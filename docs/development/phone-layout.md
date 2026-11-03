@@ -88,7 +88,10 @@ bounds without grips; tracks and handles scale from the desktop Brush controls.
   configured window buttons outside the chips. They align to the bar's
   centerline, with symmetric space toward the edge and adjacent tools. Dragging tiles, Capy or
   unused space on either bar moves the window after native movement slop, without
-  a hold. Sliders scrub and native window buttons keep their actions.
+  a hold. In movable landscape windows, the top 24 units between the bars also
+  move the window, even with bars hidden. This input band scales below 320;
+  drawers, menus and other overlays keep their input above it. Fullscreen and
+  portrait have no band. Sliders scrub and native window buttons keep their actions.
 - **Safe area:** each bar sits 8 from its edge, or past the platform's safe inset
   where that is larger, and its ends follow the same rule. Android reports a
   camera cutout only on its own edge and, from Android 12, the rounded corners.

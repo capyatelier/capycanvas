@@ -6,6 +6,30 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn phone_movable_metrics_update_the_title_without_changing_saved_state() {
+    let mut s = phone_session([891, 412]);
+    let workspace = s.capture_workspace().unwrap();
+    let settings = s.state.settings.clone();
+    assert!(!serde_json::from_str::<PhoneState>("{}").unwrap().movable);
+    let legacy: PhoneAction = serde_json::from_value(serde_json::json!({
+        "kind": "metrics", "native": [0., 0.], "native_counts": [0, 0], "insets": [0., 0., 0., 0.],
+    })).unwrap();
+    assert!(matches!(legacy, PhoneAction::Metrics { movable: false, .. }));
+    assert_eq!(s.dispatch(UiAction::Phone { action: legacy }).unwrap().regions, 0);
+    for movable in [true, false] {
+        let action = PhoneAction::Metrics { native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable };
+        let change = s.dispatch(UiAction::Phone { action: action.clone() }).unwrap();
+        assert_ne!(change.regions & regions::LAYOUT, 0);
+        assert_eq!(s.state.phone.movable, movable);
+        assert_eq!(s.phone_layout().unwrap().title.width > 0., movable);
+        assert_eq!(s.dispatch(UiAction::Phone { action }).unwrap().regions, 0);
+    }
+    assert_eq!(s.capture_workspace().unwrap(), workspace);
+    assert_eq!(s.state.settings, settings);
+    assert!(s.state.requests.is_empty());
+}
+
+#[test]
 fn phone_menu_toggles_keep_the_menu_open_and_zen_closes_it() {
     let mut s = phone_session([412, 891]);
     s.dispatch(UiAction::Phone { action: PhoneAction::Capy }).unwrap();
@@ -201,7 +225,7 @@ fn phone_drawers_stay_inside_the_window_during_resize() {
     for short in std::iter::once(317).chain(280..480) {
         for viewport in [[short as f32, 568.], [568., short as f32]] {
             for swapped in [false, true] {
-                let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap();
+                let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped, false).unwrap();
                 let drawer = phone.drawer(phone.tools[0], viewport, &[160., 240.], &[360., 240.], 8.).unwrap();
                 let menu = phone.menu(viewport, 242., 500., 32.).unwrap();
                 for bounds in [drawer.bounds, menu.bounds] {
@@ -537,7 +561,7 @@ fn phone_runtime_controls_preserve_raw_layout_and_retained_resolution() {
             control: ToolbarControl::BrushSizeSlider, phase: ContactPhase::Up,
         } },
         UiAction::Phone { action: PhoneAction::Metrics {
-            native: [0., 48.], native_counts: [0, 1], insets: [0., 24., 0., 16.],
+            native: [0., 48.], native_counts: [0, 1], insets: [0., 24., 0., 16.], movable: false,
         } },
     ].into_iter().enumerate() {
         s.dispatch(action).unwrap();
@@ -757,7 +781,7 @@ fn phone_toolbar_dividers_are_free_at_both_ends_and_empty_stays_empty() {
     let controls: Vec<_> = (0..PhoneLayout::MAX_TOOLS * 2 + 1).map(|index| if index % 2 == 0 { ToolbarControl::Divider } else { ToolbarControl::Color }).collect();
     layout.insert_phone_tools(None, &controls).unwrap();
     layout.validate().unwrap();
-    let presentation = PhoneLayout::resolve(&layout, [412., 891.], [0.; 4], [0.; 2], [0; 2], false).unwrap();
+    let presentation = PhoneLayout::resolve(&layout, [412., 891.], [0.; 4], [0.; 2], [0; 2], false, false).unwrap();
     assert!(presentation.tools[PhoneLayout::MAX_TOOLS * 2].width > 0.);
     for tile in layout.phone.clone().unwrap() { layout.remove_phone_tool(tile.id).unwrap(); }
     layout.resolve_phone_defaults(WorkspacePreset::Photographer).unwrap();

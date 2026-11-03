@@ -12,6 +12,7 @@ pub struct PhoneState {
     pub insets: [f32; 4],
     pub native: [f32; 2],
     pub native_counts: [u32; 2],
+    pub movable: bool,
     pub hidden: bool,
     pub menu: bool,
     pub capy_drag: bool,
@@ -33,7 +34,7 @@ pub enum PhoneAction {
     Drawing { id: u64, close: bool },
     SwapSides,
     Slider { control: ToolbarControl, phase: crate::ContactPhase },
-    Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4] },
+    Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4], #[serde(default)] movable: bool },
 }
 impl crate::UiState {
     pub fn phone_settings(&self) -> crate::TileView {
@@ -53,7 +54,7 @@ impl PhoneState {
     pub fn resolve(self, layout: &DockLayout, viewport: [f32; 2]) -> Option<PhoneLayout> {
         if !self.platform.is_some_and(crate::Platform::presents_phone_layout) { return None; }
         layout.phone.as_ref()?;
-        let mut phone = PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped)?;
+        let mut phone = PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped, self.movable)?;
         if self.hidden {
             phone.size = Bounds::default();
             phone.strength = Bounds::default();
@@ -91,6 +92,7 @@ pub struct PhoneLayout {
     pub controls: [Bounds; 2],
     pub bars: [Bounds; 2],
     pub work_area: Bounds,
+    pub title: Bounds,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -98,16 +100,17 @@ pub enum PhoneBarOutcome { Pending, Held, Dragging, WindowMove, Cancel, Tap(u32)
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PhoneBarContact {
     held: bool, dragged: bool, editable: bool, index: Option<usize>,
-    origin: [f32; 2], point: [f32; 2], key: Option<(Edge, Bounds, Bounds)>, ids: [u32; PhoneLayout::MAX_TILES], dividers: [bool; PhoneLayout::MAX_TILES], count: usize,
+    origin: [f32; 2], point: [f32; 2], key: Option<(Edge, Bounds, Bounds, Bounds)>, ids: [u32; PhoneLayout::MAX_TILES], dividers: [bool; PhoneLayout::MAX_TILES], count: usize,
 }
 impl PhoneBarContact {
     pub fn begin(layout: &PhoneLayout, point: [f32; 2], native_button: bool) -> Option<Self> {
         let contains = |b: &Bounds| b.width > 0. && b.height > 0. && b.contains(point[0], point[1]);
-        (layout.bars.iter().chain(&layout.tool_hits).chain([&layout.capy_hit, &layout.settings_hit]).any(contains)
+        let title = contains(&layout.title);
+        (layout.bars.iter().chain(&layout.tool_hits).chain([&layout.capy_hit, &layout.settings_hit, &layout.title]).any(contains)
             && !native_button && ![layout.size, layout.strength].iter().any(contains)).then(|| Self {
-                editable: ![layout.capy_hit, layout.settings_hit].iter().any(contains),
-                index: layout.tool_hits.iter().position(contains).or_else(|| layout.tools.iter().position(contains)), origin: point, point,
-                key: Some((layout.edge, layout.bars[0], layout.work_area)), ..Default::default()
+                editable: !title && ![layout.capy_hit, layout.settings_hit].iter().any(contains),
+                index: if title { None } else { layout.tool_hits.iter().position(contains).or_else(|| layout.tools.iter().position(contains)) }, origin: point, point,
+                key: Some((layout.edge, layout.bars[0], layout.work_area, layout.title)), ..Default::default()
             })
     }
     pub fn set_tools(&mut self, tiles: &[crate::ToolbarTile]) {
@@ -115,7 +118,7 @@ impl PhoneBarContact {
         for (i, tile) in tiles.iter().take(PhoneLayout::MAX_TILES).enumerate() { self.ids[i] = tile.id; self.dividers[i] = tile.control == ToolbarControl::Divider; }
     }
     pub fn valid<'a>(&self, layout: &PhoneLayout, tiles: impl IntoIterator<Item = &'a crate::ToolbarTile>) -> bool {
-        if self.key != Some((layout.edge, layout.bars[0], layout.work_area)) { return false; }
+        if self.key != Some((layout.edge, layout.bars[0], layout.work_area, layout.title)) { return false; }
         let mut ids = tiles.into_iter().map(|tile| tile.id);
         (0..self.count).all(|i| ids.next() == Some(self.ids[i])) && ids.next().is_none()
     }
@@ -297,15 +300,15 @@ impl PhoneLayout {
             .then_some(Bounds { height: self.tile, ..bounds })
     }
     pub fn resolve(layout: &DockLayout, viewport: [f32; 2], insets: [f32; 4], native: [f32; 2],
-        native_counts: [u32; 2], swapped: bool) -> Option<Self> {
+        native_counts: [u32; 2], swapped: bool, movable: bool) -> Option<Self> {
         if viewport.iter().any(|v| !v.is_finite() || *v <= 0.) || viewport[0].min(viewport[1]) >= 480. {
             return None;
         }
         let scale = (viewport[0].min(viewport[1]) / 320.).min(1.);
         if scale < 1. {
-            let mut p = Self::resolve(layout, viewport.map(|v| (v / scale).max(320.)), insets.map(|v| v / scale), native, native_counts, swapped)?;
+            let mut p = Self::resolve(layout, viewport.map(|v| (v / scale).max(320.)), insets.map(|v| v / scale), native, native_counts, swapped, movable)?;
             let scaled = |b: &mut Bounds| { b.x *= scale; b.y *= scale; b.width *= scale; b.height *= scale; };
-            for b in [&mut p.capy, &mut p.capy_hit, &mut p.size, &mut p.strength, &mut p.settings, &mut p.settings_hit, &mut p.work_area]
+            for b in [&mut p.capy, &mut p.capy_hit, &mut p.size, &mut p.strength, &mut p.settings, &mut p.settings_hit, &mut p.work_area, &mut p.title]
                 .into_iter().chain(&mut p.tools).chain(&mut p.tool_hits).chain(&mut p.chips).chain(&mut p.controls).chain(&mut p.bars) { scaled(b); }
             p.tile *= scale;
             p.icon *= scale;
@@ -397,7 +400,7 @@ impl PhoneLayout {
         Some(Self { tile, icon: tile * crate::HeaderSize::Medium.icon() as f32 / 48., capy_icon: tile * 440. / 512.,
             edge, capy, capy_hit: hit(capy, other), size, strength, settings, settings_hit: hit(settings, other), tools,
             tool_hits: std::array::from_fn(|i| if tiles.get(i).is_some_and(|t| t.control != ToolbarControl::Divider) { hit(tools[i], edge) } else { Bounds::default() }),
-            chips, controls, bars, work_area })
+            chips, controls, bars, title: if movable && vertical { Bounds { x: work_area.x, y: 0., width: work_area.width, height: 24. } } else { Bounds::default() }, work_area })
     }
 }
 
@@ -409,7 +412,7 @@ mod tests {
         let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
         for viewport in [[320., 568.], [412., 891.], [891., 412.]] {
             for swapped in [false, true] {
-                let p = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0., 48.], [0, 1], swapped).unwrap();
+                let p = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0., 48.], [0, 1], swapped, false).unwrap();
                 let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
                 for b in p.tools.into_iter().filter(|b| b.width > 0.).chain([p.capy, p.settings]) {
                     let mut contact = PhoneBarContact::begin(&p, center(b), false).unwrap();
@@ -436,15 +439,36 @@ mod tests {
         let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
         for viewport in [[412., 891.], [891., 412.], [280., 280.], [280., 560.], [560., 280.]] {
             for swapped in [false, true] {
-                let state = PhoneState { platform: Some(crate::Platform::Gtk), swapped, ..Default::default() };
+                let state = PhoneState { platform: Some(crate::Platform::Gtk), swapped, movable: true, ..Default::default() };
                 let visible = state.resolve(&layout, viewport).unwrap();
                 let hidden = PhoneState { hidden: true, ..state }.resolve(&layout, viewport).unwrap();
+                assert_eq!(hidden.title, visible.title);
                 assert_eq!(hidden.capy, visible.capy);
                 assert_eq!(hidden.capy_hit, visible.capy_hit);
                 assert_eq!(hidden.chips[1], visible.capy);
                 assert!(hidden.tools.iter().chain(&hidden.tool_hits).chain(&hidden.controls).chain(&hidden.bars)
                     .chain([&hidden.chips[0], &hidden.size, &hidden.strength, &hidden.settings, &hidden.settings_hit])
                     .all(|b| *b == Bounds::default()));
+            }
+        }
+    }
+    #[test]
+    fn movable_phone_titles_cover_only_landscape_canvas_and_scale_below_320() {
+        let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
+        for swapped in [false, true] {
+            let state = PhoneState { platform: Some(crate::Platform::Gtk), swapped, movable: true, ..Default::default() };
+            for (viewport, title) in [
+                ([891., 412.], Bounds { x: 63.75, y: 0., width: 763.5, height: 24. }),
+                ([560., 280.], Bounds { x: 45.71875, y: 0., width: 468.5625, height: 21. }),
+            ] {
+                let phone = state.resolve(&layout, viewport).unwrap();
+                assert_eq!(phone.title, title, "{viewport:?}/{swapped}");
+                assert_eq!(phone.title.x, phone.work_area.x);
+                assert_eq!(phone.title.width, phone.work_area.width);
+                assert_eq!(PhoneState { movable: false, ..state }.resolve(&layout, viewport).unwrap().title, Bounds::default());
+            }
+            for viewport in [[412., 891.], [280., 560.], [280., 280.]] {
+                assert_eq!(state.resolve(&layout, viewport).unwrap().title, Bounds::default());
             }
         }
     }
@@ -485,6 +509,7 @@ mod tests {
                                 native,
                                 native_counts,
                                 swapped,
+                                false,
                             )
                             .unwrap();
                             if insets == [0.; 4] && native == [0.; 2] {
@@ -585,7 +610,7 @@ mod tests {
             }
         }
         assert!(
-            PhoneLayout::resolve(&layout, [480., 900.], [0.; 4], [0.; 2], [0; 2], false).is_none()
+            PhoneLayout::resolve(&layout, [480., 900.], [0.; 4], [0.; 2], [0; 2], false, false).is_none()
         );
     }
 }
@@ -766,7 +791,7 @@ mod menu_tests {
         let layout = crate::WorkspacePreset::Painter.layout(crate::Platform::Gtk);
         for viewport in [[412., 891.], [891., 412.], [320., 568.], [280., 560.], [560., 280.]] {
             for swapped in [false, true] {
-                let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap();
+                let phone = PhoneLayout::resolve(&layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped, false).unwrap();
                 for row in [28., 32., 44.] {
                     let width = phone.menu_width(242., 340., row);
                     let placement = phone.menu(viewport, width, 400., row).unwrap();

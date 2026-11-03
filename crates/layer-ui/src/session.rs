@@ -3310,15 +3310,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.state.customization.drawer = None;
                         save_settings = true;
                     }
-                    PhoneAction::Metrics { native, native_counts, insets } => {
+                    PhoneAction::Metrics { native, native_counts, insets, movable } => {
                         if native.iter().chain(&insets).any(|v| !v.is_finite() || *v < 0.) || native_counts.iter().any(|n| *n > 4) {
                             return Err("Invalid native control metrics".into());
                         }
                         let state = &mut self.state.phone;
-                        if (state.native, state.native_counts, state.insets) == (native, native_counts, insets) { return Ok(UiChange::default()); }
+                        if (state.native, state.native_counts, state.insets, state.movable) == (native, native_counts, insets, movable) { return Ok(UiChange::default()); }
                         state.native = native;
                         state.native_counts = native_counts;
                         state.insets = insets;
+                        state.movable = movable;
                     }
                 }
                 self.refresh_chrome();

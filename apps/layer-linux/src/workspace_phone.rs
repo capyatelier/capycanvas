@@ -14,10 +14,11 @@ pub(super) struct Phone {
     sliders: RefCell<Vec<Rc<toolbar_components::Component>>>,
     settings: RefCell<Option<toolbar_components::TileWidget>>,
     chips: RefCell<Vec<gtk::WindowHandle>>,
+    title: gtk::WindowHandle,
     native: [gtk::WindowControls; 2],
     buttons: RefCell<Vec<(usize, gtk::WindowControls)>>,
     decoration: RefCell<String>,
-    reported: Cell<Option<([f32; 2], [u32; 2])>>,
+    reported: Cell<Option<([f32; 2], [u32; 2], bool)>>,
     menu: phone_menu::Menu,
     menu_key: Cell<Option<([f32; 2], Bounds, Bounds, Bounds, f32)>>,
     loans: RefCell<Vec<(gtk::Widget, gtk::Widget, gtk::Box)>>,
@@ -33,12 +34,14 @@ impl Phone {
         root.add_css_class("phone-frame");
         root.add_css_class("header-medium");
         let menu = phone_menu::Menu::new();
+        let title = gtk::WindowHandle::new();
+        title.set_widget_name("phone-title-band");
         let bridge = gtk::DrawingArea::new();
         bridge.add_css_class("drawer-connection");
         bridge.set_can_target(false);
         let connection = Rc::new(Cell::new(None));
         drawers::paint_connection(&bridge, connection.clone());
-        Self { root, contact: Rc::default(), tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), chips: RefCell::default(),
+        Self { root, contact: Rc::default(), tools: RefCell::default(), sliders: RefCell::default(), settings: RefCell::default(), chips: RefCell::default(), title,
             native: [gtk::WindowControls::new(gtk::PackType::Start), gtk::WindowControls::new(gtk::PackType::End)],
             buttons: RefCell::default(), decoration: RefCell::default(), reported: Cell::new(None), menu, menu_key: Cell::new(None),
             loans: RefCell::default(), bridge, connection, placement: RefCell::default() }
@@ -93,11 +96,15 @@ impl Phone {
                 let picked = w.surface.pick(p.x() as f64, p.y() as f64, gtk::PickFlags::DEFAULT)?;
                 let capy = w.zen_capy.parent()?;
                 if ![w.phone.root.upcast_ref::<gtk::Widget>(), &capy].iter().any(|root| picked == **root || picked.is_ancestor(*root)) { return None; }
+                let gpu = w.gpu.borrow();
+                let gpu = gpu.as_ref()?;
+                let layout = gpu.session.phone_layout()?;
+                let title = layout.title.width > 0. && layout.title.contains(p.x(), p.y());
+                if title && picked != w.phone.title && !picked.is_ancestor(&w.phone.title) { return None; }
+                if gpu.session.state().phone.hidden && !title { return None; }
                 let native = std::iter::successors(Some(picked), |widget| widget.parent()).any(|widget|
                     widget.is::<gtk::Button>() && widget.ancestor(gtk::WindowControls::static_type()).is_some());
-                let gpu = w.gpu.borrow();
-                if gpu.as_ref()?.session.state().phone.hidden { return None; }
-                gpu.as_ref()?.session.phone_layout().and_then(|layout| PhoneBarContact::begin(&layout, [p.x(), p.y()], native)).map(|mut contact| { contact.set_tools(gpu.as_ref().unwrap().session.state().workspace.layout.phone.as_deref().unwrap_or(&[])); contact })
+                PhoneBarContact::begin(&layout, [p.x(), p.y()], native).map(|mut contact| { contact.set_tools(gpu.session.state().workspace.layout.phone.as_deref().unwrap_or(&[])); contact })
             });
             contact.replace(start.zip(gesture.current_event()));
             if contact.borrow().is_none() { gesture.set_state(gtk::EventSequenceState::Denied); }
@@ -236,6 +243,7 @@ impl Phone {
                 self.add(&chip);
                 self.chips.borrow_mut().push(chip);
             }
+            self.add(&self.title);
             for (side, group) in self.native.iter().enumerate() {
                 group.set_widget_name(&format!("native-group-{side}"));
                 group.add_css_class("phone-controls");
@@ -280,9 +288,10 @@ impl Phone {
             }
             let native = self.native.each_ref().map(|group| if group.is_empty() { 0. } else { group.measure(gtk::Orientation::Horizontal, -1).1 as f32 });
             let native_counts = [0, 1].map(|side| self.buttons.borrow().iter().filter(|(s, b)| *s == side && !b.is_empty()).count() as u32);
-            if (native, native_counts) != (state.phone.native, state.phone.native_counts)
-                && self.reported.replace(Some((native, native_counts))) != Some((native, native_counts)) {
-                glib::idle_add_local_once(glib::clone!(#[weak] w, move || w.dispatch(UiAction::Phone { action: PhoneAction::Metrics { native, native_counts, insets: [0.; 4] } })));
+            let movable = !w.window.is_fullscreen();
+            if (native, native_counts, movable) != (state.phone.native, state.phone.native_counts, state.phone.movable)
+                && self.reported.replace(Some((native, native_counts, movable))) != Some((native, native_counts, movable)) {
+                glib::idle_add_local_once(glib::clone!(#[weak] w, move || w.dispatch(UiAction::Phone { action: PhoneAction::Metrics { native, native_counts, insets: [0.; 4], movable } })));
             }
         }
         let tiles = state.workspace.layout.phone.as_deref().unwrap_or(&[]);
@@ -439,7 +448,8 @@ impl Phone {
         for (child, bounds) in self.root.imp().children.borrow().iter().zip(geometry.iter_mut()) {
             let b = if let Some(index) = self.chips.borrow().iter().position(|c| child == c) {
                     Some(if index < 2 { p.chips[index] } else { p.bars[index - 2] })
-                } else if child == &self.menu.root { menu.as_ref().map(|p| p.bounds) }
+                } else if child == &self.title { Some(p.title) }
+                else if child == &self.menu.root { menu.as_ref().map(|p| p.bounds) }
                 else if child == &self.bridge { self.connection.get().map(|p| p.bounds) }
                 else if self.settings.borrow().as_ref().is_some_and(|item| child == &item.root()) { Some(p.settings_hit) }
                 else if let Some(side) = self.native.iter().position(|n| child == n) { (!vertical).then_some(p.controls[side]) }

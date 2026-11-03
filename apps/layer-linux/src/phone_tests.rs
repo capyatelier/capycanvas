@@ -108,9 +108,16 @@ fn frame(d: &Driver) {
         (bounds.y()+bounds.height()*0.5) as f64, gtk::PickFlags::DEFAULT).unwrap();
     assert!(picked == button || picked.is_ancestor(&button), "phone controls receive native input");
     for (name, expected) in [("phone-tools-chip", phone.chips[0]), ("phone-sliders-chip", phone.chips[1]),
-        ("phone-bar-tools", phone.bars[0]), ("phone-bar-capy", phone.bars[1])] {
+        ("phone-bar-tools", phone.bars[0]), ("phone-bar-capy", phone.bars[1]), ("phone-title-band", phone.title)] {
         let widget = d.named(name);
+        assert_eq!(widget.is_mapped(), expected.width > 0. && expected.height > 0., "{name}: nonempty shared geometry controls visibility");
+        if expected.width <= 0. || expected.height <= 0. { continue; }
         inside(d, &widget);
+        if name == "phone-title-band" {
+            assert!(widget.measure(gtk::Orientation::Horizontal,-1).1 as f32 <= expected.width
+                && widget.measure(gtk::Orientation::Vertical,-1).1 as f32 <= expected.height,
+                "the undecorated title handle does not expand shared geometry");
+        }
         let bounds = widget.compute_bounds(&d.w.surface).unwrap();
         assert!([bounds.x()-expected.x,bounds.y()-expected.y,bounds.width()-expected.width,bounds.height()-expected.height]
             .into_iter().all(|difference| difference.abs() <= 1.), "{name} uses shared continuous geometry");
@@ -259,6 +266,13 @@ fn native_phone_frame() {
     let saved_zen = state(&d.w).workspace.zen_mode;
     frame(&d);
     capture(&mut d, "rest");
+    d.w.window.fullscreen();
+    until(|| d.w.window.is_fullscreen() && !state(&d.w).phone.movable
+        && presentation(&d).title.width == 0. && !d.named("phone-title-band").is_mapped(), "fullscreen removes the movable title band");
+    d.w.window.unfullscreen();
+    until(|| !d.w.window.is_fullscreen() && state(&d.w).phone.movable,
+        "leaving fullscreen restores movable phone geometry");
+    frame(&d);
     mouse_paint(&mut d, "normal");
     let before = presentation(&d).capy;
     menu(&mut d);
@@ -280,8 +294,9 @@ fn native_phone_frame() {
     assert!(!d.named("component-slider-size").is_mapped());
     assert!(!d.named(&tool(&d, ToolbarControl::Color)).is_mapped());
     for child in std::iter::successors(d.w.phone.root.first_child(), |child| child.next_sibling()) {
-        assert_eq!(child.is_mapped(), child.widget_name() == "phone-sliders-chip",
-            "only the retained Capy chip stays mapped: {}", child.widget_name());
+        assert_eq!(child.is_mapped(), child.widget_name() == "phone-sliders-chip"
+            || (child.widget_name() == "phone-title-band" && presentation(&d).title.width > 0.),
+            "only retained phone input stays mapped: {}", child.widget_name());
     }
     assert!(d.w.phone.placement.borrow().is_none());
     inside(&d, &d.named("zen-capy"));
@@ -582,6 +597,29 @@ fn tool_drawer_sets(d: &mut Driver) {
             click(d, &opener);
         }
         inventory_drawer_ready(d);
+        if name == "sketch-brush" && presentation(d).edge != Edge::Top {
+            let body = d.named("tool-drawer");
+            let bounds = body.compute_bounds(&d.w.surface).unwrap();
+            assert!(bounds.y() <= 12. && bounds.y()+bounds.height() > 12., "the open drawer overlaps the title band");
+            let point = [bounds.x()+bounds.width()*0.5,12.];
+            let picked = d.w.surface.pick(point[0] as f64,point[1] as f64,gtk::PickFlags::DEFAULT).unwrap();
+            assert!(picked == body || picked.is_ancestor(&body), "drawer owns the y12 overlap");
+            let presses = Rc::new(Cell::new(0));
+            let input = gtk::EventControllerLegacy::new();
+            input.set_propagation_phase(gtk::PropagationPhase::Capture);
+            input.connect_event(glib::clone!(#[strong] presses, move |_,event| {
+                if event.event_type() == gtk::gdk::EventType::ButtonPress { presses.set(presses.get()+1); }
+                glib::Propagation::Proceed
+            }));
+            body.add_controller(input.clone());
+            let checkpoint = ui_session(&d.w).engine().checkpoint();
+            let point = d.w.surface.compute_point(&d.w.window,&gtk::graphene::Point::new(point[0],point[1])).unwrap();
+            d.input.click([point.x(),point.y()]);
+            assert_eq!(presses.get(),1,"the actual press reaches the drawer");
+            assert_eq!(ui_session(&d.w).engine().checkpoint(),checkpoint);
+            assert!(d.w.chrome_contacts.borrow().is_empty());
+            body.remove_controller(&input);
+        }
         let drawer = state(&d.w).customization.drawer.unwrap();
         let adaptive = matches!(control, C { command: CommandId::DrawingBrush | CommandId::Sculpt });
         if adaptive {
@@ -869,8 +907,15 @@ fn native_phone_window_move() {
                 let top = if layout.edge == Edge::Top {
                     [layout.chips[0].x + layout.chips[0].width + 4., layout.bars[0].y + layout.tile * 0.5]
                 } else { [layout.bars[0].x + layout.tile * 0.5, layout.chips[0].y - 4.] };
-                let points = if bar == 0 { vec![center(layout.tools[0]), top] }
+                let mut points = if bar == 0 { vec![center(layout.tools[0]), top] }
                     else { vec![center(layout.capy), center(layout.settings), gap] };
+                if bar == 0 && layout.edge != Edge::Top {
+                    let title = d.named("phone-title-band");
+                    let point = [layout.work_area.x + layout.work_area.width*0.5,10.];
+                    let picked = d.w.surface.pick(point[0] as f64,point[1] as f64,gtk::PickFlags::DEFAULT).unwrap();
+                    assert!(picked == title || picked.is_ancestor(&title), "landscape top input belongs to the title handle");
+                    points.push(point);
+                } else if layout.edge == Edge::Top { assert!(!d.named("phone-title-band").is_mapped()); }
                 for (source, point) in points.into_iter().enumerate() {
                     let from = [origin[0] + point[0], origin[1] + point[1]];
                     let delta = [if origin[0] + size[0] as f32 * 0.5 > monitor.width() as f32 * 0.5 { -60. } else { 60. },
@@ -899,6 +944,31 @@ fn native_phone_window_move() {
                     origin = moved;
                 }
             }
+        }
+        if presentation(&d).edge != Edge::Top {
+            d.w.dispatch(UiAction::Phone { action: PhoneAction::Capy });
+            until(|| state(&d.w).phone.menu && d.w.phone.placement.borrow().is_some(), "the landscape menu opens for overlap input");
+            let menu = d.named("phone-menu");
+            let bounds = menu.compute_bounds(&d.w.surface).unwrap();
+            assert!(bounds.y() <= 12. && bounds.y()+bounds.height() > 12., "the menu overlaps the title band");
+            let local = [bounds.x()+bounds.width()*0.5,12.];
+            let picked = d.w.surface.pick(local[0] as f64,local[1] as f64,gtk::PickFlags::DEFAULT).unwrap();
+            assert!(picked == menu || picked.is_ancestor(&menu),"the menu owns the overlapping press");
+            let checkpoint = ui_session(&d.w).engine().checkpoint();
+            let from = [origin[0]+local[0],origin[1]+local[1]];
+            let to = [from[0]+30.,from[1]];
+            d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to),contact("mouse","up",to)]));
+            assert!(state(&d.w).phone.menu,"dragging the root menu does not hand off window movement");
+            let probe = [origin[0]+size[0] as f32*0.5,origin[1]+size[1] as f32*0.5];
+            observed.set(None);
+            d.input.perform(serde_json::json!([{"point":[probe[0]-1.,probe[1]]},{"point":probe}]));
+            let local = observed.get().expect("pointer inside the menu overlap window");
+            assert!((probe[0]-local[0]-origin[0]).abs() <= 1. && (probe[1]-local[1]-origin[1]).abs() <= 1.,
+                "menu input leaves the actual window origin unchanged");
+            assert_eq!(ui_session(&d.w).engine().checkpoint(),checkpoint);
+            assert!(d.w.chrome_contacts.borrow().is_empty());
+            d.w.dispatch(UiAction::Phone { action: PhoneAction::Capy });
+            until(|| !state(&d.w).phone.menu,"close the overlap menu before changing orientation");
         }
     }
     d.finish();
@@ -969,7 +1039,8 @@ fn menu_pages(d: &mut Driver) {
     d.input.perform(serde_json::json!([contact("mouse","up",point)]));
     until(|| d.w.visible_dialog().as_ref() == Some(&d.w.preferences.dialog), "Preferences gear opens Settings");
     crate::page_dialog::close_dialog(&d.w.preferences.dialog);
-    until(|| d.w.visible_dialog().as_ref() != Some(&d.w.preferences.dialog), "Settings closes");
+    until(|| d.w.visible_dialog().as_ref() != Some(&d.w.preferences.dialog)
+        && !d.w.pages.root.is_transition_running() && !d.w.pages.root.is_mapped(), "Settings closes");
     if !state(&d.w).phone.menu { menu(d); }
     let retired = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     d.input.key(0xff1b);
@@ -1649,7 +1720,16 @@ fn menu_back_swipe(d: &mut Driver, stack: &gtk::Stack, initial: Bounds) {
     let name = stack.visible_child_name().unwrap();
     let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
     let sign = if scroll.direction() == gtk::TextDirection::Rtl { -1. } else { 1. };
-    let from = screen_point(scroll.upcast_ref(), &d.w.window, [if sign < 0. { 0.85 } else { 0.15 }, 0.5]);
+    let mut from = screen_point(scroll.upcast_ref(), &d.w.window, [if sign < 0. { 0.85 } else { 0.15 }, 0.5]);
+    if presentation(d).title.width > 0. {
+        let bounds = scroll.compute_bounds(&d.w.surface).unwrap();
+        assert!(bounds.y() <= 12. && bounds.y()+bounds.height() > 12., "submenu swipe content intersects the title band");
+        let local = d.w.surface.compute_point(&d.w.window,&gtk::graphene::Point::new(bounds.x()+bounds.width()*0.15,12.)).unwrap();
+        from = [local.x(),local.y()];
+        let picked = d.w.window.pick(from[0] as f64,from[1] as f64,gtk::PickFlags::DEFAULT).unwrap();
+        let menu = d.named("phone-menu");
+        assert!(picked == menu || picked.is_ancestor(&menu),"the submenu owns the title overlap");
+    }
     let width = stack.width() as f32;
     let point = |fraction: f32| [from[0] + sign * width * fraction, from[1]];
     d.input.perform(serde_json::json!([
@@ -1797,7 +1877,9 @@ fn native_phone_inventory() {
             let w = d.w.clone();
             let frames = sample_after_paint(&d.w.window, move || state(&w).phone.hidden
                 && std::iter::successors(w.phone.root.first_child(), |child| child.next_sibling())
-                    .all(|child| child.is_mapped() == (child.widget_name() == "phone-sliders-chip"))
+                    .all(|child| child.is_mapped() == (child.widget_name() == "phone-sliders-chip"
+                        || (child.widget_name() == "phone-title-band" && state(&w).phone_presentation(
+                            [w.surface.width() as f32,w.surface.height() as f32]).unwrap().title.width > 0.)))
                 && find_named(w.phone.root.upcast_ref(), "component-slider-size").is_some_and(|slider| !slider.is_mapped()));
             d.input.key(0xff09);
             until(|| frames.samples.borrow().iter().any(|sample| sample.state), "Zen's hidden controls reach native after-paint");

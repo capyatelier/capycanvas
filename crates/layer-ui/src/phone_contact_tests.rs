@@ -4,7 +4,7 @@ use crate::{Platform, ToolbarTile, WorkspacePreset};
 const VIEWPORTS: [[f32; 2]; 4] = [[412., 891.], [891., 412.], [280., 560.], [560., 280.]];
 
 fn resolve(layout: &DockLayout, viewport: [f32; 2], swapped: bool) -> PhoneLayout {
-    PhoneLayout::resolve(layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped).unwrap()
+    PhoneLayout::resolve(layout, viewport, [0.; 4], [0.; 2], [0; 2], swapped, false).unwrap()
 }
 
 fn center(bounds: Bounds) -> [f32; 2] { [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5] }
@@ -41,6 +41,40 @@ fn phone_tile_contact_distinguishes_tap_quick_drag_and_hold_release() {
                 assert!(lifted.iter().zip(phone.tools).enumerate().all(|(index, (shown, original))| index == 2 || *shown == original));
                 assert_eq!(held.motion(&phone, tiles, slight, false), PhoneBarOutcome::Held);
                 assert_eq!(held.finish(&phone, tiles, slight), PhoneBarOutcome::Menu(Some(tiles[2].id)));
+            }
+        }
+    }
+}
+
+#[test]
+fn phone_title_contacts_move_the_window_without_a_tile_and_cancel_when_not_movable() {
+    let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    let tiles = layout.phone.as_ref().unwrap();
+    for viewport in [[891., 412.], [560., 280.]] {
+        for swapped in [false, true] {
+            for hidden in [false, true] {
+                let state = PhoneState { platform: Some(Platform::Gtk), swapped, hidden, movable: true, ..Default::default() };
+                let phone = state.resolve(&layout, viewport).unwrap();
+                let origin = center(phone.title);
+                let mut tap = begin(&phone, tiles, origin);
+                assert!(!tap.editable && tap.index.is_none());
+                let slight = [origin[0] + 1., origin[1]];
+                assert_eq!(tap.motion(&phone, tiles, slight, false), PhoneBarOutcome::Pending);
+                assert_eq!(tap.finish(&phone, tiles, slight), PhoneBarOutcome::Pending);
+                let mut drag = begin(&phone, tiles, origin);
+                let moved = [origin[0] + 20., origin[1]];
+                assert_eq!(drag.motion(&phone, tiles, moved, true), PhoneBarOutcome::WindowMove);
+                let mut held = begin(&phone, tiles, origin);
+                assert_eq!(held.arm(), PhoneBarOutcome::Pending);
+                assert_eq!(held.lifted(), None);
+                assert_eq!(held.finish(&phone, tiles, origin), PhoneBarOutcome::Pending);
+                let fixed = PhoneState { movable: false, ..state }.resolve(&layout, viewport).unwrap();
+                assert_eq!(fixed.bars, phone.bars);
+                assert_eq!(fixed.work_area, phone.work_area);
+                assert!(PhoneBarContact::begin(&fixed, origin, false).is_none());
+                assert!(!drag.valid(&fixed, tiles));
+                assert_eq!(drag.motion(&fixed, tiles, moved, true), PhoneBarOutcome::Cancel);
+                assert_eq!(drag.finish(&fixed, tiles, moved), PhoneBarOutcome::Cancel);
             }
         }
     }
@@ -94,7 +128,7 @@ fn held_phone_contacts_cancel_after_rotation_resize_or_toolbar_identity_change()
     changed.swap(0, 1);
     assert!(!contact.valid(&phone, &changed));
     assert_eq!(contact.finish(&phone, &changed, center(phone.tools[3])), PhoneBarOutcome::Cancel);
-    assert!(PhoneLayout::resolve(&layout, [480., 891.], [0.; 4], [0.; 2], [0; 2], false).is_none());
+    assert!(PhoneLayout::resolve(&layout, [480., 891.], [0.; 4], [0.; 2], [0; 2], false, false).is_none());
 }
 
 #[test]
