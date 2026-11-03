@@ -449,6 +449,20 @@ All sixteen successful device rows and both OOM records remain in
 `artifacts/fill-tools/m4a-native-audit/native-results.json` and
 `artifacts/fill-tools/m4a-native-audit/final-mid-cell-three-samples.json`.
 
+The 2026-11-03 Close gaps Off ABBA compares `8b1ef98ef` with R3b on the
+24 MP two-gap fixture, factory display/font settings and thermal status 0.
+Two warm second-tap samples per arm use the same private measurement overlay,
+with GPU stage profiling disabled. These still-result timings do not qualify motion.
+
+| Off tap metric | Control | R3b |
+| --- | ---: | ---: |
+| Request to mask, mean | 2048.988 ms | 1548.260 ms (−24.44%) |
+| Native landed brackets, sample range | 17.537–20.565 s | 2.773–3.210 s |
+| Readback bytes, one capture | 30,048,176 | 24,032,096 |
+
+The time outside the request remains unattributed. Raw samples and build hashes:
+`artifacts/fill-tools/final/r3b-c3b/m-r3b-abba.json`.
+
 ## HDR color bubbles
 
 The 2026-10-24 Wacom MovinkPad 11 diagnostic uses the HDR bubble port published

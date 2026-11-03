@@ -45,9 +45,9 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
     let extra_start=underfill_offset.map_or(coverage_size as usize+32,|offset|offset as usize+band_count*4);
     let coord=|value:u32|[value&65535,value>>16];
     let seals=(0..seal_records).filter_map(|record| {
-        let at=extra_start+record*20;let reach=read(at+16);
-        (reach!=0).then(||layer_render::RegionSeal {id:read(at),start:coord(read(at+4)),end:coord(read(at+8)),
-            bend:(read(at+12)!=u32::MAX).then(||coord(read(at+12))),reach})
+        let at=extra_start+record*20;
+        (read(at+16)!=0).then(||layer_render::RegionSeal {id:read(at),start:coord(read(at+4)),end:coord(read(at+8)),
+            bend:(read(at+12)!=u32::MAX).then(||coord(read(at+12)))})
     }).collect();
     let next=read(coverage_size as usize+24);
     Ok(Captured {colour_on_solid:read(coverage_size as usize+28)&1!=0,next:(next!=u32::MAX).then(||coord(next)),pixels:std::sync::Arc::new(pixels),underfill,active:read(24) as usize,line_bounded:read(28)!=0,

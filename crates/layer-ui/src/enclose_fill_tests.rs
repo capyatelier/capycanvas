@@ -179,7 +179,7 @@ mod enclose_fill_checks {
             contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
             let request=s.renderer_mut().region_requests.last().unwrap().clone();reply(&mut s,&request);
             s.renderer_mut().region_reply.as_mut().unwrap().gaps=Some(layer_render::RegionGapMasks {next:None,active:2,line_bounded:true,
-                seals:vec![layer_render::RegionSeal {id:7,start:[100,80],bend:None,end:[104,80],reach:32}].into()});
+                seals:vec![layer_render::RegionSeal {id:7,start:[100,80],bend:None,end:[104,80]}].into()});
             s.frame(30_000_000,30_000_000).unwrap();contact(&mut s,PenPhase::Up,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();s.frame(50_000_000,50_000_000).unwrap();
             let first=s.engine.checkpoint();assert!(s.engine.can_undo());
             let point=if hit {[102.,80.]}else{[150.,90.]};

@@ -687,7 +687,6 @@ pub struct RegionSeal {
     pub start: [u32; 2],
     pub bend: Option<[u32; 2]>,
     pub end: [u32; 2],
-    pub reach: u32,
 }
 #[derive(Clone, Debug)]
 pub struct RegionGapMasks {

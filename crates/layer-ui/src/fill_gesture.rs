@@ -148,7 +148,6 @@ impl<R:CanvasRenderer> UiSession<R> {
                     && self.engine.document().drawing_content()==Some(layer_core::SourceTarget::Paint(completed.before.0)));
                 let hit=previous.as_ref().and_then(|completed| {
                     let masks=completed.ready.result.gaps.as_ref()?;let limit=6.*scale/self.state.camera.zoom;
-                    if !masks.seals.iter().any(|seal|seal_distance([point.x,point.y],seal)<=limit){return None;}
                     let ids=masks.seals.iter().filter(|seal|seal_distance([point.x,point.y],seal)<=limit).map(|seal|seal.id).collect::<Vec<_>>();
                     (!ids.is_empty()).then_some(ids)
                 });
@@ -459,7 +458,7 @@ impl<R:CanvasRenderer> UiSession<R> {
     }
     fn slide_fill_gesture(&mut self)->Result<(),String> {
         let scale=self.logical_viewport.map_or(1.,|logical|self.state.camera.viewport[0] as f32/logical[0]);
-        let mut query=None;let mut show=false;let mut vector_slot=None;
+        let mut request=None;let mut query=None;let mut show=false;let mut vector_slot=None;
         if let Some(gesture)=&mut self.region_tools.gesture && let Some(hold)=&mut gesture.hold {
             let x=gesture.point.x/scale;
             let fraction=if x<hold.anchor {hold.fraction+(x-hold.anchor)/(hold.anchor-hold.left).max(f32::EPSILON)*hold.fraction}
@@ -472,8 +471,7 @@ impl<R:CanvasRenderer> UiSession<R> {
                     if let Some(vector)=&mut gesture.vector {
                         vector.active=slot;vector_slot=Some(slot);gesture.revision=gesture.revision.wrapping_add(1);show=true;
                     }else {
-                        let mut request=gesture.request.clone().unwrap();request.fill.as_mut().unwrap().reach=Some(reach);
-                        let ready=gesture.ready.as_ref().unwrap();query=Some((request,ready.operation.clone(),ready.color,ready.basis));gesture.waiting=true;
+                        request=gesture.request.clone();request.as_mut().unwrap().fill.as_mut().unwrap().reach=Some(reach);
                     }
                     self.region_tools.refinement.close_gaps=reach>0;self.region_tools.gap_reach=(reach>0).then_some(reach);
                     hold.caption=if reach==0 {self.state.localization.text(MessageId::COMMAND_CLOSE_GAPS_OFF)}else{NumericControl::whole_pixels(0.,64.).compact_text(f64::from(reach)).into()};
@@ -483,10 +481,10 @@ impl<R:CanvasRenderer> UiSession<R> {
                 let value=(fraction*100.).round()/100.;
                 if (self.region_tools.tolerance-value).abs()>0.00001 {
                     self.region_tools.tolerance=value;hold.caption=NumericControl::percent().compact_text(f64::from(value)).into();
-                    let mut request=gesture.request.clone().unwrap();request.tolerance=value;
-                    let ready=gesture.ready.as_ref().unwrap();query=Some((request,ready.operation.clone(),ready.color,ready.basis));gesture.waiting=true;
+                    request=gesture.request.clone();request.as_mut().unwrap().tolerance=value;
                 }
             }
+            if let Some(request)=request {let ready=gesture.ready.as_ref().unwrap();query=Some((request,ready.operation.clone(),ready.color,ready.basis));gesture.waiting=true;}
         }
         if let Some(slot)=vector_slot {
             self.vector_fill_slot(slot);

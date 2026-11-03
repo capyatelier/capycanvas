@@ -246,8 +246,9 @@ impl Flood {
     ) -> Result<Region, GpuRasterError> {
         let requested_close=refinement.close_gaps;
         let trail=fill.and_then(|fill|fill.trail.as_ref()).filter(|trail|!trail.points.is_empty());
-        let multiple=fill.is_some() && contiguous && self.lines.has_seals();
-        let refinement=RegionRefinement {close_gaps:(refinement.close_gaps || multiple) && self.lines.has_seals(),..refinement};
+        let close=fill.is_none_or(|fill|fill.reach!=Some(0));
+        let multiple=fill.is_some() && close && contiguous && self.lines.has_seals();
+        let refinement=RegionRefinement {close_gaps:close && (refinement.close_gaps || multiple) && self.lines.has_seals(),..refinement};
         let [w, h] = extent;
         if w == 0
             || h == 0

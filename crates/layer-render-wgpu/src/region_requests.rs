@@ -21,7 +21,7 @@ pub(super) struct RegionRequests {
     chunk_timing:Option<u64>,
     preparation:Option<Preparation>,
     refiner: Option<selection_refine::SelectionRefiner>,
-    readback: Vec<wgpu::Buffer>,
+    readback: Option<wgpu::Buffer>,
     pending: Option<Region>,
     waiting: Option<RegionRequest>,
     areas: Option<areas::AreasJob>,
@@ -62,7 +62,7 @@ impl RegionRequests {
             + self.cache.as_ref().map_or(0,|cache|cache.seeds.size())
             + self.cache.as_ref().and_then(|cache|cache.mask.as_ref()).filter(|mask|self.raw.mask().as_ref()!=Some(mask)).map_or(0,wgpu::Buffer::size)
             + self.stop_mask.as_ref().map_or(0,wgpu::Buffer::size)
-            + self.readback.iter().map(wgpu::Buffer::size).sum::<u64>()
+            + self.readback.as_ref().map_or(0,wgpu::Buffer::size)
             + self.pending.as_ref().map_or(0, Region::storage_bytes)
             + self.running.as_ref().map_or(0, |r| r.job.storage_bytes())
             + self.modify_source.as_ref().map_or(0, |s| s.document.size() + s.levels.iter().map(wgpu::Buffer::size).sum::<u64>())
@@ -74,7 +74,7 @@ impl RegionRequests {
             raw: region_sources::RawRegions::new(device),
             cache:None,sampling:region_sources::Sampling::Pixels,cache_request:None,stop_mask:None,chunk_timing:None,preparation:None,
             refiner: None,
-            readback: Vec::new(),
+            readback: None,
             pending: None,
             waiting: None,
             areas: None,
@@ -93,7 +93,7 @@ impl RegionRequests {
         self.running = None;
         if self.pending.take().is_some() {
             self.rx = None;
-            self.readback.clear();
+            self.readback=None;
         }
     }
     fn refiner(&mut self, r: &WgpuRasterizer) -> &mut selection_refine::SelectionRefiner {
@@ -716,7 +716,7 @@ impl RegionRequests {
         let band_bytes=u64::from(extent[0].div_ceil(8))*u64::from(extent[1])*4;
         let seal_metadata=region.gaps.as_ref().and_then(|gaps|gaps.seal_metadata.as_ref());
         let gaps=region.gaps.is_some();
-        self.readback.clear();
+        self.readback=None;
         let stale=self.cache_request.is_some();
         if stale {self.flood.copy_stale(&mut encoder,&region.coverage,region.bounds_offset+20);}
         let mask_size=region.bounds_offset+32;
@@ -732,7 +732,7 @@ impl RegionRequests {
         if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,&readback,mask_size+band_size+metadata_bytes,extra_size);}
         let capture=selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
             underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize};
-        self.readback.push(readback);
+        self.readback=Some(readback);
         if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
         r.uploads.finish(&encoder);
         r.metrics.command_passes += encoder.pass_count();
@@ -875,7 +875,7 @@ impl WgpuRasterizer {
         let _ = self.device.poll(wgpu::PollType::Poll);
         let incoming=requests.rx.as_ref()?.try_recv().ok()?;
         let region=requests.pending.take().unwrap();
-        requests.readback.clear();
+        requests.readback=None;
         let result=match incoming {
             Ok((_,true))=>{
                 if let Some(cache)=&mut requests.cache {cache.ready=false;cache.classified=false;}

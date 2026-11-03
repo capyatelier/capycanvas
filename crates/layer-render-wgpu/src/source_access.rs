@@ -213,8 +213,6 @@ impl WgpuRasterizer {
         })
     }
 
-    /// Consume this texture in queue order before the source cache can evict it.
-    /// It can be encoded sRGB8 paint or linear Float32 original-source data.
     pub(super) fn raw_layer_tile(
         &mut self,
         layer: SourceTarget,
