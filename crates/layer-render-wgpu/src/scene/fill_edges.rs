@@ -142,6 +142,16 @@ fn band_intersects(operation:&layer_core::RasterOperation,coordinate:[u32;2],ext
     }
     !region.intersect(pixel_rect(selection.bounds(),extent)).is_empty()
 }
+fn external(edges:&layer_core::FillEdges,packet:FramePacket<'_>,preview:Option<&layer_render::FillPreview>)->Vec<bool> {
+    let edited:Vec<_>=packet.dab_batches.iter().map(|batch|batch.target).chain(preview.map(|fill|fill.target)).collect();
+    edges.lines.iter().map(|line|!crate::snapshot::capture_targets(line.snapshot.view().with_scope(&line.scope),&line.scope).iter()
+        .any(|target|edited.contains(target))).collect()
+}
+fn same_edges(a:&layer_core::FillEdges,b:&layer_core::FillEdges)->bool {
+    Arc::ptr_eq(&a.snapshot,&b.snapshot) && a.colour_on_solid==b.colour_on_solid && a.position==b.position && a.tolerance==b.tolerance
+        && a.lines.len()==b.lines.len() && a.lines.iter().zip(&b.lines).all(|(a,b)|
+            Arc::ptr_eq(&a.snapshot,&b.snapshot) && a.scope==b.scope && a.fill_above==b.fill_above)
+}
 pub(crate) fn read_bounds(operation:&layer_core::RasterOperation,bounds:PixelRect,extent:[u32;2])->PixelRect {
     if matches!(operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..}) {bounds.expand(HALO,extent)}else{bounds}
 }
@@ -185,17 +195,17 @@ impl Scene {
         }
         Ok(())
     }
-    pub(super) fn prepare_fill_edges(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,index:u32,edges:&layer_core::FillEdges,operation:&layer_core::RasterOperation,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+    pub(super) fn prepare_fill_edges(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,edges:&layer_core::FillEdges,operation:&layer_core::RasterOperation,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         let extent=packet.scene.target_extent(target);let offset=packet.scene.target_offset(target);
         let mut capture=self.fill_capture.take().unwrap_or_else(||Box::new(Capture::new(r,extent,edges.lines.len())));
-        let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.input(target,index).map(|input|(state.line_seeds[input].clone(),state.inputs[input].external.clone())));
-        capture.external=prepared.as_ref().map_or_else(||vec![false;edges.lines.len()],|(_,external)|external.clone());
+        capture.external=external(edges,packet,r.fill_preview.as_ref());
+        let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.input(target,edges,&capture.external,extent,offset).map(|input|state.line_seeds[input].clone()));
         let [x,y]=[edges.position.x,edges.position.y].map(|v|v.max(0.) as u32);
         let region=PixelRect::new(x,y,x+1,y+1).intersect(PixelRect::full(extent));
         let result=(|| {
             for (index,line) in edges.lines.iter().enumerate() {
-                if capture.external[index] {
-                    copy(encoder,&prepared.as_ref().unwrap().0,&capture.line_seeds,[0,index as u32],[0,index as u32],[1;2]);
+                if capture.external[index] && let Some(prepared)=&prepared {
+                    copy(encoder,prepared,&capture.line_seeds,[0,index as u32],[0,index as u32],[1;2]);
                 }else {
                     capture.source.region_into(r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),region,&capture.seed.0,encoder)?;
                     copy(encoder,&capture.seed.0,&capture.line_seeds,[0;2],[0,index as u32],[1;2]);
@@ -208,7 +218,7 @@ impl Scene {
         })();
         self.fill_capture=Some(capture);result
     }
-    pub(super) fn fill_edge_page(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,index:u32,operation:&layer_core::RasterOperation,coordinate:[u32;2],encoder:&mut submission::CommandEncoder)->Result<Option<(wgpu::BindGroup,[f32;4])>,GpuRasterError> {
+    pub(super) fn fill_edge_page(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,operation:&layer_core::RasterOperation,coordinate:[u32;2],encoder:&mut submission::CommandEncoder)->Result<Option<(wgpu::BindGroup,[f32;4])>,GpuRasterError> {
         let RasterOperationKind::Fill {edges:Some(edges),..}=&operation.kind else {unreachable!();};
         let extent=packet.scene.target_extent(target);let offset=packet.scene.target_offset(target);
         if !band_intersects(operation,coordinate,extent,HALO) {return Ok(None);}
@@ -221,7 +231,8 @@ impl Scene {
             if !band_intersects(operation,coordinate,extent,0) {return Ok(None);}
             encoder.copy_texture_to_texture(capture.seed.0.as_image_copy(),wgpu::TexelCopyTextureInfo {texture:&capture.color.0,
                 origin:wgpu::Origin3d {x:0,y:SIDE,z:0},mip_level:0,aspect:wgpu::TextureAspect::All},wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1});
-            let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.pages.iter().find(|(key,_,_)|*key==(target,index,coordinate)))
+            let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.input(target,edges,&capture.external,extent,offset)
+                .and_then(|input|state.pages.iter().find(|(key,_,_)|*key==(input,coordinate))))
                 .map(|(_,lines,cover)|(lines.0.clone(),cover.0.clone()));
             if let Some((lines,cover))=&prepared {
                 copy(encoder,lines,&capture.lines.0,[0;2],[0;2],[SIDE;2]);copy(encoder,cover,&capture.cover.0,[0;2],[0;2],[SIDE;2]);
@@ -241,25 +252,28 @@ impl Scene {
 }
 
 struct Input {
-    target:SourceTarget,index:u32,operation:layer_core::RasterOperation,external:Vec<bool>,damage:PixelRect,
+    target:SourceTarget,operation:layer_core::RasterOperation,external:Vec<bool>,extent:[u32;2],offset:[i64;2],
 }
 enum Step {Seed(usize),Page(usize,[u32;2])}
 pub(crate) struct FillEdgesPreflight {
-    owner:u64,revision:u64,color:layer_core::color::DocumentColor,preview:Option<(u64,u64,SourceTarget)>,inputs:Vec<Input>,steps:Vec<Step>,next:usize,
+    owner:u64,color:layer_core::color::DocumentColor,inputs:Vec<Input>,steps:Vec<Step>,next:usize,
     capture:artwork::Capture,scene:Option<Box<Scene>>,seed:Texture,scratch:Texture,line_seeds:Vec<wgpu::Texture>,
-    pages:Vec<((SourceTarget,u32,[u32;2]),Texture,Texture)>,failure:Option<GpuRasterError>,
+    pages:Vec<((usize,[u32;2]),Texture,Texture)>,failure:Option<GpuRasterError>,
 }
 impl FillEdgesPreflight {
     pub fn matches(&self,packet:FramePacket<'_>,color:layer_core::color::DocumentColor)->bool {
-        self.owner==packet.scene.owner() && self.revision==packet.scene.revision() && self.color==color
+        self.owner==packet.scene.owner() && self.color==color
     }
     pub fn pending(&self)->bool {self.failure.is_none() && self.next<self.steps.len()}
-    fn input(&self,target:SourceTarget,index:u32)->Option<usize> {self.inputs.iter().position(|input|input.target==target && input.index==index)}
+    fn input(&self,target:SourceTarget,edges:&layer_core::FillEdges,external:&[bool],extent:[u32;2],offset:[i64;2])->Option<usize> {
+        self.inputs.iter().position(|input|input.target==target && input.external==external && input.extent==extent && input.offset==offset
+            && matches!(&input.operation.kind,RasterOperationKind::Fill {edges:Some(stored),..} if same_edges(stored,edges)))
+    }
     fn advance(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         if self.scene.is_none() {self.scene=Some(Scene::new(r)?);}
         while let Some(step)=self.steps.get(self.next) {
             let (Step::Seed(input)|Step::Page(input,_))=*step;
-            let input=&self.inputs[input];let extent=packet.scene.target_extent(input.target);let offset=packet.scene.target_offset(input.target);
+            let input=&self.inputs[input];let extent=input.extent;let offset=input.offset;
             let RasterOperationKind::Fill {edges:Some(edges),..}=&input.operation.kind else {unreachable!();};
             let scene=self.scene.as_mut().unwrap();
             match *step {
@@ -279,7 +293,7 @@ impl FillEdgesPreflight {
                         LineCapture {source:&mut self.capture,next:&self.scratch,seeds:&self.line_seeds[id],lines:&lines.1,cover:&cover.1}
                             .capture(scene,r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),line,index,page_rect(coordinate).expand(HALO,extent),encoder)?;
                     }
-                    self.pages.push(((input.target,input.index,coordinate),lines,cover));
+                    self.pages.push(((id,coordinate),lines,cover));
                 }
             }
             self.next+=1;
@@ -290,35 +304,29 @@ impl FillEdgesPreflight {
 impl WgpuRasterizer {
     pub(crate) fn prepare_fill_edges(&mut self,packet:FramePacket<'_>)->bool {
         if self.snapshot_worker {return true;}
-        let keys:Vec<_>=packet.dab_batches.iter().filter_map(|batch| {
+        let requested:Vec<_>=packet.dab_batches.iter().filter_map(|batch| {
             let DabBatchKind::RasterOperation(index)=batch.kind else {return None;};
-            let operation=packet.scene.operations(batch.target)?.get(index as usize)?;
-            matches!(operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..}).then_some((batch.target,index))
-        }).chain(self.fill_preview.iter().filter(|fill|matches!(fill.operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..})).map(|fill|(fill.target,u32::MAX))).collect();
-        if keys.is_empty() {self.fill_edges_preflight=None;return true;}
+            Some((batch.target,packet.scene.operations(batch.target)?.get(index as usize)?,batch_pixel_rect(batch,packet.scene.target_extent(batch.target))))
+        }).chain(self.fill_preview.iter().map(|fill|(fill.target,&fill.operation,pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target)))))
+            .filter_map(|(target,operation,damage)| {
+                let RasterOperationKind::Fill {edges:Some(edges),underfill:Some(_),..}=&operation.kind else {return None;};
+                Some((target,operation,damage,external(edges,packet,self.fill_preview.as_ref())))
+            }).collect();
+        if requested.is_empty() {self.fill_edges_preflight=None;return true;}
         if let Some(compiler)=self.startup.as_ref().map(|startup|&startup.compiler).or(self.preparation_compiler.as_ref())
-            && !compiler.require([&self.scene_pipelines.pipeline[SCALAR_PIPELINE+1]],startup::DOCUMENT) {compiler.start();return false;}
-        let preview=self.fill_preview.as_ref().map(layer_render::FillPreview::key);
-        let mut state=if let Some(state)=self.fill_edges_preflight.take().filter(|state|state.preview==preview
-            && state.inputs.iter().map(|input|(input.target,input.index)).eq(keys.iter().copied())) {state}else {
-            let edited:Vec<_>=packet.dab_batches.iter().map(|batch|batch.target).chain(self.fill_preview.iter().map(|fill|fill.target)).collect();
-            let inputs:Vec<_>=packet.dab_batches.iter().filter_map(|batch| {
-                let DabBatchKind::RasterOperation(index)=batch.kind else {return None;};
-                Some((batch.target,index,packet.scene.operations(batch.target)?.get(index as usize)?,batch_pixel_rect(batch,packet.scene.target_extent(batch.target))))
-            }).chain(self.fill_preview.iter().map(|fill|(fill.target,u32::MAX,&fill.operation,pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target)))))
-                .filter_map(|(target,index,operation,damage)| {
-                    let RasterOperationKind::Fill {edges:Some(edges),underfill:Some(_),..}=&operation.kind else {return None;};
-                    let external=edges.lines.iter().map(|line|!crate::snapshot::capture_targets(line.snapshot.view().with_scope(&line.scope),&line.scope).iter().any(|target|edited.contains(target))).collect();
-                    Some(Input {target,index,operation:operation.clone(),external,damage})
-                }).collect();
+            && !compiler.require([&self.scene_pipelines.pipeline[SCALAR_PIPELINE]],startup::DOCUMENT) {compiler.start();return false;}
+        let mut state=if let Some(state)=self.fill_edges_preflight.take().filter(|state|requested.iter().all(|(target,operation,_,external)|
+            matches!(&operation.kind,RasterOperationKind::Fill {edges:Some(edges),..} if state.input(*target,edges,external,
+                packet.scene.target_extent(*target),packet.scene.target_offset(*target)).is_some()))) {state}else {
+            let inputs:Vec<_>=requested.iter().map(|(target,operation,_,external)|Input {target:*target,operation:(**operation).clone(),external:external.clone(),
+                extent:packet.scene.target_extent(*target),offset:packet.scene.target_offset(*target)}).collect();
             let steps=inputs.iter().enumerate().filter(|(_,input)|input.external.iter().any(|external|*external)).flat_map(|(id,input)| {
-                let extent=packet.scene.target_extent(input.target);
-                std::iter::once(Step::Seed(id)).chain(page_coordinates(input.damage).filter(move |coordinate|band_intersects(&input.operation,*coordinate,extent,0)).map(move |coordinate|Step::Page(id,coordinate)))
+                std::iter::once(Step::Seed(id)).chain(page_coordinates(requested[id].2).filter(move |coordinate|band_intersects(&input.operation,*coordinate,input.extent,0)).map(move |coordinate|Step::Page(id,coordinate)))
             }).collect::<Vec<_>>();
             let bytes=(steps.iter().filter(|step|matches!(step,Step::Page(..))).count() as u64).checked_mul(2*u64::from(SIDE).pow(2)*u64::from(self.device.scalar_format().block_copy_size(None).unwrap()));
             let failure=bytes.ok_or(GpuRasterError::SourceWorkingSetExceeded).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes)).err();
             let line_seeds=inputs.iter().map(|input|create_color_target(&self.device,[1,input.external.len().max(1) as u32],"prepared fill line seeds").0).collect();
-            FillEdgesPreflight {owner:packet.scene.owner(),revision:packet.scene.revision(),color:self.document_color(),preview,inputs,steps,next:0,capture:Default::default(),scene:None,
+            FillEdgesPreflight {owner:packet.scene.owner(),color:self.document_color(),inputs,steps,next:0,capture:Default::default(),scene:None,
                 seed:create_color_target(&self.device,[1;2],"prepared fill seed"),scratch:create_color_target(&self.device,[SIDE,SIDE+1],"prepared fill line source"),line_seeds,pages:Vec::new(),failure}
         };
         if state.pending() {
@@ -330,4 +338,73 @@ impl WgpuRasterizer {
         let ready=!state.pending();self.fill_edges_preflight=Some(state);ready
     }
     pub(crate) fn take_fill_edges_failure(&mut self)->Option<GpuRasterError> {self.fill_edges_preflight.as_mut().and_then(|state|state.failure.take())}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{layer_tests::placement,test_support::{packet,submit_ready}};
+
+    fn fixture()->(layer_core::Document,SourceTarget,layer_core::RasterOperation) {
+        let extent=[384;2];let mut document=placement::paint_document(extent,"Fill target");
+        let target=placement::target(&document);
+        let image=layer_core::color::source::rgba8_source(extent,|x,_|if (252..260).contains(&x) {[24,48,80,192]}else{[0;4]});
+        let reference=placement::append_paint(&mut document,"Reference",layer_core::authored::PaintSource {domain:extent,color_mode:Default::default(),
+            raster:Default::default(),base:Some(layer_core::authored::PaintBase::new(image.into())),operations:Default::default()}).1;
+        let rectangle=|x0,x1|layer_core::Selection::polygon(vec![layer_core::Point{x:x0,y:0.},layer_core::Point{x:x1,y:0.},
+            layer_core::Point{x:x1,y:384.},layer_core::Point{x:x0,y:384.}]).unwrap();
+        let mut coverage=layer_core::CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),extent,[0;2]);
+        coverage.source.default_coverage=0.;coverage.selection=Some(rectangle(0.,256.));
+        let snapshot=document.snapshot();
+        let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage,kind:RasterOperationKind::Fill {
+            color:[0.1,0.4,0.7,1.],texture:Default::default(),alpha_locked:false,underfill:Some(rectangle(252.,256.)),
+            edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:layer_core::Point{x:240.,y:192.},tolerance:0.,colour_on_solid:false,
+                lines:vec![layer_core::FillLine {snapshot,scope:SceneScope::Raw(reference),fill_above:false}]}))}};
+        (document,target,operation)
+    }
+    fn commit(document:&mut layer_core::Document,target:SourceTarget,operation:layer_core::RasterOperation)->DabBatch {
+        let batch=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage:operation.bounds([384;2]),
+            ..crate::test_support::dab_batch(target,crate::tests::test_style(BrushExecution::Dry),layer_core::Rect::from_extent([384;2]))};
+        let SourceTarget::Paint(handle)=target else {unreachable!()};
+        let mut source=document.artwork.paint.get(handle).unwrap().clone();source.operations=Arc::new(vec![operation]);
+        document.apply(layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&document.artwork.paint,handle,Some(source)).unwrap())).unwrap();
+        batch
+    }
+    #[test]
+    fn ready_fill_preview_reuses_seed_and_page_steps_at_commit() {
+        let mut results=Vec::new();
+        for preview in [false,true] {
+            let (mut document,target,operation)=fixture();let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            submit_ready(&mut r,FramePacket {reset_layers:true,..packet(document.scene(),[384;2])}).unwrap();
+            let retained=if preview {
+                r.set_fill_preview(Some(layer_render::FillPreview {transaction:42,revision:0,target,operation:operation.clone()}));
+                submit_ready(&mut r,packet(document.scene(),[384;2])).unwrap();
+                let state=r.fill_edges_preflight.as_ref().unwrap();assert!(!state.pending());assert!(!state.pages.is_empty());
+                Some((state.line_seeds.clone(),state.steps.len(),state.next))
+            }else{None};
+            let batch=commit(&mut document,target,operation);r.set_fill_preview(None);
+            let frame=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(document.scene(),[384;2])};
+            crate::test_support::prepare_raster(&mut r,|r|if r.raster_dependencies_ready(frame,None){Ok(())}else{Err(GpuRasterError::DeferredObjectWork)}).unwrap();
+            if let Some((seeds,steps,next))=retained {
+                let state=r.fill_edges_preflight.as_ref().unwrap();assert_eq!(state.line_seeds,seeds);
+                assert_eq!((state.steps.len(),state.next),(steps,next));assert_eq!(next,steps);
+            }
+            submit_ready(&mut r,frame).unwrap();results.push(r.readback_srgb_rgba8().unwrap());
+        }
+        assert_eq!(results[0],results[1]);
+    }
+    #[test]
+    fn equal_preview_key_with_a_different_reference_snapshot_rebuilds_captures() {
+        let (document,target,operation)=fixture();let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        submit_ready(&mut r,FramePacket {reset_layers:true,..packet(document.scene(),[384;2])}).unwrap();
+        let mut preview=layer_render::FillPreview {transaction:42,revision:0,target,operation};
+        r.set_fill_preview(Some(preview.clone()));submit_ready(&mut r,packet(document.scene(),[384;2])).unwrap();
+        let seeds=r.fill_edges_preflight.as_ref().unwrap().line_seeds.clone();let pixels=r.readback_srgb_rgba8().unwrap();
+        let RasterOperationKind::Fill {edges:Some(edges),..}=&mut preview.operation.kind else {unreachable!()};
+        let old=edges.lines[0].snapshot.clone();edges.lines[0].snapshot=Arc::new((*old).clone());
+        assert_eq!(old,edges.lines[0].snapshot);assert!(!Arc::ptr_eq(&old,&edges.lines[0].snapshot));
+        r.set_fill_preview(Some(preview));submit_ready(&mut r,packet(document.scene(),[384;2])).unwrap();
+        assert_ne!(r.fill_edges_preflight.as_ref().unwrap().line_seeds,seeds);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(),pixels);
+    }
 }

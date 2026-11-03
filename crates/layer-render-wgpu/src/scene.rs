@@ -45,7 +45,7 @@ pub(crate) mod resample;
 pub(crate) mod scale;
 
 const SCALAR_PIPELINE:usize=9;
-const FRAGMENTS: [(&str, &str); 11] = [
+const FRAGMENTS: [(&str, &str); 10] = [
     ("fragment_main", "tile layer composition"),
     ("fragment_main", "tile layer over"),
     ("fragment_coverage", "tile mask coverage"),
@@ -55,7 +55,6 @@ const FRAGMENTS: [(&str, &str); 11] = [
     ("fragment_blend", "tile layer blend"),
     ("fragment_image", "tile image placement"),
     ("fragment_tone", "tile tone mapping"),
-    ("fragment_main", "scalar scene composition"),
     ("fragment_main", "scalar scene over"),
 ];
 
@@ -68,7 +67,7 @@ fn fragment_pipeline(operation: u32, over: bool, scalar:bool) -> Option<usize> {
         21 | 22 => 2,
         12 => 7,
         10 => 8,
-        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => (if scalar {SCALAR_PIPELINE}else{0})+usize::from(over),
+        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => if scalar {SCALAR_PIPELINE}else{usize::from(over)},
         4 => 6,
         _ => panic!("Unknown scene draw operation {operation}"),
     })
@@ -1468,7 +1467,7 @@ impl Scene {
             Ok::<_, GpuRasterError>((view, tile.grain(binding), strength * r.papers.relief(&id).unwrap()))
         }).transpose()?;
         let edge_settings=match &op.kind {RasterOperationKind::Fill {edges:Some(edges),underfill:Some(_),..}=>Some(edges.as_ref()),_=>None};
-        if let Some(edges)=edge_settings {self.prepare_fill_edges(r,packet,target,operation_index as u32,edges,op,encoder)?;}
+        if let Some(edges)=edge_settings {self.prepare_fill_edges(r,packet,target,edges,op,encoder)?;}
         let Some(stored_index) = r.paint_layers.iter().position(|l| l.id == target) else {
             return Ok(());
         };
@@ -1495,7 +1494,7 @@ impl Scene {
         let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         let underfill_coverage = layer_masks::underfill_coverage(op);
         for (c, source, destination) in pages {
-            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,operation_index as u32,op,c,encoder)).transpose()?.flatten();
+            let edge_input=edge_settings.map(|_|self.fill_edge_page(r,packet,target,op,c,encoder)).transpose()?.flatten();
             let mask = self.command_mask_at(r, &op.coverage, c, (target, operation_index as u32, false))?;
             let underfill = underfill_coverage.as_ref().map(|coverage| self.command_mask_at(r, coverage, c, (target, operation_index as u32, true))).transpose()?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
@@ -2600,7 +2599,7 @@ impl Pipelines {
         used[6] = true;
         for operation in scene.targets().filter(|target| !target.is_coverage()).filter_map(|target| scene.operations(target)).flatten() {
             if let Some(pipeline)=operation_pipeline(&operation.kind) {used[pipeline]=true;}
-            if matches!(operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..}) {used[SCALAR_PIPELINE+1]=true;}
+            if matches!(operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..}) {used[SCALAR_PIPELINE]=true;}
         }
         self.pipeline.iter().zip(used).filter_map(|(pipeline,used)| used.then_some(pipeline))
     }
@@ -2650,7 +2649,7 @@ impl Pipelines {
                 (device.clone(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
                 fullscreen_pipeline_recipe(mode, &device, &pipeline_layout, &shader, entry,
-                    (i == 1 || i == SCALAR_PIPELINE+1).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    (i == 1 || i == SCALAR_PIPELINE).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     if i == 2 || i>=SCALAR_PIPELINE { device.scalar_format() } else { device.working_format() }, label)
             })
         }).collect::<Vec<_>>().try_into().ok().unwrap();
@@ -2879,7 +2878,7 @@ mod shader_tests {
     #[test]
     fn fragment_operations_select_only_their_assigned_pipeline() {
         assert_eq!(FRAGMENTS.map(|(entry,_)| entry), ["fragment_main","fragment_main","fragment_coverage",
-            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone","fragment_main","fragment_main"]);
+            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone","fragment_main"]);
         let expected = [
             [Some(0),Some(1)],
             [Some(0),Some(1)],
@@ -2917,7 +2916,7 @@ mod shader_tests {
                 }
             }
         }
-        for over in [false,true] {assert_eq!(fragment_pipeline(23,over,true),Some(SCALAR_PIPELINE+usize::from(over)));}
+        assert_eq!(fragment_pipeline(23,true,true),Some(SCALAR_PIPELINE));
         for operation in [u32::MAX] {
             for over in [false,true] {
                 assert!(std::panic::catch_unwind(|| fragment_pipeline(operation,over,false)).is_err(),
