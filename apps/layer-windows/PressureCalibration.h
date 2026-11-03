@@ -84,7 +84,7 @@ struct ResponseCalibration:std::enable_shared_from_this<ResponseCalibration>{
             }});
             segments.Children().Append(control);
         }
-        directionSection.Children().Append(segments);Grid::SetColumn(directionSection,3);controls.Children().Append(directionSection);
+        directionSection.VerticalAlignment(VerticalAlignment::Center);directionSection.Children().Append(segments);Grid::SetColumn(directionSection,3);controls.Children().Append(directionSection);
         scroll.Content(content);scroll.HorizontalScrollBarVisibility(ScrollBarVisibility::Disabled);scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);body.Children().Append(scroll);
         footer.ColumnSpacing(8);footer.Margin({16,16,16,16});
         for(int i=0;i<4;i++){ColumnDefinition column;column.Width({1,i==1?GridUnitType::Star:GridUnitType::Auto});footer.ColumnDefinitions().Append(column);}

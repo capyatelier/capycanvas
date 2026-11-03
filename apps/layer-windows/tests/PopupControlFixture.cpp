@@ -6,6 +6,7 @@
 #include "WorkspaceManagerView.h"
 #include "WorkspaceDialogs.h"
 #include "WorkspaceView.h"
+#include "PressureCalibration.h"
 #include "CanvasActionBar.h"
 #include "EffectControls.h"
 #include "SettingsView.h"
@@ -211,6 +212,36 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         for(auto const& popup:VisualTreeHelper::GetOpenPopupsForXamlRoot(root.XamlRoot()))if(auto node=findElement(popup.Child(),id))return node;
         return findElement(root,id);
     }
+    winrt::Windows::Foundation::IAsyncAction tiltRows(J const& model,J const& catalog){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source,catalog);source->model=model;source->state=object(model,L"state");source->refreshPalette();source->send=[](std::string){};
+        require(object(source->state,L"tilt_calibration").Size()!=0,L"Tilt row fixture needs shared calibration presentation");
+        Canvas host;host.Width(1000);host.Height(700);auto previousSize=window.AppWindow().Size();auto width=root.Width(),height=root.Height();
+        auto calibration=std::make_shared<ResponseCalibration>();calibration->data=source;calibration->init(host);
+        root.Width(1000);root.Height(780);root.Children().InsertAt(0,host);window.AppWindow().Resize({1100,900});
+        auto cleanup=[&]{uint32_t at;if(root.Children().IndexOf(host,at))root.Children().RemoveAt(at);calibration.reset();root.Width(width);root.Height(height);window.AppWindow().Resize(previousSize);};
+        try{
+            co_await wait([host]{return host.IsLoaded()&&host.ActualWidth()==1000&&host.ActualHeight()==700;},L"Tilt native row host did not arrange");
+            auto font=calibration->sensitivityTitle.FontSize();
+            auto bounds=[host](FrameworkElement const& item){return item.TransformToVisual(host).TransformBounds({0,0,float(item.ActualWidth()),float(item.ActualHeight())});};
+            for(bool wrapped:{false,true}){
+                for(auto title:{calibration->sensitivityTitle,calibration->directionTitle})title.FontSize(font*(wrapped?1.5:1.));
+                calibration->Publish();host.UpdateLayout();
+                co_await wait([calibration,wrapped]{
+                    if(!calibration->frame.IsLoaded()||calibration->firmer.ActualWidth()<=0)return false;
+                    for(auto title:{calibration->sensitivityTitle,calibration->directionTitle})if(wrapped?title.ActualHeight()<=36:title.ActualHeight()<=0||title.ActualHeight()>36)return false;
+                    return true;
+                },L"Tilt native captions did not arrange in their natural or wrapped rows");
+                auto first=bounds(calibration->firmer),last=bounds(calibration->lighter);auto plot=findElement(host,L"pen-tilt-curve");require(bool(plot),L"Tilt native row fixture lost its actual response graph");auto graph=bounds(plot);
+                require(std::abs(calibration->frame.ActualWidth()-384)<=1,L"Tilt row fixture lost its minimum-width utility");
+                require(std::abs(first.Y-last.Y)<=1&&first.Y>=graph.Y+graph.Height,L"Tilt sensitivity controls left their row below the graph");
+                for(auto item:{calibration->firmer,calibration->lighter}){auto box=bounds(item);require(std::abs(box.Width-36)<=1&&std::abs(box.Height-36)<=1,L"Tilt sensitivity row lost square tile targets");}
+                for(auto axis:calibration->axes){auto box=bounds(axis);require(std::abs(box.Width-36)<=1&&std::abs(box.Height-36)<=1,L"Tilt direction row lost square tile targets");
+                    require(std::abs(box.Y-first.Y)<=1&&box.X>last.X+last.Width,(L"Tilt "+hstring(wrapped?L"wrapped":L"natural")+L" direction row is not aligned with sensitivity: delta="+to_hstring(box.Y-first.Y)+L" sensitivity-caption-height="+to_hstring(calibration->sensitivityTitle.ActualHeight())+L" direction-caption-height="+to_hstring(calibration->directionTitle.ActualHeight())+L" sensitivity-y/height="+to_hstring(first.Y)+L"/"+to_hstring(first.Height)+L" axis-y/height="+to_hstring(box.Y)+L"/"+to_hstring(box.Height)+L" controls-y/height="+to_hstring(bounds(calibration->controls).Y)+L"/"+to_hstring(bounds(calibration->controls).Height)).c_str());
+                }
+            }
+            cleanup();
+        }catch(...){cleanup();throw;}
+    }
     winrt::Windows::Foundation::IAsyncAction gradientContacts(J const& model,J const& catalog,J const& control){
         auto source=std::make_shared<WorkspaceData>();context.apply(source,catalog);source->model=J::Parse(model.Stringify());source->state=object(source->model,L"state");source->refreshPalette();
         auto edits=std::make_shared<std::vector<J>>();Bindings fields;
@@ -355,7 +386,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }catch(...){if(attached)root.Children().RemoveAt(0);header.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);result->set_exception(std::current_exception());}
     }
     winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
-        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec,inspectorSnapshot;NativeLayoutInput layout,inspectorLayout;
+        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec,inspectorSnapshot,tiltSnapshot;NativeLayoutInput layout,inspectorLayout;
         auto queue=root.DispatcherQueue();auto weak=weak_from_this();
         co_await resume_background();
         {
@@ -382,6 +413,9 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             auto swatch=num(array(palette,L"swatches").GetObjectAt(0),L"id"),other=num(array(palette,L"palettes").GetObjectAt(1),L"id");
             paletteQuery(O({{L"type",S(L"palette_action")},{L"action",O({{L"op",S(L"use")},{L"id",N(swatch)}})}}));
             CapySnapshotInfo info{};NativeString initial(capy_snapshot(host.get(),&info));require(bool(initial)&&info.full,L"Layer fixture full model missing");
+            action(R"({"type":"invoke","command":"pen_tilt"})");
+            NativeString tiltModel(capy_snapshot(host.get(),&info));require(bool(tiltModel)&&info.full,L"Tilt native fixture shared model missing");tiltSnapshot=std::move(tiltModel.bytes);
+            action(R"({"type":"tilt_calibration","action":{"kind":"panel","action":{"kind":"cancel"}}})");
             auto model=J::Parse(to_hstring(initial.bytes));auto id=num(object(object(object(model,L"state"),L"layer_tools"),L"editing_layer"),L"id");
             action(to_string(O({{L"type",S(L"layer")},{L"action",O({{L"op",S(L"begin_rename")},{L"id",N(id)}})}}).Stringify()));
             NativeString current(capy_snapshot(host.get(),&info));require(bool(current)&&info.full,L"Layer rename full model missing");
@@ -436,6 +470,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 root.Children().RemoveAt(0);attached=false;view.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);
             }catch(...){if(attached)root.Children().RemoveAt(0);view.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);throw;}
         }
+        phase=L"tilt-control-rows";co_await tiltRows(J::Parse(to_hstring(tiltSnapshot)),copy);
         phase=L"gradient-input";co_await gradientContacts(model,copy,J::Parse(to_hstring(gradientSpec)));phase=L"layer-language-draft";
         auto locale=J::Parse(to_hstring(translated));
         require(str(object(locale,L"bootstrap"),L"active_tag")==L"ja",L"Japanese fixture presentation is not Japanese");
@@ -903,8 +938,8 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             phase=L"shortcut-search-ime";co_await shortcutSearchIme();
             phase=L"customization-name-ack";co_await customizationDraft();
             phase=L"native-default-ime";co_await defaultIme();
-            phase=L"paper-name-ime";co_await paperNameIme();
             phase=L"layer-language-draft";co_await layerLanguageDraft();
+            phase=L"paper-name-ime";co_await paperNameIme();
             phase=L"settings-resize";co_await settingsResize();
             phase=L"window-close";auto closed=owner.Begin(data,anchor,menu());window.Close();co_await settle();
             require(!closed.Current()&&!closed.Show(anchor,{}),L"Reply reopened canceled owner");empty();++checks;
