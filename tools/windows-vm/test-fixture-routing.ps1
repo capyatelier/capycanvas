@@ -2,9 +2,43 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-fixtures.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}
-foreach($name in 'Write-FixturePlan','Get-NextFixture','Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Assert-FixtureFiles','Build-ControlFixture'){
+foreach($name in 'Get-FixtureProcessArguments','Write-FixturePlan','Get-NextFixture','Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Assert-FixtureFiles','Build-ControlFixture'){
     $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
     . ([scriptblock]::Create($function.Extent.Text))
+}
+& {
+    $scripts="C:\owned fixture's scripts";$TimeoutMinutes=7
+    $arguments=@('-File',"C:\owned fixture's scripts\exercise-snap.ps1",'-Executable',"C:\owned app's directory\CapyCanvas.exe")
+    foreach($fixture in @('drawers','color-picker','shortcuts','snapshot','Snap')){if(((Get-FixtureProcessArguments $fixture $arguments) -join [char]0) -cne ($arguments -join [char]0)){throw 'An ordinary fixture changed its process arguments'}}
+    $routed=@(Get-FixtureProcessArguments 'snap' $arguments)
+    if($routed.Count -ne 2 -or $routed[0] -ne '-Command'){throw 'Snap did not use a desktop helper command'}
+    function Join-Path($Path,$ChildPath){'Capture-Desktop'}
+    function Capture-Desktop($Desktop,$Script,$Parameters,$TimeoutSeconds){
+        if($Desktop -cne 'Default' -or $Script -cne $arguments[1] -or $Parameters.Executable -cne $arguments[3] -or $Parameters.Count -ne 1 -or $TimeoutSeconds -ne 420){throw 'Snap desktop routing lost its desktop, script, arguments or timeout'}
+    }
+    $routed=@(Get-FixtureProcessArguments 'snap' $arguments)
+    Invoke-Expression $routed[1]
+    $launch=$ast.Find({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$arguments' -and $node.Right.Extent.Text -like '*Get-FixtureProcessArguments*'},$true)
+    if(!$launch){throw 'Fixture launch bypasses desktop routing'}
+}
+& {
+    $helper=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/test-desktop.ps1'),[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw ($errors|Out-String)}
+    $bootstrap=$helper.Find({param($node)$node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.Value.Contains('$invocation=Import-Clixml')},$true)
+    $child=[Management.Automation.Language.Parser]::ParseInput($bootstrap.Value,[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw ($errors|Out-String)}
+    $context=@($child.EndBlock.Statements|Where-Object {$_.Extent.Text.Contains('$env:CAPY_FIXTURE_CONTEXT')})
+    if($context.Count -ne 1){throw 'Desktop child must select one fixture context'}
+    $contextCode=$context[0].Extent.Text.Replace('$PSScriptRoot',"'"+$PSScriptRoot.Replace("'","''")+"'")
+    $prior=$env:CAPY_FIXTURE_CONTEXT
+    try{
+        $env:CAPY_FIXTURE_CONTEXT='C:\owned runner\snap-context.json'
+        . ([scriptblock]::Create($contextCode))
+        if($env:CAPY_FIXTURE_CONTEXT -cne 'C:\owned runner\snap-context.json'){throw 'Nested desktop lost the runner fixture context'}
+        $env:CAPY_FIXTURE_CONTEXT=$null
+        . ([scriptblock]::Create($contextCode))
+        if($env:CAPY_FIXTURE_CONTEXT -cne (Join-Path $PSScriptRoot 'fixture.json')){throw 'A standalone desktop lost its private fixture context'}
+    }finally{$env:CAPY_FIXTURE_CONTEXT=$prior}
 }
 & {
     $directory=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-plan-'+[guid]::NewGuid().ToString('N'))

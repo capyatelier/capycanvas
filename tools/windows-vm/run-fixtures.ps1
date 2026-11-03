@@ -72,6 +72,16 @@ foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
         foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @(Get-FixtureVariantArguments $fixture $option $choice) }
     }
 }
+function Get-FixtureProcessArguments([string]$Fixture,[string[]]$Arguments){
+    if($Fixture -cne 'snap'){return $Arguments}
+    $parameters=@()
+    for($i=2;$i -lt $Arguments.Count;$i++){
+        $name=$Arguments[$i].TrimStart('-').Replace("'","''");$value='$true'
+        if($i+1 -lt $Arguments.Count -and !$Arguments[$i+1].StartsWith('-')){$i++;$value="'"+$Arguments[$i].Replace("'","''")+"'"}
+        $parameters+="'$name'=$value"
+    }
+    '-Command';"& '"+(Join-Path $scripts 'test-desktop.ps1').Replace("'","''")+"' -Desktop Default -Script '"+$Arguments[1].Replace("'","''")+"' -Parameters @{"+($parameters -join ';')+"} -TimeoutSeconds "+($TimeoutMinutes*60)
+}
 function Select-Fixtures([string[]]$Available,[string[]]$Requested) {
     if($null -eq $Requested -or !$Requested.Count){return $Available}
     $Requested=@($Requested|ForEach-Object {
@@ -292,6 +302,7 @@ while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
         $arguments = if ($null -eq $run.Value) { Start-Shortcuts } else { @('-File', (Join-Path $scripts "exercise-$fixture.ps1"), '-Executable', $Executable) + $run.Value }
         $arguments += @(Get-FixtureCompanionArguments $fixture $run.Value ${function:Build-ControlFixture})
         if ($DebuggerPath) { $arguments += @('-DebuggerPath', $DebuggerPath) }
+        $arguments=@(Get-FixtureProcessArguments $fixture $arguments)
         $env:CAPY_WAIT_SCALE = if($HardwareGpu){$null}else{'3'}
         $process = Start-Process (Get-Process -Id $PID).Path -ArgumentList (ConvertTo-FixtureCommandLine (@('-NoProfile', '-Sta') + $arguments)) -NoNewWindow -PassThru -RedirectStandardOutput "$log.log" -RedirectStandardError "$log.err"
         $null = $process.Handle

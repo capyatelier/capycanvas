@@ -14,6 +14,7 @@ public static class CapyPrivateDesktop {
     [StructLayout(LayoutKind.Sequential)]
     struct ProcessInfo {public IntPtr process,thread;public uint id,threadId;}
     [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateDesktop(string name,IntPtr device,IntPtr mode,uint flags,uint access,IntPtr security);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr OpenDesktop(string name,uint flags,bool inherit,uint access);
     [DllImport("user32.dll",SetLastError=true)] static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
     [DllImport("user32.dll",SetLastError=true)] static extern bool SwitchDesktop(IntPtr desktop);
     [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
@@ -31,7 +32,7 @@ public static class CapyPrivateDesktop {
         ProcessInfo child=new ProcessInfo();bool switched=false;
         if(original==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
         try {
-            desktop=CreateDesktop(desktopName,IntPtr.Zero,IntPtr.Zero,0,0x1ff,IntPtr.Zero);
+            desktop=desktopName=="Default"?OpenDesktop(desktopName,0,false,0x1ff):CreateDesktop(desktopName,IntPtr.Zero,IntPtr.Zero,0,0x1ff,IntPtr.Zero);
             if(desktop==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
             job=CreateJobObject(IntPtr.Zero,null);
             if(job==IntPtr.Zero)throw new Win32Exception(Marshal.GetLastWin32Error());
