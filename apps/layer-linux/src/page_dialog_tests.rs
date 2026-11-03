@@ -510,9 +510,27 @@ fn native_phone_navigation_headers() {
                     &text[start..start + line.length() as usize]
                 }).collect::<String>();
                 assert_eq!(joined, text, "About {} preserves its complete text", row.id.key());
-                if !text.contains(' ') && (!link || row.id == PreferenceId::Website) {
-                    assert_eq!(layout.line_count(), 1, "About {} keeps its short token whole", row.id.key());
+                assert!(!layout.is_ellipsized(), "About {} shows every glyph", row.id.key());
+                let natural = layout.copy();
+                natural.set_width(-1);
+                let (x, y) = label.layout_offsets();
+                let (ink, logical) = layout.pixel_extents();
+                for rect in [ink, logical] {
+                    assert!(x + rect.x() >= -1 && y + rect.y() >= -1
+                        && x + rect.x() + rect.width() <= label.width() + 1
+                        && y + rect.y() + rect.height() <= label.height() + 1,
+                        "About {} keeps its text inside the label: {rect:?} in {}x{} at {x},{y}", row.id.key(), label.width(), label.height());
                 }
+                let scroll = label.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+                let visible = label.compute_bounds(&scroll).unwrap();
+                assert!(visible.x() >= -1. && visible.y() >= -1.
+                    && visible.x() + visible.width() <= scroll.width() as f32 + 1.
+                    && visible.y() + visible.height() <= scroll.height() as f32 + 1.,
+                    "About {} keeps its complete value in view: {visible:?}", row.id.key());
+                if !text.contains(' ') && (!link || row.id == PreferenceId::Website) && natural.pixel_size().0 <= label.width() {
+                    assert_eq!(layout.line_count(), 1, "About {} keeps a fitting token on one line", row.id.key());
+                }
+                if row.id == PreferenceId::Website { capture(&mut d, "preferences-about-website"); }
                 if link {
                     let attributes = label.attributes().unwrap();
                     let hyphens = attributes.iterator().get(gtk::pango::AttrType::InsertHyphens).unwrap().downcast::<gtk::pango::AttrInt>().unwrap();
