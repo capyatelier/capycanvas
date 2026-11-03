@@ -220,7 +220,7 @@ void CanvasWindow::Open() {
     }});
     panel.PointerExited([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock();self&&self->inputDispatcher&&!e.Handled()){
         auto point=e.GetCurrentPoint(self->panel);auto id=point.PointerId();bool pen=point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen;
-        if(!point.IsInContact())self->inputDispatcher.TryEnqueue([weak,id,pen]{if(auto self=weak.lock();self&&!self->closing){if(pen){self->PenButtons(id,false);std::lock_guard lock(self->mutex);self->penSources.Forget(id);}self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}});
+        if(!point.IsInContact())self->inputDispatcher.TryEnqueue([weak,id,pen]{if(auto self=weak.lock();self&&!self->closing){if(pen){self->PenButtons(id,false);std::lock_guard lock(self->mutex);self->penSources.Forget(id);}self->LeaveHover(HoverRoute::Xaml);}});
     }});
     textFocus=FocusManager::GettingFocus(auto_revoke,[weak=weak_from_this()](auto&&,GettingFocusEventArgs const& e){
         if(auto self=weak.lock();self&&!self->closed)if(auto entry=e.NewFocusedElement().try_as<TextBox>();entry&&entry.XamlRoot()==self->root.XamlRoot()){
@@ -767,10 +767,10 @@ void CanvasWindow::StartInput() {
             if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);}
         });
         inputSource.PointerRoutedAway([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);self->LeaveHover(HoverRoute::Independent);}
         });
         inputSource.PointerRoutedReleased([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
-            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}
+            if(auto self=weak.lock()){self->Pointer(e,4);self->CanvasTouch(e,4);self->LeaveHover(HoverRoute::Independent);}
         });
         inputSource.PointerWheelChanged([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
             if(auto self=weak.lock())self->Wheel(e);
@@ -779,7 +779,7 @@ void CanvasWindow::StartInput() {
             if(auto self=weak.lock();self&&!e.CurrentPoint().IsInContact()){
                 auto point=e.CurrentPoint();self->PenButtons(point,4);
                 if(point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen){std::lock_guard lock(self->mutex);self->penSources.Forget(point.PointerId());}
-                self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});
+                self->LeaveHover(HoverRoute::Independent);
             }
         });
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
@@ -856,7 +856,12 @@ void CanvasWindow::ObservePointerModality(Microsoft::UI::Input::PointerPoint con
     if(scrollbarInput&&scrollbarInput->Observe(point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse,point.Timestamp()))
         dispatcher.TryEnqueue([source=scrollbarInput]{auto& state=CapyUi::MouseScrollbars::current();if(state.source==source)state.apply();});
 }
+void CanvasWindow::LeaveHover(HoverRoute route){
+    if(hoverRoute!=route)return;
+    hoverRoute=HoverRoute::None;SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});
+}
 void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e,uint32_t phase){
+    if(phase<=2)hoverRoute=HoverRoute::Independent;
     auto current=e.CurrentPoint();
     if(phase<=2)ObservePointerModality(current);
     Pointer(PointerSamples(current,e.GetIntermediatePoints(),phase,true),e.KeyModifiers(),
@@ -875,8 +880,11 @@ void CanvasWindow::XamlPointer(PointerRoutedEventArgs const& e,uint32_t phase){
     auto history=e.GetIntermediatePoints(panel);auto samples=PointerSamples(current,history,phase,false);
     auto modifiers=e.KeyModifiers();auto arrival=latencyTrace.enabled?Now():0;
     bool pen=current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen,barrel=current.Properties().IsBarrelButtonPressed();
-    inputDispatcher.TryEnqueue([weak=weak_from_this(),samples=std::move(samples),modifiers,pen,barrel,arrival]() mutable {
-        if(auto self=weak.lock();self&&!self->closing)self->Pointer(std::move(samples),modifiers,pen,barrel,arrival);
+    inputDispatcher.TryEnqueue([weak=weak_from_this(),samples=std::move(samples),modifiers,pen,barrel,arrival,phase]() mutable {
+        if(auto self=weak.lock();self&&!self->closing){
+            if(phase<=2)self->hoverRoute=HoverRoute::Xaml;
+            self->Pointer(std::move(samples),modifiers,pen,barrel,arrival);
+        }
     });
     CanvasTouch(xamlCanvasTouch,current,history,phase);e.Handled(true);
     if(phase==3||phase==4){xamlContacts.erase(id);panel.ReleasePointerCapture(e.Pointer());}
@@ -1755,7 +1763,7 @@ void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
     auto source=e.OriginalSource().try_as<DependencyObject>();
     while(source&&source!=panel&&source!=root)source=VisualTreeHelper::GetParent(source);
     if(!point.IsInContact()&&(leave||source!=panel)&&inputDispatcher){
-        inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing)self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});});
+        inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock();self&&!self->closing){self->hoverRoute=HoverRoute::None;self->SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});}});
     }
     {
         std::lock_guard lock(mutex);

@@ -140,6 +140,8 @@ private:
     std::shared_ptr<CapyUi::PointerModality> scrollbarInput;
     std::atomic<uint32_t> sentModifiers{0};
     std::optional<bool> pendingHover;
+    enum class HoverRoute:uint8_t{None,Xaml,Independent};
+    HoverRoute hoverRoute=HoverRoute::None;
     CanvasContactGate canvasContacts; // render thread
     winrt::Microsoft::UI::Xaml::Controls::StackPanel toolbar;
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
@@ -247,6 +249,7 @@ private:
     uint64_t replayTime=0;
     void Replay(ReplayKind);
     void StartInput();
+    void LeaveHover(HoverRoute route);
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
     using PointerPoints=winrt::Windows::Foundation::Collections::IVector<winrt::Microsoft::UI::Input::PointerPoint>;
     std::vector<CapyPointer> PointerSamples(winrt::Microsoft::UI::Input::PointerPoint const&,PointerPoints const&,uint32_t phase,bool predict);
