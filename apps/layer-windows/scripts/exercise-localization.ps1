@@ -85,10 +85,15 @@ function Camera{Trace-Part 'camera-state' 'camera'}
 function Use-Window($Window,$PreparedRoot){
  if(!$PreparedRoot){
   Register-CapyFixtureWindow $review ([long]$Window.hwnd) $run
-  $PreparedRoot=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $run).Root
  }elseif($PreparedRoot.Current.ProcessId -ne $review.Id -or [long]$PreparedRoot.Current.NativeWindowHandle -ne [long]$Window.hwnd){throw 'Prepared window root does not belong to its registered owner'}
- $script:current=$Window;$script:root=$PreparedRoot;$script:CapyStateFile=Join-Path $run "ui-state-$($review.Id)-$($Window.id).json"
- Wait-Until {[CapyRowPointer]::SetForegroundWindow([IntPtr]$Window.hwnd)|Out-Null;[CapyRowPointer]::GetForegroundWindow() -eq [IntPtr]$Window.hwnd} 'Review window did not own foreground input' 10
+ $native=@{root=$PreparedRoot}
+ Wait-Until {
+  if(!$native.root){$native.root=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $run).Root}
+  if(!$native.root){return $false}
+  [CapyRowPointer]::SetForegroundWindow([IntPtr]$Window.hwnd)|Out-Null
+  [CapyRowPointer]::GetForegroundWindow() -eq [IntPtr]$Window.hwnd
+ } 'Review window did not own foreground input' 10
+ $script:current=$Window;$script:root=$native.root;$script:CapyStateFile=Join-Path $run "ui-state-$($review.Id)-$($Window.id).json"
 }
 function Focus-Canvas{
  Wait-Until {

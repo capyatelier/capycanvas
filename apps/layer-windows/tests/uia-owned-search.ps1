@@ -387,6 +387,32 @@ if($useWindow.Count -ne 1){throw 'Missing actual localization window switch'}
     $otherRoot=[CapyOwnedSearchTest.Node]::new('other-owned-window',33,0,0);$otherRoot.NativeWindowHandle=[IntPtr]$other.hwnd
     Use-Window $other $otherRoot
     if($script:current -ne $other -or $script:root -ne $otherRoot -or $script:CapyStateFile -ne (Join-Path $run "ui-state-$($review.Id)-8.json")){throw 'Switching localization windows retained the previous presentation trace'}
+    & {
+        $script:windowResolutions=0
+        $beforeActivation=[CapyOwnedSearchTest.Driver]::Activations
+        function Owned-DrawingWindow($Process,[long]$WindowHandle,[string]$TraceDirectory){
+            if($Process -ne $review -or $WindowHandle -ne $window.hwnd -or $TraceDirectory -ne $run){throw 'Pending root discovery changed its owned inputs'}
+            if([CapyOwnedSearchTest.Driver]::Activations -ne $beforeActivation){throw 'Localization activated before its native root became available'}
+            $script:windowResolutions++
+            if($script:windowResolutions -ge 2){[pscustomobject]@{Root=$discovered}}
+        }
+        function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){
+            if($Seconds -ne 10){throw 'Localization window handoff changed its deadline'}
+            foreach($step in 1..2){if(& $Condition){return}}
+            throw $Message
+        }
+        Use-Window $window
+        if($script:windowResolutions -ne 2 -or $script:root -ne $discovered -or $script:current -ne $window -or $script:CapyStateFile -ne (Join-Path $run "ui-state-$($review.Id)-7.json")){throw 'Localization proceeded before its owned native root became available'}
+        if([CapyOwnedSearchTest.Driver]::Activations -ne $beforeActivation+1){throw 'Localization activated an unavailable root or repeated its accepted activation'}
+        $beforeActivation=[CapyOwnedSearchTest.Driver]::Activations
+        $previousRoot=$script:root;$previousWindow=$script:current;$previousState=$script:CapyStateFile
+        function Owned-DrawingWindow($Process,[long]$WindowHandle,[string]$TraceDirectory){
+            if([CapyOwnedSearchTest.Driver]::Activations -ne $beforeActivation){throw 'Unavailable native root reached foreground activation'}
+        }
+        $rejected=$false
+        try{Use-Window $window}catch{if($_.Exception.Message -ne 'Review window did not own foreground input'){throw};$rejected=$true}
+        if(!$rejected -or [CapyOwnedSearchTest.Driver]::Activations -ne $beforeActivation -or $script:root -ne $previousRoot -or $script:current -ne $previousWindow -or $script:CapyStateFile -ne $previousState){throw 'Unavailable localization root advanced or discarded the previous owned binding'}
+    }
 }
 Write-Output 'Localization window switching retains prepared owned roots without rediscovery, preserves ordinary discovery, and rejects foreign PID or HWND before activation.'
 
