@@ -212,6 +212,42 @@ Write-Output 'Photo monitor resolves null CIM paths through the retained owned h
 Write-Output 'Retained color drawer captures use the owned native window after scoped control checks.'
 
 $noticeSource=Fixture-Ast 'LocalizationProperties.ps1'
+$noticePreparation=$noticeSource.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Notice-Surface'},$true)
+$noticeCommands=@($noticePreparation.Body.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.PipelineAst]}|ForEach-Object {$_.PipelineElements}|Where-Object {$_ -is [Management.Automation.Language.CommandAst]})
+$prepare=@($noticeCommands|Where-Object {$_.GetCommandName() -eq 'Property-Panel' -and $_.CommandElements[1].Value -eq 'layers'})
+$select=@($noticeCommands|Where-Object {$_.Extent.Text -ceq 'Invoke-Id "layer-$layer-name"'})
+if($prepare.Count -ne 1 -or $select.Count -ne 1 -or $prepare[0].Extent.StartOffset -ge $select[0].Extent.StartOffset){throw 'Notice image selection must prepare Layers with Property-Panel before invoking its authored image'}
+Write-Output 'Notice image selection uses the existing panel preparation before invoking the authored image.'
+
+& {
+    $tools=(Fixture-Ast 'LocalizationProperties.ps1').Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Tool-Surfaces'},$true)
+    $start=$tools.Extent.Text.LastIndexOf("`n",$tools.Extent.Text.IndexOf('$tooltipIndex=-1'))+1;$end=$tools.Extent.Text.IndexOf(' $away=',$start)
+    if($end -lt $start){throw 'Missing actual Tool Set tooltip preparation'}
+    $action=@{type='choose_tool_variant';anchor=@{kind='tile';panel='toolbar';tile=48};variant=@{type='command';command='move'}}
+    $model=@{state=@{tool_set=@{groups=@();subtools=@(@{enabled=$false;label='Disabled'},@{enabled=$true;disabled_reason='Unavailable';label='Explained'},@{enabled=$true;label='English';action=$action})};document_file=@{revision=4}};windows_gpu_generation=3}
+    $control=[pscustomobject]@{Current=[pscustomobject]@{HelpText=''}};$control|Add-Member ScriptMethod GetRuntimeId {[int[]]@(1,2)}
+    function Fresh-Model{$model}
+    function Copy-Panel([string]$Panel,[string]$Probe){if($Panel -ne 'brushes' -or $Probe -ne 'tool-subtool-2'){throw 'Tool Set tooltip selected another native projection'}}
+    function Control([string]$Id){if($Id -ne 'tool-subtool-2'){throw 'Tool Set tooltip addressed a nonexistent group'};$control}
+    . ([scriptblock]::Create($tools.Extent.Text.Substring($start,$end-$start)))
+    if($tooltipId -ne 'tool-subtool-2' -or $tooltipIndex -ne 2){throw 'Tool Set tooltip accepted a disabled or explained choice'}
+    $guard=$tools.Find({param($n)$n -is [Management.Automation.Language.IfStatementAst] -and $n.Extent.Text.Contains('Tool Set tooltip target/action/reason changed during copy publication')},$true)
+    $check=[scriptblock]::Create($guard.Extent.Text);$item=$model.state.tool_set.subtools[2]
+    & $check
+    foreach($case in @('reason','help','action')){
+        switch($case){'reason'{$item.disabled_reason='Unavailable'};'help'{$control.Current.HelpText='Unrelated'};'action'{$item.action=@{type='another_action'}}}
+        $rejected=$false;try{& $check}catch{if($_.Exception.Message -ne 'Tool Set tooltip target/action/reason changed during copy publication'){throw};$rejected=$true}
+        if(!$rejected){throw "Tool Set tooltip retained guard accepted changed $case"}
+        $item.Remove('disabled_reason');$control.Current.HelpText='';$item.action=$action
+    }
+    $caption=$tools.Find({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and $n.Extent.Text.Contains('Retained keyboard Tool Set tooltip kept an earlier exact caption')},$true)
+    $captionCheck=[scriptblock]::Create($caption.CommandElements[1].ScriptBlock.Extent.Text.TrimStart('{').TrimEnd('}'))
+    $tip=[pscustomobject]@{Current=[pscustomobject]@{Name='Japanese'}};$review=@{Id=33};$item.label='Japanese'
+    function Capy-Tooltips{$tip}
+    if(!(& $captionCheck)){throw 'Tool Set tooltip rejected its current localized leaf caption'}
+    $tip.Current.Name='English';if(& $captionCheck){throw 'Tool Set tooltip accepted its previous leaf caption'}
+}
+Write-Output 'Tool Set localization uses enabled leaf rows and preserves current tooltip captions, help, reasons and actions.'
 $noticeReady=@($noticeSource.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and $n.Extent.Text.EndsWith("'The retained visible native notice did not adopt its shared text and actions before expiry' 2")},$true))
 if($noticeReady.Count -ne 1){throw 'Missing actual localized notice readiness condition'}
 & {

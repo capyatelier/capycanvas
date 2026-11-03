@@ -790,3 +790,104 @@ namespace CapyRuntimePreviewTest {
     if(!$failure -or $failure.FullyQualifiedErrorId -ne 'InvalidCastIConvertible'){throw 'Runtime preview suppressed invalid geometry instead of retaining its conversion failure'}
 }
 Write-Output 'Runtime preview returns pending empty controls without geometry reads or waits, arranges ready controls and retains invalid crop failures.'
+
+& {
+    Add-Type -AssemblyName WindowsBase
+    Add-Type -TypeDefinition @'
+using System;
+namespace CapyHeaderMenuTest {
+ public enum TreeScope {Descendants}
+ public static class Condition {public static object TrueCondition=new object();}
+ public static class ControlType {public static string Button="button",Text="text",MenuItem="menuitem";}
+ public static class TreeWalker {public static object RawViewWalker;}
+ public static class Pointer {public static uint Dpi=96;public static uint GetDpiForWindow(IntPtr value){return Dpi;}}
+}
+'@
+    $headerAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/LocalizationProperties.ps1'),[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw ($errors|Out-String)}
+    foreach($name in @('Header-MenuCaption','Header-MenuState')){
+        $function=@($headerAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}.GetNewClosure(),$true))
+        if($name -eq 'Header-MenuCaption' -and !$function.Count){continue}
+        if($function.Count -ne 1){throw "Missing actual header function: $name"}
+        . ([scriptblock]::Create($function[0].Extent.Text.Replace('System.Windows.Automation.','CapyHeaderMenuTest.').Replace('[CapyRowPointer]','[CapyHeaderMenuTest.Pointer]')))
+    }
+    $wait=@($headerAst.FindAll({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Wait-Until' -and $node.Extent.Text.Contains("'Retained menu did not open its current shared command copy'")},$true))
+    if($wait.Count -ne 1){throw 'Missing actual retained View-menu publication predicate'}
+    $menuPredicate=[scriptblock]::Create($wait[0].CommandElements[1].ScriptBlock.EndBlock.Extent.Text.Replace('System.Windows.Automation.','CapyHeaderMenuTest.'))
+    $review=[pscustomobject]@{Id=33};$script:current=[pscustomobject]@{hwnd=7};$run='header-regression-unused';$identities=@{}
+    $root=[pscustomobject]@{Current=[pscustomobject]@{Name=('Retained '+[char]0xb7+' Capy Canvas')}}
+    function Wait-Until([scriptblock]$Condition,[string]$Message){if(!(& $Condition)){throw $Message}}
+    function Catalog-Text($Tag,$Id,$Domain){if($Id -eq 'common-app-name'){'Capy Canvas'}elseif($Id -eq 'native-header-menus'){'Menus'}else{throw 'Unexpected header copy'}}
+    function Check-Identities($Ids){$script:identityChecks++}
+    function Set-Content {param($LiteralPath,$Encoding,[Parameter(ValueFromPipeline)]$Value) process{}}
+    function Model{$view}
+    function Control([string]$Value){$nodes[$Value]}
+    function Find([string]$Value,[switch]$Name,$Within,$Type,[switch]$Visible){if($Name){$headings[$Value]}elseif($Value -like 'application-menu-*' -and $script:compact){$null}else{$nodes[$Value]}}
+    function Header-TestNode($Name,$Box,$Children=@(),[string]$Type='text'){
+        $node=[pscustomobject]@{Current=[pscustomobject]@{Name=$Name;ProcessId=33;BoundingRectangle=$Box;IsOffscreen=$false;ControlType=$Type;ClassName=$(if($Type -eq 'text'){'TextBlock'}else{''})};Children=@($Children);Parent=$null;Key=(++$script:nodeKey)}
+        foreach($child in $node.Children){$child.Parent=$node}
+        $node|Add-Member ScriptMethod FindAll {param($Scope,$Condition)foreach($child in $this.Children){$child;$child.FindAll($Scope,$Condition)}}
+        $node|Add-Member ScriptMethod GetRuntimeId {@(1,$this.Key)}
+        $node
+    }
+    $walker=[pscustomobject]@{};$walker|Add-Member ScriptMethod GetParent {param($Element)$Element.Parent};[CapyHeaderMenuTest.TreeWalker]::RawViewWalker=$walker
+    function Reset-Header([bool]$Compact,[int]$Dpi){
+        $script:compact=$Compact;$script:current=[pscustomobject]@{hwnd=7};[CapyHeaderMenuTest.Pointer]::Dpi=$Dpi;$script:identityChecks=0;$scale=$Dpi/96.
+        $specs=@(foreach($id in @('file','edit','image','layer','select','filter','view','window')){[pscustomobject]@{id=$id;label=$id}})
+        $script:view=[pscustomobject]@{windows_active_tag='it';application_menus=$specs;header=[pscustomobject]@{editing=$false;model=[pscustomobject]@{zones=@(@([pscustomobject]@{id=2;item=[pscustomobject]@{kind='menu_labels'}}))}}}
+        $width=if($Compact){36}else{504};$script:bounds=[pscustomobject]@{x=48;y=6;width=$width;height=36}
+        $metric=[pscustomobject]@{id=2;width=$(if($Compact){704.860523223877}else{504});compact=36}
+        $script:presentation=[pscustomobject]@{metrics=@($metric);geometry=[pscustomobject]@{items=@([pscustomobject]@{id=2;bounds=$bounds})};actual_items=@([pscustomobject]@{id=2;bounds=($bounds|ConvertTo-Json|ConvertFrom-Json)})}
+        $script:nodes=@{'title-bar'=(Header-TestNode 'Title bar' ([Windows.Rect]::new(100,50,1600*$scale,48*$scale)));'application-menus'=(Header-TestNode 'Menus' ([Windows.Rect]::new(100+48*$scale,50+6*$scale,36*$scale,36*$scale)) @() 'button');'fit_canvas'=(Header-TestNode 'Fit' ([Windows.Rect]::new(900,200,100,30)))}
+        $nodes['title-bar'].Current|Add-Member ScriptProperty ItemStatus {$script:presentation|ConvertTo-Json -Depth 12 -Compress}
+        $script:headings=@{};$i=0
+        foreach($spec in $specs){
+            $box=[Windows.Rect]::new(100+(53+62*$i)*$scale,50+11*$scale,60*$scale,26*$scale)
+            $text=Header-TestNode $spec.label ([Windows.Rect]::new($box.X+8*$scale,$box.Y+4*$scale,44*$scale,18*$scale))
+            $nodes['application-menu-'+$spec.id]=Header-TestNode $spec.label $box @($text) 'button'
+            $row=[Windows.Rect]::new(172,140+32*$i,200,32);$caption=Header-TestNode $spec.label ([Windows.Rect]::new(180,$row.Y+5,120,22))
+            $headings[$spec.label]=Header-TestNode $spec.label $row @($caption) 'menuitem';$i++
+        }
+        $script:fit=[pscustomobject]@{label='Fit'}
+    }
+    foreach($dpi in @(96,144,192)){
+        Reset-Header $true $dpi
+        $current=Header-MenuState $view $identities
+        if(!$current.compact -or $identityChecks -or !(& $menuPredicate) -or $current.caption_observations.Count -ne 8){throw "Compact headings did not preserve all eight current captions at $dpi DPI"}
+        Reset-Header $false $dpi
+        $script:current=[pscustomobject]@{hwnd=7};$record=Header-MenuState $view $identities
+        if($record.compact -or $identityChecks -ne 1 -or $record.widths.Count -ne 8){throw "Expanded geometry or retained identity check was bypassed at $dpi DPI"}
+        $bounds.width-=.75;$presentation.actual_items[0].bounds.width-=.75
+        $near=Header-MenuState $view $identities
+        if($near.compact -or $identityChecks -ne 2){throw "Near-natural .75 DIP geometry changed the expanded contract at $dpi DPI"}
+    }
+    Reset-Header $true 144;$current=Header-MenuState $view $identities
+    $nestedText=Header-TestNode 'Fit' ([Windows.Rect]::new(900,200,100,20))
+    $nested=Header-TestNode 'Fit' ([Windows.Rect]::new(892,195,180,32)) @($nestedText) 'menuitem';$nested.Parent=$headings['view']
+    $headings['view'].Children+=@($nested)
+    if(!(& $menuPredicate)){throw 'Compact heading validator treated expanded submenu text as its own caption'}
+    foreach($bad in @('missing heading','foreign heading','overlapping heading','clipped caption','stale own caption')){
+        Reset-Header $true 144;$current=Header-MenuState $view $identities
+        switch($bad){
+            'missing heading' {$headings.Remove('window')}
+            'foreign heading' {$headings['window'].Current.ProcessId=99}
+            'overlapping heading' {$headings['window'].Current.BoundingRectangle=[Windows.Rect]::new(172,140,200,32)}
+            'clipped caption' {$headings['window'].Children[0].Current.BoundingRectangle=[Windows.Rect]::new(0,0,120,22)}
+            'stale own caption' {$headings['window'].Children[0].Current.Name='Old window'}
+        }
+        if(& $menuPredicate){throw "Compact menu accepted $bad"}
+    }
+    foreach($bad in @('allocation mismatch','undersized compact control','wrong compact caption','inline padding')){
+        Reset-Header ($bad -ne 'inline padding') 144
+        switch($bad){
+            'allocation mismatch' {$presentation.actual_items[0].bounds.x+=1.01}
+            'undersized compact control' {$nodes['application-menus'].Current.BoundingRectangle=[Windows.Rect]::new(172,59,1,54)}
+            'wrong compact caption' {$nodes['application-menus'].Current.Name='Old menus'}
+            'inline padding' {$nodes['application-menu-file'].Children[0].Current.BoundingRectangle=[Windows.Rect]::new(180,72,63,27)}
+        }
+        $failed=$false
+        try{Header-MenuState $view $identities|Out-Null}catch{if($_.Exception.Message -notlike 'Retained application menus did not present*'){throw};$failed=$true}
+        if(!$failed){throw "Header accepted $bad"}
+    }
+}
+Write-Output 'Retained HeaderMenus covers inline and compact captions and geometry without dropping hidden inline identities after expansion.'

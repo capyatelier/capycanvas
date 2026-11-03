@@ -1,40 +1,64 @@
-﻿function Header-MenuState($View,$Identities){
+﻿function Header-MenuCaption($Button,[string]$Expected,[double]$Density=1,$Padding=$null){
+ $box=$Button.Current.BoundingRectangle
+ $texts=@($Button.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {!$_.Current.IsOffscreen -and ($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -or $_.Current.ClassName -eq 'TextBlock')})
+ $providers=@()
+ foreach($text in $texts){
+  if($Button.Current.ControlType -eq [System.Windows.Automation.ControlType]::MenuItem){
+   $owner=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($text)
+   while($owner -and $owner.Current.ControlType -ne [System.Windows.Automation.ControlType]::MenuItem){$owner=[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($owner)}
+   if(!$owner -or ($owner.GetRuntimeId() -join ':') -ne ($Button.GetRuntimeId() -join ':')){continue}
+  }
+  $caption=$text.Current.BoundingRectangle;$bounds=$box;$bounds.Inflate(1,1)
+  if($text.Current.Name -ne $Expected -or $caption.Width -le 0 -or $caption.Height -le 0 -or !$bounds.Contains($caption)){return}
+  if($null -ne $Padding -and [Math]::Abs(($box.Width-$caption.Width)/$Density-$Padding) -gt 1){return}
+  $providers+=[pscustomobject]@{runtime_id=($text.GetRuntimeId() -join ':');name=$text.Current.Name;bounds=$caption.ToString()}
+ }
+ [pscustomobject]@{observable=($texts.Count -gt 0);caption_current=$(if($texts.Count){$true}else{$null});providers=$providers;visual_review='required'}
+}
+
+function Header-MenuState($View,$Identities){
  $specs=@($View.application_menus);$density=[CapyRowPointer]::GetDpiForWindow([IntPtr]$script:current.hwnd)/96.
  $entries=@($View.header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'menu_labels'})
- if($entries.Count -ne 1 -or $View.header.editing){throw 'Menu localization requires the ordinary wide title bar'}
- $hit=@{widths=$null;presentation=$null;captions=$null}
+ if($entries.Count -ne 1 -or $View.header.editing){throw 'Menu localization requires the ordinary title bar'}
+ $hit=@{widths=$null;presentation=$null;captions=$null;compact=$false}
  try{
  Wait-Until {
   $widths=@{};$buttons=@{};$captions=@{};$right=$null
-  foreach($spec in $specs){
-   $button=Find ('application-menu-'+$spec.id) -Visible -Type ([System.Windows.Automation.ControlType]::Button)
-   if(!$button -or $button.Current.Name -ne $spec.label){return $false}
-   $box=$button.Current.BoundingRectangle
-   if($box.Width -le 0 -or $box.Height -le 0 -or ($null -ne $right -and $box.Left -lt $right-1)){return $false}
-   $texts=@($button.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)|Where-Object {!$_.Current.IsOffscreen -and ($_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Text -or $_.Current.ClassName -eq 'TextBlock')})
-   $captionRecords=@()
-   foreach($text in $texts){
-    $caption=$text.Current.BoundingRectangle;$bounds=$box;$bounds.Inflate(1,1)
-    if($text.Current.Name -ne $spec.label -or $caption.Width -le 0 -or $caption.Height -le 0 -or !$bounds.Contains($caption)){return $false}
-    if([Math]::Abs(($box.Width-$caption.Width)/$density-16) -gt 1){return $false}
-    $captionRecords+=[pscustomobject]@{runtime_id=($text.GetRuntimeId() -join ':');name=$text.Current.Name;bounds=$caption.ToString()}
-   }
-   $captions[$spec.id]=[pscustomobject]@{observable=($texts.Count -gt 0);caption_current=$(if($texts.Count){$true}else{$null});providers=$captionRecords;visual_review='required'}
-   $buttons[$spec.id]=$box;$widths[$spec.id]=$box.Width/$density;$right=$box.Right
-  }
   try{$titlebar=Control 'title-bar';$presentation=$titlebar.Current.ItemStatus|ConvertFrom-Json}catch{return $false}
   $metric=@($presentation.metrics|Where-Object id -eq $entries[0].id)
   $geometry=@($presentation.geometry.items|Where-Object id -eq $entries[0].id)
   $actual=@($presentation.actual_items|Where-Object id -eq $entries[0].id)
   if($metric.Count -ne 1 -or $geometry.Count -ne 1 -or $actual.Count -ne 1 -or $metric[0].width -le 0){return $false}
-  if([Math]::Abs($metric[0].width-$geometry[0].bounds.width) -gt 1 -or [Math]::Abs($metric[0].width-$actual[0].bounds.width) -gt 1){return $false}
+  $compact=[Math]::Abs($geometry[0].bounds.width-$metric[0].compact) -lt [Math]::Abs($geometry[0].bounds.width-$metric[0].width)
+  $expectedWidth=if($compact){$metric[0].compact}else{$metric[0].width}
+  if($expectedWidth -le 0 -or [Math]::Abs($expectedWidth-$geometry[0].bounds.width) -gt 1 -or [Math]::Abs($expectedWidth-$actual[0].bounds.width) -gt 1){return $false}
   foreach($axis in @('x','y','width','height')){if([Math]::Abs($geometry[0].bounds.$axis-$actual[0].bounds.$axis) -gt 1){return $false}}
   $origin=$titlebar.Current.BoundingRectangle;$group=$actual[0].bounds
   if($origin.IsEmpty -or $origin.Width -le 0 -or $origin.Height -le 0 -or $group.width -le 0 -or $group.height -le 0){return $false}
   $groupBounds=[Windows.Rect]::new($origin.Left+$group.x*$density,$origin.Top+$group.y*$density,$group.width*$density,$group.height*$density)
   $groupBounds.Inflate(1,1)
+  if($compact){
+   $button=Find 'application-menus' -Visible -Type ([System.Windows.Automation.ControlType]::Button)
+   if(!$button -or $button.Current.ProcessId -ne $review.Id -or $button.Current.Name -ne (Catalog-Text $View.windows_active_tag 'native-header-menus' 'common')){return $false}
+   $box=$button.Current.BoundingRectangle
+   if($box.Width -le 0 -or $box.Height -le 0 -or !$groupBounds.Contains($box)){return $false}
+   $native=@{x=($box.Left-$origin.Left)/$density;y=($box.Top-$origin.Top)/$density;width=$box.Width/$density;height=$box.Height/$density}
+   foreach($axis in @('x','y','width','height')){if([Math]::Abs($native[$axis]-$group.$axis) -gt 1){return $false}}
+   $buttons.menus=$box;$widths.menus=$box.Width/$density
+  }else{
+  foreach($spec in $specs){
+   $button=Find ('application-menu-'+$spec.id) -Visible -Type ([System.Windows.Automation.ControlType]::Button)
+   if(!$button -or $button.Current.Name -ne $spec.label){return $false}
+   $box=$button.Current.BoundingRectangle
+   if($box.Width -le 0 -or $box.Height -le 0 -or ($null -ne $right -and $box.Left -lt $right-1)){return $false}
+   $caption=Header-MenuCaption $button $spec.label $density 16
+   if(!$caption){return $false}
+   $captions[$spec.id]=$caption
+   $buttons[$spec.id]=$box;$widths[$spec.id]=$box.Width/$density;$right=$box.Right
+  }
+  }
   foreach($buttonBounds in $buttons.Values){if(!$groupBounds.Contains($buttonBounds)){return $false}}
-  $hit.widths=$widths;$hit.presentation=$presentation;$hit.captions=$captions;$true
+  $hit.widths=$widths;$hit.presentation=$presentation;$hit.captions=$captions;$hit.compact=$compact;$true
  } 'Retained application menus did not present their current shared captions and measured geometry' 15
  } catch{
   try{
@@ -58,9 +82,9 @@
   }
   throw
  }
- Check-Identities $Identities
+ if(!$hit.compact){Check-Identities $Identities}
  if(!$root.Current.Name.EndsWith(' · '+(Catalog-Text $View.windows_active_tag 'common-app-name' 'common'))){throw 'The retained window title did not use the current app name'}
- [pscustomobject]@{tag=$View.windows_active_tag;labels=@($specs|Select-Object id,label);widths=$hit.widths;presentation=$hit.presentation;caption_observations=$hit.captions;visual_review='Required: inspect raw menu captions and fit; missing text providers do not establish a visual pass'}
+ [pscustomobject]@{tag=$View.windows_active_tag;labels=@($specs|Select-Object id,label);widths=$hit.widths;presentation=$hit.presentation;compact=$hit.compact;caption_observations=$hit.captions;visual_review='Required: inspect raw menu captions and fit; missing text providers do not establish a visual pass'}
 }
 
 function Header-MenuSurface{
@@ -87,7 +111,25 @@ function Header-MenuSurface{
   $largest=[Math]::Max($largest,$width)
   Application-Menu 'view'
   $fit=@($view.state.commands|Where-Object id -eq 'fit_canvas')[0]
-  Wait-Until {$command=Find 'fit_canvas' -Visible;$command -and $command.Current.Name -eq $fit.label} 'Retained menu did not open its current shared command copy' 10
+  Wait-Until {
+   $command=Find 'fit_canvas' -Visible
+   if(!$command -or $command.Current.Name -ne $fit.label){return $false}
+   if($current.compact){
+    $bottom=$null
+    foreach($spec in $view.application_menus){
+     $heading=Find $spec.label -Name -Visible -Type ([System.Windows.Automation.ControlType]::MenuItem)
+     if(!$heading -or $heading.Current.ProcessId -ne $review.Id){return $false}
+     $box=$heading.Current.BoundingRectangle
+     if($box.Width -le 0 -or $box.Height -le 0 -or ($null -ne $bottom -and $box.Top -lt $bottom-1)){return $false}
+     $caption=Header-MenuCaption $heading $spec.label
+     if(!$caption){return $false}
+     $current.caption_observations[$spec.id]=$caption
+     $bottom=$box.Bottom
+    }
+   }
+   $true
+  } 'Retained menu did not open its current shared command copy' 10
+  if($current.compact){Capture-Window $first ('header-menus-compact-'+$evidence.Count+'-'+$choice.tag)}
   Key 27;Wait-Until {!(Find 'fit_canvas' -Visible)} 'Retained application menu did not dismiss' 10
  }
  foreach($id in $baseline.widths.Keys){if([Math]::Abs($current.widths[$id]-$baseline.widths[$id]) -gt 1){throw 'Returning to English retained another locale menu width'}}
@@ -667,17 +709,18 @@ function Tool-Surfaces{
  Use-Window $first
  Search-Command 'transform' 'scale_rotate'
  Wait-Until {$view=Model;$view -and $view.state.layer_tools.tool -eq 'transform' -and (Find 'tool-setting-transform_x') -and (Find 'tool-choice-transform-reference')} 'Transform did not expose retained native position and anchor controls' 30
- $groups=@((Fresh-Model).state.tool_set.groups);$tooltipIndex=-1;for($i=0;$i -lt $groups.Count;$i++){if($groups[$i].enabled -and !$groups[$i].disabled_reason){$tooltipIndex=$i;break}}
- if($tooltipIndex -lt 0){throw 'Tool Set tooltip fixture requires an enabled group with no disabled reason'}
- $tooltipId='tool-group-'+$tooltipIndex;Copy-Panel 'brushes' $tooltipId;$tooltipControl=Control $tooltipId -Arranged;$tooltipIdentity=$tooltipControl.GetRuntimeId() -join ':'
- $baseline=Fresh-Model;$tooltipAction=$baseline.state.tool_set.groups[$tooltipIndex].action|ConvertTo-Json -Depth 20 -Compress;$tooltipDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$tooltipGpu=$baseline.windows_gpu_generation
+ $subtools=@((Fresh-Model).state.tool_set.subtools);$tooltipIndex=-1;for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].enabled -and !$subtools[$i].disabled_reason){$tooltipIndex=$i;break}}
+ if($tooltipIndex -lt 0){throw 'Tool Set tooltip fixture requires an enabled leaf choice with no disabled reason'}
+ $tooltipId='tool-subtool-'+$tooltipIndex;Copy-Panel 'brushes' $tooltipId;$tooltipControl=Control $tooltipId -Arranged;$tooltipIdentity=$tooltipControl.GetRuntimeId() -join ':'
+ $baseline=Fresh-Model;$tooltipAction=$baseline.state.tool_set.subtools[$tooltipIndex].action|ConvertTo-Json -Depth 20 -Compress;$tooltipDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$tooltipGpu=$baseline.windows_gpu_generation
+ if($tooltipControl.Current.HelpText -ne [string]$baseline.state.tool_set.subtools[$tooltipIndex].disabled_reason){throw 'Tool Set tooltip target exposed unrelated accessibility help'}
  $away=$root.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($away.X+20),[int]($away.Y+20));Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Previous tooltip did not retire before keyboard-only Tool Set copy acceptance'
  Focus-Keyboard $tooltipControl
- Wait-Until {$tips=@(Capy-Tooltips $review.Id);$tips.Count -eq 1 -and $tips[0].Current.Name -eq $baseline.state.tool_set.groups[$tooltipIndex].label} 'Tool Set initial keyboard tooltip is not its exact source caption' 10
+ Wait-Until {$tips=@(Capy-Tooltips $review.Id);$tips.Count -eq 1 -and $tips[0].Current.Name -eq $baseline.state.tool_set.subtools[$tooltipIndex].label} 'Tool Set initial keyboard tooltip is not its exact source caption' 10
  Focus-Canvas;Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Initial Tool Set keyboard tooltip did not retire'
  Surface-Languages 'retained-toolset-keyboard-tooltip' {
-  $view=Fresh-Model $first $choice.tag;$item=$view.state.tool_set.groups[$tooltipIndex];$control=Control $tooltipId -Arranged
-  if(!$item.enabled -or $item.disabled_reason -or ($item.action|ConvertTo-Json -Depth 20 -Compress) -ne $tooltipAction -or ($control.GetRuntimeId() -join ':') -ne $tooltipIdentity){throw 'Tool Set tooltip target/action/reason changed during copy publication'}
+  $view=Fresh-Model $first $choice.tag;$item=$view.state.tool_set.subtools[$tooltipIndex];$control=Control $tooltipId -Arranged
+  if(!$item.enabled -or $item.disabled_reason -or $control.Current.HelpText -ne [string]$item.disabled_reason -or ($item.action|ConvertTo-Json -Depth 20 -Compress) -ne $tooltipAction -or ($control.GetRuntimeId() -join ':') -ne $tooltipIdentity){throw 'Tool Set tooltip target/action/reason changed during copy publication'}
   Focus-Keyboard $control
   Wait-Until {$tips=@(Capy-Tooltips $review.Id);$tips.Count -eq 1 -and $tips[0].Current.Name -eq $item.label} 'Retained keyboard Tool Set tooltip kept an earlier exact caption' 10
   Focus-Canvas;Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Retained Tool Set keyboard tooltip did not retire'
@@ -824,6 +867,7 @@ function Notice-Surface{
    [Math]::Abs($secondBounds.X-1280) -lt 1 -and [Math]::Abs($secondBounds.Y) -lt 1 -and [Math]::Abs($secondBounds.Width-640) -lt 1 -and [Math]::Abs($secondBounds.Height-950) -lt 1 -and $firstBounds.Right -le $secondBounds.Left
  } 'The two owned notice windows did not take their exact disjoint screen positions' 15
  Use-Window $first $drawingRoot
+ Property-Panel 'layers'
  $layer=@((Model).state.layers|Where-Object object)[0].id
  Invoke-Id "layer-$layer-name"
  Focus-Canvas;Key 66
