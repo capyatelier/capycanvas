@@ -927,6 +927,7 @@ def validate_results(plan, results):
 
 def fixture_status_command(output):
     return r"""$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 function Read-FixtureText([string]$Path){
     $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     $reader=[IO.StreamReader]::new($stream)

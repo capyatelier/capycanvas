@@ -168,6 +168,26 @@ try{
         $rows=@($last.log.TrimEnd().Split([char]10)|ForEach-Object {$_|ConvertFrom-Json})
         if($rows.Count -ne 2 -or $rows[0].name -ne 'first' -or $rows[0].exit -ne 0 -or $rows[1].name -ne 'second' -or $rows[1].exit -ne 1){throw 'Live result snapshots lost or changed an appended fixture result'}
     }finally{$writer.Dispose()}
+    $message='Result '+[char]0xec+[char]0x65e5
+    Write-FixtureResult $resultsFile (@{name='unicode';exit=1;message=$message}|ConvertTo-Json -Compress)
+    $script="[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(437);`n"+$command.Groups['script'].Value.Replace('{output}',$Output)
+    $start=[Diagnostics.ProcessStartInfo]::new()
+    $start.FileName=$powershell
+    $start.Arguments=ConvertTo-FixtureCommandLine @('-NoProfile','-NonInteractive','-EncodedCommand',[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script)))
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true
+    $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    $child=[Diagnostics.Process]::Start($start)
+    $bytes=[IO.MemoryStream]::new()
+    try{
+        $copy=$child.StandardOutput.BaseStream.CopyToAsync($bytes)
+        $errorText=$child.StandardError.ReadToEndAsync()
+        if(!$child.WaitForExit(30000)){$child.Kill();throw 'Fixture status encoding probe timed out'}
+        $null=$copy.GetAwaiter().GetResult()
+        if($child.ExitCode -ne 0){throw ('Fixture status encoding probe failed: '+$errorText.GetAwaiter().GetResult())}
+        $progress=[Text.UTF8Encoding]::new($false,$true).GetString($bytes.ToArray())|ConvertFrom-Json
+        $result=@($progress.log.TrimEnd().Split([char]10)|ForEach-Object {$_|ConvertFrom-Json})[-1]
+        if($result.name -cne 'unicode' -or $result.message -cne $message){throw 'Fixture status changed Unicode result text through the legacy console'}
+    }finally{$bytes.Dispose();$child.Dispose()}
     if(@(Reviews).Count -or $queried.Count){throw 'Missing ownership receipt searched for processes'}
     @{process_id=41;windows=@(@{process_id=42},@{process_id=41})}|ConvertTo-Json|Set-Content (Join-Path $Output 'owned-context.json')
     $owned=@(Reviews)
