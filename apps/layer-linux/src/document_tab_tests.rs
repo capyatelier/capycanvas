@@ -1480,6 +1480,14 @@ fn native_document_tabs_canvas_transition() {
     until(||!windows.borrow().is_empty(),"transition window created");
     let w=windows.borrow()[0].clone();
     w.window.maximize(); w.window.present(); new_photo::ready(&w);
+    let mut workspace=state(&w).workspace;
+    workspace.layout.set_panel_visible(layer_ui::Panel::Navigator,true).unwrap();
+    let group=workspace.layout.panel_group(layer_ui::Panel::Navigator).unwrap();
+    if let Some(column)=workspace.layout.column_for_group(group) {
+        workspace.layout.set_column_collapsed(column,false,[w.surface.width() as f32,w.surface.height() as f32]).unwrap();
+    }
+    workspace.layout.select_tab(group,layer_ui::Panel::Navigator).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)});
     w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas}); new_photo::ready(&w);
     let mut input=RemoteInput::new().settle_ms(0).timeout_secs(30); input.ready();
     glib::MainContext::default().block_on(w.documents.open(&w,(drawing([24,80,216]),None))).unwrap();
@@ -1491,7 +1499,18 @@ fn native_document_tabs_canvas_transition() {
     until(||file.exists() && !w.servicing.get() && !state(&w).document_file.modified,"transition source saved");
     let [x,y]=super::canvas_bar_tests::canvas_point(&w,[160.,128.]);
     let center=w.window.compute_point(&w.surface,&gtk::graphene::Point::new(x,y)).unwrap();
-    let points:[[f32;2];1024]=std::array::from_fn(|i|[center.x()+(i%32) as f32-16.,center.y()+(i/32) as f32-16.]);
+    let scale=w.area.scale_factor() as f32;
+    let overview=w.navigator_overviews.placements(ui_session(&w).state(),scale).into_iter().find(|p|p.opacity>0.99).unwrap();
+    let [x,y,width,height]=overview.bounds;
+    let [cx,cy,cw,ch]=overview.clip.unwrap_or(overview.bounds);
+    let [left,top,right,bottom]=[x.max(cx),y.max(cy),(x+width).min(cx+cw),(y+height).min(cy+ch)];
+    assert!((right-left)/scale>40. && (bottom-top)/scale>40.,"Navigator image has room for a 32-pixel block");
+    let navigator=[(left+right)/(2.*scale),(top+bottom)/(2.*scale)];
+    let points:[[f32;2];2048]=std::array::from_fn(|i| {
+        let origin=if i<1024 {[center.x(),center.y()]}else {navigator};
+        let i=i%1024;
+        [origin[0]+(i%32) as f32-16.,origin[1]+(i/32) as f32-16.]
+    });
     switch(&w,1);
     for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)}); new_photo::ready(&w);
@@ -1526,11 +1545,14 @@ fn native_document_tabs_canvas_transition() {
             until(||!ui_session(&w).wants_continuous_frames(),"incoming artwork presentation settled");
         });
         paints.finish();
-        let old=frames.first().unwrap()[0]; let new=frames.last().unwrap()[0];
+        for (region,offset) in [("canvas",0),("navigator",1024)] {
+        let name=format!("{name}-{region}");
+        let old=frames.first().unwrap()[offset]; let new=frames.last().unwrap()[offset];
         assert!(old[0].abs_diff(new[0])>50 && old[2].abs_diff(new[2])>50,"{name}: distinct old and new artwork endpoints {old:?} -> {new:?}");
         let mut mixed=0;
         let mut previous_phase=0f32;
         for (index,frame) in frames.iter().enumerate() {
+            let frame=&frame[offset..offset+1024];
             let pixel=frame[0];
             assert!(frame.iter().all(|p|p.iter().zip(pixel).all(|(a,b)|a.abs_diff(b)<=4)),"{name} frame {index}: no checkerboard during the transition");
             assert!(pixel.iter().enumerate().all(|(c,value)|*value>=old[c].min(new[c]).saturating_sub(8) && *value<=old[c].max(new[c]).saturating_add(8)),"{name} frame {index}: no surround or paper flash {pixel:?}");
@@ -1545,6 +1567,7 @@ fn native_document_tabs_canvas_transition() {
             if phase>0.05 && phase<0.95 {mixed+=1;}
         }
         assert!(mixed>0,"{name}: presented at least one intermediate fade frame");
+        }
         }
         switch(&w,1);
     }

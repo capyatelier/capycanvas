@@ -549,7 +549,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.backend.set_fill_reveal(reveal);
     }
     pub fn showing_drawing(&self) -> bool { self.backend.showing_drawing() }
-    pub fn set_canvas_transition(&mut self, alpha: Option<f32>) { self.backend.set_canvas_transition(alpha); }
+    pub fn showing_navigator(&self) -> bool { self.backend.showing_navigator() }
+    pub fn set_canvas_transition(&mut self, fade: layer_render::CanvasFade) { self.backend.set_canvas_transition(fade); }
 
     /// Current disposable transform, including its startup shader dependency.
     pub fn transform_preview(&self) -> Option<&layer_render::TransformPreview> {

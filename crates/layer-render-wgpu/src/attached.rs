@@ -112,7 +112,8 @@ impl CanvasRenderer for AttachedRenderer {
     fn fill_preview_ready(&self)->Option<(u64,u64)> {self.0.as_ref().and_then(|gpu|gpu.fill_preview_ready())}
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {if let Some(gpu)=&mut self.0 {gpu.set_fill_reveal(reveal);}}
     fn showing_drawing(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.showing_drawing()) }
-    fn set_canvas_transition(&mut self, alpha: Option<f32>) { if let Some(gpu)=&mut self.0 {gpu.set_canvas_transition(alpha);} }
+    fn showing_navigator(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.showing_navigator()) }
+    fn set_canvas_transition(&mut self, fade: layer_render::CanvasFade) { if let Some(gpu)=&mut self.0 {gpu.set_canvas_transition(fade);} }
     fn request_effect_analysis(&mut self, query: layer_core::ArtworkQuery) -> Result<bool, Self::Error> { self.gpu()?.request_effect_analysis(query) }
     fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> { self.0.as_mut()?.take_effect_analysis() }
     fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> { self.gpu()?.accept_effect_analysis() }

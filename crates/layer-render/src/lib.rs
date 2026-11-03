@@ -818,6 +818,15 @@ pub fn remap_document_colors(
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CanvasFade {
+    pub drawing: Option<f32>,
+    pub navigator: Option<f32>,
+}
+impl CanvasFade {
+    pub const WAITING: Self = Self {drawing:Some(1.),navigator:Some(1.)};
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -917,7 +926,8 @@ pub trait CanvasRenderer {
     fn fill_preview_ready(&self)->Option<(u64,u64)> {None}
     fn set_fill_reveal(&mut self, _reveal: Option<FillReveal>) {}
     fn showing_drawing(&self) -> bool { false }
-    fn set_canvas_transition(&mut self, _alpha: Option<f32>) {}
+    fn showing_navigator(&self) -> bool { false }
+    fn set_canvas_transition(&mut self, _fade: CanvasFade) {}
     /// A retouching stroke whose source was not ready while the pen was down.
     /// It must be replayed once, after contact ends. Each stroke is reported
     /// once; renderers without retouch sources report none.

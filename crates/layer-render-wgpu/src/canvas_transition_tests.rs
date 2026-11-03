@@ -7,6 +7,37 @@ fn refining(r: &WgpuRasterizer) -> bool {
 }
 
 #[test]
+fn navigator_waits_for_a_full_refresh_before_pausing_transition_refinement() {
+    let extent=[64;2];
+    let mut document=paint_document(extent,"Navigator readiness");
+    paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new(
+        layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]).into()));
+    let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let backdrop=layer_core::SceneScope::Members(document.scene().constant_backdrop().into());
+    submit_settled(&mut r,packet(document.scene().with_scope(&backdrop),extent));
+    assert!(!r.showing_drawing() && !r.showing_navigator());
+    let revision=r.navigator.revision;
+    assert!(revision>0);
+    r.set_canvas_transition(layer_render::CanvasFade::WAITING);
+    let frame=FramePacket {time_seconds:0.01,..packet(document.scene(),extent)};
+    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+    while !r.showing_drawing() {
+        submit_ready(&mut r,frame).unwrap();
+        r.wait_idle().unwrap();
+        assert!(std::time::Instant::now()<deadline,"full composition publishes while the Navigator refresh is coalesced");
+    }
+    assert_eq!(r.navigator.revision,revision);
+    assert!(!r.showing_navigator());
+    let idle=FramePacket {time_seconds:0.06,composite_all:false,..frame};
+    assert!(!r.retained_transition_frame(idle,None));
+    submit_ready(&mut r,idle).unwrap();
+    r.wait_idle().unwrap();
+    assert!(r.showing_navigator());
+    assert!(r.navigator.revision>revision);
+    assert!(r.retained_transition_frame(idle,None));
+}
+
+#[test]
 fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
     let extent = [2560, 2048];
     let mut document = paint_document(extent, "Retained fade");
@@ -16,7 +47,7 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
         ]).into(),
     ));
     let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-    assert_eq!(r.canvas_transition, None);
+    assert_eq!(r.canvas_transition, layer_render::CanvasFade::default());
     let frame = FramePacket {
         view: layer_render::ViewState { width_px: 512, height_px: 384,
             document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] },
@@ -25,7 +56,7 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
     let idle = FramePacket { composite_all: false, ..frame };
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     let mut first = true;
-    while !r.showing_drawing() || !refining(&r) {
+    while !r.showing_drawing() || !r.showing_navigator() || !refining(&r) {
         submit_ready(&mut r, if first { frame } else { idle }).unwrap();
         first = false;
         r.wait_idle().unwrap();
@@ -36,7 +67,7 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
     let damage = r.document_damage.clone();
     let deferred = r.object_deferred;
     for alpha in [1., 0.5, 0.125] {
-        r.set_canvas_transition(Some(alpha));
+        r.set_canvas_transition(layer_render::CanvasFade {drawing:Some(alpha),navigator:None});
         assert!(r.retained_transition_frame(idle, None));
         assert!(r.raster_dependencies_ready(idle, None));
         r.submit(idle).unwrap();
@@ -70,7 +101,7 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
     r.wait_idle().unwrap();
     assert!(r.metrics.dabs > painted);
 
-    r.set_canvas_transition(None);
+    r.set_canvas_transition(Default::default());
     let submissions = r.metrics.submissions;
     submit_settled(&mut r, camera);
     assert!(r.metrics.submissions > submissions);

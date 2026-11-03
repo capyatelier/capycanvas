@@ -702,7 +702,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         session.refresh_commands();
         session.refresh_shortcuts(true);
         session.update_toolbar_context();
-        session.engine.set_canvas_transition(Some(1.));
+        session.engine.set_canvas_transition(layer_render::CanvasFade::WAITING);
         Ok(session)
     }
 
@@ -5046,7 +5046,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        self.canvas_transition.started.is_some() || self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
+        self.canvas_transition.running() || self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || self.interaction.axes.active()
             || self.touch_repeat_pending()
             || self.layer_interaction.touches.pending()

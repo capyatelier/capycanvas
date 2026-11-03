@@ -964,6 +964,7 @@ enum Initialization {
 struct DrawingPresentation {
     document: Option<(u64, layer_core::PortableId)>,
     showing: bool,
+    navigator: bool,
 }
 
 /// Headless-capable wgpu brush renderer. A platform presenter can sample the
@@ -1077,7 +1078,7 @@ pub struct WgpuRasterizer {
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     presentation: DrawingPresentation,
-    canvas_transition: Option<f32>,
+    canvas_transition: layer_render::CanvasFade,
     artwork_revision: u64,
     evaluated_object_revision: Option<u64>,
     composite_damage: PixelRect,
@@ -1480,7 +1481,7 @@ impl WgpuRasterizer {
             color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             presentation: DrawingPresentation::default(),
-            canvas_transition: None,
+            canvas_transition: Default::default(),
             artwork_revision: 0,
             evaluated_object_revision: None,
             composite_damage: PixelRect::EMPTY,
@@ -1640,6 +1641,7 @@ impl WgpuRasterizer {
         if self.presentation.document != Some(document) {
             self.presentation.document = Some(document);
             self.presentation.showing = false;
+            self.presentation.navigator = false;
         }
     }
     pub(crate) fn presentation_views(&self)->Option<[&wgpu::TextureView;3]> {
@@ -4011,7 +4013,8 @@ impl CanvasRenderer for WgpuRasterizer {
         if enabled { self.factory.start_memory_samples(); }
     }
     fn showing_drawing(&self) -> bool { self.presentation.showing }
-    fn set_canvas_transition(&mut self, alpha: Option<f32>) { self.canvas_transition=alpha; }
+    fn showing_navigator(&self) -> bool { self.presentation.navigator }
+    fn set_canvas_transition(&mut self, fade: layer_render::CanvasFade) { self.canvas_transition=fade; }
     fn telemetry(&self) -> layer_render::RendererTelemetry {
         let mut t = self.telemetry.snapshot(&self.device, &self.queue);
         #[cfg(not(target_arch = "wasm32"))]
@@ -4199,7 +4202,7 @@ impl WgpuRasterizer {
             && self.artwork_frame.as_ref().is_some_and(|frame| frame.view == packet.view && frame.same_artwork(packet))
     }
     fn retained_transition_frame(&self, packet: FramePacket<'_>, preview: Option<&layer_render::TransformPreview>) -> bool {
-        self.canvas_transition.is_some() && self.presentation.showing && !self.analysis_dirty
+        self.canvas_transition.drawing.is_some() && self.presentation.showing && self.presentation.navigator && !self.analysis_dirty
             && self.empty_artwork_frame(packet, preview)
             && (self.document_damage.is_empty() || self.object_deferred
                 && self.evaluated_object_revision == Some(packet.scene.revision())
@@ -4213,6 +4216,7 @@ impl WgpuRasterizer {
         let revision = self.composite_revision;
         self.begin_frame_memory(packet);
         let submitted = self.metrics.submissions;
+        let navigator_revision = self.navigator.revision;
         let result = self.submit_frame_inner(packet, native_commit);
         self.publish_motion_memory();
         if let Err(error)=result {
@@ -4222,6 +4226,10 @@ impl WgpuRasterizer {
         if self.composite_revision != revision && self.has_presentable_frame()
             && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
             self.presentation.showing = true;
+        }
+        if self.presentation.showing && self.navigator.revision != navigator_revision
+            && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
+            self.presentation.navigator = true;
         }
         if self.metrics.submissions != submitted {
             let context = self.submitted_context.as_ref().unwrap();

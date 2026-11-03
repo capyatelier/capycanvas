@@ -509,21 +509,34 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   await mkdir(transitionDirectory,{recursive:true});
   const closeColor=(a,b)=>a.every((value,i)=>Math.abs(value-b[i])<=3);
   for(const theme of ['light','dark']) {
-    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}})`);
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'navigator',visible:true}})`);await settle();
     let clip;
     const shots=[];
     const capture=async phase=>{
-      const {data}=await call('Page.captureScreenshot',{format:'png',clip});
+      const navigator=await evaluate(`(()=>{
+        const overview=document.querySelector('.navigator-overview');if(!overview)throw Error('Navigator panel is visible');
+        const r=overview.getBoundingClientRect(),g=layerApp.app.navigator_geometry(r.width,r.height);
+        if(!g)throw Error('Navigator image geometry is available');
+        const x=Math.ceil(r.x+g.image.x)+2,y=Math.ceil(r.y+g.image.y)+2;
+        return{x,y,width:Math.floor(r.x+g.image.x+g.image.width)-x-2,height:Math.floor(r.y+g.image.y+g.image.height)-y-2};
+      })()`);
+      assert.ok(navigator.width>=32&&navigator.height>=32,`${theme}: Navigator image has a visible sampling area`);
+      const x=Math.min(clip.x,navigator.x),y=Math.min(clip.y,navigator.y);
+      const bounds={x,y,width:Math.max(clip.x+clip.width,navigator.x+navigator.width)-x,height:Math.max(clip.y+clip.height,navigator.y+navigator.height)-y,scale:1};
+      const regions={canvas:{...clip,x:clip.x-x,y:clip.y-y},navigator:{...navigator,x:navigator.x-x,y:navigator.y-y}};
+      const {data}=await call('Page.captureScreenshot',{format:'png',clip:bounds});
       const sample=await evaluate(`(async()=>{
         const image=new Image();image.src='data:image/png;base64,'+${JSON.stringify(data)};await image.decode();
         const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
         const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);
-        const pixels=context.getImageData(Math.floor(image.width/4)-16,Math.floor(image.height/2)-16,32,32).data;
-        const low=[255,255,255],high=[0,0,0];
-        for(let i=0;i<pixels.length;i+=4)for(let k=0;k<3;k++){low[k]=Math.min(low[k],pixels[i+k]);high[k]=Math.max(high[k],pixels[i+k]);}
-        return{rgb:low,spread:Math.max(...high.map((value,i)=>value-low[i]))};
+        return Object.fromEntries(Object.entries(${JSON.stringify(regions)}).map(([name,r])=>{
+          const pixels=context.getImageData(r.x+Math.max(0,Math.floor(r.width/4)-16),r.y+Math.floor(r.height/2)-16,32,32).data;
+          const low=[255,255,255],high=[0,0,0];
+          for(let i=0;i<pixels.length;i+=4)for(let k=0;k<3;k++){low[k]=Math.min(low[k],pixels[i+k]);high[k]=Math.max(high[k],pixels[i+k]);}
+          return[name,{rgb:low,spread:Math.max(...high.map((value,i)=>value-low[i]))}];
+        }));
       })()`);
-      const shot={phase,data,at:performance.now(),...sample};if(phase)shots.push(shot);return shot;
+      const shot={phase,data,regions,at:performance.now(),...sample.canvas,navigator:sample.navigator};if(phase)shots.push(shot);return shot;
     };
     const openSolid=async(color,name,expected)=>{
       await evaluate(`(async()=>{
@@ -534,8 +547,8 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
       await wait('!layerApp.app.canvas_work_pending()');await evaluate('layerApp.app.wait_for_canvas()');
       clip=await evaluate(`(()=>{const camera=layerApp.app.camera(),bounds=layerApp.canvas.getBoundingClientRect();return{x:Math.round(bounds.x+camera.translation[0]*bounds.width/camera.viewport[0])+2,y:Math.round(bounds.y+camera.translation[1]*bounds.height/camera.viewport[1])+2,width:Math.floor(512*camera.zoom*bounds.width/camera.viewport[0])-4,height:Math.floor(256*camera.zoom*bounds.height/camera.viewport[1])-4,scale:1}})()`);
       const deadline=performance.now()+60000;let shot;
-      do{shot=await capture(null);assert.ok(performance.now()<deadline,`${theme} ${name}: opaque reference reaches ${expected}, got ${shot.rgb}`);}while(!closeColor(shot.rgb,expected)||shot.spread>1);
-      shots.push({...shot,phase:name});return{tab:(await tabs()).selected,rgb:shot.rgb};
+      do{shot=await capture(null);assert.ok(performance.now()<deadline,`${theme} ${name}: opaque canvas and Navigator reach ${expected}, got ${shot.rgb} / ${shot.navigator.rgb}`);}while(!closeColor(shot.rgb,expected)||shot.spread>1||!closeColor(shot.navigator.rgb,expected)||shot.navigator.spread>1);
+      shots.push({...shot,phase:name});return{tab:(await tabs()).selected,rgb:shot.rgb,navigator:shot.navigator.rgb};
     };
     const incoming=await openSolid('#0000ff',`blue-${theme}`,[0,0,255]);
     const outgoing=await openSolid('#ff0000',`red-${theme}`,[255,0,0]);
@@ -552,44 +565,55 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
       for(let i=0;i<2;i++){
         const shot=await capture(`held-${i}`);strip.push(shot);
         assert.ok(shot.spread<=1&&closeColor(shot.rgb,outgoing.rgb),`${theme}: Waiting keeps the outgoing opaque drawing, got ${shot.rgb}`);
+        assert.ok(shot.navigator.spread<=1&&closeColor(shot.navigator.rgb,outgoing.navigator),`${theme}: Waiting keeps the outgoing Navigator, got ${shot.navigator.rgb}`);
       }
       await evaluate('switchTransition.release();switchTransition.selection');
       const deadline=performance.now()+60000;
       do{
         strip.push(await capture(`fade-${strip.length-2}`));
         assert.ok(performance.now()<deadline,`${theme}: the transition reaches the incoming drawing`);
-      }while(!closeColor(strip.at(-1).rgb,incoming.rgb)||await evaluate('switchTransition.wake||layerApp.app.canvas_work_pending()'));
+      }while(!closeColor(strip.at(-1).rgb,incoming.rgb)||!closeColor(strip.at(-1).navigator.rgb,incoming.navigator)||await evaluate('switchTransition.wake||layerApp.app.canvas_work_pending()'));
       await evaluate('layerApp.app.wait_for_canvas()');await settle();strip.push(await capture('new'));
       assert.ok(closeColor(strip.at(-1).rgb,incoming.rgb),`${theme}: the completed fade shows the incoming drawing`);
-      const delta=incoming.rgb.map((value,i)=>value-outgoing.rgb[i]),length=delta.reduce((sum,value)=>sum+value*value,0);
-      let previous=0,mixed=false;
-      for(const shot of strip){
-        assert.ok(shot.spread<=1,`${theme} ${shot.phase}: opaque transition has no checkerboard`);
-        assert.ok(shot.rgb.every((value,i)=>value>=Math.min(outgoing.rgb[i],incoming.rgb[i])-3&&value<=Math.max(outgoing.rgb[i],incoming.rgb[i])+3),`${theme} ${shot.phase}: no surround or unrelated pixels: ${shot.rgb}`);
-        const blend=convert=>{
-          const weights=[0,2].map(i=>(convert(shot.rgb[i])-convert(outgoing.rgb[i]))/(convert(incoming.rgb[i])-convert(outgoing.rgb[i])));
-          return Math.abs(weights[0]-weights[1])<=.05;
-        };
-        const linear=value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4};
-        assert.ok(blend(value=>value)||blend(linear),`${theme} ${shot.phase}: pixels blend the two drawings rather than a cleared target: ${shot.rgb}`);
-        const progress=shot.rgb.reduce((sum,value,i)=>sum+(value-outgoing.rgb[i])*delta[i],0)/length;
-        assert.ok(progress>=previous-.03,`${theme}: transition progresses from old through mixed to new`);previous=progress;
-        mixed ||= Math.max(...shot.rgb.map((value,i)=>Math.abs(value-outgoing.rgb[i])))>8&&Math.max(...shot.rgb.map((value,i)=>Math.abs(value-incoming.rgb[i])))>8;
+      assert.ok(closeColor(strip.at(-1).navigator.rgb,incoming.navigator),`${theme}: the completed fade shows the incoming Navigator`);
+      for(const part of ['canvas','navigator']){
+        const from=part==='canvas'?outgoing.rgb:outgoing.navigator,to=part==='canvas'?incoming.rgb:incoming.navigator;
+        const delta=to.map((value,i)=>value-from[i]),length=delta.reduce((sum,value)=>sum+value*value,0);
+        let previous=0,mixed=false;
+        for(const shot of strip){
+          const sample=part==='canvas'?shot:shot.navigator;
+          assert.ok(sample.spread<=1,`${theme} ${part} ${shot.phase}: opaque transition has no checkerboard`);
+          assert.ok(sample.rgb.every((value,i)=>value>=Math.min(from[i],to[i])-3&&value<=Math.max(from[i],to[i])+3),`${theme} ${part} ${shot.phase}: no surround or unrelated pixels: ${sample.rgb}`);
+          const blend=convert=>{
+            const weights=[0,2].map(i=>(convert(sample.rgb[i])-convert(from[i]))/(convert(to[i])-convert(from[i])));
+            return Math.abs(weights[0]-weights[1])<=.05;
+          };
+          const linear=value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4};
+          assert.ok(blend(value=>value)||blend(linear),`${theme} ${part} ${shot.phase}: pixels blend the two drawings rather than a cleared target: ${sample.rgb}`);
+          const progress=sample.rgb.reduce((sum,value,i)=>sum+(value-from[i])*delta[i],0)/length;
+          assert.ok(progress>=previous-.03,`${theme} ${part}: transition progresses from old through mixed to new`);previous=progress;
+          mixed ||= Math.max(...sample.rgb.map((value,i)=>Math.abs(value-from[i])))>8&&Math.max(...sample.rgb.map((value,i)=>Math.abs(value-to[i])))>8;
+        }
+        assert.ok(mixed,`${theme} ${part}: the 150 ms fade contains a genuinely mixed presented frame`);
       }
-      assert.ok(mixed,`${theme}: the 150 ms fade contains a genuinely mixed presented frame`);
-      console.log(`PASS ${theme} switch transition: real decode held outgoing pixels, ${strip.length} captured frames old→mixed→new, no surround/checkerboard`);
+      console.log(`PASS ${theme} canvas and Navigator switch transition: real decode held outgoing pixels, ${strip.length} captured frames old→mixed→new, no surround/checkerboard`);
     } finally {
       await evaluate('switchTransition.release();layerApp.app.frame=switchTransition.frame;GPUCanvasContext.prototype.getCurrentTexture=switchTransition.texture;delete window.switchTransition');
       await Promise.all(shots.map(shot=>writeFile(`${transitionDirectory}/switch-transition-${theme}-${shot.phase}.png`,Buffer.from(shot.data,'base64'))));
-      await writeFile(`${transitionDirectory}/switch-transition-${theme}.json`,JSON.stringify(strip.map(({phase,at,rgb,spread})=>({phase,ms:at-strip[0].at,rgb,spread})),null,2));
+      await writeFile(`${transitionDirectory}/switch-transition-${theme}.json`,JSON.stringify(strip.map(({phase,at,rgb,spread,navigator})=>({phase,ms:at-strip[0].at,rgb,spread,navigator})),null,2));
       if(strip.length){
         const sheet=await evaluate(`(async()=>{
           const images=await Promise.all(${JSON.stringify(strip.map(shot=>shot.data))}.map(async data=>{const image=new Image();image.src='data:image/png;base64,'+data;await image.decode();return image}));
-          const width=192,height=Math.round(images[0].height*width/images[0].width),columns=Math.min(4,images.length),canvas=document.createElement('canvas');canvas.width=columns*width;canvas.height=Math.ceil(images.length/columns)*(height+20);
-          const context=canvas.getContext('2d');context.fillStyle='#171717';context.fillRect(0,0,canvas.width,canvas.height);context.fillStyle='white';context.font='12px sans-serif';
-          images.forEach((image,i)=>{const x=i%columns*width,y=Math.floor(i/columns)*(height+20);context.drawImage(image,x,y,width,height);context.fillText(${JSON.stringify(strip.map(shot=>shot.phase))}[i],x+4,y+height+14)});return canvas.toDataURL('image/png').split(',')[1];
+          const regions=${JSON.stringify(strip.map(shot=>shot.regions))},phases=${JSON.stringify(strip.map(shot=>shot.phase))};
+          return Object.fromEntries(['canvas','navigator'].map(part=>{
+            const first=regions[0][part],width=192,height=Math.round(first.height*width/first.width),columns=Math.min(4,images.length),canvas=document.createElement('canvas');canvas.width=columns*width;canvas.height=Math.ceil(images.length/columns)*(height+20);
+            const context=canvas.getContext('2d');context.fillStyle='#171717';context.fillRect(0,0,canvas.width,canvas.height);context.fillStyle='white';context.font='12px sans-serif';
+            images.forEach((image,i)=>{const x=i%columns*width,y=Math.floor(i/columns)*(height+20),r=regions[i][part];context.drawImage(image,r.x,r.y,r.width,r.height,x,y,width,height);context.fillText(phases[i],x+4,y+height+14)});
+            return[part,canvas.toDataURL('image/png').split(',')[1]];
+          }));
         })()`);
-        await writeFile(`${transitionDirectory}/switch-transition-${theme}-strip.png`,Buffer.from(sheet,'base64'));
+        await writeFile(`${transitionDirectory}/switch-transition-${theme}-strip.png`,Buffer.from(sheet.canvas,'base64'));
+        await writeFile(`${transitionDirectory}/switch-transition-${theme}-navigator-strip.png`,Buffer.from(sheet.navigator,'base64'));
       }
     }
   }

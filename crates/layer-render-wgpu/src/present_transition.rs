@@ -15,8 +15,8 @@ impl Drop for Charge {
 }
 #[derive(Clone)]
 pub struct HeldCanvas {
-    pub(crate) _texture: wgpu::Texture,
-    pub(crate) view: wgpu::TextureView,
+    pub(crate) canvas: Option<wgpu::TextureView>,
+    pub(crate) navigator: Option<(wgpu::TextureView, crate::pixel_rect::PixelRect)>,
     pub(crate) size: [u32; 2],
     pub(crate) format: wgpu::TextureFormat,
     pub(crate) encoding: SdrSurfaceColor,
@@ -24,29 +24,28 @@ pub struct HeldCanvas {
     pub(crate) _charge: Arc<Charge>,
 }
 impl HeldCanvas {
-    pub(crate) fn capture(device: &PipelineDevice, encoder: &mut wgpu::CommandEncoder,
-        size: [u32; 2], format: wgpu::TextureFormat, encoding: SdrSurfaceColor,
-        pipeline: &wgpu::RenderPipeline, group: &wgpu::BindGroup) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+    pub(crate) fn capture(encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, draw: impl FnOnce(&mut wgpu::RenderPass<'_>)) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label:Some("capture held canvas"),color_attachments:&[Some(wgpu::RenderPassColorAttachment {
+                view:target,depth_slice:None,resolve_target:None,ops:wgpu::Operations {
+                    load:wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store:wgpu::StoreOp::Store}})],
+            depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
+        draw(&mut pass);
+    }
+    pub(crate) fn texture(device: &PipelineDevice, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::TextureView {
+        device.create_texture(&wgpu::TextureDescriptor {
             label: Some("held canvas"), size: wgpu::Extent3d {width:size[0],height:size[1],depth_or_array_layers:1},
             mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format,
-            usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::TEXTURE_BINDING,view_formats:&[],
-        });
-        let view = texture.create_view(&Default::default());
-        let bytes = crate::texture_bytes(&texture);
+            usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::TEXTURE_BINDING|wgpu::TextureUsages::COPY_SRC|wgpu::TextureUsages::COPY_DST,view_formats:&[],
+        }).create_view(&Default::default())
+    }
+    pub(crate) fn new(device: &PipelineDevice, size: [u32; 2], format: wgpu::TextureFormat, encoding: SdrSurfaceColor,
+        canvas: Option<wgpu::TextureView>, navigator: Option<(wgpu::TextureView, crate::pixel_rect::PixelRect)>) -> Self {
+        let bytes = canvas.iter().chain(navigator.iter().map(|(view,_)| view)).map(|view| crate::texture_bytes(view.texture())).sum();
         device.transient_display.fetch_add(bytes, Ordering::AcqRel);
-        let held = Self {_texture:texture,view,size,format,encoding,device:(**device).clone(),
+        let held = Self {canvas,navigator,size,format,encoding,device:(**device).clone(),
             _charge:Arc::new(Charge {bytes,total:device.transient_display.clone(),memory:device.transient_memory.clone()})};
         held._charge.publish();
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label:Some("capture held canvas"),color_attachments:&[Some(wgpu::RenderPassColorAttachment {
-                    view:&held.view,depth_slice:None,resolve_target:None,ops:wgpu::Operations {
-                        load:wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),store:wgpu::StoreOp::Store}})],
-                depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
-            pass.set_pipeline(pipeline);pass.set_bind_group(0,group,&[0]);pass.draw(0..3,0..1);
-        }
-        held.retain_until_complete(encoder);
         held
     }
     pub(crate) fn compatible(&self, device:&PipelineDevice,size:[u32;2],format:wgpu::TextureFormat,encoding:SdrSurfaceColor)->bool {
@@ -78,34 +77,38 @@ impl TransitionRecipes {
     }
 }
 pub(crate) struct TransitionDraw {
-    group:wgpu::BindGroup,
-    uniform:wgpu::Buffer,
-    alpha:Option<f32>,
+    canvas: Option<wgpu::BindGroup>,
+    navigator: Option<wgpu::BindGroup>,
+    origin: [f32; 2],
+    uniform: wgpu::Buffer,
+    fade: Option<layer_render::CanvasFade>,
 }
 impl TransitionDraw {
     pub fn new(device:&PipelineDevice,recipes:&TransitionRecipes,held:&HeldCanvas)->Self {
-        let uniform=device.create_buffer(&wgpu::BufferDescriptor {label:Some("held canvas fade"),size:272,usage:wgpu::BufferUsages::UNIFORM|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-        let group=device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("held canvas"),layout:&recipes.layout,entries:&[
-            wgpu::BindGroupEntry {binding:0,resource:wgpu::BindingResource::TextureView(&held.view)},
+        let uniform=device.create_buffer(&wgpu::BufferDescriptor {label:Some("held canvas fade"),size:528,usage:wgpu::BufferUsages::UNIFORM|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        let group=|view: &wgpu::TextureView| device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("held canvas"),layout:&recipes.layout,entries:&[
+            wgpu::BindGroupEntry {binding:0,resource:wgpu::BindingResource::TextureView(view)},
             wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:&uniform,offset:0,size:wgpu::BufferSize::new(16)})},
         ]});
-        Self {group,uniform,alpha:None}
+        Self {canvas:held.canvas.as_ref().map(group),navigator:held.navigator.as_ref().map(|(view,_)|group(view)),
+            origin:held.navigator.as_ref().map_or([0.;2],|(_,rect)|[rect.min_x() as f32,rect.min_y() as f32]),uniform,fade:None}
     }
-    pub fn update(&mut self,uploads:&mut Uploads,encoder:&mut wgpu::CommandEncoder,alpha:f32)->Result<(),GpuRasterError> {
-        let alpha=alpha.clamp(0.,1.);
-        if self.alpha==Some(alpha) {return Ok(());}
-        for (offset,footprint) in [(0,1.),(256,4.)] {
-            let bytes: [u8;16] = std::array::from_fn(|i| [alpha,footprint,0.,0.][i/4].to_ne_bytes()[i%4]);
+    pub fn update(&mut self,uploads:&mut Uploads,encoder:&mut wgpu::CommandEncoder,fade:layer_render::CanvasFade)->Result<(),GpuRasterError> {
+        if self.fade==Some(fade) {return Ok(());}
+        for (offset,alpha,footprint,origin) in [(0,fade.drawing,1.,[0.;2]),(256,fade.drawing,4.,[0.;2]),(512,fade.navigator,1.,self.origin)] {
+            let values=[alpha.unwrap_or(0.).clamp(0.,1.),footprint,origin[0],origin[1]];
+            let bytes: [u8;16] = std::array::from_fn(|i| values[i/4].to_ne_bytes()[i%4]);
             uploads.write_at(encoder,&self.uniform,offset,&bytes)?;
         }
-        self.alpha=Some(alpha);Ok(())
+        self.fade=Some(fade);Ok(())
     }
-    pub fn draw(&self,recipes:&TransitionRecipes,pass:&mut wgpu::RenderPass<'_>,source:bool) {
-        pass.set_pipeline(&recipes.pipeline);pass.set_bind_group(0,&self.group,&[if source {256}else{0}]);pass.draw(0..3,0..1);
+    pub fn draw(&self,recipes:&TransitionRecipes,pass:&mut wgpu::RenderPass<'_>,slot:u32) {
+        let Some(group)=(if slot==2 {&self.navigator}else{&self.canvas}) else {return;};
+        pass.set_pipeline(&recipes.pipeline);pass.set_bind_group(0,group,&[slot*256]);pass.draw(0..3,0..1);
     }
 }
 const SHADER:&str=r#"
-struct Uniform {alpha:f32, footprint:f32, pad:vec2<f32>}
+struct Uniform {alpha:f32, footprint:f32, origin:vec2<f32>}
 @group(0) @binding(0) var held:texture_2d<f32>;
 @group(0) @binding(1) var<uniform> fade:Uniform;
 @vertex fn vs(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
@@ -113,7 +116,7 @@ struct Uniform {alpha:f32, footprint:f32, pad:vec2<f32>}
     return vec4(p[index],0.,1.);
 }
 @fragment fn fs(@builtin(position) position:vec4<f32>)->@location(0) vec4<f32> {
-    let pixel=min(vec2<i32>(position.xy*fade.footprint),vec2<i32>(textureDimensions(held))-vec2(1));
+    let pixel=clamp(vec2<i32>(position.xy*fade.footprint)-vec2<i32>(fade.origin),vec2(0),vec2<i32>(textureDimensions(held))-vec2(1));
     return textureLoad(held,pixel,0)*fade.alpha;
 }
 "#;

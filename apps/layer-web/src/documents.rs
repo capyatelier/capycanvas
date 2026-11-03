@@ -470,7 +470,7 @@ impl WebApp {
         if let Some(control) = self.tone.pending.take() { control.cancel(); }
         self.tone = Default::default();
         self.proof = Default::default();
-        self.reset_document_views();
+        self.startup = Default::default();
         self.document_changed()
     }
 }

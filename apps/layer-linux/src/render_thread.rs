@@ -446,7 +446,7 @@ impl Drop for TransitionReply {
 enum Command {
     SeedContext(EvaluationContext),
     CaptureContext(ContextRequest),
-    CanvasTransition(Option<f32>),
+    CanvasTransition(layer_render::CanvasFade),
     LocalTone(Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>, mpsc::Sender<Result<(),String>>),
     Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
     Screen(u64, f32, Option<layer_render_wgpu::ScreenCheck>),
@@ -517,6 +517,7 @@ struct FrameReport {
     retouch_waiting: std::sync::atomic::AtomicU64,
     paper_drawn: std::sync::atomic::AtomicU64,
     showing_drawing: AtomicBool,
+    showing_navigator: AtomicBool,
 }
 enum Reply {
     ColorAdopted(u64, HashMap<AssetId, BrushSource>, layer_render_wgpu::snapshot::SnapshotGpu, Option<layer_render_wgpu::ShaderActivity>),
@@ -1201,8 +1202,9 @@ impl CanvasRenderer for RenderWorker {
     fn fill_preview_ready(&self)->Option<(u64,u64)> {self.report.fill_preview.try_read().ok().and_then(|key|*key)}
     fn set_fill_reveal(&mut self,reveal:Option<layer_render::FillReveal>) {self.fill_reveal=reveal;}
     fn showing_drawing(&self) -> bool { self.report.showing_drawing.load(Ordering::Acquire) }
-    fn set_canvas_transition(&mut self, alpha: Option<f32>) {
-        let _ = self.send(Command::CanvasTransition(alpha));
+    fn showing_navigator(&self) -> bool { self.report.showing_navigator.load(Ordering::Acquire) }
+    fn set_canvas_transition(&mut self, fade: layer_render::CanvasFade) {
+        let _ = self.send(Command::CanvasTransition(fade));
     }
     fn prepare_moving_layer(&mut self, layer: Option<OccurrenceHandle>) {
         if self.moving_layer != layer && self.send(Command::MovingLayer(layer)).is_ok() {
@@ -2288,7 +2290,10 @@ impl Worker {
     /// source is kept for the session to replay.
     fn report_frame(&mut self, report: &FrameReport) {
         let showing = self.renderer.showing_drawing();
-        if report.showing_drawing.swap(showing, Ordering::AcqRel) != showing {
+        let navigator = self.renderer.showing_navigator();
+        let drawing_changed = report.showing_drawing.swap(showing, Ordering::AcqRel) != showing;
+        let navigator_changed = report.showing_navigator.swap(navigator, Ordering::AcqRel) != navigator;
+        if drawing_changed || navigator_changed {
             wake_canvas(&self.area, &self.presented_chrome);
         }
         if let Ok(mut key)=report.fill_preview.try_write(){*key=self.renderer.fill_preview_ready();}

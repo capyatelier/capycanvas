@@ -215,13 +215,18 @@ reference white; a raw linear clear is incorrect for an encoded UNORM target.
 Standalone transparent overview targets retain their transparent clear.
 
 Before a drawing's first non-backdrop composition, the presenter shows the
-surround or the previous drawing's held artwork. A held image contains only the
-surface-sized artwork pass; chrome and cursor overlays stay live above it.
+surround or the previous drawing's held artwork. The canvas part contains only
+the surface-sized artwork pass; chrome and cursor overlays stay live above it.
 `UiSession` starts a 150 ms fade when the renderer reports Showing. Rapid
 switches through Waiting drawings retain the original image. A size, format,
 encoding or device mismatch discards it; completion releases its transient GPU
 charge. GTK transfers the native child surface with the image so replacing a
 worker preserves the displayed pixels.
+The same held capture includes the previous meaningful Navigator image, cropped
+to its surface bounds. The Navigator draws above panels within its current clip
+and starts its own 150 ms fade on a full-scope refresh. Until then it holds the
+old image, or shows the panel when no compatible image exists. Both parts share
+one transient charge and release independently when their fades finish.
 
 The artwork pipelines leave out the paper lighting code; a second set with it
 compiles the first time paper lighting shows, in the background where a startup

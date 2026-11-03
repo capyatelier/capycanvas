@@ -306,9 +306,11 @@ impl WebApp {
             // display transform must follow the new renderer, including undo.
             let output_changed = config.format != window.config.format || config.color_space != window.config.color_space;
             if *presented_space != space || output_changed {
+                let held=presenter.capture_held(gpu.device(),gpu.queue());
                 config.format = window.config.format;
                 config.color_space = window.config.color_space;
                 *presenter = ViewportPresenter::for_overview_surface(gpu, config.format, window.color).map_err(js)?;
+                presenter.adopt_held(held);
                 *presented_space = space;
             }
             presenter.inherit_proof(gpu, &window.presenter);

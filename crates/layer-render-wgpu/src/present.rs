@@ -144,7 +144,8 @@ pub struct ViewportPresenter {
     transition_device: crate::PipelineDevice,
     held: Option<crate::HeldCanvas>,
     held_draw: Option<crate::present_transition::TransitionDraw>,
-    held_alpha: Option<f32>,
+    held_alpha: layer_render::CanvasFade,
+    presented_overview_buffer: Option<wgpu::Buffer>,
     presented_selection_overlay: Option<layer_render::SelectionOverlay>,
     presented_motion: Option<([f32; 24], crate::pixel_rect::DocRect, u64)>,
     motion_views: Option<[wgpu::TextureView; 2]>,
@@ -591,7 +592,7 @@ impl ViewportPresenter {
     }
 
     pub async fn prepare(&mut self, renderer: &WgpuRasterizer) -> Result<(), GpuRasterError> {
-        crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline, &self.recipes.transition.pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
+        crate::Deferred::prepare_all(self.pipeline.iter().chain([&self.surround_pipeline, &self.cursor_pipeline, &self.recipes.transition.pipeline]).chain(self.overview_pipeline.iter()).chain(self.recipes.overviews[1].get()).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
             .await.map_err(GpuRasterError::Effect)?;
         if let Some(panels) = &self.panels {
             crate::Deferred::prepare_all([&panels.pipeline,&panels.mask_pipeline]).await.map_err(GpuRasterError::Effect)?;
@@ -760,7 +761,8 @@ impl ViewportPresenter {
             transition_device: device.for_recipe(),
             held: None,
             held_draw: None,
-            held_alpha: None,
+            held_alpha: Default::default(),
+            presented_overview_buffer: None,
             presented_view: None,
             presented_selection_overlay: None,
             presented_motion: None,
@@ -797,19 +799,22 @@ impl ViewportPresenter {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32, 5 => Float32x4],
         };
-        let blend = wgpu::BlendState {
-            color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
-            // The canvas already owns window coverage. Reapplying
-            // alpha blending here would thicken antialiased corners.
-            alpha: if self.standalone_overview {
-                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.alpha
-            } else {
-                wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add }
-            },
-        };
-        self.overview_pipeline = Some(self.recipes.overviews[usize::from(self.standalone_overview)].get_or_init(||
-            surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
-                ["overview_vertex", "overview_fragment"], Some(instance), self.format, Some(blend))).clone());
+        for standalone in [self.standalone_overview,true] {
+            let blend = wgpu::BlendState {
+                color: wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.color,
+                alpha: if standalone { wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING.alpha }
+                    else { wgpu::BlendComponent { src_factor:wgpu::BlendFactor::Zero, dst_factor:wgpu::BlendFactor::One, operation:wgpu::BlendOperation::Add } },
+            };
+            let pipeline=self.recipes.overviews[usize::from(standalone)].get_or_init(||
+                surface_pipeline(device, "in-surface document overviews", &self.pipeline_layout, &self.shader,
+                    ["overview_vertex", "overview_fragment"], Some(instance.clone()), self.format, Some(blend)));
+            if standalone==self.standalone_overview {self.overview_pipeline=Some(pipeline.clone());}
+        }
+        if !self.standalone_overview && let Some(startup)=&renderer.startup
+            && let Some(pipeline)=self.recipes.overviews[1].get().filter(|pipeline|!pipeline.ready()) {
+            startup.compiler.background(pipeline,crate::startup::OTHER,||true);
+            startup.compiler.start();
+        }
     }
 
     /// Reuses the composition, bindings and current presentation pass. An
@@ -943,7 +948,7 @@ impl ViewportPresenter {
         let geometry=renderer.display_geometry().unwrap_or(&self.disabled_local_buffer);
         let previous = &self.history;
         !previous.valid
-            || (self.held.is_some() && self.held_alpha != renderer.canvas_transition)
+            || (self.held_alpha != self.transition_alpha(renderer))
             || self.presented_drawing != Some(renderer.presentation)
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
             || self.presented_selection_overlay != renderer.selection_overlay
@@ -1018,12 +1023,50 @@ impl ViewportPresenter {
         self.encode_content(renderer, encoder, target, view, surround_linear, false)
     }
 
+    fn overview_rect(placement: &[f32; 21], view: ViewState, rotation: u32) -> crate::pixel_rect::PixelRect {
+        crate::present_damage::surface_bounds([placement[0],placement[1],placement[2],placement[3]],view,rotation)
+            .intersect(crate::present_damage::surface_bounds([placement[17],placement[18],placement[19],placement[20]],view,rotation))
+    }
     fn capture_into(&mut self, encoder:&mut wgpu::CommandEncoder)->Option<crate::HeldCanvas> {
-        if !self.presented_drawing.is_some_and(|drawing|drawing.showing) {return self.held.take();}
+        let drawing = self.presented_drawing?;
+        if !drawing.showing {return self.held.take();}
         let (view,_,rotation,_)=self.presented_view?;
         let size=if rotation.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]};
-        Some(crate::HeldCanvas::capture(&self.transition_device,encoder,size,self.format,self.color,
-            self.last_artwork_pipeline.as_ref()?,self.bind_group.as_ref()?))
+        let bounds=crate::pixel_rect::PixelRect::full(size);
+        let rect=self.history.overviews.iter().map(|p|Self::overview_rect(p,view,rotation)).fold(crate::pixel_rect::PixelRect::EMPTY,|a,b|a.union(b)).intersect(bounds);
+        let navigator_bindings=(drawing.navigator && !rect.is_empty()).then(|| {
+            self.overview_pipeline.as_ref().and_then(|_|self.recipes.overviews[1].get()).filter(|pipeline|pipeline.ready())
+                .zip(self.presented_overview_buffer.as_ref()).zip(self.bind_group.as_ref())
+        }).flatten();
+        let canvas_bindings=(!self.standalone_overview).then(||self.last_artwork_pipeline.as_ref().zip(self.bind_group.as_ref())).flatten();
+        if canvas_bindings.is_none() && navigator_bindings.is_none() {return self.held.take();}
+        let scratch=crate::HeldCanvas::texture(&self.transition_device,size,self.format);
+        let navigator=if let Some(((pipeline,buffer),group))=navigator_bindings {
+            crate::HeldCanvas::capture(encoder,&scratch,|pass| {
+                pass.set_pipeline(pipeline);pass.set_bind_group(0,group,&[0]);
+                pass.set_vertex_buffer(0,buffer.slice(..));
+                pass.set_scissor_rect(rect.min_x(),rect.min_y(),rect.width(),rect.height());
+                pass.draw(0..6,0..self.history.overviews.len() as u32);
+            });
+            if self.standalone_overview {Some((scratch.clone(),bounds))}
+            else {
+                let image=crate::HeldCanvas::texture(&self.transition_device,[rect.width(),rect.height()],self.format);
+                encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {texture:scratch.texture(),mip_level:0,
+                    origin:wgpu::Origin3d {x:rect.min_x(),y:rect.min_y(),z:0},aspect:wgpu::TextureAspect::All},
+                    wgpu::TexelCopyTextureInfo {texture:image.texture(),mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},
+                    wgpu::Extent3d {width:rect.width(),height:rect.height(),depth_or_array_layers:1});
+                Some((image,rect))
+            }
+        } else {None};
+        let canvas=if let Some((pipeline,group))=canvas_bindings {
+            crate::HeldCanvas::capture(encoder,&scratch,|pass| {
+                pass.set_pipeline(pipeline);pass.set_bind_group(0,group,&[0]);pass.draw(0..3,0..1);
+            });
+            Some(scratch)
+        } else {None};
+        let held=crate::HeldCanvas::new(&self.transition_device,size,self.format,self.color,canvas,navigator);
+        held.retain_until_complete(encoder);
+        Some(held)
     }
     pub fn capture_held(&mut self, device:&wgpu::Device, queue:&wgpu::Queue)->Option<crate::HeldCanvas> {
         if *self.transition_device!=*device {return None;}
@@ -1040,15 +1083,24 @@ impl ViewportPresenter {
         ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]}
     }
 
+    fn transition_alpha(&self, renderer: &WgpuRasterizer) -> layer_render::CanvasFade {
+        layer_render::CanvasFade {
+            drawing:self.held.as_ref().and_then(|held|held.canvas.as_ref()).map(|_|if renderer.presentation.showing {renderer.canvas_transition.drawing.unwrap_or(0.)}else{1.}),
+            navigator:self.held.as_ref().and_then(|held|held.navigator.as_ref()).map(|_|if renderer.presentation.navigator {renderer.canvas_transition.navigator.unwrap_or(0.)}else{1.}),
+        }
+    }
+
     pub fn needs_overview_present(&self, renderer: &WgpuRasterizer, extent: [u32;2]) -> bool {
         assert!(self.standalone_overview);
         let previous=&self.history;
         let navigator=renderer.navigator.view().unwrap_or(&renderer.empty_view);
-        renderer.presentation_views().is_some() && (!previous.valid
+        !previous.valid
+            || self.presented_drawing!=Some(renderer.presentation)
+            || self.held_alpha!=self.transition_alpha(renderer)
             || self.presented_view!=Some((Self::overview_view(extent),[0.;4],self.quarter_turns,self.corner_radius))
             || previous.navigator_revision!=renderer.navigator.revision
             || previous.hdr!=self.hdr_options || previous.proof!=self.proof_options || previous.screen!=self.screen_options
-            || self.overviews_changed || self.bind_group.is_none() || self.navigator_view.as_ref()!=Some(navigator))
+            || self.overviews_changed || self.bind_group.is_none() || self.navigator_view.as_ref()!=Some(navigator)
     }
 
     /// Render a retained native Navigator surface from the current GPU image.
@@ -1089,21 +1141,27 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        if !overview_only {
-            let size = [target.texture().width(),target.texture().height()];
-            if self.presented_drawing.is_some_and(|old|old.showing && old.document!=renderer.presentation.document) {
-                let held=self.capture_into(encoder);
-                self.adopt_held(held);
-            }
-            if self.held.as_ref().is_some_and(|held|!held.compatible(&renderer.device,size,self.format,self.color))
-                || renderer.presentation.showing && renderer.canvas_transition.is_none() {
-                self.held=None;self.held_draw=None;
-            }
-            if let Some(held)=&self.held {
-                let draw=self.held_draw.get_or_insert_with(||crate::present_transition::TransitionDraw::new(&renderer.device,&self.recipes.transition,held));
-                draw.update(&mut self.uploads,encoder,if renderer.presentation.showing {renderer.canvas_transition.unwrap_or(0.)}else{1.})?;
-                held.retain_until_complete(encoder);
-            }
+        let size = [target.texture().width(),target.texture().height()];
+        if self.presented_drawing.is_some_and(|old|old.showing && old.document!=renderer.presentation.document) {
+            let held=self.capture_into(encoder);
+            self.adopt_held(held);
+        }
+        if self.held.as_ref().is_some_and(|held|!held.compatible(&renderer.device,size,self.format,self.color)) {
+            self.held=None;self.held_draw=None;
+        }
+        if let Some(held)=&mut self.held {
+            let drop_canvas=held.canvas.is_some() && renderer.presentation.showing && renderer.canvas_transition.drawing.is_none();
+            let drop_navigator=held.navigator.is_some() && (self.overviews.is_empty() || renderer.presentation.navigator && renderer.canvas_transition.navigator.is_none());
+            if drop_canvas {held.canvas=None;}
+            if drop_navigator {held.navigator=None;}
+            if drop_canvas || drop_navigator {self.held_draw=None;}
+            if held.canvas.is_none() && held.navigator.is_none() {self.held=None;}
+        }
+        let fade=self.transition_alpha(renderer);
+        if let Some(held)=&self.held {
+            let draw=self.held_draw.get_or_insert_with(||crate::present_transition::TransitionDraw::new(&renderer.device,&self.recipes.transition,held));
+            draw.update(&mut self.uploads,encoder,fade)?;
+            held.retain_until_complete(encoder);
         }
         if self.fill_before.as_ref().is_some_and(|(id,image)|renderer.fill_reveal.is_none_or(|reveal|reveal.transaction!=*id)
             || [image.texture().width(),image.texture().height()]!=if self.quarter_turns.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]}) {
@@ -1323,8 +1381,8 @@ impl ViewportPresenter {
                 .then_some(renderer.display_selection_damage)
                 .filter(|_| previous.outline_revision.wrapping_add(1) == renderer.display_selection_revision);
             let content = !previous.valid
-                || self.held.is_some() && self.held_alpha != renderer.canvas_transition
-                || self.held_alpha.is_some() && self.held.is_none()
+                || self.held_alpha != self.transition_alpha(renderer)
+                || self.held_alpha != layer_render::CanvasFade::default() && self.held.is_none()
                 || self.presented_drawing != Some(renderer.presentation)
                 || previous.hdr != self.hdr_options
                 || previous.proof != self.proof_options
@@ -1455,7 +1513,7 @@ impl ViewportPresenter {
                     pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, group, &[SOURCE_CAMERA]);
                     pass.draw(0..3, 0..1);
-                    if let Some(draw)=&self.held_draw {draw.draw(&self.recipes.transition,pass,true);}
+                    if let Some(draw)=&self.held_draw {draw.draw(&self.recipes.transition,pass,1);}
                 },
                 timestamp_writes.as_ref().map(|t| wgpu::RenderPassTimestampWrites { end_of_pass_write_index: None, ..t.clone() }),
                 &mut glass,
@@ -1560,7 +1618,7 @@ impl ViewportPresenter {
                 }
                 pass.set_scissor_rect(repaint.min_x(), repaint.min_y(), repaint.width(), repaint.height());
                 if let Some(draw)=&self.held_draw {
-                    draw.draw(&self.recipes.transition,&mut pass,false);
+                    draw.draw(&self.recipes.transition,&mut pass,0);
                     pass.set_bind_group(0,self.bind_group.as_ref().unwrap(),&[0]);
                 }
                 if shade.is_some_and(|(_, _, flash)| flash) {
@@ -1582,10 +1640,20 @@ impl ViewportPresenter {
                     pass.set_bind_group(0,self.bind_group.as_ref().unwrap(),&[0]);
                 }
             }
-            if showing && !self.overviews.is_empty() {
+            if renderer.presentation.navigator && !self.overviews.is_empty() {
                 pass.set_pipeline(self.overview_pipeline.as_ref().unwrap());
                 pass.set_vertex_buffer(0, self.overview_buffer.as_ref().unwrap().slice(..));
                 pass.draw(0..6, 0..self.overviews.len() as u32);
+            }
+            if let (Some(draw),Some((_,rect)))=(&self.held_draw,self.held.as_ref().and_then(|held|held.navigator.as_ref())) {
+                for placement in &self.overviews {
+                    let clip=crate::present_damage::surface_bounds([placement[17],placement[18],placement[19],placement[20]],view,self.quarter_turns);
+                    let area=rect.intersect(clip).intersect(*repaint);
+                    if !area.is_empty() {
+                        pass.set_scissor_rect(area.min_x(),area.min_y(),area.width(),area.height());
+                        draw.draw(&self.recipes.transition,&mut pass,2);
+                    }
+                }
             }
         }
         // Return upload chunks only after this encoder's GPU work completes.
@@ -1593,7 +1661,8 @@ impl ViewportPresenter {
         self.uploads.finish(encoder);
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
         if showing {self.last_artwork_pipeline=Some((**pipeline).clone());}
-        self.held_alpha=if self.held.is_some() {renderer.canvas_transition}else{None};
+        self.held_alpha=fade;
+        self.presented_overview_buffer=self.overview_buffer.clone();
         self.presented_drawing = Some(renderer.presentation);
         self.presented_selection_overlay = renderer.selection_overlay;
         self.presented_paper = Some(lit);
@@ -1601,6 +1670,7 @@ impl ViewportPresenter {
         if capture_before.is_some() {self.bind_group=None;}
         self.overlays_changed = false;
         if overview_only {
+            self.history.overviews.clone_from(&self.overviews);
             self.history.valid=true;
             self.history.navigator_revision=renderer.navigator.revision;
             self.history.hdr=self.hdr_options;
@@ -1722,7 +1792,7 @@ mod tests {
         let view=crate::test_support::view(extent);
         presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
         let red=crate::layer_tests::page_bytes(&renderer,&texture);
-        renderer.set_canvas_transition(Some(1.));
+        renderer.set_canvas_transition(layer_render::CanvasFade::WAITING);
         let mut b=paint_document(extent,"blue");
         set_source(&mut b,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
         renderer.prepare_startup(&b,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
@@ -1743,7 +1813,7 @@ mod tests {
             assert!(std::time::Instant::now()<deadline,"The incoming drawing publishes meaningful pixels");
         }
         for (alpha,expected) in [(Some(1.),[255,0,0,255]),(Some(0.125),[32,0,223,255]),(None,[0,0,255,255])] {
-            renderer.set_canvas_transition(alpha);
+            renderer.set_canvas_transition(layer_render::CanvasFade {drawing:alpha,navigator:None});
             presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
             let bytes=crate::layer_tests::page_bytes(&renderer,&texture);
             for (actual,expected) in bytes[..4].iter().zip(expected) {assert!(actual.abs_diff(expected)<=1);}
@@ -1752,6 +1822,79 @@ mod tests {
         renderer.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
         assert_eq!(renderer.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
     }
+    #[test]
+    fn navigator_transition_holds_fades_and_clips_in_surface_and_standalone() {
+        use crate::layer_tests::placement::{paint_document,set_source};
+        for standalone in [false,true] {
+            let extent=[64;2];
+            let mut a=paint_document(extent,"red Navigator");
+            set_source(&mut a,layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]));
+            let mut b=paint_document(extent,"blue Navigator");
+            set_source(&mut b,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
+            let mut r=WgpuRasterizer::new_native_headless(a.composition().color).unwrap();
+            crate::test_support::submit_settled(&mut r,crate::test_support::packet(a.scene(),extent));
+            assert!(r.showing_navigator());
+            let format=wgpu::TextureFormat::Rgba8Unorm;
+            let mut presenter=if standalone {ViewportPresenter::for_overview_surface(&r,format,SdrSurfaceColor::Srgb).unwrap()}
+                else {ViewportPresenter::for_renderer(&r,format)};
+            let placement=OverviewPlacement {bounds:[16.,16.,32.,32.],clip:None,
+                work_area:[[0.,0.],[64.,0.],[64.,64.],[0.,64.]],outline_linear:[1.;3],scale:1.,opacity:1.};
+            presenter.set_overviews(&r,&[placement]);
+            if !standalone {
+                presenter.set_panel_surfaces(&r,&[crate::PanelSurface {sidebar:[0.;4],sidebar_radii:[0.;4],plane:0.,bridge_width:0.,direction:1.,scale:1.,color:[0.;4],opacity:1.,anchors:vec![],
+                    groups:vec![crate::PanelSurfaceGroup {bounds:[8.,8.,48.,48.],radii:[0.;4],tab_bar:[0.;4],active_tab:[0.;4],tab_clip:[0.;4],color:[0.,1.,0.,1.],strip_color:[0.,1.,0.,1.],opacity:1.}]}]);
+            }
+            pollster::block_on(presenter.prepare(&r)).unwrap();
+            let (texture,target)=crate::create_target(r.device(),extent,format,"Navigator transition");
+            let present=|presenter:&mut ViewportPresenter,r:&WgpuRasterizer| {
+                if standalone {presenter.present_overviews(r,&target,extent).unwrap();}
+                else {presenter.present(r,&target,crate::test_support::view(extent),[0.,1.,0.,1.]).unwrap();}
+                crate::layer_tests::page_bytes(r,&texture)
+            };
+            let pixel=|bytes:&[u8],x:usize| <[u8;4]>::try_from(&bytes[(32*64+x)*4..][..4]).unwrap();
+            let red=present(&mut presenter,&r);
+            assert_eq!(pixel(&red,40),[255,0,0,255]);
+            if !standalone {
+                let pipeline=presenter.overview_pipeline.take();
+                let held=presenter.capture_held(r.device(),r.queue()).unwrap();
+                assert!(held.canvas.is_some() && held.navigator.is_none());
+                drop(held);presenter.overview_pipeline=pipeline;
+            }
+            r.set_canvas_transition(layer_render::CanvasFade::WAITING);
+            r.prepare_startup(&b,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+            let waiting=present(&mut presenter,&r);
+            assert_eq!(pixel(&waiting,40),[255,0,0,255]);
+            assert!(presenter.held.as_ref().unwrap().navigator.is_some());
+            r.set_canvas_transition(Default::default());
+            crate::test_support::submit_settled(&mut r,crate::test_support::packet(b.scene(),extent));
+            r.presentation.navigator=false;
+            r.set_canvas_transition(layer_render::CanvasFade {drawing:None,navigator:Some(1.)});
+            assert_eq!(pixel(&present(&mut presenter,&r),40),[255,0,0,255]);
+            assert!(presenter.held.as_ref().unwrap().canvas.is_none());
+            r.presentation.navigator=true;
+            for (alpha,expected) in [(Some(1.),[255,0,0,255]),(Some(0.125),[32,0,223,255])] {
+                r.set_canvas_transition(layer_render::CanvasFade {drawing:None,navigator:alpha});
+                let bytes=present(&mut presenter,&r);
+                for (actual,expected) in pixel(&bytes,40).iter().zip(expected) {assert!(actual.abs_diff(expected)<=1,"{standalone}: {:?}",pixel(&bytes,40));}
+            }
+            presenter.set_overviews(&r,&[OverviewPlacement {clip:Some([32.,16.,16.,32.]),..placement}]);
+            let clipped=present(&mut presenter,&r);
+            assert_eq!(pixel(&clipped,24),if standalone {[0;4]}else{[0,255,0,255]});
+            r.set_canvas_transition(Default::default());
+            assert_eq!(pixel(&present(&mut presenter,&r),40),[0,0,255,255]);
+            assert!(presenter.held.is_none());
+            r.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            assert_eq!(r.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
+            let held=presenter.capture_held(r.device(),r.queue());
+            presenter.adopt_held(held);
+            presenter.set_overviews(&r,&[]);
+            present(&mut presenter,&r);
+            r.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            assert!(presenter.held.is_none());
+            assert_eq!(r.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
+        }
+    }
+
     #[test]
     fn backdrop_scope_defers_native_paint_restore_until_the_full_document_is_prepared() {
         use crate::layer_tests::placement::{paint, target, reveal_all};

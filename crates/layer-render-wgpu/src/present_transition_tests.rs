@@ -19,8 +19,11 @@ fn held_capture_blends_and_releases_its_device_charge_after_completion() {
     "#.into())});
     let pipeline=crate::present::surface_pipeline(device,"capture test",&pipeline_layout,&shader,["vs","fs"],None,format,None);
     let mut encoder=device.create_command_encoder(&Default::default());
-    let held=HeldCanvas::capture(device,&mut encoder,[8,8],format,SdrSurfaceColor::Srgb,&pipeline,&group);
-    let bytes=crate::texture_bytes(&held._texture);
+    let view=HeldCanvas::texture(device,[8,8],format);
+    HeldCanvas::capture(&mut encoder,&view,|pass| {pass.set_pipeline(&pipeline);pass.set_bind_group(0,&group,&[0]);pass.draw(0..3,0..1);});
+    let held=HeldCanvas::new(device,[8,8],format,SdrSurfaceColor::Srgb,Some(view),None);
+    held.retain_until_complete(&encoder);
+    let bytes=crate::texture_bytes(held.canvas.as_ref().unwrap().texture());
     assert_eq!(device.transient_display.load(Ordering::Acquire),bytes);
     assert!(held.compatible(device,[8,8],format,SdrSurfaceColor::Srgb));
     assert!(!held.compatible(device,[9,8],format,SdrSurfaceColor::Srgb));
@@ -34,13 +37,13 @@ fn held_capture_blends_and_releases_its_device_charge_after_completion() {
     for (alpha,expected) in [(1.,[255,0,0,255]),(0.125,[32,0,223,255]),(0.,[0,0,255,255])] {
         let (texture,target)=crate::create_target(device,[8,8],format,"fade test");
         let mut encoder=device.create_command_encoder(&Default::default());
-        draw.update(&mut uploads,&mut encoder,alpha).unwrap();
+        draw.update(&mut uploads,&mut encoder,layer_render::CanvasFade {drawing:Some(alpha),navigator:None}).unwrap();
         {
             let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {label:None,
                 color_attachments:&[Some(wgpu::RenderPassColorAttachment {view:&target,depth_slice:None,resolve_target:None,
                     ops:wgpu::Operations {load:wgpu::LoadOp::Clear(wgpu::Color {r:0.,g:0.,b:1.,a:1.}),store:wgpu::StoreOp::Store}})],
                 depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
-            draw.draw(&recipes,&mut pass,false);
+            draw.draw(&recipes,&mut pass,0);
         }
         held.retain_until_complete(&encoder);uploads.finish(&encoder);renderer.queue.submit([encoder.finish()]);
         let pixels=crate::layer_tests::page_bytes(&renderer,&texture);
@@ -54,7 +57,10 @@ fn held_capture_blends_and_releases_its_device_charge_after_completion() {
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     assert_eq!(device.transient_display.load(Ordering::Acquire),0);
     let mut encoder=device.create_command_encoder(&Default::default());
-    let held=HeldCanvas::capture(device,&mut encoder,[8,8],format,SdrSurfaceColor::Srgb,&pipeline,&group);
+    let view=HeldCanvas::texture(device,[8,8],format);
+    HeldCanvas::capture(&mut encoder,&view,|pass| {pass.set_pipeline(&pipeline);pass.set_bind_group(0,&group,&[0]);pass.draw(0..3,0..1);});
+    let held=HeldCanvas::new(device,[8,8],format,SdrSurfaceColor::Srgb,Some(view),None);
+    held.retain_until_complete(&encoder);
     renderer.queue.submit([encoder.finish()]);
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     device.destroy();

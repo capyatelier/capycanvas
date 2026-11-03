@@ -142,7 +142,7 @@ impl WebApp {
         self.session=candidate;
         self.documents.restore_identity(identity).map_err(js)?;
         if let Some(control)=self.tone.pending.take(){control.cancel();}
-        self.tone=Default::default();self.proof=Default::default();self.reset_document_views();
+        self.tone=Default::default();self.proof=Default::default();self.startup = Default::default();
         serialize(&SessionAdoption{id:identity,change:layer_ui::UiChange{revision:self.session.state().revision,regions:layer_ui::regions::ALL,canvas_wake:true,..Default::default()}})
     }
     pub fn restore_session_order(&mut self,order:JsValue)->Result<JsValue,JsValue> {

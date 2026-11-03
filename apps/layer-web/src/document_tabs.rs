@@ -242,13 +242,7 @@ impl WebApp {
                 factory: gpu.renderer_factory(),
             });
         }
-        self.reset_document_views();
-    }
-    pub(super) fn reset_document_views(&mut self) {
         self.startup = Default::default();
-        for slot in self.overviews.values_mut() {
-            slot.gpu = None;
-        }
     }
     pub(super) fn document_changed(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::UiChange {
