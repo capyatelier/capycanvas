@@ -36,7 +36,8 @@ function Idle-Fps{
     Wait-Until {(Control 'renderer-stat-2').Current.Name -eq '0'} 'Diagnostics did not show zero FPS after canvas activity stopped' 15
     $frames=Drawing-Frames
     Start-Sleep -Milliseconds 1500
-    if((Control 'renderer-stat-2').Current.Name -ne '0' -or (Drawing-Frames) -ne $frames){throw 'Idle Diagnostics created canvas drawing updates or reported active FPS'}
+    $fps=(Control 'renderer-stat-2').Current.Name;$after=Drawing-Frames
+    if($fps -ne '0' -or $after -ne $frames){throw "Idle Diagnostics created canvas drawing updates or reported active FPS: frames_before=$frames frames_after=$after fps=$fps"}
     $frames
 }
 function Diagnostics-Identity([string]$Stage){

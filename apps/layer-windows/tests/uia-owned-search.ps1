@@ -661,3 +661,30 @@ namespace CapyFooterTest {
     }
 }
 Write-Output 'Retained footer setup authors its sufficient column width before the modal; locale checks preserve the width bound without background input.'
+
+$layoutAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-workspace-layout.ps1'),[ref]$tokens,[ref]$errors)
+if(@($errors).Count){throw ($errors|Out-String)}
+$idleFps=@($layoutAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Idle-Fps'},$true))
+if($idleFps.Count -ne 1){throw 'Missing actual idle Diagnostics assertion'}
+& {
+    . ([scriptblock]::Create($idleFps[0].Extent.Text))
+    $samples=@{}
+    function Control([string]$Id){
+        if($Id -ne 'renderer-stat-2'){throw 'Unexpected idle Diagnostics reading'}
+        if($samples.after){$samples.fpsReads++}
+        [pscustomobject]@{Current=@{Name=$(if($samples.after){$samples.fps}else{'0'})}}
+    }
+    function Drawing-Frames{$samples.frameReads++;if($samples.frameReads -gt 2){throw 'Idle Diagnostics sampled Frames more than once after the interval'};if($samples.after){$samples.frames}else{10}}
+    function Start-Sleep([int]$Milliseconds){if($Milliseconds -ne 1500){throw 'Idle Diagnostics changed its sample interval'};$samples.sleeps++;$samples.after=$true}
+    function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){if($Seconds -ne 15 -or !(& $Condition)){throw $Message}}
+    foreach($case in @(@{frames=10;fps='0';fail=$false},@{frames=11;fps='0';fail=$true},@{frames=10;fps='7';fail=$true})){
+        $samples.after=$false;$samples.frames=$case.frames;$samples.fps=$case.fps;$samples.frameReads=0;$samples.fpsReads=0;$samples.sleeps=0;$failed=$false
+        try{$result=Idle-Fps}catch{
+            if($_.Exception.Message -ne "Idle Diagnostics created canvas drawing updates or reported active FPS: frames_before=10 frames_after=$($case.frames) fps=$($case.fps)"){throw}
+            $failed=$true
+        }
+        if($failed -ne $case.fail -or (!$failed -and $result -ne 10)){throw 'Idle Diagnostics changed its stable, moving-frame or active-FPS verdict'}
+        if($samples.frameReads -ne 2 -or $samples.fpsReads -ne 1 -or $samples.sleeps -ne 1){throw 'Idle Diagnostics did not report its single post-interval samples'}
+    }
+}
+Write-Output 'Idle Diagnostics preserves stable, moving-frame and active-FPS verdicts and reports its single before/after frame and FPS samples.'
