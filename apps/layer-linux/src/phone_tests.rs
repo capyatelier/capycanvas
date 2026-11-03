@@ -40,10 +40,12 @@ fn click(d: &mut Driver, name: &str) {
 fn capture_current(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap_or_else(|_| "light".into());
+        let capture_name = format!("phone-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height());
         d.input.perform(serde_json::json!([{ "capture_window": {
-            "name": format!("phone-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height()),
+            "name": &capture_name,
             "maximized": d.w.window.is_maximized(),
         } }]));
+        super::phone_motion::export_allocations(&d.w,name,&capture_name);
     }
 }
 
@@ -1848,7 +1850,9 @@ fn inventory_monitor(d: &mut Driver, name: &str) {
     until(|| !frames.samples.borrow().is_empty(), "the inventory overlay has been painted");
     drop(frames.finish());
     let theme = format!("{:?}", state(&d.w).theme).to_lowercase();
-    d.input.perform(serde_json::json!([{ "capture": format!("inventory-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height()) }]));
+    let capture_name = format!("inventory-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height());
+    d.input.perform(serde_json::json!([{ "capture": &capture_name }]));
+    super::phone_motion::export_allocations(&d.w,name,&capture_name);
 }
 
 #[test]

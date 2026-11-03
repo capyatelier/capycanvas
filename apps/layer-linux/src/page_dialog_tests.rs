@@ -322,10 +322,12 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
 
 pub(super) fn capture(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        let capture_name = format!("pages-{}x{}-{}-{name}",d.w.surface.width(),d.w.surface.height(),format!("{:?}",state(&d.w).theme).to_lowercase());
         d.input.perform(serde_json::json!([{ "capture_window": {
-            "name": format!("pages-{}x{}-{}-{name}", d.w.surface.width(), d.w.surface.height(), format!("{:?}", state(&d.w).theme).to_lowercase()),
+            "name": &capture_name,
             "maximized": d.w.window.is_maximized()
         } }]));
+        super::phone_motion::export_allocations(&d.w,name,&capture_name);
     }
 }
 
@@ -440,6 +442,7 @@ fn native_phone_navigation_headers() {
     assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
     let checkpoint = ui_session(&d.w).engine().checkpoint();
     let original = header_state(d.w.preferences.dialog.upcast_ref());
+    super::phone::capture(&mut d, "rest");
     d.click(&d.named("zen-capy"));
     until(|| state(&d.w).phone.menu, "Capy opens its icon strip");
     d.click(&d.named("phone-preferences"));

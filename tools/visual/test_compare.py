@@ -66,5 +66,14 @@ class ComparisonTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Expected an opaque", result.stderr)
 
+    def test_sheet_keeps_all_three_images_at_native_size(self):
+        result = self.run_compare(self.reference, arguments=("--sheet",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with Image.open(self.root / "result/sheet.png") as sheet:
+            self.assertEqual(sheet.size, (9, 2))
+            self.assertIn("icc_profile", sheet.info)
+            self.assertEqual(sheet.getpixel((0, 0)), (20, 40, 60))
+            self.assertEqual(sheet.getpixel((6, 0)), (0, 0, 0))
+
 if __name__ == "__main__":
     unittest.main()

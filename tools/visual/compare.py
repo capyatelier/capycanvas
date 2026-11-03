@@ -12,6 +12,7 @@ parser.add_argument("candidate", type=Path)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--channel-tolerance", type=int, default=0)
 parser.add_argument("--allowed-different-fraction", type=float, default=0)
+parser.add_argument("--sheet", action="store_true", help="Save reference, candidate and difference beside each other")
 parser.add_argument("--candidate-rotation", type=int, choices=[0, 90, 180, 270], default=0,
     help="Counterclockwise orientation correction for raw device captures, after EXIF; never resamples")
 args = parser.parse_args()
@@ -60,6 +61,11 @@ passed = changed / pixels <= args.allowed_different_fraction
 args.output.mkdir(parents=True, exist_ok=True)
 profile_bytes = ImageCms.ImageCmsProfile(srgb).tobytes()
 diff.save(args.output / "difference.png", icc_profile=profile_bytes)
+if args.sheet:
+    sheet = Image.new("RGB", (reference.width * 3, reference.height))
+    for index, image in enumerate((reference, candidate, diff)):
+        sheet.paste(image, (index * reference.width, 0))
+    sheet.save(args.output / "sheet.png", icc_profile=profile_bytes)
 Image.blend(reference, candidate, 0.5).save(args.output / "overlay.png", icc_profile=profile_bytes)
 # Red intensity is the largest channel error, amplified 8x for inspection only.
 amplified = maximum.point(lambda value: min(255, value * 8))

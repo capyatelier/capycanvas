@@ -7,6 +7,7 @@ reference at the same viewport, scale, theme, document and workspace.
 | --- | --- |
 | `chrome-capture.mjs` | Captures the Web editor or a component fixture in headless Chrome. |
 | `compare.py` | Full-image comparison of two PNGs. |
+| `phone_audit.py` | Paired GTK/Web phone allocations and a GTK, Web, difference sheet. |
 | `check_color_wheel.py` | Checks sampled color-wheel pixels against the shared Rust picker. |
 | `check_icon_paints.py`, `check_control_colors.py` | Flat-fill checks for icon and control-color fixtures. |
 | `tool_action_fixture.py` | Builds the tool-action fixture from an inventory. |
@@ -93,6 +94,28 @@ sRGB (untagged images are reported as assumed sRGB), requires opaque inputs of
 equal pixel size, and compares every pixel. It writes the raw difference, an
 amplified heatmap, a 50% overlay and JSON statistics, and exits with status 1 on
 failure. It never rescales, crops or masks.
+
+Phone captures use a PNG and a same-stem allocation JSON from the existing GTK
+capture tests or Web's `--phone-audit` journey. Compare one matched state with:
+
+```sh
+python3 tools/visual/phone_audit.py gtk/state.allocations.json web/state.allocations.json --output artifacts/phone-audit/state
+```
+
+The allocation report requires matching state, viewport, DPR, theme, text scale
+and preset. It lists missing elements and every rectangle differing by more than
+one pixel, using actual widget allocations or DOM bounds. A gated host, empty
+inventory or unavailable state cannot pass. Pixel comparison remains exact and
+color-managed; `sheet.png` contains GTK, Web and the raw difference at their
+original size. Review raster differences separately from allocation differences.
+Native window-control reservations and the GTK window-move band are reported
+separately from shared geometry. Pixels are never excluded. Use GTK's
+`LAYER_PHONE_DECORATION_LAYOUT=:` for a reference without native buttons.
+
+Pass two capture directories to compare a matrix. The tool pairs state,
+viewport, theme, DPR, text scale and preset, rejects duplicate keys, and reports
+unpaired states. Web's `index.json` unreachable states and GTK's `index.json`
+failed cases prevent a matrix pass even when the available images match.
 
 - **UI acceptance is perceptual.** Review matched pairs at normal viewing size.
   Fix visible workspace/canvas mismatches; record intentional native styling in

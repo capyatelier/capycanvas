@@ -112,6 +112,152 @@ fn slider(d: &Driver, control: ToolbarControl, phone: bool) -> Option<gtk::Scale
         .filter(|widget| bounds(widget.upcast_ref(), &d.w).is_some())
 }
 
+pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: &str) {
+    let Some(directory) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") else { return; };
+    let state = state(w);
+    let (document,camera) = {
+        let session = ui_session(w);
+        let document = session.engine().document();
+        let composition = document.composition();
+        let scene = document.scene();
+        let paper = document.bottom_paper().map(|occurrence| {
+            let color = scene.effect(occurrence).and_then(|effect| match effect.value("color") {
+                Some(layer_core::EffectValue::Color(color)) => Some(*color), _ => None,
+            });
+            let relief = scene.effect(occurrence).and_then(layer_core::paper::light).map(|light| light.relief);
+            serde_json::json!({"visible":scene.visible(occurrence),"color":color,"relief":relief})
+        });
+        (serde_json::json!({"extent":composition.size,"color":composition.color,"paper":paper}),
+            serde_json::to_value(session.camera()).unwrap())
+    };
+    let viewport = [w.window.width(), w.window.height()];
+    let dpr = w.window.scale_factor();
+    assert_eq!(dpr,1,"the phone audit capture matrix requires actual DPR1");
+    let phone = state.phone_presentation([w.surface.width() as f32, w.surface.height() as f32]);
+    let all = widgets(w.window.upcast_ref()).collect::<Vec<_>>();
+    let named = |name: &str| {
+        let matching = all.iter().filter(|widget| widget.widget_name() == name).cloned().collect::<Vec<_>>();
+        assert!(matching.iter().filter(|widget| widget.is_mapped()).count() <= 1,
+            "allocation export has duplicate mapped widget {name}");
+        matching.iter().find(|widget| widget.is_mapped()).or_else(|| matching.first()).cloned()
+    };
+    let mut elements = Vec::new();
+    let mut missing = Vec::new();
+    let mut ids = std::collections::BTreeSet::new();
+    let mut widget_sources = serde_json::Map::new();
+    let mut add = |id: &str, role: &str, widget: Option<gtk::Widget>| {
+        assert!(ids.insert(id.to_owned()), "duplicate allocation semantic ID {id}");
+        let Some(widget) = widget else { missing.push(id.to_owned()); return; };
+        let visible = widget.is_mapped();
+        let bounds = visible.then(|| widget.compute_bounds(&w.window)).flatten()
+            .map(|rect| [rect.x(), rect.y(), rect.width(), rect.height()]);
+        if visible && bounds.is_none() { missing.push(id.to_owned()); }
+        elements.push(serde_json::json!({"id":id,"role":role,"bounds":bounds,"visible":visible}));
+        widget_sources.insert(id.into(), serde_json::json!({"widget_name":widget.widget_name().to_string(),"type":widget.type_().name().to_string()}));
+    };
+    if phone.is_some() {
+        for (id, role, name) in [
+            ("bar.tools","bar","phone-bar-tools"),("bar.capy","bar","phone-bar-capy"),
+            ("chip.tools","chip","phone-tools-chip"),("chip.capy","chip","phone-sliders-chip"),
+            ("capy","tile","zen-capy"),("tile.settings","tile","phone-tool-settings"),
+            ("native.start","native-reservation","native-group-0"),("native.end","native-reservation","native-group-1"),
+        ] { add(id,role,named(name)); }
+        if let Some(title) = named("phone-title-band") { add("title","window-move",Some(title)); }
+        for tile in state.workspace.layout.phone.iter().flatten().filter(|tile| tile.control != ToolbarControl::Divider) {
+            add(&format!("tile.{}",tile.id),"tile",named(&format!("phone-tool-{}",tile.id)));
+        }
+        for name in ["size","strength"] {
+            let slider = named(&format!("component-slider-{name}"));
+            add(&format!("slider.{name}"),"slider",slider.clone());
+            if let Some(slider) = slider {
+                for part in ["trough","slider"] {
+                    let widget = widgets(&slider).find(|widget| widget.css_name() == part);
+                    add(&format!("slider.{name}.{}",if part == "trough" { "track" } else { "handle" }),part,widget);
+                }
+            }
+            if let Some(value) = named(&format!("slider-value-{name}")) { add(&format!("slider.{name}.value"),"value",Some(value)); }
+        }
+        if let Some(preview) = named("brush-slider-preview").filter(|widget| widget.is_mapped()) {
+            add("slider.preview","preview",Some(preview));
+        }
+    }
+    if let Some(drawer) = state.customization.drawer.as_ref() {
+        add("drawer","drawer",named("tool-drawer"));
+        add("drawer.bridge","bridge",named("drawer-connection"));
+        let drawer_type = named("tool-drawer").map(|widget| widget.type_());
+        for (index,column) in drawer.columns.iter().enumerate() {
+            let widget = column.first().and_then(|panel| named(&format!("drawer-panel-{panel:?}")))
+                .and_then(|widget| std::iter::successors(Some(widget), |widget| widget.parent())
+                    .find(|widget| widget.parent().is_some_and(|parent| Some(parent.type_()) == drawer_type)));
+            add(&format!("drawer.column.{index}"),"drawer-column",widget);
+        }
+        for panel in drawer.panels() { add(&format!("drawer.panel.{panel:?}"),"drawer-panel",named(&format!("drawer-panel-{panel:?}"))); }
+    }
+    if state.phone.menu {
+        let bridge = std::iter::successors(w.phone.root.first_child(), |widget| widget.next_sibling())
+            .find(|widget| widget.has_css_class("drawer-connection"));
+        add("menu.bridge","bridge",bridge);
+        for (id,role,name) in [("menu","menu","phone-menu"),("menu.list","menu-list","phone-menu-scroll"),
+            ("menu.separator","separator","phone-menu-separator")] {
+            add(id,role,named(name));
+        }
+        let page = named("phone-menu-pages").and_downcast::<gtk::Stack>().and_then(|stack| stack.visible_child());
+        add("menu.page","menu-page",page);
+        for name in ["preferences","search","finger","zen","swap"] {
+            add(&format!("menu.tile.{name}"),"menu-tile",named(&format!("phone-{name}")));
+        }
+        if let Some(back) = named("phone-menu-back").filter(|widget| widget.is_mapped()) { add("menu.back","back",Some(back)); }
+        if let Some(list) = named("phone-menu-list") {
+            for (index,row) in widgets(&list).filter(|widget| widget.is_mapped() && widget.type_().name() == "GtkModelButton").enumerate() {
+                add(&format!("menu.row.{index}"),"menu-row",Some(row));
+            }
+        }
+    }
+    for panel in all.iter().filter(|widget| widget.is_mapped() && widget.has_css_class("content-drawer")
+        && widget.widget_name().starts_with("column-drawer-")) {
+        add(&format!("canvas-panel.{}",panel.widget_name().trim_start_matches("column-drawer-")),"canvas-panel",Some(panel.clone()));
+    }
+    if let Some(dialog) = w.visible_dialog() {
+        let page = named(&format!("page-{}",dialog.widget_name()));
+        add("page","page",page.clone());
+        if let Some(page) = page {
+            let headers = descendants::<adw::HeaderBar>(&page).into_iter().filter(|header| header.is_mapped()).collect::<Vec<_>>();
+            assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers");
+            add("page.header","page-header",headers.first().map(|header| header.clone().upcast()));
+            if let Some(header) = headers.first() {
+                let done = layer_ui::CommonCopy::new(&w.localization()).done;
+                let mut secondary = 0;
+                for button in descendants::<gtk::Button>(header.upcast_ref()).into_iter().filter(|button| button.is_mapped()) {
+                    let icon = button.icon_name();
+                    let id = if icon.as_deref() == Some("go-previous-symbolic") { "page.back".into() }
+                        else if icon.as_deref() == Some("window-close-symbolic") { "page.close".into() }
+                        else if button.label().as_deref() == Some(done.as_ref()) { "page.done".into() }
+                        else if button.has_css_class("suggested-action") { "page.primary".into() }
+                        else { let id = format!("page.secondary.{secondary}"); secondary += 1; id };
+                    add(&id,"page-action",Some(button.upcast()));
+                }
+            }
+        }
+    }
+    drop(add);
+    let text_pt = std::env::var("LAYER_PHONE_TEXT_PT").ok().map(|value| value.parse::<f32>().unwrap())
+        .unwrap_or(layer_ui::UI_TEXT_PT as f32);
+    let font = w.window.pango_context().font_description().map(|font| font.to_string().as_str().to_owned());
+    let report = serde_json::json!({"schema_version":1,"host":"gtk","state":state_name,"viewport":viewport,"dpr":dpr,
+        "theme":format!("{:?}",state.theme).to_lowercase(),"text_scale":text_pt as f64/layer_ui::UI_TEXT_PT as f64,
+        "preset":w.workspaces.view().id,"phone_active":phone.is_some(),
+        "status":if phone.is_none() { "unavailable" } else if missing.is_empty() { "captured" } else { "missing" },
+        "reason":if phone.is_none() { Some("phone layout inactive") } else { None },"elements":elements,"missing":missing,
+        "source":{"capture":capture_name,"coordinate_space":"window-client-logical","scale_factor":w.window.scale_factor(),
+            "font":font,"text_pt":text_pt,"base_text_pt":layer_ui::UI_TEXT_PT,"requested":phone,
+            "document":document,"camera":camera,
+            "swapped":state.phone.swapped,"hidden":state.phone.hidden,"widgets":widget_sources,
+            "tiles":state.workspace.layout.phone}});
+    let path = std::path::PathBuf::from(directory).join(format!("{capture_name}.allocations.json"));
+    let bytes = serde_json::to_vec_pretty(&report).unwrap();
+    glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || std::fs::write(path,bytes))).unwrap().unwrap();
+}
+
 pub(super) fn setup(name: &str) -> Driver {
     assert!(crate::storage::workspaces().is_some());
     let app = native_test_app(name);
