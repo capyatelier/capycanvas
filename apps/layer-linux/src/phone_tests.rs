@@ -674,14 +674,21 @@ fn tool_drawer_sets(d: &mut Driver) {
         capture(d, name);
         if adaptive {
             let view = drawer.tool_set.as_ref().unwrap();
-            let next = view.groups.iter().find(|item| !item.selected && item.enabled).unwrap();
             let body = d.named(&format!("drawer-panel-{:?}", drawer.columns[0][0]));
-            let row = mapped_label(&body, &next.label).unwrap();
-            super::histogram::scroll_to(&row);
-            let button = row.ancestor(gtk::Button::static_type()).unwrap();
-            let cell = button.parent().unwrap();
-            let mut point = screen_point(&cell, &d.w.window, [1., 0.5]);
-            point[0] -= 2.;
+            let (button, cell) = view.groups.iter().filter(|item| !item.selected && item.enabled).find_map(|item| {
+                let row = mapped_label(&body, &item.label).unwrap();
+                super::histogram::scroll_to(&row);
+                let button = row.ancestor(gtk::Button::static_type()).unwrap();
+                let cell = button.parent().unwrap();
+                let scroll = button.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
+                let bar = scroll.vscrollbar();
+                let bounds = cell.compute_bounds(&d.w.window).unwrap();
+                (!bar.is_mapped() || bounds.intersection(&bar.compute_bounds(&d.w.window).unwrap()).is_none()).then_some((button, cell))
+            }).expect("an unselected chip has a cell outside the scrollbar");
+            let bounds = cell.compute_bounds(&d.w.window).unwrap();
+            let point = [bounds.x() + bounds.width() - 2., bounds.y() + bounds.height() * 0.5];
+            let hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+            assert!(hit == button || hit.is_ancestor(&button), "the unobscured cell edge belongs to its button");
             d.input.click(point);
             until(|| state(&d.w).customization.drawer.as_ref().and_then(|drawer| drawer.tool_set.as_ref())
                 .is_some_and(|updated| updated.subtools != view.subtools), "choosing a set replaces the drawer list");
