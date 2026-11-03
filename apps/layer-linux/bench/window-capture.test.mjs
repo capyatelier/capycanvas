@@ -21,7 +21,8 @@ function framePixels() {
 function harness() {
     const frame = framePixels();
     const state = {now: 0, sample: null, format: 'RGBA', signals: new Map(), calls: [], writes: [],
-        pipelines: [], sessions: 0, mapped: 0, unmapped: 0};
+        pipelines: [], sessions: 0, mapped: 0, unmapped: 0,
+        colorimetry: {primaries: 1, transfer: 4, matrix: 1, range: 0}};
     const Gst = {MapFlags: {READ: 1}, State: {PLAYING: 'playing', NULL: 'null'},
         StateChangeReturn: {FAILURE: 'failure', SUCCESS: 'success'}, init() {},
         parse_launch(command) {
@@ -58,7 +59,7 @@ function harness() {
         mkdir_with_parents() {}, file_set_contents(path, value) { state.writes.push({path, value}); }};
     const context = vm.createContext({imports: {gi: {GLib, Gst, GstApp: {},
         Gio: {DBus: {session}, DBusCallFlags: {NONE: 0}, DBusSignalFlags: {NONE: 0}},
-        GstVideo: {VideoInfo: {new_from_caps: () => ({...frame, stride: [frame.stride]})}},
+        GstVideo: {VideoInfo: {new_from_caps: () => ({...frame, stride: [frame.stride], colorimetry: state.colorimetry})}},
         GdkPixbuf: {Colorspace: {RGB: 0}, Pixbuf: {new_from_bytes: () => ({savev(path) {
             if (state.saveFailure) throw Error('PNG write failed');
             state.writes.push({path});
@@ -124,6 +125,7 @@ test('success writes matching PNG and metadata and cleans each independent sessi
     const metadata = JSON.parse(state.writes[1].value);
     assert.deepEqual(metadata.dimensions, [8, 8]);
     assert.deepEqual(metadata.raw_size, [12, 10]);
+    assert.deepEqual(metadata.colorimetry, state.colorimetry);
     assert.match(state.pipelines[0].command, /pipewiresrc path=42 ! video\/x-raw,format=BGRA ! videoconvert ! video\/x-raw,format=RGBA/);
 });
 

@@ -3,6 +3,7 @@
 import argparse
 import io
 import json
+import struct
 from pathlib import Path
 from PIL import Image, ImageChops, ImageCms, ImageOps, ImageStat
 
@@ -21,7 +22,47 @@ if not 0 <= args.channel_tolerance <= 255 or not 0 <= args.allowed_different_fra
 
 srgb = ImageCms.createProfile("sRGB")
 
-def read(path):
+def bt709_gamma22(profile):
+    if not profile or len(profile) < 132 or profile[36:40] != b"acsp" or profile[16:24] != b"RGB XYZ ":
+        return False
+    try:
+        length, = struct.unpack_from(">I", profile)
+        count, = struct.unpack_from(">I", profile, 128)
+        if length != len(profile) or count > (length - 132) // 12:
+            return False
+        tags = {}
+        for index in range(count):
+            name, offset, size = struct.unpack_from(">4sII", profile, 132 + index * 12)
+            if name in tags or offset < 132 + count * 12 or offset % 4 or size < 8 or size > length - offset:
+                return False
+            tags[name] = profile[offset:offset + size]
+        for name in (b"rTRC", b"gTRC", b"bTRC"):
+            curve = tags[name]
+            if curve[:4] == b"curv" and len(curve) in (14, 16) and struct.unpack_from(">I", curve, 8)[0] == 1:
+                if struct.unpack_from(">H", curve, 12)[0] != round(2.2 * 256) or any(curve[14:]):
+                    return False
+            elif curve[:4] == b"para" and len(curve) == 16 and curve[8:12] == bytes(4):
+                if struct.unpack_from(">i", curve, 12)[0] != round(2.2 * 65536):
+                    return False
+            else:
+                return False
+        for name, expected in ((b"rXYZ", (0x6FA2, 0x38F5, 0x0390)),
+                (b"gXYZ", (0x6299, 0xB785, 0x18DA)), (b"bXYZ", (0x24A0, 0x0F84, 0xB6CF))):
+            colorant = tags[name]
+            if len(colorant) != 20 or colorant[:4] != b"XYZ " or any(
+                    abs(value - target) > 1 for value, target in zip(struct.unpack_from(">3i", colorant, 8), expected)):
+                return False
+    except (KeyError, struct.error):
+        return False
+    return True
+
+
+def embedded_profile(path):
+    with Image.open(path) as image:
+        return image.info.get("icc_profile")
+
+
+def read(path, paired_profile):
     image = Image.open(path)
     image.load()
     # XCTest PNGs can store a rotated raster with EXIF orientation. Normalize
@@ -30,19 +71,38 @@ def read(path):
     if image.convert("RGBA").getchannel("A").getextrema() != (255, 255):
         raise ValueError(f"Expected an opaque editor screenshot: {path.name}")
     profile = image.info.get("icc_profile")
+    declared = None
+    metadata = path.with_suffix(".json")
+    if metadata.exists():
+        try:
+            values = json.loads(metadata.read_text())
+        except (ValueError, OSError) as error:
+            raise SystemExit(f"unsupported encoding: {path.name}: invalid capture metadata: {error}")
+        if isinstance(values, dict) and "colorimetry" in values:
+            declared = values["colorimetry"]
+            if (not isinstance(declared, dict)
+                    or any(type(declared.get(key)) is not int for key in ("primaries", "transfer", "matrix", "range"))
+                    or declared["primaries"] != 1 or declared["transfer"] != 4
+                    or declared["matrix"] != 1 or declared["range"] not in (0, 1)
+                    or not bt709_gamma22(paired_profile)
+                    or profile is not None and profile != paired_profile):
+                raise SystemExit(f"unsupported encoding: {path.name}: capture declaration and paired ICC profile do not match")
+            profile = paired_profile
     if profile:
         source = ImageCms.ImageCmsProfile(io.BytesIO(profile))
         description = ImageCms.getProfileDescription(source).strip()
+        if declared is not None:
+            description = f"declared BT.709 gamma 2.2; matched paired ICC: {description}"
         rgb = ImageCms.profileToProfile(image.convert("RGB"), source, srgb,
             renderingIntent=ImageCms.Intent.RELATIVE_COLORIMETRIC, outputMode="RGB")
     else:
         # Chrome's forced-sRGB captures may omit the optional PNG profile chunk.
-        description = "sRGB chunk" if "srgb" in image.info else "untagged; assumed sRGB"
+        description = "sRGB chunk" if "srgb" in image.info else "untagged; undeclared; assumed sRGB"
         rgb = image.convert("RGB")
     return rgb, description
 
-reference, reference_profile = read(args.reference)
-candidate, candidate_profile = read(args.candidate)
+reference, reference_profile = read(args.reference, embedded_profile(args.candidate))
+candidate, candidate_profile = read(args.candidate, embedded_profile(args.reference))
 if args.candidate_rotation:
     candidate = candidate.transpose({90: Image.Transpose.ROTATE_90,
         180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_270}[args.candidate_rotation])

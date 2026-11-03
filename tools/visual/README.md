@@ -90,10 +90,23 @@ artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
 ```
 
 The comparator honors declared orientation, converts embedded ICC profiles to
-sRGB (untagged images are reported as assumed sRGB), requires opaque inputs of
+sRGB, requires opaque inputs of
 equal pixel size, and compares every pixel. It writes the raw difference, an
 amplified heatmap, a 50% overlay and JSON statistics, and exits with status 1 on
 failure. It never rescales, crops or masks.
+
+GTK window captures record negotiated `colorimetry` (primaries, transfer,
+matrix and range as GStreamer enum values) in their existing same-stem JSON.
+For BT.709/gamma2.2 RGB
+captures with full or unspecified range, the comparator verifies the paired
+ICC profile's three single-gamma TRCs and D50-adapted sRGB colorants before
+using that same ICC transform for both images. Single-gamma `curv` and type-0
+`para` tags must encode 2.2 within their fixed-point rounding. The colorants
+match [Skia's ICC fixed-point sRGB matrix](https://raw.githubusercontent.com/google/skia/main/include/core/SkColorSpace.h)
+within one s15Fixed16 unit. Unsupported declarations or mismatched profiles
+are refused. Undeclared untagged captures retain the reported sRGB assumption;
+older captures must be regenerated to record their encoding. PNG pixels and
+profiles are never changed by the capture metadata writer.
 
 Phone captures use a PNG and a same-stem allocation JSON from the existing GTK
 capture tests or Web's `--phone-audit` journey. Compare one matched state with:

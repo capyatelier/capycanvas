@@ -128,6 +128,8 @@ var WindowCapture = class {
             buffer.unmap(map);
         }
         result.metadata.maximized = this.active.maximized;
+        const {primaries, transfer, matrix, range} = info.colorimetry;
+        result.metadata.colorimetry = {primaries, transfer, matrix, range};
         const [width, height] = result.metadata.dimensions;
         GLib.mkdir_with_parents(this.directory, 0o700);
         GdkPixbuf.Pixbuf.new_from_bytes(new GLib.Bytes(result.pixels), GdkPixbuf.Colorspace.RGB,
