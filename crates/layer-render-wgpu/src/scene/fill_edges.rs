@@ -77,8 +77,8 @@ pub(super) fn shader()->String {
 impl Capture {
     fn new(r:&WgpuRasterizer,extent:[u32;2],lines:usize)->Self {
         Self {source:Default::default(),color:create_color_target(&r.device,[SIDE,SIDE+1],"fill source halo"),
-            lines:create_color_target(&r.device,[SIDE;2],"fill line alpha"),next:create_color_target(&r.device,[SIDE,SIDE+1],"fill line source"),
-            cover:create_color_target(&r.device,[SIDE;2],"fill lower line alpha"),
+            lines:create_target(&r.device,[SIDE;2],r.device.scalar_format(),"fill line alpha"),next:create_color_target(&r.device,[SIDE,SIDE+1],"fill line source"),
+            cover:create_target(&r.device,[SIDE;2],r.device.scalar_format(),"fill lower line alpha"),
             seed:create_color_target(&r.device,[1;2],"fill seed"),mask:r.unclipped.clone(),precision:None,
             line_seeds:create_color_target(&r.device,[1,lines.max(1) as u32],"fill line seeds").0,external:Vec::new(),
             top:create_color_target(&r.device,[extent[0],HALO],"fill original row border").0,
@@ -272,7 +272,7 @@ impl FillEdgesPreflight {
                     }
                 }
                 Step::Page(id,coordinate)=> {
-                    let lines=create_color_target(&r.device,[SIDE;2],"prepared fill lines");let cover=create_color_target(&r.device,[SIDE;2],"prepared fill cover");
+                    let lines=create_target(&r.device,[SIDE;2],r.device.scalar_format(),"prepared fill lines");let cover=create_target(&r.device,[SIDE;2],r.device.scalar_format(),"prepared fill cover");
                     scene.jobs.push(Job::Clear(lines.1.clone(),wgpu::Color::TRANSPARENT));
                     scene.jobs.push(Job::Clear(cover.1.clone(),wgpu::Color::TRANSPARENT));scene.encode_jobs(r,encoder)?;
                     for (index,line) in edges.lines.iter().enumerate().filter(|(index,_)|input.external[*index]) {
@@ -296,6 +296,8 @@ impl WgpuRasterizer {
             matches!(operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..}).then_some((batch.target,index))
         }).chain(self.fill_preview.iter().filter(|fill|matches!(fill.operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..})).map(|fill|(fill.target,u32::MAX))).collect();
         if keys.is_empty() {self.fill_edges_preflight=None;return true;}
+        if let Some(compiler)=self.startup.as_ref().map(|startup|&startup.compiler).or(self.preparation_compiler.as_ref())
+            && !compiler.require([&self.scene_pipelines.pipeline[SCALAR_PIPELINE+1]],startup::DOCUMENT) {compiler.start();return false;}
         let preview=self.fill_preview.as_ref().map(layer_render::FillPreview::key);
         let mut state=if let Some(state)=self.fill_edges_preflight.take().filter(|state|state.preview==preview
             && state.inputs.iter().map(|input|(input.target,input.index)).eq(keys.iter().copied())) {state}else {
@@ -313,7 +315,7 @@ impl WgpuRasterizer {
                 let extent=packet.scene.target_extent(input.target);
                 std::iter::once(Step::Seed(id)).chain(page_coordinates(input.damage).filter(move |coordinate|band_intersects(&input.operation,*coordinate,extent,0)).map(move |coordinate|Step::Page(id,coordinate)))
             }).collect::<Vec<_>>();
-            let bytes=(steps.iter().filter(|step|matches!(step,Step::Page(..))).count() as u64).checked_mul(2*u64::from(SIDE).pow(2)*u64::from(self.device.working_format().block_copy_size(None).unwrap()));
+            let bytes=(steps.iter().filter(|step|matches!(step,Step::Page(..))).count() as u64).checked_mul(2*u64::from(SIDE).pow(2)*u64::from(self.device.scalar_format().block_copy_size(None).unwrap()));
             let failure=bytes.ok_or(GpuRasterError::SourceWorkingSetExceeded).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes)).err();
             let line_seeds=inputs.iter().map(|input|create_color_target(&self.device,[1,input.external.len().max(1) as u32],"prepared fill line seeds").0).collect();
             FillEdgesPreflight {owner:packet.scene.owner(),revision:packet.scene.revision(),color:self.document_color(),preview,inputs,steps,next:0,capture:Default::default(),scene:None,

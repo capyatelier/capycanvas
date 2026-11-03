@@ -463,6 +463,20 @@ with GPU stage profiling disabled. These still-result timings do not qualify mot
 The time outside the request remains unattributed. Raw samples and build hashes:
 `artifacts/fill-tools/final/r3b-c3b/m-r3b-abba.json`.
 
+C3b's single background pair compares `8b1ef98ef` with R3b+C3b on the 24 MP
+one-reference fixture, with GPU stage profiling off. Both retain 76 band pages
+and create 155 textures.
+
+| Background edge capture | Control | R3b+C3b |
+| --- | ---: | ---: |
+| Retained line-alpha bytes | 224,755,712 | 56,188,928 (−75%) |
+| Preflight CPU | 270.412 ms | 160.720 ms |
+| Stored frame, inner CPU | 765.956 ms | 722.193 ms |
+
+The stored-frame spans exclude diagnostic logging after the inner call.
+Receipts and the partial stored-counter limitation:
+`artifacts/fill-tools/final/r3b-c3b/m-c3b-background.json`.
+
 ## HDR color bubbles
 
 The 2026-10-24 Wacom MovinkPad 11 diagnostic uses the HDR bubble port published

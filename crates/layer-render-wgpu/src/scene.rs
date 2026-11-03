@@ -44,7 +44,8 @@ pub(crate) mod bake_preflight;
 pub(crate) mod resample;
 pub(crate) mod scale;
 
-const FRAGMENTS: [(&str, &str); 9] = [
+const SCALAR_PIPELINE:usize=9;
+const FRAGMENTS: [(&str, &str); 11] = [
     ("fragment_main", "tile layer composition"),
     ("fragment_main", "tile layer over"),
     ("fragment_coverage", "tile mask coverage"),
@@ -54,9 +55,11 @@ const FRAGMENTS: [(&str, &str); 9] = [
     ("fragment_blend", "tile layer blend"),
     ("fragment_image", "tile image placement"),
     ("fragment_tone", "tile tone mapping"),
+    ("fragment_main", "scalar scene composition"),
+    ("fragment_main", "scalar scene over"),
 ];
 
-fn fragment_pipeline(operation: u32, over: bool) -> Option<usize> {
+fn fragment_pipeline(operation: u32, over: bool, scalar:bool) -> Option<usize> {
     Some(match operation {
         15 => return None,
         6 => 3,
@@ -65,7 +68,7 @@ fn fragment_pipeline(operation: u32, over: bool) -> Option<usize> {
         21 | 22 => 2,
         12 => 7,
         10 => 8,
-        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => usize::from(over),
+        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => (if scalar {SCALAR_PIPELINE}else{0})+usize::from(over),
         4 => 6,
         _ => panic!("Unknown scene draw operation {operation}"),
     })
@@ -2126,8 +2129,8 @@ impl Scene {
         let mut effects_ready = self.effects.preparation_ready();
         for job in &self.jobs {
             match job {
-                Job::Draw {data,over,..} => {
-                    if let Some(index) = fragment_pipeline(data[8] as u32,*over)
+                Job::Draw {target,data,over,..} => {
+                    if let Some(index) = fragment_pipeline(data[8] as u32,*over,target.texture().format()==r.device.scalar_format())
                         && !self.pipeline[index].ready() && !is_compute(job) {self.pending_pipelines |= 1 << index;}
                 }
                 Job::Effect {prepared,..} => effects_ready &= prepared.pipeline.ready(),
@@ -2525,7 +2528,7 @@ impl Scene {
                                 pass.set_bind_group(3, masks, &[]);
                             } else if let Job::Draw { over, data, edges, .. } = job {
                                 pass.set_bind_group(2,edges.as_ref().unwrap_or(&self.edge_binding),&[]);
-                                pass.set_pipeline(&self.pipeline[fragment_pipeline(data[8] as u32,*over).expect("fragment draw operation")]);
+                                pass.set_pipeline(&self.pipeline[fragment_pipeline(data[8] as u32,*over,source.as_ref().unwrap_or(target).texture().format()==r.device.scalar_format()).expect("fragment draw operation")]);
                             }
                             pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                             pass.set_bind_group(1, binding, &[]);
@@ -2595,7 +2598,10 @@ impl Pipelines {
         let mut used = [false; FRAGMENTS.len()];
         used[..3].fill(true);
         used[6] = true;
-        for pipeline in scene.targets().filter(|target| !target.is_coverage()).filter_map(|target| scene.operations(target)).flatten().filter_map(|op| operation_pipeline(&op.kind)) {used[pipeline] = true;}
+        for operation in scene.targets().filter(|target| !target.is_coverage()).filter_map(|target| scene.operations(target)).flatten() {
+            if let Some(pipeline)=operation_pipeline(&operation.kind) {used[pipeline]=true;}
+            if matches!(operation.kind,RasterOperationKind::Fill {edges:Some(_),underfill:Some(_),..}) {used[SCALAR_PIPELINE+1]=true;}
+        }
         self.pipeline.iter().zip(used).filter_map(|(pipeline,used)| used.then_some(pipeline))
     }
     pub fn scale_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 6] {
@@ -2644,8 +2650,8 @@ impl Pipelines {
                 (device.clone(), pipeline_layout.clone(), shader.clone());
             Deferred::pipeline(move |mode| {
                 fullscreen_pipeline_recipe(mode, &device, &pipeline_layout, &shader, entry,
-                    (i == 1).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    if i == 2 { device.scalar_format() } else { device.working_format() }, label)
+                    (i == 1 || i == SCALAR_PIPELINE+1).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    if i == 2 || i>=SCALAR_PIPELINE { device.scalar_format() } else { device.working_format() }, label)
             })
         }).collect::<Vec<_>>().try_into().ok().unwrap();
         let constant = {
@@ -2873,7 +2879,7 @@ mod shader_tests {
     #[test]
     fn fragment_operations_select_only_their_assigned_pipeline() {
         assert_eq!(FRAGMENTS.map(|(entry,_)| entry), ["fragment_main","fragment_main","fragment_coverage",
-            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone"]);
+            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone","fragment_main","fragment_main"]);
         let expected = [
             [Some(0),Some(1)],
             [Some(0),Some(1)],
@@ -2903,17 +2909,18 @@ mod shader_tests {
         for (operation,pipelines) in expected.into_iter().enumerate() {
             for over in [false,true] {
                 if matches!(operation,8|9) {
-                    assert!(std::panic::catch_unwind(|| fragment_pipeline(operation as u32,over)).is_err(),
+                    assert!(std::panic::catch_unwind(|| fragment_pipeline(operation as u32,over,false)).is_err(),
                         "undefined operation {operation} over={over} selected a fragment pipeline");
                 } else {
-                    assert_eq!(fragment_pipeline(operation as u32,over),pipelines[usize::from(over)],
+                    assert_eq!(fragment_pipeline(operation as u32,over,false),pipelines[usize::from(over)],
                         "operation {operation} over={over}");
                 }
             }
         }
+        for over in [false,true] {assert_eq!(fragment_pipeline(23,over,true),Some(SCALAR_PIPELINE+usize::from(over)));}
         for operation in [u32::MAX] {
             for over in [false,true] {
-                assert!(std::panic::catch_unwind(|| fragment_pipeline(operation,over)).is_err(),
+                assert!(std::panic::catch_unwind(|| fragment_pipeline(operation,over,false)).is_err(),
                     "unknown operation {operation} over={over} selected a fragment pipeline");
             }
         }

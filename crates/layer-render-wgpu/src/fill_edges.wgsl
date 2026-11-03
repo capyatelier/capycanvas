@@ -54,7 +54,7 @@ fn fill_plateau(at:vec2<i32>,seed:vec4<f32>)->vec4<f32> {
 
 fn fill_line_alpha(at:vec2<i32>)->f32 {
     if any(at<vec2(0)) || any(at>=vec2<i32>(settings.backdrop.zw)) {return 0.;}
-    let own=textureLoad(fill_source,at,0).a;let other=textureLoad(fill_lines,at,0).a;
+    let own=textureLoad(fill_source,at,0).a;let other=textureLoad(fill_lines,at,0).r;
     return own+other*(1.-own);
 }
 fn fill_profile(at:vec2<i32>,axis:vec2<i32>)->vec2<f32> {
@@ -110,7 +110,7 @@ fn fill_line_middle(world:vec2<f32>,at:vec2<i32>,support:bool)->f32 {
 fn fill_edge_value(world:vec2<f32>,pixel:vec4<f32>,paint:vec4<f32>,support:bool)->vec4<f32> {
     let local=vec2<i32>(floor(world-settings.backdrop.xy));
     let seed=textureLoad(fill_source,vec2(0,i32(textureDimensions(fill_source).y)-1),0);
-    var amount=paint.a*(1.-textureLoad(fill_cover,local,0).a);
+    var amount=paint.a*(1.-textureLoad(fill_cover,local,0).r);
     if seed.a<.99999 || pixel.a<.99999 {
         if (support || (seed.a>0. && !fill_near_seed(vec4(0.),seed))) && fill_line_alpha(local)==0. {return pixel;}
         amount*=fill_line_middle(world,local,support)/max(fill_selection_at(world),.000001);

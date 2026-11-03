@@ -126,7 +126,7 @@ fn scene_clip(v:Vertex) {
     if op==23u {
         let pixel=textureLoad(front,vec2<i32>(floor(v.position.xy-settings.rect.xy)),0);
         let seed=textureLoad(front,vec2(0,i32(textureDimensions(front).y)-1),0);
-        return select(pixel,vec4(0.),all(pixel==seed));
+        return vec4(select(pixel.a,0.,all(pixel==seed)));
     }
     let raw=scene_read(front,v);
     if op==1u || op==7u || op==13u || op==14u || op==17u || op==19u {return scene_pointwise(raw,v);}
