@@ -416,6 +416,8 @@ always uses a full-screen page.
   disagree: Settings collapses at 680 px on Web, 840 dp on Android, by
   the system on Apple and never on Windows; New Drawing and Edit Color stack at
   632–744 depending on the host.
+- Supply content measurement to `DialogPresentation::bounds` as a callback;
+  only canvas panels need it. Full-screen pages use their shared bounds directly.
 - **Pages live inside the window**, as Android's Settings overlay does, rather than
   in a toolkit dialog. GTK's automatic bottom sheet (at most 450 wide or 360 tall)
   and Apple's fitted sheets don't apply in the phone layout.

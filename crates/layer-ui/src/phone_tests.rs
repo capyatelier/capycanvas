@@ -727,7 +727,7 @@ fn phone_editor_panels_notices_and_search_stay_between_the_bars() {
         let contains = |bounds: Bounds| bounds.x >= area.x && bounds.y >= area.y
             && bounds.x + bounds.width <= area.x + area.width + 0.01
             && bounds.y + bounds.height <= area.y + area.height + 0.01;
-        let panel = s.state.dialog_presentation(DialogRole::CanvasPanel, viewport).bounds([500., 800.]).unwrap();
+        let panel = s.state.dialog_presentation(DialogRole::CanvasPanel, viewport).bounds(|| [500., 800.]).unwrap();
         assert!(contains(panel));
         let notice = s.layout(viewport).notice;
         assert!(!notice.window && notice.y < area.y + area.height);

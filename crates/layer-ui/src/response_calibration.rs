@@ -179,7 +179,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
     }
     pub(crate) fn response_calibration_placement(&self,extent:[f32;2],viewport:[f32;2])->Option<Bounds> {
         if extent.iter().chain(&viewport).any(|v|!v.is_finite() || *v<=0.) {return None;}
-        if let Some(phone) = self.phone_layout() { return crate::DialogPresentation::CanvasPanel(phone.work_area).bounds(extent); }
+        if let Some(phone) = self.phone_layout() { return crate::DialogPresentation::CanvasPanel(phone.work_area).bounds(|| extent); }
         let layout=self.layout(viewport);let mut area=layout.work_area;
         if layout.status.height>0. {area.height=area.height.min((layout.status.y-area.y).max(0.));}
         let mut obstacles:Vec<_>=layout.groups.iter().map(|g|g.bounds)

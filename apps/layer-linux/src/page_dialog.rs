@@ -73,7 +73,7 @@ impl Pages {
         let page = pages.iter().rev().find(|page| !page.closing.get()).or_else(|| pages.last());
         let role = page.map_or(layer_ui::DialogRole::Editor, |page| page.role);
         let presentation = w.gpu.borrow().as_ref().map(|gpu| gpu.session.state().dialog_presentation(role, viewport));
-        let measured = page.map_or(viewport, |page| {
+        let measured = || page.map_or(viewport, |page| {
             let width = page.frame.measure(gtk::Orientation::Horizontal, -1).1.min(viewport[0] as i32);
             [width as f32, page.frame.measure(gtk::Orientation::Vertical, width).1 as f32]
         });

@@ -165,6 +165,20 @@ fn native_export_narrow_bounds() {
 }
 
 #[test]
+#[ignore = "private compositor: --native-test=native_phone_editor_close_measurement --native-storage; phone viewport/theme external"]
+fn native_phone_editor_close_measurement() {
+    let mut d = super::phone_motion::setup("art.capycanvas.EditorCloseMeasurement");
+    let warnings = bounds::size_warnings();
+    crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
+    let (dialog, _) = page_frame(&d);
+    capture(&mut d, "edit-color-before-close");
+    close(&d, &dialog);
+    let warnings = warnings.lock().unwrap().clone();
+    assert!(warnings.is_empty(), "closing an editor page never measures its body below its minimum: {warnings:?}");
+    d.finish();
+}
+
+#[test]
 #[ignore = "private compositor: --native-test=native_edit_color_narrow_bounds --native-storage; viewport/theme external"]
 fn native_edit_color_narrow_bounds() {
     let mut d = super::phone_motion::setup("art.capycanvas.EditColorNarrowBounds");

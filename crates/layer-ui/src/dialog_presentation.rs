@@ -11,11 +11,12 @@ pub enum DialogPresentation {
 }
 impl DialogPresentation {
     pub fn single_pane(self) -> bool { matches!(self, Self::Page(_)) }
-    pub fn bounds(self, measured: [f32; 2]) -> Option<Bounds> {
+    pub fn bounds(self, measured: impl FnOnce() -> [f32; 2]) -> Option<Bounds> {
         match self {
             Self::Floating => None,
             Self::Page(bounds) => Some(bounds),
             Self::CanvasPanel(area) => {
+                let measured = measured();
                 let width = area.width.min(measured[0].max(360.));
                 let height = measured[1].min(area.height).max(0.);
                 Some(Bounds { x: area.x + (area.width - width) * 0.5, y: area.y + area.height - height, width, height })
@@ -47,6 +48,20 @@ impl UiState {
 mod tests {
     use super::*;
     #[test]
+    fn only_canvas_panels_measure_their_content() {
+        let area = Bounds { x: 8., y: 12., width: 400., height: 600. };
+        for (presentation, expected) in [(DialogPresentation::Floating, None),
+            (DialogPresentation::Page(area), Some(area))] {
+            assert_eq!(presentation.bounds(|| panic!("fixed page bounds never measure content")), expected);
+        }
+        let mut measurements = 0;
+        assert!(DialogPresentation::CanvasPanel(area).bounds(|| {
+            measurements += 1;
+            [380., 200.]
+        }).is_some());
+        assert_eq!(measurements, 1);
+    }
+    #[test]
     fn only_editor_pages_require_one_navigation_pane() {
         for (presentation, single) in [(DialogPresentation::Floating, false),
             (DialogPresentation::Page(Bounds::default()), true),
@@ -59,7 +74,7 @@ mod tests {
         for available in [396., 770.] {
             let area = Bounds { x: 8., y: 52., width: available, height: 300. };
             for measured in [216_f32, 360., 900.] {
-                let bounds = DialogPresentation::CanvasPanel(area).bounds([measured, 100.]).unwrap();
+                let bounds = DialogPresentation::CanvasPanel(area).bounds(|| [measured, 100.]).unwrap();
                 assert_eq!(bounds.width, available.min(measured.max(360.)));
                 assert_eq!(bounds.x, area.x + (available - bounds.width) / 2.);
                 assert_eq!(bounds.y + bounds.height, area.y + area.height);
