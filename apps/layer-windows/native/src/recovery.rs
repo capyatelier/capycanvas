@@ -678,9 +678,10 @@ impl Service {
         all(not(target_os = "windows"), not(test)),
         expect(dead_code, reason = "Used by the Windows host")
     )]
-    pub fn status(&self, localization: &layer_ui::Localizer, selected: u64) -> serde_json::Value {
+    pub fn status(&self, localization: &layer_ui::Localizer, selected: u64, stamp: &SessionStamp) -> serde_json::Value {
         let drawing=self.asking.front().and_then(|key|self.manifest.drawings.iter().find(|drawing|drawing.key==*key)).map(|drawing|drawing.id);
         serde_json::json!({"busy":self.busy,"restoring":self.restoring(),"closing":self.closing,"ready":self.close_ready(),
+            "current":self.stores.as_ref().is_some_and(|stores|stores.is_current(selected,stamp)),
             "camera":self.stamps.get(&selected).map(|stamp|&stamp.state.camera),
             "error":self.error.as_ref().map(|error|layer_ui::document_recovery_unavailable(localization,error)),"drawing":drawing,"retained":self.retained.len(),"windows":self.windows})
     }
@@ -770,7 +771,7 @@ mod tests {
             assert!(!recovery.busy);
             assert!(recovery.startup_stamp.is_none());
             assert_eq!(recovery.restore_queue,VecDeque::from([7]));
-            assert_eq!(recovery.status(host.session.localization(),1)["restoring"],true);
+            assert_eq!(recovery.status(host.session.localization(),1,&host.session.session_stamp())["restoring"],true);
             assert!(recovery.restoring());
             let mut documents=crate::documents::DocumentService::open(||{}).unwrap();
             assert_eq!(documents.tabs_view(&host)["available"],true);
@@ -794,7 +795,7 @@ mod tests {
                 assert!(recovery.failed());
             }
             assert!(!recovery.restoring());
-            assert_eq!(recovery.status(host.session.localization(),1)["restoring"],false);
+            assert_eq!(recovery.status(host.session.localization(),1,&host.session.session_stamp())["restoring"],false);
             #[cfg(target_os="windows")]
             {
                 let path=TempDir::new();
@@ -832,8 +833,29 @@ mod tests {
         let session=UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&localization).unwrap(),None,[32,24],Platform::Windows).unwrap();
         let committed=session.session_stamp();let mut pending=committed.clone();pending.state.camera.zoom*=2.;
         service.stamps.insert(7,committed.clone());service.pending_stamps.insert(7,pending);
-        assert_eq!(service.status(&localization,7)["camera"],serde_json::json!(committed.state.camera));
-        assert!(service.status(&localization,8)["camera"].is_null());
+        assert_eq!(service.status(&localization,7,&committed)["camera"],serde_json::json!(committed.state.camera));
+        assert!(service.status(&localization,8,&committed)["camera"].is_null());
+        service.stop().unwrap();
+    }
+    #[test]
+    fn recovery_status_requires_the_live_undo_checkpoint_even_when_no_write_is_running() {
+        let root=TempDir::new();let mut service=Service::open(||{}).unwrap();
+        let stores=SessionStores::native(root.path.clone(),Arc::new(||{}));
+        service.stores=Some(stores.clone());service.busy=false;
+        let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+        let mut session=UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&localization).unwrap(),None,[32,24],Platform::Windows).unwrap();
+        for opacity in [1.,0.4] {
+            if opacity!=1. {session.dispatch(UiAction::SetLayerOpacity {id:None,opacity}).unwrap();}
+            let stamp=session.session_stamp();
+            stores.checkpoint(7,session.capture_session().unwrap(),stamp.clone(),true).unwrap().wait_on_worker().unwrap();
+            assert_eq!(service.status(&localization,7,&stamp)["current"],true);
+        }
+        session.dispatch(UiAction::Invoke {command:layer_ui::CommandId::Undo}).unwrap();
+        let stamp=session.session_stamp();let status=service.status(&localization,7,&stamp);
+        assert_eq!(status["busy"],false);assert_eq!(status["current"],false);
+        assert!(!session.engine().can_undo());assert!(session.engine().can_redo());
+        stores.checkpoint(7,session.capture_session().unwrap(),stamp.clone(),true).unwrap().wait_on_worker().unwrap();
+        assert_eq!(service.status(&localization,7,&stamp)["current"],true);
         service.stop().unwrap();
     }
     #[test]

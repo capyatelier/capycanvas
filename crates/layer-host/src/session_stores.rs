@@ -120,7 +120,7 @@ impl SessionStores {
         self.bind(id,None)?;
         let mut state=self.0.state.lock().unwrap();let key=state.aliases[&id].clone();let drawing=state.drawings.get_mut(&key).unwrap();
         drawing.observed=Some(stamp);
-        if drawing.observed==drawing.committed {drawing.due=None;return Ok(false);}
+        if drawing.observed.as_ref().zip(drawing.committed.as_ref()).is_some_and(|(a,b)|same_checkpoint(a,b)) {drawing.due=None;return Ok(false);}
         if immediate {drawing.due=Some(now_ms);}
         let deadline=drawing.committed_at.unwrap_or(now_ms).saturating_add(Self::checkpoint_interval_ms());
         let due=*drawing.due.get_or_insert(deadline);
@@ -250,11 +250,16 @@ fn native_worker(work:StoreWork) {
     });
     if let Ok(worker)=worker {let _=worker.send(work);}
 }
+fn same_checkpoint(a:&SessionStamp,b:&SessionStamp)->bool {
+    let mut current=a.clone();current.epoch=b.epoch;
+    if current.camera_navigation==b.camera_navigation {current.state.camera.center=b.state.camera.center;}
+    current==*b
+}
 impl Drawing {
     fn new(binding:DrawingStore)->Self {Self {binding,observed:None,committed:None,committed_at:None,due:None,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()}}
     fn current(&self,stamp:&SessionStamp)->bool {
-        self.committed.as_ref()==Some(stamp) && self.inflight.as_ref().is_none_or(|current|current==stamp)
-            && self.pending.checkpoint.as_ref().is_none_or(|request|matches!(&request.work,Work::Checkpoint {stamp:current,..} if current==stamp))
+        self.committed.as_ref().is_some_and(|current|same_checkpoint(current,stamp)) && self.inflight.as_ref().is_none_or(|current|same_checkpoint(current,stamp))
+            && self.pending.checkpoint.as_ref().is_none_or(|request|matches!(&request.work,Work::Checkpoint {stamp:current,..} if same_checkpoint(current,stamp)))
     }
 }
 pub struct StoreWork(Option<StoreTask>);
@@ -267,7 +272,7 @@ impl DrawingWork {
         let mut request=self.request.take().unwrap();
         let current=match &request.work {
             Work::Checkpoint {stamp,forced:false,..}=>self.stores.0.state.lock().unwrap().drawings.get(&self.key)
-                .is_some_and(|drawing|drawing.observed.as_ref().is_none_or(|observed|observed==stamp)),
+                .is_some_and(|drawing|drawing.observed.as_ref().is_none_or(|observed|same_checkpoint(observed,stamp))),
             _=>true,
         };
         let cancelled=AtomicBool::new(false);
@@ -304,7 +309,7 @@ impl DrawingWork {
         let next=state.drawings.get_mut(&self.key).and_then(|drawing| {
             if drawing.sequence!=self.sequence {return None;}
             drawing.running=false;drawing.inflight=None;drawing.retiring=false;
-            if let Some(stamp)=committed {drawing.committed=Some(stamp);drawing.committed_at=Some(SessionStores::now_ms());if drawing.observed.as_ref()==drawing.committed.as_ref() {drawing.due=None;}}
+            if let Some(stamp)=committed {drawing.committed=Some(stamp);drawing.committed_at=Some(SessionStores::now_ms());if drawing.observed.as_ref().zip(drawing.committed.as_ref()).is_some_and(|(a,b)|same_checkpoint(a,b)) {drawing.due=None;}}
             drawing.pending.take().map(|request|self.stores.start(drawing,request))
         });
         if next.is_none() && !state.aliases.values().any(|key|key==&self.key) {state.drawings.remove(&self.key);}

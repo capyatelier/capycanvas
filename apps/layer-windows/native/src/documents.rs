@@ -1001,7 +1001,7 @@ impl DocumentService {
     }
     #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn recovery_status(&self, host: &NativeHost) -> Option<serde_json::Value> {
-        self.recovery.as_ref().map(|service|service.status(host.session.localization(),self.window.documents.selected()))
+        self.recovery.as_ref().map(|service|service.status(host.session.localization(),self.window.documents.selected(),&host.session.session_stamp()))
     }
     fn present_package(&mut self,host:&mut NativeHost,view:layer_ui::PackageView,original:Option<PathBuf>)->Result<(),String> {
         let summary=serde_json::to_value(view.summary(host.session.localization())).map_err(|error|error.to_string())?;

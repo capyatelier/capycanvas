@@ -50,7 +50,7 @@ function Session-Index {
     $file=Session-File;if($file){Get-Content $file.FullName -Raw|ConvertFrom-Json}
 }
 function Settled-Checkpoint([int]$Count){
-    Wait-Until {$index=Session-Index;$index -and @($index.drawings).Count -eq $Count -and !(Model).windows_recovery.busy} 'Session checkpoint did not become durable' 120
+    Wait-Until {$index=Session-Index;$recovery=(Model).windows_recovery;$index -and @($index.drawings).Count -eq $Count -and !$recovery.busy -and $recovery.current} 'Session checkpoint did not become durable' 120
 }
 function Disk-Signature {
     @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter '*.json' -Recurse|Sort-Object FullName|ForEach-Object{@{path=$_.FullName;bytes=$_.Length;written=$_.LastWriteTimeUtc.Ticks}})|ConvertTo-Json -Compress

@@ -277,7 +277,7 @@ fn returning_to_the_committed_stamp_supersedes_queued_optional_work() {
 
 #[test]
 fn restored_stamp_is_committed_at_ui_adoption() {
-    for edit_after_restore in [false, true] {
+    for edit_after_restore in 0..4 {
         let fixture = Fixture::new(); let (capture, stamp, _, _) = capture();
         let binding = fixture.stores.bind(1, None).unwrap();
         binding.on_worker(|store| capture.checkpoint(store, &AtomicBool::new(false))).unwrap();
@@ -289,16 +289,24 @@ fn restored_stamp_is_committed_at_ui_adoption() {
         assert!(!fixture.stores.is_current(1, &stamp));
         let mut session = layer_ui::UiSession::from_project(crate::Renderer::default(), restore.document().clone(),
             None, [256; 2], layer_ui::Platform::Gtk).unwrap();
+        let mut window=layer_ui::UiSession::from_project(crate::Renderer::default(),restore.document().clone(),
+            None,[256;2],layer_ui::Platform::Gtk).unwrap();
+        window.set_viewport([1706.6666,1018.6667],[2560,1528]).unwrap();
         let observed = restore.state.destination.clone();
         session.restore_session(restore, false, observed).unwrap();
+        session.inherit_restored_window_state(&window).unwrap();
+        session.set_viewport([1706.6666,1018.6667],[2560,1528]).unwrap();
         assert!(fixture.stores.0.state.lock().unwrap().drawings[binding.key()].committed.is_some());
-        if edit_after_restore {
-            session.dispatch(layer_ui::UiAction::Layer {action: layer_ui::LayerAction::New {group: false, clipped: false}}).unwrap();
+        match edit_after_restore {
+            1=>{session.dispatch(layer_ui::UiAction::Layer {action:layer_ui::LayerAction::New {group:false,clipped:false}}).unwrap();}
+            2=>{session.gesture([100.,100.],[125.,130.],1.,0.).unwrap();}
+            3=>{session.dispatch(layer_ui::UiAction::SetZoomLocked {locked:true}).unwrap();}
+            _=>{}
         }
         let adopted = session.session_stamp();
-        assert_eq!(fixture.stores.is_current(1, &adopted), !edit_after_restore);
+        assert_eq!(fixture.stores.is_current(1, &adopted), edit_after_restore==0);
         assert!(!fixture.stores.checkpoint_due(1, adopted.clone(), false).unwrap());
-        assert_eq!(fixture.stores.observe(1,adopted,SessionStores::now_ms()+SessionStores::checkpoint_interval_ms(),false).unwrap(),edit_after_restore);
+        assert_eq!(fixture.stores.observe(1,adopted,SessionStores::now_ms()+SessionStores::checkpoint_interval_ms(),false).unwrap(),edit_after_restore!=0);
         assert_eq!(std::fs::read(binding.path().join("head.json")).unwrap(), head);
         assert!(fixture.queue.lock().unwrap().is_empty());
     }
