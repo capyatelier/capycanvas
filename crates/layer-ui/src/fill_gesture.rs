@@ -36,12 +36,8 @@ impl Gesture {
         if let Some(vector)=&self.vector {return Some((true,vector.active,vector.slots[vector.active].as_ref().and_then(|face|face.as_ref())
             .into_iter().flat_map(|face|face.seals.iter()).map(|(a,b,_)|[a.map(|v|v as f32),b.map(|v|v as f32)]).collect()));}
         self.ready.as_ref().map(|ready|ready.result.gaps.as_ref().map_or((false,0,Vec::new()),|masks| {
-            let mut seals=Vec::new();let reach=layer_render::RegionGapMasks::STOPS[masks.active];
-            let point=|p:[u32;2]|p.map(|v|v as f32+0.5);
-            for seal in masks.seals.iter().filter(|seal|seal.reach==reach) {
-                let (a,b)=(point(seal.start),point(seal.end));
-                if let Some(bend)=seal.bend {let bend=point(bend);seals.extend([[a,bend],[bend,b]]);}else{seals.push([a,b]);}
-            }
+            let reach=layer_render::RegionGapMasks::STOPS[masks.active];
+            let seals=masks.seals.iter().filter(|seal|seal.reach==reach).flat_map(seal_segments).collect();
             (masks.line_bounded,masks.active,seals)
         }))
     }
@@ -333,12 +329,8 @@ impl<R:CanvasRenderer> UiSession<R> {
     }
     fn fill_payload(&self)->Result<Option<(Selection,layer_core::RasterOperationKind,Option<layer_core::color::RgbColor>)>,String> {
         let Some(ready)=self.region_tools.gesture.as_ref().and_then(|gesture|gesture.ready.as_ref()) else{return Ok(None);};
-        let selection=Selection::pixels(ready.result.pixels.clone()).transformed(ready.basis).map_err(error)?;
         let mut operation=ready.operation.clone();
-        if let layer_core::RasterOperationKind::Fill {underfill,edges,..}=&mut operation {
-            if let Some(edges)=edges {edges.colour_on_solid=ready.result.colour_on_solid;}
-            *underfill=ready.result.underfill.clone().map(Selection::pixels).map(|selection|selection.transformed(ready.basis)).transpose().map_err(error)?;
-        }
+        let selection=Self::apply_region_result(&ready.result,Some(&mut operation),ready.basis)?;
         Ok(Some((selection,operation,ready.color)))
     }
     pub(in crate::session) fn fill_query_trail(&self)->Option<layer_render::RegionFillTrail> {
@@ -529,11 +521,9 @@ impl<R:CanvasRenderer> UiSession<R> {
                 FillGestureView {transaction:0,tip:[0.;2],ring:None,pill:None,seals:seals.into(),tick:0,resize_cursor:false}
             })).or_else(||self.region_tools.completed.as_ref().filter(|completed|completed.checkpoint==self.engine.checkpoint() && completed.owner==self.engine.document().owner)
             .and_then(|completed|completed.ready.result.gaps.as_ref()).map(|masks| {
-                let mut seals=Vec::new();let reach=layer_render::RegionGapMasks::STOPS[masks.active];
-                for seal in masks.seals.iter().filter(|seal|seal.reach==reach) {
-                    let point=|[x,y]:[u32;2]|transform(Point {x:x as f32+0.5,y:y as f32+0.5});let start=point(seal.start);let end=point(seal.end);
-                    if let Some(bend)=seal.bend {let bend=point(bend);seals.extend([[start,bend],[bend,end]]);}else{seals.push([start,end]);}
-                }
+                let reach=layer_render::RegionGapMasks::STOPS[masks.active];
+                let seals=masks.seals.iter().filter(|seal|seal.reach==reach).flat_map(seal_segments)
+                    .map(|segment|segment.map(|[x,y]|transform(Point {x,y}))).collect::<Vec<_>>();
                 FillGestureView {transaction:0,tip:[0.;2],ring:None,pill:None,seals:seals.into(),tick:0,resize_cursor:false}
             }));
         if self.state.fill_gesture!=view {self.state.fill_gesture=view;Ok(regions::COLOR_PREVIEW)}else{Ok(0)}
@@ -573,13 +563,13 @@ impl<R:CanvasRenderer> UiSession<R> {
         self.publish_fill_gesture()
     }
 }
+fn seal_segments(seal:&layer_render::RegionSeal)->impl Iterator<Item=[[f32;2];2]> {
+    let point=|p:[u32;2]|p.map(|v|v as f32+0.5);
+    let (start,end,bend)=(point(seal.start),point(seal.end),seal.bend.map(point));
+    std::iter::once([start,bend.unwrap_or(end)]).chain(bend.map(|bend|[bend,end]))
+}
 fn seal_distance(point:[f32;2],seal:&layer_render::RegionSeal)->f32 {
-    let distance=|a:[u32;2],b:[u32;2]| {
-        let a=a.map(|v|v as f32+0.5);let b=b.map(|v|v as f32+0.5);let d=[b[0]-a[0],b[1]-a[1]];
-        let t=(((point[0]-a[0])*d[0]+(point[1]-a[1])*d[1])/(d[0]*d[0]+d[1]*d[1]).max(f32::EPSILON)).clamp(0.,1.);
-        (point[0]-a[0]-t*d[0]).hypot(point[1]-a[1]-t*d[1])
-    };
-    seal.bend.map_or_else(||distance(seal.start,seal.end),|bend|distance(seal.start,bend).min(distance(bend,seal.end)))
+    seal_segments(seal).map(|[a,b]|segment_distance(point.map(f64::from),a.map(f64::from),b.map(f64::from))).fold(f64::INFINITY,f64::min) as f32
 }
 
 fn segment_distance(point:[f64;2],a:[f64;2],b:[f64;2])->f64 {

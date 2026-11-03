@@ -52,6 +52,9 @@ struct Running {
     underfill: Option<(wgpu::Buffer,u64)>,
 }
 impl RegionRequests {
+    fn refinement(request:&RegionRequest)->layer_render::RegionRefinement {
+        layer_render::RegionRefinement {close_gaps:request.refinement.close_gaps || request.fill.is_some(),..request.refinement}
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.flood.storage_bytes()
             + self.raw.storage_bytes()
@@ -247,7 +250,7 @@ impl RegionRequests {
         }
         self.build_cache(r,request,request.enclosure.is_some(),encoder,true,false)?;
         if let Some(startup)=&r.startup
-            && !self.flood.prepare(&startup.compiler,layer_render::RegionRefinement {close_gaps:request.refinement.close_gaps || request.fill.is_some(),..request.refinement},request.enclosure.is_some(),request.contiguous,startup::BRUSH) {return Err(GpuRasterError::DeferredObjectWork);}
+            && !self.flood.prepare(&startup.compiler,Self::refinement(request),request.enclosure.is_some(),request.contiguous,startup::BRUSH) {return Err(GpuRasterError::DeferredObjectWork);}
         let source=cache::source(r,request);
         let base=RegionRequest {source,limit:None,reference_count:None,..request.clone()};
         let classified={
@@ -314,7 +317,7 @@ impl RegionRequests {
         match self.build_cache(r,&request,enclosed,encoder,false,false) {
             Ok(())=>{
                 self.preparation.as_mut().unwrap().recipes_ready=r.startup.as_ref().is_none_or(|startup|
-                    self.flood.prepare(&startup.compiler,layer_render::RegionRefinement {close_gaps:request.refinement.close_gaps || request.fill.is_some(),..request.refinement},enclosed,true,startup::OTHER)
+                    self.flood.prepare(&startup.compiler,Self::refinement(&request),enclosed,true,startup::OTHER)
                     & (!enclosed || startup.compiler.require(r.selection_clip.pipelines(),startup::OTHER)));
                 Ok(())
             },
@@ -389,7 +392,7 @@ impl RegionRequests {
             } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
                 ready &= self.raw.prepare(&startup.compiler,startup::BRUSH);
                 if !matches!(request.source, layer_render::RegionSource::Coverage(_) | layer_render::RegionSource::ObjectCoverage(_)) {
-                    let prepared=self.flood.prepare(&startup.compiler,layer_render::RegionRefinement {close_gaps:request.refinement.close_gaps || request.fill.is_some(),..request.refinement},request.enclosure.is_some(),request.contiguous,startup::BRUSH);
+                    let prepared=self.flood.prepare(&startup.compiler,Self::refinement(&request),request.enclosure.is_some(),request.contiguous,startup::BRUSH);
                     if !lines || self.cache.as_ref().is_some_and(|cache|cache.ready) {ready &= prepared;}
                 }
             }
@@ -715,7 +718,7 @@ impl RegionRequests {
         let variants=region.gaps.as_ref().map_or(&[][..],|gaps|gaps.variants.as_slice());
         let gaps=region.gaps.is_some();
         let regions=std::iter::once(&region).chain(variants).collect::<Vec<_>>();
-        self.readback.truncate(regions.len());
+        self.readback.clear();
         let mut captures=Vec::with_capacity(regions.len());
         let stale=self.cache_request.is_some();
         if stale {self.flood.copy_stale(&mut encoder,&region.coverage,region.bounds_offset+20);}
@@ -725,18 +728,15 @@ impl RegionRequests {
             let extra_size=if index==0 && probe.is_some() {self.raw.tonal_statistics.size()}else{0};
             let metadata_bytes=if index==0 {seal_metadata.map_or(0,wgpu::Buffer::size)}else{0};
             let size=mask_size+band_size+metadata_bytes+extra_size;
-            if self.readback.len()==index || self.readback[index].size()<size {
-                let buffer=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region history snapshot"),size,
-                    usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-                if self.readback.len()==index {self.readback.push(buffer);}else{self.readback[index]=buffer;}
-            }
-            let readback=&self.readback[index];
-            encoder.copy_buffer_to_buffer(&region.coverage,0,readback,0,mask_size);
-            if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,readback,mask_size,band_size);}
-            if index==0 && let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,readback,mask_size+band_size,metadata_bytes);}
-            if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,readback,mask_size+band_size+metadata_bytes,extra_size);}
+            let readback=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region history snapshot"),size,
+                usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+            encoder.copy_buffer_to_buffer(&region.coverage,0,&readback,0,mask_size);
+            if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,&readback,mask_size,band_size);}
+            if index==0 && let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,&readback,mask_size+band_size,metadata_bytes);}
+            if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,&readback,mask_size+band_size+metadata_bytes,extra_size);}
             captures.push(selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
                 underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize});
+            self.readback.push(readback);
             if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
         }
         r.uploads.finish(&encoder);

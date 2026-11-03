@@ -96,6 +96,13 @@ impl Lines {
             & compiler.require([&self.colour],priority)
     }
     pub fn token_buffer(&self)->&wgpu::Buffer {self.tokens.as_ref().unwrap()}
+    pub fn begin_areas(&mut self,device:&PipelineDevice) {
+        let size=32+self.scratch.as_ref().unwrap()[1].size();
+        if self.tokens.as_ref().is_none_or(|buffer|buffer.size()<size) {
+            self.tokens=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window tokens"),size,
+                usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
+        }
+    }
     pub fn hold_barriers(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder) {
         self.encode(input,encoder,None,None,vec![("hold_barriers",u64::from(self.offsets[0]),self.params([0;4],[0;4],[0;4],[1.,1.,0.,0.]))]);
     }
@@ -134,11 +141,6 @@ impl Lines {
             self.scratch=Some(std::array::from_fn(|index|device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window coordinates"),size:if index==0 {compact_bytes}else{scratch_bytes},
                 usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false})));
         }
-        let token_words=8+scratch_bytes/4;
-        if self.tokens.as_ref().is_none_or(|buffer|buffer.size()<token_words*4) {
-            self.tokens=Some(device.create_buffer(&wgpu::BufferDescriptor {label:Some("region window tokens"),size:token_words*4,
-                usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
-        }
         self.extent=extent;self.offsets=offsets;
         self.windows=windows.iter().map(|(_,core)|(*core,analysis_window(*core,extent))).collect();
         Ok(())
@@ -148,9 +150,7 @@ impl Lines {
         [vec![w,h,w.div_ceil(32),w.div_ceil(4)],window.to_vec(),core.to_vec(),self.offsets.to_vec(),options.to_vec(),paper.map(f32::to_bits).to_vec(),vec![0;4]].concat()
     }
     fn encode(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,steps:Vec<Step>) {
-        self.encode_with_data(input,encoder,first,second,self.data.as_ref().unwrap(),steps);
-    }
-    fn encode_with_data(&self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,first:Option<&wgpu::Buffer>,second:Option<&wgpu::Buffer>,data:&wgpu::Buffer,steps:Vec<Step>) {
+        let data=self.data.as_ref().unwrap();
         let Input {device,mask,paper}=input;
         let alignment=u64::from(device.limits().min_uniform_buffer_offset_alignment);
         let stride=PARAMS.next_multiple_of(alignment);

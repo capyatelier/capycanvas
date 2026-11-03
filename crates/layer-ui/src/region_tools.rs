@@ -655,6 +655,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }));}
         operation
     }
+    pub(in crate::session) fn apply_region_result(result:&layer_render::RegionResult,operation:Option<&mut layer_core::RasterOperationKind>,basis:layer_core::Affine)->Result<Selection,String> {
+        let selection=Selection::pixels(result.pixels.clone()).transformed(basis).map_err(error)?;
+        if let Some(layer_core::RasterOperationKind::Fill {underfill,edges,..})=operation {
+            if let Some(edges)=edges {edges.colour_on_solid=result.colour_on_solid;}
+            *underfill=result.underfill.clone().map(Selection::pixels).map(|selection|selection.transformed(basis)).transpose().map_err(error)?;
+        }
+        Ok(selection)
+    }
     fn queue_region(&mut self,request:RegionRequest,purpose:Purpose) {self.queue_region_task(RegionTask::Mask(request),purpose);}
     fn queue_region_task(&mut self,mut task:RegionTask,mut purpose:Purpose) {
         let request=match &mut task {RegionTask::Mask(request)|RegionTask::FlatAreas(request)=>request};
@@ -754,13 +762,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     Purpose::Region {operation:Some(operation),color,basis} if self.region_tools.gesture.is_some()=> {
                         return self.accept_fill_result(result,operation,color,basis);
                     }
-                    Purpose::Region { operation, color, basis } => {
-                        let selection = Selection::pixels(result.pixels).transformed(basis).map_err(error)?;
-                        if let Some(mut operation) = operation {
-                            if let layer_core::RasterOperationKind::Fill { underfill, edges, .. } = &mut operation {
-                                if let Some(edges)=edges {edges.colour_on_solid=result.colour_on_solid;}
-                                *underfill = result.underfill.map(Selection::pixels).map(|selection| selection.transformed(basis)).transpose().map_err(error)?;
-                            }
+                    Purpose::Region { mut operation, color, basis } => {
+                        let selection=Self::apply_region_result(&result,operation.as_mut(),basis)?;
+                        if let Some(operation) = operation {
                             self.paint_operation(Some(selection), operation, color.as_slice())?;
                         } else {
                             self.set_mask_coverage(layer_core::SelectionTarget::Current,selection)?;

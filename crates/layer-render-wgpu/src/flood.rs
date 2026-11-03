@@ -162,6 +162,7 @@ impl Flood {
     }
     pub fn begin_areas(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],reach:Option<u32>)->Result<Areas,GpuRasterError> {
         let labels=Labels::new(extent,&input.device.limits()).ok_or(GpuRasterError::SizeOverflow)?;
+        self.lines.begin_areas(input.device);
         if labels.words*4>self.capacity {
             self.labels=Some(input.device.create_buffer(&wgpu::BufferDescriptor {label:Some("flood reusable labels"),size:labels.words*4,
                 usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::COPY_SRC,mapped_at_creation:false}));
@@ -296,15 +297,14 @@ impl Flood {
         let mut region=allocate(scratch_words);
         let variants=if multiple && !single {(0..4).map(|_|allocate(words.max(mask_bytes))).collect::<Vec<_>>()}else{Vec::new()};
         let active=fill.and_then(|fill|fill.reach).map_or(u32::from(requested_close),|reach|reach/16);
-        let summary: Vec<u8> = [0,0,w,h,0,1,0,0,w,h,0,0,0,active].into_iter().flat_map(u32::to_ne_bytes).collect();
+        let summary: Vec<u8> = [0,0,w,h,0,1,0,0,w,h,0,0,0,active,u32::MAX].into_iter().flat_map(u32::to_ne_bytes).collect();
         let summary = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("flood summary"),contents:&summary,usage:wgpu::BufferUsages::COPY_SRC,
         });
         for region in std::iter::once(&region).chain(&variants) {
             encoder.copy_buffer_to_buffer(&summary,0,&region.coverage,0,32);
             encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset,20);
-            let no_next=device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("fill trail end"),contents:&u32::MAX.to_ne_bytes(),usage:wgpu::BufferUsages::COPY_SRC});
-            encoder.copy_buffer_to_buffer(&no_next,0,&region.coverage,region.bounds_offset+24,4);
+            encoder.copy_buffer_to_buffer(&summary,56,&region.coverage,region.bounds_offset+24,4);
             if band {encoder.copy_buffer_to_buffer(&summary,32,&region.coverage,region.bounds_offset+32,20);}
         }
         let stride = PARAMETER_BYTES.next_multiple_of(u64::from(limit.min_uniform_buffer_offset_alignment));
