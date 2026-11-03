@@ -93,7 +93,6 @@ impl ToolSet {
                 button.add_css_class("flat");
                 button.add_css_class("tool-group");
                 let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
-                if !media { button.set_halign(gtk::Align::Start); }
                 if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
                 button.set_size_request(
                     if media { (layer_ui::BRUSH_SETS_MIN_WIDTH - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32 } else { -1 },

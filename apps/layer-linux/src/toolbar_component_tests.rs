@@ -698,7 +698,7 @@ fn assert_blend_category_cells(buttons: &[gtk::Button], wide: bool, context: &st
         let cell = button.parent().unwrap();
         let native = button.compute_bounds(&cell).unwrap();
         assert!(native.x().abs() < 1.);
-        super::super::phone::assert_group_chip(button, wide, context);
+        super::super::phone::assert_group_chip(button, context);
         for previous in &bounds[..index] {
             let current = bounds[index];
             assert!(current.x() >= previous.x() + previous.width() - 1.
@@ -737,7 +737,7 @@ fn native_tool_set_category_input() {
                     let cell = button.parent().unwrap();
                     let bounds = button.compute_bounds(&cell).unwrap();
                     assert!(bounds.x().abs() < 1., "the chip starts its cell: {bounds:?}");
-                    super::super::phone::assert_group_chip(button, true, &format!("{command:?}/{theme:?}/{floating}"));
+                    super::super::phone::assert_group_chip(button, &format!("{command:?}/{theme:?}/{floating}"));
                     let point = screen_point(button.upcast_ref(), &d.w.window, [0.85, 0.5]);
                     let hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
                     assert!(hit == *button || hit.is_ancestor(button), "category edge belongs to its button");
@@ -746,6 +746,19 @@ fn native_tool_set_category_input() {
                     assert!(button.state_flags().contains(gtk::StateFlags::PRELIGHT));
                     d.input.click(point);
                     assert!(button.has_css_class("selected-tool"));
+                }
+                if command == CommandId::Brush {
+                    let button = &buttons[0];
+                    let cell = button.parent().unwrap();
+                    assert!(cell.compute_bounds(&cell.parent().unwrap()).unwrap().x().abs() < 1., "the edge probe uses the first column");
+                    let bounds = cell.compute_bounds(&d.w.window).unwrap();
+                    let scroll = button.ancestor(gtk::ScrolledWindow::static_type()).and_downcast::<gtk::ScrolledWindow>().unwrap();
+                    let scrollbar = scroll.vscrollbar().compute_bounds(&d.w.window).unwrap();
+                    assert!(bounds.intersection(&scrollbar).is_none(), "the whole edge-probe cell avoids the scrollbar: {bounds:?} {scrollbar:?}");
+                    let point = [bounds.x() + bounds.width() - 2., bounds.y() + bounds.height() * 0.5];
+                    assert!(!button.has_css_class("selected-tool"));
+                    d.input.click(point);
+                    assert!(button.has_css_class("selected-tool"), "the cell's trailing edge selects its set");
                 }
                 d.capture_canvas(&format!("tool-set-{command:?}-{theme:?}-{floating}.png"));
                 if command == CommandId::Blend && floating {
@@ -768,6 +781,8 @@ fn native_tool_set_category_input() {
         }
     }
     for theme in [Theme::Light, Theme::Dark] {
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: "builtin:workspace:illustrator".into() });
+        wait_workspaces(&d.w);
         restore(&d, WorkspacePreset::Illustrator);
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         d.w.dispatch(UiAction::Invoke { command: CommandId::Hand }); pump(150);
@@ -780,7 +795,10 @@ fn native_tool_set_category_input() {
             d.click(button.upcast_ref());
             assert!(state(&d.w).tool_set.subtools.iter().any(|choice| choice.action == item.action && choice.selected));
         }
-        restore(&d, WorkspacePreset::Painter);
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: "builtin:workspace:painter".into() });
+        wait_workspaces(&d.w);
+        new_photo::ready(&d.w);
+        assert_eq!(d.w.workspaces.view().id.as_deref(), Some("builtin:workspace:painter"));
         d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso }); pump(100);
         let opener = d.named(&d.header_tool(ToolbarControl::Command { command: CommandId::DrawingBrush }));
         d.click(&opener); d.click(&opener);
@@ -790,7 +808,9 @@ fn native_tool_set_category_input() {
         for button in buttons {
             assert_eq!(button.height(), 44, "media category lists retain their height");
         }
-        d.capture_canvas(&format!("media-category-{theme:?}.png"));
+        d.input.perform(serde_json::json!([{ "capture_window": {
+            "name": format!("desktop-sketch-brush-{theme:?}").to_lowercase(), "maximized": d.w.window.is_maximized(),
+        } }]));
         d.click(&opener);
     }
     d.finish();
