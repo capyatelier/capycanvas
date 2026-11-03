@@ -279,8 +279,14 @@ impl MaskRenderer {
                     if *target == authored { self.command_pages.insert((*key, *coordinate), page.clone()); }
                 }
             }
-            let needed = coverage.selection.as_ref().map_or_else(Default::default,
+            let mut needed:std::collections::BTreeSet<_> = coverage.selection.as_ref().map_or_else(Default::default,
                 |selection| page_coordinates(pixel_rect(selection.bounds(), source.domain)).collect());
+            if key.2 && source.default_coverage==0. && coverage.use_.offset==[0;2] && !coverage.use_.inverted
+                && let Some(selection)=&coverage.selection && !selection.inverted && selection.affine==layer_core::Affine::IDENTITY
+                && let layer_core::SelectionShape::Pixels(pixels)=&selection.shape {
+                needed.retain(|coordinate| {let page=page_rect(*coordinate);
+                    pixels.coverage_bounds_in([page.min_x(),page.min_y(),page.max_x(),page.max_y()])!=[0;4]});
+            }
             initialize_pages(&mut self.command_pages, *key, source, coverage.selection.as_ref(), needed, regions.is_some(),
                 device, encoder, selections, &self.pipelines.initialize, &self.pipelines.init_layout, &self.pipelines.empty_selection)?;
         }
@@ -404,6 +410,65 @@ fn initialize_pages<K: Copy + Ord>(
             .insert((target, coordinate), MaskPage { texture, view });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layer_tests::placement;
+
+    #[test]
+    fn background_underfill_keeps_only_band_pages_and_matches_explicit_zero_pages() {
+        let extent=[768;2];
+        let selection=|contains:fn(u32,u32)->bool| {
+            let mut words=vec![0;extent[0] as usize*extent[1] as usize/4];
+            for y in 0..extent[1] {for x in 0..extent[0] {if contains(x,y) {
+                words[((y*extent[0]+x)/4) as usize]|=255<<((x%4)*8);
+            }}}
+            layer_core::Selection::pixels(Arc::new(layer_core::SelectionPixels::bytes(extent,[0,0,768,768],words).unwrap()))
+        };
+        let background=selection(|_,_|true);
+        let band=selection(|x,y|(x==128 || x==640) && (128..=640).contains(&y)
+            || (y==128 || y==640) && (128..=640).contains(&x));
+        let mut results=Vec::new();
+        for explicit_zero in [false,true] {
+            let mut document=placement::paint_document(extent,"Background band");
+            let target=placement::target(&document);
+            placement::set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[128,64,32,128]));
+            let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            crate::test_support::submit_ready(&mut r,FramePacket {reset_layers:true,..crate::test_support::packet(document.scene(),extent)}).unwrap();
+            let mut coverage=layer_core::CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),extent,[0;2]);
+            coverage.source.default_coverage=0.;coverage.selection=Some(background.clone());
+            let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage,
+                kind:layer_core::RasterOperationKind::Fill {color:[0.1,0.4,0.7,1.],texture:Default::default(),alpha_locked:false,
+                    edges:None,underfill:Some(band.clone())}};
+            let batch=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage:operation.bounds(extent),
+                ..crate::test_support::dab_batch(target,crate::tests::test_style(BrushExecution::Dry),layer_core::Rect::from_extent(extent))};
+            placement::paint_mut(&mut document).operations=Arc::new(vec![operation]);
+            let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),..crate::test_support::packet(document.scene(),extent)};
+            r.layer_masks.pipelines.initialize.compile();
+            let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+            r.layer_masks.prepare(&r.device,&mut encoder,(packet.scene,packet.dab_batches,None),extent,false,&mut r.selection_clip).unwrap();
+            assert_eq!(r.layer_masks.command_pages.keys().filter(|(key,_)|!key.2).count(),9);
+            assert_eq!(r.layer_masks.command_pages.keys().filter(|(key,_)|key.2).count(),8);
+            assert!(!r.layer_masks.command_pages.contains_key(&((target,0,true),[1,1])));
+            if explicit_zero {
+                let page=MaskPage::new(&r.device);
+                drop(encoder.color_pass("explicit empty underfill",&page.view,wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)));
+                r.layer_masks.command_pages.insert(((target,0,true),[1,1]),page);
+            }
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);
+            crate::test_support::submit_ready(&mut r,packet).unwrap();
+            let pixels=r.readback_srgb_rgba8().unwrap();
+            let center=((384*extent[0]+384)*4) as usize;
+            let edge=((384*extent[0]+128)*4) as usize;
+            assert_eq!(pixels[center+3],255);
+            assert_eq!(pixels[((384*extent[0]+128)*4+3) as usize],255);
+            assert_ne!(&pixels[center..center+4],&pixels[edge..edge+4]);
+            results.push(pixels);
+        }
+        assert_eq!(results[0],results[1]);
+    }
 }
 
 impl WgpuRasterizer {
