@@ -506,6 +506,8 @@ Follow these rules when writing one:
 - **Wait for the operation you started.** Compare the document revision or the
   requested state before and after input. An already enabled Undo does not prove
   a new stroke committed, and `WaitForInputIdle` does not acknowledge an operation.
+  For native overlays, acknowledge the applied fill before composed pixel
+  sampling; bubble checks use `Wait-BubbleOverlayPhase`.
   After zooming, steady-motion checks also wait for the committed
   `windows_recovery.camera.zoom` and its applied UI revision; a later session
   checkpoint can publish another full snapshot without changing workspace content.

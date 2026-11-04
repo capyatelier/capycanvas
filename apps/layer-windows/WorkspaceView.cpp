@@ -219,7 +219,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock()){self->publishDrawerSources();self->queueMeasurements();}});
         expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();},
             [weak=weak_from_this()](double width){if(auto self=weak.lock())return self->configurationHeight(width);return 0.;});
-        bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();});
+        bubbles=std::make_unique<WorkspaceBubbles>(data,root,[weak=weak_from_this()]{if(auto self=weak.lock())self->queueMeasurements();},
+            [weak=weak_from_this()]{if(auto self=weak.lock())self->tracePresentation();});
         measureGate.Child(measureHost);measureGate.UseLayoutRounding(false);measureGate.IsHitTestVisible(false);measureGate.Visibility(Visibility::Collapsed);Canvas::SetLeft(measureGate,-100000);root.Children().Append(measureGate);
         root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->layoutUpdated();});
         root.Loaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->queueMeasurements();});
@@ -792,7 +793,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }
             for(int i=0;i<VisualTreeHelper::GetChildrenCount(node);i++)visit(VisualTreeHelper::GetChild(node,i));
         };
-        if(!windowResizing){visit(root);visit(utilities);}
+        if(!windowResizing){visit(root);visit(utilities);for(auto overlay:bubbles->TraceOverlays(root))elements.Append(overlay);}
         A grips;
         for(auto const& [id,handle]:handles){
             if(!handle.IsLoaded())continue;

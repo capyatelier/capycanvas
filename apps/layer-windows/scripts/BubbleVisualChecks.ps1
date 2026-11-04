@@ -556,6 +556,15 @@ function Bubble-VisualState([long]$Id){
         checkpoint=@($model.windows_tabs.session_stamps|Where-Object id -eq $model.windows_tabs.selected)[0].stamp.checkpoint
     }|ConvertTo-Json -Depth 90 -Compress
 }
+function Wait-BubbleOverlayPhase([long]$Id,[string]$Phase){
+    Wait-Until {
+        $workspace=Workspace-Root
+        if(!$workspace -or !$workspace.Current.ItemStatus){return $false}
+        $presentation=$workspace.Current.ItemStatus|ConvertFrom-Json
+        $overlay=@($presentation.elements|Where-Object id -eq "tool-bubble-overlay-$Id")
+        $overlay.Count -eq 1 -and $overlay[0].overlay_phase -ceq $Phase
+    } "Selected bubble overlay did not apply $Phase for $Id"
+}
 function Bubble-VisualTags([long]$Id,[string]$Label){
     $center=Center $Id;$reach=((Packet $Id).reach+16)*$scale
     foreach($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
@@ -620,17 +629,20 @@ function Assert-BubbleVisualStates([long]$Id){
     $down=$false;$visualFailure=$null
     try{
         [CapyRowPointer]::Hover($away.x,$away.y)
-        $null=Wait-StablePixels {Patch-Pixels $point}
+        Wait-BubbleOverlayPhase $Id 'idle'
+        $null=Wait-StablePixels {Patch-Pixels $point} -Composed
         $baseline=Read-BubbleVisualPatch $point ($prefix+'-idle-patch.png')
         $idleBounds=Bubble-VisualBounds $face
         $null=Screen-Pixels $point.x $point.y ($prefix+'-idle.png')
         [CapyRowPointer]::Hover($point.x,$point.y)
-        $null=Wait-StablePixels {Patch-Pixels $point}
+        Wait-BubbleOverlayPhase $Id 'hover'
+        $null=Wait-StablePixels {Patch-Pixels $point} -Composed
         $hover=Read-BubbleVisualPatch $point ($prefix+'-hover-patch.png')
         $evidence.hover=Measure-BubbleVisualOverlay $baseline $hover $ink .07
         $null=Screen-Pixels $point.x $point.y ($prefix+'-hover.png')
         [CapyRowPointer]::Down('mouse',$point.x,$point.y);$down=$true
-        Start-Sleep -Milliseconds 100
+        Wait-BubbleOverlayPhase $Id 'pressed'
+        $null=Wait-StablePixels {Patch-Pixels $point} -Composed
         $pressed=Read-BubbleVisualPatch $point ($prefix+'-pressed-patch.png')
         $pressedBounds=Bubble-VisualBounds $face
         $evidence.pressed=Measure-BubbleVisualOverlay $baseline $pressed $ink .14
@@ -642,7 +654,8 @@ function Assert-BubbleVisualStates([long]$Id){
             Wait-Until {[Math]::Abs((Center $Id).x-$origin.x) -gt 8*$scale} 'Held bubble did not move beyond its press slop'
             [CapyRowPointer]::Move($point.x,$point.y)
             Wait-Until {$at=Center $Id;[Math]::Abs($at.x-$origin.x) -lt 2 -and [Math]::Abs($at.y-$origin.y) -lt 2} 'Held bubble did not return to its starting position'
-            $null=Wait-StablePixels {Patch-Pixels $point}
+            Wait-BubbleOverlayPhase $Id 'hover'
+            $null=Wait-StablePixels {Patch-Pixels $point} -Composed
             $returned=Read-BubbleVisualPatch $point ($prefix+"-returned-$cycle-patch.png")
             $evidence["returned-$cycle"]=Measure-BubbleVisualOverlay $baseline $returned $ink .07
         }

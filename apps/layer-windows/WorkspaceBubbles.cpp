@@ -172,14 +172,15 @@ void WorkspaceBubbles::Impl::step(J const& motion,double now,bool reduced,uint64
     for(auto value:array(motion,L"placements")){auto p=value.GetObject();auto found=records.find(uint32_t(num(p,L"id")));if(found==records.end())continue;auto& r=*found->second;
         r.center=point(array(p,L"center"));r.lifted=flag(p,L"lifted");r.homing=flag(p,L"homing");r.root.Visibility(Visibility::Visible);}
     if(contact&&!contact->paired)contact->record->hovered=hit(*contact->record,contact->last);
+    bool overlayChanged=false;
     for(auto const& [id,r]:records){active=r->fade.step(now,reduced)||active;
         for(auto it=r->parts.begin();it!=r->parts.end();){auto& p=*it->second;active=p.step(now,reduced)||active;
             if(p.appearance.value==0&&p.appearance.target==0){remove(r->root,p.root);it=r->parts.erase(it);continue;}
-            draw(r,it->second);++it;}
+            overlayChanged=draw(r,it->second)||overlayChanged;++it;}
         r->place();r->root.IsHitTestVisible(!r->faded);Canvas::SetZIndex(r->root,(r->lifted?800:700)+r->order);
         stamp(r);
     }
-    contactSurface();if(changed)changed();
+    contactSurface();if(changed)changed();if(overlayChanged&&overlayApplied)overlayApplied();
 }
 void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& packet){
     if(r->packet.Size()&&r->packet.Stringify()==packet.Stringify())return;
@@ -230,7 +231,7 @@ void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& pa
         }++it;
     }
 }
-void WorkspaceBubbles::Impl::draw(std::shared_ptr<Record> const& r,std::shared_ptr<Part> const& p){
+bool WorkspaceBubbles::Impl::draw(std::shared_ptr<Record> const& r,std::shared_ptr<Part> const& p){
     if(p->theme!=data->theme()){p->theme=data->theme();p->contentDirty=true;p->wheelKey=L"";p->surfaceKey=L"";}
     p->root.Width(p->size.Width);p->root.Height(p->size.Height);p->ink.Width(p->size.Width);p->ink.Height(p->size.Height);p->art.Width(p->size.Width);p->art.Height(p->size.Height);
     p->transform.CenterX(p->size.Width/2);p->transform.CenterY(p->size.Height/2);p->transform.TranslateX(r->reach+p->center.X-p->size.Width/2);p->transform.TranslateY(r->reach+p->center.Y-p->size.Height/2);
@@ -241,7 +242,16 @@ void WorkspaceBubbles::Impl::draw(std::shared_ptr<Record> const& r,std::shared_p
     p->ink.Opacity(p->strength);
     p->shadow.Opacity(prefix(p->key,L"bead:")&&!p->glass?p->strength:1);
     p->root.IsHitTestVisible(p->appearance.target>0&&!r->faded);if(p->accessible)p->accessible.Visibility(p->appearance.target>0?Visibility::Visible:Visibility::Collapsed);bool selected=flag(p->data,L"selected")&&(p->key==L"face"||item||prefix(p->key,L"bead:")&&p->glass);
-    p->selection.Fill(selected?CapyUi::selected(data):clear());if(!item||p->appearance.target>0)p->hover.Fill(data->tint(L"text",pressed&&marked(contact->hit)?36:hovered?18:0));
+    p->selection.Fill(selected?CapyUi::selected(data):clear());
+    auto phase=pressed&&marked(contact->hit)?OverlayPhase::Pressed:hovered?OverlayPhase::Hover:OverlayPhase::Idle;
+    bool overlayChanged=false;
+    if(!item||p->appearance.target>0){
+        p->hover.Fill(data->tint(L"text",static_cast<uint8_t>(phase)));
+        if(p->key==L"face"&&layer.IsLoaded()&&layer.Visibility()==Visibility::Visible&&r->root.Visibility()==Visibility::Visible
+            &&p->root.IsLoaded()&&p->root.Visibility()==Visibility::Visible&&p->appearance.value>0){
+            overlayChanged=p->appliedOverlayPhase!=phase;p->appliedOverlayPhase=phase;
+        }
+    }
     if(p->key==L"face"&&str(r->view,L"kind")==L"history")for(uint32_t i=0;i<2;++i){
         bool over=r->hovered&&r->hovered.ValueType()==JsonValueType::Object&&num(r->hovered.GetObject(),L"half",-1)==i;
         bool down=pressed&&contact->hit&&contact->hit.ValueType()==JsonValueType::Object&&num(contact->hit.GetObject(),L"half",-1)==i;
@@ -265,6 +275,7 @@ void WorkspaceBubbles::Impl::draw(std::shared_ptr<Record> const& r,std::shared_p
         inspector.place(p->layers->Root(),p->size.Width,p->size.Height,data->panelMetric(L"disclosure_height"),open);
         if(!inspector.animating&&!open&&inspector.anchor.Size()&&p->layers->layers->restoreAnchor(inspector.anchor))inspector.anchor=J{};
     }
+    return overlayChanged;
 }
 void WorkspaceBubbles::Impl::content(std::shared_ptr<Record> const& r,std::shared_ptr<Part> const& p){
     auto weak=weak_from_this();std::weak_ptr<Record> owner=r;std::weak_ptr<Part> part=p;auto v=r->view;auto size=p->size;Point center{size.Width/2,size.Height/2};
@@ -404,13 +415,15 @@ void WorkspaceBubbles::Impl::intensity(std::shared_ptr<Record> const& r,std::sha
     AutomationProperties::SetName(art.value,str(spec,L"label"));AutomationProperties::SetItemStatus(art.value,str(spec,L"text"));
 }
 void WorkspaceBubbles::Impl::refresh(std::shared_ptr<Record> const& r){
-    for(auto const& [key,p]:r->parts){if(p->retired)continue;draw(r,p);
+    bool overlayChanged=false;
+    for(auto const& [key,p]:r->parts){if(p->retired)continue;overlayChanged=draw(r,p)||overlayChanged;
         if(p->wheel){auto preview=data->colorPreview;auto model=object(preview,L"view");if(!model.Size())model=object(data->model,L"color_panel");auto colors=object(preview,L"colors");if(!colors.Size())colors=displayColors(data->state);auto side=num(r->view,L"diameter")-14,scale=workspace.XamlRoot()?workspace.XamlRoot().RasterizationScale():1.;auto next=model.Stringify()+colors.Stringify()+to_hstring(side)+L":"+to_hstring(scale);
             if(p->wheelKey!=next&&side>0){try{p->wheel->present(p->wheelImage,model,colors,side,scale);p->wheelKey=next;}catch(hresult_error const& error){OutputDebugStringW(error.message().c_str());}}
         }
         intensity(r,p);
         if(p->inspector){p->layers->Apply(true);p->inspector->properties->Apply(flag(p->data,L"properties"));p->inspector->refresh(flag(p->data,L"properties"),str(p->data,L"disclosure"),!flag(p->data,L"full"));}
     }
+    if(overlayChanged&&overlayApplied)overlayApplied();
 }
 void WorkspaceBubbles::Impl::thumbnails(){
     if(!workspace.IsLoaded()||!workspace.XamlRoot()||!workspace.XamlRoot().IsHostVisible()){ForgetLayerThumbnails(data->thumbnails,this);return;}
@@ -441,7 +454,7 @@ void WorkspaceBubbles::Impl::glass(A& boxes,A& arcs,A& colors,UIElement const& r
         }else if(p->glass){auto width=p->size.Width*scale,height=p->size.Height*scale,radius=p->radius*scale;A box;for(double v:{origin.X+r->center.X+p->center.X*r->scale()-width/2,origin.Y+r->center.Y+p->center.Y*r->scale()-height/2,width,height,radius,radius,radius,radius,p->squircle?1.:0.,strength})box.Append(N(v));boxes.Append(box);}
     }
 }
-WorkspaceBubbles::WorkspaceBubbles(std::shared_ptr<WorkspaceData> data,Canvas workspace,std::function<void()> changed):impl(std::make_shared<Impl>()){impl->data=std::move(data);impl->workspace=workspace;impl->changed=std::move(changed);impl->init();}
+WorkspaceBubbles::WorkspaceBubbles(std::shared_ptr<WorkspaceData> data,Canvas workspace,std::function<void()> changed,std::function<void()> overlayApplied):impl(std::make_shared<Impl>()){impl->data=std::move(data);impl->workspace=workspace;impl->changed=std::move(changed);impl->overlayApplied=std::move(overlayApplied);impl->init();}
 WorkspaceBubbles::~WorkspaceBubbles(){impl->cancel();}
 void WorkspaceBubbles::Attach(UIElement const& root,std::function<void()> cancel){impl->attach(root,std::move(cancel));}
 void WorkspaceBubbles::Apply(){impl->apply();}
@@ -449,6 +462,23 @@ void WorkspaceBubbles::Reattach(){impl->reattach();}
 void WorkspaceBubbles::Wake(){impl->wake();}
 bool WorkspaceBubbles::Cancel(){return impl->cancel();}
 void WorkspaceBubbles::Glass(A& boxes,A& arcs,A& colors,UIElement const& reference)const{impl->glass(boxes,arcs,colors,reference);}
+A WorkspaceBubbles::TraceOverlays(UIElement const& reference)const{
+    A overlays;
+    if(!impl->layer.IsLoaded()||impl->layer.Visibility()!=Visibility::Visible)return overlays;
+    for(auto const& [id,record]:impl->records){
+        if(record->root.Visibility()!=Visibility::Visible)continue;
+        auto face=record->parts.find(L"face");
+        if(face==record->parts.end())continue;
+        auto const& part=*face->second;
+        if(!part.root.IsLoaded()||part.root.Visibility()!=Visibility::Visible||part.root.ActualWidth()<=0||part.root.ActualHeight()<=0)continue;
+        if(!part.appliedOverlayPhase)continue;
+        auto phase=*part.appliedOverlayPhase;
+        auto bounds=part.root.TransformToVisual(reference).TransformBounds({0,0,float(part.root.ActualWidth()),float(part.root.ActualHeight())});
+        overlays.Append(O({{L"id",S(L"tool-bubble-overlay-"+to_hstring(id))},{L"bounds",rectangle(bounds)},{L"actual_bounds",rectangle(bounds)},
+            {L"overlay_phase",S(phase==OverlayPhase::Idle?L"idle":phase==OverlayPhase::Hover?L"hover":L"pressed")}}));
+    }
+    return overlays;
+}
 A WorkspaceBubbles::InputRegions(UIElement const& reference)const{
     A result;if(!impl->layer.IsLoaded())return result;
     for(auto const& [id,r]:impl->records)if(!r->faded)for(auto const& [key,p]:r->parts)if(p->root.IsHitTestVisible()&&p->root.Visibility()==Visibility::Visible){

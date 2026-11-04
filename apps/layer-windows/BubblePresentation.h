@@ -28,6 +28,7 @@ inline V ui(std::shared_ptr<WorkspaceData> const& data,J const& request){
     if(!raw)throw hresult_invalid_argument();return JsonValue::Parse(to_hstring(raw.get()));
 }
 inline hstring kind(V const& value){return value&&value.ValueType()==JsonValueType::String?value.GetString():L"";}
+enum class OverlayPhase:uint8_t { Idle=0, Hover=18, Pressed=36 };
 struct Tween {
     double value=0,target=0,from=0,start=-1,duration=0,delay=0;
     bool smooth=false;
@@ -60,6 +61,7 @@ struct Part {
     J data;
     Canvas root,ink,art,decorations,shadow;
     Shapes::Path background,selection,hover;
+    std::optional<OverlayPhase> appliedOverlayPhase;
     Button accessible{nullptr};
     CompositeTransform transform;
     Point center{},fromCenter{},toCenter{};
@@ -149,7 +151,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     CapyUi::Canvas stamps;
     CapyUi::Shapes::Ellipse contactReach;
     CapyUi::UIElement inputRoot{nullptr};
-    std::function<void()> changed,cancelSources;
+    std::function<void()> changed,overlayApplied,cancelSources;
     std::map<uint32_t,std::shared_ptr<CapyBubbles::Record>> records;
     std::shared_ptr<CapyBubbles::Contact> contact;
     std::optional<CapyBubbles::Candidate> candidate;
@@ -180,7 +182,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     void step(CapyUi::J const&,double,bool,uint64_t);
     void update(std::shared_ptr<CapyBubbles::Record> const&,CapyUi::J const&);
     void refresh(std::shared_ptr<CapyBubbles::Record> const&);
-    void draw(std::shared_ptr<CapyBubbles::Record> const&,std::shared_ptr<CapyBubbles::Part> const&);
+    bool draw(std::shared_ptr<CapyBubbles::Record> const&,std::shared_ptr<CapyBubbles::Part> const&);
     void content(std::shared_ptr<CapyBubbles::Record> const&,std::shared_ptr<CapyBubbles::Part> const&);
     void stamp(std::shared_ptr<CapyBubbles::Record> const&);
     void thumbnails();

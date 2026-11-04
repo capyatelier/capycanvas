@@ -1087,3 +1087,84 @@ foreach($placementDpi in 96,144,192){foreach($placementCase in 'fits','delayed',
     } $menuTransition[0].Extent.Text $placementDpi $placementCase
 }}
 Write-Output 'Actual HeaderPlacement menu transition uses the available desktop at 100/150/200 percent, acknowledges delayed native geometry, retains focus/caption assertions, restores native outer bounds across frame insets and rejects unavailable expanded native geometry.'
+
+$bubbleTokens=$null;$bubbleErrors=$null
+$bubbleAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/BubbleVisualChecks.ps1'),[ref]$bubbleTokens,[ref]$bubbleErrors)
+if(@($bubbleErrors).Count){throw ($bubbleErrors|Out-String)}
+Add-Type -TypeDefinition @'
+namespace CapyBubbleOverlayTest {
+ public static class Input {
+  public static int X=100;public static bool Held=false;
+  public static void Hover(int x,int y){}
+  public static void Down(string device,int x,int y){}
+  public static void Move(int x,int y){X=x;Held=true;}
+  public static void Key(uint process,int key){Held=false;}
+  public static void Cancel(){}
+ }
+}
+'@
+& {
+    foreach($name in @('Assert-BubbleVisualStates','Measure-BubbleVisualOverlay')){
+        $definition=@($bubbleAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}.GetNewClosure(),$true))
+        if($definition.Count -ne 1){throw "Missing actual $name fixture function"}
+        . ([scriptblock]::Create($definition[0].Extent.Text.Replace('[CapyRowPointer]','[CapyBubbleOverlayTest.Input]')))
+    }
+    $phaseHelper=@($bubbleAst.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Wait-BubbleOverlayPhase'},$true))
+    if($phaseHelper.Count -eq 1){. ([scriptblock]::Create($phaseHelper[0].Extent.Text))}
+    $script:overlayPhase='idle';$script:overlayMode='normal';$script:phaseReads=0;$script:pixelReads=0;$script:badColor=$false
+    $script:run=Join-Path ([IO.Path]::GetTempPath()) ('capy-bubble-overlay-'+[guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($script:run)|Out-Null
+    $script:review=[pscustomobject]@{Id=33};$script:scale=1;$script:w=[pscustomobject]@{X=0;Y=0}
+    $script:checks=[Collections.Generic.List[string]]::new()
+    function Workspace-Root {
+        if($script:overlayMode -eq 'wrong-owner'){return $null}
+        $id=if($script:overlayMode -eq 'wrong-id'){'tool-bubble-overlay-24'}else{'tool-bubble-overlay-23'}
+        $elements=if($script:overlayMode -eq 'missing'){@()}else{@(@{id=$id;overlay_phase=$script:overlayPhase})}
+        [pscustomobject]@{Current=[pscustomobject]@{ItemStatus=(@{elements=$elements}|ConvertTo-Json -Depth 5 -Compress)}}
+    }
+    function Wait-Until([scriptblock]$Condition,[string]$Message){
+        foreach($attempt in 1..3){
+            if($Message -like 'Selected bubble overlay did not apply*'){$script:phaseReads++}
+            if(& $Condition){return}
+            if($script:overlayMode -eq 'normal' -and $Message -match '^Selected bubble overlay did not apply (idle|hover|pressed)'){$script:overlayPhase=$Matches[1]}
+        }
+        throw $Message
+    }
+    function View([long]$Id){[pscustomobject]@{selected=$true;enabled=$true;kind='dial'}}
+    function Relative([long]$Id,$Offset){[pscustomobject]@{x=100;y=100}}
+    function Center([long]$Id){[pscustomobject]@{x=[CapyBubbleOverlayTest.Input]::X;y=100}}
+    function Control([string]$Id,[switch]$Arranged){[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=0}}}
+    function Model{[pscustomobject]@{state=[pscustomobject]@{palette=[pscustomobject]@{text='#202020'}}}}
+    function Bubble-VisualState([long]$Id){'unchanged'}
+    function Bubble-VisualBounds($Element){if([CapyBubbleOverlayTest.Input]::Held){return ,@(0.,0.,104.,104.)};return ,@(0.,0.,100.,100.)}
+    function Patch-Pixels($Point){'stable'}
+    function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
+        $script:pixelReads++
+        if($script:pixelReads -le 6 -and (!$Composed -or $script:phaseReads -eq 0)){throw 'Overlay pixels sampled before applied phase and composed stability'}
+        & $CapturePixels
+    }
+    function Read-BubbleVisualPatch($Point,[string]$Path){
+        $value=switch($script:overlayPhase){'hover'{188};'pressed'{if($script:badColor){200}else{176}};default{200}}
+        return ,@((1..81)|ForEach-Object {@{r=$value;g=$value;b=$value}})
+    }
+    function Screen-Pixels([int]$X,[int]$Y,[string]$Path){'screen'}
+    function Capture([string]$Name,[switch]$Composed,[switch]$WithModel){}
+    try{
+        $script:overlayMode='normal';$script:overlayPhase='idle';$script:phaseReads=0;$script:pixelReads=0
+        [CapyBubbleOverlayTest.Input]::X=100;[CapyBubbleOverlayTest.Input]::Held=$false
+        Assert-BubbleVisualStates 23
+        if($script:phaseReads -lt 9 -or $script:pixelReads -lt 6 -or $checks -notcontains 'selected-face-hover-pressed-pixels-and-fixed-size') {throw 'Actual bubble sequence did not acknowledge delayed applied phases'}
+        foreach($mode in @('wrong-owner','wrong-id','missing','wrong-phase')){
+            $script:overlayMode=$mode;$script:overlayPhase='idle';$before=$script:pixelReads;$rejected=$false
+            try{Wait-BubbleOverlayPhase 23 'pressed'}catch{if($_.Exception.Message -notlike 'Selected bubble overlay did not apply pressed for 23*'){throw};$rejected=$true}
+            if(!$rejected -or $script:pixelReads -ne $before){throw "Overlay $mode reached pixels before applied acknowledgement"}
+        }
+        $script:overlayMode='normal'
+        $script:overlayPhase='idle';$script:badColor=$true;$script:pixelReads=0
+        [CapyBubbleOverlayTest.Input]::X=100;[CapyBubbleOverlayTest.Input]::Held=$false
+        $rejected=$false
+        try{Assert-BubbleVisualStates 23}catch{if($_.Exception.Message -notlike 'Selected bubble pressed pixels do not match its text-color overlay:*'){throw};$rejected=$true}
+        if(!$rejected){throw 'Applied phase accepted wrong overlay pixels'}
+    }finally{Remove-Item -LiteralPath $script:run -Recurse -Force -ErrorAction SilentlyContinue}
+}
+Write-Output 'Actual bubble overlay sequence waits for applied Fill before composed pixels, rejects missing and wrong owned phase, and retains its pressed pixel assertion.'
