@@ -86,7 +86,7 @@ fn apple_new_drawing_takes_the_upcoming_untitled_name_or_the_name_it_was_given()
 #[test]
 fn apple_tabs_preserve_history_pixels_and_disk_parking() {
     for platform in [0, 1] {
-        let app = App::new(platform);
+        let app = App::unbound(platform);
         app.borrow().host.session.renderer_mut().0 = Some(native_renderer());
         app.draw_until_idle();
         let root=std::env::temp_dir().join(format!("capy-apple-tabs-{}",layer_core::PortableId::random()));

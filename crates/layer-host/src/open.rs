@@ -100,7 +100,7 @@ impl OpenEnvironment {
     /// Returns a candidate whose canvas and configured brush are ready to draw.
     pub fn prepare(
         &self,
-        project: Document,
+        mut project: Document,
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
         let check = || {
@@ -109,7 +109,9 @@ impl OpenEnvironment {
         check()?;
         project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
         let writer=self.asset_writer.as_ref().map(|writer|writer.for_document(&project)).transpose()?;
-        if let Some(writer)=&writer {pollster::block_on(writer.store_document(&project))?;}
+        if let Some(ready)=writer.as_ref().map(layer_ui::AssetWriter::try_resolve).transpose()?.flatten() {
+            pollster::block_on(ready.store_document(&project))?;
+        }else {project.reserve_import()?;}
         self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
         check()?;
         layer_color::validate_document_color(&project)?;
@@ -198,7 +200,8 @@ mod tests {
         let layer_core::SourceTarget::Paint(target)=project.working.target.unwrap() else {panic!()};
         let descriptor=project.composition().color.paint_descriptor();
         let pixels=[23,47,83,255].repeat((layer_core::raster::TILE_SIZE*layer_core::raster::TILE_SIZE) as usize);
-        let tile=layer_core::raster::RasterTile::backed(layer_core::raster::TileBlob::encode(descriptor,&pixels).unwrap());
+        let blob=std::sync::Arc::new(layer_core::raster::TileBlob::encode(descriptor,&pixels).unwrap());
+        let tile=layer_core::raster::RasterTile::backed_shared(blob.clone());
         project.artwork.paint.get_mut(target).unwrap().raster=layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
             tiles:[(layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Color,coordinate:[0;2]},tile)].into(),
             ..Default::default()
@@ -220,16 +223,42 @@ mod tests {
             OpenEnvironment::capture(&session, admission, RendererOptions::default()).unwrap();
         let directory=std::env::temp_dir().join(format!("capy-open-storage-{}",layer_core::PortableId::random()));
         let stores=crate::session_stores::SessionStores::native(directory.clone(),std::sync::Arc::new(||{}));
-        stores.install_storage(1,&session).unwrap();
         assert!(std::sync::Arc::ptr_eq(&environment.localization, &localization));
         assert_eq!(environment.viewport, session.state().camera.viewport);
-        let mut candidate = environment.prepare(project.clone(), || false).unwrap();
+        let inventory=layer_core::Editor::new(project.clone()).retained_tiles();
+        let bytes=inventory.resident_bytes().saturating_add(inventory.metadata_bytes) as u64;
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let pinned=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
+        let occupied=budget.ram_limit_bytes()-bytes+1;
+        pinned.report(layer_core::MemoryReport {ram_bytes:occupied,pinned_ram_bytes:occupied,..Default::default()});
+        let refused=project.clone().with_memory(layer_core::DocumentMemory::new(budget.clone(),None));
+        assert_eq!(environment.prepare(refused,||false).err().as_deref(),Some(layer_core::MEMORY_BUDGET_EXCEEDED));
+        assert_eq!(budget.snapshot().reserved_bytes,0);
+        let mut candidate=std::thread::scope(|scope| {
+            let (sent,received)=std::sync::mpsc::channel();
+            let environment=&environment;let project=project.clone();
+            let worker=scope.spawn(move || {
+                let result=environment.prepare(project,||false);
+                sent.send(()).unwrap();result
+            });
+            let completed=received.recv_timeout(Duration::from_secs(30)).is_ok();
+            assert!(!directory.exists());assert!(blob.resident_bytes()>0);
+            stores.install_storage(1,&session).unwrap();
+            let candidate=worker.join().unwrap();
+            assert!(completed,"preparation waited for the startup storage binding");candidate.unwrap()
+        });
         assert!(candidate.can_park_document());
         assert!(std::sync::Arc::ptr_eq(candidate.localization(), &localization));
         let gpu = candidate.renderer_mut().0.as_mut().unwrap();
         assert!(gpu.device() == &environment.gpu.device);
         let ready = gpu.poll_startup().unwrap();
         assert!(ready.canvas_ready && ready.brush_ready);
+        let binding=stores.install_storage(2,&candidate).unwrap();
+        let reply=stores.checkpoint(2,candidate.capture_session().unwrap(),candidate.session_stamp(),true).unwrap();
+        assert!(pollster::block_on(reply).is_ok());
+        assert_eq!(blob.resident_bytes(),0);
+        assert!(binding.path().join("head.0").exists() || binding.path().join("head.1").exists());
+        assert_eq!(blob.decode_on_worker().unwrap(),pixels);
         assert_eq!(
             environment.prepare(project, || true).err().as_deref(),
             Some("Document operation cancelled")

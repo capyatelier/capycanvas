@@ -53,7 +53,7 @@ unsafe fn launch_json(platform: u32, json: *const c_char, bootstrap: *mut u64, e
     app
 }
 
-struct App(u64);
+struct App(u64, Option<std::path::PathBuf>);
 impl App {
     fn borrow(&self)->layer_host::handles::LocalBorrowed<CapyApple> {handles::app(self.0).unwrap()}
     fn document(&self)->layer_core::Document {self.borrow().host.session.engine().document().clone()}
@@ -1264,8 +1264,15 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
 
 impl App {
     fn new(platform: u32) -> Self {
+        let mut app = Self::unbound(platform);
+        app.1 = Some(std::env::temp_dir().join(format!("capy-apple-storage-{}", layer_core::PortableId::random())));
+        let stores = layer_host::session_stores::SessionStores::native(app.1.as_ref().unwrap().clone(), std::sync::Arc::new(|| {}));
+        app.with(|native| stores.attach_window(&native.window, &native.host).unwrap());
+        app
+    }
+    fn unbound(platform: u32) -> Self {
         layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
-        let app = Self(capy_apple_create(platform));
+        let app = Self(capy_apple_create(platform), None);
         assert!(!(app.0==0));
         assert_eq!(unsafe { capy_apple_resize(app.0, 1200, 900, 1.) }, 0);
         app
@@ -1451,6 +1458,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe { capy_apple_destroy(self.0) }
+        if let Some(root) = &self.1 {
+            if let Err(error) = std::fs::remove_dir_all(root) { assert_eq!(error.kind(), std::io::ErrorKind::NotFound); }
+        }
     }
 }
 
@@ -1783,7 +1793,7 @@ fn stateless_color_editors_preserve_tagged_precision_and_convert_previews() {
 #[test]
 fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
-    let prepared = App(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
+    let prepared = App(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
     assert!(!(prepared.0==0));
     let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
     let resolve = |operation| localized_stateless(capy_apple_numeric,
@@ -1987,7 +1997,7 @@ fn apple_launch_resolves_saved_preference_before_native_session() {
     for platform in [0, 1] {
         let saved = json!({"language": {"Explicit": "en"}}).to_string();
         let source = CString::new(json!({"saved": saved, "preferred_languages": ["ja-JP", "ko-KR", "en-US"]}).to_string()).unwrap();
-        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
+        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
         assert!(!(app.0==0));
         let localization = app.borrow().host.session.localization().clone();
         assert_eq!(localization.language(), layer_ui::UiLanguage::English);
@@ -2018,7 +2028,7 @@ fn apple_launch_rejects_invalid_transport_without_a_session() {
 
     }
     let mut error = 7;
-    let app = App(unsafe { launch_json(0, valid.as_ptr(), std::ptr::null_mut(), &mut error) });
+    let app = App(unsafe { launch_json(0, valid.as_ptr(), std::ptr::null_mut(), &mut error) }, None);
     assert!(!(app.0==0));
     assert_eq!(error,0);
 }
@@ -2040,7 +2050,7 @@ fn apple_native_boundaries_preserve_panic_diagnostics() {
 fn apple_launch_configuration_passes_the_display_to_the_startup_sheet() {
     let source = CString::new(json!({"saved":"", "preferred_languages":["en"], "screen":{"extent":[2880,1800],"ppi":220}}).to_string()).unwrap();
     for platform in [0, 1] {
-        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
+        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
         assert!(!(app.0==0));
         let document=app.document();
         assert_eq!(document.composition().size, [2400, 1800]);
@@ -2051,7 +2061,7 @@ fn apple_launch_configuration_passes_the_display_to_the_startup_sheet() {
 #[test]
 fn apple_launch_prepared_context_survives_restore_and_invalid_platform_keeps_bootstrap_copy() {
     let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
-    let app = App(apple_launch_localized(1, "", localization.clone()).unwrap());
+    let app = App(apple_launch_localized(1, "", localization.clone()).unwrap(), None);
     assert!(!(app.0==0));
     app.action(json!({"type": "restore_saved_settings", "saved": "{\"language\":{\"Explicit\":\"en\"}}"}));
     assert!(std::sync::Arc::ptr_eq(&localization, &app.with(|native|native.host.session.localization().clone())));
@@ -2128,7 +2138,7 @@ fn apple_language_publication_is_atomic_deferred_and_window_local() {
 fn apple_launch_uses_each_scene_settings_instead_of_first_process_language() {
     for (platform, language) in [(0, "ja"), (1, "ko"), (0, "en")] {
         let source = CString::new(json!({"saved":json!({"language":{"Explicit":language}}).to_string(),"preferred_languages":["en"]}).to_string()).unwrap();
-        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
+        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
         assert!(!(app.0==0));
         assert_eq!(app.request(2, json!({"type":"bootstrap"})).unwrap()["active_tag"], language);
     }

@@ -349,6 +349,10 @@ impl AssetWriter {
             },
         }
     }
+    pub fn try_resolve(&self)->Result<Option<Self>,String> {
+        use futures_util::FutureExt;
+        self.resolve().now_or_never().transpose()
+    }
     pub fn fail_pending(&self,error:String) {
         if let AssetWriterState::Pending {fail:Some(fail),..}=&*self.0 {fail(error);}
     }
@@ -382,7 +386,11 @@ impl AssetWriter {
         if let Some(ready)=ready {document.memory().bind_storage(ready.binding())?;}Ok(())
     }
     pub async fn store_clip(&self,clip:&crate::PixelClip,localization:&crate::Localizer)->Result<(),String> {
-        self.store_document(&clip.document(localization)?).await
+        #[cfg(not(target_arch="wasm32"))]
+        let Some(writer)=self.try_resolve()? else {return Ok(());};
+        #[cfg(target_arch="wasm32")]
+        let writer=self;
+        writer.store_document(&clip.document(localization)?).await
     }
 }
 #[derive(Default)]
@@ -523,12 +531,15 @@ impl ImageImportBatch {
         if self.finished {return self.check(false);}
         if let Some(write)=self.write.clone() {write.await?;self.write=None;}
         let Some(writer)=&self.writer else {return Ok(());};
+        #[cfg(not(target_arch="wasm32"))]
+        let Some(ready)=writer.try_resolve()? else {self.written_sources=self.sources.len();return Ok(());};
         let tiles=layer_core::raster_storage::RetainedTiles::from_sources(self.sources[self.written_sources..].iter().map(|(_,source)|source));
         self.written_sources=self.sources.len();
         let bytes=layer_core::color::source::resident_source_bytes(self.sources.iter().chain(self.pending.iter()).map(|(_,source)|source)) as u64;
         if self.reservation.as_ref().is_some_and(|reservation|!reservation.resize(bytes)) {return Err(layer_core::MEMORY_BUDGET_EXCEEDED.into());}
         if tiles.try_blobs()?.is_none_or(|blobs|!blobs.is_empty()) {
             use futures_util::FutureExt;
+            #[cfg(target_arch="wasm32")]
             let ready=writer.resolve().await?;
             let AssetWriterState::Ready {write,..}=&*ready.0 else {unreachable!()};
             self.write=Some(write(tiles,self.reservation.clone())?.shared());
@@ -624,7 +635,15 @@ impl ImageImportBatch {
     )->Result<(),String> {
         if cancelled.load(std::sync::atomic::Ordering::Acquire) { self.invalidate(); return Err("Image import cancelled".into()); }
         self.check(false)?;
-        let mut photo=decode(BufReader::new(input),self.limits,cancelled).inspect_err(|_| {
+        #[cfg(not(target_arch="wasm32"))]
+        let limits={
+            let available=layer_color::photo::PhotoMemoryBudget::from_limit(self.budget.import_headroom_bytes());
+            layer_color::photo::DecodeLimits {source_bytes:self.limits.source_bytes.min(available.source_bytes),
+                codec_bytes:self.limits.codec_bytes.min(available.decode_bytes),dimension:self.limits.dimension}
+        };
+        #[cfg(target_arch="wasm32")]
+        let limits=self.limits;
+        let mut photo=decode(BufReader::new(input),limits,cancelled).inspect_err(|_| {
             if cancelled.load(std::sync::atomic::Ordering::Acquire) { self.invalidate(); }
         })?;
         let name = photo.display_name(name);
@@ -661,8 +680,12 @@ impl ImageImportBatch {
             if self.sources.is_empty() {
                 return Err("No images to import".into());
             }
+            #[cfg(not(target_arch="wasm32"))]
+            let writer=self.writer.as_ref().map(AssetWriter::try_resolve).transpose()?.flatten();
+            #[cfg(target_arch="wasm32")]
+            let writer=self.writer.clone();
             Ok(PreparedImages { sources: std::mem::take(&mut self.sources),
-                reservation: self.reservation.take(), budget: self.budget.clone(),writer:self.writer.clone() })
+                reservation: self.reservation.take(), budget: self.budget.clone(),writer })
         });
         self.invalidate();
         result
@@ -671,6 +694,78 @@ impl ImageImportBatch {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn unbound_native_import_finishes_in_ram_without_waiting_for_storage() {
+        use std::{future::Future,task::{Context,Poll}};
+        let slot=AssetWriterSlot::default();
+        let source=source();
+        let bytes=layer_core::color::source::resident_source_bytes([&source]) as u64;
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let mut images=ImageImportBatch::with_budget(Default::default(),RgbSpace::ProPhoto,photo_limits(),budget.clone()).with_writer(slot.pending());
+        images.append("Photo".into(),source,false).unwrap();
+        let mut storing=Box::pin(images.finish_storage());
+        assert!(matches!(storing.as_mut().poll(&mut Context::from_waker(std::task::Waker::noop())),Poll::Ready(Ok(()))));
+        drop(storing);
+        assert_eq!(budget.snapshot().reserved_bytes,bytes);
+        let prepared=images.take_sources(false).unwrap();
+        assert!(prepared.writer.is_none());
+        assert_eq!(layer_core::color::source::resident_source_bytes(prepared.sources.iter().map(|(_,source)|source)) as u64,bytes);
+        assert_eq!(budget.snapshot().reserved_bytes,bytes);
+    }
+
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn unbound_native_import_refuses_residency_above_ram_and_bounds_the_next_decode() {
+        let slot=AssetWriterSlot::default();let image=source();
+        let bytes=layer_core::color::source::resident_source_bytes([&image]) as u64;
+        for available in [bytes-1,bytes+64] {
+            let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+            let pinned=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
+            let occupied=budget.ram_limit_bytes()-available;
+            pinned.report(layer_core::MemoryReport {ram_bytes:occupied,pinned_ram_bytes:occupied,..Default::default()});
+            let mut images=ImageImportBatch::with_budget(Default::default(),RgbSpace::ProPhoto,photo_limits(),budget.clone()).with_writer(slot.pending());
+            let result=images.append("Photo".into(),image.clone(),false);
+            if available<bytes {
+                assert_eq!(result.unwrap_err(),layer_core::MEMORY_BUDGET_EXCEEDED);
+                assert_eq!(budget.snapshot().reserved_bytes,0);
+            }else {
+                result.unwrap();pollster::block_on(images.write_prepared()).unwrap();
+                assert_eq!(budget.snapshot().reserved_bytes,bytes);
+                let remaining=budget.import_headroom_bytes();assert_eq!(remaining,64);
+                let result=images.read_candidate_with_decoder(std::io::Cursor::new([]),"Next",&AtomicBool::new(false),|_,limits,_| {
+                    assert!((limits.source_bytes+limits.codec_bytes) as u64<=remaining);
+                    Err(layer_core::MEMORY_BUDGET_EXCEEDED.into())
+                });
+                assert_eq!(result.unwrap_err(),layer_core::MEMORY_BUDGET_EXCEEDED);
+            }
+        }
+    }
+
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn nonblocking_asset_resolution_streams_inherited_ready_writers_and_propagates_failure() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        fn writer(binding:layer_core::package::session_store::DrawingStore,writes:Arc<AtomicUsize>)->AssetWriter {
+            let target=binding.clone();let count=writes.clone();
+            AssetWriter::new(binding,Arc::new(move |_,_| {count.fetch_add(1,Ordering::SeqCst);Ok(Box::pin(async {Ok(())}))}),
+                Arc::new(move |binding|Ok(writer(binding.unwrap_or_else(||target.clone()),writes.clone()))))
+        }
+        let parent=AssetWriterSlot::default();let child=AssetWriterSlot::default();
+        child.bind(parent.pending().fork().unwrap());let captured=child.pending();
+        assert!(captured.try_resolve().unwrap().is_none());
+        let root=std::env::temp_dir().join(format!("capy-inherited-writer-{}",layer_core::PortableId::random()));
+        let binding=layer_core::package::session_store::DrawingStore::new(&root,None).unwrap();
+        let writes=Arc::new(AtomicUsize::new(0));parent.bind(writer(binding.clone(),writes.clone()));
+        assert_eq!(captured.try_resolve().unwrap().unwrap().binding().key(),binding.key());
+        let mut images=ImageImportBatch::new(Default::default(),RgbSpace::ProPhoto,photo_limits()).with_writer(captured);
+        images.append("Photo".into(),source(),false).unwrap();pollster::block_on(images.finish_storage()).unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst),1);assert!(images.take_sources(false).unwrap().writer.is_some());
+        let failed=AssetWriterSlot::default();let capture=failed.pending();failed.fail("Startup claim failed".into());
+        assert!(matches!(capture.try_resolve(),Err(error) if error=="Startup claim failed"));
+        assert!(!root.exists());
+    }
+
     #[cfg(any(unix,windows))]
     #[test]
     fn invalidated_written_images_refuse_further_storage_preparation() {

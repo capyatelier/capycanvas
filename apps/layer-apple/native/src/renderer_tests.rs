@@ -205,7 +205,7 @@ fn unsupported_metal_adapter_keeps_localized_explanation_and_native_cause_on_bot
     for platform in [0, 1] {
         for language in [layer_ui::UiLanguage::English, layer_ui::UiLanguage::Japanese] {
             let localization = layer_ui::Localizer::shared(language);
-            let app = App(apple_launch_localized(platform, "", localization.clone()).unwrap());
+            let app = App(apple_launch_localized(platform, "", localization.clone()).unwrap(), None);
             let mut lease_native=app.borrow();let native=&mut *lease_native;
             assert!(layer_host::admit_adapter(native.host.session.localization(), adapter, &limits).is_ok());
             let expected = layer_ui::gpu_unsupported(&localization, &cause);

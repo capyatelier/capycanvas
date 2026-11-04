@@ -65,7 +65,7 @@ fn launch_with_failures(platform: u32, path: &Path, observe: Option<SessionDesti
 }
 fn launch_with_observer_context(platform: u32, path: &Path, observe: Option<SessionDestinationObserver>, adopt: bool,
     context: *mut std::ffi::c_void) -> (App, Option<String>, Vec<serde_json::Value>) {
-    let app = App::new(platform);
+    let app = App::unbound(platform);
     app.borrow().host.session.renderer_mut().0 = Some(native_renderer());
     app.draw_until_idle();
     let task = open(&app, path, adopt);
@@ -259,7 +259,7 @@ fn apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart() {
         assert!(actual == painted,
             "platform {platform}: restart expected {:?}, restored {:?}", sample(&painted), sample(&actual));
         drop(restored);
-        let first_presented = App::new(platform);
+        let first_presented = App::unbound(platform);
         let gpu = native_renderer();
         let staged = layer_host::GpuContext::of(&gpu).rasterizer(Default::default(), &Default::default(), false).unwrap();
         first_presented.borrow().host.session.renderer_mut().0 = Some(staged);
@@ -606,7 +606,7 @@ fn apple_session_stale_startup_appends_without_overwriting_new_input() {
         let saved = app.document().clone();
         checkpoint(&app, 0, false);
         drop(app);
-        let app = App::new(platform);
+        let app = App::unbound(platform);
         app.borrow().host.session.renderer_mut().0 = Some(native_renderer());
         app.draw_until_idle();
         let task = open(&app, &path, false);

@@ -680,6 +680,28 @@ fn panicked_or_dropped_work_completes_replies_wakes_and_releases_busy_state() {
 }
 
 #[test]
+fn an_import_prepared_before_binding_is_persisted_by_the_later_checkpoint() {
+    let fixture=Fixture::new();
+    let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let startup=layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Mac).unwrap();
+    let source=layer_core::color::source::rgba8_source([4;2],|_,_|[12,34,56,255]);
+    let tile=source.tiles.values().next().unwrap().clone();
+    let mut images=layer_ui::ImageImportBatch::new(Default::default(),layer_core::color::RgbSpace::ProPhoto,layer_ui::photo_decode_limits())
+        .with_writer(startup.pending_asset_writer());
+    images.append("Photo".into(),(*source).clone(),false).unwrap();
+    pollster::block_on(images.finish_storage()).unwrap();
+    assert!(fixture.queue.lock().unwrap().is_empty());assert!(!fixture.root.exists());assert!(tile.resident_bytes()>0);
+    let document=layer_ui::clipboard_document(images.take_sources(false).unwrap(),Default::default(),startup.localization()).unwrap();
+    assert!(document.memory().storage().is_none());
+    let session=layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Mac).unwrap();
+    let binding=fixture.stores.install_storage(1,&session).unwrap();
+    let reply=fixture.stores.checkpoint(1,session.capture_session().unwrap(),session.session_stamp(),true).unwrap();fixture.run();
+    assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Checkpoint(_)))));
+    assert_eq!(tile.resident_bytes(),0);assert_eq!(&tile.decode_on_worker().unwrap()[..4],&[12,34,56,255]);
+    assert!(heads(binding.path()).iter().any(Option::is_some));
+}
+
+#[test]
 fn imported_payload_ram_plateaus_with_one_decode_ahead_and_reuses_42_durable_images() {
     use std::{future::Future,pin::Pin,task::{Context,Poll,Waker}};
     const MIB:u64=1024*1024;
