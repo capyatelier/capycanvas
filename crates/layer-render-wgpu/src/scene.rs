@@ -1794,12 +1794,12 @@ impl Scene {
             let mut objects=std::mem::take(&mut self.exact_object_results);
             let result=objects.advance(r,self,&mut encoder,false);
             self.exact_object_results=objects;
-            let idle=result? == 0 && encoder.pass_count() == 0;
+            let idle=result? == 0 && !encoder.has_work();
             r.uploads.finish(&encoder);
             encoder.submit(&r.queue);
             if idle && r.image_decode_waiting() { r.await_image_decode().await?; continue; }
             r.metrics.object_drain_submissions += 1;
-            crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+            r.await_capture_submission(idle).await?;
         }
         if r.snapshot_cancelled.as_ref().is_some_and(|cancelled|cancelled.load(std::sync::atomic::Ordering::Relaxed)) {
             return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
@@ -1824,16 +1824,18 @@ impl Scene {
                 };
                 match result {
                     Err(GpuRasterError::DeferredObjectWork)=> {
+                        let idle=!encoder.has_work();
                         r.uploads.finish(encoder);
                         std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
-                        crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        r.await_capture_submission(idle).await?;
                         preparing=self.ordered&&!self.jobs.is_empty();
                         self.prepare_capture_work_async(r).await?;
                     },
                     Ok(()) if preparing=> {
+                        let idle=!encoder.has_work();
                         r.uploads.finish(encoder);
                         std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
-                        crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        r.await_capture_submission(idle).await?;
                         preparing=false;
                     },
                     result=> {result?;break;},
@@ -1853,9 +1855,10 @@ impl Scene {
                     match result {
                         Err(GpuRasterError::DeferredObjectWork)=> {
                             pending=self.ordered&&!self.jobs.is_empty();
+                            let idle=!encoder.has_work();
                             r.uploads.finish(encoder);
                             std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
-                            crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                            r.await_capture_submission(idle).await?;
                             self.prepare_capture_work_async(r).await?;
                         },
                         result=> {result?;break;},

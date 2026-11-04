@@ -319,6 +319,13 @@ impl Uploads {
     }
 }
 
+impl WgpuRasterizer {
+    async fn await_capture_submission(&mut self,idle:bool)->Result<(),GpuRasterError> {
+        if cfg!(target_arch="wasm32") && !idle && self.uploads.memory_bytes()[1]<=16*1024*1024 {return Ok(());}
+        crate::local_tone::wait_async(&self.device,&self.queue).await.map_err(GpuRasterError::Color)
+    }
+}
+
 struct DisplayRetirement {
     bytes:u64,
     charge:Arc<std::sync::atomic::AtomicU64>,
