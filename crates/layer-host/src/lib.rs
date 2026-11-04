@@ -469,9 +469,6 @@ impl NativeHost {
         self.prepare_ui_previews()?;
         let retry = self.thumbnails.retry(&self.session);
         let mut accepted = Vec::new();
-        // Background brush/filter warmup keeps the canvas dirty after document
-        // pixels settle. It must not starve visible thumbnails. Still yield to
-        // active input, pending edits and shared editor background operations.
         if self.startup.canvas_ready
             && self.session.background_readback_idle()
             && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())
@@ -1604,6 +1601,153 @@ mod tests {
             assert!(!host.dirty, "settled paper does not pump idle frames");
         }
         assert!(host.startup.complete);
+    }
+
+    fn visible_layer_thumbnails(host: &mut NativeHost, pending: impl Fn(&NativeHost)) -> std::collections::BTreeMap<u64, Vec<u8>> {
+        const MAX_THUMBNAIL_POLLS: usize = 2000;
+        const MAX_ACCEPTED_PENDING: usize = 8;
+        let mut slots = host.session.state().layers.iter().filter(|layer| layer.visible && layer.has_thumbnail)
+            .map(|layer| (layer.id, None, None)).collect::<Vec<_>>();
+        slots.sort_by_key(|slot| format!("{}:content", slot.0));
+        assert_eq!(slots.len(), 4);
+        let mut serial = 0u64;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        for _ in 0..MAX_THUMBNAIL_POLLS {
+            if std::time::Instant::now() >= deadline { break; }
+            pending(host);
+            let accepted = slots.iter().filter(|slot| slot.1.is_some() && slot.2.is_none()).count();
+            let requests = slots.iter().filter(|slot| slot.1.is_none() && slot.2.is_none()).take(MAX_ACCEPTED_PENDING - accepted)
+                .map(|slot| { serial += 1; (serial, slot.0) }).collect::<Vec<_>>();
+            let reply = host.query(json!({"type":"layer_thumbnails", "requests":requests})).unwrap();
+            for accepted in reply["accepted"].as_array().unwrap() {
+                let request = accepted.as_u64().unwrap();
+                let (_, target) = requests.iter().find(|(id, _)| *id == request).unwrap();
+                let slot = slots.iter_mut().find(|slot| slot.0 == *target).unwrap();
+                assert!(slot.1.replace(request).is_none());
+            }
+            for image in reply["images"].as_array().unwrap() {
+                let request = image[0].as_u64().unwrap();
+                let slot = slots.iter_mut().find(|slot| slot.1 == Some(request)).unwrap();
+                assert_eq!((image[1].as_u64(), image[2].as_u64()), (Some(32), Some(32)));
+                let bytes = serde_json::from_value::<Vec<u8>>(image[3].clone()).unwrap();
+                assert_eq!(bytes.len(), 4096);
+                assert!(slot.2.replace(bytes).is_none());
+            }
+            if slots.iter().all(|slot| slot.2.is_some()) {
+                pending(host);
+                return slots.into_iter().map(|(id, _, image)| (id, image.unwrap())).collect();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(reply["wait_ms"].as_u64().unwrap().max(8)));
+        }
+        let missing = slots.iter().filter(|slot| slot.2.is_none()).map(|slot| (slot.0, slot.1)).collect::<Vec<_>>();
+        panic!("visible thumbnails missing while background work remains pending: {missing:?}");
+    }
+
+    #[test]
+    fn optional_region_preparation_does_not_starve_visible_layer_thumbnails() {
+        let mut document = layer_ui::new_drawing(128, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        for (name, rgba) in [("Red", [220, 40, 30, 255]), ("Blue", [30, 60, 220, 255])] {
+            let image = layer_core::color::source::rgba8_source([32, 24], |_, _| rgba);
+            let (_, edit) = document.create_object_layer_edit(name, layer_core::authored::ImageObject::new(image.into()), None, 0).unwrap();
+            document.apply(edit).unwrap();
+        }
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Windows, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.complete || host.session.wants_continuous_frames() { frame_step(&mut host, &clock, deadline); }
+        assert!(!host.session.engine().backend().has_pending_work());
+        host.session.renderer_mut().prepare_regions(Some(&layer_render::RegionPreparation {
+            source: layer_render::RegionSource::Composite, reference_count: None, paper: None,
+            tolerance: 0., refinement: Default::default(), enclosed: false,
+        }));
+        let images = visible_layer_thumbnails(&mut host, |host| assert!(host.session.engine().backend().has_pending_work()));
+        assert_eq!(images.len(), 4);
+    }
+
+    #[test]
+    fn reopened_object_thumbnails_match_layers_while_display_work_is_pending() {
+        if layer_core::temp_files::directory().is_err() {
+            let directory = std::env::temp_dir().join("capy-layer-host-tests");
+            assert!(directory.is_absolute());
+            let initialized = layer_core::temp_files::set_directory(directory);
+            assert!(layer_core::temp_files::directory().is_ok(), "test temporary storage did not initialize: {initialized:?}");
+        }
+        let mut document = layer_core::Document::new(layer_core::PortableId::random(), 2133, 1600,
+            layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() });
+        for (name, extent, rgba, affine) in [
+            ("Red", [640, 480], [220, 40, 30, 255], [1., 0., 0., 1., 600., 520.]),
+            ("Blue", [480, 360], [30, 60, 220, 255], [0., 1.25, -1.25, 0., 1450., 500.]),
+        ] {
+            let image = layer_core::color::source::rgba8_source(extent, |_, _| rgba);
+            let mut object = layer_core::authored::ImageObject::new(image.into());
+            object.affine = layer_core::authored::Affine64(affine);
+            let (_, edit) = document.create_object_layer_edit(name, object, None, 0).unwrap();
+            document.apply(edit).unwrap();
+        }
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Windows, document);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let capture = crate::tasks::capture_document(host.session.engine().document());
+        let package = layer_core::package::codec::PreparedPackage::prepare(&capture, None, &cancel).unwrap();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write(&mut bytes, &cancel).unwrap();
+        bytes.set_position(0);
+        let admission = layer_ui::DocumentSessions::<()>::default().admission(&host.session.retained_document_tiles());
+        let environment = crate::open::OpenEnvironment::capture(&host.session, admission, RendererOptions::default()).unwrap();
+        let imported = environment.read(layer_core::Cancellable { inner: bytes, cancelled: || false },
+            layer_ui::ImportIntent::Open, "Two images.capy", &cancel, crate::photo_reader::local).unwrap();
+        let layer_ui::ImportOutcome::Editable(imported) = imported else { panic!("saved drawing must reopen for editing") };
+        host.session = environment.prepare(imported.project.clone(), || false).unwrap();
+        host.startup = Default::default();
+        host.document_adopted();
+        let clock = std::cell::Cell::new(1_000_000_000);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !host.startup.canvas_ready || !host.session.filter_previews_idle()
+            || host.session.engine().has_pending_input() || !host.session.engine().backend().has_pending_work()
+        {
+            frame_step(&mut host, &clock, deadline);
+        }
+        loop {
+            let before = (host.session.engine().backend().showing_drawing(), host.session.engine().backend().showing_navigator());
+            clock.set(clock.get() + 150_000_000);
+            frame_step(&mut host, &clock, deadline);
+            if before == (host.session.engine().backend().showing_drawing(), host.session.engine().backend().showing_navigator()) { break; }
+        }
+        assert!(host.session.engine().backend().has_pending_work(), "the reopened fixture must retain real display work after transitions finish");
+        assert!(!host.session.engine().has_pending_document_edits());
+        let gpu = host.session.engine().backend().0.as_ref().unwrap().snapshot_gpu();
+        let snapshot = host.session.engine().document().snapshot();
+        let mut expected = std::collections::BTreeMap::new();
+        for layer in host.session.state().layers.iter().filter(|layer| layer.visible && layer.has_thumbnail) {
+            let handle = layer_ui::occurrence_handle(layer.id).unwrap();
+            let point = match layer.label.as_str() {
+                "Red" => [920, 760], "Blue" => [1225, 800], "Paint" | "Paper" => [100, 100],
+                label => panic!("unexpected fixture layer: {label}"),
+            };
+            let mut canonical = gpu.capture_scene(snapshot.clone(), layer_core::SceneScope::Members(vec![handle].into()), Default::default()).unwrap();
+            canonical.capture_window(point, [1; 2]).unwrap();
+            let pixel = canonical.preview_document([1; 2], layer_core::color::RgbSpace::Srgb).unwrap().srgb_bytes().unwrap();
+            if layer.label == "Paint" { assert_eq!(pixel[3], 0); }
+            else { assert_eq!(pixel[3], 255); }
+            expected.insert(layer.id, pixel);
+        }
+        let images = visible_layer_thumbnails(&mut host, |host| {
+            assert!(host.session.engine().backend().has_pending_work());
+            assert!(!host.session.engine().has_pending_document_edits());
+        });
+        for (id, pixels) in images {
+            let canonical = &expected[&id];
+            if canonical[3] == 0 {
+                let values = pixels.as_chunks::<4>().0.iter().map(|pixel| {
+                    assert_eq!(pixel[0], pixel[1]); assert_eq!(pixel[1], pixel[2]); assert_eq!(pixel[3], 255); pixel[0]
+                }).collect::<std::collections::BTreeSet<_>>();
+                assert!(values.len() > 1, "transparent layer has a checker, not stale artwork");
+            } else {
+                for y in 8..24 { for x in 8..24 {
+                    let pixel = &pixels[(y * 32 + x) * 4..][..4];
+                    assert!(pixel.iter().zip(canonical).all(|(a,b)|a.abs_diff(*b) <= 1), "layer {id} differs from its canonical interior: {pixel:?} != {canonical:?}");
+                }}
+            }
+        }
     }
 
     #[test]

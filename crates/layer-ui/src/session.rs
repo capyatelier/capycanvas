@@ -5082,13 +5082,15 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
+        self.ui_work_pending() || self.engine.wants_continuous_frames()
+    }
+    fn ui_work_pending(&self) -> bool {
         self.canvas_transition.running() || self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || self.interaction.axes.active()
             || self.touch_repeat_pending()
             || self.layer_interaction.touches.pending()
             || self.paper_preview.active()
             || (!self.rendering_suspended && self.papers.pending.as_ref().is_some_and(|pending| pending.image.is_some()))
-            || self.engine.wants_continuous_frames()
             || self.vector_lines.active()
             || self.pending_filters.is_some()
             || self.targeted_curve_busy()
@@ -10505,7 +10507,8 @@ mod tests {
         assert!(!s.background_readback_idle());
         s.pen(event(&s, 2, PenPhase::Up, 1.0));
         s.frame(1, 1).unwrap();
-        assert!(!s.background_readback_idle());
+        assert!(!s.engine.has_pending_input());
+        assert!(s.background_readback_idle());
         s.frame(2, 2).unwrap();
         assert!(s.background_readback_idle());
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![custom_filter("unsharp_mask")]);
@@ -10519,6 +10522,29 @@ mod tests {
         assert!(!s.background_readback_idle());
         assert!(s.renderer_mut().validation.is_some());
         assert_eq!(s.engine.backend().shader_idle, (true, true));
+    }
+
+    #[test]
+    fn background_readback_preserves_queued_input_and_document_edit_guards() {
+        let mut s = session(Platform::Gtk);
+        s.frame(0, 0).unwrap();
+        assert!(s.background_readback_idle());
+        s.pen(event(&s, 1, PenPhase::Down, 1.));
+        assert!(s.pen_contact);
+        assert!(!s.background_readback_idle());
+        s.pen(event(&s, 2, PenPhase::Up, 1.));
+        s.frame(1, 1).unwrap();
+        s.frame(2, 2).unwrap();
+        assert!(s.background_readback_idle());
+        let queued = event(&s, 3, PenPhase::Move, 0.);
+        s.pen.push(queued).unwrap();
+        assert!(s.filter_previews_idle() && s.engine.has_pending_input());
+        assert!(!s.background_readback_idle());
+        s.frame(3, 3).unwrap();
+        assert!(!s.engine.has_pending_input());
+        layer(&mut s, LayerAction::New { group: false, clipped: false });
+        assert!(s.engine.has_pending_document_edits());
+        assert!(!s.background_readback_idle());
     }
 
     #[test]
@@ -10584,6 +10610,7 @@ mod tests {
         s.renderer_mut().refining = true;
         s.frame(9, 9).unwrap();
         assert!(s.filter_previews_idle() && s.engine.wants_continuous_frames());
+        assert!(s.background_readback_idle());
         assert_eq!(s.engine.backend().shader_idle, (true, false));
         s.renderer_mut().refining = false;
         s.frame(10, 10).unwrap();

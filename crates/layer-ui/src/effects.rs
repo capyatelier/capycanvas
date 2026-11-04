@@ -113,7 +113,7 @@ impl<B: CanvasRenderer> UiSession<B> {
             && !self.engine.has_pending_document_edits()
     }
     pub fn background_readback_idle(&self) -> bool {
-        self.filter_previews_idle() && !self.wants_continuous_frames()
+        self.filter_previews_idle() && !self.engine.has_pending_input() && !self.ui_work_pending()
     }
     pub fn filter_preview_revision(&self) -> u64 {
         self.state.filter_catalog_revision

@@ -1040,7 +1040,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             host.prepare_canvas_frame(0, 0, true).unwrap();
-            if host.startup.complete && host.session.background_readback_idle() {
+            if host.startup.complete && !host.session.wants_continuous_frames() {
                 break;
             }
             assert!(Instant::now() < deadline, "canvas did not settle: startup={:?}, previews_idle={}, continuous={}", host.startup, host.session.filter_previews_idle(), host.session.wants_continuous_frames());
