@@ -38,7 +38,7 @@ class Element extends FakeElement {
   querySelectorAll(tags){const wanted=tags.split(',').map(tag=>tag.toUpperCase());return this.children.flatMap(node=>node.tagName?[...(wanted.includes(node.tagName)?[node]:[]),...node.querySelectorAll(tags)]:[]);}
   querySelector(tag){return this.querySelectorAll(tag)[0]??null;}
 }
-const keydown=key=>({type:'keydown',key,preventDefault(){},stopPropagation(){}});
+const keydown=key=>({type:'keydown',key,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
 function dialogHarness(t,hdr){
   let language='en';const dom=colorDialogDom(t),{app,stats}=fakeColorApp({language:()=>language,hdr});
   const result=chooseColor({app,slot:'foreground',element:dom.element,button:dom.button});
@@ -91,6 +91,17 @@ test('Edit Color publishes the draft, its intensity and remembered formats only 
     assert.deepEqual(await h.result,{color:{space:'Srgb',rgba:[.25,.5,.75,1]},intensity:hdr?1:null});
     assert.equal(h.doc.body.children.length,0,'closing removes the dialog and its strip');
   }
+});
+
+test('Edit Color projects Swatches, Back and Escape from the shared route without losing the draft',async t=>{
+  const h=dialogHarness(t,false),sheet=h.nodes().find(node=>node.className==='color-sheet'),search=h.nodes().find(node=>node.tagName==='INPUT'&&node.parentNode?.className==='color-sheet-head');
+  const more=h.nodes().find(node=>node.className==='color-swatches'),back=h.nodes().find(node=>node.className==='color-sheet-close');
+  more.click();assert.deepEqual(h.stats.actions.at(-1),{op:'toggle_swatches'});assert.equal(sheet.hidden,false);assert.equal(sheet.classList.contains('open'),true);assert.equal(h.doc.activeElement,search);
+  search.value='blue';search.dispatchEvent({type:'input'});assert.deepEqual(h.stats.actions.at(-1),{op:'search',text:'blue'});
+  h.root.dispatchEvent(keydown('Escape'));assert.deepEqual(h.stats.actions.at(-1),{op:'search',text:''});assert.equal(search.value,'');assert.equal(sheet.classList.contains('open'),true);
+  h.root.dispatchEvent(keydown('Escape'));assert.deepEqual(h.stats.actions.at(-1),{op:'back'});assert.equal(sheet.classList.contains('open'),false);
+  more.click();back.click();assert.deepEqual(h.stats.actions.slice(-2),[{op:'toggle_swatches'},{op:'back'}]);assert.equal(sheet.classList.contains('open'),false);
+  h.apply().click();assert.deepEqual(await h.result,{color:{space:'Srgb',rgba:[.25,.5,.75,1]},intensity:null});
 });
 
 test('effect publication retains page options, color controls and semantic actions while refreshing captions',t=>{

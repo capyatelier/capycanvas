@@ -431,6 +431,7 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
   }
 
   return {
+    get search() { return shortcutSearch; },
     container(pageId, node) {
       if (pageId === "shortcuts") return buildShortcuts(node);
       if (pageId === "input") return buildInput(node);

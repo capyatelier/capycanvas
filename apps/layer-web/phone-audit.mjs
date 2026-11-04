@@ -1009,6 +1009,14 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
     for(const row of rows){
       if(row.blocked){report.unreachable.push({state:row.id,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:'unavailable',missing:[],reason:row.blocked,png:null});continue;}
       await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
+      if(row.id==='preferences-shortcuts-direct'&&active){
+        await click('#shortcuts-search');await call('Input.insertText',{text:'Escape'});await settle();
+        assert.equal(await evaluate('layerApp.app.preferences().shortcut_query'),'Escape');
+        const escape=async()=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();};
+        await escape();assert.deepEqual(await evaluate('({query:layerApp.app.preferences().shortcut_query,page:layerApp.app.preferences().page,requested:layerApp.app.preferences().page_requested,open:document.querySelector("#settings").open})'),{query:'',page:'shortcuts',requested:true,open:true},'Escape clears Shortcuts search before navigating');
+        await escape();assert.equal(await evaluate('document.querySelector("#settings").open&&!layerApp.app.preferences().page_requested'),true,'The next Escape returns to the Settings landing');
+        await send(shortcuts);await settle();
+      }
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');
       const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);const specifications=await evaluate(row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,row.document?.count??1,row.document?.color);};
       await shot(row);

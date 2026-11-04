@@ -5,7 +5,7 @@ use adw::prelude::*;
 use gtk::{gdk, glib};
 use layer_core::color::RgbColor;
 use layer_ui::{
-    ColorAction, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorTarget, ColorEditorView, ColorPickerAction,
+    ColorAction, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorRoute, ColorEditorTarget, ColorEditorView, ColorPickerAction,
     ColorScrubSpeed, ColorShape, ColorSlot, ColorStripCorner, ColorStripPlacement, ColorStripView, SwatchSheetView, UiAction,
 };
 use std::{
@@ -918,6 +918,7 @@ impl Editor {
             editor.mini_current.set_display_color(view.current_value, display, headroom);
             editor.mini_new.set_display_color(view.value, display, headroom);
             editor.mini_hex.set_text(&view.hex);
+            editor.project_sheet(view);
         }));
         editor.form.connect_blocked(move |blocked| if let Some(editor) = weak.upgrade() { editor.apply_button.set_sensitive(!blocked); });
         editor.relabel();
@@ -940,7 +941,7 @@ impl Editor {
         self.search.update_property(&[gtk::accessible::Property::Label(&color.swatch_search)]);
         self.sheet_close.set_tooltip_text(Some(&color.close_swatches));
         self.sheet_close.update_property(&[gtk::accessible::Property::Label(&color.close_swatches)]);
-        let swatches = if self.slide.is_open() { &color.close_swatches } else { &color.all_swatches };
+        let swatches = if self.view().is_some_and(|view| view.route == ColorEditorRoute::Swatches) { &color.close_swatches } else { &color.all_swatches };
         self.swatches.set_tooltip_text(Some(swatches));
         self.swatches.update_property(&[gtk::accessible::Property::Label(swatches)]);
     }
@@ -1004,20 +1005,30 @@ impl Editor {
         }
     }
 
-    pub(crate) fn show_sheet(&self, open: bool) {
-        if open && !self.slide.is_open() {
-            self.form.updating.set(true);
-            self.search.set_text(&self.draft.borrow().memory().search);
-            self.form.updating.set(false);
+    fn project_sheet(&self, view: &ColorEditorView) {
+        let open = view.route == ColorEditorRoute::Swatches;
+        let changed = self.slide.show(open);
+        if open {
+            if self.search.text().as_str() != view.search { self.search.set_text(&view.search); }
             self.fill_sheet();
-            self.sheet_scroll.vadjustment().set_value(0.);
+            if changed { self.sheet_scroll.vadjustment().set_value(0.); }
         }
-        if !self.slide.show(open) { return; }
+        if !changed { return; }
         self.body.set_sensitive(!open);
         self.bottom_stack.set_visible_child_name(if open { "mini" } else { "recent" });
         if open { self.swatches.add_css_class("open"); } else { self.swatches.remove_css_class("open"); }
         self.relabel();
         if open { self.search.grab_focus(); } else { self.swatches.grab_focus(); }
+    }
+
+    fn escape_sheet(&self, search_focused: bool) {
+        let Some(view) = self.view() else { return; };
+        let action = match layer_ui::dialog_escape(view.route == ColorEditorRoute::Swatches, search_focused, !view.search.is_empty()) {
+            layer_ui::DialogEscape::ClearSearch => ColorEditorAction::Search { text: String::new() },
+            layer_ui::DialogEscape::Back => ColorEditorAction::Back,
+            layer_ui::DialogEscape::Cancel => return,
+        };
+        let _ = self.apply(action);
     }
 
     fn start_pick(&self) {
@@ -1080,23 +1091,23 @@ impl Editor {
         let weak = self.this.clone();
         self.pick.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.start_pick(); }));
         self.swatches.connect_clicked(glib::clone!(#[strong] weak, move |_| {
-            if let Some(editor) = weak.upgrade() { editor.show_sheet(!editor.slide.is_open()); }
+            if let Some(editor) = weak.upgrade() { let _ = editor.apply(ColorEditorAction::ToggleSwatches); }
         }));
-        self.sheet_close.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { editor.show_sheet(false); }));
+        self.sheet_close.connect_clicked(glib::clone!(#[strong] weak, move |_| if let Some(editor) = weak.upgrade() { let _ = editor.apply(ColorEditorAction::Back); }));
         self.search.connect_search_changed(glib::clone!(#[strong] weak, move |search| {
             let Some(editor) = weak.upgrade() else { return; };
             if editor.updating.get() { return; }
-            let result = editor.draft.borrow_mut().apply(ColorEditorAction::Search { text: search.text().into() });
-            if result.is_ok() { editor.fill_sheet(); }
+            let result = editor.apply(ColorEditorAction::Search { text: search.text().into() });
+            editor.report(Target::Dialog, result);
         }));
-        crate::input::stop_search(&self.search, glib::clone!(#[strong] weak, move |search| {
+        crate::input::stop_search(&self.search, glib::clone!(#[strong] weak, move |_| {
             let Some(editor) = weak.upgrade() else { return; };
-            if search.text().is_empty() { editor.show_sheet(false); } else { search.set_text(""); }
+            editor.escape_sheet(true);
         }));
         let sheet_keys = gtk::EventControllerKey::new();
         sheet_keys.connect_key_pressed(glib::clone!(#[strong] weak, move |_, key, _, _| {
             if key != gdk::Key::Escape { return glib::Propagation::Proceed; }
-            if let Some(editor) = weak.upgrade() { editor.show_sheet(false); }
+            if let Some(editor) = weak.upgrade() { editor.escape_sheet(editor.search.delegate().is_some_and(|text| text.is_focus())); }
             glib::Propagation::Stop
         }));
         self.sheet.add_controller(sheet_keys);
@@ -1144,7 +1155,6 @@ impl Editor {
             editor.set_localization(localization);
             editor.relabel();
             editor.refresh();
-            if editor.slide.is_open() { editor.fill_sheet(); }
             true
         }));
         if let Some(editor) = self.this.upgrade() { workspace.color_editors.borrow_mut().push(editor); }

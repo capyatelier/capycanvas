@@ -1510,7 +1510,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(l.text(MessageId::COMMANDS_THIS_COMMAND_SEARCH_BELONGS_TO_A_PREVIOUS_DRAWING).to_string());
         }
         if let A::Dismiss { search_focused, text } = action {
-            return self.command_search_action(match crate::dialog_escape(self.state.command_search.as_ref().unwrap().parameter.is_some(), search_focused, !text.is_empty()) {
+            let parameter = self.state.command_search.as_ref().unwrap().parameter.is_some();
+            return self.command_search_action(match crate::dialog_escape(parameter, search_focused && !parameter, !text.is_empty()) {
                 crate::DialogEscape::Back => A::Back,
                 crate::DialogEscape::ClearSearch => A::Query { text: String::new() },
                 crate::DialogEscape::Cancel => A::Close,

@@ -552,17 +552,17 @@ test('dialog presentation retains controls and ignores a retired native close',a
   const emitter=events=>({addEventListener:(type,handler)=>events.set(type,handler),removeEventListener:type=>events.delete(type)});
   Object.assign(globalThis,{window:{...emitter(events),visualViewport:{...emitter(viewportEvents),width:412,height:891,offsetLeft:0,offsetTop:0}},innerWidth:412,innerHeight:891});
   t.after(()=>Object.assign(globalThis,previous));
-  const dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button'),search=element('input');
+  const dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button'),search=element('input'),shortcutSearch=element('input');
   const inner=element('header'),originalIcon=icon('window-close');primary.append(originalIcon);primary.setAttribute('aria-label','Original close');
-  header.append(cancel,primary);dialog.append(header,inner,search);doc.body.append(dialog);
+  header.append(cancel,primary);dialog.append(header,inner,search,shortcutSearch);doc.body.append(dialog);
   const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
-  let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header,currentPrimary=primary;
+  let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header,currentPrimary=primary,clearedNode=null;
   const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},floating_dialog_width:(_window,natural)=>natural,
     dialog_header:(intent,back)=>({start:back?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),
-    dialog_escape:(back,focused,text)=>back?'back':focused&&text?'clear_search':'cancel'};
-  const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary:()=>currentPrimary,search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
+    dialog_escape:(back,focused,text)=>focused&&text?'clear_search':back?'back':'cancel'};
+  const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary:()=>currentPrimary,search:()=>doc.activeElement===shortcutSearch?shortcutSearch:search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
     subpage:()=>subpage,onBack:()=>{backs++;subpage=false;currentHeader=header;host.layout();},
-    onCancel:()=>{cancels++;host.hide();},clearSearch:()=>{clears++;search.value='';}});
+    onCancel:()=>{cancels++;host.hide();},clearSearch:node=>{clears++;clearedNode=node;node.value='';}});
   const intent={role:'editor',modal:true,primary:'action'};
   assert.equal(host.present(intent),true);search.value='retained draft';search.setSelectionRange(2,7);search.focus();search.scrollTop=24;
   window.visualViewport.height=480;viewportEvents.get('resize')();
@@ -585,8 +585,9 @@ test('dialog presentation retains controls and ignores a retired native close',a
   assert.equal(done.parentNode,inner,'The single projected action follows the active header');
   const back=inner.children.find(node=>node.dataset.dialogPart==='start');
   assert.notEqual(back,cancel);assert.equal(back.getAttribute('aria-label'),'Back');assert.equal(cancel.hidden,true);
-  search.value='retained subpage query';escape();
-  assert.equal(backs,1);assert.equal(clears,1);assert.equal(cancels,1);assert.equal(search.value,'retained subpage query');
+  shortcutSearch.value='retained subpage query';shortcutSearch.focus();escape();
+  assert.equal(backs,0);assert.equal(clears,2);assert.equal(clearedNode,shortcutSearch);assert.equal(shortcutSearch.value,'');assert.equal(subpage,true);
+  escape();assert.equal(backs,1);assert.equal(cancels,1);
   subpage=true;host.dismiss();assert.equal(backs,2);
   subpage=true;page=false;host.layout();assert.equal(back.getAttribute('aria-label'),'Back');assert.equal(back.hidden,false);assert.equal(cancel.hidden,true);assert.equal(back.parentNode,header);
   subpage=false;

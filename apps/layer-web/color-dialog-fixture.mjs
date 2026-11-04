@@ -10,6 +10,8 @@ export class Element extends FakeElement {
     this.classList = {add:name => classes.add(name), remove:name => classes.delete(name), toggle:(name, on = !classes.has(name)) => (on ? classes.add(name) : classes.delete(name), on), contains:name => classes.has(name)};
   }
   get firstChild() { return this.children[0]; }
+  addEventListener(type, listener, options) { super.addEventListener(type, listener); if (options === true || options?.capture) (this.captureListeners ??= new Set()).add(listener); }
+  dispatchEvent(event) { const listeners=this.listeners[event.type]??[]; for(const listener of listeners.filter(current=>this.captureListeners?.has(current)))listener(event);for(const listener of listeners.filter(current=>!this.captureListeners?.has(current)))listener(event);return !event.defaultPrevented; }
   get firstElementChild() { return this.children.find(node => node.tagName) ?? null; }
   get parentElement() { return this.parentNode?.tagName ? this.parentNode : null; }
   append(...nodes) { for(const node of nodes) { if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node); } }
@@ -65,14 +67,14 @@ export const dialogProjection = {
   dialog_presentation:() => ({kind:'floating'}),
   floating_dialog_width:(_window,natural)=>natural,
   dialog_header:() => ({start:'cancel', end:'primary'}),
-  dialog_escape:() => 'cancel',
+  dialog_escape:(subpage,focused,text) => focused&&text?'clear_search':subpage?'back':'cancel',
   color_editor_layout:(available,minimum)=>({split:minimum.every(width=>width>0)&&available>=minimum[0]+minimum[1]+24,compact_fields:available<minimum[1]}),
   dialog_panes_fit:(available, minimum, gap) => minimum.every(width => width > 0) && available >= minimum[0] + minimum[1] + gap,
 };
 
 export function fakeColorApp({language = () => 'en', selected = {space:'Srgb', rgba:[.25, .5, .75, 1]}, hdr = false} = {}) {
   const stats = {requests:0, actions:[]};
-  const view = editor => ({dialog:{role:'editor', modal:true, primary:'action'},
+  const view = editor => ({dialog:{role:'editor', modal:true, primary:'action'}, route:editor.route,
     panel:{hdr, intensity:0, rgb_space:'Srgb', shape:'circle', rendition:null}, shapes:['circle', 'square', 'triangle'].map(shape => ({shape, label:shape, name:shape, selected:shape === 'circle'})),
     current:{rgba:[1, 1, 1, 1]}, new:{rgba:editor.value.rgba}, hex:editor.hex, hex_note:null,
     rows:[row('RGB', ['64', '128', '191'], language()), row('HSB', ['210°', '67%', '75%'], language()), row('OKLCH', ['58.1%', '0.112', '247°'], language())],
@@ -83,11 +85,14 @@ export function fakeColorApp({language = () => 'en', selected = {space:'Srgb', r
     catalog:() => ({native_copy:{color:Object.fromEntries(['edit', 'wheel', 'intensity', 'circle', 'square', 'triangle', 'current', 'new', 'pick_canvas', 'copy', 'hex', 'format', 'intensity_ev', 'swatch_search', 'close_swatches', 'all_swatches', 'use_color', 'picking_strip', 'copied'].map(key => [key, `${language()}:${key}`])), palettes:{add_current:`${language()}:add`}}}),
     bootstrap_view:() => ({common:{cancel:`${language()}:cancel`}}),
     color_ui(request) {
-      if (request.type === 'editor_open') { const editor = {picker:{editor:{forms:['rgb', 'hsb', 'oklch'], search:''}}, value:selected, hex:'#4080BF'}; return {editor, view:view(editor), error:null}; }
+      if (request.type === 'editor_open') { const editor = {picker:{editor:{forms:['rgb', 'hsb', 'oklch'], search:''}}, route:'editor', value:selected, hex:'#4080BF'}; return {editor, view:view(editor), error:null}; }
       if (request.type === 'editor') {
         stats.requests++;
         if (request.action) stats.actions.push(request.action);
         const refused = request.action?.op === 'value' && !Number.isFinite(Number(request.action.text));
+        if (request.action?.op === 'toggle_swatches') request.editor.route = request.editor.route === 'swatches' ? 'editor' : 'swatches';
+        if (request.action?.op === 'back') request.editor.route = 'editor';
+        if (request.action?.op === 'search') request.editor.picker.editor.search = request.action.text;
         return {editor:request.editor, view:view(request.editor), error:refused ? `${language()}:refused` : null};
       }
       throw Error(`Unexpected request ${request.type}`);

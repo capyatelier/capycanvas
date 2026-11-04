@@ -4,8 +4,8 @@ use crate::{Bounds, UiState};
 #[serde(rename_all = "snake_case")]
 pub enum DialogEscape { Back, ClearSearch, Cancel }
 pub fn dialog_escape(subpage: bool, search_focused: bool, search_has_text: bool) -> DialogEscape {
-    if subpage { DialogEscape::Back }
-    else if search_focused && search_has_text { DialogEscape::ClearSearch }
+    if search_focused && search_has_text { DialogEscape::ClearSearch }
+    else if subpage { DialogEscape::Back }
     else { DialogEscape::Cancel }
 }
 
@@ -167,9 +167,9 @@ mod tests {
         }
     }
     #[test]
-    fn escape_leaves_subpages_before_clearing_focused_search() {
+    fn escape_clears_focused_search_before_leaving_subpages() {
         for focused in [false, true] { for text in [false, true] {
-            assert_eq!(dialog_escape(true, focused, text), DialogEscape::Back);
+            assert_eq!(dialog_escape(true, focused, text), if focused && text { DialogEscape::ClearSearch } else { DialogEscape::Back });
             assert_eq!(dialog_escape(false, focused, text), if focused && text { DialogEscape::ClearSearch } else { DialogEscape::Cancel });
         } }
     }

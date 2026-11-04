@@ -314,7 +314,13 @@ pub enum ColorEditorAction {
     Color { color: RgbColor },
     Revert,
     Search { text: String },
+    ToggleSwatches,
+    Back,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorEditorRoute { Editor, Swatches }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -330,6 +336,7 @@ pub struct ColorEditor {
     picker: ColorState,
     start: ColorState,
     opaque: bool,
+    route: ColorEditorRoute,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scrub: Option<Scrub>,
 }
@@ -377,6 +384,7 @@ pub struct ColorRowView {
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorEditorView {
     pub dialog: crate::DialogIntent,
+    pub route: ColorEditorRoute,
     pub panel: ColorPanelView,
     pub shapes: [ColorShapeChoice; 3],
     pub current: ColorPreview,
@@ -455,7 +463,7 @@ impl ColorEditor {
         Ok(Self::with_picker(picker, opaque))
     }
     fn with_picker(picker: ColorState, opaque: bool) -> Self {
-        Self { start: picker.clone(), picker, opaque, scrub: None }
+        Self { start: picker.clone(), picker, opaque, route: ColorEditorRoute::Editor, scrub: None }
     }
     pub fn validate(&self) -> Result<(), String> {
         self.picker.validate()?;
@@ -567,6 +575,14 @@ impl ColorEditor {
                 self.picker.editor.search = text;
                 Ok(())
             }
+            ColorEditorAction::ToggleSwatches => {
+                self.route = match self.route {
+                    ColorEditorRoute::Editor => ColorEditorRoute::Swatches,
+                    ColorEditorRoute::Swatches => ColorEditorRoute::Editor,
+                };
+                Ok(())
+            }
+            ColorEditorAction::Back => { self.route = ColorEditorRoute::Editor; Ok(()) }
         }
     }
     fn scrub(&mut self, target: ColorEditorTarget, pixels: f32, speed: ColorScrubSpeed) -> Result<(), ColorEditorError> {
@@ -673,6 +689,7 @@ impl ColorEditor {
         let [a, b, c] = rows;
         Ok(ColorEditorView {
             dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
+            route: self.route,
             panel,
             shapes: SHAPE_CHOICES.map(|(shape, label, name)| ColorShapeChoice { shape, label, name: localizer.text(name), selected: self.picker.shape == shape }),
             current: form::mapped_preview(self.start.definition(), space, display, rendition)?,
@@ -734,6 +751,31 @@ mod tests {
     }
     fn view(editor: &ColorEditor) -> ColorEditorView { editor.view(RgbSpace::Srgb, None, &english()).unwrap() }
     fn texts(row: &ColorRowView) -> [&str; 3] { [0, 1, 2].map(|i| row.values[i].text.as_str()) }
+
+    #[test]
+    fn swatch_navigation_is_transient_and_preserves_the_color_and_search() {
+        let mut editor = editor(0x3B7EA1);
+        let color = editor.value();
+        assert_eq!(view(&editor).route, ColorEditorRoute::Editor);
+        editor.apply(ColorEditorAction::ToggleSwatches).unwrap();
+        assert_eq!(view(&editor).route, ColorEditorRoute::Swatches);
+        assert!(!editor.memory_changed());
+        editor.apply(ColorEditorAction::Search { text: "Ink".into() }).unwrap();
+        editor.apply(ColorEditorAction::Back).unwrap();
+        assert_eq!(view(&editor).route, ColorEditorRoute::Editor);
+        editor.apply(ColorEditorAction::ToggleSwatches).unwrap();
+        assert_eq!(view(&editor).search, "Ink");
+        editor.apply(ColorEditorAction::Back).unwrap();
+        assert_eq!(view(&editor).route, ColorEditorRoute::Editor);
+        assert_eq!(view(&editor).search, "Ink");
+        editor.apply(ColorEditorAction::ToggleSwatches).unwrap();
+        editor.apply(ColorEditorAction::ToggleSwatches).unwrap();
+        assert_eq!(view(&editor).route, ColorEditorRoute::Editor);
+        assert_eq!(editor.value(), color);
+        let reopened = ColorEditor::for_color(editor.picker(), color, false).unwrap();
+        assert_eq!(view(&reopened).route, ColorEditorRoute::Editor);
+        assert_eq!(view(&reopened).search, "Ink");
+    }
 
     #[test]
     fn rows_use_painter_units_and_copy_standard_notations() {

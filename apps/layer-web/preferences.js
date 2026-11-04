@@ -167,7 +167,8 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   }
   const goBack=()=>{const action=view()?.navigation.back;if(action)send(action);};
   const shell=createDialogHost({onKey,app,dialog,header:activeHeader,cancel:exit,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
-    subpage:()=>!!layout?.subpage,search,clearSearch:()=>send({type:'search',query:''})});
+    subpage:()=>!!layout?.subpage,search:()=>document.activeElement===shortcutPage.search?shortcutPage.search:search,
+    clearSearch:node=>send({type:node===shortcutPage.search?'search_shortcuts':'search',query:''})});
   root.dataset.dialogPart='panes';
   function arrange() {
     const model=view();if(!model||!dialog.open)return;

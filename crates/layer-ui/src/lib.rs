@@ -92,7 +92,7 @@ mod toolbar_preview;
 pub use toolbar_preview::*;
 mod tools;
 pub use color::{
-    COLOR_FORM_FAMILIES, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorMemory, ColorEditorTarget, ColorEditorView, ColorForm, ColorFormChoice,
+    COLOR_FORM_FAMILIES, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorMemory, ColorEditorRoute, ColorEditorTarget, ColorEditorView, ColorForm, ColorFormChoice,
     ColorHexNote, ColorHexNoteKind, ColorRowView, ColorScrubSpeed, ColorShapeChoice, ColorStripCorner, ColorStripPlacement, ColorStripView, ColorValueName, ColorValueView,
     ColorValidationCopy, ColorPreview, ColorUiRequest, color_preview, color_validation_localized, color_ui_localized,
     ColorLibrary, ColorLibraryAction, ColorPalette, ColorReorderPreview, SavedColor,

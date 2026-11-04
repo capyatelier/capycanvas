@@ -14,8 +14,9 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
   function escape() {
     if(!intent)return;
     if(onDismiss){onDismiss();return;}
-    const action=app.dialog_escape(subpage(),!!search&&document.activeElement===search,!!search?.value);
-    if(action==='clear_search')clearSearch();else if(action==='back')onBack();else onCancel();
+    const searchNode=typeof search==='function'?search():search;
+    const action=app.dialog_escape(subpage(),!!searchNode&&document.activeElement===searchNode,!!searchNode?.value);
+    if(action==='clear_search')clearSearch(searchNode);else if(action==='back')onBack();else onCancel();
   }
   const cancelled=event=>{event.preventDefault();escape();};
   const key=event=>{if(event.defaultPrevented)return;if(event.key==='Escape'&&!composingKey(event)){event.preventDefault();event.stopPropagation();escape();}else{onKey?.(event);if(intent?.modal)event.stopPropagation();}};

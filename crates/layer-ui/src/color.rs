@@ -22,7 +22,7 @@ pub use hdr_arc::HdrIntensityArc;
 mod bubble;
 pub use bubble::{ColorBubbleArc, ColorBubbleLayout};
 pub use editor::{
-    COLOR_FORM_FAMILIES, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorMemory, ColorEditorTarget, ColorEditorView, ColorForm,
+    COLOR_FORM_FAMILIES, ColorEditor, ColorEditorAction, ColorEditorError, ColorEditorMemory, ColorEditorRoute, ColorEditorTarget, ColorEditorView, ColorForm,
     ColorFormChoice, ColorHexNote, ColorHexNoteKind, ColorRowView, ColorScrubSpeed, ColorShapeChoice, ColorStripCorner, ColorStripPlacement, ColorStripView, ColorValueName, ColorValueView,
 };
 mod form;

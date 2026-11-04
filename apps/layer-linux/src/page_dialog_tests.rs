@@ -638,7 +638,13 @@ fn navigation_headers_settings(mut d: &mut Driver) {
                 for (scroll, position) in scrolls.iter().zip(positions) { scroll.vadjustment().set_value(position); }
             }
         }
-        d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref());
+        if settings==SettingsPage::Shortcuts {
+            let search=named::<gtk::SearchEntry>(&frame,"shortcuts-search");search.set_text("Escape");search.grab_focus();
+            until(|| ui_session(&d.w).preferences().unwrap().shortcut_query=="Escape" && search.delegate().is_some_and(|text| text.is_focus()),"the real Shortcuts search owns its non-empty query");
+            keys(&mut d,0xff1b);
+            until(|| ui_session(&d.w).preferences().unwrap().shortcut_query.is_empty() && split.shows_content(),"first Escape clears shortcut search before navigating Back");
+            keys(&mut d,0xff1b);
+        } else { d.click(icon_button(&subpage, "go-previous-symbolic").unwrap().upcast_ref()); }
         until(|| !split.shows_content(), "Preferences Back preserves the dialog");
         assert_eq!(done_header(&d, &frame, true), root);
     }

@@ -621,3 +621,8 @@ Update the SDR dial at its assigned width before measuring the Proof drawer.
 `ContentDrawer::body_fits_content` makes phone Proof bodies content-sized on
 both hosts. GTK propagates the Print scroller's natural height; desktop docked
 Proof keeps its expanding body.
+
+Edit Color projects its All Swatches route from `ColorEditorView`. Hosts send
+Toggle Swatches or Back; sheet animations and focus remain native. Navigation
+does not enter the remembered color formats/search. Escape uses `dialog_escape`:
+clear a focused search with text before going Back, then cancel at the root.
