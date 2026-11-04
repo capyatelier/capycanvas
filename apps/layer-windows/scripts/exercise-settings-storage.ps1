@@ -14,11 +14,6 @@ $locked=$null
 function Saved {
     try {Get-Content -LiteralPath $settingsFile -Raw | ConvertFrom-Json} catch {}
 }
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8) {
-    $watch=[Diagnostics.Stopwatch]::StartNew()
-    do {if(& $Condition){return};Start-Sleep -Milliseconds 75}while($watch.Elapsed.TotalSeconds -lt $Seconds)
-    throw $Message
-}
 function Find([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
     $condition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
@@ -90,7 +85,7 @@ function Start-App {
     $script:scope=$root
 }
 function Check-Exit {
-    if(!$review.WaitForExit(8000)){throw 'Authorized settings close did not finish'}
+    Wait-Until {$review.Refresh();$review.HasExited} 'Authorized settings close did not finish' 8 -Closing
     if($review.ExitCode -ne 0){throw ('Native settings exit code: '+$review.ExitCode)}
     if((Get-Item -LiteralPath $stderr).Length -ne 0){throw 'Review runtime stderr requires inspection'}
     $script:review=$null
