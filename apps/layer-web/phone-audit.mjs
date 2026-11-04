@@ -138,7 +138,7 @@ const pages = [
   {id:'properties',action:{type:'invoke',command:'document_properties'},selector:'dialog.document-dialog[open]',header:'header'},
 ];
 
-export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,drawersOnly=false,menusOnly=false,customizeOnly=false}) {
+export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOnly=false,drawersOnly=false,menusOnly=false,customizeOnly=false,inputOnly=false}) {
   const {createDrawing}=await import('./new-drawing-fixture.mjs');
   const directory=process.env.LAYER_TEST_ARTIFACTS||'/mnt/localssd/capy9-phone-impl/web-phone-audit';
   await mkdir(directory,{recursive:true});
@@ -182,6 +182,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     assert.equal(metadata.theme,test.theme,'Capture theme');
     metadata.phone_tiles=await evaluate('layerApp.state().workspace.layout.phone??[]');
     if(frameOnly)metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
+    if(inputOnly)metadata.input=await evaluate('({coarse:matchMedia("(pointer: coarse)").matches,screen:[screen.width,screen.height],mode:layerApp.state().settings.finger_drawing,pen_seen:layerApp.state().settings.pen_seen,picker:layerApp.state().color_picker})');
     const document=await evaluate(`(()=>{const s=layerApp.state(),tab=s.tabs.find(t=>t.active);return {extent:tab?[tab.width,tab.height]:null,color:layerApp.app.document_color(),count:layerApp.app.document_tabs(0).tabs.length,busy:s.document_file.busy,host_busy:layerApp.documents.busy()};})()`);
     assert.equal(document.count,expected_documents,'Captured drawing count');
     assert.deepEqual(document.extent,[1200,1600],'Captured active drawing extent');
@@ -247,6 +248,12 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     await wait('!layerApp.state().customization.drawer&&!document.querySelector(".content-drawer")');
   };
   const drawerReady=()=>wait(`(()=>{const d=layerApp.state().customization.drawer,r=document.querySelector('.content-drawer[data-drawer="tool"]');if(!d||!r)return false;const p=layerApp.app.drawer_measure({viewport:[innerWidth,innerHeight],column:null,tiles:[]}).measure;return p&&r.getBoundingClientRect().width>=p.placement.bounds.width-.5;})()`);
+  const saveRecording=async name=>{
+    const data=await evaluate(`(${takeStrokeRecording})(layerApp.app)`),path=`${directory}/${name}.capystrokes`;
+    await writeFile(path,Buffer.concat([Buffer.from('CAPYPEN4'),gzipSync(Buffer.from(data))]));
+    const records=execFileSync('cargo',['run','--locked','-q','-p','layer-engine','--features','prediction-bench','--example','stroke-recording','--','dump',path],{cwd:root,encoding:'utf8'}).trim().split('\n').map(line=>JSON.parse(line));
+    await writeFile(`${path}.json`,JSON.stringify(records,null,2)+'\n');return records;
+  };
   if(drawersOnly){
     await send({type:'invoke',command:'brush'});await wait('layerApp.app.brush_ready()');
     const center=await evaluate('(()=>{const b=document.querySelector("#canvas").getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()');
@@ -262,7 +269,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
   for(const test of matrix){
     await close();
     await wait('layerApp.state().workspace_ready&&!JSON.parse(layerApp.app.workspace_view()).busy');
-    await call('Emulation.setDeviceMetricsOverride',{width:test.viewport[0],height:test.viewport[1],deviceScaleFactor:1,mobile:false});
+    await call('Emulation.setDeviceMetricsOverride',{width:test.viewport[0],height:test.viewport[1],deviceScaleFactor:1,mobile:inputOnly,...(inputOnly?{screenWidth:412,screenHeight:891}:{})});
     await send({type:'set_theme',theme:test.theme});
     await evaluate(`document.documentElement.style.setProperty('--ui-text-size',${JSON.stringify(`${test.text_pt}pt`)});null`);
     await settle();
@@ -273,6 +280,81 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       {id:'current.header',role:'context',selector:'#header'},
       {id:'current.canvas',role:'context',selector:'#canvas'},
       {id:'current.capy',role:'context',selector:'#zen-capy'}],active?'phone':'desktop fallback: Web phone presentation is not enabled');
+    if(inputOnly){
+      assert.equal(await evaluate('matchMedia("(pointer: coarse)").matches'),true,'The primary browser pointer is coarse');
+      await send({type:'restore_settings',settings:{...original.settings,theme:test.theme,finger_drawing:'auto',pen_seen:false}});
+      await send({type:'invoke',command:'drawing_brush'});await send({type:'set_brush_size',value:40});await send({type:'set_color',rgba:[0,0,0,1]});
+      const {readyCanvas}=await import('./canvas-pixels-fixture.mjs');
+      const ready=()=>readyCanvas({evaluate,settle});await ready();
+      const area=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone.work_area');
+      const start={x:area.x+area.width*.4,y:area.y+area.height*.5},end={x:area.x+area.width*.6,y:start.y};
+      const roi={x:Math.floor(start.x-10),y:Math.floor(start.y-10),width:Math.ceil(end.x-start.x+20),height:20,scale:1};
+      const pixels=async()=>{await ready();return canvasPixels(roi);};
+      const touch=(type,touchPoints=[])=>call('Input.dispatchTouchEvent',{type,touchPoints});
+      const mouse=(type,point,buttons=0)=>call('Input.dispatchMouseEvent',{type,...point,button:type==='mouseMoved'?'none':'left',buttons,clickCount:1,pointerType:'pen',force:buttons?1:0});
+      const clear=async()=>{await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2,button:'none',buttons:0});await settle();};
+      const stroke=async()=>{await touch('touchStart',[{id:100,...start}]);for(let i=1;i<=12;i++)await touch('touchMove',[{id:100,x:start.x+(end.x-start.x)*i/12,y:start.y}]);await touch('touchEnd');await wait('layerApp.app.document_park_ready()');};
+      const undo=async()=>{await send({type:'invoke',command:'undo'});await wait('layerApp.app.document_park_ready()');};
+      const snapshot=async name=>capture(test,name,phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),'native browser contacts and the shared Finger/picker engine');
+      const tap=async count=>{await touch('touchStart',Array.from({length:count},(_,i)=>({id:200+i,x:area.x+area.width*.5+(i-(count-1)/2)*25,y:start.y})));await touch('touchEnd');await settle();};
+      const mode=value=>send({type:'preferences',action:{type:'edit',id:'finger_drawing',value}});
+      await mouse('mouseMoved',start);assert.equal(await evaluate('layerApp.state().settings.pen_seen'),false,'Hover does not admit a pen');
+      const layer=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
+      await send({type:'layer',action:{op:'lock',id:layer,value:true}});
+      await mouse('mousePressed',start,1);await mouse('mouseReleased',start);await settle();
+      assert.equal(await evaluate('layerApp.state().settings.pen_seen'),false,'A refused locked-layer contact does not admit a pen');
+      await undo();await clear();const blank=await pixels();
+      await stroke();const auto=await pixels();assert.ok(auto.white<blank.white-20,'Coarse phone Auto paints real pixels');
+      await snapshot('input-auto-stroke');await undo();assert.deepEqual(await pixels(),blank);
+      await click('#zen-capy');await wait('layerApp.state().phone.menu');await click('#phone-finger');
+      assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'off');assert.equal(await evaluate('document.querySelector("#phone-finger").getAttribute("aria-pressed")'),'false');
+      await close();await stroke();await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank,'Off contact leaves the artwork unchanged');
+      await snapshot('input-off');await click('#zen-capy');await click('#phone-finger');
+      assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'on');await close();
+      await stroke();assert.ok((await pixels()).white<blank.white-20,'Capy On paints');await snapshot('touch-stroke');
+      await tap(2);await wait('layerApp.app.document_park_ready()');assert.deepEqual(await pixels(),blank,'Two fingers undo the prior stroke');
+      await tap(3);await wait('layerApp.app.document_park_ready()');assert.ok((await pixels()).white<blank.white-20,'Three fingers redo it');
+      await tap(2);await wait('layerApp.app.document_park_ready()');assert.deepEqual(await pixels(),blank);
+      await evaluate('layerApp.app.start_stroke_recording();null');await touch('touchStart',[{id:100,...start}]);
+      await wait('layerApp.state().color_picker.preview!=null&&layerApp.state().color_picker.loupe_point!=null');
+      const picker=await evaluate('layerApp.state().color_picker');
+      assert.ok(Math.abs(picker.sample_point[0]-start.x)<=1&&Math.abs(picker.sample_point[1]-start.y)<=1);
+      assert.ok(Math.abs(picker.sample_point[1]-picker.loupe_point[1]-44)<=1,'The shared browser fallback lifts the actual picker by 44 logical pixels');
+      for(const angle of [30,60,90,120,150]){
+        const radians=angle*Math.PI/180,p={x:Math.round(picker.loupe_point[0]+39*Math.cos(radians)),y:Math.round(picker.loupe_point[1]+39*Math.sin(radians)),width:1,height:1,scale:1};
+        assert.equal((await canvasPixels(p)).white,0,'The original black ring is rendered at its shared radius');
+      }
+      await snapshot('hold-active');await touch('touchEnd');await wait('layerApp.state().layer_tools.tool==="paint"&&layerApp.app.document_park_ready()');
+      const held=await saveRecording(`finger-hold-${test.viewport.join('x')}-${test.theme}`),heldEvents=held.flatMap(r=>r.Raw?[r.Raw.event]:[]);
+      assert.equal(heldEvents.filter(e=>e.phase==='Cancel').length,1,'The held picker cancels paint once');
+      assert.deepEqual(held.flatMap(r=>r.End?[r.End.cancelled]:[]),[true]);
+      assert.ok(await evaluate('layerApp.state().colors.foreground.rgba.slice(0,3).every(v=>v>.95)'),'Lifting accepts the sampled white');
+      await send({type:'set_color',rgba:[0,0,0,1]});assert.deepEqual(await pixels(),blank,'Hold withdraws its provisional paint');
+      const colors=await evaluate('layerApp.state().colors');await touch('touchStart',[{id:100,...start}]);await wait('layerApp.state().color_picker.preview!=null');
+      await touch('touchCancel');await wait('layerApp.state().layer_tools.tool==="paint"&&layerApp.app.document_park_ready()');
+      assert.deepEqual(await evaluate('layerApp.state().colors'),colors,'Native cancellation restores the picker colors');
+      const pair=[{id:100,x:area.x+area.width*.5-30,y:start.y},{id:101,x:area.x+area.width*.5+30,y:start.y}];
+      const beforePan=await evaluate('layerApp.state().camera.translation');await touch('touchStart',pair);
+      for(let i=1;i<=3;i++)await touch('touchMove',pair.map(p=>({...p,x:p.x+i*14,y:p.y+i*9})));
+      await touch('touchEnd');await settle();assert.notDeepEqual(await evaluate('layerApp.state().camera.translation'),beforePan,'Two contacts navigate after withdrawing the finger');
+      await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank);await snapshot('input-navigation');
+      const durable=await evaluate('JSON.stringify(layerApp.app.workspace_persistence())');
+      await tap(4);await wait('layerApp.state().phone.hidden');await snapshot('input-four-finger-zen');
+      assert.equal(await evaluate('JSON.stringify(layerApp.app.workspace_persistence())'),durable,'Four-finger Zen preserves the saved workspace');
+      await click('#zen-capy');await wait('!layerApp.state().phone.hidden');
+      await touch('touchStart',[{id:100,...start}]);await touch('touchMove',[{id:100,x:start.x+12,y:start.y}]);
+      await mouse('mousePressed',start,1);await touch('touchStart',[{id:100,x:start.x+12,y:start.y},{id:101,...end}]);
+      for(let i=1;i<=8;i++)await mouse('mouseMoved',{x:start.x+(end.x-start.x)*i/8,y:start.y},1);
+      await mouse('mouseReleased',end);await wait('layerApp.state().settings.pen_seen&&layerApp.app.document_park_ready()');
+      await clear();assert.ok((await pixels()).white<blank.white-20,'The real pen wins the provisional finger');await snapshot('input-pen-wins');await undo();
+      await touch('touchMove',[{id:100,...end},{id:101,...start}]);await touch('touchEnd');await clear();
+      assert.deepEqual(await pixels(),blank,'Rejected fingers cannot resume after pen lift');
+      await stroke();assert.ok((await pixels()).white<blank.white-20,'A fresh contact still paints in On after pen admission');await undo();
+      await mode(0);await stroke();await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank,'Auto stops painting after real pen admission');
+      await snapshot('input-auto-after-pen');
+      await send({type:'restore_settings',settings:original.settings});
+      continue;
+    }
     if(customizeOnly){
       const durable=()=>evaluate('layerApp.app.workspace_persistence()');
       const history=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history');
@@ -810,10 +892,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       if(cancelled)await touch('touchStart',[{id:100,x:origin.x+20,y:origin.y},{id:101,x:origin.x+60,y:origin.y}]);
       await touch('touchEnd');
       await wait('layerApp.app.document_park_ready()');
-      const data=await evaluate(`(${takeStrokeRecording})(layerApp.app)`);
-      const path=`${directory}/finger-${cancelled?'withdrawn':'paint'}.capystrokes`;
-      await writeFile(path,Buffer.concat([Buffer.from('CAPYPEN4'),gzipSync(Buffer.from(data))]));
-      const records=execFileSync('cargo',['run','--locked','-q','-p','layer-engine','--features','prediction-bench','--example','stroke-recording','--','dump',path],{cwd:root,encoding:'utf8'}).trim().split('\n').map(line=>JSON.parse(line));
+      const records=await saveRecording(`finger-${cancelled?'withdrawn':'paint'}`);
       const events=records.flatMap(record=>record.Raw?[record.Raw.event]:[]);
       assert.ok(events.length>=3,'Native browser touch passes the packed Wasm paint ABI');
       assert.ok(events.every(event=>event.tool==='Finger'&&event.pressure===1),'Every decoded browser paint sample is Finger at full pressure');
@@ -823,7 +902,6 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       assert.equal(ends[0].cancelled,cancelled,'Withdrawal rolls back the provisional stroke');
       assert.equal(ends[0].interrupted,false,'The recording includes the engine stroke end before it stops');
       if(!cancelled)assert.equal(events.at(-1).phase,'Up');
-      await writeFile(`${path}.json`,JSON.stringify(records,null,2)+'\n');
       if(!cancelled){
         assert.equal(await evaluate('layerApp.state().commands.find(c=>c.id==="undo").enabled'),true,'The completed stroke is undoable');
         await send({type:'invoke',command:'undo'});

@@ -34,7 +34,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
   function refresh() {
     report();
     if(!active)return;
-    if(contact&&(contact.hold_ms!==app.phone_hold_ms()||contact.bar&&!app.phone_bar_valid(contact.bar)))cancelContact();
+    if(contact&&(contact.hold_ms!==app.touch_hold_ms()||contact.bar&&!app.phone_bar_valid(contact.bar)))cancelContact();
     const authored=state().workspace.layout.phone??[],views=app.phone_tools();
     for(const [id,record]of tools)if(!authored.some(tile=>tile.id===id)){record.root.remove();tools.delete(id);}
     for(const [index,tile]of authored.entries()) {
@@ -119,7 +119,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     suppressClick=false;
     const start=point(event),capyPress=capyTarget.contains(event.target),bar=capyPress?null:app.phone_bar_contact(...start);
     if(!capyPress&&!bar)return;
-    contact={id:event.pointerId,start,bar,capy:capyPress,position:start,held:false,hold_ms:app.phone_hold_ms()};
+    contact={id:event.pointerId,start,bar,capy:capyPress,position:start,held:false,hold_ms:app.touch_hold_ms()};
     const current=contact;
     current.timer=setTimeout(()=>{
       if(contact!==current)return;

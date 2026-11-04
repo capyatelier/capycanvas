@@ -240,6 +240,11 @@ sampling, whether changed by touch or the Source dropdown. Changing source keeps
 the settings drawer open. Native hold timing, movement slop and sequence
 ownership belong to each host; sampling, preview, acceptance and cancellation belong
 to shared Rust.
+GTK and Web share the lift calculation: 10 mm from a reliable logical monitor
+height and its physical height, clamped to 36–64 logical pixels, or 44 when those
+facts are unavailable. Hosts convert the result using the actual canvas scale.
+Web uses the shared hold interval where no OS interval is available and forwards
+the hold through its ordinary input-reply handler, including paint cancellation.
 
 Entering the picker retires existing navigation contacts, including a resting
 palm. Their later movement cannot resume navigation, and their pending hold

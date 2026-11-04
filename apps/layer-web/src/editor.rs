@@ -75,7 +75,8 @@ impl WebApp {
         let visible = serde_wasm_bindgen::from_value(visible).map_err(js)?;
         serialize(&self.session.state().dialog_presentation_in(role, [width, height], visible))
     }
-    pub fn phone_hold_ms(&self) -> u32 { self.session.touch_policy().tap_ms }
+    pub fn touch_hold_ms(&self) -> u32 { self.session.touch_policy().tap_ms }
+    pub fn finger_loupe_offset(&self, scale: f32) -> f32 { layer_ui::finger_loupe_offset(None, scale) }
     pub fn phone_bar_contact(&self, x: f32, y: f32) -> Option<WebBarContact> {
         let mut contact = layer_ui::PhoneBarContact::begin(&self.session.phone_layout()?, [x, y], false)?;
         contact.set_tools(self.session.state().workspace.layout.phone.as_deref().unwrap_or_default());

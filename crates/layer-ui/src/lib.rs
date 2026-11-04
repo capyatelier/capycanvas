@@ -67,7 +67,7 @@ pub use session_recovery::{SessionCapture,SessionRestore,SessionDocumentState,Se
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;
-pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle, PickerPreview};
+pub use eyedropper::{COLOR_SAMPLE_WIDTHS, ColorPickerAction, ColorPickerState, ColorPickerStyle, PickerPreview, finger_loupe_offset};
 mod export;
 pub use export::{ExportChoice, ExportChoices, ExportNumericControls, ExportDraft, ExportDraftAction, ExportForm, ExportBackground, ExportFormat, ExportMetadataView, ExportProfile, ExportProfileCaption, ExportRecipe, ExportResolution, ExportSize, MetadataChoice};
 pub use layer_color::photo::{ExportMetadata, MetadataKeep};

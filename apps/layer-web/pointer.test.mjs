@@ -1,6 +1,7 @@
 import {nativeScreenEvents} from './native-input-fixture.mjs';
 import {observePenInput,paintToolKind,browserDeviceClass} from './pen-input.js';
 import {observeButtonFeedback} from './button-feedback.js';
+import {browserDragThreshold} from './pen-scroll.js';
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -176,7 +177,8 @@ test("workspace dragging clears the canvas cursor without hit-testing moving pan
   assert.equal(samples.length, 2);
 });
 function harness({ raw = false, prediction = false, paint: allowPaint = true, paintTouch = false } = {}) {
-  const listeners = new Map(), windowListeners = new Map(), records = [], phases = [], buttons = [], cursors = [], captures = [], timers = [], attributes = new Set();
+  const listeners = new Map(), windowListeners = new Map(), records = [], phases = [], buttons = [], cursors = [], captures = [], timers = new Map(), attributes = new Set();
+  let nextTimer=0;
   const listen = (target, name, fn) => target.set(name, [...target.get(name) ?? [], fn]);
   const emit = (target, type, event) => {
     let stopped = false;
@@ -192,11 +194,17 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true, pa
       addEventListener: (name, fn) => listen(listeners, name, fn),
     },
     lastPenEvent: null, pending: [], notice: null, state: { camera: { revision: 1 }, settings: { feedback: prediction, platform_prediction: prediction } },
-    app: { pen(batch) { records.push(...batch); return batch.length / 11; } },
+    holdRequests:[],holdScales:[],browserDragThreshold,
+    app: { pen(batch) { records.push(...batch); return batch.length / 11; },
+      touch_hold_ms:()=>467,finger_loupe_offset(scale){context.holdScales.push(scale);return 71;} },
     input(event) {
       if (event.type === "pen_button") {
         buttons.push(event);
         return { paint: false, handled: true };
+      }
+      if(event.type==='color_picker_hold'){
+        context.holdRequests.push(event);contact=null;
+        return {cancel_paint:true,paint:false,handled:true,change:{}};
       }
       phases.push(event);
       if (context.cancelPaint) { contact = null; return { cancel_paint: true, paint: false, handled: true }; }
@@ -213,7 +221,8 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true, pa
     document: {documentElement: {hasAttribute: name => attributes.has(name), toggleAttribute: (name, value) => value ? attributes.add(name) : attributes.delete(name)}, addEventListener() {}},
     chromeEvents:[],chromeInput: event => (context.chromeEvents.push(event),{handled: event.kind === 'contact' && !!context.consumeChrome}),
     zenUpdates:0,updateZen() {context.zenUpdates++;}, closeMenusOutside() {}, requestAnimationFrame() {}, endWorkspaceGesture() {}, queuePen() {},
-    window: { addEventListener: (name, fn) => listen(windowListeners, name, fn) }, setTimeout: fn => timers.push(fn), clearTimeout() {},
+    window: { addEventListener: (name, fn) => listen(windowListeners, name, fn) },
+    setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),
     header: null, paintToolKind, applyChange() {}, message: assert.fail,
   };
   context.app.input = context.input;
@@ -240,7 +249,8 @@ function harness({ raw = false, prediction = false, paint: allowPaint = true, pa
         preventDefault() { prevented = true; }, ...overrides});
       return prevented;
     },
-    context, captures,flushTimers:()=>timers.splice(0).forEach(fn=>fn()),
+    context, captures,timerDelays:()=>[...timers.values()].map(t=>t.delay),
+    flushTimers(){for(const [id,{fn}]of [...timers])if(timers.delete(id))fn();},
   };
 }
 
@@ -524,6 +534,33 @@ test('a shared cancellation reply retires the active paint once through the comm
   h.chrome('blur');
   assert.deepEqual(h.samples().map(sample=>[sample[0],sample[1],sample[10]]),[[1,1,3],[1,2,3],[1,4,3]]);
   assert.equal(h.context.lastPenEvent,null);
+});
+
+test('a native picker hold uses shared timing and offset and consumes the cancellation reply',()=>{
+  const h=harness({paintTouch:true});
+  h.context.canvas.width=1600;h.context.canvas.height=1200;
+  h.send('pointerdown',{pointerType:'touch',pointerId:9,isPrimary:false});
+  assert.deepEqual(h.timerDelays(),[467]);
+  h.flushTimers();
+  const request=h.context.holdRequests[0];
+  assert.equal(request.type,'color_picker_hold');assert.equal(request.id,9);
+  assert.deepEqual(Array.from(request.position),[80,100]);assert.equal(request.offset,71);
+  assert.deepEqual(h.context.holdScales,[2]);
+  assert.deepEqual(h.samples().map(s=>[s[1],s[10]]),[[1,3],[4,3]]);
+  h.flushTimers();h.send('pointerup',{pointerType:'touch',pointerId:9,buttons:0});
+  assert.equal(h.context.holdRequests.length,1);
+  assert.equal(h.samples().filter(s=>s[1]===4).length,1);
+});
+
+test('native hold lifetime cancels before shared picker admission',()=>{
+  for(const ending of ['pointerup','pointercancel','lostpointercapture','blur','slop','pen']){
+    const h=harness();h.send('pointerdown',{pointerType:'touch',pointerId:3});
+    if(ending==='slop')h.send('pointermove',{pointerType:'touch',pointerId:3,clientX:40+browserDragThreshold+1});
+    else if(ending==='pen')h.send('pointerdown',{pointerType:'pen',pointerId:4});
+    else if(ending==='blur')h.chrome('blur');
+    else h.send(ending,{pointerType:'touch',pointerId:3,buttons:0});
+    h.flushTimers();assert.equal(h.context.holdRequests.length,0,ending);
+  }
 });
 
 test('physical browser device facts classify primary pointer and screen independently of viewport',()=>{

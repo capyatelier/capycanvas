@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 
 pub const COLOR_SAMPLE_WIDTHS: [u32; 5] = layer_core::ARTWORK_SAMPLE_WIDTHS;
 
+pub fn finger_loupe_offset(logical_height_and_mm: Option<[f32; 2]>, scale: f32) -> f32 {
+    logical_height_and_mm.filter(|[_, mm]| *mm > 0.).map_or(44., |[height, mm]| {
+        (height * 10. / mm).clamp(36., 64.)
+    }) * scale
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorPickerStyle {

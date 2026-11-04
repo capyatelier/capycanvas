@@ -55,6 +55,10 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.ok(defaults.includes(original));
     assert.ok(defaults.includes((await view(other)).id),'A second window reuses an available default');
     assert.deepEqual([...(await view(other)).order].sort(),[...defaults].sort(),'Opening a second window does not create a workspace');
+    for(const [run,peer,value,mode]of [[evaluate,other,1,'on'],[other,evaluate,2,'off'],[evaluate,other,0,'auto']]){
+      await run(`layerApp.dispatch({type:'preferences',action:{type:'edit',id:'finger_drawing',value:${value}}});null`);
+      await wait(peer,`layerApp.state().settings.finger_drawing===${JSON.stringify(mode)}`);
+    }
     await other('layerApp.dispatch({type:"set_brush_size",value:91});null');
     await wait(other,ready);
     await evaluate('layerApp.dispatch({type:"set_color",rgba:[0.4,0.2,0.7,1]});null');
@@ -77,6 +81,10 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     const point=await other('(()=>{const r=layerApp.canvas.getBoundingClientRect();return{x:r.x+r.width*.5,y:r.y+r.height*.5}})()');
     for(const type of ['mousePressed','mouseReleased']) await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1},sessionId);
     await wait(other,'layerApp.state().color_library.history.length>0');
+    await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,pointerType:'pen',buttons:0,force:0},sessionId);
+    assert.equal(await other('layerApp.state().settings.pen_seen'),false,'Hover alone does not broadcast pen admission');
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1,pointerType:'pen',force:type==='mousePressed'?.5:0},sessionId);
+    await wait(other,'layerApp.state().settings.pen_seen');await wait(evaluate,'layerApp.state().settings.pen_seen');
     await wait(other,ready);
     const history=await other('JSON.stringify(layerApp.state().color_library.history)');
     await evaluate('layerApp.dispatch({type:"invoke",command:"zen_mode"});null');
@@ -85,6 +93,8 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.notDeepEqual(ownCapture.working,otherCapture.working);
     await checkpoint(other);
     await call('Page.reload',{},sessionId); await new Promise(r=>setTimeout(r,1000)); await wait(other,ready);
+    assert.equal(await other('layerApp.state().settings.pen_seen'),true,'Admitted pen detection survives restart');
+    assert.equal(await other('layerApp.state().settings.finger_drawing'),'auto','The shared finger mode survives restart');
     assert.equal(await other('JSON.stringify(layerApp.state().color_library.history)'),history);
     assert.ok(await other('layerApp.state().color_library.palettes.some(p=>p.name==="Window A palette")'),'Painting keeps another window\'s palettes after restart');
     for(const [id,size] of [[2,91],[5,53],[7,77]]) {

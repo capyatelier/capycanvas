@@ -489,7 +489,7 @@ test('phone contacts preview locally, commit once and retire on cancellation',t=
   const view={enabled:true,label:'Tool',icon:'tool',selected:false};
   let next=0,valid=true,hold_ms=500,outcome={kind:'pending'},capture;
   const app={phone_tools:()=>[view,view],phone_settings:()=>view,toolbar_component:()=>({}),header_view:()=>({capy:view,sizes:[{id:'medium',tile:32}]}),capy_caption:()=>'',
-    phone_hold_ms:()=>hold_ms,phone_bar_contact:()=>{const id=++next;return{id,free:()=>freed.push(id)};},phone_bar_valid:()=>valid,
+    touch_hold_ms:()=>hold_ms,phone_bar_contact:()=>{const id=++next;return{id,free:()=>freed.push(id)};},phone_bar_valid:()=>valid,
     phone_bar_input:(bar,input)=>{inputs.push([bar.id,input.kind]);return{outcome,geometry:geometry.tools,lifted:outcome.kind==='held'||outcome.kind==='dragging'?0n:null};}};
   const workspace=element('div'),capy=element('button');doc.body.append(workspace);workspace.append(capy);
   const createElement=(...args)=>{const n=element(...args);n.style.setProperty=()=>{};n.querySelector=()=>null;n.hasPointerCapture=id=>capture===id;n.setPointerCapture=id=>capture=id;n.releasePointerCapture=()=>capture=null;return n;};

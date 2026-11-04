@@ -267,9 +267,5 @@ pub(crate) fn finger_offset(w: &Workspace) -> f32 {
         .native()
         .and_then(|n| n.surface())
         .and_then(|s| s.display().monitor_at_surface(&s));
-    // Ten millimetres where the monitor reports physical dimensions; logical
-    // DPI is a fallback for virtual displays. Bound implausible EDID values.
-    monitor.filter(|m| m.height_mm() > 0).map_or(44., |m| {
-        (m.geometry().height() as f32 * 10. / m.height_mm() as f32).clamp(36., 64.)
-    }) * scale
+    layer_ui::finger_loupe_offset(monitor.map(|m| [m.geometry().height() as f32, m.height_mm() as f32]), scale)
 }

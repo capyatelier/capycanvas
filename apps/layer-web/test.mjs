@@ -237,6 +237,10 @@ try {
   if(process.argv.includes('--native-writeback'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installNativeWritebackTrace})()`});
   if(process.argv.includes('--heal-portability'))await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installHealPortabilityTrace})()`});
   if(process.argv.includes('--tool-bubbles')&&process.env.LAYER_BUBBLE_INPUT_TRACE==='1')await call('Page.addScriptToEvaluateOnNewDocument',{source:`(${installBubbleInputTrace})()`});
+  if(process.argv.includes('--phone-input')){
+    await call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:10});
+    await call('Emulation.setDeviceMetricsOverride',{width:412,height:891,screenWidth:412,screenHeight:891,deviceScaleFactor:1,mobile:true});
+  }
   const pageLoaded = cdp.once("Page.loadEventFired", 120000);
   await call("Page.navigate", { url: pageUrl });
   await pageLoaded;
@@ -444,6 +448,7 @@ try {
     [process.argv.includes("--phone-menus"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, menusOnly:true }), checkErrors],
     [process.argv.includes("--phone-drawers"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, drawersOnly:true }), checkErrors],
     [process.argv.includes("--phone-frame"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, frameOnly:true }), checkErrors],
+    [process.argv.includes("--phone-input"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, canvasPixels, inputOnly:true }), checkErrors],
     [process.argv.includes("--phone-customize"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, customizeOnly:true }), checkErrors],
     [process.argv.includes("--phone-audit"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--settings-audit"), () => checkSettingsParity({ call, evaluate, settle }), checkErrors],

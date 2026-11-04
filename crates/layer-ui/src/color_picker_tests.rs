@@ -1,4 +1,15 @@
 #[test]
+fn finger_loupe_offset_uses_monitor_height_then_surface_scale() {
+    for scale in [0.5, 1., 2., 3.] {
+        for (height, expected) in [(None, 44.), (Some([1000., 250.]), 40.),
+            (Some([1000., 1000.]), 36.), (Some([2000., 100.]), 64.),
+            (Some([1000., 0.]), 44.), (Some([1000., -1.]), 44.)] {
+            assert_eq!(finger_loupe_offset(height, scale), expected * scale);
+        }
+    }
+}
+
+#[test]
 fn malformed_chrome_contact_is_dropped_without_side_effects() {
     for platform in Platform::ALL {
         let mut s=session(platform);
@@ -464,8 +475,10 @@ fn color_picker_hold_requires_a_live_unclaimed_single_touch() {
             }
         }
         let tool = s.state.layer_tools.tool;
-        s.input(UiInput::ColorPickerHold { id: 8, position: [250., 300.], offset: 44. }).unwrap();
-        assert_eq!(s.state.layer_tools.tool, tool, "{interruption}");
+        for id in [8, 9] {
+            s.input(UiInput::ColorPickerHold { id, position: [250., 300.], offset: 44. }).unwrap();
+            assert_eq!(s.state.layer_tools.tool, tool, "{interruption}/{id}");
+        }
         if interruption == "picker" {
             s.picker_position([250., 300.]);
             assert_eq!(s.color_picker_overlay().unwrap().sample, [250., 300.]);

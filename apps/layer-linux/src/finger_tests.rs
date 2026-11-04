@@ -48,10 +48,12 @@ fn capture(d: &mut Driver, name: &str) {
     until(|| ui_session(&d.w).engine().backend().frames_idle(), "finger capture is ready");
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
+        let capture_name = format!("finger-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height());
         d.input.perform(serde_json::json!([{ "capture_window": {
-            "name": format!("finger-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height()),
+            "name": &capture_name,
             "maximized": d.w.window.is_maximized(),
         } }]));
+        super::phone_motion::export_allocations(&d.w, name, &capture_name);
     }
 }
 

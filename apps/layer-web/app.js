@@ -43,7 +43,7 @@ import { createLayerPanel } from "./layers.js";
 import { createPalettes } from "./palettes.js";
 import { createEffectPanels } from "./effects.js";
 import { installTooltips } from "./tooltips.js";
-import { installPenScrolling } from "./pen-scroll.js";
+import { installPenScrolling, browserDragThreshold } from "./pen-scroll.js";
 import { bindCopy, liveCopy, refreshBindings, refreshCopy } from "./localization.js";
 
 // The static packager fills this map with fingerprinted resource filenames.
@@ -1617,23 +1617,21 @@ function queuePen(e, stage, predictionsOnly = false) {
 // actual raw delivery, so browsers/devices without it still paint via moves.
 let rawPenPointer = null;
 const canvasPenContacts = new Set();
-const canvasFingers=new Set();
 let pickerHold=null;
 function cancelPickerHold(){if(pickerHold)clearTimeout(pickerHold.timer);pickerHold=null;}
-window.addEventListener('blur',()=>{cancelPickerHold();canvasFingers.clear();});
+window.addEventListener('blur',cancelPickerHold);
 function pickerTouch(e,stage){
-  if(e.pointerType!=='touch')return;
   if(stage===1){
-    canvasFingers.add(e.pointerId);cancelPickerHold();
-    if(canvasFingers.size===1){
+    cancelPickerHold();
+    if(e.pointerType==='touch'){
       pickerHold={id:e.pointerId,x:e.clientX,y:e.clientY,timer:setTimeout(()=>{
         pickerHold=null;
-        try{applyChange(app.input({type:'color_picker_hold',id:corePointerId(e),position:position(e),offset:44*(devicePixelRatio||1)}).change);}
-        catch(error){message(error);}
-      },500)};
+        const scale=canvas.width/canvas.getBoundingClientRect().width;
+        input({type:'color_picker_hold',id:corePointerId(e),position:position(e),offset:app.finger_loupe_offset(scale)});
+      },app.touch_hold_ms())};
     }
-  } else if(stage===2&&pickerHold?.id===e.pointerId&&Math.hypot(e.clientX-pickerHold.x,e.clientY-pickerHold.y)>8)cancelPickerHold();
-  else if(stage===3||stage===4){canvasFingers.delete(e.pointerId);cancelPickerHold();}
+  } else if(stage===2&&pickerHold?.id===e.pointerId&&Math.hypot(e.clientX-pickerHold.x,e.clientY-pickerHold.y)>browserDragThreshold)cancelPickerHold();
+  else if(stage===3||stage===4)cancelPickerHold();
 }
 
 const penSideButtons = new Map();
