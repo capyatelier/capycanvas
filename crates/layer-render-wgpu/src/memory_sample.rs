@@ -6,7 +6,14 @@ use web_time::Instant;
 
 pub(super) struct MemorySampler {
     snapshot: Arc<Mutex<Option<Sample>>>,
-    updates: mpsc::SyncSender<()>,
+    updates: Option<mpsc::SyncSender<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+impl Drop for MemorySampler {
+    fn drop(&mut self) {
+        drop(self.updates.take());
+        if let Some(worker)=self.worker.take() { let _=worker.join(); }
+    }
 }
 #[derive(Clone)]
 struct Sample { memory: MemorySnapshot, budget: Arc<MemoryBudgetSummary> }
@@ -55,7 +62,7 @@ impl MemorySampler {
         let snapshot = Arc::new(Mutex::new(None));
         let publish = Arc::downgrade(&snapshot);
         let (updates, received) = mpsc::sync_channel(1);
-        let _ = std::thread::Builder::new().name("memory samples".into()).spawn(move || {
+        let worker = std::thread::Builder::new().name("memory samples".into()).spawn(move || {
             let mut sample=None;
             let mut next=Instant::now();
             loop {
@@ -70,10 +77,10 @@ impl MemorySampler {
                     Err(mpsc::RecvTimeoutError::Disconnected)=>break,
                 }
             }
-        });
-        Self { snapshot, updates }
+        }).ok();
+        Self { snapshot, updates: Some(updates), worker }
     }
-    pub fn request_update(&self) { let _=self.updates.try_send(()); }
+    pub fn request_update(&self) { if let Some(updates)=&self.updates { let _=updates.try_send(()); } }
     pub fn snapshot(&self) -> Option<MemorySnapshot> { self.snapshot.try_lock().ok().and_then(|snapshot| snapshot.as_ref().map(|sample| sample.memory)) }
     pub fn budget_snapshot(&self) -> Option<Arc<MemoryBudgetSummary>> {
         self.snapshot.try_lock().ok().and_then(|snapshot| snapshot.as_ref().map(|sample| sample.budget.clone()))
@@ -189,12 +196,29 @@ mod tests {
         }, sample, |_| {});
         running.recv_timeout(Duration::from_secs(5)).unwrap();
         let old_state = Arc::downgrade(&retired.snapshot);
-        drop(retired);
-        let replacement = MemorySampler { snapshot: Arc::new(Mutex::new(None)), updates: mpsc::sync_channel(1).0 };
+        let retired=std::thread::spawn(move || drop(retired));
+        let replacement = MemorySampler { snapshot: Arc::new(Mutex::new(None)), updates: Some(mpsc::sync_channel(1).0), worker: None };
         release.send(()).unwrap();
+        retired.join().unwrap();
         done.recv_timeout(Duration::from_secs(5)).unwrap();
         assert!(old_state.upgrade().is_none());
         assert!(replacement.snapshot().is_none());
+    }
+
+    #[test]
+    fn dropping_sampler_joins_worker_and_releases_query_captures() {
+        let owner=Arc::new(());
+        let captured=owner.clone();
+        let (queried,ready)=mpsc::channel();
+        let sampler=MemorySampler::with_updates(move || {
+            let _=&captured;
+            let _=queried.send(());
+            MemorySnapshot {sampled_at:Instant::now(),process:None,gpu:None}
+        },sample,|_| {});
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(Arc::strong_count(&owner),2);
+        drop(sampler);
+        assert_eq!(Arc::strong_count(&owner),1);
     }
 
     #[test]

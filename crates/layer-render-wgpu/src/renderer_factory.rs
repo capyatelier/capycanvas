@@ -16,7 +16,9 @@ struct Factory {
     #[cfg(target_arch = "wasm32")]
     memory_update_pending: std::sync::atomic::AtomicBool,
     #[cfg(not(target_arch = "wasm32"))]
-    memory: OnceLock<crate::memory_sample::MemorySampler>,
+    memory: Mutex<std::sync::Weak<crate::memory_sample::MemorySampler>>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    _memory_fixture: Option<Arc<crate::memory_sample::MemorySampler>>,
 }
 impl Drop for Factory {
     fn drop(&mut self) { self.budget.unregister_device(self.memory_device); }
@@ -26,14 +28,15 @@ pub(crate) fn fixture_factory(hardware: &RendererFactory, budget: layer_core::Me
     let memory_device = budget.register_device(facts);
     let mut shared = hardware.0.shared.clone();
     shared.transient_memory = Some(budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device)));
+    #[cfg(not(target_arch = "wasm32"))]
+    let memory=Arc::new(crate::memory_sample::fixture_sampler(budget.clone()));
     let factory = RendererFactory(Arc::new(Factory { adapter: hardware.adapter().clone(), device: hardware.device().clone(), queue: hardware.queue().clone(),
         choices: Default::default(), shared, budget: budget.clone(), memory_device,
         #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
         #[cfg(target_arch = "wasm32")] memory_update_pending: Default::default(),
-        #[cfg(not(target_arch = "wasm32"))] memory: OnceLock::new(),
+        #[cfg(not(target_arch = "wasm32"))] memory: Mutex::new(Arc::downgrade(&memory)),
+        #[cfg(not(target_arch = "wasm32"))] _memory_fixture: Some(memory),
     }));
-    #[cfg(not(target_arch = "wasm32"))]
-    { let _ = factory.0.memory.set(crate::memory_sample::fixture_sampler(budget)); }
     factory
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,9 +59,8 @@ impl RendererFactory {
         let factory = Self(Arc::new(Factory { adapter, device: (**device).clone(), queue, choices: Default::default(), shared, budget, memory_device,
             #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
             #[cfg(target_arch = "wasm32")] memory_update_pending: Default::default(),
-            #[cfg(not(target_arch = "wasm32"))] memory: OnceLock::new() }));
-        #[cfg(not(target_arch = "wasm32"))]
-        factory.start_memory_samples();
+            #[cfg(not(target_arch = "wasm32"))] memory: Default::default(),
+            #[cfg(all(test, not(target_arch = "wasm32")))] _memory_fixture: None }));
         factory
     }
     pub(super) fn pipeline_device(&self, color: layer_core::color::DocumentColor) -> PipelineDevice {
@@ -69,13 +71,19 @@ impl RendererFactory {
     pub fn device(&self) -> &wgpu::Device { &self.0.device }
     pub fn queue(&self) -> &wgpu::Queue { &self.0.queue }
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn start_memory_samples(&self) { self.0.memory.get_or_init(|| crate::memory_sample::MemorySampler::new(self.device().clone(), self.0.budget.clone(), self.0.memory_device)); }
+    pub(super) fn memory_samples(&self) -> Arc<crate::memory_sample::MemorySampler> {
+        let mut cached=self.0.memory.lock().unwrap();
+        if let Some(memory)=cached.upgrade() { return memory; }
+        let memory=Arc::new(crate::memory_sample::MemorySampler::new(self.device().clone(),self.0.budget.clone(),self.0.memory_device));
+        *cached=Arc::downgrade(&memory);
+        memory
+    }
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn memory_snapshot(&self) -> Option<layer_render::MemorySnapshot> { self.0.memory.get().and_then(|memory| memory.snapshot()) }
+    pub(super) fn memory_snapshot(&self) -> Option<layer_render::MemorySnapshot> { self.0.memory.lock().unwrap().upgrade().and_then(|memory| memory.snapshot()) }
     pub(super) fn memory_budget(&self) -> &layer_core::MemoryBudget { &self.0.budget }
     pub(super) fn request_memory_update(&self) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(memory) = self.0.memory.get() { memory.request_update(); }
+        if let Some(memory) = self.0.memory.lock().unwrap().upgrade() { memory.request_update(); }
         #[cfg(target_arch = "wasm32")]
         {
             if self.0.memory_update_pending.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
@@ -93,7 +101,7 @@ impl RendererFactory {
     }
     pub(super) fn budget_snapshot(&self) -> Option<Arc<layer_render::MemoryBudgetSummary>> {
         #[cfg(not(target_arch = "wasm32"))]
-        { self.0.memory.get().and_then(|memory| memory.budget_snapshot()) }
+        { self.0.memory.lock().unwrap().upgrade().and_then(|memory| memory.budget_snapshot()) }
         #[cfg(target_arch = "wasm32")]
         { self.0.memory_summary.try_lock().ok().and_then(|summary| summary.clone()) }
     }

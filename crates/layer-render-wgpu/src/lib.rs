@@ -976,6 +976,8 @@ struct DrawingPresentation {
 /// Headless-capable wgpu brush renderer. A platform presenter can sample the
 /// same composite texture rather than requesting readback.
 pub struct WgpuRasterizer {
+    #[cfg(not(target_arch = "wasm32"))]
+    memory_samples: Arc<memory_sample::MemorySampler>,
     snapshot_worker: bool,
     snapshot_cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     startup: Option<startup::Startup>,
@@ -1379,7 +1381,11 @@ impl WgpuRasterizer {
         let changed_cells = Some(changed_cells::ChangedCells::new(&device));
         let portable_blend = portable_blend::Renderer::new(&device);
         let transforms = Some(paint_transform::PaintTransforms::from_recipes(&recipes.transforms));
+        #[cfg(not(target_arch = "wasm32"))]
+        let memory_samples=factory.memory_samples();
         let mut renderer = Box::new(Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            memory_samples,
             factory,
             memory,
             recipes: recipes.clone(),
@@ -4022,8 +4028,6 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_clipping_preview(&mut self, shadows: bool, highlights: bool) { self.clipping_preview = [shadows, highlights]; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
-        #[cfg(not(target_arch = "wasm32"))]
-        if enabled { self.factory.start_memory_samples(); }
     }
     fn showing_drawing(&self) -> bool { self.presentation.showing }
     fn showing_navigator(&self) -> bool { self.presentation.navigator }
@@ -4031,7 +4035,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn telemetry(&self) -> layer_render::RendererTelemetry {
         let mut t = self.telemetry.snapshot(&self.device, &self.queue);
         #[cfg(not(target_arch = "wasm32"))]
-        { t.memory = self.factory.memory_snapshot(); }
+        { t.memory = self.memory_samples.snapshot(); }
         t.memory_budget = self.factory.budget_snapshot();
         let m = &self.metrics;
         t.submissions = m.submissions;
