@@ -33,11 +33,10 @@ function Enable-FixtureJapaneseInput {
             Start-ScheduledTask -TaskName $taskName
             do {
                 $info = Get-ScheduledTaskInfo -TaskName $taskName
-                $state = (Get-ScheduledTask -TaskName $taskName).State
-                if ($info.LastRunTime -gt $previousRun -and $state -notin @('Running','Queued')) { break }
+                $state = (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).State
+                if ($info.LastRunTime -gt $previousRun -and $state -eq 'Ready' -and $info.LastTaskResult -ne 267009) { $result = $info.LastTaskResult; break }
                 Start-Sleep -Seconds 1
             } while ($true)
-            $result = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
             if ($result -ne 0) { throw "Japanese Basic input task $taskName failed: $result" }
         } finally {
             $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

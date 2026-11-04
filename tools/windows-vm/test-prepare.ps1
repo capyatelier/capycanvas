@@ -45,8 +45,24 @@ function Start-ScheduledTask($TaskName){
     $script:task.State='Running';$script:task.LastRunTime=[datetime]::MinValue.AddTicks(1);$script:inTask=$true
     try{$null=$script:task.Action.Argument -match '-EncodedCommand ([A-Za-z0-9+/=]+)$';$command=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($Matches[1]));& ([scriptblock]::Create($command))}catch{$script:task.LastTaskResult=1}finally{$script:inTask=$false;$script:task.State='Ready'}
 }
-function Get-ScheduledTaskInfo($TaskName){if($TaskName -ne $script:task.Name){throw 'Queried unrelated task info'};$script:task}
-function Get-ScheduledTask($TaskName,$ErrorAction){if($script:task -and $TaskName -ne $script:task.Name){throw 'Queried unrelated task'};$script:task}
+function Get-ScheduledTaskInfo($TaskName){
+    if($TaskName -ne $script:task.Name){throw 'Queried unrelated task info'}
+    if($script:taskObservations -and $script:task.LastRunTime -gt [datetime]::MinValue){
+        if($script:observationIndex -ge $script:taskObservations.Count){throw 'Read task info again after its terminal observation'}
+        $observation=$script:taskObservations[$script:observationIndex];$script:observationIndex++
+        return [pscustomobject]@{LastRunTime=$script:task.LastRunTime;LastTaskResult=$observation.result}
+    }
+    $script:task
+}
+function Get-ScheduledTask($TaskName,$ErrorAction){
+    if($script:task -and $TaskName -ne $script:task.Name){throw 'Queried unrelated task'}
+    if($script:taskObservations -and $script:observationIndex -gt 0){
+        $state=$script:taskObservations[$script:observationIndex-1].state
+        if($null -eq $state){return $null}
+        return [pscustomobject]@{State=$state}
+    }
+    $script:task
+}
 function Unregister-ScheduledTask($TaskName,[switch]$Confirm){if($Confirm -or $TaskName -ne $script:task.Name -or $script:task.State -ne 'Ready'){throw 'Removed an unrelated or running task'};$script:task=$null;$script:removed++}
 function Get-WinUserLanguageList {if($script:capabilityState -ne 'Installed'){throw 'User input profile touched before Basic installation'};,$script:languages}
 function New-WinUserLanguageList([string]$Language){
@@ -57,7 +73,7 @@ function Set-WinUserLanguageList($LanguageList,[switch]$Force){
     if(!$Force -or ![object]::ReferenceEquals($LanguageList,$script:languages)){throw 'Preparation replaced the current user language list'}
     $script:writes++
 }
-$script:installFailure='';$script:inTask=$false;$script:task=$null
+$script:installFailure='';$script:inTask=$false;$script:task=$null;$script:taskObservations=$null
 foreach($script:explorerAfter in @(1,2)){foreach($initialCapability in @('Installed','NotPresent')){foreach($script:newTip in @('0411:00000411',$tip)){foreach($existingJapanese in @($false,$true)){
     $script:capabilityState=$initialCapability;$script:installs=0;$script:registered=0;$script:removed=0
     $script:explorerChecks=0;$script:clock=[datetime]'2026-01-01';$script:sleeps=0
@@ -87,6 +103,25 @@ foreach($script:installFailure in @('throw','unchanged')){
     try{Enable-FixtureJapaneseInput}catch{$failed=$true}
     if(!$failed -or $script:installs -ne 1 -or $script:writes -ne 0){throw 'Failed Basic installation continued into user profile changes'}
     if($script:registered -ne 1 -or $script:removed -ne 1 -or $script:task){throw 'Failed capability task escaped owned cleanup'}
+}
+foreach($terminalResult in @(0,1)){
+    $script:installFailure=if($terminalResult){'throw'}else{''}
+    $script:capabilityState='NotPresent';$script:installs=0;$script:registered=0;$script:removed=0;$script:writes=0
+    $script:explorerAfter=1;$script:explorerChecks=0;$script:clock=[datetime]'2026-01-01';$script:sleeps=0
+    $script:languages=[Collections.Generic.List[object]]::new();$script:languages.Add((Language 'en-US' @('0409:00000409')))
+    $script:observationIndex=0;$script:taskObservations=@(
+        @{state=$null;result=267009},
+        @{state='Ready';result=267009},
+        @{state='Running';result=0},
+        @{state='Ready';result=$terminalResult}
+    )
+    $failure=$null;try{Enable-FixtureJapaneseInput}catch{$failure=$_}
+    if($script:observationIndex -ne 4 -or $script:sleeps -ne 3){throw "Preparation accepted an incomplete scheduler observation: $failure"}
+    if($terminalResult){
+        if(!$failure -or $failure.Exception.Message -notmatch 'failed: 1$' -or $script:writes -ne 0){throw 'Completed installation failure was not preserved'}
+    }elseif($failure -or $script:writes -ne 1){throw "Completed installation did not enable its input profile: $failure"}
+    if($script:registered -ne 1 -or $script:installs -ne 1 -or $script:removed -ne 1 -or $script:task){throw 'Scheduler observations repeated installation or escaped owned cleanup'}
+    $script:taskObservations=$null
 }
 $script:installFailure='';$script:capabilityState='NotPresent';$script:installs=0;$script:registered=0;$script:writes=0
 $script:explorerAfter=[int]::MaxValue;$script:explorerChecks=0;$script:clock=[datetime]'2026-01-01';$script:sleeps=0;$failed=$false
