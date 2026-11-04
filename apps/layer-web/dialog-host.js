@@ -7,7 +7,7 @@ export function hasModalDialog(){for(const intent of presentedDialogs.values())i
 
 export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
   let primary=typeof sourcePrimary==='function'?sourcePrimary():sourcePrimary;
-  let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close;
+  let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,responseChanges;
   const slots=new Map([cancel,primary].filter(Boolean).map(node=>[node,{parent:node.parentNode,next:node.nextSibling}]));
   const footer=primary?.closest('footer');
   dialog.dataset.dialogPart='page';
@@ -76,9 +76,18 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
     }
     for(const [name,key]of Object.entries({left:'x',top:'y',width:'width',height:'height'}))dialog.style[name]=bounds?.[key]!=null?`${bounds[key]}px`:'';
     if(positioned)dialog.style.maxHeight=positioned.maxHeight!=null?`${positioned.maxHeight}px`:'';
+    if(intent.role==='alert'){
+      const responses=(primary??cancel).parentElement,style=getComputedStyle(responses);
+      if(!responseChanges){responseChanges=new MutationObserver(queueLayout);responseChanges.observe(responses,{childList:true,subtree:true,characterData:true});resize.observe(responses);}
+      const buttons=[...responses.children].filter(node=>node.tagName==='BUTTON'&&!node.hidden);
+      const widths=buttons.map(node=>{const css=node.style.cssText;node.style.cssText+=';flex:none;width:max-content;max-width:none;';const width=node.getBoundingClientRect().width;node.style.cssText=css;return width;});
+      const available=responses.clientWidth-(parseFloat(style.paddingLeft)||0)-(parseFloat(style.paddingRight)||0);
+      responses.classList.toggle('alert-responses-stacked',app.alert_responses_stacked(widths,parseFloat(style.columnGap)||0,available));
+    }
   }
+  function queueLayout(){if(!resizeFrame)resizeFrame=requestAnimationFrame(()=>{resizeFrame=0;layout();});}
   window.addEventListener('resize',layout);window.visualViewport?.addEventListener('resize',layout);window.visualViewport?.addEventListener('scroll',layout);
-  const resize=new ResizeObserver(()=>{if(!resizeFrame)resizeFrame=requestAnimationFrame(()=>{resizeFrame=0;layout();});});resize.observe(cancel);if(primary)resize.observe(primary);
+  const resize=new ResizeObserver(queueLayout);resize.observe(cancel);if(primary)resize.observe(primary);
   return {
     present(next) {
       intent=next;presentedDialogs.set(dialog,intent);dialog.setAttribute('role',intent.role==='alert'?'alertdialog':'dialog');dialog.setAttribute('aria-modal',String(intent.modal));
@@ -92,7 +101,7 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
     },
     layout,
     dismiss(){if(intent){if(onDismiss){onDismiss();return;}if(app.dialog_header(intent,subpage()).start==='back')onBack();else onCancel();}},
-    dispose(){presentedDialogs.delete(dialog);if(resizeFrame)cancelAnimationFrame(resizeFrame);resize.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);dialog.removeEventListener('pointerdown',down);dialog.removeEventListener('pointercancel',cancelContact);done?.remove();back?.remove();close?.remove();},
+    dispose(){presentedDialogs.delete(dialog);if(resizeFrame)cancelAnimationFrame(resizeFrame);resize.disconnect();responseChanges?.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);dialog.removeEventListener('pointerdown',down);dialog.removeEventListener('pointercancel',cancelContact);done?.remove();back?.remove();close?.remove();},
   };
 }
 

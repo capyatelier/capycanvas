@@ -9,6 +9,11 @@ pub fn dialog_escape(subpage: bool, search_focused: bool, search_has_text: bool)
     else { DialogEscape::Cancel }
 }
 
+pub fn alert_responses_stacked(widths: &[f32], gap: f32, available: f32) -> bool {
+    widths.iter().copied().fold(0., f32::max) * widths.len() as f32
+        + gap * widths.len().saturating_sub(1) as f32 > available
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DialogRole { Editor, Alert, CanvasPanel }
@@ -172,6 +177,16 @@ mod tests {
             assert_eq!(dialog_escape(true, focused, text), if focused && text { DialogEscape::ClearSearch } else { DialogEscape::Back });
             assert_eq!(dialog_escape(false, focused, text), if focused && text { DialogEscape::ClearSearch } else { DialogEscape::Cancel });
         } }
+    }
+    #[test]
+    fn alert_responses_match_captured_gtk_homogeneous_widths() {
+        assert!(alert_responses_stacked(&[100., 144.], 12., 252.));
+        assert!(alert_responses_stacked(&[100., 163., 100.], 12., 252.));
+        assert!(!alert_responses_stacked(&[100., 100.], 12., 324.));
+        assert!(!alert_responses_stacked(&[100., 100.], 12., 212.));
+        assert!(alert_responses_stacked(&[100., 100.], 12., 211.));
+        assert!(!alert_responses_stacked(&[100.], 12., 100.));
+        assert!(!alert_responses_stacked(&[], 12., 0.));
     }
     #[test]
     fn only_canvas_panels_measure_their_content() {

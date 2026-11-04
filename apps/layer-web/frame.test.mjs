@@ -558,6 +558,7 @@ test('dialog presentation retains controls and ignores a retired native close',a
   const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
   let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header,currentPrimary=primary,clearedNode=null;
   const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},floating_dialog_width:(_window,natural)=>natural,
+    alert_responses_stacked:(widths,gap,available)=>Math.max(0,...widths)*widths.length+gap*Math.max(0,widths.length-1)>available,
     dialog_header:(intent,back)=>({start:back?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),
     dialog_escape:(back,focused,text)=>focused&&text?'clear_search':back?'back':'cancel'};
   const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary:()=>currentPrimary,search:()=>doc.activeElement===shortcutSearch?shortcutSearch:search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
@@ -620,6 +621,27 @@ test('dialog presentation retains controls and ignores a retired native close',a
   assert.equal(currentHeader.dataset.dialogPart,undefined,'A floating alert has a heading and response buttons, without a page header');
   assert.equal(cancel.dataset.dialogPart,undefined);assert.equal(primary.dataset.dialogPart,undefined);
   host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
+});
+
+test('alert response widths use shared homogeneous stacking through resize and relabel',async t=>{
+  const {createDialogHost,createProgressDialog}=await import('./dialog-host.js');
+  const {doc,element,button,icon}=colorDialogDom(t),calls=[],changes=[],frames=[];
+  globalThis.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
+  globalThis.MutationObserver=class{constructor(callback){this.callback=callback;changes.push(this);}observe(node){this.node=node;}disconnect(){this.disconnected=true;}};
+  const dialog=element('dialog'),header=element('header'),footer=element('footer'),cancel=element('button'),primary=element('button');
+  dialog.append(header,footer);footer.append(cancel,primary);doc.body.append(dialog);footer.clientWidth=220;
+  let widths=[70,118];cancel.getBoundingClientRect=()=>({width:widths[0]});primary.getBoundingClientRect=()=>({width:widths[1]});
+  globalThis.getComputedStyle=node=>({boxSizing:'border-box',paddingLeft:node===footer?'8px':'0px',paddingRight:node===footer?'8px':'0px',columnGap:node===footer?'12px':'0px'});
+  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:intent=>({start:'cancel',end:intent.primary?'primary':null}),dialog_escape:()=> 'cancel',bootstrap_view:()=>({common:{cancel:'Cancel'}}),
+    alert_responses_stacked:(measured,gap,available)=>{calls.push({widths:measured,gap,available});return Math.max(0,...measured)*measured.length+gap*Math.max(0,measured.length-1)>available;}};
+  const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel',back:'Back',done:'Done'},onCancel:()=>host.hide()});
+  host.present({role:'alert',modal:true,primary:'action'});
+  assert.deepEqual(calls.at(-1),{widths:[70,118],gap:12,available:204});assert.equal(footer.classList.contains('alert-responses-stacked'),true);
+  footer.clientWidth=280;host.layout();assert.deepEqual(calls.at(-1),{widths:[70,118],gap:12,available:264});assert.equal(footer.classList.contains('alert-responses-stacked'),false);
+  widths=[70,140];changes[0].callback();frames.shift()();assert.deepEqual(calls.at(-1),{widths:[70,140],gap:12,available:264});assert.equal(footer.classList.contains('alert-responses-stacked'),true);
+  host.hide();host.dispose();assert.equal(changes[0].disconnected,true);
+  const progress=createProgressDialog({app,element,button,icon,intent:{role:'alert',modal:true,primary:null},title:'Preparing',body:'Working',onCancel:()=>{}});
+  assert.deepEqual(calls.at(-1).widths,[0]);progress.remove();
 });
 
 

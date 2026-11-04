@@ -626,3 +626,5 @@ Edit Color projects its All Swatches route from `ColorEditorView`. Hosts send
 Toggle Swatches or Back; sheet animations and focus remain native. Navigation
 does not enter the remembered color formats/search. Escape uses `dialog_escape`:
 clear a focused search with text before going Back, then cancel at the root.
+Alert response rows use `alert_responses_stacked` with measured natural button
+widths, spacing and the response area's content width.

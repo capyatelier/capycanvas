@@ -46,11 +46,11 @@ export class Element extends FakeElement {
 }
 
 export function colorDialogDom(t) {
-  const previous = Object.fromEntries(['document', 'window', 'innerWidth', 'innerHeight', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'getComputedStyle', 'devicePixelRatio'].map(key => [key, globalThis[key]]));
+  const previous = Object.fromEntries(['document', 'window', 'innerWidth', 'innerHeight', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'MutationObserver', 'getComputedStyle', 'devicePixelRatio'].map(key => [key, globalThis[key]]));
   const doc = {createTextNode:nodeValue => ({nodeType:3, nodeValue:String(nodeValue)}), createElementNS:(_, tag) => new Element(tag, doc), createElement:tag => new Element(tag, doc), activeElement:null,
     querySelector:selector => selector === 'dialog[open]' ? doc.body.descendants().find(node => node.tagName === 'DIALOG' && node.open) ?? null : null};
   doc.body = new Element('body', doc);
-  Object.assign(globalThis, {document:doc, window:{addEventListener() {}, removeEventListener() {}}, innerWidth:1200, innerHeight:900, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, getComputedStyle:()=>({boxSizing:'border-box'}), devicePixelRatio:1});
+  Object.assign(globalThis, {document:doc, window:{addEventListener() {}, removeEventListener() {}}, innerWidth:1200, innerHeight:900, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, MutationObserver:class { observe() {} disconnect() {} }, getComputedStyle:()=>({boxSizing:'border-box'}), devicePixelRatio:1});
   t.after(() => Object.assign(globalThis, previous));
   const element = (tag, cls, text) => { const node = new Element(tag, doc); node.className = cls ?? ''; if (text != null) { if (typeof text === 'function') bindCopy(node, text); else node.textContent = text; } return node; };
   const button = (text, action, cls) => { const node = element('button', cls, text); node.addEventListener('click', action); return node; };
@@ -68,6 +68,7 @@ export const dialogProjection = {
   floating_dialog_width:(_window,natural)=>natural,
   dialog_header:() => ({start:'cancel', end:'primary'}),
   dialog_escape:(subpage,focused,text) => focused&&text?'clear_search':subpage?'back':'cancel',
+  alert_responses_stacked:(widths,gap,available) => Math.max(0,...widths)*widths.length+gap*Math.max(0,widths.length-1)>available,
   color_editor_layout:(available,minimum)=>({split:minimum.every(width=>width>0)&&available>=minimum[0]+minimum[1]+24,compact_fields:available<minimum[1]}),
   dialog_panes_fit:(available, minimum, gap) => minimum.every(width => width > 0) && available >= minimum[0] + minimum[1] + gap,
 };

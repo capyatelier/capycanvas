@@ -1889,6 +1889,7 @@ dialog[role=alertdialog] p:not(.workspace-error) { margin:10px 0 21px; line-heig
 dialog.workspace-form[role=alertdialog]:not(.palette-form) p:not(.workspace-error) { margin-bottom:39px; }
 dialog[role=alertdialog] .workspace-error:empty { display:none; }
 dialog[role=alertdialog] :is(footer,.prompt-actions) { display:flex; gap:12px; margin:0; }
+dialog[role=alertdialog] .alert-responses-stacked { flex-direction:column-reverse; align-items:stretch; }
 dialog[role=alertdialog] :is(footer,.prompt-actions) > button { flex:1; min-height:44px; margin:0; padding:10px 20px; line-height:24px; }
 dialog[role=alertdialog] .destructive-action { color:red; background:#ffbaba; }
 body[data-theme=dark] dialog[role=alertdialog] .destructive-action { color:#ff938f; background:#4c2426; }
