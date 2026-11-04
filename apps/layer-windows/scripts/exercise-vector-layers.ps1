@@ -54,16 +54,9 @@ function Tool-Number([string]$Id,[string]$Text){
  (Control 'drawing-canvas').SetFocus();Park
 }
 function Sketch-VectorRoutes([long]$Layer){
- $switch={
-  $id='builtin:workspace:painter';$choice=Find ('workspace-switch-'+$id) -Visible
-  if(!$choice){Invoke 'header-workspace-menu';$choice=Control 'Sketch' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged}
-  $choice.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-  if($choice.Current.ControlType-eq[System.Windows.Automation.ControlType]::MenuItem){Key 0x1B}
-  Wait-Until {$m=Model;$m.windows_workspace.id-eq$id -and !$m.windows_workspace.busy -and $m.canvas_ready} 'Sketch did not adopt its native header'
- }
  $lock=Control 'layer-lock' -Arranged;$lock.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {(Model).state.layer_tools.editing_layer.locked} 'The vector layer did not lock for its header reason'
- & $switch
+ Use-Workspace 'builtin:workspace:painter' 'Sketch'
  $locked=@((Model).header.items|Where-Object {$_.resolved_control.command-eq'scale_rotate'})[0]
  if(!$locked -or $locked.enabled -or !$locked.disabled_reason){throw 'The locked Sketch Scale/rotate has no shared refusal'}
  $frame=Control ('header-item-'+$locked.id) -Arranged
@@ -73,7 +66,7 @@ function Sketch-VectorRoutes([long]$Layer){
  Use-PaintWorkspace
  (Control 'layer-lock' -Arranged).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {!(Model).state.layer_tools.editing_layer.locked} 'The vector layer did not unlock'
- & $switch
+ Use-Workspace 'builtin:workspace:painter' 'Sketch'
  $scale=@((Model).header.items|Where-Object {$_.resolved_control.command-eq'scale_rotate'})[0]
  $frame=Control ('header-item-'+$scale.id) -Arranged
  if(!$scale.enabled -or $scale.disabled_reason -or $frame.Current.HelpText-cne$scale.label){throw 'Unlocking did not clear the native header reason'}

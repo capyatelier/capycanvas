@@ -1360,6 +1360,24 @@ public static class CapyImageDragPacingTest {
 
 & {
     $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-vector-layers.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $actual=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Sketch-VectorRoutes'},$true)
+    . ([scriptblock]::Create($actual.Extent.Text.Replace('[System.Windows.Automation.TogglePattern]','[CapyOwnedSearchTest.TogglePattern]')))
+    $toggle=[pscustomobject]@{};$toggle|Add-Member ScriptMethod Toggle {}
+    $lock=[pscustomobject]@{};$lock|Add-Member ScriptMethod GetCurrentPattern {param($p)$toggle}
+    function Control($Id,[switch]$Arranged){if($Id-ne'layer-lock'){throw 'Unexpected control before workspace route'};$lock}
+    function Model{@{state=@{layer_tools=@{editing_layer=@{locked=$true}}}}}
+    function Wait-Until($Condition,$Message){if(!(& $Condition)){throw $Message}}
+    function Find($Id,[switch]$Visible){$null}
+    function Invoke($Id){throw 'One-shot compact workspace fallback executed'}
+    function Use-Workspace($Id,$Name){if($Id-ne'builtin:workspace:painter'-or$Name-ne'Sketch'){throw 'Wrong shared workspace route'};throw 'Shared Sketch route reached'}
+    $routed=$false;try{Sketch-VectorRoutes 7}catch{if($_.Exception.Message-ne'Shared Sketch route reached'){throw};$routed=$true}
+    if(!$routed){throw 'Vector fixture did not use shared workspace readiness'}
+}
+
+& {
+    $tokens=$null;$errors=$null
     $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-multiwindow.ps1'),[ref]$tokens,[ref]$errors)
     if($errors.Count){throw ($errors|Out-String)}
     foreach($name in 'Ready','Use-Window'){
