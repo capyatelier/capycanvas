@@ -588,3 +588,16 @@ test('phone contacts preview locally, commit once and retire on cancellation',t=
   assert.deepEqual(freed,[1,2,3,4]);assert.equal(root.dataset.contact,undefined);
   assert.equal(inputs.filter(([,kind])=>kind==='finish').length,1,'Only a live contact reaches shared Finish');
 });
+
+test('a consumed child Escape leaves its dialog open until the terminal Escape',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js');
+  const {doc,element,icon}=colorDialogDom(t),dialog=element('dialog'),header=element('header'),cancel=element('button');
+  header.append(cancel);dialog.append(header);doc.body.append(dialog);
+  let cancels=0;
+  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null}),dialog_escape:()=> 'cancel'};
+  const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){cancels++;host.hide();}});
+  host.present({role:'editor',modal:true,primary:null});
+  const key=defaultPrevented=>dialog.dispatchEvent({type:'keydown',key:'Escape',defaultPrevented,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
+  key(true);assert.equal(dialog.open,true);assert.equal(cancels,0,'The child menu or swatch sheet already handled Escape');
+  key(false);assert.equal(dialog.open,false);assert.equal(cancels,1);host.dispose();
+});

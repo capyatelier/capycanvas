@@ -13,7 +13,7 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
     if(action==='clear_search')clearSearch();else if(action==='back')onBack();else onCancel();
   }
   const cancelled=event=>{event.preventDefault();escape();};
-  const key=event=>{if(event.key==='Escape'&&!composingKey(event)){event.preventDefault();event.stopPropagation();escape();}};
+  const key=event=>{if(event.defaultPrevented)return;if(event.key==='Escape'&&!composingKey(event)){event.preventDefault();event.stopPropagation();escape();}};
   const closed=()=>{if(expectedCloses){expectedCloses--;return;}if(intent&&!dialog.open)onCancel();};
   const outside=event=>{
     if(!intent||event.target!==dialog)return;

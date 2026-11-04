@@ -116,7 +116,14 @@ export async function checkColorEditor({call,evaluate,settle}) {
     assert.equal(await formName(1),'HSL','row formats are remembered');
     await slide(true);
     assert.equal(await evaluate(`document.querySelector('${dialog} .color-sheet input').value`),'Ink','swatch search is remembered');
-    await slide(false);
+    await evaluate(`(()=>{const search=document.querySelector('${dialog} .color-sheet input');search.value='';search.dispatchEvent(new Event('input'))})()`);
+    await key('Escape','Escape',27);
+    await wait(`document.querySelector('${dialog} .color-sheet').hidden && !!document.querySelector('${dialog}')`);
+    await key('Escape','Escape',27);
+    await wait(`!document.querySelector('${dialog}')`);
+    assert.equal(await foreground(),original,'Escape from the sheet then the dialog keeps the paint');
+    await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
+    await wait(`!!document.querySelector('${dialog}')`);
     await evaluate(`(()=>{const data=new DataTransfer();data.setData('text/plain','#CA4B35');document.querySelector('${dialog}').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true}))})()`);
     await click(`${dialog} .color-pick`);
     await wait(`!document.querySelector('${dialog}') && !document.querySelector('.color-strip').hidden && layerApp.app.color_preview().picker.editor`);
