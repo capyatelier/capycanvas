@@ -77,5 +77,39 @@ try{
     }
     Expect 'a requested frame followed by later submissions' $false
     if($script:polls -ne 1){throw 'The wait followed later submissions after its requested frame was displayed'}
+    foreach($idle in @($false,$true)){
+        Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=11;displayed=10}
+        $script:polls=0
+        $script:advance={
+            Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=12;displayed=$(if($script:polls -eq 1){11}else{12})}
+        }
+        Wait-PresentedFrame -Idle:$idle
+        $expected=if($idle){2}else{1}
+        if($script:polls -ne $expected){throw "Idle=$idle returned at snapshot $($script:polls+1), expected $($expected+1)"}
+        $checks++
+    }
+    Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=11;displayed=10}
+    $script:polls=0;$script:samples=0
+    function Start-Sleep([int]$Milliseconds){}
+    $pixels=Wait-StablePixels {
+        if($script:polls -lt 2){throw 'Idle pixels were sampled before the third snapshot'}
+        $script:samples++;'pixels'
+    } -Idle
+    if($pixels -ne 'pixels' -or $script:samples -ne 4 -or $script:polls -ne 2){throw 'Idle pixel sampling did not follow the idle acknowledgement'}
+    $checks++
+    $script:advance=$null
+    foreach($case in @(
+        @{name='an older idle acknowledgement';epoch=41;required=12;displayed=12;owner=$PID},
+        @{name='a foreign idle acknowledgement';epoch=43;required=12;displayed=12;owner=($PID+1)},
+        @{name='missing idle statistics';epoch=43;required=12;displayed=$null;owner=$PID},
+        @{name='a missing idle requirement';epoch=43;required=$null;displayed=12;owner=$PID},
+        @{name='a missing idle epoch';epoch=$null;required=12;displayed=12;owner=$PID}
+    )){
+        Write-Trace 'presentation-state' @{process_id=$case.owner;window_id=7;presentation_epoch=$case.epoch;required=$case.required;displayed=$case.displayed}
+        $failed=$false
+        try{Wait-PresentedFrame -Idle}catch{if($_.Exception.Message -ne 'The canvas did not settle on screen'){throw};$failed=$true}
+        if(!$failed){throw "Idle wait accepted $($case.name)"}
+        $checks++
+    }
     "Presented frame wait: $checks passed"
 }finally{Remove-Item -LiteralPath $out -Recurse -Force}

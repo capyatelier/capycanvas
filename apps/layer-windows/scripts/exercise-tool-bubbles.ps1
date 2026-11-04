@@ -1543,9 +1543,11 @@ try{
     [CapyRowPointer]::Hover($w.X+20,$w.Y+20)
     $before=Wait-StablePixels {Screen-Pixels $paper.x $paper.y}
     $paintDevice=if($Device -eq 'touch'){'pen'}else{$Device}
+    $revision=Revision
     Drag $paper $end -PointerDevice $paintDevice
     [CapyRowPointer]::Hover($w.X+20,$w.Y+20)
-    $painted=Wait-StablePixels {Screen-Pixels $paper.x $paper.y}
+    Wait-Until {(Revision) -ne $revision} 'Bubble stroke did not commit'
+    $painted=Wait-StablePixels {Screen-Pixels $paper.x $paper.y} -Idle
     if($painted -eq $before){throw 'Native canvas stroke did not change actual pixels'}
     if(@((View $controls).rings).Count -eq 0){throw 'Painting closed the controls halo'}
     Tap (Relative $history (Packet $history).history[0]);Wait-Until {(Screen-Pixels $paper.x $paper.y) -eq $before} 'Bubble Undo did not restore exact artwork pixels'

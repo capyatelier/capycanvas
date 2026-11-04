@@ -261,7 +261,7 @@ function Screen-Pixels([int]$X,[int]$Y,[string]$Path='',[switch]$Cursor) {
         try{[BitConverter]::ToString($hash.ComputeHash($bytes)).Replace('-','')}finally{$hash.Dispose()}
     }finally{$graphics.Dispose();$bitmap.Dispose()}
 }
-function Wait-PresentedFrame{
+function Wait-PresentedFrame([switch]$Idle){
     if(!$review){return}
     $path=State-File;if(!$path){return}
     $folder=Split-Path -Parent $path;$leaf=Split-Path -Leaf $path
@@ -271,22 +271,24 @@ function Wait-PresentedFrame{
     })
     $frame=($states|ForEach-Object {$_.presented}|Measure-Object -Maximum).Maximum
     $epoch=($states|ForEach-Object {$_.presentation_epoch}|Measure-Object -Maximum).Maximum
-    if($null -eq $frame){return}
+    if($null -eq $frame -and !$Idle){return}
     $presentation=Join-Path $folder ($leaf -replace '^ui-state-','presentation-state-')
     $presentationTarget=@{required=$null}
+    $message=if($Idle){'The canvas did not settle on screen'}else{'The display did not show the latest canvas frame'}
     Wait-Until {
         $display=if([IO.File]::Exists($presentation)){Read-Snapshot $presentation}
         if($display.process_id -ne $review.Id){return $false}
-        if($null -ne $epoch){
-            if($null -eq $display.presentation_epoch -or $display.presentation_epoch -lt $epoch -or $null -eq $display.required){return $false}
+        if($null -ne $epoch -or $Idle){
+            if($null -eq $epoch -or $null -eq $display.presentation_epoch -or $display.presentation_epoch -lt $epoch -or $null -eq $display.required){return $false}
+            if($Idle){return $null -ne $display.displayed -and $display.displayed -ge $display.required}
             if($null -eq $presentationTarget.required -or $display.required -lt $presentationTarget.required){$presentationTarget.required=$display.required}
             return $null -eq $display.displayed -or $display.displayed -ge $presentationTarget.required
         }
         $null -eq $display.displayed -or $display.displayed -ge $frame
-    } 'The display did not show the latest canvas frame'
+    } $message
 }
-function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
-    if(!$Composed){Wait-PresentedFrame}
+function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed,[switch]$Idle){
+    if(!$Composed){Wait-PresentedFrame -Idle:$Idle}
     $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $CapturePixels;$stable=0;$comparisons=0
     do{
         Start-Sleep -Milliseconds 100;$next=& $CapturePixels;$comparisons++
