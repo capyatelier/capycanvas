@@ -95,7 +95,6 @@ impl Source {
 
 #[derive(Default)]
 pub(crate) struct Sources {
-    adopted: (u64, usize),
     pub(super) entries: HashMap<SourceTarget, Source>,
     pub(super) reset: bool,
     pub(super) object_moving: Option<OccurrenceHandle>,
@@ -135,8 +134,6 @@ impl Sources {
             + self.object_refinements.values().chain(self.object_damage.values()).map(|damage| std::mem::size_of::<(super::super::object_cache::DamageKey, Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
     }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
-        let epoch = (r.composite_revision, r.transform_damage.len());
-        let transform_damage: &[_] = if std::mem::replace(&mut self.adopted, epoch) != epoch { &r.transform_damage } else { &[] };
         let mut wanted = BTreeSet::new();
         self.reset = false;
         self.object_moving = r.moving_layer;
@@ -145,7 +142,7 @@ impl Sources {
             let visible = packet.scene.visible(handle);
             if visible && occurrence.kind() == LayerKind::Paint && occurrence.is_artwork() && stack::has_content(r, packet.scene, handle) {
                 let id = packet.scene.source_target(handle).unwrap();
-                if wanted.insert(id) { self.update(r, packet, handle, false, batch_tiles, transform_damage); }
+                if wanted.insert(id) { self.update(r, packet, handle, false, batch_tiles); }
                 let source = self.entries.get_mut(&id).unwrap();
                 source.raster = packet.scene.paint_source(handle).unwrap().raster.identity();
                 let watercolor = r.watercolor_style(id, packet.dab_batches);
@@ -154,11 +151,11 @@ impl Sources {
                 }
             }
             if let Some((mask, _)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled && (visible || packet.inspect_mask == Some(handle)))
-                && wanted.insert(SourceTarget::Coverage(mask.source)) { self.update(r, packet, handle, true, batch_tiles, transform_damage); }
+                && wanted.insert(SourceTarget::Coverage(mask.source)) { self.update(r, packet, handle, true, batch_tiles); }
         }
         self.entries.retain(|id, _| wanted.contains(id));
     }
-    fn update(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle, is_mask: bool, batch_tiles: &[Vec<brush_tiles::BrushTile>], transform_damage: &[(SourceTarget, PixelRect)]) {
+    fn update(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle, is_mask: bool, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
         let scene = packet.scene;
         let (id, plane, image, mask) = if is_mask {
             (SourceTarget::Coverage(scene.mask(handle).unwrap().0.source), RasterPlane::Mask, None, metadata::mask_metadata(scene, handle))
@@ -239,7 +236,7 @@ impl Sources {
         if r.preview_layer_id == Some(id) && source.preview.is_empty() {
             source.preview = Damage::from_tiles(r.preview_damage, r.preview_contact_tiles.as_ref());
         }
-        for &(target, region) in transform_damage {
+        for &(target, region) in &r.transform_damage {
             if target == id { damage.regions.push(region); }
         }
         let radius = source.watercolor.map_or(0, |w| w.radius());

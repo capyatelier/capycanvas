@@ -246,47 +246,6 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish(
 }
 
 #[test]
-fn deferred_composition_adopts_raster_damage_once() {
-    let extent=[1;2];
-    let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Reference".into(),paper:"Paper".into()});
-    let target=doc.scene().order()[0];
-    let reference=paint_occurrence(&mut doc,"Reference",Some(rgba8_source(extent,|x,y|[8*x as u8,8*y as u8,80,192])));
-    set_root_entries(&mut doc,vec![reference,target]);
-    let view=ViewState {width_px:1,height_px:1,document_to_surface:[0.5,0.,0.,0.5,0.,0.]};
-    let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {unified:true,budget_bytes:Some(192<<20),..Default::default()}).unwrap();
-    crate::test_support::submit_settled(&mut r,FramePacket {view,..packet(doc.scene(),extent)});
-    let SourceTarget::Paint(reference)=doc.scene().source_target(reference).unwrap() else {unreachable!()};
-    doc.artwork.paint.get_mut(reference).unwrap().base=Some(PaintBase::new(rgba8_source(extent,|x,y|[8*x as u8,8*y as u8,120,192]).into()));
-    let source=doc.scene().source_target(target).unwrap();let SourceTarget::Paint(paint)=source else {unreachable!()};
-    let coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent,[0;2]);
-    doc.artwork.paint.get_mut(paint).unwrap().operations=Arc::new(vec![layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage,
-        kind:layer_core::RasterOperationKind::Fill {color:[0.,0.,0.5,0.5],texture:Default::default(),alpha_locked:false,edges:None,underfill:None}}]);
-    doc.artwork.paint.get_mut(paint).unwrap().raster=layer_core::raster::RasterRevision::pending();
-    let mut stored=crate::layer_tests::batch(source);stored.kind=DabBatchKind::RasterOperation(0);stored.dab_count=0;stored.damage=layer_core::Rect::from_extent(extent);
-    let frame=FramePacket {view,dab_batches:std::slice::from_ref(&stored),..packet(doc.scene().with_owner(doc.owner,1),extent)};
-    crate::test_support::submit_ready(&mut r,frame).unwrap();
-    assert!(r.object_deferred,"the changed reference must defer composition after the fill's mips were prepared");
-    let input=&r.scene.as_ref().unwrap().scale_sources.entries[&source];
-    assert!(!r.transform_damage.is_empty());
-    let updates=input.updates;let valid:usize=input.levels.values().map(|level|level.valid.len()).sum();
-    assert!(valid>0,"the first attempt prepared the fill source");
-    let idle=FramePacket {composite_all:false,dab_batches:&[],..frame};
-    crate::test_support::submit_settled(&mut r,idle);
-    let input=&r.scene.as_ref().unwrap().scale_sources.entries[&source];
-    let after_valid:usize=input.levels.values().map(|level|level.valid.len()).sum();
-    let after_updates=input.updates;
-    assert!(r.transform_damage.is_empty());
-    let mut ample=doc.clone();ample.artwork.paint.get_mut(paint).unwrap().raster=layer_core::raster::RasterRevision::pending();
-    let mut control=crate::memory::memory_tests::legacy_scene_renderer(ample.composition().color);
-    crate::test_support::submit_settled(&mut control,FramePacket {scene:ample.scene().with_owner(ample.owner,1),..frame});
-    let actual=display_pixels(&r);let expected=display_pixels(&control);assert_eq!(actual.len(),expected.len());
-    for (actual,expected) in actual.iter().zip(expected) {for channel in 0..4 {
-        assert!((actual[channel]-expected[channel]).abs()<2e-6,"{actual:?} != {expected:?}");
-    }}
-    assert!(after_updates<=updates+after_valid.saturating_sub(valid) as u64,"the continuation re-staled prepared source mips: {updates}->{after_updates}, valid {valid}->{after_valid}");
-}
-
-#[test]
 fn fill_preview_becomes_ready_after_deferred_object_composition() {
     let extent=[1024,512];
     let mut doc=deferred_object_document();
