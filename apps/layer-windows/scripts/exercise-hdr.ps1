@@ -511,7 +511,7 @@ try {
    Write-Output "$device phase: short tab tap"
    $id=if((Model).windows_tabs.selected -eq 1){2}else{1};$button=Control ('drawing-tab-'+$id) -Within $tabStrip -Arranged;$bounds=$button.Current.BoundingRectangle
    [CapyRowPointer]::Down($device,[int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2));[CapyRowPointer]::Up($device -eq 'pen')
-   Wait-Until {(Model).windows_tabs.selected -eq $id -and (Model).brush_ready} 'Native short tab tap did not select its drawing' 60
+   Wait-Until {(Model).windows_tabs.selected -eq $id -and (Model).brush_ready -and (Model).windows_tabs.available} 'Native short tab tap did not select its drawing' 60
    Write-Output "$device phase: tab acknowledged context"
    $selected=(Model).windows_tabs.selected;$button=Control 'drawing-tab-1' -Within $tabStrip -Arranged;$bounds=$button.Current.BoundingRectangle;$x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
    if($device -eq 'mouse'){[CapyRowPointer]::RightClick($x,$y)}else{
