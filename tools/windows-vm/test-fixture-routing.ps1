@@ -118,6 +118,37 @@ foreach($case in @(@{option='CanvasResetOnly';journey='Check-CanvasReset'},@{opt
     if(!$failure -or $failure -notlike ($case.option+' requires *')){throw 'Explicit mouse must retain the native edge guard'}
     if($case.option -eq 'CancelOnly'){$bound.Device='pen';if((& $probe @bound) -ne 'pen'){throw 'Explicit pen cancellation changed'}}
 }
+& {
+    $localization=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/exercise-localization.ps1'),[ref]$tokens,[ref]$errors)
+    if(@($errors).Count){throw ($errors|Out-String)}
+    $aliases=@($localization.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text -match '^if\(\$Theme.StartsWith\('})
+    $partition=$localization.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Journey-Languages'},$false)
+    $probe=[scriptblock]::Create($localization.ParamBlock.Extent.Text+"`n"+($aliases.Extent.Text -join "`n")+"`n"+$partition.Extent.Text+"`n"+'[pscustomobject]@{theme=$Theme;large=[bool]$LargeText;part=$JourneyPart;tags=@(Journey-Languages @(1..15) $JourneyPart)}')
+    foreach($case in @(
+        @{selectors=@('JourneyOnly','journey-2-dark','journey-3-dark','journey-4-dark');theme='dark';large=$false},
+        @{selectors=@('journey-light','journey-2-light','journey-3-light','journey-4-light');theme='light';large=$false},
+        @{selectors=@('journey-dark-large','journey-2-dark-large','journey-3-dark-large','journey-4-dark-large');theme='dark';large=$true},
+        @{selectors=@('journey-light-large','journey-2-light-large','journey-3-light-large','journey-4-light-large');theme='light';large=$true}
+    )){
+        $parts=@(foreach($selector in $case.selectors){
+            $arguments=@($edgeRuns[('localization:'+$selector)])
+            if(!$arguments.Count){throw "Missing generated Journey selector: $selector"}
+            $bound=@{Executable='C:\owned\CapyCanvas.exe'}
+            for($i=0;$i -lt $arguments.Count;$i++){
+                $name=$arguments[$i].TrimStart('-')
+                if($name -eq 'Theme'){$i++;$bound[$name]=$arguments[$i]}else{$bound[$name]=$true}
+            }
+            & $probe @bound
+        })
+        $expected=@('1,2,3,4','5,6,7,8','9,10,11,12','13,14,15')
+        for($i=0;$i -lt 4;$i++){
+            if($parts[$i].part -ne $i+1 -or ($parts[$i].tags -join ',') -cne $expected[$i]){throw 'Generated Journey selectors repeated or lost a language quarter'}
+            if($parts[$i].theme -cne $case.theme -or $parts[$i].large -ne $case.large){throw 'Journey partition changed theme or text scale'}
+        }
+        $tags=@($parts|ForEach-Object {$_.tags})
+        if(($tags -join ',') -cne ((1..15) -join ',') -or @($tags|Select-Object -Unique).Count -ne 15){throw 'Generated Journey selectors did not cover every tag exactly once'}
+    }
+}
 if(($edgeRuns['edge-reach:pen'] -join ',') -ne '-Device,pen' -or ($edgeRuns['edge-reach:ColumnResetOnly'] -join ',') -ne '-ColumnResetOnly'){throw 'Native edge routing changed unrelated variants'}
 $smoke=@(
     'activation','canvas-editing:smoke','canvas-editing:smoke-light','clipboard',

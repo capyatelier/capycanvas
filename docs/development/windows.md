@@ -610,6 +610,8 @@ selection, `-ArcContextOnly` in HDR and `-PixelsOnly` in Navigator run those
 portions of their normal journeys.
 `-ColumnEarlyOnly` in workspace pickup tests early motion along a collapsed strip.
 `-ClippedEdgesOnly` checks layer-list boundaries; toolbar components `-Journey theme`/`theme-light` checks retained theme ink, and color editor `-Theme layout-dark`/`layout-light` checks SDR/HDR wheel shrink and growth.
+
+Localization keeps window/profile checks in its default/theme variants; `-RetainedToolsOnly` covers tool/filter surfaces, while `-JourneyOnly -JourneyPart 1` through `4` cover disjoint language quarters (`journey-2-*`, `journey-3-*` and `journey-4-*` select the later parts).
 `-SwipeCleanupOnly` in switcher drag runs its native swipe Delete cleanup.
 
 ## Matched editor captures

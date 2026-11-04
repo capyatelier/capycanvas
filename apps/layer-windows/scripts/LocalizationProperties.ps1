@@ -708,13 +708,17 @@ function Tool-Surfaces{
  Toolbar-GroupedLanguageSurface
  Use-Window $first
  Search-Command 'transform' 'scale_rotate'
+ Copy-Panel 'tool_settings' 'tool-setting-transform_x'
  Wait-Until {$view=Model;$view -and $view.state.layer_tools.tool -eq 'transform' -and (Find 'tool-setting-transform_x') -and (Find 'tool-choice-transform-reference')} 'Transform did not expose retained native position and anchor controls' 30
  $subtools=@((Fresh-Model).state.tool_set.subtools);$tooltipIndex=-1;for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].enabled -and !$subtools[$i].disabled_reason){$tooltipIndex=$i;break}}
  if($tooltipIndex -lt 0){throw 'Tool Set tooltip fixture requires an enabled leaf choice with no disabled reason'}
  $tooltipId='tool-subtool-'+$tooltipIndex;Copy-Panel 'brushes' $tooltipId;$tooltipControl=Control $tooltipId -Arranged;$tooltipIdentity=$tooltipControl.GetRuntimeId() -join ':'
  $baseline=Fresh-Model;$tooltipAction=$baseline.state.tool_set.subtools[$tooltipIndex].action|ConvertTo-Json -Depth 20 -Compress;$tooltipDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$tooltipGpu=$baseline.windows_gpu_generation
  if($tooltipControl.Current.HelpText -ne [string]$baseline.state.tool_set.subtools[$tooltipIndex].disabled_reason){throw 'Tool Set tooltip target exposed unrelated accessibility help'}
- $away=$root.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($away.X+20),[int]($away.Y+20));Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Previous tooltip did not retire before keyboard-only Tool Set copy acceptance'
+ $away=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
+ Focus-Canvas;$area=(Fresh-Model).state.camera.work_area
+ [CapyRowPointer]::Hover([int]($away.Left+$area[0]+$area[2]/2),[int]($away.Top+$area[1]+$area[3]/2))
+ Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Previous tooltip did not retire before keyboard-only Tool Set copy acceptance'
  Focus-Keyboard $tooltipControl
  Wait-Until {$tips=@(Capy-Tooltips $review.Id);$tips.Count -eq 1 -and $tips[0].Current.Name -eq $baseline.state.tool_set.subtools[$tooltipIndex].label} 'Tool Set initial keyboard tooltip is not its exact source caption' 10
  Focus-Canvas;Wait-Until {@(Capy-Tooltips $review.Id).Count -eq 0} 'Initial Tool Set keyboard tooltip did not retire'

@@ -40,10 +40,21 @@ function Search-Command([string]$Query,[string]$Id){
  Wait-Until {(Search).query -eq $Query -and (Search).results[0].id -ceq ('command.'+$Id) -and (Find 'command-result-0').Current.Name -eq ((Model).state.commands|Where-Object id -eq $Id).label -and (Find 'command-result-0').Current.IsEnabled} "Native search did not resolve $Id" 20
  Invoke-Id 'command-result-0'
 }
-function Profile-Surfaces{
- $icc=Join-Path $run 'nameless-profile.icc';$photo=Join-Path $run 'Tiếng Việt İı ไทย source.png'
- Write-ProfileFixture $icc
+function New-SourcePhoto{
+ $photo=Join-Path $run 'Tiếng Việt İı ไทย source.png'
  [IO.File]::WriteAllBytes($photo,[Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAABdWlDQ1BJQ0MgUHJvZmlsZQAAeJx1kT1LA0EQhh8TNRIVCy1ELK6IomBQFMRSY5EmSIgKfjWXM5cISTzuEiTaCjYWAQvRxq/Cf6CtYKsgCIogYm3pVyNyziaBBNE59ubh3X2H2VnwRNJGxqkfh0w2Z8fCIW1ufkHzveDHSyOD9OuGY01EoxH+jc876lS+Dapa/5/7M5rXJaCuSXjUsOycsHRDZC1nKd4W7jBS+rLwofCALQ0KXyk9XuZnxckyvyu2Z2KT4FE1tWQNx2vYSNkZ4T7hQCadNyr9qJu0JLKz05K7ZHXjECNMCI04eVZIkyMoOSsz+9s3VPJNsSoeQ/4WBWxxJEmJd0DUvFRNSDZFT8iXpqDm/nuejjkyXK7eEoKGJ9d96wHfDnwXXffryHW/j8H7CBfZqn9V5jT2IXqxqgUOoG0Tzi6rWnwXzreg88HSbb0keWV5TBNeT6F1HtpvwL9YnlVln5N7mNmQJ7qGvX3olfNtSz+jdWhi8y0eYwAAAZ1pVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iPjxyZGY6UkRGIHhtbG5zOnJkZj0iaHR0cDovL3d3dy53My5vcmcvMTk5OS8wMi8yMi1yZGYtc3ludGF4LW5zIyI+PHJkZjpEZXNjcmlwdGlvbiB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iPjxkYzpjcmVhdG9yPjxyZGY6U2VxPjxyZGY6bGk+UHJpdmF0ZSBsb2NhbGl6YXRpb24gZml4dHVyZTwvcmRmOmxpPjwvcmRmOlNlcT48L2RjOmNyZWF0b3I+PGRjOnJpZ2h0cz48cmRmOkFsdD48cmRmOmxpIHhtbDpsYW5nPSJ4LWRlZmF1bHQiPkdlbmVyYXRlZCB0ZXN0IGltYWdlPC9yZGY6bGk+PC9yZGY6QWx0PjwvZGM6cmlnaHRzPjwvcmRmOkRlc2NyaXB0aW9uPjwvcmRmOlJERj48L3g6eG1wbWV0YT59360kAAAAGUlEQVR4nGOUTDnBQApgIkn1qIZRDUNKAwAUYwFl4JulLgAAAABJRU5ErkJggg=='))
+ $photo
+}
+function Open-SourcePhoto([string]$Path){
+ Use-Window $first
+ Menu-Command 'file' 'open_document';Choose-Path $Path
+ Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.label -eq [IO.Path]::GetFileNameWithoutExtension($Path) -and (($view.state.commands|Where-Object id -eq 'repair_source_profile').enabled -or ($view.state.commands|Where-Object id -eq 'apply_transform').enabled)} 'Private source photo did not become editable' 90
+ if(((Fresh-Model).state.commands|Where-Object id -eq 'apply_transform').enabled){Search-Command 'apply transform' 'apply_transform'}
+ Wait-Until {((Model).state.commands|Where-Object id -eq 'repair_source_profile').enabled} 'Imported source did not expose profile repair' 45
+}
+function Profile-Surfaces{
+ $icc=Join-Path $run 'nameless-profile.icc';$photo=New-SourcePhoto
+ Write-ProfileFixture $icc
  Use-Window $first;Menu-Command 'view' 'soft_proof'
  Wait-Until {(Find 'proof-panel-mode')} 'Retained native Proof panel did not open' 30
  Menu-Command 'file' 'document_properties'
@@ -98,10 +109,7 @@ function Profile-Surfaces{
  Invoke 'CloseButton';Wait-Until {(Find 'proof-profile')} 'Profile library did not return to the retained proof draft' 30
  Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.windows_document} 'Proof draft did not cancel' 30
  if($ProfilesOnly){return}
- Menu-Command 'file' 'open_document';Choose-Path $photo
- Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.label -eq [IO.Path]::GetFileNameWithoutExtension($photo) -and (($view.state.commands|Where-Object id -eq 'repair_source_profile').enabled -or ($view.state.commands|Where-Object id -eq 'apply_transform').enabled)} 'Private source photo did not become editable' 90
- if(((Fresh-Model).state.commands|Where-Object id -eq 'apply_transform').enabled){Search-Command 'apply transform' 'apply_transform'}
- Wait-Until {((Model).state.commands|Where-Object id -eq 'repair_source_profile').enabled} 'Imported source did not expose profile repair' 45
+ Open-SourcePhoto $photo
  Search-Command 'repair source profile' 'repair_source_profile'
  Wait-Until {(Find 'document-source-profile') -and (Find 'document-profile-choice')} 'Source repair dialog did not open' 45
  $sourceIdentity=(Control 'document-source-profile').GetRuntimeId() -join ':';$choiceIdentity=(Control 'document-profile-choice').GetRuntimeId() -join ':'

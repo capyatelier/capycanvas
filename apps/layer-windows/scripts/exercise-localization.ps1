@@ -1,10 +1,12 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large','blend-large-dark','blend-large-light','profiles-dark','profiles-light','notice-light','stats-light')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[switch]$NoticeOnly,[switch]$StatsOnly,[switch]$HeaderOnly,[switch]$BlendOnly,[switch]$GroupedToolsOnly,[switch]$ProfilesOnly,[switch]$ConfigurationOnly,[switch]$ZenThemeOnly,[switch]$ColorOnly)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light','light-large','blend-large-dark','blend-large-light','profiles-dark','profiles-light','notice-light','stats-light','retained-tools-light','retained-tools-dark-large','retained-tools-light-large','journey-light','journey-dark-large','journey-light-large','journey-2-dark','journey-2-light','journey-2-dark-large','journey-2-light-large','journey-3-dark','journey-3-light','journey-3-dark-large','journey-3-light-large','journey-4-dark','journey-4-light','journey-4-dark-large','journey-4-light-large')][string]$Theme='dark',[switch]$LargeText,[int]$LanguageLimit=0,[ValidateRange(1,4)][int]$JourneyPart=1,[switch]$NoticeOnly,[switch]$StatsOnly,[switch]$HeaderOnly,[switch]$BlendOnly,[switch]$GroupedToolsOnly,[switch]$ProfilesOnly,[switch]$ConfigurationOnly,[switch]$ZenThemeOnly,[switch]$ColorOnly,[switch]$RetainedToolsOnly,[switch]$JourneyOnly)
 $ErrorActionPreference='Stop'
 if($Theme.StartsWith('profiles-')){$Theme=$Theme.Substring(9);$ProfilesOnly=$true}
 if($Theme -eq 'notice-light'){$Theme='light';$NoticeOnly=$true}
 if($Theme -eq 'stats-light'){$Theme='light';$StatsOnly=$true}
 if($Theme -eq 'light-large'){$Theme='light';$LargeText=$true}
 if($Theme.StartsWith('blend-large-')){$Theme=$Theme.Substring(12);$LargeText=$true;$BlendOnly=$true;$LanguageLimit=2}
+if($Theme.StartsWith('retained-tools-')){$choice=$Theme.Substring(15);$RetainedToolsOnly=$true;$LargeText=$LargeText -or $choice.EndsWith('-large');$Theme=if($choice.StartsWith('light')){'light'}else{'dark'}}
+if($Theme.StartsWith('journey-')){$choice=$Theme.Substring(8);$part=$choice.Split('-',2);if($part[0] -in @('2','3','4')){$JourneyPart=[int]$part[0];$choice=$part[1]};$JourneyOnly=$true;$LargeText=$LargeText -or $choice.EndsWith('-large');$Theme=if($choice.StartsWith('light')){'light'}else{'dark'}}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 . (Join-Path $PSScriptRoot 'LocalizationProfiles.ps1')
 . (Join-Path $PSScriptRoot 'LocalizationShortcuts.ps1')
@@ -505,6 +507,123 @@ function Zen-ThemeSurface{
  Wait-Until {!(Model).preferences} 'Preferences did not close after the inactive Zen theme journey'
  @{theme=$Theme;transitions=$records;animations_enabled=$animations;reduced_motion=if($animations){'unverified; current Windows animations are enabled'}else{'settled native visibility and restoration passed with Windows animations disabled'};layout_camera_brush_artwork_history_and_gpu='unchanged';frame_pacing='unverified';evidence=$run}
 }
+function Open-TextDrawing{
+ Use-Window $first;Focus-Canvas
+ Menu-Command 'file' 'new_window'
+ Wait-Until {@(Windows).Count -eq 3} 'Text-draft window did not register' 45
+ $script:textWindow=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id})[0];Ready $textWindow;Use-Window $textWindow
+ Menu-Command 'file' 'new_document'
+ New-DrawingPixels 64 64
+ Invoke 'new-drawing-create';Idle
+ Wait-Until {$view=Model;$view -and $view.state.tabs[-1].width -eq 64 -and $view.state.tabs[-1].height -eq 64} 'Small test drawing did not prepare' 45
+ $script:layer=(Fresh-Model).state.layer_tools.editing_layer.id
+ Invoke "layer-$layer-name";(Control "layer-$layer-name").SetFocus();Key 113
+ Wait-Until {(Model).state.layer_tools.rename_layer -eq $layer} 'Unicode rename draft did not open' 15
+ $layerName=Control "layer-$layer-rename"
+ Select-Draft $layerName $literalName
+ Focus-Canvas
+ Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.label -eq $literalName -and $null -eq $view.state.layer_tools.rename_layer} 'Literal Unicode layer name did not commit at its existing focus boundary' 15
+}
+function Journey-Languages([object[]]$Choices,[int]$Part){
+ $count=[int][Math]::Ceiling($Choices.Count/4.0)
+ @($Choices|Select-Object -Skip (($Part-1)*$count) -First $count)
+}
+function Run-Journey{
+ $lastIndex=$inventory.Count-1
+ Preference-Numeric
+ Shortcut-Surfaces
+ Property-Surfaces
+ Panel-CopySurfaces
+ Use-Window $textWindow
+ Search-Command 'Pen' 'pen'
+ Wait-Until {$view=Model;$view -and ($view.state.commands|Where-Object id -eq 'pen').selected -and $view.brush_ready} 'Pen did not become ready for continued drawing' 45
+ Open-Search
+ (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('brush size')
+ Wait-Until {(Search).query -eq 'brush size' -and (Search).results[0].id -ceq 'tool_setting.size' -and (Search).results[0].enabled -and (Find 'command-result-0').Current.Name -ceq (Search).results[0].label -and (Find 'command-result-0').Current.IsEnabled} 'Brush size parameter did not resolve' 15
+ Invoke-Id 'command-result-0';Wait-Until {$parameter=(Search).parameter;$parameter -and $parameter.id -ceq 'tool_setting.size' -and !(Find 'command-result-0' -Visible) -and (Find 'command-search' -Visible).Current.Name -eq $parameter.label} 'Brush size parameter entry did not open' 15
+ (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1');Key 13
+ Wait-Until {!(Find 'command-search' -Visible) -and (Model).state.brush.diameter -eq 1} 'Controlled one-pixel Pen size did not commit' 15
+ $journeys=@()
+ foreach($choice in $seen){
+  Use-Window $second;Language-Choice $choice.index|Out-Null
+  Wait-Until {(Model $textWindow).windows_active_tag -eq $choice.tag} 'Drawing window did not adopt the current context' 30
+  Use-Window $textWindow;Focus-Canvas
+  foreach($layer in @((Fresh-Model $textWindow $choice.tag).state.layers)){
+   $label=Control "layer-$($layer.id)-label"
+   if($label.Current.Name -ne $layer.label){throw "Layer row $($layer.id) lost its literal name after the language changed"}
+  }
+  Open-Search
+  $search=Control 'command-search';$search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('undo')
+  $query=(Fresh-Model).state.commands|Where-Object id -eq 'undo'|Select-Object -First 1
+  Wait-Until {(Search).query -eq 'undo' -and (Find 'command-result-0').Current.Name -eq $query.label} 'English-alias command search did not resolve Undo after switching' 15
+  $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($query.label)
+  Wait-Until {(Search).query -eq $query.label -and (Find 'command-result-0').Current.Name -eq $query.label} 'Localized command search did not resolve Undo after switching' 15
+  if($choice.tag -eq 'de'){
+   $size=(Fresh-Model).state.commands|Where-Object id -eq 'image_size'|Select-Object -First 1
+   foreach($spelling in @('Bildgröße','BILDGRÖSSE','BILDGRÖẞE','IMAGE SIZE')){
+    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
+    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $size.label} 'German sharp-S and English-alias matching did not resolve Image Size' 15
+   }
+  }
+  if($choice.tag -eq 'vi'){
+   foreach($spelling in @($query.label.Normalize([Text.NormalizationForm]::FormD),$query.label.ToUpperInvariant().Normalize([Text.NormalizationForm]::FormD))){
+    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
+    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $query.label} 'Vietnamese decomposed command search did not preserve accented matching' 15
+   }
+  }
+  if($choice.tag -eq 'tr'){
+   $size=(Fresh-Model).state.commands|Where-Object id -eq 'image_size'|Select-Object -First 1
+   foreach($spelling in @('IMAGE SIZE','İMAGE SİZE','ımage sıze')){
+    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
+    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $size.label} 'Turkish English-alias dotted/dotless I matching did not resolve Image Size' 15
+   }
+   $import=(Fresh-Model).state.commands|Where-Object id -eq 'import_image'|Select-Object -First 1
+   foreach($spelling in @($import.label.ToUpperInvariant(),$import.label.ToUpperInvariant().Replace('I','İ'))){
+    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
+    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $import.label} 'Turkish localized dotted/dotless I matching did not resolve Import Image' 15
+   }
+  }
+  Capture-Window $textWindow ($choice.tag+'-search');Key 27
+  Wait-Until {!(Find 'command-search' -Visible)} 'Search did not close' 15
+  Application-Menu 'view'
+  Capture-Window $textWindow ($choice.tag+'-view-menu');Key 27
+  Menu-Command 'view' 'fit_canvas'
+  $pixelsBefore=Stable-CanvasPixels ($choice.tag+'-pixels-before')
+  Draw $journeys.Count $choice.tag
+  $pixelsDrawn=Stable-CanvasPixels ($choice.tag+'-pixels-drawn')
+  if($pixelsDrawn -eq $pixelsBefore){throw 'Continued drawing did not change presented canvas pixels'}
+  $drawn=(Fresh-Model $script:current $choice.tag).state.document_file.revision
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),90)
+  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $drawn} 'Undo stopped after language switching' 45
+  Wait-Until {(Canvas-Pixels) -eq $pixelsBefore} 'Undo did not restore the presented canvas pixels' 45
+  Canvas-Pixels ($choice.tag+'-pixels-undone')|Out-Null
+  $undone=(Fresh-Model $script:current $choice.tag).state.document_file.revision
+  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),90)
+  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $undone} 'Redo stopped after language switching' 45
+  Canvas-Pixels ($choice.tag+'-pixels-redone')|Out-Null
+  Wait-Until {(Canvas-Pixels) -eq $pixelsDrawn} 'Redo did not restore the presented drawing pixels' 45
+  Menu-Command 'file' 'save_document_as'
+  $project=Join-Path $run ($choice.tag+'-'+$literalName+'.capy');Choose-Path $project
+  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and (Test-Path -LiteralPath $project) -and $view.state.document_file.location.uri -eq $project -and !$view.state.document_file.modified} 'Unicode project save did not acknowledge its checkpoint' 45
+  $before=Export-Image (Join-Path $run ($choice.tag+'-before.png'))
+  Menu-Command 'file' 'open_document';Choose-Path $project
+  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $view.state.document_file.location.uri -eq $project -and !$view.state.document_file.modified -and $view.state.layer_tools.editing_layer.label -eq $literalName} 'Unicode project reopen changed the saved name or checkpoint' 90
+  $after=Export-Image (Join-Path $run ($choice.tag+'-after.png'))
+  if($before -ne $after){throw 'Save/reopen changed exported drawing pixels after language switching'}
+  Capture-Window $textWindow ($choice.tag+'-drawing')
+  $journeys+=[pscustomobject]@{tag=$choice.tag;search='localized and English alias passed';drawing_undo_redo='passed';unicode_save_reopen_export='passed';export_sha256=$after}
+ }
+ Notice-Surface
+ Use-Window $second;Language-Choice 0|Out-Null;$lastChoice=Language-Choice $lastIndex
+ Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.preferences} 'Preferences did not close' 10
+ Focus-Canvas;Menu-Command 'file' 'new_window'
+ Wait-Until {@(Windows).Count -eq 4} 'Future window did not register' 45
+ $future=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id -and $_.id -ne $textWindow.id})[0];Ready $future
+ if((Fresh-Model $future $lastChoice.tag).windows_active_tag -ne $lastChoice.tag){throw 'Future window used a stale language'}
+ Capture-Window $future 'future-window'
+ Wait-Until {(Read-Snapshot (Settings-File)).language.Explicit -eq $lastChoice.tag} 'Language preference did not persist to the isolated settings file' 30
+ $result=[pscustomobject]@{theme=$Theme;language_limit=$LanguageLimit;system_text_scale=$actualTextScale;language_choices=$seen;explicit_language_count=$seen.Count;retained_shortcut_editor_picker_capture='all selected locales passed';retained_properties_numeric_choice_toggle_curve_color_gradient='all selected locales passed';drawing_undo_redo_unicode_save_reopen_export='passed';notice='passed';future_window='passed';settings_persistence='passed';journeys=$journeys;evidence=$run}|ConvertTo-Json -Depth 6;[IO.File]::WriteAllText((Join-Path $run 'results.json'),$result);$result
+}
 try{
  Enter-CapyEnvironment
  $previousTextScale=Text-Scale
@@ -527,7 +646,7 @@ try{
  Menu-Command 'file' 'new_window'
  Wait-Until {@(Windows).Count -eq 2} 'Second window did not register' 45
  $second=@(Windows|Where-Object id -ne $first.id)[0];Ready $second
- if(@($NoticeOnly,$StatsOnly,$HeaderOnly,$BlendOnly,$GroupedToolsOnly,$ConfigurationOnly,$ProfilesOnly,$ZenThemeOnly,$ColorOnly|Where-Object {$_}).Count -gt 1){throw 'Choose one focused localization mode'}
+ if(@($NoticeOnly,$StatsOnly,$HeaderOnly,$BlendOnly,$GroupedToolsOnly,$ConfigurationOnly,$ProfilesOnly,$ZenThemeOnly,$ColorOnly,$RetainedToolsOnly,$JourneyOnly|Where-Object {$_}).Count -gt 1){throw 'Choose one focused localization mode'}
  if($ColorOnly){
   $CapyPopups=$true
   [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -560,7 +679,7 @@ try{
   [pscustomobject]@{theme=$Theme;languages=$seen;profile_library_search='nine private ICC entries, stable-ID query and live localized metadata passed';evidence=$run}|ConvertTo-Json -Depth 4|Tee-Object -FilePath (Join-Path $run 'results.json')
   $completed=$true;return
  }
- if($GroupedToolsOnly -or $StatsOnly){
+ if($GroupedToolsOnly -or $StatsOnly -or $RetainedToolsOnly -or $JourneyOnly){
   if($HeaderOnly -or $BlendOnly -or $NoticeOnly){throw 'Choose one focused localization mode'}
   [CapyRowPointer]::Initialize([uint32]$review.Id)
   Use-Window $second;Menu-Command 'edit' 'settings';Invoke-Id 'preference-page-appearance'
@@ -579,6 +698,19 @@ try{
   if($StatsOnly){
    Stats-CopySurface
    Write-Output "Retained idle Diagnostics help and identity passed for $($seen.Count) languages ($Theme)"
+   $completed=$true;return
+  }
+  if($RetainedToolsOnly){
+   Open-SourcePhoto (New-SourcePhoto)
+   Tool-Surfaces
+   Filter-Surfaces
+   $result=[pscustomobject]@{theme=$Theme;language_choices=$seen;retained_tool_and_filter_surfaces='passed';retained_transform_numeric_anchor='all selected locales passed';sampler='current captions and raw choices after expected Blur/reentry passed';evidence=$run}|ConvertTo-Json -Depth 8;[IO.File]::WriteAllText((Join-Path $run 'results.json'),$result);$result
+   $completed=$true;return
+  }
+  if($JourneyOnly){
+   $seen=@(Journey-Languages $seen $JourneyPart)
+   Open-TextDrawing
+   Run-Journey
    $completed=$true;return
   }
   Toolbar-GroupedLanguageSurface
@@ -604,21 +736,7 @@ try{
   [pscustomobject]@{theme=$Theme;retained_notice_copy_actions_and_deadline='passed';evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
   $completed=$true;return
  }
- Use-Window $first;Focus-Canvas
- Menu-Command 'file' 'new_window'
- Wait-Until {@(Windows).Count -eq 3} 'Text-draft window did not register' 45
- $textWindow=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id})[0];Ready $textWindow;Use-Window $textWindow
- Menu-Command 'file' 'new_document'
- New-DrawingPixels 64 64
- Invoke 'new-drawing-create';Idle
- Wait-Until {$view=Model;$view -and $view.state.tabs[-1].width -eq 64 -and $view.state.tabs[-1].height -eq 64} 'Small test drawing did not prepare' 45
- $layer=(Fresh-Model).state.layer_tools.editing_layer.id
- Invoke "layer-$layer-name";(Control "layer-$layer-name").SetFocus();Key 113
- Wait-Until {(Model).state.layer_tools.rename_layer -eq $layer} 'Unicode rename draft did not open' 15
- $layerName=Control "layer-$layer-rename"
- Select-Draft $layerName $literalName
- Focus-Canvas
- Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.label -eq $literalName -and $null -eq $view.state.layer_tools.rename_layer} 'Literal Unicode layer name did not commit at its existing focus boundary' 15
+ Open-TextDrawing
  Invoke-Id 'layer-add-mask'
  Wait-Until {$view=Model;$view -and @($view.state.layers|Where-Object {$_.id -eq $layer -and $_.has_mask}).Count -eq 1 -and (Find ('layer-'+$layer+'-mask')) -and (Find ('layer-'+$layer+'-mask-thumbnail'))} 'Private named layer did not expose its real mask controls' 30
  Invoke-Id ('layer-'+$layer+'-content')
@@ -732,101 +850,7 @@ try{
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  Header-MenuSurface
  Profile-Surfaces
- Tool-Surfaces
- Filter-Surfaces
- Preference-Numeric
- Shortcut-Surfaces
- Property-Surfaces
- Panel-CopySurfaces
- Use-Window $textWindow
- Search-Command 'Pen' 'pen'
- Wait-Until {$view=Model;$view -and ($view.state.commands|Where-Object id -eq 'pen').selected -and $view.brush_ready} 'Pen did not become ready for continued drawing' 45
- Open-Search
- (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('brush size')
- Wait-Until {(Search).query -eq 'brush size' -and (Search).results[0].id -ceq 'tool_setting.size' -and (Search).results[0].enabled -and (Find 'command-result-0').Current.Name -ceq (Search).results[0].label -and (Find 'command-result-0').Current.IsEnabled} 'Brush size parameter did not resolve' 15
- Invoke-Id 'command-result-0';Wait-Until {$parameter=(Search).parameter;$parameter -and $parameter.id -ceq 'tool_setting.size' -and !(Find 'command-result-0' -Visible) -and (Find 'command-search' -Visible).Current.Name -eq $parameter.label} 'Brush size parameter entry did not open' 15
- (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('1');Key 13
- Wait-Until {!(Find 'command-search' -Visible) -and (Model).state.brush.diameter -eq 1} 'Controlled one-pixel Pen size did not commit' 15
- $journeys=@()
- foreach($choice in $seen){
-  Use-Window $second;Language-Choice $choice.index|Out-Null
-  Wait-Until {(Model $textWindow).windows_active_tag -eq $choice.tag} 'Drawing window did not adopt the current context' 30
-  Use-Window $textWindow;Focus-Canvas
-  foreach($layer in @((Fresh-Model $textWindow $choice.tag).state.layers)){
-   $label=Control "layer-$($layer.id)-label"
-   if($label.Current.Name -ne $layer.label){throw "Layer row $($layer.id) lost its literal name after the language changed"}
-  }
-  Open-Search
-  $search=Control 'command-search';$search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('undo')
-  $query=(Fresh-Model).state.commands|Where-Object id -eq 'undo'|Select-Object -First 1
-  Wait-Until {(Search).query -eq 'undo' -and (Find 'command-result-0').Current.Name -eq $query.label} 'English-alias command search did not resolve Undo after switching' 15
-  $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($query.label)
-  Wait-Until {(Search).query -eq $query.label -and (Find 'command-result-0').Current.Name -eq $query.label} 'Localized command search did not resolve Undo after switching' 15
-  if($choice.tag -eq 'de'){
-   $size=(Fresh-Model).state.commands|Where-Object id -eq 'image_size'|Select-Object -First 1
-   foreach($spelling in @('Bildgröße','BILDGRÖSSE','BILDGRÖẞE','IMAGE SIZE')){
-    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
-    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $size.label} 'German sharp-S and English-alias matching did not resolve Image Size' 15
-   }
-  }
-  if($choice.tag -eq 'vi'){
-   foreach($spelling in @($query.label.Normalize([Text.NormalizationForm]::FormD),$query.label.ToUpperInvariant().Normalize([Text.NormalizationForm]::FormD))){
-    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
-    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $query.label} 'Vietnamese decomposed command search did not preserve accented matching' 15
-   }
-  }
-  if($choice.tag -eq 'tr'){
-   $size=(Fresh-Model).state.commands|Where-Object id -eq 'image_size'|Select-Object -First 1
-   foreach($spelling in @('IMAGE SIZE','İMAGE SİZE','ımage sıze')){
-    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
-    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $size.label} 'Turkish English-alias dotted/dotless I matching did not resolve Image Size' 15
-   }
-   $import=(Fresh-Model).state.commands|Where-Object id -eq 'import_image'|Select-Object -First 1
-   foreach($spelling in @($import.label.ToUpperInvariant(),$import.label.ToUpperInvariant().Replace('I','İ'))){
-    $search.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($spelling)
-    Wait-Until {(Search).query -eq $spelling -and (Find 'command-result-0').Current.Name -eq $import.label} 'Turkish localized dotted/dotless I matching did not resolve Import Image' 15
-   }
-  }
-  Capture-Window $textWindow ($choice.tag+'-search');Key 27
-  Wait-Until {!(Find 'command-search' -Visible)} 'Search did not close' 15
-  Application-Menu 'view'
-  Capture-Window $textWindow ($choice.tag+'-view-menu');Key 27
-  Menu-Command 'view' 'fit_canvas'
-  $pixelsBefore=Stable-CanvasPixels ($choice.tag+'-pixels-before')
-  Draw $journeys.Count $choice.tag
-  $pixelsDrawn=Stable-CanvasPixels ($choice.tag+'-pixels-drawn')
-  if($pixelsDrawn -eq $pixelsBefore){throw 'Continued drawing did not change presented canvas pixels'}
-  $drawn=(Fresh-Model $script:current $choice.tag).state.document_file.revision
-  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),90)
-  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $drawn} 'Undo stopped after language switching' 45
-  Wait-Until {(Canvas-Pixels) -eq $pixelsBefore} 'Undo did not restore the presented canvas pixels' 45
-  Canvas-Pixels ($choice.tag+'-pixels-undone')|Out-Null
-  $undone=(Fresh-Model $script:current $choice.tag).state.document_file.revision
-  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),90)
-  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $undone} 'Redo stopped after language switching' 45
-  Canvas-Pixels ($choice.tag+'-pixels-redone')|Out-Null
-  Wait-Until {(Canvas-Pixels) -eq $pixelsDrawn} 'Redo did not restore the presented drawing pixels' 45
-  Menu-Command 'file' 'save_document_as'
-  $project=Join-Path $run ($choice.tag+'-'+$literalName+'.capy');Choose-Path $project
-  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and (Test-Path -LiteralPath $project) -and $view.state.document_file.location.uri -eq $project -and !$view.state.document_file.modified} 'Unicode project save did not acknowledge its checkpoint' 45
-  $before=Export-Image (Join-Path $run ($choice.tag+'-before.png'))
-  Menu-Command 'file' 'open_document';Choose-Path $project
-  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $view.state.document_file.location.uri -eq $project -and !$view.state.document_file.modified -and $view.state.layer_tools.editing_layer.label -eq $literalName} 'Unicode project reopen changed the saved name or checkpoint' 90
-  $after=Export-Image (Join-Path $run ($choice.tag+'-after.png'))
-  if($before -ne $after){throw 'Save/reopen changed exported drawing pixels after language switching'}
-  Capture-Window $textWindow ($choice.tag+'-drawing')
-  $journeys+=[pscustomobject]@{tag=$choice.tag;search='localized and English alias passed';drawing_undo_redo='passed';unicode_save_reopen_export='passed';export_sha256=$after}
- }
- Notice-Surface
- Use-Window $second;Language-Choice 0|Out-Null;Language-Choice $lastIndex|Out-Null
- Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.preferences} 'Preferences did not close' 10
- Focus-Canvas;Menu-Command 'file' 'new_window'
- Wait-Until {@(Windows).Count -eq 4} 'Future window did not register' 45
- $future=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id -and $_.id -ne $textWindow.id})[0];Ready $future
- if((Fresh-Model $future $lastChoice.tag).windows_active_tag -ne $lastChoice.tag){throw 'Future window used a stale language'}
- Capture-Window $future 'future-window'
- Wait-Until {(Read-Snapshot (Settings-File)).language.Explicit -eq $lastChoice.tag} 'Language preference did not persist to the isolated settings file' 30
- [pscustomobject]@{theme=$Theme;language_limit=$LanguageLimit;system_text_scale=$actualTextScale;narrow_preferences='900 by 720 for every locale';language_choices=$seen;explicit_language_count=$seen.Count;system_language=$systemChoice.tag;retained_numeric_draft_and_selection='passed';retained_unicode_text_draft_and_selection='passed';retained_nonempty_canvas_selection_and_bounds='passed';retained_preference_control='passed';retained_profile_source_proof_export='all exercised explicit locales passed';retained_shortcut_editor_picker_capture='all exercised explicit locales passed';retained_properties_numeric_choice_toggle_curve_color_gradient='all exercised explicit locales passed';retained_transform_numeric_anchor='all exercised explicit locales passed';sampler='current captions and raw choices after expected Blur/reentry passed; native RTI retention across Blur unavailable';inactive_windows='passed';future_window='passed';settings_persistence='passed';rapid_choices='passed';document_and_gpu_generation='passed';journeys=$journeys;scope='WinUI SDK/WARP controls, native file pickers and injected mouse/keys; genuine TSF, physical pen and hardware D3D12 frame pacing unverified';evidence=$run}|ConvertTo-Json -Depth 6|Tee-Object -FilePath (Join-Path $run 'results.json')
+ [pscustomobject]@{theme=$Theme;language_limit=$LanguageLimit;system_text_scale=$actualTextScale;narrow_preferences='900 by 720 for every locale';language_choices=$seen;explicit_language_count=$seen.Count;system_language=$systemChoice.tag;retained_numeric_draft_and_selection='passed';retained_unicode_text_draft_and_selection='passed';retained_nonempty_canvas_selection_and_bounds='passed';retained_preference_control='passed';retained_profile_source_proof_export='all selected locales passed';inactive_windows='passed';rapid_choices='passed';document_and_gpu_generation='passed';retained_header='passed';evidence=$run}|ConvertTo-Json -Depth 6|Tee-Object -FilePath (Join-Path $run 'results.json')
  $completed=$true
 }catch{
  if($review -and !$review.HasExited){try{Capture-Window $script:current 'failure'}catch{}}
