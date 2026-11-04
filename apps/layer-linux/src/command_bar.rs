@@ -172,6 +172,7 @@ impl CommandBar {
         self.card.set_margin_top(bounds.y.round() as i32);
         if let Some(scroll) = self.viewport.parent().and_downcast::<gtk::ScrolledWindow>() {
             let reserved = self.card.measure(gtk::Orientation::Vertical, bounds.width as i32).0
+                - self.card.margin_top() - self.card.margin_bottom()
                 - scroll.measure(gtk::Orientation::Vertical, bounds.width as i32).0;
             scroll.set_max_content_height((bounds.height as i32 - reserved).max(1));
         }

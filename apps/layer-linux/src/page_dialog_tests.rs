@@ -908,6 +908,16 @@ fn w6d_canvas(d: &mut Driver) {
     d.w.dispatch(UiAction::Invoke { command:CommandId::SearchCommands });
     until(|| d.w.command_bar.is_open() && find_named(d.w.window.upcast_ref(),"command-bar").is_some_and(|widget|widget.is_mapped()),"Command Search opens");
     capture(d,"command-search");
+    assert_eq!(state(&d.w).command_search.as_ref().unwrap().results.iter().map(|row|row.id.clone()).collect::<Vec<_>>(),
+        ["command.undo","command.fit_canvas","command.save_document","command.settings","command.keyboard_shortcuts"]);
+    let card=find_named(d.w.window.upcast_ref(),"command-bar").unwrap();
+    let card_bounds=card.compute_bounds(&d.w.window).unwrap();
+    assert!((314.0..=315.0).contains(&card_bounds.height()),"five Search rows retain their natural card height: {card_bounds:?}");
+    assert!(card_bounds.height()<=329.,"Search fits the landscape placement budget");
+    let last=find_named(&card,"command-result-4").unwrap();
+    let scroll=last.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+    let bounds=last.compute_bounds(&scroll).unwrap();
+    assert!(bounds.y()>=-1. && bounds.y()+bounds.height()<=scroll.height() as f32+1.,"last Search row is fully visible: {bounds:?}, viewport {}",scroll.height());
     d.w.dispatch(UiAction::CommandSearch { action:CommandSearchAction::Close });
     until(|| !d.w.command_bar.owns_input(),"Command Search releases input before Proof");
 
