@@ -109,7 +109,7 @@ fn dependencies(scene:layer_core::authored::SceneView<'_>,members:&[OccurrenceHa
     }
     required
 }
-fn same_source(r:&WgpuRasterizer,old:&RegionSource,new:&RegionSource)->bool {
+pub(super) fn same_source(r:&WgpuRasterizer,old:&RegionSource,new:&RegionSource)->bool {
     match (old,new) {
         (RegionSource::Scene {snapshot:a,scope:x},RegionSource::Scene {snapshot:b,scope:y}) if x==y=>{
             let a=a.view();let b=b.view();

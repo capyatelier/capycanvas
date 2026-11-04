@@ -120,6 +120,56 @@ fn fill_amendment_restores_the_original_source_and_keeps_one_undo_entry() {
 }
 
 #[test]
+fn region_cache_restore_keeps_all_pages_while_frame_time_advances() {
+    fn settle(r:&mut WgpuRasterizer,document:&Document,elapsed:&mut f32) {
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        loop {
+            *elapsed+=1.;
+            let frame=Arc::new(artwork::Frame::new(FramePacket {time_seconds:*elapsed,..packet(document.scene(),document.composition().size)},
+                layer_core::EvaluationContext {elapsed:*elapsed,..Default::default()}));
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            r.prefetch_regions(&frame,&mut encoder).unwrap();
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);
+            r.wait_idle().unwrap();
+            if !r.regions.as_ref().unwrap().background_pending() {break;}
+            assert!(std::time::Instant::now()<deadline,"reference preparation must finish");
+        }
+    }
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+    let extent=[384,256];
+    let mut document=paint_document(extent,"Restored reference");
+    let paint=target(&document);
+    let empty=placement::paint(&document).raster.clone();
+    let bytes=[255,0,0,255].repeat((PAGE_SIZE*PAGE_SIZE) as usize);
+    let tile=RasterTile::backed(TileBlob::encode(document.composition().color.paint_descriptor(),&bytes).unwrap());
+    placement::paint_mut(&mut document).raster=RasterRevision::backed(RasterData {tiles:(0..2).map(|x|
+        (TileKey {plane:RasterPlane::Color,coordinate:[x,0]},tile.clone())).collect(),..Default::default()});
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r,&document,extent);
+    r.startup=Some(startup::Startup::new(&r.device).unwrap());
+    r.startup.as_ref().unwrap().compiler.start();r.shader_idle(true,true);
+    let leaf=placement::occurrence_id(&document);
+    let source=|document:&Document|RegionSource::reference(document.snapshot(),leaf).unwrap();
+    r.prepare_regions(Some(&RegionPreparation {source:source(&document),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
+    let mut elapsed=0.;
+    settle(&mut r,&document,&mut elapsed);
+    placement::paint_mut(&mut document).raster=empty.clone();document.revision+=1;
+    submit_ready(&mut r,FramePacket {restore_rasters:&[(paint,empty)],time_seconds:elapsed,..packet(document.scene(),extent)}).unwrap();
+    settle(&mut r,&document,&mut elapsed);
+    let (_,classified,dirty)=crate::region_requests::tests::cached_pages(&r);
+    assert!(dirty.is_empty());
+    let classified=pollster::block_on(crate::local_tone::read_buffer_async(&r.device,&r.queue,classified.as_ref().unwrap())).unwrap();
+    assert!(classified.iter().all(|byte|*byte==255),"restored transparent pages remain eligible");
+    for _ in 0..2 {
+        let mut query=request(source(&document),rectangle([0,0,1,1]),Default::default(),0.);
+        query.enclosure=None;query.position=[192,128];
+        let result=receive_request(&mut r,query);
+        assert_eq!(result.pixels.bounds(),[0,0,extent[0],extent[1]]);
+        for point in [[64,128],[320,128]] {assert_eq!(value(&result.pixels,point[0],point[1]),255);}
+    }
+}
+
+#[test]
 fn region_cache_reference_edits_match_fresh_masks_across_page_and_window_seams() {
     let extent=[4097,257];
     let alpha=(0..extent[0]*extent[1]).map(|i| {

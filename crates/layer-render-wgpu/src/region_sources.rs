@@ -240,9 +240,11 @@ impl RawRegions {
     }
     pub fn batch_limit(&mut self,limit:Option<usize>) {self.batches_left=limit;}
     pub fn classification(&mut self,mask:Option<wgpu::Buffer>,pages:Option<Vec<[u32;2]>>) {
+        self.cancel();self.request_source=None;
         self.bindings.clear();self.mask=mask;self.pages=pages;
     }
-    pub fn processing(&self,source:&layer_render::RegionSource,sampling:Sampling)->bool {self.progress.is_some() && self.request_source.as_ref().is_some_and(|(old,mode)|old==source && *mode==sampling)}
+    pub fn processing(&self,source:&layer_render::RegionSource,sampling:Sampling)->bool {self.processing_with(sampling,|old|old==source)}
+    pub fn processing_with(&self,sampling:Sampling,matches:impl FnOnce(&layer_render::RegionSource)->bool)->bool {self.progress.is_some() && self.request_source.as_ref().is_some_and(|(old,mode)|*mode==sampling && matches(old))}
     pub fn extent(&self) -> Option<[u32; 2]> { self.progress.as_ref().map(|progress| progress.extent) }
     pub fn begin(&mut self, r: &WgpuRasterizer, request: &layer_render::RegionRequest) -> Result<(), GpuRasterError> {
         if self.progress.is_some() { return Ok(()); }

@@ -180,7 +180,8 @@ impl RegionRequests {
             if !self.cache.as_ref().unwrap().classified {
                 let cache=self.cache.as_ref().unwrap();
                 if !cache.dirty.is_empty() {self.sampling=cache.sampling;}
-                if !self.raw.processing(&base.source,self.sampling) {
+                if !self.raw.processing_with(self.sampling,|old|old.sources().len()==base.source.sources().len()
+                    && old.sources().iter().zip(base.source.sources()).all(|(old,new)|cache::same_source(r,old,new))) {
                     let pages=(!cache.dirty.is_empty()).then(||cache.dirty.values().flatten().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect());
                     let [width,height]=r.document_extent;
                     let bytes=u64::from(width.div_ceil(32))*u64::from(height)*4;
