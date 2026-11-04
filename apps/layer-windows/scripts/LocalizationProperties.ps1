@@ -1009,7 +1009,7 @@ function Notice-Surface{
      if(!$control){return $false}
      $controlBounds=$control.Current.BoundingRectangle
      if(!$bounds.Contains($controlBounds)){return $false}
-     if($locked){if($controlBounds.Top+1 -lt $textBounds.Bottom){return $false}}
+     if($locked -or $actualTextScale -gt 1.01){if($controlBounds.Top+1 -lt $textBounds.Bottom){return $false}}
      elseif($controlBounds.Left+1 -lt $textBounds.Right){return $false}
      $actionBounds+=@{id=$offer.id;bounds=$controlBounds}
      if(($control.Element.GetCachedPropertyValue([System.Windows.Automation.AutomationElement]::RuntimeIdProperty) -join ':') -ne $identities[$offer.id]){throw 'Relabeling replaced a retained notice action'}
