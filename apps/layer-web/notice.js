@@ -1,12 +1,6 @@
-export const TIMEOUT_MS = 4000, MARGIN = 12;
+export const TIMEOUT_MS = 4000;
 
-// The shared placement, lifted above a canvas action bar along the canvas bottom.
-export function noticePlacement({ notice }, bar) {
-  const y = bar && bar.y + bar.height > notice.bar_floor ? Math.min(notice.y, bar.y - MARGIN) : notice.y;
-  return { x: notice.x, y, width: notice.max_width, minText: notice.min_text_width };
-}
-
-export function createNotice({ workspace, element, button, answer, layout, bar, tiles, glass, arrangement,
+export function createNotice({ above, workspace, element, button, answer, layout, bar, tiles, glass, arrangement,
   timeoutMs = TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const root = element("div", "canvas-notice");
   root.setAttribute("role", "status");
@@ -44,14 +38,14 @@ export function createNotice({ workspace, element, button, answer, layout, bar, 
   function place() {
     const resolved = layout();
     if (root.hidden || !resolved) return;
-    const placement = noticePlacement(resolved, bar());
+    const placement = above(resolved.notice, bar());
     const ratio = globalThis.devicePixelRatio || 1, align = v => Math.round(v * ratio) / ratio;
     root.style.maxWidth = "none"; root.classList.remove("stacked");
     const natural = node => node.hidden ? 0 : node.getBoundingClientRect().width;
-    const content = placement.width, words = natural(text), offers = natural(actions);
-    const beside = arrangement({ type: "notice_layout", text: words, content, actions: offers, gap: tiles.gap, min_text_width: placement.minText }).beside;
+    const content = placement.max_width, words = natural(text), offers = natural(actions);
+    const beside = arrangement({ type: "notice_layout", text: words, content, actions: offers, gap: tiles.gap, min_text_width: placement.min_text_width }).beside;
     root.classList.toggle("stacked", !beside);
-    root.style.maxWidth = `${placement.width}px`;
+    root.style.maxWidth = `${placement.max_width}px`;
     const next = `translate(${align(placement.x)}px, ${align(placement.y)}px) translate(-50%, -100%)`;
     if (next !== transform) root.style.transform = transform = next;
     const shape = `${next} ${content} ${words} ${offers}`;

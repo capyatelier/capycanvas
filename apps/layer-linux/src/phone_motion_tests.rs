@@ -260,82 +260,82 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
     }
     let mut dialog_measure = serde_json::Value::Null;
     let presented = w.window.visible_dialog().or_else(|| w.pages.visible()).or_else(|| if phone.is_none() { w.visible_dialog() } else { None });
-    if let Some(dialog) = presented {
-        let phone_page = phone.is_some() && w.pages.visible().as_ref() == Some(&dialog);
-        let page = if phone_page { Some(crate::page_dialog::parent(&dialog)) }
-            else { dialog.child().or_else(|| Some(dialog.clone().upcast())) };
-        add("page","page",page.clone());
-        if let Some(page) = page {
-            let shell = |name: &str| widgets(&page).find(|widget| widget.is_mapped() && widget.widget_name() == name);
-            let headers = widgets(&page).filter(|widget| widget.is_mapped() && widget.widget_name() == "dialog-header").collect::<Vec<_>>();
-            if phone_page { assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers"); }
-            if phone_page || !headers.is_empty() { add("page.header","page-header",headers.first().cloned()); }
-            let start = shell("dialog-start").or_else(|| headers.first().and_then(|header| widgets(header).filter(|widget| widget.is_mapped())
-                .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
-                .find(|button| button.icon_name().as_deref() == Some("go-previous-symbolic")
-                    || widgets(button.upcast_ref()).any(|widget| widget.downcast_ref::<gtk::Image>()
-                        .is_some_and(|image| image.icon_name().as_deref() == Some("go-previous-symbolic"))))
-                .map(|button| { button.set_widget_name("dialog-start"); button.upcast() })));
-            let end = shell("dialog-end").or_else(|| crate::page_dialog::primary_button(&dialog)
-                .filter(|button| button.is_mapped() && button.is_ancestor(&page)).map(|button| button.upcast()));
-            if let Some(start) = start { add("page.start","page-action",Some(start)); }
-            if let Some(end) = end.clone() { add("page.end","page-action",Some(end)); }
-            let panes = shell("dialog-panes");
-            if let Some(panes) = panes.clone() { add("page.panes","panes",Some(panes)); }
-            let split = panes.as_ref().and_then(|panes| widgets(panes).find(|widget| widget.is::<adw::NavigationSplitView>()))
-                .and_then(|widget| widget.downcast::<adw::NavigationSplitView>().ok());
-            let sidebar = split.as_ref().and_then(|split| split.sidebar()).map(|page| page.upcast::<gtk::Widget>());
-            let content = split.as_ref().and_then(|split| split.content()).map(|page| page.upcast::<gtk::Widget>());
-            let first_group = descendants::<adw::PreferencesGroup>(&page).into_iter().find(|group| group.is_mapped());
-            let width = |widget: &gtk::Widget| {
-                let (minimum,natural,_,_) = widget.measure(gtk::Orientation::Horizontal,-1);
-                serde_json::json!({"allocated":widget.width(),"minimum":minimum,"natural":natural})
-            };
-            let end_measure = end.as_ref().and_then(|widget| widget.downcast_ref::<gtk::Button>()).map(|button| {
-                let label = widgets(button.upcast_ref()).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
-                    .find(|label| label.is_mapped());
-                let padding = button.style_context().padding();
-                let border = button.style_context().border();
-                serde_json::json!({"button":width(button.upcast_ref()),"text":button.label().map(|text| text.to_string()),
-                    "padding":[padding.left(),padding.top(),padding.right(),padding.bottom()],
-                    "border":[border.left(),border.top(),border.right(),border.bottom()],
-                    "label":label.map(|label| {
-                        let font = label.pango_context().font_description();
-                        serde_json::json!({"text":label.text().to_string(),"allocated":width(label.upcast_ref()),
-                            "bounds":label.compute_bounds(button).map(|bounds| [bounds.x(),bounds.y(),bounds.width(),bounds.height()]),
-                            "layout_pixels":label.layout().pixel_size(),"font":font.as_ref().map(ToString::to_string),
-                            "weight":font.as_ref().map(|font| format!("{:?}",font.weight())),
-                            "size":font.as_ref().map(|font| font.size() as f64 / gtk::pango::SCALE as f64),
-                            "absolute":font.as_ref().map(|font| font.is_size_absolute())})
-                    })})
-            });
-            dialog_measure = serde_json::json!({"page":width(&page),
-                "panes":panes.as_ref().map(&width),
-                "sidebar":sidebar.as_ref().map(&width),"content":content.as_ref().map(&width),
-                "first_group":first_group.as_ref().map(|widget| width(widget.upcast_ref())),
-                "end":end_measure,
-                "collapsed":split.as_ref().map(|split| split.is_collapsed()),
-                "shows_content":split.as_ref().map(|split| split.shows_content())});
-            if dialog.widget_name() == "tool-picker" {
-                let search = widgets(&page).find(|widget| widget.is::<gtk::SearchEntry>() && widget.widget_name() == "tool-search");
-                add("picker.search","search",search.clone());
-                if let Some(catalog) = search.and_then(|search| search.parent()) {
-                    let body = catalog.parent();
-                    add("picker.catalog","catalog",Some(catalog.clone()));
-                    add("picker.body","body",body.clone());
-                    let choices = widgets(&catalog).find(|widget| widget.is::<gtk::ScrolledWindow>());
-                    add("picker.choices","scroll",choices.clone());
-                    if let Some(row) = choices.as_ref().and_then(|choices| widgets(choices).find(|widget| widget.is::<gtk::ListBox>())
-                        .and_then(|list| list.downcast::<gtk::ListBox>().ok())
-                        .and_then(|list| list.row_at_index(0))
-                        .filter(|row| row.compute_bounds(choices).is_some_and(|bounds| bounds.intersection(
-                            &gtk::graphene::Rect::new(0.,0.,choices.width() as f32,choices.height() as f32)).is_some()))) {
-                        let row = row.upcast::<gtk::Widget>();
-                        add("picker.row.0","row",Some(row.clone()));
-                        let mut labels = widgets(&row).filter(|widget| widget.is::<gtk::Label>());
-                        add("picker.row.0.title","label",labels.next());
-                        add("picker.row.0.subtitle","label",labels.next());
-                    }
+    let role = |widget: &gtk::Widget, name: &str| widget.widget_name() == format!("dialog-{name}") || widget.has_css_class(&format!("dialog-part-{name}"));
+    let phone_page = phone.is_some() && presented.as_ref().is_some_and(|dialog| w.pages.visible().as_ref() == Some(dialog));
+    let page = presented.as_ref().and_then(|dialog| if phone_page { Some(crate::page_dialog::parent(dialog)) }
+        else { dialog.child().or_else(|| Some(dialog.clone().upcast())) })
+        .or_else(|| widgets(w.window.upcast_ref()).find(|widget| widget.is_mapped() && role(widget,"page")));
+    if let Some(page) = page {
+        add("page","page",Some(page.clone()));
+        let shell = |name: &str| widgets(&page).find(|widget| widget.is_mapped() && role(widget,name));
+        let headers = widgets(&page).filter(|widget| widget.is_mapped() && widget.widget_name() == "dialog-header").collect::<Vec<_>>();
+        if phone_page { assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers"); }
+        if phone_page || !headers.is_empty() { add("page.header","page-header",headers.first().cloned()); }
+        let start = shell("start").or_else(|| headers.first().and_then(|header| widgets(header).filter(|widget| widget.is_mapped())
+            .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+            .find(|button| button.icon_name().as_deref() == Some("go-previous-symbolic")
+                || widgets(button.upcast_ref()).any(|widget| widget.downcast_ref::<gtk::Image>()
+                    .is_some_and(|image| image.icon_name().as_deref() == Some("go-previous-symbolic"))))
+            .map(|button| { button.set_widget_name("dialog-start"); button.upcast() })));
+        let end = shell("end").or_else(|| presented.as_ref().and_then(crate::page_dialog::primary_button)
+            .filter(|button| button.is_mapped() && button.is_ancestor(&page)).map(|button| button.upcast()));
+        if let Some(start) = start { add("page.start","page-action",Some(start)); }
+        if let Some(end) = end.clone() { add("page.end","page-action",Some(end)); }
+        let panes = shell("panes");
+        if let Some(panes) = panes.clone() { add("page.panes","panes",Some(panes)); }
+        let split = panes.as_ref().and_then(|panes| widgets(panes).find(|widget| widget.is::<adw::NavigationSplitView>()))
+            .and_then(|widget| widget.downcast::<adw::NavigationSplitView>().ok());
+        let sidebar = split.as_ref().and_then(|split| split.sidebar()).map(|page| page.upcast::<gtk::Widget>());
+        let content = split.as_ref().and_then(|split| split.content()).map(|page| page.upcast::<gtk::Widget>());
+        let first_group = descendants::<adw::PreferencesGroup>(&page).into_iter().find(|group| group.is_mapped());
+        let width = |widget: &gtk::Widget| {
+            let (minimum,natural,_,_) = widget.measure(gtk::Orientation::Horizontal,-1);
+            serde_json::json!({"allocated":widget.width(),"minimum":minimum,"natural":natural})
+        };
+        let end_measure = end.as_ref().and_then(|widget| widget.downcast_ref::<gtk::Button>()).map(|button| {
+            let label = widgets(button.upcast_ref()).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                .find(|label| label.is_mapped());
+            let padding = button.style_context().padding();
+            let border = button.style_context().border();
+            serde_json::json!({"button":width(button.upcast_ref()),"text":button.label().map(|text| text.to_string()),
+                "padding":[padding.left(),padding.top(),padding.right(),padding.bottom()],
+                "border":[border.left(),border.top(),border.right(),border.bottom()],
+                "label":label.map(|label| {
+                    let font = label.pango_context().font_description();
+                    serde_json::json!({"text":label.text().to_string(),"allocated":width(label.upcast_ref()),
+                        "bounds":label.compute_bounds(button).map(|bounds| [bounds.x(),bounds.y(),bounds.width(),bounds.height()]),
+                        "layout_pixels":label.layout().pixel_size(),"font":font.as_ref().map(ToString::to_string),
+                        "weight":font.as_ref().map(|font| format!("{:?}",font.weight())),
+                        "size":font.as_ref().map(|font| font.size() as f64 / gtk::pango::SCALE as f64),
+                        "absolute":font.as_ref().map(|font| font.is_size_absolute())})
+                })})
+        });
+        dialog_measure = serde_json::json!({"page":width(&page),
+            "panes":panes.as_ref().map(&width),
+            "sidebar":sidebar.as_ref().map(&width),"content":content.as_ref().map(&width),
+            "first_group":first_group.as_ref().map(|widget| width(widget.upcast_ref())),
+            "end":end_measure,
+            "collapsed":split.as_ref().map(|split| split.is_collapsed()),
+            "shows_content":split.as_ref().map(|split| split.shows_content())});
+        if presented.as_ref().is_some_and(|dialog| dialog.widget_name() == "tool-picker") {
+            let search = widgets(&page).find(|widget| widget.is::<gtk::SearchEntry>() && widget.widget_name() == "tool-search");
+            add("picker.search","search",search.clone());
+            if let Some(catalog) = search.and_then(|search| search.parent()) {
+                let body = catalog.parent();
+                add("picker.catalog","catalog",Some(catalog.clone()));
+                add("picker.body","body",body.clone());
+                let choices = widgets(&catalog).find(|widget| widget.is::<gtk::ScrolledWindow>());
+                add("picker.choices","scroll",choices.clone());
+                if let Some(row) = choices.as_ref().and_then(|choices| widgets(choices).find(|widget| widget.is::<gtk::ListBox>())
+                    .and_then(|list| list.downcast::<gtk::ListBox>().ok())
+                    .and_then(|list| list.row_at_index(0))
+                    .filter(|row| row.compute_bounds(choices).is_some_and(|bounds| bounds.intersection(
+                        &gtk::graphene::Rect::new(0.,0.,choices.width() as f32,choices.height() as f32)).is_some()))) {
+                    let row = row.upcast::<gtk::Widget>();
+                    add("picker.row.0","row",Some(row.clone()));
+                    let mut labels = widgets(&row).filter(|widget| widget.is::<gtk::Label>());
+                    add("picker.row.0.title","label",labels.next());
+                    add("picker.row.0.subtitle","label",labels.next());
                 }
             }
         }

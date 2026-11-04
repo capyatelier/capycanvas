@@ -13,6 +13,7 @@ export class Element extends FakeElement {
   get firstElementChild() { return this.children.find(node => node.tagName) ?? null; }
   get parentElement() { return this.parentNode?.tagName ? this.parentNode : null; }
   append(...nodes) { for(const node of nodes) { if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node); } }
+  prepend(...nodes) { for(const node of nodes.reverse()) this.insertBefore(node, this.firstChild); }
   get childNodes() { return this.children; }
   get textContent() { return this.children.map(node => node.nodeType === 3 ? node.nodeValue : node.textContent).join(''); }
   set textContent(value) { this.children.forEach(node => node.parentNode = null); this.children = []; if (value !== '') this.append(this.ownerDocument.createTextNode(value)); }

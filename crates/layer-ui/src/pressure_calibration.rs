@@ -16,6 +16,7 @@ pub enum PressureCalibrationAction {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PressureCalibrationView {
+    pub dialog: crate::DialogIntent,
     pub bounds: Bounds,
     pub axis_gutter:String,
     pub title: String,

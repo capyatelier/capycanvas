@@ -1,5 +1,5 @@
 import {liveCopy,bindCopy} from './localization.js';
-import {createDialogHost} from './dialog-host.js';
+import {createDialogHost,hasModalDialog} from './dialog-host.js';
 import {orderTabChildren} from './tab-order.js';
 export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy,showMenu}) {
   const copy=liveCopy(app,'catalog').native_copy.header,common=liveCopy(app,'bootstrap_view').common;
@@ -179,7 +179,7 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   root.addEventListener('dragover',e=>{if([...e.dataTransfer.types].includes('Files')&&!editing()){e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy';}});
   root.addEventListener('drop',e=>{if(editing())return;e.preventDefault();e.stopPropagation();const files=[...e.dataTransfer.files];if(files.length)invoke(()=>openFiles(files));});
   return {root,refresh,showSelector,cancel:cancelDrag,key(e){
-    if(editing()||e.target.closest('input,textarea,select,[contenteditable=true]')||document.querySelector('dialog[open]'))return false;
+    if(editing()||e.target.closest('input,textarea,select,[contenteditable=true]')||hasModalDialog())return false;
     if(e.ctrlKey&&e.altKey&&e.code==='KeyD'){e.preventDefault();showSelector();return true;}
     if(e.ctrlKey&&e.altKey&&e.code==='KeyW'){e.preventDefault();invoke(()=>close(id(model.selected)));return true;}
     if(root.contains(e.target)&&e.ctrlKey&&e.code==='KeyZ'){e.preventDefault();invoke(()=>{applyChange(app.document_order_history(e.shiftKey));refresh(true);});return true;}

@@ -396,7 +396,7 @@ async fn adopt(
         let cancelled = cancelled.clone();
         move |_, _| cancelled.set(true)
     });
-    dialog.present(Some(&w.window));
+    crate::page_dialog::present_intent(&dialog, &w.window, copy.progress_dialog);
     let result = loop {
         if cancelled.get() {
             break Ok(false);

@@ -469,7 +469,7 @@ fn native_alert_wait_releases_responses_and_abandoned_futures() {
         dialog.set_close_response("cancel");
         let weak_dialog = dialog.downgrade();
         drop(child);
-        let mut future = Box::pin(crate::alert::choose(dialog, &parent));
+        let mut future = Box::pin(crate::alert::choose_intent(dialog, &parent, layer_ui::DialogIntent::alert(), Some("accept"), &[]));
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(future.as_mut().poll(&mut context).is_pending());
         pump(100);

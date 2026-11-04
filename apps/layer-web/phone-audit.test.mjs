@@ -121,6 +121,24 @@ test('dialog row selection validates the chosen batch and retains its existing v
   assert.throws(()=>selectDialogAuditRows({batch:'w6b'},''),/requires nonempty row IDs/);
 });
 
+test('W6d uses real panels, the existing Proof drawer collector and an explicit float drawing fixture',()=>{
+  const rows=selectDialogAuditRows({batch:'w6d'}),active=rows.filter(row=>!row.blocked);
+  assert.deepEqual(active.map(row=>row.id),['selection-refine','frequency-separation','pressure-calibration','tilt-calibration','soft-proof','sdr-rendition','command-search']);
+  assert.deepEqual(rows.filter(row=>row.blocked).map(row=>row.id),['document-opening-progress','image-import-progress','export-progress','document-color-progress','clipboard-progress']);
+  for(const id of ['soft-proof','sdr-rendition']){const row=rows.find(row=>row.id===id);assert.equal(row.collector,'drawer');assert.equal(row.rootselector,'.content-drawer .proof-panel');}
+  assert.deepEqual(rows.find(row=>row.id==='sdr-rendition').document,{color:{space:'Srgb',depth:'F32'},count:2});
+  assert.ok(rows.filter(row=>row.blocked).every(row=>!row.openaction&&!row.rootselector&&row.blocked.length));
+});
+
+test('calibration inventory opens the actual Input row and uses its retained Cancel button',async()=>{
+  for(const kind of ['pressure','tilt']){
+    const row=dialogAuditRows.find(row=>row.id===`${kind}-calibration`),actions=[],clicks=[];
+    const context={send:async action=>actions.push(action),click:async selector=>clicks.push(selector),wait:async()=>{}};
+    await row.openaction(context);await row.closeaction(context);
+    assert.deepEqual(actions,[{type:'open_settings',page:'input'}]);assert.deepEqual(clicks,[`#setting-pen-${kind}`,`#pen-${kind}-cancel`]);
+  }
+});
+
 test('W6c routes retain manager lists, details, forms and blocked checks in one inventory',()=>{
   const rows=dialogAuditRows.filter(row=>row.batch==='w6c');
   for(const id of ['workspaces','layout-history','this-workspace','saved-toolbars','this-workspace-details','saved-toolbar-details','new-workspace','new-toolbar','save-toolbar','replace-toolbar','rename-saved-toolbar','delete-saved-toolbar','update-saved-toolbar','rename-toolbar','duplicate-toolbar','delete-toolbar','reset-workspace','reset-brushes','unsaved-changes','rename-workspace','delete-workspace','save-as-new-workspace','delete-inactive-workspace','add-tools','insert-tools'])assert.ok(rows.some(row=>row.id===id&&row.openaction&&row.rootselector));

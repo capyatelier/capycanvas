@@ -173,6 +173,7 @@ impl ProfileCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ExportCopy {
+    pub progress_dialog: crate::DialogIntent,
     pub dialog: crate::DialogIntent,
     pub preset_dialog: crate::DialogIntent,
     pub common: CommonCopy,
@@ -298,7 +299,7 @@ pub struct ExportCopy {
 }
 impl ExportCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
+        Self { progress_dialog:crate::DialogIntent::progress(), dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             preset_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
             title: localizer.text(MessageId::COLOR_FEATURES_EXPORT_TITLE),
             help: localizer.text(MessageId::COLOR_FEATURES_EXPORT_HELP),
@@ -425,6 +426,7 @@ impl ExportCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DocumentColorCopy {
+    pub progress_dialog: crate::DialogIntent,
     pub dialog: crate::DialogIntent,
     pub common: CommonCopy,
     pub assign_title: Arc<str>,
@@ -493,7 +495,7 @@ pub struct DocumentColorCopy {
 }
 impl DocumentColorCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
+        Self { progress_dialog:crate::DialogIntent::progress(), dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
             preparing_comparison: localizer.text(MessageId::COLOR_FEATURES_COLOR_PREPARING_COMPARISON),
             choose_different: localizer.text(MessageId::COLOR_FEATURES_COLOR_CHOOSE_DIFFERENT),
             clipped_comparison: localizer.text(MessageId::COLOR_FEATURES_COLOR_CLIPPED_COMPARISON),

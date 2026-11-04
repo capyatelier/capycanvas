@@ -31,16 +31,8 @@ impl Drop for Wait {
     }
 }
 
-pub async fn choose(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>) -> glib::GString {
-    choose_role(dialog, parent, layer_ui::DialogRole::Alert, crate::page_dialog::Metadata::new()).await
-}
-
 pub async fn choose_intent(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, intent: layer_ui::DialogIntent, primary: Option<&str>, secondary: &[&str]) -> glib::GString {
     let metadata = crate::page_dialog::Metadata::responses(primary, &dialog.close_response(), secondary).intent(intent);
-    choose_role(dialog, parent, intent.role, metadata).await
-}
-
-async fn choose_role(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole, metadata: crate::page_dialog::Metadata) -> glib::GString {
     let state = Rc::new(RefCell::new(Response::default()));
     let handler = dialog.connect_response(None, {
         let state = state.clone();
@@ -62,7 +54,7 @@ async fn choose_role(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, r
         handler: Some(handler),
         completed: false,
     };
-    crate::page_dialog::present_with(&wait.dialog, parent, role, metadata);
+    crate::page_dialog::present_with(&wait.dialog, parent, intent.role, metadata);
     let response = std::future::poll_fn(|cx| {
         let mut state = state.borrow_mut();
         if let Some(value) = state.value.take() {

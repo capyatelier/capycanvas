@@ -128,8 +128,9 @@ pub struct CommandDescriptor {
     pub parameter: Option<CommandParameter>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CommandSearchView {
+    pub dialog: crate::DialogIntent,
     pub query: String,
     pub results: Vec<CommandDescriptor>,
     pub selected: usize,
@@ -138,7 +139,12 @@ pub struct CommandSearchView {
     pub detail: String,
 }
 
+impl Default for CommandSearchView {
+    fn default() -> Self { Self { dialog: Self::DIALOG,
+        query:String::new(),results:Vec::new(),selected:0,parameter:None,error:None,detail:String::new() } }
+}
 impl CommandSearchView {
+    pub const DIALOG: crate::DialogIntent=crate::DialogIntent {primary:Some(crate::DialogPrimary::Close),..crate::DialogIntent::canvas_panel(true)};
     fn refresh_detail(&mut self) {
         let selected = self.parameter.as_ref().or_else(|| self.results.get(self.selected));
         self.detail = self

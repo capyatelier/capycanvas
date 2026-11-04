@@ -1,4 +1,4 @@
-import {createDialogHost} from './dialog-host.js';
+import {createDialogHost,createProgressDialog,hasModalDialog} from './dialog-host.js';
 import {createFileHandleStore} from './file-handles.js';
 import { liveCopy, bindCopy } from './localization.js';
 import {createDrawingTabs} from './drawing-tabs.js';
@@ -32,7 +32,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   let closing=false,changing=false,batching=false;
   let nativeKey=null,nativePending=null,keyboardPaste=false;
   const nativeDeliveries=new Map();
-  const editing=target=>!!target?.closest?.('input,select,textarea,[contenteditable]:not([contenteditable=false]),dialog[open]');
+  const editing=target=>!!target?.closest?.('input,select,textarea,[contenteditable]:not([contenteditable=false])');
   function finishNativePaste(files=[]){
     const pending=nativePending;nativePending=null;
     if(pending){clearTimeout(pending.timer);pending.resolve(files);}
@@ -53,7 +53,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   window.addEventListener('pagehide',cancelNativePaste);
   document.addEventListener('paste',event=>{
     refreshInputContext?.();
-    if(event.defaultPrevented||editing(event.target)||editing(document.activeElement)||document.querySelector('dialog[open], details[open]')||document.querySelector(':popover-open:not(.hover-tooltip)')){finishNativePaste();return;}
+    if(event.defaultPrevented||editing(event.target)||editing(document.activeElement)||(hasModalDialog()||document.querySelector('details[open]'))||document.querySelector(':popover-open:not(.hover-tooltip)')){finishNativePaste();return;}
     const files=[...event.clipboardData?.files??[]];
     if(nativePending){
       const current=app.state().requests.some(request=>request.id===nativePending.id);
@@ -74,11 +74,10 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     const root=element("dialog","document-dialog"),form=element("form");
     const header=element("header","dialog-header"),caption=element("h2","",title);header.append(caption);
     form.method="dialog";openDialogs.add(form);root.append(header,form);document.body.append(root);
-    let result=null,shell;root.addEventListener("close",()=>{shell?.dispose();openDialogs.delete(form);root.remove();resolve(result);},{once:true});
-    const finish=value=>{result=value;if(shell)shell.hide();else root.close();};
+    let result=null,shell;root.addEventListener("close",()=>{shell.dispose();openDialogs.delete(form);root.remove();resolve(result);},{once:true});
+    const finish=value=>{result=value;shell.hide();};
     const controls=build(form,finish,{header,caption,layout:()=>shell?.layout(),dismiss:()=>shell?.dismiss()});
-    if(intent){shell=createDialogHost({app,dialog:root,header,icon,copy:common,onCancel:()=>finish(null),...controls});shell.present(intent);}
-    else root.showModal();
+    shell=createDialogHost({app,dialog:root,header,icon,copy:common,onCancel:()=>finish(null),...controls});shell.present(intent);
   });
   const cancel=(footer,finish)=>{const control=button(()=>common.cancel,()=>finish(null));footer.append(control);return control;};
   const proof=createProof({app,dialog,element,button,icon,dropdown,applyChange,wake,dispatch,contentChanged});
@@ -107,9 +106,8 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     try {
       control=app.capture_control();
       if(task.large()){
-        progress=element("aside","file-progress");progress.setAttribute("role","status");
-        const label=element("span","",caption);progress.append(label,button(()=>common.cancel,()=>{control.cancel();cancelling=true;bindCopy(label,caption);}));
-        document.body.append(progress);
+        progress=createProgressDialog({app,element,button,icon,intent:delivery.progress_dialog,title:caption,
+          onCancel:()=>{control.cancel();cancelling=true;bindCopy(progress.title,caption);}});
       }
       clip=await gpuOperation(()=>task.run(control,nonce));
       if(control.cancelled())throw new DOMException("Copy cancelled","AbortError");
@@ -169,11 +167,11 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     try {
       return await dialog(()=>delivery.download_file,(form,finish)=>{
         form.append(element("p","",()=>deliveryMessage("download_confirm",{name})));
-        const footer=element("footer");cancel(footer,finish);
+        const footer=element("footer"),cancelButton=cancel(footer,finish);
         const done=button(()=>delivery.file_saved,()=>finish(true),"suggested-action");done.disabled=true;
         const start=button(()=>delivery.download,()=>{const a=element("a");a.href=url;a.download=name;a.click();done.disabled=false;});
-        footer.append(start,done);form.append(footer);
-      });
+        footer.append(start,done);form.append(footer);return {cancel:cancelButton,primary:done};
+      },delivery.download_dialog);
     } finally {URL.revokeObjectURL(url);}
   }
   async function destination(request,recipe) {
@@ -323,12 +321,12 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         const progressCaption=()=>progressPhase==="cancelling"?delivery.cancelling:exportCopy[progressPhase];
         try {
           if(recipe){
-            control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
-            progressLabel=element("span","",progressCaption);progress.append(progressLabel,button(()=>common.cancel,()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}));document.body.append(progress);
+            control=app.capture_control();progress=createProgressDialog({app,element,button,icon,intent:exportCopy.progress_dialog,title:()=>exportCopy.exporting,body:progressCaption,
+              onCancel:()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}});progressLabel=progress.label;
           }
           if(recipe)applyChange(app.dispatch({type:"prepare_export",id,owner:r.owner,recipe,location:target.location}));
           const bytes=(output=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
-          if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.querySelector('button').disabled=true;}
+          if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.cancel.disabled=true;}
 
           let success;
           if(target.handle) {
@@ -399,7 +397,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   }
   async function select(id){
     if(id==null||String(id)===String(app.document_tabs(0).selected))return;
-    if(active.size||batching||closing||document.querySelector('dialog[open]'))throw transportFailure("switch_dialog");
+    if(active.size||batching||closing||hasModalDialog())throw transportFailure("switch_dialog");
     await transition(()=>applyChange(app.select_document(BigInt(id))));
   }
   async function close(id){
@@ -422,8 +420,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       applyChange(change);
     }
     const id=request??0,fileState=app.state().document_file,target=file?location(file.file.name,file.handle):null;
-    const progress=element('aside','file-progress');progress.setAttribute('role','status');let cancelled=false,candidate;
-    progress.append(element('span','',()=>bootstrap.preparing_document),button(()=>common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
+    let cancelled=false,candidate;
+    const progress=createProgressDialog({app,element,button,icon,intent:bootstrap.progress_dialog,title:()=>bootstrap.opening_files,body:()=>bootstrap.preparing_document,
+      onCancel:()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}});
     try{
       const original=file?.file??(bytes instanceof Blob?bytes:new Blob([bytes]));
       app.admit_document_input(BigInt(original.size),new Uint8Array(await original.slice(0,4).arrayBuffer()));
@@ -485,7 +484,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     }}finally{batching=false;tabs.refresh(true);}
   }
   async function openFiles(files){
-    if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw transportFailure("open_drawings_operation");
+    if(active.size||batching||changing||closing||hasModalDialog())throw transportFailure("open_drawings_operation");
     await openBatch(files.map(value=>value.file?value:{file:value}));
   }
   const handleStore=createFileHandleStore();
@@ -520,7 +519,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       footer.append(later,button(()=>bootstrap.recovery.discard,()=>finish('discard')),retry);form.append(footer);return {cancel:later,primary:retry};
     },bootstrap.recovery.dialog),
     handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
-    canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
+    canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!hasModalDialog()&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing,showMenu});
   return {title:tabs.root,key(event,send){
     if(!event.altKey&&((event.ctrlKey||event.metaKey)&&app.shortcut_key_is(event.key,latinKey(event),'v')

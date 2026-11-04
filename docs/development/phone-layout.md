@@ -414,6 +414,11 @@ inline storage notice from `WorkspaceView`. Hosts report `OpenDetails` and
 `PageList`; the shared view keeps the selected detail and its Back state.
 Manager prompts derive their serialized fields, and the workspace view adds
 the dialog intent around the prompt at publication.
+Calibration and preview views declare their actual native modality. Use the shared
+calibration extent and dialog bounds with measured native content; do not feed a
+previous allocation back as its natural size. Web input, document admission and
+canvas picking use the common shell's declared modality, including when native focus is blurred.
+Specialty controllers report Escape through their existing shared actions.
 
 - In the phone layout, every dialog opens the way Android's Settings does: a
   full-window page that slides down from the top, inside the safe area.

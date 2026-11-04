@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {captureTextComposition, composingKey, compositionBusy} from './text-input.js';
-import {colorDialogDom, fakeColorApp} from './color-dialog-fixture.mjs';
+import {colorDialogDom, dialogProjection, fakeColorApp} from './color-dialog-fixture.mjs';
 import {chooseColor} from './color-editor.js';
 import {createPreviewPanel} from './preview-panel.js';
 
@@ -234,16 +234,16 @@ for (const key of ['Enter', 'Escape']) for (const keyCode of [0, 229]) {
   });
 
   test(`preview ${key}/${keyCode} waits for the ordinary press`, t => {
-    const h = colorDialogDom(t), app = {bootstrap_view:() => ({common:{apply:'Apply', cancel:'Cancel'}})};
+    const h = colorDialogDom(t), app = {...dialogProjection, bootstrap_view:() => ({common:{apply:'Apply', cancel:'Cancel'}})};
     const element = (...args) => {
       const node = h.element(...args);
       node.after = other => node.parentNode.insertBefore(other, node.parentNode.children[node.parentNode.children.indexOf(node) + 1]);
       return node;
     };
     let applied = 0, cancelled = 0;
-    const panel = createPreviewPanel({app, name:'candidate', view:() => ({title:'Refine', numeric:{kind:'number'}, label:'Radius', radius:1}),
-      kind:() => 'grow', value() {}, apply:() => applied++, cancel:() => cancelled++, element, button:h.button,
-      numberField:() => Object.assign(element('div'), {update() {}}), workspace:h.doc.body, layout:() => null, bar:() => null});
+    const panel = createPreviewPanel({app, name:'candidate', view:() => ({title:'Refine', dialog:{role:'editor', modal:true, primary:'action'}, numeric:{kind:'number'}, label:'Radius', radius:1}),
+      kind:() => 'grow', value() {}, apply:() => applied++, cancel:() => cancelled++, element, button:h.button, icon:h.icon,
+      numberField:() => Object.assign(element('div'), {update() {}}), workspace:h.doc.body});
     panel.refresh();
     const node = h.doc.body.children.find(node => node.id === 'candidate-panel'), field = element('input');
     node.append(field);

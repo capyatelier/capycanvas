@@ -1,7 +1,8 @@
+import {createProgressDialog} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 // Browser transport and hit targets only. Rust captures camera coordinates,
 // validates layer destinations, prepares the entire batch and owns its history.
-export function createImageImport({app,canvas,applyChange,wake,element,button,message,gpuOperation,interpret,openClipboard,openFiles}) {
+export function createImageImport({app,canvas,applyChange,wake,element,button,icon,message,gpuOperation,interpret,openClipboard,openFiles}) {
   const bootstrap=liveCopy(app,"bootstrap_view"),delivery=liveCopy(app,"document_delivery_copy");
   let incoming=null,control=null;
   const command=id=>app.state().commands.find(c=>c.id===id);
@@ -47,9 +48,9 @@ export function createImageImport({app,canvas,applyChange,wake,element,button,me
         const files=drop?.files??await choose();
         if(!files?.length){applyChange(app.finish_document(id,false));return;}
         control=app.capture_control();
-        progress=element('aside','file-progress');progress.setAttribute('role','status');
-        let cancelling=false;const caption=()=>cancelling?delivery.cancelling:bootstrap.preparing_document,label=element('span','',caption);
-        progress.append(label,button(()=>bootstrap.common.cancel,()=>{control.cancel();cancelling=true;bindCopy(label,caption);}));document.body.append(progress);
+        let cancelling=false;const caption=()=>cancelling?delivery.cancelling:bootstrap.preparing_document;
+        progress=createProgressDialog({app,element,button,icon,intent:delivery.progress_dialog,title:()=>app.document_request_title(id),body:caption,
+          onCancel:()=>{control.cancel();cancelling=true;bindCopy(progress.label,caption);}});
         prepared=await gpuOperation(()=>app.prepare_images(request,files,interpret,control));
         const batch=prepared;prepared=null;
         if(app.state().requests.find(r=>r.id===id)?.kind.request.mode==='new_image')await openClipboard(id,batch,control);

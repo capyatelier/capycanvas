@@ -3066,10 +3066,10 @@ impl Workspace {
             use crate::preview_dialog::PreviewValue;
             let tools = &state.layer_tools;
             self.selection_refine.refresh(self, tools.selection_resize.as_ref().map(|v| {
-                PreviewValue { title: v.title, label: v.label, value: v.radius.into(), numeric: &v.numeric }
+                PreviewValue { dialog: v.dialog, title: v.title, label: v.label, value: v.radius.into(), numeric: &v.numeric }
             }));
             self.frequency_separation.refresh(self, tools.frequency_separation.as_ref().map(|v| {
-                PreviewValue { title: v.title, label: v.label, value: v.radius.into(), numeric: &v.numeric }
+                PreviewValue { dialog: v.dialog, title: v.title, label: v.label, value: v.radius.into(), numeric: &v.numeric }
             }));
             self.canvas_size.refresh(self, &state);
             self.image_size.refresh(self, &state);

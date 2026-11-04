@@ -159,7 +159,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
             }
         ),
     );
-    dialog.present(Some(&w.window));
+    crate::page_dialog::present_intent(&dialog, &w.window, layer_ui::bootstrap_view(&w.localization()).progress_dialog);
     let result = async {
         let sources = if paste {
             let clipboard = w.window.clipboard();

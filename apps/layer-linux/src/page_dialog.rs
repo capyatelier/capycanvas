@@ -113,7 +113,7 @@ impl Pages {
                 classes.extend(page_classes.iter().map(ToString::to_string));
                 Some(classes)
             }).sync_create().build();
-        frame.update_property(&[gtk::accessible::Property::Modal(meta.intent.is_none_or(|intent| intent.modal))]);
+        frame.update_property(&[gtk::accessible::Property::Modal(meta.intent.expect("projected pages declare their shared dialog intent").modal)]);
         let navigation = meta.navigation_root.is_some();
         let specification::Header { header, loan, previous_title, projected, hidden, mut responses, page_primary, close, bindings } = meta.project_header(dialog, w, &frame);
         let default = gtk::prelude::GtkWindowExt::default_widget(&w.window).map(|widget| widget.downgrade());
@@ -255,20 +255,18 @@ pub fn parent(widget: &impl IsA<gtk::Widget>) -> gtk::Widget {
         .unwrap_or_else(|| widget.as_ref().clone())
 }
 
-pub fn present(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>) {
-    present_role(dialog, parent_widget, layer_ui::DialogRole::Editor);
-}
-
 pub fn present_intent(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>, intent: layer_ui::DialogIntent) {
     present_with(dialog, parent_widget, intent.role, specification::get(dialog.as_ref()).intent(intent));
 }
 
+#[cfg(test)]
 pub fn present_role(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole) {
     present_with(dialog, parent_widget, role, specification::get(dialog.as_ref()));
 }
 
 pub fn present_with(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole, metadata: Metadata) {
     let dialog = dialog.as_ref();
+    specification::configure(dialog,metadata.clone());
     if let Some(w) = owner(parent_widget.as_ref()) {
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
         let page = w.gpu.borrow().as_ref().is_some_and(|gpu| gpu.session.state().dialog_presentation(role, viewport) != layer_ui::DialogPresentation::Floating);

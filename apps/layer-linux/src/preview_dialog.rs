@@ -12,6 +12,7 @@ use std::{
 
 /// What the dialog shows: its title and one labelled value.
 pub struct PreviewValue<'a> {
+    pub dialog: layer_ui::DialogIntent,
     pub title: &'a str,
     pub label: &'a str,
     pub value: f64,
@@ -97,7 +98,7 @@ impl PreviewDialog {
             self.number(&view, &w.localization()).set_value(view.value);
             if !self.shown.replace(true) {
                 w.window.add_css_class(Self::PREVIEW_CLASS);
-                crate::page_dialog::present_with(&self.dialog, &w.window, layer_ui::DialogRole::CanvasPanel, crate::page_dialog::Metadata::responses(Some("apply"), "cancel", &[]));
+                crate::page_dialog::present_with(&self.dialog, &w.window, view.dialog.role, crate::page_dialog::Metadata::responses(Some("apply"), "cancel", &[]).intent(view.dialog));
             }
         } else if self.shown.replace(false) {
             w.window.remove_css_class(Self::PREVIEW_CLASS);

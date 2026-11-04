@@ -86,7 +86,7 @@ async fn run(
         let cancelled = cancelled.clone();
         move |_, _| cancelled.store(true, Ordering::Release)
     });
-    dialog.present(Some(window));
+    crate::page_dialog::present_intent(&dialog, window, copy.progress_dialog);
     let control = cancelled.clone();
     // Await acknowledgement even after Cancel. A successor cannot overlap a
     // detached decoder, and a cancelled candidate never reaches a new window.

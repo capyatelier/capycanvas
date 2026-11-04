@@ -1,7 +1,7 @@
 import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createNotice, noticePlacement, TIMEOUT_MS, MARGIN } from "./notice.js";
+import { createNotice, TIMEOUT_MS } from "./notice.js";
 
 class FakeElement extends SharedElement {
   constructor(tag, className = "") {
@@ -21,16 +21,16 @@ class FakeElement extends SharedElement {
 }
 
 const area = { x: 60, y: 48, width: 1000, height: 800 }, status = { x: 60, y: 820, width: 1000, height: 28 }, floor = status.y;
-const placement = { x: 560, y: floor - MARGIN, max_width: 960, min_text_width: 960, window: false, bar_floor: floor - 72 };
+const placement = { x: 560, y: 808, max_width: 960, min_text_width: 960, window: false, bar_floor: floor - 72 };
 const tiles = { gap: 2, size: [36, 36] };
 const layout = { work_area: area, status, notice: placement };
-function harness({ bar = null, arrangement = () => ({ beside: true }) } = {}) {
+function harness({ bar = null, arrangement = () => ({ beside: true }), above = () => placement } = {}) {
   const workspace = new FakeElement("main"), answers = [], timers = [], glass = { queued: 0, queue() { this.queued++; } };
   let clock = 0, barBounds = bar;
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, click, className = "") => { const node = element("button", className, text); node.addEventListener("click", click); return node; };
   const notice = createNotice({
-    arrangement,
+    arrangement, above,
     workspace, element, button, answer: (id, accept, action) => answers.push(action === undefined ? [id, accept] : [id, accept, action]),
     layout: () => layout, bar: () => barBounds, tiles, glass,
     setTimer: (callback, ms) => { const timer = { id: timers.length + 1, callback, at: clock + ms }; timers.push(timer); return timer.id; },
@@ -64,7 +64,7 @@ test("a notice shows its text over the canvas without an action or a popover", (
   assert.equal(h.notice.root.hidden, false);
   assert.equal(h.text.textContent, "The active layer is locked");
   assert.equal(h.action.hidden, true);
-  assert.equal(h.notice.root.style.transform, `translate(560px, ${floor - MARGIN}px) translate(-50%, -100%)`, "at the shared anchor");
+  assert.equal(h.notice.root.style.transform, `translate(560px, ${placement.y}px) translate(-50%, -100%)`, "at the shared anchor");
   assert.equal(h.notice.root.style.maxWidth, `${placement.max_width}px`);
   assert.equal(h.notice.root.getAttribute("aria-label"), "Notice", "named by the shared notice name");
   assert.deepEqual(h.answers, []);
@@ -158,24 +158,23 @@ test("ordered actions keep their tokens, and a disabled choice shows its reason"
   assert.deepEqual(h.answers, [[20n, true, "new_paint_layer"]]);
 });
 
-test("the notice follows the shared placement and sits above a canvas action bar along the bottom edge", () => {
-  assert.deepEqual(noticePlacement(layout, null), { x: 560, y: floor - MARGIN, width: 960, minText: 960 });
-  const edge = { x: 400, y: floor - MARGIN - 48, width: 300, height: 48 };
-  assert.deepEqual(noticePlacement(layout, edge), { x: 560, y: edge.y - MARGIN, width: 960, minText: 960 });
-  const near = { x: 400, y: 300, width: 300, height: 48 };
-  assert.deepEqual(noticePlacement(layout, near).y, floor - MARGIN, "a bar beside an object elsewhere does not move it");
-  assert.equal(noticePlacement({ notice: { ...placement, max_width: 376 } }, null).width, 376, "the shared width bounds the notice");
-  const window = { ...placement, x: 550, y: 888, window: true, bar_floor: 900 };
-  assert.deepEqual(noticePlacement({ notice: window }, edge), { x: 550, y: 888, width: 960, minText: 960 }, "a notice at the window's bottom ignores the canvas bar");
-  const h = harness();
+test("the notice forwards its shared placement and follows an updated canvas action bar", () => {
+  const edge = { x: 400, y: 760, width: 300, height: 48 }, requests = [];
+  const h = harness({ above: (notice, bar) => {
+    requests.push([notice, bar]);
+    return bar ? { ...placement, y: 748 } : placement;
+  } });
   h.notice.publish(refusal(1n));
+  assert.deepEqual(requests.at(-1), [placement, null]);
   h.setBar(edge);
   h.notice.place();
-  assert.equal(h.notice.root.style.transform, `translate(560px, ${edge.y - MARGIN}px) translate(-50%, -100%)`, "it follows a bar that appears later");
+  assert.deepEqual(requests.at(-1), [placement, edge]);
+  assert.equal(h.notice.root.style.transform, 'translate(560px, 748px) translate(-50%, -100%)');
   h.notice.hide();
   h.setBar(null);
   h.notice.place();
-  assert.equal(h.notice.root.style.transform, `translate(560px, ${edge.y - MARGIN}px) translate(-50%, -100%)`, "a hidden notice is not placed");
+  assert.equal(requests.length, 2, "a hidden notice does not request placement");
+  assert.equal(h.notice.root.style.transform, 'translate(560px, 748px) translate(-50%, -100%)');
 });
 
 test("text shares a row with the actions only on one line, and otherwise the actions stack below it", () => {
@@ -220,7 +219,7 @@ test("the notice is a Small canvas bar strip whose first action is the suggestio
 });
 
 test("showing, moving and hiding the notice refreshes its glass", () => {
-  const h = harness();
+  const h = harness({ above: (notice, bar) => bar ? { ...notice, y: 748 } : notice });
   h.text.width = 300;
   h.notice.publish(refusal(50n));
   const shown = h.glass.queued;
@@ -230,7 +229,7 @@ test("showing, moving and hiding the notice refreshes its glass", () => {
   h.text.width = 400;
   h.notice.place();
   assert.equal(h.glass.queued, shown + 1, "a resized notice is measured again");
-  h.setBar({ x: 400, y: floor - MARGIN - 48, width: 300, height: 48 });
+  h.setBar({ x: 400, y: 760, width: 300, height: 48 });
   h.notice.place();
   assert.equal(h.glass.queued, shown + 2, "a moved notice is measured again");
   h.notice.hide();

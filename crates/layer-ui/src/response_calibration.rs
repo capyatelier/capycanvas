@@ -74,7 +74,7 @@ impl<R: EditableResponse> Calibration<R> {
     pub fn view_as(&self,l:&Localizer,title:MessageId,less:MessageId,more:MessageId,domain:CurveDomain)->Option<PressureCalibrationView> {
         let draft=self.source()?;let points=draft.points();
         let axis=|id|CurveAxisView {label:l.text(id).to_string(),minimum:domain.axis_text(0.),maximum:domain.axis_text(1.),white:None};
-        Some(PressureCalibrationView {bounds:self.placement.unwrap_or(Bounds{x:500.,y:64.,width:384.,height:360.}),
+        Some(PressureCalibrationView {dialog:crate::DialogIntent::canvas_panel(false),bounds:self.placement.unwrap_or(Bounds{x:500.,y:64.,width:384.,height:360.}),
             axis_gutter:CurveDomain::Percent.axis_text(1.),
             title:l.text(title).to_string(),close:l.text(MessageId::COMMON_CLOSE).to_string(),firmer:l.text(less).to_string(),lighter:l.text(more).to_string(),
             reset:l.text(MessageId::COMMON_RESET).to_string(),cancel:l.text(MessageId::COMMON_CANCEL).to_string(),apply:l.text(MessageId::COMMON_APPLY).to_string(),

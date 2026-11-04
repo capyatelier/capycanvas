@@ -1,3 +1,4 @@
+import {createProgressDialog} from './dialog-host.js';
 import { liveCopy, bindCopy } from './localization.js';
 import {importProfile,chooseProfileLibrary} from './export-controls.js';
 // A comparison owns one immutable candidate. Cancel drains its work before the
@@ -41,6 +42,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
         const flattened=result?.value==="copy";
         const choice=source?(rasterize?null:profiles[Number(profile.value)]):history?null:operation==="assign"?{Assign:space.value}:operation==="depth"?{Depth:{depth:depth.value,dither:depth.value==="U8"?dither.value:"None"}}:{Convert:{space:space.value,options:{intent:intent.value,black_point_compensation:false}}};
         running=(async()=>{
+          const progress=createProgressDialog({app,element,button,icon,intent:copy.progress_dialog,title:()=>copy.preparing_title,body:()=>copy.preparing_help,onCancel:()=>cancel.click()});
           try {
             const next=await gpuOperation(async()=>{
               if(!source)return app.prepare_color(id,choice,control,flattened);
@@ -59,7 +61,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
             present();
             apply.disabled=false;
           }catch(error){const wasCancelled=control.cancelled();control.cancel();if(!closed&&!pending&&!wasCancelled)fail(error);}
-          finally{running=null;if(!closed){if(phase==="preparing"){phase="draft";present();}if(pending)queueMicrotask(prepare);}}
+          finally{progress.remove();running=null;if(!closed){if(phase==="preparing"){phase="draft";present();}if(pending)queueMicrotask(prepare);}}
         })();
       };
       footer.append(cancel);if(!history)footer.append(apply);

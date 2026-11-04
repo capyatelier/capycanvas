@@ -36,7 +36,7 @@ fn progress(w: &Workspace, request: &layer_ui::DocumentRequest, large: bool, con
         dialog.connect_response(Some("cancel"), move |_, _| control.cancel())
     });
     if let Some(dialog) = &progress {
-        dialog.present(Some(&w.window));
+        crate::page_dialog::present_intent(dialog, &w.window, layer_ui::DocumentDeliveryCopy::new(&w.localization()).progress_dialog);
     }
     progress.zip(signal)
 }

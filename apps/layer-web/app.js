@@ -1,3 +1,4 @@
+import {hasModalDialog} from './dialog-host.js';
 import { addScrollbar } from "./scrollbars.js";
 import { observeButtonFeedback } from "./button-feedback.js";
 import { edgeContactClass, edgeResetClass } from "./edge-reach.js";
@@ -492,7 +493,7 @@ function resumeOptionalCompiler() {
 function optionalCompilerReady() {
   return !compilerContacts.size && !pending.length
     && !documents?.busy()
-    && !document.querySelector('dialog[open],#header details[open],:popover-open:not(.hover-tooltip)');
+    && !hasModalDialog() && !document.querySelector('#header details[open],:popover-open:not(.hover-tooltip)');
 }
 window.addEventListener('blur', () => { compilerContacts.clear(); deferOptionalCompiler(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) deferOptionalCompiler(); });
@@ -1458,7 +1459,7 @@ function chromeInput(event) {
       held: heldPointers.size > 0,
       dragging: dragItem !== null,
       popup_open:
-        !!(document.querySelector("dialog[open], details[open]") || document.querySelector(":popover-open:not(.hover-tooltip)")) ||
+        hasModalDialog() || !!(document.querySelector("details[open]") || document.querySelector(":popover-open:not(.hover-tooltip)")) ||
         (CSS.supports("selector(select:open)") && !!document.querySelector("select:open")),
     },
   });
@@ -1761,10 +1762,8 @@ window.addEventListener(
   },
   { capture: true, passive: false },
 );
-function keyInput(e, pressed, divider = null) {
-  if (pressed && e.defaultPrevented) return;
-  const nativeDialog=!!document.querySelector("dialog:modal:not(#settings)") && !state.preferences.capture;
-  if (pressed && nativeDialog) return;
+function keyInput(e, pressed, divider = null, fromDialog = false) {
+  if (pressed && (e.defaultPrevented || hasModalDialog() && !fromDialog)) return;
   updateZen();
   const reply = input({
     type: "key",
@@ -1784,7 +1783,7 @@ function keyInput(e, pressed, divider = null) {
           (!!e.target.closest("button,summary") && app.control_takes_key(e.key, e.ctrlKey || e.metaKey, e.altKey, keyboardFocused.has(e.target))))),
     divider,
   });
-  if (reply.handled && !nativeDialog && !composingKey(e)) {
+  if (reply.handled && !composingKey(e)) {
     if(!documents?.allowNativePaste())e.preventDefault();
     e.stopPropagation();
   }
@@ -1961,19 +1960,19 @@ try {
   fillGesture.refresh(app.color_preview().fill_gesture);
   const motionChanged=()=>dispatch({type:'system_motion_changed',reduced:systemMotion.matches});
   systemMotion.addEventListener('change',motionChanged);motionChanged();
-  penResponse=createPenResponse({state:()=>state,workspace,element,button,icon,numberField,dispatch});
+  penResponse=createPenResponse({app,state:()=>state,workspace,element,button,icon,numberField,dispatch});
   observePenInput({workspace,canvas,dispatch,position,owner:()=>state.document_file.epoch});
-  refreshPreferences = createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
+  refreshPreferences = createPreferences({ onKey:event=>keyInput(event,true,null,true), app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
   commandBar = createCommandBar({app,element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
   workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, dropdown, message });
-  selectionUi = createSelectionUi({app,state:()=>state,element,button,dropdown,numberField,dispatch,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
+  selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,dropdown,numberField,dispatch,workspace});
   const separate=action=>dispatch({type:'frequency_separation',action});
   frequencySeparationUi = createPreviewPanel({app,name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
     value:radius=>separate({op:'radius',radius}),apply:()=>separate({op:'apply'}),cancel:()=>separate({op:'cancel'}),
-    element,button,numberField,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
+    element,button,icon,numberField,workspace});
   canvasSizeUi = createCanvasSizeUi({app,state:()=>state,element,button,dropdown,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   imageSizeUi = createImageSizeUi({app,state:()=>state,element,button,dropdown,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   configureColorEditor({dispatch,icon,wasmModule});
@@ -2001,7 +2000,7 @@ try {
   phone = createPhone({app,state:()=>state,workspace,capy,header,element,button,icon,dropdown,place,dispatch,rasterWorker,customization,changed:()=>glass?.queue()});
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, marker: customization.variationMarker, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms, metrics: () => `${devicePixelRatio}:${panelFontGeneration}:${catalog.text_size_pt}`,
     openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); frequencySeparationUi.place(); notice?.place(); } });
-  notice = createNotice({ arrangement: request => app.toolbar_ui(request), workspace, element, button, glass, tiles: app.toolbar_ui({ type: "style", style: "small" }), answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
+  notice = createNotice({ above:(notice,bar)=>app.notice_above(notice,bar), arrangement: request => app.toolbar_ui(request), workspace, element, button, glass, tiles: app.toolbar_ui({ type: "style", style: "small" }), answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
   zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, button, icon, numberField, catalog,
     menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
     dispatch, camera: () => state.camera, toggled: updateZen });
@@ -2033,7 +2032,7 @@ try {
       launches=launches.then(async()=>{
         if(!files.length)return;
         const deadline=performance.now()+240000;
-        while(documents.busy()||!app.document_park_ready()||document.querySelector('dialog[open]')) {
+        while(documents.busy()||!app.document_park_ready()||hasModalDialog()) {
           if(performance.now()>deadline)throw Error(delivery.open_drawings_operation);
           await new Promise(resolve=>setTimeout(resolve,50));
         }

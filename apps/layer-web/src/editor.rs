@@ -82,6 +82,20 @@ impl WebApp {
         let visible = serde_wasm_bindgen::from_value(visible).map_err(js)?;
         serialize(&self.session.state().dialog_presentation_in(role, [width, height], visible))
     }
+    pub fn dialog_bounds(&self, role: JsValue, viewport: JsValue, visible: JsValue, measured: JsValue) -> Result<JsValue, JsValue> {
+        let role=serde_wasm_bindgen::from_value(role).map_err(js)?;
+        let viewport=serde_wasm_bindgen::from_value(viewport).map_err(js)?;
+        let visible=serde_wasm_bindgen::from_value(visible).map_err(js)?;
+        let measured=serde_wasm_bindgen::from_value(measured).map_err(js)?;
+        serialize(&self.session.state().dialog_presentation_in(role,viewport,visible).bounds(|| measured))
+    }
+    pub fn calibration_extent(&self, area: JsValue, natural: JsValue) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::calibration_extent(serde_wasm_bindgen::from_value(area).map_err(js)?,serde_wasm_bindgen::from_value(natural).map_err(js)?))
+    }
+    pub fn notice_above(&self, notice: JsValue, bar: JsValue) -> Result<JsValue, JsValue> {
+        let notice:layer_ui::NoticePlacement=serde_wasm_bindgen::from_value(notice).map_err(js)?;
+        serialize(&notice.above(serde_wasm_bindgen::from_value(bar).map_err(js)?))
+    }
     pub fn touch_hold_ms(&self) -> u32 { self.session.touch_policy().tap_ms }
     pub fn finger_loupe_offset(&self, scale: f32) -> f32 { layer_ui::finger_loupe_offset(None, scale) }
     pub fn phone_bar_contact(&self, x: f32, y: f32) -> Option<WebBarContact> {

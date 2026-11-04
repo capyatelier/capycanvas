@@ -403,7 +403,7 @@ impl ManagerUi {
         self.remove.set_sensitive(view.rows.iter().find(|row| Some(&row.id) == view.selected.as_ref())
             .is_some_and(|row| row.options.iter().any(|button| button.enabled && matches!(button.action, ManagerAction::Delete(_)))));
         if !self.presented.replace(true) {
-            crate::page_dialog::present(&self.dialog, &w.window);
+            crate::page_dialog::present_intent(&self.dialog, &w.window, view.dialog.unwrap());
         }
         self.render_prompt(w, view);
         if page == ManagerPage::Workspaces && w.visible_dialog().as_ref() == Some(&self.dialog)

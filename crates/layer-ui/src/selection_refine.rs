@@ -84,6 +84,7 @@ impl RefineKind {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SelectionRefineView {
+    pub dialog: crate::DialogIntent,
     pub kind: RefineKind,
     pub title: &'static str,
     /// The value's name, such as "Feather radius".
@@ -180,6 +181,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         doc.selection_edit(target, coverage.clone()).map_err(error)?;
         self.selection_masks.refine = Some(RefineDraft {
             view: SelectionRefineView {
+                dialog: crate::DialogIntent::canvas_panel(true),
                 kind,
                 title: kind.title(),
                 label: kind.label(),

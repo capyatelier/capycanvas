@@ -2,7 +2,7 @@
 //! around the shared workspace controller.
 use super::*;
 use layer_workspace::{
-    ManagerAction, ManagerPage, StoreWorker, WorkspaceController, WorkspaceInput, WorkspaceView,
+    ManagerPage, StoreWorker, WorkspaceController, WorkspaceInput, WorkspaceView,
 };
 use std::{
     sync::{

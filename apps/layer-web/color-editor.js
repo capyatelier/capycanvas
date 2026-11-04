@@ -1,4 +1,4 @@
-import {createDialogHost} from './dialog-host.js';
+import {createDialogHost,hasModalDialog} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {createRasterWorker} from './raster-worker-client.js';
 import {wheelPainter,wheelPicker,hueStopCache,wheelHit,rgba,json} from './color-wheel.js';
@@ -259,7 +259,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
   const epoch = app.state().document_file.epoch;
   const colors = app.state().layer_tools.mask_editing?.colors ?? app.state().colors;
   const rendition = app.color_panel().rendition ?? null;
-  const canPick = !document.querySelector('dialog[open]');
+  const canPick = !hasModalDialog();
   return new Promise(resolve => {
     const root = element('dialog', 'color-dialog picker-dialog');
     const miniCurrent = element('span'), miniNew = element('span'), miniHex = element('span', 'color-mini-hex');

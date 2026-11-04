@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DocumentDeliveryCopy {
+    pub progress_dialog: crate::DialogIntent,
+    pub download_dialog: crate::DialogIntent,
     pub untitled: Arc<str>,
     pub image_name: Arc<str>,
     pub clipboard_unavailable: Arc<str>,
@@ -40,6 +42,8 @@ pub struct DocumentDeliveryCopy {
 impl DocumentDeliveryCopy {
     pub fn new(localization: &Localizer) -> Self {
         Self {
+            progress_dialog: crate::DialogIntent::progress(),
+            download_dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             untitled: localization.text(MessageId::DOCUMENTS_UNTITLED),
             image_name: localization.text(MessageId::MENU_IMAGE),
             clipboard_unavailable: localization.text(MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_UNAVAILABLE),

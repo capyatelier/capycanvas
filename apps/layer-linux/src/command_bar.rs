@@ -67,12 +67,14 @@ impl CommandBar {
         let body = gtk::Box::builder().orientation(gtk::Orientation::Vertical)
             .spacing(COMMAND_SEARCH_STYLE.gap).accessible_role(gtk::AccessibleRole::Dialog).build();
         body.set_widget_name("command-bar");
+        body.add_css_class("dialog-part-page");
         body.add_css_class("command-bar");
         body.set_halign(gtk::Align::Center);
         body.set_valign(gtk::Align::Start);
-        body.update_property(&[gtk::accessible::Property::Label(copy.title.as_ref()), gtk::accessible::Property::Modal(true)]);
+        body.update_property(&[gtk::accessible::Property::Label(copy.title.as_ref()), gtk::accessible::Property::Modal(CommandSearchView::DIALOG.modal)]);
         root.add_overlay(&body);
         let header = gtk::Box::new(gtk::Orientation::Horizontal, COMMAND_SEARCH_STYLE.gap);
+        header.set_widget_name("dialog-header");
         let entry = gtk::SearchEntry::new();
         entry.set_widget_name("command-search");
         entry.set_placeholder_text(Some(copy.search_commands.as_ref()));
@@ -83,6 +85,7 @@ impl CommandBar {
         unit.set_visible(false);
         let close = gtk::Button::from_icon_name("window-close-symbolic");
         close.set_widget_name("command-search-close");
+        close.add_css_class("dialog-part-end");
         close.set_tooltip_text(Some(copy.close_search.as_ref()));
         close.update_property(&[gtk::accessible::Property::Label(copy.close_search.as_ref())]);
         close.add_css_class("flat");

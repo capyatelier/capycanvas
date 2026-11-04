@@ -1,7 +1,7 @@
 import { bindCopy } from './localization.js';
 import { latinKey } from "./text-input.js";
 import {createDialogHost} from './dialog-host.js';
-export function createShortcutPage({ app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
+export function createShortcutPage({ onKey, app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
   let rootResults, categoryResults, modifierMain, modifierCategory, inputRoot;
@@ -70,7 +70,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
     const body = element("div", "sheet-body");
     node.append(header, body); document.body.append(node);
     node.addEventListener("close", () => { node.signature = ""; });
-    const host=createDialogHost({app,dialog:node,header,cancel:exit,icon,copy:common,onCancel:onDismiss,search,clearSearch,cancelLabel:()=>common.close});
+    const host=createDialogHost({onKey,app,dialog:node,header,cancel:exit,icon,copy:common,onCancel:onDismiss,search,clearSearch,cancelLabel:()=>common.close});
     return { node, header, title, body, host, signature: "" };
   }
   const dismissRecording = close => () => (view()?.capture ? send({ type: "cancel_shortcut" }) : close());
@@ -95,7 +95,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
   const importCancel=button(()=>common.cancel,()=>send({type:'cancel_keymap_import'}));
   const importConfirm=button(()=>common.import,()=>send({type:'confirm_keymap_import'}),'suggested-action');importConfirm.id='confirm-keymap-import';
   importHeader.append(importTitle);importFooter.append(importCancel,importConfirm);importDialog.append(importHeader,importBody,importFooter);document.body.append(importDialog);
-  const importHost=createDialogHost({app,dialog:importDialog,header:importHeader,cancel:importCancel,primary:importConfirm,icon,copy:common,onCancel:()=>send({type:'cancel_keymap_import'})});
+  const importHost=createDialogHost({onKey,app,dialog:importDialog,header:importHeader,cancel:importCancel,primary:importConfirm,icon,copy:common,onCancel:()=>send({type:'cancel_keymap_import'})});
   let importSignature = '';
 
   function present(target, intent) {

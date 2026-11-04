@@ -1238,7 +1238,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str, owner: u64, repe
         progress.set_text(Some(if rows == 0 { &copy.preparing } else if rows == height { &copy.finishing_file } else { &copy.writing_image }));
         true
     }));
-    dialog.present(Some(&w.window));
+    crate::page_dialog::present_intent(&dialog, &w.window, progress_copy.borrow().progress_dialog);
     let timer = glib::timeout_add_local(std::time::Duration::from_millis(50), glib::clone!(#[strong] progress_copy, #[strong] job, #[weak] progress, #[upgrade_or] glib::ControlFlow::Break,
         move || {
             let copy = progress_copy.borrow();

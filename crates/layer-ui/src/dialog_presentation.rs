@@ -32,6 +32,8 @@ pub struct DialogIntent {
 }
 impl DialogIntent {
     pub const fn editor(primary: Option<DialogPrimary>) -> Self { Self { role: DialogRole::Editor, modal: true, primary } }
+    pub const fn canvas_panel(modal: bool) -> Self { Self { role: DialogRole::CanvasPanel, modal, primary: Some(DialogPrimary::Action) } }
+    pub const fn progress() -> Self { Self { role: DialogRole::Alert, modal: true, primary: None } }
     pub const fn alert() -> Self { Self { role: DialogRole::Alert, modal: true, primary: Some(DialogPrimary::Action) } }
     pub fn header(self, subpage: bool) -> DialogHeader {
         use DialogHeaderAction as A;
@@ -63,6 +65,10 @@ impl DialogPresentation {
             }
         }
     }
+}
+
+pub fn calibration_extent(area: [f32; 2], natural: [f32; 2]) -> [f32; 2] {
+    [natural[0].max(384.).min(area[0]), natural[1].max(360.).min(area[1])]
 }
 
 pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
@@ -108,6 +114,20 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn canvas_intents_preserve_native_modality_and_progress_is_a_cancel_only_alert() {
+        let calibration=DialogIntent::canvas_panel(false);
+        assert_eq!(calibration.role,DialogRole::CanvasPanel);
+        assert!(!calibration.modal);
+        assert!(DialogIntent::canvas_panel(true).modal);
+        assert_eq!(DialogIntent::progress(),DialogIntent {role:DialogRole::Alert,modal:true,primary:None});
+    }
+    #[test]
+    fn calibration_minimums_fit_the_measured_native_area() {
+        assert_eq!(calibration_extent([412.,891.],[200.,220.]),[384.,360.]);
+        assert_eq!(calibration_extent([280.,280.],[200.,220.]),[280.,280.]);
+        assert_eq!(calibration_extent([800.,900.],[460.,550.]),[460.,550.]);
+    }
     #[test]
     fn close_only_done_and_an_explicit_primary_have_distinct_headers() {
         use DialogHeaderAction as A;

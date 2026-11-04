@@ -871,11 +871,59 @@ fn w6c_profile_library(d: &mut Driver) {
     close(d, &settings);
 }
 
+fn w6d_canvas(d: &mut Driver) {
+    let (layer, [width,height]) = {
+        let session=ui_session(&d.w);let document=session.engine().document();
+        (layer_ui::occurrence_token(document.working.occurrence.unwrap()),document.composition().size.map(|side| side as f32))
+    };
+    d.w.dispatch(UiAction::SelectLayer { id:layer });
+    d.w.dispatch(UiAction::Invoke { command:CommandId::Lasso });
+    native_pen_path(&d.w,&[[width*0.5,height*0.5],[width*0.85,height*0.5],[width*0.85,height*0.85],[width*0.5,height*0.85],[width*0.5,height*0.5]]);
+    d.w.dispatch(UiAction::Layer { action:LayerAction::FillSelection });
+    d.w.dispatch(UiAction::Invoke { command:CommandId::FeatherSelection });
+    until(|| state(&d.w).layer_tools.selection_resize.is_some() && find_named(d.w.window.upcast_ref(),"selection-refine-value").is_some_and(|widget|widget.is_mapped()),"Refine opens its canvas panel");
+    capture(d,"selection-refine");
+    d.w.dispatch(UiAction::Selection { action:SelectionAction::CancelResize });
+
+    d.w.dispatch(UiAction::Invoke { command:CommandId::BlendPerceptual });
+    d.w.dispatch(UiAction::Invoke { command:CommandId::FrequencySeparation });
+    until(|| state(&d.w).layer_tools.frequency_separation.is_some() && find_named(d.w.window.upcast_ref(),"frequency-separation-radius").is_some_and(|widget|widget.is_mapped()),"Frequency Separation opens its canvas panel");
+    capture(d,"frequency-separation");
+    d.w.dispatch(UiAction::FrequencySeparation { action:FrequencySeparationAction::Cancel });
+
+    d.w.dispatch(UiAction::Invoke { command:CommandId::SearchCommands });
+    until(|| d.w.command_bar.is_open() && find_named(d.w.window.upcast_ref(),"command-bar").is_some_and(|widget|widget.is_mapped()),"Command Search opens");
+    capture(d,"command-search");
+    d.w.dispatch(UiAction::CommandSearch { action:CommandSearchAction::Close });
+    until(|| !d.w.command_bar.owns_input(),"Command Search releases input before Proof");
+
+    d.w.dispatch(UiAction::Invoke { command:CommandId::SoftProofSetup });
+    until(|| state(&d.w).customization.drawer.as_ref().is_some_and(|drawer|drawer.panels().any(|panel|panel==Panel::Proof)) && find_named(d.w.window.upcast_ref(),"drawer-panel-Proof").is_some_and(|panel|panel.is_mapped()&&panel.width()>0&&panel.height()>0),"Soft Proof opens its phone drawer");
+    let proof=find_named(d.w.window.upcast_ref(),"drawer-panel-Proof").unwrap();
+    let print=find_button(&proof,"Print").unwrap();
+    until(|| !d.w.drawer.animation_active(),"Proof drawer reaches its target before Print input");
+    d.click(print.upcast_ref());
+    until(|| find_named(&proof,"soft-proof-setup").is_some_and(|widget|widget.is_mapped()),"Print settings map in the phone drawer");
+    capture(d,"soft-proof");
+
+    let original=d.w.documents.selected();
+    d.w.documents.enqueue(&d.w,(new_drawing_at(1200,1600,layer_core::color::SampleDepth::F32),None));
+    until(|| d.w.documents.len()==2 && !d.w.documents.changing.get(),"the float drawing opens");
+    super::new_photo::ready(&d.w);
+    let temporary=d.w.documents.selected();assert_ne!(temporary,original);
+    d.w.dispatch(UiAction::Invoke { command:CommandId::SdrRendition });
+    until(|| state(&d.w).customization.drawer.as_ref().is_some_and(|drawer|drawer.panels().any(|panel|panel==Panel::Proof)) && find_named(d.w.window.upcast_ref(),"drawer-panel-Proof").is_some_and(|panel|panel.is_mapped()&&panel.width()>0&&panel.height()>0&&find_named(&panel,"sdr-tone-pad-surface").is_some_and(|widget|widget.is_mapped())),"SDR Rendition opens its phone drawer");
+    capture(d,"sdr-rendition");
+    d.w.documents.select(&d.w,temporary,true);
+    until(|| d.w.documents.len()==1 && d.w.documents.selected()==original && !d.w.documents.changing.get(),"the original drawing returns");
+}
+
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6b/w6c, phone viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6b/w6c/w6d, phone viewport/theme external"]
 fn native_phone_dialogs() {
     let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    if batch == "w6d" { w6d_canvas(&mut d); d.finish(); return; }
     if batch == "w6c" {
         w6c_catchup(&mut d); w6c_managers(&mut d); w6c_profile_library(&mut d);
         d.finish(); return;

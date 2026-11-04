@@ -1,8 +1,9 @@
+import {createDialogHost} from './dialog-host.js';
 import { bindCopy } from "./localization.js";
 // DOM focus/IME and modal capture; Rust owns search, selection and execution.
 export function createCommandBar({app,element, button, icon, dispatch, style, canvas, layoutChanged, nativeCopy}) {
   const copy = nativeCopy.search;
-  let view = null, signature = "", previousFocus, focus = "canvas", outside = false;
+  let view = null, signature = "", focus = "canvas";
   const dialog = element("dialog", "command-bar");
   dialog.id = "command-bar";
   bindCopy(dialog, () => copy.search_commands, "ariaLabel");
@@ -19,7 +20,7 @@ export function createCommandBar({app,element, button, icon, dispatch, style, ca
   bindCopy(input, () => view?.parameter?.label ?? copy.search_commands, "ariaLabel");
   field.append(input);
   const unit = element("span", "command-unit");
-  const close = button("×", () => send({type:"close"}), "command-search-close");
+  const close = button("", () => send({type:"close"}), "command-search-close");close.append(icon("window-close"));
   close.id = "command-search-close"; bindCopy(close, () => copy.close_search, "ariaLabel");
   header.append(field, unit, close);
   const list = element("div", "command-results"); list.id = "command-results";
@@ -30,12 +31,12 @@ export function createCommandBar({app,element, button, icon, dispatch, style, ca
   input.setAttribute("aria-describedby", detail.id);
   dialog.append(header, list, empty, detail); document.body.append(dialog);
   const send = action => dispatch({type:"command_search", action});
+  const shell=createDialogHost({app,dialog,header,cancel:close,primary:close,icon,copy:app.bootstrap_view().common,onCancel:()=>send({type:'close'}),
+    onDismiss:()=>send({type:'dismiss',search_focused:document.activeElement===input,text:input.value}),
+    placement:visible=>{const bounds=app.command_search_placement(visible.width,visible.height);return {x:bounds.x+visible.x,y:bounds.y+visible.y,width:bounds.width,maxHeight:bounds.height};}});
   function fitViewport() {
     if (!view) return;
-    const viewport = window.visualViewport, height = viewport?.height ?? innerHeight;
-    const bounds=app.command_search_placement(viewport?.width??innerWidth,height);
-    dialog.style.left=`${bounds.x+(viewport?.offsetLeft??0)}px`;dialog.style.top=`${bounds.y+(viewport?.offsetTop??0)}px`;
-    dialog.style.width=`${bounds.width}px`;dialog.style.maxHeight=`${bounds.height}px`;
+    shell.layout();
     layoutChanged();
   }
   window.visualViewport?.addEventListener("resize", fitViewport);
@@ -48,36 +49,21 @@ export function createCommandBar({app,element, button, icon, dispatch, style, ca
   document.addEventListener("focusin", e => rememberFocus(e.target));
   document.addEventListener("pointerdown", e => rememberFocus(e.target), {capture:true});
   input.addEventListener("input", () => { if (view && !view.parameter) send({type:"query", text:input.value}); });
-  function back() { send({type:'dismiss',search_focused:document.activeElement===input,text:input.value}); }
-  dialog.addEventListener("cancel", e => { e.preventDefault(); back(); });
   dialog.addEventListener("keydown", e => {
     if (!view) return;
     e.stopPropagation();
-    if (e.key === "Escape") { e.preventDefault(); back(); }
-    else if (["ArrowDown", "ArrowUp"].includes(e.key) && !view?.parameter) {
+    if (["ArrowDown", "ArrowUp"].includes(e.key) && !view?.parameter) {
       e.preventDefault(); send({type:"move", delta:e.key === "ArrowDown" ? 1 : -1});
     } else if (e.key === "Enter" && e.target !== close) {
       e.preventDefault(); send({type:"commit", text:input.value});
     }
   });
-  const outsideBounds = e => { const r = dialog.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
-  dialog.addEventListener("pointerdown", e => { outside = e.target === dialog && outsideBounds(e); });
-  // Keep the modal through the complete dismissal click so its release cannot paint.
-  dialog.addEventListener("click", e => {
-    if (outside && e.target === dialog && outsideBounds(e)) { e.preventDefault(); e.stopPropagation(); send({type:"close"}); }
-    outside = false;
-  });
-  dialog.addEventListener("pointercancel", () => { outside = false; });
   return {
     refresh(next) {
       const wasOpen = !!view, previousParameter = view?.parameter?.id;
       view = next ? {...next, selected:Number(next.selected)} : null;
       if (!view) {
-        if (dialog.open) { dialog.close(); layoutChanged(); }
-        if (wasOpen && !document.querySelector("dialog[open]")) {
-          if (previousFocus?.isConnected && !dialog.contains(previousFocus)) previousFocus.focus({preventScroll:true});
-          if (document.activeElement === document.body || dialog.contains(document.activeElement)) canvas.focus({preventScroll:true});
-        }
+        shell.hide();if(wasOpen){layoutChanged();if(document.activeElement===document.body)canvas.focus({preventScroll:true});}
         return;
       }
       const parameter = view.parameter;
@@ -118,8 +104,7 @@ export function createCommandBar({app,element, button, icon, dispatch, style, ca
       else input.removeAttribute("aria-activedescendant");
       detail.textContent = view.detail;
       if (!wasOpen) {
-        previousFocus = document.activeElement;
-        dialog.showModal(); input.focus({preventScroll:true});
+        shell.present(view.dialog); input.focus({preventScroll:true});
         if (!matchMedia("(prefers-reduced-motion: reduce)").matches)
           dialog.animate([{opacity:0, transform:"translateY(-4px)"}, {opacity:1, transform:"translateY(0)"}], {duration:120, easing:"cubic-bezier(.2,.8,.2,1)"}).onfinish = layoutChanged;
       }

@@ -1,7 +1,8 @@
+import {createDialogHost} from './dialog-host.js';
 import {createCurveEditor} from './curve-editor.js';
 
-export function createPenResponse({state,workspace,element,button,icon,numberField,dispatch}) {
-  let panel,editor,heading,device,close,firmer,lighter,sensitivityTitle,reset,cancel,apply,direction,circle,arrows,axes,drag,mode,measured,measureFrame,initialized=false;
+export function createPenResponse({app,state,workspace,element,button,icon,numberField,dispatch}) {
+  let panel,host,editor,heading,device,close,firmer,lighter,sensitivityTitle,reset,cancel,apply,direction,circle,arrows,axes,drag,mode,measured,measureFrame,initialized=false;
   const viewport=()=>[workspace.clientWidth,workspace.clientHeight];
   const position=e=>{const r=workspace.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
   const model=()=>state()[`${mode}_calibration`];
@@ -9,7 +10,7 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
   function dispose(){
     if(measureFrame)cancelAnimationFrame(measureFrame);
     measureFrame=null;
-    const retired=editor;editor=null;retired?.dispose();panel?.remove();panel=null;drag=null;measured=null;initialized=false;
+    const retired=editor;editor=null;retired?.dispose();host?.hide();host?.dispose();host=null;panel?.remove();panel=null;drag=null;measured=null;initialized=false;
   }
   function measure(){
     measureFrame=null;if(!panel)return;
@@ -19,9 +20,11 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
     panel.style.setProperty('--curve-gutter',`${reserve.getBoundingClientRect().width}px`);
     const r=panel.getBoundingClientRect(),v=viewport(),view=model();
     if(!view)return;
-    const key=[r.width,r.height,...v].join(',');
-    if(key!==measured || Math.abs(view.bounds.width-r.width)>.5 || Math.abs(view.bounds.height-r.height)>.5){
-      measured=key;send({kind:'measure',extent:[r.width,r.height],viewport:v});
+    const area=app.layout(...v).phone?.work_area??{width:v[0],height:v[1]},header=panel.querySelector('.utility-header'),footer=panel.querySelector('.utility-actions');
+    const extent=app.calibration_extent([area.width,area.height],[r.width,body.scrollHeight+header.getBoundingClientRect().height+footer.getBoundingClientRect().height]);
+    const key=[...extent,...v].join(',');
+    if(key!==measured || Math.abs(view.bounds.width-extent[0])>.5 || Math.abs(view.bounds.height-extent[1])>.5){
+      measured=key;send({kind:'measure',extent,viewport:v});
     } else if(!initialized){
       initialized=true;panel.style.visibility='';editor.graph.focus({preventScroll:true});
     }
@@ -34,9 +37,8 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
     if(!panel){
       const target={kind:mode},panelKind=mode;
       const act=action=>dispatch(panelKind==='tilt'?{type:'tilt_calibration',action:{kind:'panel',action}}:{type:'pressure_calibration',action});
-      panel=element('div','dock-group floating-panel utility-panel');panel.id=`${prefix}-dialog`;
+      panel=element('dialog','dock-group floating-panel utility-panel');panel.id=`${prefix}-dialog`;
       panel.style.visibility='hidden';
-      panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
       const header=element('div','dock-tabs utility-header'),title=element('div','utility-heading');
       heading=element('strong','utility-title');heading.id=`${prefix}-title`;panel.setAttribute('aria-labelledby',heading.id);
       device=element('span','utility-device');title.append(heading,device);
@@ -66,12 +68,12 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
       direction.append(bar);
       if(mode==='tilt'){editor.node.querySelector('.curve-plot').append(circle);controls.append(direction);body.append(editor.node,controls);}
       else body.append(editor.node,sensitivity);panel.append(header,body,actions);workspace.append(panel);
+      host=createDialogHost({app,dialog:panel,header,cancel,primary:apply,icon,copy:app.bootstrap_view().common,onCancel:()=>act({kind:'cancel'}),onDismiss:()=>dispatch({type:'curve_editor',target,action:{kind:'key',epoch:model().editor.controls.epoch,key_event:'Escape',pressed:true,repeat:false,modifiers:{command:false,shift:false,alt:false}}}),placement:()=>model().bounds});
       const contact=(phase,e)=>act({kind:'drag',phase,position:e?position(e):[0,0],viewport:viewport()});
       title.onpointerdown=e=>{if(e.button)return;e.preventDefault();e.stopPropagation();drag=e.pointerId;title.setPointerCapture(e.pointerId);contact('down',e);};
       title.onpointermove=e=>{if(drag===e.pointerId)contact('move',e);};
       title.onpointerup=e=>{if(drag===e.pointerId){contact('up',e);drag=null;title.releasePointerCapture(e.pointerId);}};
       title.onpointercancel=title.onlostpointercapture=()=>{if(drag!=null){drag=null;contact('cancel');}};
-      panel.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();dispatch({type:'curve_editor',target,action:{kind:'key',epoch:model().editor.controls.epoch,key_event:e.key,pressed:true,repeat:e.repeat,modifiers:{command:false,shift:false,alt:false}}});}};
       panel.addEventListener('pointerdown',e=>e.stopPropagation());
     }
     heading.textContent=view.title;close.title=view.close;close.setAttribute('aria-label',view.close);
@@ -91,7 +93,9 @@ export function createPenResponse({state,workspace,element,button,icon,numberFie
     }
     editor.update(view.editor,view.title);
     const reserve=panel.querySelector('.curve-frame > span');reserve.textContent=view.axis_gutter;reserve.setAttribute('aria-hidden','true');
-    panel.style.width=`${Math.min(384,viewport()[0])}px`;panel.style.maxHeight=`${viewport()[1]}px`;panel.style.transform=`translate(${view.bounds.x}px,${view.bounds.y}px)`;
+    const area=app.layout(...viewport()).phone?.work_area??{width:viewport()[0],height:viewport()[1]};
+    const [width]=app.calibration_extent([area.width,area.height],[panel.scrollWidth,0]);panel.style.width=`${width}px`;
+    panel.style.maxHeight=`${area.height}px`;host.present(view.dialog);
     if(!measureFrame)measureFrame=requestAnimationFrame(measure);
   }
   const observer=new ResizeObserver(()=>{measured=null;if(panel&&!measureFrame)measureFrame=requestAnimationFrame(measure);});observer.observe(workspace);

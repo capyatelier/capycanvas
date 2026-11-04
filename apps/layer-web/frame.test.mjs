@@ -113,7 +113,7 @@ test('compiler input hooks wait for app publication and retain contact and resum
   let inputs=0,wait=3.2,wakes=0;
   const events=owner=>({addEventListener(type,listener){listeners.set(`${owner}:${type}`,listener);}});
   const context={window:events('window'),document:{...events('document'),hidden:false,querySelector:()=>null},
-    app:undefined,gpuReady:false,compilerResumeTimer:undefined,pending:[],documents:{busy:()=>false},
+    app:undefined,gpuReady:false,compilerResumeTimer:undefined,pending:[],documents:{busy:()=>false},hasModalDialog:()=>false,
     setTimeout(callback,delay){timers.push({callback,delay});return timers.length;},wake(){wakes++;}};
   const contacts=source.slice(source.indexOf('const compilerContacts = new Set();'),source.indexOf('for (const type of ["pointerdown", "pointermove"])'));
   const compiler=source.slice(source.indexOf('function deferOptionalCompiler()'),source.indexOf('function scheduleCompiler()'));
@@ -153,33 +153,30 @@ test('live preferences publish while document dialogs retain exclusive editing i
 
 test('native key input retains dialog ownership, text and Latin candidates', () => {
   const received = [];
-  let modal = {};
   class Element { closest() { return null; } }
-  const context = {Element, document:{querySelector:() => modal}, state:{preferences:{capture:null}},
-    composingKey:() => false, latinKey, updateZen() {}, keyboardFocused:new WeakSet(),
-    app:{control_takes_key:() => false}, documents:{allowNativePaste:() => false},
+  let composing=false,nativePaste=false,modal=true;
+  const context = {Element,
+    composingKey:() => composing, hasModalDialog:() => modal, latinKey, updateZen() {}, keyboardFocused:new WeakSet(),
+    app:{control_takes_key:() => false}, documents:{allowNativePaste:() => nativePaste},
     input:event => { received.push(event); return {handled:true}; }};
   runInNewContext(source.slice(source.indexOf('function keyInput('), source.indexOf('const keyboardFocused =')), context);
-  const key = (pressed, properties = {}) => {
+  const key = (pressed, properties = {}, fromDialog = false) => {
     const event = {target:new Element(), key:'Escape', defaultPrevented:false, stopped:false,
       ...properties,
       preventDefault() { this.defaultPrevented=true; }, stopPropagation() { this.stopped=true; }};
-    context.keyInput(event, pressed);
+    context.keyInput(event, pressed, null, fromDialog);
     return event;
   };
   assert.equal(key(true).defaultPrevented, false);
-  assert.equal(received.length, 0, 'The visible sheet owns Escape when focus has been blurred');
-  context.state.preferences.capture = {};
-  assert.equal(key(true).defaultPrevented, true);
-  assert.equal(received.length, 1, 'Recording still receives and consumes the chord');
-  context.state.preferences.capture = null;
+  assert.equal(received.length, 0, 'A blurred global press cannot bypass the modal dialog');
+  assert.equal(key(true, {}, true).defaultPrevented, true);
+  assert.equal(received.length, 1, 'The common host forwards its owned press exactly once');
   key(false);
   assert.equal(received.at(-1).pressed, false, 'Release retires the shared recording key');
-  assert.equal(key(true).defaultPrevented, false);
-  assert.equal(received.length, 2, 'The next Escape returns to native dismissal');
-  modal = null;
-  assert.equal(key(true).defaultPrevented, true);
-  assert.equal(received.length, 3, 'Main Preferences retains shared key handling');
+  modal=false;
+  composing=true;assert.equal(key(true).defaultPrevented,false);assert.equal(received.at(-1).editing,true);
+  composing=false;nativePaste=true;assert.equal(key(true,{key:'v',code:'KeyV',ctrlKey:true}).defaultPrevented,false);
+  nativePaste=false;
   for (const [name, code, shiftKey, latin] of [['я','KeyZ',false,'z'], ['Я','KeyZ',true,'Z'],
     ['и','KeyB',false,'b'], ['é','Digit2',false,'2'], ['х','BracketLeft',true,'{'],
     ['a','KeyQ',false,'q'], ['z','KeyZ',false,null], ['Escape','Escape',false,null]]) {
@@ -190,6 +187,85 @@ test('native key input retains dialog ownership, text and Latin candidates', () 
       assert.equal(received.at(-1).pressed, pressed);
     }
   }
+});
+
+test('canvas panel measurement excludes intentional header overflow and previous allocation',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js');
+  const {doc,element,icon}=colorDialogDom(t),dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button');
+  header.append(cancel,primary);dialog.append(header);doc.body.append(dialog);
+  dialog.scrollWidth=361;dialog.scrollHeight=212;dialog.style.width='500px';dialog.style.height='212px';
+  dialog.getBoundingClientRect=()=>({width:360,height:123});
+  const measurements=[];
+  const app={dialog_presentation:()=>({kind:'canvas_panel'}),dialog_header:()=>({start:'cancel',end:'primary'}),
+    dialog_bounds:(_role,_viewport,_visible,measured)=>{assert.equal(dialog.style.width,'');assert.equal(dialog.style.height,'');measurements.push(measured);return{x:26,y:704,width:measured[0],height:measured[1]};}};
+  const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel'},onCancel(){}});
+  host.present({role:'canvas_panel',modal:true,primary:'action'});host.layout();
+  assert.deepEqual(measurements,[[360,123],[360,123]],'Decoration overflow and the previous fixed height never become natural content');
+  assert.equal(dialog.style.width,'360px');assert.equal(dialog.style.height,'123px');
+  host.hide();host.dispose();
+});
+
+test('common dialog host forwards owned keys once and registers actual modal state',async t=>{
+  const {createDialogHost,hasOpenDialog,hasModalDialog}=await import('./dialog-host.js');
+  const {doc,element,icon}=colorDialogDom(t),dialog=element('dialog'),header=element('header'),cancel=element('button');
+  header.append(cancel);dialog.append(header);doc.body.append(dialog);dialog.show=()=>{dialog.open=true;};
+  const forwarded=[];
+  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null}),dialog_escape:()=> 'cancel'};
+  const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){},onKey:event=>forwarded.push(event.key)});
+  const key=()=>{let stopped=0;dialog.dispatchEvent({type:'keydown',key:'a',stopPropagation(){stopped++;},preventDefault(){}});return stopped;};
+  assert.equal(hasOpenDialog(),false);assert.equal(hasModalDialog(),false);
+  host.present({role:'editor',modal:true,primary:null});
+  assert.equal(hasOpenDialog(),true);assert.equal(hasModalDialog(),true);assert.equal(key(),1);assert.deepEqual(forwarded,['a']);
+  host.hide();assert.equal(hasOpenDialog(),false);assert.equal(hasModalDialog(),false);
+  host.present({role:'editor',modal:false,primary:null});
+  assert.equal(hasOpenDialog(),true);assert.equal(hasModalDialog(),false);assert.equal(key(),0);assert.deepEqual(forwarded,['a','a']);
+  host.dispose();assert.equal(hasOpenDialog(),false);assert.equal(hasModalDialog(),false);
+});
+
+test('a consumed child Escape leaves its dialog open until the terminal Escape',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js');
+  const {doc,element,icon}=colorDialogDom(t),dialog=element('dialog'),header=element('header'),cancel=element('button');
+  header.append(cancel);dialog.append(header);doc.body.append(dialog);
+  let cancels=0;
+  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null}),dialog_escape:()=> 'cancel'};
+  const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){cancels++;host.hide();}});
+  host.present({role:'editor',modal:true,primary:null});
+  const key=defaultPrevented=>dialog.dispatchEvent({type:'keydown',key:'Escape',defaultPrevented,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
+  key(true);assert.equal(dialog.open,true);assert.equal(cancels,0,'The child menu or swatch sheet already handled Escape');
+  key(false);assert.equal(dialog.open,false);assert.equal(cancels,1);host.dispose();
+});
+
+test('a nonmodal canvas panel leaves keyboard and native pen delivery available after hide',async t=>{
+  const {createDialogHost,hasModalDialog}=await import('./dialog-host.js');
+  const {observePenInput}=await import('./pen-input.js');
+  const {doc,element,button,icon}=colorDialogDom(t),dialog=element('dialog'),header=element('header'),cancel=element('button'),canvas=element('canvas');
+  header.append(cancel);dialog.append(header);doc.body.append(dialog,canvas);dialog.show=()=>{dialog.open=true;};
+  const actions=[],listeners=new Map(),context={Element:canvas.constructor,hasModalDialog,composingKey:()=>false,latinKey,updateZen(){},keyboardFocused:new WeakSet(),app:{control_takes_key:()=>false},documents:{allowNativePaste:()=>false},input:event=>{actions.push(event);return{handled:true};}};
+  runInNewContext(source.slice(source.indexOf('function keyInput('),source.indexOf('const keyboardFocused =')),context);
+  observePenInput({workspace:{addEventListener:(type,handler)=>listeners.set(type,handler)},canvas,position:()=>[10,20],dispatch:action=>actions.push(action)});
+  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null})};
+  const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){}});
+  host.present({role:'canvas_panel',modal:false,primary:'action'});
+  const opened=[],admission={active:new Set(),batching:false,changing:false,closing:false,hasModalDialog,openBatch:files=>opened.push(files),transportFailure:assert.fail};
+  const documentSource=readFileSync(new URL('documents.js',import.meta.url),'utf8');
+  runInNewContext(documentSource.slice(documentSource.indexOf('async function openFiles('),documentSource.indexOf('const handleStore=')),admission);
+  const file={name:'owned.capy'};await admission.openFiles([file]);assert.equal(opened[0][0].file,file,'A nonmodal calibration panel does not block opening a drawing');
+  const {fakeColorApp}=await import('./color-dialog-fixture.mjs'),{chooseColor}=await import('./color-editor.js');
+  const color=chooseColor({app:fakeColorApp().app,slot:'foreground',element,button});
+  const colorDialog=doc.body.children.find(node=>node!==dialog&&node.tagName==='DIALOG');
+  assert.equal(colorDialog.descendants().find(node=>node.className==='color-pick').hidden,false,'A nonmodal calibration panel leaves canvas picking available');
+  colorDialog.close();await color;
+  const facts=[],chrome={hasModalDialog,workspaceViewport:[1200,900],customization:{placement:()=>null},workspaceChrome:{facts:()=>({})},heldPointers:new Map(),dragItem:null,
+    document:{querySelector:selector=>selector.includes('dialog[open]')?dialog:null,elementFromPoint:()=>canvas},CSS:{supports:()=>false},input:event=>{facts.push(event.facts);return{paint:!event.facts.popup_open};}};
+  runInNewContext(source.slice(source.indexOf('function chromeInput('),source.indexOf('function updateZen(')),chrome);
+  for(const retire of [()=>{},()=>host.hide(),()=>host.dispose()]){
+    retire();assert.equal(hasModalDialog(),false);
+    assert.equal(chrome.chromeInput({kind:'contact',position:[10,20]}).paint,true,'Nonmodal calibration never reports a blocking popup');
+    context.keyInput({target:canvas,key:'b',defaultPrevented:false,preventDefault(){},stopPropagation(){}},true);
+    listeners.get('pointerdown')({target:canvas,pointerType:'pen',pointerId:actions.length+1});
+    assert.deepEqual(actions.slice(-2).map(action=>action.type),['key','pen_input']);
+  }
+  assert.ok(facts.every(fact=>fact.popup_open===false));
 });
 
 function harness(moving = false) {
@@ -587,17 +663,4 @@ test('phone contacts preview locally, commit once and retire on cancellation',t=
   }
   assert.deepEqual(freed,[1,2,3,4]);assert.equal(root.dataset.contact,undefined);
   assert.equal(inputs.filter(([,kind])=>kind==='finish').length,1,'Only a live contact reaches shared Finish');
-});
-
-test('a consumed child Escape leaves its dialog open until the terminal Escape',async t=>{
-  const {createDialogHost}=await import('./dialog-host.js');
-  const {doc,element,icon}=colorDialogDom(t),dialog=element('dialog'),header=element('header'),cancel=element('button');
-  header.append(cancel);dialog.append(header);doc.body.append(dialog);
-  let cancels=0;
-  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null}),dialog_escape:()=> 'cancel'};
-  const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){cancels++;host.hide();}});
-  host.present({role:'editor',modal:true,primary:null});
-  const key=defaultPrevented=>dialog.dispatchEvent({type:'keydown',key:'Escape',defaultPrevented,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
-  key(true);assert.equal(dialog.open,true);assert.equal(cancels,0,'The child menu or swatch sheet already handled Escape');
-  key(false);assert.equal(dialog.open,false);assert.equal(cancels,1);host.dispose();
 });

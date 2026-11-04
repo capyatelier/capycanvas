@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
-import {MARGIN} from './notice.js';
+const MARGIN = 12;
 
 const notice='.canvas-notice',action=`${notice} .canvas-notice-action`,bar='.canvas-action-bar';
 const shown=`(()=>{const n=document.querySelector('${notice}');return !!n&&!n.hidden})()`;

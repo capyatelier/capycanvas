@@ -22,6 +22,7 @@ pub enum FrequencySeparationAction {
 /// The open Frequency Separation dialog: one radius, previewed on the canvas.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FrequencySeparationView {
+    pub dialog: crate::DialogIntent,
     pub title: &'static str,
     pub label: &'static str,
     pub radius: f32,
@@ -135,7 +136,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             target,
             revision,
             filters,
-            view: FrequencySeparationView { title: "Frequency Separation", label: "Radius", radius, numeric },
+            view: FrequencySeparationView { dialog: crate::DialogIntent::canvas_panel(true), title: "Frequency Separation", label: "Radius", radius, numeric },
             unpublished: None,
         });
         self.show_separation()?;

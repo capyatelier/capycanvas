@@ -120,9 +120,10 @@ export async function checkRetouchLayers({call,evaluate,settle,device=false}) {
       await choose('filter',['Frequency Separation…'],kind);
       await wait(`!!document.querySelector('${panel} #frequency-separation-value')&&layerApp.state().layer_tools.frequency_separation?.radius===4`);
       assert.equal(await evaluate(`document.querySelector('${panel} h2').textContent`),'Frequency Separation');
-      const slider=`document.querySelector('${panel} .number-slider')`;
+      const slider=`document.querySelector('${panel} input.number-slider')`;
       const track=await rect(slider);
       const along=f=>({x:track.x+8+(track.width-16)*f,y:track.y+track.height/2});
+      assert.equal(await evaluate(`document.elementFromPoint(${along(.19).x},${along(.19).y})===${slider}`),true,'Frequency Separation drag starts on its range input');
       await drag([along(.19),along(.3),along(.45)],kind);
       await wait('layerApp.state().layer_tools.frequency_separation?.radius>6');
       assert.equal((await layers()).length,count,`${kind}: the preview adds no layer`);

@@ -38,8 +38,10 @@ impl PressurePanel {
         let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).accessible_role(gtk::AccessibleRole::Dialog).build();
         let root = PanelColumns::new(&column);
         root.add_css_class("floating-panel"); root.add_css_class("utility-panel"); root.set_widget_name("pen-pressure-panel");
+        root.add_css_class("dialog-part-page");
         root.set_visible(false);
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        header.set_widget_name("dialog-header");
         header.add_css_class("dock-tabs"); header.add_css_class("utility-header"); header.set_height_request(layer_ui::TAB_BAR_HEIGHT as i32);
         let heading=gtk::Box::new(gtk::Orientation::Vertical,4);heading.set_hexpand(true);
         heading.set_margin_start(16);heading.set_margin_top(12);heading.set_margin_bottom(12);
@@ -78,8 +80,8 @@ impl PressurePanel {
         footer.add_css_class("dialog-actions");footer.set_margin_start(16);footer.set_margin_end(16);footer.set_margin_top(16);footer.set_margin_bottom(16);
         let reset = gtk::Button::new(); reset.set_widget_name("pen-pressure-reset");
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0); spacer.set_hexpand(true);
-        let cancel = gtk::Button::new(); cancel.set_widget_name("pen-pressure-cancel");
-        let apply = gtk::Button::new(); apply.set_widget_name("pen-pressure-apply"); apply.add_css_class("suggested-action");
+        let cancel = gtk::Button::new(); cancel.set_widget_name("pen-pressure-cancel"); cancel.add_css_class("dialog-part-start");
+        let apply = gtk::Button::new(); apply.set_widget_name("pen-pressure-apply"); apply.add_css_class("dialog-part-end"); apply.add_css_class("suggested-action");
         for button in [&firmer,&lighter,&reset,&cancel,&apply] {button.set_height_request(layer_ui::TILE_SIZE as i32);}
         footer.append(&reset); footer.append(&spacer); footer.append(&cancel); footer.append(&apply); column.append(&footer);
         Rc::new(Self { root, column, title, heading, close, body, device, direction, sensitivity_title, sensitivity_bar, direction_title, arrows, axes,
@@ -191,7 +193,7 @@ impl PressurePanel {
             self.arrows.queue_draw();
         }
         self.projecting.set(false);
-        self.title.set_label(&view.title); self.column.update_property(&[gtk::accessible::Property::Label(&view.title),gtk::accessible::Property::Modal(false)]);
+        self.title.set_label(&view.title); self.column.update_property(&[gtk::accessible::Property::Label(&view.title),gtk::accessible::Property::Modal(view.dialog.modal)]);
         self.close.set_tooltip_text(Some(&view.close)); self.close.update_property(&[gtk::accessible::Property::Label(&view.close)]);
         self.reset.set_label(&view.reset);
         self.sensitivity_title.set_visible(tilt.is_some());
@@ -225,8 +227,9 @@ impl PressurePanel {
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
         let area = w.gpu.borrow().as_ref().and_then(|gpu| gpu.session.phone_layout()).map(|phone| phone.work_area)
             .unwrap_or(Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] });
-        let width = 384f32.max(self.column.measure(gtk::Orientation::Horizontal,-1).0 as f32).min(area.width);
-        let extent = [width,360f32.max(self.column.measure(gtk::Orientation::Vertical,width as i32).1 as f32).min(area.height)];
+        let available = [area.width,area.height];
+        let width = layer_ui::calibration_extent(available,[self.column.measure(gtk::Orientation::Horizontal,-1).0 as f32,0.])[0];
+        let extent = layer_ui::calibration_extent(available,[width,self.column.measure(gtk::Orientation::Vertical,width as i32).1 as f32]);
         if self.measured.replace(Some((extent, viewport))) != Some((extent, viewport))
             || (bounds.width-extent[0]).abs() >= 0.5 || (bounds.height-extent[1]).abs() >= 0.5 {
             w.measure(self.panel_action(PressureCalibrationAction::Measure{extent,viewport}));

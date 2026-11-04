@@ -84,10 +84,6 @@ pub(super) struct Header {
     pub bindings: Vec<(glib::Object, glib::SignalHandlerId)>,
 }
 impl Metadata {
-    fn dialog_intent(&self) -> layer_ui::DialogIntent {
-        self.intent.unwrap_or_else(|| layer_ui::DialogIntent::editor(self.primary.as_ref().map(|action|
-            if matches!(action, Action::Close) { layer_ui::DialogPrimary::Close } else { layer_ui::DialogPrimary::Action })))
-    }
     pub(super) fn project_header(&self, dialog: &adw::Dialog, w: &std::rc::Rc<Workspace>, frame: &gtk::Box) -> Header {
         let navigation = self.navigation_root.is_some();
         let header = self.navigation_root.clone().or_else(|| self.header.as_ref().map(|(_, header)| header.clone())).unwrap_or_default();
@@ -113,7 +109,7 @@ impl Metadata {
         let close = gtk::Button::from_icon_name("window-close-symbolic");
         close.add_css_class("flat");
         close.set_widget_name("dialog-start");
-        let intent = self.dialog_intent();
+        let intent = self.intent.expect("projected pages declare their shared dialog intent");
         close.set_visible(intent.header(false).start.is_some());
         let cancel_label = layer_ui::CommonCopy::new(&w.localization()).cancel;
         close.set_tooltip_text(Some(&cancel_label));

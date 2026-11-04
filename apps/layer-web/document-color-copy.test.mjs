@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement as SharedElement} from './fake-dom.mjs';
 import {chooseDocumentColor} from './document-color.js';
+import {dialogProjection} from './color-dialog-fixture.mjs';
 import {refreshCopy,refreshBindings} from './localization.js';
 
 class Element extends SharedElement {
-  constructor(tag,doc){super();Object.assign(this,{tagName:tag.toUpperCase(),ownerDocument:doc,children:[],attributes:new Map(),listeners:{},value:'',className:'',style:{}});}
+  constructor(tag,doc){super();Object.assign(this,{tagName:tag.toUpperCase(),ownerDocument:doc,children:[],attributes:new Map(),listeners:{},value:'',className:'',style:{},dataset:{}});this.classList={toggle(){},remove(){}};}
   get firstChild(){return this.children[0];}
   get textContent(){return this.children.map(node=>node.nodeType===3?node.nodeValue:node.textContent).join('');}
   set textContent(value){this.replaceChildren(this.ownerDocument.createTextNode(value));}
@@ -17,14 +18,25 @@ class Element extends SharedElement {
   querySelectorAll(selector){const tags=selector.split(',').map(tag=>tag.toUpperCase());return this.children.flatMap(node=>node.tagName?[...(tags.includes(node.tagName)?[node]:[]),...node.querySelectorAll(selector)]:[]);}
   getContext(type,options){assert.equal(type,"2d");assert.deepEqual(options,{willReadFrequently:true});return {putImageData:image=>{this.image=image;}};}
   focus(){this.ownerDocument.activeElement=this;}
+  closest(tag){for(let node=this;node;node=node.parentNode)if(node.tagName===tag.toUpperCase())return node;return null;}
+  getBoundingClientRect(){return{x:0,y:0,width:0,height:0,left:0,right:0,top:0,bottom:0};}
+  showModal(){this.open=true;}
+  close(){this.open=false;this.dispatchEvent({type:'close'});}
+  remove(){if(this.parentNode)this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);this.parentNode=null;}
 }
 const settle=()=>new Promise(done=>setImmediate(done));
 function harness(t,{source=false,missing=null,failure=null}={}) {
   const previous=globalThis.ImageData;globalThis.ImageData=class{constructor(data,width,height){Object.assign(this,{data,width,height});}};t.after(()=>{globalThis.ImageData=previous;});
-  const doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};let language='en',form,finish,resolver,freed=false,reads=0,prepares=0;
+  const doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};
+  doc.createElement=tag=>new Element(tag,doc);doc.body=new Element('body',doc);
+  doc.querySelector=selector=>selector==='dialog[open]'?doc.body.querySelectorAll('dialog').find(node=>node.open)??null:null;
+  const previousDom={document:globalThis.document,window:globalThis.window,ResizeObserver:globalThis.ResizeObserver,innerWidth:globalThis.innerWidth,innerHeight:globalThis.innerHeight};
+  Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},ResizeObserver:class{observe(){}unobserve(){}disconnect(){}},innerWidth:1200,innerHeight:900});
+  t.after(()=>Object.assign(globalThis,previousDom));
+  let language='en',form,finish,resolver,freed=false,reads=0,prepares=0;
   const fields=['assign_title','assign_help','repair_title','repair_help','space','correct_profile','composition_preview','outside_gamut','preparing','preview_help','prepared_composition','original_composition','before','after','preview','add_source','apply_profile'];
-  const documentCopy=()=>({...Object.fromEntries(fields.map(field=>[field,`${language}:${field}`])),common:{apply:`${language}:apply`,cancel:`${language}:cancel`}});
-  const app={document_color:()=>({space:'Srgb',depth:'U8'}),document_color_copy:documentCopy,export_copy:()=>({}),profile_copy:()=>({import:`${language}:import`,saved_dialog:`${language}:saved`}),
+  const documentCopy=()=>({...Object.fromEntries(fields.map(field=>[field,`${language}:${field}`])),common:{apply:`${language}:apply`,cancel:`${language}:cancel`},progress_dialog:{role:'alert',modal:true,primary:null}});
+  const app={...dialogProjection,bootstrap_view:()=>({common:{cancel:`${language}:cancel`}}),document_color:()=>({space:'Srgb',depth:'U8'}),document_color_copy:documentCopy,export_copy:()=>({}),profile_copy:()=>({import:`${language}:import`,saved_dialog:`${language}:saved`}),
     capture_control:()=>{let cancelled=false,freed=false;return{cancelled:()=>cancelled,cancel(){assert.equal(freed,false);cancelled=true;},free(){freed=true;}};},color_feature_error_copy:error=>`${language}:${error.color_feature_error}`,
     source_profile_name_copy:value=>value==null?`${language}:unnamed`:value,color_source_preview:(name,preview,adds)=>`${name} / ${preview} / ${adds}`,
     prepare_color(){prepares++;return new Promise((done,reject)=>{resolver=failure?()=>reject(failure):done;});},prepare_source(){prepares++;return new Promise(done=>{resolver=done;});},prepare_source_comparison:prepared=>prepared};
@@ -33,7 +45,7 @@ function harness(t,{source=false,missing=null,failure=null}={}) {
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null){if(typeof text==='function')bind(node,text);else node.textContent=text;}return node;};
   const bind=(node,reader)=>{bindCopy(node,reader);return node;};
   const button=(text,action,cls)=>{const node=element('button',cls,text);node.click=action;return node;};
-  const result=chooseDocumentColor({app,element,button,dropdown:dropdownFactory({element,button}),id:7,request:source?{type:'repair_source_profile'}:{type:'document_color',operation:'assign'},gpuOperation:run=>run(),dialog:(title,build)=>new Promise(done=>{form=element('form');finish=done;build(form,done);})});
+  const result=chooseDocumentColor({app,element,button,icon:asset=>element('svg','',asset),dropdown:dropdownFactory({element,button}),id:7,request:source?{type:'repair_source_profile'}:{type:'document_color',operation:'assign'},gpuOperation:run=>run(),dialog:(title,build)=>new Promise(done=>{form=element('form');finish=done;build(form,done);})});
   return {app,doc,form,result,candidate,switch(tag){language=tag;refreshCopy(app);form.localize();refreshBindings();},resolve(value=candidate){resolver(value);},stats:()=>({reads,prepares}),buttons:()=>form.querySelectorAll('button'),finish};
 }
 import {bindCopy} from './localization.js';

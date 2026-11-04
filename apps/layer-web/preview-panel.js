@@ -1,46 +1,22 @@
 import {liveCopy} from './localization.js';
-import { noticePlacement } from "./notice.js";
-import { captureSliderContacts } from "./numeric.js";
+import {createDialogHost} from './dialog-host.js';
+import {captureSliderContacts} from './numeric.js';
 
-export const PREVIEW_PANEL_WIDTH = 360;
-
-export function createPreviewPanel({app,name,view,kind,value,apply,cancel,element,button,numberField,workspace,layout,bar}) {
+export function createPreviewPanel({app,name,view,kind,value,apply,cancel,element,button,icon,numberField,workspace}) {
   const common=liveCopy(app,'bootstrap_view').common;
-  let panel=null,title,number=null,shown=null,below=null,bounds=null,transform='';
+  let panel=null,title,body,host,number=null,shown=null;
   function open() {
-    panel=element('section','refine-panel');panel.id=`${name}-panel`;
-    panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');panel.tabIndex=-1;
-    title=element('h2','refine-title');title.id=`${name}-title`;panel.setAttribute('aria-labelledby',title.id);
-    const actions=element('div','refine-actions');
-    actions.append(button(()=>common.cancel,cancel),button(()=>common.apply,apply,'suggested-action'));
-    panel.append(title,actions);
-    panel.addEventListener('mousedown',e=>{if(!e.target.closest('input'))e.preventDefault();});
+    panel=element('dialog','document-dialog refine-panel');panel.id=`${name}-panel`;panel.tabIndex=-1;
+    const header=element('header','dialog-header'),actions=element('footer','refine-actions');
+    title=element('h2','refine-title');title.id=`${name}-title`;panel.setAttribute('aria-labelledby',title.id);header.append(title);
+    body=element('div','dialog-content');
+    const cancelButton=button(()=>common.cancel,cancel),primary=button(()=>common.apply,apply,'suggested-action');actions.append(cancelButton,primary);
+    body.append(actions);panel.append(header,body);workspace.append(panel);
+    host=createDialogHost({app,dialog:panel,header,cancel:cancelButton,primary,icon,copy:common,onCancel:cancel});
     panel.addEventListener('contextmenu',e=>e.preventDefault());
-    panel.addEventListener('keydown',e=>{
-      if(e.defaultPrevented||!['Enter','Escape'].includes(e.key))return;
-      e.preventDefault();e.stopPropagation();
-      (e.key==='Enter'?apply:cancel)();
-    });
-    below=bar();
-    workspace.append(panel);
-    panel.focus({preventScroll:true});
+    panel.addEventListener('keydown',e=>{if(!e.defaultPrevented&&e.key==='Enter'){e.preventDefault();e.stopPropagation();apply();}});
   }
-  function close() {
-    panel.remove();panel=number=shown=bounds=below=null;transform='';
-  }
-  // Bottom centre of the work area, above a canvas action bar along that edge.
-  // A bar hidden during a canvas contact keeps its place, so the panel holds still.
-  function place() {
-    const resolved=layout();
-    if(!panel||!resolved)return;
-    below=bar()??below;
-    const anchor=noticePlacement(resolved,below),width=Math.min(PREVIEW_PANEL_WIDTH,anchor.width);
-    panel.style.width=`${width}px`;
-    const height=panel.offsetHeight,ratio=globalThis.devicePixelRatio||1,align=v=>Math.round(v*ratio)/ratio;
-    bounds={x:anchor.x-width/2,y:anchor.y-height,width,height};
-    const next=`translate(${align(bounds.x)}px, ${align(bounds.y)}px)`;
-    if(next!==transform)panel.style.transform=transform=next;
-  }
+  function close() {host.hide();host.dispose();panel.remove();panel=number=shown=null;}
   function refresh() {
     const v=view();
     if(!v){if(panel)close();return;}
@@ -54,12 +30,10 @@ export function createPreviewPanel({app,name,view,kind,value,apply,cancel,elemen
         captureSliderContacts(field);
         field.slider.addEventListener('touchstart',e=>{if(e.cancelable)e.preventDefault();},{passive:false});
       }
-      if(number)number.replaceWith(field);else title.after(field);
+      if(number)number.replaceWith(field);else body.prepend(field);
       number=field;
     }
-    number.relabel?.(v.label);
-    number.update(v.radius);
-    if(rebuilt)place();
+    number.relabel?.(v.label);number.update(v.radius);host.present(v.dialog);
   }
-  return {refresh,place,bounds:()=>panel?bounds:null};
+  return {refresh,place:()=>host?.layout(),bounds:()=>{if(!panel)return null;const {x,y,width,height}=panel.getBoundingClientRect();return{x,y,width,height};}};
 }

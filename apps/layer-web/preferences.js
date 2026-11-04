@@ -4,7 +4,7 @@ import {createShortcutPage} from './shortcut-page.js';
 import {createDialogHost} from './dialog-host.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
-export function createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
+export function createPreferences({ onKey, app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
   const dialog = document.getElementById("settings");
   const bootstrap = liveCopy(app, "bootstrap_view");
   const profileCopy = liveCopy(app, "profile_copy");
@@ -166,7 +166,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     return row;
   }
   const goBack=()=>{const action=view()?.navigation.back;if(action)send(action);};
-  const shell=createDialogHost({app,dialog,header:activeHeader,cancel:exit,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
+  const shell=createDialogHost({onKey,app,dialog,header:activeHeader,cancel:exit,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
     subpage:()=>!!layout?.subpage,search,clearSearch:()=>send({type:'search',query:''})});
   root.dataset.dialogPart='panes';
   function arrange() {
@@ -182,7 +182,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   new ResizeObserver(arrange).observe(root);
 
   let searchSignature = "", searchFocus = 0n, revealed = null;
-  const shortcutPage = createShortcutPage({ app, element, button, icon, send, view, scroller: pages, settingsGroup, dropdown, copy:nativeCopy.shortcuts, common:bootstrap.common });
+  const shortcutPage = createShortcutPage({ onKey, app, element, button, icon, send, view, scroller: pages, settingsGroup, dropdown, copy:nativeCopy.shortcuts, common:bootstrap.common });
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   function paintSwatches(widget, input, kind) {
