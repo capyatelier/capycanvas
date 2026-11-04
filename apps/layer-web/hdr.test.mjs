@@ -8,6 +8,16 @@ import {checkProofStartingLayout,checkProofKeys,checkProofPattern} from './proof
 import {checkHdrDisplay,checkHdrCapabilityFallback} from './hdr-display.test.mjs';
 import {mkdir,writeFile} from 'node:fs/promises';
 
+export async function assertSdrDialLayout(evaluate) {
+  await checkProofPattern({evaluate});
+  const facts=await evaluate(`(()=>{const dial=document.querySelector('.proof-tone-pad'),page=dial.parentElement,r=dial.getBoundingClientRect(),drawer=dial.closest('.content-drawer')?.getBoundingClientRect();return{available:page.clientWidth,bounds:[r.x,r.y,r.width,r.height],drawer:drawer?[drawer.x,drawer.y,drawer.width,drawer.height]:null};})()`);
+  const [x,y,width,height]=facts.bounds;
+  assert.ok(Math.abs(width-Math.max(128,Math.floor(facts.available)))<=1,`SDR dial keeps its natural square size: ${JSON.stringify(facts)}`);
+  assert.ok(Math.abs(width-height)<=1,`SDR dial stays square: ${JSON.stringify(facts)}`);
+  if(facts.drawer){const [left,top,w,h]=facts.drawer;assert.ok(x>=left-1&&y>=top-1&&x+width<=left+w+1&&y+height<=top+h+1,`SDR dial stays inside the drawer: ${JSON.stringify(facts)}`);}
+  return facts;
+}
+
 // Run in headed desktop Chrome or the attached tablet's ordinary Chrome tab.
 // Files go through real codecs/workers/storage; only native file-picker handles
 // are supplied by the harness. Input uses the browser's touch/pen dispatch path.
@@ -115,7 +125,8 @@ export async function checkHdr({call,evaluate,settle}) {
     await invoke('undo');assert.deepEqual(await hist(),original);await invoke('redo');assert.deepEqual(await hist(),painted);original=painted;
     mark('Pen painting preserves negative and above-white channels with exact one-step undo/redo');
     const master0=await save();
-    await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);
+    await invoke('sdr_rendition');await wait(`!!document.querySelector('.proof-panel [aria-label="SDR balance and contrast"]')`);await settle();
+    await assertSdrDialLayout(evaluate);
     await output(false);
     results.proofOutput=await checkHdrDisplay({evaluate},false);await showProof();
     if(process.env.LAYER_PROOF_WORKSPACE) {

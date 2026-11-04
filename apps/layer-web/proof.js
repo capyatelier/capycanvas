@@ -28,7 +28,7 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
   const mounts=new Set();let primary=null,mountPending=false;
   const scheduleMount=()=>{if(!mountPending){mountPending=true;requestAnimationFrame(()=>{mountPending=false;placePanel();refreshPanel();});}};
   const mountObserver=new ResizeObserver(scheduleMount);
-  function mount(root){if(!primary)primary=root;mounts.add(root);mountObserver.observe(root);scheduleMount();return()=>{mountObserver.unobserve(root);mounts.delete(root);scheduleMount();};}
+  function mount(root){if(!primary)primary=root;let width=null;mounts.add(root);root.arrangePanel=()=>{const next=root.clientWidth;if(next!==width){width=next;placePanel();refreshPanel();}};mountObserver.observe(root);scheduleMount();return()=>{delete root.arrangePanel;mountObserver.unobserve(root);mounts.delete(root);scheduleMount();};}
   function placePanel(){
     if(paused)return;
     const visible=[...mounts].reverse().find(n=>n.isConnected&&!n.closest("[inert]")&&n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0);
@@ -235,7 +235,7 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
       for(const{input,spec}of arcControls)input.value=form.rendition[spec.key];
       if(form.mode!=='sdr'||!mapped){cancelDial();return;}
       ensurePattern();
-      {const host=panel.parentElement,outer=host.getBoundingClientRect(),top=canvas.getBoundingClientRect().top-outer.top+host.scrollTop;dialSize=Math.max(128,Math.floor(Math.min(sdrPage.clientWidth,host.clientHeight-top-4)));canvas.style.width=canvas.style.height=`${dialSize}px`;const pixels=Math.ceil(dialSize*devicePixelRatio);if(canvas.width!==pixels)canvas.width=canvas.height=pixels;}
+      {const size=Math.max(128,Math.floor(sdrPage.clientWidth)),resized=size!==dialSize;dialSize=size;canvas.style.width=canvas.style.height=`${dialSize}px`;const pixels=Math.ceil(dialSize*devicePixelRatio);if(canvas.width!==pixels)canvas.width=canvas.height=pixels;if(resized)contentChanged('proof');}
       const d=dial(),ctx=canvas.getContext('2d',{willReadFrequently:true}),[cx,cy]=d.center;
       ctx.setTransform(canvas.width/dialSize,0,0,canvas.height/dialSize,0,0);ctx.clearRect(0,0,dialSize,dialSize);ctx.save();ctx.beginPath();ctx.arc(cx,cy,d.radius,0,2*Math.PI);ctx.clip();if(patternPixels)ctx.drawImage(texture,cx-d.radius,cy-d.radius,d.radius*2,d.radius*2);else{ctx.fillStyle='#808080';ctx.fill();}ctx.restore();
       const marker=(p,r,focus)=>{ctx.beginPath();ctx.arc(...p,r,0,Math.PI*2);ctx.strokeStyle='rgba(0,0,0,.65)';ctx.lineWidth=4;ctx.stroke();ctx.strokeStyle='white';ctx.lineWidth=2;ctx.stroke();if(focus){ctx.beginPath();ctx.arc(...p,r+3,0,Math.PI*2);ctx.strokeStyle='rgba(255,255,255,.65)';ctx.lineWidth=1;ctx.stroke();}};
