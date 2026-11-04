@@ -1220,3 +1220,35 @@ Write-Output 'Actual bubble overlay sequence waits for applied Fill before compo
     . ([scriptblock]::Create($loop.Extent.Text))
     if(($seen-join',')-ne'tool-subtool-0,tool-subtool-1'){throw 'Selection drawer did not check every shared sibling row'}
 }
+
+& {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+public static class CapyImageDragPacingTest {
+ public static int Clock,Last,Cancelled;
+ public static bool FailMove;
+ public static List<string> Events=new List<string>();
+ public static void Down(string device,int x,int y){Last=Clock;Events.Add("down:"+device+":"+x+","+y);}
+ public static void Move(int x,int y){if(Clock-Last<8)throw new InvalidOperationException("Unpaced image drag");Last=Clock;if(FailMove)throw new InvalidOperationException("Owned injection refused");Events.Add("move:"+x+","+y);}
+ public static void Up(){if(Clock-Last<8)throw new InvalidOperationException("Unpaced image release");Events.Add("up");}
+ public static void Cancel(){Cancelled++;}
+ public static void Reset(){Clock=Last=Cancelled=0;FailMove=false;Events.Clear();}
+}
+'@
+    $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-image-rows.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $actual=$source.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Drag-Image'},$true)
+    . ([scriptblock]::Create($actual.Extent.Text.Replace('[CapyRowPointer]','[CapyImageDragPacingTest]')))
+    function Start-Sleep([int]$Milliseconds){[CapyImageDragPacingTest]::Clock+=$Milliseconds}
+    foreach($Device in 'mouse','pen','touch'){
+        [CapyImageDragPacingTest]::Reset()
+        Drag-Image @(100,200) @(180,240)
+        $expected="down:${Device}:100,200,move:110,205,move:120,210,move:130,215,move:140,220,move:150,225,move:160,230,move:170,235,move:180,240,up"
+        if(([CapyImageDragPacingTest]::Events-join',')-ne$expected-or[CapyImageDragPacingTest]::Cancelled-ne1){throw 'Image drag changed its native path or cleanup'}
+    }
+    [CapyImageDragPacingTest]::Reset();[CapyImageDragPacingTest]::FailMove=$true;$rejected=$false
+    try{Drag-Image @(100,200) @(180,240)}catch{if($_.Exception.ToString()-notlike'*Owned injection refused*'){throw};$rejected=$true}
+    if(!$rejected-or[CapyImageDragPacingTest]::Cancelled-ne1-or[CapyImageDragPacingTest]::Events.Count-ne1){throw 'Refused image injection retried or escaped cleanup'}
+}

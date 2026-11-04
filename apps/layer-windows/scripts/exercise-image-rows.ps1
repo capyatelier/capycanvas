@@ -86,7 +86,7 @@ function Author-Image([string]$Name,$Before,[scriptblock]$Edit){
 }
 function Drag-Image([int[]]$From,[int[]]$To){
  [CapyRowPointer]::Down($Device,$From[0],$From[1])
- try{for($step=1;$step -le 8;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/8),[int]($From[1]+($To[1]-$From[1])*$step/8))};[CapyRowPointer]::Up()}
+ try{Start-Sleep -Milliseconds 8;for($step=1;$step -le 8;$step++){[CapyRowPointer]::Move([int]($From[0]+($To[0]-$From[0])*$step/8),[int]($From[1]+($To[1]-$From[1])*$step/8));Start-Sleep -Milliseconds 8};[CapyRowPointer]::Up()}
  finally{[CapyRowPointer]::Cancel()}
 }
 function Point([string]$Id){
