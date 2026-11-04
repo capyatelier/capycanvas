@@ -80,7 +80,7 @@ pub use object_sampling::prepare_nearest_coordinates;
 pub type BrowserImageDecoder = std::rc::Rc<dyn Fn(Arc<layer_core::color::source::SourceImage>, [u32; 2], layer_core::color::RgbSpace)
     -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PreparedImagePixels, String>>>>>;
 #[cfg(target_arch="wasm32")]
-pub type BrowserRasterDecoder = std::rc::Rc<dyn Fn(Arc<layer_core::raster::TileBlob>, layer_core::color::RgbSpace, layer_core::color::RgbSpace)
+pub type BrowserRasterDecoder = std::rc::Rc<dyn Fn(Arc<layer_core::raster::TileBlob>, layer_core::color::RgbSpace, layer_core::color::RgbSpace, bool)
     -> std::pin::Pin<Box<dyn std::future::Future<Output=Result<PreparedImagePixels,String>>>>>;
 #[cfg(target_arch="wasm32")]
 pub type BrowserNearestCoordinateDecoder = std::rc::Rc<dyn Fn([f64;6],[u32;2],u32,u32)
@@ -3477,18 +3477,19 @@ impl WgpuRasterizer {
         match prepared {
             object_image_mips::PreparedImageWork::Image(tile)=>receipt.matches_image(&tile.source,tile.coordinate),
             object_image_mips::PreparedImageWork::Raster(tile)=>receipt.matches_raster(&tile.blob,tile.space,tile.destination),
-            object_image_mips::PreparedImageWork::Coordinates {..}=>false,
+            object_image_mips::PreparedImageWork::Coordinates {..}|object_image_mips::PreparedImageWork::Paper {..}=>false,
         }
     }
     pub(crate) fn decode_queue_has_room(&self) -> bool {
         self.moving_decode.as_ref().is_none_or(|(_,queue)|queue.accepts_held(self.source_results.len(),false))
     }
     pub(crate) fn image_decode_waiting(&self) -> bool {
-        if self.held_result_ready() {return false;}
+        if self.held_result_ready() || self.papers.images_ready() {return false;}
         if self.bake_preflight.as_ref().is_some_and(|state|state.waiting()) {return true;}
         #[cfg(target_arch = "wasm32")]
         if self.browser_image_result.borrow().is_some() { return false; }
-        self.moving_decode.as_ref().is_some_and(|(_,queue)| queue.pending() && !queue.ready())
+        self.moving_decode.as_ref().map_or(self.papers.image_waiting(),|(_,queue)|
+            !queue.ready() && (queue.pending() || self.papers.image_waiting()))
     }
     pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<PreparedImageUpload>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
@@ -3515,6 +3516,7 @@ impl WgpuRasterizer {
         self.preparation_progress=self.preparation_progress.saturating_add(1);
         let prepared = match prepared {
             object_image_mips::PreparedImageWork::Image(prepared) => prepared,
+            object_image_mips::PreparedImageWork::Paper {..}=>return Err(GpuRasterError::InvalidImage),
             object_image_mips::PreparedImageWork::Coordinates {destination,pixels} => {
                 if let Some(destination) = destination.upgrade() { *destination.lock().unwrap() = Some(pixels); }
                 return Ok(None);
@@ -3566,6 +3568,7 @@ impl WgpuRasterizer {
             }
             if !self.image_decode_waiting() { return std::task::Poll::Ready(Ok(())); }
             *self.browser_image_wake.borrow_mut() = Some(cx.waker().clone());
+            self.papers.register_waker(cx.waker());
             if let Some(wake) = &self.snapshot_decode_wake { *wake.lock().unwrap() = Some(cx.waker().clone()); }
             std::task::Poll::Pending
         }).await
@@ -3581,6 +3584,7 @@ impl WgpuRasterizer {
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_preparation_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.papers.set_wake(wake.clone());
         if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
         self.preparation_wake=Some(wake);
     }
@@ -3678,11 +3682,12 @@ impl WgpuRasterizer {
                     if callback.is_none() && !self.snapshot_worker {return Err(GpuRasterError::Color("Raster preparation worker unavailable".into()));}
                     let cache=self.device.source_samples.clone();
                     Box::pin(async move {
-                        let pixels = if let Some(callback)=callback {callback(request.blob.clone(), request.space, request.destination).await}
+                        let pixels = if let Some(callback)=callback {callback(request.blob.clone(), request.space, request.destination,false).await}
                             else {object_image_mips::prepare_raster_tile(&request.blob,request.space,&cache)};
                         object_image_mips::PreparedImageWork::Raster(object_image_mips::PreparedRasterTile {blob:request.blob,space:request.space,destination:request.destination,scalar:request.scalar,pixels})
                     })
                 },
+                object_image_mips::MipDecodeRequest::Paper {..}=>return Err(GpuRasterError::InvalidImage),
                 object_image_mips::MipDecodeRequest::Coordinates(request) => {
                     let callback = self.browser_nearest_coordinate_decoder.clone();
                     if callback.is_none() && (!self.snapshot_worker || self.browser_image_decoder.is_some()) {
@@ -3914,7 +3919,8 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn has_pending_work(&self) -> bool {
         let waiting_objects=self.object_deferred && self.decode_wait_blocks_frame();
-        self.fill_preview.is_some() && self.fill_preview_ready().is_none()
+        self.papers.images_ready() || self.papers.image_waiting() && !self.preparation_can_wake()
+            || self.fill_preview.is_some() && self.fill_preview_ready().is_none()
             || self.held_result_ready() || self.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && !self.decode_wait_blocks_frame()) || self.bake_preflight.as_ref().is_some_and(|state|state.pending() && (!self.preparation_can_wake() || !state.waiting())) || self.restore_preparation_pending() && !self.decode_wait_blocks_frame() || self.analysis_dirty || !self.transform_damage.is_empty() || !self.document_damage.is_empty() && !waiting_objects || self.settling.is_some() || self.retouch.as_ref().is_some_and(|retouch| retouch.pending() && !self.decode_wait_blocks_frame())
             || self.navigator.pending() && !waiting_objects
             || self.transform_sources_pending && self.transform_preview.is_some() && !self.decode_wait_blocks_frame()
@@ -6963,7 +6969,7 @@ mod lut3d_tests;
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }
     pub fn set_browser_image_decoder(&mut self, worker: BrowserImageDecoder) { self.browser_image_decoder = Some(worker); }
-    pub fn set_browser_raster_decoder(&mut self, worker: BrowserRasterDecoder) { self.browser_raster_decoder = Some(worker); }
+    pub fn set_browser_raster_decoder(&mut self, worker: BrowserRasterDecoder) { self.papers.set_decoder(worker.clone());self.browser_raster_decoder = Some(worker); }
     #[cfg(target_arch = "wasm32")]
     pub fn set_browser_nearest_coordinate_decoder(&mut self, worker: BrowserNearestCoordinateDecoder) { self.browser_nearest_coordinate_decoder = Some(worker); }
 }

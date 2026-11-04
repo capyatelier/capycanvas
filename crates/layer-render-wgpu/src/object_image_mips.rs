@@ -312,11 +312,13 @@ pub(crate) struct CoordinateRequest {
 pub(crate) enum MipDecodeRequest {
     Image(ImageDecodeRequest),
     Raster(RasterDecodeRequest),
+    Paper {blob:Arc<layer_core::raster::TileBlob>,coordinate:[u32;2]},
     Coordinates(CoordinateRequest),
 }
 pub(crate) enum PreparedImageWork {
     Image(PreparedMipTile),
     Raster(PreparedRasterTile),
+    Paper {blob:Arc<layer_core::raster::TileBlob>,coordinate:[u32;2],pixels:Result<Arc<Vec<u8>>,String>},
     Coordinates {destination:CoordinateDestination,pixels:CoordinateResult},
 }
 pub fn prepare_image_tile(source:&SourceImage,coordinate:[u32;2],destination:RgbSpace,cache:&layer_core::raster::DecodedTileCache,decoder:Option<&layer_color::WorkingDecoder>)->Result<crate::scene::sources::PreparedSourcePixels,String> {
@@ -371,12 +373,14 @@ pub(crate) fn image_decode_failure<'a>(failures:&'a [crate::moving_projection::F
 enum DecodeKey {
     Image(Weak<SourceImage>,[u32;2]),
     Raster(Weak<layer_core::raster::TileBlob>,RgbSpace,RgbSpace,bool),
+    Paper(Weak<layer_core::raster::TileBlob>,[u32;2]),
 }
 impl DecodeKey {
     fn matches(&self,other:&Self)->bool {
         match (self,other) {
             (Self::Image(a,p),Self::Image(b,q))=>a.ptr_eq(b) && p==q,
             (Self::Raster(a,space,destination,scalar),Self::Raster(b,other,target,coverage))=>a.ptr_eq(b) && space==other && destination==target && scalar==coverage,
+            (Self::Paper(a,p),Self::Paper(b,q))=>a.ptr_eq(b) && p==q,
             _=>false,
         }
     }
@@ -455,6 +459,10 @@ fn contained<T,E:From<String>>(work:impl FnOnce()->Result<T,E>)->Result<T,E> {
 #[cfg(not(target_arch="wasm32"))]
 fn prepare_request(request:MipDecodeRequest,destination:RgbSpace,cache:&layer_core::raster::DecodedTileCache,decoders:&mut Decoders)->PreparedImageWork {
     match request {
+        MipDecodeRequest::Paper {blob,coordinate}=> {
+            let pixels=contained(||cache.decode_on_worker(&blob));
+            PreparedImageWork::Paper {blob,coordinate,pixels}
+        },
         MipDecodeRequest::Raster(request) => {
             let pixels=contained(||prepare_raster_tile(&request.blob,request.space,cache));
             PreparedImageWork::Raster(PreparedRasterTile {blob:request.blob,space:request.space,destination:request.destination,scalar:request.scalar,pixels})
@@ -511,6 +519,10 @@ impl MipDecodeQueue {
         let key=DecodeKey::Raster(Arc::downgrade(&blob),space,destination,scalar);
         self.enqueue(MipDecodeRequest::Raster(RasterDecodeRequest {blob,space,destination,scalar}),Some(key))
     }
+    pub(crate) fn request_paper(&mut self,blob:Arc<layer_core::raster::TileBlob>,coordinate:[u32;2])->bool {
+        let key=DecodeKey::Paper(Arc::downgrade(&blob),coordinate);
+        self.enqueue(MipDecodeRequest::Paper {blob,coordinate},Some(key))
+    }
     pub(crate) fn request_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:CoordinateDestination)->bool {
         self.enqueue(MipDecodeRequest::Coordinates(CoordinateRequest {inverse,size,first,count,destination}),None)
     }
@@ -537,6 +549,7 @@ impl MipDecodeQueue {
         let key=match &result {
             PreparedImageWork::Image(tile)=>Some(DecodeKey::Image(Arc::downgrade(&tile.source),tile.coordinate)),
             PreparedImageWork::Raster(tile)=>Some(DecodeKey::Raster(Arc::downgrade(&tile.blob),tile.space,tile.destination,tile.scalar)),
+            PreparedImageWork::Paper {blob,coordinate,..}=>Some(DecodeKey::Paper(Arc::downgrade(blob),*coordinate)),
             PreparedImageWork::Coordinates {..}=>None,
         };
         let index=self.outstanding.iter().position(|stored|match (stored,&key) {
@@ -553,6 +566,7 @@ impl MipDecodeQueue {
         !self.outstanding.is_empty()
     }
     pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)>0}
+    pub(crate) fn in_flight(&self)->bool {!self.outstanding.is_empty()}
     #[cfg(target_arch="wasm32")]
     pub(crate) fn take_external(&mut self)->Option<MipDecodeRequest> {self.external.take()}
     #[cfg(target_arch="wasm32")]
@@ -569,6 +583,32 @@ mod tests {
         let (send,_)=std::sync::mpsc::sync_channel(capacity);
         let context=Arc::new(DecodeContext {cache:Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination:RgbSpace::Srgb,send,ready:ready.clone(),wake:Default::default()});
         MipDecodeQueue {pool:Arc::new(DecodePool {requests,capacity,epoch:Default::default()}),context,waiting:None,results,ready,outstanding,capacity}
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn paper_tiles_pipeline_to_capacity_and_complete_out_of_order() {
+        use std::sync::atomic::AtomicUsize;
+        let (requests,receive)=std::sync::mpsc::sync_channel(2);
+        let (send,results)=std::sync::mpsc::sync_channel(2);let ready=Arc::new(AtomicUsize::new(0));
+        let mut queue=queued(requests,results,ready.clone(),Vec::new(),2);
+        let pixels=Arc::new(vec![73;(PAGE_SIZE*PAGE_SIZE) as usize]);
+        let blob=Arc::new(layer_core::raster::TileBlob::encode(layer_core::color::PixelDescriptor::COVERAGE8,&pixels).unwrap());
+        assert!(queue.request_paper(blob.clone(),[0,0]));assert!(queue.request_paper(blob.clone(),[1,0]));
+        assert!(queue.request_paper(blob.clone(),[0,0]));assert!(!queue.request_paper(blob.clone(),[2,0]));
+        for coordinate in [[0,0],[1,0]] {
+            assert!(matches!(receive.try_recv(),Ok(DecodeJob {request:MipDecodeRequest::Paper {coordinate:at,..},..}) if at==coordinate));
+        }
+        assert!(receive.try_recv().is_err());
+        send.send(PreparedImageWork::Paper {blob:blob.clone(),coordinate:[1,0],pixels:Ok(pixels.clone())}).unwrap();ready.fetch_add(1,Ordering::AcqRel);
+        assert!(matches!(queue.poll(),Some(PreparedImageWork::Paper {coordinate:[1,0],..})));
+        assert!(queue.request_paper(blob.clone(),[0,0]));assert!(receive.try_recv().is_err());
+        assert!(queue.request_paper(blob.clone(),[2,0]));
+        assert!(matches!(receive.try_recv(),Ok(DecodeJob {request:MipDecodeRequest::Paper {coordinate:[2,0],..},..})));
+        for coordinate in [[2,0],[0,0]] {
+            send.send(PreparedImageWork::Paper {blob:blob.clone(),coordinate,pixels:Ok(pixels.clone())}).unwrap();ready.fetch_add(1,Ordering::AcqRel);
+            assert!(matches!(queue.poll(),Some(PreparedImageWork::Paper {coordinate:at,..}) if at==coordinate));
+        }
+        assert!(!queue.pending());
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]

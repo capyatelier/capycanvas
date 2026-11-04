@@ -94,15 +94,16 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
             Ok(layer_render_wgpu::PreparedImagePixels::PremultipliedWorkingPixels(std::sync::Arc::new(bytes)))
         }
     })));
-    renderer.set_browser_raster_decoder(Rc::new(|blob,space,_destination| Box::pin(async move {
+    renderer.set_browser_raster_decoder(Rc::new(|blob,space,_destination,native_channels| Box::pin(async move {
         documents::yield_browser().await.map_err(|e|format!("{e:?}"))?;
         let compressed=blob.read_compressed().await?;
         let buffers=js_sys::Array::new();
         buffers.push(&js_sys::Uint8Array::from(compressed.as_ref()));
-        let metadata=serde_json::to_string(&ImageDecode::Raster {descriptor:blob.descriptor,space}).map_err(|e|e.to_string())?;
+        let metadata=serde_json::to_string(&ImageDecode::Raster {descriptor:blob.descriptor,space,native_channels}).map_err(|e|e.to_string())?;
         let result=JsFuture::from(call("image-decode",&metadata,&buffers).map_err(|e|format!("{e:?}"))?).await.map_err(|e|format!("{e:?}"))?;
         let bytes=result.dyn_into::<js_sys::Uint8Array>().map_err(|_|"Missing prepared image pixels")?.to_vec();
-        if bytes.len()!=(TILE_SIZE*TILE_SIZE) as usize*4*blob.descriptor.depth().bytes() {return Err("Invalid prepared source tile extent".into());}
+        let channels=if native_channels {usize::from(blob.descriptor.channels)}else {4};
+        if bytes.len()!=(TILE_SIZE*TILE_SIZE) as usize*channels*blob.descriptor.depth().bytes() {return Err("Invalid prepared source tile extent".into());}
         Ok(layer_render_wgpu::PreparedImagePixels::NativeSamples(std::sync::Arc::new(bytes)))
     })));
     renderer.set_browser_nearest_coordinate_decoder(Rc::new(|inverse,size,first,count| Box::pin(async move {
@@ -251,7 +252,7 @@ enum ImageDecode {
         coordinate:[u32;2],
         profiles:Vec<usize>,
     },
-    Raster {descriptor:PixelDescriptor,space:layer_core::color::RgbSpace},
+    Raster {descriptor:PixelDescriptor,space:layer_core::color::RgbSpace,native_channels:bool},
 }
 #[derive(Serialize,Deserialize)]
 struct NearestCoordinates {inverse:[f64;6],size:[u32;2],first:u32,count:u32}
@@ -270,12 +271,13 @@ pub fn raster_worker_image_decode(metadata:&str,buffers:js_sys::Array)->Result<V
     let request:ImageDecode=serde_json::from_str(metadata).map_err(js)?;
     let cache=layer_core::raster::DecodedTileCache::new(4*1024*1024);
     let pixels=match request {
-        ImageDecode::Raster {descriptor,space} => {
+        ImageDecode::Raster {descriptor,space,native_channels} => {
             if buffers.length()!=1 {return Err(js("Invalid image preparation payloads"));}
             let compressed=buffers.get(0).dyn_into::<js_sys::Uint8Array>()?;
             if compressed.length() as usize>layer_core::package::MAX_RANGE_BYTES {return Err(js("Oversized image tile payload"));}
             let tile=Arc::new(TileBlob::from_verified_resource(layer_core::PortableId::random(),descriptor,compressed.to_vec().into()).map_err(js)?);
-            layer_render_wgpu::prepare_raster_tile(&tile,space,&cache).map_err(js)?
+            if native_channels {layer_render_wgpu::PreparedImagePixels::NativeSamples(cache.decode_bytes_on_worker(&tile,&tile.memory_compressed().map_err(js)?.ok_or_else(||js("Missing raster input"))?).map_err(js)?)}
+            else {layer_render_wgpu::prepare_raster_tile(&tile,space,&cache).map_err(js)?}
         },
         ImageDecode::Image {interpretation,destination,extent,coordinate,profiles:chunks} => {
             if chunks.len()>1 || buffers.length()==0 {return Err(js("Invalid image preparation payloads"));}
@@ -449,9 +451,12 @@ pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Resu
         let samples=image_samples.clone();
         Box::pin(async move {layer_render_wgpu::prepare_image_tile(&source,coordinate,destination,&samples,None)})
     }));
-    renderer.set_browser_raster_decoder(Rc::new(move |blob,space,_destination| {
+    renderer.set_browser_raster_decoder(Rc::new(move |blob,space,_destination,native_channels| {
         let samples=samples.clone();
-        Box::pin(async move {layer_render_wgpu::prepare_raster_tile(&blob,space,&samples)})
+        Box::pin(async move {
+            if native_channels {Ok(layer_render_wgpu::PreparedImagePixels::NativeSamples(samples.decode_bytes_on_worker(&blob,&blob.memory_compressed()?.ok_or("Missing paper input")?)?))}
+            else {layer_render_wgpu::prepare_raster_tile(&blob,space,&samples)}
+        })
     }));
     renderer.set_browser_nearest_coordinate_decoder(Rc::new(|inverse,size,first,count| Box::pin(async move {
         layer_render_wgpu::prepare_nearest_coordinates(inverse,size,first,count)

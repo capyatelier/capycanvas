@@ -251,6 +251,8 @@ enum Stage {
     Ready { view: wgpu::TextureView, relief: f32 },
 }
 
+struct ImageInput {texture:wgpu::Texture,uploaded:Vec<bool>,count:usize}
+
 struct Bake {
     id: AssetId,
     program: Arc<str>,
@@ -260,6 +262,7 @@ struct Bake {
     priority: u8,
     used: u64,
     stage: Stage,
+    image: Option<ImageInput>,
     wants_slope: bool,
     slope: Option<wgpu::TextureView>,
 }
@@ -284,6 +287,15 @@ pub(super) struct Papers {
     bakes: Vec<Bake>,
     clock: u64,
     submitted: Arc<AtomicBool>,
+    decode: Option<object_image_mips::MipDecodeQueue>,
+    #[cfg(not(target_arch="wasm32"))]
+    wake: Option<Arc<dyn Fn()+Send+Sync>>,
+    #[cfg(target_arch="wasm32")]
+    decoder: Option<BrowserRasterDecoder>,
+    #[cfg(target_arch="wasm32")]
+    decoded: std::rc::Rc<std::cell::RefCell<Option<object_image_mips::PreparedImageWork>>>,
+    #[cfg(target_arch="wasm32")]
+    wake: std::rc::Rc<std::cell::RefCell<Option<std::task::Waker>>>,
 }
 
 impl std::ops::Deref for Papers {
@@ -317,7 +329,92 @@ impl Recipes {
 }
 impl Papers {
     pub fn from_recipes(recipes: Arc<Recipes>) -> Self {
-        Self { recipes, programs: Vec::new(), slope_programs: None, bakes: Vec::new(), clock: 0, submitted: Arc::new(AtomicBool::new(true)) }
+        Self { recipes, programs: Vec::new(), slope_programs: None, bakes: Vec::new(), clock: 0, submitted: Arc::new(AtomicBool::new(true)),
+            decode:None,wake:Default::default(),
+            #[cfg(target_arch="wasm32")] decoder:None,
+            #[cfg(target_arch="wasm32")] decoded:Default::default(),
+        }
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    pub fn set_wake(&mut self,wake:Arc<dyn Fn()+Send+Sync>) {
+        if let Some(queue)=&self.decode {queue.set_wake(wake.clone());}self.wake=Some(wake);
+    }
+    #[cfg(target_arch="wasm32")]
+    pub fn set_decoder(&mut self,decoder:BrowserRasterDecoder) {self.decoder=Some(decoder);}
+    #[cfg(target_arch="wasm32")]
+    pub fn register_waker(&self,wake:&std::task::Waker) {*self.wake.borrow_mut()=Some(wake.clone());}
+    pub fn images_ready(&self)->bool {
+        #[cfg(target_arch="wasm32")]
+        if self.decoded.borrow().is_some() {return true;}
+        self.decode.as_ref().is_some_and(|queue|queue.ready())
+    }
+    pub fn image_waiting(&self)->bool {self.decode.as_ref().is_some_and(|queue|queue.in_flight()) && !self.images_ready()}
+    fn image_complete(bake:&Bake)->bool {
+        match &bake.surface.texture {
+            TextureSource::Image(source)=>bake.image.as_ref().is_some_and(|input|input.count==(source.extent[0].div_ceil(PAGE_SIZE)*source.extent[1].div_ceil(PAGE_SIZE)) as usize),
+            TextureSource::Program(_)=>true,
+        }
+    }
+    fn image_source(bake:&Bake)->Option<&layer_core::Image> {
+        if !matches!(bake.stage,Stage::Waiting) || Self::image_complete(bake) {return None;}
+        let TextureSource::Image(source)=&bake.surface.texture else {return None;};Some(source)
+    }
+    fn advance_images(&mut self,device:&PipelineDevice,queue:&wgpu::Queue,held:Option<&TextureSource>)->Result<(),GpuRasterError> {
+        #[cfg(target_arch="wasm32")]
+        if let Some(result)=self.decoded.borrow_mut().take() && let Some(decode)=&mut self.decode {decode.complete_external(result);}
+        while let Some(prepared)=self.decode.as_mut().and_then(|decode|decode.poll()) {
+            let object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels}=prepared else {return Err(GpuRasterError::InvalidImage);};
+            for bake in &mut self.bakes {
+                let Some(source)=Self::image_source(bake) else {continue;};
+                if !source.tiles.get(&coordinate).is_some_and(|expected|Arc::ptr_eq(&blob,expected)) {continue;}
+                let pixels=pixels.as_ref().map_err(|error|GpuRasterError::Effect(error.clone()))?;
+                if pixels.len()!=(PAGE_SIZE*PAGE_SIZE) as usize {return Err(GpuRasterError::InvalidImage);}
+                let extent=source.extent;let columns=extent[0].div_ceil(PAGE_SIZE);
+                let input=bake.image.get_or_insert_with(||ImageInput {texture:Self::image_texture(device,extent),
+                    uploaded:vec![false;(columns*extent[1].div_ceil(PAGE_SIZE)) as usize],count:0});
+                let index=(coordinate[1]*columns+coordinate[0]) as usize;
+                if input.uploaded[index] {continue;}
+                let origin=coordinate.map(|v|v*PAGE_SIZE);
+                queue.write_texture(wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:origin[0],y:origin[1],z:0},..input.texture.as_image_copy()},pixels,
+                    wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(PAGE_SIZE),rows_per_image:Some(PAGE_SIZE)},
+                    wgpu::Extent3d {width:PAGE_SIZE.min(extent[0]-origin[0]),height:PAGE_SIZE.min(extent[1]-origin[1]),depth_or_array_layers:1});
+                input.uploaded[index]=true;input.count+=1;
+            }
+        }
+        'inputs: for bake in &self.bakes {
+            if held==Some(&bake.surface.texture) {continue;}
+            let Some(source)=Self::image_source(bake) else {continue;};
+            if self.decode.is_none() {
+                let decode=object_image_mips::MipDecodeQueue::new(device)?;
+                #[cfg(not(target_arch="wasm32"))]
+                if let Some(wake)=&self.wake {decode.set_wake(wake.clone());}
+                self.decode=Some(decode);
+            }
+            let columns=source.extent[0].div_ceil(PAGE_SIZE);
+            for index in 0..columns*source.extent[1].div_ceil(PAGE_SIZE) {
+                if bake.image.as_ref().is_some_and(|input|input.uploaded[index as usize]) {continue;}
+                let coordinate=[index%columns,index/columns];
+                let blob=source.tiles.get(&coordinate).ok_or(GpuRasterError::InvalidImage)?;
+                if blob.descriptor.channels!=1 || blob.descriptor.depth()!=layer_core::color::SampleDepth::U8 {return Err(GpuRasterError::InvalidImage);}
+                if !self.decode.as_mut().unwrap().request_paper(blob.clone(),coordinate) {break 'inputs;}
+            }
+        }
+        #[cfg(target_arch="wasm32")]
+        if let Some(request)=self.decode.as_mut().and_then(|decode|decode.take_external()) {
+            let object_image_mips::MipDecodeRequest::Paper {blob,coordinate}=request else {return Err(GpuRasterError::InvalidImage);};
+            let callback=self.decoder.clone().ok_or_else(||GpuRasterError::Effect("Paper preparation worker unavailable".into()))?;
+            let (result,wake)=(self.decoded.clone(),self.wake.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                let space=layer_core::color::RgbSpace::Srgb;
+                let pixels=callback(blob.clone(),space,space,true).await.and_then(|pixels|match pixels {
+                    PreparedImagePixels::NativeSamples(pixels)=>Ok(pixels),_=>Err("Invalid prepared paper samples".into()),
+                });
+                *result.borrow_mut()=Some(object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels});
+                if let Some(wake)=wake.borrow_mut().take() {wake.wake();}
+            });
+        }
+        Ok(())
     }
 
     fn image_texture(device: &PipelineDevice, extent: [u32; 2]) -> wgpu::Texture {
@@ -397,7 +494,7 @@ impl Papers {
             usage: wgpu::BufferUsages::STORAGE,
         })?;
         self.bakes.retain(|b| !(matches!(b.stage, Stage::Waiting) && b.priority == priority && b.surface.texture == binding.surface.texture));
-        self.bakes.push(Bake { id: id.clone(), program, surface: binding.surface.clone(), tile, data, priority, used: clock, stage: Stage::Waiting,
+        self.bakes.push(Bake { id: id.clone(), program, surface: binding.surface.clone(), tile, data, priority, used: clock, stage: Stage::Waiting,image:None,
             wants_slope: false, slope: None });
         while self.bakes.len() > CACHED_BAKES {
             let Some(oldest) = self.bakes.iter().enumerate().filter(|(_, b)| matches!(b.stage, Stage::Ready { .. } | Stage::Waiting))
@@ -422,10 +519,12 @@ impl Papers {
     }
 
     pub fn work_pending(&self, id: &AssetId) -> bool {
-        self.bakes.iter().any(|bake| bake.id == *id && !bake.complete() && self.ready_to_step(bake))
+        self.bakes.iter().any(|bake| bake.id == *id && !bake.complete() && (self.ready_to_step(bake)||self.images_ready()
+            || matches!(bake.stage,Stage::Waiting) && !Self::image_complete(bake) && !self.image_waiting()))
     }
 
     fn ready_to_step(&self, bake: &Bake) -> bool {
+        if matches!(bake.stage,Stage::Waiting) && !Self::image_complete(bake) {return false;}
         if matches!(bake.stage, Stage::Ready { .. }) {
             bake.wants_slope && bake.slope.is_none() && self.slope_programs.as_ref().is_some_and(|programs| programs.ready())
         } else {
@@ -461,6 +560,7 @@ impl Papers {
     }
 
     pub fn advance(&mut self, device: &PipelineDevice, queue: &wgpu::Queue, wait: bool, held: Option<&TextureSource>) -> Result<(), GpuRasterError> {
+        self.advance_images(device,queue,held)?;
         if !wait && !self.submitted.load(Ordering::Acquire) {
             let _ = device.poll(wgpu::PollType::Poll);
             if !self.submitted.load(Ordering::Acquire) {
@@ -470,6 +570,7 @@ impl Papers {
         loop {
             let Some(index) = self.bakes.iter().enumerate()
                 .filter(|(_, b)| !b.complete() && (matches!(b.stage, Stage::Ready { .. }) || held != Some(&b.surface.texture)))
+                .filter(|(_,b)|!matches!(b.stage,Stage::Waiting) || Self::image_complete(b))
                 .min_by_key(|(_, b)| (b.priority, matches!(b.stage, Stage::Waiting), std::cmp::Reverse(b.used))).map(|(i, _)| i) else {
                 return Ok(());
             };
@@ -504,17 +605,8 @@ impl Papers {
         let next = match &mut bake.stage {
             Stage::Waiting => {
                 let image = match &bake.surface.texture {
-                    TextureSource::Image(source) => {
-                        let texture = Self::image_texture(device, source.extent);
-                        let mut rows = source.rows();
-                        let mut bytes = vec![0; source.row_bytes() * source.extent[1] as usize];
-                        for (y, row) in bytes.chunks_mut(source.row_bytes()).enumerate() {
-                            rows.read(y as u32, row).map_err(GpuRasterError::Effect)?;
-                        }
-                        queue.write_texture(texture.as_image_copy(), &bytes,
-                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(source.extent[0]), rows_per_image: Some(source.extent[1]) },
-                            wgpu::Extent3d { width: source.extent[0], height: source.extent[1], depth_or_array_layers: 1 });
-                        texture.create_view(&Default::default())
+                    TextureSource::Image(_) => {
+                        bake.image.take().ok_or(GpuRasterError::InvalidImage)?.texture.create_view(&Default::default())
                     }
                     TextureSource::Program(_) => self.recipes.empty_image.clone(),
                 };
@@ -657,6 +749,56 @@ mod tests {
     use layer_core::paper::{reference, PaperBinding, PaperSurface};
 
     #[test]
+    fn stored_image_paper_does_not_wait_for_reads_on_the_render_owner() {
+        use layer_core::{Document,authored::{Artwork,PaintBase,SourceTarget},color::source::{SourceBuilder,SourceChannels,SourceInterpretation}};
+        let interpretation=SourceInterpretation {channels:SourceChannels::Gray,depth:layer_core::color::SampleDepth::U8,profile:Default::default(),profile_assumed:false};
+        let extent=[260,261];
+        let source=|| {
+            let mut builder=SourceBuilder::new(extent,interpretation.clone(),1<<20).unwrap();
+            for y in 0..extent[1] {builder.push_row(&(0..extent[0]).map(|x|((x*37+y*101)%251) as u8).collect::<Vec<_>>()).unwrap();}
+            let mut source=builder.finish().unwrap();source.resolution=Some(layer_core::ImageResolution::ppi(300));Arc::new(source)
+        };
+        let memory=source();let source=source();let image=layer_core::Image::new(source.clone());
+        let mut artwork=Artwork::new(source.extent).unwrap();
+        let (_,SourceTarget::Paint(target))=crate::test_support::add_paint(&mut artwork,"Stored paper",source.extent) else {unreachable!()};
+        artwork.paint.get_mut(target).unwrap().base=Some(PaintBase::new(image.clone()));
+        let retained=layer_core::Editor::new(Document::from_artwork(artwork).unwrap()).retained_tiles();
+        let store=crate::test_support::GatedStore::new(&retained,false);
+        assert!(source.tiles.values().all(|tile|tile.memory_compressed().unwrap().is_none()));
+        let texture=TextureSource::Image(image);
+        let binding=PaperBinding {surface:Arc::new(PaperSurface {texture,mapping:reference(extent,[300.;2]).mapping}),target_offset:[0;2]};
+        let mut renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let id=renderer.papers.require(&renderer.device,None,&binding,startup::BRUSH).unwrap();
+        let bake=renderer.papers.bakes.iter().find(|bake|bake.id==id).unwrap();
+        let programs=renderer.papers.programs.iter().find(|programs|programs.id==bake.program).unwrap();
+        pollster::block_on(Deferred::prepare_all([&programs.probe,&programs.bake])).unwrap();
+        let (send,receive)=std::sync::mpsc::channel();
+        let owner=std::thread::spawn(move || {
+            let result=renderer.papers.advance(&renderer.device,&renderer.queue,false,None);
+            if renderer.papers.image_waiting() {
+                assert!(renderer.image_decode_waiting());
+                let target=Arc::new(std::sync::Mutex::new(None));
+                renderer.source_results.push_back((renderer.device.working_space(),object_image_mips::PreparedImageWork::Coordinates {
+                    destination:Arc::downgrade(&target),pixels:Ok(Arc::new(vec![0;8])),
+                }));
+                assert!(!renderer.image_decode_waiting(),"ready source work must run while paper reads are pending");
+                renderer.source_results.clear();
+            }
+            let _=send.send(());(renderer,result)
+        });
+        let returned=receive.recv_timeout(std::time::Duration::from_secs(2)).is_ok();
+        store.gate.entered();store.gate.release();
+        let (mut renderer,result)=owner.join().unwrap();result.unwrap();
+        assert!(returned,"paper preparation waited for storage on the render owner");
+        assert!(renderer.papers.view(&id).is_none());
+        let stored=bake_binding(&mut renderer,binding.clone());
+        renderer.papers.bakes.clear();
+        let mut surface=(*binding.surface).clone();surface.texture=TextureSource::Image(layer_core::Image::new(memory));
+        let expected=bake_binding(&mut renderer,PaperBinding {surface:Arc::new(surface),..binding});
+        assert_eq!(stored,expected);
+    }
+
+    #[test]
     fn device_loss_before_paper_parameters_returns_an_error() {
         let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let surface = PaperSurface { texture: layer_core::paper::default_texture(), mapping: reference([64, 64], [300.; 2]).mapping };
@@ -694,7 +836,12 @@ mod tests {
 
     fn bake_binding(renderer: &mut WgpuRasterizer, binding: PaperBinding) -> (Vec<u8>, [u32; 2], f32) {
         let id = renderer.papers.require(&renderer.device, None, &binding, startup::BRUSH).unwrap();
-        renderer.papers.advance(&renderer.device, &renderer.queue, true, None).unwrap();
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+        while renderer.papers.view(&id).is_none() {
+            renderer.papers.advance(&renderer.device, &renderer.queue, true, None).unwrap();
+            assert!(std::time::Instant::now()<deadline,"paper preparation did not complete");
+            std::thread::yield_now();
+        }
         let bake = renderer.papers.bakes.iter().find(|b| b.id == id).unwrap();
         let Stage::Ready { view, relief } = &bake.stage else { panic!("unfinished bake") };
         let texture = view.texture();

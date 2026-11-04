@@ -118,7 +118,7 @@ impl SnapshotGpu {
                     #[cfg(target_arch="wasm32")]
                     {
                         let space = r.document_color().space;
-                        let pixels = r.browser_raster_decoder.as_ref().ok_or("Raster preparation worker unavailable")?(blob.clone(),space,space).await?;
+                        let pixels = r.browser_raster_decoder.as_ref().ok_or("Raster preparation worker unavailable")?(blob.clone(),space,space,false).await?;
                         let scene::sources::PreparedSourcePixels::NativeSamples(samples) = pixels else {return Err("Coverage requires native samples".into());};
                         r.submit_restore(|r,_,encoder| crate::native_tiles::scalar::upload_coverage(r,encoder,&page.texture,blob.descriptor.depth(),&samples,4)).map_err(|e|e.to_string())?;
                     }
