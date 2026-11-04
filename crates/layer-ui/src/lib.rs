@@ -35,7 +35,7 @@ pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
 mod phone;
 mod dialog_presentation;
-pub use dialog_presentation::{DialogRole, DialogPresentation, DialogEscape, dialog_escape, dialog_panes_fit};
+pub use dialog_presentation::{DialogRole, DialogPresentation, DialogEscape, DialogPrimary, DialogIntent, DialogHeader, DialogHeaderAction, dialog_escape, dialog_panes_fit};
 pub use phone::{PhoneAction, PhoneBarContact, PhoneBarOutcome, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuContact, PhoneMenuSwipe, PhoneMenuHit, PhoneMenuSettle, PhoneMenuInput, PhoneMenuReply, PhoneMenuRoute, PhoneMenuRow, PhoneMenuEllipsis, PhoneMenuClose, PhoneMenuPageView, PhoneMenuView, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;

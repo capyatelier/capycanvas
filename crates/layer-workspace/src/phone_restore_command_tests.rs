@@ -15,7 +15,12 @@ fn phone_restore_is_undone_by_the_command_named_in_its_confirmation() {
     f.input(serde_json::json!({ "type": "form", "action": { "type": "reset", "value": current.id } }));
     assert_eq!(&layer_ui::durable_layout(&f.host.session.state().workspace.layout), before.history.layout(), "the phone confirmation does not preview a different layout");
     let command = f.host.session.command(CommandId::UndoWorkspace);
-    assert!(f.controller.view.prompt.as_ref().unwrap().message.contains(command.label.as_ref()));
+    let prompt = f.controller.view.prompt.as_ref().unwrap();
+    assert!(prompt.message.contains(command.label.as_ref()));
+    assert_eq!(prompt.dialog_intent(), layer_ui::DialogIntent::alert());
+    let wire = serde_json::to_value(prompt).unwrap();
+    assert_eq!(wire["dialog"]["role"], "alert");
+    assert_eq!(wire["dialog"]["modal"], true);
     f.input(serde_json::json!({ "type": "submit", "name": "" }));
     assert_ne!(&restored, before.history.layout());
     assert_eq!(layer_ui::durable_layout(&f.host.session.state().workspace.layout), restored);

@@ -683,9 +683,9 @@ impl ManagerUi {
         );
         *self.prompt_choices.borrow_mut() = prompt.choices.iter().map(|c| c.id.clone()).collect();
         *self.prompt.borrow_mut() = Some(dialog.clone());
-        if prompt.name.is_some() || prompt.description.is_some() || !prompt.choices.is_empty() {
-            crate::page_dialog::present_with(&dialog, &w.window, layer_ui::DialogRole::Editor, crate::page_dialog::Metadata::responses(Some("confirm"), "cancel", &[]));
-        } else { dialog.present(Some(&w.window)); }
+        let intent = prompt.dialog_intent();
+        crate::page_dialog::present_with(&dialog, &w.window, intent.role,
+            crate::page_dialog::Metadata::responses(Some("confirm"), "cancel", &[]).intent(intent));
     }
 }
 fn prompt_dialog(

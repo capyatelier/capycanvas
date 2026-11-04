@@ -4,6 +4,7 @@ import { createToolbarComponent } from "./toolbar-components.js";
 import { colorButton, pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
 import {liveCopy} from './localization.js';
 import {middleEllipsis} from './text-layout.js';
+import {createDialogHost} from './dialog-host.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
@@ -217,7 +218,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     cancelHold(); heldPointer = null;
     const node = contextTarget(e.target);
     const menuHold = e.pointerType === "touch" || e.pointerType === "pen";
-    if (!node || e.button !== 0 || (!menuHold && !node.closest("[data-drag-pickup=hold]"))) return;
+    if (!node || e.target.closest('#phone-frame') || e.button !== 0 || (!menuHold && !node.closest("[data-drag-pickup=hold]"))) return;
     const parent = node.parentNode;
     hold = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: setTimeout(() => {
       cancelHold();
@@ -409,20 +410,24 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const pickerHeader = element("header", "dialog-header"), pickerTitle = element("h2");
   const cancel = () => send({ type: "cancel_tools" });
   const confirm = button("", () => send({ type: "confirm_tools" }), "suggested-action");
-  confirm.id = "confirm-tools"; pickerHeader.append(button(()=>common.cancel, cancel), pickerTitle, confirm);
-  const pickerBody = element("div", "tool-picker-body"), nameRow = element("label", "toolbar-name");
+  const pickerCancel=button(()=>common.cancel,cancel);pickerCancel.id='cancel-tools';
+  confirm.id = "confirm-tools"; pickerHeader.append(pickerCancel, pickerTitle, confirm);
+  const pickerBody = element("div", "tool-picker-body"), nameGroup = element("div", "tool-picker-name"), nameRow = element("label", "toolbar-name");
+  nameGroup.append(nameRow);
   const nameLabel = element("span"), name = element("input"); name.id = "toolbar-name";
   name.addEventListener("input", () => send({ type: "picker_name", name: name.value })); nameRow.append(nameLabel, name);
   const search = element("input", "preferences-search"); search.type = "search"; search.id = "tool-search";
   search.addEventListener("input", () => send({ type: "picker_search", query: search.value }));
   const searchRow = element("div", "tool-search"); searchRow.append(icon("search"), search);
   const choices = element("div", "tool-choices"), error = element("p", "preferences-error"), count = element("span", "tool-count");
-  pickerBody.append(nameRow, searchRow, panelFrame(choices), error, count); picker.append(pickerHeader, pickerBody); workspace.append(picker);
-  picker.addEventListener("cancel", (e) => { e.preventDefault(); cancel(); });
-  picker.addEventListener("close", () => { if (app.tool_picker()) cancel(); });
+  const catalogRoot=element('div','tool-picker-catalog');catalogRoot.style.gap=`${catalog.command_search_style.gap}px`;
+  catalogRoot.append(searchRow,panelFrame(choices));
+  pickerBody.append(nameGroup,catalogRoot,count,error); picker.append(pickerHeader, pickerBody); workspace.append(picker);
+  const pickerHost=createDialogHost({app,dialog:picker,header:pickerHeader,cancel:pickerCancel,primary:confirm,icon,copy:common,onCancel:cancel,
+    search,clearSearch:()=>send({type:'picker_search',query:''})});
   function refreshPicker() {
     const model = app.tool_picker();
-    if (!model) { if (picker.open) picker.close(); return; }
+    if (!model) { pickerHost.hide(); return; }
     pickerTitle.textContent = model.title; picker.setAttribute("aria-label", model.title);
     nameRow.hidden = model.name == null; nameLabel.textContent = model.name_label;
     name.setAttribute("aria-label", model.name_label);
@@ -443,8 +448,11 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
         row.append(icon(choice.icon), text, check); return row;
       }));
     }
-    model.choices.forEach((choice, index) => { choices.children[index].querySelector("input").checked = choice.selected; });
-    if (!picker.open) { picker.showModal(); choices.scrollTop=0; (model.name == null ? search : name).focus(); }
+    model.choices.forEach((choice, index) => {
+      const row=choices.children[index],check=row.querySelector('input'),disabled=model.disabled?.some(control=>JSON.stringify(control)===JSON.stringify(choice.control))??false;
+      check.checked=choice.selected;check.disabled=disabled;row.setAttribute('aria-disabled',String(disabled));
+    });
+    if(pickerHost.present(model.dialog)){choices.scrollTop=0;(model.name==null?search:name).focus();}
   }
 
   const manager = element("dialog", "toolbar-manager"); manager.id = "toolbar-manager";

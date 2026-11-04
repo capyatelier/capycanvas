@@ -186,12 +186,14 @@ fn native_phone_customize() {
     capture(&mut d, "customize-capacity");
     let disabled = view.choices.iter().find(|choice| choice.control != ToolbarControl::Divider).unwrap().control;
     let check = named::<gtk::CheckButton>(&frame, &format!("tool-choice-{}", serde_json::to_string(&disabled).unwrap()));
-    super::super::histogram::scroll_to(check.upcast_ref());
+    let row = check.ancestor(adw::ActionRow::static_type()).unwrap();
+    super::super::histogram::scroll_to(&row);
     d.click(check.upcast_ref());
     assert!(!check.is_active(), "native clicking cannot select a tool at capacity");
     assert_eq!(ui_session(&d.w).tool_picker().unwrap().selected_count, 0);
     let divider = named::<gtk::CheckButton>(&frame, &format!("tool-choice-{}", serde_json::to_string(&ToolbarControl::Divider).unwrap()));
-    super::super::histogram::scroll_to(divider.upcast_ref());
+    let row = divider.ancestor(adw::ActionRow::static_type()).unwrap();
+    super::super::histogram::scroll_to(&row);
     d.click(divider.upcast_ref());
     assert!(divider.is_active() && divider.is_sensitive(), "Divider remains natively selectable at capacity");
     assert!(ui_session(&d.w).tool_picker().unwrap().can_confirm);

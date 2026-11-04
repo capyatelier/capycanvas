@@ -444,6 +444,7 @@ try {
     [process.argv.includes("--phone-menus"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, menusOnly:true }), checkErrors],
     [process.argv.includes("--phone-drawers"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, drawersOnly:true }), checkErrors],
     [process.argv.includes("--phone-frame"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, frameOnly:true }), checkErrors],
+    [process.argv.includes("--phone-customize"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, customizeOnly:true }), checkErrors],
     [process.argv.includes("--phone-audit"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--settings-audit"), () => checkSettingsParity({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--workspace-constraints"), () => checkWorkspaceConstraints({call,evaluate,settle,reload}), checkErrors],

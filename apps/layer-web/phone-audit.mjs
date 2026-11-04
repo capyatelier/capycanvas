@@ -131,7 +131,7 @@ const pages = [
   {id:'properties',action:{type:'invoke',command:'document_properties'},selector:'dialog.document-dialog[open]',header:'header'},
 ];
 
-export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,drawersOnly=false,menusOnly=false}) {
+export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,drawersOnly=false,menusOnly=false,customizeOnly=false}) {
   const {createDrawing}=await import('./new-drawing-fixture.mjs');
   const directory=process.env.LAYER_TEST_ARTIFACTS||'/mnt/localssd/capy9-phone-impl/web-phone-audit';
   await mkdir(directory,{recursive:true});
@@ -266,6 +266,119 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       {id:'current.header',role:'context',selector:'#header'},
       {id:'current.canvas',role:'context',selector:'#canvas'},
       {id:'current.capy',role:'context',selector:'#zen-capy'}],active?'phone':'desktop fallback: Web phone presentation is not enabled');
+    if(customizeOnly){
+      const durable=()=>evaluate('layerApp.app.workspace_persistence()');
+      const history=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history');
+      const before=await durable(),oldHistory=await history();
+      const tiles=()=>evaluate('layerApp.state().workspace.layout.phone');
+      const point=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+      const touch=(type,position)=>call('Input.dispatchTouchEvent',{type,touchPoints:position?[{id:41,...position}]:[]});
+      const hold=async position=>{
+        const start=await evaluate('performance.now()');await touch('touchStart',position);
+        await wait(`performance.now()-${start}>=900&&document.querySelector("#phone-frame").dataset.contact==="held"`);
+        assert.equal(await evaluate('!!document.querySelector(".panel-context-menu:popover-open")'),false,'Holding lifts without opening a menu before release');
+      };
+      const release=async()=>{await touch('touchEnd');await settle();};
+      const menu=async(tile)=>{
+        const position=await point(`#phone-tool-${tile}`);await hold(position);await release();
+        await wait('document.querySelector(".panel-context-menu")?.matches(":popover-open")');
+      };
+      const menuAction=async label=>{
+        const index=await evaluate(`[...document.querySelectorAll('.panel-context-menu > button')].findIndex(n=>n.menuItem?.label===${JSON.stringify(label)})`);
+        assert.ok(index>=0,label);await click(`.panel-context-menu > button:nth-of-type(${index+1})`);
+      };
+      const captureCustom=async name=>{
+        const specs=phoneAuditFrameSpecifications(await tiles());
+        if(await evaluate('!!document.querySelector("#tool-picker[open]")')){
+          specs.push(
+            {id:'page',role:'page',selector:'#tool-picker'},
+            {id:'page.header',role:'page-header',selector:'#tool-picker > header'},
+            {id:'page.close',role:'page-action',selector:'#cancel-tools'},
+            {id:'page.primary',role:'page-action',selector:'#confirm-tools'},
+            ...[['body','body','.tool-picker-body'],['catalog','catalog','.tool-picker-catalog'],['search','search','.tool-search'],['choices','scroll','.tool-picker-catalog > .panel-frame']].map(([id,role,selector])=>({id:`picker.${id}`,role,selector:`#tool-picker ${selector}`})));
+          if(await evaluate('(()=>{const row=document.querySelector(".tool-choice:first-child").getBoundingClientRect(),clip=document.querySelector(".tool-picker-catalog > .panel-frame").getBoundingClientRect();return row.bottom>clip.top&&row.top<clip.bottom;})()'))specs.push(
+            ...[['row.0','row','.tool-choice:first-child'],['row.0.title','label','.tool-choice:first-child > span > span'],['row.0.subtitle','label','.tool-choice:first-child > span > small']].map(([id,role,selector])=>({id:`picker.${id}`,role,selector:`#tool-picker ${selector}`})));
+        }
+        return capture(test,name,specs,'shared phone customization');
+      };
+      const escape=async()=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();};
+      const first=(await tiles())[0].id;
+      await menu(first);await captureCustom('customize-tile-menu');await menuAction('Remove Tool');
+      const removed=await durable();assert.equal(removed.layout.phone.some(t=>t.id===first),false);
+      assert.equal((await history()).undo.length,oldHistory.undo.length+1);
+      await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await durable(),before);
+      await send({type:'invoke',command:'redo_workspace'});assert.deepEqual(await durable(),removed);
+      const anchor=(await tiles())[0].id;
+      await menu(anchor);await menuAction('Insert Tools…');
+      await wait('!!document.querySelector("#tool-picker.dialog-page[open]")');
+      const bounds=await evaluate('(()=>{const n=document.querySelector("#tool-picker"),r=n.getBoundingClientRect(),p=layerApp.app.dialog_presentation("editor",innerWidth,innerHeight,{x:0,y:0,width:innerWidth,height:innerHeight});return{actual:[r.x,r.y,r.width,r.height],expected:Object.values(p.bounds),modal:n.matches(":modal"),header:getComputedStyle(n.firstElementChild).display,header_height:n.firstElementChild.getBoundingClientRect().height,actions:["#cancel-tools","#confirm-tools"].map(s=>document.querySelector(s).getBoundingClientRect().height)};})()');
+      assert.equal(bounds.modal,true);assert.equal(bounds.header,'grid');
+      assert.ok(bounds.actual.every((value,i)=>Math.abs(value-bounds.expected[i])<=1),'The picker consumes shared page bounds');
+      const nativeHeight=test.text_pt===16?36:34;
+      assert.ok(bounds.actions.every(height=>Math.abs(height-nativeHeight)<=1)&&Math.abs(bounds.header_height-nativeHeight-13)<=1,`Measured GTK action/header height: ${JSON.stringify(bounds)}`);
+      await evaluate('document.querySelector("#tool-search").value="brush";document.querySelector("#tool-search").dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#tool-search").focus();null');
+      await escape();assert.equal(await evaluate('layerApp.app.tool_picker().query'),'');
+      assert.equal(await evaluate('document.querySelector("#tool-picker").open'),true,'First Escape clears focused search');
+      const selected=await evaluate('layerApp.app.tool_picker().choices.filter(c=>c.control.kind!=="divider").slice(0,2).map(c=>c.control)');
+      for(const control of selected)await send({type:'customize',action:{type:'picker_select',control,selected:true}});
+      const wrapped=await evaluate('[...document.querySelectorAll(".tool-choice > span > :is(span,small)")].filter(n=>{const range=document.createRange();range.selectNodeContents(n);const rects=[...range.getClientRects()];return rects.some(r=>Math.abs(r.top-rects[0].top)>1);}).map(n=>n.textContent)');
+      assert.deepEqual(wrapped,[],'Picker titles and descriptions stay on one line');
+      const content=await evaluate('(()=>{const bounds=s=>{const r=document.querySelector(s).getBoundingClientRect();return[r.x,r.y,r.width,r.height];};return{search:bounds("#tool-picker .tool-search"),row:bounds("#tool-picker .tool-choice"),title:bounds("#tool-picker .tool-choice > span > span"),subtitle:bounds("#tool-picker .tool-choice > span > small")};})()');
+      const large=test.text_pt===16,headerHeight=large?49:47;
+      const expectedPicker={search:[18,headerHeight+30,test.viewport[0]-36,34],row:[18,headerHeight+72,test.viewport[0]-36,large?68:55],title:[60,headerHeight+(large?80:81),test.viewport[0]-124,large?26:18],subtitle:[60,headerHeight+(large?109:102),test.viewport[0]-124,large?22:15]};
+      for(const [name,actual]of Object.entries(content))assert.ok(actual.every((v,i)=>Math.abs(v-expectedPicker[name][i])<=1),`Measured GTK picker ${name}: ${JSON.stringify({actual,expected:expectedPicker[name]})}`);
+      await captureCustom('customize-insert-two');
+      const prior=(await history()).undo.length;await click('#confirm-tools');
+      assert.deepEqual((await tiles()).slice(0,2).map(t=>t.control),selected);
+      assert.equal((await tiles())[2].id,anchor);assert.equal((await history()).undo.length,prior+1);
+      await menu(anchor);await menuAction('Insert Tools…');
+      const last=await evaluate('layerApp.app.tool_picker().choices.find(c=>c.control.kind!=="divider").control');
+      await send({type:'customize',action:{type:'picker_select',control:last,selected:true}});await click('#confirm-tools');
+      const full=await durable();assert.equal(full.layout.phone.filter(t=>t.control.kind!=='divider').length,10);
+      await menu(anchor);await menuAction('Insert Tools…');
+      assert.equal(await evaluate('[...document.querySelectorAll(".tool-choice")].every((row,i)=>{const c=layerApp.app.tool_picker().choices[i],n=row.querySelector("input");return c.control.kind==="divider"?!n.disabled:n.disabled&&row.getAttribute("aria-disabled")==="true"&&Number(getComputedStyle(row).opacity)<1;})'),true,'Capacity dims and disables every non-divider row');
+      await captureCustom('customize-capacity');
+      const disabled=await evaluate('layerApp.app.tool_picker().choices.findIndex(c=>c.control.kind!=="divider")');
+      await click(`.tool-choice:nth-child(${disabled+1})`);assert.equal(await evaluate('Number(layerApp.app.tool_picker().selected_count)'),0,'A disabled row cannot select a tool');
+      const divider=await evaluate('layerApp.app.tool_picker().choices.findIndex(c=>c.control.kind==="divider")');
+      await click(`.tool-choice:nth-child(${divider+1})`);
+      assert.equal(await evaluate('layerApp.app.tool_picker().can_confirm'),true);
+      await captureCustom('customize-capacity-divider');
+      const unchanged=await history();await escape();assert.equal(await evaluate('layerApp.app.tool_picker()??null'),null);assert.deepEqual(await history(),unchanged);
+      const sequence=await tiles(),from=await point(`#phone-tool-${sequence[0].id}`),to=await point(`#phone-tool-${sequence[2].id}`);
+      to[await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone.edge==="top"?"x":"y"')]+=1;
+      const moveHistory=await history();await hold(from);await touch('touchMove',to);
+      await wait('document.querySelector("#phone-frame").dataset.contact==="dragging"');
+      const paint=await evaluate(`(()=>{const n=document.querySelector('#phone-tool-${sequence[0].id}').parentElement,s=getComputedStyle(n);return{lifted:n.classList.contains('header-drag-preview'),outline:s.outline,background:s.backgroundColor};})()`);
+      assert.equal(paint.lifted,true,JSON.stringify(paint));assert.ok(paint.outline.startsWith('rgb')&&paint.outline.includes('solid 2px'),JSON.stringify(paint));assert.notEqual(paint.background,'rgba(0, 0, 0, 0)');
+      assert.deepEqual(await history(),moveHistory,'Reorder preview never enters shared history');
+      await captureCustom('customize-reorder-held');await release();
+      const expected=[sequence[1],sequence[2],sequence[0],...sequence.slice(3)];
+      assert.deepEqual(await tiles(),expected);assert.equal((await history()).undo.length,moveHistory.undo.length+1);
+      await send({type:'invoke',command:'undo_workspace'});assert.deepEqual(await tiles(),sequence);
+      const outside={x:test.viewport[0]/2,y:test.viewport[1]/2},cancelled=await history();
+      await hold(from);await touch('touchMove',outside);await release();assert.deepEqual(await history(),cancelled);
+      await captureCustom('customize-offbar-cancelled');
+      await hold(from);await escape();await release();assert.deepEqual(await history(),cancelled,'Escape cancels a held contact');
+      const empty=await durable();empty.layout.phone=[];await send({type:'restore_workspace',workspace:empty});
+      const blank=await evaluate('(()=>{const b=layerApp.app.layout(innerWidth,innerHeight).phone.bars[0];return{x:b.x+b.width/2,y:b.y+b.height/2};})()');
+      await hold(blank);await release();await wait('document.querySelector(".panel-context-menu")?.matches(":popover-open")');
+      assert.deepEqual(await evaluate('[...document.querySelectorAll(".panel-context-menu > button")].map(n=>n.menuItem.label)'),['Add Tools…']);
+      await captureCustom('customize-empty-toolbar');await menuAction('Add Tools…');await escape();
+      assert.deepEqual((await durable()).layout.phone,[],'Cancelling Add Tools preserves an explicit empty toolbar');
+      await send({type:'invoke',command:'reset_layout'});
+      await wait('!!document.querySelector(".workspace-form[open]")');
+      assert.equal(await evaluate('document.querySelector(".workspace-form").classList.contains("dialog-page")'),false,'Phone Restore stays a compact alert');
+      await captureCustom('customize-phone-restore-confirm');
+      await click('.workspace-form footer .suggested-action');
+      await wait('!JSON.parse(layerApp.app.workspace_view()).busy&&!document.querySelector(".workspace-form[open]")');
+      const restored=await durable();assert.notDeepEqual(restored.layout.phone,full.layout.phone);
+      const desktop=layout=>{const {phone,next_tile_id,...rest}=layout;return rest;};
+      assert.deepEqual(desktop(restored.layout),desktop(full.layout),'Phone Restore preserves desktop topology');
+      await captureCustom('customize-phone-restored');
+      await send({type:'restore_workspace',workspace:before});
+      continue;
+    }
     if(menusOnly){
       await send({type:'preferences',action:{type:'edit',id:'finger_drawing',value:2}});
       const route=()=>evaluate('JSON.stringify(layerApp.state().phone.menu_route)');
@@ -652,6 +765,25 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       await writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
       await writeFile(`${directory}/${name}.json`,JSON.stringify({host:'web',theme,viewport:[1600,1000],text_pt:11,...rows},null,2)+'\n');
       await click(`${selector} > summary`);
+    }
+  }
+  if(customizeOnly){
+    await call('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:1,mobile:false});
+    await evaluate("document.documentElement.style.setProperty('--ui-text-size','11pt');null");await settle();
+    for(const theme of ['light','dark'])for(const item of ['clock','tool']){
+      await send({type:'set_theme',theme});await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
+      if(item==='tool')await send({type:'customize',action:{type:'header',action:{type:'add',zone:'left',before:null,item:{kind:'tool',control:{kind:'command',command:'lasso'}}}}});
+      const source=await evaluate(`(()=>{const model=layerApp.state().workspace.layout.header,id=model.zones.flat().find(e=>e.item.control?.command==='lasso')?.id,n=document.querySelector(${JSON.stringify(item)}==='clock'?'#header-component-clock':'[data-header-item="'+id+'"]');if(!n)throw Error('Missing desktop pickup source '+JSON.stringify(model));const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+      const target=item==='clock'?{x:800,y:25}:{x:source.x+80,y:source.y};
+      await call('Input.dispatchMouseEvent',{type:'mousePressed',...source,button:'left',buttons:1,clickCount:1});
+      await call('Input.dispatchMouseEvent',{type:'mouseMoved',...target,button:'left',buttons:1});
+      await wait('!!document.querySelector(".header-drag-preview")');await settle();
+      const facts=await evaluate('(()=>{const n=document.querySelector(".header-drag-preview"),s=getComputedStyle(n),r=n.getBoundingClientRect();return{bounds:[r.x,r.y,r.width,r.height],background:s.backgroundColor,outline:s.outline};})()');
+      const name=`desktop-header-${item}-held-${theme}`;
+      await writeFile(`${directory}/${name}.json`,JSON.stringify(facts,null,2)+'\n');
+      await writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await call('Input.dispatchMouseEvent',{type:'mouseReleased',...target,button:'left',buttons:0,clickCount:1});
+      await send({type:'customize',action:{type:'header',action:{type:'cancel'}}});
     }
   }
   if(frameOnly){

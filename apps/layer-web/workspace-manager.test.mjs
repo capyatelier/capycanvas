@@ -174,7 +174,9 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.notDeepEqual(beforeLayoutReset.history.revisions[beforeLayoutReset.history.current].layout,originalCapture.history.revisions[originalCapture.history.current].layout);
     for(const confirm of [false,true]) {
       await menu('Restore Starting Layout…');
-      assert.match(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),/arrangement shown behind this dialog.*Window → Undo Workspace/);
+      const restoreMessage=await evaluate('document.querySelector(".workspace-form[open] .dialog-content > p").textContent');
+      assert.match(restoreMessage,/arrangement shown behind this dialog.*preview/);
+      assert.ok(restoreMessage.includes(`Window → ${await evaluate('layerApp.state().commands.find(c=>c.id==="undo_workspace").label')}`));
       assert.deepEqual(await evaluate('layerApp.state().workspace.layout'),originalLayout,'Opening Restore previews the starting layout');
       assert.deepEqual(normalized(await capture()),normalized(beforeLayoutReset),'Preview leaves durable history and tool settings untouched');
       await shot(confirm?'restore-starting-layout':'cancel-starting-layout');
@@ -197,7 +199,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     const rowsBeforeDelete=(await view()).rows.map(row=>row.id);
     const deleteForm=async()=>{
       await click('.workspace-delete');
-      assert.equal(await evaluate('document.querySelector(".workspace-form[open] > p").textContent'),'Delete “Web Inking Acceptance”? This is permanent. This window will switch to an available default workspace.');
+      assert.equal(await evaluate('document.querySelector(".workspace-form[open] .dialog-content > p").textContent'),'Delete “Web Inking Acceptance”? This is permanent. This window will switch to an available default workspace.');
       assert.equal(await evaluate('document.querySelectorAll(".workspace-form[open] .dropdown").length'),0);
     };
     await deleteForm(); await click('.workspace-form footer button'); await idle();

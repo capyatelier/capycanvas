@@ -103,7 +103,8 @@ pub struct PhoneLayout {
     pub title: Bounds,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PhoneBarOutcome { Pending, Held, Dragging, WindowMove, Cancel, Tap(u32), Menu(Option<u32>), Move { tile: u32, before: Option<u32> } }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PhoneBarContact {

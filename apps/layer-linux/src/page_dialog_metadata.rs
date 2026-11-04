@@ -7,6 +7,7 @@ use super::{close_dialog, respond};
 pub enum Action { #[default] Close, Button(gtk::Button), Response(String) }
 #[derive(Clone, Default)]
 pub struct Metadata {
+    pub(super) intent: Option<layer_ui::DialogIntent>,
     pub(super) title: Option<(gtk::Widget, &'static str)>,
     pub(super) header: Option<(adw::ToolbarView, adw::HeaderBar)>,
     pub(super) navigation_root: Option<adw::HeaderBar>,
@@ -19,6 +20,7 @@ pub struct Metadata {
 }
 impl Metadata {
     pub fn new() -> Self { Self::default() }
+    pub fn intent(mut self, intent: layer_ui::DialogIntent) -> Self { self.intent = Some(intent); self }
     pub fn title(mut self, widget: &impl IsA<gtk::Widget>, property: &'static str) -> Self { self.title = Some((widget.clone().upcast(), property)); self.hide(widget) }
     pub fn hide(mut self, widget: &impl IsA<gtk::Widget>) -> Self { self.hidden.push(widget.clone().upcast()); self }
     pub fn header(mut self, view: &adw::ToolbarView, header: &adw::HeaderBar) -> Self { self.header = Some((view.clone(), header.clone())); self.navigation_header(header) }
@@ -75,6 +77,10 @@ pub(super) struct Header {
     pub bindings: Vec<(glib::Object, glib::SignalHandlerId)>,
 }
 impl Metadata {
+    fn dialog_intent(&self) -> layer_ui::DialogIntent {
+        self.intent.unwrap_or_else(|| layer_ui::DialogIntent::editor(self.primary.as_ref().map(|action|
+            if matches!(action, Action::Close) { layer_ui::DialogPrimary::Close } else { layer_ui::DialogPrimary::Action })))
+    }
     pub(super) fn project_header(&self, dialog: &adw::Dialog, w: &std::rc::Rc<Workspace>, frame: &gtk::Box) -> Header {
         let navigation = self.navigation_root.is_some();
         let header = self.navigation_root.clone().or_else(|| self.header.as_ref().map(|(_, header)| header.clone())).unwrap_or_default();
@@ -98,8 +104,8 @@ impl Metadata {
         }
         let close = gtk::Button::from_icon_name("window-close-symbolic");
         close.add_css_class("flat");
-        let done = matches!(self.primary.as_ref(), Some(Action::Close));
-        close.set_visible(!done);
+        let intent = self.dialog_intent();
+        close.set_visible(intent.header(false).start.is_some());
         let cancel_label = layer_ui::CommonCopy::new(&w.localization()).cancel;
         close.set_tooltip_text(Some(&cancel_label));
         close.update_property(&[gtk::accessible::Property::Label(&cancel_label)]);
@@ -109,14 +115,14 @@ impl Metadata {
             if let Some(split) = top_navigation.as_ref().filter(|split| split.is_mapped() && split.shows_content()) { split.set_show_content(false); }
             else { cancel.activate(&dialog); }
         }));
-        let bindings = self.top_navigation.as_ref().map_or_else(Vec::new, |(split, page)| bind_navigation(split, page, dialog, &title, &close, done, w));
+        let bindings = self.top_navigation.as_ref().map_or_else(Vec::new, |(split, page)| bind_navigation(split, page, dialog, &title, &close, intent, w));
         header.pack_start(&close);
         if let Some(row) = close.parent().and_downcast::<gtk::Box>() { row.reorder_child_after(&close, gtk::Widget::NONE); }
         projected.push((header.clone(), close.clone().upcast()));
         let mut hidden = self.hidden.clone();
         let mut responses = Vec::new();
         let mut page_primary = None;
-        if let Some(action) = &self.primary {
+        if let Some(action) = self.primary.as_ref().filter(|_| intent.header(false).end.is_some()) {
             let destinations = if navigation { self.headers.clone() } else { vec![header.clone()] };
             for destination in destinations {
                 if let Action::Button(button) = action {
@@ -136,15 +142,17 @@ impl Metadata {
     }
 }
 
-fn bind_navigation(split: &adw::NavigationSplitView, page: &adw::NavigationPage, dialog: &adw::Dialog, title: &gtk::Label, close: &gtk::Button, done: bool, w: &Workspace) -> Vec<(glib::Object, glib::SignalHandlerId)> {
+fn bind_navigation(split: &adw::NavigationSplitView, page: &adw::NavigationPage, dialog: &adw::Dialog, title: &gtk::Label, close: &gtk::Button, intent: layer_ui::DialogIntent, w: &Workspace) -> Vec<(glib::Object, glib::SignalHandlerId)> {
     let copy = layer_ui::CommonCopy::new(&w.localization());
     let update = std::rc::Rc::new(glib::clone!(#[weak] split, #[weak] page, #[weak] dialog, #[weak] title, #[weak] close, move |mapped: bool| {
         let subpage = mapped && split.shows_content();
         let caption = if subpage { page.title() } else { dialog.title() };
         title.set_label(&caption);
-        close.set_visible(!done || subpage);
-        close.set_icon_name(if subpage { "go-previous-symbolic" } else { "window-close-symbolic" });
-        let label = if subpage { &copy.back } else { &copy.cancel };
+        let action = intent.header(subpage).start;
+        close.set_visible(action.is_some());
+        let back = action == Some(layer_ui::DialogHeaderAction::Back);
+        close.set_icon_name(if back { "go-previous-symbolic" } else { "window-close-symbolic" });
+        let label = if back { &copy.back } else { &copy.cancel };
         close.set_tooltip_text(Some(label));
         close.update_property(&[gtk::accessible::Property::Label(label)]);
     }));

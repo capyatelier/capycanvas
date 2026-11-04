@@ -1,5 +1,6 @@
 import {bindCopy,liveCopy} from "./localization.js";
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
+import {createDialogHost} from './dialog-host.js';
 export function createWorkspaceManager({ app, store, applyChange, element, button, icon, dropdown, message }) {
   let view, inline;
   const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common;
@@ -39,7 +40,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const recoveryButton = localizedButton(()=>view?.error??"", () => { dismissedError = null; showRecovery(view.error); }, "workspace-recovery");
   recoveryButton.hidden = true; switcher.root.after(recoveryButton);
   let switcherRevision;
-  let lastView, pageKey, rowsKey, formKey, timer, formName, formDescription, formChoice, formError, formSubmit, previousFocus, observePending = false;
+  let lastView, pageKey, rowsKey, formKey, timer, formName, formDescription, formChoice, formError, formSubmit, formHost, previousFocus, observePending = false;
   const expectedCloses = new WeakMap();
   const channel = new BroadcastChannel("capycanvas.workspace.windows");
   channel.addEventListener("message", e => {
@@ -62,15 +63,13 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if(!cancel&&app.workspace_name_validation(name)){inline.input.setAttribute("aria-invalid","true");return false;}
     inline.submitted=true;send(cancel?{type:"cancel"}:{type:"submit",name,description:null,choice:null});return true;
   }
-  for (const node of [dialog, formDialog]) {
-    node.addEventListener("cancel", e => { e.preventDefault();switcher.cancel();send({type:node===dialog?"dismiss":"cancel"}); });
-    node.addEventListener("close", () => {
-      const expected = expectedCloses.get(node) || 0;
-      if (expected) expectedCloses.set(node, expected - 1);
-      else if (node === formDialog ? view?.prompt : view?.page) cancel();
-    });
-    node.addEventListener("click", e => { if (e.target === node) { const r = node.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) cancel(); } });
-  }
+  dialog.addEventListener("cancel", e => { e.preventDefault();switcher.cancel();send({type:'dismiss'}); });
+  dialog.addEventListener("close", () => {
+    const expected=expectedCloses.get(dialog)||0;
+    if(expected)expectedCloses.set(dialog,expected-1);
+    else if(view?.page)cancel();
+  });
+  dialog.addEventListener("click", e => { if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)cancel();} });
   function show(node, open) {
     if (open && !node.open) { if (!dialog.open && !formDialog.open) previousFocus = document.activeElement; node.showModal(); if (node === dialog) node.focus({preventScroll:true}); }
     if (!open && node.open) { expectedCloses.set(node,(expectedCloses.get(node)||0)+1); node.close(); if (!dialog.open && !formDialog.open) previousFocus?.focus?.(); }
@@ -154,34 +153,40 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     const form = renameId?null:view.prompt;
     const key = form ? JSON.stringify([view.prompt_action, form.name!=null, form.description!=null, (form.choices??[]).map(choice=>choice.id)]) : null;
     if (key !== formKey) {
+      formHost?.hide();formHost?.dispose();formHost=null;
       formKey = key; formDialog.replaceChildren(); formName = null;formDescription=null;formChoice=null;
       if (form) {
         const heading = element("h2");bindCopy(heading,()=>JSON.parse(app.workspace_view()).prompt?.title??""); heading.id = "workspace-form-title";
-        formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(heading);
-        if(form.message){const message=element("p");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");formDialog.append(message);}
+        const formHeader=element('header','workspace-form-heading'),body=element('div','dialog-content');formHeader.append(heading);
+        formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(formHeader,body);
+        if(form.message){const message=element("p");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");body.append(message);}
         if (form.name != null) {
           const label = element("label");bindCopy(label,()=>common.name); formName = element("input"); formName.value = form.name;formName.id="workspace-item-name"; formName.maxLength = 100;formName.addEventListener("input",validatePrompt);
-          bindCopy(formName,()=>common.name,"ariaLabel"); label.append(formName); formDialog.append(label);
+          bindCopy(formName,()=>common.name,"ariaLabel"); label.append(formName); body.append(label);
         }
         if(form.description!=null){
           const label=element("label");bindCopy(label,()=>copy.description);formDescription=element("textarea");formDescription.id="workspace-item-description";formDescription.value=form.description;
-          bindCopy(formDescription,()=>copy.description,"ariaLabel");label.append(formDescription);formDialog.append(label);
+          bindCopy(formDescription,()=>copy.description,"ariaLabel");label.append(formDescription);body.append(label);
         }
         if(form.choices?.length){
           const label=element("label");bindCopy(label,()=>view?.prompt?.choice_label??"");formChoice=dropdown(()=>view?.prompt?.choice_label??'');formChoice.id="workspace-item-choice";
-          formChoice.update({choices:form.choices.map(choice=>({value:choice.id,label:()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label})),value:form.selected??form.choices[0].id});label.append(formChoice);formDialog.append(label);
+          formChoice.update({choices:form.choices.map(choice=>({value:choice.id,label:()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label})),value:form.selected??form.choices[0].id});label.append(formChoice);body.append(label);
         }
         formError = element("p", "workspace-error"); const footer = element("footer");
         formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, "suggested-action");
         formName?.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();if(validatePrompt())formSubmit.click();}});
         if (form.destructive) formSubmit.classList.add("destructive-action");
-        footer.append(localizedButton(()=>view?.prompt?.cancel??common.cancel,cancel), formSubmit); formDialog.append(formError, footer);
+        const formCancel=localizedButton(()=>view?.prompt?.cancel??common.cancel,()=>send({type:'cancel'}));
+        footer.append(formCancel, formSubmit);body.append(formError);formDialog.append(footer);
+        formHost=createDialogHost({app,dialog:formDialog,header:formHeader,cancel:formCancel,primary:formSubmit,icon,copy:common,
+          onCancel:()=>send({type:'cancel'}),cancelLabel:()=>view?.prompt?.cancel??common.cancel});
       }
     }
     if (form) { validatePrompt();bindCopy(formSubmit,()=>view?.retry&&view?.prompt_action?.type!=="save_as_new"?copy.retry:view?.prompt?.confirm??""); }
     list.style.flex=view.page==="workspaces"?"0 1 auto":"";
     list.style.height=view.page==="workspaces"?`${Math.min(7,view.rows.length)*56}px`:"";
-    show(dialog, !!view.page); show(formDialog, !!form);
+    show(dialog, !!view.page);
+    if(form){if(formHost.present(form.dialog))(formName??formDescription??formSubmit).focus({preventScroll:true});}
     if(dialog.open&&!form&&!inline&&(!dialog.contains(document.activeElement)||document.activeElement===dialog))list.querySelector('[aria-selected="true"]')?.focus({preventScroll:true});
     if (!view.page && !form && view.error) showRecovery(view.error);
     switcher.root.dispatchEvent(new Event("workspace-view-changed"));

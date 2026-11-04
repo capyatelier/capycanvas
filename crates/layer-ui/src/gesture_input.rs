@@ -3,6 +3,7 @@ use super::held_actions::merge_change;
 use crate::interaction::{Restore, TouchGesture};
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn touch_policy(&self) -> TouchPolicy { self.interaction.touch_policy }
     pub fn set_touch_policy(&mut self, policy: TouchPolicy) -> Result<(), String> {
         if policy.tap_ms == 0 || policy.tap_ms > 2000 || !(policy.slop.is_finite() && policy.slop > 0.) {
             return Err("Invalid touch policy".into());

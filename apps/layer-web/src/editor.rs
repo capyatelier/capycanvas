@@ -45,9 +45,60 @@ struct LayerDrawerQuery {
 
 #[wasm_bindgen]
 pub struct WebMenuContact { contact: layer_ui::PhoneMenuContact }
+#[wasm_bindgen]
+pub struct WebBarContact { contact: layer_ui::PhoneBarContact }
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum BarInput {
+    Arm,
+    Motion { position: [f32; 2], past_slop: bool },
+    Finish { position: [f32; 2] },
+}
+#[derive(Serialize)]
+struct BarReply<'a> {
+    outcome: layer_ui::PhoneBarOutcome,
+    geometry: &'a [layer_ui::Bounds],
+    lifted: Option<usize>,
+}
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn dialog_header(&self, intent: JsValue, subpage: bool) -> Result<JsValue, JsValue> {
+        let intent: layer_ui::DialogIntent = serde_wasm_bindgen::from_value(intent).map_err(js)?;
+        serialize(&intent.header(subpage))
+    }
+    pub fn dialog_escape(&self, subpage: bool, search_focused: bool, search_has_text: bool) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::dialog_escape(subpage, search_focused, search_has_text))
+    }
+    pub fn dialog_presentation(&self, role: JsValue, width: f32, height: f32, visible: JsValue) -> Result<JsValue, JsValue> {
+        let role = serde_wasm_bindgen::from_value(role).map_err(js)?;
+        let visible = serde_wasm_bindgen::from_value(visible).map_err(js)?;
+        serialize(&self.session.state().dialog_presentation_in(role, [width, height], visible))
+    }
+    pub fn phone_hold_ms(&self) -> u32 { self.session.touch_policy().tap_ms }
+    pub fn phone_bar_contact(&self, x: f32, y: f32) -> Option<WebBarContact> {
+        let mut contact = layer_ui::PhoneBarContact::begin(&self.session.phone_layout()?, [x, y], false)?;
+        contact.set_tools(self.session.state().workspace.layout.phone.as_deref().unwrap_or_default());
+        Some(WebBarContact { contact })
+    }
+    pub fn phone_bar_valid(&self, contact: &WebBarContact) -> bool {
+        self.session.phone_layout().is_some_and(|layout| contact.contact.valid(&layout,
+            self.session.state().workspace.layout.phone.iter().flatten()))
+    }
+    pub fn phone_bar_input(&self, contact: &mut WebBarContact, input: JsValue) -> Result<JsValue, JsValue> {
+        let input: BarInput = serde_wasm_bindgen::from_value(input).map_err(js)?;
+        let tiles = self.session.state().workspace.layout.phone.as_deref().unwrap_or_default();
+        let Some(layout) = self.session.phone_layout().filter(|layout| contact.contact.valid(layout, tiles)) else {
+            return serialize(&BarReply { outcome: contact.contact.cancel(), geometry: &[], lifted: None });
+        };
+        let outcome = match input {
+            BarInput::Arm => contact.contact.arm(),
+            BarInput::Motion { position, past_slop } => contact.contact.motion(&layout, tiles, position, past_slop),
+            BarInput::Finish { position } => contact.contact.finish(&layout, tiles, position),
+        };
+        let geometry = contact.contact.geometry(&layout);
+        serialize(&BarReply { outcome, geometry: &geometry[..tiles.len().min(geometry.len())], lifted: contact.contact.lifted() })
+    }
     pub fn command_search_placement(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         let viewport = [width, height];
         let visible = layer_ui::Bounds { x: 0., y: 0., width, height };

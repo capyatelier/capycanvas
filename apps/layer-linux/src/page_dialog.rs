@@ -108,7 +108,7 @@ impl Pages {
                 classes.extend(page_classes.iter().map(ToString::to_string));
                 Some(classes)
             }).sync_create().build();
-        frame.update_property(&[gtk::accessible::Property::Modal(true)]);
+        frame.update_property(&[gtk::accessible::Property::Modal(meta.intent.is_none_or(|intent| intent.modal))]);
         let navigation = meta.navigation_root.is_some();
         let specification::Header { header, loan, previous_title, projected, hidden, mut responses, page_primary, close, bindings } = meta.project_header(dialog, w, &frame);
         let default = gtk::prelude::GtkWindowExt::default_widget(&w.window).map(|widget| widget.downgrade());
@@ -243,6 +243,10 @@ pub fn parent(widget: &impl IsA<gtk::Widget>) -> gtk::Widget {
 
 pub fn present(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>) {
     present_role(dialog, parent_widget, layer_ui::DialogRole::Editor);
+}
+
+pub fn present_intent(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>, intent: layer_ui::DialogIntent) {
+    present_with(dialog, parent_widget, intent.role, specification::get(dialog.as_ref()).intent(intent));
 }
 
 pub fn present_role(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole) {

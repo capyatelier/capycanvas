@@ -1,6 +1,7 @@
 use crate::{Bounds, UiState};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DialogEscape { Back, ClearSearch, Cancel }
 pub fn dialog_escape(subpage: bool, search_focused: bool, search_has_text: bool) -> DialogEscape {
     if subpage { DialogEscape::Back }
@@ -8,10 +9,41 @@ pub fn dialog_escape(subpage: bool, search_focused: bool, search_has_text: bool)
     else { DialogEscape::Cancel }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DialogRole { Editor, Alert, CanvasPanel }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogPrimary { Action, Close }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DialogHeaderAction { Cancel, Back, Primary, Close }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct DialogHeader {
+    pub start: Option<DialogHeaderAction>,
+    pub end: Option<DialogHeaderAction>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DialogIntent {
+    pub role: DialogRole,
+    pub modal: bool,
+    pub primary: Option<DialogPrimary>,
+}
+impl DialogIntent {
+    pub fn editor(primary: Option<DialogPrimary>) -> Self { Self { role: DialogRole::Editor, modal: true, primary } }
+    pub fn alert() -> Self { Self { role: DialogRole::Alert, modal: true, primary: Some(DialogPrimary::Action) } }
+    pub fn header(self, subpage: bool) -> DialogHeader {
+        use DialogHeaderAction as A;
+        DialogHeader {
+            start: if subpage { Some(A::Back) } else if self.primary == Some(DialogPrimary::Close) { None } else { Some(A::Cancel) },
+            end: self.primary.map(|primary| if primary == DialogPrimary::Close { A::Close } else { A::Primary }),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", content = "bounds", rename_all = "snake_case")]
 pub enum DialogPresentation {
     Floating,
     Page(Bounds),
@@ -39,6 +71,9 @@ pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
 
 impl UiState {
     pub fn dialog_presentation(&self, role: DialogRole, viewport: [f32; 2]) -> DialogPresentation {
+        self.dialog_presentation_in(role, viewport, Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] })
+    }
+    pub fn dialog_presentation_in(&self, role: DialogRole, viewport: [f32; 2], visible: Bounds) -> DialogPresentation {
         let Some(phone) = self.phone_presentation(viewport) else { return DialogPresentation::Floating; };
         match role {
             DialogRole::Alert => DialogPresentation::Floating,
@@ -46,7 +81,7 @@ impl UiState {
             DialogRole::Editor => {
                 let [left, top, right, bottom] = self.phone.insets;
                 DialogPresentation::Page(Bounds { x: left, y: top,
-                    width: (viewport[0] - left - right).max(0.), height: (viewport[1] - top - bottom).max(0.) })
+                    width: (viewport[0] - left - right).max(0.), height: (viewport[1] - top - bottom).max(0.) }.intersection(visible).unwrap_or_default())
             }
         }
     }
@@ -55,6 +90,18 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn close_only_done_and_an_explicit_primary_have_distinct_headers() {
+        use DialogHeaderAction as A;
+        for (primary, start, end) in [(None, Some(A::Cancel), None),
+            (Some(DialogPrimary::Action), Some(A::Cancel), Some(A::Primary)),
+            (Some(DialogPrimary::Close), None, Some(A::Close))] {
+            let intent = DialogIntent::editor(primary);
+            assert_eq!(intent.header(false), DialogHeader { start, end });
+            assert_eq!(intent.header(true), DialogHeader { start: Some(A::Back), end });
+            assert!(intent.modal);
+        }
+    }
     #[test]
     fn escape_leaves_subpages_before_clearing_focused_search() {
         for focused in [false, true] { for text in [false, true] {

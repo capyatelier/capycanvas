@@ -42,16 +42,16 @@ test('phone inset reports apply while busy and deduplicate against shared state'
   const state={workspace_ready:true,phone:{insets:[0,0,0,0]}};
   let busy=true,observer,refuse=false;
   const attempts=[],delivered=[];
-  const context={documents:{interactionBusy:()=>busy},workspaceGesture:null,
+  const context={documents:{interactionBusy:()=>busy},workspaceGesture:null,window:{addEventListener(){}},
     app:{allowed_during_document_interaction:action=>action.type==='phone'&&action.action.kind==='metrics',
       dispatch(action){if(!refuse){delivered.push(action);state.phone.insets=[...action.action.insets];}return{};}},
     applyChange(){},message:assert.fail,
     ResizeObserver:class{constructor(callback){this.callback=callback;this.targets=[];observer=this;}observe(target){this.targets.push(target);}}};
   runInNewContext(source.slice(source.indexOf('function dispatch(action)'),source.indexOf('let languageTimer')),context);
   runInNewContext(phoneSource.replace(/^import .*;\n/gm,'').replace('export function createPhone','function createPhone'),context);
-  const element=()=>({style:{setProperty(){}},children:[],append(...nodes){this.children.push(...nodes);}});
+  const element=()=>({style:{setProperty(){}},children:[],append(...nodes){this.children.push(...nodes);},addEventListener(){}});
   const presenter=context.createPhone({app:context.app,state:()=>state,workspace:element(),capy:element(),header:{},element,button:element,
-    dispatch:action=>{attempts.push(action);context.dispatch(action);}});
+    customization:{target(){}},dispatch:action=>{attempts.push(action);context.dispatch(action);}});
   const measure=insets=>observer.callback(observer.targets.map((target,index)=>({target,contentRect:{width:insets[index]}})));
   measure([19,7,13,5]);
   assert.deepEqual([...state.phone.insets],[19,7,13,5]);
@@ -447,4 +447,75 @@ test('drawer progress follows frame deltas through delayed callbacks, close and 
   const switched=fixture(false,true);switched.context.onFrame(100);assert.equal(switched.queries[0].progress,1,'Switching an opener keeps its immediate placement');
   switched.record.started=null;switched.record.closing=true;switched.context.onFrame(1000);
   assert.ok(Math.abs(switched.queries.at(-1).progress-.08)<1e-10,'Closing does not inherit the switch offset');
+});
+
+test('dialog presentation retains controls and ignores a retired native close',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js');
+  const {doc,element,icon}=colorDialogDom(t),events=new Map(),viewportEvents=new Map();
+  const previous=Object.fromEntries(['window','innerWidth','innerHeight'].map(key=>[key,globalThis[key]]));
+  const emitter=events=>({addEventListener:(type,handler)=>events.set(type,handler),removeEventListener:type=>events.delete(type)});
+  Object.assign(globalThis,{window:{...emitter(events),visualViewport:{...emitter(viewportEvents),width:412,height:891,offsetLeft:0,offsetTop:0}},innerWidth:412,innerHeight:891});
+  t.after(()=>Object.assign(globalThis,previous));
+  const dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button'),search=element('input');
+  header.append(cancel,primary);dialog.append(header,search);doc.body.append(dialog);
+  const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
+  let page=true,clears=0,cancels=0;
+  const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},
+    dialog_header:()=>({start:'cancel',end:'primary'}),
+    dialog_escape:(back,focused,text)=>back?'back':focused&&text?'clear_search':'cancel'};
+  const host=createDialogHost({app,dialog,header,cancel,primary,search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done'},
+    onCancel:()=>{cancels++;host.hide();},clearSearch:()=>{clears++;search.value='';}});
+  const intent={role:'editor',modal:true,primary:'action'};
+  assert.equal(host.present(intent),true);search.value='retained draft';search.setSelectionRange(2,7);search.focus();search.scrollTop=24;
+  window.visualViewport.height=480;viewportEvents.get('resize')();
+  assert.equal(dialog.style.height,'480px');assert.equal(doc.activeElement,search);assert.equal(search.value,'retained draft');
+  assert.deepEqual([search.selectionStart,search.selectionEnd,search.scrollTop],[2,7,24]);
+  page=false;events.get('resize')();assert.equal(dialog.style.height,'');assert.equal(doc.activeElement,search);
+  const escape=(composing=false)=>dialog.dispatchEvent({type:'keydown',key:'Escape',isComposing:composing,preventDefault(){},stopPropagation(){}});
+  escape(true);assert.equal(clears,0);escape();assert.equal(clears,1);assert.equal(cancels,0);
+  search.value='';escape();assert.equal(cancels,1);assert.equal(doc.activeElement,focus);
+  dialog.dispatchEvent({type:'cancel',preventDefault(){}});assert.equal(cancels,1,'A retired surface cannot cancel again');
+  dialog.close=()=>{dialog.open=false;};host.present(intent);host.hide();host.present(intent);
+  dialog.dispatchEvent({type:'close'});assert.equal(cancels,1,'An old queued close cannot cancel the reopened form');
+  assert.equal(dialog.open,true);host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
+});
+
+test('phone contacts preview locally, commit once and retire on cancellation',t=>{
+  const {element,icon,doc}=colorDialogDom(t),listeners=new Map(),timers=new Map(),sent=[],inputs=[],freed=[];
+  const tiles=[{id:8,control:{kind:'brush'}},{id:9,control:{kind:'eraser'}}];
+  const bounds={x:0,y:0,width:32,height:32},geometry={edge:'top',bars:[bounds,bounds],chips:[bounds,bounds],tools:[bounds,{...bounds,x:40}],tool_hits:[bounds,{...bounds,x:40}],
+    capy_target:bounds,capy:bounds,capy_hit:bounds,settings_hit:bounds,settings:bounds,size:bounds,strength:bounds,icon:16,capy_icon:24};
+  const model={workspace_ready:true,phone:{insets:[0,0,0,0]},workspace:{layout:{phone:tiles}}};
+  const view={enabled:true,label:'Tool',icon:'tool',selected:false};
+  let next=0,valid=true,hold_ms=500,outcome={kind:'pending'},capture;
+  const app={phone_tools:()=>[view,view],phone_settings:()=>view,toolbar_component:()=>({}),header_view:()=>({capy:view,sizes:[{id:'medium',tile:32}]}),capy_caption:()=>'',
+    phone_hold_ms:()=>hold_ms,phone_bar_contact:()=>{const id=++next;return{id,free:()=>freed.push(id)};},phone_bar_valid:()=>valid,
+    phone_bar_input:(bar,input)=>{inputs.push([bar.id,input.kind]);return{outcome,geometry:geometry.tools,lifted:outcome.kind==='held'||outcome.kind==='dragging'?0n:null};}};
+  const workspace=element('div'),capy=element('button');doc.body.append(workspace);workspace.append(capy);
+  const createElement=(...args)=>{const n=element(...args);n.style.setProperty=()=>{};n.querySelector=()=>null;n.hasPointerCapture=id=>capture===id;n.setPointerCapture=id=>capture=id;n.releasePointerCapture=()=>capture=null;return n;};
+  const context={window:{addEventListener:(type,listener)=>{const list=listeners.get(type)??[];list.push(listener);listeners.set(type,list);}},document:doc,
+    ResizeObserver:class{observe(){}},setTimeout:fn=>{const id=timers.size+1;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),
+    browserDragThreshold:8,createToolbarComponent:()=>Object.assign(createElement('div'),{layoutComponent(){},closeComponent(){},updateComponent(){}})};
+  const source=readFileSync(new URL('phone.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export function createPhone','function createPhone');
+  runInNewContext(source,context);
+  const host=context.createPhone({app,state:()=>model,workspace,capy,header:{phone(){}},element:createElement,button:()=>createElement('button'),icon,
+    customization:{target(){},variationMarker:()=>element('span'),showContext:()=>sent.push('menu')},dispatch:action=>sent.push(action),place(){},changed(){}});
+  host.layout({phone:geometry});
+  const root=workspace.children.find(n=>n.id==='phone-frame'),tool=doc.body.descendants().find(n=>n.id==='phone-tool-8');
+  const event=(type,x=2,y=2)=>{for(const fn of listeners.get(type)??[])fn({target:tool,button:0,isPrimary:true,pointerId:1,clientX:x,clientY:y,preventDefault(){},stopPropagation(){}});};
+  const arm=()=>{outcome={kind:'held'};for(const fn of [...timers.values()])fn();};
+  event('pointerdown');arm();assert.equal(root.dataset.contact,'held');
+  assert.equal(tool.parentNode.classList.contains('header-drag-preview'),true,'A Wasm usize index marks the lifted control');
+  outcome={kind:'dragging'};event('pointermove',42);assert.equal(sent.length,0);assert.equal(root.dataset.contact,'dragging');
+  outcome={kind:'move',value:{tile:8,before:null}};event('pointerup',42);event('pointerup',42);
+  assert.equal(sent.length,1);assert.equal(sent[0].action.kind,'move_tool');assert.deepEqual(freed,[1]);
+  for(const cancellation of ['pointercancel','blur','resize','threshold']){
+    event('pointerdown');arm();
+    if(cancellation==='resize'){valid=false;host.refresh();valid=true;}
+    else if(cancellation==='threshold'){hold_ms++;host.refresh();}
+    else event(cancellation);
+    event('pointerup');assert.equal(sent.length,1,'Cancelled contacts cannot commit');
+  }
+  assert.deepEqual(freed,[1,2,3,4,5]);assert.equal(root.dataset.contact,undefined);
+  assert.equal(inputs.filter(([,kind])=>kind==='finish').length,1,'Only a live contact reaches shared Finish');
 });

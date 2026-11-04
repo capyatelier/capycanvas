@@ -116,6 +116,13 @@ node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,
 node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
 ```
 
+Run `bash tools/performance/workspace-motion.sh web --phone-customize` for
+phone toolbar holds, reorder, capacity, picker pages and scoped Restore.
+`LAYER_PHONE_AUDIT_CASES=412x891-light,891x412-dark` selects focused cases from
+the phone audit matrix. The same picker and prompt controls survive page,
+floating and visual-viewport changes; shared Rust supplies role, headers,
+Escape and contact outcomes.
+
 The launcher fixture uses Bash; `LAYER_TEST_BASH` selects its executable
 (default `/bin/bash`). On Windows, set it in Git Bash before those commands:
 

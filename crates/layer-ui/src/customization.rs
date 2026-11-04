@@ -1594,6 +1594,7 @@ pub struct ToolPicker {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolPickerView {
+    pub dialog: crate::DialogIntent,
     pub title: std::sync::Arc<str>,
     pub confirm_label: std::sync::Arc<str>,
     pub name: Option<String>,
@@ -1851,6 +1852,7 @@ impl ToolPicker {
             })
             .collect();
         ToolPickerView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             title: if matches!(self.destination, ToolDestination::Header { .. }) {
                 localization.text(MessageId::WORKSPACE_PICKER_HEADER_TITLE)
             } else if name.is_some() {

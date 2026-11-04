@@ -450,6 +450,11 @@ always uses a full-screen page.
   632–744 depending on the host.
 - Supply content measurement to `DialogPresentation::bounds` as a callback;
   only canvas panels need it. Full-screen pages use their shared bounds directly.
+- `DialogIntent` supplies the role, modality and primary-action meaning for the
+  common header. Keep close-only Done distinct from a declared primary named
+  Done. Hosts project existing controls and preserve their draft and focus when
+  presentation changes. `dialog_escape` leaves a subpage first, then clears a
+  focused nonempty search, and otherwise cancels.
 - **Pages live inside the window**, as Android's Settings overlay does, rather than
   in a toolkit dialog. GTK's automatic bottom sheet (at most 450 wide or 360 tall)
   and Apple's fitted sheets don't apply in the phone layout.

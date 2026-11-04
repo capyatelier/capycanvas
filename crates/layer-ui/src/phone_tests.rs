@@ -6,6 +6,17 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn phone_editor_pages_clip_to_the_visible_viewport_without_changing_modes() {
+    let mut s = phone_session([412, 891]);
+    s.state.phone.insets = [5., 7., 11., 13.];
+    let visible = Bounds { x: 0., y: 0., width: 412., height: 480. };
+    assert_eq!(s.state.dialog_presentation_in(DialogRole::Editor, [412., 891.], visible),
+        DialogPresentation::Page(Bounds { x: 5., y: 7., width: 396., height: 473. }));
+    s.set_viewport([1000., 800.], [1000, 800]).unwrap();
+    assert_eq!(s.state.dialog_presentation_in(DialogRole::Editor, [1000., 800.], visible), DialogPresentation::Floating);
+}
+
+#[test]
 fn phone_menu_search_escape_clears_then_closes_and_backs_out_of_parameters() {
     let mut s = phone_session([412, 891]);
     s.dispatch(UiAction::Invoke { command: CommandId::SearchCommands }).unwrap();

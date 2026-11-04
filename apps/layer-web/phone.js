@@ -1,5 +1,6 @@
 import {createToolbarComponent} from './toolbar-components.js';
 import {updatePaintPairIcon} from './color-controls.js';
+import {browserDragThreshold} from './pen-scroll.js';
 
 export function createPhone({app,state,workspace,capy,header,element,button,icon,dropdown,place,dispatch,rasterWorker,customization,changed}) {
   const root=element('div','window-bar');root.id='phone-frame';root.hidden=true;workspace.append(root);
@@ -11,8 +12,10 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
   const settingsTarget=element('div','phone-target'),settings=button('',()=>send({kind:'tool_settings'}),'tile-button phone-tool');
   settings.id='phone-tool-settings';settingsTarget.append(settings);root.append(settingsTarget);
   const tools=new Map(),sliders=new Map();
-  let geometry,active=false,insets=[...state().phone.insets];
+  let geometry,active=false,insets=[...state().phone.insets],contact,preview,lifted,suppressClick=false;
   const send=action=>dispatch({type:'phone',action});
+  for(const name of ['bar-tools','bar-capy'])customization.target(parts[name],{kind:'phone_toolbar'});
+  customization.target(capyTarget,{kind:'zen_mode'});
   function position(node,bounds) {
     node.hidden=!bounds||bounds.width<=0||bounds.height<=0;
     if(!node.hidden)place(node,bounds);
@@ -31,6 +34,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
   function refresh() {
     report();
     if(!active)return;
+    if(contact&&(contact.hold_ms!==app.phone_hold_ms()||contact.bar&&!app.phone_bar_valid(contact.bar)))cancelContact();
     const authored=state().workspace.layout.phone??[],views=app.phone_tools();
     for(const [id,record]of tools)if(!authored.some(tile=>tile.id===id)){record.root.remove();tools.delete(id);}
     for(const [index,tile]of authored.entries()) {
@@ -38,13 +42,14 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
       if(!record) {
         const wrapper=element('div','phone-target'),node=tile.control.kind==='divider'?element('div','tile-divider'):button('',()=>send({kind:'tool',tile:tile.id}),'tile-button phone-tool');
         node.id=`phone-tool-${tile.id}`;wrapper.append(node);root.append(wrapper);record={root:wrapper,node};tools.set(tile.id,record);
+        wrapper.onclick=event=>{if(event.target===wrapper)node.click();};
+        customization.target(wrapper,{kind:'phone_tile',tile:tile.id});
         if(tile.control.kind==='divider')node.setAttribute('role','separator');
         else {node.append(icon(views[index].icon,true),customization.variationMarker());node.addEventListener('dblclick',()=>{if(record.view.double_click)dispatch({type:'double_click_tool',control:record.view.resolved_control});});}
       }
       record.view=views[index];
       if(tile.control.kind!=='divider')refreshButton(record.node,record.view);
-      const hit=tile.control.kind==='divider'?geometry.tools[index]:geometry.tool_hits[index];
-      target(record.root,record.node,hit,geometry.tools[index]);
+      placeTool(record,index,tile);
     }
     refreshButton(settings,app.phone_settings());
     target(settingsTarget,settings,geometry.settings_hit,geometry.settings);
@@ -70,6 +75,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     geometry=resolved.phone;
     const next=!!geometry;
     if(next!==active) {
+      cancelContact();
       active=next;root.hidden=!active;header.phone(active);
       const parent=active?capyTarget:workspace;
       if(parent.moveBefore)parent.moveBefore(capy,null);
@@ -83,6 +89,80 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     refresh();changed();
   }
   const probe=element('div');probe.id='phone-safe-insets';workspace.append(probe);
+  function placeTool(record,index,tile) {
+    const visual=(preview??geometry.tools)[index],hit=index===lifted?visual:tile.control.kind==='divider'?geometry.tools[index]:geometry.tool_hits[index];
+    position(record.root,hit);position(record.node,{...visual,x:visual.x-hit.x,y:visual.y-hit.y});
+    record.root.style.zIndex=index===lifted?'1':'';record.root.classList.toggle('header-drag-preview',index===lifted);
+  }
+  function placePreview(reply) {
+    preview=reply?.geometry;lifted=reply?.lifted==null?undefined:Number(reply.lifted);
+    for(const [index,tile]of (state().workspace.layout.phone??[]).entries()) {
+      const record=tools.get(tile.id);if(!record)continue;
+      placeTool(record,index,tile);
+    }
+  }
+  function cancelContact() {
+    const previous=contact;contact=null;
+    if(!previous)return;
+    suppressClick=true;
+    clearTimeout(previous.timer);
+    if(previous.capy)send({kind:'capy_drop',position:[-1,-1]});
+    previous.bar?.free();
+    if(root.hasPointerCapture(previous.id))root.releasePointerCapture(previous.id);
+    delete root.dataset.contact;preview=undefined;lifted=undefined;if(geometry)placePreview();
+  }
+  const point=event=>{const bounds=workspace.getBoundingClientRect();return[event.clientX-bounds.x,event.clientY-bounds.y];};
+  function capture() {if(contact&&!root.hasPointerCapture(contact.id))root.setPointerCapture(contact.id);}
+  window.addEventListener('pointerdown',event=>{
+    cancelContact();
+    if(!active||!root.contains(event.target)||event.button||!event.isPrimary)return;
+    suppressClick=false;
+    const start=point(event),capyPress=capyTarget.contains(event.target),bar=capyPress?null:app.phone_bar_contact(...start);
+    if(!capyPress&&!bar)return;
+    contact={id:event.pointerId,start,bar,capy:capyPress,position:start,held:false,hold_ms:app.phone_hold_ms()};
+    const current=contact;
+    current.timer=setTimeout(()=>{
+      if(contact!==current)return;
+      if(current.capy){current.held=true;send({kind:'capy_hold'});capture();suppressClick=true;return;}
+      const reply=app.phone_bar_input(current.bar,{kind:'arm'});
+      if(reply.outcome.kind==='held'){current.held=true;root.dataset.contact='held';capture();placePreview(reply);suppressClick=true;}
+      else if(reply.outcome.kind==='cancel')cancelContact();
+    },current.hold_ms);
+  },true);
+  window.addEventListener('pointermove',event=>{
+    if(contact?.id!==event.pointerId)return;
+    contact.position=point(event);
+    const past_slop=Math.hypot(contact.position[0]-contact.start[0],contact.position[1]-contact.start[1])>browserDragThreshold;
+    if(contact.capy){if(past_slop&&!contact.held){clearTimeout(contact.timer);contact.cancelled=true;capture();suppressClick=true;}return;}
+    if(contact.cancelled)return;
+    const reply=app.phone_bar_input(contact.bar,{kind:'motion',position:contact.position,past_slop});
+    if(reply.outcome.kind==='window_move'){
+      clearTimeout(contact.timer);contact.cancelled=true;capture();suppressClick=true;placePreview();
+    } else if(reply.outcome.kind==='dragging'){
+      event.preventDefault();root.dataset.contact='dragging';placePreview(reply);suppressClick=true;
+    } else if(reply.outcome.kind==='cancel'){suppressClick=true;cancelContact();}
+  },true);
+  window.addEventListener('pointerup',event=>{
+    if(contact?.id!==event.pointerId)return;
+    const current=contact,position=point(event);contact=null;clearTimeout(current.timer);
+    if(root.hasPointerCapture(current.id))root.releasePointerCapture(current.id);
+    delete root.dataset.contact;placePreview();
+    if(current.capy){if(current.held)send({kind:'capy_drop',position});return;}
+    const {outcome}=app.phone_bar_input(current.bar,{kind:'finish',position});current.bar.free();
+    if(current.cancelled)return;
+    if(outcome.kind==='move'){send({kind:'move_tool',...outcome.value});suppressClick=true;}
+    else if(outcome.kind==='menu'){
+      const source=outcome.value==null?parts['bar-tools']:tools.get(outcome.value)?.root;
+      if(source)customization.showContext(source,[event.clientX,event.clientY]);suppressClick=true;
+    } else if(outcome.kind==='cancel')suppressClick=true;
+  },true);
+  window.addEventListener('pointercancel',event=>{if(contact?.id===event.pointerId){suppressClick=true;cancelContact();}},true);
+  root.addEventListener('lostpointercapture',event=>{if(contact?.id===event.pointerId){suppressClick=true;cancelContact();}});
+  root.addEventListener('click',event=>{if(suppressClick&&event.detail){suppressClick=false;event.preventDefault();event.stopImmediatePropagation();}},true);
+  window.addEventListener('blur',()=>{suppressClick=true;cancelContact();});
+  window.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&contact){suppressClick=true;cancelContact();event.preventDefault();event.stopPropagation();}
+  },true);
   function report(){
     if(!state().workspace_ready||insets.every((value,index)=>value===state().phone.insets[index]))return;
     send({kind:'metrics',native:[0,0],native_counts:[0,0],movable:false,insets});

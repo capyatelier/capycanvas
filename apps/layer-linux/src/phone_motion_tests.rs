@@ -278,6 +278,28 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
                     add(&id,"page-action",Some(button.upcast()));
                 }
             }
+            if dialog.widget_name() == "tool-picker" {
+                let search = widgets(&page).find(|widget| widget.is::<gtk::SearchEntry>() && widget.widget_name() == "tool-search");
+                add("picker.search","search",search.clone());
+                if let Some(catalog) = search.and_then(|search| search.parent()) {
+                    let body = catalog.parent();
+                    add("picker.catalog","catalog",Some(catalog.clone()));
+                    add("picker.body","body",body.clone());
+                    let choices = widgets(&catalog).find(|widget| widget.is::<gtk::ScrolledWindow>());
+                    add("picker.choices","scroll",choices.clone());
+                    if let Some(row) = choices.as_ref().and_then(|choices| widgets(choices).find(|widget| widget.is::<gtk::ListBox>())
+                        .and_then(|list| list.downcast::<gtk::ListBox>().ok())
+                        .and_then(|list| list.row_at_index(0))
+                        .filter(|row| row.compute_bounds(choices).is_some_and(|bounds| bounds.intersection(
+                            &gtk::graphene::Rect::new(0.,0.,choices.width() as f32,choices.height() as f32)).is_some()))) {
+                        let row = row.upcast::<gtk::Widget>();
+                        add("picker.row.0","row",Some(row.clone()));
+                        let mut labels = widgets(&row).filter(|widget| widget.is::<gtk::Label>());
+                        add("picker.row.0.title","label",labels.next());
+                        add("picker.row.0.subtitle","label",labels.next());
+                    }
+                }
+            }
         }
     }
     drop(add);

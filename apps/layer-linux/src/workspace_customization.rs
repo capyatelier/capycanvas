@@ -567,7 +567,11 @@ impl Customization {
             w,
             move |_| {
                 if w.customization.picker_shown.get() {
-                    w.customize(CustomizationAction::CancelTools);
+                    let action = match layer_ui::dialog_escape(false, true, !w.customization.catalog.search.text().is_empty()) {
+                        layer_ui::DialogEscape::ClearSearch => CustomizationAction::PickerSearch { query: String::new() },
+                        _ => CustomizationAction::CancelTools,
+                    };
+                    w.customize(action);
                 }
             }
         ));
@@ -1227,7 +1231,7 @@ impl Customization {
                 }
             }
             if !self.picker_shown.replace(true) {
-                crate::page_dialog::present(&self.picker, &w.window);
+                crate::page_dialog::present_intent(&self.picker, &w.window, view.dialog);
                 if view.name.is_some() {
                     self.name.grab_focus();
                 } else {
