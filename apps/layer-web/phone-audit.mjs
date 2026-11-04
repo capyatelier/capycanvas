@@ -882,25 +882,6 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await click(`${selector} > summary`);
     }
   }
-  if(customizeOnly){
-    await call('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:1,mobile:false});
-    await evaluate("document.documentElement.style.setProperty('--ui-text-size','11pt');null");await settle();
-    for(const theme of ['light','dark'])for(const item of ['clock','tool']){
-      await send({type:'set_theme',theme});await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
-      if(item==='tool')await send({type:'customize',action:{type:'header',action:{type:'add',zone:'left',before:null,item:{kind:'tool',control:{kind:'command',command:'lasso'}}}}});
-      const source=await evaluate(`(()=>{const model=layerApp.state().workspace.layout.header,id=model.zones.flat().find(e=>e.item.control?.command==='lasso')?.id,n=document.querySelector(${JSON.stringify(item)}==='clock'?'#header-component-clock':'[data-header-item="'+id+'"]');if(!n)throw Error('Missing desktop pickup source '+JSON.stringify(model));const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-      const target=item==='clock'?{x:800,y:25}:{x:source.x+80,y:source.y};
-      await call('Input.dispatchMouseEvent',{type:'mousePressed',...source,button:'left',buttons:1,clickCount:1});
-      await call('Input.dispatchMouseEvent',{type:'mouseMoved',...target,button:'left',buttons:1});
-      await wait('!!document.querySelector(".header-drag-preview")');await settle();
-      const facts=await evaluate('(()=>{const n=document.querySelector(".header-drag-preview"),s=getComputedStyle(n),r=n.getBoundingClientRect();return{bounds:[r.x,r.y,r.width,r.height],background:s.backgroundColor,outline:s.outline};})()');
-      const name=`desktop-header-${item}-held-${theme}`;
-      await writeFile(`${directory}/${name}.json`,JSON.stringify(facts,null,2)+'\n');
-      await writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
-      await call('Input.dispatchMouseEvent',{type:'mouseReleased',...target,button:'left',buttons:0,clickCount:1});
-      await send({type:'customize',action:{type:'header',action:{type:'cancel'}}});
-    }
-  }
   if(frameOnly){
     const settings=await evaluate('layerApp.state().settings');
     await send({type:'restore_settings',settings:{...settings,finger_drawing:'on'}});

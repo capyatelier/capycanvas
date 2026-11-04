@@ -6,7 +6,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 
 // The header now shares this transaction: keep the existing toolbar destinations covered.
 export async function checkToolPicker({ call, evaluate, settle }) {
-  const dir=process.env.LAYER_TEST_ARTIFACTS||'artifacts/ui/tool-picker';await mkdir(dir,{recursive:true});
   await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
   const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle(); };
   const edit = action => send({ type: 'customize', action });
@@ -36,7 +35,6 @@ export async function checkToolPicker({ call, evaluate, settle }) {
     assert.ok(await evaluate('document.querySelector(".tool-choices").scrollTop>0'),'The catalog overflows before reopening');
     await click('#tool-picker .dialog-header > button:first-child');await open();
     assert.equal(await evaluate('document.querySelector(".tool-choices").scrollTop'),0,'A new picker starts at the first choice');
-    await writeFile(`${dir}/desktop-picker-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await evaluate('window.pickerChoices=document.querySelector(".tool-choices");pickerChoices.scrollTop=60;document.querySelector("#tool-search").focus();null');
     await call('Emulation.setDeviceMetricsOverride',{width:1281,height:960,deviceScaleFactor:1,mobile:false});await settle();
     assert.equal(await evaluate('document.querySelector(".tool-choices")===pickerChoices&&pickerChoices.scrollTop===60&&document.activeElement.id==="tool-search"'),true,'Resizing retains this picker session and its scroll and focus');

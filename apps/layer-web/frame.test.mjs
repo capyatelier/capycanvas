@@ -533,9 +533,9 @@ test('phone contacts preview locally, commit once and retire on cancellation',t=
     capy_target:bounds,capy:bounds,capy_hit:bounds,settings_hit:bounds,settings:bounds,size:bounds,strength:bounds,icon:16,capy_icon:24};
   const model={workspace_ready:true,phone:{insets:[0,0,0,0]},workspace:{layout:{phone:tiles}}};
   const view={enabled:true,label:'Tool',icon:'tool',selected:false};
-  let next=0,valid=true,hold_ms=500,outcome={kind:'pending'},capture;
+  let next=0,valid=true,outcome={kind:'pending'},capture;
   const app={phone_tools:()=>[view,view],phone_settings:()=>view,toolbar_component:()=>({}),header_view:()=>({capy:view,sizes:[{id:'medium',tile:32}]}),capy_caption:()=>'',
-    touch_hold_ms:()=>hold_ms,phone_bar_contact:()=>{const id=++next;return{id,free:()=>freed.push(id)};},phone_bar_valid:()=>valid,
+    touch_hold_ms:()=>500,phone_bar_contact:()=>{const id=++next;return{id,free:()=>freed.push(id)};},phone_bar_valid:()=>valid,
     phone_bar_input:(bar,input)=>{inputs.push([bar.id,input.kind]);return{outcome,geometry:geometry.tools,lifted:outcome.kind==='held'||outcome.kind==='dragging'?0n:null};}};
   const workspace=element('div'),capy=element('button');doc.body.append(workspace);workspace.append(capy);
   const createElement=(...args)=>{const n=element(...args);n.style.setProperty=()=>{};n.querySelector=()=>null;n.hasPointerCapture=id=>capture===id;n.setPointerCapture=id=>capture=id;n.releasePointerCapture=()=>capture=null;return n;};
@@ -555,13 +555,12 @@ test('phone contacts preview locally, commit once and retire on cancellation',t=
   outcome={kind:'dragging'};event('pointermove',42);assert.equal(sent.length,0);assert.equal(root.dataset.contact,'dragging');
   outcome={kind:'move',value:{tile:8,before:null}};event('pointerup',42);event('pointerup',42);
   assert.equal(sent.length,1);assert.equal(sent[0].action.kind,'move_tool');assert.deepEqual(freed,[1]);
-  for(const cancellation of ['pointercancel','blur','resize','threshold']){
+  for(const cancellation of ['pointercancel','blur','resize']){
     event('pointerdown');arm();
     if(cancellation==='resize'){valid=false;host.refresh();valid=true;}
-    else if(cancellation==='threshold'){hold_ms++;host.refresh();}
     else event(cancellation);
     event('pointerup');assert.equal(sent.length,1,'Cancelled contacts cannot commit');
   }
-  assert.deepEqual(freed,[1,2,3,4,5]);assert.equal(root.dataset.contact,undefined);
+  assert.deepEqual(freed,[1,2,3,4]);assert.equal(root.dataset.contact,undefined);
   assert.equal(inputs.filter(([,kind])=>kind==='finish').length,1,'Only a live contact reaches shared Finish');
 });

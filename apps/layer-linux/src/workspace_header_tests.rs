@@ -1683,10 +1683,6 @@ fn native_header_drag_only_bank_input() {
             ]));
             assert!(d.w.dragging.get(), "touch={touch}, hit={hit}");
             assert!(!d.w.workspace_drag.borrow().as_ref().unwrap().wait_for_hold);
-            if !touch && hit == 0 && std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-                std::fs::write(d.input.dir.join("desktop-header-held.json"), serde_json::to_vec(&serde_json::json!({ "source": [b.x(), b.y(), b.width(), b.height()], "target": to, "panel": state(&d.w).palette.panel })).unwrap()).unwrap();
-                d.input.perform(serde_json::json!([{ "capture_window": { "name": "desktop-header-held", "maximized": d.w.window.is_maximized() } }]));
-            }
             assert_eq!(
                 state(&d.w).workspace.layout.header,
                 original.layout.header,
@@ -1706,19 +1702,6 @@ fn native_header_drag_only_bank_input() {
             assert_eq!(state(&d.w).workspace.layout.header, original.layout.header);
             d.edit();
         }
-    }
-    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-        d.w.dispatch(UiAction::Customize { action: CustomizationAction::Header { action: HeaderAction::Add { zone: HeaderZone::Left, before: None, item: HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Lasso } } } } });
-        let tile = state(&d.w).workspace.layout.header.entries().find(|entry| matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Lasso } })).unwrap().id;
-        let source = d.named(&format!("header-item-{tile}"));
-        until(|| source.is_mapped() && source.width() > 0, "desktop tool reference allocated");
-        let from = d.point(&source);
-        let to = [from[0] + 80., from[1]];
-        d.input.perform(serde_json::json!([contact("mouse", "down", from), contact("mouse", "move", to)]));
-        let held = d.w.header.drag_for_test().unwrap().held;
-        std::fs::write(d.input.dir.join("desktop-header-tool-held.json"), serde_json::to_vec(&held).unwrap()).unwrap();
-        d.input.perform(serde_json::json!([{ "capture_window": { "name": "desktop-header-tool-held", "maximized": d.w.window.is_maximized() } }, contact("mouse", "up", to)]));
-        d.click_name("header-edit-cancel");d.edit();
     }
     crate::capture(&d.w, d.input.dir.join("drag-only-bank.png").to_str().unwrap());
     d.click_name("header-edit-cancel");
@@ -1963,10 +1946,6 @@ fn native_header_picker_journey() {
                 .to_str()
                 .unwrap(),
         );
-        if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-            d.input.perform(serde_json::json!([{"capture_window":{"name":format!("desktop-picker-{touch}"),
-                "maximized":d.w.window.is_maximized()}}]));
-        }
         d.click_name("confirm-tools");
         let added = state(&d.w).workspace.layout.header;
         assert_eq!(
