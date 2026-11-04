@@ -174,6 +174,8 @@ Brush controls.
   Tools…, hold then drag to move it, and hold empty bar space for the toolbar's
   menu. At ten tools the picker shows the toolbar as full. Each edit is one layout
   undo step.
+- A newly opened tool picker starts at the top of its catalog. Resizing the open
+  picker retains its form and scroll position.
 - Title bar editing is unavailable in the phone layout, since no title bar shows.
   Window hides Customize Title Bar…, and command search, bindings and tiles that run
   it are disabled with a reason, so nothing opens an invisible editor or changes the

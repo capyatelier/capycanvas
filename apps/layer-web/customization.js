@@ -444,7 +444,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       }));
     }
     model.choices.forEach((choice, index) => { choices.children[index].querySelector("input").checked = choice.selected; });
-    if (!picker.open) { picker.showModal(); (model.name == null ? search : name).focus(); }
+    if (!picker.open) { picker.showModal(); choices.scrollTop=0; (model.name == null ? search : name).focus(); }
   }
 
   const manager = element("dialog", "toolbar-manager"); manager.id = "toolbar-manager";

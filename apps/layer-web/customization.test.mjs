@@ -31,6 +31,15 @@ export async function checkToolPicker({ call, evaluate, settle }) {
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), true);
     assert.equal(await evaluate("document.querySelector('#toolbar-name').parentElement.hidden"), true);
     assert.equal((await model()).can_confirm, false);
+    await evaluate('(()=>{const choices=document.querySelector(".tool-choices");choices.scrollTop=choices.scrollHeight;})()');await settle();
+    assert.ok(await evaluate('document.querySelector(".tool-choices").scrollTop>0'),'The catalog overflows before reopening');
+    await click('#tool-picker .dialog-header > button:first-child');await open();
+    assert.equal(await evaluate('document.querySelector(".tool-choices").scrollTop'),0,'A new picker starts at the first choice');
+    await evaluate('window.pickerChoices=document.querySelector(".tool-choices");pickerChoices.scrollTop=60;document.querySelector("#tool-search").focus();null');
+    await call('Emulation.setDeviceMetricsOverride',{width:1281,height:960,deviceScaleFactor:1,mobile:false});await settle();
+    assert.equal(await evaluate('document.querySelector(".tool-choices")===pickerChoices&&pickerChoices.scrollTop===60&&document.activeElement.id==="tool-search"'),true,'Resizing retains this picker session and its scroll and focus');
+    await call('Emulation.setDeviceMetricsOverride',{width:1280,height:960,deviceScaleFactor:1,mobile:false});await settle();
+    await evaluate('delete window.pickerChoices;null');
     const selected = [];
     for (const query of ['strength', 'color']) {
       await input('#tool-search', query);
