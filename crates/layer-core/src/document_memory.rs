@@ -20,6 +20,7 @@ impl Drop for CaptureMemory {
 #[derive(Default)]
 struct Inventories { current: Arc<crate::raster_storage::RetainedTiles>, captures: Vec<Weak<CaptureMemory>> }
 pub(crate) struct Owner {
+    storage_identity:u64,
     inventories: Mutex<Inventories>,
     captured_resident: AtomicU64,
     memory: MemoryOwner,
@@ -41,10 +42,12 @@ impl Default for DocumentMemory {
 }
 impl DocumentMemory {
     pub fn new(budget: MemoryBudget, reservation: Option<MemoryReservation>) -> Self {
-        Self { _capture: None, owner: Arc::new(Owner { inventories:Mutex::new(Inventories::default()), captured_resident:AtomicU64::new(0), memory: budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None),
+        static NEXT:AtomicU64=AtomicU64::new(1);
+        Self { _capture: None, owner: Arc::new(Owner {storage_identity:NEXT.fetch_add(1,Ordering::Relaxed), inventories:Mutex::new(Inventories::default()), captured_resident:AtomicU64::new(0), memory: budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None),
             history: budget.register_owner(MemoryOwnerKind::History, MemoryClass::Pinned, None), budget,
             resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false),storage:Default::default() }), reservation, preview_inventory: None }
     }
+    pub fn storage_identity(&self)->u64 {self.owner.storage_identity}
     pub fn storage(&self)->Option<crate::package::session_store::DrawingStore> {self.owner.storage.lock().unwrap().clone()}
     pub fn bind_storage(&self,storage:crate::package::session_store::DrawingStore)->Result<(),String> {
         let mut current=self.owner.storage.lock().unwrap();

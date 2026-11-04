@@ -803,7 +803,7 @@ impl WebApp {
         layer_ui::document_storage_retained(self.session.localization(), detail)
     }
     pub fn document_recovery_unavailable(&self, detail: &str) -> String {
-        self.session.fail_asset_writer(detail.to_owned());
+        self.session.storage_failed(detail.to_owned());
         layer_ui::document_recovery_unavailable(self.session.localization(), detail)
     }
     pub fn file_open_failure(&self, name: &str) -> String {

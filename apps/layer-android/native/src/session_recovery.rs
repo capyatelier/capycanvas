@@ -168,7 +168,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionCommit(mut env: JNIEnv,
 pub extern "system" fn Java_art_capycanvas_Native_sessionFailure(mut env: JNIEnv, _: JClass, handle: jlong, detail: JString, recovery: jboolean) -> jni::sys::jstring {
     crate::jni_entry!(env, handle, capy_app, {
     let result = read(&mut env,&detail).map(|detail| {
-        capy_app.host.session.fail_asset_writer(detail.clone());
+        capy_app.host.session.storage_failed(detail.clone());
         let localization = capy_app.host.session.localization();
         if recovery != 0 {layer_ui::document_recovery_unavailable(localization,&detail)}
         else {layer_ui::document_storage_retained(localization,&detail)}

@@ -53,7 +53,7 @@ unsafe fn launch_json(platform: u32, json: *const c_char, bootstrap: *mut u64, e
     app
 }
 
-struct App(u64, Option<std::path::PathBuf>);
+struct App(u64, Option<(std::path::PathBuf, layer_host::session_stores::SessionStores)>);
 impl App {
     fn borrow(&self)->layer_host::handles::LocalBorrowed<CapyApple> {handles::app(self.0).unwrap()}
     fn document(&self)->layer_core::Document {self.borrow().host.session.engine().document().clone()}
@@ -1265,9 +1265,10 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
 impl App {
     fn new(platform: u32) -> Self {
         let mut app = Self::unbound(platform);
-        app.1 = Some(std::env::temp_dir().join(format!("capy-apple-storage-{}", layer_core::PortableId::random())));
-        let stores = layer_host::session_stores::SessionStores::native(app.1.as_ref().unwrap().clone(), std::sync::Arc::new(|| {}));
+        let root = std::env::temp_dir().join(format!("capy-apple-storage-{}", layer_core::PortableId::random()));
+        let stores = layer_host::session_stores::SessionStores::native(root.clone(), std::sync::Arc::new(|| {}));
         app.with(|native| stores.attach_window(&native.window, &native.host).unwrap());
+        app.1 = Some((root, stores));
         app
     }
     fn unbound(platform: u32) -> Self {
@@ -1458,7 +1459,8 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe { capy_apple_destroy(self.0) }
-        if let Some(root) = &self.1 {
+        if let Some((root, stores)) = self.1.take() {
+            drop(stores);
             if let Err(error) = std::fs::remove_dir_all(root) { assert_eq!(error.kind(), std::io::ErrorKind::NotFound); }
         }
     }

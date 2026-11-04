@@ -97,7 +97,7 @@ struct Drawing {
 }
 struct State {drawings:BTreeMap<String,Drawing>,aliases:BTreeMap<u64,String>,next_compaction:u64}
 struct Inner {
-    root:PathBuf,opener:Arc<dyn StoreOpener>,clock:fn()->u64,state:Mutex<State>,execute:StoreExecutor,wake:Mutex<Arc<dyn Fn()+Send+Sync>>,pressure:Mutex<Option<(layer_ui::StoragePressure,u64)>>,trims:Mutex<TrimRequests>,
+    assets:layer_ui::AssetStore,resolver:std::sync::OnceLock<layer_ui::AssetResolver>,root:PathBuf,opener:Arc<dyn StoreOpener>,clock:fn()->u64,state:Mutex<State>,execute:StoreExecutor,wake:Mutex<Arc<dyn Fn()+Send+Sync>>,pressure:Mutex<Option<(layer_ui::StoragePressure,u64)>>,trims:Mutex<TrimRequests>,
 }
 #[derive(Clone)]
 pub struct SessionStores(Arc<Inner>);
@@ -109,7 +109,9 @@ impl SessionStores {
         Self::with_opener(root,Arc::new(layer_core::package::session_store::NativeStoreOpener),execute,wake,native_now_ms)
     }
     pub fn with_opener(root:PathBuf,opener:Arc<dyn StoreOpener>,execute:StoreExecutor,wake:Arc<dyn Fn()+Send+Sync>,clock:fn()->u64)->Self {
-        Self(Arc::new(Inner {root,opener,clock,state:Mutex::new(State {drawings:BTreeMap::new(),aliases:BTreeMap::new(),next_compaction:0}),execute,wake:Mutex::new(wake),pressure:Mutex::new(None),trims:Mutex::new(TrimRequests::default())}))
+        let stores=Self(Arc::new(Inner {assets:Default::default(),resolver:Default::default(),root,opener,clock,state:Mutex::new(State {drawings:BTreeMap::new(),aliases:BTreeMap::new(),next_compaction:0}),execute,wake:Mutex::new(wake),pressure:Mutex::new(None),trims:Mutex::new(TrimRequests::default())}));
+        stores.0.resolver.set(stores.create_asset_resolver()).unwrap_or_else(|_|unreachable!());
+        stores.0.assets.attach(stores.asset_resolver()).expect("new store registration");stores
     }
     pub fn set_wake(&self,wake:Arc<dyn Fn()+Send+Sync>) {*self.0.wake.lock().unwrap()=wake;}
     fn wake(&self) {let wake=self.0.wake.lock().unwrap().clone();wake();}
@@ -141,21 +143,25 @@ impl SessionStores {
         Ok(true)
     }
     pub fn install_storage<R:layer_render::CanvasRenderer>(&self,id:u64,session:&layer_ui::UiSession<R>)->Result<DrawingStore,String> {
-        let binding=match session.engine().document().memory().storage().or_else(||session.asset_writer().map(|writer|writer.binding())) {Some(binding)=>binding,None=>self.bind(id,None)?};
+        let binding=match session.engine().document().memory().storage().or_else(||session.asset_writer().binding()) {Some(binding)=>binding,None=>self.bind(id,None)?};
+        let binding=session.install_asset_store(self.asset_resolver(),binding)?;
         self.adopt_binding(id,binding.clone())?;
-        session.bind_asset_writer(self.asset_writer_bound(binding.clone()))?;
         Ok(binding)
     }
-    pub fn asset_writer(&self,id:u64)->Result<layer_ui::AssetWriter,String> {Ok(self.asset_writer_bound(self.bind(id,None)?))}
-    fn asset_writer_bound(&self,binding:DrawingStore)->layer_ui::AssetWriter {
-        let stores=self.clone();let target=binding.clone();let create=self.clone();
-        layer_ui::AssetWriter::new(binding,Arc::new(move |tiles,memory| {
-            let reply=stores.request_binding(target.key(),Some(target.clone()),Work::ImportTiles {tiles,_reservation:memory})?;
-            Ok(Box::pin(async move {reply.await?;Ok(())}))
-        }),Arc::new(move |binding| {
-            let binding=match binding {Some(binding)=>binding,None=>DrawingStore::with_opener(&create.0.root,None,create.0.opener.clone())?};
-            if binding.path().parent()!=Some(create.0.root.as_path()) {return Err("Drawing store belongs to another session root".into());}
-            Ok(create.asset_writer_bound(binding))
+    pub fn asset_writer(&self,id:u64)->Result<layer_ui::AssetWriter,String> {self.0.assets.writer().for_binding(self.bind(id,None)?)}
+    fn asset_resolver(&self)->layer_ui::AssetResolver {self.0.resolver.get().unwrap().clone()}
+    fn create_asset_resolver(&self)->layer_ui::AssetResolver {
+        let weak=Arc::downgrade(&self.0);
+        layer_ui::AssetResolver::new(self.0.root.clone(),Arc::new(move |binding| {
+            let stores=SessionStores(weak.upgrade().ok_or("Drawing storage owner closed")?);
+            let binding=match binding {Some(binding)=>binding,None=>DrawingStore::with_opener(&stores.0.root,None,stores.0.opener.clone())?};
+            if binding.path().parent()!=Some(stores.0.root.as_path()) {return Err("Drawing store belongs to another session root".into());}
+            let weak=Arc::downgrade(&stores.0);let target=binding.clone();
+            Ok(layer_ui::AssetBinding {store:binding,write:Arc::new(move |tiles,memory| {
+                let stores=SessionStores(weak.upgrade().ok_or("Drawing storage owner closed")?);
+                let reply=stores.request_binding(target.key(),Some(target.clone()),Work::ImportTiles {tiles,_reservation:memory})?;
+                Ok(Box::pin(async move {reply.await?;Ok(())}))
+            })})
         }))
     }
     pub fn remap(&self,mapping:&[(u64,u64)]) {

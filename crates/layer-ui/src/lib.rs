@@ -58,7 +58,9 @@ mod package_view;
 pub use package_view::{PackageView, PackagePresentation, PackageViewSummary, PackageCapabilities, PackageDisposition, PackageAction, PackageOutput, PackageCause};
 
 mod import_policy;
-pub use import_policy::{AssetWriter,AssetWriteFuture,AssetWriteFn,AssetForkFn,FileDropRefusal, ImageImportBatch, PreparedImages, ImportIntent, ImportSource, ImportOutcome, ImportedDocument, photo_decode_limits, photo_document_names, read_import,read_import_backing,read_import_with_decoder};
+mod asset_store;
+pub use asset_store::{AssetWriter,AssetStore,AssetResolver,AssetBinding,AssetResolveFn};
+pub use import_policy::{AssetWriteFuture,AssetWriteFn,FileDropRefusal, ImageImportBatch, PreparedImages, ImportIntent, ImportSource, ImportOutcome, ImportedDocument, photo_decode_limits, photo_document_names, read_import,read_import_backing,read_import_with_decoder};
 
 pub mod recovery;
 pub use session::session_recovery;

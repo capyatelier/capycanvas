@@ -608,12 +608,12 @@ fn session_attachment_leaves_foreign_outgoing_storage_and_pressure_untouched() {
     let document=||layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
     let blank=document();let session=layer_ui::UiSession::new(Photos(blank.composition().color),blank,[32,32],layer_ui::Platform::Android).unwrap();
     assert!(outgoing.stores.attach_session(1,&session,pressure.clone()).unwrap());
-    let binding=session.asset_writer().unwrap().binding();
+    let binding=session.asset_writer().binding().unwrap();
     let generation=outgoing.stores.0.pressure.lock().unwrap().as_ref().unwrap().1;
     assert!(!incoming.stores.attach_session(1,&session,pressure.clone()).unwrap());
     assert!(incoming.stores.bindings().is_empty());assert!(incoming.stores.0.pressure.lock().unwrap().is_none());
     assert!(pressure.is_current(generation));
-    assert_eq!(session.asset_writer().unwrap().binding().path(),binding.path());
+    assert_eq!(session.asset_writer().binding().unwrap().path(),binding.path());
     assert!(incoming.stores.adopt_binding(1,binding).is_err());
     assert!(outgoing.queue.lock().unwrap().is_empty());assert!(incoming.queue.lock().unwrap().is_empty());
     assert!(!outgoing.root.exists() && !incoming.root.exists());
@@ -621,7 +621,7 @@ fn session_attachment_leaves_foreign_outgoing_storage_and_pressure_untouched() {
     restored.memory().bind_storage(restored_binding.clone()).unwrap();
     let adopted=layer_ui::UiSession::new(Photos(restored.composition().color),restored,[32,32],layer_ui::Platform::Android).unwrap();
     assert!(incoming.stores.attach_session(2,&adopted,pressure.clone()).unwrap());
-    assert_eq!(adopted.asset_writer().unwrap().binding().path(),restored_binding.path());
+    assert_eq!(adopted.asset_writer().binding().unwrap().path(),restored_binding.path());
     assert!(!pressure.is_current(generation));
     assert!(outgoing.stores.install_storage(2,&adopted).is_err());
     assert!(outgoing.queue.lock().unwrap().is_empty());assert!(incoming.queue.lock().unwrap().is_empty());
@@ -629,7 +629,7 @@ fn session_attachment_leaves_foreign_outgoing_storage_and_pressure_untouched() {
 }
 
 #[test]
-fn imports_captured_before_storage_installation_resume_with_one_stable_binding() {
+fn imports_captured_before_storage_installation_keep_ram_and_use_one_stable_binding() {
     use std::{future::Future,task::{Context,Poll,Waker}};
     let fixture=Fixture::new();
     let source=layer_core::color::source::rgba8_source([32,32],|x,y|[x as u8,y as u8,127,255]);
@@ -639,62 +639,168 @@ fn imports_captured_before_storage_installation_resume_with_one_stable_binding()
     let color=document.composition().color;
     let session=layer_ui::UiSession::new(Photos(color),document,[32,32],layer_ui::Platform::Android).unwrap();
     let captured=session.image_import_writer().unwrap();let fork=captured.fork().unwrap();
-    let mut ready=Box::pin(fork.resolve());
-    let wake=Arc::new(ReplyWake(AtomicUsize::new(0)));let waker=Waker::from(wake.clone());let mut context=Context::from_waker(&waker);
-    assert!(ready.as_mut().poll(&mut context).is_pending());
+    assert!(captured.resolve().unwrap().is_none());assert!(fork.resolve().unwrap().is_none());
+    let mut context=Context::from_waker(Waker::noop());
     let mut write=Box::pin(captured.store_document(session.engine().document()));
-    assert!(write.as_mut().poll(&mut context).is_pending());
+    assert!(matches!(write.as_mut().poll(&mut context),Poll::Ready(Ok(()))));drop(write);
+    assert!(session.engine().document().memory().storage().is_none());
+    assert!(source.tiles.values().all(|tile|tile.resident_bytes()>0));
     assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
     let documents=layer_ui::DocumentSessions::<()>::default();
     assert!(fixture.stores.attach_session(1,&session,documents.pressure_source()).unwrap());
     let binding=fixture.stores.bind(1,None).unwrap();
-    assert!(!fixture.root.exists());assert!(wake.0.load(Ordering::SeqCst)>0);
-    let Poll::Ready(Ok(derived))=ready.as_mut().poll(&mut context) else {panic!("installed writer did not wake its fork");};
-    assert_ne!(derived.binding().key(),binding.key());
-    assert_eq!(pollster::block_on(fork.resolve()).unwrap().binding().key(),derived.binding().key());
+    assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+    let derived=fork.resolve().unwrap().unwrap().store;
+    assert_ne!(derived.key(),binding.key());assert_eq!(derived.path().parent(),Some(fixture.root.as_path()));
+    assert_eq!(fork.resolve().unwrap().unwrap().store.path(),derived.path());
+    assert_eq!(captured.resolve().unwrap().unwrap().store.path(),binding.path());
+    let mut write=Box::pin(captured.store_document(session.engine().document()));
     assert!(write.as_mut().poll(&mut context).is_pending());fixture.run();
     assert!(matches!(write.as_mut().poll(&mut context),Poll::Ready(Ok(()))));
     assert_eq!(session.engine().document().memory().storage().unwrap().path(),binding.path());
     assert!(source.tiles.values().all(|tile|tile.resident_bytes()==0));
 }
 #[test]
-fn new_tabs_inherit_pending_storage_or_bind_directly_without_changing_captured_identity() {
-    use std::{future::Future,task::{Context,Poll}};
+fn new_tabs_share_registration_or_bind_directly_without_changing_captured_identity() {
     for direct in [false,true] {
         let fixture=Fixture::new();
         let make=|| {let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
             layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap()};
         let first=make();let incoming=make();
-        incoming.bind_asset_writer(first.pending_asset_writer().fork().unwrap()).unwrap();
-        let captured=incoming.image_import_writer().unwrap();let mut waiting=Box::pin(captured.resolve());let mut context=Context::from_waker(std::task::Waker::noop());
-        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        incoming.bind_asset_writer(first.asset_writer().fork().unwrap()).unwrap();
+        let captured=incoming.image_import_writer().unwrap();assert!(captured.resolve().unwrap().is_none());
         if direct {fixture.stores.install_storage(2,&incoming).unwrap();}
         let first_binding=fixture.stores.install_storage(1,&first).unwrap();
-        let Poll::Ready(Ok(writer))=waiting.as_mut().poll(&mut context) else {panic!("new tab lost its startup storage binding");};
-        let binding=writer.binding();assert_ne!(binding.key(),first_binding.key());
+        let binding=captured.resolve().unwrap().unwrap().store;assert_ne!(binding.key(),first_binding.key());
+        assert_eq!(binding.path().parent(),Some(fixture.root.as_path()));
         assert_eq!(fixture.stores.install_storage(2,&incoming).unwrap().path(),binding.path());
         assert_eq!(incoming.engine().document().memory().storage().unwrap().path(),binding.path());
-        assert_eq!(pollster::block_on(captured.resolve()).unwrap().binding().path(),binding.path());
+        assert_eq!(captured.resolve().unwrap().unwrap().store.path(),binding.path());
         assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
     }
 }
 #[test]
-fn opening_window_storage_completes_pending_writers_for_active_and_parked_tabs() {
-    use std::{future::Future,task::{Context,Poll}};
+fn opening_window_storage_attaches_active_and_parked_writers_without_changing_identity() {
     let fixture=Fixture::new();let mut host=crate::NativeHost::new(layer_ui::Platform::Android).unwrap();
     let mut window=crate::window::DocumentWindow::<Box<layer_ui::UiSession<crate::Renderer>>>::default();
-    let inherited=host.session.pending_asset_writer().fork().unwrap();
+    let inherited=host.session.asset_writer().fork().unwrap();
     let incoming=layer_ui::UiSession::new(crate::Renderer(None),layer_ui::new_drawing(32,32,host.session.localization()).unwrap(),[32,32],layer_ui::Platform::Android).unwrap();
     incoming.bind_asset_writer(inherited).unwrap();
     let outgoing=std::mem::replace(&mut host.session,Box::new(incoming));let retained=outgoing.retained_document_tiles();
     window.documents.append(outgoing,retained,host.session.localization());
     let captured=window.documents.order().iter().map(|id|window.session(&host,*id).unwrap().image_import_writer().unwrap()).collect::<Vec<_>>();
-    let mut waiting=captured.iter().map(|writer|Box::pin(writer.resolve())).collect::<Vec<_>>();let mut context=Context::from_waker(std::task::Waker::noop());
-    for write in &mut waiting {assert!(write.as_mut().poll(&mut context).is_pending());}
+    for writer in &captured {assert!(writer.resolve().unwrap().is_none());}
     assert!(fixture.stores.attach_window(&window,&host).unwrap());
-    for write in &mut waiting {assert!(matches!(write.as_mut().poll(&mut context),Poll::Ready(Ok(_))));}
+    let bindings=captured.iter().map(|writer| {
+        let binding=writer.resolve().unwrap().unwrap().store;
+        assert_eq!(binding.path().parent(),Some(fixture.root.as_path()));
+        assert_eq!(writer.resolve().unwrap().unwrap().store.path(),binding.path());binding.path().to_owned()
+    }).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(bindings.len(),2);
     assert_eq!(fixture.stores.bindings().len(),2);assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
 }
+
+#[test]
+fn concurrent_writer_clones_keep_one_target_and_forks_keep_independent_targets() {
+    let fixture=Fixture::new();let writer=fixture.stores.asset_writer(1).unwrap();
+    let clones=std::thread::scope(|scope| {
+        (0..8).map(|_| {let writer=writer.clone();scope.spawn(move ||writer.resolve().unwrap().unwrap().store.path().to_owned())})
+            .collect::<Vec<_>>().into_iter().map(|thread|thread.join().unwrap()).collect::<Vec<_>>()
+    });
+    let binding=writer.binding().unwrap();assert!(clones.iter().all(|path|path==binding.path()));
+    let forks=std::thread::scope(|scope| {
+        (0..4).map(|_| {let writer=writer.clone();scope.spawn(move || {
+            let fork=writer.fork().unwrap();let binding=fork.resolve().unwrap().unwrap().store;
+            assert_eq!(fork.clone().resolve().unwrap().unwrap().store.path(),binding.path());binding.path().to_owned()
+        })}).collect::<Vec<_>>().into_iter().map(|thread|thread.join().unwrap()).collect::<std::collections::BTreeSet<_>>()
+    });
+    assert_eq!(forks.len(),4);
+    assert!(forks.iter().all(|path|path!=binding.path() && path.parent()==Some(fixture.root.as_path())));
+    assert_eq!(writer.resolve().unwrap().unwrap().store.path(),binding.path());
+    let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let original=writer.for_document(&document).unwrap();let shared=writer.for_document(&document.clone()).unwrap();
+    let owned=original.resolve().unwrap().unwrap().store;assert_eq!(shared.resolve().unwrap().unwrap().store.path(),owned.path());
+    let fresh=document.clone().with_memory(layer_core::DocumentMemory::new(layer_core::MemoryBudget::process(),None));
+    assert_ne!(writer.for_document(&fresh).unwrap().resolve().unwrap().unwrap().store.path(),owned.path());
+    assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+}
+
+#[test]
+fn concurrent_resolution_and_session_installation_choose_one_storage_identity() {
+    let fixture=Fixture::new();let root=fixture.stores.asset_writer(1).unwrap();
+    let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let session=layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap();
+    session.bind_asset_writer(root.fork().unwrap()).unwrap();let captured=session.asset_writer();
+    assert!(captured.binding().is_none());assert!(session.engine().document().memory().storage().is_none());
+    let barrier=Arc::new(std::sync::Barrier::new(9));
+    let ((session,binding),resolved)=std::thread::scope(|scope| {
+        let readers=(0..8).map(|_| {let captured=captured.clone();let barrier=barrier.clone();scope.spawn(move || {
+            barrier.wait();captured.resolve().unwrap().unwrap().store.path().to_owned()
+        })}).collect::<Vec<_>>();
+        let stores=fixture.stores.clone();let barrier=barrier.clone();
+        let install=scope.spawn(move || {barrier.wait();let binding=stores.install_storage(2,&session).unwrap();(session,binding)});
+        let resolved=readers.into_iter().map(|reader|reader.join().unwrap()).collect::<Vec<_>>();
+        (install.join().unwrap(),resolved)
+    });
+    assert!(resolved.iter().all(|path|path==binding.path()));
+    assert_eq!(captured.binding().unwrap().path(),binding.path());
+    assert_eq!(session.engine().document().memory().storage().unwrap().path(),binding.path());
+    assert_eq!(fixture.stores.bind(2,None).unwrap().path(),binding.path());
+    assert_eq!(captured.resolve().unwrap().unwrap().store.path(),binding.path());
+    assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+}
+
+#[test]
+fn startup_claim_retry_replaces_registration_without_reviving_failed_captures() {
+    use std::{future::Future,task::{Context,Poll,Waker}};
+    let fixture=Fixture::new();
+    let mut document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let source=layer_core::color::source::rgba8_source([4;2],|_,_|[12,34,56,255]);
+    let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+    document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new(source.clone().into()));
+    let session=layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap();
+    let captured=session.asset_writer();let fork=captured.fork().unwrap();
+    assert!(captured.resolve().unwrap().is_none());assert!(fork.resolve().unwrap().is_none());
+    session.storage_failed("Startup claim failed".into());
+    assert!(matches!(captured.resolve(),Err(error) if error=="Startup claim failed"));
+    assert!(matches!(fork.resolve(),Err(error) if error=="Startup claim failed"));
+    assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+    let binding=fixture.stores.install_storage(1,&session).unwrap();let writer=session.asset_writer();
+    assert_eq!(writer.resolve().unwrap().unwrap().store.path(),binding.path());
+    assert_eq!(session.engine().document().memory().storage().unwrap().path(),binding.path());
+    assert_eq!(fixture.stores.bind(1,None).unwrap().path(),binding.path());
+    assert!(matches!(captured.resolve(),Err(error) if error=="Drawing storage owner closed"));
+    assert!(matches!(fork.resolve(),Err(error) if error=="Drawing storage owner closed"));
+    assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+    let mut writing=Box::pin(writer.store_document(session.engine().document()));let mut context=Context::from_waker(Waker::noop());
+    assert!(writing.as_mut().poll(&mut context).is_pending());fixture.run();
+    assert!(matches!(writing.as_mut().poll(&mut context),Poll::Ready(Ok(()))));
+    assert_eq!(writer.resolve().unwrap().unwrap().store.path(),binding.path());
+    for tile in source.tiles.values() {assert_eq!(tile.resident_bytes(),0);assert_eq!(&tile.decode_on_worker().unwrap()[..4],&[12,34,56,255]);}
+}
+
+#[test]
+fn a_closed_coordinator_cannot_redirect_captured_writers_to_another_root() {
+    let outgoing=Fixture::new();let incoming=Fixture::new();
+    let make=|| {let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap()};
+    let session=make();let original=outgoing.stores.install_storage(1,&session).unwrap();
+    let captured=session.asset_writer();let fork=captured.fork().unwrap();
+    let derived=fork.resolve().unwrap().unwrap().store;let before=captured.resolve().unwrap().unwrap();
+    drop(outgoing);
+    assert!(matches!(captured.resolve(),Err(error) if error=="Drawing storage owner closed"));
+    assert!(matches!(fork.resolve(),Err(error) if error=="Drawing storage owner closed"));
+    let (_,_,retained,_)=capture();
+    assert!(matches!((before.write)(retained,None),Err(error) if error=="Drawing storage owner closed"));
+    assert!(incoming.stores.install_storage(1,&session).is_err());
+    let replacement=make();let current=incoming.stores.install_storage(1,&replacement).unwrap();
+    assert_eq!(replacement.asset_writer().resolve().unwrap().unwrap().store.path(),current.path());
+    assert_eq!(captured.binding().unwrap().path(),original.path());assert_eq!(fork.binding().unwrap().path(),derived.path());
+    assert!(captured.resolve().is_err());assert!(fork.resolve().is_err());
+    assert_ne!(current.path().parent(),original.path().parent());
+    assert!(!incoming.root.exists());assert!(incoming.queue.lock().unwrap().is_empty());
+}
+
 #[test]
 fn panicked_or_dropped_work_completes_replies_wakes_and_releases_busy_state() {
     use std::future::Future;
@@ -724,7 +830,7 @@ fn an_import_prepared_before_binding_is_persisted_by_the_later_checkpoint() {
     let source=layer_core::color::source::rgba8_source([4;2],|_,_|[12,34,56,255]);
     let tile=source.tiles.values().next().unwrap().clone();
     let mut images=layer_ui::ImageImportBatch::new(Default::default(),layer_core::color::RgbSpace::ProPhoto,layer_ui::photo_decode_limits())
-        .with_writer(startup.pending_asset_writer());
+        .with_writer(startup.asset_writer());
     images.append("Photo".into(),(*source).clone(),false).unwrap();
     pollster::block_on(images.finish_storage()).unwrap();
     assert!(fixture.queue.lock().unwrap().is_empty());assert!(!fixture.root.exists());assert!(tile.resident_bytes()>0);
@@ -745,7 +851,7 @@ fn imported_payload_ram_plateaus_with_one_decode_ahead_and_reuses_42_durable_ima
     let fixture=Fixture::new();
     let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {total_bytes:Some(MIB),available_bytes:Some(MIB),override_bytes:Some(MIB),..Default::default()});
     let limits=layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(MIB));
-    let writer=fixture.stores.asset_writer(1).unwrap();let binding=writer.binding();
+    let writer=fixture.stores.asset_writer(1).unwrap();let binding=writer.binding().unwrap();
     let mut images=layer_ui::ImageImportBatch::with_budget(Default::default(),layer_core::color::RgbSpace::ProPhoto,limits,budget.clone()).with_writer(writer);
     let mut tiles=Vec::new();let mut physical=0usize;
     for index in 0..42 {

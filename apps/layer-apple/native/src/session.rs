@@ -309,7 +309,7 @@ pub unsafe extern "C" fn capy_apple_session_open(app: u64, sessions: *const c_ch
             warning: None, failures: Default::default(), append: retry && a.session_disk.is_some(),
         }))))
     });
-    if opened.is_none() && let Some(error)=&a.error {a.host.session.fail_asset_writer(error.to_string_lossy().into_owned());}
+    if opened.is_none() && let Some(error)=&a.error {a.host.session.storage_failed(error.to_string_lossy().into_owned());}
     opened.unwrap_or(0)
 }
 /// # Safety

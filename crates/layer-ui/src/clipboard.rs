@@ -118,7 +118,7 @@ pub fn clipboard_document(sources: impl Into<crate::PreparedImages>, policy: Pho
     document.validate(Default::default())?;
     layer_color::validate_document_color(&document)?;
     let mut document = document.with_memory(layer_core::DocumentMemory::new(budget, reservation));
-    if let Some(writer)=writer {document.memory().bind_storage(writer.binding())?;}
+    if let Some(binding)=writer.and_then(|writer|writer.binding()) {document.memory().bind_storage(binding)?;}
     document.reserve_import()?;
     Ok(document)
 }

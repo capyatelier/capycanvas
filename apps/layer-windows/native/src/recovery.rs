@@ -437,7 +437,7 @@ impl Service {
                 Err(mpsc::TryRecvError::Empty)=>break,
                 Err(mpsc::TryRecvError::Disconnected)=>{
                     let error="Session worker stopped unexpectedly".to_string();
-                    host.session.fail_asset_writer(error.clone());
+                    host.session.storage_failed(error.clone());
                     self.changed|=self.error.as_ref()!=Some(&error);self.error=Some(error);self.busy=false;break;
                 }
             };
@@ -462,7 +462,7 @@ impl Service {
                         self.manifest = manifest;
                         self.ready = true
                     }
-                    Err(error) => {host.session.fail_asset_writer(error.clone());self.error = Some(error);},
+                    Err(error) => {host.session.storage_failed(error.clone());self.error = Some(error);},
                 },
                 Finished::Restored{result,manifest} => {if let Some(manifest)=manifest{self.manifest=manifest;}match result {
                     Ok(PreparedRestore{candidates,attempts,failed,errors}) => {
@@ -495,7 +495,7 @@ impl Service {
                 }},
             }
         }
-        if host.session.asset_writer().is_none() && let Some(stores)=&self.stores {stores.install_storage(window.documents.selected(),&host.session)?;}
+        if host.session.asset_writer().binding().is_none() && let Some(stores)=&self.stores {stores.install_storage(window.documents.selected(),&host.session)?;}
         if self.closed && (quitting || host.session.state().document_file.close_ready) {
             self.drain()?;
             return Ok(std::mem::take(&mut self.changed));

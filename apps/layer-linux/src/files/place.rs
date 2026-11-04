@@ -85,7 +85,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
     };
     let writer={
         let gpu=w.gpu.borrow();let session=&gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        if session.asset_writer().is_none() {
+        if session.asset_writer().binding().is_none() {
             w.restart.stores.adopt_binding(w.documents.selected(),w.recovery().binding.clone())?;
             w.restart.stores.install_storage(w.documents.selected(),session)?;
         }

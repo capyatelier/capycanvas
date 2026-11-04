@@ -61,7 +61,7 @@ impl WebApp {
         self.session.validate_image_placement(&images.request.context).map_err(js)?;
         let project = if let Some(clip) = images.clip {
             let project=clip.document(self.session.localization()).map_err(js)?;
-            project.memory().bind_storage(images.writer.binding()).map_err(js)?;project
+            if let Some(binding)=images.writer.binding() {project.memory().bind_storage(binding).map_err(js)?;}project
         } else {
             layer_ui::clipboard_document(images.sources, self.session.state().settings.photo_open, self.session.localization()).map_err(js)?
         };
@@ -71,7 +71,7 @@ impl WebApp {
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let localization = self.session.localization().clone();
-        let writer=Some(self.session.pending_asset_writer());
+        let writer=Some(self.session.asset_writer());
         self.documents.admission(&self.session.retained_document_tiles()).admit(&project).map_err(|reason| js(reason.message(&localization)))?;
         Ok(future_to_promise(async move {
             let candidate = prepare_session(project, factory, &brush, viewport, localization, writer, Some(&cancelled)).await?;
@@ -214,7 +214,7 @@ impl WebApp {
             project.composition().color.space, &mut brush);
         let localization = self.session.localization().clone();
         let control = candidate.control.clone();
-        let writer=Some(self.session.pending_asset_writer());
+        let writer=Some(self.session.asset_writer());
         self.documents.admission(&self.session.retained_document_tiles()).admit(&project).map_err(|reason| js(reason.message(&localization)))?;
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
@@ -281,7 +281,7 @@ impl WebApp {
         let localization = self.session.localization().clone();
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
-        let writer=Some(self.session.pending_asset_writer());
+        let writer=Some(self.session.asset_writer());
         let admission = self.documents.admission(&self.session.retained_document_tiles());
         let order = match &request {
             DocumentRequest::New => Some((

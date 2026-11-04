@@ -45,7 +45,7 @@ impl OpenEnvironment {
             brush: session.engine().configured_brush().clone(),
             new_drawing: session.new_drawing_order().cloned(),
             photo_policy: session.state().settings.photo_open,
-            asset_writer:Some(session.pending_asset_writer()),
+            asset_writer:Some(session.asset_writer()),
         })
     }
 
@@ -64,7 +64,7 @@ impl OpenEnvironment {
     pub fn use_store(&mut self,stores:&crate::session_stores::SessionStores,id:u64)->Result<(),String> {
         self.asset_writer=Some(stores.asset_writer(id)?);Ok(())
     }
-    pub fn storage_failed(&self,error:String) {if let Some(writer)=&self.asset_writer {writer.fail_pending(error);}}
+    pub fn storage_failed(&self,error:String) {if let Some(writer)=&self.asset_writer {writer.storage_failed(error);}}
 
     pub fn admit_sessions<'a>(&self, editors: impl IntoIterator<Item = &'a layer_core::Editor>) -> Result<(), String> {
         self.admission.admit_sessions(editors).map_err(|reason| reason.message(&self.localization))
@@ -109,7 +109,7 @@ impl OpenEnvironment {
         check()?;
         project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
         let writer=self.asset_writer.as_ref().map(|writer|writer.for_document(&project)).transpose()?;
-        if let Some(ready)=writer.as_ref().map(layer_ui::AssetWriter::try_resolve).transpose()?.flatten() {
+        if let Some(ready)=writer.as_ref().map(layer_ui::AssetWriter::resolve).transpose()?.flatten() {
             pollster::block_on(ready.store_document(&project))?;
         }else {project.reserve_import()?;}
         self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
