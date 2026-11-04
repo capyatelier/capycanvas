@@ -19,8 +19,12 @@ export async function checkColorPicker({call,evaluate,settle}) {
   await evaluate(`layerApp.app.workspace_input(JSON.stringify({type:'switch',id:'builtin:workspace:painter'}));null`);
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:painter'&&!JSON.parse(layerApp.app.workspace_view()).busy`);await settle();
   await invoke('brush');await invoke('fit_canvas');
+  const sliderValues=await evaluate(`(()=>{window.pickerSliders=[...document.querySelectorAll('[data-toolbar-component=brush_size_slider] .number-slider,[data-toolbar-component=brush_strength_slider] .number-slider')].filter(n=>n.checkVisibility());return pickerSliders.map(n=>n.value);})()`);
+  assert.equal(sliderValues.length,2,'The desktop toolbar presents both brush sliders');
   await key('i','KeyI',73);assert.equal((await state()).layer_tools.tool,'pick_visible');
+  assert.equal(await evaluate(`pickerSliders.every((n,i)=>n.isConnected&&n.disabled&&n.value===${JSON.stringify(sliderValues)}[i])`),true,'Picker startup disables the retained sliders without moving their handles');
   await key('Escape','Escape',27);assert.equal((await state()).layer_tools.tool,'paint');
+  assert.deepEqual(await evaluate(`(()=>{delete window.pickerSliders;return [...document.querySelectorAll('[data-toolbar-component=brush_size_slider] .number-slider,[data-toolbar-component=brush_strength_slider] .number-slider')].filter(n=>n.checkVisibility()).map(n=>n.value);})()`),sliderValues,'Leaving the picker restores the displayed brush values');
   const brush=(await state()).brush.preset;
   await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Alt',code:'AltLeft',windowsVirtualKeyCode:18,modifiers:1});await settle();
   assert.equal((await state()).layer_tools.tool,'pick_visible');

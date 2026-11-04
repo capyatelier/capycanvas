@@ -25,6 +25,8 @@ Paint keeps it hidden. See [default workspaces](default-workspaces.md#arrangemen
 Sliders occupy one lane and prefer four tiles of length, including tile gaps.
 They work horizontally or vertically; vertical values increase upward. They
 follow the active tool’s Size or Strength setting and disable when unavailable.
+Disabled sliders retain their displayed position and bookmarks. A new disabled
+slider starts at its minimum; values return when the tool makes them available.
 While the contact stays in the slider band, it follows the track. Moving away
 blends toward a linear mapping of the whole window along that axis over four
 tiles. Size keeps its logarithmic numeric curve. The phone bars use two tiles.

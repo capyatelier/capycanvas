@@ -31,7 +31,7 @@ class Element extends FakeElement {
   showPopover(){this.open=true;}
   getContext(){return {resetTransform(){},clearRect:()=>{this.drawnImage=undefined;},scale(){},save(){},beginPath(){},rect(){},clip(){},drawImage:image=>{this.drawnImage=image;this.drawCount=(this.drawCount??0)+1;},fillRect(){},restore(){},measureText:text=>({width:text.length*6})};}
 }
-function harness(t,standalone=false,fixed=false){
+function harness(t,standalone=false,fixed=false,initiallyDisabled=false){
   const globals=['document','window','getComputedStyle','innerWidth','innerHeight','devicePixelRatio','requestAnimationFrame','cancelAnimationFrame'],original=Object.fromEntries(globals.map(key=>[key,globalThis[key]])),doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener(){},removeEventListener(){}};
   const frames=new Map();let frameId=0;
   doc.createElement=tag=>new Element(tag,doc);Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1000,innerHeight:800,devicePixelRatio:1,requestAnimationFrame:callback=>{frames.set(++frameId,callback);return frameId;},cancelAnimationFrame:id=>frames.delete(id),getComputedStyle:()=>({color:'#fff',backgroundColor:'#333',fontWeight:'400',fontSize:'12px',fontFamily:'sans'})});
@@ -43,6 +43,7 @@ function harness(t,standalone=false,fixed=false){
   const formatted=value=>({value,text:String(value),edit:String(value),fill:value/100});
   const app={phone_slider_stretch_distance:()=>null,native_caption:request=>{assert.equal(request.type,'numeric_error');assert.equal(request.reason.reason,'invalid_expression');return`${language}:invalid`;},catalog:()=>({panel_metrics:{control_height:26},native_copy:{tool_controls:Object.fromEntries(['more_options','remove_bookmark','bookmark_value'].map(key=>[key,`${language}:${key}`]))}}),numeric_labels:label=>({edit:`${language}:edit:${label}`,decrease:'-',increase:'+'}),number_input:request=>formatted(request.value),toolbar_stamp:(context,known)=>{stampQueries.push({context,known});const next=stampReply(context,known);if(next?.alpha.length)stamps++;return next;},toolbar_ui:request=>{
     if(request.type==='slider_readout')return {value:'5',unit:'px',metrics:{inset:4,gap:2,units_below:false}};
+    if(request.type==='slider_spec')return numeric;
     if(request.type==='slider_scale')return request.cross/36;
     if(request.type==='slider_layout')return {cap:{x:0,y:0,width:0,height:0},track:{x:0,y:0,width:request.width,height:request.height},show_value:false,stretch_distance:144};
     if(request.type==='slider_stretch')return .5;
@@ -54,7 +55,7 @@ function harness(t,standalone=false,fixed=false){
     throw Error(request.type);
   }};
   const element=(tag,cls,text)=>{const node=doc.createElement(tag);node.className=cls??'';if(text!=null)node.textContent=text;return node;},button=(text,action,cls)=>{const node=element('button',cls,text);node.addEventListener('click',action);return node;},icon=name=>element('svg',name);
-  const tile=()=>({id:'test',slider_style:{show_value:false,expand:false},label:`${language}:slider`,control:{kind:standalone?'brush_size_slider':'tool_options'},component:{context:{type:'brush'},numeric:standalone?{id:'size',label:`${language}:size`,group:`${language}:group`,numeric,value:5}:null,bookmarks:[{value:5,fill:.05,selected:true}],options:standalone?[]:[{Numeric:{id:'size',label:`${language}:size`,group:`${language}:group`,numeric,value:5}},{Choice:{id:'mode',label:`${language}:mode`,items:[{label:`${language}:first`,icon:'a',selected:true,action:{type:'set_name',name:'literal label',label:'literal English user content'}},{label:`${language}:second`,icon:'b',selected:false,action:{type:'set_name',name:'literal second'}}]}},{Action:{checkable:false,state:{id:'run',icon:'run',label:`${language}:run`,tooltip:`${language}:help`,enabled:true,selected:false}}}]}});
+  const tile=()=>({id:'test',slider_style:{show_value:false,expand:false},label:`${language}:slider`,control:{kind:standalone?'brush_size_slider':'tool_options'},component:{context:{type:'brush'},numeric:standalone&&!initiallyDisabled?{id:'size',label:`${language}:size`,group:`${language}:group`,numeric,value:5}:null,bookmarks:initiallyDisabled?[]:[{value:5,fill:.05,selected:true}],options:standalone?[]:[{Numeric:{id:'size',label:`${language}:size`,group:`${language}:group`,numeric,value:5}},{Choice:{id:'mode',label:`${language}:mode`,items:[{label:`${language}:first`,icon:'a',selected:true,action:{type:'set_name',name:'literal label',label:'literal English user content'}},{label:`${language}:second`,icon:'b',selected:false,action:{type:'set_name',name:'literal second'}}]}},{Action:{checkable:false,state:{id:'run',icon:'run',label:`${language}:run`,tooltip:`${language}:help`,enabled:true,selected:false}}}]}});
   root=createToolbarComponent({app,...(fixed?{control:tile().control,presentation:tile()}:{tile:tile()}),view:{tile_style:'small'},element,button,icon,dispatch:action=>{actions.push(action);actionHandler?.(action);},draggable(){assert.equal(fixed,false);},target(){assert.equal(fixed,false);},place(){},panel:'tools',rasterWorker});
   return {app,root,tile,doc,actions,stampQueries,workerRequests,onAction:fn=>{actionHandler=fn;},expressions:()=>expressions,layouts:()=>layouts,stamps:()=>stamps,stampReply(fn){stampReply=fn;},workerReply(fn){workerReply=fn;},async flush(){for(let i=0;i<4;i++)await Promise.resolve();},pendingFrames:()=>frames.size,frame(){const callbacks=[...frames.values()];frames.clear();callbacks.forEach(callback=>callback());},switch(tag){language=tag;refreshCopy(app);root.updateComponent(tile());}};
 }
@@ -239,4 +240,38 @@ test('scaled slider motion reports widget coordinates to the shared contact gate
   slider.dispatch('pointermove',{pointerId:7,clientX:39,clientY:24});
   assert.deepEqual(motion,[3,0]);
   slider.dispatch('pointerup',{pointerId:7});
+});
+
+for(const fixed of [false,true])test(`disabled ${fixed?'fixed':'desktop'} sliders retain their displayed position and bookmarks`,t=>{
+  const h=harness(t,true,fixed),value=h.tile();value.component.numeric.value=73;
+  h.root.updateComponent(value);
+  const slider=h.root.querySelector('.number-slider'),mark=h.root.querySelector('.toolbar-slider-mark'),fill=slider.value;
+  const disabled=h.tile();disabled.component.numeric=null;disabled.component.context={type:'picker'};disabled.component.bookmarks=[];
+  h.root.updateComponent(disabled);
+  assert.equal(h.root.querySelector('.number-slider'),slider);assert.equal(slider.disabled,true);assert.equal(slider.value,fill);
+  assert.equal(h.root.querySelector('.toolbar-slider-mark'),mark);
+  h.root.updateComponent(disabled);assert.equal(h.root.querySelector('.number-slider'),slider);
+  const restored=h.tile();restored.component.numeric.value=25;h.root.updateComponent(restored);
+  assert.equal(h.root.querySelector('.number-slider'),slider);assert.equal(slider.disabled,false);assert.equal(slider.value,.25);
+  restored.component.context={type:'other-drawing'};h.root.updateComponent(restored);
+  assert.notEqual(h.root.querySelector('.number-slider'),slider);assert.deepEqual(h.actions,[]);
+});
+
+test('a slider first presented without a numeric value starts disabled at its minimum',t=>{
+  const h=harness(t,true,true,true),slider=h.root.querySelector('.number-slider');
+  assert.equal(slider.disabled,true);assert.equal(Number(slider.value),0);
+  assert.equal(h.root.querySelector('.toolbar-slider-mark'),null);assert.deepEqual(h.actions,[]);
+});
+
+test('disabling an active slider keeps a newer synchronous publication',t=>{
+  const h=harness(t,true,true),slider=h.root.querySelector('.number-slider');
+  h.root.layoutComponent({width:147,height:48},'horizontal');
+  slider.dispatch('pointerdown',{pointerId:7,button:0,clientX:35,clientY:24});
+  const disabled=h.tile();disabled.component.numeric=null;disabled.component.context={type:'picker'};
+  const newer=h.tile();newer.component.numeric.value=81;newer.component.context={type:'newer'};
+  h.onAction(action=>{if(action.type==='phone'&&action.action.phase==='cancel')h.root.updateComponent(newer);});
+  h.root.updateComponent(disabled);
+  const sliders=h.root.querySelectorAll('.number-slider');assert.equal(sliders.length,1);
+  assert.equal(sliders[0].disabled,false);assert.equal(sliders[0].value,.81);
+  assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel']);
 });

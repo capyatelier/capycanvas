@@ -142,8 +142,9 @@ export function createToolbarComponent({ app, tile, control = tile?.control, pre
     const valueRow = element('span', 'toolbar-slider-value-row'), valueLabel = element('span', 'toolbar-slider-value'), unit = element('span', 'toolbar-slider-unit');
     valueRow.append(valueLabel, unit); readout.append(title, valueRow); cap.append(readout); readout.hidden = true;
     const track = element('div', 'number-track'), slider = element('input', 'number-slider');
-    slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 'any'; slider.setAttribute('aria-label', field.label);
+    slider.type = 'range'; slider.min = 0; slider.max = 1; slider.step = 'any'; slider.value = 0; slider.setAttribute('aria-label', field.label);
     const marks = element('div', 'toolbar-slider-marks'), thumb = element('div', 'toolbar-slider-thumb');
+    track.style.setProperty('--position', 0);
     track.append(slider, thumb, marks); row.append(cap, track); more.hidden = true;
     let current = field.value, fill = 0, contact, stamp, canvas, caption, bookmark, preview, previewFrame, previewBusy=false, previewDirty=false;
     const format = () => app.number_input({ control: field.numeric, value: current, operation: { type: 'format' } });
@@ -231,10 +232,11 @@ export function createToolbarComponent({ app, tile, control = tile?.control, pre
       }
     }
     function update(option) {
+      slider.disabled = !model.numeric; cap.disabled = !model.numeric;
+      if (!model.numeric) { updateReadout(); return; }
       if (option) { current = option.value; field = { ...option, numeric: { ...option.numeric, digits: Number(option.numeric.digits) } }; }
       cap.title = field.label; cap.setAttribute('aria-label', field.label); slider.setAttribute('aria-label', field.label);
       const shown = format(); fill = shown.fill; slider.value = fill; slider.setAttribute('aria-valuetext', shown.text);
-      slider.disabled = !model.numeric; cap.disabled = !model.numeric;
       marks.replaceChildren(...model.bookmarks.map(mark => {
         const line = element('span', 'toolbar-slider-mark'); line.classList.toggle('selected', mark.selected);
         line.style.setProperty('--position', mark.selected ? fill : mark.fill); return line;
@@ -438,8 +440,17 @@ export function createToolbarComponent({ app, tile, control = tile?.control, pre
     sliderPreferences = next.slider_style;
     copyChanged = copyKey !== copy.more_options; copyKey = copy.more_options;
     const nextSchema = key([sliderPreferences, value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Checklist ? {Checklist:{...semantic(o.Checklist),items:o.Checklist.items.map(i=>({...semantic(i),selected:false,enabled:true}))}} : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
-    const sliderField = () => value.numeric || { id: control.kind === 'brush_size_slider' ? 'size' : 'strength', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control }), value: 0.5 };
+    const sliderField = () => {
+      if (value.numeric) return value.numeric;
+      const numeric = app.toolbar_ui({ type: 'slider_spec', control });
+      return { id: control.kind === 'brush_size_slider' ? 'size' : 'strength', label: next.label, numeric, value: numeric.soft_min };
+    };
     model = value;
+    if (standalone && !value.numeric && fields.length) {
+      closePopup(); fields[0].cancel();
+      if (model !== value) return;
+      fields[0].update(); layout(); return;
+    }
     if (nextSchema !== schema) {
       closePopup(); const previous=fields; fields=[]; schema=nextSchema;
       if (standalone) {
