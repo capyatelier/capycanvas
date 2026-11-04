@@ -1,6 +1,7 @@
 use super::*;
 use super::workspace_header::Driver;
 use layer_render::CanvasRenderer;
+use layer_core::DefaultBrushPreset;
 
 fn setup(name: &str) -> Driver {
     let d = super::phone_motion::setup(name);
@@ -60,7 +61,10 @@ pub(super) fn capture(d: &mut Driver, name: &str) {
     clear_canvas_pointer(d);
     capy.set_has_tooltip(false);
     capy.trigger_tooltip_query();
-    capture_current(d, name);
+    super::phone_motion::settle_presentation(&d.w);
+    if widgets(d.w.window.upcast_ref()).any(|widget|widget.is::<gtk::Popover>() && widget.is_mapped()) {
+        inventory_monitor(d,name);
+    } else {capture_current(d,name);}
     capy.set_has_tooltip(tooltip);
 }
 
@@ -296,6 +300,8 @@ fn native_phone_frame() {
     menu(&mut d);
     capture(&mut d, "menu-swapped");
     menu_pages(&mut d);
+    click(&mut d,"phone-swap");
+    until(||!state(&d.w).phone.swapped,"hidden frame uses the original side");
     click(&mut d, "phone-zen");
     until(|| state(&d.w).phone.hidden, "Zen hides the phone bars");
     assert!(!d.named("component-slider-size").is_mapped());
@@ -592,10 +598,7 @@ fn tool_drawer_sets(d: &mut Driver) {
         (WorkspacePreset::Photographer, "photo-healing", S { slot: ToolSlotId::Healing }),
         (WorkspacePreset::Photographer, "photo-eraser", C { command: CommandId::Eraser }),
     ] {
-        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
-            layout: preset.layout(Platform::Gtk), ..Default::default()
-        }) });
-        new_photo::ready(&d.w);
+        inventory_workspace(d,preset);
         let opener = tool(d, control);
         click(d, &opener);
         new_photo::ready(&d.w);
@@ -1274,6 +1277,8 @@ fn native_phone_menu_feedback() {
     d.w.documents.enqueue(&d.w, (new_drawing_at(128, 96, layer_core::color::SampleDepth::U8), None));
     until(|| d.w.documents.len() == 2 && !d.w.documents.changing.get(), "a second drawing opens");
     new_photo::ready(&d.w);
+    ui_session_mut(&d.w).name_new_drawing("Menu drawing");
+    d.w.refresh(regions::DOCUMENT);
     let second = d.w.documents.selected();
     menu(&mut d);
     let caption = d.named("phone-drawing");
@@ -1867,6 +1872,13 @@ fn inventory_close(d: &mut Driver) {
         && d.w.drawer.is_closed(), "the inventory surface closes before the next view");
 }
 
+fn inventory_workspace(d: &Driver, preset: WorkspacePreset) {
+    let id=layer_workspace::DEFAULT_WORKSPACES.iter().find(|(_,value)|*value==preset).unwrap().0;
+    d.w.workspaces.send(&d.w,layer_workspace::WorkspaceInput::Switch {id:id.into()});
+    wait_workspaces(&d.w);new_photo::ready(&d.w);
+    assert_eq!(d.w.workspaces.view().id.as_deref(),Some(id));
+}
+
 fn inventory_drawer_ready(d: &Driver) {
     until(|| state(&d.w).customization.drawer.is_some() && d.w.drawer.placement().is_some()
         && !d.w.drawer.animation_active(), "the inventory drawer finishes opening");
@@ -1905,21 +1917,202 @@ fn inventory_monitor(d: &mut Driver, name: &str) {
     super::phone_motion::export_allocations(&d.w,name,&capture_name);
 }
 
+pub(super) fn inventory_popup(d: &mut Driver, opener: &gtk::Widget, name: &str, secondary: bool) {
+    let target=if opener.is::<adw::ComboRow>() {
+        widgets(opener).find(|widget|widget.is_mapped() && widget.widget_name()=="preference-choice-value").unwrap()
+    } else {opener.clone()};
+    super::histogram::scroll_to(&target);
+    super::phone_motion::settle_presentation(&d.w);
+    let point=d.point(&target);
+    let hit=d.w.window.pick(point[0] as f64,point[1] as f64,gtk::PickFlags::DEFAULT).unwrap();
+    assert!(hit==*opener || hit.is_ancestor(opener),"the popup contact belongs to {}: {}",opener.widget_name(),hit.widget_name());
+    if secondary {
+        d.input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+    } else { d.click(&target); }
+    let popup_root=if opener.is::<adw::ComboRow>() {opener.clone()} else {d.w.window.clone().upcast()};
+    until(||widgets(&popup_root).any(|widget|widget.is::<gtk::Popover>() && widget.is_mapped()),"the offered popup maps");
+    super::phone_motion::settle_presentation(&d.w);
+    inventory_monitor(d,name);
+    d.input.key(0xff1b);
+    until(||!widgets(d.w.window.upcast_ref()).any(|widget|widget.is::<gtk::Popover>() && widget.is_mapped()),"the popup closes");
+}
+
+fn inventory_panel_menus(d: &mut Driver, panel: Panel) {
+    d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
+    d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
+    if panel==Panel::Layers {
+        let id=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
+        let row=d.named(&format!("art-layer-{id}"));
+        inventory_popup(d,&row,"layers-row-menu",true);
+        let blend=d.named("layer-blend");inventory_popup(d,&blend,"layers-blend-menu",false);
+        let filter=d.named("layer-add-filter");inventory_popup(d,&filter,"layers-add-filter-menu",false);
+        let p=d.point(&row);
+        d.input.perform(serde_json::json!([{"touch":"down","slot":0,"point":[p[0]-15.,p[1]]},{"touch":"down","slot":1,"point":[p[0]+15.,p[1]]},{"touch":"up","slot":0},{"touch":"up","slot":1}]));
+        until(||state(&d.w).layer_tools.opacity_popup==Some(id),"two fingers open the layer opacity popup");
+        capture(d,"layers-opacity-popover");d.input.key(0xff1b);
+        d.input.perform(serde_json::json!([contact("touch","down",p),contact("touch","move",[p[0]-60.,p[1]]),contact("touch","up",[p[0]-60.,p[1]])]));
+        let swipe=row.ancestor(crate::swipe_row::SwipeRow::static_type()).unwrap().downcast::<crate::swipe_row::SwipeRow>().unwrap();
+        until(||swipe.swipe_progress()==1.,"the layer swipe reveals its actions");capture(d,"layers-swipe-actions");swipe.reveal(false);
+        until(||swipe.is_at_rest(),"the layer swipe closes");
+        d.w.dispatch(UiAction::Layer {action:LayerAction::BeginRename {id}});
+        until(||widgets(&row).any(|widget|widget.has_css_class("layer-name-entry") && widget.is_mapped()),"the layer name is edited inline");
+        capture(d,"layers-inline-rename");d.w.dispatch(UiAction::Layer {action:LayerAction::CancelRename});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::AddLayer});
+        let added=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
+        let top=d.named(&format!("art-layer-{added}"));
+        let from=d.point(&top);let to=d.point(&row);
+        d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",[to[0],to[1]+8.])]));
+        capture_current(d,"layers-drag-pickup");d.input.key(0xff1b);d.input.perform(serde_json::json!([contact("mouse","up",[to[0],to[1]+8.])]));
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+    }
+    if panel==Panel::Color {
+        let slot=d.named("color-Foreground");inventory_popup(d,&slot,"color-slot-menu",true);
+        let wheel=d.named("color-wheel");inventory_popup(d,&wheel,"color-wheel-menu",true);
+        let swatch=widgets(d.w.window.upcast_ref()).find(|widget|widget.is_mapped() && widget.widget_name().starts_with("palette-swatch-")).unwrap();
+        inventory_popup(d,&swatch,"palette-swatch-menu",true);
+        let from=d.point(&swatch);let to=[from[0]+40.,from[1]+20.];
+        d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to)]));
+        capture_current(d,"swatch-drag");d.input.key(0xff1b);d.input.perform(serde_json::json!([contact("mouse","up",to)]));
+        d.click(&d.named("palette-chooser"));
+        until(||d.named("palette-browser").is_mapped(),"the palette chooser opens");
+        let add=d.named("palette-library-add");inventory_popup(d,&add,"palette-library-menu",false);
+        let row=widgets(&d.named("palette-browser")).find(|widget|widget.is_mapped() && widget.widget_name().starts_with("palette-choice-")).unwrap();
+        inventory_popup(d,&row,"palette-row-menu",true);
+        d.input.key(0xff1b);
+    }
+}
+
+fn inventory_layer_kinds(d: &mut Driver) {
+    let paint=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
+    d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel:Panel::Layers}});inventory_drawer_ready(d);
+    d.w.dispatch(UiAction::Customize {action:CustomizationAction::ToggleLayerDrawerProperties});
+    capture(d,"properties-paint");inventory_close(d);
+    for kind in ["vector","selection","fill","mask","group"] {
+        d.w.dispatch(UiAction::SelectLayer {id:paint});
+        match kind {
+            "vector"=>d.w.dispatch(UiAction::Layer {action:LayerAction::NewVector}),
+            "group"=>d.w.dispatch(UiAction::Layer {action:LayerAction::New {group:true,clipped:false}}),
+            "fill"=>d.w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"solid_color".into()}}),
+            _=>{
+                d.w.dispatch(UiAction::Invoke {command:CommandId::SelectAll});
+                d.w.dispatch(UiAction::Invoke {command:if kind=="mask" {CommandId::MaskSelection} else {CommandId::SaveSelectionLayer}});
+            }
+        }
+        new_photo::ready(&d.w);
+        d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel:Panel::Layers}});inventory_drawer_ready(d);
+        capture(d,&format!("layers-{kind}"));
+        d.w.dispatch(UiAction::Customize {action:CustomizationAction::ToggleLayerDrawerProperties});
+        until(||state(&d.w).customization.drawer.as_ref().is_some_and(|drawer|drawer.layer_properties==Some(true)),"the layer Properties disclosure expands");
+        capture(d,&format!("properties-{kind}"));inventory_close(d);
+        if ui_session(&d.w).command(CommandId::ReturnToArtwork).enabled {d.w.dispatch(UiAction::Invoke {command:CommandId::ReturnToArtwork});}
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+        d.w.dispatch(UiAction::Invoke {command:CommandId::Deselect});
+    }
+    for (effect,name) in [("curves","curves-editor"),("gradient_fill","gradient-editor"),("levels","properties-actions-menu")] {
+        d.w.dispatch(UiAction::SelectLayer {id:paint});
+        d.w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}});new_photo::ready(&d.w);
+        d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel:Panel::Properties}});inventory_drawer_ready(d);
+        if effect=="levels" {
+            let group=d.named("property-picker-menu");inventory_popup(d,&group,name,false);inventory_popup(d,&group,"property-picker",false);
+            let filter=d.named("properties-add-filter");inventory_popup(d,&filter,"properties-add-filter-menu",false);
+            let action=state(&d.w).layer_properties.actions.iter().find(|action|matches!(action.action,EffectAction::Calibrate {role:layer_core::levels::CalibrationRole::Black,..})).unwrap().action.clone();
+            d.w.dispatch(UiAction::Effect {action});
+            until(||state(&d.w).canvas_bar.as_ref().is_some_and(|bar|bar.context.kind==layer_ui::CanvasBarKind::Picker),"the offered black-point action exposes its Picker bar");
+            d.w.dispatch(UiAction::Customize {action:CustomizationAction::CloseExpanded});
+            until(||d.w.drawer.is_closed(),"the Picker bar has no expanded Properties drawer");
+            capture(d,"canvas-bar-picker");d.w.dispatch(UiAction::Invoke {command:CommandId::Eyedropper});
+        } else {
+            let target=d.named(if effect=="curves" {"property-rgb-graph"} else {"effect-gradient"});super::histogram::scroll_to(&target);capture(d,name);
+            if effect=="curves" {capture(d,"properties-filter");}
+        }
+        inventory_close(d);d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+    }
+    d.w.dispatch(UiAction::SelectLayer {id:paint});
+}
+
+fn inventory_bar_menu(d: &mut Driver, menu: layer_ui::CanvasBarMenu, name: &str) {
+    let button=d.named(&format!("canvas-bar-menu-{}",menu.id()));
+    if button.is_mapped() { inventory_popup(d,&button,&format!("canvas-bar-menu-{name}"),false); }
+    else {
+        let more=d.named("canvas-bar-more");d.click(&more);
+        let label=menu.label(&d.w.localization());
+        let item=super::canvas_bar_tests::until_some(||mapped_label(d.w.canvas_bar.root.upcast_ref(),&label),"the overflow offers the requested bar menu");
+        d.click(&item);capture(d,&format!("canvas-bar-menu-{name}"));d.input.key(0xff1b);
+    }
+}
+
+fn inventory_place_checker(d: &Driver) {
+    let checker=layer_core::color::source::rgba8_source([64,64],|x,y|if (x/16+y/16)%2==0 {[76,112,144,255]} else {[208,176,128,255]});
+    ui_session_mut(&d.w).place_layer_source("Inventory marks.png",std::sync::Arc::unwrap_or_clone(checker),None).unwrap();d.w.wake();new_photo::ready(&d.w);
+}
+
+fn inventory_canvas_bars(d: &mut Driver) {
+    let paint=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
+    d.w.dispatch(UiAction::Invoke {command:CommandId::SelectAll});
+    until(||state(&d.w).canvas_bar.as_ref().is_some_and(|bar|bar.context.kind==layer_ui::CanvasBarKind::Selection),"Select All exposes the Selection bar");
+    capture(d,"canvas-bar-selection");
+    for (menu,name) in [(layer_ui::CanvasBarMenu::Copy,"copy"),(layer_ui::CanvasBarMenu::Adjust,"adjust"),(layer_ui::CanvasBarMenu::Mask,"mask"),(layer_ui::CanvasBarMenu::Refine,"refine")] {
+        inventory_bar_menu(d,menu,name);
+    }
+    let more=d.named("canvas-bar-more");
+    if more.is_mapped() {inventory_popup(d,&more,"canvas-bar-menu-more",false);}
+    else {eprintln!("M0 unavailable canvas-bar-menu-more: the actual Selection bar has no overflow");}
+    d.w.dispatch(UiAction::Invoke {command:CommandId::QuickMask});capture(d,"canvas-bar-quickmask");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::ReturnToArtwork});
+    d.w.dispatch(UiAction::Invoke {command:CommandId::SaveSelectionLayer});capture(d,"canvas-bar-selectionlayer");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::ReturnToArtwork});d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+    d.w.dispatch(UiAction::SelectLayer {id:paint});d.w.dispatch(UiAction::Invoke {command:CommandId::SelectAll});
+    d.w.dispatch(UiAction::Invoke {command:CommandId::MaskSelection});capture(d,"canvas-bar-layermask");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::ReturnToArtwork});d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Deselect});
+
+    d.w.dispatch(UiAction::Invoke {command:CommandId::PolygonSelect});
+    for p in [[300.,300.],[500.,300.]] {let p=super::photo_edit::window_point(&d.w,p);d.input.perform(serde_json::json!([contact("mouse","down",p),contact("mouse","up",p)]));}
+    let hover=super::photo_edit::window_point(&d.w,[500.,500.]);d.input.perform(serde_json::json!([{"point":hover}]));
+    capture_current(d,"canvas-bar-polygon");d.w.dispatch(UiAction::Invoke {command:CommandId::CancelSelection});
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Ruler});
+    let from=super::photo_edit::window_point(&d.w,[300.,300.]);let to=super::photo_edit::window_point(&d.w,[500.,380.]);
+    d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to),contact("mouse","up",to)]));
+    capture(d,"canvas-bar-guide");capture(d,"overlay-rulers");d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Clone});new_photo::ready(&d.w);d.w.dispatch(UiAction::Invoke {command:CommandId::CloneSourceArm});
+    d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","up",from)]));
+    assert!(!state(&d.w).commands.iter().find(|command|command.id==CommandId::CloneSourceArm).unwrap().selected,"the admitted source contact disarms Set Source");
+    d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","up",from)]));
+    until(||state(&d.w).canvas_bar.as_ref().is_some_and(|bar|bar.context.kind==layer_ui::CanvasBarKind::CloneSource),"tapping the source marker exposes its bar");
+    capture(d,"canvas-bar-clonesource");capture(d,"overlay-clone-source");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
+
+    inventory_place_checker(d);
+    capture(d,"canvas-bar-placement");capture(d,"overlay-placed-image");d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTransform});new_photo::ready(&d.w);
+    d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel:Panel::Layers}});inventory_drawer_ready(d);capture(d,"layers-image");
+    d.w.dispatch(UiAction::Customize {action:CustomizationAction::ToggleLayerDrawerProperties});capture(d,"properties-image");inventory_close(d);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::SelectLayer {id:paint});
+    d.w.dispatch(UiAction::Invoke {command:CommandId::SelectAll});d.w.dispatch(UiAction::Invoke {command:CommandId::FillSelection});new_photo::ready(&d.w);
+    d.w.dispatch(UiAction::Invoke {command:CommandId::ScaleRotate});d.w.dispatch(UiAction::Invoke {command:CommandId::TransformWarp});
+    inventory_bar_menu(d,layer_ui::CanvasBarMenu::WarpGrid,"warp");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::CancelTransform});d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::Invoke {command:CommandId::Deselect});
+
+    d.w.dispatch(UiAction::Layer {action:LayerAction::NewVector});d.w.dispatch(UiAction::Invoke {command:CommandId::Figure});
+    d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to),contact("mouse","up",to)]));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::EditPoints});capture(d,"overlay-vector");
+    d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
+    d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to),contact("mouse","up",to)]));
+    until(||state(&d.w).notice.is_some() && d.w.notice.root.is_mapped(),"painting on vector content exposes the real canvas notice");capture(d,"canvas-notice");
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
+    d.w.dispatch(UiAction::SelectLayer {id:paint});d.w.dispatch(UiAction::Invoke {command:CommandId::Fill});
+    d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to)]));
+    capture_current(d,"overlay-fill-trail");d.input.key(0xff1b);d.input.perform(serde_json::json!([contact("mouse","up",to)]));
+    d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
+}
+
 #[test]
 #[ignore = "private compositor: --native-test=native_phone_inventory --native-storage; phone viewport/theme external"]
 fn native_phone_inventory() {
     let mut d = setup("art.capycanvas.PhoneInventory");
-    let sample = layer_core::color::source::rgba8_source([64, 64], |x, y|
-        if (x / 16 + y / 16) % 2 == 0 { [76, 112, 144, 255] } else { [208, 176, 128, 255] });
-    ui_session_mut(&d.w).import_layer_source("Inventory marks", std::sync::Arc::unwrap_or_clone(sample)).unwrap();
-    d.w.wake();
-    new_photo::ready(&d.w);
-    let compact = d.w.surface.width().min(d.w.surface.height()) < 320;
     for preset in WorkspacePreset::ALL {
         let tag = preset.name().to_lowercase();
-        d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
-            layout: preset.layout(Platform::Gtk), ..Default::default()
-        }) });
+        inventory_workspace(&d,preset);
         until(|| state(&d.w).workspace.layout.phone.as_ref().is_some_and(|tiles|
             tiles.iter().map(|tile| tile.control).collect::<Vec<_>>() == preset.phone_controls()),
             "the inventory workspace uses its actual phone preset");
@@ -1941,13 +2134,27 @@ fn native_phone_inventory() {
             capture(&mut d, "inventory-hidden");
             d.input.key(0xff1b);
             until(|| !state(&d.w).phone.hidden, "Escape restores the inventory bars");
+            let diameter=state(&d.w).brush.diameter;
+            d.w.dispatch(UiAction::SetBrushSize {value:40.});capture(&mut d,"frame-revealed");
+            for (name,level) in [("frame-opaque",layer_ui::Transparency::Off),("frame-glass",layer_ui::Transparency::High)] {
+                let index=layer_ui::Transparency::CHOICES.iter().position(|(value,_)|*value==level).unwrap();
+                d.w.dispatch(UiAction::Preferences {action:PreferenceAction::Edit {id:PreferenceId::Transparency,value:PreferenceValue::Choice(index as u32)}});capture(&mut d,name);
+            }
+            d.w.dispatch(UiAction::Preferences {action:PreferenceAction::Edit {id:PreferenceId::Transparency,value:PreferenceValue::Choice(1)}});
+            d.w.dispatch(UiAction::SetBrushSize {value:diameter});
         }
-        if compact && preset != WorkspacePreset::Painter { continue; }
         let tiles = state(&d.w).workspace.layout.phone.unwrap();
         for tile in tiles.into_iter().filter(|tile| tile.control != ToolbarControl::Divider) {
-            if compact && !matches!(tile.control, ToolbarControl::Color
-                | ToolbarControl::Panel { panel: Panel::Layers }
-                | ToolbarControl::Command { command: CommandId::DrawingBrush }) { continue; }
+            let owns_image=tile.control==(ToolbarControl::Command {command:CommandId::ScaleRotate});
+            if owns_image {inventory_place_checker(&d);d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTransform});new_photo::ready(&d.w);}
+            if owns_image {assert!(state(&d.w).layers.iter().any(|row|row.label.starts_with("Inventory marks")),"the ScaleRotate tile has its owned checker layer");}
+            if let ToolbarControl::Command {command}=tile.control {
+                let view=ui_session(&d.w).command(command);
+                if !view.enabled {
+                    if owns_image {d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});new_photo::ready(&d.w);}
+                    eprintln!("M0 unavailable inventory-{tag}-{command:?}: {}",view.tooltip);continue;
+                }
+            }
             let name = format!("phone-tool-{}", tile.id);
             click(&mut d, &name);
             new_photo::ready(&d.w);
@@ -1960,23 +2167,48 @@ fn native_phone_inventory() {
                 _ => "Color".to_string(),
             }.to_lowercase();
             capture(&mut d, &format!("inventory-{tag}-{label}"));
+            if preset==WorkspacePreset::Painter {
+                if let ToolbarControl::Panel {panel:Panel::Layers}=tile.control { inventory_panel_menus(&mut d,Panel::Layers); }
+                if tile.control==ToolbarControl::Color { inventory_panel_menus(&mut d,Panel::Color); }
+            }
             inventory_close(&mut d);
+            if owns_image {d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});new_photo::ready(&d.w);}
         }
     }
-    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
-        layout: WorkspacePreset::Painter.layout(Platform::Gtk), ..Default::default()
-    }) });
-    for command in [CommandId::DrawingBrush, CommandId::Fill, CommandId::Select] {
-        if compact && command != CommandId::DrawingBrush { continue; }
+    inventory_workspace(&d,WorkspacePreset::Painter);
+    d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
+    for command in CommandId::TOOLS {
+        let owns_image=command==CommandId::ScaleRotate;
+        if owns_image {inventory_place_checker(&d);d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTransform});new_photo::ready(&d.w);}
+        if owns_image {assert!(state(&d.w).layers.iter().any(|row|row.label.starts_with("Inventory marks")),"ScaleRotate settings have their owned checker layer");}
+        let view=ui_session(&d.w).command(command);
+        if !view.enabled {
+            if owns_image {d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});new_photo::ready(&d.w);}
+            eprintln!("M0 unavailable inventory-settings-{command:?}: {}",view.tooltip);continue;
+        }
         d.w.dispatch(UiAction::Invoke { command });
         click(&mut d, "phone-tool-settings");
         inventory_drawer_ready(&d);
-        capture(&mut d, &format!("inventory-settings-{}", format!("{command:?}").to_lowercase()));
+        capture(&mut d, &format!("inventory-settings-{}",serde_json::to_value(command).unwrap().as_str().unwrap()));
+        if command==CommandId::Select { let menu=d.named("selection-actions");inventory_popup(&mut d,&menu,"selection-actions-menu",false); }
+        if command==CommandId::Fill {
+            let group=widgets(d.w.window.upcast_ref()).find(|widget|widget.is_mapped() && widget.widget_name().starts_with("tool-action-group-")).unwrap();
+            inventory_popup(&mut d,&group,"tool-action-dropdown",false);
+        }
         inventory_close(&mut d);
+        if owns_image {d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});new_photo::ready(&d.w);}
     }
+    for panel in [Panel::Navigator,Panel::Histogram,Panel::Waveform,Panel::Stats,Panel::Sizes,Panel::Brushes] {
+        d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel}});inventory_drawer_ready(&d);
+        capture(&mut d,&format!("inventory-window-{}",format!("{panel:?}").to_lowercase()));inventory_close(&mut d);
+    }
+    inventory_layer_kinds(&mut d);
+    inventory_canvas_bars(&mut d);
     d.w.documents.enqueue(&d.w, (new_drawing_at(128, 96, layer_core::color::SampleDepth::U8), None));
     until(|| d.w.documents.len() == 2 && !d.w.documents.changing.get(), "two drawings are ready for the inventory");
     new_photo::ready(&d.w);
+    ui_session_mut(&d.w).name_new_drawing("Menu drawing");
+    d.w.refresh(regions::DOCUMENT);
     menu(&mut d);
     capture(&mut d, "inventory-menu-root");
     click(&mut d, "phone-drawing");
@@ -1991,7 +2223,7 @@ fn native_phone_inventory() {
         capture(&mut d, "inventory-menu-file");
         menu_back_swipe(&mut d, &stack, initial);
     }
-    if !compact {
+    {
         let label = ApplicationMenu::Window.localized_label(&d.w.localization());
         open_menu_page(&mut d, &label);
         open_menu_page(&mut d, "Workspaces");
@@ -2033,7 +2265,7 @@ fn native_phone_inventory() {
         inventory_monitor(&mut d, "finger-hold");
         d.input.perform(serde_json::json!([{ "touch": "up" }]));
         until(|| ui_session(&d.w).color_picker_overlay().is_none(), "the inventory hold finishes");
-    } else { inventory_close(&mut d); }
+    }
     d.finish();
 }
 

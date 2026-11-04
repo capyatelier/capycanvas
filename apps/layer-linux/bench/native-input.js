@@ -33,6 +33,11 @@ const captureFrame = name => {
     buffer.unmap(map);
     GdkPixbuf.Pixbuf.new_from_bytes(pixels, GdkPixbuf.Colorspace.RGB, false, 8,
         info.width, info.height, info.stride[0]).savev(`${captureDir}/${name}.png`, 'png', [], []);
+    const {primaries, transfer, matrix, range} = info.colorimetry;
+    GLib.file_set_contents(`${captureDir}/${name}.json`, `${JSON.stringify({
+        raw_size: [info.width, info.height], dimensions: [info.width, info.height],
+        colorimetry: {primaries, transfer, matrix, range},
+    }, null, 2)}\n`);
     return true;
 };
 const recording = {name: null, samples: [], timer: 0, events: [], sink: null, window: false};

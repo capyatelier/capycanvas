@@ -81,13 +81,11 @@ fn native_new_drawing_dimension_controls_fit() {
     assert!(!find_named(&frame, "new-drawing-size").unwrap().downcast::<gtk::Label>().unwrap().layout().is_ellipsized(), "the pixel size stays readable");
     super::histogram::scroll_to(&find_named(&frame, "new-drawing-paper-color").unwrap());
     super::phone::capture(&mut d, "new-drawing-dimensions-fit-bottom");
-    let window = d.w.window.clone();
+    let workspace = d.w.clone();
     let settled_sheet = |name: &str| {
         let sheet = find_named(&frame, name).unwrap();
-        drop(idle_paint(&window));
-        until(|| sheet.is_mapped() && sheet.parent().and_then(|parent| sheet.compute_bounds(&parent))
-            .is_some_and(|bounds| bounds.y().abs() <= 1.), "the New Drawing sheet reaches its open position");
-        drop(idle_paint(&window));
+        until(||sheet.is_mapped(),"the New Drawing sheet maps");
+        super::phone_motion::settle_presentation(&workspace);
         sheet
     };
     let footer_fits = |name: &str| {
@@ -119,7 +117,7 @@ fn native_new_drawing_dimension_controls_fit() {
             let name = named::<gtk::Entry>(&frame, "new-drawing-save-name");
             let stack = name.ancestor(gtk::Stack::static_type()).unwrap().downcast::<gtk::Stack>().unwrap();
             until(|| name.is_mapped() && !stack.is_transition_running(), "Save Preset finishes opening");
-            drop(idle_paint(&window));
+            super::phone_motion::settle_presentation(&workspace);
             capture(&mut d, "new-drawing-footer-save-preset");
             footer_fits("new-drawing-save-confirm");
             let natural = name.measure(gtk::Orientation::Horizontal, -1).1;
@@ -353,11 +351,16 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
 
 pub(super) fn capture(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        super::phone_motion::settle_presentation(&d.w);
         let capture_name = format!("pages-{}x{}-{}-{name}",d.w.surface.width(),d.w.surface.height(),format!("{:?}",state(&d.w).theme).to_lowercase());
-        d.input.perform(serde_json::json!([{ "capture_window": {
-            "name": &capture_name,
-            "maximized": d.w.window.is_maximized()
-        } }]));
+        if widgets(d.w.window.upcast_ref()).any(|widget|widget.is::<gtk::Popover>() && widget.is_mapped()) {
+            d.input.perform(serde_json::json!([{ "capture": &capture_name }]));
+        } else {
+            d.input.perform(serde_json::json!([{ "capture_window": {
+                "name": &capture_name,
+                "maximized": d.w.window.is_maximized()
+            } }]));
+        }
         super::phone_motion::export_allocations(&d.w,name,&capture_name);
     }
 }
@@ -409,10 +412,19 @@ fn first_editor_pages(d: &mut Driver, visit: &mut impl FnMut(&mut Driver, &str))
     d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
     let (dialog, _) = dialog_frame(d);
     visit(d, "new-drawing");
+    let frame=crate::page_dialog::parent(&dialog);
+    let color=find_named(&frame,"new-drawing-paper-color").unwrap();super::histogram::scroll_to(&color);d.click(&color);
+    until(||state(&d.w).new_drawing.as_ref().and_then(|view|view.drawer.as_ref()).is_some_and(|drawer|matches!(drawer,NewDrawingDrawerView::PaperColor(_))),"New Drawing opens its paper colors");
+    let tile=named::<gtk::Button>(&frame,"new-drawing-paper-color-0");
+    super::phone::inventory_popup(d,tile.upcast_ref(),"new-drawing-paper-color-menu",true);
+    named::<gtk::Button>(&frame,"new-drawing-color-cancel").emit_clicked();
+    until(||state(&d.w).new_drawing.as_ref().is_some_and(|view|view.drawer.is_none()),"the paper-color footer returns to New Drawing");
     close(d, &dialog);
     crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
     let (dialog, _) = dialog_frame(d);
     visit(d, "color");
+    let model=find_named(&crate::page_dialog::parent(&dialog),"edit-color-form-0").unwrap();
+    super::phone::inventory_popup(d,&model,"color-model-popover",false);
     close(d, &dialog);
 }
 
@@ -420,11 +432,6 @@ fn first_editor_pages(d: &mut Driver, visit: &mut impl FnMut(&mut Driver, &str))
 #[ignore = "private compositor: --native-test=native_dialog_layout --native-storage; 600/700/800/1024x900 light/dark"]
 fn native_dialog_layout() {
     let mut d = super::phone_motion::setup("art.capycanvas.DialogLayout");
-    let settings=gtk::Settings::default().unwrap();
-    struct RestoreAnimations(gtk::Settings,bool);
-    impl Drop for RestoreAnimations { fn drop(&mut self) { self.0.set_gtk_enable_animations(self.1); } }
-    let _restore=RestoreAnimations(settings.clone(),settings.is_gtk_enable_animations());
-    settings.set_gtk_enable_animations(false);
     assert!(matches!([d.w.surface.width(), d.w.surface.height()], [600, 900] | [700, 900] | [800, 900] | [1024, 900]));
     first_editor_pages(&mut d, &mut |d,name| {
         capture(d,name);
@@ -504,6 +511,12 @@ fn navigation_headers_settings(mut d: &mut Driver) {
     let root = done_header(&d, &frame, true);
     let close_button = done_button(&d, &root);
     capture(&mut d, "preferences-root");
+    d.click(&d.named("preferences-search-toggle"));
+    let search=named::<gtk::SearchEntry>(&frame,"settings-search");
+    for (query,name) in [("color","preferences-query"),("zzznomatchzzz","preferences-empty")] {
+        search.set_text(query);until(||ui_session(&d.w).preferences().is_some_and(|view|view.query==query),"Preferences displays its actual search query");capture(d,name);
+    }
+    search.set_text("");d.click(&d.named("preferences-search-toggle"));
     let start = descendants::<gtk::Button>(root.upcast_ref()).into_iter().filter(|button| button.is_mapped()
         && button.compute_bounds(&root).is_some_and(|bounds| bounds.x() < root.width() as f32 / 2.)).collect::<Vec<_>>();
     assert_eq!(start.len(), 1, "Preferences root keeps only its search toggle at the start");
@@ -516,6 +529,16 @@ fn navigation_headers_settings(mut d: &mut Driver) {
         d.click(&row);
         until(|| split.shows_content(), "Preferences opens its page from the root list");
         capture(&mut d, &format!("preferences-{}", settings.key()));
+        if settings==SettingsPage::Appearance {
+            let row=find_named(&frame,"setting-theme").unwrap();super::phone::inventory_popup(d,&row,"preferences-reset-menu",true);
+        }
+        if settings==SettingsPage::Shortcuts {
+            let search=named::<gtk::SearchEntry>(&frame,"shortcuts-search");
+            for (query,name) in [("Undo","shortcuts-query"),("zzznomatchzzz","shortcuts-empty")] {
+                search.set_text(query);until(||ui_session(&d.w).preferences().is_some_and(|view|view.shortcut_query==query),"Shortcuts displays its actual search query");capture(d,name);
+            }
+            search.set_text("");let menu=find_named(&frame,"keymap-menu").unwrap();super::phone::inventory_popup(d,&menu,"keymap-menu",false);
+        }
         assert!(split.is_collapsed(), "Preferences {} keeps one pane on a phone", settings.key());
         let preferences = ui_session(&d.w).preferences().unwrap();
         let page = preferences.pages.iter().find(|page| page.id == settings).unwrap();
@@ -581,7 +604,7 @@ fn navigation_headers_settings(mut d: &mut Driver) {
                 }
             }
             capture(&mut d, &format!("preferences-{}-{}", settings.key(), row.id.key()));
-            if frame.width() == 412 && matches!(row.id, PreferenceId::Language | PreferenceId::MissingProfile) {
+            if matches!(row.id, PreferenceId::Language | PreferenceId::MissingProfile) {
                 d.click(native.upcast_ref());
                 until(|| descendants::<gtk::Popover>(native.upcast_ref()).iter().any(|popup| popup.is_mapped()), "the native preference choice popup opens");
                 let popup = descendants::<gtk::Popover>(native.upcast_ref()).into_iter().find(|popup| popup.is_mapped()).unwrap();
@@ -606,7 +629,7 @@ fn navigation_headers_settings(mut d: &mut Driver) {
                 until(|| !popup.is_mapped(), "Escape closes the native preference choice popup");
             }
         }
-        if settings == SettingsPage::Color && frame.width() == 412 {
+        if settings == SettingsPage::Color {
             assert_eq!(popup_checks.len(), 2, "both selected preference options are checked");
             assert!(popup_checks.iter().all(|(_, checked)| *checked), "selected preference options retain their native checkmark: {popup_checks:?}");
         }
@@ -697,6 +720,23 @@ fn navigation_headers_settings(mut d: &mut Driver) {
 
 }
 
+fn preferences_popups(d: &mut Driver) {
+    d.w.dispatch(UiAction::Invoke {command:CommandId::Settings});
+    let (dialog,frame)=page(d);
+    for (page,id) in [(SettingsPage::Appearance,PreferenceId::Language),(SettingsPage::Color,PreferenceId::MissingProfile)] {
+        d.w.dispatch(UiAction::Preferences {action:PreferenceAction::Page {page}});
+        let row=find_named(&frame,&format!("setting-{}",id.key())).unwrap();
+        super::phone::inventory_popup(d,&row,&format!("preferences-{}-popup",id.key()),false);
+        if page==SettingsPage::Appearance {
+            let row=find_named(&frame,"setting-theme").unwrap();super::phone::inventory_popup(d,&row,"preferences-reset-menu",true);
+        }
+    }
+    d.w.dispatch(UiAction::Preferences {action:PreferenceAction::Page {page:SettingsPage::Shortcuts}});
+    let menu=find_named(&frame,"keymap-menu").unwrap();super::phone::inventory_popup(d,&menu,"keymap-menu",false);
+    d.w.dispatch(UiAction::CloseSettings);
+    until(||!dialog.is_mapped(),"the popup-only Preferences capture closes");
+}
+
 fn w6c_palette_library(d: &mut Driver) {
     let window = d.w.window.clone();
     if !find_named(window.upcast_ref(), "palette-chooser").is_some_and(|widget| widget.is_mapped()) {
@@ -756,7 +796,12 @@ fn manager_offered(d: &Driver, page: layer_workspace::ManagerPage, kind: &str, f
 fn w6c_managers(d: &mut Driver) {
     use layer_workspace::{ManagerAction as A,ManagerPage as P,WorkspaceInput as I};
     for (name,page) in [("workspaces",P::Workspaces),("layout-history",P::History),("this-workspace",P::ThisWorkspace),("saved-toolbars",P::ToolbarLibrary)] {
-        manager_page(d,page,false);dialog_frame(d);capture(d,name);manager_close(d);
+        manager_page(d,page,false);dialog_frame(d);capture(d,name);
+        if page==P::Workspaces {
+            let id=d.w.workspaces.view().rows[0].id.clone();let row=d.named(&format!("workspace-row-{id}"));
+            super::phone::inventory_popup(d,&row,"workspace-row-menu",true);
+        }
+        manager_close(d);
     }
     for (name,page) in [("this-workspace-details",P::ThisWorkspace),("saved-toolbar-details",P::ToolbarLibrary)] {
         manager_page(d,page,true);dialog_frame(d);capture(d,name);manager_close(d);
@@ -775,13 +820,9 @@ fn w6c_managers(d: &mut Driver) {
         d.w.dispatch(UiAction::Customize { action:CustomizationAction::CancelTools });
         until(|| d.w.visible_dialog().is_none(), "tool picker closes");
     }
-    let settings = gtk::Settings::default().unwrap();
-    let animations = settings.is_gtk_enable_animations();
-    settings.set_gtk_enable_animations(false);
     for (name,command) in [("reset-workspace",WorkspaceCommand::ResetLayout),("reset-brushes",WorkspaceCommand::ResetBrushes)] {
         d.w.dispatch(UiAction::WorkspaceManager { command });dialog_frame(d);capture(d,name);manager_close(d);
     }
-    settings.set_gtk_enable_animations(animations);
     for (name,rename) in [("rename-workspace",true),("delete-workspace",false)] {
         let id=manager_workspace(d);
         let offered=d.w.workspaces.view().rows.iter().find(|row| row.id==id).unwrap().actions.iter()
@@ -804,18 +845,32 @@ fn w6c_managers(d: &mut Driver) {
 
 fn w6c_catchup(d: &mut Driver) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
-    page(d);
-    for action in [NewDrawingAction::Presets, NewDrawingAction::SaveAs,
-        NewDrawingAction::PresetName { text: "Canvas study".into() }, NewDrawingAction::SavePreset] {
-        d.w.dispatch(UiAction::NewDrawing { action });
-    }
+    let (_,frame)=page(d);
+    let resolution=find_named(&frame,"new-drawing-resolution-menu").unwrap();
+    super::phone::inventory_popup(d,&resolution,"new-drawing-resolution-menu",false);
+    d.click(&find_named(&frame,"new-drawing-presets-button").unwrap());
+    until(||find_named(&frame,"new-drawing-save-as").is_some_and(|widget|widget.is_mapped()),"the preset browser opens");
+    d.click(&find_named(&frame,"new-drawing-save-as").unwrap());
+    let name=named::<gtk::Entry>(&frame,"new-drawing-save-name");
+    until(||name.is_mapped(),"Save Preset opens its name field");name.set_text("Canvas study");
+    d.click(&find_named(&frame,"new-drawing-save-confirm").unwrap());
+    until(||state(&d.w).new_drawing.as_ref().and_then(|view|view.drawer.as_ref()).is_some_and(|drawer|
+        matches!(drawer,NewDrawingDrawerView::Presets(browser) if browser.save.is_none() && browser.tiles.iter().any(|tile|tile.own && tile.selected))),"the saved preset returns to browsing");
     let index = match state(&d.w).new_drawing.unwrap().drawer.unwrap() {
         NewDrawingDrawerView::Presets(browser) => browser.tiles.iter().position(|tile| tile.own && tile.selected).unwrap(),
         other => panic!("{other:?}"),
     };
-    d.w.dispatch(UiAction::NewDrawing { action: NewDrawingAction::RenamePreset { index } });
+    let tile=find_named(&frame,&format!("new-drawing-preset-{index}")).unwrap();super::histogram::scroll_to(&tile);
+    super::phone::inventory_popup(d,&tile,"new-drawing-preset-menu",true);
+    let point=d.point(&tile);d.input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+    let menu=find_named(&frame,"new-drawing-preset-menu").unwrap();
+    until(||menu.is_mapped(),"the owned preset offers its context actions");
+    let rename=state(&d.w).new_drawing.as_ref().unwrap().copy.rename.clone();
+    d.click(find_button(&menu,&rename).unwrap().upcast_ref());
+    until(||name.is_mapped() && state(&d.w).new_drawing.as_ref().and_then(|view|view.drawer.as_ref()).is_some_and(|drawer|
+        matches!(drawer,NewDrawingDrawerView::Presets(browser) if browser.save.is_some())),"Rename Preset opens its actual name form");
     capture(d, "rename-drawing-preset");
-    d.w.dispatch(UiAction::NewDrawing { action: NewDrawingAction::Cancel });
+    named::<gtk::Button>(&frame,"new-drawing-cancel").emit_clicked();
     until(|| d.w.visible_dialog().is_none(), "New Drawing closes");
 
     let directory = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
@@ -831,6 +886,8 @@ fn w6c_catchup(d: &mut Driver) {
     crate::paper_picker::open(&d.w, paper);
     let (picker, frame) = page(d);
     let grid = named::<gtk::FlowBox>(&frame, "texture-grid");
+    let own=grid.child_at_index(layer_core::paper::built_in_papers().len() as i32).unwrap();
+    super::phone::inventory_popup(d,own.upcast_ref(),"paper-tile-menu",true);
     super::paper::paper_tile_menu(&grid, layer_core::paper::built_in_papers().len() as i32, "Rename…");
     let (rename, _) = page(d);
     capture(d, "rename-paper");
@@ -843,7 +900,8 @@ fn w6c_catchup(d: &mut Driver) {
     let (export, frame) = page(d);
     export_page(d, &frame, "presets");
     named::<adw::ButtonRow>(&frame, "export-preset-save").emit_by_name::<()>("activated", &[]);
-    until(|| d.w.visible_dialog().is_some_and(|dialog| find_named(&crate::page_dialog::parent(&dialog), "export-preset-name").is_some()), "Save Export Preset opens");
+    until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name()=="export-preset-name-dialog"
+        && find_named(&crate::page_dialog::parent(&dialog), "export-preset-name").is_some_and(|entry|entry.is_mapped())), "Save Export Preset opens its actual name form");
     capture(d, "save-export-preset");
     crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
     until(|| d.w.visible_dialog().as_ref() == Some(&export), "Save Export Preset closes");
@@ -885,6 +943,16 @@ fn w6c_profile_library(d: &mut Driver) {
     d.click(manager.upcast_ref());
     until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "profile-library-manager"), "Profile Library opens");
     capture(d, "profile-library");
+    let path=std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap()).join("M0 Adobe working.icc");
+    let path=glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+        std::fs::write(&path,layer_color::profile_bytes(&layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::AdobeRgb)).unwrap()).unwrap();path
+    })).unwrap();
+    d.click(&d.named("profile-library-import"));
+    let chooser=super::new_photo::chooser();let file=gtk::gio::File::for_path(path);chooser.set_file(&file).unwrap();
+    until(||chooser.file().as_ref()==Some(&file) && chooser.widget_for_response(gtk::ResponseType::Accept).is_some_and(|button|button.is_sensitive()),"the native profile chooser offers its selected file");
+    chooser.response(gtk::ResponseType::Accept);
+    until(||find_named(d.w.window.upcast_ref(),"profile-library-menu-0").is_some_and(|widget|widget.is_mapped()),"the imported working profile offers its row menu");
+    let menu=d.named("profile-library-menu-0");super::phone::inventory_popup(d,&menu,"profile-library-row-menu",false);
     crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
     until(|| d.w.visible_dialog().as_ref() == Some(&settings), "Profile Library closes");
     close(d, &settings);
@@ -912,23 +980,38 @@ fn w6d_canvas(d: &mut Driver) {
         ["command.undo","command.fit_canvas","command.save_document","command.settings","command.keyboard_shortcuts"]);
     let card=find_named(d.w.window.upcast_ref(),"command-bar").unwrap();
     let card_bounds=card.compute_bounds(&d.w.window).unwrap();
-    assert!((314.0..=315.0).contains(&card_bounds.height()),"five Search rows retain their natural card height: {card_bounds:?}");
-    assert!(card_bounds.height()<=329.,"Search fits the landscape placement budget");
     let last=find_named(&card,"command-result-4").unwrap();
     let scroll=last.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+    let list=find_named(&card,"command-results").unwrap();let width=card_bounds.width() as i32;
+    let natural=card.measure(gtk::Orientation::Vertical,width).1-card.margin_top()-card.margin_bottom()
+        +list.measure(gtk::Orientation::Vertical,width).1-scroll.measure(gtk::Orientation::Vertical,width).1;
+    let phone=state(&d.w).phone_presentation([d.w.surface.width() as f32,d.w.surface.height() as f32]).unwrap();
+    let available=layer_ui::COMMAND_SEARCH_STYLE.placement([d.w.surface.width() as f32,d.w.surface.height() as f32],phone.work_area,true).height;
+    assert!((card_bounds.height()-(natural as f32).min(available)).abs()<=1.,"Search keeps its full natural content within the shared budget: {card_bounds:?}, natural {natural}, budget {available}");
     let bounds=last.compute_bounds(&scroll).unwrap();
-    assert!(bounds.y()>=-1. && bounds.y()+bounds.height()<=scroll.height() as f32+1.,"last Search row is fully visible: {bounds:?}, viewport {}",scroll.height());
+    if natural as f32<=available { assert!(bounds.y()>=-1. && bounds.y()+bounds.height()<=scroll.height() as f32+1.,"last Search row is fully visible: {bounds:?}, viewport {}",scroll.height()); }
+    let entry=named::<gtk::SearchEntry>(&card,"command-search");
+    for (query,name) in [("undo","command-search-query"),("zzznomatchzzz","command-search-empty")] {
+        entry.set_text(query);until(||state(&d.w).command_search.as_ref().is_some_and(|search|search.query==query),"Command Search displays its actual query");capture(d,name);
+    }
+    entry.set_text("brush size");
+    until(||state(&d.w).command_search.as_ref().is_some_and(|search|search.results.first().is_some_and(|result|result.id=="tool_setting.size")),"Brush size is the offered parameter result");
+    entry.grab_focus();keys(d,0xff0d);
+    until(||state(&d.w).command_search.as_ref().is_some_and(|search|search.parameter.is_some()),"Command Search opens its selected parameter");
+    capture(d,"command-search-parameter");keys(d,0xff1b);
     d.w.dispatch(UiAction::CommandSearch { action:CommandSearchAction::Close });
     until(|| !d.w.command_bar.owns_input(),"Command Search releases input before Proof");
 
     d.w.dispatch(UiAction::Invoke { command:CommandId::SoftProofSetup });
     until(|| state(&d.w).customization.drawer.as_ref().is_some_and(|drawer|drawer.panels().any(|panel|panel==Panel::Proof)) && find_named(d.w.window.upcast_ref(),"drawer-panel-Proof").is_some_and(|panel|panel.is_mapped()&&panel.width()>0&&panel.height()>0),"Soft Proof opens its phone drawer");
     let proof=find_named(d.w.window.upcast_ref(),"drawer-panel-Proof").unwrap();
+    capture(d,"soft-proof-off");
     let print=find_button(&proof,"Print").unwrap();
     until(|| !d.w.drawer.animation_active(),"Proof drawer reaches its target before Print input");
     d.click(print.upcast_ref());
     until(|| find_named(&proof,"soft-proof-setup").is_some_and(|widget|widget.is_mapped()),"Print settings map in the phone drawer");
     capture(d,"soft-proof");
+    let profile=find_named(&proof,"proof-profile-choose").unwrap();super::phone::inventory_popup(d,&profile,"profile-picker-menu",false);
     let print_body=find_named(&proof,"soft-proof-setup").unwrap();
     let scroll=print_body.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
     assert!(scroll.property::<bool>("propagate-natural-height"),"phone Print propagates its actual natural body height");
@@ -1055,6 +1138,7 @@ fn w7_file_failure(d: &mut Driver) {
 fn native_phone_dialogs() {
     let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    if batch=="w6a-popups" {preferences_popups(&mut d);d.finish();return;}
     if let Some(kind)=batch.strip_prefix("w7-toolbar-") { w7_toolbar(&mut d,&format!("{kind}_toolbar"));d.finish();return; }
     if batch=="w7-file-failure" { w7_file_failure(&mut d);d.finish();return; }
     if matches!(batch.as_str(),"w7-pressure"|"w7-tilt") { w7_calibration(&mut d,batch=="w7-tilt");d.finish();return; }

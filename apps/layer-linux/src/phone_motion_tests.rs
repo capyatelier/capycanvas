@@ -112,6 +112,46 @@ fn slider(d: &Driver, control: ToolbarControl, phone: bool) -> Option<gtk::Scale
         .filter(|widget| bounds(widget.upcast_ref(), &d.w).is_some())
 }
 
+fn presentation_settled(w: &Workspace) -> bool {
+    if w.drawer.animation_active() { return false; }
+    if w.visible_dialog().is_some_and(|dialog| !crate::page_dialog::parent(&dialog).is_mapped()) { return false; }
+    widgets(w.window.upcast_ref()).filter(|widget|widget.is_mapped()).all(|widget| {
+        if let Some(stack)=widget.downcast_ref::<gtk::Stack>() { return !stack.is_transition_running(); }
+        if let Some(reveal)=widget.downcast_ref::<gtk::Revealer>() { return reveal.reveals_child()==reveal.is_child_revealed(); }
+        if let Some(navigation)=widget.downcast_ref::<adw::NavigationView>() {
+            return std::iter::successors(widget.first_child(),|child|child.next_sibling())
+                .filter(|child|child.is::<adw::NavigationPage>() && child.is_mapped()).count()==usize::from(navigation.visible_page().is_some());
+        }
+        let Some(parent)=widget.parent() else { return true; };
+        if widget.css_name()=="sheet" && matches!(parent.type_().name(),"AdwFloatingSheet"|"AdwBottomSheet") {
+            if !parent.property::<bool>("open") || widget.opacity()!=1. { return false; }
+            let Some((xx,yx,xy,yy,_,_))=widget.compute_transform(&parent).and_then(|matrix|matrix.to_2d()) else { return false; };
+            if (xx,yx,xy,yy)!=(1.,0.,0.,1.) { return false; }
+            if parent.type_().name()=="AdwBottomSheet" {
+                return widget.compute_bounds(&parent).is_some_and(|bounds|
+                    (bounds.y()+bounds.height()-parent.height() as f32).abs()<0.01);
+            }
+        }
+        if let Some(overlay)=parent.downcast_ref::<gtk::Overlay>() {
+            if overlay.is_clip_overlay(&widget) && widget.height()==overlay.height() && widget.width()==overlay.width() {
+                return widget.compute_bounds(overlay).is_some_and(|bounds|bounds.x().abs()<0.01 && bounds.y().abs()<0.01);
+            }
+        }
+        true
+    })
+}
+
+pub(super) fn settle_presentation(w: &Rc<Workspace>) {
+    let painted=Rc::new(Cell::new(false));
+    let clock=w.window.frame_clock().unwrap();
+    let handler=clock.connect_after_paint(glib::clone!(#[strong] painted, #[weak] w, move |_| {
+        painted.set(presentation_settled(&w));
+    }));
+    w.window.queue_draw();
+    until(||painted.get() && presentation_settled(w),"the settled presentation reaches after-paint");
+    clock.disconnect(handler);
+}
+
 pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: &str) {
     let Some(directory) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") else { return; };
     let state = state(w);
@@ -344,12 +384,15 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
     let text_pt = std::env::var("LAYER_PHONE_TEXT_PT").ok().map(|value| value.parse::<f32>().unwrap())
         .unwrap_or(layer_ui::UI_TEXT_PT as f32);
     let font = w.window.pango_context().font_description().map(|font| font.to_string().as_str().to_owned());
-    let rows = |body: &gtk::Widget| widgets(body).filter(|widget| widget.is_mapped() && widget.widget_name().as_str() != widget.type_().name()).map(|widget| {
+    let rows = |body: &gtk::Widget| widgets(body).filter(|widget| widget.is_mapped() && (widget.widget_name().as_str() != widget.type_().name()
+        || widget.is::<adw::PreferencesGroup>() || widget.is::<adw::ActionRow>() || widget.is::<adw::EntryRow>())).map(|widget| {
         let bounds = |widget: &gtk::Widget| widget.compute_bounds(&w.window).map(|r| [r.x(),r.y(),r.width(),r.height()]);
         let labels = widgets(&widget).filter(|child| child.is_mapped()).filter_map(|child| child.downcast::<gtk::Label>().ok()).map(|label| label.text().to_string()).collect::<Vec<_>>();
         let selected=widget.downcast_ref::<adw::ComboRow>().map(|row| row.selected());
+        let padding=widget.style_context().padding();let border=widget.style_context().border();
         serde_json::json!({"name":widget.widget_name().to_string(),"type":widget.type_().name(),"bounds":bounds(&widget),
-            "parent_bounds":widget.parent().as_ref().and_then(bounds),"labels":labels,"selected":selected})
+            "parent_bounds":widget.parent().as_ref().and_then(bounds),"labels":labels,"selected":selected,
+            "padding":[padding.left(),padding.top(),padding.right(),padding.bottom()],"border":[border.left(),border.top(),border.right(),border.bottom()]})
     }).collect::<Vec<_>>();
     let drawer_rows = state.customization.drawer.as_ref().map(|drawer| drawer.panels().filter_map(|panel| {
         let body = named(&format!("drawer-panel-{panel:?}"))?;
@@ -364,7 +407,7 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         "source":{"capture":capture_name,"coordinate_space":"window-client-logical","scale_factor":w.window.scale_factor(),
             "font":font,"text_pt":text_pt,"base_text_pt":layer_ui::UI_TEXT_PT,"requested":phone,
             "document":document,"camera":camera,
-            "swapped":state.phone.swapped,"hidden":state.phone.hidden,"widgets":widget_sources,
+            "swapped":state.phone.swapped,"hidden":state.phone.hidden,"menu_route":state.phone.menu_navigation.current(),"widgets":widget_sources,
             "tiles":state.workspace.layout.phone,"dialog_measure":dialog_measure,"drawer_rows":drawer_rows,"dialog_rows":dialog_rows,
             "command_search":state.command_search.as_ref().map(|search| serde_json::json!({"query":search.query,"result_ids":search.results.iter().map(|result| &result.id).collect::<Vec<_>>() }))}});
     let path = std::path::PathBuf::from(directory).join(format!("{capture_name}.allocations.json"));
@@ -392,10 +435,17 @@ pub(super) fn setup(name: &str) -> Driver {
     w.window.maximize();
     w.window.present();
     new_photo::ready(&w);
+    ui_session_mut(&w).name_new_drawing("Phone drawing");
+    w.refresh(regions::DOCUMENT);
     w.workspaces.send(&w, layer_workspace::WorkspaceInput::Switch { id: "builtin:workspace:painter".into() });
     wait_workspaces(&w);
     new_photo::ready(&w);
     assert_eq!(w.workspaces.view().id.as_deref(), Some("builtin:workspace:painter"));
+    w.dispatch(UiAction::Invoke { command: CommandId::Sculpt });
+    w.dispatch(UiAction::SelectToolGroup { group: layer_ui::ToolGroup::Blend });
+    assert!(ui_session(&w).state().notice.is_none());
+    w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::Pencil as u32 });
+    assert_eq!(ui_session(&w).state().brush.preset, layer_core::DefaultBrushPreset::Pencil as u32);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     pump(300);
     Driver::start(w, app)

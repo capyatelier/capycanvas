@@ -203,6 +203,7 @@ fn native_phone_customize() {
     until(|| ui_session(&d.w).tool_picker().is_none() && d.w.visible_dialog().is_none()
         && !d.w.pages.root.is_transition_running(), "cancel closes the capacity picker");
     assert_eq!(history(&d), unchanged, "cancel adds no history");
+    capture(&mut d, "frame-ten-tools");
 
     let before_move = layout(&d);
     let tiles = before_move.phone.as_ref().unwrap();
@@ -229,6 +230,7 @@ fn native_phone_customize() {
     let mut empty = layout(&d);
     empty.phone = Some(Vec::new());
     d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState { layout: empty, ..Default::default() }) });
+    capture(&mut d, "frame-empty-tools");
     hold(&mut d, None);
     let model = ui_session(&d.w).context_menu(ContextTarget::PhoneToolbar).unwrap();
     assert_eq!(model.sections.iter().flatten().map(|item| item.label.as_str()).collect::<Vec<_>>(), ["Add Tools…"]);

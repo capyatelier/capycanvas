@@ -214,7 +214,174 @@ async function untaggedAuditClose({send,evaluate,wait}){
   await evaluate('window.showOpenFilePicker=phoneAuditPicker;delete window.phoneAuditPicker;delete window.phoneAuditMissingProfile');
 }
 
+async function auditPanel(context,panel){
+  await context.send({type:'phone',action:{kind:'panel',panel}});
+  await context.wait('!!document.querySelector(".content-drawer")');
+}
+async function auditPopup({click,evaluate,call,settle},selector,context=false){
+  if(!context)return click(selector);
+  await evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'nearest'})`);await settle();
+  const point=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1});await settle();
+}
+async function auditSurfaceClose({send,evaluate,settle}){
+  await evaluate('[...document.querySelectorAll(":popover-open")].forEach(node=>node.hidePopover())');
+  await send({type:'customize',action:{type:'close_expanded'}});
+  await evaluate('[...document.querySelectorAll("dialog[open]")].reverse().forEach(node=>node.requestClose())');await settle();
+}
+async function auditToolClose(c){
+  if(await c.evaluate('layerApp.state().commands.find(item=>item.id==="cancel_transform")?.enabled'))await c.send({type:'invoke',command:'cancel_transform'});
+  await c.send({type:'select_brush',id:2});await auditSurfaceClose(c);
+}
+async function auditLayerKind(c,kind){
+  if(kind!=='image')await c.evaluate('window.phoneAuditLayerIds=layerApp.state().layers.map(layer=>String(layer.id))');
+  if(kind==='image')await auditOwnedImage(c);
+  else if(kind==='group')await c.send({type:'layer',action:{op:'new',group:true,clipped:false}});
+  else if(kind==='fill'){
+    await c.send({type:'effect',action:{op:'insert',effect:'solid_color'}});
+  }else if(kind==='mask'){
+    await c.send({type:'invoke',command:'select_all'});await c.send({type:'invoke',command:'mask_selection'});
+  }else if(kind==='selection'){await c.send({type:'invoke',command:'select_all'});await c.send({type:'invoke',command:'save_selection_layer'});}
+  else await c.send({type:'invoke',command:'new_vector_layer'});
+  await c.send({type:'layer',action:{op:'cancel_rename'}});await auditPanel(c,'layers');
+}
+async function auditLayerClose(c){
+  if(await c.evaluate('layerApp.state().commands.find(item=>item.id==="return_to_artwork")?.enabled'))await c.send({type:'invoke',command:'return_to_artwork'});
+  await auditSurfaceClose(c);await c.send({type:'invoke',command:'undo'});
+  assert.deepEqual(await c.evaluate('layerApp.state().layers.map(layer=>String(layer.id))'),await c.evaluate('phoneAuditLayerIds'),'The one authored fixture action is undone');
+  await c.send({type:'invoke',command:'deselect'});await c.send({type:'select_brush',id:2});await c.evaluate('delete window.phoneAuditLayerIds');
+}
+async function auditEffect(c,effect){
+  await c.evaluate('window.phoneAuditLayerIds=layerApp.state().layers.map(layer=>String(layer.id))');
+  await c.send({type:'effect',action:{op:'insert',effect}});await auditPanel(c,'properties');
+}
+async function auditHeldDrag(c,selector,delta,touch=false){
+  await c.evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'nearest'})`);await c.settle();
+  const start=await c.evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`),end={x:start.x+delta[0],y:start.y+delta[1]};
+  if(touch){await c.call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:704,...start}]});await c.call('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{id:704,...end}]});await c.call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}
+  else{await c.call('Input.dispatchMouseEvent',{type:'mousePressed',...start,button:'left',buttons:1,clickCount:1});await c.call('Input.dispatchMouseEvent',{type:'mouseMoved',...end,button:'left',buttons:1});}
+  await c.settle();
+}
+async function auditDragClose(c){
+  await c.evaluate('window.dispatchEvent(new Event("blur"))');await c.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:2,y:2,button:'left',buttons:0,clickCount:1});
+  await auditSurfaceClose(c);
+}
+async function auditCanvasPoint(c,point){
+  return c.evaluate(`(()=>{const camera=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${point[0]}*camera.zoom+camera.translation[0])*r.width/camera.viewport[0],y:r.y+(${point[1]}*camera.zoom+camera.translation[1])*r.height/camera.viewport[1]}})()`);
+}
+async function auditCanvasDrag(c,from,to,held=false){
+  await c.wait('layerApp.app.brush_ready()');
+  const start=await auditCanvasPoint(c,from),end=await auditCanvasPoint(c,to);
+  await c.call('Input.dispatchMouseEvent',{type:'mousePressed',...start,button:'left',buttons:1,clickCount:1});
+  await c.call('Input.dispatchMouseEvent',{type:'mouseMoved',...end,button:'left',buttons:1});
+  if(!held)await c.call('Input.dispatchMouseEvent',{type:'mouseReleased',...end,button:'left',buttons:0,clickCount:1});await c.settle();
+}
+async function auditPlacement(c){
+  await c.evaluate(`(async()=>{window.phoneAuditImagePicker=window.showOpenFilePicker;const canvas=new OffscreenCanvas(64,64),context=canvas.getContext('2d'),image=context.createImageData(64,64);for(let y=0;y<64;y++)for(let x=0;x<64;x++)image.data.set((Math.floor(x/16)+Math.floor(y/16))%2===0?[76,112,144,255]:[208,176,128,255],(y*64+x)*4);context.putImageData(image,0,0);const file=new File([await canvas.convertToBlob({type:'image/png'})],'Inventory marks.png',{type:'image/png'});window.showOpenFilePicker=async()=>[{name:file.name,getFile:async()=>file}];})()`);
+  await c.send({type:'invoke',command:'import_image'});await c.wait('!layerApp.documents.busy()&&layerApp.state().canvas_bar?.context.kind==="placement"');
+}
+async function auditOwnedImage(c){
+  await c.evaluate('window.phoneAuditLayerIds=layerApp.state().layers.map(layer=>String(layer.id))');
+  await auditPlacement(c);await c.send({type:'invoke',command:'apply_transform'});
+  await c.wait('!layerApp.documents.busy()&&layerApp.app.document_park_ready()');
+  await c.evaluate('window.showOpenFilePicker=phoneAuditImagePicker;delete window.phoneAuditImagePicker');
+}
+async function auditPlacementClose(c){
+  await c.send({type:'invoke',command:'cancel_transform'});await c.wait('!layerApp.documents.busy()&&!layerApp.state().requests.length');
+  await c.evaluate('window.showOpenFilePicker=phoneAuditImagePicker;delete window.phoneAuditImagePicker');await auditSurfaceClose(c);
+}
+async function auditCanvasBar(c,kind){
+  if(kind==='selection')await c.send({type:'invoke',command:'select_all'});
+  else if(kind==='quickmask'){await c.send({type:'invoke',command:'select_all'});await c.send({type:'invoke',command:'quick_mask'});}
+  else if(kind==='selectionlayer')await auditLayerKind(c,'selection');
+  else if(kind==='layermask')await auditLayerKind(c,'mask');
+  else if(kind==='picker'){
+    await auditEffect(c,'levels');
+    await c.evaluate('layerApp.dispatch({type:"effect",action:layerApp.state().layer_properties.actions.find(item=>item.action.op==="calibrate").action})');
+  }else if(kind==='guide'){await c.send({type:'invoke',command:'ruler'});await auditCanvasDrag(c,[300,300],[500,380]);}
+  await c.send({type:'customize',action:{type:'close_expanded'}});
+  await c.wait('!!layerApp.state().canvas_bar&&!document.querySelector(".canvas-action-bar").classList.contains("suppressed")');
+}
+async function auditBarMenu(c,menu){
+  if(menu==='more')return c.click('.canvas-action-bar-more');
+  const selector=`[data-canvas-bar-menu="${menu}"]`;
+  if(await c.evaluate(`document.querySelector(${JSON.stringify(selector)}).closest('.canvas-action-bar-item').hidden`)){
+    await c.click('.canvas-action-bar-more');const label=await c.evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-label')`);
+    await c.evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(node=>node.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).click()`);
+  }else await c.click(selector);
+}
+async function auditCanvasClose(c){
+  const kind=await c.evaluate('layerApp.state().canvas_bar?.context.kind');
+  if(kind==='picker')await c.send({type:'invoke',command:'eyedropper'});
+  if(['selection_layer','layer_mask','quick_mask'].includes(kind))await c.send({type:'invoke',command:'return_to_artwork'});
+  if(kind==='guide')await c.send({type:'invoke',command:'undo'});
+  if(await c.evaluate('typeof phoneAuditLayerIds!=="undefined"'))await auditLayerClose(c);
+  else{await c.send({type:'invoke',command:'deselect'});await c.send({type:'select_brush',id:2});await auditSurfaceClose(c);}
+}
+const auditMenuRow=(id,prepare,selector,context=false,rootselector='.panel-context-menu:popover-open',closeaction=auditSurfaceClose)=>({batch:'m0',id,rootselector,openaction:async c=>{await prepare(c);await auditPopup(c,selector,context);},closeaction});
+
 export const dialogAuditRows=[
+  {batch:'m0',id:'properties-paint',collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditPanel(c,'layers');await c.click('.content-drawer .layer-properties-disclosure');},closeaction:auditSurfaceClose},
+  {batch:'m0',id:'canvas-bar-clonesource',rootselector:'.canvas-action-bar:not(.suppressed)',openaction:async c=>{await c.send({type:'invoke',command:'clone'});await c.wait('layerApp.state().brush.tool==="clone"&&layerApp.app.brush_ready()');await c.send({type:'invoke',command:'clone_source_arm'});const point=await auditCanvasPoint(c,[300,300]);for(let tap=0;tap<2;tap++){for(const type of ['mousePressed','mouseReleased'])await c.call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await c.settle();if(tap===0)await c.wait('!layerApp.state().commands.find(item=>item.id==="clone_source_arm").selected');}await c.wait('layerApp.state().canvas_bar?.context.kind==="clone_source"');},variants:[{id:'overlay-clone-source',openaction:async()=>{}}],closeaction:async c=>{await c.send({type:'select_brush',id:2});await auditSurfaceClose(c);}},
+  {batch:'m0',id:'overlay-vector',rootselector:'#canvas',openaction:async c=>{await auditLayerKind(c,'vector');await c.send({type:'customize',action:{type:'close_expanded'}});await c.send({type:'invoke',command:'figure'});await auditCanvasDrag(c,[300,300],[500,380]);await c.send({type:'invoke',command:'edit_points'});},closeaction:async c=>{await c.send({type:'invoke',command:'undo'});await auditLayerClose(c);}},
+  {batch:'m0',id:'canvas-bar-menu-warp',rootselector:'.panel-context-menu:popover-open',openaction:async c=>{await c.send({type:'invoke',command:'select_all'});await c.send({type:'invoke',command:'fill_selection'});await c.wait('layerApp.app.document_park_ready()');await c.send({type:'invoke',command:'scale_rotate'});await c.send({type:'invoke',command:'transform_warp'});await c.wait('!!document.querySelector("[data-canvas-bar-menu=warp_grid]")');await auditBarMenu(c,'warp_grid');},closeaction:async c=>{await auditSurfaceClose(c);await c.send({type:'invoke',command:'cancel_transform'});await c.send({type:'invoke',command:'undo'});await c.send({type:'invoke',command:'deselect'});await c.send({type:'select_brush',id:2});}},
+
+  {batch:'m0',id:'canvas-bar-placement',rootselector:'.canvas-action-bar:not(.suppressed)',openaction:auditPlacement,variants:[{id:'overlay-placed-image',openaction:async()=>{}}],closeaction:auditPlacementClose},
+  {batch:'m0',id:'canvas-bar-polygon',rootselector:'.canvas-action-bar:not(.suppressed)',openaction:async c=>{await c.send({type:'invoke',command:'polygon_select'});for(const point of [[300,300],[500,300]]){const position=await auditCanvasPoint(c,point);for(const type of ['mousePressed','mouseReleased'])await c.call('Input.dispatchMouseEvent',{type,...position,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});}await c.call('Input.dispatchMouseEvent',{type:'mouseMoved',...await auditCanvasPoint(c,[500,500]),button:'none',buttons:0});await c.settle();},closeaction:async c=>{await c.send({type:'invoke',command:'cancel_selection'});await auditCanvasClose(c);}},
+  {batch:'m0',id:'overlay-rulers',rootselector:'#canvas',openaction:c=>auditCanvasBar(c,'guide'),closeaction:auditCanvasClose},
+  {batch:'m0',id:'overlay-fill-trail',rootselector:'.fill-gesture-overlay:not([hidden])',openaction:async c=>{await c.send({type:'invoke',command:'fill'});await auditCanvasDrag(c,[300,300],[500,380],true);},closeaction:async c=>{await c.evaluate('window.dispatchEvent(new Event("blur"))');await c.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:2,y:2,button:'left',buttons:0,clickCount:1});await c.send({type:'select_brush',id:2});}},
+
+  {batch:'m0',id:'layers-swipe-actions',collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditPanel(c,'layers');await auditHeldDrag(c,'.layer-row[data-layer]:not(.layer-row-unit) .layer-name',[-60,0],true);await c.wait('parseFloat(document.querySelector(".layer-row[data-layer]:not(.layer-row-unit)").parentElement.style.getPropertyValue("--swipe"))>0');},closeaction:auditDragClose},
+  {batch:'m0',id:'layers-drag-pickup',rootselector:'.layer-drag-preview',openaction:async c=>{await c.evaluate('window.phoneAuditLayerIds=layerApp.state().layers.map(layer=>String(layer.id))');await c.send({type:'invoke',command:'add_layer'});await auditPanel(c,'layers');await auditHeldDrag(c,'.layer-row[data-layer]:not(.layer-row-unit) .layer-grip',[20,48]);},closeaction:async c=>{await auditDragClose(c);await auditLayerClose(c);}},
+  {batch:'m0',id:'swatch-drag',rootselector:'.palette-drag-ghost',openaction:async c=>{await auditPanel(c,'color');await auditHeldDrag(c,'.palette-swatches .palette-tile',[40,20]);},closeaction:auditDragClose},
+  {batch:'m0',id:'canvas-notice',rootselector:'.canvas-notice:not([hidden])',openaction:async c=>{await dialogAuditRows.find(row=>row.id==='overlay-vector').openaction(c);await c.send({type:'select_brush',id:2});await auditCanvasDrag(c,[300,300],[500,380]);},closeaction:async c=>{await c.send({type:'invoke',command:'undo'});await auditLayerClose(c);}},
+
+  ...[
+    ['numeric-popover','The numeric popover belongs to vertical desktop toolbar components; phone sliders omit its axis fields and ToolSettings uses NumberPopover=false. No existing phone route; desktop-only chrome is outside M0.'],
+    ['profile-picker-menu','GTK profile picker More menu is presented as inline Import/Saved-profile buttons on Web document-color.js/export-controls.js; no corresponding menu opener.'],
+  ].map(([id,blocked])=>({batch:'m0',id,blocked})),
+  {batch:'m0',id:'new-drawing-preset-menu',rootselector:'.new-drawing-menu:popover-open',openaction:async c=>{await dialogAuditRows.find(row=>row.id==='rename-drawing-preset').openaction(c);await c.click('#new-drawing-save-cancel');const index=await c.evaluate('layerApp.state().new_drawing.drawer.tiles.findIndex(tile=>tile.own&&tile.name==="Canvas study")');await auditPopup(c,`[data-new-drawing-preset="${index}"]`,true);},closeaction:async c=>{await c.evaluate('document.querySelector(".new-drawing-menu:popover-open").hidePopover()');await drawingPresetMenu(c,'delete');await c.click('#new-drawing-cancel');}},
+  auditMenuRow('new-drawing-paper-color-menu',async c=>{await c.send({type:'invoke',command:'new_document'});await c.click('#new-drawing-paper-color');},'[data-new-drawing-paper-color="0"]',true),
+  {batch:'m0',id:'paper-tile-menu',rootselector:'#texture-dialog .panel-context-menu:popover-open',openaction:async c=>{await dialogAuditRows.find(row=>row.id==='rename-paper').openaction(c);await c.evaluate('document.querySelector("#paper-rename-dialog").requestClose()');await c.wait('!document.querySelector("#paper-rename-dialog")');const index=await c.evaluate('[...document.querySelectorAll("#texture-dialog .texture-tile")].findIndex(tile=>tile.querySelector(".texture-caption").textContent==="Linen scan")');await auditPopup(c,`#texture-dialog .texture-tile[data-texture-tile="${index}"]`,true);},closeaction:async c=>{await c.evaluate('document.querySelector("#texture-dialog .panel-context-menu:popover-open").hidePopover();document.querySelector("#texture-dialog").requestClose()');const id=await c.evaluate('layerApp.state().layer_properties.controls.find(control=>control.paper).paper.tiles.find(tile=>tile.label==="Linen scan").id');await c.send({type:'effect',action:{op:'delete_paper',id}});await auditSurfaceClose(c);}},
+
+  ...['picker','selection','quickmask','selectionlayer','layermask','guide'].map(kind=>({batch:'m0',id:`canvas-bar-${kind}`,rootselector:'.canvas-action-bar:not(.suppressed)',openaction:c=>auditCanvasBar(c,kind),closeaction:auditCanvasClose})),
+  ...['more','copy','adjust','mask','refine'].map(menu=>({batch:'m0',id:`canvas-bar-menu-${menu}`,rootselector:'.panel-context-menu:popover-open',openaction:async c=>{await auditCanvasBar(c,'selection');await auditBarMenu(c,menu);},closeaction:auditCanvasClose})),
+
+  ...[['curves-editor','curves'],['gradient-editor','gradient_fill']].map(([id,effect])=>({batch:'m0',id,collector:'drawer',rootselector:'.content-drawer',openaction:c=>auditEffect(c,effect),variants:id==='curves-editor'?[{id:'properties-filter',openaction:async()=>{}}]:[],closeaction:auditLayerClose})),
+  ...[['properties-actions-menu','[data-property-action-group]','.toolbar-choice-menu:popover-open'],['properties-add-filter-menu','#properties-add-filter','.panel-context-menu:popover-open']].map(([id,selector,rootselector])=>({batch:'m0',id,rootselector,openaction:async c=>{await auditEffect(c,'levels');await c.click(selector);},variants:id==='properties-actions-menu'?[{id:'property-picker',openaction:async()=>{}}]:[],closeaction:auditLayerClose})),
+  {batch:'m0',id:'profile-library-row-menu',blocked:'Web profile library renders inline Use/Hide/Remove actions, with no row-menu opener (export-controls.js chooseProfileLibrary); GTK menu is a presentation gap, not a fixture alias.'},
+
+  ...['vector','selection','fill','mask','image','group'].flatMap(kind=>[
+    {batch:'m0',id:`layers-${kind}`,collector:'drawer',rootselector:'.content-drawer',openaction:c=>auditLayerKind(c,kind),closeaction:auditLayerClose},
+    {batch:'m0',id:`properties-${kind}`,collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditLayerKind(c,kind);await c.click('.content-drawer .layer-properties-disclosure');await c.wait('getComputedStyle(document.querySelector(".content-drawer .layer-properties-pages > .layers-panel")).visibility==="hidden"');},closeaction:auditLayerClose},
+  ]),
+  {batch:'m0',id:'layers-inline-rename',collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditPanel(c,'layers');const id=await c.evaluate('layerApp.state().layer_tools.editing_layer.id');await c.send({type:'layer',action:{op:'begin_rename',id}});},closeaction:async c=>{await c.send({type:'layer',action:{op:'cancel_rename'}});await auditSurfaceClose(c);}},
+  {batch:'m0',id:'layers-opacity-popover',rootselector:'.layer-opacity-popup:popover-open',openaction:async c=>{await auditPanel(c,'layers');const point=await c.evaluate('(()=>{const r=document.querySelector(".layer-row[data-layer]:not(.layer-row-unit) .layer-name").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');await c.call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:701,...point,x:point.x-15},{id:702,x:point.x+15,y:point.y}]});await c.call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await c.settle();},closeaction:auditSurfaceClose},
+
+  ...[
+    ['layers-row-menu','.layer-row[data-layer]:not(.layer-row-unit)',true],
+    ['layers-blend-menu','.layer-blend',false],
+    ['layers-add-filter-menu','#layer-add-filter',false],
+  ].map(([id,selector,context])=>auditMenuRow(id,c=>auditPanel(c,'layers'),selector,context)),
+  ...[
+    ['color-slot-menu','[data-color-slot="foreground"]',true],['color-wheel-menu','.color-wheel',true],
+    ['palette-library-menu','.palette-library-add',false],['palette-row-menu','.palette-choice',true],
+    ['palette-swatch-menu','.palette-swatches .palette-tile',true],
+  ].map(([id,selector,context])=>auditMenuRow(id,async c=>{await auditPanel(c,'color');if(id==='palette-library-menu'||id==='palette-row-menu')await c.click('.palette-selector');},selector,context)),
+  auditMenuRow('selection-actions-menu',async c=>{await c.send({type:'invoke',command:'select'});await auditPanel(c,'tool_settings');},'.selection-menu-button',false,'.panel-context-menu:popover-open',auditToolClose),
+  auditMenuRow('tool-action-dropdown',async c=>{await c.send({type:'invoke',command:'crop'});await auditPanel(c,'tool_settings');},'[data-tool-action-group]',false,'.panel-context-menu:popover-open',auditToolClose),
+  auditMenuRow('color-model-popover',c=>c.send({type:'invoke',command:'edit_color'}),'[data-color-format="0"]',false,'.color-format-menu:not([hidden])'),
+  auditMenuRow('new-drawing-resolution-menu',c=>c.send({type:'invoke',command:'new_document'}),'#new-drawing-resolution-choices'),
+  auditMenuRow('keymap-menu',c=>c.send(shortcuts),'#keymap-menu > summary',false,'#keymap-menu[open]'),
+  auditMenuRow('preferences-reset-menu',c=>c.send({type:'open_settings',page:'appearance'}),'[data-preference="transparency"]',true,'#preference-context-menu:popover-open'),
+  auditMenuRow('workspace-row-menu',async c=>{await managerPage(c,'workspaces');},'.workspace-grip'),
+  {batch:'m0',id:'command-search-parameter',rootselector:'#command-bar[open]',openaction:async({send,wait})=>{await send({type:'invoke',command:'search_commands'});await send({type:'command_search',action:{type:'query',text:'brush size'}});await send({type:'command_search',action:{type:'commit',text:'brush size'}});await wait('layerApp.state().command_search?.parameter?.id==="tool_setting.size"');},closeaction:auditSurfaceClose},
+  ...['query','empty'].flatMap(kind=>[
+    {batch:'m0',id:`preferences-${kind}`,rootselector:'#settings[open]',openaction:async({send})=>{await send({type:'invoke',command:'settings'});await send(preference({type:'toggle_search',open:true}));await send(preference({type:'search',query:kind==='query'?'color':'zzznomatchzzz'}));},closeaction:auditSurfaceClose},
+    {batch:'m0',id:`shortcuts-${kind}`,rootselector:'#settings[open]',openaction:async({send,click,call,settle})=>{await send(shortcuts);await click('#shortcuts-search');await call('Input.insertText',{text:kind==='query'?'Undo':'zzznomatchzzz'});await settle();},closeaction:auditSurfaceClose},
+    {batch:'m0',id:`command-search-${kind}`,rootselector:'#command-bar[open]',openaction:async({send})=>{await send({type:'invoke',command:'search_commands'});await send({type:'command_search',action:{type:'query',text:kind==='query'?'Undo':'zzznomatchzzz'}});},closeaction:auditSurfaceClose},
+  ]),
+
   {batch:'w6a',id:'preferences-root',openaction:{type:'invoke',command:'settings'},rootselector:'#settings[open]',baseline:true},
   ...['appearance','canvas','color','input','shortcuts','about'].map(page=>({batch:'w6a',id:page==='shortcuts'?'preferences-shortcuts-direct':`preferences-${page}`,requestedpage:page,openaction:page==='shortcuts'?shortcuts:{type:'open_settings',page},rootselector:'#settings[open]',baseline:page==='appearance'})),
   {batch:'w6a',id:'preferences-shortcuts-category',openaction:[shortcuts,preference({type:'shortcut_category',id:'Modifier keys'})],rootselector:'#settings[open]'},
@@ -433,6 +600,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     if(state==='command-search')metadata.command_search=await evaluate('({query:layerApp.state().command_search?.query??"",result_ids:(layerApp.state().command_search?.results??[]).map(result=>result.id)})');
     if(state==='soft-proof'||state==='sdr-rendition')metadata.proof_body_rows=await evaluate(`(()=>{const body=document.querySelector('.content-drawer .proof-panel');return [...body.querySelectorAll('.proof-modes button,.proof-print .document-size,.proof-sdr .document-size,.proof-tone-pad')].filter(node=>node.getClientRects().length).map(node=>{const r=node.getBoundingClientRect();return{label:node.textContent.trim(),bounds:[r.x,r.y,r.width,r.height]};});})()`);
     if(mode==='frame')metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
+    if(mode==='menus')Object.assign(metadata,await evaluate('({menu_route:layerApp.state().phone.menu_route,swapped:layerApp.state().phone.swapped,hidden:layerApp.state().phone.hidden})'));
     if(mode==='input')metadata.input=await evaluate('({coarse:matchMedia("(pointer: coarse)").matches,screen:[screen.width,screen.height],mode:layerApp.state().settings.finger_drawing,pen_seen:layerApp.state().settings.pen_seen,picker:layerApp.state().color_picker})');
     const document=await evaluate(`(()=>{const s=layerApp.state(),tab=s.tabs.find(t=>t.active);return {extent:tab?[tab.width,tab.height]:null,color:layerApp.app.document_color(),count:layerApp.app.document_tabs(0).tabs.length,busy:s.document_file.busy,host_busy:layerApp.documents.busy()};})()`);
     assert.equal(document.count,expected_documents,'Captured drawing count');
@@ -465,7 +633,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     return record;
   };
   await send({type:'invoke',command:'new_document'});
-  const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:mode==='menus'?'Untitled 1':null}));
+  const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:'Phone drawing'}));
   assert.equal(setup.resolution,300,'New drawing recipe resolution');
   assert.deepEqual(setup.color,{space:'Srgb',depth:'U8'},'New drawing recipe color');
   assert.deepEqual(setup.paper.color.rgba,[1,1,1,1],'New drawing recipe white paper');
@@ -487,6 +655,14 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
   await wait('layerApp.app.document_tabs(0).tabs.length===1&&!layerApp.documents.busy()&&!layerApp.state().document_file.busy');
   await send({type:'workspace_manager',command:{type:'switch',id:'builtin:workspace:painter'}});
   await wait(`JSON.parse(layerApp.app.workspace_view()).id==='builtin:workspace:painter'&&!JSON.parse(layerApp.app.workspace_view()).busy`);
+  await send({type:'invoke',command:'sculpt'});
+  await send({type:'select_tool_group',group:'blend'});
+  assert.deepEqual(await evaluate('layerApp.state().tool_panels.sculpt_sets.groups.filter(group=>group.selected).map(group=>group.action.group)'),['blend'],'The actual Sculpt group is Blend before restoring Pencil');
+  await send({type:'select_brush',id:2});
+  await wait('layerApp.app.brush_ready()');
+  assert.deepEqual(await evaluate('layerApp.state().layers.map(layer=>layer.label)'),['Current ink','Paper'],'Audit starts with the native blank layer list');
+  assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),false,'Audit starts without a selection');
+  assert.deepEqual(await evaluate('({preset:layerApp.state().brush.preset,notice:layerApp.state().notice??null,error:layerApp.state().host_error??null,status:document.querySelector("#status").textContent.trim()})'),{preset:2,notice:null,error:null,status:''},'The initial native-matched fixture has Pencil and no notice or host error');
   const click=async selector=>{
     await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n||n.disabled)throw Error('Unavailable '+${JSON.stringify(selector)});n.scrollIntoView({block:'nearest',inline:'nearest'});})()`);
     await settle();
@@ -506,14 +682,6 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     const records=execFileSync('cargo',['run','--locked','-q','-p','layer-engine','--features','prediction-bench','--example','stroke-recording','--','dump',path],{cwd:root,encoding:'utf8'}).trim().split('\n').map(line=>JSON.parse(line));
     await writeFile(`${path}.json`,JSON.stringify(records,null,2)+'\n');return records;
   };
-  if(mode==='drawers'){
-    await send({type:'invoke',command:'brush'});await wait('layerApp.app.brush_ready()');
-    const center=await evaluate('(()=>{const b=document.querySelector("#canvas").getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()');
-    await call('Input.dispatchMouseEvent',{type:'mousePressed',...center,button:'left',buttons:1,clickCount:1});
-    for(let i=1;i<=4;i++)await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:center.x+5*i,y:center.y,button:'left',buttons:1});
-    await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:center.x+20,y:center.y,button:'left',buttons:0,clickCount:1});
-    await wait('layerApp.app.document_park_ready()');
-  }
   const requestedCases=process.env.LAYER_PHONE_AUDIT_CASES?.split(',').map(value=>value.trim());
   const availableCases=audit.matrix;
   for(const key of requestedCases??[])assert.ok(availableCases.some(test=>`${test.viewport.join('x')}-${test.theme}`===key),`Unknown phone audit case: ${key}`);
@@ -726,7 +894,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       await open();
       const bounds=()=>evaluate('document.querySelector(".menu-drawer").getBoundingClientRect().toJSON()');
       let initial=await bounds();
-      const captureMenu=async (name,expectedDocuments=1)=>{
+      const captureMenu=async (name,expectedDocuments=1,expectedExtent=[1200,1600])=>{
         const point=await evaluate(`(()=>{const p=layerApp.app.layout(innerWidth,innerHeight).phone;return p.edge==='top'?{x:layerApp.state().phone.swapped?p.capy.x-4:p.capy.x+p.tile+4,y:p.capy.y+p.tile*.5}:{x:p.capy.x+p.tile*.5,y:p.capy.y+p.tile+4};})()`);
         await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,button:'none',buttons:0});await settle();
         const specs=[...frame,{id:'menu',role:'menu',selector:'#phone-menu'},
@@ -747,7 +915,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
           }
           if(close)specs.push({id:`menu.row.${index}.close`,role:'menu-close',selector:selector+' + .menu-close'});
         }
-        const record=await capture(test,name,specs,'typed shared Capy menu through the common drawer owner',null,expectedDocuments);
+        const record=await capture(test,name,specs,'typed shared Capy menu through the common drawer owner',null,expectedDocuments,{space:'Srgb',depth:'U8'},expectedExtent);
         assert.deepEqual(record.missing,[]);assert.ok(record.elements.find(e=>e.id==='menu.bridge').visible);
         const row=record.elements.find(e=>e.id==='menu.row.0'),tiles=record.elements.filter(e=>e.role==='menu-tile');
         for(const tile of tiles)assert.ok(Math.abs(tile.bounds[2]-row.bounds[3])<=1&&Math.abs(tile.bounds[3]-row.bounds[3])<=1,'The strip tiles match the native menu row height');
@@ -755,23 +923,24 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         return record;
       };
       const projections=await evaluate(`layerApp.app.phone_menu().pages.map(p=>({id:p.id,parent:p.parent,title:p.title,sections:p.sections.map(s=>s.map(r=>({label:r.label,target:r.target,enabled:r.enabled,selected:r.selected})))}))`);
-      async function visit(page){
+      async function visit(page,swapped){
         assert.equal(await route(),JSON.stringify(page.id));
         const name=page.id.page?.kind==='application'?`application-${page.id.page.menu}`:page.id.page?.kind??'main';
-        await captureMenu(`menu-${name}${page.id.path.length?'-'+page.id.path.flat().join('-'):''}`);
+        await captureMenu(`menu-${name}${page.id.path.length?'-'+page.id.path.flat().join('-'):''}${swapped?'-swapped':''}`);
         for(const [s,section]of page.sections.entries())for(const [i,row]of section.entries())if(row.target){
           await click(`.menu-page:not([hidden]):not([inert]) [data-position="[${s},${i}]"]`);
           await wait(`JSON.stringify(layerApp.state().phone.menu_route)===${JSON.stringify(JSON.stringify(row.target))}`);
-          await visit(projections.find(p=>JSON.stringify(p.id)===JSON.stringify(row.target)));
+          await visit(projections.find(p=>JSON.stringify(p.id)===JSON.stringify(row.target)),swapped);
           await click('.menu-page:not([hidden]):not([inert]) .submenu-back');
           await wait(`JSON.stringify(layerApp.state().phone.menu_route)===${JSON.stringify(JSON.stringify(page.id))}`);
         }
       }
-      await visit(projections.find(p=>!p.parent));
-      assert.equal(await route(),rootRoute);
       const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
       for(const swapped of [false,true]){
         if(swapped)await click('#phone-swap');
+        await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});
+        initial=await bounds();await visit(projections.find(p=>!p.parent),swapped);
+        assert.equal(await route(),rootRoute);
         for(const material of [0,2]){
           await send({type:'preferences',action:{type:'edit',id:'transparency',value:material}});
           initial=await bounds();await captureMenu(`menu-root-${swapped?'swapped':'normal'}-${material?'glass':'opaque'}`);
@@ -851,11 +1020,11 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       await open();await click('#phone-drawing');
       await click('.menu-page:not([hidden]):not([inert]) [data-position="[1,0]"]');
       await wait('!layerApp.state().phone.menu&&!!document.querySelector("dialog[open]")');
-      await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:'Untitled 1'}));
+      await evaluate(createDrawing({width:128,height:96,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:'Menu drawing'}));
       await wait('layerApp.app.document_tabs(0).tabs.length===2&&!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
       const second=await evaluate('Number(layerApp.app.document_tabs(0).selected)');assert.notEqual(first,second);
-      await open();initial=await bounds();await captureMenu('menu-root-two',2);
-      await click('#phone-drawing');await captureMenu('menu-drawings-two',2);
+      await open();initial=await bounds();await captureMenu('menu-root-two',2,[128,96]);
+      await click('#phone-drawing');await captureMenu('menu-drawings-two',2,[128,96]);
       await click(`#phone-drawing-${first}`);
       await wait(`!layerApp.state().phone.menu&&Number(layerApp.app.document_tabs(0).selected)===${first}&&!layerApp.documents.busy()`);
       await send({type:'invoke',command:'drawings'});initial=await bounds();await captureMenu('menu-drawings-current',2);
@@ -869,6 +1038,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       await close();continue;
     }
     if(mode==='drawers'){
+      const fixture={send,evaluate,wait,call,settle,click};
       const captureDrawer=async name=>{
         try {await drawerReady();}
         catch(error){
@@ -894,6 +1064,8 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         const tiles=await evaluate('layerApp.state().workspace.layout.phone');
         for(const tile of tiles.filter(tile=>tile.control.kind!=='divider')){
           const name=tile.control.command??tile.control.slot??tile.control.panel??tile.control.kind;
+          const transforming=name==='scale_rotate';
+          if(transforming)await auditOwnedImage(fixture);
           const selector=`#phone-tool-${tile.id}`;
           await click(selector);
           if(!await evaluate('!!layerApp.state().customization.drawer')){
@@ -934,13 +1106,27 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
             await wait(`getComputedStyle(document.querySelector('.content-drawer .layer-properties-pages > .properties-panel')).visibility==='hidden'`);
           }
           await closeDrawer();
+          if(transforming)await auditLayerClose(fixture);
         }
         await click('#phone-tool-settings');await captureDrawer(`inventory-${tag}-settings`);
         assert.deepEqual((await evaluate('layerApp.state().customization.drawer')).columns,[['tool_settings']]);
       }
       await closeDrawer();
-      for(const panel of ['stats','histogram']){
+      for(const panel of ['navigator','histogram','waveform','stats','sizes','brushes']){
         await send({type:'phone',action:{kind:'panel',panel}});await captureDrawer(`inventory-window-${panel}`);await closeDrawer();
+      }
+      await send({type:'select_brush',id:2});
+      for(const command of await evaluate('layerApp.app.catalog().tool_commands')){
+        let offered=await evaluate(`layerApp.state().commands.find(item=>item.id===${JSON.stringify(command)})`);
+        const transforming=command==='scale_rotate';
+        if(transforming){await auditOwnedImage(fixture);offered=await evaluate(`layerApp.state().commands.find(item=>item.id===${JSON.stringify(command)})`);}
+        if(!offered?.enabled){report.unreachable.push({state:`inventory-settings-${command}`,viewport:test.viewport,theme:test.theme,status:'unavailable',reason:offered?.disabled_reason??'The shared command is not offered in this fixture',png:null});if(transforming)await auditLayerClose(fixture);continue;}
+        await closeDrawer();await send({type:'invoke',command});
+        if(transforming)assert.equal(await evaluate('layerApp.state().commands.find(item=>item.id==="scale_rotate").selected'),true,'The owned image selects the actual Scale/Rotate tool');
+        await send({type:'phone',action:{kind:'panel',panel:'tool_settings'}});
+        await captureDrawer(`inventory-settings-${command}`);await closeDrawer();
+        if(await evaluate('layerApp.state().commands.find(c=>c.id==="cancel_transform")?.enabled'))await send({type:'invoke',command:'cancel_transform'});
+        if(transforming)await auditLayerClose(fixture);
       }
       const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
       for(const swapped of [false,true]){
@@ -983,6 +1169,8 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       assert.equal(active,true,'Web phone capability is presented');
       const check=async(name)=>{
         const p=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone');
+        const point=await evaluate(`(()=>{const p=layerApp.app.layout(innerWidth,innerHeight).phone;if(layerApp.state().phone.hidden){const r=document.querySelector('#zen-capy').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};}return p.edge==='top'?{x:layerApp.state().phone.swapped?p.capy.x-4:p.capy.x+p.tile+4,y:p.capy.y+p.tile*.5}:{x:p.capy.x+p.tile*.5,y:p.capy.y+p.tile+4};})()`);
+        await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point,button:'none',buttons:0});await settle();
         const record=await capture(test,name,phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),'shared phone frame');
         assert.deepEqual(record.missing,[],`${name}: every frame element is present`);
         const expected=new Map([
@@ -1008,12 +1196,15 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         assert.deepEqual(await evaluate('[layerApp.state().phone.native,layerApp.state().phone.native_counts,layerApp.state().phone.movable]'),[[0,0],[0,0],false]);
       };
       await check('frame-rest');
+      await send({type:'set_brush_size',value:40});
+      await send({type:'set_color',rgba:[0,0,0,1]});
+      assert.deepEqual(await evaluate('layerApp.state().colors.foreground.rgba'),[0,0,0,1]);
       await send({type:'phone',action:{kind:'swap_sides'}});await check('frame-swapped');
+      await send({type:'phone',action:{kind:'swap_sides'}});
       await send({type:'invoke',command:'zen_mode'});await check('frame-hidden');
       await evaluate('document.querySelector("#zen-capy").click()');await settle();
       assert.equal(await evaluate('layerApp.state().phone.hidden'),false,'The same Capy reveals the bars');
       await check('frame-revealed');
-      await send({type:'phone',action:{kind:'swap_sides'}});
       const transparency=['off','low','medium','high'].indexOf(await evaluate('layerApp.state().settings.transparency'));
       for(const value of [0,3]){
         await send({type:'preferences',action:{type:'edit',id:'transparency',value}});

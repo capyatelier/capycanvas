@@ -84,6 +84,7 @@ fn drawing(d: &mut Driver) {
     assert_eq!(state(&d.w).settings.finger_drawing, layer_ui::FingerDrawing::On);
     if state(&d.w).phone.menu {
         assert!(d.named("phone-finger").property::<bool>("active"));
+        super::phone_motion::settle_presentation(&d.w);
         capture(d, "menu-on");
         d.input.key(0xff1b);
         until(|| !state(&d.w).phone.menu, "Escape closes the finger menu before drawing");
@@ -149,6 +150,7 @@ fn drawing(d: &mut Driver) {
         assert_eq!(choice.selected(), index);
         assert_eq!(ui_session(&d.w).finger_drawing(), index == 1);
     }
+    super::phone_motion::settle_presentation(&d.w);
     capture(d, "settings-on");
     d.w.dispatch(UiAction::CloseSettings);
     until(|| !page.is_mapped(), "Settings closes before testing canvas hit targets");
