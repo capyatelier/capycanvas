@@ -377,7 +377,7 @@ impl NativeHost {
         )?;
         let document_spec = layer_ui::new_document_spec(self.session.localization());
         map.serialize_entry("document_options", &json!({
-            "unsaved_description": document_spec.unsaved_description, "discard_label": document_spec.discard,
+            "dialog": document_spec.dialog, "unsaved_description": document_spec.unsaved_description, "discard_label": document_spec.discard,
             "cancel_label": document_spec.cancel,
             "save_label": layer_ui::DocumentRequest::ConfirmClose { title: String::new() }.accept_label(self.session.localization()),
             "open_label": layer_ui::DocumentRequest::Open.accept_label(self.session.localization()),

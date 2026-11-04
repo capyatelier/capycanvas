@@ -518,6 +518,7 @@ pub struct DrawingSelector {
     pub page: crate::ContextMenuItem,
 }
 impl DrawingSelector {
+    pub const DIALOG: crate::DialogIntent=crate::DialogIntent::editor(Some(crate::DialogPrimary::Close));
     pub fn new(labels: &[DocumentTabLabel], current: u64, new: &crate::CommandState, localization: &Localizer) -> Self {
         let caption = |label: &DocumentTabLabel| format!("{}{}", if label.modified { "• " } else { "" }, label.title);
         let rows = labels.iter().map(|label| {

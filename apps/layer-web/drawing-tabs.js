@@ -1,4 +1,5 @@
 import {liveCopy,bindCopy} from './localization.js';
+import {createDialogHost} from './dialog-host.js';
 import {orderTabChildren} from './tab-order.js';
 export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy,showMenu}) {
   const copy=liveCopy(app,'catalog').native_copy.header,common=liveCopy(app,'bootstrap_view').common;
@@ -7,7 +8,7 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
   const strip=element('div','drawing-tabs');strip.setAttribute('role','tablist');bindCopy(strip,()=>copy.drawings,"ariaLabel");
   const compact=button('',()=>showSelector(),'drawing-selector');bindCopy(compact,()=>copy.choose_drawing,"ariaLabel");
   root.append(strip,compact);
-  const rows=new Map();let model,signature='',popup=null,contact=null,rowMenu=null,suppress=false;
+  const rows=new Map();let model,signature='',popup=null,popupHost=null,contact=null,rowMenu=null,suppress=false;
   const same=(a,b)=>String(a)===String(b);
   const id=value=>BigInt(value);
   const fail=error=>message(String(error));
@@ -120,13 +121,14 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
       cancelDrag();vertical?showRowMenu(tabId):showSelector(tabId);
     });
   }
-  function dismiss(){cancelDrag();dismissRowMenu();if(popup){popup.close();popup=null;}}
+  function dismiss(){cancelDrag();dismissRowMenu();if(popup){popupHost.hide();popup=null;}}
   function showSelector(focusId){
     if(editing()||busy())return;
     if(showMenu?.({kind:'drawings'}))return;
     dismiss();refresh();
     const dialog=element('dialog','drawing-list document-dialog');bindCopy(dialog,()=>copy.drawings,"ariaLabel");popup=dialog;
-    const heading=element('header');heading.append(element('h2','',()=>copy.drawings),button(()=>common.done,dismiss));dialog.append(heading);
+    const heading=element('header','dialog-header'),done=button(()=>common.done,dismiss);heading.append(element('h2','',()=>copy.drawings),done);dialog.append(heading);
+    const host=createDialogHost({app,dialog,header:heading,cancel:done,primary:done,icon,copy:common,onCancel:dismiss});popupHost=host;
     const list=element('div','drawing-list-rows');list.setAttribute('role','list');dialog.append(list);
     for(const tab of model.tabs){
       const row=element('div','drawing-list-row');row.dataset.drawingId=tab.id;row.setAttribute('role','listitem');
@@ -137,8 +139,8 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
     }
     const footer=element('footer');
     for(const [redo,label,enabled] of [[false,()=>copy.undo_order,model.can_undo],[true,()=>copy.redo_order,model.can_redo]]){const b=button(label,()=>{applyChange(app.document_order_history(redo));dismiss();showSelector(focusId);});b.disabled=!enabled;footer.append(b);}
-    dialog.append(footer);dialog.addEventListener('close',()=>{if(popup===dialog)popup=null;dialog.remove();dismissRowMenu();cancelDrag();});
-    document.body.append(dialog);dialog.showModal();
+    dialog.append(footer);dialog.addEventListener('close',()=>{if(popup===dialog){popup=null;popupHost=null;}host.dispose();dialog.remove();dismissRowMenu();cancelDrag();});
+    document.body.append(dialog);host.present(model.dialog);
     [...list.children].find(n=>same(n.dataset.drawingId,focusId??model.selected))?.querySelector('.drawing-list-pick').focus();
   }
   function refresh(force=false){

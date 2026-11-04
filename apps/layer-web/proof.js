@@ -212,7 +212,7 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
     hasPending=()=>!!(pendingTimer||preparing);
     finishPending=async()=>{if(pendingTimer){clearTimeout(pendingTimer);pendingTimer=null;startPrepare();}if(preparing)await preparing;if(app.proof_panel_copy().mode==='print'&&failure)throw failure;};
     const schedule=()=>{if(committing)return;clearTimeout(pendingTimer);cancel();bpc.disabled=intent.value==='AbsoluteColorimetric';if(bpc.disabled)bpc.checked=false;pendingTimer=setTimeout(startPrepare,180);};
-    async function chooseProfile(value){if(!['add','manage'].includes(value)){selected=value;syncProfile();schedule();return;}syncProfile();try{const p=value==='add'?await importProfile(app,element):await chooseProfileLibrary({app,element,button,manage:true});if(panel!==owner)return;if(p){selected=option(saved,p);syncProfile();schedule();}}catch(e){fail(e);}}
+    async function chooseProfile(value){if(!['add','manage'].includes(value)){selected=value;syncProfile();schedule();return;}syncProfile();try{const p=value==='add'?await importProfile(app,element):await chooseProfileLibrary({app,element,button,icon,manage:true});if(panel!==owner)return;if(p){selected=option(saved,p);syncProfile();schedule();}}catch(e){fail(e);}}
     bpc.onchange=schedule;
     mode.onchange=()=>{if(committing)return;const next=mode.value;cancelContacts();serial++;clearTimeout(pendingTimer);pendingTimer=null;cancel();mode.value=next;send({type:'mode',mode:mode.value});if(mode.value==='print'&&selected!=='')schedule();};
     function restorePrint(form){

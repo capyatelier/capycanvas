@@ -45,6 +45,7 @@ impl Metadata {
 }
 pub fn configure(dialog: &impl IsA<adw::Dialog>, metadata: Metadata) { unsafe { dialog.as_ref().set_data("capy-page-metadata", metadata); } }
 pub(super) fn get(dialog: &adw::Dialog) -> Metadata { unsafe { dialog.data::<Metadata>("capy-page-metadata").map(|data| data.as_ref().clone()).unwrap_or_default() } }
+pub fn intent(dialog: &impl IsA<adw::Dialog>, intent: layer_ui::DialogIntent) { configure(dialog, get(dialog.as_ref()).intent(intent)); }
 pub fn primary(dialog: &impl IsA<adw::Dialog>, action: Option<Action>) { let mut meta = get(dialog.as_ref()); meta.primary = action; configure(dialog, meta); }
 impl Action {
     pub(super) fn activate(&self, dialog: &adw::Dialog) {

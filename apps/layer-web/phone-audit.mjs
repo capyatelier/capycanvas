@@ -133,7 +133,50 @@ const unavailable = [
 
 const preference=action=>({type:'preferences',action});
 const shortcuts={type:'invoke',command:'keyboard_shortcuts'};
-const drawing=op=>({type:'new_drawing',action:{op}});
+async function drawingPresetMenu({evaluate,call,click,settle},action){
+  const point=await evaluate(`(()=>{const view=layerApp.state().new_drawing,index=view.drawer.tiles.findIndex(tile=>tile.own&&tile.name==='Canvas study'),node=document.querySelector('[data-new-drawing-preset="'+index+'"]');if(index<0||!node)throw Error('Authored drawing preset is unavailable');node.scrollIntoView({block:'nearest'});const b=node.getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2};})()`);
+  for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1});await settle();
+  const index=await evaluate(`[...document.querySelectorAll('#new-drawing-dialog .new-drawing-menu:popover-open button')].findIndex(node=>node.firstChild.textContent===layerApp.state().new_drawing.copy[${JSON.stringify(action)}])`);
+  assert.ok(index>=0,`Drawing preset offers ${action}`);await click(`#new-drawing-dialog .new-drawing-menu:popover-open button:nth-child(${index+1})`);
+}
+async function drawingState(evaluate,expected){
+  const actual=await evaluate('(()=>{const drawer=layerApp.state().new_drawing?.drawer;return{kind:drawer?.kind??null,save:!!drawer?.save};})()');
+  assert.deepEqual(actual,expected,'The requested New Drawing drawer and naming form are actually presented');
+}
+async function managerInput({evaluate,wait,settle},input){
+  await evaluate(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify(input))});layerApp.wake();null`);await settle();
+  await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy&&!JSON.parse(layerApp.app.workspace_view()).saving');
+}
+async function managerPage(context,page,details=false){
+  await managerInput(context,{type:'open',page});
+  if(page==='toolbar_library'&&!await context.evaluate('JSON.parse(layerApp.app.workspace_view()).rows.length')){
+    await managerOffered(context,'this_workspace','save_toolbar');await context.wait('!!document.querySelector("#workspace-item-name")');
+    await context.evaluate(`(()=>{const input=document.querySelector('#workspace-item-name');input.value='Canvas tools';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.workspace-form .suggested-action').click();})()`);
+    await managerInput(context,{type:'open',page});
+  }
+  if(details){
+    const id=await context.evaluate('JSON.parse(layerApp.app.workspace_view()).rows[0]?.id');assert.ok(id,'Manager details have an offered row');
+    const selector=`.workspace-manager[open] .workspace-choice[data-id=${JSON.stringify(id)}]`;
+    await context.wait(`document.querySelector(${JSON.stringify(selector)})?.checkVisibility()`);await context.click(selector);
+  }
+}
+async function managerClose(context){await managerInput(context,{type:'cancel'});await managerInput(context,{type:'dismiss'});}
+async function managerWorkspace(context){
+  await managerPage(context,'workspaces');
+  if(!await context.evaluate('JSON.parse(layerApp.app.workspace_view()).rows.some(row=>row.title==="Canvas study")')){
+    await managerInput(context,{type:'form',action:{type:'new'}});await managerInput(context,{type:'submit',name:'Canvas study',description:null,choice:null});
+  }
+  const id=await context.evaluate('JSON.parse(layerApp.app.workspace_view()).rows.find(row=>row.title==="Canvas study")?.id');assert.ok(id,'Authored workspace is offered');
+  await managerInput(context,{type:'select',id});return id;
+}
+async function managerOffered(context,page,type,form=true){
+  await managerPage(context,page,true);
+  const action=await context.evaluate(`(()=>{const view=JSON.parse(layerApp.app.workspace_view());return [...(view.details?.actions??[]),...view.rows.flatMap(row=>row.actions)].find(button=>button.enabled&&button.action.type===${JSON.stringify(type)})?.action;})()`);
+  assert.ok(action,`Manager offers ${type}`);
+  if(form)await managerInput(context,{type:'form',action});
+  else {await context.wait(`!!document.querySelector('.workspace-details [data-action="${type}"]')`);await context.click(`.workspace-details [data-action="${type}"]`);}
+}
+
 export const dialogAuditRows=[
   {batch:'w6a',id:'preferences-root',openaction:{type:'invoke',command:'settings'},rootselector:'#settings[open]',baseline:true},
   ...['appearance','canvas','color','input','shortcuts','about'].map(page=>({batch:'w6a',id:page==='shortcuts'?'preferences-shortcuts-direct':`preferences-${page}`,requestedpage:page,openaction:page==='shortcuts'?shortcuts:{type:'open_settings',page},rootselector:'#settings[open]',baseline:page==='appearance'})),
@@ -150,11 +193,11 @@ export const dialogAuditRows=[
   {batch:'w6a',id:'keymap-details',openaction:[shortcuts,preference({type:'keymap_details',open:true})],rootselector:'#keymap-details[open]'},
   {batch:'w6a',id:'choose-action',openaction:[{type:'open_settings',page:'input'},preference({type:'open_action_picker',trigger:'touch.tap.2'})],rootselector:'#action-picker[open]'},
   {batch:'w6a',id:'keymap-import',openaction:[shortcuts,preference({type:'import_keymap',text:JSON.stringify({format:'capycanvas-keymap',version:1,keymap:{id:'photoshop',revision:1}})})],rootselector:'#keymap-import[open]',closeaction:preference({type:'cancel_keymap_import'})},
-  {batch:'w6b',id:'new-drawing',openaction:{type:'invoke',command:'new_document'},rootselector:'#new-drawing-dialog[open]',baseline:true,closeaction:drawing('cancel'),variants:[
-    {id:'new-paper',openaction:drawing('paper')},
-    {id:'new-drawing-footer-presets',openaction:[drawing('close_drawer'),drawing('presets')]},
-    {id:'new-drawing-footer-save-preset',openaction:drawing('save_as')},
-    {id:'new-drawing-footer-paper-color',openaction:[drawing('cancel_save'),drawing('close_drawer'),drawing('paper_color')]},
+  {batch:'w6b',id:'new-drawing',openaction:{type:'invoke',command:'new_document'},rootselector:'#new-drawing-dialog[open]',baseline:true,drawingstate:{kind:null,save:false},closeaction:async({evaluate})=>{await evaluate('document.querySelector("#new-drawing-cancel").click()');},variants:[
+    {id:'new-paper',drawingstate:{kind:'paper',save:false},openaction:async({click})=>{await click('#new-drawing-texture');}},
+    {id:'new-drawing-footer-presets',drawingstate:{kind:'presets',save:false},openaction:async({click})=>{await click('#new-drawing-paper-cancel');await click('#new-drawing-presets-button');}},
+    {id:'new-drawing-footer-save-preset',drawingstate:{kind:'presets',save:true},openaction:async({click})=>{await click('#new-drawing-save-as');}},
+    {id:'new-drawing-footer-paper-color',drawingstate:{kind:'paper_color',save:false},openaction:async({click})=>{await click('#new-drawing-save-cancel');await click('#new-drawing-browser-cancel');await click('#new-drawing-paper-color');}},
   ]},
   {batch:'w6b',id:'color',openaction:async({send,evaluate,click,wait})=>{
     const tile=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone&&layerApp.state().workspace.layout.phone.find(tile=>tile.control.kind==="color")?.id');
@@ -178,12 +221,89 @@ export const dialogAuditRows=[
       await evaluate(`document.querySelector('[data-export-page="${id}"]').click()`);await settle();
     }})),closeaction:async({evaluate,settle})=>{await evaluate('document.querySelector("#export-options [data-dialog-part=start]").click()');await settle();}},
   ...[['canvas-size','canvas_size','#canvas-size-dialog[open]'],['image-size','image_size','#image-size-dialog[open]'],['properties','document_properties','dialog.document-dialog[open]']].map(([id,command,rootselector])=>({batch:'w6b',id,openaction:{type:'invoke',command},rootselector})),
+  {batch:'w6c',id:'rename-drawing-preset',rootselector:'#new-drawing-dialog[open]',drawingstate:{kind:'presets',save:true},openaction:async context=>{
+    const {send,click,evaluate,call}=context;await send({type:'invoke',command:'new_document'});await click('#new-drawing-presets-button');await click('#new-drawing-save-as');
+    await drawingState(evaluate,{kind:'presets',save:true});await evaluate('document.querySelector("#new-drawing-save-name").select()');await call('Input.insertText',{text:'Canvas study'});await click('#new-drawing-save-confirm');
+    await drawingState(evaluate,{kind:'presets',save:false});await drawingPresetMenu(context,'rename');
+    assert.equal(await evaluate('layerApp.state().new_drawing.drawer.save?.name'),'Canvas study');
+  },closeaction:async context=>{await context.click('#new-drawing-save-cancel');await drawingPresetMenu(context,'delete');await context.evaluate('document.querySelector("#new-drawing-cancel").click()');}},
+  {batch:'w6c',id:'rename-paper',rootselector:'#paper-rename-dialog[open]',openaction:async context=>{
+    const {evaluate,click,wait}=context;await dialogAuditRows.find(row=>row.id==='paper').openaction(context);
+    await evaluate(`(async()=>{const canvas=new OffscreenCanvas(64,48),context=canvas.getContext('2d');for(let y=0;y<48;y++)for(let x=0;x<64;x++){const v=(x*7+y*3)%256;context.fillStyle='rgb('+v+','+v+','+v+')';context.fillRect(x,y,1,1);}const file=new File([await canvas.convertToBlob({type:'image/png'})],'Linen scan.png',{type:'image/png'}),click=HTMLInputElement.prototype.click;HTMLInputElement.prototype.click=function(){if(this.type!=='file'||this.accept!=='image/*')return click.call(this);HTMLInputElement.prototype.click=click;const transfer=new DataTransfer();transfer.items.add(file);this.files=transfer.files;this.dispatchEvent(new Event('change'));};})()`);
+    await click('#texture-import');await wait('!layerApp.state().requests.some(request=>request.kind.type==="paper")&&layerApp.state().layer_properties.controls.some(control=>control.paper?.tiles.some(tile=>tile.label==="Linen scan"))');
+    await click('#property-texture');await wait('!!document.querySelector("#texture-dialog[open]")');
+    await evaluate(`(()=>{const tile=[...document.querySelectorAll('#texture-dialog .texture-tile')].find(tile=>tile.querySelector('.texture-caption').textContent==='Linen scan');tile.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}));document.querySelector('#texture-dialog [role=menu] button').click();})()`);
+  },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector("#paper-rename-dialog").requestClose()');await wait('!document.querySelector("#paper-rename-dialog")');await evaluate('document.querySelector("#texture-dialog").requestClose()');const id=await evaluate('layerApp.state().layer_properties.controls.find(control=>control.paper).paper.tiles.find(tile=>tile.label==="Linen scan").id');await send({type:'effect',action:{op:'delete_paper',id}});await send({type:'customize',action:{type:'close_expanded'}});}},
+  {batch:'w6c',id:'save-export-preset',rootselector:'#export-preset-name-dialog[open]',openaction:async({send,evaluate,wait})=>{
+    await send({type:'invoke',command:'export_document'});await wait('!!document.querySelector("#export-options[open]")');
+    await evaluate(`(()=>{const root=document.querySelector('#export-options');root.querySelector('[data-export-page="presets"]').click();[...root.querySelectorAll('button')].find(button=>button.textContent===layerApp.app.export_copy().save_new_preset).click();})()`);
+  },closeaction:async({evaluate,wait})=>{await evaluate('document.querySelector("#export-preset-name-dialog").requestClose()');await wait('!document.querySelector("#export-preset-name-dialog")');await evaluate('document.querySelector("#export-options [data-dialog-part=start]").click()');}},
+  ...[['new-palette','new_palette'],['rename-palette','rename_palette'],['delete-palette','remove_palette']].map(([id,command])=>({batch:'w6c',id,rootselector:'dialog.palette-form[open]',openaction:async({send,evaluate,wait})=>{
+    if(command!=='new_palette'&&!await evaluate('layerApp.state().color_library.palettes.some(palette=>palette.name==="Canvas study")'))await send({type:'color',action:{op:'library',action:{op:'create_palette',name:'Canvas study'}}});
+    await send({type:'phone',action:{kind:'panel',panel:'palettes'}});await wait('!!document.querySelector(".content-drawer .palettes-panel .palette-selector")');
+    await evaluate(`(()=>{const root=document.querySelector('.content-drawer .palettes-panel');root.querySelector('.palette-selector').click();const node=${JSON.stringify(command)}==='new_palette'?root.querySelector('.palette-library-add'):[...root.querySelectorAll('.palette-choice')].find(node=>node.dataset.name==='Canvas study');node.menuCommand({command:${JSON.stringify(command)},id:layerApp.state().color_library.palettes.find(palette=>palette.name==='Canvas study')?.id});})()`);
+  },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector("dialog.palette-form[open]").requestClose()');await wait('!document.querySelector("dialog.palette-form[open]")');await send({type:'customize',action:{type:'close_expanded'}});}})),
+  {batch:'w6c',id:'profile-library',rootselector:'.profile-library[open]',openaction:async({send,evaluate,wait})=>{
+    await send({type:'open_settings',page:'color'});await wait('[...document.querySelectorAll("#settings button")].some(button=>button.textContent==="Manage Profiles…")');
+    await evaluate('[...document.querySelectorAll("#settings button")].find(button=>button.textContent==="Manage Profiles…").click()');
+  },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector(".profile-library[open]").requestClose()');await wait('!document.querySelector(".profile-library[open]")');await send({type:'close_settings'});}},
+  ...[['workspaces','workspaces'],['layout-history','history'],['this-workspace','this_workspace'],['saved-toolbars','toolbar_library']].map(([id,page])=>({batch:'w6c',id,rootselector:'.workspace-manager[open]',openaction:context=>managerPage(context,page),closeaction:managerClose})),
+  ...[['this-workspace-details','this_workspace'],['saved-toolbar-details','toolbar_library']].map(([id,page])=>({batch:'w6c',id,rootselector:'.workspace-manager[open]',openaction:context=>managerPage(context,page,true),closeaction:managerClose})),
+  ...[['new-workspace','new'],['new-toolbar','new_toolbar']].map(([id,type])=>({batch:'w6c',id,rootselector:'.workspace-form[open]',openaction:async context=>{
+    await managerPage(context,type==='new'?'workspaces':'this_workspace');await managerInput(context,{type:'form',action:type==='new'?{type}:{type,value:null}});
+  },closeaction:managerClose})),
+  ...[['save-toolbar','this_workspace','save_toolbar'],['replace-toolbar','this_workspace','replace_toolbar'],['rename-saved-toolbar','toolbar_library','rename'],['delete-saved-toolbar','toolbar_library','delete'],['update-saved-toolbar','toolbar_library','update_toolbar']].map(([id,page,type])=>({batch:'w6c',id,rootselector:'.workspace-form[open]',openaction:context=>managerOffered(context,page,type),closeaction:managerClose})),
+  ...[['rename-toolbar','rename_toolbar'],['duplicate-toolbar','duplicate_toolbar'],['delete-toolbar','delete_toolbar']].map(([id,type])=>({batch:'w6c',id,rootselector:'#toolbar-prompt[open]',openaction:context=>managerOffered(context,'this_workspace',type,false),closeaction:async context=>{await context.send({type:'customize',action:{type:'cancel_toolbar'}});await managerClose(context);}})),
+  ...[['reset-workspace','reset_layout'],['reset-brushes','reset_brushes']].map(([id,type])=>({batch:'w6c',id,rootselector:'.workspace-form[open]',openaction:async context=>{await context.send({type:'workspace_manager',command:{type}});},closeaction:managerClose})),
+  ...[['rename-workspace','rename'],['delete-workspace','delete']].map(([id,type])=>({batch:'w6c',id,...(type==='rename'?{aliasof:'workspaces'}:{}),rootselector:type==='rename'?'.workspace-manager[open]':'.workspace-form[open]',openaction:async context=>{
+    const id=await managerWorkspace(context);const action=await context.evaluate(`JSON.parse(layerApp.app.workspace_view()).rows.find(row=>row.id===${JSON.stringify(id)}).actions.find(button=>button.enabled&&button.action.type===${JSON.stringify(type)})?.action`);
+    assert.ok(action,`Authored workspace offers ${type}`);await managerInput(context,{type:'form',action});
+  },closeaction:managerClose})),
+
+  {batch:'w6c',id:'save-as-new-workspace',rootselector:'.workspace-form[open]',openaction:async context=>{
+    await managerInput(context,{type:'form',action:{type:'save_as_new'}});
+  },closeaction:managerClose},
+  {batch:'w6c',id:'delete-inactive-workspace',rootselector:'.workspace-form[open]',openaction:async context=>{
+    const id=await managerWorkspace(context);await managerClose(context);await managerInput(context,{type:'switch',id:'builtin:workspace:painter'});await managerPage(context,'workspaces');
+    const action=await context.evaluate(`JSON.parse(layerApp.app.workspace_view()).rows.find(row=>row.id===${JSON.stringify(id)}).actions.find(button=>button.enabled&&button.action.type==='delete')?.action`);
+    assert.ok(action,'Inactive workspace offers Delete');await managerInput(context,{type:'form',action});
+  },closeaction:managerClose},
+  {batch:'w6c',id:'legacy-toolbar-manager',aliasof:'this-workspace',blocked:'Managed workspace menus and commands route Manage Toolbars to This Workspace; the retained raw customization action has no separate managed user route.'},
+  ...[['add-tools',false],['insert-tools',true]].map(([id,phone])=>({batch:'w6c',id,rootselector:'#tool-picker[open]',openaction:async({send,evaluate})=>{
+    if(phone){const before=await evaluate('layerApp.state().workspace.layout.phone[0].id');await send({type:'phone',action:{kind:'insert_tools',before}});}
+    else await send({type:'customize',action:{type:'insert_tools',panel:'toolbar',before:null}});
+  },closeaction:{type:'customize',action:{type:'cancel_tools'}}})),
+  {batch:'w6c',id:'unsaved-changes',rootselector:'dialog.document-dialog[open]',openaction:async({send,evaluate})=>{
+    await send({type:'invoke',command:'add_layer'});await evaluate('layerApp.documents.close(layerApp.app.document_tabs(0).selected);null');
+  }},
+
+  ...[
+    ['recover-interrupted-workspaces','Requires the existing interrupted-store setup; no short opener from a healthy manager.'],
+    ['restore-workspaces','Requires the existing released-storage/restart setup in saved-data-ux.'],
+    ['failed-drawing-recovery','Requires the existing session-store failure setup and restart.'],
+    ['workspace-not-saved','Requires an actual failed workspace write; no short healthy-store opener.'],
+    ['preserved-package-preview','Requires the existing package fixture preparation in package-view.'],
+    ['stroke-recording-failure','Existing desktop recording journey asserts the actual failure alert; paired phone capture needs the native failure setup extracted.'],
+    ['cannot-open-file','Existing desktop document-errors journey asserts the actual alert; paired phone capture needs the native failure setup extracted.'],
+    ['workspace-save-status','Requires a real pending/failed store operation; healthy idle storage has no notice.'],
+  ].map(([id,blocked])=>({batch:'w6c',id,blocked})),
 ];
 
 export function dialogAuditSpecifications(rootselector,root=document){
-  const node=root.querySelector(rootselector),specs=[{id:'page',role:'page',selector:rootselector},{id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`}];
+  const node=root.querySelector(rootselector),specs=[{id:'page',role:'page',selector:rootselector}];
+  if(node?.getAttribute?.('role')!=='alertdialog')specs.push({id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`});
   for(const part of ['start','end','panes'])if(node?.querySelector(`[data-dialog-part="${part}"]`))specs.push({id:`page.${part}`,role:part==='panes'?'panes':'page-action',selector:`${rootselector} [data-dialog-part="${part}"]`});
   return specs;
+}
+
+export function selectDialogAuditRows(dialogs,requested){
+  const rows=dialogAuditRows.filter(row=>dialogs?.batch?row.batch===dialogs.batch:dialogs?.mode==='desktop'?row.baseline:row.batch==='w6a'?row.id.startsWith('preferences-'):row.id!=='color');
+  if(requested==null)return rows;
+  assert.ok(dialogs?.batch,'LAYER_PHONE_DIALOG_ROWS requires a selected dialog batch');
+  const ids=requested.split(',').map(id=>id.trim());
+  assert.ok(ids.every(Boolean),'LAYER_PHONE_DIALOG_ROWS requires nonempty row IDs');
+  for(const id of ids)assert.ok(rows.some(row=>row.id===id),`Unknown dialog row ${id} in batch ${dialogs.batch}`);
+  return rows.filter(row=>ids.includes(row.id));
 }
 
 export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOnly=false,drawersOnly=false,menusOnly=false,customizeOnly=false,inputOnly=false,dialogs=null}) {
@@ -192,10 +312,15 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
   await mkdir(directory,{recursive:true});
   const root=fileURLToPath(new URL('../..',import.meta.url));
   const source={};
-  const report={schema_version:1,host:'web',source,cases:[],unreachable:[]};
+  const requestedRows=process.env.LAYER_PHONE_DIALOG_ROWS,rows=selectDialogAuditRows(dialogs,requestedRows);
+  const report={schema_version:1,host:'web',source,dialog_batch:dialogs?.batch??null,requested_dialog_rows:requestedRows?.split(',').map(id=>id.trim())??null,cases:[],unreachable:[]};
   const original=await evaluate(`({settings:layerApp.state().settings,text:document.documentElement.style.getPropertyValue('--ui-text-size'),workspace:JSON.parse(layerApp.app.workspace_view()).id,documents:layerApp.app.document_tabs(0).tabs.map(tab=>({id:String(tab.id),modified:tab.modified}))})`);
   assert.equal(original.documents.length,1,'Audit starts with one isolated startup drawing');
   assert.equal(original.documents[0].modified,false,'Audit may only close an unmodified startup drawing');
+  const reducedMotion=await evaluate('matchMedia("(prefers-reduced-motion: reduce)").matches?"reduce":"no-preference"');
+  report.prefers_reduced_motion=dialogs?'reduce':reducedMotion;
+  if(dialogs)await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+  try {
   const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+10000;function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else requestAnimationFrame(check);}check();})`);
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)});null`);await settle();};
   const close=async()=>{
@@ -849,14 +974,14 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       }
       continue;
     }
-    const rows=dialogAuditRows.filter(row=>dialogs?.batch?row.batch===dialogs.batch:dialogs?.mode==='desktop'?row.baseline:row.batch==='w6a'?row.id.startsWith('preferences-'):row.id!=='color');
     const open=async action=>{if(typeof action==='function')await action({send,evaluate,wait,call,settle,click});else for(const step of Array.isArray(action)?action:[action])await send(step);};
     for(const row of rows){
+      if(row.blocked){report.unreachable.push({state:row.id,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:'unavailable',missing:[],reason:row.blocked,png:null});continue;}
       await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');
-      const shot=async state=>capture(test,state,await evaluate(`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`),dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established');
-      await shot(row.id);
-      for(const variant of row.variants??[]){await open(variant.openaction);await shot(variant.id);}
+      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);return capture(test,route.id,await evaluate(`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`),dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established');};
+      await shot(row);
+      for(const variant of row.variants??[]){await open(variant.openaction);await shot(variant);}
       if(row.closeaction)await open(row.closeaction);
       if(row.batch==='w6a')await send({type:'close_settings'});
       await close();
@@ -943,5 +1068,6 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
   await evaluate(`document.documentElement.style.setProperty('--ui-text-size',${JSON.stringify(original.text)});null`);
   await send({type:'restore_saved_settings',saved:JSON.stringify(original.settings)});
   await call('Emulation.clearDeviceMetricsOverride');
-  console.log(`PHONE ${frameOnly?'FRAME':drawersOnly?'DRAWERS':'AUDIT'}: ${report.cases.length} captures; ${report.unreachable.length} unreachable states; ${directory}/index.json ${frameOnly?'(shared allocation checks passed; cross-host pixels pending)':'(not a parity pass)'}`);
+  console.log(`PHONE ${frameOnly?'FRAME':drawersOnly?'DRAWERS':'AUDIT'}: ${report.cases.length} captures; ${report.unreachable.length} unreachable states; ${report.requested_dialog_rows?`selected rows ${report.requested_dialog_rows.join(',')}; `:''}${directory}/index.json ${frameOnly?'(shared allocation checks passed; cross-host pixels pending)':'(not a parity pass)'}`);
+  } finally {if(dialogs)await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:reducedMotion}]});}
 }

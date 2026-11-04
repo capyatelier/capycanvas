@@ -259,12 +259,14 @@ pub const MAX_NEW_DOCUMENT_DIMENSION: u32 = 8192;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct NewDocumentSpec {
+    pub dialog: crate::DialogIntent,
     pub cancel: std::sync::Arc<str>,
     pub discard: std::sync::Arc<str>,
     pub unsaved_description: std::sync::Arc<str>,
 }
 pub fn new_document_spec(localization: &Localizer) -> NewDocumentSpec {
     NewDocumentSpec {
+        dialog: crate::DialogIntent::alert(),
         cancel: localization.text(MessageId::COMMON_CANCEL),
         discard: localization.text(MessageId::DOCUMENTS_DISCARD),
         unsaved_description: localization.text(MessageId::DOCUMENTS_UNSAVED_DESCRIPTION),

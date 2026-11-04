@@ -11,6 +11,10 @@ pub enum ManagerPage {
     ToolbarLibrary,
 }
 impl ManagerPage {
+    pub fn toolbar(self) -> bool { matches!(self,Self::ThisWorkspace | Self::ToolbarLibrary) }
+    pub fn dialog(self) -> layer_ui::DialogIntent {
+        layer_ui::DialogIntent::editor(Some(if self.toolbar() { layer_ui::DialogPrimary::Close } else { layer_ui::DialogPrimary::Action }))
+    }
     pub fn label(self, localization: &layer_ui::Localizer) -> String {
         match self {
             Self::Workspaces => localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES).to_string(),

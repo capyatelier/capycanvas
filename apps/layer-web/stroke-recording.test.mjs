@@ -67,8 +67,12 @@ export async function checkStrokeRecording({call, evaluate, settle}) {
     await compactControl('Save stroke recording');
     // Provider failure must retain the recording too.
     await evaluate(`window.showSaveFilePicker=async()=>({async createWritable(){throw Error('test provider failure')}}); ${button}.click()`);
-    await settle();
+    await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+15000;function check(){if(document.querySelector('dialog[role="alertdialog"][open]'))resolve();else if(performance.now()>deadline)reject(Error('Recording failure alert missing'));else setTimeout(check,20);}check();})`);
+    assert.deepEqual(await evaluate(`(()=>{const dialog=document.querySelector('dialog[role="alertdialog"][open]');return{modal:dialog.getAttribute('aria-modal'),diagnostic:dialog.textContent.includes('test provider failure')}})()`),{modal:'true',diagnostic:true},'Provider failure presents the shared alert');
     assert.equal(await evaluate('layerApp.app.stroke_recording_status().ready'),true);
+    await evaluate(`[...document.querySelectorAll('dialog[role="alertdialog"][open] button')].find(button=>button.textContent===layerApp.app.bootstrap_view().ok).click()`);await settle();
+    assert.equal(await evaluate('!!document.querySelector(\'dialog[role="alertdialog"][open]\')'),false,'The failure alert closes before retry');
+    assert.equal(await evaluate('layerApp.app.stroke_recording_status().ready'),true,'Dismissing the alert retains the recording');
     await evaluate(`window.showSaveFilePicker=async options=>{strokeTest.name=options.suggestedName;return {async createWritable(){return{async write(bytes){strokeTest.bytes=Array.from(bytes)},async close(){},async abort(){}}}}}; ${button}.click()`);
     await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+15000;function check(){if(strokeTest.bytes&&!layerApp.app.stroke_recording_status().ready)resolve();else if(performance.now()>deadline)reject(Error('Recording export timed out'));else setTimeout(check,20);}check();})`);
     const result = await evaluate('({name:strokeTest.name,bytes:strokeTest.bytes,state:{ready:layerApp.app.stroke_recording_status().ready}})');

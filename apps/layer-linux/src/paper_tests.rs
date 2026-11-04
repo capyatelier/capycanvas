@@ -62,6 +62,38 @@ fn pending(grid: &gtk::FlowBox) -> Option<i32> {
     grid.selected_children().first().map(|child| child.index())
 }
 
+pub(super) fn save_scan(path: &std::path::Path) {
+    let pixels: Vec<u8> = (0..400u32 * 300).flat_map(|i| {
+        let (x, y) = (i % 400, i / 400);
+        let v = (128. + 60. * ((x as f32 * 0.37).sin() * (y as f32 * 0.29).cos()) + ((x * 7919 + y * 104_729) % 61) as f32 - 30.) as u8;
+        [v, v, v, 255]
+    }).collect();
+    gtk::gdk::MemoryTexture::new(400, 300, gtk::gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(pixels), 1600).save_to_png(path).unwrap();
+}
+
+pub(super) fn import_scan(w: &Rc<Workspace>, dialog: &adw::Dialog, path: &std::path::Path) {
+    let frame = crate::page_dialog::parent(dialog);
+    click(&named::<gtk::Button>(&frame, "texture-import"));
+    until(|| !crate::page_dialog::parent(dialog).is_mapped(), "Import closes Choose Texture");
+    let file = chooser();
+    file.set_file(&gtk::gio::File::for_path(path)).unwrap();
+    pump(150);
+    file.response(gtk::ResponseType::Accept);
+    until(|| matches!(texture(w), layer_core::TextureSource::Image(_)), "the imported paper is applied");
+}
+
+pub(super) fn paper_tile_menu(grid: &gtk::FlowBox, index: i32, label: &str) {
+    let child = grid.child_at_index(index).unwrap();
+    let press = child.observe_controllers().iter::<glib::Object>().filter_map(Result::ok)
+        .find_map(|controller| controller.downcast::<gtk::GestureClick>().ok()).expect("the tile has a menu");
+    press.emit_by_name::<()>("pressed", &[&1i32, &0f64, &0f64]);
+    pump(200);
+    let menu: gtk::Popover = named(child.upcast_ref(), "paper-tile-menu");
+    assert!(menu.is_visible());
+    click(&find_button(menu.upcast_ref(), label).unwrap());
+    pump(200);
+}
+
 #[test]
 #[ignore = "private Wayland display and hardware GPU"]
 #[allow(deprecated)]
@@ -137,20 +169,9 @@ fn native_paper_picker_relief_and_scale() {
     pump(1800);
 
     let scan = directory.join("cotton-rag.png");
-    let pixels: Vec<u8> = (0..400u32 * 300).flat_map(|i| {
-        let (x, y) = (i % 400, i / 400);
-        let v = (128. + 60. * ((x as f32 * 0.37).sin() * (y as f32 * 0.29).cos()) + ((x * 7919 + y * 104_729) % 61) as f32 - 30.) as u8;
-        [v, v, v, 255]
-    }).collect();
-    gtk::gdk::MemoryTexture::new(400, 300, gtk::gdk::MemoryFormat::R8g8b8a8, &glib::Bytes::from_owned(pixels), 1600).save_to_png(&scan).unwrap();
+    save_scan(&scan);
     let (dialog, _) = texture_dialog(&w, &button);
-    click(&texture_button(&dialog, "import"));
-    until(|| !dialog.is_mapped(), "Import closes Choose Texture");
-    let file = chooser();
-    file.set_file(&gtk::gio::File::for_path(&scan)).unwrap();
-    pump(150);
-    file.response(gtk::ResponseType::Accept);
-    until(|| matches!(texture(&w), layer_core::TextureSource::Image(_)), "the imported paper is applied");
+    import_scan(&w, &dialog, &scan);
     let tiles = || state(&w).layer_properties.controls[1].paper.clone().unwrap().tiles;
     assert_eq!(tiles().len(), built_in() as usize + 1);
     assert_eq!(tiles()[built_in() as usize].label.as_ref(), "cotton-rag");
@@ -167,30 +188,19 @@ fn native_paper_picker_relief_and_scale() {
     assert!(chosen.y() >= 0. && chosen.y() + chosen.height() <= scroller.height() as f32, "the chosen paper is scrolled into view: {chosen:?}");
     save_snapshot(&w, 200, || path("texture-dialog-imported"));
     let caption = |index: i32| grid.child_at_index(index).and_then(|child| child.tooltip_text()).unwrap_or_default();
-    let menu = |index: i32, label: &str| {
-        let child = grid.child_at_index(index).unwrap();
-        let press = child.observe_controllers().iter::<glib::Object>().filter_map(Result::ok)
-            .find_map(|controller| controller.downcast::<gtk::GestureClick>().ok()).expect("the tile has a menu");
-        press.emit_by_name::<()>("pressed", &[&1i32, &0f64, &0f64]);
-        pump(200);
-        let menu: gtk::Popover = named(child.upcast_ref(), "paper-tile-menu");
-        assert!(menu.is_visible());
-        click(&find_button(menu.upcast_ref(), label).unwrap());
-        pump(200);
-    };
-    menu(built_in(), "Rename…");
+    paper_tile_menu(&grid, built_in(), "Rename…");
     let dialog = w.window.visible_dialog().unwrap();
     named::<adw::EntryRow>(dialog.upcast_ref(), "paper-rename-name").set_text("Cotton rag");
     pump(100);
     response(&w, "rename");
     until(|| tiles()[built_in() as usize].label.as_ref() == "Cotton rag" && caption(built_in()) == "Cotton rag", "the paper is renamed in the open dialog");
     assert!(textures.is_mapped() && pending(&grid) == Some(built_in()));
-    menu(built_in(), "Delete");
+    paper_tile_menu(&grid, built_in(), "Delete");
     until(|| tiles().len() == built_in() as usize + 1 && tiles()[0].label.as_ref() == "This drawing’s paper" && caption(0) == "This drawing’s paper", "the drawing keeps its deleted paper");
     assert_eq!(pending(&grid), Some(0), "the choice follows the drawing's paper");
     assert!(matches!(texture(&w), layer_core::TextureSource::Image(_)));
     save_snapshot(&w, 200, || path("texture-dialog-own"));
-    menu(0, "Add to Library");
+    paper_tile_menu(&grid, 0, "Add to Library");
     until(|| tiles().len() == built_in() as usize + 1 && tiles()[built_in() as usize].label.as_ref() == state(&w).document_file.title(), "the drawing's paper returns to the library");
     assert_eq!(state(&w).layer_properties.controls[1].value, EffectValue::Choice(built_in() as u32));
     until(|| pending(&grid) == Some(built_in()), "the open dialog follows the library");

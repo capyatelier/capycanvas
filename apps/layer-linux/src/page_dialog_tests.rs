@@ -678,11 +678,208 @@ fn navigation_headers_settings(mut d: &mut Driver) {
 
 }
 
+fn w6c_palette_library(d: &mut Driver) {
+    let window = d.w.window.clone();
+    if !find_named(window.upcast_ref(), "palette-chooser").is_some_and(|widget| widget.is_mapped()) {
+        let color = state(&d.w).workspace.layout.phone.as_ref().unwrap().iter()
+            .find(|tile| tile.control == ToolbarControl::Color).unwrap().id;
+        d.click(&d.named(&format!("phone-tool-{color}")));
+    }
+    until(|| find_named(window.upcast_ref(), "palette-chooser").is_some_and(|widget| widget.is_mapped() && widget.width() > 0), "Color opens its palette chooser");
+    if !find_named(window.upcast_ref(), "palette-library-add").is_some_and(|widget| widget.is_mapped()) {
+        let chooser = d.named("palette-chooser");
+        super::histogram::scroll_to(&chooser);
+        d.click(&chooser);
+    }
+    until(|| find_named(window.upcast_ref(), "palette-library-add").is_some_and(|widget| widget.is_mapped() && widget.width() > 0), "the palette library opens");
+}
+
+fn manager_input(d: &Driver, input: layer_workspace::WorkspaceInput) {
+    d.w.workspaces.send(&d.w,input);
+    until(|| { let view=d.w.workspaces.view(); view.ready && !view.busy && !view.saving }, "manager input completes");
+}
+fn manager_page(d: &Driver, page: layer_workspace::ManagerPage, details: bool) {
+    d.w.workspaces.ui.show(&d.w,page);
+    until(|| { let view=d.w.workspaces.view(); view.ready && !view.busy && !view.saving }, "manager page opens");
+    if page==layer_workspace::ManagerPage::ToolbarLibrary && d.w.workspaces.view().rows.is_empty() {
+        manager_offered(d,layer_workspace::ManagerPage::ThisWorkspace,"save_toolbar",true);
+        manager_input(d,layer_workspace::WorkspaceInput::Submit { name:"Canvas tools".into(),description:None,choice:None });
+        manager_input(d,layer_workspace::WorkspaceInput::Open { page });
+    }
+    if details {
+        let id=d.w.workspaces.view().rows.first().expect("offered manager row").id.clone();
+        manager_input(d,layer_workspace::WorkspaceInput::Select { id:Some(id) });
+        manager_input(d,layer_workspace::WorkspaceInput::OpenDetails);
+    }
+}
+fn manager_close(d: &Driver) {
+    manager_input(d,layer_workspace::WorkspaceInput::Cancel);
+    manager_input(d,layer_workspace::WorkspaceInput::Dismiss);
+    until(|| d.w.visible_dialog().is_none() && !d.w.pages.root.is_transition_running(), "manager surfaces close");
+}
+fn manager_workspace(d: &Driver) -> String {
+    use layer_workspace::{ManagerAction as A,ManagerPage as P,WorkspaceInput as I};
+    manager_page(d,P::Workspaces,false);
+    if !d.w.workspaces.view().rows.iter().any(|row| row.title=="Canvas study") {
+        manager_input(d,I::Form { action:A::New });
+        manager_input(d,I::Submit { name:"Canvas study".into(),description:None,choice:None });
+    }
+    let id=d.w.workspaces.view().rows.iter().find(|row| row.title=="Canvas study").unwrap().id.clone();
+    manager_input(d,I::Select { id:Some(id.clone()) });id
+}
+fn manager_offered(d: &Driver, page: layer_workspace::ManagerPage, kind: &str, form: bool) {
+    manager_page(d,page,true);
+    let view=d.w.workspaces.view();
+    let action=view.details.iter().flat_map(|details| &details.actions).chain(view.rows.iter().flat_map(|row| &row.actions))
+        .find(|button| button.enabled && serde_json::to_value(&button.action).unwrap()["type"]==kind).expect("offered manager form").action.clone();
+    manager_input(d,if form { layer_workspace::WorkspaceInput::Form { action } } else { layer_workspace::WorkspaceInput::Action { action } });
+}
+fn w6c_managers(d: &mut Driver) {
+    use layer_workspace::{ManagerAction as A,ManagerPage as P,WorkspaceInput as I};
+    for (name,page) in [("workspaces",P::Workspaces),("layout-history",P::History),("this-workspace",P::ThisWorkspace),("saved-toolbars",P::ToolbarLibrary)] {
+        manager_page(d,page,false);dialog_frame(d);capture(d,name);manager_close(d);
+    }
+    for (name,page) in [("this-workspace-details",P::ThisWorkspace),("saved-toolbar-details",P::ToolbarLibrary)] {
+        manager_page(d,page,true);dialog_frame(d);capture(d,name);manager_close(d);
+    }
+    for (name,page,action) in [("new-workspace",P::Workspaces,A::New),("new-toolbar",P::ThisWorkspace,A::NewToolbar(None))] {
+        manager_page(d,page,false);manager_input(d,I::Form { action });dialog_frame(d);capture(d,name);manager_close(d);
+    }
+    for (name,page,kind) in [("save-toolbar",P::ThisWorkspace,"save_toolbar"),("replace-toolbar",P::ThisWorkspace,"replace_toolbar"),
+        ("rename-saved-toolbar",P::ToolbarLibrary,"rename"),("delete-saved-toolbar",P::ToolbarLibrary,"delete"),("update-saved-toolbar",P::ToolbarLibrary,"update_toolbar")] {
+        manager_offered(d,page,kind,true);dialog_frame(d);capture(d,name);manager_close(d);
+    }
+    for (name,phone) in [("add-tools",false),("insert-tools",true)] {
+        let action=if phone { UiAction::Phone { action:PhoneAction::InsertTools { before:Some(state(&d.w).workspace.layout.phone.as_ref().unwrap()[0].id) } } }
+            else { UiAction::Customize { action:CustomizationAction::InsertTools { panel:Panel::Toolbar,before:None } } };
+        d.w.dispatch(action);dialog_frame(d);capture(d,name);
+        d.w.dispatch(UiAction::Customize { action:CustomizationAction::CancelTools });
+        until(|| d.w.visible_dialog().is_none(), "tool picker closes");
+    }
+    let settings = gtk::Settings::default().unwrap();
+    let animations = settings.is_gtk_enable_animations();
+    settings.set_gtk_enable_animations(false);
+    for (name,command) in [("reset-workspace",WorkspaceCommand::ResetLayout),("reset-brushes",WorkspaceCommand::ResetBrushes)] {
+        d.w.dispatch(UiAction::WorkspaceManager { command });dialog_frame(d);capture(d,name);manager_close(d);
+    }
+    settings.set_gtk_enable_animations(animations);
+    for (name,rename) in [("rename-workspace",true),("delete-workspace",false)] {
+        let id=manager_workspace(d);
+        let offered=d.w.workspaces.view().rows.iter().find(|row| row.id==id).unwrap().actions.iter()
+            .find(|button| button.enabled && if rename { matches!(button.action,A::Rename(_)) } else { matches!(button.action,A::Delete(_)) }).unwrap().action.clone();
+        manager_input(d,I::Form { action:offered });dialog_frame(d);capture(d,name);manager_close(d);
+    }
+    manager_input(d,I::Form { action:A::SaveAsNew });dialog_frame(d);capture(d,"save-as-new-workspace");manager_close(d);
+    let inactive=manager_workspace(d);manager_close(d);
+    manager_input(d,I::Switch { id:"builtin:workspace:painter".into() });manager_page(d,P::Workspaces,false);
+    let delete=d.w.workspaces.view().rows.iter().find(|row| row.id==inactive).unwrap().actions.iter()
+        .find(|button| button.enabled && matches!(button.action,A::Delete(_))).unwrap().action.clone();
+    manager_input(d,I::Form { action:delete });dialog_frame(d);capture(d,"delete-inactive-workspace");manager_close(d);
+    d.w.dispatch(UiAction::Invoke { command:CommandId::AddLayer });
+    d.w.documents.select(&d.w,d.w.documents.selected(),true);
+    dialog_frame(d);capture(d,"unsaved-changes");
+    let dialog=d.w.visible_dialog().unwrap();
+    d.click(find_button(dialog.upcast_ref(), &layer_ui::new_document_spec(&d.w.localization()).cancel).unwrap().upcast_ref());
+    until(|| d.w.visible_dialog().is_none() && !d.w.servicing.get(), "unsaved cancellation finishes");
+}
+
+fn w6c_catchup(d: &mut Driver) {
+    d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
+    page(d);
+    for action in [NewDrawingAction::Presets, NewDrawingAction::SaveAs,
+        NewDrawingAction::PresetName { text: "Canvas study".into() }, NewDrawingAction::SavePreset] {
+        d.w.dispatch(UiAction::NewDrawing { action });
+    }
+    let index = match state(&d.w).new_drawing.unwrap().drawer.unwrap() {
+        NewDrawingDrawerView::Presets(browser) => browser.tiles.iter().position(|tile| tile.own && tile.selected).unwrap(),
+        other => panic!("{other:?}"),
+    };
+    d.w.dispatch(UiAction::NewDrawing { action: NewDrawingAction::RenamePreset { index } });
+    capture(d, "rename-drawing-preset");
+    d.w.dispatch(UiAction::NewDrawing { action: NewDrawingAction::Cancel });
+    until(|| d.w.visible_dialog().is_none(), "New Drawing closes");
+
+    let directory = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
+    std::fs::create_dir_all(&directory).unwrap();
+    let scan = directory.join("Linen scan.png");
+    super::paper::save_scan(&scan);
+    let selected = state(&d.w).layer_properties.layer.unwrap();
+    let paper = layer_ui::occurrence_token(layer_core::paper::paper_occurrence(ui_session(&d.w).engine().document().scene(), None).unwrap());
+    d.w.dispatch(UiAction::SelectLayer { id: paper });
+    crate::paper_picker::open(&d.w, paper);
+    let (picker, _) = page(d);
+    super::paper::import_scan(&d.w, &picker, &scan);
+    crate::paper_picker::open(&d.w, paper);
+    let (picker, frame) = page(d);
+    let grid = named::<gtk::FlowBox>(&frame, "texture-grid");
+    super::paper::paper_tile_menu(&grid, layer_core::paper::built_in_papers().len() as i32, "Rename…");
+    let (rename, _) = page(d);
+    capture(d, "rename-paper");
+    crate::page_dialog::close_dialog(&rename);
+    until(|| d.w.visible_dialog().as_ref() == Some(&picker), "Rename Paper closes");
+    close(d, &picker);
+    d.w.dispatch(UiAction::SelectLayer { id: selected });
+
+    d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
+    let (export, frame) = page(d);
+    export_page(d, &frame, "presets");
+    named::<adw::ButtonRow>(&frame, "export-preset-save").emit_by_name::<()>("activated", &[]);
+    until(|| d.w.visible_dialog().is_some_and(|dialog| find_named(&crate::page_dialog::parent(&dialog), "export-preset-name").is_some()), "Save Export Preset opens");
+    capture(d, "save-export-preset");
+    crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
+    until(|| d.w.visible_dialog().as_ref() == Some(&export), "Save Export Preset closes");
+    close(d, &export);
+
+    w6c_palette_library(d);
+    d.click(&d.named("palette-library-add"));
+    d.click_label(&d.w.localization().text(layer_ui::MessageId::NATIVE_PALETTES_MENU_NEW));
+    let (dialog, frame) = page(d);
+    capture(d, "new-palette");
+    named::<gtk::Entry>(&frame, "palette-library-name").set_text("Canvas study");
+    let alert = dialog.downcast_ref::<adw::AlertDialog>().unwrap();
+    assert!(alert.is_response_enabled("save"));
+    d.click(find_button(&frame, &alert.response_label("save")).unwrap().upcast_ref());
+    until(|| d.w.visible_dialog().is_none(), "New Palette saves");
+
+    w6c_palette_library(d);
+    let id = state(&d.w).color_library.palettes.iter().find(|palette| palette.name == "Canvas study").unwrap().id;
+    for (label, name) in [(layer_ui::MessageId::NATIVE_PALETTES_MENU_RENAME, "rename-palette"),
+        (layer_ui::MessageId::NATIVE_PALETTES_MENU_REMOVE, "delete-palette")] {
+        let row = d.named(&format!("palette-choice-{id}"));
+        super::histogram::scroll_to(&row);
+        assert!(row.grab_focus());
+        keys(d, 0xff67);
+        d.click_label(&d.w.localization().text(label));
+        until(|| d.w.visible_dialog().is_some(), "Palette prompt opens");
+        capture(d, name);
+        crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
+        until(|| d.w.visible_dialog().is_none(), "Palette prompt closes");
+    }
+}
+
+fn w6c_profile_library(d: &mut Driver) {
+    d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Color });
+    let (settings, frame) = page(d);
+    let manager = named::<gtk::Button>(&frame, "color-profile-library");
+    super::histogram::scroll_to(manager.upcast_ref());
+    assert!(manager.is_mapped());
+    d.click(manager.upcast_ref());
+    until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "profile-library-manager"), "Profile Library opens");
+    capture(d, "profile-library");
+    crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
+    until(|| d.w.visible_dialog().as_ref() == Some(&settings), "Profile Library closes");
+    close(d, &settings);
+}
+
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a or w6b, phone viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6b/w6c, phone viewport/theme external"]
 fn native_phone_dialogs() {
     let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    if batch == "w6c" {
+        w6c_catchup(&mut d); w6c_managers(&mut d); w6c_profile_library(&mut d);
+        d.finish(); return;
+    }
     if batch == "w6b" {
         inventory_with(&mut d, |d, name| {
             if matches!(name, "new-drawing" | "color" | "export" | "export-size" | "export-color" | "export-presets" | "canvas-size") { capture(d, name); }

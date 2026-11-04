@@ -20,7 +20,7 @@ impl NativeWorkspaces {
                 prompt.set_close_response("cancel");
                 prompt.set_default_response(Some("cancel"));
                 prompt.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
-                let response = crate::alert::choose(prompt, &w.window).await;
+                let response = crate::alert::choose_intent(prompt, &w.window, copy.recovery.dialog, Some("discard"), &[]).await;
                 w.workspaces.close_prompt.set(false);
                 if response == "discard" {
                     w.workspaces.send(&w, WorkspaceInput::DiscardClose);

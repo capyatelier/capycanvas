@@ -146,6 +146,80 @@ fn active_workspace_deletion_keeps_the_manager_open() {
     assert!(f.controller.view.error.is_none());
 }
 
+#[test]
+fn manager_details_navigation_uses_shared_phone_layout_and_resets_on_open_and_close() {
+    let mut f = Fixture::new();
+    assert!(f.controller.view.dialog.is_none());
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    assert_eq!(f.controller.view.dialog, Some(ManagerPage::Workspaces.dialog()));
+    f.input(serde_json::json!({"type":"open_details"}));
+    assert!(!f.controller.view.details_requested);
+    assert!(!f.controller.view.dialog_layout(true).toolbar);
+
+    f.input(serde_json::json!({"type":"open","page":"this_workspace"}));
+    assert_eq!(f.controller.view.dialog, Some(ManagerPage::ThisWorkspace.dialog()));
+    let phone = f.controller.view.dialog_layout(true);
+    assert!(phone.toolbar && phone.single_pane && !phone.subpage);
+    let desktop = f.controller.view.dialog_layout(false);
+    assert!(desktop.toolbar && !desktop.single_pane && !desktop.subpage);
+    f.input(serde_json::json!({"type":"open_details"}));
+    assert!(f.controller.view.details_requested);
+    assert!(f.controller.view.dialog_layout(true).subpage, "activation opens the detail page while its content loads");
+    let row = f.controller.view.rows[0].id.clone();
+    f.input(serde_json::json!({"type":"select","id":row}));
+    assert!(f.controller.view.details.is_some());
+    assert!(f.controller.view.dialog_layout(true).subpage);
+    assert!(!f.controller.view.dialog_layout(false).subpage);
+    f.input(serde_json::json!({"type":"page_list"}));
+    assert!(!f.controller.view.details_requested);
+    assert!(!f.controller.view.dialog_layout(true).subpage);
+    f.input(serde_json::json!({"type":"open_details"}));
+    assert!(f.controller.view.dialog_layout(true).subpage);
+    f.input(serde_json::json!({"type":"open","page":"toolbar_library"}));
+    assert!(!f.controller.view.details_requested);
+    assert!(!f.controller.view.dialog_layout(true).subpage);
+    f.input(serde_json::json!({"type":"dismiss"}));
+    assert!(f.controller.view.page.is_none() && f.controller.view.dialog.is_none());
+    assert!(!f.controller.view.details_requested);
+    f.input(serde_json::json!({"type":"open","page":"this_workspace"}));
+    assert!(!f.controller.view.details_requested && !f.controller.view.dialog_layout(true).subpage);
+}
+
+#[test]
+fn manager_prompt_wire_keeps_all_fields_inside_the_dialog_envelope() {
+    let prompt = ManagerPrompt {
+        title: "Title".into(), message: "Message".into(), confirm: "Confirm".into(),
+        cancel: Some("Cancel".into()), destructive: true, name: Some("Name".into()),
+        description: Some("Description".into()), choice_label: Some("Choice".into()),
+        choices: vec![ManagerChoice { id: "choice-id".into(), label: "Choice label".into() }],
+        selected: Some("choice-id".into()),
+    };
+    let mut view = WorkspaceView { prompt: Some(prompt.clone()), ..WorkspaceView::default() };
+    let mut fields = serde_json::to_value(&prompt).unwrap();
+    fields["dialog"] = serde_json::to_value(prompt.dialog_intent()).unwrap();
+    assert_eq!(serde_json::to_value(&view).unwrap()["prompt"], fields);
+    view.prompt = Some(ManagerPrompt::confirm("Alert", "Question", "Accept"));
+    assert_eq!(serde_json::to_value(&view).unwrap()["prompt"]["dialog"], serde_json::to_value(layer_ui::DialogIntent::alert()).unwrap());
+    view.prompt = None;
+    assert!(serde_json::to_value(&view).unwrap()["prompt"].is_null());
+}
+
+#[test]
+fn discovering_interrupted_changes_publishes_the_recover_status_in_the_same_poll() {
+    let mut f = Fixture::new();
+    assert_eq!(f.controller.view.interrupted, 0);
+    assert!(f.controller.view.status.is_none());
+    let mut batch = CommitBatch::prepare(Owner::fresh(), vec![]).unwrap();
+    batch.editing_json = Some(serde_json::to_string(&layer_ui::EditingState::default()).unwrap());
+    f.backend.database.borrow_mut().prepare_delivery(&batch).unwrap();
+    f.backend.now.set(100_000);
+    f.pump();
+    assert_eq!(f.controller.view.interrupted, 1);
+    let status = f.controller.view.status.as_ref().unwrap();
+    assert!(!status.error && !status.retry);
+    assert!(matches!(status.action.as_ref().map(|button| &button.action), Some(ManagerAction::RecoverInterrupted)));
+}
+
 fn delete_selected_item_without_reloading(f: &mut Fixture, id: String, page: ManagerPage) {
     f.input(serde_json::json!({"type":"open","page":page}));
     f.input(serde_json::json!({"type":"select","id":id}));

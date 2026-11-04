@@ -190,6 +190,11 @@ impl WebApp {
     pub fn workspace_view(&self) -> Result<String, JsValue> {
         serde_json::to_string(&self.workspaces.as_ref().map(|c| &c.view)).map_err(js)
     }
+    pub fn workspace_dialog_layout(&self, viewport: JsValue) -> Result<JsValue, JsValue> {
+        let viewport=serde_wasm_bindgen::from_value(viewport).map_err(js)?;
+        let page=self.session.state().dialog_presentation(layer_ui::DialogRole::Editor,viewport).single_pane();
+        serialize(&self.workspaces.as_ref().map(|controller| controller.view.dialog_layout(page)))
+    }
     pub fn workspace_input(&mut self, input: String) -> Result<JsValue, JsValue> {
         let input: WorkspaceInput = serde_json::from_str(&input).map_err(js)?;
         let c = self
@@ -199,7 +204,7 @@ impl WebApp {
         match c.input(&mut self.session, input, js_sys::Date::now() as u64) {
             Ok(change) => serialize(&change),
             Err(error) => {
-                c.view.error = Some(error.localized_message(self.session.localization()));
+                c.set_error(error);
                 serialize(&layer_ui::UiChange::default())
             }
         }

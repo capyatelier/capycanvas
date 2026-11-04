@@ -270,13 +270,14 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
             let headers = widgets(&page).filter(|widget| widget.is_mapped() && widget.widget_name() == "dialog-header").collect::<Vec<_>>();
             if phone_page { assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers"); }
             if phone_page || !headers.is_empty() { add("page.header","page-header",headers.first().cloned()); }
-            let start = shell("dialog-start").or_else(|| headers.first().and_then(|header| widgets(header)
+            let start = shell("dialog-start").or_else(|| headers.first().and_then(|header| widgets(header).filter(|widget| widget.is_mapped())
                 .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
                 .find(|button| button.icon_name().as_deref() == Some("go-previous-symbolic")
                     || widgets(button.upcast_ref()).any(|widget| widget.downcast_ref::<gtk::Image>()
                         .is_some_and(|image| image.icon_name().as_deref() == Some("go-previous-symbolic"))))
                 .map(|button| { button.set_widget_name("dialog-start"); button.upcast() })));
-            let end = shell("dialog-end");
+            let end = shell("dialog-end").or_else(|| crate::page_dialog::primary_button(&dialog)
+                .filter(|button| button.is_mapped() && button.is_ancestor(&page)).map(|button| button.upcast()));
             if let Some(start) = start { add("page.start","page-action",Some(start)); }
             if let Some(end) = end.clone() { add("page.end","page-action",Some(end)); }
             let panes = shell("dialog-panes");

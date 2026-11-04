@@ -994,7 +994,7 @@ impl EffectPanels {
         dialog.add_response("ok", "OK");
         let w = w.clone();
         glib::spawn_future_local(async move {
-            crate::alert::choose(dialog, &w.window).await;
+            crate::alert::choose_intent(dialog, &w.window, layer_ui::bootstrap_view(&w.localization()).recovery.dialog, Some("ok"), &[]).await;
         });
     }
     fn recording_tick(self: &Rc<Self>, w: &Rc<Workspace>) {

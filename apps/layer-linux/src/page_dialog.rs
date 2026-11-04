@@ -7,7 +7,12 @@ thread_local! { static WINDOWS: RefCell<Vec<Weak<Workspace>>> = const { RefCell:
 
 #[path = "page_dialog_metadata.rs"]
 mod specification;
-pub use specification::{Action, Metadata, configure, primary};
+pub use specification::{Action, Metadata, configure, primary, intent};
+
+#[cfg(test)]
+pub(crate) fn primary_button(dialog: &adw::Dialog) -> Option<gtk::Button> {
+    match specification::get(dialog).primary { Some(Action::Button(button)) => Some(button), _ => None }
+}
 
 fn viewport(w: &Workspace) -> [f32; 2] {
     let parent = w.pages.root.parent().unwrap();

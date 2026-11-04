@@ -226,7 +226,7 @@ pub(crate) async fn show_package(
         dialog.add_responses(&[("close",summary.close.as_ref()),("copy",summary.copy_original.as_ref())]);
         if summary.capabilities.export { dialog.add_response("export", &summary.export_preview); }
         dialog.set_close_response("close");
-        let response = crate::alert::choose_editor(dialog,window, None, &["copy", "export"]).await;
+        let response = crate::alert::choose_intent(dialog,window, summary.dialog, None, &["copy", "export"]).await;
         let preview = response == "export";
         if response != "copy" && !preview { return Ok(()); }
         let title = if preview { &summary.export_preview } else { &summary.copy_original };

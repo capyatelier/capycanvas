@@ -145,7 +145,7 @@ impl Workspace {
                                     "discard",
                                     adw::ResponseAppearance::Destructive,
                                 );
-                                let response = crate::alert::choose(dialog, &w.window).await;
+                                let response = crate::alert::choose_intent(dialog, &w.window, spec.dialog, Some("save"), &["discard"]).await;
                                 let decision = match response.as_str() {
                                     "save" => CloseDecision::Save,
                                     "discard" => CloseDecision::Discard,

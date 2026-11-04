@@ -18,7 +18,7 @@ fn phone_restore_is_undone_by_the_command_named_in_its_confirmation() {
     let prompt = f.controller.view.prompt.as_ref().unwrap();
     assert!(prompt.message.contains(command.label.as_ref()));
     assert_eq!(prompt.dialog_intent(), layer_ui::DialogIntent::alert());
-    let wire = serde_json::to_value(prompt).unwrap();
+    let wire = serde_json::to_value(&f.controller.view).unwrap()["prompt"].clone();
     assert_eq!(wire["dialog"]["role"], "alert");
     assert_eq!(wire["dialog"]["modal"], true);
     f.input(serde_json::json!({ "type": "submit", "name": "" }));

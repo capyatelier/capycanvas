@@ -467,11 +467,10 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   managerScroll.append(managerList, managerEmpty);
   managerBody.append(managerDescription, managerScroll, managerDelete);
   manager.append(managerHeader, managerBody); workspace.append(manager);
-  manager.addEventListener("cancel", e => { e.preventDefault(); closeManager(); });
-  manager.addEventListener("close", () => { if (app.toolbar_manager()) closeManager(); });
+  const managerHost=createDialogHost({app,dialog:manager,header:managerHeader,cancel:managerClose,primary:managerClose,icon,copy:common,onCancel:closeManager});
   function refreshManager() {
     const model = app.toolbar_manager();
-    if (!model) { if (manager.open) manager.close(); return; }
+    if (!model) { managerHost.hide(); return; }
     managerTitle.textContent = model.title; manager.setAttribute("aria-label", model.title);
     managerClose.setAttribute("aria-label", model.close_label);
     managerDescription.textContent = model.description;
@@ -489,7 +488,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       }));
     }
     for (const row of managerList.children) row.setAttribute("aria-pressed", String(row.dataset.panel === model.selected));
-    if (!manager.open) { manager.showModal(); managerClose.focus(); }
+    if (managerHost.present(model.dialog)) managerList.querySelector('[aria-pressed="true"]')?.focus();
   }
 
   const prompt = element("dialog", "toolbar-prompt"), promptTitle = element("h2"), promptMessage = element("p");
@@ -502,15 +501,15 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const cancelPrompt = () => send({ type: "cancel_toolbar" });
   const promptCancel = button("", cancelPrompt), promptConfirm = button("", () => send({ type: "confirm_toolbar" }));
   promptConfirm.id = "confirm-toolbar"; promptActions.append(promptCancel, promptConfirm);
-  prompt.append(promptTitle, promptMessage, promptNameRow, promptError, promptActions); workspace.append(prompt);
-  prompt.addEventListener("cancel", e => { e.preventDefault(); cancelPrompt(); });
-  prompt.addEventListener("close", () => { if (app.toolbar_prompt()) cancelPrompt(); });
+  const promptHeader=element('header','dialog-header');promptHeader.append(promptTitle);
+  prompt.append(promptHeader,promptMessage,promptNameRow,promptError,promptActions);workspace.append(prompt);
+  const promptHost=createDialogHost({app,dialog:prompt,header:promptHeader,cancel:promptCancel,primary:promptConfirm,icon,copy:common,onCancel:cancelPrompt});
   promptName.addEventListener("keydown", e => {
     if (e.key === "Enter" && !promptConfirm.disabled) { e.preventDefault(); promptConfirm.click(); }
   });
   function refreshPrompt() {
     const model = app.toolbar_prompt();
-    if (!model) { if (prompt.open) prompt.close(); return; }
+    if (!model) { promptHost.hide(); return; }
     promptTitle.textContent = model.title; prompt.setAttribute("aria-label", model.title);
     promptMessage.textContent = model.message; promptMessage.hidden = !model.message;
     promptNameRow.hidden = model.name == null;
@@ -520,7 +519,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     promptCancel.textContent = model.cancel_label; promptConfirm.textContent = model.confirm_label;
     promptConfirm.disabled = !model.can_confirm;
     promptConfirm.className = model.destructive ? "destructive-action" : "suggested-action";
-    if (!prompt.open) { prompt.showModal(); if (model.name != null) { promptName.focus(); promptName.select(); } }
+    if (promptHost.present(model.dialog) && model.name != null) { promptName.focus(); promptName.select(); }
   }
 
   function clearExpansion() {

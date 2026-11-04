@@ -470,7 +470,7 @@ async fn failed_drawings(w:&Rc<Workspace>)->Result<(),String> {
         }));
         dialog.set_close_response("later");dialog.set_default_response(Some("later"));
         dialog.set_response_appearance("discard",adw::ResponseAppearance::Destructive);
-        let response=crate::alert::choose(dialog,&w.window).await;
+        let response=crate::alert::choose_intent(dialog,&w.window,copy.dialog,Some("retry"),&["discard"]).await;
         if response=="discard" {
             w.restart.stores.prepare_retirement(&drawing.key)?.await?;
             if let Some(warning)=w.restart.update_checked(|manifest|manifest.remove(drawing.id),true).await? {w.changed(Err(warning));}

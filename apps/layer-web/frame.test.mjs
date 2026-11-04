@@ -461,11 +461,11 @@ test('dialog presentation retains controls and ignores a retired native close',a
   const inner=element('header'),originalIcon=icon('window-close');primary.append(originalIcon);primary.setAttribute('aria-label','Original close');
   header.append(cancel,primary);dialog.append(header,inner,search);doc.body.append(dialog);
   const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
-  let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header;
+  let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header,currentPrimary=primary;
   const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},
     dialog_header:(intent,back)=>({start:back?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),
     dialog_escape:(back,focused,text)=>back?'back':focused&&text?'clear_search':'cancel'};
-  const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary,search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
+  const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary:()=>currentPrimary,search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
     subpage:()=>subpage,onBack:()=>{backs++;subpage=false;currentHeader=header;host.layout();},
     onCancel:()=>{cancels++;host.hide();},clearSearch:()=>{clears++;search.value='';}});
   const intent={role:'editor',modal:true,primary:'action'};
@@ -508,6 +508,21 @@ test('dialog presentation retains controls and ignores a retired native close',a
   host.present(intent);subpage=true;host.layout();cancel.click();assert.equal(sourceCancels,1,'Programmatic original Cancel remains terminal on a subpage');assert.equal(backs,4);
   subpage=false;page=false;host.present(intent);assert.equal(cancel.hidden,false);cancel.click();assert.equal(sourceCancels,2,'The original Cancel callback still closes at the root');
   page=true;host.present({...intent,primary:'close'});done.click();assert.equal(cancels,3);
+  const footer=element('footer'),apply=element('button'),after=element('span');footer.append(apply,after);apply.nextSibling=after;dialog.append(footer);
+  let applied=0,closedByOriginal=0;apply.addEventListener('click',()=>{applied++;});primary.addEventListener('click',()=>{closedByOriginal++;});
+  currentPrimary=apply;host.present(intent);
+  assert.equal(apply.parentNode,header,'Workspaces Apply is the live projected primary');assert.equal(primary.hidden,true);
+  apply.click();assert.equal(applied,1);
+  currentPrimary=primary;host.present({...intent,primary:'close'});
+  assert.equal(apply.hidden,true,'The previous primary is retired when the toolbar Close takes over');assert.equal(done.hidden,false);
+  page=false;host.layout();
+  assert.deepEqual(footer.children,[apply,after],'Returning to floating restores the original Apply slot');
+  assert.equal(primary.parentNode,header);assert.equal(primary.hidden,false);primary.click();assert.equal(closedByOriginal,1,'The original Close node keeps its callback');
+  page=true;currentPrimary=apply;host.present(intent);apply.click();assert.equal(applied,2,'Returning to Apply keeps its original node and callback');
+  page=false;host.layout();assert.deepEqual(footer.children,[apply,after]);
+  page=false;subpage=false;currentPrimary=primary;host.present({role:'alert',modal:true,primary:'action'});
+  assert.equal(currentHeader.dataset.dialogPart,undefined,'A floating alert has a heading and response buttons, without a page header');
+  assert.equal(cancel.dataset.dialogPart,undefined);assert.equal(primary.dataset.dialogPart,undefined);
   host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
 });
 

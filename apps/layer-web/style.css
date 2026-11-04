@@ -1762,7 +1762,23 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .workspace-manager [hidden] { display:none; }
 .workspace-manager[data-toolbar=true] { width:min(780px,calc(100vw - 32px)); height:min(600px,calc(100vh - 32px)); }
 .workspace-manager[data-toolbar=true] .workspace-list { min-height:108px; }
-.workspace-manager[data-toolbar=true] .workspace-details { flex:none; max-height:180px; overflow:auto; margin:8px 18px 0; }
+.workspace-panes { display:flex; flex:1; gap:18px; min-height:0; margin:20px; }
+.workspace-sidebar { display:flex; flex:1; flex-direction:column; min-width:220px; min-height:0; }
+.workspace-panes .workspace-list { margin:0; }
+.workspace-panes .workspace-list-actions { margin:0 0 12px; }
+.workspace-panes .workspace-row-actions { margin:6px 0 0; }
+.workspace-manager[data-toolbar=true] .workspace-sidebar { flex:0 0 280px; }
+.workspace-manager[data-toolbar=true] .workspace-details { flex:1; overflow:auto; min-width:0; margin:0; padding-left:18px; }
+.workspace-manager.single-pane .workspace-panes { display:block; }
+.workspace-manager.single-pane .workspace-sidebar { min-width:0; height:100%; }
+.workspace-manager.single-pane .workspace-details { height:100%; }
+.workspace-manager.single-pane .workspace-details h3 { display:none; }
+.workspace-manager.dialog-page .workspace-panes { margin:8px; }
+.workspace-manager.dialog-page .workspace-intro { margin:8px 8px 4px; }
+.workspace-manager.dialog-page .workspace-manager-tabs { margin:8px 8px 4px; }
+.workspace-status { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; }
+.workspace-status.error { color:#e66; }
+.workspace-status button { font-size:inherit; }
 
 .workspace-name-entry { box-sizing:border-box; width:100%; min-width:0; min-height:var(--panel-control-height, 26px); padding:0 var(--panel-field-padding, 6px); margin:0; border:0; background:var(--input); border-radius:var(--control-radius); box-shadow:none; line-height:normal; color:inherit; }
 .workspace-name-entry[aria-invalid="true"] { outline:1px solid #c44; }
@@ -1857,3 +1873,19 @@ dialog.dialog-page::backdrop { background:transparent; backdrop-filter:none; }
 #phone-frame[data-contact="dragging"] :is(.phone-target,.phone-tool,.phone-bar) { cursor:grabbing; }
 
 .dialog-page > form { display:flex; flex:1; flex-direction:column; min-height:0; overflow:auto; }
+
+.workspace-manager.dialog-page[data-toolbar=false] .workspace-panes { margin-bottom:28px; }
+dialog[role=alertdialog] { width:max-content; min-width:300px; max-width:372px; padding:32px 24px 24px; }
+dialog[role=alertdialog] > header { display:contents; }
+dialog[role=alertdialog] h2 { margin:0; font-size:inherit; line-height:20px; text-align:center; }
+dialog[role=alertdialog] p:not(.workspace-error) { margin:10px 0 21px; line-height:19px; text-align:center; }
+dialog.workspace-form[role=alertdialog]:not(.palette-form) p:not(.workspace-error) { margin-bottom:39px; }
+dialog[role=alertdialog] .workspace-error:empty { display:none; }
+dialog[role=alertdialog] :is(footer,.prompt-actions) { display:flex; gap:12px; margin:0; }
+dialog[role=alertdialog] :is(footer,.prompt-actions) > button { flex:1; min-height:44px; margin:0; padding:10px 20px; line-height:24px; }
+dialog[role=alertdialog] .destructive-action { color:red; background:#ffbaba; }
+body[data-theme=dark] dialog[role=alertdialog] .destructive-action { color:#ff938f; background:#4c2426; }
+
+.dialog-header-slot { position:absolute; top:6px; right:6px; display:flex; gap:6px; }
+.profile-library-import { display:grid; place-items:center; width:34px; height:34px; min-height:34px; padding:0; }
+.profile-library-import svg { width:16px; height:16px; }

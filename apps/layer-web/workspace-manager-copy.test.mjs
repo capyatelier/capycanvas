@@ -11,12 +11,14 @@ class Element extends SharedElement {
   get childNodes(){return this.children;}
   get firstElementChild(){return this.children.find(n=>n.tagName);}
   get parentElement(){return this.parentNode;}
+  get nextSibling(){return this.parentNode?.children[this.parentNode.children.indexOf(this)+1]??null;}
   get textContent(){return this.children.map(n=>n.nodeType===3?n.nodeValue:n.textContent).join('');}
   set textContent(value){this.replaceChildren(this.ownerDocument.createTextNode(value));}
   get ariaLabel(){return this.getAttribute('aria-label');}
   set ariaLabel(value){this.setAttribute('aria-label',value);}
   get isConnected(){return !!this.parentNode;}
-  get classList(){const read=()=>new Set(this.className.split(/\s+/).filter(Boolean)),write=set=>{this.className=[...set].join(' ');};return {add:(...names)=>{const set=read();names.forEach(name=>set.add(name));write(set);},remove:(...names)=>{const set=read();names.forEach(name=>set.delete(name));write(set);},toggle:(name,on)=>{const set=read();on??=!set.has(name);if(on)set.add(name);else set.delete(name);write(set);return on;}};}
+  get classList(){const read=()=>new Set(this.className.split(/\s+/).filter(Boolean)),write=set=>{this.className=[...set].join(' ');};return {contains:name=>read().has(name),add:(...names)=>{const set=read();names.forEach(name=>set.add(name));write(set);},remove:(...names)=>{const set=read();names.forEach(name=>set.delete(name));write(set);},toggle:(name,on)=>{const set=read();on??=!set.has(name);if(on)set.add(name);else set.delete(name);write(set);return on;}};}
+  append(...nodes){for(const node of nodes){if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node);}}
   insertBefore(node,before){if(node.parentNode)node.remove();node.parentNode=this;this.children.splice(before?this.children.indexOf(before):this.children.length,0,node);return node;}
   prepend(node){return this.insertBefore(node,this.firstChild);}
   after(node){const siblings=this.parentNode.children;node.parentNode=this.parentNode;siblings.splice(siblings.indexOf(this)+1,0,node);}
@@ -30,18 +32,21 @@ class Element extends SharedElement {
   replaceWith(node){this.parentNode.insertBefore(node,this);this.remove();}
   select(){this.selectionStart=0;this.selectionEnd=this.value?.length??0;}
   focus(){this.ownerDocument.activeElement=this;}
+  click(){this.dispatchEvent({type:'click',target:this});}
   showModal(){this.open=true;}
+  getBoundingClientRect(){return{x:0,y:0,left:0,top:0,right:100,bottom:34,width:100,height:34};}
   close(){this.open=false;for(const listener of this.listeners.close??[])listener();}
 }
 const headerFields=['search','description','this_workspace','saved_toolbars','new_toolbar','retry','workspaces','new_workspace','owned_elsewhere','save_as_new_workspace','drag_to_reorder','current_workspace','shown_top','show_top','move_up','move_down'];
-function harness(t,{failure=false}={}) {
+function harness(t,{failure=false,phone=false}={}) {
   const doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener:()=>{}};doc.createElement=tag=>new Element(tag,doc);doc.body=new Element('body',doc);doc.activeElement=doc.body;const title=new Element('span',doc);title.id='document-title';doc.body.append(title);doc.querySelector=selector=>doc.body.querySelector(selector);
-  const saved=Object.fromEntries(['document','window','sessionStorage','BroadcastChannel','ResizeObserver','innerWidth','innerHeight'].map(key=>[key,globalThis[key]]));Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1200,innerHeight:900,ResizeObserver:class {observe(){}disconnect(){}},sessionStorage:{getItem:()=>null,setItem:()=>{}},BroadcastChannel:class {addEventListener(){}postMessage(){}}});t.after(()=>Object.assign(globalThis,saved));
+  const saved=Object.fromEntries(['document','window','sessionStorage','BroadcastChannel','ResizeObserver','innerWidth','innerHeight'].map(key=>[key,globalThis[key]]));Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:phone?412:1200,innerHeight:900,ResizeObserver:class {observe(){}unobserve(){}disconnect(){}},sessionStorage:{getItem:()=>null,setItem:()=>{}},BroadcastChannel:class {addEventListener(){}postMessage(){}}});t.after(()=>Object.assign(globalThis,saved));
   const timers=[];t.mock.method(globalThis,'setInterval',fn=>{timers.push(fn);return timers.length;});
   let tag='en';const inputs=[];let ticks=0,observes=0;
   const row=()=>({id:'literal-id',title:`${tag}:row-title`,subtitle:`${tag}:row-subtitle`,current:true,actions:[],options:[],pin:{label:`${tag}:pin-label`,icon:'pin-outline',selected:false,enabled:false,edit:{type:'toggle',id:'literal-id'}}});
   let override={};const view=()=>({ready:true,busy:false,switcher_busy:false,dirty:false,id:'literal-id',name:'İı ไทย Tiếng Việt { $name } 🎨',page:failure?null:'workspaces',rows:failure?[]:[row()],switcher:[],switcher_display:[],switcher_options_label:`${tag}:workspace-options`,switcher_options:{title:`${tag}:workspace-options`,sections:[]},switcher_menu:{title:`${tag}:workspaces`,sections:[]},order:['literal-id'],switcher_revision:1,selected:'literal-id',title:`${tag}:title`,intro:`${tag}:intro`,primary:`${tag}:primary`,enabled:true,error:failure?`${tag}:write-failed`:null,switcher_error:null,focus_window:null,retry:failure,prompt:failure?null:{title:`${tag}:prompt-title`,message:`${tag}:prompt-message`,name:'Original literal name',confirm:`${tag}:confirm`,destructive:false},prompt_action:failure?null:{type:'new'},...override});
-  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:'primary'}),catalog:()=>({native_copy:{header:Object.fromEntries(headerFields.map(name=>[name,`${tag}:${name}`]))}}),bootstrap_view:()=>({common:Object.fromEntries(['close','cancel','name','keep_open','delete'].map(name=>[name,`${tag}:${name}`]))}),workspace_name_validation:name=>name.trim()?null:`${tag}:invalid-name`,workspace_view:()=>{const result=view();if(result.prompt)result.prompt.dialog={role:'editor',modal:true,primary:'action'};return JSON.stringify(result);},workspace_start:()=>{},workspace_tick:()=>{ticks++;return {};},workspace_observe:()=>{observes++;},workspace_input:value=>{inputs.push(JSON.parse(value));return {};},native_caption:({type,title})=>`${tag}:${type}:${title}`};
+  const sharedView=()=>{const result={details_requested:false,status:failure?{text:`${tag}:write-failed`,error:true,retry:true,action:{label:`${tag}:save_as_new_workspace`,action:{type:'save_as_new'},enabled:true,primary:false}}:null,...view()};result.dialog=result.page?{role:'editor',modal:true,primary:['this_workspace','toolbar_library'].includes(result.page)?'close':'action'}:null;if(result.prompt)result.prompt.dialog={role:'editor',modal:true,primary:'action'};return result;};
+  const app={dialog_presentation:()=>phone?{kind:'page',bounds:{x:0,y:0,width:412,height:900}}:{kind:'floating'},dialog_header:(intent,subpage)=>({start:subpage?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),dialog_escape:subpage=>subpage?'back':'cancel',workspace_dialog_layout:()=>{const v=sharedView(),toolbar=['this_workspace','toolbar_library'].includes(v.page);return{toolbar,single_pane:toolbar&&phone,subpage:toolbar&&phone&&v.details_requested};},catalog:()=>({native_copy:{header:Object.fromEntries(headerFields.map(name=>[name,`${tag}:${name}`]))}}),bootstrap_view:()=>({common:Object.fromEntries(['close','cancel','name','keep_open','delete','back','done'].map(name=>[name,`${tag}:${name}`]))}),workspace_name_validation:name=>name.trim()?null:`${tag}:invalid-name`,workspace_view:()=>JSON.stringify(sharedView()),workspace_start:()=>{},workspace_tick:()=>{ticks++;return {};},workspace_observe:()=>{observes++;},workspace_input:value=>{inputs.push(JSON.parse(value));return {};},native_caption:({type,title})=>`${tag}:${type}:${title}`};
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null)node.textContent=text;return node;};const button=(text,run,cls)=>{const node=element('button',cls,text);node.click=run;return node;};
   const manager=createWorkspaceManager({dropdown:dropdownFactory({element,button}),app,store:{execute:()=>{},holdOwner:()=>{}},applyChange:()=>{},element,button,icon:()=>element('span','icon'),message:()=>{}});
   return {manager,doc,inputs,setView(next){override=next;manager.localize();},switch(next){tag=next;refreshCopy(app);manager.localize();refreshBindings();},tick(){timers[0]();},stats:()=>({ticks,observes}),nodes:()=>({dialog:doc.body.querySelector('.workspace-manager'),form:doc.body.querySelectorAll('.workspace-form').find(node=>node.open)??doc.body.querySelector('.workspace-form'),row:doc.body.querySelector('.workspace-row'),input:doc.body.querySelector('#workspace-item-name')})};
@@ -57,9 +62,13 @@ test('workspace prompt and rows publish copy without replacing dirty names, sele
   h.tick();assert.deepEqual(h.nodes(),original);assert.equal(h.doc.activeElement,input);assert.equal(input.value,'İı ไทย Tiếng Việt { $name } 🎨 draft');
 });
 
-test('workspace recovery displays the complete shared failure and relabels retained recovery controls',t=>{
-  const h=harness(t,{failure:true}),recovery=h.nodes().form,trigger=h.doc.body.querySelector('.workspace-recovery'),controls=recovery.querySelectorAll('button');
-  assert.equal(trigger.textContent,'en:write-failed');h.switch('tr');assert.equal(h.nodes().form,recovery);assert.deepEqual(recovery.querySelectorAll('button'),controls);assert.equal(trigger.textContent,'tr:write-failed');assert.equal(recovery.ariaLabel,'tr:workspaces');assert.equal(recovery.querySelector('p').textContent,'tr:write-failed');assert.deepEqual(controls.map(node=>node.textContent),['tr:keep_open','tr:retry','tr:save_as_new_workspace']);assert.deepEqual(h.inputs,[]);
+test('inline workspace failure retains localized Retry and Save As controls and forwards their shared actions',t=>{
+  const h=harness(t,{failure:true}),status=h.doc.body.querySelector('.workspace-status'),controls=status.querySelectorAll('button');
+  assert.deepEqual(controls.map(node=>node.textContent),['en:retry','en:save_as_new_workspace']);
+  assert.equal(status.hidden,false);assert.equal(status.querySelector('span').textContent,'en:write-failed');assert.equal(h.nodes().form.open,false);assert.equal(h.nodes().dialog.open,false);
+  h.switch('tr');assert.equal(h.doc.body.querySelector('.workspace-status'),status);assert.deepEqual(status.querySelectorAll('button'),controls);assert.equal(status.querySelector('span').textContent,'tr:write-failed');assert.deepEqual(controls.map(node=>node.textContent),['tr:retry','tr:save_as_new_workspace']);assert.deepEqual(h.inputs,[]);
+  controls[0].click();controls[1].click();assert.deepEqual(h.inputs,[{type:'retry'},{type:'form',action:{type:'save_as_new'}}]);
+  h.setView({status:null});assert.equal(status.hidden,true,'A cleared shared status retires the inline notice');
 });
 
 
@@ -79,6 +88,16 @@ test('advanced toolbar pages present shared details actions and workspace search
   const details=h.doc.body.querySelector('.workspace-details');assert.equal(details.hidden,false);assert.equal(details.querySelector('p').textContent,'Reusable tools');details.querySelector('button').click();assert.deepEqual(h.inputs.at(-1),{type:'action',action});
   const search=h.doc.body.querySelector('#workspace-manager-search');assert.equal(search.hidden,false);search.value='ink';search.dispatchEvent({type:'input'});assert.deepEqual(h.inputs.at(-1),{type:'search',query:'ink'});
   const tabs=h.doc.body.querySelector('.workspace-manager-tabs').querySelectorAll('button');tabs[0].click();assert.deepEqual(h.inputs.at(-1),{type:'open',page:'this_workspace'});
+});
+
+test('single-pane toolbar details forward shared PageList Back without replacing the list or search',t=>{
+  const h=harness(t,{phone:true}),details={title:'Saved toolbar',description:'Reusable tools',actions:[]};
+  h.setView({page:'toolbar_library',prompt:null,details,details_requested:true});
+  const dialog=h.nodes().dialog,list=dialog.querySelector('.workspace-list'),search=dialog.querySelector('#workspace-manager-search'),sidebar=dialog.querySelector('.workspace-sidebar'),body=dialog.querySelector('.workspace-details'),back=dialog.querySelector('.dialog-back');
+  assert.equal(sidebar.hidden,true);assert.equal(body.hidden,false);assert.equal(back.hidden,false);assert.equal(dialog.querySelector('h2').textContent,'Saved toolbar');
+  back.click();assert.deepEqual(h.inputs.at(-1),{type:'page_list'});
+  h.setView({page:'toolbar_library',prompt:null,details,details_requested:false});
+  assert.equal(sidebar.hidden,false);assert.equal(body.hidden,true);assert.equal(back.hidden,true);assert.equal(dialog.querySelector('.workspace-list'),list);assert.equal(dialog.querySelector('#workspace-manager-search'),search);
 });
 
 

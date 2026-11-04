@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,dialogAuditRows,dialogAuditSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording} from './phone-audit.mjs';
+import {runInNewContext} from 'node:vm';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,dialogAuditRows,selectDialogAuditRows,dialogAuditSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
 
 test('collecting a recording cannot leave its completion prompt over the next contact',t=>{
@@ -106,11 +107,71 @@ test('dialog rows share routes across desktop and phone and include all W6a fami
   assert.deepEqual(dialogAuditRows.filter(row=>row.baseline).map(row=>row.id),['preferences-root','preferences-appearance','new-drawing','color']);
 });
 
+test('W6c catch-up rows cover the seven forms reachable without a photo',()=>{
+  const ids=['rename-drawing-preset','rename-paper','save-export-preset','new-palette','rename-palette','delete-palette','profile-library'];
+  const rows=ids.map(id=>dialogAuditRows.find(row=>row.batch==='w6c'&&row.id===id));
+  assert.ok(rows.every(row=>row&&typeof row.openaction==='function'&&typeof row.closeaction==='function'&&row.rootselector.includes('[open]')));
+});
+
+test('dialog row selection validates the chosen batch and retains its existing variants',()=>{
+  assert.deepEqual(selectDialogAuditRows({batch:'w6c'},'this-workspace-details, saved-toolbar-details').map(row=>row.id),['this-workspace-details','saved-toolbar-details']);
+  const [drawing]=selectDialogAuditRows({batch:'w6b'},'new-drawing');assert.equal(drawing,dialogAuditRows.find(row=>row.id==='new-drawing'));assert.equal(drawing.variants.length,4);
+  assert.throws(()=>selectDialogAuditRows({batch:'w6c'},'new-drawing'),/Unknown dialog row new-drawing in batch w6c/);
+  assert.throws(()=>selectDialogAuditRows(null,'new-drawing'),/requires a selected dialog batch/);
+  assert.throws(()=>selectDialogAuditRows({batch:'w6b'},''),/requires nonempty row IDs/);
+});
+
+test('W6c routes retain manager lists, details, forms and blocked checks in one inventory',()=>{
+  const rows=dialogAuditRows.filter(row=>row.batch==='w6c');
+  for(const id of ['workspaces','layout-history','this-workspace','saved-toolbars','this-workspace-details','saved-toolbar-details','new-workspace','new-toolbar','save-toolbar','replace-toolbar','rename-saved-toolbar','delete-saved-toolbar','update-saved-toolbar','rename-toolbar','duplicate-toolbar','delete-toolbar','reset-workspace','reset-brushes','unsaved-changes','rename-workspace','delete-workspace','save-as-new-workspace','delete-inactive-workspace','add-tools','insert-tools'])assert.ok(rows.some(row=>row.id===id&&row.openaction&&row.rootselector));
+  assert.equal(rows.find(row=>row.id==='rename-workspace').aliasof,'workspaces');
+  assert.equal(rows.find(row=>row.id==='legacy-toolbar-manager').aliasof,'this-workspace');
+  assert.match(rows.find(row=>row.id==='legacy-toolbar-manager').blocked,/Managed workspace/);
+  for(const row of rows.filter(row=>row.blocked)){assert.equal(row.openaction,undefined);assert.equal(row.rootselector,undefined);assert.ok(row.blocked.length);}
+});
+
+test('manager form routes use the selected row and the actual enabled offered action',async()=>{
+  const action={type:'save_toolbar',value:'authored-toolbar'},inputs=[],clicks=[],guards=[];
+  const view={rows:[{id:'authored-row',actions:[]}],details:{actions:[{enabled:false,action:{type:'save_toolbar',value:'disabled'}},{enabled:true,action} ]}};
+  const layerApp={app:{workspace_input:json=>inputs.push(JSON.parse(json)),workspace_view:()=>JSON.stringify(view)},wake(){}};
+  const context={evaluate:source=>runInNewContext(source,{layerApp}),wait:async condition=>guards.push(condition),settle:async()=>{},click:async selector=>{clicks.push(selector);inputs.push({type:'select',id:'authored-row'},{type:'open_details'});}};
+  await dialogAuditRows.find(row=>row.id==='save-toolbar').openaction(context);
+  assert.deepEqual(inputs,[{type:'open',page:'this_workspace'},{type:'select',id:'authored-row'},{type:'open_details'},{type:'form',action}]);
+  assert.deepEqual(clicks,['.workspace-manager[open] .workspace-choice[data-id="authored-row"]']);
+  assert.ok(guards.some(condition=>condition.includes('checkVisibility()')),'The chosen native row must be mapped before opening its details');
+  view.details.actions=[];
+  await assert.rejects(()=>dialogAuditRows.find(row=>row.id==='save-toolbar').openaction(context),/Manager offers save_toolbar/);
+});
+
+test('New Drawing capture variants use the retained form controls and declare their drawer state',async()=>{
+  const row=dialogAuditRows.find(row=>row.id==='new-drawing');
+  assert.deepEqual(row.drawingstate,{kind:null,save:false});
+  const expected=[['#new-drawing-texture'],['#new-drawing-paper-cancel','#new-drawing-presets-button'],['#new-drawing-save-as'],['#new-drawing-save-cancel','#new-drawing-browser-cancel','#new-drawing-paper-color']];
+  for(const [index,variant] of row.variants.entries()){
+    const clicks=[];await variant.openaction({click:async selector=>clicks.push(selector),send:()=>assert.fail('Retained form actions must not use the gated outer dispatcher')});
+    assert.deepEqual(clicks,expected[index]);assert.ok(variant.drawingstate.kind);assert.equal(variant.drawingstate.save,index===2);
+  }
+});
+
+test('Rename Drawing Preset uses actual naming input and the offered context menu',async()=>{
+  const row=dialogAuditRows.find(row=>row.id==='rename-drawing-preset'),clicks=[],events=[];
+  const state={new_drawing:{drawer:{kind:'presets',save:null,tiles:[{own:true,name:'Canvas study'}]},copy:{rename:'Rename'}}};
+  const node={select(){},scrollIntoView(){},getBoundingClientRect:()=>({x:0,y:0,width:100,height:30})};
+  const browser={layerApp:{state:()=>state},document:{querySelector:()=>node,querySelectorAll:()=>[{firstChild:{textContent:'Rename'}}]}};
+  await row.openaction({send:async action=>assert.deepEqual(action,{type:'invoke',command:'new_document'}),
+    evaluate:async source=>JSON.parse(JSON.stringify(runInNewContext(source,browser))??'null'),settle:async()=>{},
+    call:async(type,event)=>events.push([type,event]),click:async selector=>{clicks.push(selector);if(selector==='#new-drawing-save-as')state.new_drawing.drawer.save={name:'Canvas study'};if(selector==='#new-drawing-save-confirm')state.new_drawing.drawer.save=null;if(selector.includes('nth-child'))state.new_drawing.drawer.save={name:'Canvas study'};}});
+  assert.deepEqual(clicks,['#new-drawing-presets-button','#new-drawing-save-as','#new-drawing-save-confirm','#new-drawing-dialog .new-drawing-menu:popover-open button:nth-child(1)']);
+  assert.equal(events[0][0],'Input.insertText');assert.equal(events[0][1].text,'Canvas study');assert.deepEqual(events.slice(1).map(([,event])=>event.button),['right','right']);
+});
+
 test('dialog allocations use only shared shell part attributes and require the header',()=>{
   const root={querySelector:()=>({querySelector:selector=>selector==='[data-dialog-part="end"]'||selector==='[data-dialog-part="panes"]'?{}:null})};
   const specs=dialogAuditSpecifications('#actual-dialog[open]',root);
   assert.deepEqual(specs.map(spec=>spec.id),['page','page.header','page.end','page.panes']);
   assert.equal(specs[1].optional,undefined);
   assert.deepEqual(dialogAuditSpecifications('#missing',{querySelector:()=>null}).map(spec=>spec.id),['page','page.header']);
+  const alert={getAttribute:()=> 'alertdialog',querySelector:()=>null};
+  assert.deepEqual(dialogAuditSpecifications('#alert',{querySelector:()=>alert}).map(spec=>spec.id),['page']);
   assert.ok(specs.slice(1).every(spec=>spec.selector.includes('[data-dialog-part=')));
 });

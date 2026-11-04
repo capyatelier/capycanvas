@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 macro_rules! copy_struct {
-    ($name:ident { $($field:ident: $message:ident $(=> $argument:ident)?,)* }) => {
+    ($name:ident { $($field:ident: $message:ident $(=> $argument:ident)?,)* } $(; $($dialog:ident = $intent:expr),* $(,)?)?) => {
         #[derive(Clone, Debug, Serialize)]
-        pub struct $name { $(pub $field: Arc<str>,)* }
+        pub struct $name { $(pub $field: Arc<str>,)* $($(pub $dialog: crate::DialogIntent,)*)? }
         impl $name {
-            pub(crate) fn new(l: &Localizer) -> Self { Self { $($field: copy_struct!(@value l, $message $(, $argument)?),)* } }
+            pub(crate) fn new(l: &Localizer) -> Self { Self { $($field: copy_struct!(@value l, $message $(, $argument)?),)* $($($dialog: $intent,)*)? } }
         }
     };
     (@value $l:ident, $message:ident) => { $l.text(MessageId::$message) };
@@ -543,7 +543,7 @@ copy_struct! { RecoveryCopy {
     opening_workspace: NATIVE_DIALOG_OPENING_WORKSPACE,
     saving_workspace: NATIVE_DIALOG_SAVING_WORKSPACE,
     workspace_dialog_failed: NATIVE_DIALOG_WORKSPACE_DIALOG_FAILED,
-} }
+} ; dialog = crate::DialogIntent::alert(), recording_ready_dialog = crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)) }
 
 #[cfg(test)]
 mod sampler_tests {

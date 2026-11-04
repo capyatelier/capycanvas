@@ -324,7 +324,7 @@ test('profile-library search uses shared metadata matching and Escape waits for 
     profile_entry_copy:entry=>({name:`${language}:profile-${entry.id}`,details:'Details'}),
     profile_library_matches:(entry,query)=>{queries.push([entry.id,query]);return !query||entry.id===query;},
     profile_library:async(type)=>{if(type==='list')return entries;if(type==='remove')await new Promise(done=>release=done);},color_feature_error_copy:String};
-  const result=chooseProfileLibrary({app,element,button,manage:true});await new Promise(done=>setImmediate(done));
+  const result=chooseProfileLibrary({app,element,button,icon:()=>element('svg'),manage:true});await new Promise(done=>setImmediate(done));
   const root=body.children.find(node=>node.tagName==='DIALOG'),search=root.querySelectorAll('input')[0];assert.equal(search.hidden,false);
   search.value='3';search.dispatchEvent({type:'input'});assert.equal(root.querySelectorAll('h3').length,1);assert.equal(root.querySelectorAll('h3')[0].textContent,'en:profile-3');assert.ok(queries.some(([id,query])=>id==='3'&&query==='3'));
   language='fr';localizeProfileLibraries();assert.equal(root.querySelectorAll('h3')[0].textContent,'fr:profile-3');assert.equal(search.value,'3');

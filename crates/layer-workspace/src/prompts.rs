@@ -8,7 +8,7 @@ pub struct ManagerChoice {
     pub id: String,
     pub label: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagerPrompt {
     pub title: String,
     pub message: String,
@@ -20,24 +20,6 @@ pub struct ManagerPrompt {
     pub choice_label: Option<String>,
     pub choices: Vec<ManagerChoice>,
     pub selected: Option<String>,
-}
-impl Serialize for ManagerPrompt {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut view = serializer.serialize_struct("ManagerPrompt", 11)?;
-        view.serialize_field("dialog", &self.dialog_intent())?;
-        view.serialize_field("title", &self.title)?;
-        view.serialize_field("message", &self.message)?;
-        view.serialize_field("confirm", &self.confirm)?;
-        view.serialize_field("cancel", &self.cancel)?;
-        view.serialize_field("destructive", &self.destructive)?;
-        view.serialize_field("name", &self.name)?;
-        view.serialize_field("description", &self.description)?;
-        view.serialize_field("choice_label", &self.choice_label)?;
-        view.serialize_field("choices", &self.choices)?;
-        view.serialize_field("selected", &self.selected)?;
-        view.end()
-    }
 }
 impl ManagerPrompt {
     pub fn dialog_intent(&self) -> layer_ui::DialogIntent {

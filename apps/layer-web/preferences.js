@@ -320,7 +320,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget, controls: [input, ...widget.querySelectorAll("button")] });
         }
       }
-      if(page.id==="color")node.append(button(() => profileCopy.manage,()=>chooseProfileLibrary({app,element,button,manage:true})));
+      if(page.id==="color")node.append(button(() => profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,manage:true})));
     }
   }
   return function refresh(model) {

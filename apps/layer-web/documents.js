@@ -66,7 +66,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(request){nativeDeliveries.set(request.id,Promise.resolve(files));event.preventDefault();applyChange(change);}
   });
   const images=createImageImport({app,canvas,applyChange,wake,element,button,icon,message,gpuOperation,
-    openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button,dropdown})});
+    openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button,icon,dropdown})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
@@ -80,7 +80,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(intent){shell=createDialogHost({app,dialog:root,header,icon,copy:common,onCancel:()=>finish(null),...controls});shell.present(intent);}
     else root.showModal();
   });
-  const cancel=(footer,finish)=>footer.append(button(()=>common.cancel,()=>finish(null)));
+  const cancel=(footer,finish)=>{const control=button(()=>common.cancel,()=>finish(null));footer.append(control);return control;};
   const proof=createProof({app,dialog,element,button,icon,dropdown,applyChange,wake,dispatch,contentChanged});
   const clipMime="web application/x-capycanvas-clip",customClip=!!globalThis.ClipboardItem?.supports?.(clipMime);
   const clipboardRead=()=>{
@@ -237,9 +237,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         const current=()=>app.state().requests.find(request=>request.id===id)?.kind.request;
         const spec=()=>app.editor_models(innerWidth,innerHeight).document_options;
         const decision=await dialog(()=>current()?.title??r.title,(form,finish)=>{
-          form.append(element("p","",()=>spec().unsaved_description));const footer=element("footer");cancel(footer,finish);
-          footer.append(button(()=>spec().discard_label,()=>finish("discard")),button(()=>common.save,()=>finish("save"),"suggested-action"));form.append(footer);
-        });
+          form.append(element("p","",()=>spec().unsaved_description));const footer=element("footer"),cancelButton=cancel(footer,finish),save=button(()=>common.save,()=>finish("save"),"suggested-action");
+          footer.append(button(()=>spec().discard_label,()=>finish("discard")),save);form.append(footer);return {cancel:cancelButton,primary:save};
+        },spec().dialog);
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
       if(r.type==="properties") {
@@ -255,7 +255,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         applyChange(app.finish_document(id,true));
         if(appearance)proof.run(id);
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {
-        candidate=await chooseDocumentColor({app,dialog,element,button,dropdown,gpuOperation,request:r,id});
+        candidate=await chooseDocumentColor({app,dialog,element,button,icon,dropdown,gpuOperation,request:r,id});
         if(candidate?.is_copy?.()) {
           const prepared=await gpuOperation(()=>app.prepare_color_copy(candidate));
           candidate.free();candidate=null;
@@ -308,7 +308,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
           } catch(error) { message(error); }
           return;
         }
-        const choice=r.repeat?{recipe:r.repeat.recipe}:r.type==="export"?await chooseExport({app,dialog,element,button,dropdown,numberField,gpuOperation,id}):null;
+        const choice=r.repeat?{recipe:r.repeat.recipe}:r.type==="export"?await chooseExport({app,dialog,element,button,icon,dropdown,numberField,gpuOperation,id}):null;
         const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
         const target=await destination(r.repeat?{...r,location:r.repeat.location}:r,recipe);
@@ -427,7 +427,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     try{
       const original=file?.file??(bytes instanceof Blob?bytes:new Blob([bytes]));
       app.admit_document_input(BigInt(original.size),new Uint8Array(await original.slice(0,4).arrayBuffer()));
-      candidate=await gpuOperation(()=>app.prepare_document(id,bytes==null&&!file?undefined:original,fileState.epoch,fileState.revision,target?.name,()=>chooseSourceProfile({app,dialog,element,button,dropdown}),()=>cancelled));
+      candidate=await gpuOperation(()=>app.prepare_document(id,bytes==null&&!file?undefined:original,fileState.epoch,fileState.revision,target?.name,()=>chooseSourceProfile({app,dialog,element,button,icon,dropdown}),()=>cancelled));
       if(cancelled)throw new DOMException('Opening cancelled','AbortError');
       if(app.package_view(candidate)){
         progress.remove();
@@ -467,15 +467,21 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         };
         if(model.capabilities.copy_original)footer.append(button(()=>model.copy_original,()=>savePart(original,name,"application/vnd.capycanvas",false)));
         if(model.capabilities.export&&preview)footer.append(button(()=>model.export_preview,()=>savePart(new Blob([preview.encoded],{type:"image/png"}),name.replace(/\.[^.]+$/,"")+".png","image/png",true)));
-        footer.append(button(()=>model.close,()=>finish(null)));form.append(footer);
-      });
+        const close=button(()=>model.close,()=>finish(null));footer.append(close);form.append(footer);return {cancel:close,primary:close};
+      },model.dialog);
+  }
+  async function openError(name){
+    await dialog(()=>bootstrap.cannot_open_file,(form,finish)=>{
+      form.parentNode.id='file-launch-error';form.append(element('p','',()=>app.file_open_failure(name)));
+      const ok=button(()=>bootstrap.ok,()=>finish(null));form.append(ok);return {cancel:ok,primary:ok};
+    },bootstrap.file_error_dialog);
   }
   async function openBatch(files,request=null){
     if(batching)throw transportFailure("batch_opening");
     batching=true;
     try{for(const [index,file] of files.entries()){
       try{await openDrawing({request:index===0?request:null,file});}
-      catch(error){if(error?.name==='AbortError')break;if(files.length===1)throw error;console.error(error);const name=file.file.name;message(()=>app.file_open_failure(name));}
+      catch(error){if(error?.name==='AbortError')break;if(files.length>1)console.error(error);await openError(file.file.name);if(files.length===1)throw error;}
     }}finally{batching=false;tabs.refresh(true);}
   }
   async function openFiles(files){
@@ -508,7 +514,11 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     } finally {candidate?.free();}
   }
   const recovery=createDocumentRecovery({app,message,restore:restoreSession,remember:rows=>handleStore.remember(rows),settled:trim,
-    reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:detail=>dialog(()=>bootstrap.recovery.attention,(form,finish)=>{form.append(element('p','',()=>bootstrap.recovery.explanation));if(detail)form.append(element('p','diagnostic-detail',detail));const footer=element('footer');footer.append(button(()=>bootstrap.recovery.later,()=>finish('later')),button(()=>bootstrap.recovery.discard,()=>finish('discard')),button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action'));form.append(footer);}),
+    reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:detail=>dialog(()=>bootstrap.recovery.title,(form,finish)=>{
+      form.append(element('p','',()=>bootstrap.recovery.explanation));if(detail)form.append(element('p','diagnostic-detail',detail));
+      const footer=element('footer'),later=button(()=>bootstrap.recovery.later,()=>finish('later')),retry=button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action');
+      footer.append(later,button(()=>bootstrap.recovery.discard,()=>finish('discard')),retry);form.append(footer);return {cancel:later,primary:retry};
+    },bootstrap.recovery.dialog),
     handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
     canOffer:()=>canvasReady()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing,showMenu});

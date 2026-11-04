@@ -55,6 +55,7 @@ impl WebApp {
     }
     pub fn document_tabs(&self, width: f32) -> Result<JsValue, JsValue> {
         serialize(&serde_json::json!({
+            "dialog": layer_ui::DrawingSelector::DIALOG,
             "available": self.session.can_switch_document(),
             "tabs": self.documents.labels(&self.session.state().document_file, |s| &s.state().document_file, self.session.localization()),
             "selected": self.documents.selected(),

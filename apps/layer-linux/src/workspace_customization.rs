@@ -353,7 +353,7 @@ impl ToolbarManagerUi {
                 .as_ref(),
         );
         if !self.shown.replace(true) {
-            crate::page_dialog::present(&self.dialog, &w.window);
+            crate::page_dialog::present_intent(&self.dialog, &w.window, model.dialog);
         }
     }
 }
@@ -1271,8 +1271,8 @@ impl Customization {
                 .set_label(view.error.as_deref().unwrap_or(""));
             self.toolbar_error.set_visible(view.error.is_some());
             if !self.toolbar_shown.replace(true) {
-                if view.destructive { self.toolbar_dialog.present(Some(&w.window)); }
-                else { crate::page_dialog::present_with(&self.toolbar_dialog, &w.window, layer_ui::DialogRole::Editor, crate::page_dialog::Metadata::responses(Some("confirm"), "cancel", &[])); }
+                crate::page_dialog::present_with(&self.toolbar_dialog, &w.window, view.dialog.role,
+                    crate::page_dialog::Metadata::responses(Some("confirm"), "cancel", &[]).intent(view.dialog));
                 if !view.destructive {
                     self.toolbar_name.grab_focus();
                 }

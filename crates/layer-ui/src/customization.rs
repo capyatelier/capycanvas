@@ -1904,6 +1904,7 @@ pub struct ToolbarPrompt {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolbarPromptView {
+    pub dialog: crate::DialogIntent,
     pub title: std::sync::Arc<str>,
     pub message: String,
     pub name: Option<String>,
@@ -1939,6 +1940,7 @@ impl ToolbarPrompt {
             ToolbarOperation::Delete => (localization.text(MessageId::WORKSPACE_TOOLBAR_DELETE_TITLE), localization.text(MessageId::WORKSPACE_TOOLBAR_DELETE_CONFIRM), true),
         };
         ToolbarPromptView {
+            dialog: if destructive { crate::DialogIntent::alert() } else { crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)) },
             title,
             confirm_label,
             destructive,
@@ -1973,6 +1975,7 @@ pub struct ManagedToolbar {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolbarManagerView {
+    pub dialog: crate::DialogIntent,
     pub title: std::sync::Arc<str>,
     pub close_label: std::sync::Arc<str>,
     pub description: std::sync::Arc<str>,
@@ -2007,6 +2010,7 @@ impl ToolbarManager {
             .selected
             .filter(|id| toolbars.iter().any(|p| p.panel == *id));
         ToolbarManagerView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
             title: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_TITLE),
             close_label: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_CLOSE),
             description: localization.text(MessageId::WORKSPACE_TOOLBAR_MANAGER_DESCRIPTION),

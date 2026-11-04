@@ -1,10 +1,17 @@
+import {createDialogHost} from './dialog-host.js';
 // One recording per window, shared by retained diagnostic panels and drawers.
 const controllers = new WeakMap();
-export function strokeRecordingControl(app, button, message = console.error) {
+export function strokeRecordingControl(app, button, message = console.error, icon) {
   let controller = controllers.get(app);
   if (!controller) {
     let busy = false, wasActive = false;
     const buttons = new Set();
+    function prompt(intent,title,content,cancel,primary,closed=()=>{}) {
+      const dialog=document.createElement('dialog'),header=document.createElement('header'),heading=document.createElement('h2'),footer=document.createElement('footer');
+      dialog.className='document-dialog';header.className='dialog-header';heading.textContent=title;header.append(heading);footer.append(cancel,primary);dialog.append(header,content,footer);document.body.append(dialog);
+      const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:app.bootstrap_view().common,onCancel:()=>host.hide()});
+      dialog.addEventListener('close',()=>{host.dispose();dialog.remove();closed();},{once:true});host.present(intent);return host;
+    }
     const update = () => {
       const state = app.stroke_recording_status();
       for (const b of buttons) {
@@ -14,15 +21,13 @@ export function strokeRecordingControl(app, button, message = console.error) {
       }
       if (wasActive && state.ready && !busy) {
         // File pickers require a fresh user gesture after an automatic stop.
-        const dialog = document.createElement('dialog');
         const text = document.createElement('p');
         text.textContent = 'Stroke recording finished. Save the recorded input.';
         const save = document.createElement('button'); save.textContent = 'Save recording';
         const later = document.createElement('button'); later.textContent = 'Later';
-        save.onclick = () => { dialog.close(); void deliver(); };
-        later.onclick = () => dialog.close();
-        dialog.onclose = () => dialog.remove();
-        dialog.append(text, later, save); document.body.append(dialog); dialog.showModal();
+        save.onclick = () => { host.hide(); void deliver(); };
+        later.onclick = () => host.hide();
+        const host=prompt(app.bootstrap_view().recovery.recording_ready_dialog,'Stroke recording',text,later,save);
       }
       wasActive = state.recording;
     };
@@ -48,20 +53,22 @@ export function strokeRecordingControl(app, button, message = console.error) {
             await navigator.share({files:[file], title:'Stroke recording'});
             app.stroke_recording_saved();
           } else {
-            const url = URL.createObjectURL(file), dialog = document.createElement('dialog');
+            const url = URL.createObjectURL(file);
             const link = document.createElement('a'); link.href = url; link.download = name; link.textContent = 'Download stroke recording';
             const done = document.createElement('button'); done.textContent = 'File saved'; done.disabled = true;
             const later = document.createElement('button'); later.textContent = 'Keep for later';
             link.onclick = () => { done.disabled = false; };
-            done.onclick = () => { app.stroke_recording_saved(); dialog.close(); update(); };
-            later.onclick = () => dialog.close();
-            dialog.onclose = () => { URL.revokeObjectURL(url); dialog.remove(); };
-            dialog.append(link, later, done); document.body.append(dialog); dialog.showModal();
+            done.onclick = () => { app.stroke_recording_saved(); host.hide(); update(); };
+            later.onclick = () => host.hide();
+            const host=prompt(app.bootstrap_view().recovery.recording_ready_dialog,'Stroke recording',link,later,done,()=>URL.revokeObjectURL(url));
           }
         }
       } catch (error) {
         if (writable) await writable.abort().catch(()=>{});
-        if (error.name !== 'AbortError') message(error);
+        if (error.name !== 'AbortError') {
+          message(error);const text=document.createElement('p'),ok=document.createElement('button');text.textContent=String(error);ok.textContent=app.bootstrap_view().ok;
+          const host=prompt(app.bootstrap_view().recovery.dialog,'Stroke recording',text,ok,ok);ok.onclick=()=>host.hide();
+        }
       } finally { busy = false; update(); }
     }
     controller = {buttons, update, click() {

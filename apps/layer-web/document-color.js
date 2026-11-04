@@ -2,7 +2,7 @@ import { liveCopy, bindCopy } from './localization.js';
 import {importProfile,chooseProfileLibrary} from './export-controls.js';
 // A comparison owns one immutable candidate. Cancel drains its work before the
 // document request is released; Apply publishes that exact prepared result.
-export async function chooseDocumentColor({app,dialog,element,button,dropdown,gpuOperation,request,id}) {
+export async function chooseDocumentColor({app,dialog,element,button,icon,dropdown,gpuOperation,request,id}) {
   const copy=liveCopy(app,"document_color_copy"),exportCopy=liveCopy(app,"export_copy"),profilesCopy=liveCopy(app,"profile_copy");
   const history=request.type==="color_history",source=["repair_source_profile","rasterize_source"].includes(request.type),rasterize=request.type==="rasterize_source";
   const operation=source?(rasterize?"rasterize":"repair"):request.operation,current=app.document_color();
@@ -33,7 +33,7 @@ export async function chooseDocumentColor({app,dialog,element,button,dropdown,gp
       const present=()=>{bindCopy(status,statusLabel);bindCopy(apply,applyLabel);};
       const fail=error=>{failure=error;present();};
       const invalidate=()=>{candidate?.free();candidate=null;presentation=null;failure=null;phase="draft";apply.disabled=true;comparison.replaceChildren();present();};
-      if(profile){const load=button(()=>profilesCopy.import,async()=>{try{const imported=await importProfile(app,element);if(closed||!imported)return;profiles.push(imported.profile);profileChoices.push([String(profiles.length-1),()=>app.profile_name_copy(imported.name)]);profile.update({choices:profileChoices.map(([value,label])=>({value,label})),value:profiles.length-1});schedule();}catch(error){if(!closed)fail(error);}});const saved=button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(closed||!imported)return;profiles.push(imported.profile);profileChoices.push([String(profiles.length-1),()=>app.profile_name_copy(imported.name)]);profile.update({choices:profileChoices.map(([value,label])=>({value,label})),value:profiles.length-1});schedule();}catch(error){if(!closed)fail(error);}});inputs.push(load,saved);form.append(load,saved);}
+      if(profile){const load=button(()=>profilesCopy.import,async()=>{try{const imported=await importProfile(app,element);if(closed||!imported)return;profiles.push(imported.profile);profileChoices.push([String(profiles.length-1),()=>app.profile_name_copy(imported.name)]);profile.update({choices:profileChoices.map(([value,label])=>({value,label})),value:profiles.length-1});schedule();}catch(error){if(!closed)fail(error);}});const saved=button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon});if(closed||!imported)return;profiles.push(imported.profile);profileChoices.push([String(profiles.length-1),()=>app.profile_name_copy(imported.name)]);profile.update({choices:profileChoices.map(([value,label])=>({value,label})),value:profiles.length-1});schedule();}catch(error){if(!closed)fail(error);}});inputs.push(load,saved);form.append(load,saved);}
       const schedule=()=>{if(closed)return;invalidate();pending=true;control?.cancel();if(!running)queueMicrotask(prepare);};
       const prepare=()=>{
         if(running||closed||!pending)return;pending=false;invalidate();control?.free();control=app.capture_control();

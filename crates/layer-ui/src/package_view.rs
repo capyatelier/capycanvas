@@ -33,6 +33,7 @@ impl PackagePresentation {
     }
     pub fn summary(&self, localization: &Localizer) -> PackageViewSummary {
         PackageViewSummary {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
             disposition: self.disposition,
             capabilities: self.capabilities(),
             extent: self.extent,
@@ -55,6 +56,7 @@ impl PackagePresentation {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PackageViewSummary {
+    pub dialog: crate::DialogIntent,
     pub disposition: PackageDisposition,
     pub capabilities: PackageCapabilities,
     pub extent: Option<[u32; 2]>,

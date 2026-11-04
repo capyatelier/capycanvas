@@ -4,7 +4,7 @@ import { liveCopy, bindCopy } from './localization.js';
 const profileLibraries=new Set();
 export function localizeProfileLibraries(){for(const render of profileLibraries)render();}
 export const SDR_FORMATS=["Png","Tiff","Jpeg","Webp"];
-export async function chooseExport({app,dialog,element,button,dropdown,numberField,gpuOperation,id}) {
+export async function chooseExport({app,dialog,element,button,icon,dropdown,numberField,gpuOperation,id}) {
   let control,running,closed=false;
   const model=app.export_form(),copy=liveCopy(app,"export_copy"),profilesCopy=liveCopy(app,"profile_copy");
   let page="main";
@@ -65,7 +65,7 @@ export async function chooseExport({app,dialog,element,button,dropdown,numberFie
       try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});fail(null);}
       catch(e){fail(e,true);}
     }));
-    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});invalidate();}catch(e){fail(e,true);}}));
+    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon});if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});invalidate();}catch(e){fail(e,true);}}));
     const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:quality.numericValue,
       size:size.value==="Original"?"Original":{Fit:{bounds:[width.numericValue,height.numericValue],enlarge:enlarge.checked}},
@@ -164,7 +164,7 @@ export function importProfile(app,element) {
   });
 }
 
-export function chooseSourceProfile({app,dialog,element,button,dropdown}) {
+export function chooseSourceProfile({app,dialog,element,button,icon,dropdown}) {
   const copy=liveCopy(app,"profile_copy");
   return dialog(()=>copy.interpret_title,(form,finish)=>{
     form.append(element("p","",()=>copy.interpret_help));
@@ -173,12 +173,12 @@ export function chooseSourceProfile({app,dialog,element,button,dropdown}) {
     const append=imported=>{profiles.push(imported.profile);choices.push({value:profiles.length-1,label:()=>app.profile_name_copy(imported.name)});select.update({choices,value:profiles.length-1});};
     let failure=null;const error=element("p","error-message"),fail=(value,profile)=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,profile));};form.append(error);
     form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;append(imported);fail(null);}catch(e){fail(e,true);}}));
-    form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;append(imported);}catch(e){fail(e,true);}}));
+    form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon});if(!imported)return;append(imported);}catch(e){fail(e,true);}}));
     const footer=element("footer"),cancel=button(()=>copy.common.cancel,()=>finish(null)),use=button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action");footer.append(cancel,use);form.append(footer);return {cancel,primary:use};
   },copy.dialog);
 }
 
-export function chooseProfileLibrary({app,element,button,manage=false}) {
+export function chooseProfileLibrary({app,element,button,icon,manage=false}) {
   const copy=liveCopy(app,"profile_copy");
   return new Promise(resolve=>{
     const root=element("dialog","document-dialog profile-library"),form=element("form"),list=element("div"),error=element("p","error-message"),search=element("input");
@@ -209,8 +209,10 @@ export function chooseProfileLibrary({app,element,button,manage=false}) {
       try{await action();}catch(e){if(!closed)fail(e);}finally{busy=false;if(!closed)render();}
     };
     search.addEventListener("input",render);profileLibraries.add(render);
-    form.append(button(()=>copy.import,()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
+    const add=button('',()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();}));
+    add.append(icon('plus'));add.className='profile-library-import';bindCopy(add,()=>copy.add_profile,'ariaLabel');bindCopy(add,()=>copy.add_profile,'title');
+    const slot=element('div','dialog-header-slot');slot.dataset.dialogSlot='end';slot.append(add);header.append(slot);form.append(done);
     form.onsubmit=e=>e.preventDefault();root.append(header,form);document.body.append(root);
-    const shell=createDialogHost({app,dialog:root,header,cancel:done,primary:done,copy:copy.common,onCancel:()=>finish(null),search,clearSearch:()=>{search.value="";render();}});shell.present(copy.library_dialog);run(refresh);
+    const shell=createDialogHost({app,dialog:root,header,cancel:done,primary:done,endSlot:slot,icon,copy:copy.common,onCancel:()=>finish(null),search,clearSearch:()=>{search.value="";render();}});shell.present(copy.library_dialog);run(refresh);
   });
 }

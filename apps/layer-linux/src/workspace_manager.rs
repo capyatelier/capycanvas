@@ -161,13 +161,9 @@ impl NativeWorkspaces {
             #[weak]
             w,
             move |_| {
-                let view = w.workspaces.view();
-                let action = if view.interrupted > 0 && view.error.is_none() {
-                    ManagerAction::RecoverInterrupted
-                } else {
-                    ManagerAction::SaveAsNew
-                };
-                w.workspaces.send(&w, WorkspaceInput::Form { action });
+                if let Some(action)=w.workspaces.view().status.and_then(|status| status.action) {
+                    w.workspaces.send(&w, WorkspaceInput::Form { action:action.action });
+                }
             }
         ));
         self.retry.connect_clicked(glib::clone!(
@@ -348,7 +344,7 @@ impl NativeWorkspaces {
         *self.view.borrow_mut() = view.clone();
         w.surface
             .update_state(&[gtk::accessible::State::Busy(view.busy)]);
-        self.update_status(w, &view);
+        self.update_status(&view);
         self.update_switcher();
         self.ui.render(w, &view);
         if view.ready
@@ -404,32 +400,19 @@ impl NativeWorkspaces {
             }
         }
     }
-    fn update_status(&self, w: &Rc<Workspace>, view: &WorkspaceView) {
+    fn update_status(&self, view: &WorkspaceView) {
         if self.controller.borrow().is_none() { return; }
         if self.status_key.borrow().as_ref().is_some_and(|key| key.0 == view.ready && key.1 == view.busy && key.2 == view.interrupted && key.3 == view.name && key.4 == view.error) { return; }
         *self.status_key.borrow_mut() = Some((view.ready, view.busy, view.interrupted, view.name.clone(), view.error.clone()));
-        if let Some(error) = &view.error {
-            self.recovery.set_label(&w.localization().text(layer_ui::MessageId::WORKSPACE_ACTION_SAVE_AS_NEW_WORKSPACE));
-            self.root.set_visible(true);
-            self.label.set_text(error);
-            self.label.add_css_class("error");
-            self.retry.set_visible(true);
-            self.recovery.set_visible(true);
-        } else if view.interrupted > 0 && !view.busy {
-            let caption = w.localization().text(layer_ui::MessageId::WORKSPACE_ACTION_RECOVER_INTERRUPTED_CHANGES);
-            self.recovery.set_label(&caption);
-            self.root.set_visible(true);
-            self.retry.set_visible(false);
-            self.recovery.set_visible(true);
-            self.label.remove_css_class("error");
-            self.label.set_text(&format!("{} · {}", view.interrupted, caption));
-        } else {
-            self.root.set_visible(!view.ready);
-            self.label.remove_css_class("error");
-            self.retry.set_visible(false);
-            self.recovery.set_visible(false);
-            if view.ready { self.label.set_text(""); } else { self.label.set_text(&w.localization().text(layer_ui::MessageId::NATIVE_DIALOG_LOADING)); }
-        }
+        self.root.set_visible(view.status.is_some());
+        self.label.set_text(view.status.as_ref().map_or("",|status| status.text.as_str()));
+        if view.status.as_ref().is_some_and(|status| status.error) { self.label.add_css_class("error"); }
+        else { self.label.remove_css_class("error"); }
+        self.retry.set_visible(view.status.as_ref().is_some_and(|status| status.retry));
+        let action=view.status.as_ref().and_then(|status| status.action.as_ref());
+        self.recovery.set_visible(action.is_some());
+        if let Some(action)=action { self.recovery.set_label(&action.label); }
+
     }
     /// Return true while the close must wait for acknowledged workspace writes.
     pub fn request_close(&self, w: &Rc<Workspace>) -> bool {
@@ -460,7 +443,7 @@ impl NativeWorkspaces {
     #[cfg(test)]
     pub fn report_error(&self, w: &Rc<Workspace>, error: &str) {
         if let Some(controller) = self.controller.borrow_mut().as_mut() {
-            controller.view.error = Some(error.into());
+            controller.set_error(layer_workspace::StoreError::new(layer_workspace::ErrorKind::Unavailable,error));
         }
         self.render(w);
     }

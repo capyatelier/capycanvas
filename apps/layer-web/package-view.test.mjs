@@ -35,6 +35,12 @@ export async function checkPackageView({evaluate,settle}) {
   const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
   const snapshot=()=>evaluate(`(()=>{const s=layerApp.state(),f=s.document_file,t=layerApp.app.document_tabs(1000);return JSON.parse(JSON.stringify({file:{epoch:f.epoch,revision:f.revision,modified:f.modified,location:f.location},layers:s.layers,selected:t.selected,tabs:t.tabs.map(t=>t.id)},(_,v)=>typeof v==='bigint'?String(v):v));})()`);
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open].document-dialog button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing package action '+${JSON.stringify(label)});b.click();})()`);
+  const dismissOpenFailure=async name=>{
+    await wait(`!!document.querySelector('#file-launch-error[open]')`);
+    assert.deepEqual(await evaluate(`(()=>{const dialog=document.querySelector('#file-launch-error');return{role:dialog.getAttribute('role'),modal:dialog.getAttribute('aria-modal'),named:dialog.textContent.includes(${JSON.stringify(name)})}})()`),{role:'alertdialog',modal:'true',named:true});
+    await evaluate(`[...document.querySelectorAll('#file-launch-error button')].find(button=>button.textContent===layerApp.app.bootstrap_view().ok).click()`);
+    await wait(`!document.querySelector('#file-launch-error[open]')`);
+  };
   const launch=async name=>{
     await evaluate(`(()=>{packageViewTest.model=null;packageViewTest.outcome=null;const file=new File([packageViewTest.inputs.get(${JSON.stringify(name)})],${JSON.stringify(name)});packageViewTest.opening=layerApp.documents.openFiles([{file,handle:packageViewTest.originalHandle}]).then(()=>packageViewTest.outcome={ok:true},error=>packageViewTest.outcome={error:String(error),name:error.name});})()`);
   };
@@ -116,7 +122,7 @@ export async function checkPackageView({evaluate,settle}) {
       if(cancelled)await evaluate("document.querySelector('.file-progress button').click()");
       else {await evaluate("layerApp.app.dispatch({type:'invoke',command:'add_layer'});layerApp.wake()");await settle();}
       const retained=await snapshot();
-      await evaluate('packageViewTest.release()');await wait('packageViewTest.outcome!==null');
+      await evaluate('packageViewTest.release()');if(!cancelled)await dismissOpenFailure('editable.capy');await wait('packageViewTest.outcome!==null');
       const outcome=await evaluate('packageViewTest.outcome');
       if(cancelled){assert.deepEqual(outcome,{ok:true},'Cancelling a batch open resolves without adopting a drawing');assert.equal(await evaluate('packageViewTest.model'),null,'Cancelled preparation never publishes its package viewer');}
       else assert.match(outcome.error,/drawing changed while opening/i);

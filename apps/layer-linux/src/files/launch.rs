@@ -283,7 +283,7 @@ impl Launcher {
                         dialog.set_heading(Some(&copy.cannot_open_file)); dialog.set_body(&layer_ui::file_open_failure(localization, &name)); dialog.set_response_label("ok", &copy.ok);
                         true
                     });
-                    crate::alert::choose(dialog, parent).await;
+                    crate::alert::choose_intent(dialog, parent, copy.file_error_dialog, Some("ok"), &[]).await;
                 }
             }
         }

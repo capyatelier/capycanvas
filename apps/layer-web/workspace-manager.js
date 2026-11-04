@@ -33,15 +33,30 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const error = element("p", "workspace-error"), footer = element("footer");
   const primary = localizedButton(()=>view?.primary??"", () => send({ type: "confirm" }), "suggested-action");
   const retry = localizedButton(()=>copy.retry, () => send({type:"retry"})); retry.hidden = true;
-  footer.append(localizedButton(()=>common.cancel,cancel), retry, primary); dialog.append(header, intro, tabs, listActions, list, rowActions, details, error, footer);
+  const cancelButton=localizedButton(()=>common.cancel,cancel),sidebar=element('div','workspace-sidebar'),panes=element('div','workspace-panes');
+  sidebar.append(listActions,list,rowActions);panes.append(sidebar,details);panes.dataset.dialogPart='panes';
+  footer.append(cancelButton,retry,primary);dialog.append(header,tabs,intro,panes,error,footer);
+  const host=createDialogHost({app,dialog,header,cancel:close,primary:()=>view?.dialog?.primary==='close'?close:primary,icon,copy:common,onCancel:cancel,
+    subpage:()=>layout?.subpage??false,onBack:()=>send({type:'page_list'}),search,clearSearch:()=>send({type:'search',query:''})});
+  let layout;
+  function arrange(){
+    if(!view?.page)return;
+    layout=app.workspace_dialog_layout([innerWidth,innerHeight]);
+    dialog.classList.toggle('single-pane',layout.single_pane);panes.dataset.panes=layout.single_pane?'single':'split';
+    sidebar.hidden=layout.subpage;details.hidden=!layout.toolbar||(layout.single_pane&&!layout.subpage);
+    cancelButton.hidden=dialog.classList.contains('dialog-page');
+    bindCopy(heading,()=>layout?.subpage?view?.details?.title??view?.title??'':view?.title??'');host.layout();
+  }
+  window.addEventListener('resize',arrange);
   document.body.append(dialog, formDialog);
   const switcher = createWorkspaceSwitcher({app,dialog, list, element, button, icon, send, getView:() => view,
     redraw:() => { lastView = null; render(); }});
-  const recoveryButton = localizedButton(()=>view?.error??"", () => { dismissedError = null; showRecovery(view.error); }, "workspace-recovery");
-  recoveryButton.hidden = true; switcher.root.after(recoveryButton);
+  const status=element('div','workspace-status'),statusText=element('span'),statusRetry=localizedButton(()=>copy.retry,()=>send({type:'retry'}));
+  const recoveryButton=localizedButton(()=>view?.status?.action?.label??'',
+    ()=>{if(view?.status?.action)send({type:'form',action:view.status.action.action});},'workspace-recovery');
+  status.append(statusText,statusRetry,recoveryButton);switcher.root.after(status);
   let switcherRevision;
-  let lastView, pageKey, rowsKey, formKey, timer, formName, formDescription, formChoice, formError, formSubmit, formHost, previousFocus, observePending = false;
-  const expectedCloses = new WeakMap();
+  let lastView, pageKey, rowsKey, formKey, timer, formName, formDescription, formChoice, formError, formSubmit, formHost, observePending = false;
   const channel = new BroadcastChannel("capycanvas.workspace.windows");
   channel.addEventListener("message", e => {
     if (e.data?.switcher) send({type:"refresh_switcher"});
@@ -63,31 +78,21 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if(!cancel&&app.workspace_name_validation(name)){inline.input.setAttribute("aria-invalid","true");return false;}
     inline.submitted=true;send(cancel?{type:"cancel"}:{type:"submit",name,description:null,choice:null});return true;
   }
-  dialog.addEventListener("cancel", e => { e.preventDefault();switcher.cancel();send({type:'dismiss'}); });
-  dialog.addEventListener("close", () => {
-    const expected=expectedCloses.get(dialog)||0;
-    if(expected)expectedCloses.set(dialog,expected-1);
-    else if(view?.page)cancel();
-  });
-  dialog.addEventListener("click", e => { if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)cancel();} });
-  function show(node, open) {
-    if (open && !node.open) { if (!dialog.open && !formDialog.open) previousFocus = document.activeElement; node.showModal(); if (node === dialog) node.focus({preventScroll:true}); }
-    if (!open && node.open) { expectedCloses.set(node,(expectedCloses.get(node)||0)+1); node.close(); if (!dialog.open && !formDialog.open) previousFocus?.focus?.(); }
-  }
   function render() {
     const json = app.workspace_view(); if (json === lastView) return; lastView = json; view = JSON.parse(json);
     if (!view) return;
-    bindCopy(recoveryButton,()=>view?.error??"");recoveryButton.hidden = !view.error;
-    if (!view.error) { dismissedError = null; if (recovery?.open) recovery.close(); }
+    status.hidden=!view.status;bindCopy(statusText,()=>view?.status?.text??'');
+    status.classList.toggle('error',!!view.status?.error);statusRetry.hidden=!view.status?.retry;
+    recoveryButton.hidden=!view.status?.action;bindCopy(recoveryButton,()=>view?.status?.action?.label??'');
     switcher.render(view);
     if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel.postMessage({switcher:true});
     switcherRevision = view.switcher_revision;
     if (view.focus_window) { channel.postMessage({ focus: view.focus_window.id }); message(copy.owned_elsewhere); }
     if (view.page !== pageKey) { pageKey = view.page; list.scrollTop = 0; }
     bindCopy(heading,()=>view?.title??"");bindCopy(intro,()=>view?.intro??"");intro.hidden = !view.intro;
-    const toolbar=["this_workspace","toolbar_library"].includes(view.page);
+    const toolbar=app.workspace_dialog_layout([innerWidth,innerHeight])?.toolbar??false;
     const renaming=view.page==="workspaces"&&view.prompt_action?.type==="rename";
-    dialog.dataset.toolbar=String(toolbar);tabs.hidden=!toolbar;details.hidden=!toolbar;
+    dialog.dataset.toolbar=String(toolbar);tabs.hidden=!toolbar;footer.hidden=toolbar;
     for(const tab of tabs.children){tab.disabled=view.busy;tab.setAttribute("aria-pressed",String(tab.dataset.page===view.page));}
     search.hidden=!toolbar;
     if(search.value!==(view.query??""))search.value=view.query??"";search.disabled=view.busy;
@@ -109,7 +114,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       const scroll = list.scrollTop;
       rowsKey = newRowsKey; list.replaceChildren();
       for (const row of view.rows) {
-        const container = element("div", "workspace-row"), select = view.page==="workspaces"?element("div","workspace-choice"):button("",()=>send({type:"select",id:row.id}),"workspace-choice");
+        const container = element("div", "workspace-row"), select = view.page==="workspaces"?element("div","workspace-choice"):button("",()=>{send({type:"select",id:row.id});send({type:"open_details"});},"workspace-choice");
         if(view.page==="workspaces"){
           select.tabIndex=0;
           select.addEventListener("click",event=>{if(!event.target.closest("input")&&(!view.busy||view.prompt_action?.type==="rename"))send({type:"select",id:row.id});});
@@ -185,10 +190,9 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if (form) { validatePrompt();bindCopy(formSubmit,()=>view?.retry&&view?.prompt_action?.type!=="save_as_new"?copy.retry:view?.prompt?.confirm??""); }
     list.style.flex=view.page==="workspaces"?"0 1 auto":"";
     list.style.height=view.page==="workspaces"?`${Math.min(7,view.rows.length)*56}px`:"";
-    show(dialog, !!view.page);
+    if(view.dialog){host.present(view.dialog);arrange();}else host.hide();
     if(form){if(formHost.present(form.dialog))(formName??formDescription??formSubmit).focus({preventScroll:true});}
     if(dialog.open&&!form&&!inline&&(!dialog.contains(document.activeElement)||document.activeElement===dialog))list.querySelector('[aria-selected="true"]')?.focus({preventScroll:true});
-    if (!view.page && !form && view.error) showRecovery(view.error);
     switcher.root.dispatchEvent(new Event("workspace-view-changed"));
   }
   function validatePrompt(){
@@ -197,20 +201,6 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     bindCopy(formError,()=>validation()??view?.error??"");
     formSubmit.disabled=!!(view?.busy||view?.switcher_busy||validation());
     return !formSubmit.disabled;
-  }
-  let recovery, recoveryText, dismissedError;
-  function showRecovery(text) {
-    if (text === dismissedError) return;
-    if (!recovery) {
-      recovery = element("dialog", "workspace-form"); bindCopy(recovery,()=>copy.workspaces,"ariaLabel");
-      recoveryText = element("p"); const footer = element("footer");
-      const hide = () => { recovery.close(); };
-      recovery.addEventListener("cancel", e => { e.preventDefault(); dismissedError = view.error; hide(); send({type:"resume"}); });
-      footer.append(localizedButton(()=>common.keep_open, () => { dismissedError = view.error; hide(); send({type:"resume"}); }), localizedButton(()=>copy.retry, () => { dismissedError = null; hide(); send({ type: "retry" }); }),
-        localizedButton(()=>copy.save_as_new_workspace, () => { hide(); send({ type: "form", action: { type: "save_as_new" } }); }, "suggested-action"));
-      const title=element("h2");bindCopy(title,()=>copy.workspaces);recovery.append(title,recoveryText,footer); document.body.append(recovery);
-    }
-    bindCopy(recoveryText,()=>view?.error??"");if (!recovery.open) recovery.showModal();
   }
   let startupReady = false;
   let resolveReady;

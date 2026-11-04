@@ -142,6 +142,7 @@ impl ManagerUi {
         let detail_page = adw::NavigationPage::new(&detail_view, &localization.text(layer_ui::MessageId::WORKSPACE_WORKSPACES));
         let navigation = adw::NavigationSplitView::builder().sidebar(&sidebar_page).content(&detail_page).collapsed(true).build();
         let panes = gtk::Stack::builder().hhomogeneous(false).vhomogeneous(false).vexpand(true).build();
+        panes.set_widget_name("dialog-panes");
         panes.add_named(&split, Some("wide"));
         panes.add_named(&navigation, Some("narrow"));
         let resize = crate::dialog_content::new(gtk::Orientation::Vertical, 0);
@@ -315,6 +316,11 @@ impl ManagerUi {
                 w.workspaces.send(&w, WorkspaceInput::Select { id });
             }
         ));
+        self.navigation.connect_show_content_notify(glib::clone!(#[weak] w, move |navigation| {
+            if !w.workspaces.ui.rebuilding.get() && !navigation.shows_content() && w.workspaces.view().details_requested {
+                w.workspaces.send(&w, WorkspaceInput::PageList);
+            }
+        }));
         self.list.connect_row_activated(glib::clone!(
             #[weak]
             w,
@@ -326,7 +332,7 @@ impl ManagerUi {
                     w.workspaces.ui.list.select_row(Some(row));
                     return;
                 }
-                if w.workspaces.ui.panes.visible_child_name().as_deref() == Some("narrow") { w.workspaces.ui.navigation.set_show_content(true); }
+                w.workspaces.send(&w, WorkspaceInput::OpenDetails);
             }
         ));
     }
@@ -365,7 +371,7 @@ impl ManagerUi {
             self.render_prompt(w, view);
             return;
         };
-        let compact = matches!(page, ManagerPage::Workspaces | ManagerPage::History);
+        let compact = !page.toolbar();
         if self.page.replace(Some(page)) != Some(page) {
             self.configure(w, page, &view.query);
         }
@@ -405,8 +411,11 @@ impl ManagerUi {
         { self.focus_workspace_selection(); }
     }
     fn arrange(&self, w: &Workspace) {
-        let compact = matches!(self.page.get(), Some(ManagerPage::Workspaces | ManagerPage::History));
-        let narrow = !compact && crate::page_dialog::single_pane(w);
+        let view=w.workspaces.view();
+        let layout=view.dialog_layout(crate::page_dialog::single_pane(w));
+        let compact=!layout.toolbar;
+        let narrow=layout.single_pane;
+        self.rebuilding.set(true);
         self.sidebar.set_width_request(if narrow { -1 } else { 220 });
         self.details.set_width_request(if narrow { -1 } else { PANEL_MIN_WIDTH as i32 });
         self.detail_title.set_visible(!narrow);
@@ -427,15 +436,15 @@ impl ManagerUi {
             }
             self.split.set_end_child((!compact).then_some(&self.details_view));
         }
+        self.navigation.set_show_content(layout.subpage);
+        self.rebuilding.set(false);
     }
     fn configure(&self, w: &Rc<Workspace>, page: ManagerPage, query: &str) {
         self.navigation.set_show_content(false);
-        let toolbar = matches!(
-            page,
-            ManagerPage::ThisWorkspace | ManagerPage::ToolbarLibrary
-        );
+        let toolbar = page.toolbar();
         let compact = !toolbar;
-        crate::page_dialog::primary(&self.dialog, Some(if toolbar { crate::page_dialog::Action::Close } else { crate::page_dialog::Action::Button(self.apply.clone()) }));
+        crate::page_dialog::primary(&self.dialog, Some(crate::page_dialog::Action::Button(self.apply.clone())));
+        crate::page_dialog::intent(&self.dialog, page.dialog());
         let empty = gtk::Label::new(Some(&w.localization().text(layer_ui::MessageId::NATIVE_HEADER_NO_ITEMS)));
         margins(&empty, 18);
         self.list.set_placeholder(Some(&empty));

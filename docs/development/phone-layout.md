@@ -404,6 +404,11 @@ no tick callback while idle. Manage Workspaces and Layout History defer layout
 adoption until confirmation. Other hosts still need the remaining dialog rules
 below; Web Settings already fills windows below 480 px wide and Android Settings
 always uses a full-screen page.
+The workspace manager projects its list/detail navigation, dialog actions and
+inline storage notice from `WorkspaceView`. Hosts report `OpenDetails` and
+`PageList`; the shared view keeps the selected detail and its Back state.
+Manager prompts derive their serialized fields, and the workspace view adds
+the dialog intent around the prompt at publication.
 
 - In the phone layout, every dialog opens the way Android's Settings does: a
   full-window page that slides down from the top, inside the safe area.

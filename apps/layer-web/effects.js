@@ -140,7 +140,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   resource.append(resourceChoice,resourceImport);properties.insertBefore(resource,body);
   const stats=element("div","renderer-stats");stats.dataset.control="stats";panels.get("stats").append(stats);
   const recordButton=button("Start stroke recording",()=>{}); stats.append(recordButton);
-  const disposeRecording=strokeRecordingControl(app,recordButton,message);
+  const disposeRecording=strokeRecordingControl(app,recordButton,message,icon);
   let schema,fieldOwner,fields=new Map(),metricLabels=[];
   const svg=(tag,attributes={})=>{const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const [k,v] of Object.entries(attributes))e.setAttribute(k,v);return e;};
   const chart=svg("svg",{viewBox:"0 0 200 46",class:"renderer-chart","aria-hidden":"true"});

@@ -138,7 +138,7 @@ impl WebApp {
             "color_panel": state.preview_colors().view_mapped(self.session.effective_sdr_rendition(), self.session.localization()),
             "application_menus": self.application_menu_models(),
             "document_options": json!({
-                "unsaved_description": document.unsaved_description,
+                "dialog": document.dialog, "unsaved_description": document.unsaved_description,
                 "discard_label": document.discard,
                 "cancel_label": document.cancel,
             }),

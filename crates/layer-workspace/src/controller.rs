@@ -107,6 +107,9 @@ pub struct FocusTarget {
 }
 #[derive(Clone, Serialize, Default)]
 pub struct WorkspaceView {
+    pub dialog: Option<layer_ui::DialogIntent>,
+    pub details_requested: bool,
+    pub status: Option<ManagerStatus>,
     pub ready: bool,
     pub busy: bool,
     pub loading: bool,
@@ -128,6 +131,7 @@ pub struct WorkspaceView {
     pub details: Option<ManagerDetails>,
     pub primary: String,
     pub enabled: bool,
+    #[serde(serialize_with = "serialize_prompt")]
     pub prompt: Option<ManagerPrompt>,
     pub prompt_action: Option<ManagerAction>,
     pub error: Option<String>,
@@ -145,9 +149,40 @@ pub struct WorkspaceView {
     pub switcher_error: Option<String>,
     pub switcher_revision: u64,
 }
+fn serialize_prompt<S: serde::Serializer>(prompt: &Option<ManagerPrompt>, serializer: S) -> std::result::Result<S::Ok,S::Error> {
+    #[derive(Serialize)]
+    struct View<'a> { dialog: layer_ui::DialogIntent, #[serde(flatten)] prompt: &'a ManagerPrompt }
+    prompt.as_ref().map(|prompt| View { dialog:prompt.dialog_intent(),prompt }).serialize(serializer)
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ManagerStatus { pub text: String, pub error: bool, pub retry: bool, pub action: Option<ManagerButton> }
+impl WorkspaceView {
+    fn present_status(&mut self, localization: &layer_ui::Localizer) {
+        let action=if self.error.is_some() { Some(ManagerAction::SaveAsNew) }
+            else if self.interrupted>0 && !self.busy { Some(ManagerAction::RecoverInterrupted) } else { None };
+        self.status=if self.error.is_some() || action.is_some() || !self.ready {
+            let text=self.error.clone().unwrap_or_else(|| action.as_ref().map_or_else(
+                || localization.text(layer_ui::MessageId::NATIVE_DIALOG_LOADING).to_string(),
+                |action| format!("{} · {}",self.interrupted,action.label(localization))));
+            Some(ManagerStatus {text,error:self.error.is_some(),retry:self.error.is_some(),
+                action:action.map(|action| ManagerButton {label:action.label(localization),action,enabled:true,primary:false})})
+        } else { None };
+    }
+}
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct ManagerLayout { pub toolbar: bool, pub single_pane: bool, pub subpage: bool }
+impl WorkspaceView {
+    pub fn dialog_layout(&self, page: bool) -> ManagerLayout {
+        let toolbar=self.page.is_some_and(ManagerPage::toolbar);
+        let single_pane=toolbar && page;
+        ManagerLayout { toolbar,single_pane,subpage:single_pane && self.details_requested }
+    }
+}
 #[derive(Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkspaceInput {
+    OpenDetails,
+    PageList,
     Open {
         page: ManagerPage,
     },
@@ -345,11 +380,13 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         self.pending_binding = self.manager.binding();
         self.present(now);
+        self.publish_flags();
         true
     }
     pub fn set_error(&mut self, error: StoreError) {
         self.view.error = Some(error.localized_message(&self.localization));
         self.error = Some(error);
+        self.publish_flags();
     }
     fn clear_error(&mut self) {
         self.view.error = None;
@@ -646,6 +683,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.details_source = None;
         self.view.selected = None;
         self.view.query.clear();
+        self.view.details_requested=false;
         if self.task.is_none() && self.incoming.is_none() && self.install.is_none() {
             self.end_transition(session);
         }
@@ -693,6 +731,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.switcher_display = switcher_rows(m.switcher_display_ids_in(&self.view.order));
         self.view.present_switcher_menus(&self.localization, switcher_rows(self.view.order.clone()));
         let page = self.view.page;
+        self.view.dialog=page.map(ManagerPage::dialog);
         let (title, intro) = match page {
             Some(ManagerPage::History) => (message(&self.localization, layer_ui::MessageId::WORKSPACE_HISTORY_TITLE, &[("name", self.view.name.clone())]), String::new()),
             Some(ManagerPage::ThisWorkspace) => (
@@ -908,6 +947,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 | WorkspaceInput::RefreshSwitcher
                 | WorkspaceInput::EditSwitcher { .. }
                 | WorkspaceInput::Search { .. }
+                | WorkspaceInput::OpenDetails | WorkspaceInput::PageList
                 | WorkspaceInput::FocusFailed { .. }
         ) && (self.view.ready || !matches!(input, WorkspaceInput::Close))
         {
@@ -938,6 +978,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 self.error = None;
                 self.view.error = Some(error);
             },
+            WorkspaceInput::OpenDetails => { self.view.details_requested=self.view.page.is_some_and(ManagerPage::toolbar); }
+            WorkspaceInput::PageList => { self.view.details_requested=false; }
             WorkspaceInput::Search { query } => {
                 if self.view.page.is_some() && self.view.prompt.is_none() {
                     self.view.query = query;
@@ -1088,6 +1130,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         self.view.saving = self.manager.saving();
         self.view.closing = self.terminating && !self.view.closed;
         self.view.update_switcher_menu_availability();
+        self.view.present_status(&self.localization);
     }
     fn open<R: CanvasRenderer>(
         &mut self,
@@ -1109,6 +1152,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             self.view.query.clear();
         }
         self.view.page = Some(page);
+        self.view.details_requested=false;
         self.view.details = None;
         self.details_source = None;
         self.view.selected = match page {
@@ -2029,10 +2073,10 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 }
             }
         }
-        self.publish_flags();
         self.view.interrupted = self.interrupted.len();
         self.view.retry = self.view.error.is_some()
             && (self.manager.has_failed_operation() || self.manager.dirty());
+        self.publish_flags();
         change
     }
 }
