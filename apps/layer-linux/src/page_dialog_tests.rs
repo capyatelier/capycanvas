@@ -1033,6 +1033,8 @@ fn w7_calibration(d: &mut Driver, tilt: bool) {
 
 fn w7_toolbar(d: &mut Driver, kind: &str) {
     manager_offered(d,layer_workspace::ManagerPage::ThisWorkspace,kind,false);
+    assert!(state(&d.w).customization.toolbar_prompt.is_some(),"the offered toolbar action opens its shared prompt");
+    assert_eq!(d.w.visible_dialog().unwrap().widget_name(),"toolbar-dialog","the toolbar prompt survives its manager closing");
     dialog_frame(d);capture(d,&kind.replace('_',"-"));
     d.w.dispatch(UiAction::Customize {action:CustomizationAction::CancelToolbar});
     manager_close(d);

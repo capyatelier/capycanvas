@@ -276,6 +276,7 @@ impl NativeWorkspaces {
             };
             step(controller, &mut gpu.session)
         };
+        self.render(w);
         if change.regions != 0 || change.needs_present() {
             w.changed(Ok(change));
         }
@@ -291,7 +292,6 @@ impl NativeWorkspaces {
             ));
             return;
         }
-        self.render(w);
     }
     pub fn send(&self, w: &Rc<Workspace>, input: WorkspaceInput) {
         let mut input = Some(input);
