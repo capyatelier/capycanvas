@@ -6,9 +6,10 @@
 using namespace CapyUi;
 namespace {
 struct IconSources {
+    using Key=std::pair<hstring,uint32_t>;
     struct Entry {Imaging::SvgImageSource source{nullptr};bool ready=false;std::vector<std::pair<void*,weak_ref<Image>>> waiting;};
-    struct Binding {weak_ref<Image> image;hstring key;};
-    std::map<hstring,Entry> sources;
+    struct Binding {weak_ref<Image> image;Key key;};
+    std::map<Key,Entry> sources;
     std::map<void*,hstring> keys;
     std::map<void*,Binding> bindings;
     static IconSources& Current(){static thread_local IconSources cache;return cache;}
@@ -17,14 +18,14 @@ struct IconSources {
         auto& keys=Current().keys;auto found=keys.find(get_abi(source));
         return found==keys.end()?Windows::Foundation::Uri(nullptr):Windows::Foundation::Uri(found->second);
     }
-    static void Ready(hstring const& key){
+    static void Ready(Key const& key){
         auto& cache=Current();auto& entry=cache.sources.at(key);if(entry.ready)return;entry.ready=true;
         for(auto const& [id,weak]:std::exchange(entry.waiting,{})){
             auto image=weak.get();auto binding=cache.bindings.find(id);
             if(binding!=cache.bindings.end()&&binding->second.key==key&&binding->second.image.get()==image){cache.bindings.erase(binding);if(image)image.Source(entry.source);}
         }
     }
-    static fire_and_forget Load(hstring key,std::filesystem::path path){
+    static fire_and_forget Load(Key key,std::filesystem::path path){
         auto source=Current().sources.at(key).source;
         apartment_context apartment;co_await resume_background();
         try{
@@ -33,14 +34,14 @@ struct IconSources {
             auto status=co_await source.SetSourceAsync(stream);stream.Close();
             if(status==Imaging::SvgImageSourceLoadStatus::Success){
                 Ready(key);auto theme=path.parent_path().filename()==L"dark"?L"light":L"dark";
-                auto relative=L"icons/"+std::wstring(theme)+L"/"+path.filename().wstring();Get(asset(relative),assetPath(relative));
+                auto relative=L"icons/"+std::wstring(theme)+L"/"+path.filename().wstring();Get(asset(relative),assetPath(relative),key.second);
             }
         }catch(...){}
     }
-    static Entry& Get(Windows::Foundation::Uri const& uri,std::filesystem::path const& path){
-        auto key=uri.AbsoluteUri();auto& cache=Current();auto [found,added]=cache.sources.try_emplace(key);
+    static Entry& Get(Windows::Foundation::Uri const& uri,std::filesystem::path const& path,uint32_t pixels){
+        Key key{uri.AbsoluteUri(),pixels};auto& cache=Current();auto [found,added]=cache.sources.try_emplace(key);
         auto& entry=found->second;
-        if(added){entry.source=Imaging::SvgImageSource();cache.keys.emplace(get_abi(entry.source),key);Load(key,path);}
+        if(added){entry.source=Imaging::SvgImageSource();entry.source.RasterizePixelWidth(pixels);entry.source.RasterizePixelHeight(pixels);cache.keys.emplace(get_abi(entry.source),key.first);Load(key,path);}
         return entry;
     }
 };
@@ -52,10 +53,12 @@ void CapyUi::setIcon(Image const& result,hstring name,hstring theme,double size)
     result.Width(size);result.Height(size);result.IsHitTestVisible(false);
     auto relative=L"icons/"+std::wstring(theme.c_str())+L"/"+file+L".svg";auto uri=asset(relative);
     auto source=result.Source().try_as<Imaging::SvgImageSource>();
-    auto key=uri.AbsoluteUri();auto& cache=IconSources::Current();auto pending=cache.bindings.find(get_abi(result));
+    auto scale=result.XamlRoot()?result.XamlRoot().RasterizationScale():double(GetDpiForSystem())/96.;
+    auto pixels=uint32_t(std::isfinite(size)?std::ceil(size*std::max(2.,scale)):source.RasterizePixelWidth());
+    IconSources::Key key{uri.AbsoluteUri(),pixels};auto& cache=IconSources::Current();auto pending=cache.bindings.find(get_abi(result));
     if(pending!=cache.bindings.end()&&pending->second.image.get()==result&&pending->second.key==key)return;
-    if(source)if(auto previous=IconSources::UriOf(source);previous&&previous.AbsoluteUri()==key){cache.bindings.erase(get_abi(result));return;}
-    auto& entry=IconSources::Get(uri,assetPath(relative));
+    if(source&&source.RasterizePixelWidth()==pixels&&source.RasterizePixelHeight()==pixels)if(auto previous=IconSources::UriOf(source);previous&&previous.AbsoluteUri()==key.first){cache.bindings.erase(get_abi(result));return;}
+    auto& entry=IconSources::Get(uri,assetPath(relative),pixels);
     if(entry.ready||!result.Source()){cache.bindings.erase(get_abi(result));result.Source(entry.source);}
     else{cache.bindings.insert_or_assign(get_abi(result),IconSources::Binding{make_weak(result),key});entry.waiting.emplace_back(get_abi(result),make_weak(result));}
 }
