@@ -388,7 +388,7 @@ fn line_picking_and_intersection_erasing_ignore_fill_only_paths() {
     let fill = face_path(&face);
     let object = VectorObject::from_records(vec![Record::Path(fill.clone()), Record::Path(line)]);
     let mut index = VectorIndex::default();
-    assert_eq!(index.hit(&object, [50., 45.], 0.1), None);
+    assert_eq!(index.hit(&object, [50., 45.], 0.1), Some(fill.id));
     assert_eq!(index.hit(&object, [50., 50.], 0.1), Some(ItemId(1)));
     let erased = object.erase(&mut index, &Eraser { from: [10., 50.], to: [10., 50.], radius: 1. }, EraseMode::ToIntersection).unwrap();
     let remaining: Vec<_> = erased.paths().map(|(_, path)| path).collect();

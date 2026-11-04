@@ -81,8 +81,10 @@ impl VectorIndex {
     }
     pub fn hit(&mut self, object: &VectorObject, point: [f64; 2], slop: f64) -> Option<ItemId> {
         self.update(object);
-        self.candidates([point[0] - slop, point[1] - slop, point[0] + slop, point[1] + slop]).into_iter()
-            .filter_map(|at| self.path(at)).find(|path| path.pickable() && path.style.strokes().next().is_some() && path.hit(point, slop)).map(|path| path.id)
+        let candidates = self.candidates([point[0] - slop, point[1] - slop, point[0] + slop, point[1] + slop]);
+        let pick = |stroked| candidates.iter().filter_map(|&at| self.path(at))
+            .find(|path| path.pickable() && path.style.strokes().next().is_some() == stroked && path.hit(point, slop)).map(|path| path.id);
+        pick(true).or_else(|| pick(false))
     }
     pub fn near(&mut self, object: &VectorObject, area: [f64; 4]) -> Vec<Position> {
         self.update(object);
@@ -91,7 +93,7 @@ impl VectorIndex {
     pub fn within(&mut self, object: &VectorObject, area: [f64; 4]) -> BTreeSet<ItemId> {
         self.update(object);
         let inside = |b: [f64; 4]| b[0] >= area[0] && b[1] >= area[1] && b[2] <= area[2] && b[3] <= area[3];
-        self.candidates(area).into_iter().filter_map(|at| self.path(at)).filter(|path| path.pickable() && path.style.strokes().next().is_some() && inside(path.visual_bounds())).map(|path| path.id).collect()
+        self.candidates(area).into_iter().filter_map(|at| self.path(at)).filter(|path| path.pickable() && inside(path.visual_bounds())).map(|path| path.id).collect()
     }
 }
 
@@ -106,6 +108,42 @@ mod tests {
         let paint = Paint::color(crate::color::RgbColor::new(Default::default(), [0., 0., 0., 1.]).unwrap());
         Record::Path(PathItem::new(ItemId(id), Arc::new(geometry), Arc::new(Style::new(vec![PaintEntry::Stroke(Stroke::new(paint, 2.))]))))
     }
+    fn fill(id: u64) -> PathItem {
+        let anchors = [[0., 0.], [100., 0.], [100., 100.], [0., 100.]].map(Anchor::corner);
+        PathItem::new(ItemId(id), Arc::new(PathGeometry::new(vec![Subpath::new(&anchors, true)]).unwrap()),
+            Arc::new(Style::new(vec![PaintEntry::Fill(Fill { paint: Paint::color(crate::color::RgbColor::BLACK), unknown: None })])))
+    }
+
+    #[test]
+    fn filled_hits_fall_back_behind_strokes_and_keep_frontmost_order() {
+        let front = fill(1);
+        let back = fill(2);
+        let mut index = VectorIndex::default();
+        let object = VectorObject::from_records(vec![Record::Path(front.clone()), Record::Path(back.clone()), line(3, [0., 50.], [100., 50.]), line(4, [0., 50.], [100., 50.])]);
+        assert_eq!(index.hit(&object, [50., 20.], 0.), Some(front.id));
+        assert_eq!(index.hit(&object, [50., 50.], 0.), Some(ItemId(3)));
+        let reordered = VectorObject::from_records(vec![Record::Path(back.clone()), Record::Path(front.clone()), line(4, [0., 50.], [100., 50.]), line(3, [0., 50.], [100., 50.])]);
+        assert_eq!(index.hit(&reordered, [50., 20.], 0.), Some(back.id));
+        assert_eq!(index.hit(&reordered, [50., 50.], 0.), Some(ItemId(4)));
+        let mut hidden = front; hidden.hidden = true;
+        let mut locked = back.clone(); locked.locked = true;
+        let unpickable = VectorObject::from_records(vec![Record::Path(hidden.clone()), Record::Path(locked)]);
+        assert_eq!(index.hit(&unpickable, [50., 20.], 0.), None);
+        let visible = VectorObject::from_records(vec![Record::Path(hidden), Record::Path(back)]);
+        assert_eq!(index.hit(&visible, [50., 20.], 0.), Some(ItemId(2)));
+        assert_eq!(index.hit(&visible, [101., 50.], 0.), None);
+    }
+
+    #[test]
+    fn marquee_includes_pickable_fills_and_strokes_inside_its_bounds() {
+        let mut hidden = fill(3); hidden.hidden = true;
+        let mut locked = fill(4); locked.locked = true;
+        let object = VectorObject::from_records(vec![Record::Path(fill(1)), line(2, [10., 50.], [90., 50.]), Record::Path(hidden), Record::Path(locked)]);
+        let mut index = VectorIndex::default();
+        assert_eq!(index.within(&object, [-1., -1., 101., 101.]), [ItemId(1), ItemId(2)].into());
+        assert_eq!(index.within(&object, [1., 1., 99., 99.]), [ItemId(2)].into());
+    }
+
     fn hatching(count: u64) -> VectorObject {
         let columns = (count as f64).sqrt().ceil() as u64;
         VectorObject::from_records((0..count).map(|i| {

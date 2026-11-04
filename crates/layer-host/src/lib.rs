@@ -1452,6 +1452,74 @@ mod tests {
     }
 
     #[test]
+    fn native_pen_move_marquee_and_alt_drag_preserve_vector_edits() {
+        use layer_ui::{CommandId, FigurePaint, LayerAction, Modifiers, Platform};
+        let mut outcomes = Vec::new();
+        for platform in [Platform::Windows, Platform::Gtk] {
+            for (batched, paint) in [false, true].into_iter().flat_map(|batched| [FigurePaint::Both, FigurePaint::Fill].map(|paint| (batched, paint))) {
+                let (_reference, mut host) = gpu_host(platform, [1000, 1000]);
+                host.resize(1600, 1200, 1.).unwrap();
+                host.dispatch(UiAction::Invoke { command: CommandId::FitCanvas }).unwrap();
+                host.dispatch(UiAction::Layer { action: LayerAction::NewVector }).unwrap();
+                let layer = host.session.engine().document().working.occurrence.unwrap();
+                host.dispatch(UiAction::Layer { action: LayerAction::Tool { tool: layer_ui::LayerCanvasTool::Figure { shape: layer_ui::FigureShape::Rectangle, paint } } }).unwrap();
+                let clock = std::cell::Cell::new(1_000_000_000);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                while !host.startup.brush_ready || !host.session.paint_ready() { frame_step(&mut host, &clock, deadline); }
+                assert_eq!(host.session.engine().document().working.occurrence, Some(layer));
+                let drag = |host: &mut NativeHost, from: [f32; 2], to: [f32; 2]| {
+                    let transform = layer_core::Affine(host.session.state().camera.document_to_surface());
+                    let revision = host.session.state().camera.revision;
+                    assert!(host.accepts_pointer_input(revision));
+                    let count = if from == to { 2 } else { 22 };
+                    let records: Vec<_> = (0..count).flat_map(|i| {
+                        let at = transform.map(Point { x: from[0] + (to[0] - from[0]) * i as f32 / (count - 1) as f32, y: from[1] + (to[1] - from[1]) * i as f32 / (count - 1) as f32 });
+                        clock.set(clock.get() + 10_000_000);
+                        [f64::from(at.x), f64::from(at.y), 0.5, 0., 0., 0., 0., clock.get() as f64, if i == 0 { 1. } else if i + 1 == count { 3. } else { 2. }]
+                    }).collect();
+                    let batch = PointerBatch { id: 77, tool: 0, button: 0, records: &records, predicted: false, view_revision: revision, device_flags: SampleFlags(0) };
+                    if batched { host.pointer_batch(batch).unwrap(); frame_step(host, &clock, deadline); }
+                    else {
+                        for sample in records.as_chunks::<9>().0 {
+                            host.pointer_event(batch.event(sample, [0, 0], false, 0), PointerButton::Primary).unwrap();
+                            frame_step(host, &clock, deadline);
+                        }
+                    }
+                };
+                drag(&mut host, [400., 400.], [700., 620.]);
+                let rectangle = host.session.engine().document().scene().vector_layer(layer).unwrap().paths().next().expect("native figure drag authors the rectangle").1.clone();
+                assert!(rectangle.hit([550., 510.], 6.));
+                host.dispatch(UiAction::Invoke { command: CommandId::Move }).unwrap();
+                assert_eq!(host.session.state().layer_tools.tool, layer_ui::LayerCanvasTool::Move);
+                drag(&mut host, [350., 350.], [750., 670.]);
+                let marquee = host.session.engine().document().working.vector_items.as_ref().is_some_and(|selection| selection.items.contains(&rectangle.id));
+                clock.set(clock.get() + 1_000_000_000);
+                drag(&mut host, [550., 510.], [550., 510.]);
+                let clicked = host.session.engine().document().working.vector_items.as_ref().is_some_and(|selection| selection.items.contains(&rectangle.id));
+                host.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
+                assert!(host.session.engine().document().working.vector_items.as_ref().is_some_and(|selection| selection.items.contains(&rectangle.id)));
+                let original = host.session.engine().document().scene().vector_layer(layer).unwrap().clone();
+                let before = host.session.engine().checkpoint();
+                host.input(UiInput::Key { latin: None, key: "alt".into(), pressed: true, repeat: false, modifiers: Modifiers { alt: true, ..Default::default() }, editing: false, divider: None }).unwrap();
+                clock.set(clock.get() + 1_000_000_000);
+                drag(&mut host, [550., 510.], [900., 510.]);
+                host.input(UiInput::Key { latin: None, key: "alt".into(), pressed: false, repeat: false, modifiers: Modifiers::default(), editing: false, divider: None }).unwrap();
+                let copied = host.session.engine().document().scene().vector_layer(layer).unwrap();
+                let original_retained = copied.paths().any(|(_, path)| path == &rectangle);
+                let copy = copied.path_count() == 2 && original_retained && host.session.engine().checkpoint() != before;
+                let undo = if copy {
+                    host.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
+                    frame_step(&mut host, &clock, deadline);
+                    host.session.engine().checkpoint() == before && host.session.engine().document().scene().vector_layer(layer) == Some(&original)
+                } else { false };
+                outcomes.push((platform, batched, paint, marquee, clicked, copy, undo));
+            }
+        }
+        assert!(outcomes.iter().filter(|(_, _, paint, ..)| *paint == FigurePaint::Both).all(|(_, _, _, marquee, clicked, copy, undo)| *marquee && *clicked && *copy && *undo), "stroked controls: {outcomes:?}");
+        assert!(outcomes.iter().all(|(_, _, _, marquee, clicked, copy, undo)| *marquee && *clicked && *copy && *undo), "platform, batched, paint, marquee, clicked, copied, undo: {outcomes:?}");
+    }
+
+    #[test]
     fn undrawable_overviews_do_not_hold_canvas_presentation() {
         use scene::{Navigators, NavigatorSlot, SceneDisplay, SlotUnits};
         let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [64; 2]);
