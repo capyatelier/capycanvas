@@ -1197,3 +1197,26 @@ Write-Output 'Actual bubble overlay sequence waits for applied Fill before compo
     . ([scriptblock]::Create($loop.Extent.Text))
     if(($cases-join',')-ne'zoom:0,rotate_view:0,rotate_view:71,hand:0,hand:71'){throw 'Navigation did not cover each tile and its supported header action'}
 }
+
+& {
+    $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-tool-variations.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $slot=@{id=43};$choices=@(@{label='Lasso';enabled=$true},@{label='Rectangle';enabled=$false})
+    $published=@{state=@{customization=@{drawer=@{anchor=@{tile=43};tool_set=@{groups=@();subtools=$choices}}}}}
+    function Model{$published}
+    function Wait-Until($Condition,$Message){if(!(& $Condition)){throw $Message}}
+    $wait=$source.Find({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Wait-Until'-and@($node.CommandElements|Where-Object {$_.Value-eq'Grouped tool did not open its scoped drawer'}).Count-eq1},$true)
+    . ([scriptblock]::Create($wait.Extent.Text))
+    $assignment=$source.Find({param($node)$node-is[Management.Automation.Language.AssignmentStatementAst]-and$node.Left-is[Management.Automation.Language.VariableExpressionAst]-and$node.Left.VariablePath.UserPath-in'groups','subtools'},$true)
+    . ([scriptblock]::Create($assignment.Extent.Text))
+    $drawer=@{};$seen=[Collections.Generic.List[string]]::new()
+    function Control($Id,$Within,[switch]$Arranged){
+        if($Id-notmatch'^tool-subtool-(\d+)$'){throw 'Selection drawer requested a group button'}
+        $seen.Add($Id);$choice=$choices[[int]$Matches[1]]
+        @{Current=@{Name=$choice.label;IsEnabled=$choice.enabled}}
+    }
+    $loop=$source.Find({param($node)$node-is[Management.Automation.Language.ForStatementAst]-and$null-ne$node.Body.Find({param($child)$child-is[Management.Automation.Language.ThrowStatementAst]-and$child.Extent.Text-like'*Drawer did not present the shared sibling choices*'},$true)},$true)
+    . ([scriptblock]::Create($loop.Extent.Text))
+    if(($seen-join',')-ne'tool-subtool-0,tool-subtool-1'){throw 'Selection drawer did not check every shared sibling row'}
+}

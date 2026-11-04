@@ -232,12 +232,12 @@ try{
         if(@(Tile-Images $slot.id).Count -ne 2){throw 'Grouped selection tool lost its native icon or marker'}
         foreach($device in @('mouse','pen','touch')){$results+=Choose "tile-toolbar-$($slot.id)" {Tile $slot.id} $device}
         Tap "tile-toolbar-$($slot.id)"
-        Wait-Until {(Model).state.customization.drawer.anchor.tile -eq $slot.id -and (Model).state.customization.drawer.tool_set.groups.Count -ge 2} 'Grouped tool did not open its scoped drawer'
+        Wait-Until {(Model).state.customization.drawer.anchor.tile -eq $slot.id -and (Model).state.customization.drawer.tool_set.subtools.Count -ge 2} 'Grouped tool did not open its scoped drawer'
         $drawer=Control 'tool-drawer' -Arranged
-        $groups=@((Model).state.customization.drawer.tool_set.groups)
-        for($i=0;$i -lt $groups.Count;$i++){
-            $button=Control "tool-group-$i" -Within $drawer -Arranged
-            if($button.Current.Name -ne $groups[$i].label -or $button.Current.IsEnabled -ne $groups[$i].enabled){throw 'Drawer did not present the shared sibling choices'}
+        $subtools=@((Model).state.customization.drawer.tool_set.subtools)
+        for($i=0;$i -lt $subtools.Count;$i++){
+            $button=Control "tool-subtool-$i" -Within $drawer -Arranged
+            if($button.Current.Name -ne $subtools[$i].label -or $button.Current.IsEnabled -ne $subtools[$i].enabled){throw 'Drawer did not present the shared sibling choices'}
         }
         Tap "tile-toolbar-$($slot.id)"
         Wait-Until {!(Model).state.customization.drawer} 'Grouped drawer did not toggle closed'
