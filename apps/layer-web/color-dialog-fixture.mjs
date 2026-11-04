@@ -63,6 +63,7 @@ const row = (label, values, language) => ({form:label.toLowerCase(), label, form
 
 export const dialogProjection = {
   dialog_presentation:() => ({kind:'floating'}),
+  floating_dialog_width:(_window,natural)=>natural,
   dialog_header:() => ({start:'cancel', end:'primary'}),
   dialog_escape:() => 'cancel',
   dialog_panes_fit:(available, minimum, gap) => minimum.every(width => width > 0) && available >= minimum[0] + minimum[1] + gap,

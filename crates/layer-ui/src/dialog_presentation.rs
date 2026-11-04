@@ -71,6 +71,11 @@ pub fn calibration_extent(area: [f32; 2], natural: [f32; 2]) -> [f32; 2] {
     [natural[0].max(384.).min(area[0]), natural[1].max(360.).min(area[1])]
 }
 
+pub fn floating_dialog_width(window: f32, natural: f32) -> f32 {
+    let padding = (30. + (window - 720.).max(0.) / 8.).floor();
+    natural.max(0.).min((window - 2. * padding).max(0.))
+}
+
 pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
     minimum.iter().all(|width| *width > 0.) && width >= minimum.iter().sum::<f32>() + gap
 }
@@ -114,6 +119,15 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn floating_editor_width_matches_native_sheet_allocation() {
+        for (window, width) in [(600.,540.),(700.,640.),(800.,720.),(1024.,888.)] {
+            assert_eq!(floating_dialog_width(window,1000.),width);
+            assert_eq!(floating_dialog_width(window,440.),440.);
+        }
+        assert_eq!(floating_dialog_width(801.,1000.),721.);
+        assert_eq!(floating_dialog_width(20.,440.),0.);
+    }
     #[test]
     fn canvas_intents_preserve_native_modality_and_progress_is_a_cancel_only_alert() {
         let calibration=DialogIntent::canvas_panel(false);

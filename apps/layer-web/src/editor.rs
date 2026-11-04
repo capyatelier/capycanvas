@@ -92,6 +92,9 @@ impl WebApp {
     pub fn calibration_extent(&self, area: JsValue, natural: JsValue) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::calibration_extent(serde_wasm_bindgen::from_value(area).map_err(js)?,serde_wasm_bindgen::from_value(natural).map_err(js)?))
     }
+    pub fn floating_dialog_width(&self, window: f32, natural: f32) -> f32 {
+        layer_ui::floating_dialog_width(window,natural)
+    }
     pub fn notice_above(&self, notice: JsValue, bar: JsValue) -> Result<JsValue, JsValue> {
         let notice:layer_ui::NoticePlacement=serde_wasm_bindgen::from_value(notice).map_err(js)?;
         serialize(&notice.above(serde_wasm_bindgen::from_value(bar).map_err(js)?))

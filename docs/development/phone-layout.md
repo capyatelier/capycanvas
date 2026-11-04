@@ -599,6 +599,8 @@ uses the shared content-width projection; GTK retains its native AdwClamp.
 The common Web dialog host retains each form and its bound labels across page
 and floating presentation. Shared header actions project Close as Done on a
 page, while the floating dialog keeps its own close control.
+Floating Web Editor dialogs pass their measured natural border-box width to
+shared `floating_dialog_width`; GTK keeps its native AdwDialog allocation.
 
 Declare a form's dialog intent in its shared view and pass it to both hosts.
 Keep the form's controller and action controls when presentation changes. The

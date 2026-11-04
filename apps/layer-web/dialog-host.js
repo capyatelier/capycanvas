@@ -67,6 +67,11 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
       dialog.style.width='';dialog.style.height='';
       const measured=dialog.getBoundingClientRect();
       bounds=app.dialog_bounds(intent.role,[innerWidth,innerHeight],visible,[measured.width,measured.height]);
+    }else if(!page&&!positioned&&intent.role==='editor'){
+      dialog.style.width='';
+      const style=getComputedStyle(dialog),inset=style.boxSizing==='border-box'?0:
+        ['paddingLeft','paddingRight','borderLeftWidth','borderRightWidth'].reduce((sum,key)=>sum+(parseFloat(style[key])||0),0);
+      bounds={width:Math.max(0,app.floating_dialog_width(visible.width,dialog.getBoundingClientRect().width)-inset)};
     }
     for(const [name,key]of Object.entries({left:'x',top:'y',width:'width',height:'height'}))dialog.style[name]=bounds?.[key]!=null?`${bounds[key]}px`:'';
     if(positioned)dialog.style.maxHeight=positioned.maxHeight!=null?`${positioned.maxHeight}px`:'';
