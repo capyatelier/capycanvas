@@ -501,7 +501,7 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
             let offset = origin.map(|v| u32::try_from(v).map_err(js)).into_iter().collect::<Result<Vec<_>,_>>()?;
             document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase {image:image.into(),offset:[offset[0],offset[1]],policy:layer_core::authored::PaintBasePolicy::WorkingPixels});
             let stack=document.composition().result; document.artwork.stacks.get_mut(stack).unwrap().entries.truncate(1);
-            artwork_transfer::pack(document.artwork).await
+            artwork_transfer::pack(document.artwork).await.map(|wire|wire.into_js())
         }
         SnapshotTask::Remap(specs) => {
             let plan = layer_core::RemapPlan {scene: scene.clone(), specs: specs.into()};
@@ -518,7 +518,7 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
                     layer_core::SourceTarget::Selection(_) => return Err(js("Missing moved layer")),
                 }
             }
-            artwork_transfer::pack(artwork).await
+            artwork_transfer::pack(artwork).await.map(|wire|wire.into_js())
         }
         SnapshotTask::TransformPixels {target,map,source} => {
             let mut document = layer_core::Document::from_artwork(scene.artwork.clone()).map_err(js)?;
@@ -526,7 +526,7 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
             plan.scene = scene;
             let output = gpu.transform_pixels(plan,Default::default()).await.map_err(js)?;
             document.apply(output).map_err(js)?;
-            artwork_transfer::pack(document.artwork).await
+            artwork_transfer::pack(document.artwork).await.map(|wire|wire.into_js())
         }
     }
 }

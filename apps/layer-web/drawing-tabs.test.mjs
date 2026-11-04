@@ -528,8 +528,13 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   assert.equal((await tabs()).tabs.length,beforeFailedSave,'Failed Save does not finish Close');
   assert.equal((await tabs()).tabs.find(t=>t.id===copies[0].id).modified,true);
   await evaluate('window.showSaveFilePicker=window.tabSavePicker');
-  // A storage failure must keep RAM and navigation usable while refusing more
-  // admissions. Restore the injected quota failure before the next checkpoint.
+  await select(copies[1].id);await invoke('add_layer');await ready();
+  await evaluate('sessionStoreFixture.checkpoint()');
+  const quotaReleaseKey=await evaluate(`layerApp.app.session_binding(BigInt(${copies[1].id}),null)`);
+  const quotaReleaseFiles=await evaluate(`sessionStoreFixture.files(${JSON.stringify(quotaReleaseKey)})`);
+  assert.equal(await evaluate(`layerApp.app.session_current(BigInt(${copies[1].id}))`),true,'The drawing to discard has a durable checkpoint');
+  assert.ok(Object.keys(quotaReleaseFiles).some(name=>name.startsWith('packs/')||name.startsWith('resources/')),'The drawing to discard owns immutable stored payloads');
+  await select(copies[0].id);
   await evaluate(`window.tabStoragePost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(value,...args){const request=value.request;if(request?.operation==='write_at'&&request.metadata.name.startsWith('drawings/')&&request.metadata.name.includes('/packs/'))throw new DOMException('Test cache full','QuotaExceededError');return tabStoragePost.call(this,value,...args);};`);
   let failedStorageTab;
   try{
@@ -547,8 +552,18 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
     assert.equal(await evaluate('layerApp.state().layers.length'),changedLayers,'Navigation after a disk failure preserves the editor');
   }finally{await evaluate('Worker.prototype.postMessage=window.tabStoragePost');}
   await select(failedStorageTab);await evaluate('layerApp.documents.autosave()');
+  assert.ok((await tabs()).storage_error,'Removing the write fault without freeing space leaves the quota refusal latched');
+  assert.ok((await tabs()).resident_bytes>0,'The refused payload stays in RAM until space becomes available');
+  await evaluate(`layerApp.documents.close(BigInt(${copies[1].id}))`);
+  await wait(`!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes')`);
+  await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()`);
+  await wait(`!layerApp.app.document_tabs(0).tabs.some(tab=>Number(tab.id)===${copies[1].id})`);await ready();
+  const retiredFiles=await evaluate(`sessionStoreFixture.files(${JSON.stringify(quotaReleaseKey)})`);
+  assert.equal(await evaluate(`sessionStoreFixture.snapshot(${JSON.stringify(quotaReleaseKey)})`),null,'Discard retires the durable drawing head');
+  assert.ok(Object.entries(quotaReleaseFiles).some(([name,bytes])=>bytes.length>0&&!(name in retiredFiles)),'Discard actually removes owned drawing bytes');
+  await wait('!layerApp.app.document_tabs(0).storage_error&&Number(layerApp.app.document_tabs(0).resident_bytes)===0');
   assert.equal((await tabs()).storage_error??null,null);
-  assert.equal((await tabs()).resident_bytes,0,'Storage retries successfully after quota failure is removed');
+  assert.equal((await tabs()).resident_bytes,0,'Ordinary checkpoints release RAM after another durable drawing is discarded');
   const transitionDirectory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/document-tabs/web';
   await mkdir(transitionDirectory,{recursive:true});
   const closeColor=(a,b)=>a.every((value,i)=>Math.abs(value-b[i])<=3);

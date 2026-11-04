@@ -180,7 +180,7 @@ pub(super) async fn render_output(
     let original = (flatten.is_none() && !metadata.recipe.format.is_hdr()).then(|| capture.output_source(
         extent, &metadata.recipe.interpretation(), metadata.recipe.encoding, metadata.recipe.background.matte(),
     )).flatten();
-    let buffers = if let Some(original) = original {
+    let mut packed = if let Some(original) = original {
         let project =
             layer_color::photo_project((*original).clone(), Default::default(), layer_core::DocumentNames { paint: "Original".into(), paper: "".into() }, metadata.color.depth)
                 .map_err(js)?;
@@ -190,14 +190,15 @@ pub(super) async fn render_output(
                 .as_string()
                 .ok_or_else(|| js("Missing original metadata"))?,
         );
-        js_sys::Reflect::get(&packed, &js("buffers"))?.dyn_into::<js_sys::Array>()?
+        packed
     } else {
-        js_sys::Array::new()
+        let packed = artwork_transfer::PackedArtwork::empty();
+        js_sys::Reflect::set(&packed, &js("buffers"), &js_sys::Array::new())?;
+        packed
     };
     for (index, block) in metadata.photo.iter_mut().zip(photo.blocks()) {
         if let Some(bytes) = block {
-            *index = Some(buffers.length());
-            buffers.push(&js_sys::Uint8Array::from(bytes.as_ref()));
+            *index = Some(packed.push_buffer(bytes.as_ref())?);
         }
     }
     // Codecs consume pixels on their file worker, but illumination analysis is
@@ -206,12 +207,12 @@ pub(super) async fn render_output(
         (!metadata.recipe.format.is_hdr() && !flatten.is_some_and(|c| c.depth.is_float()))) {
         let guide = capture.local_tone_guide_async().await.map_err(js)?;
         cancelled(&control)?;
+        let samples: Vec<u8> = guide.samples.as_flattened().iter().flat_map(|value| value.to_le_bytes()).collect();
         metadata.guide = Some(GuideMetadata {
-            extent: guide.extent, peak: guide.peak, buffer: buffers.length(),
+            extent: guide.extent, peak: guide.peak, buffer: packed.push_buffer(&samples)?,
         });
-        let samples = js_sys::Float32Array::from(guide.samples.as_flattened());
-        buffers.push(&js_sys::Uint8Array::new(&samples.buffer()));
     }
+    let buffers = js_sys::Reflect::get(&packed, &js("buffers"))?.dyn_into::<js_sys::Array>()?;
     metadata.token = raster_worker::call_cancellable(
         "output-begin", "", &js_sys::Array::new(), control.clone(),
     ).await?
@@ -391,7 +392,7 @@ pub async fn raster_worker_output(
             limit: artwork_transfer::photo_memory_budget().encode_bytes,
         };
         let (source, png) = layer_color::write_clip_rows(rows, &mut read_row).map_err(js)?;
-        let result = match source {
+        let mut result = match source {
             Some(source) => {
                 let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), source.extent[0], source.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
                 let root=document.artwork.root; document.artwork.compositions.get_mut(root).unwrap().color=metadata.color;
@@ -401,15 +402,14 @@ pub async fn raster_worker_output(
                 artwork_transfer::pack(document.artwork).await?
             }
             None => {
-                let empty = js_sys::Object::new();
+                let empty = artwork_transfer::PackedArtwork::empty();
                 js_sys::Reflect::set(&empty, &js("buffers"), &js_sys::Array::new())?;
-                empty.into()
+                empty
             }
         };
-        let buffers: js_sys::Array = js_sys::Reflect::get(&result, &js("buffers"))?.dyn_into()?;
-        js_sys::Reflect::set(&result, &js("png"), &JsValue::from(buffers.length()))?;
-        buffers.push(&js_sys::Uint8Array::from(png.as_slice()));
-        return Ok(result);
+        let png=result.push_buffer(png.as_slice())?;
+        js_sys::Reflect::set(&result,&js("png"),&JsValue::from(png))?;
+        return Ok(result.into_js());
     }
     let before = if metadata.preview && metadata.rendition.is_some() {
         Some(mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, guide.as_ref(), &mut read_row).map_err(js)?)
@@ -586,7 +586,7 @@ pub async fn raster_worker_output(
         project.artwork.metadata = std::sync::Arc::new(delivery.photo);
         let wire = artwork_transfer::pack(project.artwork).await?;
         js_sys::Reflect::set(&wire, &js("clipped"), &JsValue::from_f64(clipped as f64))?;
-        return Ok(wire);
+        return Ok(wire.into_js());
     }
     let result = serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent}))?;
     if let Some(preview) = preview {

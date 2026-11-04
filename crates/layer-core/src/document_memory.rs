@@ -31,6 +31,7 @@ pub(crate) struct Owner {
     history_metadata: AtomicU64,
     parked: AtomicBool,
     initialized: AtomicBool,
+    storage:Mutex<Option<crate::package::session_store::DrawingStore>>,
 }
 impl std::fmt::Debug for DocumentMemory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_struct("DocumentMemory").finish_non_exhaustive() }
@@ -42,7 +43,13 @@ impl DocumentMemory {
     pub fn new(budget: MemoryBudget, reservation: Option<MemoryReservation>) -> Self {
         Self { _capture: None, owner: Arc::new(Owner { inventories:Mutex::new(Inventories::default()), captured_resident:AtomicU64::new(0), memory: budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None),
             history: budget.register_owner(MemoryOwnerKind::History, MemoryClass::Pinned, None), budget,
-            resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false) }), reservation, preview_inventory: None }
+            resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false),storage:Default::default() }), reservation, preview_inventory: None }
+    }
+    pub fn storage(&self)->Option<crate::package::session_store::DrawingStore> {self.owner.storage.lock().unwrap().clone()}
+    pub fn bind_storage(&self,storage:crate::package::session_store::DrawingStore)->Result<(),String> {
+        let mut current=self.owner.storage.lock().unwrap();
+        if current.as_ref().is_some_and(|current|current.path()!=storage.path()) {return Err("Drawing storage identity changed".into());}
+        *current=Some(storage);Ok(())
     }
     pub(crate) fn requires_inventory_commit(&self) -> bool {
         self.preview_inventory.is_some() || self.reservation.as_ref().is_some_and(MemoryReservation::active)

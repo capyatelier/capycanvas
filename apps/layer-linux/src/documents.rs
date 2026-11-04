@@ -1032,6 +1032,10 @@ impl Documents {
         if !w.window.is_visible() || self.closing_window.get() {
             return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
         }
+        let writer=w.restart.stores.asset_writer(self.selected())?.for_document(&project)?;
+        let stored=project.clone();
+        gio::spawn_blocking(move || pollster::block_on(writer.store_document(&stored)))
+            .await.map_err(|_|"Drawing storage worker failed".to_string())??;
         let retry_storage = self.model.borrow().storage_error().is_some();
         if retry_storage {
             self.trim(w).await;
@@ -1090,7 +1094,7 @@ impl Documents {
             }
             recovery
         } else {
-            Rc::new(Recovery::default())
+            Rc::new(Recovery::for_document(next.session.engine().document()))
         };
         if let Some((location,fingerprint))=destination {next.session.record_destination_fingerprint(&location,fingerprint)?;}
         if replace_initial {

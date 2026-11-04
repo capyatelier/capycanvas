@@ -195,12 +195,6 @@ documents-prints-at = При печати { $width } × { $height } { $unit }
 documents-too-large-side = Слишком большой для этого устройства: сторона не длиннее { $maximum } px
 documents-too-large-memory = Слишком большой для свободной памяти этого устройства
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · до { $layers ->
-    [one] { $count } слоя
-    [few] { $count } слоёв
-    [many] { $count } слоёв
-   *[other] { $count } слоя
-}
 documents-layer-memory = { $size } на слой
 documents-layer-memory-available = { $size } на слой · доступно { $available }
 documents-no-paper = Без бумаги

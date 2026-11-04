@@ -196,7 +196,6 @@ documents-prints-at = 印刷サイズ { $width } × { $height } { $unit }
 documents-too-large-side = このデバイスには大きすぎます。辺の長さは{ $maximum } pxまでです。
 documents-too-large-memory = このデバイスの空きメモリには大きすぎます。
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · レイヤー最大{ $count }個
 documents-layer-memory = 1レイヤーあたり{ $size }
 documents-layer-memory-available = 1レイヤーあたり{ $size } · 空き{ $available }
 documents-no-paper = 用紙なし

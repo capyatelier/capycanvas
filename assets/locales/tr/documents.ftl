@@ -195,7 +195,6 @@ documents-prints-at = Baskı boyutu { $width } × { $height } { $unit }
 documents-too-large-side = Bu cihaz için çok büyük: kenarlar en fazla { $maximum } px olabilir
 documents-too-large-memory = Bu cihazın kullanılabilir belleği için çok büyük
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · en fazla { $count } katman
 documents-layer-memory = Katman başına { $size }
 documents-layer-memory-available = Katman başına { $size } · { $available } kullanılabilir
 documents-no-paper = Kâğıt yok

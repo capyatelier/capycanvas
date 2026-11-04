@@ -551,8 +551,112 @@ fn stale_optional_work_skips_preparation_and_storage_but_forced_work_runs() {
 }
 
 struct ReplyWake(AtomicUsize);
+struct Photos(layer_core::color::DocumentColor);
+impl layer_render::CanvasRenderer for Photos {
+    type Error=std::io::Error;
+    fn supports_tiled_sources(&self)->bool {true}
+    fn document_color(&self)->layer_core::color::DocumentColor {self.0}
+    fn resize_surface(&mut self,_width:u32,_height:u32)->Result<(),Self::Error> {Ok(())}
+    fn prepare_asset(&mut self,_asset:&layer_core::AssetId,_image:layer_render::HostImage<'_>)->Result<(),Self::Error> {Ok(())}
+    fn release_asset(&mut self,_asset:&layer_core::AssetId) {}
+    fn submit(&mut self,_packet:layer_render::FramePacket<'_>)->Result<(),Self::Error> {Ok(())}
+}
 impl std::task::Wake for ReplyWake {
     fn wake(self: Arc<Self>) {self.0.fetch_add(1, Ordering::SeqCst);}
+}
+#[test]
+fn session_attachment_leaves_foreign_outgoing_storage_and_pressure_untouched() {
+    let outgoing=Fixture::new();let incoming=Fixture::new();
+    let documents=layer_ui::DocumentSessions::<()>::default();let pressure=documents.pressure_source();
+    let document=||layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let blank=document();let session=layer_ui::UiSession::new(Photos(blank.composition().color),blank,[32,32],layer_ui::Platform::Android).unwrap();
+    assert!(outgoing.stores.attach_session(1,&session,pressure.clone()).unwrap());
+    let binding=session.asset_writer().unwrap().binding();
+    let generation=outgoing.stores.0.pressure.lock().unwrap().as_ref().unwrap().1;
+    assert!(!incoming.stores.attach_session(1,&session,pressure.clone()).unwrap());
+    assert!(incoming.stores.bindings().is_empty());assert!(incoming.stores.0.pressure.lock().unwrap().is_none());
+    assert!(pressure.is_current(generation));
+    assert_eq!(session.asset_writer().unwrap().binding().path(),binding.path());
+    assert!(incoming.stores.adopt_binding(1,binding).is_err());
+    assert!(outgoing.queue.lock().unwrap().is_empty());assert!(incoming.queue.lock().unwrap().is_empty());
+    assert!(!outgoing.root.exists() && !incoming.root.exists());
+    let restored=document();let restored_binding=incoming.stores.bind(2,None).unwrap();
+    restored.memory().bind_storage(restored_binding.clone()).unwrap();
+    let adopted=layer_ui::UiSession::new(Photos(restored.composition().color),restored,[32,32],layer_ui::Platform::Android).unwrap();
+    assert!(incoming.stores.attach_session(2,&adopted,pressure.clone()).unwrap());
+    assert_eq!(adopted.asset_writer().unwrap().binding().path(),restored_binding.path());
+    assert!(!pressure.is_current(generation));
+    assert!(outgoing.stores.install_storage(2,&adopted).is_err());
+    assert!(outgoing.queue.lock().unwrap().is_empty());assert!(incoming.queue.lock().unwrap().is_empty());
+    assert!(!outgoing.root.exists() && !incoming.root.exists());
+}
+
+#[test]
+fn imports_captured_before_storage_installation_resume_with_one_stable_binding() {
+    use std::{future::Future,task::{Context,Poll,Waker}};
+    let fixture=Fixture::new();
+    let source=layer_core::color::source::rgba8_source([32,32],|x,y|[x as u8,y as u8,127,255]);
+    let mut document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()});
+    let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+    document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::authored::PaintBase::new(source.clone().into()));
+    let color=document.composition().color;
+    let session=layer_ui::UiSession::new(Photos(color),document,[32,32],layer_ui::Platform::Android).unwrap();
+    let captured=session.image_import_writer().unwrap();let fork=captured.fork().unwrap();
+    let mut ready=Box::pin(fork.resolve());
+    let wake=Arc::new(ReplyWake(AtomicUsize::new(0)));let waker=Waker::from(wake.clone());let mut context=Context::from_waker(&waker);
+    assert!(ready.as_mut().poll(&mut context).is_pending());
+    let mut write=Box::pin(captured.store_document(session.engine().document()));
+    assert!(write.as_mut().poll(&mut context).is_pending());
+    assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+    let documents=layer_ui::DocumentSessions::<()>::default();
+    assert!(fixture.stores.attach_session(1,&session,documents.pressure_source()).unwrap());
+    let binding=fixture.stores.bind(1,None).unwrap();
+    assert!(!fixture.root.exists());assert!(wake.0.load(Ordering::SeqCst)>0);
+    let Poll::Ready(Ok(derived))=ready.as_mut().poll(&mut context) else {panic!("installed writer did not wake its fork");};
+    assert_ne!(derived.binding().key(),binding.key());
+    assert_eq!(pollster::block_on(fork.resolve()).unwrap().binding().key(),derived.binding().key());
+    assert!(write.as_mut().poll(&mut context).is_pending());fixture.run();
+    assert!(matches!(write.as_mut().poll(&mut context),Poll::Ready(Ok(()))));
+    assert_eq!(session.engine().document().memory().storage().unwrap().path(),binding.path());
+    assert!(source.tiles.values().all(|tile|tile.resident_bytes()==0));
+}
+#[test]
+fn new_tabs_inherit_pending_storage_or_bind_directly_without_changing_captured_identity() {
+    use std::{future::Future,task::{Context,Poll}};
+    for direct in [false,true] {
+        let fixture=Fixture::new();
+        let make=|| {let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+            layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap()};
+        let first=make();let incoming=make();
+        incoming.bind_asset_writer(first.pending_asset_writer().fork().unwrap()).unwrap();
+        let captured=incoming.image_import_writer().unwrap();let mut waiting=Box::pin(captured.resolve());let mut context=Context::from_waker(std::task::Waker::noop());
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        if direct {fixture.stores.install_storage(2,&incoming).unwrap();}
+        let first_binding=fixture.stores.install_storage(1,&first).unwrap();
+        let Poll::Ready(Ok(writer))=waiting.as_mut().poll(&mut context) else {panic!("new tab lost its startup storage binding");};
+        let binding=writer.binding();assert_ne!(binding.key(),first_binding.key());
+        assert_eq!(fixture.stores.install_storage(2,&incoming).unwrap().path(),binding.path());
+        assert_eq!(incoming.engine().document().memory().storage().unwrap().path(),binding.path());
+        assert_eq!(pollster::block_on(captured.resolve()).unwrap().binding().path(),binding.path());
+        assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
+    }
+}
+#[test]
+fn opening_window_storage_completes_pending_writers_for_active_and_parked_tabs() {
+    use std::{future::Future,task::{Context,Poll}};
+    let fixture=Fixture::new();let mut host=crate::NativeHost::new(layer_ui::Platform::Android).unwrap();
+    let mut window=crate::window::DocumentWindow::<Box<layer_ui::UiSession<crate::Renderer>>>::default();
+    let inherited=host.session.pending_asset_writer().fork().unwrap();
+    let incoming=layer_ui::UiSession::new(crate::Renderer(None),layer_ui::new_drawing(32,32,host.session.localization()).unwrap(),[32,32],layer_ui::Platform::Android).unwrap();
+    incoming.bind_asset_writer(inherited).unwrap();
+    let outgoing=std::mem::replace(&mut host.session,Box::new(incoming));let retained=outgoing.retained_document_tiles();
+    window.documents.append(outgoing,retained,host.session.localization());
+    let captured=window.documents.order().iter().map(|id|window.session(&host,*id).unwrap().image_import_writer().unwrap()).collect::<Vec<_>>();
+    let mut waiting=captured.iter().map(|writer|Box::pin(writer.resolve())).collect::<Vec<_>>();let mut context=Context::from_waker(std::task::Waker::noop());
+    for write in &mut waiting {assert!(write.as_mut().poll(&mut context).is_pending());}
+    assert!(fixture.stores.attach_window(&window,&host).unwrap());
+    for write in &mut waiting {assert!(matches!(write.as_mut().poll(&mut context),Poll::Ready(Ok(_))));}
+    assert_eq!(fixture.stores.bindings().len(),2);assert!(!fixture.root.exists());assert!(fixture.queue.lock().unwrap().is_empty());
 }
 #[test]
 fn panicked_or_dropped_work_completes_replies_wakes_and_releases_busy_state() {
@@ -572,5 +676,242 @@ fn panicked_or_dropped_work_completes_replies_wakes_and_releases_busy_state() {
         assert_eq!(fixture.queue.lock().unwrap().len(), 1); fixture.run();
         assert!(matches!(next.try_take(), Some(Ok(StoreResult::Durable(_)))));
         assert_eq!(fixture.wakes.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[test]
+fn imported_payload_ram_plateaus_with_one_decode_ahead_and_reuses_42_durable_images() {
+    use std::{future::Future,pin::Pin,task::{Context,Poll,Waker}};
+    const MIB:u64=1024*1024;
+    let fixture=Fixture::new();
+    let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {total_bytes:Some(MIB),available_bytes:Some(MIB),override_bytes:Some(MIB),..Default::default()});
+    let limits=layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(MIB));
+    let writer=fixture.stores.asset_writer(1).unwrap();let binding=writer.binding();
+    let mut images=layer_ui::ImageImportBatch::with_budget(Default::default(),layer_core::color::RgbSpace::ProPhoto,limits,budget.clone()).with_writer(writer);
+    let mut tiles=Vec::new();let mut physical=0usize;
+    for index in 0..42 {
+        pollster::block_on(images.prepare_decode()).unwrap();
+        let source=Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([128,128],|x,y| {
+            let value=x.wrapping_mul(0x9e3779b9).wrapping_add(y.wrapping_mul(0x85ebca6b)).wrapping_add(index*97);
+            [value as u8,(value>>8) as u8,(value>>16) as u8,255]
+        }));
+        physical+=source.resident_bytes();tiles.extend(source.tiles.values().cloned());
+        images.append(format!("Photo {index}"),source,false).unwrap();
+        assert!(tiles.iter().filter(|tile|tile.resident_bytes()>0).count()<=2);
+        assert!(budget.snapshot().reserved_bytes<MIB/2);
+        let mut write=Box::pin(images.write_prepared());let mut context=Context::from_waker(Waker::noop());
+        if index!=0 {assert!(write.as_mut().poll(&mut context).is_pending());fixture.run();}
+        assert!(matches!(write.as_mut().poll(&mut context),Poll::Ready(Ok(()))));
+        assert_eq!(fixture.queue.lock().unwrap().len(),1);
+        assert_eq!(tiles.iter().filter(|tile|tile.resident_bytes()>0).count(),1);
+    }
+    assert!(physical>MIB as usize,"the complete batch exceeds its RAM allowance");
+    let mut finish=Box::pin(images.finish_storage());let mut context=Context::from_waker(Waker::noop());
+    assert!(finish.as_mut().poll(&mut context).is_pending());fixture.run();
+    assert!(matches!(Pin::as_mut(&mut finish).poll(&mut context),Poll::Ready(Ok(()))));drop(finish);
+    assert!(tiles.iter().all(|tile|tile.resident_bytes()==0));
+    let packed=||std::fs::read_dir(binding.path().join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>();
+    let before=packed();assert_eq!(before,physical as u64);
+    let document=layer_ui::clipboard_document(images.take_sources(false).unwrap(),Default::default(),&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    assert_eq!(document.memory().storage().unwrap().path(),binding.path());
+    let color=document.composition().color;
+    let session=layer_ui::UiSession::new(Photos(color),document,[256,256],layer_ui::Platform::Gtk).unwrap();
+    let reply=fixture.stores.import(1,session.capture_session().unwrap(),session.session_stamp()).unwrap();fixture.run();
+    assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Checkpoint(_)))));
+    assert_eq!(packed(),before,"checkpoint reuses all imported locations");
+    assert_eq!(tiles[0].decode_on_worker().unwrap()[..4],[0,0,0,255]);
+}
+
+fn quota_opener(space:Arc<std::sync::atomic::AtomicU64>,quota:Arc<AtomicBool>,creates:Arc<AtomicUsize>)->Arc<dyn StoreOpener> {
+    use layer_core::package::{store_io::{FileTransport,FileFuture,FileAccess,StoreFile,DirectoryEntry,NativeTransport},storage_budget::{StorageFacts,StorageBudget,STORAGE_UNAVAILABLE},session_store::{SessionStore,StoreOpener}};
+    use std::sync::atomic::AtomicU64;
+    struct Disk {inner:NativeTransport,space:Arc<AtomicU64>,quota:Arc<AtomicBool>,creates:Arc<AtomicUsize>,scope:String}
+    impl FileTransport for Disk {
+        fn storage_facts(&self)->FileFuture<'_,StorageFacts> {Box::pin(async {Ok(StorageFacts {scope:self.scope.clone(),available_bytes:Some(self.space.load(Ordering::SeqCst)),epoch:StorageBudget::process().sample_epoch()})})}
+        fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {
+            if access==FileAccess::Create && (name.starts_with("generations/") || name==".retiring") {
+                self.creates.fetch_add(1,Ordering::SeqCst);
+                if self.quota.load(Ordering::SeqCst) {return Box::pin(async {Err(STORAGE_UNAVAILABLE.into())});}
+            }
+            self.inner.open(name,access)
+        }
+        fn list<'a>(&'a self,name:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {self.inner.list(name)}
+        fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,layer_core::package::store_io::Removal> {Box::pin(async move {
+            let mut removed=self.inner.remove(name).await?;removed.scope=self.scope.clone();Ok(removed)
+        })}
+    }
+    struct Opener(Arc<AtomicU64>,Arc<AtomicBool>,Arc<AtomicUsize>);
+    impl StoreOpener for Opener {
+        fn storage_facts<'a>(&'a self,path:&'a std::path::Path)->FileFuture<'a,StorageFacts> {Box::pin(async move {
+            Ok(StorageFacts {scope:path.parent().unwrap().display().to_string(),available_bytes:Some(self.0.load(Ordering::SeqCst)),epoch:StorageBudget::process().sample_epoch()})
+        })}
+        fn open<'a>(&'a self,path:&'a std::path::Path,_retirement:bool)->FileFuture<'a,Option<SessionStore>> {Box::pin(async move {
+            SessionStore::open_transport(path.into(),Arc::new(Disk {inner:NativeTransport::new(path.into()),space:self.0.clone(),quota:self.1.clone(),creates:self.2.clone(),scope:path.parent().unwrap().display().to_string()}),Arc::new(()),layer_core::tile_io::ReadCache::process()).await.map(Some)
+        })}
+    }
+    Arc::new(Opener(space,quota,creates))
+}
+
+#[test]
+fn refusal_epoch_preserves_sampling_cleanup_and_ignores_rollback_and_reservations() {
+    use layer_core::package::{store_io::FileFuture,session_store::{SessionStore,StoreOpener},storage_budget::{StorageBudget,StorageFacts,StorageAdmission,STORAGE_UNAVAILABLE}};
+    use std::{future::Future,sync::atomic::AtomicU64,task::{Context,Poll,Waker}};
+    struct Opening {inner:Arc<dyn StoreOpener>,scope:String,available:Mutex<Option<u64>>,full:AtomicBool,hold:AtomicBool,wake:Mutex<Option<Waker>>,rollback:Mutex<Option<DrawingStore>>}
+    impl StoreOpener for Opening {
+        fn storage_facts<'a>(&'a self,_path:&'a std::path::Path)->FileFuture<'a,StorageFacts> {Box::pin(async {
+            let epoch=StorageBudget::process().sample_epoch();
+            std::future::poll_fn(|cx| {
+                if !self.hold.load(Ordering::SeqCst) {return Poll::Ready(());}
+                *self.wake.lock().unwrap()=Some(cx.waker().clone());Poll::Pending
+            }).await;
+            Ok(StorageFacts {scope:self.scope.clone(),available_bytes:*self.available.lock().unwrap(),epoch})
+        })}
+        fn open<'a>(&'a self,path:&'a std::path::Path,retirement:bool)->FileFuture<'a,Option<SessionStore>> {Box::pin(async move {
+            if !self.full.load(Ordering::SeqCst) {return self.inner.open(path,retirement).await;}
+            let rollback=self.rollback.lock().unwrap().take();
+            if let Some(rollback)=rollback {rollback.with_retirement_store(async |store|store.retire().await).await?;}
+            Err(STORAGE_UNAVAILABLE.into())
+        })}
+    }
+    let mut fixture=Fixture::new();let space=Arc::new(AtomicU64::new(1<<30));let queued=fixture.queue.clone();
+    let opener=Arc::new(Opening {inner:quota_opener(space.clone(),Arc::new(AtomicBool::new(false)),Arc::new(AtomicUsize::new(0))),scope:fixture.root.display().to_string(),available:Mutex::new(Some(1<<30)),full:AtomicBool::new(false),hold:AtomicBool::new(false),wake:Default::default(),rollback:Default::default()});
+    fixture.stores=SessionStores::with_opener(fixture.root.clone(),opener.clone(),Arc::new(move |work|queued.lock().unwrap().push_back(work)),Arc::new(||{}),||0);
+    for id in 2..=6 {let (saved,stamp,_,_)=capture();let reply=fixture.stores.checkpoint(id,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());}
+    *opener.rollback.lock().unwrap()=Some(fixture.stores.bind(2,None).unwrap());fixture.stores.release_binding(2);
+    opener.full.store(true,Ordering::SeqCst);let (saved,stamp,_,_)=capture();
+    let fail=||{let reply=fixture.stores.checkpoint(1,saved.clone(),stamp.clone(),true).unwrap();fixture.run();assert!(matches!(reply.try_take(),Some(Err(error)) if error==STORAGE_UNAVAILABLE));};
+    fail();let binding=fixture.stores.bind(1,None).unwrap();
+    let sample=|now|{assert!(!fixture.stores.observe(1,stamp.clone(),now,false).unwrap());fixture.run();fixture.stores.0.state.lock().unwrap().drawings[binding.key()].storage_error.is_none()};
+    assert!(StorageBudget::process().removal(&opener.scope).0>0);assert!(!sample(2000),"rollback before refusal cannot grant another attempt");
+    *opener.available.lock().unwrap()=Some(2<<30);space.store(2<<30,Ordering::SeqCst);assert!(sample(4000));
+    opener.hold.store(true,Ordering::SeqCst);let reply=fixture.stores.checkpoint(1,saved.clone(),stamp.clone(),true).unwrap();
+    let mut running=Box::pin(fixture.pop().run_async());let mut context=Context::from_waker(Waker::noop());
+    assert!(running.as_mut().poll(&mut context).is_pending());
+    let retired=fixture.stores.retire(3).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+    opener.hold.store(false,Ordering::SeqCst);opener.wake.lock().unwrap().take().unwrap().wake();pollster::block_on(running);
+    assert!(reply.try_take().unwrap().is_err());assert!(sample(6000),"cleanup during the facts sample must survive");
+    fail();assert!(!sample(8000),"the same cleanup cannot grant another attempt");
+    let retired=fixture.stores.retire(4).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());assert!(sample(10000));
+    let reservation=match StorageBudget::process().admit(&opener.scope,64*1024*1024,0) {StorageAdmission::Granted(reservation)=>reservation,_=>panic!("expected reservation")};
+    fail();drop(reservation);assert!(!sample(12000),"reservation release must not look like raw capacity growth");
+    let mut now=14000;
+    for (id,available) in [(5,Some(0)),(6,None)] {
+        *opener.available.lock().unwrap()=available;assert!(!sample(now));now+=2000;
+        let retired=fixture.stores.retire(id).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+        assert!(sample(now),"cleanup is independent of zero or unknown estimates");now+=2000;
+        assert!(!matches!(StorageBudget::process().admit(&opener.scope,1,0),StorageAdmission::Granted(_)));
+        fail();assert!(!sample(now),"failed admission consumes cleanup evidence");now+=2000;
+    }
+    assert!(!binding.path().exists());
+}
+
+#[test]
+fn failed_store_open_samples_without_creating_until_capacity_or_cleanup_changes() {
+    use layer_core::package::{store_io::FileFuture,session_store::{SessionStore,StoreOpener},storage_budget::{StorageFacts,STORAGE_UNAVAILABLE}};
+    use std::sync::atomic::AtomicU64;
+    struct Opening {inner:Arc<dyn StoreOpener>,full:Arc<AtomicBool>,attempts:Arc<AtomicUsize>}
+    impl StoreOpener for Opening {
+        fn storage_facts<'a>(&'a self,path:&'a std::path::Path)->FileFuture<'a,StorageFacts> {self.inner.storage_facts(path)}
+        fn open<'a>(&'a self,path:&'a std::path::Path,retirement:bool)->FileFuture<'a,Option<SessionStore>> {
+            self.attempts.fetch_add(1,Ordering::SeqCst);
+            if self.full.load(Ordering::SeqCst) {Box::pin(async {Err(STORAGE_UNAVAILABLE.into())})}else {self.inner.open(path,retirement)}
+        }
+    }
+    let mut fixture=Fixture::new();let space=Arc::new(AtomicU64::new(1<<30));let full=Arc::new(AtomicBool::new(false));
+    let creates=Arc::new(AtomicUsize::new(0));let attempts=Arc::new(AtomicUsize::new(0));let queued=fixture.queue.clone();
+    fixture.stores=SessionStores::with_opener(fixture.root.clone(),Arc::new(Opening {inner:quota_opener(space.clone(),Arc::new(AtomicBool::new(false)),creates.clone()),full:full.clone(),attempts:attempts.clone()}),
+        Arc::new(move |work|queued.lock().unwrap().push_back(work)),Arc::new(||{}),||0);
+    for id in [2,3] {let (saved,stamp,_,_)=capture();let reply=fixture.stores.checkpoint(id,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());}
+    full.store(true,Ordering::SeqCst);let (saved,stamp,_,tile)=capture();
+    let write=||fixture.stores.checkpoint(1,saved.clone(),stamp.clone(),true).unwrap();
+    let first=write();fixture.run();assert!(matches!(first.try_take(),Some(Err(error)) if error==STORAGE_UNAVAILABLE));
+    let binding=fixture.stores.bind(1,None).unwrap();let initial=attempts.load(Ordering::SeqCst);let initial_creates=creates.load(Ordering::SeqCst);
+    for tick in 1..20 {assert!(!fixture.stores.observe(1,stamp.clone(),tick*2000,false).unwrap());fixture.run();}
+    assert_eq!(attempts.load(Ordering::SeqCst),initial);assert_eq!(creates.load(Ordering::SeqCst),initial_creates);assert!(!binding.path().exists());
+    space.store(2<<30,Ordering::SeqCst);assert!(!fixture.stores.observe(1,stamp.clone(),40000,false).unwrap());fixture.run();
+    let retry=write();fixture.run();assert!(retry.try_take().unwrap().is_err());assert_eq!(attempts.load(Ordering::SeqCst),initial+1);
+    for tick in 21..30 {assert!(!fixture.stores.observe(1,stamp.clone(),tick*2000,false).unwrap());fixture.run();}
+    assert_eq!(attempts.load(Ordering::SeqCst),initial+1);assert!(!binding.path().exists());
+    let retired=fixture.stores.retire(2).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+    assert!(!fixture.stores.observe(1,stamp.clone(),60000,false).unwrap());fixture.run();
+    let retry=write();fixture.run();assert!(retry.try_take().unwrap().is_err());assert_eq!(attempts.load(Ordering::SeqCst),initial+2);
+    full.store(false,Ordering::SeqCst);assert!(!fixture.stores.observe(1,stamp.clone(),62000,false).unwrap());fixture.run();
+    assert_eq!(attempts.load(Ordering::SeqCst),initial+2);assert_eq!(creates.load(Ordering::SeqCst),initial_creates);assert!(!binding.path().exists());
+    let retired=fixture.stores.retire(3).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+    assert!(!fixture.stores.observe(1,stamp.clone(),64000,false).unwrap());fixture.run();
+    let retry=write();fixture.run();assert!(matches!(retry.try_take(),Some(Ok(StoreResult::Checkpoint(_)))));
+    assert_eq!(attempts.load(Ordering::SeqCst),initial+3);assert_eq!(creates.load(Ordering::SeqCst),initial_creates+1);
+    assert!(fixture.stores.is_current(1,&stamp));assert_eq!(tile.resident_bytes(),0);
+}
+
+#[test]
+fn disk_refusal_preserves_each_write_kind_and_waits_for_changed_space_without_retrying_frames() {
+    use layer_core::package::storage_budget::STORAGE_UNAVAILABLE;
+    use std::sync::atomic::AtomicU64;
+    for kind in ["import","pressure","checkpoint","legacy-import","prepare-retirement"] {
+        let constant=kind=="legacy-import" || kind=="prepare-retirement";
+        let mut fixture=Fixture::new();let space=Arc::new(AtomicU64::new(1<<30));let quota=Arc::new(AtomicBool::new(false));let creates=Arc::new(AtomicUsize::new(0));let queued=fixture.queue.clone();let wakes=fixture.wakes.clone();
+        fixture.stores=SessionStores::with_opener(fixture.root.clone(),quota_opener(space.clone(),quota.clone(),creates.clone()),Arc::new(move |work|queued.lock().unwrap().push_back(work)),Arc::new(move ||{wakes.fetch_add(1,Ordering::SeqCst);}),||0);
+        let (saved,stamp,_,_)=capture();let committed_stamp=stamp.clone();let baseline=fixture.stores.checkpoint(1,saved,stamp,true).unwrap();fixture.run();assert!(baseline.try_take().unwrap().is_ok());
+        let binding=fixture.stores.bind(1,None).unwrap();let before=heads(binding.path());
+        if constant {for id in [2,3] {
+            let (saved,stamp,_,_)=capture();let reply=fixture.stores.checkpoint(id,saved,stamp,true).unwrap();fixture.run();assert!(reply.try_take().unwrap().is_ok());
+        }}
+        let legacy=if kind=="legacy-import" {
+            let generation=std::fs::read_dir(binding.path().join("generations")).unwrap().next().unwrap().unwrap().path();
+            let packed:serde_json::Value=serde_json::from_slice(&std::fs::read(&generation).unwrap()).unwrap();
+            let metadata=packed["session"].clone();let mut resources=BTreeMap::new();
+            for record in metadata["resources"].as_array().unwrap() {
+                let pack=std::fs::read(binding.path().join(record["location"]["pack"].as_str().unwrap())).unwrap();
+                let offset=record["location"]["offset"].as_str().unwrap().parse::<usize>().unwrap();
+                let length=record["bytes"].as_str().unwrap().parse::<usize>().unwrap();
+                let bytes:Arc<[u8]>=pack[offset..offset+length].into();
+                resources.insert(record["id"].as_str().unwrap().parse().unwrap(),layer_core::package::ImmutableBacking::new(Arc::new(bytes)).unwrap());
+            }
+            let logical=fixture.stores.import_legacy(binding.key(),Some(PortableId::random()),serde_json::to_vec(&metadata).unwrap().into(),resources.clone()).unwrap();fixture.run();
+            assert!(matches!(logical.try_take(),Some(Ok(StoreResult::Imported(Err(layer_core::package::session_store::ImportFailure::Changed))))));
+            Some((generation.file_stem().unwrap().to_str().unwrap().parse::<PortableId>().unwrap(),Arc::<[u8]>::from(serde_json::to_vec(&metadata).unwrap()),resources))
+        }else {None};
+        let (saved,stamp,retained,tile)=capture();let bytes=tile.resident_bytes();
+        if constant {quota.store(true,Ordering::SeqCst);}else {space.store(0,Ordering::SeqCst);}
+        let reply=match kind {"prepare-retirement"=>fixture.stores.prepare_retirement(binding.key()),"legacy-import"=>{let (expected,metadata,resources)=legacy.as_ref().unwrap();fixture.stores.import_legacy(binding.key(),Some(*expected),metadata.clone(),resources.clone())},"import"=>fixture.stores.import(1,saved.clone(),stamp.clone()),"pressure"=>fixture.stores.pressure(1,retained),_=>fixture.stores.checkpoint(1,saved.clone(),stamp.clone(),false)}.unwrap();
+        fixture.run();match reply.try_take().unwrap() {
+            Err(error)|Ok(StoreResult::Imported(Err(layer_core::package::session_store::ImportFailure::Io(error))))=>assert_eq!(error,STORAGE_UNAVAILABLE),_=>panic!("write must fail for unavailable storage"),
+        }
+        assert_eq!(heads(binding.path()),before);assert_eq!(tile.resident_bytes(),bytes);
+        assert_eq!(fixture.stores.checkpoint_due(1,stamp.clone(),true).unwrap_err(),STORAGE_UNAVAILABLE);
+        assert!(!fixture.stores.checkpoint_due(1,committed_stamp,true).unwrap());
+        assert!(fixture.queue.lock().unwrap().is_empty());
+        let attempts=creates.load(Ordering::SeqCst);
+        let wakes=fixture.wakes.load(Ordering::SeqCst);
+        for now in 0..1000 {assert!(!fixture.stores.observe(1,stamp.clone(),now,false).unwrap());}
+        assert!(fixture.queue.lock().unwrap().is_empty());assert_eq!(fixture.wakes.load(Ordering::SeqCst),wakes);
+        assert!(!fixture.stores.observe(1,stamp.clone(),2000,false).unwrap());fixture.run();
+        assert!(fixture.stores.0.state.lock().unwrap().drawings[binding.key()].storage_error.is_some());
+        assert_eq!(fixture.wakes.load(Ordering::SeqCst),wakes,"unchanged full-disk facts do not wake a frame");
+        if constant {
+            let retired=fixture.stores.retire(2).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+            assert!(!fixture.stores.observe(1,stamp.clone(),4000,false).unwrap());fixture.run();
+            assert!(fixture.stores.observe(1,stamp.clone(),4001,false).unwrap());
+            let retry=if let Some((expected,metadata,resources))=&legacy {fixture.stores.import_legacy(binding.key(),Some(*expected),metadata.clone(),resources.clone()).unwrap()}
+                else {fixture.stores.prepare_retirement(binding.key()).unwrap()};fixture.run();
+            assert!(matches!(retry.try_take(),Some(Err(error)) if error==STORAGE_UNAVAILABLE));
+            assert_eq!(creates.load(Ordering::SeqCst),attempts+1);assert_eq!(heads(binding.path()),before);
+            for tick in 3..20 {
+                assert!(!fixture.stores.observe(1,stamp.clone(),tick*2000,false).unwrap());fixture.run();
+                assert!(fixture.stores.0.state.lock().unwrap().drawings[binding.key()].storage_error.is_some());
+            }
+            assert_eq!(creates.load(Ordering::SeqCst),attempts+1,"the same removal permits only one write attempt");
+            quota.store(false,Ordering::SeqCst);
+            let retired=fixture.stores.retire(3).unwrap();fixture.run();assert!(retired.try_take().unwrap().is_ok());
+        }else {space.store(1<<30,Ordering::SeqCst);}
+        assert!(!fixture.stores.observe(1,stamp.clone(),40000,false).unwrap());fixture.run();
+        assert!(fixture.stores.observe(1,stamp.clone(),40001,false).unwrap());
+        let retry=if let Some((expected,metadata,resources))=legacy {fixture.stores.import_legacy(binding.key(),Some(expected),metadata,resources).unwrap()}
+            else if kind=="prepare-retirement" {fixture.stores.prepare_retirement(binding.key()).unwrap()}
+            else {fixture.stores.checkpoint(1,saved,stamp,true).unwrap()};
+        fixture.run();assert!(matches!(retry.try_take(),Some(Ok(StoreResult::Checkpoint(_)|StoreResult::Imported(Ok(_))|StoreResult::RetirementPrepared))));
+        if kind=="prepare-retirement" {assert_eq!(heads(binding.path()),before);assert!(binding.path().join(".retiring").is_file());}
+        else {if kind!="legacy-import" {assert_eq!(tile.resident_bytes(),0);}assert_ne!(heads(binding.path()),before);}
     }
 }

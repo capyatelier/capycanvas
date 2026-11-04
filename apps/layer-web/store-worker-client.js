@@ -12,7 +12,7 @@ export function createStoreWorker(wake) {
   worker.onmessage=({data})=>{
     const job=pending.get(data.id);if(!job)return;
     pending.delete(data.id);
-    if(data.error)job.reject(Error(data.error));else job.resolve(data.result);
+    if(data.error!==undefined){const error=Error(data.error);if(data.errorName)error.name=data.errorName;job.reject(error);}else job.resolve(data.result);
     if(job.operation==='read_at')wake();
   };
   function send(request) {

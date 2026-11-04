@@ -195,10 +195,6 @@ documents-prints-at = Se imprime a { $width } × { $height } { $unit }
 documents-too-large-side = Demasiado grande para este dispositivo: los lados llegan como máximo a { $maximum } px
 documents-too-large-memory = Demasiado grande para la memoria disponible en este dispositivo
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · hasta { $layers ->
-    [one] { $count } capa
-   *[other] { $count } capas
-}
 documents-layer-memory = { $size } por capa
 documents-layer-memory-available = { $size } por capa · { $available } disponibles
 documents-no-paper = Sin papel

@@ -9,6 +9,12 @@ pub(crate) const CACHE_BYTES: u64 = 608 * MIB;
 pub(crate) const OBJECT_CACHE_BYTES: u64 = 128 * MIB;
 const SOURCE_POOL_BYTES: u64 = 1024 * MIB;
 const DECODED_SAMPLE_BYTES: u64 = 512 * MIB;
+pub fn new_drawing_working_bytes(viewport:[u32;2],unified:bool)->u64 {
+    let extent=viewport.map(|side|side.max(1).saturating_add(2*PAGE_SIZE));
+    let display=display_mips::Plan::new(extent).map(|plan|plan.pixel_bytes_through(display_mips::MAX_LEVEL)).unwrap_or(u64::MAX);
+    let ram=SOURCE_WORKING_BYTES+layer_core::package::MAX_RANGE_BYTES as u64;
+    ram.saturating_add(if unified {(3*WORKING_BYTES).saturating_add(display)}else {0})
+}
 pub(crate) const RASTER_BUFFER_BYTES: u64 = 64 * MIB;
 
 #[cfg(test)]

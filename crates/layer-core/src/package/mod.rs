@@ -32,5 +32,6 @@ pub mod transfer;
 
 pub mod session;
 pub mod store_io;
+pub mod storage_budget;
 
 pub mod session_store;

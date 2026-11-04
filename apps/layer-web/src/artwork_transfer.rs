@@ -4,6 +4,31 @@ use std::sync::atomic::AtomicBool;
 use wasm_bindgen_futures::JsFuture;
 
 const BLOCK:usize=4*1024*1024;
+type CopyAdmission=std::rc::Rc<std::cell::RefCell<Option<layer_core::MemoryReservation>>>;
+#[wasm_bindgen]
+pub struct WebTransferLease {admission:CopyAdmission}
+#[wasm_bindgen]
+impl WebTransferLease {pub fn release(&self) {self.admission.borrow_mut().take();}}
+pub(super) struct PackedArtwork {value:JsValue,admission:Option<CopyAdmission>}
+impl std::ops::Deref for PackedArtwork {type Target=JsValue;fn deref(&self)->&JsValue {&self.value}}
+impl Drop for PackedArtwork {fn drop(&mut self) {if let Some(admission)=&self.admission {admission.borrow_mut().take();}}}
+impl PackedArtwork {
+    pub(super) fn empty()->Self {Self {value:js_sys::Object::new().into(),admission:None}}
+    pub(super) fn push_buffer(&mut self,bytes:&[u8])->Result<u32,JsValue> {
+        let buffers=js_sys::Reflect::get(&self.value,&js("buffers"))?.dyn_into::<js_sys::Array>()?;
+        if let Some(admission)=&self.admission {
+            let mut held=admission.borrow_mut();let held=held.as_mut().ok_or_else(||js("Artwork transfer was already posted"))?;
+            let required=held.reserved_bytes().checked_add(bytes.len() as u64).ok_or_else(||js(layer_core::MEMORY_BUDGET_EXCEEDED))?;
+            if !held.resize(required) {return Err(js(layer_core::MEMORY_BUDGET_EXCEEDED));}
+        }else {
+            let held=layer_core::MemoryBudget::process().admit_import(bytes.len() as u64).ok_or_else(||js(layer_core::MEMORY_BUDGET_EXCEEDED))?;
+            let admission=std::rc::Rc::new(std::cell::RefCell::new(Some(held)));self.admission=Some(admission.clone());
+            js_sys::Reflect::set(&buffers,&js("admission"),&JsValue::from(WebTransferLease {admission}))?;
+        }
+        let index=buffers.length();buffers.push(&js_sys::Uint8Array::from(bytes));Ok(index)
+    }
+    pub(super) fn into_js(mut self)->JsValue {self.admission=None;self.value.clone()}
+}
 pub(super) fn limits(dimension:u32)->ProjectLimits {seed_memory_budget();ProjectLimits {dimension,tiles:8192,..ProjectLimits::for_import()}}
 
 #[derive(Serialize,Deserialize)]
@@ -21,27 +46,33 @@ pub(super) async fn wait_backing_cancellable(artwork:&Artwork,control:Option<&la
     }Ok(())
 }
 
-pub(super) async fn pack(artwork:Artwork)->Result<JsValue,JsValue>{pack_scene(artwork,None).await}
-pub(super) async fn pack_scene(artwork:Artwork,selection:Option<layer_core::Selection>)->Result<JsValue,JsValue>{
+pub(super) async fn pack(artwork:Artwork)->Result<PackedArtwork,JsValue>{pack_scene(artwork,None).await}
+pub(super) async fn pack_scene(artwork:Artwork,selection:Option<layer_core::Selection>)->Result<PackedArtwork,JsValue>{
     let checkpoint=CaptureCheckpoint {document:artwork.id,owner:0,session_generation:0,artwork_generation:0,working_generation:0,edit_checkpoint:0};
     pack_with_selection(artwork.capture(checkpoint).map_err(js)?,selection).await
 }
-async fn pack_capture(capture:ArtworkCapture)->Result<JsValue,JsValue>{pack_with_selection(capture,None).await}
-async fn pack_with_selection(capture:ArtworkCapture,selection:Option<layer_core::Selection>)->Result<JsValue,JsValue>{
+async fn pack_capture(capture:ArtworkCapture)->Result<PackedArtwork,JsValue>{pack_with_selection(capture,None).await}
+async fn pack_with_selection(capture:ArtworkCapture,selection:Option<layer_core::Selection>)->Result<PackedArtwork,JsValue>{
+    seed_memory_budget();
     wait_backing(&capture.artwork).await?;
     let transfer=PreparedTransfer::capture_with_selection(&capture,&selection,&AtomicBool::new(false)).map_err(js)?;
-    let buffers=js_sys::Array::new();let mut chunks=Vec::new();
+    let chunks=(0..transfer.payload_count()).map(|index|usize::try_from(transfer.payload_len(index).map_err(js)?).map(|length|length.div_ceil(BLOCK)).map_err(js)).collect::<Result<Vec<_>,JsValue>>()?;
+    let metadata=serde_json::to_string(&Envelope{transfer:transfer.descriptor().clone(),chunks}).map_err(js)?;
+    let overhead=(metadata.len() as u64).checked_mul(3).and_then(|bytes|bytes.checked_add(BLOCK as u64)).ok_or_else(||js(layer_core::MEMORY_BUDGET_EXCEEDED))?;
+    let reservation=transfer.reserve_copy(&layer_core::MemoryBudget::process(),overhead).map_err(js)?;
+    let admission=std::rc::Rc::new(std::cell::RefCell::new(Some(reservation)));
+    let packed=PackedArtwork {value:js_sys::Object::new().into(),admission:Some(admission.clone())};
+    let buffers=js_sys::Array::new();
     for index in 0..transfer.payload_count(){
-        let len=usize::try_from(transfer.payload_len(index).map_err(js)?).map_err(js)?;let mut count=0;
+        let len=usize::try_from(transfer.payload_len(index).map_err(js)?).map_err(js)?;
         for offset in (0..len).step_by(BLOCK){
             let bytes=transfer.read_chunk_async(index,offset as u64,(len-offset).min(BLOCK)).await.map_err(js)?;
-            buffers.push(&js_sys::Uint8Array::from(bytes.as_slice()));count+=1;
+            buffers.push(&js_sys::Uint8Array::from(bytes.as_slice()));
             documents::yield_browser().await?;
         }
-        chunks.push(count);
     }
-    let metadata=serde_json::to_string(&Envelope{transfer:transfer.descriptor().clone(),chunks}).map_err(js)?;
-    let result=js_sys::Object::new();js_sys::Reflect::set(&result,&js("metadata"),&js(metadata))?;js_sys::Reflect::set(&result,&js("buffers"),&buffers)?;Ok(result.into())
+    js_sys::Reflect::set(&buffers,&js("admission"),&JsValue::from(WebTransferLease {admission}))?;
+    js_sys::Reflect::set(&packed,&js("metadata"),&js(metadata))?;js_sys::Reflect::set(&packed,&js("buffers"),&buffers)?;Ok(packed)
 }
 pub(super) async fn unpack(metadata:&str,buffers:js_sys::Array)->Result<Artwork,JsValue>{Ok(unpack_capture(metadata,buffers).await?.artwork.as_ref().clone())}
 pub(super) async fn unpack_scene(metadata:&str,buffers:js_sys::Array)->Result<(Artwork,Option<layer_core::Selection>),JsValue>{let(capture,selection)=unpack_with_selection(metadata,buffers).await?;Ok((capture.artwork.as_ref().clone(),selection))}
@@ -129,7 +160,7 @@ pub async fn raster_worker_read(options:&str,file:web_sys::Blob)->Result<JsValue
                 js_sys::Reflect::set(&wire,&js("fallback"),&serialize(&view.presentation())?)?;
                 if let Some(preview)=view.preview(){js_sys::Reflect::set(&wire,&js("preview"),&preview_value(preview)?)?;}
             }
-            Ok(wire)
+            Ok(wire.into_js())
         }
         layer_ui::ImportOutcome::Package(outcome)=>package_value(outcome),
     }

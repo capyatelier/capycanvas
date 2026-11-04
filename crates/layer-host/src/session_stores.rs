@@ -13,7 +13,7 @@ pub type StoreExecutor=Arc<dyn Fn(StoreWork)+Send+Sync>;
 #[cfg(target_arch="wasm32")]
 pub type StoreExecutor=Arc<dyn Fn(StoreWork)>;
 
-pub enum StoreResult {Checkpoint(PortableId),Imported(Result<PortableId,layer_core::package::session_store::ImportFailure>),Durable(usize),Restored {session:Option<layer_ui::SessionRestore>,recovered_previous:bool},RetirementPrepared,Retired,Superseded}
+pub enum StoreResult {Checkpoint(PortableId),Imported(Result<PortableId,layer_core::package::session_store::ImportFailure>),Durable(usize),StorageReady(bool),Restored {session:Option<layer_ui::SessionRestore>,recovered_previous:bool},RetirementPrepared,Retired,Superseded}
 #[derive(Default)]
 struct ReplyState {result:Option<Result<StoreResult,String>>,waker:Option<Waker>,completion:Option<StoreCompletion>}
 #[derive(Clone,Default)]
@@ -44,7 +44,7 @@ impl std::future::Future for StoreReply {
     }
 }
 pub type CapturePreparation=Box<dyn FnOnce(&mut SessionCapture)->Result<(),String>+Send>;
-enum Work {Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Import {expected:Option<PortableId>,metadata:Arc<[u8]>,resources:BTreeMap<PortableId,layer_core::package::ImmutableBacking>},Restore(ProjectLimits),PrepareRetirement,Retire}
+enum Work {Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Import {expected:Option<PortableId>,metadata:Arc<[u8]>,resources:BTreeMap<PortableId,layer_core::package::ImmutableBacking>},ImportTiles {tiles:RetainedTiles,_reservation:Option<layer_core::MemoryReservation>},SampleStorage,Restore(ProjectLimits),PrepareRetirement,Retire}
 struct Request {work:Work,replies:Vec<StoreReply>}
 impl Request {
     fn finish(self,result:Result<StoreResult,String>) {
@@ -52,7 +52,7 @@ impl Request {
         for (index,reply) in self.replies.into_iter().enumerate() {
             let value=if index+1==count {result.take().unwrap()}else {match result.as_ref().unwrap() {
                 Ok(StoreResult::Imported(result))=>Ok(StoreResult::Imported(result.clone())),Ok(StoreResult::Checkpoint(id))=>Ok(StoreResult::Checkpoint(*id)),Ok(StoreResult::Durable(bytes))=>Ok(StoreResult::Durable(*bytes)),
-                Ok(StoreResult::RetirementPrepared)=>Ok(StoreResult::RetirementPrepared),Ok(StoreResult::Retired)=>Ok(StoreResult::Retired),Ok(StoreResult::Superseded)=>Ok(StoreResult::Superseded),Err(error)=>Err(error.clone()),
+                Ok(StoreResult::StorageReady(ready))=>Ok(StoreResult::StorageReady(*ready)),Ok(StoreResult::RetirementPrepared)=>Ok(StoreResult::RetirementPrepared),Ok(StoreResult::Retired)=>Ok(StoreResult::Retired),Ok(StoreResult::Superseded)=>Ok(StoreResult::Superseded),Err(error)=>Err(error.clone()),
                 Ok(StoreResult::Restored {..})=>unreachable!(),
             }};reply.finish(value);
         }
@@ -79,7 +79,7 @@ impl Pending {
                 }
                 self.pressure=Some(request);
             },
-            Work::Restore(_)|Work::Import {..}=>self.restores.push_back(request),
+            Work::ImportTiles {..}|Work::SampleStorage|Work::Restore(_)|Work::Import {..}=>self.restores.push_back(request),
             Work::PrepareRetirement=>self.preparations.push_back(request),
             Work::Retire=>{
                 if let Some(previous)=self.retire.take() {request.replies.extend(previous.replies);}
@@ -89,9 +89,17 @@ impl Pending {
         }Vec::new()
     }
 }
+#[derive(Clone)]
+struct StorageRefusal {facts:Option<layer_core::package::storage_budget::StorageFacts>,epoch:u64}
+impl StorageRefusal {
+    fn allows(&self,facts:&layer_core::package::storage_budget::StorageFacts)->bool {
+        layer_core::package::storage_budget::StorageBudget::process().removal(&facts.scope).1>self.epoch
+            || facts.available_bytes.is_some_and(|available|available>0 && self.facts.as_ref().map_or(facts.epoch>self.epoch,|old|facts.epoch>old.epoch && available>old.available_bytes.unwrap_or(0)))
+    }
+}
 struct Drawing {
     binding:DrawingStore,observed:Option<SessionStamp>,committed:Option<SessionStamp>,committed_at:Option<u64>,due:Option<u64>,
-    sequence:u64,running:bool,inflight:Option<SessionStamp>,retiring:bool,pending:Pending,
+    storage_error:Option<StorageRefusal>,next_storage_sample:u64,sequence:u64,running:bool,inflight:Option<SessionStamp>,retiring:bool,pending:Pending,
 }
 struct State {drawings:BTreeMap<String,Drawing>,aliases:BTreeMap<u64,String>}
 struct Inner {
@@ -123,6 +131,39 @@ impl SessionStores {
         state.drawings.entry(key.clone()).or_insert_with(||Drawing::new(binding));
         state.aliases.insert(id,key.clone());Ok(state.drawings[&key].binding.clone())
     }
+    pub fn attach_session<R:layer_render::CanvasRenderer>(&self,id:u64,session:&layer_ui::UiSession<R>,pressure:layer_ui::StoragePressure)->Result<bool,String> {
+        if session.engine().document().memory().storage().is_some_and(|binding|binding.path().parent()!=Some(self.0.root.as_path())) {return Ok(false);}
+        self.install_storage(id,session)?;
+        self.watch_pressure(pressure);Ok(true)
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    pub fn attach_window<P:crate::window::Parked>(&self,window:&crate::window::DocumentWindow<P>,host:&crate::NativeHost)->Result<bool,String> {
+        if !self.attach_session(window.documents.selected(),&host.session,window.documents.pressure_source())? {return Ok(false);}
+        for &id in window.documents.order() {
+            if id==window.documents.selected() {continue;}
+            let session=window.session(host,id)?;
+            if session.engine().document().memory().storage().is_none_or(|binding|binding.path().parent()==Some(self.0.root.as_path())) {self.install_storage(id,session)?;}
+        }
+        Ok(true)
+    }
+    pub fn install_storage<R:layer_render::CanvasRenderer>(&self,id:u64,session:&layer_ui::UiSession<R>)->Result<DrawingStore,String> {
+        let binding=match session.engine().document().memory().storage().or_else(||session.asset_writer().map(|writer|writer.binding())) {Some(binding)=>binding,None=>self.bind(id,None)?};
+        self.adopt_binding(id,binding.clone())?;
+        session.bind_asset_writer(self.asset_writer_bound(binding.clone()))?;
+        Ok(binding)
+    }
+    pub fn asset_writer(&self,id:u64)->Result<layer_ui::AssetWriter,String> {Ok(self.asset_writer_bound(self.bind(id,None)?))}
+    fn asset_writer_bound(&self,binding:DrawingStore)->layer_ui::AssetWriter {
+        let stores=self.clone();let target=binding.clone();let create=self.clone();
+        layer_ui::AssetWriter::new(binding,Arc::new(move |tiles,memory| {
+            let reply=stores.request_binding(target.key(),Some(target.clone()),Work::ImportTiles {tiles,_reservation:memory})?;
+            Ok(Box::pin(async move {reply.await?;Ok(())}))
+        }),Arc::new(move |binding| {
+            let binding=match binding {Some(binding)=>binding,None=>DrawingStore::with_opener(&create.0.root,None,create.0.opener.clone())?};
+            if binding.path().parent()!=Some(create.0.root.as_path()) {return Err("Drawing store belongs to another session root".into());}
+            Ok(create.asset_writer_bound(binding))
+        }))
+    }
     pub fn remap(&self,mapping:&[(u64,u64)]) {
         let mut state=self.0.state.lock().unwrap();
         let mapped=mapping.iter().filter_map(|&(old,new)|state.aliases.remove(&old).map(|key|(new,key))).collect::<Vec<_>>();
@@ -142,6 +183,11 @@ impl SessionStores {
         self.bind(id,None)?;
         let mut state=self.0.state.lock().unwrap();let key=state.aliases[&id].clone();let drawing=state.drawings.get_mut(&key).unwrap();
         drawing.observed=Some(stamp);
+        if drawing.storage_error.is_some() {
+            let sample=!drawing.running && now_ms>=drawing.next_storage_sample;
+            if sample {drawing.next_storage_sample=now_ms.saturating_add(Self::checkpoint_interval_ms());}
+            drop(state);if sample {self.request_key(&key,Work::SampleStorage)?;}return Ok(false);
+        }
         if drawing.observed.as_ref().zip(drawing.committed.as_ref()).is_some_and(|(a,b)|same_checkpoint(a,b)) {drawing.due=None;return Ok(false);}
         if immediate {drawing.due=Some(now_ms);}
         let deadline=drawing.committed_at.unwrap_or(now_ms).saturating_add(Self::checkpoint_interval_ms());
@@ -155,7 +201,9 @@ impl SessionStores {
         if current {self.observe(id,stamp,(self.0.clock)(),false)?;return Ok(false);}
         let urgent=force || first;
         let ready=self.observe(id,stamp,(self.0.clock)(),urgent)?;
-        Ok(urgent || ready)
+        let state=self.0.state.lock().unwrap();let drawing=&state.drawings[&state.aliases[&id]];
+        if force && drawing.storage_error.is_some() {return Err(layer_core::package::storage_budget::STORAGE_UNAVAILABLE.into());}
+        Ok(drawing.storage_error.is_none() && (urgent || ready))
     }
     pub fn is_current(&self,id:u64,stamp:&SessionStamp)->bool {
         let state=self.0.state.lock().unwrap();state.aliases.get(&id).and_then(|key|state.drawings.get(key)).is_some_and(|drawing|drawing.current(stamp))
@@ -284,7 +332,7 @@ fn same_checkpoint(a:&SessionStamp,b:&SessionStamp)->bool {
     current==*b
 }
 impl Drawing {
-    fn new(binding:DrawingStore)->Self {Self {binding,observed:None,committed:None,committed_at:None,due:None,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()}}
+    fn new(binding:DrawingStore)->Self {Self {binding,observed:None,committed:None,committed_at:None,due:None,storage_error:None,next_storage_sample:0,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()}}
     fn current(&self,stamp:&SessionStamp)->bool {
         self.committed.as_ref().is_some_and(|current|same_checkpoint(current,stamp)) && self.inflight.as_ref().is_none_or(|current|same_checkpoint(current,stamp))
             && self.pending.checkpoint.as_ref().is_none_or(|request|matches!(&request.work,Work::Checkpoint {stamp:current,..} if same_checkpoint(current,stamp)))
@@ -312,8 +360,11 @@ impl DrawingWork {
                 .is_some_and(|drawing|drawing.observed.as_ref().is_none_or(|observed|same_checkpoint(observed,stamp))),
             _=>true,
         };
+        let blocked={let state=self.stores.0.state.lock().unwrap();state.drawings.get(&self.key).and_then(|drawing|drawing.storage_error.clone())};
         let cancelled=AtomicBool::new(false);
+        let rejected=blocked.is_some() && matches!(request.work,Work::Checkpoint {..}|Work::Pressure(_)|Work::Import {..}|Work::ImportTiles {..});
         let work=async {
+            if rejected {return Err(layer_core::package::storage_budget::STORAGE_UNAVAILABLE.into());}
             if let Work::Checkpoint {capture,prepare,..}=&mut request.work && let Some(prepare)=prepare.take() {prepare(capture)?;}
             let operation=async |store:&mut layer_core::package::session_store::SessionStore|match &request.work {
                 Work::Checkpoint {capture,..}=>capture.checkpoint(store,&cancelled).await.map(StoreResult::Checkpoint),
@@ -322,10 +373,16 @@ impl DrawingWork {
                     for tiles in tiles {bytes=bytes.saturating_add(store.make_durable(tiles,&cancelled).await?);}
                     Ok(StoreResult::Durable(bytes))
                 },
-                Work::Import {expected,metadata,resources}=>Ok(StoreResult::Imported(store.import_generation(*expected,metadata,resources.clone(),&cancelled).await)),
+                Work::Import {expected,metadata,resources}=>match store.import_generation(*expected,metadata,resources.clone(),&cancelled).await {
+                    Err(layer_core::package::session_store::ImportFailure::Io(error))=>Err(error),result=>Ok(StoreResult::Imported(result)),
+                },
+                Work::ImportTiles {tiles,..}=>store.make_durable(tiles,&cancelled).await.map(StoreResult::Durable),
+                Work::SampleStorage=>unreachable!(),
                 Work::Restore(limits)=>{
                     let weak=Arc::downgrade(&self.stores.0);let key=self.key.clone();
-                    let session=store.load(*limits,&cancelled).await?.map(layer_ui::SessionRestore::from_core).transpose()?.map(|restore|restore.on_adopted(Box::new(move |stamp:SessionStamp| {
+                    let restored=store.load(*limits,&cancelled).await?;
+                    if let Some(restored)=&restored {restored.editor.document().memory().bind_storage(self.binding.clone())?;}
+                    let session=restored.map(layer_ui::SessionRestore::from_core).transpose()?.map(|restore|restore.on_adopted(Box::new(move |stamp:SessionStamp| {
                         if let Some(inner)=weak.upgrade() && let Some(drawing)=inner.state.lock().unwrap().drawings.get_mut(&key) {
                             drawing.observed=Some(stamp.clone());drawing.committed=Some(stamp);drawing.committed_at=Some((inner.clock)());drawing.due=None;
                         }
@@ -335,7 +392,11 @@ impl DrawingWork {
                 Work::PrepareRetirement=>store.prepare_retirement().await.map(|()|StoreResult::RetirementPrepared),
                 Work::Retire=>store.retire().await.map(|()|StoreResult::Retired),
             };
-            if matches!(request.work,Work::PrepareRetirement|Work::Retire) {
+            if matches!(request.work,Work::SampleStorage) {
+                let facts=self.binding.storage_facts().await?;
+                Ok(StoreResult::StorageReady(blocked.as_ref().map_or_else(||facts.available_bytes.is_some_and(|available|available>0),|refusal|refusal.allows(&facts))))
+            }
+            else if matches!(request.work,Work::PrepareRetirement|Work::Retire) {
                 let missing=if matches!(request.work,Work::PrepareRetirement) {StoreResult::RetirementPrepared}else {StoreResult::Retired};
                 Ok(self.binding.with_retirement_store(operation).await?.unwrap_or(missing))
             }else {self.binding.with_store(operation).await}
@@ -344,14 +405,31 @@ impl DrawingWork {
         let result=if !current {drop(work);Ok(StoreResult::Superseded)}else {std::panic::AssertUnwindSafe(work).catch_unwind().await.unwrap_or_else(|_|Err("Drawing storage worker failed".into()))};
         #[cfg(target_arch="wasm32")]
         let result=if !current {drop(work);Ok(StoreResult::Superseded)}else {work.await};
+        let refusal=if !rejected && !matches!(request.work,Work::SampleStorage)
+            && result.as_ref().is_err_and(|error|error==layer_core::package::storage_budget::STORAGE_UNAVAILABLE) {
+            let epoch=layer_core::package::storage_budget::StorageBudget::process().event_epoch();
+            Some(StorageRefusal {facts:self.binding.storage_facts().await.ok(),epoch})
+        }else {None};
         let committed=match (&request.work,&result) {(Work::Checkpoint {stamp,..},Ok(StoreResult::Checkpoint(_)))=>Some(stamp.clone()),_=>None};
         let written=committed.is_some();
+        {
+            let mut state=self.stores.0.state.lock().unwrap();
+            if let Some(drawing)=state.drawings.get_mut(&self.key) {
+                match &result {
+                    Err(_) if refusal.is_some()=>{
+                        drawing.storage_error=refusal;drawing.next_storage_sample=(self.stores.0.clock)().saturating_add(SessionStores::checkpoint_interval_ms());
+                    },
+                    Ok(StoreResult::StorageReady(true))=>{drawing.storage_error=None;},_=>{},
+                }
+            }
+        }
+        let storage_ready=matches!(result,Ok(StoreResult::StorageReady(true)));
         self.complete(committed,matches!(result,Ok(StoreResult::Retired)));
-        if written {
+        if written || storage_ready {
             let watched=self.stores.0.pressure.lock().unwrap().clone();
             if let Some((source,generation))=watched && source.is_current(generation) && source.error().is_some() {source.storage_completed(Ok(()));}
         }
-        request.finish(result);self.stores.wake();
+        let wake=!matches!(result,Ok(StoreResult::StorageReady(false)));request.finish(result);if wake {self.stores.wake();}
     }
     fn complete(&self,committed:Option<SessionStamp>,retired:bool) {
         let mut state=self.stores.0.state.lock().unwrap();

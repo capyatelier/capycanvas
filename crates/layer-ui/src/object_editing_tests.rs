@@ -19,7 +19,7 @@ fn imported_placement_keeps_its_reservation_until_apply_or_cancel() {
         let mut s=UiSession::new(Recorder {tiled_sources:true,..Default::default()},document,[1000,1000],Platform::Gtk).unwrap();
         let reservation=budget.admit_import(1024*1024).unwrap();
         let source=std::sync::Arc::unwrap_or_clone(rgba8_source([32;2],|x,y|[x as u8,y as u8,7,255]));
-        let prepared=crate::PreparedImages::from_parts(vec![("Photo".into(),source)],Some(reservation.clone()),budget.clone());
+        let prepared=crate::PreparedImages::from_parts(vec![("Photo".into(),source)],Some(reservation.clone()),budget.clone(),None);
         s.place_image_objects(prepared,None,None,true,false).unwrap();
         assert!(reservation.active());assert!(budget.snapshot().reserved_bytes>0);
         invoke(&mut s,if apply {CommandId::ApplyTransform}else{CommandId::CancelTransform});

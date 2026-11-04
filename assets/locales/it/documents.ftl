@@ -192,10 +192,6 @@ documents-prints-at = Formato di stampa { $width } × { $height } { $unit }
 documents-too-large-side = Troppo grande per questo dispositivo: i lati arrivano al massimo a { $maximum } px
 documents-too-large-memory = Troppo grande per la memoria disponibile su questo dispositivo
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · fino a { $layers ->
-    [one] { $count } livello
-   *[other] { $count } livelli
-}
 documents-layer-memory = { $size } per livello
 documents-layer-memory-available = { $size } per livello · { $available } disponibili
 documents-no-paper = Nessuna carta

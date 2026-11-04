@@ -212,7 +212,7 @@ impl Task {
                             session.state().settings.photo_open,
                             session.engine().document().composition().color.space,
                             layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes())),
-                        ),
+                        ).with_writer(session.image_import_writer()?),
                         context: session.image_placement_context(None, None)?,
                         device: session
                             .engine()
@@ -569,6 +569,7 @@ impl Task {
                     if task.mode != Some(layer_ui::PasteMode::Into) {
                         clip.convert_layers(task.color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || self.control.is_cancelled())?;
                     }
+                    pollster::block_on(task.images.writer().ok_or("Drawing storage is not ready")?.store_clip(&clip,&self.localization))?;
                     task.clip = Some(clip); self.stage = "commit"; self.describe()
                 }
                 Action::ReadImages { paths, alternatives } => {
@@ -634,8 +635,10 @@ impl Task {
         let Payload::Import(task) = &mut self.payload else {
             return Err("No image batch".into());
         };
+        pollster::block_on(task.images.write_prepared())?;
         while let Some(path) = task.paths.pop_front() {
             let result = (|| {
+            pollster::block_on(task.images.prepare_decode())?;
             let path = std::path::Path::new(&path);
             let file = std::fs::File::open(path)
                 .map_err(|e| crate::document_io::io_error("read image", e))?;
@@ -652,7 +655,8 @@ impl Task {
                 name,
                 self.control.cancellation_flag(),
                 |mut input, limits, cancelled| crate::photo_reader::read(&mut input, limits, cancelled),
-            )
+            )?;
+            pollster::block_on(task.images.write_prepared())
             })();
             if let Err(error) = result {
                 if !self.control.is_cancelled()
@@ -667,6 +671,7 @@ impl Task {
                 return self.describe();
             }
         }
+        pollster::block_on(task.images.finish_storage())?;
         self.stage = "commit";
         self.describe()
     }

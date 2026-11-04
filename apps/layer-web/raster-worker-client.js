@@ -1,3 +1,13 @@
+function takeTransferAdmission(buffers) {
+  const admission=buffers?.admission;
+  if(admission)delete buffers.admission;
+  return admission;
+}
+export function releaseTransferred(buffers) {takeTransferAdmission(buffers)?.release();}
+export function postTransferred(buffers,post) {
+  const admission=takeTransferAdmission(buffers);
+  try{return post();}finally{admission?.release();}
+}
 export function createRasterWorker(module,reportGpu=()=>{}) {
   const owners = new Map();
   let next = 0, idleAnalysis;
@@ -45,7 +55,7 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       const poll=cancelled?setInterval(()=>{if(cancelled())state.fail(new DOMException("Image operation cancelled","AbortError"));},50):null;
       const finish=callback=>value=>{clearInterval(poll);callback(value);};
       state.pending.set(id,{resolve:finish(resolve),reject:finish(reject),timer,operation:request.operation});
-      try{state.worker.postMessage({id,request,module:state.module},(request.buffers||[]).map(bytes=>bytes.buffer));state.module=undefined;}
+      try{postTransferred(request.buffers,()=>state.worker.postMessage({id,request,module:state.module},(request.buffers||[]).map(bytes=>bytes.buffer)));state.module=undefined;}
       catch(error){clearInterval(poll);clearTimeout(timer);state.pending.delete(id);reject(error);}
     });
   }

@@ -90,6 +90,7 @@ use deferred::{Compilation, CompileMode, Deferred};
 mod pipeline_device;
 mod renderer_factory;
 mod memory;
+pub use memory::new_drawing_working_bytes as new_drawing_memory_requirement;
 pub use renderer_factory::RendererFactory;
 use pipeline_device::PipelineDevice;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -3801,6 +3802,9 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn memory_headroom(&self) -> Option<u64> {
         Some(self.factory.memory_budget().import_headroom_bytes())
+    }
+    fn new_drawing_working_bytes(&self, viewport:[u32;2])->Option<u64> {
+        Some(memory::new_drawing_working_bytes(viewport,self.factory.unified_memory()))
     }
     fn paint_ready(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.startup.as_ref().is_none_or(|startup| startup.brush_ready) && !self.startup_needs_update(document, brush, transform)

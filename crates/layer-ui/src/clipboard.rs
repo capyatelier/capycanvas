@@ -102,7 +102,7 @@ pub fn clipboard_color_changes(from: DocumentColor, to: DocumentColor) -> impl I
 }
 
 pub fn clipboard_document(sources: impl Into<crate::PreparedImages>, policy: PhotoOpenPolicy, localization: &Localizer) -> Result<layer_core::Document, String> {
-    let (sources, reservation, budget) = sources.into().into_parts();
+    let (sources, reservation, budget, writer) = sources.into().into_parts();
     let (name, first) = sources.first().ok_or("Copy an image to paste")?;
     let extent = sources.iter().fold([0, 0], |extent, (_, source)| std::array::from_fn(|i| extent[i].max(source.extent[i])));
     let depth = sources.iter().map(|(_, source)| policy.editing_depth(source.interpretation.depth)).max_by_key(|depth| (depth.is_float(), depth.bits())).unwrap();
@@ -118,6 +118,7 @@ pub fn clipboard_document(sources: impl Into<crate::PreparedImages>, policy: Pho
     document.validate(Default::default())?;
     layer_color::validate_document_color(&document)?;
     let mut document = document.with_memory(layer_core::DocumentMemory::new(budget, reservation));
+    if let Some(writer)=writer {document.memory().bind_storage(writer.binding())?;}
     document.reserve_import()?;
     Ok(document)
 }
@@ -808,7 +809,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         mode: PasteMode,
         context: &ImagePlacementContext,
     ) -> Result<(), String> {
-        let (sources, reservation, budget) = sources.into().into_parts();
+        let (sources, reservation, budget,writer) = sources.into().into_parts();
         self.validate_image_placement(context)?;
         self.require_painting()?;
         refused(self.paste_refusal())?;
@@ -830,7 +831,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             PasteMode::NewImage => Err("Open the clipboard as a new drawing".into()),
             PasteMode::Paste | PasteMode::AtView | PasteMode::AtCursor => {
                 let [x, y] = self.pending_paste_center(mode).map(|v| v as f32);
-                self.place_image_objects(crate::PreparedImages::from_parts(sources, reservation, budget), Some(Point { x, y }), context.destination, mode == PasteMode::Paste, false)
+                self.place_image_objects(crate::PreparedImages::from_parts(sources, reservation, budget,writer), Some(Point { x, y }), context.destination, mode == PasteMode::Paste, false)
             }
             PasteMode::InPlace => {
                 let objects = sources.into_iter().map(|(name, source)| placed(&name, Arc::new(source).into(), [0.; 2])).collect();

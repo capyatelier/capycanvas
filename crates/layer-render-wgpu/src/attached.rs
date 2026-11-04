@@ -50,6 +50,9 @@ impl CanvasRenderer for AttachedRenderer {
     fn memory_headroom(&self) -> Option<u64> {
         self.0.as_deref().and_then(CanvasRenderer::memory_headroom)
     }
+    fn new_drawing_working_bytes(&self,viewport:[u32;2])->Option<u64> {
+        self.0.as_deref().and_then(|gpu|gpu.new_drawing_working_bytes(viewport))
+    }
     fn paint_ready(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.0.as_ref().is_none_or(|gpu| gpu.paint_ready(document, brush, transform))
     }

@@ -40,7 +40,13 @@ impl WebApp {
         }))
     }
     pub fn session_binding(&self,id:u64,key:Option<String>)->Result<String,JsValue> {
-        self.stores.bind(id,key.as_deref()).map(|binding|binding.key().to_owned()).map_err(js)
+        let session=self.document_session(id)?;
+        if let Some(binding)=session.engine().document().memory().storage() {
+            self.stores.adopt_binding(id,binding.clone()).map_err(js)?;
+            self.stores.install_storage(id,session).map_err(js)?;return Ok(binding.key().to_owned());
+        }
+        self.stores.bind(id,key.as_deref()).map_err(js)?;
+        self.stores.install_storage(id,session).map(|binding|binding.key().to_owned()).map_err(js)
     }
     pub fn session_existing_binding(&self,key:&str)->Option<u64> {
         self.stores.bindings().into_iter().find_map(|(id,binding)|(binding.key()==key).then_some(id))

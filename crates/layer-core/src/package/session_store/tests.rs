@@ -16,9 +16,10 @@
         Block {entered:std::sync::mpsc::Sender<()>,resume:std::sync::mpsc::Receiver<()>},
         Exit(&'static str),
         HeadWrite(usize),
+        StorageFull,
     }
     #[derive(Default)]
-    pub(super) struct Control {pub fault:Option<Fault>,count:usize,operations:Vec<String>,hold_reads:bool,reads:std::collections::VecDeque<(Arc<dyn StoreFile>,u64,usize,Option<u32>,ReadCompletion)>}
+    pub(super) struct Control {pub fault:Option<Fault>,space:Option<Option<u64>>,count:usize,operations:Vec<String>,hold_reads:bool,reads:std::collections::VecDeque<(Arc<dyn StoreFile>,u64,usize,Option<u32>,ReadCompletion)>}
     fn controls()->&'static Mutex<BTreeMap<PathBuf,Weak<Transport>>> {
         static CONTROLS:OnceLock<Mutex<BTreeMap<PathBuf,Weak<Transport>>>>=OnceLock::new();CONTROLS.get_or_init(Default::default)
     }
@@ -37,6 +38,7 @@
         fn read_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {self.inner.read_at(offset,length)}
         fn write_at<'a>(&'a self,offset:u64,bytes:&'a [u8])->FileFuture<'a,()> {
             Box::pin(async move {
+                if matches!(self.control.lock().unwrap().fault,Some(Fault::StorageFull)) {return Err(crate::package::storage_budget::STORAGE_UNAVAILABLE.into());}
                 let head_write=if self.name.starts_with("head.") {match self.control.lock().unwrap().fault {Some(Fault::HeadWrite(length))=>Some(length),_=>None}}else {None};
                 if let Some(length)=head_write {if length>0 {self.inner.write_at(offset,&bytes[..length.min(bytes.len())]).await?;}return Err("Injected head write failed".into());}
                 let interrupted={let state=self.control.lock().unwrap();matches!(state.fault,Some(Fault::Interrupt {operation,after:false}) if operation==state.count+1)};
@@ -70,11 +72,19 @@
         }
     }
     impl FileTransport for Transport {
+        fn storage_facts(&self)->FileFuture<'_,crate::package::storage_budget::StorageFacts> {Box::pin(async {
+            let mut facts=self.inner.storage_facts().await?;
+            if let Some(space)=self.control.lock().unwrap().space {facts.scope=format!("test:{:p}",Arc::as_ptr(&self.control));facts.available_bytes=space;}
+            Ok(facts)
+        })}
         fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {Box::pin(async move {
             Ok(Arc::new(TransportFile {inner:self.inner.open(name,access).await?,name:name.into(),control:self.control.clone()}) as Arc<dyn StoreFile>)
         })}
         fn list<'a>(&'a self,name:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {self.inner.list(name)}
-        fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,()> {self.inner.remove(name)}
+        fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,super::super::store_io::Removal> {Box::pin(async move {
+            let mut removed=self.inner.remove(name).await?;
+            if self.control.lock().unwrap().space.is_some() {removed.scope=format!("test:{:p}",Arc::as_ptr(&self.control));}Ok(removed)
+        })}
     }
     pub(super) async fn open_store(path:&Path)->Result<SessionStore,String> {
         create_directory(path)?;let path=fs::canonicalize(path).map_err(|error|error.to_string())?;
@@ -221,6 +231,26 @@
         let editor = Editor::new(document);
         let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
         captured(&capture, json!({"marker": marker}))
+    }
+    #[test]
+    fn full_disk_keeps_pressure_and_checkpoint_bytes_in_ram_without_publishing() {
+        use crate::package::storage_budget::STORAGE_UNAVAILABLE;
+        for authoritative in [false,true] {for operation in ["pressure","checkpoint"] {
+            let directory=Directory::new();let cancel=AtomicBool::new(false);let mut store=open_store(&directory.0).wait().unwrap();
+            let old=capture(5);let head=checkpoint(&mut store,&old,&cancel).unwrap();
+            let incoming=capture(9);let before=incoming.tiles.iter().map(|tile|tile.resident_bytes()).sum::<usize>();assert!(before>0);
+            let state=control(&store);*state.lock().unwrap()=Control {space:Some(Some(if authoritative {1<<30}else {0})),fault:authoritative.then_some(Fault::StorageFull),..Default::default()};
+            let result=match operation {
+                "pressure"=>store.make_durable(&crate::raster_storage::RetainedTiles {sources:incoming.tiles.clone(),..Default::default()},&cancel).wait().map(|_|()),
+                _=>checkpoint(&mut store,&incoming,&cancel).map(|_|()),
+            };
+            assert_eq!(result.unwrap_err(),STORAGE_UNAVAILABLE,"{operation}; authoritative={authoritative}");
+            assert_eq!(store.generation(),Some(head));assert_eq!(head::read(&*store._owner.io).wait().unwrap().unwrap().head.current.id,head);
+            assert_eq!(incoming.tiles.iter().map(|tile|tile.resident_bytes()).sum::<usize>(),before);
+            if !authoritative {assert!(state.lock().unwrap().operations.is_empty());}
+            *state.lock().unwrap()=Control::default();
+            assert!(checkpoint(&mut store,&incoming,&cancel).is_ok());
+        }}
     }
     #[test]
     fn async_stored_tile_read_retains_completed_bytes_until_its_lease_is_consumed() {
@@ -504,6 +534,26 @@
         fs::set_permissions(&owner.path, permissions).unwrap();
         result.unwrap(); assert_eq!(operations.len(), 2); assert_eq!(marker(&mut store), 1);
     }
+    #[test]
+    fn shared_owner_crossing_a_partly_filled_pack_is_written_once() {
+        fn input(resource:crate::authored::Resource<[u8]>)->StoreInput {
+            StoreInput::entry(&super::super::resources::ResourceEntry {kind:"capy.test/1",data:serde_json::json!({}),raw_encoding:"capy.test/1",payload:Payload::Encoded(resource)},&AtomicBool::new(false)).unwrap()
+        }
+        let directory=Directory::new();let cancel=AtomicBool::new(false);let mut store=SessionStore::open(&directory.0).wait().unwrap();
+        store.store_inputs(vec![input(vec![1].into())],&cancel).wait().unwrap().commit().unwrap();
+        let pack=store.append.unwrap().0;let path=store.pack_path(pack);
+        OpenOptions::new().write(true).open(&path).unwrap().set_len(PACK_BYTES-16).unwrap();
+        let owner:crate::authored::Resource<[u8]>=vec![17;8].into();let alias=owner.alias(PortableId::random());
+        let first=owner.id();let second=alias.id();let separate:crate::authored::Resource<[u8]>=vec![29;16].into();let separate_id=separate.id();
+        store.store_inputs(vec![input(owner),input(separate),input(alias)],&cancel).wait().unwrap().commit().unwrap();
+        let first=&store.index[&first].location;let second=&store.index[&second].location;
+        assert!(Arc::ptr_eq(first,second));assert_eq!(first.pack.id,pack);
+        assert_eq!(&*first.read().wait().unwrap(),&[17;8]);assert_eq!(&*second.read().wait().unwrap(),&[17;8]);
+        assert_eq!(&*store.index[&separate_id].location.read().wait().unwrap(),&[29;16]);
+        let bytes=fs::read_dir(directory.0.join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>();
+        assert_eq!(bytes,PACK_BYTES-16+24);assert_eq!(count(&directory.0.join("packs")),2);
+    }
+
     #[test]
     fn rollover_keeps_previous_pack_and_live_ranges() {
         let directory = Directory::new(); let cancel = AtomicBool::new(false);

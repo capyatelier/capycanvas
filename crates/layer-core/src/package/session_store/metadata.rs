@@ -32,9 +32,11 @@ impl MetadataStore {
             None=>(None,0),
         };
         let generation=PortableId::random();let cancelled=AtomicBool::new(false);
-        io::create(&*self.io,&format!("generations/{generation}.json"),bytes,&cancelled).await?;
+        let mut reservation=crate::package::storage_budget::reserve(&*self.io,bytes.len() as u64+2048).await?;
+        let created=io::create(&*self.io,&format!("generations/{generation}.json"),bytes,&cancelled).await;
+        reservation.written(bytes.len() as u64)?;created?;
         let head=Head {current:Generation::new(generation,bytes),previous};
-        head::publish(&*self.io,sequence,&head).await?;
+        let published=head::publish(&*self.io,sequence,&head).await;reservation.written(2048)?;published?;
         let retained=std::iter::once(head.current.id).chain(head.previous.map(|generation|generation.id)).collect();
         io::clean(&*self.io,"generations",&retained,".json").await
     }

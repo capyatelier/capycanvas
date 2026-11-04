@@ -345,6 +345,7 @@ impl WebApp {
         session.set_document_replacement(false);
         let documents = layer_ui::DocumentSessions::localized(session.localization());
         let stores=store_transport::coordinator();stores.watch_pressure(documents.pressure_source());
+        stores.install_storage(documents.selected(),&session).map_err(js)?;
         Ok(Self {
             language_transition: layer_ui::LanguageTransition::new(session.localization().clone()),
             language_preparation: None,
@@ -799,6 +800,7 @@ impl WebApp {
         layer_ui::document_storage_retained(self.session.localization(), detail)
     }
     pub fn document_recovery_unavailable(&self, detail: &str) -> String {
+        self.session.fail_asset_writer(detail.to_owned());
         layer_ui::document_recovery_unavailable(self.session.localization(), detail)
     }
     pub fn file_open_failure(&self, name: &str) -> String {

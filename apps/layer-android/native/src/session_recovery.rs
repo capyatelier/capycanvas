@@ -85,7 +85,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionWatchPressure(mut env:J
     crate::jni_entry!(env,handle,capy_app, {
         let stores=crate::inspection::borrow::<SessionStores>(stores)?;
         stores.set_wake(capy_app.host.wake_callback());
-        stores.watch_pressure(capy_app.window.documents.pressure_source());
+        stores.attach_window(&capy_app.window,&capy_app.host)?;
     })
 }
 
@@ -168,6 +168,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionCommit(mut env: JNIEnv,
 pub extern "system" fn Java_art_capycanvas_Native_sessionFailure(mut env: JNIEnv, _: JClass, handle: jlong, detail: JString, recovery: jboolean) -> jni::sys::jstring {
     crate::jni_entry!(env, handle, capy_app, {
     let result = read(&mut env,&detail).map(|detail| {
+        capy_app.host.session.fail_asset_writer(detail.clone());
         let localization = capy_app.host.session.localization();
         if recovery != 0 {layer_ui::document_recovery_unavailable(localization,&detail)}
         else {layer_ui::document_storage_retained(localization,&detail)}
@@ -228,6 +229,7 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionRead(mut env: JNIEnv, _
         let Work::Restore { environment, pending, .. } = &mut task.work else { return Err("Not a session restore".into()); };
         if pending.is_some() {return Err("Session restore already read".into());}
         stores.adopt(id as u64,&key)?;
+        environment.use_store(&stores,id as u64)?;
         let StoreResult::Restored {session,recovered_previous}=stores.restore(id as u64,environment.limits())?.wait_on_worker()? else {return Err("Unexpected drawing storage reply".into());};
         let restored = session.ok_or("The drawing has no complete session copy")?;
         let location = serde_json::to_string(&restored.state.location.as_ref().filter(|_|restored.state.destination.is_some())).map_err(error)?;

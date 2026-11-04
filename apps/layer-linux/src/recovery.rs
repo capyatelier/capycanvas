@@ -7,7 +7,7 @@ use layer_ui::{recovery::{RecoveryState, RecoveryEvent, RecoveryWork, RecoveryWo
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 fn directory() -> PathBuf {
-    crate::storage::sessions().map(|root| PathBuf::from(root).join("packed")).unwrap_or_default()
+    crate::storage::roots().map(|roots|roots.sessions().join("packed")).unwrap_or_default()
 }
 fn key() -> String { layer_core::authored::PortableId::random().to_string() }
 fn enabled() -> bool { crate::storage::sessions().is_some() }
@@ -54,6 +54,9 @@ impl Default for Recovery {
     }
 }
 impl Recovery {
+    pub(crate) fn for_document(document:&layer_core::Document)->Self {
+        match document.memory().storage() {Some(binding)=>Self {binding,..Default::default()},None=>Self::default()}
+    }
     pub fn discard(self: &Rc<Self>) {
         self.snapshot.borrow_mut().take();
         self.discarded.store(true, Ordering::Release);
@@ -70,9 +73,11 @@ impl Recovery {
     }
     fn capture_at(self:&Rc<Self>,w:&Rc<Workspace>,id:u64,session:&layer_ui::UiSession<crate::render_thread::RenderWorker>,force:bool) {
         self.window.replace(Rc::downgrade(w));
-        if !enabled() || self.discarded.load(Ordering::Acquire) { return; }
-        if let Err(error)=w.restart.stores.adopt_binding(id,self.binding.clone()) {self.error.replace(Some(error));return;}
+        if self.discarded.load(Ordering::Acquire) { return; }
+        if crate::storage::roots().is_none() {return;}
+        if let Err(error)=w.restart.stores.adopt_binding(id,self.binding.clone()).and_then(|()|w.restart.stores.install_storage(id,session).map(|_|())) {self.error.replace(Some(error));return;}
         self.stores.replace(Some(w.restart.stores.clone()));
+        if !enabled() {return;}
         let stamp=session.session_stamp();
         match w.restart.stores.checkpoint_due(id,stamp.clone(),force) {
             Ok(false)=>{if w.restart.stores.is_current(id,&stamp) {self.current.set(true);}return;},Ok(true)=>{},Err(error)=>{self.error.replace(Some(error));return;},

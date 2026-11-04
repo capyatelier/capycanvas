@@ -55,7 +55,7 @@ pub(super) async fn publish(io:&dyn FileTransport,previous:u64,head:&Head)->Resu
                 Err(_)=>false,
             };
             drop(file);
-            if incomplete {io.remove(name).await.map_err(|cleanup|format!("{error}; {cleanup}"))?;}
+            if incomplete {super::super::storage_budget::remove(io,name).await.map_err(|cleanup|format!("{error}; {cleanup}"))?;}
         }
         return Err(error);
     }

@@ -17,6 +17,7 @@ pub struct WebPreparedImages {
     pub(super) sources: layer_ui::PreparedImages,
     pub(super) clip: Option<layer_ui::PixelClip>,
     pub(super) control: layer_render_wgpu::snapshot::CaptureControl,
+    pub(super) writer:layer_ui::AssetWriter,
 }
 
 fn active(session: &UiSession<AttachedRenderer>, id: u32) -> Result<(), JsValue> {
@@ -126,6 +127,7 @@ impl WebApp {
         };
         let localization = self.session.localization().clone();
         let photo_policy = self.session.state().settings.photo_open;
+        let writer=self.session.image_import_writer().map_err(js)?;
         let color = self.session.engine().document().composition().color;
         let mode = match self.session.document_request(request.id).map_err(js)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None };
         let clip = files.as_string().map(|nonce| self.documents.clip.capture(&nonce, &localization).map_err(js)).transpose()?;
@@ -144,14 +146,16 @@ impl WebApp {
                     clip.layers = Some(Arc::new(layers));
                 }
                 output::cancelled(&control)?;
-                return Ok(WebPreparedImages { request, sources: Default::default(), clip: Some(clip), control }.into());
+                writer.store_clip(&clip,&localization).await.map_err(js)?;
+                return Ok(WebPreparedImages { request, sources: Default::default(), clip: Some(clip), control,writer }.into());
             }
             if files.length() == 0 {
                 return Err(js("Choose at least one image"));
             }
             let mut images = layer_ui::ImageImportBatch::new(photo_policy, color.space,
-                layer_color::photo::DecodeLimits::from_memory_budget(artwork_transfer::photo_memory_budget()));
+                layer_color::photo::DecodeLimits::from_memory_budget(artwork_transfer::photo_memory_budget())).with_writer(writer.clone());
             for item in files.iter() {
+                images.prepare_decode().await.map_err(js)?;
                 let candidates = if js_sys::Array::is_array(&item) { js_sys::Array::from(&item) } else { js_sys::Array::of1(&item) };
                 let mut decoded = Err(js("No readable clipboard image"));
                 for candidate in candidates.iter() {
@@ -176,12 +180,14 @@ impl WebApp {
                     output::cancelled(&control)?;
                     images.interpret(serde_wasm_bindgen::from_value(choice).map_err(js)?, control.is_cancelled()).map_err(js)?;
                 }
+                images.write_prepared().await.map_err(js)?;
             }
             output::cancelled(&control)?;
+            images.finish_storage().await.map_err(js)?;
             Ok(WebPreparedImages {
                 request, clip: None,
                 sources: images.take_sources(control.is_cancelled()).map_err(js)?,
-                control,
+                control,writer,
             }
             .into())
         }))

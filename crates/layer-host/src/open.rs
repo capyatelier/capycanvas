@@ -20,6 +20,7 @@ pub struct OpenEnvironment {
     pub brush: layer_core::BrushSnapshot,
     pub new_drawing: Option<layer_ui::NewDrawingOrder>,
     pub photo_policy: layer_ui::PhotoOpenPolicy,
+    pub asset_writer:Option<layer_ui::AssetWriter>,
 }
 
 impl OpenEnvironment {
@@ -44,6 +45,7 @@ impl OpenEnvironment {
             brush: session.engine().configured_brush().clone(),
             new_drawing: session.new_drawing_order().cloned(),
             photo_policy: session.state().settings.photo_open,
+            asset_writer:Some(session.pending_asset_writer()),
         })
     }
 
@@ -58,6 +60,11 @@ impl OpenEnvironment {
             ..ProjectLimits::for_import()
         }
     }
+
+    pub fn use_store(&mut self,stores:&crate::session_stores::SessionStores,id:u64)->Result<(),String> {
+        self.asset_writer=Some(stores.asset_writer(id)?);Ok(())
+    }
+    pub fn storage_failed(&self,error:String) {if let Some(writer)=&self.asset_writer {writer.fail_pending(error);}}
 
     pub fn admit_sessions<'a>(&self, editors: impl IntoIterator<Item = &'a layer_core::Editor>) -> Result<(), String> {
         self.admission.admit_sessions(editors).map_err(|reason| reason.message(&self.localization))
@@ -96,15 +103,14 @@ impl OpenEnvironment {
         project: Document,
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
-        project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
-        self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
         let check = || {
-            if cancelled() {
-                Err("Document operation cancelled".to_string())
-            } else {
-                Ok(())
-            }
+            if cancelled() {Err("Document operation cancelled".to_string())}else {Ok(())}
         };
+        check()?;
+        project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
+        let writer=self.asset_writer.as_ref().map(|writer|writer.for_document(&project)).transpose()?;
+        if let Some(writer)=&writer {pollster::block_on(writer.store_document(&project))?;}
+        self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
         check()?;
         layer_color::validate_document_color(&project)?;
         let mut gpu = self
@@ -159,6 +165,7 @@ impl OpenEnvironment {
             std::thread::sleep(Duration::from_millis(2));
         }
         check()?;
+        if let Some(writer)=writer {candidate.bind_asset_writer(writer)?;}
         Ok(Box::new(candidate))
     }
 }
@@ -167,6 +174,23 @@ impl OpenEnvironment {
 mod tests {
     use super::*;
     use layer_render_wgpu::WgpuRasterizer;
+    #[test]
+    fn warp_floor_admits_a_blank_4800_by_3600_canvas_but_not_an_exhausted_working_set() {
+        use layer_core::{MemoryBudget,MemoryFacts,DeviceMemoryFacts,MemoryOwnerKind,MemoryClass,MemoryReport};
+        use layer_ui::{DrawingSetup,LengthUnit,Measure,PaperSetup,CanvasLimits,SetupProblem};
+        const MIB:u64=1024*1024;const GIB:u64=1024*MIB;
+        let budget=MemoryBudget::with_facts(MemoryFacts {total_bytes:Some(81*GIB/10),available_bytes:Some(5*GIB/4),process_limit_bytes:Some(384*MIB),..Default::default()});
+        budget.register_device(DeviceMemoryFacts {unified:true,..Default::default()});
+        assert_eq!(budget.ram_limit_bytes(),384*MIB);
+        let working=layer_render_wgpu::new_drawing_memory_requirement([2560,1600],true);
+        let setup=DrawingSetup {unit:LengthUnit::Px,width:Measure::new(4800.),height:Measure::new(3600.),resolution:300,
+            color:Default::default(),blend_space:Default::default(),paper:PaperSetup {texture:None,color:layer_core::color::RgbColor::WHITE,transparent:false,relief:0}};
+        let limits=||CanvasLimits::new(16384,Some(budget.import_headroom_bytes())).with_working_bytes(Some(working));
+        assert!(working>0 && working<384*MIB);assert_eq!(setup.validate(limits()),Ok(()));
+        let owner=budget.register_owner(MemoryOwnerKind::Other,MemoryClass::Pinned,None);
+        owner.report(MemoryReport {ram_bytes:384*MIB,pinned_ram_bytes:384*MIB,..Default::default()});
+        assert_eq!(setup.validate(limits()),Err(SetupProblem::Memory));
+    }
 
     #[test]
     fn open_prepares_a_ready_candidate_and_honours_cancellation() {
@@ -194,6 +218,9 @@ mod tests {
             .admission(&session.retained_document_tiles());
         let environment =
             OpenEnvironment::capture(&session, admission, RendererOptions::default()).unwrap();
+        let directory=std::env::temp_dir().join(format!("capy-open-storage-{}",layer_core::PortableId::random()));
+        let stores=crate::session_stores::SessionStores::native(directory.clone(),std::sync::Arc::new(||{}));
+        stores.install_storage(1,&session).unwrap();
         assert!(std::sync::Arc::ptr_eq(&environment.localization, &localization));
         assert_eq!(environment.viewport, session.state().camera.viewport);
         let mut candidate = environment.prepare(project.clone(), || false).unwrap();
@@ -207,7 +234,8 @@ mod tests {
             environment.prepare(project, || true).err().as_deref(),
             Some("Document operation cancelled")
         );
-        drop((candidate, environment, session));
+        drop((candidate, environment, session,stores));
+        let _=std::fs::remove_dir_all(directory);
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 }

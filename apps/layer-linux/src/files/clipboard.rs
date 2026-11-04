@@ -119,6 +119,9 @@ pub(super) async fn paste(w: &Rc<Workspace>, mode: PasteMode) -> Result<bool, St
             if control.is_cancelled() { return Ok(false); }
             clip = result??;
         }
+        let writer=w.restart.stores.asset_writer(w.documents.selected())?;
+        let stored=clip.clone();let localization=w.localization();
+        gio::spawn_blocking(move || pollster::block_on(writer.store_clip(&stored,&localization))).await.map_err(|_|"Drawing storage worker failed")??;
         let mut owner = w.gpu.borrow_mut();
         let session = &mut owner.as_mut().ok_or("Canvas unavailable")?.session;
         session.validate_image_placement(&context)?;

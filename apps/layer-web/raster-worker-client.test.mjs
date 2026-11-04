@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createRasterWorker} from './raster-worker-client.js';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import {createRasterWorker,postTransferred,releaseTransferred} from './raster-worker-client.js';
 import {observeColorWorkers,waitForColorCapture} from '../../tools/visual/color-panel.mjs';
 
 function fixture(module) {
@@ -24,6 +26,38 @@ function fixture(module) {
 }
 async function withFixture(body){const f=fixture();try{await body(f);}finally{f.close();}}
 const request=(operation='snapshot',extra={})=>({operation,metadata:'{}',buffers:[],...(operation==='read'?{file:new Blob(['input'])}:{}),...extra});
+
+for(const fail of [false,true])test(`wire reservations release after ${fail?'failed':'successful'} postMessage`,()=>{
+  const buffers=[new Uint8Array(4)];let released=0,posted=false;
+  buffers.admission={release(){assert.equal(posted,true);released++;}};
+  const post=()=>{assert.equal('admission' in buffers,false);posted=true;if(fail)throw Error('post failed');return 'posted';};
+  if(fail)assert.throws(()=>postTransferred(buffers,post),/post failed/);
+  else assert.equal(postTransferred(buffers,post),'posted');
+  assert.equal(released,1);
+});
+
+for(const failure of ['cleanup','transfer-list','post',null])test(`worker packed output releases its reservation after ${failure??'success'}`,async()=>{
+  let released=0,closed=0,unlocked=0;const replies=[],buffers=[new Uint8Array(4)];
+  buffers.admission={release(){released++;}};
+  const result={buffers};if(failure==='transfer-list')Object.defineProperty(result,'preview',{get(){throw Error('transfer-list failed');}});
+  const scope={Uint8Array,postTransferred,releaseTransferred,init:async()=>({memory:{buffer:new ArrayBuffer(8)}}),wasm:{configure_gpu_diagnostics(){},async raster_worker_output(){return result;}},
+    self:{postMessage(message){if(failure==='post'&&message.result)throw Error('post failed');replies.push(message);}},
+    job:{offset:16,raw:{close(){closed++;}},root:{async removeEntry(){if(failure==='cleanup')throw Error('cleanup failed');}},release(){unlocked++;}}};
+  const source=readFileSync(new URL('./raster-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
+  runInNewContext(source+'\noutputs.set("output",job);globalThis.executeOutput=execute;',scope);
+  await scope.executeOutput({id:1,request:{operation:'output-encode',metadata:JSON.stringify({token:'output',extent:[1,1],preview:true}),buffers:[]}});
+  assert.equal(released,1,'Every produced packed result releases its reservation exactly once');
+  assert.equal(closed,1);assert.equal(unlocked,1);assert.equal(replies.length,1);
+  if(failure)assert.match(replies[0].error,new RegExp(failure+' failed'));else assert.equal(replies[0].result,result);
+});
+
+test('sender reservations release before a raster worker replies',()=>withFixture(async f=>{
+  const buffers=[new Uint8Array(4)];let released=0;
+  buffers.admission={release(){released++;}};
+  const pending=f.run(request('snapshot',{buffers}));
+  assert.equal(released,1);assert.equal('admission' in f.workers[0].messages[0].request.buffers,false);
+  f.workers[0].reply('result');assert.equal(await pending,'result');assert.equal(released,1);
+}));
 
 test('encoded inputs clone their Blob without a whole-input buffer transfer',()=>withFixture(async f=>{
   const file=new Blob([new Uint8Array(9*1024*1024)]);

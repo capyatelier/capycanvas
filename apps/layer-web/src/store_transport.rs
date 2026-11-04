@@ -36,7 +36,10 @@ pub fn configure_store_transport(transport:js_sys::Function,wake:js_sys::Functio
     TRANSPORT.with_borrow_mut(|slot|*slot=Some(transport));
     ReadCache::process().set_scheduler(Arc::new(|cache|spawn_local(async move {cache.drive();})));
 }
-fn error(value:JsValue)->String {value.as_string().unwrap_or_else(||format!("{value:?}"))}
+fn error(value:JsValue)->String {
+    if js_sys::Reflect::get(&value,&js("name")).ok().and_then(|name|name.as_string()).as_deref()==Some("QuotaExceededError") {return layer_core::package::storage_budget::STORAGE_UNAVAILABLE.into();}
+    value.as_string().or_else(||js_sys::Reflect::get(&value,&js("message")).ok().and_then(|message|message.as_string())).unwrap_or_else(||format!("{value:?}"))
+}
 fn begin_call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Result<js_sys::Promise,String> {
     let request=js_sys::Object::new();let buffers=js_sys::Array::new();
     if let Some(bytes)=bytes {buffers.push(&js_sys::Uint8Array::from(bytes));}
@@ -104,8 +107,15 @@ pub(super) async fn directories(name:&str)->Result<Vec<String>,String> {
     store_io::check_member(name)?;
     Ok(entries(call("list",serde_json::json!({"name":name}),None).await?)?.into_iter().filter(|entry|entry.directory).map(|entry|entry.name).collect())
 }
+fn browser_storage_facts()->FileFuture<'static,layer_core::package::storage_budget::StorageFacts> {
+    Box::pin(async move {
+        let epoch=layer_core::package::storage_budget::StorageBudget::process().sample_epoch();
+        serde_wasm_bindgen::from_value(call("estimate",serde_json::json!({"epoch":epoch}),None).await?).map_err(|error|error.to_string())
+    })
+}
 struct BrowserStoreOpener;
 impl StoreOpener for BrowserStoreOpener {
+    fn storage_facts<'a>(&'a self,_path:&'a Path)->FileFuture<'a,layer_core::package::storage_budget::StorageFacts> {browser_storage_facts()}
     fn open<'a>(&'a self,path:&'a Path,retirement:bool)->FileFuture<'a,Option<SessionStore>> {
         Box::pin(async move {
             let name=path.to_str().ok_or("Invalid drawing store path")?;
@@ -123,6 +133,7 @@ impl BrowserTransport {
     fn name(&self,member:&str)->Result<String,String> {store_io::check_member(member)?;Ok(format!("{}/{member}",self.lease.name))}
 }
 impl FileTransport for BrowserTransport {
+    fn storage_facts(&self)->FileFuture<'_,layer_core::package::storage_budget::StorageFacts> {browser_storage_facts()}
     fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {
         Box::pin(async move {
             let name=self.name(name)?;
@@ -137,8 +148,8 @@ impl FileTransport for BrowserTransport {
             entries(call("list",serde_json::json!({"name":name}),None).await?)
         })
     }
-    fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,()> {
-        Box::pin(async move {call("remove",serde_json::json!({"name":self.name(name)?}),None).await?;Ok(())})
+    fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,store_io::Removal> {
+        Box::pin(async move {serde_wasm_bindgen::from_value(call("remove",serde_json::json!({"name":self.name(name)?}),None).await?).map_err(|error|error.to_string())})
     }
 }
 #[derive(Clone)]

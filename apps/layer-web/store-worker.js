@@ -44,6 +44,10 @@ function range(offset,length) {
 }
 async function execute({operation,metadata:meta={},buffers=[],handles=[]}) {
   switch(operation) {
+    case 'estimate': {
+      const {quota,usage}=await navigator.storage.estimate();
+      return {epoch:meta.epoch,scope:self.location.origin,available_bytes:Number.isSafeInteger(quota)&&Number.isSafeInteger(usage)&&quota>=usage?quota-usage:null};
+    }
     case 'legacy-windows': return legacy.windows();
     case 'legacy-manifest': return legacy.manifest(meta.key);
     case 'legacy-snapshot': return legacy.snapshot(meta.key);
@@ -85,9 +89,13 @@ async function execute({operation,metadata:meta={},buffers=[],handles=[]}) {
       return entries.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
     }
     case 'remove': {
-      close(meta.name);
-      try {const [dir,leaf]=await parent(meta.name);await dir.removeEntry(leaf);}
-      catch(error){if(error.name!=='NotFoundError')throw error;}return;
+      const opened=files.get(meta.name);let bytes=opened?.getSize()??0;close(meta.name);
+      try {
+        const [dir,leaf]=await parent(meta.name);
+        if(!opened)try {bytes=(await (await dir.getFileHandle(leaf)).getFile()).size;}
+        catch(error){if(error.name!=='TypeMismatchError')throw error;}
+        await dir.removeEntry(leaf);return {scope:self.location.origin,bytes};
+      } catch(error){if(error.name!=='NotFoundError')throw error;return {scope:self.location.origin,bytes:0};}
     }
     default: throw Error('Unknown drawing store operation');
   }
@@ -102,7 +110,7 @@ async function drain() {
   try {
     const result=await execute(item.request),transfers=(result?.buffers??[]).map(bytes=>bytes.buffer);
     self.postMessage({id:item.id,result},transfers);
-  }catch(error){self.postMessage({id:item.id,error:String(error.message??error)});}
+  }catch(error){self.postMessage({id:item.id,error:String(error.message??error),errorName:error.name});}
   finally {active=false;schedule();}
 }
 self.onmessage=({data})=> {

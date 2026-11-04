@@ -341,7 +341,6 @@ documents-prints-at = Ukuran cetak { $width } × { $height } { $unit }
 documents-too-large-side = Terlalu besar untuk perangkat ini: setiap sisi maksimal { $maximum } px
 documents-too-large-memory = Terlalu besar untuk memori yang tersedia di perangkat ini
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · hingga { $count } lapisan
 documents-layer-memory = { $size } per lapisan
 documents-layer-memory-available = { $size } per lapisan · { $available } tersedia
 documents-no-paper = Tanpa kertas

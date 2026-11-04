@@ -14,10 +14,14 @@ pub trait StoreFile: RangeReader {
     fn write_at<'a>(&'a self,offset:u64,bytes:&'a [u8])->FileFuture<'a,()>;
     fn flush(&self)->FileFuture<'_,()>;
 }
+#[derive(Clone,Debug,serde::Deserialize,PartialEq,Eq)]
+pub struct Removal {pub scope:String,pub bytes:u64}
+
 pub trait FileTransport: Send+Sync {
+    fn storage_facts(&self)->FileFuture<'_,super::storage_budget::StorageFacts>;
     fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>>;
     fn list<'a>(&'a self,directory:&'a str)->FileFuture<'a,Vec<DirectoryEntry>>;
-    fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,()>;
+    fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,Removal>;
 }
 
 pub fn check_member(name:&str)->Result<(),String> {
@@ -33,6 +37,7 @@ pub fn check_range(offset:u64,length:usize)->Result<(),String> {
 #[cfg(not(target_arch="wasm32"))]
 mod native {
     use super::*;
+    use super::super::storage_budget::storage_error;
     use crate::tile_io::{read_buffer,read_exact_at,verify_crc,ReadCompletion};
     use std::{fs::{self,File,OpenOptions},path::PathBuf,sync::atomic::{AtomicBool,Ordering}};
 
@@ -49,6 +54,47 @@ mod native {
                     Ok(_)=>{},Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},Err(error)=>return Err(error.to_string()),
                 }
             }Ok(path)
+        }
+    }
+    fn existing_path(mut path:&std::path::Path)->Result<&std::path::Path,String> {
+        loop {match std::fs::metadata(path) {
+            Ok(_)=>return Ok(path),Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{path=path.parent().ok_or("Drawing storage volume is unavailable")?;},
+            Err(error)=>return Err(storage_error(error)),
+        }}
+    }
+    fn storage_scope(path:&std::path::Path)->Result<String,String> {
+        let path=existing_path(path)?;
+        #[cfg(unix)]
+        {use std::os::unix::fs::MetadataExt;Ok(std::fs::metadata(path).map_err(storage_error)?.dev().to_string())}
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::{core::PCWSTR,Win32::Storage::FileSystem::GetVolumePathNameW};
+            let path=path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();let mut volume=vec![0u16;32768];
+            unsafe {GetVolumePathNameW(PCWSTR(path.as_ptr()),&mut volume).map_err(|error|error.to_string())?;}
+            let end=volume.iter().position(|unit|*unit==0).ok_or("Invalid drawing storage volume")?;
+            String::from_utf16(&volume[..end]).map_err(|_|"Invalid drawing storage volume".into())
+        }
+    }
+    fn storage_facts(path:&std::path::Path)->Result<super::super::storage_budget::StorageFacts,String> {
+        use super::super::storage_budget::{StorageBudget,StorageFacts};
+        let epoch=StorageBudget::process().sample_epoch();let path=existing_path(path)?;let scope=storage_scope(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let path=std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_|"Invalid drawing storage path")?;
+            let mut facts=std::mem::MaybeUninit::<libc::statvfs>::uninit();
+            if unsafe {libc::statvfs(path.as_ptr(),facts.as_mut_ptr())}!=0 {return Err(storage_error(std::io::Error::last_os_error()));}
+            let facts=unsafe {facts.assume_init()};
+            Ok(StorageFacts {scope,available_bytes:(facts.f_bavail as u64).checked_mul(facts.f_frsize as u64),epoch})
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows::{core::PCWSTR,Win32::Storage::FileSystem::GetDiskFreeSpaceExW};
+            let path=path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();let mut available=0u64;
+            unsafe {GetDiskFreeSpaceExW(PCWSTR(path.as_ptr()),Some(&mut available),None,None).map_err(|error|error.to_string())?;}
+            Ok(StorageFacts {scope,available_bytes:Some(available),epoch})
         }
     }
     struct NativeFile {file:File,path:PathBuf,new_name:AtomicBool,writable:bool}
@@ -75,7 +121,7 @@ mod native {
                     let result={use std::os::unix::fs::FileExt;self.file.write_at(bytes,offset)};
                     #[cfg(windows)]
                     let result={use std::os::windows::fs::FileExt;self.file.seek_write(bytes,offset)};
-                    let count=match result {Err(error) if error.kind()==std::io::ErrorKind::Interrupted=>continue,result=>result.map_err(|error|error.to_string())?};
+                    let count=match result {Err(error) if error.kind()==std::io::ErrorKind::Interrupted=>continue,result=>result.map_err(storage_error)?};
                     if count==0 {return Err("Incomplete drawing store write".into());}
                     offset+=count as u64;bytes=&bytes[count..];
                 }Ok(())
@@ -83,7 +129,7 @@ mod native {
         }
         fn flush(&self)->FileFuture<'_,()> {
             Box::pin(async {
-                super::super::session_store::sync_file(&self.file).map_err(|error|error.to_string())?;
+                super::super::session_store::sync_file(&self.file).map_err(storage_error)?;
                 if self.new_name.load(Ordering::Acquire) {
                     super::super::session_store::sync_directory(self.path.parent().unwrap())?;
                     self.new_name.store(false,Ordering::Release);
@@ -92,6 +138,7 @@ mod native {
         }
     }
     impl FileTransport for NativeTransport {
+        fn storage_facts(&self)->FileFuture<'_,super::super::storage_budget::StorageFacts> {Box::pin(async {storage_facts(&self.root)})}
         fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {
             Box::pin(async move {
                 let path=self.member(name)?;
@@ -102,7 +149,7 @@ mod native {
                 }
                 let mut options=OpenOptions::new();options.read(true).write(access!=FileAccess::Read).create_new(access==FileAccess::Create);
                 #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
-                let file=options.open(&path).map_err(|error|error.to_string())?;
+                let file=options.open(&path).map_err(storage_error)?;
                 Ok(Arc::new(NativeFile {file,path,new_name:AtomicBool::new(access==FileAccess::Create),writable:access!=FileAccess::Read}) as Arc<dyn StoreFile>)
             })
         }
@@ -121,11 +168,11 @@ mod native {
                 entries.sort_by(|a,b|a.name.cmp(&b.name));Ok(entries)
             })
         }
-        fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,()> {
+        fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,Removal> {
             Box::pin(async move {
-                let path=self.member(name)?;
-                let result=match fs::symlink_metadata(&path) {Ok(metadata) if metadata.is_dir()=>fs::remove_dir(&path),Ok(_)=>fs::remove_file(&path),Err(error)=>Err(error)};
-                match result {Ok(())=>super::super::session_store::sync_directory(path.parent().unwrap()),Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(()),Err(error)=>Err(error.to_string())}
+                let path=self.member(name)?;let scope=storage_scope(&path)?;
+                let (result,bytes)=match fs::symlink_metadata(&path) {Ok(metadata) if metadata.is_dir()=>(fs::remove_dir(&path),0),Ok(metadata)=>(fs::remove_file(&path),metadata.len()),Err(error)=>(Err(error),0)};
+                match result {Ok(())=>{super::super::session_store::sync_directory(path.parent().unwrap())?;Ok(Removal {scope,bytes})},Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(Removal {scope,bytes:0}),Err(error)=>Err(error.to_string())}
             })
         }
     }
@@ -155,7 +202,8 @@ mod tests {
         assert!(ready(file.write_at(u64::MAX,b"no")).is_err());
         assert!(ready(io.open("packs/test.bin",FileAccess::Create)).is_err());
         assert_eq!(ready(io.list("packs")).unwrap().into_iter().map(|entry|entry.name).collect::<Vec<_>>(),["test.bin"]);
-        drop((file,other));ready(io.remove("packs/test.bin")).unwrap();ready(io.remove("packs/test.bin")).unwrap();
+        drop((file,other));assert_eq!(ready(io.remove("packs/test.bin")).unwrap().bytes,6);assert_eq!(ready(io.remove("packs/test.bin")).unwrap().bytes,0);
+        assert_eq!(ready(io.remove("packs")).unwrap().bytes,0);
         assert!(ready(io.list("packs")).unwrap().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }

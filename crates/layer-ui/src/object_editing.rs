@@ -583,7 +583,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn place_image_objects(&mut self, sources: impl Into<crate::PreparedImages>, centre: Option<Point>,
         destination: Option<ImageLayerDestination>, interactive: bool, fit: bool) -> Result<(), String> {
-        let (sources, reservation, _) = sources.into().into_parts();
+        let (sources, reservation, _,_) = sources.into().into_parts();
         self.require_document_idle()?;
         if !self.engine.backend().supports_tiled_sources() { return Err("This renderer does not support tiled photo layers".into()); }
         if sources.is_empty() { return Err("Choose at least one image".into()); }

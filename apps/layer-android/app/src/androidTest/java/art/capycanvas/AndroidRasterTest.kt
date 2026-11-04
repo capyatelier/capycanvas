@@ -62,6 +62,7 @@ class AndroidRasterTest {
             compose.waitUntil(30_000) { host.snapshot?.optJSONObject("state")?.optString("theme") == theme }
             assertEquals(theme, native { state(it).getString("theme") })
         }
+        compose.waitForIdle()
     }
     @Before fun isolatedWindow() {
         wakeDevice()
@@ -287,6 +288,20 @@ class AndroidRasterTest {
         point(1,0.0,dy,observe)
         for(i in 1..6) {SystemClock.sleep(10);point(2,i*15.0,dy,observe)}
         point(3,90.0,dy,observe);tick()
+    }
+    private fun recoveryDirectory(name:String):File {
+        val stores=runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            assertTrue(host.recovery.flush())
+            host.recovery.storeCoordinator()
+        }}
+        val selected=tabs().getLong("selected")
+        val key=Native.sessionBind(stores,selected)
+        val window=device.recovery.walkTopDown().single {file ->
+            file.name == "session.json" && JSONObject(Native.sessionManifestRead(file.absolutePath)).array("drawings").objects()
+                .any {it.getLong("id") == selected && it.getString("key") == key}
+        }
+        assertNotEquals("Recovery copy has its own drawing key",key,name)
+        return File(window.parentFile,name)
     }
     private fun captureSession(directory: File) {
         val id = tabs().getLong("selected")
@@ -941,7 +956,7 @@ class AndroidRasterTest {
         assertTrue("61 MP selection was published",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
         // Exercise the real recovery worker/atomic publication that reported the
         // metadata-limit error, and parse its candidate before any adoption.
-        val recovery=File(device.root,"tonal-61mp-recovery-session")
+        val recovery=recoveryDirectory("tonal-61mp-recovery-session")
         val saveStart=SystemClock.elapsedRealtimeNanos()
         captureSession(recovery)
         val saveMs=(SystemClock.elapsedRealtimeNanos()-saveStart)/1_000_000
@@ -1536,7 +1551,7 @@ class AndroidRasterTest {
         png("hdr-pq.png",clipped)
         val exr=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "Exr")).toString())).getJSONObject("recipe")}
         val exrBytes=png("hdr-exact.exr",exr);assertArrayEquals(byteArrayOf(0x76,0x2f,0x31,0x01),exrBytes.copyOfRange(0,4))
-        val recovery=File(files,"hdr-session");captureSession(recovery)
+        val recovery=recoveryDirectory("hdr-session");captureSession(recovery)
         native{Native.destroyGpuForTest(it)};compose.runOnUiThread{host.documentChanged()};compose.waitUntil(10_000){host.failure!=null}
         compose.runOnUiThread{host.restartCanvas()};compose.waitUntil(60_000){host.surfaceReady&&host.snapshot?.optBoolean("brush_ready")==true};ready()
         assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString());assertEquals(hash(sdr),hash(png("hdr-recovered-sdr.png")))
@@ -2053,6 +2068,7 @@ class AndroidRasterTest {
             }
             try {
                 for (file in inputs) Native.imageImportRead(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),file.name)
+                Native.imageImportPrepare(task)
                 if (afterRead == null) native { Native.imageImportAdopt(it,task) } else afterRead(task,id,control)
             } catch (e: Exception) { native { Native.documentComplete(it,id,false,"null") }; throw e }
             finally { Native.imageImportFree(task); Native.captureFree(control) }
@@ -2550,6 +2566,7 @@ class AndroidRasterTest {
             val (task, requestId) = native { h -> val (id, _) = request(h, "import_image"); Native.imageImportTask(h, id, Native.imageImportContext(h, "null", "null"), control) to id }
             try {
                 Native.imageImportRead(task, resolver.openFileDescriptor(uris.first(), "r")!!.detachFd(), "late.png")
+                Native.imageImportPrepare(task)
                 native { Native.destroyGpuForTest(it) }; scenario.onActivity { host.documentChanged() }
                 compose.waitUntil(10_000) { host.failure != null }
                 scenario.onActivity { host.restartCanvas() }
@@ -2680,6 +2697,7 @@ class AndroidRasterTest {
         }
         try {
             Native.imageImportRead(task, ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), input.name)
+            Native.imageImportPrepare(task)
             native { Native.imageImportAdopt(it, task) }
         } finally { Native.imageImportFree(task); Native.captureFree(control) }
         refresh(); pressCanvasBar("apply_transform")
@@ -2765,7 +2783,7 @@ class AndroidRasterTest {
         layer(obj("op" to "rename", "id" to owner, "name" to "Renamed owner"))
         invoke("undo")
         println("PASS hidden attached animation is idle")
-        val recovery = File(files, "attached-motion-blur-session")
+        val recovery = recoveryDirectory("attached-motion-blur-session")
         captureSession(recovery)
         val restore = restoreSessionTask(recovery)
         try { adoptSession(restore) } finally { Native.sessionFree(restore) }
@@ -3997,6 +4015,7 @@ class AndroidRasterTest {
             val task = native { h -> Native.imageImportTask(h, request(h, "import_image").first, Native.imageImportContext(h, "null", "null"), control) }
             try {
                 Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name)
+                Native.imageImportPrepare(task)
                 native { Native.imageImportAdopt(it, task) }
             } finally { Native.imageImportFree(task); Native.captureFree(control) }
             refresh()
@@ -4099,7 +4118,7 @@ class AndroidRasterTest {
             val editedPixels = png("$theme-edited.png")
             invoke("undo")
             assertEquals(undone, poses())
-            val recovery = File(files, "$theme-objects-session")
+            val recovery = recoveryDirectory("$theme-objects-session")
             captureSession(recovery)
             val restore = restoreSessionTask(recovery)
             try { adoptSession(restore) } finally { Native.sessionFree(restore) }
@@ -4169,7 +4188,7 @@ class AndroidRasterTest {
         fun place(file: File) {
             val control = Native.captureControl()
             val task = native { h -> Native.imageImportTask(h, request(h, "import_image").first, Native.imageImportContext(h, "null", "null"), control) }
-            try { Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name); native { Native.imageImportAdopt(it, task) } }
+            try { Native.imageImportRead(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), file.name); Native.imageImportPrepare(task); native { Native.imageImportAdopt(it, task) } }
             finally { Native.imageImportFree(task); Native.captureFree(control) }
             refresh(); pressCanvasBar("apply_transform")
         }
@@ -4832,7 +4851,7 @@ class AndroidRasterTest {
         assertEquals(4, imageObjects.size)
         assertTrue(imageObjects.all { it.getJSONObject("data").getJSONObject("image").getString("ref") == imageId })
         invoke("undo"); assertEquals(original, poses())
-        val recovery = File(files, "objects-history-session")
+        val recovery = recoveryDirectory("objects-history-session")
         captureSession(recovery)
         val restore = restoreSessionTask(recovery)
         try { adoptSession(restore) } finally { Native.sessionFree(restore) }
@@ -4955,7 +4974,7 @@ class AndroidRasterTest {
         assertEquals(eyeCheckpoint,native {JSONObject(Native.sessionStamp(it,tabs(it).getLong("selected"))).getLong("checkpoint")})
         assertFalse(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         assertEquals(beforeEye.artworkRecords().toString(),manifest(save("selection-eye-after.capy")).artworkRecords().toString())
-        val recovery=File(files,"atomic-recovery-session")
+        val recovery=recoveryDirectory("atomic-recovery-session")
         val capturedFile=native {state(it).getJSONObject("document_file")}
         captureSession(recovery)
         val stale=restoreSessionTask(recovery)
@@ -5027,13 +5046,9 @@ class AndroidRasterTest {
         }
         fun order(value:JSONObject){native{Native.documentTabs(it,value.toString())}}
         fun trim() {
-            val directory=java.nio.file.Files.createTempDirectory(files.toPath(),"tabs-pressure-").toFile()
-            val stores=Native.sessionStoresOpen(directory.absolutePath)
-            try {
-                native{Native.sessionWatchPressure(it,stores)}
-                val task=native{Native.documentStorageWait(it)}
-                if(task!=0L)try {Native.documentStorageWaitWork(task)} finally {Native.documentStorageWaitFree(task)}
-            } finally {Native.sessionStoresFree(stores)}
+            runBlocking {host.recovery.storeCoordinator()}
+            val task=native{Native.documentStorageWait(it)}
+            if(task!=0L)try {Native.documentStorageWaitWork(task)} finally {Native.documentStorageWaitFree(task)}
         }
         val first=tabs().getLong("selected")
         stroke(0.0);val exact=manifest(save("tabs-exact.capy")).rasterResources().toString()

@@ -59,7 +59,9 @@ impl WebApp {
             return Err(js("The canvas changed while importing; try again"));
         }
         self.session.validate_image_placement(&images.request.context).map_err(js)?;
-        let project = if let Some(clip) = images.clip { clip.document(self.session.localization()).map_err(js)?
+        let project = if let Some(clip) = images.clip {
+            let project=clip.document(self.session.localization()).map_err(js)?;
+            project.memory().bind_storage(images.writer.binding()).map_err(js)?;project
         } else {
             layer_ui::clipboard_document(images.sources, self.session.state().settings.photo_open, self.session.localization()).map_err(js)?
         };
@@ -69,9 +71,10 @@ impl WebApp {
         let viewport = self.session.state().camera.viewport;
         let brush = self.session.engine().configured_brush().clone();
         let localization = self.session.localization().clone();
+        let writer=Some(self.session.pending_asset_writer());
         self.documents.admission(&self.session.retained_document_tiles()).admit(&project).map_err(|reason| js(reason.message(&localization)))?;
         Ok(future_to_promise(async move {
-            let candidate = prepare_session(project, factory, &brush, viewport, localization, Some(&cancelled)).await?;
+            let candidate = prepare_session(project, factory, &brush, viewport, localization, writer, Some(&cancelled)).await?;
             Ok(WebProject { session: Some(Box::new(candidate)), request: id, copy_owner: None, epoch, revision, source: layer_ui::ImportSource::Photo,
                 placed: None, source_name: String::new(), target: None, package: None, lost }.into())
         }))
@@ -210,11 +213,12 @@ impl WebApp {
             project.composition().color.space, &mut brush);
         let localization = self.session.localization().clone();
         let control = candidate.control.clone();
+        let writer=Some(self.session.pending_asset_writer());
         self.documents.admission(&self.session.retained_document_tiles()).admit(&project).map_err(|reason| js(reason.message(&localization)))?;
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
             let cancelled = wasm_bindgen::closure::Closure::<dyn Fn() -> bool>::new(move || control.is_cancelled());
-            let session = prepare_session(project, factory, &brush, viewport, localization,
+            let session = prepare_session(project, factory, &brush, viewport, localization, writer,
                 Some(cancelled.as_ref().unchecked_ref())).await?;
             Ok(WebProject { session: Some(Box::new(session)), request, copy_owner, epoch, revision,
                 source: layer_ui::ImportSource::Photo, placed: None, source_name: String::new(),
@@ -276,6 +280,7 @@ impl WebApp {
         let localization = self.session.localization().clone();
         let brush = self.session.engine().configured_brush().clone();
         let photo_policy = self.session.state().settings.photo_open;
+        let writer=Some(self.session.pending_asset_writer());
         let admission = self.documents.admission(&self.session.retained_document_tiles());
         let order = match &request {
             DocumentRequest::New => Some((
@@ -297,7 +302,7 @@ impl WebApp {
                     .limits()
                     .max_texture_dimension_2d
                     .min(ProjectLimits::default().dimension),
-                ..Default::default()
+                ..ProjectLimits::for_import()
             };
             let source_name = source_name.unwrap_or_default();
             let mut warning = None;
@@ -347,6 +352,8 @@ impl WebApp {
             let source_kind = imported.source;
             let project = imported.project;
             if placing {
+                let writer=writer.ok_or_else(||js("Drawing storage is not ready"))?;
+                writer.store_document(&project).await.map_err(js)?;
                 hdr::admit_document(&project)?;
                 let source=project.artwork.paint.iter().find_map(|(_,_,p)|p.base.as_ref().map(|base| base.image.storage().clone())).ok_or_else(||js("The selected file is not a photo"))?;
                 return Ok(WebProject {
@@ -365,7 +372,7 @@ impl WebApp {
                 .into());
             }
             admission.admit(&project).map_err(|reason|js(reason.message(&localization)))?;
-            let prepared=prepare_session(project,factory,&brush,viewport,localization,cancelled.as_ref()).await;
+            let prepared=prepare_session(project,factory,&brush,viewport,localization,writer,cancelled.as_ref()).await;
             let mut candidate=match prepared {
                 Ok(candidate)=>candidate,
                 Err(error)=>{
@@ -484,8 +491,11 @@ pub fn raster_worker_properties(metadata: &str) -> Result<JsValue, JsValue> {
 pub(super) async fn prepare_session(
     project:layer_core::Document,factory:RendererFactory,
     brush:&layer_core::BrushSnapshot,viewport:[u32;2],localization:std::sync::Arc<layer_ui::Localizer>,
+    writer:Option<layer_ui::AssetWriter>,
     cancelled:Option<&js_sys::Function>,
 )->Result<UiSession<AttachedRenderer>,JsValue>{
+    let writer=writer.as_ref().map(|writer|writer.for_document(&project)).transpose().map_err(js)?;
+    if let Some(writer)=&writer {writer.store_document(&project).await.map_err(js)?;}
     hdr::admit_document(&project)?;
     let mut renderer = factory.rasterizer(project.composition().color).map_err(js)?;
     raster_worker::install(&mut renderer);
@@ -537,5 +547,6 @@ pub(super) async fn prepare_session(
         candidate.renderer_mut().0.as_mut().ok_or_else(||js("Canvas unavailable"))?.compile_startup_step(false).await.map_err(js)?;
         yield_browser().await?;
     }
+    if let Some(writer)=writer {candidate.bind_asset_writer(writer).map_err(js)?;}
     Ok(candidate)
 }

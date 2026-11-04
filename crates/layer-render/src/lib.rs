@@ -902,6 +902,7 @@ pub trait CanvasRenderer {
     fn memory_headroom(&self) -> Option<u64> {
         None
     }
+    fn new_drawing_working_bytes(&self, _viewport: [u32; 2]) -> Option<u64> { None }
     fn preflight_image_object_affine(
         &self, _scene:SceneView<'_>, _object:layer_core::authored::ImageObjectHandle,
         _affine:layer_core::authored::Affine64, _view:ViewState,

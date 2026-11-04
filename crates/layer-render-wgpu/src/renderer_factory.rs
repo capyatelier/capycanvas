@@ -81,6 +81,7 @@ impl RendererFactory {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn memory_snapshot(&self) -> Option<layer_render::MemorySnapshot> { self.0.memory.lock().unwrap().upgrade().and_then(|memory| memory.snapshot()) }
     pub(super) fn memory_budget(&self) -> &layer_core::MemoryBudget { &self.0.budget }
+    pub(super) fn unified_memory(&self)->bool {self.0.budget.snapshot().devices.iter().any(|device|device.device==self.0.memory_device && device.unified)}
     pub(super) fn request_memory_update(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(memory) = self.0.memory.lock().unwrap().upgrade() { memory.request_update(); }

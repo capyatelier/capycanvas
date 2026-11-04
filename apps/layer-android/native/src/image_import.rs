@@ -28,6 +28,7 @@ struct Batch {
     color: layer_core::color::DocumentColor,
     mode: Option<layer_ui::PasteMode>,
     open: Option<NewImage>,
+    localization:std::sync::Arc<layer_ui::Localizer>,
 }
 struct NewImage {
     environment: layer_host::open::OpenEnvironment,
@@ -116,10 +117,11 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
             control: crate::inspection::control(cancel)?,
             images: layer_ui::ImageImportBatch::new(a.host.session.state().settings.photo_open,
                 a.host.session.engine().document().composition().color.space, layer_color::photo::DecodeLimits::from_memory_budget(
-                    layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))),
+                    layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))).with_writer(a.host.session.image_import_writer()?),
             clip, color: a.host.session.engine().document().composition().color,
             mode: match a.host.session.document_request(id as u32)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
             open,
+            localization:a.host.session.localization().clone(),
         })
     })();
     or_throw(&mut env, result, 0)
@@ -130,8 +132,12 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportPrepare(mut env: JN
     crate::jni_entry!(env, {
     let mut b_owner = crate::inspection::borrow::<Batch>(handle)?;let b=&mut *b_owner;
     let result = (|| {
+        pollster::block_on(b.images.finish_storage())?;
         if b.open.is_none() && b.mode != Some(layer_ui::PasteMode::Into) && let Some(clip) = &mut b.clip {
             clip.convert_layers(b.color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || b.control.is_cancelled())?;
+        }
+        if b.open.is_none() && let Some(clip)=&b.clip {
+            pollster::block_on(b.images.writer().ok_or("Drawing storage is not ready")?.store_clip(clip,&b.localization))?;
         }
         let Some(open) = &mut b.open else { return Ok(()); };
         if b.control.is_cancelled() { return Err("Paste cancelled".into()); }
@@ -186,8 +192,10 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportRead(
         let control = b.control.clone();
         let file = layer_core::Cancellable { inner: file, cancelled: move || control.is_cancelled() };
         let decode = |mut input: BufReader<_>, limits, cancelled: &_| crate::photo_reader::read(&mut input, limits, cancelled);
-        if b.clipboard { b.images.read_candidate_with_decoder(BufReader::new(file), name, b.control.cancellation_flag(), decode) }
-        else { b.images.read_with_decoder(BufReader::new(file), name, b.control.cancellation_flag(), decode) }
+        pollster::block_on(b.images.prepare_decode())?;
+        if b.clipboard { b.images.read_candidate_with_decoder(BufReader::new(file), name, b.control.cancellation_flag(), decode)?; }
+        else { b.images.read_with_decoder(BufReader::new(file), name, b.control.cancellation_flag(), decode)?; }
+        pollster::block_on(b.images.write_prepared())
     })();
     if result.is_err() && !b.clipboard {
         b.images.invalidate();
@@ -220,7 +228,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportAssumeProfile(
     let mut b_owner = crate::inspection::borrow::<Batch>(handle)?;let b=&mut *b_owner;
     let result = (|| {
         let profile = serde_json::from_str(&read(&mut env, &profile)?).map_err(error)?;
-        b.images.interpret(profile, b.control.is_cancelled())
+        b.images.interpret(profile, b.control.is_cancelled())?;pollster::block_on(b.images.write_prepared())
     })();
     if result.is_err() {
         b.images.invalidate();

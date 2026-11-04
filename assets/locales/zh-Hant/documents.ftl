@@ -195,7 +195,6 @@ documents-prints-at = 列印尺寸 { $width } × { $height } { $unit }
 documents-too-large-side = 對此裝置而言太大：邊長最多 { $maximum } px
 documents-too-large-memory = 超出此裝置的可用記憶體
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · 最多 { $count } 個圖層
 documents-layer-memory = 每個圖層 { $size }
 documents-layer-memory-available = 每個圖層 { $size } · 可用 { $available }
 documents-no-paper = 無紙張

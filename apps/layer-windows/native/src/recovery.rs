@@ -334,11 +334,12 @@ impl Service {
                     Job::Fresh=>{let result=Storage::create(&root).map(|next|{let manifest=next.manifest.clone();let stores=next.stores.clone();storage=Some(next);(manifest,0,stores)});Finished::Opened(result)},
                     Job::Adopt{mapping,attempts}=>{let result=storage.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|storage|storage.complete_restores(&attempts,&mapping,&stopping));Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
                     Job::Discard{id}=>{let result=storage.as_mut().ok_or_else(||"Session storage is unavailable".to_string()).and_then(|storage|storage.discard(id,&stopping));Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
-                    Job::Restore{environment}=>{let result=(||{
+                    Job::Restore{mut environment}=>{let result=(||{
                         let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
                         let Decoded{drawings,mut failed,mut errors}=storage.decode(environment.limits(),|editors|environment.admit_sessions(editors),&stopping)?;
                         let mut prepared=PreparedRestore{candidates:Vec::new(),attempts:Vec::new(),failed:Vec::new(),errors:Vec::new()};
                         for (id,attempt,restored,recovered) in drawings {
+                            environment.use_store(&storage.stores,id)?;
                             match prepare(&environment,restored,recovered,prepared.candidates.is_empty(),&stopping) {
                                 Ok(candidate)=>{prepared.attempts.push(attempt);prepared.candidates.push((id,candidate));}
                                 Err(error)=>{
@@ -351,9 +352,10 @@ impl Service {
                         prepared.failed=failed;prepared.errors=errors;
                         Ok(prepared)
                     })();Finished::Restored{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
-                    Job::RestoreDrawing{id,environment}=>{let result=(||{
+                    Job::RestoreDrawing{id,mut environment}=>{let result=(||{
                         let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
                         let drawing=storage.manifest.drawings.iter().find(|drawing|drawing.id==id).cloned().ok_or("Session drawing is missing")?;
+                        environment.use_store(&storage.stores,id)?;
                         let attempt=storage.begin_restore(id,true,&stopping)?;
                         let result=storage.read(&drawing,environment.limits(),&stopping).and_then(|(restored,_)|{
                             environment.admit_sessions(std::iter::once(&restored.editor))?;prepare(&environment,restored,true,false,&stopping)
@@ -435,6 +437,7 @@ impl Service {
                 Err(mpsc::TryRecvError::Empty)=>break,
                 Err(mpsc::TryRecvError::Disconnected)=>{
                     let error="Session worker stopped unexpectedly".to_string();
+                    host.session.fail_asset_writer(error.clone());
                     self.changed|=self.error.as_ref()!=Some(&error);self.error=Some(error);self.busy=false;break;
                 }
             };
@@ -445,6 +448,7 @@ impl Service {
                 Finished::Opened(result) => match result {
                     Ok((manifest, windows,stores)) => {
                         stores.set_wake(host.wake_callback());
+                        stores.attach_window(window,host)?;
                         self.stores=Some(stores);
                         self.windows = windows;
                         self.restore_queue = manifest.drawings.iter().map(|d| d.id).collect();
@@ -458,7 +462,7 @@ impl Service {
                         self.manifest = manifest;
                         self.ready = true
                     }
-                    Err(error) => self.error = Some(error),
+                    Err(error) => {host.session.fail_asset_writer(error.clone());self.error = Some(error);},
                 },
                 Finished::Restored{result,manifest} => {if let Some(manifest)=manifest{self.manifest=manifest;}match result {
                     Ok(PreparedRestore{candidates,attempts,failed,errors}) => {
@@ -491,6 +495,7 @@ impl Service {
                 }},
             }
         }
+        if host.session.asset_writer().is_none() && let Some(stores)=&self.stores {stores.install_storage(window.documents.selected(),&host.session)?;}
         if self.closed && (quitting || host.session.state().document_file.close_ready) {
             self.drain()?;
             return Ok(std::mem::take(&mut self.changed));

@@ -102,7 +102,7 @@ impl DrawingSetup {
         if !(1..=MAX_NEW_DOCUMENT_RESOLUTION).contains(&self.resolution) { return Err(SetupProblem::Resolution); }
         let extent = self.extent();
         if extent.iter().any(|side| *side > limits.side) { return Err(SetupProblem::Side(limits.side)); }
-        if Capacity::new(extent, self.color.depth, limits).layers == Some(0) { return Err(SetupProblem::Memory); }
+        if limits.memory.is_some_and(|memory|memory==0 || limits.working_bytes.is_some_and(|working|working>memory)) { return Err(SetupProblem::Memory); }
         Ok(())
     }
     pub fn project(&self, id: PortableId, paper: TextureSource, limits: CanvasLimits, l: &Localizer) -> Result<Document, String> {
@@ -110,8 +110,12 @@ impl DrawingSetup {
         let mut document = self.options().document_on(id, paper, l);
         document.set_paper_color(self.paper.color);
         document.set_paper_relief(self.paper.relief as f32);
-        if self.paper.texture.is_some() { return Ok(document); }
-        document.without_paper().map_err(|error| error.to_string())
+        let mut document=if self.paper.texture.is_some() {document}else {document.without_paper().map_err(|error|error.to_string())?};
+        if let Some(working)=limits.working_bytes {
+            let budget=layer_core::MemoryBudget::process();let reservation=budget.admit_import(working).ok_or(layer_core::MEMORY_BUDGET_EXCEEDED)?;
+            document=document.with_memory(layer_core::DocumentMemory::new(budget,Some(reservation)));
+        }
+        document.reserve_import()?;Ok(document)
     }
     pub fn orientation(&self) -> Orientation {
         let [width, height] = self.extent();
@@ -161,15 +165,15 @@ pub enum Orientation {
 pub struct CanvasLimits {
     pub side: u32,
     pub memory: Option<u64>,
+    pub working_bytes: Option<u64>,
 }
 impl Default for CanvasLimits {
-    fn default() -> Self { Self { side: layer_core::MAX_EXTENT, memory: None } }
+    fn default() -> Self { Self { side: layer_core::MAX_EXTENT, memory: None, working_bytes:None } }
 }
 impl CanvasLimits {
-    pub fn new(side: u32, memory: Option<u64>) -> Self { Self { side: side.min(layer_core::MAX_EXTENT), memory } }
+    pub fn new(side: u32, memory: Option<u64>) -> Self { Self { side: side.min(layer_core::MAX_EXTENT), memory,working_bytes:None } }
+    pub fn with_working_bytes(mut self,bytes:Option<u64>)->Self {self.working_bytes=bytes;self}
 }
-
-const OVERHEAD_BYTES_PER_PIXEL: u64 = 20;
 
 fn bytes_per_pixel(depth: SampleDepth) -> u64 {
     match depth { SampleDepth::U8 => 4, SampleDepth::U16 | SampleDepth::F16 => 8, SampleDepth::F32 => 16 }
@@ -179,15 +183,13 @@ fn bytes_per_pixel(depth: SampleDepth) -> u64 {
 pub struct Capacity {
     pub megapixels: f64,
     pub layer_bytes: u64,
-    pub layers: Option<u64>,
     pub available: Option<u64>,
 }
 impl Capacity {
     pub fn new(extent: [u32; 2], depth: SampleDepth, limits: CanvasLimits) -> Self {
         let pixels = u64::from(extent[0]) * u64::from(extent[1]);
         let layer_bytes = pixels * bytes_per_pixel(depth);
-        let layers = limits.memory.map(|memory| memory.saturating_sub(pixels * OVERHEAD_BYTES_PER_PIXEL) / layer_bytes.max(1));
-        Self { megapixels: pixels as f64 / 1e6, layer_bytes, layers, available: limits.memory }
+        Self { megapixels: pixels as f64 / 1e6, layer_bytes, available: limits.memory }
     }
 }
 
@@ -668,14 +670,7 @@ impl NewDrawingView {
             None => l.format(MessageId::DOCUMENTS_LAYER_MEMORY, &args),
         };
         let problem = setup.validate(limits).err();
-        let capacity = match capacity.layers.filter(|_| problem.is_none()) {
-            Some(layers) => {
-                args.set("layers", layers);
-                args.set("count", group(layers));
-                l.format(MessageId::DOCUMENTS_CAPACITY, &args)
-            }
-            None => l.format(MessageId::DOCUMENTS_MEGAPIXELS, &args),
-        };
+        let capacity = l.format(MessageId::DOCUMENTS_MEGAPIXELS, &args);
         let size = match problem {
             Some(problem) => problem.message(l),
             None if setup.unit == LengthUnit::Px => {
@@ -1001,16 +996,16 @@ mod tests {
     }
 
     #[test]
-    fn limits_report_capacity_and_refuse_sheets_the_device_cannot_hold() {
+    fn limits_report_canvas_size_and_refuse_working_sets_the_device_cannot_hold() {
         let l = english();
         let settings = NewDocumentSettings::default();
         let limits = CanvasLimits::new(16384, Some(6 * 1024 * 1024 * 1024));
         let draft = NewDrawingDraft::new(default_setup());
         let view = NewDrawingView::new(&draft, &catalog(&settings, &l), limits);
         assert_eq!(view.preset, "Sketchbook A4");
-        assert_eq!(view.capacity, "8.7 MP · up to 180 layers");
+        assert_eq!(view.capacity, "8.7 MP");
         let roomy = NewDrawingView::new(&draft, &catalog(&settings, &l), CanvasLimits::new(16384, Some(400 * 1024 * 1024 * 1024)));
-        assert_eq!(roomy.capacity, "8.7 MP · up to 12,337 layers");
+        assert_eq!(roomy.capacity, "8.7 MP");
         assert_eq!(view.memory, "33 MB per layer · 6.0 GB available");
         assert_eq!(view.size, "3,508 × 2,480 px");
         assert!(!view.problem);
@@ -1022,7 +1017,7 @@ mod tests {
         assert_eq!(view.preset, "Custom");
         let mut heavy = draft.clone();
         heavy.apply(NewDrawingEdit::Depth(SampleDepth::F32));
-        let tight = CanvasLimits::new(16384, Some(200 * 1024 * 1024));
+        let tight = CanvasLimits::new(16384, Some(200 * 1024 * 1024)).with_working_bytes(Some(256*1024*1024));
         assert_eq!(heavy.setup.validate(tight), Err(SetupProblem::Memory));
         assert_eq!(heavy.setup.project(PortableId::random(), layer_core::paper::default_texture(), tight, &l).unwrap_err(), "Too large for this device’s available memory");
     }

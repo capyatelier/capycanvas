@@ -83,6 +83,14 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
         let context = session.image_placement_context(incoming.as_ref().and_then(|d| d.center), incoming.as_ref().and_then(|d| d.destination))?;
         (context, session.state().settings.photo_open, session.engine().document().composition().color.space)
     };
+    let writer={
+        let gpu=w.gpu.borrow();let session=&gpu.as_ref().ok_or("Canvas unavailable")?.session;
+        if session.asset_writer().is_none() {
+            w.restart.stores.adopt_binding(w.documents.selected(),w.recovery().binding.clone())?;
+            w.restart.stores.install_storage(w.documents.selected(),session)?;
+        }
+        session.image_import_writer()?
+    };
     let paths = if paste {
         Vec::new()
     } else if let Some(incoming) = incoming {
@@ -162,8 +170,8 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
                         .await.map_err(|_| "Image import cancelled")?.map_err(|e| e.to_string())?;
                     let paths = value.get::<gdk::FileList>().map_err(|e| e.to_string())?.files().iter()
                         .map(|file| file.path().ok_or_else(|| "Choose images stored on this device".to_string())).collect::<Result<Vec<_>, _>>()?;
-                    let control = cancelled.clone();
-                    gio::spawn_blocking(move || read_sources(paths, true, control)).await.map_err(|_| "Image reader failed")?
+                    let control = cancelled.clone();let writer=writer.clone();
+                    gio::spawn_blocking(move || read_sources(paths, true, control,writer)).await.map_err(|_| "Image reader failed")?
                 }.await;
             }
             for mime in layer_color::photo::mime_types() {
@@ -171,14 +179,14 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
                 if !clipboard.formats().contain_mime_type(mime) { continue; }
                 result = async {
                     let temporary = gio::CancellableFuture::new(spool(&clipboard, mime), transfer.clone()).await.map_err(|_| "Image import cancelled")??;
-                    let control = cancelled.clone();
-                    gio::spawn_blocking(move || read_sources(vec![temporary.0.clone()], true, control)).await.map_err(|_| "Image reader failed")?
+                    let control = cancelled.clone();let writer=writer.clone();
+                    gio::spawn_blocking(move || read_sources(vec![temporary.0.clone()], true, control,writer)).await.map_err(|_| "Image reader failed")?
                 }.await;
             }
             result?
         } else {
             let control = cancelled.clone();
-            gio::spawn_blocking(move || read_sources(paths, false, control)).await.map_err(|_| "Image reader failed")??
+            gio::spawn_blocking(move || read_sources(paths, false, control,writer)).await.map_err(|_| "Image reader failed")??
         };
         Ok::<_, String>(sources)
     }
@@ -224,22 +232,22 @@ pub(super) async fn run(w: &Rc<Workspace>, id: Option<u32>, mode: Option<layer_u
     Ok(true)
 }
 
-/// One worker and one aggregate source allowance for the entire batch. Failure
-/// drops every prepared source before any provisional layer can be published.
 fn read_sources(
-    paths: Vec<PathBuf>, paste: bool, cancelled: Arc<AtomicBool>,
+    paths: Vec<PathBuf>, paste: bool, cancelled: Arc<AtomicBool>,writer:layer_ui::AssetWriter,
 ) -> Result<layer_ui::PreparedImages, String> {
     if paths.is_empty() { return Err("No images to import".into()); }
-    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_ui::photo_decode_limits());
+    let mut images = layer_ui::ImageImportBatch::new(Default::default(), layer_core::color::RgbSpace::ProPhoto, layer_ui::photo_decode_limits()).with_writer(writer);
     for path in paths {
         if cancelled.load(Ordering::Acquire) { return Err("Image import cancelled".into()); }
+        pollster::block_on(images.prepare_decode())?;
         let name = if paste { "Clipboard image".into() } else {
             path.file_stem().unwrap_or_default().to_string_lossy().into_owned()
         };
         let reader = cancellable_file(&path, cancelled.clone()).map_err(|e| e.to_string())?;
         images.read_with_decoder(reader,&name,&cancelled,crate::photo_reader::read)
             .map_err(|e| format!("{name}: {e}. No images were imported."))?;
+        pollster::block_on(images.write_prepared())?;
     }
     if cancelled.load(Ordering::Acquire) { return Err("Image import cancelled".into()); }
-    images.take_sources(cancelled.load(Ordering::Acquire))
+    pollster::block_on(images.finish_storage())?;images.take_sources(cancelled.load(Ordering::Acquire))
 }

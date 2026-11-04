@@ -111,6 +111,13 @@ struct SessionJob {
     exclusion: u64,
     committed: bool,
 }
+impl Drop for SessionJob {
+    fn drop(&mut self) {
+        if !self.adopted && let Some(environment)=&self.environment {
+            environment.storage_failed(self.error.as_ref().map_or_else(||"Drawing storage owner closed".into(),|error|error.to_string_lossy().into_owned()));
+        }
+    }
+}
 impl SessionJob {
     fn manifest_path(&self) -> Result<PathBuf, String> {
         self.disk.as_ref().map(|disk| disk.lock().unwrap_or_else(|e| e.into_inner()).path.join("window.json"))
@@ -133,7 +140,7 @@ impl SessionJob {
         }
         let recovered = !manifest.clean_exit;
         self.active = manifest.active;
-        let environment = self.environment.as_ref().ok_or("The canvas is unavailable")?;
+        let environment = self.environment.as_mut().ok_or("The canvas is unavailable")?;
         let disk = self.disk.as_ref().unwrap();
         let mut disk = disk.lock().unwrap_or_else(|e| e.into_inner());
         disk.manifest = manifest.clone();
@@ -181,6 +188,7 @@ impl SessionJob {
                     let fingerprint = unsafe { observe?(uri.as_ptr(), context) };
                     handles::take::<CapySessionDestination>(fingerprint).map(|fingerprint|fingerprint.0)
                 });
+                environment.use_store(&disk.stores,id)?;
                 let mut candidate = environment.prepare(restore.document().clone(), || false)?;
                 candidate.restore_session(restore, recovered, observed)?;
                 candidate.set_document_replacement(false);
@@ -290,7 +298,7 @@ pub unsafe extern "C" fn capy_apple_session_open(app: u64, sessions: *const c_ch
     adopt: bool, retry: bool) -> u64 {
     let Some(mut lease_a)=handles::app(app) else { return 0; };
     let a=&mut *lease_a;
-    a.perform(|a| {
+    let opened=a.perform(|a| {
         let open = SessionOpen { sessions: PathBuf::from(unsafe { project::read_title(sessions) }?),
             scene: unsafe { project::read_title(scene) }?.to_owned(), adopt };
         let environment = OpenEnvironment::capture(&a.host.session,
@@ -300,7 +308,9 @@ pub unsafe extern "C" fn capy_apple_session_open(app: u64, sessions: *const c_ch
             candidates: Vec::new(), active: 0, clean_exit: false, retry, stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: 0, exclusion: 0, committed: false,
             warning: None, failures: Default::default(), append: retry && a.session_disk.is_some(),
         }))))
-    }).unwrap_or(0)
+    });
+    if opened.is_none() && let Some(error)=&a.error {a.host.session.fail_asset_writer(error.to_string_lossy().into_owned());}
+    opened.unwrap_or(0)
 }
 /// # Safety
 /// Serial owner after recovery preparation; exclusion 0 retains all drawings,
@@ -338,6 +348,7 @@ pub unsafe extern "C" fn capy_session_work(task: u64, observe: Option<SessionDes
             Ok(Ok(())) => 0,
             error => {
                 let message = match error { Ok(Err(e)) => e, Err(payload) => layer_host::panic_diagnostic(&*payload), Ok(Ok(())) => unreachable!() };
+                if let Some(environment)=&job.environment {environment.storage_failed(message.clone());}
                 job.error = CString::new(message.replace('\0', " ")).ok(); -1
             }
         }
@@ -405,7 +416,7 @@ pub unsafe extern "C" fn capy_apple_session_adopt(app: u64, task: u64) -> i32 {
             disk.unpublished = (manifest != original || !manifest.restoring.is_empty()).then_some(original);
             disk.manifest = manifest;
             disk.stores.set_wake(a.host.wake_callback());
-            disk.stores.watch_pressure(a.window.documents.pressure_source());
+            disk.stores.attach_window(&a.window,&a.host)?;
         }
         a.session_disk = Some(disk);
         job.adopted = true;

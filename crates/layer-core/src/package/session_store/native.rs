@@ -1,4 +1,5 @@
 use super::*;
+use crate::package::storage_budget::storage_error;
 use std::{fs::{self,File,OpenOptions},io::{BufWriter,Read,Write}};
 
 #[derive(Debug)]
@@ -16,7 +17,7 @@ impl OwnerLock {
         let mut options = OpenOptions::new();
         options.create(true).truncate(false).read(true).write(true);
         #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-        let file = options.open(path).map_err(|e| e.to_string())?;
+        let file = options.open(path).map_err(storage_error)?;
         #[cfg(target_os = "android")]
         let owned = {
             use std::os::fd::AsRawFd;
@@ -182,7 +183,7 @@ pub fn restore_error(root: &Path) -> Result<Option<String>, String> {
     let file = match File::open(root.join("restore-error.txt")) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(storage_error(error)),
     };
     let mut text = String::new();
     file.take(65_536).read_to_string(&mut text).map_err(|e| e.to_string())?;
@@ -333,12 +334,12 @@ pub fn create_directory(path: &Path) -> Result<(), String> {
     match builder.create(path) {
         Ok(()) => {},
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && metadata_optional(path)?.is_some_and(|metadata| metadata.is_dir()) => {},
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(storage_error(error)),
     }
     sync_directory(parent)
 }
 pub fn sync_directory(path: &Path) -> Result<(), String> {
-    #[cfg(unix)] { File::open(path).and_then(|file| file.sync_all()).map_err(|e| e.to_string()) }
+    #[cfg(unix)] { File::open(path).and_then(|file| file.sync_all()).map_err(storage_error) }
     #[cfg(windows)] { let _ = path; Ok(()) }
 }
 pub fn atomic_publish(path: &Path, write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>, ready: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
@@ -383,6 +384,12 @@ pub(super) fn remove_file(path: &Path) -> Result<(), String> {
 
 pub struct NativeStoreOpener;
 impl StoreOpener for NativeStoreOpener {
+    fn storage_facts<'a>(&'a self,path:&'a Path)->super::super::store_io::FileFuture<'a,super::super::storage_budget::StorageFacts> {
+        Box::pin(async move {
+            let transport=super::super::store_io::NativeTransport::new(path.into());
+            super::super::store_io::FileTransport::storage_facts(&transport).await
+        })
+    }
     fn open<'a>(&'a self,path:&'a Path,retirement:bool)->super::super::store_io::FileFuture<'a,Option<SessionStore>> {
         Box::pin(async move {
             if !retirement {return SessionStore::open(path).await.map(Some);}

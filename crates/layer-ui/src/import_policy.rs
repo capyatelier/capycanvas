@@ -8,7 +8,7 @@ use layer_core::{
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, BufReader, Read, Seek},
-    sync::atomic::AtomicBool,
+    sync::{Arc,atomic::AtomicBool},
 };
 
 pub fn photo_decode_limits() -> layer_color::photo::DecodeLimits {
@@ -249,8 +249,7 @@ fn read_import_input<R:Read+Seek>(
         ImportSource::Master => {
             let limit = source.input_bytes_limit(project_limits, photo_limits);
             let backing = match input.backing {Some(backing)=>backing,None=>package_backing(&mut reader,limit,cancelled)?};
-            let admission=ProjectLimits::for_import();
-            let outcome = layer_core::package::codec::open(backing, ProjectLimits {asset_bytes:project_limits.asset_bytes.min(admission.asset_bytes),raster_bytes:project_limits.raster_bytes.min(admission.raster_bytes),..project_limits}, cancelled)?;
+            let outcome = layer_core::package::codec::open(backing, project_limits, cancelled)?;
             match &outcome {
                 layer_core::package::codec::OpenOutcome::Preserved {reason,..}
                 | layer_core::package::codec::OpenOutcome::RecoveredView {reason,..}
@@ -302,15 +301,150 @@ fn read_import_input<R:Read+Seek>(
     Ok(ImportOutcome::Editable(imported))
 }
 
+#[cfg(not(target_arch="wasm32"))]
+pub type AssetWriteFuture=std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),String>>+Send>>;
+#[cfg(target_arch="wasm32")]
+pub type AssetWriteFuture=std::pin::Pin<Box<dyn std::future::Future<Output=Result<(),String>>>>;
+type AssetWrite=futures_util::future::Shared<AssetWriteFuture>;
+#[cfg(not(target_arch="wasm32"))]
+pub type AssetWriteFn=Arc<dyn Fn(layer_core::raster_storage::RetainedTiles,Option<layer_core::MemoryReservation>)->Result<AssetWriteFuture,String>+Send+Sync>;
+#[cfg(target_arch="wasm32")]
+pub type AssetWriteFn=Arc<dyn Fn(layer_core::raster_storage::RetainedTiles,Option<layer_core::MemoryReservation>)->Result<AssetWriteFuture,String>>;
+#[cfg(not(target_arch="wasm32"))]
+pub type AssetForkFn=Arc<dyn Fn(Option<layer_core::package::session_store::DrawingStore>)->Result<AssetWriter,String>+Send+Sync>;
+#[cfg(target_arch="wasm32")]
+pub type AssetForkFn=Arc<dyn Fn(Option<layer_core::package::session_store::DrawingStore>)->Result<AssetWriter,String>>;
+#[cfg(not(target_arch="wasm32"))]
+type AssetReadyFuture=std::pin::Pin<Box<dyn std::future::Future<Output=Result<AssetWriter,String>>+Send>>;
+#[cfg(target_arch="wasm32")]
+type AssetReadyFuture=std::pin::Pin<Box<dyn std::future::Future<Output=Result<AssetWriter,String>>>>;
+#[cfg(not(target_arch="wasm32"))]
+type AssetFailureFn=Arc<dyn Fn(String)+Send+Sync>;
+#[cfg(target_arch="wasm32")]
+type AssetFailureFn=Arc<dyn Fn(String)>;
+#[derive(Clone)]
+pub struct AssetWriter(Arc<AssetWriterState>);
+enum AssetWriterState {
+    Ready {binding:layer_core::package::session_store::DrawingStore,write:AssetWriteFn,fork:AssetForkFn},
+    Pending {future:futures_util::future::Shared<AssetReadyFuture>,resolved:std::sync::OnceLock<Result<AssetWriter,String>>,fail:Option<AssetFailureFn>},
+}
+impl AssetWriter {
+    pub fn new(binding:layer_core::package::session_store::DrawingStore,write:AssetWriteFn,fork:AssetForkFn)->Self {Self(Arc::new(AssetWriterState::Ready {binding,write,fork}))}
+    fn pending(future:AssetReadyFuture,fail:Option<AssetFailureFn>)->Self {
+        use futures_util::FutureExt;
+        Self(Arc::new(AssetWriterState::Pending {future:future.shared(),resolved:Default::default(),fail}))
+    }
+    pub(crate) fn ready(&self)->Option<&Self> {
+        match &*self.0 {
+            AssetWriterState::Ready {..}=>Some(self),
+            AssetWriterState::Pending {resolved,..}=>resolved.get().and_then(|result|result.as_ref().ok()).and_then(Self::ready),
+        }
+    }
+    pub async fn resolve(&self)->Result<Self,String> {
+        match &*self.0 {
+            AssetWriterState::Ready {..}=>Ok(self.clone()),
+            AssetWriterState::Pending {future,resolved,..}=>{
+                if let Some(result)=resolved.get() {return result.clone();}
+                let result=future.clone().await;let _=resolved.set(result.clone());result
+            },
+        }
+    }
+    pub fn fail_pending(&self,error:String) {
+        if let AssetWriterState::Pending {fail:Some(fail),..}=&*self.0 {fail(error);}
+    }
+    pub fn binding(&self)->layer_core::package::session_store::DrawingStore {
+        let AssetWriterState::Ready {binding,..}=&*self.ready().expect("Asset writer must be resolved").0 else {unreachable!()};binding.clone()
+    }
+    pub fn fork(&self)->Result<Self,String> {self.derive(None)}
+    pub fn for_binding(&self,binding:layer_core::package::session_store::DrawingStore)->Result<Self,String> {self.derive(Some(binding))}
+    fn derive(&self,binding:Option<layer_core::package::session_store::DrawingStore>)->Result<Self,String> {
+        if let Some(ready)=self.ready() {
+            let AssetWriterState::Ready {fork,..}=&*ready.0 else {unreachable!()};return fork(binding);
+        }
+        let parent=self.clone();
+        let AssetWriterState::Pending {fail,..}=&*self.0 else {unreachable!()};
+        let fail=fail.clone();
+        Ok(Self::pending(Box::pin(async move {
+            let ready=parent.resolve().await?;
+            let AssetWriterState::Ready {fork,..}=&*ready.0 else {unreachable!()};fork(binding)
+        }),fail))
+    }
+    pub fn for_document(&self,document:&Document)->Result<Self,String> {
+        match document.memory().storage() {Some(binding)=>self.for_binding(binding),None=>self.fork()}
+    }
+    pub async fn store_document(&self,document:&Document)->Result<(),String> {
+        let editor=layer_core::Editor::new(document.clone());let tiles=editor.retained_tiles();
+        let ready=if tiles.try_blobs()?.is_none_or(|blobs|!blobs.is_empty()) {
+            let ready=self.resolve().await?;
+            let AssetWriterState::Ready {write,..}=&*ready.0 else {unreachable!()};
+            write(tiles,document.memory().clone().take_reservation())?.await?;Some(ready)
+        }else {self.ready().cloned()};
+        if let Some(ready)=ready {document.memory().bind_storage(ready.binding())?;}Ok(())
+    }
+    pub async fn store_clip(&self,clip:&crate::PixelClip,localization:&crate::Localizer)->Result<(),String> {
+        self.store_document(&clip.document(localization)?).await
+    }
+}
+#[derive(Default)]
+struct AssetReadiness {ready:Option<AssetWriter>,result:Option<Result<AssetWriter,String>>,wake:Option<std::task::Waker>,inherited:Option<(AssetWriter,AssetReadyFuture)>}
+impl AssetReadiness {
+    fn complete(state:&std::sync::Mutex<Self>,result:Result<AssetWriter,String>) {
+        let wake={let mut state=state.lock().unwrap();
+            if let Ok(writer)=&result {state.ready=Some(writer.clone());}
+            if state.result.is_some() {return;}
+            state.inherited=None;state.result=Some(result);state.wake.take()};
+        if let Some(wake)=wake {wake.wake();}
+    }
+    fn fail(state:&std::sync::Mutex<Self>,error:String) {
+        let inherited=state.lock().unwrap().inherited.as_ref().map(|(writer,_)|writer.clone());
+        if let Some(writer)=inherited {writer.fail_pending(error.clone());}
+        Self::complete(state,Err(error));
+    }
+}
+pub(crate) struct AssetWriterSlot {state:Arc<std::sync::Mutex<AssetReadiness>>,pending:AssetWriter}
+impl Default for AssetWriterSlot {
+    fn default()->Self {
+        let state=Arc::new(std::sync::Mutex::new(AssetReadiness::default()));let waiting=state.clone();
+        let failed=state.clone();
+        let pending=AssetWriter::pending(Box::pin(std::future::poll_fn(move |cx| {
+            let mut state=waiting.lock().unwrap();
+            if let Some(result)=&state.result {return std::task::Poll::Ready(result.clone());}
+            state.wake=Some(cx.waker().clone());
+            if let Some((_,future))=&mut state.inherited && let std::task::Poll::Ready(result)=future.as_mut().poll(cx) {
+                if let Ok(writer)=&result {state.ready=Some(writer.clone());}
+                state.inherited=None;state.result=Some(result.clone());return std::task::Poll::Ready(result);
+            }
+            std::task::Poll::Pending
+        })),Some(Arc::new(move |error|AssetReadiness::fail(&failed,error))));
+        Self {state,pending}
+    }
+}
+impl AssetWriterSlot {
+    pub(crate) fn ready(&self)->Option<AssetWriter> {self.state.lock().unwrap().ready.clone()}
+    pub(crate) fn pending(&self)->AssetWriter {self.ready().unwrap_or_else(||self.pending.clone())}
+    pub(crate) fn bind(&self,writer:AssetWriter) {
+        if let Some(writer)=writer.ready().cloned() {AssetReadiness::complete(&self.state,Ok(writer));}
+        else {
+            let source=writer.clone();let future:AssetReadyFuture=Box::pin(async move {writer.resolve().await});
+            let wake={let mut state=self.state.lock().unwrap();state.inherited=Some((source,future));state.wake.take()};
+            if let Some(wake)=wake {wake.wake();}
+        }
+    }
+    pub(crate) fn fail(&self,error:String) {AssetReadiness::fail(&self.state,error);}
+}
+impl Drop for AssetWriterSlot {
+    fn drop(&mut self) {AssetReadiness::complete(&self.state,Err("Drawing storage owner closed".into()));}
+}
 #[derive(Clone)]
 pub struct PreparedImages {
     sources: Vec<(String, SourceImage)>,
     reservation: Option<layer_core::MemoryReservation>,
     budget: layer_core::MemoryBudget,
+    writer:Option<AssetWriter>,
 }
 impl From<Vec<(String, SourceImage)>> for PreparedImages {
     fn from(sources: Vec<(String, SourceImage)>) -> Self {
-        Self { sources, reservation: None, budget: layer_core::MemoryBudget::process() }
+        Self { sources, reservation: None, budget: layer_core::MemoryBudget::process(),writer:None }
     }
 }
 impl Default for PreparedImages {
@@ -321,23 +455,23 @@ impl std::ops::Deref for PreparedImages {
     fn deref(&self) -> &Self::Target { &self.sources }
 }
 impl PreparedImages {
-    pub(crate) fn from_parts(sources: Vec<(String, SourceImage)>, reservation: Option<layer_core::MemoryReservation>, budget: layer_core::MemoryBudget) -> Self {
-        Self { sources, reservation, budget }
+    pub(crate) fn from_parts(sources: Vec<(String, SourceImage)>, reservation: Option<layer_core::MemoryReservation>, budget: layer_core::MemoryBudget,writer:Option<AssetWriter>) -> Self {
+        Self { sources, reservation, budget,writer }
     }
     pub fn with_sources(mut self, sources: Vec<(String, SourceImage)>, working: layer_core::color::RgbSpace) -> Result<Self, String> {
         for (_, source) in &sources {
             source.validate()?;
             layer_color::WorkingDecoder::new(&source.interpretation, working, Default::default())?;
         }
-        let bytes = layer_core::color::source::retained_source_bytes(sources.iter().map(|(_, source)| source)) as u64;
+        let bytes = layer_core::color::source::resident_source_bytes(sources.iter().map(|(_, source)| source)) as u64;
         if self.reservation.as_ref().is_some_and(|reservation| !reservation.resize(bytes)) {
             return Err(layer_core::MEMORY_BUDGET_EXCEEDED.into());
         }
         self.sources = sources;
         Ok(self)
     }
-    pub(crate) fn into_parts(self) -> (Vec<(String, SourceImage)>, Option<layer_core::MemoryReservation>, layer_core::MemoryBudget) {
-        (self.sources, self.reservation, self.budget)
+    pub(crate) fn into_parts(self) -> (Vec<(String, SourceImage)>, Option<layer_core::MemoryReservation>, layer_core::MemoryBudget,Option<AssetWriter>) {
+        (self.sources, self.reservation, self.budget,self.writer)
     }
 }
 
@@ -351,6 +485,9 @@ pub struct ImageImportBatch {
     finished: bool,
     budget: layer_core::MemoryBudget,
     reservation: Option<layer_core::MemoryReservation>,
+    writer:Option<AssetWriter>,
+    write:Option<AssetWrite>,
+    written_sources:usize,
 }
 impl ImageImportBatch {
     pub fn new(
@@ -372,7 +509,38 @@ impl ImageImportBatch {
             finished: false,
             budget,
             reservation,
+            writer:None,write:None,written_sources:0,
         }
+    }
+    pub fn with_writer(mut self,writer:AssetWriter)->Self {self.writer=Some(writer);self}
+    pub fn writer(&self)->Option<&AssetWriter> {self.writer.as_ref()}
+    pub async fn prepare_decode(&mut self)->Result<(),String> {
+        let peak=(self.limits.source_bytes as u64).saturating_add(self.limits.codec_bytes as u64);
+        if self.write.is_some() && self.budget.import_headroom_bytes()<peak {self.write_prepared().await?;}
+        Ok(())
+    }
+    pub async fn write_prepared(&mut self)->Result<(),String> {
+        if self.finished {return self.check(false);}
+        if let Some(write)=self.write.clone() {write.await?;self.write=None;}
+        let Some(writer)=&self.writer else {return Ok(());};
+        let tiles=layer_core::raster_storage::RetainedTiles::from_sources(self.sources[self.written_sources..].iter().map(|(_,source)|source));
+        self.written_sources=self.sources.len();
+        let bytes=layer_core::color::source::resident_source_bytes(self.sources.iter().chain(self.pending.iter()).map(|(_,source)|source)) as u64;
+        if self.reservation.as_ref().is_some_and(|reservation|!reservation.resize(bytes)) {return Err(layer_core::MEMORY_BUDGET_EXCEEDED.into());}
+        if tiles.try_blobs()?.is_none_or(|blobs|!blobs.is_empty()) {
+            use futures_util::FutureExt;
+            let ready=writer.resolve().await?;
+            let AssetWriterState::Ready {write,..}=&*ready.0 else {unreachable!()};
+            self.write=Some(write(tiles,self.reservation.clone())?.shared());
+        }
+        Ok(())
+    }
+    pub async fn finish_storage(&mut self)->Result<(),String> {
+        self.write_prepared().await?;
+        if let Some(write)=self.write.clone() {write.await?;self.write=None;}
+        let bytes=layer_core::color::source::resident_source_bytes(self.sources.iter().map(|(_,source)|source)) as u64;
+        if self.reservation.as_ref().is_some_and(|reservation|!reservation.resize(bytes)) {return Err(layer_core::MEMORY_BUDGET_EXCEEDED.into());}
+        Ok(())
     }
     pub fn limits(&self) -> layer_color::photo::DecodeLimits {
         self.limits
@@ -382,6 +550,8 @@ impl ImageImportBatch {
         self.pending = None;
         self.sources.clear();
         self.reservation = None;
+        self.write=None;
+        self.written_sources=0;
     }
     pub fn pending_source(&self) -> Option<&SourceImage> {
         self.pending.as_ref().map(|(_, source)| source)
@@ -401,16 +571,11 @@ impl ImageImportBatch {
         source.validate()?;
         layer_color::WorkingDecoder::new(&source.interpretation, self.working, Default::default())?;
         self.reserve_source(&source)?;
-        self.limits.source_bytes = self
-            .limits
-            .source_bytes
-            .checked_sub(source.resident_bytes())
-            .ok_or("The image batch exceeds the source memory budget. No images were imported.")?;
         self.sources.push((name, source));
         Ok(())
     }
     fn reserve_source(&self, source: &SourceImage) -> Result<(), String> {
-        let bytes = layer_core::color::source::retained_source_bytes(self.sources.iter().map(|(_, source)| source)
+        let bytes = layer_core::color::source::resident_source_bytes(self.sources.iter().map(|(_, source)| source)
             .chain(self.pending.iter().map(|(_, source)| source)).chain(std::iter::once(source))) as u64;
         if self.reservation.as_ref().is_some_and(|reservation| reservation.resize(bytes)) { Ok(()) }
         else { Err(layer_core::MEMORY_BUDGET_EXCEEDED.into()) }
@@ -492,11 +657,12 @@ impl ImageImportBatch {
     }
     pub fn take_sources(&mut self, cancelled: bool) -> Result<PreparedImages, String> {
         let result = self.check(cancelled).and_then(|_| {
+            if self.write.is_some() || self.writer.is_some() && self.written_sources!=self.sources.len() {return Err("Image storage preparation is still pending".into());}
             if self.sources.is_empty() {
                 return Err("No images to import".into());
             }
             Ok(PreparedImages { sources: std::mem::take(&mut self.sources),
-                reservation: self.reservation.take(), budget: self.budget.clone() })
+                reservation: self.reservation.take(), budget: self.budget.clone(),writer:self.writer.clone() })
         });
         self.invalidate();
         result
@@ -505,6 +671,108 @@ impl ImageImportBatch {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn invalidated_written_images_refuse_further_storage_preparation() {
+        let root=std::env::temp_dir().join(format!("capy-invalidated-import-{}",layer_core::PortableId::random()));
+        let binding=layer_core::package::session_store::DrawingStore::new(&root,None).unwrap();
+        let writer=AssetWriter::new(binding,Arc::new(|_,_|Ok(Box::pin(async {Ok(())}))),Arc::new(|_|Err("Unexpected fork".into())));
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {total_bytes:Some(4<<30),available_bytes:Some(3<<30),..Default::default()});
+        let mut images=ImageImportBatch::with_budget(Default::default(),RgbSpace::Srgb,photo_limits(),budget).with_writer(writer);
+        images.append("Photo".into(),(*rgba8_source([4,4],|_,_|[12,34,56,255])).clone(),false).unwrap();
+        pollster::block_on(images.write_prepared()).unwrap();
+        images.invalidate();
+        for finish in [false,true] {
+            let result=if finish {pollster::block_on(images.finish_storage())}else {pollster::block_on(images.write_prepared())};
+            assert_eq!(result.unwrap_err(),"Image import is no longer prepared");
+        }
+        assert!(!root.exists());
+    }
+    #[test]
+    fn pending_asset_writers_propagate_claim_failure_across_new_tabs() {
+        use super::AssetWriterSlot;
+        use std::{future::Future,task::{Context,Poll}};
+        let first=AssetWriterSlot::default();let second=AssetWriterSlot::default();let third=AssetWriterSlot::default();
+        second.bind(first.pending().fork().unwrap());third.bind(second.pending().fork().unwrap());
+        let sibling=first.pending().fork().unwrap();
+        let writes=[first.pending(),second.pending(),third.pending(),sibling];
+        let mut waiting=writes.iter().map(|writer|Box::pin(writer.resolve())).collect::<Vec<_>>();
+        let mut context=Context::from_waker(std::task::Waker::noop());
+        for wait in &mut waiting {assert!(wait.as_mut().poll(&mut context).is_pending());}
+        third.fail("Startup claim failed".into());
+        for wait in &mut waiting {assert!(matches!(wait.as_mut().poll(&mut context),Poll::Ready(Err(error)) if error=="Startup claim failed"));}
+    }
+    #[test]
+    fn closing_a_pending_tab_does_not_fail_the_startup_claim() {
+        use super::AssetWriterSlot;
+        use std::{future::Future,task::{Context,Poll}};
+        let first=AssetWriterSlot::default();let second=AssetWriterSlot::default();
+        second.bind(first.pending().fork().unwrap());let inherited=second.pending();
+        let mut waiting=Box::pin(inherited.resolve());let mut context=Context::from_waker(std::task::Waker::noop());
+        assert!(waiting.as_mut().poll(&mut context).is_pending());drop(second);
+        assert!(matches!(waiting.as_mut().poll(&mut context),Poll::Ready(Err(error)) if error=="Drawing storage owner closed"));
+        let surviving=first.pending();let mut pending=Box::pin(surviving.resolve());assert!(pending.as_mut().poll(&mut context).is_pending());
+        first.fail("Claim failed".into());assert!(matches!(pending.as_mut().poll(&mut context),Poll::Ready(Err(error)) if error=="Claim failed"));
+    }
+    #[test]
+    fn pending_asset_writer_fails_and_wakes_when_its_owner_fails_or_drops() {
+        use super::AssetWriterSlot;
+        use std::{future::Future,sync::{Arc,atomic::{AtomicUsize,Ordering}},task::{Context,Poll,Wake,Waker}};
+        struct Signal(AtomicUsize);
+        impl Wake for Signal {fn wake(self:Arc<Self>) {self.0.fetch_add(1,Ordering::SeqCst);}}
+        for fail in [false,true] {
+            let slot=AssetWriterSlot::default();let writer=slot.pending();
+            let mut waiting=Box::pin(writer.resolve());let signal=Arc::new(Signal(AtomicUsize::new(0)));
+            let wake=Waker::from(signal.clone());let mut context=Context::from_waker(&wake);
+            assert!(waiting.as_mut().poll(&mut context).is_pending());
+            if fail {slot.fail("Storage initialization failed".into());}else {drop(slot);}
+            assert!(signal.0.load(Ordering::SeqCst)>0);
+            let Poll::Ready(Err(error))=waiting.as_mut().poll(&mut context) else {panic!("storage failure must finish pending operations")};
+            assert_eq!(error,if fail {"Storage initialization failed"}else {"Drawing storage owner closed"});
+        }
+    }
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn retry_storage_installs_a_writer_without_reviving_failed_captures() {
+        use super::{AssetWriter,AssetWriterSlot};
+        use std::sync::Arc;
+        let slot=AssetWriterSlot::default();let failed=slot.pending();
+        failed.fail_pending("Initial claim failed".into());
+        let root=std::env::temp_dir().join(format!("capy-ready-writer-{}",layer_core::PortableId::random()));
+        let binding=layer_core::package::session_store::DrawingStore::new(&root,None).unwrap();
+        let writer=AssetWriter::new(binding.clone(),Arc::new(|_,_|Ok(Box::pin(async {Ok(())}))),Arc::new(|_|Err("Unexpected fork".into())));
+        slot.bind(writer);
+        assert_eq!(slot.ready().unwrap().binding().key(),binding.key());
+        assert_eq!(pollster::block_on(slot.pending().resolve()).unwrap_or_else(|error|panic!("retry failed: {error}")).binding().key(),binding.key());
+        assert!(matches!(pollster::block_on(failed.resolve()),Err(error) if error=="Initial claim failed"));
+        assert!(!root.exists());
+    }
+    #[test]
+    fn captured_writer_failure_finishes_a_pending_asset_write_while_owner_lives() {
+        use super::AssetWriterSlot;
+        use std::{future::Future,task::{Context,Poll}};
+        let slot=AssetWriterSlot::default();let writer=slot.pending().fork().unwrap();
+        let document=layer_color::photo_project((*layer_core::color::source::rgba8_source([4;2],|_,_|[12,34,56,255])).clone(),Default::default(),
+            layer_core::DocumentNames {paint:"Photo".into(),paper:"Paper".into()},layer_core::color::SampleDepth::U8).unwrap();
+        let mut writing=Box::pin(writer.store_document(&document));
+        let mut context=Context::from_waker(std::task::Waker::noop());
+        assert!(writing.as_mut().poll(&mut context).is_pending());
+        writer.fail_pending("Claim failed on file worker".into());
+        assert!(matches!(writing.as_mut().poll(&mut context),Poll::Ready(Err(error)) if error=="Claim failed on file worker"));
+        assert!(slot.ready().is_none());
+    }
+    #[test]
+    fn blank_document_does_not_wait_for_pending_asset_storage() {
+        use super::AssetWriterSlot;
+        use std::{future::Future,task::Context};
+        let slot=AssetWriterSlot::default();let writer=slot.pending();
+        let document=layer_core::Document::new(layer_core::PortableId::random(),256,256,
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let mut storing=Box::pin(writer.store_document(&document));
+        assert!(matches!(storing.as_mut().poll(&mut Context::from_waker(std::task::Waker::noop())),std::task::Poll::Ready(Ok(()))));
+        assert!(document.memory().storage().is_none());
+        assert!(slot.ready().is_none());
+    }
     fn photo_limits() -> layer_color::photo::DecodeLimits {
         layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))
     }
@@ -611,7 +879,7 @@ mod tests {
     #[test]
     fn concurrent_image_batches_refuse_without_releasing_an_accepted_batch() {
         let image = source();
-        let bytes = layer_core::color::source::retained_source_bytes([&image]) as u64;
+        let bytes = layer_core::color::source::resident_source_bytes([&image]) as u64;
         let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { override_bytes: Some(bytes), ..Default::default() });
         let pinned=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
         let occupied=budget.ram_limit_bytes().checked_sub(bytes).unwrap();
@@ -943,19 +1211,18 @@ mod tests {
 
     #[test]
     fn batch_budget_interpretation_and_cancellation_never_publish_a_partial_batch() {
+        let second=source();
         let source = source();
-        let mut batch = ImageImportBatch::new(
-            Default::default(),
-            RgbSpace::Srgb,
-            layer_color::photo::DecodeLimits {
-                source_bytes: source.resident_bytes() * 2 - 1,
-                ..photo_limits()
-            },
-        );
+        let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(2<<30),..Default::default()});
+        let bytes=layer_core::color::source::resident_source_bytes([&source]) as u64;
+        let owner=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
+        let occupied=budget.ram_limit_bytes()-bytes*3/2;
+        owner.report(layer_core::MemoryReport {ram_bytes:occupied,pinned_ram_bytes:occupied,..Default::default()});
+        let mut batch = ImageImportBatch::with_budget(Default::default(),RgbSpace::Srgb,photo_limits(),budget);
         batch.append("first".into(), source.clone(), false).unwrap();
         assert!(
             batch
-                .append("second".into(), source.clone(), false)
+                .append("second".into(), second, false)
                 .is_err()
         );
         assert!(batch.take_sources(false).is_err());

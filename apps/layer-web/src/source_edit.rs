@@ -200,5 +200,5 @@ pub async fn raster_worker_source_rasterize(
         &JsValue::from_f64(statistics.clipped_channels as f64),
     )?;
     js_sys::Reflect::set(&wire, &js("source_profile"), &serialize(&name)?)?;
-    Ok(wire)
+    Ok(wire.into_js())
 }

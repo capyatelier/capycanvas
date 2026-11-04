@@ -38,7 +38,8 @@ impl WebApp {
             let observed=observe.call1(&JsValue::NULL,&serialize(&restore.state.location)?)?;
             let observed:Option<layer_ui::DestinationFingerprint>=serde_wasm_bindgen::from_value(JsFuture::from(js_sys::Promise::resolve(&observed)).await?).map_err(js)?;
             admission.admit(restore.document()).map_err(|reason|js(reason.message(&localization)))?;
-            let mut candidate=documents::prepare_session(restore.document().clone(),factory,&brush,viewport,localization,None).await?;
+            let writer=binding.stores.asset_writer(id).map_err(js)?;
+            let mut candidate=documents::prepare_session(restore.document().clone(),factory,&brush,viewport,localization,Some(writer),None).await?;
             candidate.restore_session(restore,recovered||recovered_previous,observed).map_err(js)?;
             Ok(WebSessionProject {session:Some(Box::new(candidate)),lost,binding}.into())
         }))

@@ -195,10 +195,6 @@ documents-prints-at = Prints at { $width } × { $height } { $unit }
 documents-too-large-side = Too large for this device: sides stop at { $maximum } px
 documents-too-large-memory = Too large for this device’s available memory
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · up to { $layers ->
-    [one] { $count } layer
-   *[other] { $count } layers
-}
 documents-layer-memory = { $size } per layer
 documents-layer-memory-available = { $size } per layer · { $available } available
 documents-no-paper = No paper

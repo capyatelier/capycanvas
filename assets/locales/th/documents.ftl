@@ -192,7 +192,6 @@ documents-prints-at = ขนาดพิมพ์ { $width } × { $height } { $u
 documents-too-large-side = ใหญ่เกินไปสำหรับอุปกรณ์นี้: แต่ละด้านยาวได้ไม่เกิน { $maximum } px
 documents-too-large-memory = ใหญ่เกินหน่วยความจำที่ว่างอยู่ของอุปกรณ์นี้
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · สูงสุด { $count } เลเยอร์
 documents-layer-memory = { $size } ต่อเลเยอร์
 documents-layer-memory-available = { $size } ต่อเลเยอร์ · ว่าง { $available }
 documents-no-paper = ไม่มีกระดาษ

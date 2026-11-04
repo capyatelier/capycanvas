@@ -25,7 +25,7 @@ function fixture() {
     constructor(){this.messages=[];this.transfers=[];this.terminated=false;workers.push(this);}
     postMessage(message,transfer){assert.equal(this.terminated,false);if(this.postError)throw this.postError;this.messages.push(message);this.transfers.push(transfer);}
     terminate(){this.terminated=true;events.push(['terminate']);}
-    reply(message,result,error){this.onmessage({data:{id:message.id,result,error}});}
+    reply(message,result,error,errorName){this.onmessage({data:{id:message.id,result,error,errorName}});}
     error(message='worker failed'){this.onerror({preventDefault(){},message});}
   };
   const run=createStoreWorker(()=>events.push(['wake']));
@@ -223,4 +223,23 @@ test('invalid destination batches abort without partially publishing handles and
   const rejected=await f.transaction();await invalid;assert.equal(rejected.aborted,true);assert.equal(f.rows.size,0);
   const error=Error('Destination storage full'),failure=assert.rejects(f.store.remember([valid]),result=>result===error);
   const write=await f.transaction();write.error=error;write.abort();await failure;assert.equal(f.rows.size,0);
+});
+
+test('quota refusal remains an error even when the browser supplies no message',()=>withFixture(async f=>{
+  const write=f.run(request('write_at',{name:'drawing/page',offset:0},[Uint8Array.of(1)]));
+  const rejected=assert.rejects(write,{name:'QuotaExceededError',message:''});
+  f.workers[0].reply(f.workers[0].messages.at(-1),undefined,'','QuotaExceededError');await rejected;
+}));
+
+test('worker quota estimates carry their sampling epoch and never override a failed write',async()=>{
+  const tasks=[],replies=[],estimates=[{quota:1000,usage:100},{quota:400,usage:300}];
+  const handle={write(){const error=Error('');error.name='QuotaExceededError';throw error;},close(){}};
+  const directory={async getDirectoryHandle(){return this;},async getFileHandle(){return {async createSyncAccessHandle(){return handle;}};}};
+  const scope={navigator:{storage:{async estimate(){return estimates.shift();},async getDirectory(){return directory;}}},MessageChannel:channels(tasks),
+    self:{location:{origin:'https://private.example'},postMessage:reply=>replies.push(reply)},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore};
+  runInNewContext(readFileSync(new URL('./store-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),scope);
+  async function run(operation,metadata,buffers=[]){scope.self.onmessage({data:{id:replies.length+1,request:request(operation,metadata,buffers)}});await tasks.shift()();return replies.at(-1);}
+  const first=await run('estimate',{epoch:7});assert.equal(first.result.epoch,7);assert.equal(first.result.scope,'https://private.example');assert.equal(first.result.available_bytes,900);
+  const write=await run('write_at',{name:'drawing/page',offset:0},[Uint8Array.of(1)]);assert.equal(write.errorName,'QuotaExceededError');assert.equal(write.error,'');
+  const next=await run('estimate',{epoch:8});assert.equal(next.result.epoch,8);assert.equal(next.result.available_bytes,100);
 });

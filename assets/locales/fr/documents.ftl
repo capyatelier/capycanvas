@@ -195,10 +195,6 @@ documents-prints-at = Taille d’impression : { $width } × { $height } { $unit
 documents-too-large-side = Trop grand pour cet appareil : les côtés ne dépassent pas { $maximum } px
 documents-too-large-memory = Trop grand pour la mémoire disponible sur cet appareil
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · jusqu’à { $layers ->
-    [one] { $count } calque
-   *[other] { $count } calques
-}
 documents-layer-memory = { $size } par calque
 documents-layer-memory-available = { $size } par calque · { $available } disponibles
 documents-no-paper = Sans papier

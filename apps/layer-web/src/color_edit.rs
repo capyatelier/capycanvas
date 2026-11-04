@@ -190,5 +190,5 @@ pub async fn raster_worker_color(
         &js("clipped"),
         &JsValue::from_f64(converted.statistics.clipped_channels as f64),
     )?;
-    Ok(wire)
+    Ok(wire.into_js())
 }

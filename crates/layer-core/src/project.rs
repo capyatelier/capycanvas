@@ -83,8 +83,7 @@ impl Default for ProjectLimits {
 
 impl ProjectLimits {
     pub fn for_import() -> Self {
-        let bytes = crate::MemoryBudget::process().import_headroom_bytes();
-        Self { asset_bytes: bytes, raster_bytes: bytes, ..Default::default() }
+        Self::default()
     }
 }
 

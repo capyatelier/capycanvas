@@ -231,7 +231,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             Payload::Placed {
                 images: layer_ui::ImageImportBatch::new(session.state().settings.photo_open,
                     session.engine().document().composition().color.space, layer_color::photo::DecodeLimits::from_memory_budget(
-                        layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))),
+                        layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()))).with_writer(session.image_import_writer()?),
                 context, request, device,
                 color: session.engine().document().composition().color,
                 mode: match session.document_request(request)? { DocumentRequest::Paste { mode } => Some(*mode), _ => None },
@@ -424,10 +424,12 @@ pub unsafe extern "C" fn capy_project_finish_images(task: u64) -> i32 {
     let task=&*lease_task;
     task.perform(|payload| {
         let Payload::Placed { images, environment, clip, color, mode, .. } = payload else { return Err("Not an image import".into()); };
+        pollster::block_on(images.finish_storage())?;
         let Some(environment) = environment.take() else {
             if *mode != Some(layer_ui::PasteMode::Into) && let Some(clip) = clip {
                 clip.convert_layers(*color, layer_color::photo::PhotoMemoryBudget::from_limit(layer_core::MemoryBudget::process().import_headroom_bytes()).encode_bytes, || task.control.is_cancelled())?;
             }
+            if let Some(clip)=clip {pollster::block_on(images.writer().ok_or("Drawing storage is not ready")?.store_clip(clip,&task.localization))?;}
             return Ok(());
         };
         let document = match clip.take() {
@@ -588,6 +590,7 @@ unsafe fn prepare_project(task: u64, input: Result<Input<'_>, String>, name: Res
             let result = (|| {
                 let name = name?;
                 let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
+                if !interpreting {pollster::block_on(images.prepare_decode())?;}
                 match input? {
                     Input::File(fd) => {
                         let file = host_file(fd);
@@ -597,7 +600,8 @@ unsafe fn prepare_project(task: u64, input: Result<Input<'_>, String>, name: Res
                     Input::Bytes(bytes) => images.read_candidate(Cursor::new(bytes), stem, task.control.cancellation_flag()),
                     Input::Assume(profile) => images.interpret(profile, task.control.is_cancelled()),
                     Input::New => Err("Choose images to place".into()),
-                }
+                }?;
+                pollster::block_on(images.write_prepared())
             })();
             if result.is_err() && !interpreting && mode.is_none() { images.invalidate(); }
             return result;

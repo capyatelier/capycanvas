@@ -21,6 +21,7 @@ fasteval = { version = "0.2.4", default-features = false }
 flate2.workspace = true
 quick-xml = "=0.41.0"
 web-time = "1.1.0"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [build-dependencies]
 fluent-syntax = "0.12"

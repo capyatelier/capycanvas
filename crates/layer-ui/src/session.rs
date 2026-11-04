@@ -258,6 +258,7 @@ struct CustomizationCopy {
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
+    asset_writer:crate::import_policy::AssetWriterSlot,
     pressure_calibration: pressure_calibration::Calibration,
     tilt_calibration: Box<tilt_calibration::Calibration>,
     tilt_meter_changed: bool,
@@ -401,6 +402,17 @@ pub(super) fn vector_eraser(command: CommandId) -> Option<crate::settings::Vecto
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn asset_writer(&self)->Option<AssetWriter> {self.asset_writer.ready()}
+    pub fn pending_asset_writer(&self)->AssetWriter {self.asset_writer.pending()}
+    pub fn fail_asset_writer(&self,error:String) {self.asset_writer.fail(error);}
+    pub fn image_import_writer(&self)->Result<AssetWriter,String> {
+        let writer=self.pending_asset_writer();
+        if self.pasting_new_image() {writer.fork()}else {Ok(writer)}
+    }
+    pub fn bind_asset_writer(&self,writer:AssetWriter)->Result<(),String> {
+        if let Some(ready)=writer.ready() {self.engine.document().memory().bind_storage(ready.binding())?;}
+        self.asset_writer.bind(writer);Ok(())
+    }
     pub fn blank(renderer: R, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
         Self::blank_localized(renderer, viewport, platform, Localizer::shared(UiLanguage::English))
     }
@@ -527,6 +539,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         effects::validate_catalog_labels(&effect_catalog, &localization)?;
         engine.set_pressure_curve(Settings::default().pressure_curve.into());
         let mut session = Self {
+            asset_writer:Default::default(),
             pressure_calibration: Default::default(),
             tilt_calibration: Default::default(),
             tilt_meter_changed: false,

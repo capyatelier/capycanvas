@@ -25,7 +25,7 @@ mod native;
 #[cfg(not(target_arch="wasm32"))]
 pub use native::*;
 
-const PACK_BYTES: u64 = 64 * 1024 * 1024;
+pub(super) const PACK_BYTES: u64 = 64 * 1024 * 1024;
 mod head;
 mod io;
 mod metadata;
@@ -119,6 +119,19 @@ struct IndexedResource {record:StoredRecord,location:Arc<StoreLocation>,owner:Op
 struct StoreInput {
     id:PortableId,record:StoredRecord,payload:Payload,length:u64,crc:u32,descriptor:[u8;32],owner:Weak<dyn Send+Sync>,
 }
+struct StoredInputs {
+    ids:Vec<PortableId>,
+    bindings:Vec<(Arc<crate::raster::TileBlob>,Arc<StoreLocation>)>,
+    reservation:Option<super::storage_budget::StorageReservation>,
+}
+impl StoredInputs {
+    fn commit(self)->Result<(),String> {
+        for (tile,location) in self.bindings {
+            if let Some(memory)=tile.compressed.memory()? {tile.compressed.bind(&memory,location)?;}
+        }
+        Ok(())
+    }
+}
 impl StoreInput {
     fn entry(entry:&super::resources::ResourceEntry,cancelled:&AtomicBool)->Result<Self,String> {
         if let Payload::Tile(tile)=&entry.payload {
@@ -144,6 +157,7 @@ impl StoreInput {
 #[derive(Clone)]
 pub struct DrawingStore(Arc<DrawingStoreInner>);
 pub trait StoreOpener:Send+Sync {
+    fn storage_facts<'a>(&'a self,path:&'a Path)->super::store_io::FileFuture<'a,super::storage_budget::StorageFacts>;
     fn open<'a>(&'a self,path:&'a Path,retirement:bool)->super::store_io::FileFuture<'a,Option<SessionStore>>;
 }
 pub fn check_store_key(key:&str)->Result<(),String> {
@@ -207,12 +221,21 @@ impl DrawingStore {
     pub fn path(&self)->&Path {&self.0.path}
     pub async fn with_store<T>(&self,work:impl AsyncFnOnce(&mut SessionStore)->Result<T,String>)->Result<T,String> {
         let mut writer=WriterLease::take(&self.0.writer).await?;
-        if writer.store.is_none() {writer.store=Some(self.0.opener.open(&self.0.path,false).await?.ok_or("Drawing store is unavailable")?);}
+        if writer.store.is_none() {
+            writer.store=Some(self.0.opener.open(&self.0.path,false).await?.ok_or("Drawing store is unavailable")?);
+        }
         work(writer.store.as_mut().unwrap()).await
+    }
+    pub async fn storage_facts(&self)->Result<super::storage_budget::StorageFacts,String> {
+        let writer=WriterLease::take(&self.0.writer).await?;
+        let facts=match writer.store.as_ref() {Some(store)=>store._owner.io.storage_facts().await?,None=>self.0.opener.storage_facts(&self.0.path).await?};
+        super::storage_budget::StorageBudget::process().publish(facts.clone());Ok(facts)
     }
     pub async fn with_retirement_store<T>(&self,work:impl AsyncFnOnce(&mut SessionStore)->Result<T,String>)->Result<Option<T>,String> {
         let mut writer=WriterLease::take(&self.0.writer).await?;
-        if writer.store.is_none() {writer.store=self.0.opener.open(&self.0.path,true).await?;}
+        if writer.store.is_none() {
+            writer.store=self.0.opener.open(&self.0.path,true).await?;
+        }
         if writer.store.is_none() {return Ok(None);}
         work(writer.store.as_mut().unwrap()).await.map(Some)
     }
@@ -353,13 +376,14 @@ impl SessionStore {
         for opaque in &draft.opaque {inputs.push(StoreInput::opaque(opaque.clone())?);}
         let order=draft.spatial_order();
         inputs.sort_by_key(|input|order.get(&input.id).copied().unwrap_or((usize::MAX,0,0)));
-        let ids=self.store_inputs(inputs,cancelled).await?;
-        let extents=self.pack_extents(&ids).await?;
-        let records=ids.iter().map(|id|&self.index[id]).collect::<Vec<_>>();
+        let stored=self.store_inputs(inputs,cancelled).await?;
+        let extents=self.pack_extents(&stored.ids).await?;
+        let records=stored.ids.iter().map(|id|&self.index[id]).collect::<Vec<_>>();
         let programs=draft.trusted_programs.clone();
         let metadata=draft.packed_metadata(&records,&extents)?;
-        let roots=GenerationRoots {identities:ids.into_iter().collect(),packs:extents.into_keys().collect(),..Default::default()};
-        self.publish_packed(metadata,roots,&programs,cancelled).await
+        let roots=GenerationRoots {identities:stored.ids.iter().copied().collect(),packs:extents.into_keys().collect(),..Default::default()};
+        let generation=self.publish_packed(metadata,roots,&programs,cancelled).await?;
+        stored.commit()?;Ok(generation)
         }.await;
         if let Ok(generation)=result {self.published_capture=Some(PublishedCapture {key,profiles,generation});}
         if let Some(owner)=memory.and_then(|owner|owner.upgrade()) {owner.refresh();}
@@ -384,12 +408,15 @@ impl SessionStore {
         check_cancelled(cancelled)?;self.validate_layout().await?;self.refresh_head().await?;
         if io::marker(&*self._owner.io,".retired",b"").await? {return Err("This drawing's session copy was retired".into());}
         if metadata.len() as u64>ProjectLimits::default().metadata_bytes {return Err("Packed recovery metadata exceeds admission limit".into());}
+        let mut reservation=super::storage_budget::reserve(&*self._owner.io,metadata.len() as u64+2048).await?;
         let generation=PortableId::random();
-        io::create(&*self._owner.io,&format!("generations/{generation}.json"),&metadata,cancelled).await?;
+        let created=io::create(&*self._owner.io,&format!("generations/{generation}.json"),&metadata,cancelled).await;
+        reservation.written(metadata.len() as u64)?;created?;
         let reference=Generation::new(generation,&metadata);
         let head=Head {current:reference.clone(),previous:self.loaded.clone().or_else(||self.head.as_ref().map(|head|head.current.clone()))};
         check_cancelled(cancelled)?;
         let published=head::publish(&*self._owner.io,self.sequence,&head).await;
+        reservation.written(2048)?;
         let sequence=match &published {
             Ok(sequence)=>*sequence,
             Err(error)=>match head::read(&*self._owner.io).await {
@@ -406,21 +433,26 @@ impl SessionStore {
         published?;
         self.collect_garbage().await?;Ok(generation)
     }
-    async fn store_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool)->Result<Vec<PortableId>,String> {
+    async fn store_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool)->Result<StoredInputs,String> {
         self.validate_layout().await?;
         if io::marker(&*self._owner.io,".retired",b"").await? {return Err("This drawing's session copy was retired".into());}
-        let mut records=Vec::with_capacity(inputs.len());
+        let mut owners=BTreeSet::new();let mut bytes=0u64;
+        for input in &inputs {
+            if self.existing(input)?.is_none() && owners.insert(input.owner_key()) {bytes=bytes.checked_add(input.length.max(1)).ok_or("Drawing storage size overflow")?;}
+        }
+        let reservation=if bytes==0 {None}else {Some(super::storage_budget::reserve(&*self._owner.io,bytes).await?)};
+        let mut stored=StoredInputs {ids:Vec::with_capacity(inputs.len()),bindings:Vec::new(),reservation};
         let mut pending=Vec::new();let mut bytes=0u64;
         for input in inputs {
             check_cancelled(cancelled)?;
-            if bytes>0 && bytes+input.length>PACK_BYTES {self.append_inputs(std::mem::take(&mut pending),cancelled).await?;bytes=0;}
+            if bytes>0 && bytes+input.length>PACK_BYTES {self.append_inputs(std::mem::take(&mut pending),cancelled,&mut stored).await?;bytes=0;}
             let id=input.id;
-            if let Some(location)=self.existing(&input)? {self.remember(input,location)?;}
+            if let Some(location)=self.existing(&input)? {self.remember(input,location,&mut stored)?;}
             else {bytes=bytes.saturating_add(input.length);pending.push(input);}
-            records.push(id);
+            stored.ids.push(id);
         }
-        if !pending.is_empty() {self.append_inputs(pending,cancelled).await?;}
-        Ok(records)
+        if !pending.is_empty() {self.append_inputs(pending,cancelled,&mut stored).await?;}
+        Ok(stored)
     }
     fn existing(&self,input:&StoreInput)->Result<Option<Arc<StoreLocation>>,String> {
         if let Payload::Tile(tile)=&input.payload && let Some(location)=tile.compressed.location()? && Arc::ptr_eq(&location.pack.owner,&self._owner) {
@@ -440,10 +472,14 @@ impl SessionStore {
         }
         Ok(None)
     }
-    async fn append_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool)->Result<(),String> {
+    async fn append_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool,stored:&mut StoredInputs)->Result<(),String> {
         use super::store_io::FileAccess;
-        let mut first=0;
+        let mut first=0;let mut aliases=BTreeMap::<(u8,usize),(PortableId,u64,[u8;32])>::new();
         while first<inputs.len() {
+            if aliases.contains_key(&inputs[first].owner_key()) {
+                let location=self.existing(&inputs[first])?.ok_or("Missing aliased recovery location")?;
+                self.remember(inputs[first].clone(),location,stored)?;first+=1;continue;
+            }
             let target=if let Some((id,extent))=self.append {
                 let file=self._owner.io.open(&format!("packs/{id}.bin"),FileAccess::Read).await?;
                 let length=file.len().await?;
@@ -452,36 +488,38 @@ impl SessionStore {
             }else {None};
             let (pack,start)=target.unwrap_or_else(||(PortableId::random(),0));
             let mut length=0u64;let mut last=first;
-            let mut aliases=BTreeMap::<(u8,usize),(u64,[u8;32])>::new();let mut offsets=Vec::new();
+            let mut offsets=Vec::new();
             while last<inputs.len() {
                 let input=&inputs[last];let key=input.owner_key();let alias=aliases.get(&key).copied();
-                let offset=if let Some((offset,descriptor))=alias {
-                    if descriptor!=input.descriptor {return Err("Conflicting aliased resource descriptors".into());}offset
+                let (input_pack,offset)=if let Some((pack,offset,descriptor))=alias {
+                    if descriptor!=input.descriptor {return Err("Conflicting aliased resource descriptors".into());}(pack,offset)
                 }else {
                     if last>first && start.saturating_add(length).saturating_add(input.length)>PACK_BYTES {break;}
                     let offset=start+length;length=length.checked_add(input.length.max(1)).ok_or("Recovery pack length overflow")?;
-                    aliases.insert(key,(offset,input.descriptor));offset
+                    aliases.insert(key,(pack,offset,input.descriptor));(pack,offset)
                 };
-                offsets.push((offset,alias.is_none()));last+=1;
+                offsets.push((input_pack,offset,alias.is_none()));last+=1;
             }
             let file=self._owner.io.open(&format!("packs/{pack}.bin"),if target.is_some() {FileAccess::Write}else {FileAccess::Create}).await?;
-            for (input,&(offset,physical)) in inputs[first..last].iter().zip(&offsets) {
+            let written=async {for (input,&(_,offset,physical)) in inputs[first..last].iter().zip(&offsets) {
                 if !physical {continue;}
                 write_payload(&*file,offset,input,cancelled).await?;
                 if input.length==0 {file.write_at(offset,&[0]).await?;}
-            }
-            file.flush().await?;check_cancelled(cancelled)?;
+            }file.flush().await?;check_cancelled(cancelled)}.await;
+            let growth=file.len().await.unwrap_or(start.saturating_add(length)).saturating_sub(start).min(length);
+            stored.reservation.as_mut().unwrap().written(growth)?;written?;
             let extent=start.checked_add(length).ok_or("Recovery pack extent overflow")?;
             let owner=self.pack(pack,extent).await?;let source=owner.source(&self.reads);let mut shared=BTreeMap::new();
-            for (input,&(offset,_)) in inputs[first..last].iter().zip(&offsets) {
-                let location=shared.entry(offset).or_insert_with(||Arc::new(StoreLocation {pack:owner.clone(),source:source.clone(),offset,length:input.length,crc:input.crc,descriptor:input.descriptor})).clone();
-                self.remember(input.clone(),location)?;
+            for (input,&(input_pack,offset,_)) in inputs[first..last].iter().zip(&offsets) {
+                let location=if input_pack==pack {shared.entry(offset).or_insert_with(||Arc::new(StoreLocation {pack:owner.clone(),source:source.clone(),offset,length:input.length,crc:input.crc,descriptor:input.descriptor})).clone()}
+                    else {self.existing(input)?.ok_or("Missing aliased recovery location")?};
+                self.remember(input.clone(),location,stored)?;
             }
             self.append=Some((pack,extent));first=last;
         }Ok(())
     }
-    fn remember(&mut self,input:StoreInput,location:Arc<StoreLocation>)->Result<(),String> {
-        if let Payload::Tile(tile)=&input.payload && let Some(memory)=tile.compressed.memory()? {tile.compressed.bind(&memory,location.clone())?;}
+    fn remember(&mut self,input:StoreInput,location:Arc<StoreLocation>,stored:&mut StoredInputs)->Result<(),String> {
+        if let Payload::Tile(tile)=&input.payload && tile.compressed.memory()?.is_some() {stored.bindings.push((tile.clone(),location.clone()));}
         self.by_owner.insert(input.owner_key(),input.id);
         self.index.insert(input.id,IndexedResource {record:input.record,location,owner:Some(input.owner)});Ok(())
     }
@@ -491,7 +529,7 @@ impl SessionStore {
             let entry=super::resources::ResourceEntry {kind:"capy.raster-tile/1",data:super::resources::encode_descriptor(blob.descriptor)?,raw_encoding:"capy.lz4-tile/1",payload:Payload::Tile(blob)};
             StoreInput::entry(&entry,cancelled)
         }).collect::<Result<Vec<_>,String>>()?;
-        let result=self.store_inputs(inputs,cancelled).await;
+        let result=match self.store_inputs(inputs,cancelled).await {Ok(stored)=>stored.commit(),Err(error)=>Err(error)};
         let released=before.saturating_sub(tiles.resident_bytes());
         if released>0 && let Some(owner)=tiles.owner.as_ref().and_then(Weak::upgrade) {owner.refresh();}
         result.map(|_|released)
@@ -521,12 +559,13 @@ impl SessionStore {
             let opaque=Arc::new(crate::authored::OpaqueResource::from_record(resource.id,record,backing,0,resource.length,resource.crc).map_err(ImportFailure::Invalid)?);
             let mut input=StoreInput::opaque(opaque).map_err(ImportFailure::Invalid)?;input.owner=owner;inputs.push(input);
         }
-        let ids=self.store_inputs(inputs,cancelled).await.map_err(|error|if error==RESOURCE_CHECKSUM_FAILED {ImportFailure::Invalid(error)}else {ImportFailure::Io(error)})?;
-        let extents=self.pack_extents(&ids).await.map_err(ImportFailure::Io)?;
-        metadata["resources"]=serde_json::to_value(self.resource_values(&ids).map_err(ImportFailure::Invalid)?).map_err(|error|ImportFailure::Invalid(error.to_string()))?;
+        let stored=self.store_inputs(inputs,cancelled).await.map_err(|error|if error==RESOURCE_CHECKSUM_FAILED {ImportFailure::Invalid(error)}else {ImportFailure::Io(error)})?;
+        let extents=self.pack_extents(&stored.ids).await.map_err(ImportFailure::Io)?;
+        metadata["resources"]=serde_json::to_value(self.resource_values(&stored.ids).map_err(ImportFailure::Invalid)?).map_err(|error|ImportFailure::Invalid(error.to_string()))?;
         let metadata=serde_json::to_vec(&PackedGeneration {format:"capy.session.packed".into(),version:2,session:metadata,extents:extents.clone()}).map_err(|error|ImportFailure::Invalid(error.to_string()))?;
-        let roots=GenerationRoots {identities:ids.into_iter().collect(),packs:extents.into_keys().collect(),..Default::default()};
-        self.publish_packed(metadata,roots,&super::TrustedPrograms::default(),cancelled).await.map_err(ImportFailure::Io)
+        let roots=GenerationRoots {identities:stored.ids.iter().copied().collect(),packs:extents.into_keys().collect(),..Default::default()};
+        let generation=self.publish_packed(metadata,roots,&super::TrustedPrograms::default(),cancelled).await.map_err(ImportFailure::Io)?;
+        stored.commit().map_err(ImportFailure::Io)?;Ok(generation)
     }
     fn recover_append(&mut self,extents:&BTreeMap<PortableId,u64>) {
         self.append=extents.iter().find(|(_,extent)|**extent<PACK_BYTES).map(|(&id,&extent)|(id,extent));
@@ -586,7 +625,7 @@ impl SessionStore {
                 inputs.push(StoreInput::opaque(resource)?);
             }
             let records=self.store_inputs(inputs,cancelled).await?;
-            let mut value=value;value["resources"]=self.resource_values(&records)?.into();
+            let mut value=value;value["resources"]=self.resource_values(&records.ids)?.into();records.commit()?;
             stored.metadata=serde_json::to_vec(&value).map_err(|error|error.to_string())?;
             let mut locations=BTreeMap::new();
             for record in value["resources"].as_array().unwrap() {
@@ -627,7 +666,7 @@ impl SessionStore {
         self.validate_layout().await?;
         io::marker(&*self._owner.io,".retiring",b"retiring\n").await?;
         if !io::marker(&*self._owner.io,".retired",b"").await? {io::create(&*self._owner.io,".retired",b"",&AtomicBool::new(false)).await?;}
-        for name in [".retiring","head.0","head.1","head.json"] {self._owner.io.remove(name).await?;}
+        for name in [".retiring","head.0","head.1","head.json"] {super::storage_budget::remove(&*self._owner.io,name).await?;}
         self.head=None;self.loaded=None;self.programs.clear();self.collect_garbage().await
     }
     pub async fn prepare_retirement(&mut self)->Result<(),String> {
@@ -670,7 +709,7 @@ impl SessionStore {
         let terminal=io::marker(&*self._owner.io,".retired",b"").await?;
         for (name,retained,suffix) in [("generations",&generations,".json"),("resources",&resources,".bin"),("packs",&packs,".bin")] {
             io::clean(&*self._owner.io,name,retained,suffix).await?;
-            if terminal && retained.is_empty() && self._owner.io.list(name).await?.is_empty() {self._owner.io.remove(name).await?;}
+            if terminal && retained.is_empty() && self._owner.io.list(name).await?.is_empty() {super::storage_budget::remove(&*self._owner.io,name).await?;}
         }
         io::clean(&*self._owner.io,"",&BTreeSet::new(),".unused").await?;Ok(())
     }

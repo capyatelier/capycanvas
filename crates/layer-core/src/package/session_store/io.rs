@@ -35,10 +35,10 @@ pub(super) async fn clean(io:&dyn FileTransport,directory:&str,retained:&BTreeSe
     for entry in io.list(directory).await? {
         if entry.directory {continue;}
         if entry.name.starts_with(".capy-save-") {
-            io.remove(&if directory.is_empty() {entry.name}else {format!("{directory}/{}",entry.name)}).await?;continue;
+            super::super::storage_budget::remove(io,&if directory.is_empty() {entry.name}else {format!("{directory}/{}",entry.name)}).await?;continue;
         }
         let Some(name)=entry.name.strip_suffix(suffix) else {continue;};
         let Ok(id)=name.parse() else {continue;};
-        if !retained.contains(&id) {io.remove(&if directory.is_empty() {entry.name}else {format!("{directory}/{}",entry.name)}).await?;}
+        if !retained.contains(&id) {super::super::storage_budget::remove(io,&if directory.is_empty() {entry.name}else {format!("{directory}/{}",entry.name)}).await?;}
     }Ok(())
 }

@@ -1162,6 +1162,9 @@ impl CanvasRenderer for RenderWorker {
     fn memory_headroom(&self) -> Option<u64> {
         self.snapshot_gpu.as_ref().and_then(|gpu| gpu.memory_headroom())
     }
+    fn new_drawing_working_bytes(&self,viewport:[u32;2])->Option<u64> {
+        self.snapshot_gpu.as_ref().map(|gpu|gpu.new_drawing_working_bytes(viewport))
+    }
     fn preflight_image_object_affine(&self,scene:layer_core::SceneView<'_>,object:layer_core::ImageObjectHandle,
         affine:layer_core::Affine64,view:ViewState,
     )->Result<(),Self::Error> {

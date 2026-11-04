@@ -1,10 +1,11 @@
 import init, * as wasm from "./pkg/layer_web.js";
 import {panelVectorPaths} from './panel-vector-paths.js';
+import {postTransferred,releaseTransferred} from './raster-worker-client.js';
 let ready,module,panelVectors;
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { if(data.module)module=data.module;pending = pending.then(() => execute(data)); };
 async function execute({id,request}) {
-  let instance;
+  let instance,result;
   const retire=()=>outputs.size===0 && (instance?.memory.buffer.byteLength || 0)>256*1024*1024;
   try {
     if (request.operation === 'alpha-image') {
@@ -21,7 +22,6 @@ async function execute({id,request}) {
         wasm.configure_gpu_diagnostics(event=>self.postMessage({gpu_event:{...event,wasm_bytes:instance.memory.buffer.byteLength}}));
         return instance;
       }));
-    let result;
     switch(request.operation) {
       case 'panel-vectors': {
         panelVectors??=new wasm.WebPanelVectors();
@@ -89,8 +89,9 @@ async function execute({id,request}) {
       case "write": { const output=await writePackage(request.metadata,request.buffers); result=output; break; }
       default: throw new Error("Unknown raster worker operation");
     }
-    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : [...(result?.bytes instanceof Uint8Array ? [result.bytes] : result?.waveform_counts ? [result.waveform_counts] : result?.buffers || []),...(result?.preview instanceof Uint8Array ? [result.preview] : [])].map(bytes=>bytes.buffer));
+    postTransferred(result?.buffers,()=>self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : [...(result?.bytes instanceof Uint8Array ? [result.bytes] : result?.waveform_counts ? [result.waveform_counts] : result?.buffers || []),...(result?.preview instanceof Uint8Array ? [result.preview] : [])].map(bytes=>bytes.buffer)));
   } catch(error) { self.postMessage({id,error:String(error),color_feature_error:error?.color_feature_error,retire:retire()}); }
+  finally {releaseTransferred(result?.buffers);}
 }
 
 const outputs=new Map();

@@ -15,6 +15,8 @@ pub(crate) struct SourceAccounting {
     sources: std::collections::HashSet<usize>,
     tiles: std::collections::HashSet<u64>,
     profiles: std::collections::HashSet<usize>,
+    resident:bool,
+    buffers:std::collections::HashSet<usize>,
 }
 impl SourceAccounting {
     pub(crate) fn charge_image(&mut self,image:&crate::Image)->usize {
@@ -29,7 +31,8 @@ impl SourceAccounting {
             .saturating_add(source.tiles.len().saturating_mul(96));
         for tile in source.tiles.values() {
             if self.tiles.insert(tile.owner_identity()) {
-                bytes = bytes.saturating_add(tile.compressed_len());
+                let size=if self.resident {let (owner,size)=tile.compressed.resident_owner();if self.buffers.insert(owner) {size}else {0}}else {tile.compressed_len()};
+                bytes = bytes.saturating_add(size);
             }
         }
         bytes = bytes.saturating_add(self.charge_profile(&source.interpretation.profile));
@@ -42,6 +45,10 @@ impl SourceAccounting {
 
 pub fn retained_source_bytes<'a>(sources: impl IntoIterator<Item=&'a SourceImage>) -> usize {
     let mut accounting=SourceAccounting::default();
+    sources.into_iter().fold(0usize,|bytes,source|bytes.saturating_add(accounting.charge_ref(source)))
+}
+pub fn resident_source_bytes<'a>(sources:impl IntoIterator<Item=&'a SourceImage>)->usize {
+    let mut accounting=SourceAccounting {resident:true,..Default::default()};
     sources.into_iter().fold(0usize,|bytes,source|bytes.saturating_add(accounting.charge_ref(source)))
 }
 

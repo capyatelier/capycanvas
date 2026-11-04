@@ -196,7 +196,6 @@ documents-prints-at = 인쇄 크기 { $width } × { $height } { $unit }
 documents-too-large-side = 이 기기에서 쓰기에는 너무 큽니다. 한 변은 최대 { $maximum } px입니다.
 documents-too-large-memory = 이 기기의 사용 가능한 메모리에 비해 너무 큽니다.
 documents-megapixels = { $megapixels } MP
-documents-capacity = { $megapixels } MP · 레이어 최대 { $count }개
 documents-layer-memory = 레이어당 { $size }
 documents-layer-memory-available = 레이어당 { $size } · { $available } 사용 가능
 documents-no-paper = 종이 없음

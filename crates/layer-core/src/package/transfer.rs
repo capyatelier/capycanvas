@@ -148,6 +148,10 @@ impl PreparedTransfer {
         manifest(&descriptor,ProjectLimits::default())?;
         Ok(Self {memory:capture.memory.clone().map(std::sync::OnceLock::from).unwrap_or_default(),admission:None,descriptor,payloads,trusted_programs})
     }
+    pub fn reserve_copy(&self,budget:&crate::MemoryBudget,overhead:u64)->Result<crate::MemoryReservation,String> {
+        let bytes=self.descriptor.lengths.iter().try_fold(overhead,|total,length|total.checked_add(*length).ok_or("Transfer length overflow"))?;
+        budget.admit_import(bytes).ok_or_else(||crate::MEMORY_BUDGET_EXCEEDED.into())
+    }
     pub fn descriptor(&self)->&TransferDescriptor{&self.descriptor}
     pub fn payload_count(&self)->usize{self.payloads.len()}
     pub fn payload_len(&self,index:usize)->Result<u64,String>{self.payloads.get(index).map(TransferPayload::len).ok_or_else(||"Missing transfer payload".into())}
@@ -320,6 +324,35 @@ mod tests {
             let count=(length-offset).min(MAX_RANGE_BYTES as u64) as usize;
             receiver.push_chunk(index,&prepared.read_chunk(index,offset,count).unwrap()).unwrap();offset+=count as u64;
         }}receiver.finish().unwrap()
+    }
+    #[cfg(any(unix,windows))]
+    #[test]
+    fn wire_copy_reserves_durable_payloads_and_scratch_before_reading() {
+        let original=capture();
+        let sources=original.artwork.paint.iter().flat_map(|(_,_,paint)|paint.base.iter().flat_map(|base|base.image.tiles.values().cloned())).collect::<Vec<_>>();
+        assert!(!sources.is_empty());
+        let store=crate::raster_storage::tests::Store::new(&crate::raster_storage::RetainedTiles {sources:sources.clone(),..Default::default()});
+        assert!(sources.iter().all(|tile|tile.memory_compressed().unwrap().is_none()));
+        let transfer=PreparedTransfer::capture(&original,&AtomicBool::new(false)).unwrap();
+        std::fs::write(store.pack(),b"unreadable payload").unwrap();
+        let overhead=MAX_RANGE_BYTES as u64;
+        let required=transfer.descriptor.lengths.iter().sum::<u64>()+overhead;
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(384*1024*1024),..Default::default()});
+        let owner=budget.register_owner(crate::MemoryOwnerKind::Authored,crate::MemoryClass::Pinned,None);
+        let pinned=budget.ram_limit_bytes()-required;
+        let report=|bytes|crate::MemoryReport {ram_bytes:bytes,pinned_ram_bytes:bytes,..Default::default()};
+        owner.report(report(pinned+1));
+        assert!(transfer.reserve_copy(&budget,overhead).is_err());
+        assert_eq!(budget.import_headroom_bytes(),required-1);
+        owner.report(report(pinned));
+        let reservation=transfer.reserve_copy(&budget,overhead).unwrap();
+        assert_eq!(reservation.reserved_bytes(),required);
+        assert_eq!(budget.import_headroom_bytes(),0);
+        assert!(transfer.reserve_copy(&budget,0).is_err());
+        drop(reservation);
+        assert_eq!(budget.import_headroom_bytes(),required);
+        assert!(transfer.reserve_copy(&budget,u64::MAX).is_err());
+        assert_eq!(budget.import_headroom_bytes(),required);
     }
     #[test]
     fn capture_rejects_image_resource_identity_collisions_before_publication() {

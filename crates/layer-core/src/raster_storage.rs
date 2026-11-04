@@ -56,7 +56,7 @@ impl Bytes {
     fn snapshot(&self) -> Result<Value, String> {
         Ok(self.value.lock().map_err(|_| "Tile storage lock failed")?.clone())
     }
-    fn resident_owner(&self) -> (usize, usize) {
+    pub(crate) fn resident_owner(&self) -> (usize, usize) {
         match self.snapshot().unwrap() {
             Value::Memory(bytes) => (Arc::as_ptr(&bytes) as *const () as usize, bytes.len()),
             Value::Store(_) => (0, 0),
@@ -195,6 +195,13 @@ impl Editor {
     }
 }
 impl RetainedTiles {
+    pub fn from_sources<'a>(sources:impl IntoIterator<Item=&'a crate::color::source::SourceImage>)->Self {
+        let mut result=Self::default();let mut seen=HashSet::new();
+        for source in sources {
+            for tile in source.tiles.values() {if seen.insert(tile.owner_identity()) {result.sources.push(tile.clone());result.metadata_bytes=result.metadata_bytes.saturating_add(192);}}
+        }
+        result
+    }
     pub async fn await_blobs(&self)->Result<Vec<Arc<TileBlob>>,String> {
         #[cfg(not(target_arch="wasm32"))]
         {self.blobs()}

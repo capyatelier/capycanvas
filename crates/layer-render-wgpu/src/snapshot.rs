@@ -151,6 +151,9 @@ impl SnapshotGpu {
     pub fn memory_headroom(&self) -> Option<u64> {
         Some(self.factory.memory_budget().import_headroom_bytes())
     }
+    pub fn new_drawing_working_bytes(&self,viewport:[u32;2])->u64 {
+        crate::memory::new_drawing_working_bytes(viewport,self.factory.unified_memory())
+    }
     pub fn preflight_image_object_affine(&self,scene:SceneView<'_>,object:layer_core::ImageObjectHandle,
         affine:layer_core::Affine64,view:layer_render::ViewState,
     )->Result<(),GpuRasterError> {
