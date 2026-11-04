@@ -387,6 +387,8 @@ impl WebApp {
         value["scrolls_together"] = json!(drawer.is_some_and(layer_ui::ContentDrawer::scrolls_together));
         value["minimums"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
             .map(|panel| drawer.body_minimum_height(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
+        value["content_sized"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
+            .map(|panel| drawer.body_fits_content(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
         serialize(&value)
     }
     pub fn application_link(&self, link: JsValue) -> Result<String, JsValue> {

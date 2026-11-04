@@ -905,6 +905,16 @@ fn w6d_canvas(d: &mut Driver) {
     d.click(print.upcast_ref());
     until(|| find_named(&proof,"soft-proof-setup").is_some_and(|widget|widget.is_mapped()),"Print settings map in the phone drawer");
     capture(d,"soft-proof");
+    let print_body=find_named(&proof,"soft-proof-setup").unwrap();
+    let scroll=print_body.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+    assert!(scroll.property::<bool>("propagate-natural-height"),"phone Print propagates its actual natural body height");
+    assert!(!proof.property::<bool>("vexpand"),"phone Proof is content-sized");
+    let natural=proof.measure(gtk::Orientation::Vertical,proof.width()).1;
+    let allocated=proof.height()+proof.margin_top()+proof.margin_bottom();
+    assert!((allocated-natural).abs()<=1,"phone Proof allocation plus margins {allocated} matches natural height {natural}");
+    let last=find_named(&proof,"proof-gamut-warning").unwrap().compute_bounds(&scroll).unwrap();
+    assert!(last.y()>=-1. && last.y()+last.height()<=scroll.height() as f32+1.,"the last Print row fits without scrolling: {last:?}, viewport {}",scroll.height());
+
 
     let original=d.w.documents.selected();
     d.w.documents.enqueue(&d.w,(new_drawing_at(1200,1600,layer_core::color::SampleDepth::F32),None));

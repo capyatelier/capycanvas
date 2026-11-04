@@ -618,3 +618,6 @@ Color-history operations use the shared standalone progress intent.
 
 Report a drawer body's natural height independently of its preceding allocation.
 Update the SDR dial at its assigned width before measuring the Proof drawer.
+`ContentDrawer::body_fits_content` makes phone Proof bodies content-sized on
+both hosts. GTK propagates the Print scroller's natural height; desktop docked
+Proof keeps its expanding body.

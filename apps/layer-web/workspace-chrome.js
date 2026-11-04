@@ -291,7 +291,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
             if(r.styledMeasure!==r.measure){
               const minimum=r.measure.minimums[index][i],style=getComputedStyle(child);
               const height=Math.max(0,minimum-parseFloat(style.marginTop)-parseFloat(style.marginBottom));
-              child.style.minHeight=`${height}px`;child.style.height=minimum?`${height}px`:'';
+              child.style.minHeight=`${height}px`;child.style.height=minimum?`${height}px`:r.measure.content_sized[index][i]?'max-content':'';
             }
             child.arrangePanel?.();
           }

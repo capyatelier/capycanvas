@@ -1024,7 +1024,7 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
     std::fs::create_dir_all(output).unwrap();
     let app=native_test_app("art.capycanvas.ProofPanel");
     let p=new_drawing_at(512,384,SampleDepth::F16);
-    let w=Workspace::with_project(&app,Some((p,None)));w.window.maximize();w.window.present();ready(&w);
+    let w=Workspace::with_project(&app,Some((p,None)));apply_fixture_theme(&w);w.window.maximize();w.window.present();ready(&w);
     for preset in [layer_ui::WorkspacePreset::Illustrator,layer_ui::WorkspacePreset::Photographer] {
         let mut workspace=state(&w).workspace;
         workspace.layout=preset.layout(layer_ui::Platform::Gtk);
@@ -1039,6 +1039,10 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         assert!(w.window.visible_dialog().is_none());
         let viewport=w.proof_panel.root.parent().unwrap();
         assert!(w.proof_panel.root.is_mapped());
+        assert!(w.proof_panel.root.property::<bool>("vexpand"),"desktop Proof keeps its expanding docked body");
+        let print=find_named(w.proof_panel.root.upcast_ref(),"soft-proof-setup").unwrap();
+        let print_scroll=print.ancestor(gtk::ScrolledWindow::static_type()).unwrap();
+        assert!(!print_scroll.property::<bool>("propagate-natural-height"),"desktop Print keeps its native scroll policy");
         assert!(w.proof_panel.root.width()<=viewport.width(),"{} Proof width {} > {}",preset.name(),w.proof_panel.root.width(),viewport.width());
         for name in ["sdr-appearance-exposure","sdr-tone-pad-surface","sdr-appearance-reset","sdr-appearance-highlight_color","proof-mode"] {
             let widget=find_named(w.proof_panel.root.upcast_ref(),name).unwrap();

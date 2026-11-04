@@ -54,6 +54,7 @@ struct Model {
 }
 pub(crate) struct ProofPanel {
     pub root: gtk::Box,
+    content_sized: bool,
     model: Rc<Model>,
     form: RefCell<Option<Rc<Form>>>,
 }
@@ -73,27 +74,28 @@ struct Form {
 }
 impl ProofPanel {
     pub fn new() -> Rc<Self> {
-        Self::with_model(Rc::default())
+        Self::with_model(Rc::default(), false)
     }
-    fn with_model(model: Rc<Model>) -> Rc<Self> {
+    fn with_model(model: Rc<Model>, content_sized: bool) -> Rc<Self> {
         let root = panel_controls::column();
         root.set_widget_name("proof-panel");
         root.set_spacing(panel_controls::CONTROL_SPACING);
-        root.set_vexpand(true);
+        root.set_vexpand(!content_sized);
         root.set_margin_top(layer_ui::PANEL_CONTENT_INSET as i32);
         root.set_margin_bottom(layer_ui::PANEL_CONTENT_INSET as i32);
         root.set_margin_start(layer_ui::PANEL_CONTENT_INSET as i32);
         root.set_margin_end(layer_ui::PANEL_CONTENT_INSET as i32);
         let p = Rc::new(Self {
             root,
+            content_sized,
             model: model.clone(),
             form: RefCell::default(),
         });
         model.views.borrow_mut().push(Rc::downgrade(&p));
         p
     }
-    pub fn duplicate(&self, w: &Rc<Workspace>) -> Rc<Self> {
-        let p = Self::with_model(self.model.clone());
+    pub fn duplicate(&self, w: &Rc<Workspace>, content_sized: bool) -> Rc<Self> {
+        let p = Self::with_model(self.model.clone(), content_sized);
         p.ensure(w);
         p
     }
@@ -478,7 +480,7 @@ impl Form {
         let stack = gtk::Stack::builder()
             .vhomogeneous(false)
             .hhomogeneous(false)
-            .vexpand(true)
+            .vexpand(!panel.content_sized)
             .transition_type(gtk::StackTransitionType::SlideLeftRight)
             .build();
         stack.add_named(&gtk::Box::new(gtk::Orientation::Vertical, 0), Some("off"));
@@ -529,7 +531,10 @@ impl Form {
             }
         }
         for (_, label) in &captions { if let Some(label) = label.upgrade() { label.set_width_chars(0); } }
-        stack.add_named(&crate::workspace::scroll(&print), Some("print"));
+        let print_scroll = crate::workspace::scroll(&print);
+        print_scroll.clone().downcast::<gtk::ScrolledWindow>().unwrap()
+            .set_propagate_natural_height(panel.content_sized);
+        stack.add_named(&print_scroll, Some("print"));
         let progress = gtk::Spinner::new();
         progress.update_property(&[gtk::accessible::Property::Label(&copy.preparing_print)]);
         progress.set_widget_name("proof-preparing");

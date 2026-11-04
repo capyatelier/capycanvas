@@ -535,6 +535,9 @@ impl ContentDrawer {
     pub fn scrolls_together(&self) -> bool {
         matches!(self.anchor, DrawerAnchor::Phone { .. }) && self.panels().any(|panel| panel == Panel::Color)
     }
+    pub fn body_fits_content(&self, panel: Panel) -> bool {
+        matches!(self.anchor, DrawerAnchor::Phone { .. }) && panel == Panel::Proof
+    }
     pub fn body_minimum_height(&self, panel: Panel) -> f32 {
         match panel {
             Panel::Layers if self.layer_properties.is_none() => crate::PANEL_CONTROL_METRICS.drawer_layers_min_height + 2. * crate::PANEL_COMPOUND_SPACING,

@@ -211,6 +211,21 @@ fn phone_color_columns_share_one_scroller_in_both_orientations() {
 }
 
 #[test]
+fn phone_proof_body_uses_its_natural_height_without_changing_desktop_drawers() {
+    for viewport in [[412, 891], [891, 412]] {
+        let mut s = phone_session(viewport);
+        s.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Proof } }).unwrap();
+        let mut drawer = s.state.customization.drawer.clone().unwrap();
+        assert!(drawer.body_fits_content(Panel::Proof));
+        for panel in [Panel::Layers, Panel::Color, Panel::Tools] {
+            assert!(!drawer.body_fits_content(panel));
+        }
+        drawer.anchor = DrawerAnchor::Header { id: 1 };
+        assert!(!drawer.body_fits_content(Panel::Proof));
+    }
+}
+
+#[test]
 fn drawer_body_minimums_preserve_scroll_bodies_without_overriding_the_layers_inspector() {
     let mut s = phone_session([412, 891]);
     s.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel: Panel::Layers } }).unwrap();

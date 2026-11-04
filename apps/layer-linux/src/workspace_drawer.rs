@@ -441,7 +441,7 @@ impl View {
                         v.bind(w);
                         Body::Palettes(v)
                     }
-                    Panel::Proof => Body::Proof(w.proof_panel.duplicate(w)),
+                    Panel::Proof => Body::Proof(w.proof_panel.duplicate(w, drawer.body_fits_content(*panel))),
                     Panel::Histogram => Body::Histogram(w.histogram.duplicate(w)),
                     Panel::Waveform => Body::Histogram(w.waveform.duplicate(w)),
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
