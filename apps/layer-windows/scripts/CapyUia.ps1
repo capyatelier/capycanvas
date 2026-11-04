@@ -705,6 +705,8 @@ function New-DrawingPixels([int]$Width,[int]$Height){
     foreach($field in @(@('document-width',$Width),@('document-height',$Height))){
         $entry=New-DrawingControl $field[0];$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue([string]$field[1])
     }
+    (New-DrawingControl 'document-width').SetFocus()
+    Wait-Until {$view=(Model).state.new_drawing;$view -and $view.values[0] -eq $Width -and $view.values[1] -eq $Height} 'New drawing did not apply pixel sizes'
 }
 function Tool-Tile([string]$Command){
     $target=@{id=$null}

@@ -168,3 +168,67 @@ Write-Output 'Document invocation passed: ordinary acknowledgement, retired comm
  }
  'Document stderr: only the single intentional preserved-package diagnostic is accepted; other sessions, duplicates and unrelated errors rejected.'
 }
+
+& {
+ $tokens=$null;$errors=$null
+ $helperAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ foreach($name in @('New-DrawingPixels','Invoke-Id')){
+  $helper=$helperAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq$name}.GetNewClosure(),$true)
+  if(!$helper){throw "Missing actual shared helper: $name"}
+  . ([scriptblock]::Create($helper.Extent.Text))
+ }
+ function New-DrawingControl([string]$Id,$Within){
+  switch($Id){'document-width'{$script:sizeEntries[0]};'document-height'{$script:sizeEntries[1]};'new-drawing-unit'{[pscustomobject]@{}};default{throw "Unexpected new drawing control: $Id"}}
+ }
+ function Model{
+  if($null-ne$script:sizePending){
+   $script:sizePending.reads--
+   if($script:sizePending.reads-le0){$script:sizeView.values[1]=$script:sizePending.value;$script:sizePending=$null}
+  }
+  $script:sizeView.can_create=$script:sizeAllowed-and$script:sizeView.values[0]-eq64-and$script:sizeView.values[1]-eq48
+  [pscustomobject]@{state=[pscustomobject]@{new_drawing=$script:sizeView}}
+ }
+ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){
+  for($poll=0;$poll-lt6;$poll++){if(& $Condition){return};$script:sizeUnacknowledged++}
+  throw $Message
+ }
+ function Find([string]$Id){
+  if($Id-cne'new-drawing-create'){throw 'Unexpected new drawing action'}
+  $null=Model
+  [pscustomobject]@{Current=[pscustomobject]@{IsEnabled=$script:sizeView.can_create}}
+ }
+ function Invoke([string]$Id){if($Id-cne'new-drawing-create'){throw 'Unexpected invocation'};$script:sizeInvocations++}
+ foreach($case in @(@{delay=0;allowed=$true},@{delay=3;allowed=$true},@{delay=3;allowed=$false})){
+  $script:sizeDelay=$case.delay;$script:sizeAllowed=$case.allowed;$script:sizeFocused=$null;$script:sizePending=$null
+  $script:sizeInvocations=0;$script:sizeUnacknowledged=0
+  $script:sizeView=[pscustomobject]@{setup=[pscustomobject]@{unit='px'};values=@(3508,2480);can_create=$false}
+  $script:sizeEntries=@(foreach($index in 0,1){
+   $pattern=[pscustomobject]@{Index=$index;Value=[string]$script:sizeView.values[$index];Dirty=$false}
+   $pattern|Add-Member ScriptProperty Current {$this}
+   $pattern|Add-Member ScriptMethod SetValue {param([string]$Value)$this.Value=$Value;$this.Dirty=$true}
+   $entry=[pscustomobject]@{Pattern=$pattern}
+   $entry|Add-Member ScriptMethod GetCurrentPattern {param($Pattern)
+    if($Pattern-ne[System.Windows.Automation.ValuePattern]::Pattern){throw 'Unexpected dimension pattern'};$this.Pattern
+   }
+   $entry|Add-Member ScriptMethod SetFocus {
+    $old=$script:sizeFocused
+    if($null-ne$old-and$old-ne$this-and$old.Pattern.Dirty){
+     $p=$old.Pattern
+     if($p.Index-eq1-and$script:sizeDelay-gt0){$script:sizePending=@{reads=$script:sizeDelay;value=[int]$p.Value}}
+     else{$script:sizeView.values[$p.Index]=[int]$p.Value}
+     $p.Dirty=$false
+    }
+    $script:sizeFocused=$this
+   }
+   $entry
+  })
+  New-DrawingPixels 64 48
+  if(($script:sizeView.values-join',')-cne'64,48'-or$null-ne$script:sizePending-or$script:sizeEntries[1].Pattern.Dirty){throw 'Pixel setup returned before both authored dimensions were committed and published'}
+  if($case.delay-gt0-and$script:sizeUnacknowledged-eq0){throw 'Pixel setup did not await delayed published dimensions'}
+  $failure=$null;try{Invoke-Id 'new-drawing-create'}catch{$failure=$_}
+  if($case.allowed){if($failure-or$script:sizeInvocations-ne1){throw 'Acknowledged drawing dimensions did not reach one enabled invocation'}}
+  elseif(!$failure-or$failure.Exception.Message-cne'Missing enabled control: new-drawing-create'-or$script:sizeInvocations-ne0-or$script:sizeView.can_create){throw 'Pixel setup bypassed the unchanged shared creation refusal'}
+ }
+ 'Shared new-drawing pixel setup: both drafts committed before return, delayed publication awaited, enabled creation invoked once and genuine refusal retained.'
+}
