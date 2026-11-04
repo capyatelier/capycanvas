@@ -93,6 +93,10 @@ class AndroidSessionRestartTest {
                 host.drain(obj("type" to "invoke","command" to "redo"));assertEquals(expected.getInt("layers"),state().array("layers").length())
                 instrumentation.runOnMainSync {host.drawingTabs.select(expected.getLong("first"))}
                 host.awaitMain("saved drawing selected",120_000) {!host.drawingTabs.switching&&host.drawingTabs.selected == expected.getLong("first")}
+                val epoch = native {JSONObject(Native.sessionStamp(it,expected.getLong("first"))).getLong("epoch")}
+                host.awaitMain("saved drawing snapshot",30_000) {
+                    host.snapshot?.optJSONObject("state")?.optJSONObject("document_file")?.optLong("epoch") == epoch
+                }
                 assertFalse(state().getJSONObject("document_file").getBoolean("modified"))
                 assertEquals(expected.getBoolean("recovered"),state().getJSONObject("document_file").getBoolean("recovered"))
                 assertEquals(jsonValue(expected.getJSONObject("location")),jsonValue(state().getJSONObject("document_file").getJSONObject("location")))
