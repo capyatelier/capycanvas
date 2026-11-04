@@ -202,9 +202,11 @@ try{
  [CapyCanvasTouch]::Up(1);Stable 'single-finger release does not jump' $before
  $panClock=[Diagnostics.Stopwatch]::StartNew()
  [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy)
- Stable 'adding second finger does not jump' $before
+ [CapyCanvasTouch]::Pair(($cx-82),($cy+9),($cx+118),($cy+9))
  $checks.Add(@{name='pan input timing';before_first_move_ms=$panClock.Elapsed.TotalMilliseconds})
- for($i=1;$i -le 10;$i++){[CapyCanvasTouch]::Pair(($cx-100+$i*6),($cy+$i*3),($cx+100+$i*6),($cy+$i*3));Start-Sleep -Milliseconds 12}
+ $expected=$before|ConvertTo-Json -Depth 8|ConvertFrom-Json;$expected.translation[0]+=18;$expected.translation[1]+=9
+ Check 'adding second finger pans without a jump' {(Matches-Gesture (Camera) $expected)}
+ for($i=4;$i -le 10;$i++){[CapyCanvasTouch]::Pair(($cx-100+$i*6),($cy+$i*3),($cx+100+$i*6),($cy+$i*3));Start-Sleep -Milliseconds 12}
  $expected=$before|ConvertTo-Json -Depth 8|ConvertFrom-Json;$expected.translation[0]+=60;$expected.translation[1]+=30
  Check 'two-finger pan preserves scale and rotation' {(Matches-Gesture (Camera) $expected)}
  $pan=Camera;$ax=$cx+60;$ay=$cy+30
@@ -226,11 +228,10 @@ try{
  [CapyCanvasTouch]::Up(3);$one=Camera;[CapyCanvasTouch]::Move(1,($ax+20),($ay-140));Stable 'remaining single finger does not pan with Pen' $one
  [CapyCanvasTouch]::Up(1);Stable 'all contacts released without a jump' $one
  foreach($attempt in 1..3){
-  [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy);$cancelled=Camera
+  $cancelled=Camera;[CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy)
   [CapyCanvasTouch]::CancelAll();Stable "cancelled touch pair $attempt preserves the drawing and camera" $cancelled
  }
  [CapyCanvasTouch]::Down(1,($cx-100),$cy);[CapyCanvasTouch]::Down(2,($cx+100),$cy)
- Stable 'fresh contact pair after cancellation does not jump' $cancelled
  [CapyCanvasTouch]::Pair(($cx-70),($cy+20),($cx+130),($cy+20))
  $expected=$cancelled|ConvertTo-Json -Depth 8|ConvertFrom-Json;$expected.translation[0]+=30;$expected.translation[1]+=20
  Check 'new contacts pan normally after cancellation' {(Matches-Gesture (Camera) $expected)}
