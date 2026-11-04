@@ -453,6 +453,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// changing the user's arrangement. Native views only forward the request.
     pub fn reveal_panel(&mut self, panel: Panel) -> Result<UiChange, String> {
         use crate::{CustomizationAction as Edit, DrawerAnchor, UiAction};
+        if self.logical_viewport.is_some_and(|viewport| self.state().phone_presentation(viewport).is_some()) {
+            return self.dispatch(UiAction::Phone { action: crate::PhoneAction::Panel { panel } });
+        }
         let mut change = self.dispatch(UiAction::Customize {
             action: Edit::SetPanelVisible {
                 panel,

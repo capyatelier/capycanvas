@@ -6,6 +6,49 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn proof_reveal_opens_the_phone_drawer_without_changing_desktop_layout() {
+    for platform in [Platform::Gtk, Platform::Web] {
+        for viewport in [[412, 891], [891, 412]] {
+            let mut s = session(platform);
+            s.state.workspace.layout = WorkspacePreset::Painter.layout(platform);
+            s.set_viewport(viewport.map(|v| v as f32), viewport).unwrap();
+            assert!(s.state().phone_presentation(viewport.map(|v| v as f32)).is_some());
+            let before = serde_json::to_vec(&s.state.workspace.layout).unwrap();
+            crate::proof_panel::reveal(&mut s).unwrap();
+            let drawer = s.state.customization.drawer.as_ref().expect("Proof opens its phone drawer");
+            assert_eq!(drawer.anchor, DrawerAnchor::Phone { anchor: PhoneDrawerAnchor::Capy });
+            assert_eq!(drawer.columns, vec![vec![Panel::Proof]]);
+            assert_eq!(serde_json::to_vec(&s.state.workspace.layout).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn panel_reveal_uses_the_phone_drawer_for_every_registered_panel_kind() {
+    let mut s = phone_session([412, 891]);
+    let before = serde_json::to_vec(&s.state.workspace.layout).unwrap();
+    for panel in Panel::ALL {
+        s.reveal_panel(panel).unwrap();
+        let drawer = s.state.customization.drawer.as_ref().unwrap();
+        assert!(matches!(drawer.anchor, DrawerAnchor::Phone { .. }));
+        assert!(drawer.panels().any(|shown| shown == panel), "{panel:?}");
+        assert_eq!(serde_json::to_vec(&s.state.workspace.layout).unwrap(), before, "{panel:?}");
+    }
+}
+
+#[test]
+fn proof_reveal_keeps_its_desktop_panel_route() {
+    let mut s = phone_session([1600, 1000]);
+    assert!(s.state().phone_presentation([1600.,1000.]).is_none());
+    customize(&mut s, CustomizationAction::SetPanelVisible { panel:Panel::Proof,visible:false });
+    assert!(s.state.workspace.layout.panel_group(Panel::Proof).is_none());
+    crate::proof_panel::reveal(&mut s).unwrap();
+    assert!(s.state.workspace.layout.panel_group(Panel::Proof).is_some());
+    assert_eq!(s.state.workspace.layout.active_panel(Panel::Proof),Some(Panel::Proof));
+    assert!(s.state.customization.drawer.as_ref().is_none_or(|drawer| !matches!(drawer.anchor,DrawerAnchor::Phone { .. })));
+}
+
+#[test]
 fn phone_editor_pages_clip_to_the_visible_viewport_without_changing_modes() {
     let mut s = phone_session([412, 891]);
     s.state.phone.insets = [5., 7., 11., 13.];

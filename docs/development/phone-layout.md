@@ -25,6 +25,11 @@ plan.
 - **One shared function decides.** Shared Rust computes the presentation from the
   layout, viewport, insets and settings; hosts draw it and forward input.
 
+Panel reveal requests open a phone drawer when phone presentation is active,
+using the session's logical viewport. Revealing a panel on phone does not change
+the saved desktop panel visibility, tab selection or column layout. Content and
+toolbar panels use the same existing phone drawer path.
+
 ## When it applies
 
 - GTK and Web present the phone layout. Each host enables its shared
