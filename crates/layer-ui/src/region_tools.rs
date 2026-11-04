@@ -663,9 +663,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(selection)
     }
-    fn queue_region(&mut self,request:RegionRequest,purpose:Purpose) {self.queue_region_task(RegionTask::Mask(request),purpose);}
+    fn queue_region(&mut self,request:RegionRequest,purpose:Purpose) {
+        let task=if matches!(&purpose,Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {..}),..}) {RegionTask::Fill(request)}else{RegionTask::Mask(request)};
+        self.queue_region_task(task,purpose);
+    }
     fn queue_region_task(&mut self,mut task:RegionTask,mut purpose:Purpose) {
-        let request=match &mut task {RegionTask::Mask(request)|RegionTask::FlatAreas(request)=>request};
+        let request=match &mut task {RegionTask::Mask(request)|RegionTask::Fill(request)|RegionTask::FlatAreas(request)=>request};
         if let Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {edges:Some(edges),..}),..}=&mut purpose {
             edges.position=Point{x:request.position[0] as f32,y:request.position[1] as f32};
             edges.tolerance=request.tolerance;

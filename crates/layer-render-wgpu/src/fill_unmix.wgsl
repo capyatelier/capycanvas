@@ -66,7 +66,16 @@ fn fill_fraction(pixel:vec4<f32>,seed:vec4<f32>,neighbour:vec4<f32>)->f32 {
     if fill_ratio_greater(lower,upper) {return -1.;}
     return .5*(f32(lower.x)/f32(lower.y)+f32(upper.x)/f32(upper.y));
 }
-fn fill_equal(a:vec4<f32>,b:vec4<f32>)->bool {return fill_fraction(a,b,b)>=0.;}
+fn fill_equal(a:vec4<f32>,b:vec4<f32>)->bool {
+    let p=fill_sample(a);let q=fill_sample(b);
+    let largest=max(abs(p.value)+max(p.low,p.high),abs(q.value)+max(q.low,q.high));
+    let exponent=vec4<i32>((bitcast<vec4<u32>>(largest)>>vec4<u32>(23))&vec4<u32>(255))-127;
+    let scale=exp2(vec4<f32>(min(vec4(127),vec4(27)-exponent)));
+    let qp=vec4<i32>(round(p.value*scale));let qq=vec4<i32>(round(q.value*scale));
+    let pl=vec4<i32>(ceil(p.low*scale+.5));let ph=vec4<i32>(ceil(p.high*scale+.5));
+    let ql=vec4<i32>(ceil(q.low*scale+.5));let qh=vec4<i32>(ceil(q.high*scale+.5));
+    return all(qp-pl<=qq+qh) && all(qp+ph>=qq-ql);
+}
 fn fill_seed_limit(pixel:vec4<f32>,seed:vec4<f32>)->f32 {
     var limit=1.;
     for(var channel=0u;channel<4u;channel++) {

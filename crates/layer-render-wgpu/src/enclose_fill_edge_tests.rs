@@ -385,7 +385,6 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
 }
 
 fn unmix_gpu(r:&WgpuRasterizer,cases:&[[[f32;4];4]],codes:[u32;4])->Vec<([f32;4],bool,f32)> {
-    use wgpu::util::DeviceExt;
     let source=[include_str!("sdr_color.wgsl"),include_str!("fill_unmix.wgsl"),r#"
 struct TestCase {pixel:vec4<f32>,seed:vec4<f32>,neighbour:vec4<f32>,paint:vec4<f32>}
 struct TestResult {projected:vec4<f32>,data:vec4<u32>}
@@ -409,6 +408,10 @@ fn check(@builtin(global_invocation_id) id:vec3<u32>) {
     results[id.x]=TestResult(fill_reconstruct(pixel,seed,neighbour,item.paint,1.),vec4(u32(fill_fraction(pixel,seed,neighbour)<0.),bitcast<u32>(fraction),0u,0u));
 }
 "#].concat();
+    unmix_gpu_source(r,cases,codes,&source)
+}
+fn unmix_gpu_source(r:&WgpuRasterizer,cases:&[[[f32;4];4]],codes:[u32;4],source:&str)->Vec<([f32;4],bool,f32)> {
+    use wgpu::util::DeviceExt;
     let shader=r.device.create_shader_module(wgpu::ShaderModuleDescriptor {label:Some("fill unmix normal math test"),source:wgpu::ShaderSource::Wgsl(source.into())});
     let io=crate::bindings::layout(&r.device,"fill unmix test io",&[
         crate::bindings::buffer(0,wgpu::ShaderStages::COMPUTE,wgpu::BufferBindingType::Storage {read_only:true},false,None),
@@ -436,6 +439,105 @@ fn check(@builtin(global_invocation_id) id:vec3<u32>) {
         let word=|index|u32::from_le_bytes(bytes[index*4..index*4+4].try_into().unwrap());
         (std::array::from_fn(|i|f32::from_bits(word(i))),word(4)!=0,f32::from_bits(word(5)))
     }).collect()
+}
+
+#[test]
+fn fill_equal_matches_fraction_for_quantized_interval_boundaries() {
+    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cases=Vec::new();
+    let mut add=|name:String,a:[f32;4],b:[f32;4],expected:Option<bool>|cases.push((name,[a,b,b,[0.;4]],expected));
+    for value in [0.,-0.,f32::from_bits(1),f32::MIN_POSITIVE,2_f32.powi(-24),0.0031308,0.25,0.5,1.,2.,16.] {
+        add(format!("equal {:08x}",value.to_bits()),[value;4],[value;4],None);
+    }
+    for channel in 0..4 {
+        for (name,value,expected) in [("touching zero interval",f32::MIN_POSITIVE,true),("one-quantum interval gap",f32::MIN_POSITIVE*1.5,false)] {
+            let mut a=[0.;4];a[channel]=value;
+            add(format!("{name} channel {channel}"),a,[0.;4],Some(expected));
+            add(format!("{name} reversed channel {channel}"),[0.;4],a,Some(expected));
+        }
+        for exponent in [-24,-14,-1,0,1,16] {
+            let power=2_f32.powi(exponent);
+            for value in [power.next_down().next_down(),power.next_down(),power,power.next_up(),power.next_up().next_up()] {
+                for neighbour in [value.next_down(),value.next_up(),value.next_up().next_up()] {
+                    let mut a=[0.;4];a[channel]=value;
+                    let mut b=a;b[channel]=neighbour;
+                    add(format!("f32 neighbours {exponent} {:08x} {:08x} channel {channel}",value.to_bits(),neighbour.to_bits()),a,b,None);
+                }
+                for step in [0.,0.5,1.,1.5,2.,3.] {
+                    let mut a=[0.;4];a[channel]=value;
+                    let mut b=a;b[channel]+=step*2_f32.powi(exponent-10);
+                    for sign in [1.,-1.] {
+                        add(format!("power {exponent} value {:08x} step {step} sign {sign} channel {channel}",value.to_bits()),a.map(|v|v*sign),b.map(|v|v*sign),None);
+                    }
+                }
+            }
+        }
+        for maximum in [255.,65535.] {
+            for code in [0.,1.,2.,maximum*0.5,maximum-1.,maximum] {
+                let value=code/maximum;
+                for offset in [-2.,-1.,0.,1.,2.] {
+                    let mut a=[0.;4];a[channel]=value;
+                    let mut b=a;b[channel]=(code+offset)/maximum;
+                    add(format!("integer {maximum} code {code} offset {offset} channel {channel}"),a,b,None);
+                    if channel<3 {
+                        a[channel]=layer_core::color::srgb_decode(a[channel]);b[channel]=layer_core::color::srgb_decode(b[channel]);
+                        add(format!("sRGB integer {maximum} code {code} offset {offset} channel {channel}"),a,b,None);
+                    }
+                }
+            }
+        }
+    }
+    let input:Vec<_>=cases.iter().map(|(_,input,_)|*input).collect();
+    let source=[include_str!("sdr_color.wgsl"),include_str!("fill_unmix.wgsl"),r#"
+fn old_fill_fraction(pixel:vec4<f32>,seed:vec4<f32>,neighbour:vec4<f32>)->f32 {
+    let p=fill_sample(pixel);let s=fill_sample(seed);let n=fill_sample(neighbour);
+    let largest=max(max(abs(p.value)+max(p.low,p.high),abs(s.value)+max(s.low,s.high)),abs(n.value)+max(n.low,n.high));
+    let exponent=vec4<i32>((bitcast<vec4<u32>>(largest)>>vec4<u32>(23))&vec4<u32>(255))-127;
+    let scale=exp2(vec4<f32>(min(vec4(127),vec4(27)-exponent)));
+    let qp=vec4<i32>(round(p.value*scale));let qs=vec4<i32>(round(s.value*scale));let qn=vec4<i32>(round(n.value*scale));
+    let pl=vec4<i32>(ceil(p.low*scale+.5));let ph=vec4<i32>(ceil(p.high*scale+.5));
+    let sl=vec4<i32>(ceil(s.low*scale+.5));let sh=vec4<i32>(ceil(s.high*scale+.5));
+    let nl=vec4<i32>(ceil(n.low*scale+.5));let nh=vec4<i32>(ceil(n.high*scale+.5));
+    var lower=vec2<i32>(0,1);var upper=vec2<i32>(1,1);
+    for(var channel=0u;channel<4u;channel++) {
+        let a=qs[channel]+sh[channel]-qn[channel]-nh[channel];
+        let b=qp[channel]-pl[channel]-qn[channel]-nh[channel];
+        if a==0 && b>0 {return -1.;}
+        if a>0 && fill_ratio_greater(vec2(b,a),lower) {lower=vec2(b,a);}
+        if a<0 && fill_ratio_greater(upper,vec2(-b,-a)) {upper=vec2(-b,-a);}
+        let c=qs[channel]-sl[channel]-qn[channel]+nl[channel];
+        let d=qp[channel]+ph[channel]-qn[channel]+nl[channel];
+        if c==0 && d<0 {return -1.;}
+        if c>0 && fill_ratio_greater(upper,vec2(d,c)) {upper=vec2(d,c);}
+        if c<0 && fill_ratio_greater(vec2(-d,-c),lower) {lower=vec2(-d,-c);}
+    }
+    if fill_ratio_greater(lower,upper) {return -1.;}
+    return .5*(f32(lower.x)/f32(lower.y)+f32(upper.x)/f32(upper.y));
+}
+struct TestCase {pixel:vec4<f32>,seed:vec4<f32>,neighbour:vec4<f32>,paint:vec4<f32>}
+struct TestResult {projected:vec4<f32>,data:vec4<u32>}
+@group(0) @binding(0) var<storage,read> cases:array<TestCase>;
+@group(0) @binding(1) var<storage,read_write> results:array<TestResult>;
+@compute @workgroup_size(64)
+fn check(@builtin(global_invocation_id) id:vec3<u32>) {
+    if id.x>=arrayLength(&cases) {return;}
+    let item=cases[id.x];
+    let before=old_fill_fraction(item.pixel,item.seed,item.seed)>=0.;
+    let after=fill_equal(item.pixel,item.seed);
+    results[id.x]=TestResult(vec4(f32(u32(before)),f32(u32(after)),0.,0.),vec4(0u));
+}
+"#].concat();
+    for (maximum,space) in [(0,0),(255,0),(65535,0),(255,2),(255,3)] {for (mantissa,minimum) in [(10,24),(23,149)] {
+        let codes=[maximum,space,mantissa,minimum];
+        let results=unmix_gpu_source(&r,&input,codes,&source);
+        assert_eq!(results.len(),cases.len());
+        for ((name,_,expected),(predicates,_,_)) in cases.iter().zip(results) {
+            assert_eq!(predicates[0].to_bits(),predicates[1].to_bits(),"{name}, codes {codes:?}");
+            if maximum==0 && mantissa==23 && let Some(expected)=expected {
+                assert_eq!(predicates[0],f32::from(u8::from(*expected)),"{name}, codes {codes:?}");
+            }
+        }
+    }}
 }
 
 #[test]

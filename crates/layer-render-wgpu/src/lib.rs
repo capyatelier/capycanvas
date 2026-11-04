@@ -1986,6 +1986,7 @@ impl WgpuRasterizer {
                     && self.prepare_paper_binding(binding, startup::BRUSH).is_ok() {
                     ready &= paper::PaperTile::id_for(binding).is_none_or(|id| self.papers.view(&id).is_some());
                 }
+                if batch.dab_count==0 {continue;}
             }
             ready &= self.brush_textures_ready(&batch.style);
             if let Some(startup) = &self.startup && !startup.strokes.covers(&batch.style) {

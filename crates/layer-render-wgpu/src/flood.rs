@@ -138,7 +138,10 @@ impl Flood {
     #[cfg(test)]
     pub fn compaction_pending(&self)->Option<bool> {self.lines.compaction_pending()}
     pub fn prepare(&self, compiler: &startup::Compiler, refinement: RegionRefinement, enclosed: bool, contiguous: bool, priority:u8) -> bool {
-        self.lines.prepare(compiler,priority,refinement) & compiler.require(stages(refinement, enclosed, contiguous).map(|entry| &self.pipelines[entry]), priority)
+        compiler.require(self.request_pipelines(refinement,enclosed,contiguous,priority==startup::OTHER),priority)
+    }
+    pub fn request_pipelines(&self,refinement:RegionRefinement,enclosed:bool,contiguous:bool,prepare_ends:bool)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        self.lines.pipelines(refinement,prepare_ends).chain(stages(refinement,enclosed,contiguous).map(|entry|&self.pipelines[entry]))
     }
     pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {self.lines.prepare_cache(compiler,priority)}
     pub fn build_lines(&mut self,input:&Input<'_>,encoder:&mut crate::submission::CommandEncoder,extent:[u32;2],paper:([f32;4],u32,bool),(budget,demand):(f64,bool),dirty:&std::collections::BTreeSet<[u32;2]>)->Result<(bool,f64),GpuRasterError> {

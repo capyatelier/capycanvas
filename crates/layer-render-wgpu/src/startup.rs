@@ -791,6 +791,54 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_request_requires_stored_dependencies_before_the_mask_is_ready() {
+        use layer_render::{CanvasRenderer,RegionRequest,RegionSource,RegionTask};
+        let mut reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let document=Document::new(layer_core::PortableId::random(),64,64,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        crate::test_support::submit_ready(&mut reference,crate::test_support::packet(document.scene(),[64;2])).unwrap();
+        let mut renderer=crate::test_support::staged_renderer(&reference,Default::default());
+        renderer.artwork_frame=reference.artwork_frame.clone();renderer.document_extent=[64;2];
+        let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
+        let compiler=&renderer.startup.as_ref().unwrap().compiler;
+        compiler.enqueue(DOCUMENT,move||{let _=entered.send(());let _=held.recv();Ok(())});compiler.start();
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        let request=RegionRequest {fill_areas:None,colour_mode:Default::default(),fill:Some(Default::default()),reference_count:None,paper:None,
+            enclosure:None,contiguous:true,selection:None,request_id:1,source:RegionSource::Composite,position:[0;2],tolerance:0.,refinement:Default::default(),limit:None};
+        let accepted=renderer.request_region(RegionTask::Fill(request));
+        let [fill,scalar]=renderer.scene_pipelines.fill_pipelines();
+        let pipelines=[fill,scalar,&renderer.pipelines.watercolor_composite,&renderer.layer_masks.initialize];
+        let render_required=pipelines.into_iter().all(|pipeline|!pipeline.ready() && pipeline.promote(DOCUMENT).is_none());
+        let compute_required=renderer.selection_clip.pipelines().into_iter().chain([&renderer.selection_clip.resample,&renderer.pipelines.watercolor_compute.1])
+            .all(|pipeline|!pipeline.ready() && pipeline.promote(DOCUMENT).is_none());
+        let regions=renderer.regions.as_ref().unwrap();
+        let refinement=layer_render::RegionRefinement {close_gaps:true,..Default::default()};
+        let request_required=regions.raw.pipelines().chain(regions.flood.request_pipelines(refinement,false,true,true))
+            .all(|pipeline|!pipeline.ready() && pipeline.promote(DOCUMENT).is_none());
+        let mask=renderer.take_region();
+        release.send(()).unwrap();
+        assert!(accepted.unwrap());assert!(mask.is_none());assert!(render_required && compute_required && request_required);
+        drop(renderer);
+        drop(reference);
+        finish_shader_compiler_shutdown();
+    }
+    #[test]
+    fn zero_dab_fill_does_not_prepare_an_unrelated_brush_style() {
+        let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut renderer=crate::test_support::staged_renderer(&reference,Default::default());
+        let mut document=Document::new(layer_core::PortableId::random(),64,64,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        renderer.scene_pipelines.pipeline[3].compile();
+        let target=document.drawing_target().unwrap();
+        let style=brush_style(&document,&layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil),StrokeTool::Brush);
+        let mut required=Requirements::default();required.style(&renderer,&style,dry_material::Reach::of_dabs(&[]),false,false);
+        assert!(!required.ready());
+        crate::layer_tests::placement::paint_mut(&mut document).operations=Arc::new(vec![layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,
+            coverage:crate::layer_tests::placement::reveal_all([64;2],[0;2]),kind:layer_core::RasterOperationKind::Fill {edges:None,underfill:None,color:[0.,0.,1.,1.],alpha_locked:false,texture:Default::default()}}]);
+        let batches=[DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,..crate::test_support::dab_batch(target,style,layer_core::Rect::from_extent([64;2]))}];
+        assert!(renderer.brush_batches_ready(FramePacket {dab_batches:&batches,..crate::test_support::packet(document.scene(),[64;2])}));
+        assert!(!required.ready());
+    }
     #[test]
     fn readiness_waits_for_every_batch_texture_and_pipeline() {
         let color = layer_core::color::DocumentColor::default();

@@ -162,7 +162,7 @@ impl CanvasRenderer for Recorder {
         &mut self,
         request: layer_render::RegionTask,
     ) -> Result<bool, Self::Error> {
-        match request {layer_render::RegionTask::Mask(request)=>self.region_requests.push(request),layer_render::RegionTask::FlatAreas(request)=>self.flat_requests.push(request)}
+        match request {layer_render::RegionTask::Mask(request)|layer_render::RegionTask::Fill(request)=>self.region_requests.push(request),layer_render::RegionTask::FlatAreas(request)=>self.flat_requests.push(request)}
         Ok(true)
     }
     fn take_region(&mut self) -> Option<Result<layer_render::RegionOutput, Self::Error>> {

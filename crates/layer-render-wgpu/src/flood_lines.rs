@@ -73,22 +73,22 @@ impl Lines {
     pub fn storage_bytes(&self)->u64 {
         self.tokens.as_ref().map_or(0,wgpu::Buffer::size)+self.data.as_ref().map_or(0,wgpu::Buffer::size)+self.scratch.as_ref().map_or(0,|buffers|buffers.iter().map(wgpu::Buffer::size).sum())
     }
-    pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {
-        compiler.require(STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
+    fn cache_pipelines(&self)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        STAGES.iter().filter(|entry|self.building.as_ref().map_or_else(
             ||STAGES[..8].contains(entry) || **entry=="reset_ends",
-            |work|work.steps.iter().any(|(pending,_,_)|pending==*entry))).map(|entry|&self.pipelines[entry]),priority)
+            |work|work.steps.iter().any(|(pending,_,_)|pending==*entry))).map(|entry|&self.pipelines[entry])
     }
-    pub fn prepare(&self,compiler:&startup::Compiler,priority:u8,refinement:RegionRefinement)->bool {
-        let prewarm=priority==startup::OTHER;
-        self.prepare_cache(compiler,priority) & compiler.require(STAGES[8..].iter().filter(|entry|match **entry {
+    pub fn prepare_cache(&self,compiler:&startup::Compiler,priority:u8)->bool {compiler.require(self.cache_pipelines(),priority)}
+    pub fn pipelines(&self,refinement:RegionRefinement,prepare_ends:bool)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
+        self.cache_pipelines().chain(STAGES[8..].iter().filter(move |entry|match **entry {
             "assign_tokens"=>false,
-            "refine_ends"|"seal_candidates"=>prewarm && !self.overflow,
+            "refine_ends"|"seal_candidates"=>prepare_ends && !self.overflow,
             "grow_region"=>matches!(refinement.edges,layer_render::RegionEdges::GrowShrink(_)),
             "assign_region"=>matches!(refinement.edges,layer_render::RegionEdges::LineMiddle),
             "region_seeds"=>!matches!(refinement.edges,layer_render::RegionEdges::Exact),
-            "apply_seals"=>refinement.close_gaps && !self.overflow && (prewarm || self.ends>0),
+            "apply_seals"=>refinement.close_gaps && !self.overflow && (prepare_ends || self.ends>0),
             _=>true,
-        }).map(|entry|&self.pipelines[entry]),priority)
+        }).map(|entry|&self.pipelines[entry]))
     }
     pub fn prepare_areas(&self,compiler:&startup::Compiler,priority:u8)->bool {
         self.prepare_cache(compiler,priority)

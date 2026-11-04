@@ -2617,6 +2617,7 @@ impl Pipelines {
         }
         self.pipeline.iter().zip(used).filter_map(|(pipeline,used)| used.then_some(pipeline))
     }
+    pub fn fill_pipelines(&self)->[&Deferred<wgpu::RenderPipeline>;2] { [&self.pipeline[3],&self.pipeline[SCALAR_PIPELINE]] }
     pub fn scale_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 6] {
         [&self.scale.reduce, &self.scale.reduce_phased, &self.scale.reduce_pair, &self.scale.compose, &self.scale.half, &self.resample.area]
     }

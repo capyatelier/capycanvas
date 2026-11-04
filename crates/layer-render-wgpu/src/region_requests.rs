@@ -821,7 +821,18 @@ impl WgpuRasterizer {
         if regions.pending.is_some() || regions.waiting.is_some() || regions.running.is_some() || regions.areas.is_some() {self.regions=Some(regions);return Ok(false);}
         regions.sampling=region_sources::Sampling::Transparent;
         regions.cache_request=None;
-        let result = match task {RegionTask::Mask(request)=>regions.start(self,request),RegionTask::FlatAreas(request)=>{regions.areas=Some(areas::AreasJob::new(request));Ok(true)}};
+        if let RegionTask::Fill(request)=&task && let Some(startup)=&self.startup {
+            let refinement=RegionRequests::refinement(request);
+            let prepare_ends=refinement.close_gaps && request.fill.as_ref().is_none_or(|fill|fill.reach!=Some(0));
+            startup.compiler.require(regions.raw.pipelines().chain(regions.flood.request_pipelines(refinement,request.enclosure.is_some(),request.contiguous,prepare_ends)),startup::DOCUMENT);
+            let mut required=self.artwork_frame.as_ref().map_or_else(startup::Requirements::default,|frame|startup::Requirements::capture_scene(self,frame.scene.view(),true));
+            required.render.extend(self.scene_pipelines.fill_pipelines().into_iter().cloned());
+            required.render.push(self.layer_masks.initialize.clone());
+            required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
+            required.compute.push(self.selection_clip.resample.clone());
+            required.require(&startup.compiler,startup::DOCUMENT);
+        }
+        let result = match task {RegionTask::Mask(request)|RegionTask::Fill(request)=>regions.start(self,request),RegionTask::FlatAreas(request)=>{regions.areas=Some(areas::AreasJob::new(request));Ok(true)}};
         if result.is_err() { regions.cancel(); }
         self.regions = Some(regions);
         self.refresh_storage_metrics();
