@@ -195,10 +195,10 @@ impl Requirements {
                 self.compute.push(pipelines.copy_kernel(false).clone());
             }
             if preview && style.rendering.blend_mode == BrushBlendMode::Normal { self.compute.push(pipelines.gather_kernel().clone()); }
-            for extra in reach.batch_variants(style) {
+            for extra in reach.required_variants(style) {
                 let kernel = |coverage| pipelines.selected_kernel(style, plan.material, coverage, extra).clone();
                 self.compute.push(kernel(plan.state.coverage));
-                if preview { self.compute.push(kernel(false)); }
+                if preview && plan.state.coverage { self.compute.push(kernel(false)); }
             }
         }
         if let Some(kind) = plan.direct {
@@ -232,7 +232,7 @@ pub(super) struct Startup {
     pub(super) document: Requirements,
     pub(super) current: Requirements,
     pub(super) strokes: Requirements,
-    resized: Requirements,
+    warming: Vec<Deferred<wgpu::ComputePipeline>>,
     preparation: Arc<std::sync::atomic::AtomicU64>,
     effects: Option<mpsc::Receiver<Result<effects::Effects, String>>>,
     effects_ready: bool,
@@ -300,7 +300,7 @@ impl Startup {
             document: Requirements::default(),
             current: Requirements::default(),
             strokes: Requirements::default(),
-            resized: Requirements::default(),
+            warming: Vec::new(),
             preparation: Default::default(),
             effects: None,
             effects_ready: false,
@@ -506,7 +506,7 @@ impl WgpuRasterizer {
         }
         let mut current = Requirements::default();
         let mut strokes = Requirements::default();
-        let mut resized = Requirements::default();
+        let mut warming: Vec<&Deferred<wgpu::ComputePipeline>> = Vec::new();
         // Native publication must be ready before accepting a brush contact,
         // but blank paper does not depend on writeback/promotion/validation.
         if let Some(native) = &self.native_edit {
@@ -523,8 +523,17 @@ impl WgpuRasterizer {
                 self.papers.require(&self.device, Some(&startup.compiler), binding, BRUSH)?;
             }
             let mask = startup.document_key.as_ref().unwrap().key.mask;
-            strokes.style(self, &style, dry_material::Reach::of(brush), mask, true);
-            resized.style(self, &style, dry_material::Reach::of(brush).any_size(), mask, true);
+            let reach = dry_material::Reach::of(brush);
+            strokes.style(self, &style, reach, mask, true);
+            let plan = BrushPassPlan::for_device(&style, &self.device);
+            if !mask && pointwise(&style) && plan.direct.is_none() {
+                for extra in reach.any_size().batch_variants(&style).filter(|&extra| !reach.required_variants(&style).any(|required| required == extra)) {
+                    for coverage in [Some(plan.state.coverage), plan.state.coverage.then_some(false)].into_iter().flatten() {
+                        let pipeline = self.pipelines.dry_material.selected_kernel(&style, plan.material, coverage, extra);
+                        if !warming.iter().any(|p| std::ptr::eq(*p, pipeline)) { warming.push(pipeline); }
+                    }
+                }
+            }
         }
         // Live transforms do not change document revision or brush settings.
         // They still need their own shaders before an interactive frame runs.
@@ -544,7 +553,7 @@ impl WgpuRasterizer {
         strokes.enqueue(&startup.compiler, BRUSH);
         startup.current = current;
         startup.strokes = strokes;
-        startup.resized = resized;
+        startup.warming = warming.into_iter().cloned().collect();
         startup.preparation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         startup.brush = Some(ShaderBrushKey::new(document, brush));
         startup.transform = transform;
@@ -610,9 +619,9 @@ impl WgpuRasterizer {
         startup.finished = brush_ready
             && !startup.host_catalog_pending
             && startup.compiler.pending() == 0;
-        if startup.finished {
+        if brush_ready {
             let generation = startup.preparation.load(std::sync::atomic::Ordering::Relaxed);
-            for pipeline in std::mem::take(&mut startup.resized.compute).into_iter().filter(|p| !p.ready()) {
+            for pipeline in std::mem::take(&mut startup.warming).into_iter().filter(|p| !p.ready()) {
                 let preparation = startup.preparation.clone();
                 startup.compiler.background(&pipeline, BACKGROUND, move || preparation.load(std::sync::atomic::Ordering::Relaxed) == generation);
             }
@@ -1327,7 +1336,7 @@ mod gpu_tests {
             let plan=BrushPassPlan::for_device(&style,&renderer.device);
             assert!(plan.direct.is_none() && plan.material==MaterialOperation::Deposit);
             let p=&renderer.pipelines.dry_material;
-            for extra in dry_material::Reach::of(&brush).batch_variants(&style) {
+            for extra in dry_material::Reach::of(&brush).required_variants(&style) {
                 assert!(p.selected_kernel(&style,plan.material,plan.state.coverage,extra).ready(),"{preset:?} commit variant {extra:#x} is ready");
                 assert!(p.selected_kernel(&style,plan.material,false,extra).ready(),"{preset:?} prediction variant {extra:#x} is ready");
             }
@@ -1405,57 +1414,123 @@ mod gpu_tests {
     }
 
     #[test]
-    fn dry_brushes_prepare_only_the_variants_their_strokes_can_select() {
-        use dry_material::{AGGREGATE, FINE_TIP};
-        let color = layer_core::color::DocumentColor::default();
-        let reference = WgpuRasterizer::new_native_headless(color).unwrap();
-        let mut renderer = crate::test_support::staged_renderer(&reference, color);
-        let mut document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
-        let deadline = std::time::Instant::now() + Duration::from_secs(60);
-        let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
-        let style = layer_render::DabStyle { blend_space: document.composition().blend, ..layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush) };
-        let plan = BrushPassPlan::for_device(&style, &renderer.device);
-        let ready = |renderer: &WgpuRasterizer, extra: u32| {
-            let p = &renderer.pipelines.dry_material;
-            [p.selected_kernel(&style, plan.material, plan.state.coverage, extra),
-                p.selected_kernel(&style, plan.material, false, extra)].iter().all(|k| k.ready())
-        };
-        renderer.shader_idle(false, false);
-        renderer.prepare_startup(&document, &brush, false).unwrap();
-        crate::test_support::wait_startup(&mut renderer, deadline, |p| p.brush_ready, format_args!("small Pencil"));
-        assert!(ready(&renderer, AGGREGATE | FINE_TIP));
-        assert!(!ready(&renderer, AGGREGATE), "a small tip never selects the coarse kernel");
-        assert!(!ready(&renderer, FINE_TIP), "single-pigment strokes never select the mixed-pigment kernel");
-        let mut any_size = Requirements::default();
-        for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
-            let style = layer_render::DabStyle { blend_space: document.composition().blend, ..brush_style(&document, &brush, tool) };
-            any_size.style(&renderer, &style, dry_material::Reach::of(&brush).any_size(), false, true);
+    fn dry_brushes_require_one_superset_per_pigment_and_entry() {
+        use dry_material::{AGGREGATE,COMPLETION,FINE_TIP,Reach};
+        use layer_core::DefaultBrushPreset::{Pencil,PointyPencil,Charcoal,Chalk,PastelBlock};
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        for preset in [Pencil,PointyPencil,Charcoal,Chalk,PastelBlock] {
+            for accumulation in [BrushAccumulation::Flow,BrushAccumulation::Uniform] {
+                for diameter in [9.,36.,300.] {
+                    let mut brush=layer_core::default_brush(preset);
+                    brush.diameter=diameter;
+                    brush.rendering.accumulation=accumulation;
+                    let style=layer_render::DabStyle::for_brush(&brush,StrokeTool::Brush);
+                    let tip=if brush.contact.unwrap().dry.unwrap().corner==0. {FINE_TIP} else {0};
+                    let flow=accumulation==BrushAccumulation::Flow;
+                    let extra=tip | if flow {AGGREGATE|COMPLETION} else {0};
+                    let reach=Reach::of(&brush);
+                    assert_eq!(reach.required_variants(&style).collect::<Vec<_>>(),[extra],"{preset:?} {accumulation:?} {diameter}");
+                    let mut required=Requirements::default();
+                    required.style(&r,&style,reach,false,true);
+                    let plan=BrushPassPlan::for_device(&style,&r.device);
+                    assert!(plan.direct.is_none());
+                    let auxiliary=1+usize::from(flow && plan.material==MaterialOperation::Deposit);
+                    assert_eq!(required.compute.len(),auxiliary+1+usize::from(plan.state.coverage),"{preset:?} {accumulation:?} {diameter}: one kernel per entry");
+                    if flow {
+                        let dabs=[crate::layer_tests::dab([0.1,0.2,0.3,1.]),crate::layer_tests::dab([0.4,0.5,0.6,1.])];
+                        assert_eq!(Reach::of_dabs(&dabs).required_variants(&style).collect::<Vec<_>>(),[extra,tip|COMPLETION],"{preset:?}: one kernel per pigment");
+                    }
+                }
+            }
         }
-        renderer.shader_idle(true, true);
-        crate::test_support::wait_startup(&mut renderer, deadline, |_| any_size.ready(),
-            format_args!("an idle renderer prepares the other tip size in the background"));
-        brush.diameter = 36.;
-        assert!(renderer.startup_needs_update(&document, &brush, false), "a coarse-capable size prepares again before input");
-        renderer.prepare_startup(&document, &brush, false).unwrap();
-        assert!(renderer.poll_startup().unwrap().brush_ready, "the background preparation covers the new size");
-        assert!(ready(&renderer, AGGREGATE) && ready(&renderer, AGGREGATE | FINE_TIP));
-        assert!(!ready(&renderer, FINE_TIP));
-        document.working.selection = Some(layer_core::Selection::polygon(vec![
-            layer_core::Point { x: 0., y: 0. }, layer_core::Point { x: 64., y: 0. }, layer_core::Point { x: 0., y: 64. },
+    }
+
+    #[test]
+    fn selected_dry_variants_warm_after_brush_readiness() {
+        use dry_material::{AGGREGATE,COMPLETION,FINE_TIP,Reach};
+        let color=Default::default();
+        let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut r=crate::test_support::staged_renderer(&reference,color);
+        let mut doc=crate::layer_tests::paper_shade::rough_gray_paper();
+        crate::layer_tests::paper_shade::set_paper(&mut doc,&[(layer_core::paper::RELIEF,layer_core::EffectValue::Number(150.))]);
+        let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+        let style=brush_style(&doc,&brush,StrokeTool::Brush);
+        let deadline=std::time::Instant::now()+Duration::from_secs(60);
+        r.shader_idle(true,false);
+        r.prepare_startup(&doc,&brush,false).unwrap();
+        crate::test_support::wait_startup(&mut r,deadline,|p|p.brush_ready,format_args!("Pencil superset"));
+        assert!(r.pipelines.dry_material.selected_kernel(&style,MaterialOperation::Deposit,false,AGGREGATE|FINE_TIP|COMPLETION).ready());
+        let exact=Reach::of(&brush).any_size().batch_variants(&style)
+            .filter(|extra| *extra != (AGGREGATE|FINE_TIP|COMPLETION)).map(|extra|
+            r.pipelines.dry_material.selected_kernel(&style,MaterialOperation::Deposit,false,extra).clone()).collect::<Vec<_>>();
+        assert!(!exact.is_empty());
+        let mut presenter=crate::ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba8UnormSrgb,crate::SdrSurfaceColor::Srgb).unwrap();
+        presenter.pipelines_ready(&r);
+        r.update_paper_lighting(doc.scene()).unwrap();
+        while !presenter.prepare_paper_lighting(&r) {
+            r.poll_startup().unwrap();
+            assert!(std::time::Instant::now() < deadline,"visible paper lighting prepares without speculative idle");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(r.paper_shade().is_some());
+        assert!(exact.iter().all(|p| !p.ready()),"paper lighting precedes speculative exact-variant warming");
+        r.shader_idle(true,true);
+        crate::test_support::wait_startup(&mut r,deadline,|p|p.brush_ready && exact.iter().all(|p|p.ready()),format_args!("selected exact variants warm during speculative idle"));
+        brush.diameter=36.;
+        assert!(r.startup_needs_update(&doc,&brush,false));
+        r.prepare_startup(&doc,&brush,false).unwrap();
+        assert!(r.poll_startup().unwrap().brush_ready,"the same superset covers the resized brush");
+        doc.working.selection=Some(layer_core::Selection::polygon(vec![
+            layer_core::Point{x:0.,y:0.},layer_core::Point{x:64.,y:0.},layer_core::Point{x:0.,y:64.},
         ]).unwrap());
-        document.revision += 1;
-        renderer.prepare_startup(&document, &brush, false).unwrap();
-        let selected = layer_render::DabStyle { selection: document.working.selection.clone().map(Arc::new), ..style.clone() };
-        assert!(![FINE_TIP, 0].into_iter().all(|extra| renderer.pipelines.dry_material.selected_kernel(&selected, plan.material, plan.state.coverage, extra).ready()),
-            "the selection needs new stroke kernels");
-        assert!(renderer.raster_dependencies_ready(crate::test_support::packet(document.scene(), [128; 2]), None),
-            "a frame without strokes does not wait for the selected brush");
-        assert!(!renderer.poll_startup().unwrap().brush_ready, "pen contacts still wait for the selected brush");
-        crate::test_support::wait_startup(&mut renderer, deadline, |p| p.brush_ready, format_args!("selected Pencil"));
-        let committed = &renderer.pipelines.dry_material;
-        assert!([FINE_TIP, 0].into_iter().all(|extra| committed.selected_kernel(&selected, plan.material, plan.state.coverage, extra).ready()),
-            "a selection clips each dab, so its strokes use the mixed-pigment kernels");
-        drop(renderer);
+        doc.revision+=1;
+        let selected=brush_style(&doc,&brush,StrokeTool::Brush);
+        let mixed=r.pipelines.dry_material.selected_kernel(&selected,MaterialOperation::Deposit,false,FINE_TIP|COMPLETION).clone();
+        assert!(!mixed.ready(),"a clipped brush needs the other pigment route");
+        r.prepare_startup(&doc,&brush,false).unwrap();
+        assert!(r.raster_dependencies_ready(crate::test_support::packet(doc.scene(),[128;2]),None),"an empty frame does not wait for the selected brush");
+        crate::test_support::wait_startup(&mut r,deadline,|p|p.brush_ready,format_args!("selected Pencil superset"));
+        assert!(mixed.ready());
+        drop(r);
+        drop(reference);
+        finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn dry_frame_admission_and_dispatch_use_the_ready_superset() {
+        use dry_material::{AGGREGATE,COMPLETION,FINE_TIP,Reach};
+        let color=Default::default();
+        let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut r=crate::test_support::staged_renderer(&reference,color);
+        let doc=Document::new(layer_core::PortableId::random(),128,128,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let deadline=std::time::Instant::now()+Duration::from_secs(60);
+        r.prepare_startup(&doc,&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),false).unwrap();
+        crate::test_support::wait_startup(&mut r,deadline,|p|p.brush_ready,format_args!("document dependencies"));
+        let brush=layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+        let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::Pencil);
+        let mut required=Requirements::default();
+        required.style(&r,&style,Reach::of(&brush).any_size(),false,true);
+        pollster::block_on(required.prepare()).unwrap();
+        let superset=r.pipelines.dry_material.selected_kernel(&style,MaterialOperation::Deposit,false,AGGREGATE|FINE_TIP|COMPLETION).clone();
+        for (radius,extra) in [(3.,AGGREGATE|FINE_TIP),(12.,AGGREGATE)] {
+            let preferred=r.pipelines.dry_material.selected_kernel(&style,MaterialOperation::Deposit,false,extra).clone();
+            assert!(!preferred.ready(),"exact {extra:#x} starts cold");
+            let selected=r.pipelines.dry_material.dispatch_kernel(&style,MaterialOperation::Deposit,false,extra);
+            assert!(std::ptr::eq(selected.compile(),superset.compile()));
+            let dab=Dab {center:layer_core::Point{x:64.,y:64.},radii:[radius;2],previous:[radius,radius,1.,0.],motion:[4.,0.],contact:[0.7,0.,0.,0.],previous_contact:[0.7,0.,0.,0.],..crate::layer_tests::dab([0.1,0.1,0.1,1.])};
+            let mut batch=crate::test_support::dab_batch(doc.working.target.unwrap(),style.clone(),layer_core::Rect::from_extent([128;2]));
+            batch.dab_count=1;
+            batch.stroke_end=false;
+            let packet=FramePacket {dabs:&[dab],dab_batches:&[batch],..crate::test_support::packet(doc.scene(),[128;2])};
+            assert!(r.raster_dependencies_ready(packet,None));
+            assert!(!preferred.ready(),"frame admission requires no exact {extra:#x}");
+            r.submit(packet).unwrap();
+            assert!(!preferred.ready(),"dispatch does not compile exact {extra:#x}");
+            preferred.compile();
+            let selected=r.pipelines.dry_material.dispatch_kernel(&style,MaterialOperation::Deposit,false,extra);
+            assert!(std::ptr::eq(selected.compile(),preferred.compile()),"a ready exact recipe wins");
+        }
+        drop(r);
         drop(reference);
         finish_shader_compiler_shutdown();
     }

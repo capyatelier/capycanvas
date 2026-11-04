@@ -1154,6 +1154,56 @@ Target: **90 completed updates/s** at the guaranteed size, on the 24 MP canvas.
 Simple brushes are guaranteed through **1536 px**; complex and very complex
 brushes retain their 1024 px and 512 px guarantees.
 
+### Thin contacts and brush readiness
+
+Measured 2026-11-04 UTC: `b1b02aebb` → `20da05962` on MovinkPad 11, 6000 × 4000. One
+ABBA block, two independent processes per arm, three warmed ten-second constant-pressure
+contacts per process. Full descriptive intervals and per-run details are in the
+[campaign report](../../artifacts/pencil-speed/report.local.md).
+
+P/C/U/F classify preview cost, committed cost, pooled completed-update rate and pooled
+fresh-gap p99. N means no evidence of regression under the MAIN-only noise rule; I is
+inconclusive; R is regression. Fresh-rate ranges and worst-contact gaps are separate
+observations. GPU costs and noise decisions do not establish sustained frame capacity.
+
+| Row | Preview ms/update | Committed ms/unique dab | Completed updates/s | Fresh completions/s range | Worst contact fresh-gap p99 ms | P/C/U/F |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pencil 9 | 3.668→1.447 (-60.5%) | 0.3733→0.0982 (-73.7%) | 156.37→192.71 | 153.45–156.14→184.24–187.42 | 11.80→13.24 | N/N/N/I |
+| Pencil 16 | 2.661→1.635 (-38.5%) | 0.3002→0.1564 (-47.9%) | 175.86→189.31 | 170.93–173.83→183.36–186.24 | 13.19→11.88 | N/N/N/N |
+| Pencil 24 | 1.757→1.256 (-28.5%) | 0.0651→0.0613 (-5.8%) | 188.12→192.04 | 181.86–183.49→185.21–187.43 | 12.30→12.59 | N/N/N/N |
+| Pencil 36 | 0.901→0.901 (+0.0%) | 0.0704→0.0684 (-2.8%) | 191.67→189.81 | 185.36–189.47→183.86–188.29 | 12.23→12.29 | I/N/N/N |
+| Pencil 64 | 1.065→1.019 (-4.3%) | 0.1258→0.1221 (-2.9%) | 188.96→186.43 | 182.92–186.04→179.08–184.94 | 12.09→11.84 | N/N/I/N |
+| Pencil 100 | 1.238→1.216 (-1.7%) | 0.2211→0.2218 (+0.3%) | 181.39→180.20 | 176.26–179.73→176.36–179.46 | 11.97→11.66 | N/N/I/N |
+| Pencil 1024 | 12.901→12.936 (+0.3%) | 7.0227→7.0115 (-0.2%) | 16.18→16.01 | 15.78–16.59→15.87–16.17 | 97.28→88.54 | N/N/N/N |
+| Charcoal 24 | 2.212→1.450 (-34.5%) | 0.0596→0.0511 (-14.3%) | 185.59→190.21 | 180.16–183.02→183.36–186.43 | 11.99→12.72 | N/N/N/I |
+| Charcoal 48 | 0.929→0.907 (-2.3%) | 0.0742→0.0744 (+0.3%) | 190.93→191.28 | 184.89–188.55→185.67–189.11 | 11.90→12.16 | N/N/N/N |
+| Chalk default | 0.972→0.994 (+2.3%) | 0.0600→0.0608 (+1.4%) | 194.74→193.46 | 184.94–189.26→186.33–189.88 | 12.83→12.49 | I/I/N/N |
+| Pastel 64 | 1.285→1.293 (+0.6%) | 0.1544→0.1589 (+2.9%) | 185.68→185.14 | 180.35–183.47→180.46–184.18 | 12.22→11.70 | N/R/I/N |
+
+Pastel 64's separate committed-cost recheck was 0.155788→0.157377 ms/dab,
++1.02% [−0.08%,+2.16%], within the MAIN-only noise band. Exact reachable kernels
+were selected throughout; the initial +2.9% observation is recorded as noise.
+Both blocks remain in the campaign report.
+
+Shared fresh-completion gap misses against the two-frame budget: Pencil 1024
+(97.28→88.54 ms). These remain pre-existing target misses, separate from the matched
+noise decisions.
+
+Initial brush preparation latency diagnostic: `prepare_startup`→`brush_ready`, excluding
+construction/shutdown and application launch. Medians use two fresh processes per arm.
+Required-kernel readiness can precede exact-variant warming.
+
+| Preset | Control→candidate ms |
+| --- | --- |
+| Pencil 9 | 4859.1→3806.7 |
+| Pencil 36 | 6027.4→3830.6 |
+| Charcoal | 6046.7→3823.1 |
+| Chalk | 5273.9→3538.6 |
+
+Completed GPU updates and actual display presentations are separate; presentation
+correspondence and individual contacts remain in the final campaign artifacts. OEM
+driver caches are uncontrolled.
+
 ### JNI cleanup comparison
 
 Measured on 2026-09-30 on the MovinkPad 11: 6000 × 4000, G-Pen 1024 px at Fit,
