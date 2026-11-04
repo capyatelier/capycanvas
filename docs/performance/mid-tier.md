@@ -357,7 +357,7 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 | Navigation over a crowded vector layer | 90 | **Not met.** Pan 57.8–58.2, pinch 56.7–58.4, rotate 54.8–55.1 presented/s at 90 Hz, with or without 5,000 paths selected | [Vector layers](#vector-layers), 2026-10-20 |
 | Marquee, Lasso or Polygon drag | 90 | | |
 | Enclose and Fill: loop drag and navigation during completion | 90 | Motion unmeasured on the reference tablet; completion checks do not qualify 90 Hz | [Reference Fill completion](#reference-fill-completion) |
-| Reference Fill completion, 24 MP | Cold and warm response | **M4a.1 warm within 5%:** enclosed conservative bound +3.990%; background +4.486%. First-open regression remains on the low tier | [Reference Fill completion](#reference-fill-completion) |
+| Reference Fill completion, 24 MP | Cold and warm response | **Warm regression remains:** final three-reference ABBA is +10.23% versus M5. First-open results are on the low tier | [Reference Fill completion](#reference-fill-completion) |
 | Selection Brush or Quick Mask, 1536 px | 90 | | |
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Paper Scale drag with relief preview | 90 | Unmeasured on the reference tablet | Canvas-bar `paper-scale-drag`; [Paper rendering](../development/paper.md#rendering-and-performance) |
@@ -405,77 +405,38 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 ## Reference Fill completion
 
-M4a native APK checks use the MovinkPad 11 at 6000 × 4000 with one reference,
-against pre-M4a main `ccf1e0110`. Three fresh enclosed-cell samples average
-the screenshot bounds below; the background row is one matched pair.
+The final 2026-11-03 native ABBA compares M5 `c668c28ba` with frozen main
+`6e22fc3e7` on MovinkPad 11: 6000 × 4000, three references, enclosed cell,
+two fills per launch, timing the second fill. Each arm has two samples, at
+matched density 280/font scale 1 and thermal status 0. This comparison precedes the native compiler worker-count change.
 
-| Area | Main, seconds | M4a, seconds | Result |
+| Warm tap measurement | M5 | Main | Result |
 | --- | ---: | ---: | --- |
-| Enclosed cell, mean bounds | 1.513–1.671 | 1.648–1.798 | About 8.2% slower at bracket midpoints |
-| Background | 2.167–2.354 | 2.487–2.750 | About 16% slower at bracket midpoints |
+| Mean visible-fill bracket | 1.581–1.746 s | 1.756–1.912 s | **+10.23%** at bracket midpoints; misses 5% |
+| Mean GPU paint | 39.370 ms | 64.906 ms | Still-result work; not motion qualification |
 
-M4a.1 qualifies warm latency against the same pre-M4a control with three
-matched native pairs per area on the final `12f050291` build, native library
-`e1af4a03…`. Both builds retain density 280 for these static latency checks;
-this does not qualify the tier's 90 Hz motion target.
+Request-to-mask time is unavailable in this audit. These native tap-to-visible
+measurements do not qualify 90 Hz motion. Build hashes, individual brackets,
+GPU counters and render-thread phase means are in
+`artifacts/fill-tools/final/section4-mid/results.json`.
 
-| Warm area and mean bounds | Main, seconds | M4a.1, seconds | Conservative overhead |
-| --- | ---: | ---: | ---: |
-| Enclosed cell, screenshot acquisition | 1.482–1.594 | 1.409–1.541 | +3.990% |
-| Background, screenshot call | 2.147–2.340 | 2.028–2.244 | +4.486% |
+The largest admitted drawing is 15,494 × 9,460 (146.57 MP). Both main and the
+same build without region preparation publish the outline, then Flat All Areas
+rejects admission with “Too large for this device’s available memory.” Neither
+publishes a Flats layer or completion time. The earlier outline timeout did not
+recur; removing background preparation does not remove this capacity limit.
 
-The cell's whole-call screenshot bounds alone leave +6.940% uncertainty.
-All 37 cell screenshots map to a unique capture, draw, and numbered GPU-fence
-completion. The narrower bounds retain the GPU wait and exclude subsequent
-Bitmap delivery/copy time. The fence interpretation matches published
-[FenceMonitor](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/main/libs/gui/FenceMonitor.cpp)
-semantics and observed process/thread/scope identities; the vendor source is
-unavailable. Original bounds, all mappings and executable checks remain in
+Earlier one-reference M4a.1 comparisons against pre-M4a `ccf1e0110` had
+conservative warm bounds of +3.990% for a cell and +4.486% for the background;
+that protocol does not qualify the final three-reference row. The retained
+capture mappings are in
 `artifacts/fill-tools/m4a1-preview-integration-native/capture-acquisition/`.
-The prepared-stroke gate and remaining first-open regression are reported
-separately in [low-tier results](low-tier.md#reference-fill-completion).
-The one reviewed background optimization reduces texture allocations from
-768 to 555 by supplying tight band bounds in the same pack reduction, with
-32 extra bytes in the existing output buffer.
-
-The separate pre-band headless 1/3/8-reference matrix does not qualify final
-native latency. At `1b464ad2a`, both main and candidate OOM on the 24 MP
-eight-reference case. The matched native checks at `ccf1e0110` open the viewport
-and contact Fill without an observed OOM, but neither main nor candidate
-produces an observed fill within 120 seconds. Completion and capacity remain
-unqualified; this is a shared miss.
-All sixteen successful device rows and both OOM records remain in
-`artifacts/fill-tools/m4a-device-matrix/results.json`; native brackets are in
-`artifacts/fill-tools/m4a-native-audit/native-results.json` and
-`artifacts/fill-tools/m4a-native-audit/final-mid-cell-three-samples.json`.
-
-The 2026-11-03 Close gaps Off ABBA compares `8b1ef98ef` with R3b on the
-24 MP two-gap fixture, factory display/font settings and thermal status 0.
-Two warm second-tap samples per arm use the same private measurement overlay,
-with GPU stage profiling disabled. These still-result timings do not qualify motion.
-
-| Off tap metric | Control | R3b |
-| --- | ---: | ---: |
-| Request to mask, mean | 2048.988 ms | 1548.260 ms (−24.44%) |
-| Native landed brackets, sample range | 17.537–20.565 s | 2.773–3.210 s |
-| Readback bytes, one capture | 30,048,176 | 24,032,096 |
-
-The time outside the request remains unattributed. Raw samples and build hashes:
-`artifacts/fill-tools/final/r3b-c3b/m-r3b-abba.json`.
-
-C3b's single background pair compares `8b1ef98ef` with R3b+C3b on the 24 MP
-one-reference fixture, with GPU stage profiling off. Both retain 76 band pages
-and create 155 textures.
-
-| Background edge capture | Control | R3b+C3b |
-| --- | ---: | ---: |
-| Retained line-alpha bytes | 224,755,712 | 56,188,928 (−75%) |
-| Preflight CPU | 270.412 ms | 160.720 ms |
-| Stored frame, inner CPU | 765.956 ms | 722.193 ms |
-
-The stored-frame spans exclude diagnostic logging after the inner call.
-Receipts and the partial stored-counter limitation:
-`artifacts/fill-tools/final/r3b-c3b/m-c3b-background.json`.
+The older 24 MP eight-reference headless checks OOM on both arms; native
+checks do not observe a completed fill within 120 seconds. That capacity row
+remains unqualified. Historical samples and the Off-path/scalar-capture
+comparisons remain in `artifacts/fill-tools/m4a-device-matrix/`,
+`artifacts/fill-tools/m4a-native-audit/` and
+`artifacts/fill-tools/final/r3b-c3b/`.
 
 ## HDR color bubbles
 

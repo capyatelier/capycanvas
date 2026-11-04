@@ -346,6 +346,45 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 ## Reference Fill completion
 
+The 2026-11-03 worker-only cold ABBA compares frozen main `db832dbc6` with
+one native compiler worker per four CPUs, giving TCL two workers. Request
+start keeps main's document-priority bundle; background preparation retains
+its existing idle admission. Both arms use the historical one-reference
+4248 × 2832 audit, a reference stroke, and a tap one second after choosing
+Fill, at matched density 272/font scale 1 and thermal status 0.
+
+| Cold tap measurement, mean of two runs | Main | Worker-only |
+| --- | ---: | ---: |
+| Native visible-fill bracket | 12.203–12.339 s | 8.185–8.365 s (**−32.56%** at midpoints) |
+| Mask submission after tap | 5.874 s | 3.591 s |
+| Mask ready after tap | 8.776 s | 6.517 s |
+| Stored callback after tap | 11.821 s | 7.890 s |
+
+The fragment compilation remains the critical path: the candidate callback
+starts about 1.37 s after mask readiness. This is a static response improvement;
+the historical pre-M4a 5.595–5.761 s pair below remains faster and is not the
+matched control. All four timings, worker IDs, native hashes and the ten
+longest pipeline creations are in
+`artifacts/fill-tools/final/cold-fix/cp4a/cold-report.local.md`.
+
+The matched motion ABBA uses three fresh eight-second strokes and pans per
+leg, 24 contacts total, at factory density 320/font scale 1 and thermal status 0.
+Every contact verifies pending preparation and the actual preset/1024 px brush.
+
+| Motion during preparation | Main | Worker-only | Result |
+| --- | ---: | ---: | --- |
+| G-Pen completed updates/s | 33.35792 | 32.96217 | −1.18635%; passes the 97% control floor |
+| G-Pen worst per-contact p99 gap | 64.887 ms | 62.211 ms | Both miss the 60 Hz target |
+| Pan actual presented cadence | 60.02280/s | 60.02280/s | Passes |
+| Pan worst per-contact p99 gap | 16.693 ms | 16.685 ms | Meets cadence target |
+| Pan full-contact presentation rate | 59.24646/s | 59.30078/s | +0.09168% |
+
+Pan onset means are 114.034 → 98.535 ms, maxima 128.246 → 122.453 ms.
+The candidate has one 66.588 ms longest present gap, against the control's
+16.820 ms; the outlier is retained despite the passing p99. Full-contact
+counts/durations, individual runs, guards and native/DEX hashes are in
+`artifacts/fill-tools/final/cold-fix/cp4a/motion-results.json`.
+
 The submit-time anchor change compares `e7ace60f5` with the Part 1 build on
 MovinkPad 11, using a warm one-reference 24 MP cell tap and two samples per
 arm in ABBA order. These are static response measurements.
