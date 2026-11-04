@@ -885,7 +885,6 @@ fn native_document_files() {
     // Autosave publishes a separate durable copy without acknowledging Save.
     w.recovery().capture(&w);
     glib::MainContext::default().block_on(w.recovery().drain());
-    let recovery_path=w.recovery().published_path();
     let recovery=glib::MainContext::default().block_on(w.recovery().read_snapshot()).unwrap().document().clone();
     let sources = |p: &layer_core::Document| p.artwork.paint.iter().filter(|(_, _, source)| source.base.is_some()).count();
     assert_eq!(sources(&recovery), 1);
@@ -905,7 +904,6 @@ fn native_document_files() {
     );
     w.recovery().capture(&w);
     glib::MainContext::default().block_on(w.recovery().drain());
-    assert!(recovery_path.join("head.json").exists());
     let saved_session=glib::MainContext::default().block_on(w.recovery().read_snapshot()).unwrap();
     assert_eq!(saved_session.state.saved_checkpoint,saved_session.editor.checkpoint());
     let bytes=std::sync::Arc::<[u8]>::from(std::fs::read(&path).unwrap());

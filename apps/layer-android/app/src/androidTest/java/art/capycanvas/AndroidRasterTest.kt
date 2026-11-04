@@ -941,12 +941,13 @@ class AndroidRasterTest {
         assertTrue("61 MP selection was published",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
         // Exercise the real recovery worker/atomic publication that reported the
         // metadata-limit error, and parse its candidate before any adoption.
-        val recovery=File(files,"tonal-61mp-recovery-session")
+        val recovery=File(device.root,"tonal-61mp-recovery-session")
         val saveStart=SystemClock.elapsedRealtimeNanos()
         captureSession(recovery)
         val saveMs=(SystemClock.elapsedRealtimeNanos()-saveStart)/1_000_000
-        val head=JSONObject(File(recovery,"head.json").readText())
-        val index=JSONObject(File(recovery,"generations/${head.getJSONObject("current").getString("id")}.json").readText()).getJSONObject("session")
+        val generations=File(recovery,"generations").listFiles().orEmpty().filter {it.extension=="json"}
+        assertEquals("A fresh recovery copy has one generation",1,generations.size)
+        val index=JSONObject(generations.single().readText()).getJSONObject("session")
         assertFalse(index.getJSONObject("current").getJSONObject("working").isNull("selection"))
         assertTrue("Selection/history metadata stays bounded",index.toString().length<16*1024*1024)
         invoke("quick_mask")

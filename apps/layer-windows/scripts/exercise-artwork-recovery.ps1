@@ -53,16 +53,16 @@ function Settled-Checkpoint([int]$Count){
     Wait-Until {$index=Session-Index;$recovery=(Model).windows_recovery;$index -and @($index.drawings).Count -eq $Count -and !$recovery.busy -and $recovery.current} 'Session checkpoint did not become durable' 120
 }
 function Disk-Signature {
-    @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter '*.json' -Recurse|Sort-Object FullName|ForEach-Object{@{path=$_.FullName;bytes=$_.Length;written=$_.LastWriteTimeUtc.Ticks}})|ConvertTo-Json -Compress
+    @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -File -Recurse|Where-Object {$_.Extension -eq '.json' -or $_.Name -in @('head.0','head.1')}|Sort-Object FullName|ForEach-Object{@{path=$_.FullName;bytes=$_.Length;written=$_.LastWriteTimeUtc.Ticks}})|ConvertTo-Json -Compress
 }
 function Failed-Source {
-    $directory=Split-Path -Parent $head
+    $directory=$drawingSource
     @(Get-ChildItem -LiteralPath $directory -File -Recurse|Where-Object {$_.Name -notin @('restore-error.txt','.lock')}|Sort-Object FullName|ForEach-Object {
         @{path=$_.FullName.Substring($directory.Length+1);bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}
     })|ConvertTo-Json -Compress
 }
 function Recovery-Diagnostic([string]$Label) {
-    $diagnostic=Join-Path (Split-Path -Parent $head) 'restore-error.txt'
+    $diagnostic=Join-Path $drawingSource 'restore-error.txt'
     Wait-Until {(Test-Path -LiteralPath $diagnostic) -and ![string]::IsNullOrWhiteSpace((Model).error)} 'Recovery did not publish its durable diagnostic'
     $detail=[IO.File]::ReadAllText($diagnostic);$recoveryMessage=(Model).error
     if([string]::IsNullOrWhiteSpace($detail) -or !$recoveryMessage.Contains($detail)){throw 'Recovery status lost the stored failure detail'}
@@ -213,9 +213,11 @@ try {
     $session=(Session-File).DirectoryName
     Close-Review
     $damaged=@($index.drawings|Where-Object id -ne $index.active)[0]
-    $head=Join-Path $session "$($damaged.key)/head.json"
-    $headBytes=[IO.File]::ReadAllBytes($head)
-    [IO.File]::WriteAllText($head,'unreadable')
+    $drawingSource=Join-Path $session $damaged.key
+    $heads=@(Get-ChildItem -LiteralPath $drawingSource -File|Where-Object {$_.Name -in @('head.0','head.1','head.json')})
+    if(!$heads.Count){throw 'The drawing has no published head'}
+    $savedHeads=@{}
+    foreach($head in $heads){$savedHeads[$head.FullName]=[IO.File]::ReadAllBytes($head.FullName);[IO.File]::WriteAllText($head.FullName,'unreadable')}
     $failedSource=Failed-Source
     Start-Review 'unreadable-drawing'
     Wait-Until {Find-Name 'Recover drawing'} 'An unreadable drawing did not ask what to do'
@@ -230,14 +232,14 @@ try {
     $retriedDiagnostic=Recovery-Diagnostic 'retry-drawing'
     Capture 'retry-drawing' -WithModel -Composed
     if($retriedDiagnostic.detail -ne $failedDiagnostic.detail -or $retriedDiagnostic.message -ne $failedDiagnostic.message -or $retriedDiagnostic.diagnostic_sha256 -ne $failedDiagnostic.diagnostic_sha256){throw 'Restart replaced the durable recovery diagnostic'}
-    [IO.File]::WriteAllBytes($head,$headBytes)
+    foreach($head in $savedHeads.GetEnumerator()){[IO.File]::WriteAllBytes($head.Key,$head.Value)}
     Invoke-Control 'Retry Storage'
     Wait-Until {@((Model).windows_tabs.tabs).Count -eq 2 -and !(Model).windows_recovery.busy} 'Retry did not reopen the repaired drawing' 120
-    Wait-Until {!(Test-Path -LiteralPath (Join-Path (Split-Path -Parent $head) 'restore-error.txt'))} 'Successful recovery did not clear the saved failure detail'
+    Wait-Until {!(Test-Path -LiteralPath (Join-Path $drawingSource 'restore-error.txt'))} 'Successful recovery did not clear the saved failure detail'
     Start-Sleep -Seconds 3
     Settled-Checkpoint 2
     Close-Review
-    [IO.File]::WriteAllText($head,'unreadable')
+    foreach($head in Get-ChildItem -LiteralPath $drawingSource -File|Where-Object {$_.Name -in @('head.0','head.1','head.json')}){[IO.File]::WriteAllText($head.FullName,'unreadable')}
     Start-Review 'discard-drawing'
     Wait-Until {Find-Name 'Recover drawing'} 'An unreadable drawing did not ask again'
     Invoke-Control 'Discard recovery copy'

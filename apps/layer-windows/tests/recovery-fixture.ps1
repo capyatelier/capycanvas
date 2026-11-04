@@ -8,10 +8,11 @@ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts 'exe
 if($errors.Count){throw 'Recovery fixture parse failed'}
 $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Failed-Source'},$true)
 . ([scriptblock]::Create($function.Extent.Text))
-$head=Join-Path $Output 'head.json'
+$drawingSource=$Output
+$heads=@('head.0','head.1','head.json')
 $folder=[IO.Directory]::CreateDirectory((Join-Path $Output 'nested folder#')).FullName
 $resource=Join-Path $folder ('paint '+[char]0x03b1+'.bin')
-[IO.File]::WriteAllText($head,'{"generation":7}')
+foreach($head in $heads){[IO.File]::WriteAllText((Join-Path $Output $head),'{"generation":7}')}
 [IO.File]::WriteAllBytes($resource,[byte[]]@(1,2,3))
 [IO.File]::WriteAllText((Join-Path $Output '.lock'),'lock')
 $diagnostic=Join-Path $Output 'restore-error.txt'
@@ -19,9 +20,13 @@ $diagnostic=Join-Path $Output 'restore-error.txt'
 $before=Failed-Source
 $records=ConvertFrom-Json -InputObject $before
 $relative=Join-Path 'nested folder#' (Split-Path -Leaf $resource)
-if($records.Count -ne 2 -or @($records.path|Where-Object {$_ -in @('head.json',$relative)}).Count -ne 2){throw 'Recovery source paths or diagnostic exclusion changed'}
+if($records.Count -ne 4 -or @($records.path|Where-Object {$_ -in ($heads+@($relative))}).Count -ne 4){throw 'Recovery source paths or diagnostic exclusion changed'}
 [IO.File]::WriteAllText($diagnostic,'retry failed')
 if((Failed-Source) -cne $before){throw 'Recovery diagnostics changed the source signature'}
+[IO.File]::WriteAllText((Join-Path $Output 'head.1'),'{"generation":8}')
+if((Failed-Source) -ceq $before){throw 'Recovery signature missed changed head slot bytes'}
+[IO.File]::WriteAllText((Join-Path $Output 'head.1'),'{"generation":7}')
+if((Failed-Source) -cne $before){throw 'Restored head slot changed the source signature'}
 [IO.File]::WriteAllBytes($resource,[byte[]]@(1,2,4))
 if((Failed-Source) -ceq $before){throw 'Recovery signature missed changed artwork bytes'}
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts 'collect-package-notices.ps1'),[ref]$tokens,[ref]$errors)

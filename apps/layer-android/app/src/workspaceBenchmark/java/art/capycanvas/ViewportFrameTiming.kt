@@ -270,7 +270,7 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 val sessionSampler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
                 fun sessionSample() {
                     val files = AppStorage.of(instrumentation.targetContext).sessions.walkTopDown().filter {it.isFile}.toList()
-                    val newest = files.filter {it.name == "head.json"}.maxOfOrNull {it.lastModified()}
+                    val newest = files.filter {it.name == "head.0" || it.name == "head.1" || it.name == "head.json"}.maxOfOrNull {it.lastModified()}
                     val io = File("/proc/self/io").readLines().associate {line ->line.substringBefore(':') to line.substringAfter(':').trim().toLong()}
                     synchronized(sessionSamples) {sessionSamples.put(obj("time_ns" to System.nanoTime(),"disk_bytes" to files.sumOf {it.length()},
                         "durable_age_ms" to newest?.let {System.currentTimeMillis()-it},"process_write_bytes" to io["write_bytes"],"process_wchar" to io["wchar"]))}
