@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {measurePhoneAuditElements,phoneAuditMatrix,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,dialogAuditRows,dialogAuditSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
 
 test('collecting a recording cannot leave its completion prompt over the next contact',t=>{
@@ -82,4 +82,35 @@ test('drawer allocations distinguish the Color stage from its painted disc',t=>{
   assert.deepEqual(specs.filter(spec=>spec.id==='drawer.color.wheel'||spec.id==='drawer.color.disc').map(spec=>[spec.id,spec.role,spec.selector]),[
     ['drawer.color.wheel','color-wheel','#stage'],['drawer.color.disc','context','#disc'],
   ]);
+});
+
+test('dialog baseline covers existing desktop widths in both themes without phone-sized viewports',()=>{
+  assert.equal(dialogAuditMatrix.length,8);
+  assert.deepEqual([...new Set(dialogAuditMatrix.map(test=>test.viewport[0]))],[600,700,800,1024]);
+  assert.ok(dialogAuditMatrix.every(test=>test.viewport[1]===900&&test.dpr===1&&test.text_pt===11&&test.text_scale===1));
+  for(const width of [600,700,800,1024])assert.deepEqual(dialogAuditMatrix.filter(test=>test.viewport[0]===width).map(test=>test.theme),['light','dark']);
+});
+
+
+test('dialog rows share routes across desktop and phone and include all W6a families',()=>{
+  const rows=dialogAuditRows.filter(row=>row.batch==='w6a');
+  assert.equal(rows.length,15);assert.equal(new Set(dialogAuditRows.map(row=>row.id)).size,dialogAuditRows.length);
+  assert.ok(rows.every(row=>row.openaction&&row.rootselector));
+  assert.deepEqual(rows.find(row=>row.id==='shortcut-editor').variants.map(row=>row.id),['shortcut-recording','shortcut-conflict']);
+  assert.equal(rows.find(row=>row.id==='preferences-shortcuts-direct').requestedpage,'shortcuts');
+  assert.equal(rows.find(row=>row.id==='preferences-shortcuts-category').openaction[1].action.id,'Modifier keys');
+  assert.equal(rows.find(row=>row.id==='shortcut-editor').openaction[1].action.id,'command.Redo');
+  assert.equal(rows.find(row=>row.id==='shortcut-editor').variants[0].openaction.action.id,'command.Hand');
+  assert.equal(rows.find(row=>row.id==='choose-action').openaction[1].action.trigger,'touch.tap.2');
+  assert.deepEqual(JSON.parse(rows.find(row=>row.id==='keymap-import').openaction[1].action.text),{format:'capycanvas-keymap',version:1,keymap:{id:'photoshop',revision:1}});
+  assert.deepEqual(dialogAuditRows.filter(row=>row.baseline).map(row=>row.id),['preferences-root','preferences-appearance','new-drawing','color']);
+});
+
+test('dialog allocations use only shared shell part attributes and require the header',()=>{
+  const root={querySelector:()=>({querySelector:selector=>selector==='[data-dialog-part="end"]'||selector==='[data-dialog-part="panes"]'?{}:null})};
+  const specs=dialogAuditSpecifications('#actual-dialog[open]',root);
+  assert.deepEqual(specs.map(spec=>spec.id),['page','page.header','page.end','page.panes']);
+  assert.equal(specs[1].optional,undefined);
+  assert.deepEqual(dialogAuditSpecifications('#missing',{querySelector:()=>null}).map(spec=>spec.id),['page','page.header']);
+  assert.ok(specs.slice(1).every(spec=>spec.selector.includes('[data-dialog-part=')));
 });

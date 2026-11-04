@@ -258,26 +258,39 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         && widget.widget_name().starts_with("column-drawer-")) {
         add(&format!("canvas-panel.{}",panel.widget_name().trim_start_matches("column-drawer-")),"canvas-panel",Some(panel.clone()));
     }
-    if let Some(dialog) = w.pages.visible() {
-        let page = named(&format!("page-{}",dialog.widget_name()));
+    let mut dialog_measure = serde_json::Value::Null;
+    let presented = w.window.visible_dialog().or_else(|| w.pages.visible()).or_else(|| if phone.is_none() { w.visible_dialog() } else { None });
+    if let Some(dialog) = presented {
+        let phone_page = phone.is_some() && w.pages.visible().as_ref() == Some(&dialog);
+        let page = if phone_page { Some(crate::page_dialog::parent(&dialog)) }
+            else { dialog.child().or_else(|| Some(dialog.clone().upcast())) };
         add("page","page",page.clone());
         if let Some(page) = page {
-            let headers = descendants::<adw::HeaderBar>(&page).into_iter().filter(|header| header.is_mapped()).collect::<Vec<_>>();
-            assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers");
-            add("page.header","page-header",headers.first().map(|header| header.clone().upcast()));
-            if let Some(header) = headers.first() {
-                let done = layer_ui::CommonCopy::new(&w.localization()).done;
-                let mut secondary = 0;
-                for button in descendants::<gtk::Button>(header.upcast_ref()).into_iter().filter(|button| button.is_mapped()) {
-                    let icon = button.icon_name();
-                    let id = if icon.as_deref() == Some("go-previous-symbolic") { "page.back".into() }
-                        else if icon.as_deref() == Some("window-close-symbolic") { "page.close".into() }
-                        else if button.label().as_deref() == Some(done.as_ref()) { "page.done".into() }
-                        else if button.has_css_class("suggested-action") { "page.primary".into() }
-                        else { let id = format!("page.secondary.{secondary}"); secondary += 1; id };
-                    add(&id,"page-action",Some(button.upcast()));
-                }
-            }
+            let shell = |name: &str| widgets(&page).find(|widget| widget.is_mapped() && widget.widget_name() == name);
+            let headers = widgets(&page).filter(|widget| widget.is_mapped() && widget.widget_name() == "dialog-header").collect::<Vec<_>>();
+            if phone_page { assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers"); }
+            if phone_page || !headers.is_empty() { add("page.header","page-header",headers.first().cloned()); }
+            let start = shell("dialog-start");
+            let end = shell("dialog-end");
+            if let Some(start) = start { add("page.start","page-action",Some(start)); }
+            if let Some(end) = end { add("page.end","page-action",Some(end)); }
+            let panes = shell("dialog-panes");
+            if let Some(panes) = panes.clone() { add("page.panes","panes",Some(panes)); }
+            let split = panes.as_ref().and_then(|panes| widgets(panes).find(|widget| widget.is::<adw::NavigationSplitView>()))
+                .and_then(|widget| widget.downcast::<adw::NavigationSplitView>().ok());
+            let sidebar = split.as_ref().and_then(|split| split.sidebar()).map(|page| page.upcast::<gtk::Widget>());
+            let content = split.as_ref().and_then(|split| split.content()).map(|page| page.upcast::<gtk::Widget>());
+            let first_group = descendants::<adw::PreferencesGroup>(&page).into_iter().find(|group| group.is_mapped());
+            let width = |widget: &gtk::Widget| {
+                let (minimum,natural,_,_) = widget.measure(gtk::Orientation::Horizontal,-1);
+                serde_json::json!({"allocated":widget.width(),"minimum":minimum,"natural":natural})
+            };
+            dialog_measure = serde_json::json!({"page":width(&page),
+                "panes":panes.as_ref().map(&width),
+                "sidebar":sidebar.as_ref().map(&width),"content":content.as_ref().map(&width),
+                "first_group":first_group.as_ref().map(|widget| width(widget.upcast_ref())),
+                "collapsed":split.as_ref().map(|split| split.is_collapsed()),
+                "shows_content":split.as_ref().map(|split| split.shows_content())});
             if dialog.widget_name() == "tool-picker" {
                 let search = widgets(&page).find(|widget| widget.is::<gtk::SearchEntry>() && widget.widget_name() == "tool-search");
                 add("picker.search","search",search.clone());
@@ -309,13 +322,13 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
     let report = serde_json::json!({"schema_version":1,"host":"gtk","state":state_name,"viewport":viewport,"dpr":dpr,
         "theme":format!("{:?}",state.theme).to_lowercase(),"text_scale":text_pt as f64/layer_ui::UI_TEXT_PT as f64,
         "preset":w.workspaces.view().id,"phone_active":phone.is_some(),
-        "status":if phone.is_none() { "unavailable" } else if missing.is_empty() { "captured" } else { "missing" },
-        "reason":if phone.is_none() { Some("phone layout inactive") } else { None },"elements":elements,"missing":missing,
+        "status":if phone.is_none() && dialog_measure.is_null() { "unavailable" } else if missing.is_empty() { "captured" } else { "missing" },
+        "reason":if phone.is_none() && dialog_measure.is_null() { Some("phone layout inactive") } else { None },"elements":elements,"missing":missing,
         "source":{"capture":capture_name,"coordinate_space":"window-client-logical","scale_factor":w.window.scale_factor(),
             "font":font,"text_pt":text_pt,"base_text_pt":layer_ui::UI_TEXT_PT,"requested":phone,
             "document":document,"camera":camera,
             "swapped":state.phone.swapped,"hidden":state.phone.hidden,"widgets":widget_sources,
-            "tiles":state.workspace.layout.phone}});
+            "tiles":state.workspace.layout.phone,"dialog_measure":dialog_measure}});
     let path = std::path::PathBuf::from(directory).join(format!("{capture_name}.allocations.json"));
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || std::fs::write(path,bytes))).unwrap().unwrap();

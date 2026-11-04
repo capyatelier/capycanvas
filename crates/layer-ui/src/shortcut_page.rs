@@ -100,6 +100,7 @@ pub struct TriggerRow {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PenButtonEditor {
+    pub dialog: crate::DialogIntent,
     pub trigger: String,
     pub label: String,
     pub per_tool: bool,
@@ -123,6 +124,7 @@ pub struct PickerSection {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ActionPickerView {
+    pub dialog: crate::DialogIntent,
     pub trigger: String,
     pub title: String,
     pub description: String,
@@ -329,6 +331,7 @@ pub(crate) fn pen_editor_localized(settings: &Settings, platform: Platform, trig
     let all = definitions(platform);
     let (per_tool, actions) = per_tool_rows(&all, &settings.pen_actions(trigger), per_tool, l);
     Some(PenButtonEditor {
+        dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
         trigger: trigger.into(),
         label: definition.localized_label(l),
         per_tool,
@@ -417,6 +420,7 @@ pub(crate) fn modifier_editor_localized(settings: &Settings, platform: Platform,
     let hold = settings.hold_keys(platform).into_iter().find(|h| h.key == *key).unwrap_or(HoldKey { key: key.clone(), actions: Default::default() });
     let (per_tool, actions) = per_tool_rows(&all, &hold.actions, per_tool, l);
     ModifierKeyEditor {
+        dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
         label: key.localized_label(platform, l),
         modified: settings.default_hold_keys(platform).iter().any(|d| d.key == hold.key && *d != hold),
         key: key.clone(),
@@ -607,6 +611,7 @@ pub(crate) fn view_localized(
             .unwrap_or_default();
         let label = key.localized_label(platform, l);
         ActionPickerView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
             trigger: crate::shortcuts::MODIFIER_CAPTURE.into(),
             title: match category {
                 Some(category) => shortcut_key_context(l, label.clone(), category.localized_label(l).to_string()),
@@ -633,6 +638,7 @@ pub(crate) fn view_localized(
         let button = GESTURE_TRIGGERS.iter().find(|t| t.id == *trigger)?;
         let current = settings.pen_actions(trigger).get(&category.unwrap_or(CONTEXTS[0])).cloned().unwrap_or_default();
         Some(ActionPickerView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
             trigger: trigger.clone(),
             title: match category {
                 Some(category) => shortcut_key_context(l, button.localized_label(l), category.localized_label(l).to_string()),
@@ -660,6 +666,7 @@ pub(crate) fn view_localized(
         let trigger = GESTURE_TRIGGERS.iter().find(|t| t.id == *id)?;
         let current = settings.gesture_binding(trigger.id);
         Some(ActionPickerView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
             trigger: trigger.id.into(),
             title: trigger.localized_label(l),
             description: if trigger.held {

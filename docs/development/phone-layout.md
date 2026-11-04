@@ -576,3 +576,11 @@ it.
    pen and one without, no tile sits under a cutout or corner, the slider handles
    don't trigger the back gesture, and finger painting and pen takeover behave as
    tested. Emulators don't stand in for the pen, edge-gesture or tier checks.
+
+GTK and Web Preferences use the shared page request, navigation routes and
+measured pane fit. Plain Preferences opens its list on a phone; an explicit
+destination opens its content. Back changes that same navigation state. Web
+uses the shared content-width projection; GTK retains its native AdwClamp.
+The common Web dialog host retains each form and its bound labels across page
+and floating presentation. Shared header actions project Close as Done on a
+page, while the floating dialog keeps its own close control.

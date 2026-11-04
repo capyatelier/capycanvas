@@ -696,6 +696,8 @@ impl PreferenceErrorSource {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferencesView {
+    pub dialog: crate::DialogIntent,
+    pub navigation: PreferencesNavigation,
     pub title: String,
     pub close_label: String,
     pub search_label: String,
@@ -724,6 +726,39 @@ pub struct PreferencesView {
     pub error: Option<String>,
     pub empty: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreferencesRoute { Root, Category, Modifier, Pen }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PreferencesNavigation {
+    pub shortcuts: Vec<PreferencesRoute>,
+    pub input: Vec<PreferencesRoute>,
+    pub title: Option<String>,
+    pub back: Option<PreferenceAction>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct PreferencesLayout { pub single_pane: bool, pub subpage: bool }
+
+impl crate::UiState {
+    pub fn preferences_layout(&self, viewport: [f32; 2], width: f32, minimum: [f32; 2]) -> PreferencesLayout {
+        let single_pane = self.dialog_presentation(crate::DialogRole::Editor, viewport).single_pane()
+            || !crate::dialog_panes_fit(width, minimum, 0.);
+        PreferencesLayout { single_pane, subpage: self.preferences.subpage() || single_pane && self.preferences.page_requested }
+    }
+}
+
+impl PreferencesState {
+    fn subpage(&self) -> bool {
+        match self.page {
+            SettingsPage::Shortcuts => self.modifier_editor.is_some() || self.shortcut_page.category.is_some(),
+            SettingsPage::Input => self.pen_editor.is_some(),
+            _ => false,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferenceSearchResult {
     pub title: String,
@@ -739,6 +774,7 @@ pub struct ModifierKeyAction {
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ModifierKeyEditor {
+    pub dialog: crate::DialogIntent,
     pub key: KeyChord,
     pub label: String,
     pub per_tool: bool,
@@ -747,6 +783,7 @@ pub struct ModifierKeyEditor {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ShortcutEditor {
+    pub dialog: crate::DialogIntent,
     pub id: String,
     pub label: String,
     pub description: String,
@@ -764,6 +801,7 @@ pub struct ShortcutEditor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceAction {
+    PageList,
     Reveal {
         id: PreferenceId,
     },
@@ -1711,6 +1749,7 @@ impl PreferencesState {
                 .collect();
             let (scope, overlaps) = settings.shortcut_scope_localized(id, platform, localizer);
             Some(ShortcutEditor {
+                dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
                 id: id.clone(),
                 label: row.label.clone(),
                 description: CommandId::ALL
@@ -1742,7 +1781,29 @@ impl PreferencesState {
                 modified: row.modified,
             })
         });
+        let modifier_editor = self.modifier_editor.as_ref().map(|(key, per_tool)|
+            crate::shortcut_page::modifier_editor_localized(settings, platform, key, *per_tool, localizer));
+        let pen_button_editor = self.pen_editor.as_ref().and_then(|(trigger, per_tool)|
+            crate::shortcut_page::pen_editor_localized(settings, platform, trigger, *per_tool, localizer));
+        let mut navigation = PreferencesNavigation { shortcuts: vec![PreferencesRoute::Root], input: vec![PreferencesRoute::Root],
+            title: None, back: self.page_requested.then_some(PreferenceAction::PageList) };
+        if shortcut_page.category.is_some() { navigation.shortcuts.push(PreferencesRoute::Category); }
+        if modifier_editor.is_some() { navigation.shortcuts.push(PreferencesRoute::Modifier); }
+        if pen_button_editor.is_some() { navigation.input.push(PreferencesRoute::Pen); }
+        match self.page {
+            SettingsPage::Shortcuts => {
+                if let Some(editor) = &modifier_editor { navigation.title = Some(editor.label.clone()); navigation.back = Some(PreferenceAction::CloseModifierKey); }
+                else if let Some(category) = &shortcut_page.category {
+                    navigation.title = shortcut_page.categories.iter().find(|c| &c.id == category).map(|c| c.label.clone());
+                    navigation.back = Some(PreferenceAction::ShortcutCategory { id: None });
+                }
+            }
+            SettingsPage::Input => if let Some(editor) = &pen_button_editor { navigation.title = Some(editor.label.clone()); navigation.back = Some(PreferenceAction::ClosePenButton); },
+            _ => {}
+        }
         PreferencesView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
+            navigation,
             title: localizer.text(MessageId::SETTINGS_TITLE).to_string(),
             close_label: localizer.text(MessageId::SETTINGS_CLOSE).to_string(),
             search_label: localizer.text(MessageId::SETTINGS_SEARCH).to_string(),
@@ -1763,13 +1824,8 @@ impl PreferencesState {
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,
-            modifier_editor: self.modifier_editor.as_ref().map(|(key, per_tool)| {
-                crate::shortcut_page::modifier_editor_localized(settings, platform, key, *per_tool, localizer)
-            }),
-            pen_button_editor: self
-                .pen_editor
-                .as_ref()
-                .and_then(|(trigger, per_tool)| crate::shortcut_page::pen_editor_localized(settings, platform, trigger, *per_tool, localizer)),
+            modifier_editor,
+            pen_button_editor,
             shortcut_page,
             keymap: crate::keymaps::view(settings, self.keymap_import.as_ref(), self.keymap_details),
             shortcuts,
@@ -1836,6 +1892,7 @@ impl PreferencesState {
         localizer: &Localizer,
     ) -> Result<(), PreferenceEditError> {
         match action {
+            PreferenceAction::PageList => self.page_requested = false,
             PreferenceAction::Reveal { id } => {
                 let page = settings
                     .pages(platform)
@@ -1864,9 +1921,11 @@ impl PreferencesState {
                 }
                 self.query = query;
                 self.searching = true;
+                self.page_requested = false;
             }
             PreferenceAction::ToggleSearch { open } => {
                 self.searching = open;
+                if open { self.page_requested = false; }
                 if !open {
                     self.query.clear();
                 }

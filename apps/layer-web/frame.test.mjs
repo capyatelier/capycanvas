@@ -5,6 +5,7 @@ import test from "node:test";
 import {headerButtonHint, presentCapy} from './header.js';
 import {colorDialogDom} from './color-dialog-fixture.mjs';
 import {latinKey} from './text-input.js';
+import {bindCopy,refreshBindings} from './localization.js';
 
 const source = readFileSync(new URL("app.js", import.meta.url), "utf8");
 test('glass CSS preserves the shared straight RGBA channels',()=>{
@@ -457,13 +458,15 @@ test('dialog presentation retains controls and ignores a retired native close',a
   Object.assign(globalThis,{window:{...emitter(events),visualViewport:{...emitter(viewportEvents),width:412,height:891,offsetLeft:0,offsetTop:0}},innerWidth:412,innerHeight:891});
   t.after(()=>Object.assign(globalThis,previous));
   const dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button'),search=element('input');
-  header.append(cancel,primary);dialog.append(header,search);doc.body.append(dialog);
+  const inner=element('header'),originalIcon=icon('window-close');primary.append(originalIcon);primary.setAttribute('aria-label','Original close');
+  header.append(cancel,primary);dialog.append(header,inner,search);doc.body.append(dialog);
   const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
-  let page=true,clears=0,cancels=0;
+  let page=true,clears=0,cancels=0,backs=0,subpage=false,currentHeader=header;
   const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},
-    dialog_header:()=>({start:'cancel',end:'primary'}),
+    dialog_header:(intent,back)=>({start:back?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),
     dialog_escape:(back,focused,text)=>back?'back':focused&&text?'clear_search':'cancel'};
-  const host=createDialogHost({app,dialog,header,cancel,primary,search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done'},
+  const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary,search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
+    subpage:()=>subpage,onBack:()=>{backs++;subpage=false;currentHeader=header;host.layout();},
     onCancel:()=>{cancels++;host.hide();},clearSearch:()=>{clears++;search.value='';}});
   const intent={role:'editor',modal:true,primary:'action'};
   assert.equal(host.present(intent),true);search.value='retained draft';search.setSelectionRange(2,7);search.focus();search.scrollTop=24;
@@ -477,7 +480,50 @@ test('dialog presentation retains controls and ignores a retired native close',a
   dialog.dispatchEvent({type:'cancel',preventDefault(){}});assert.equal(cancels,1,'A retired surface cannot cancel again');
   dialog.close=()=>{dialog.open=false;};host.present(intent);host.hide();host.present(intent);
   dialog.dispatchEvent({type:'close'});assert.equal(cancels,1,'An old queued close cannot cancel the reopened form');
-  assert.equal(dialog.open,true);host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
+  assert.equal(dialog.open,true);
+  page=true;host.present({...intent,primary:'close'});
+  assert.equal(cancel.hidden,true);assert.equal(primary.hidden,true);
+  const done=header.children.find(node=>node!==cancel&&node!==primary&&node.tagName==='BUTTON');
+  assert.ok(done);assert.equal(done.textContent,'Done');assert.deepEqual(primary.childNodes,[originalIcon],'The projected Done leaves the original primary untouched');
+  subpage=true;currentHeader=inner;host.layout();
+  assert.equal(header.classList.contains('page-header'),false);assert.equal(inner.classList.contains('page-header'),true);
+  assert.equal(done.parentNode,inner,'The single projected action follows the active header');
+  assert.equal(cancel.getAttribute('aria-label'),'Back');assert.equal(cancel.hidden,false);
+  search.value='retained subpage query';escape();
+  assert.equal(backs,1);assert.equal(clears,1);assert.equal(cancels,1);assert.equal(search.value,'retained subpage query');
+  subpage=true;host.dismiss();assert.equal(backs,2);
+  subpage=true;page=false;host.layout();assert.equal(cancel.getAttribute('aria-label'),'Back');assert.equal(cancel.hidden,false);
+  subpage=false;
+  primary.textContent='Relabelled original';
+  page=false;host.layout();assert.equal(primary.textContent,'Relabelled original');
+  assert.equal(primary.hidden,false);assert.equal(done.hidden,true);
+  assert.equal(primary.getAttribute('aria-label'),'Original close');assert.equal(cancel.hidden,true);
+  cancel.addEventListener('click',()=>host.dismiss());
+  for(const skin of [true,false]){page=skin;subpage=true;host.layout();cancel.click();}
+  assert.equal(backs,4,'Shared Back activates through the start control in both skins');
+  page=true;host.layout();done.click();assert.equal(cancels,2);
+  host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
+});
+
+
+test('dialog Cancel keeps its bound text through page, floating and language changes',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js');
+  const {doc,element,icon}=colorDialogDom(t),previous={window:globalThis.window,innerWidth:globalThis.innerWidth,innerHeight:globalThis.innerHeight};
+  Object.assign(globalThis,{window:{addEventListener(){},removeEventListener(){}},innerWidth:412,innerHeight:891});
+  t.after(()=>Object.assign(globalThis,previous));
+  const dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button'),copy={cancel:'Cancel',back:'Back',done:'Done'};
+  bindCopy(cancel,()=>copy.cancel);const bound=cancel.firstChild;
+  header.append(cancel,primary);dialog.append(header);doc.body.append(dialog);
+  let page=true;
+  const app={dialog_presentation:()=>page?{kind:'page',bounds:{x:0,y:0,width:412,height:891}}:{kind:'floating'},dialog_header:()=>({start:'cancel',end:'primary'})};
+  const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy,onCancel(){}});
+  host.present({role:'editor',modal:true,primary:'action'});
+  page=false;host.layout();
+  copy.cancel='Abbrechen';refreshBindings();
+  assert.equal(bound.nodeValue,'Abbrechen');
+  assert.equal(cancel.textContent,'Abbrechen','The original bound text remains visible after returning to floating');
+  assert.equal(bound.parentNode.hidden,false);assert.equal(cancel.contains(bound),true);
+  host.dispose();
 });
 
 test('phone contacts preview locally, commit once and retire on cancellation',t=>{

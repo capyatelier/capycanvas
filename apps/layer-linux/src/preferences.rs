@@ -419,7 +419,6 @@ impl Preferences {
         margins(&search, 6);
         let search_bar = gtk::SearchBar::new();
         search_bar.set_child(Some(&search));
-        search_bar.connect_entry(&search);
         sidebar_view.add_top_bar(&search_bar);
         let search_results = gtk::ListBox::new();
         search_results.set_selection_mode(gtk::SelectionMode::None);
@@ -450,12 +449,8 @@ impl Preferences {
             .build();
         let resize = crate::dialog_content::new(gtk::Orientation::Vertical, 0);
         resize.append(&split);
-        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().root_header(&sidebar_header).navigation_header(&header).done());
-        sidebar.connect_activated(glib::clone!(
-            #[weak]
-            split,
-            move |_| split.set_show_content(true)
-        ));
+        resize.set_widget_name("dialog-panes");
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().root_header(&sidebar_header).navigation_header(&header).back(&shortcut_page.back));
         let error = gtk::Label::builder().wrap(true).xalign(0.0).build();
         error.add_css_class("error");
         let shortcut_search = gtk::SearchEntry::builder()
@@ -497,9 +492,13 @@ impl Preferences {
             let p = &w.preferences;
             let minimum = [p.sidebar.measure(gtk::Orientation::Horizontal, -1).0 as f32,
                 p.content_view.measure(gtk::Orientation::Horizontal, -1).0 as f32];
-            let narrow = crate::page_dialog::single_pane(&w) || !dialog_panes_fit(width as f32, minimum, 0.);
-            p.split.set_collapsed(narrow);
-            p.sidebar.set_mode(if narrow { adw::SidebarMode::Page } else { adw::SidebarMode::Sidebar });
+            let layout = w.gpu.borrow().as_ref().map(|gpu| gpu.session.state().preferences_layout(
+                [w.window.width() as f32,w.window.height() as f32],width as f32,minimum));
+            if let Some(layout) = layout {
+                p.split.set_collapsed(layout.single_pane);
+                p.shortcut_page.back.set_visible(layout.subpage);
+                p.sidebar.set_mode(if layout.single_pane { adw::SidebarMode::Page } else { adw::SidebarMode::Sidebar });
+            }
         }));
         // Touch has no hover position. Native mouse emulation can leave a row
         // prelit; suppress that visual until an actual pointing device returns.
@@ -547,18 +546,31 @@ impl Preferences {
                 }
             }
         ));
-        self.stack.connect_visible_child_name_notify(glib::clone!(
+        self.sidebar.connect_activated(glib::clone!(
             #[weak]
             w,
-            move |stack| {
+            move |_| {
                 if let Some(page) = SettingsPage::ALL
                     .into_iter()
-                    .find(|p| Some(p.key()) == stack.visible_child_name().as_deref())
+                    .find(|p| Some(p.key()) == w.preferences.stack.visible_child_name().as_deref())
                 {
                     send(&w, PreferenceAction::Page { page });
                 }
             }
         ));
+        self.split.connect_show_content_notify(glib::clone!(#[weak] w, move |split| {
+            if !split.shows_content() && w.preferences.shown.get() && !w.preferences.updating.get() { send(&w,PreferenceAction::PageList); }
+        }));
+        for search in [&self.search,&self.shortcut_search] {
+            crate::input::stop_search(search,glib::clone!(#[weak] w, move |search| {
+                let p=&w.preferences;
+                match dialog_escape(p.shortcut_page.back.is_mapped(),true,!search.text().is_empty()) {
+                    DialogEscape::Back => p.shortcut_page.back.emit_clicked(),
+                    DialogEscape::ClearSearch => search.set_text(""),
+                    DialogEscape::Cancel => w.dispatch(UiAction::CloseSettings),
+                }
+            }));
+        }
         self.search.connect_changed(glib::clone!(
             #[weak]
             w,
@@ -1011,6 +1023,7 @@ impl Preferences {
             if self.sidebar_page.title().as_str() != view.title { self.sidebar_page.set_title(&view.title); }
             if let Some(page) = view.pages.iter().find(|page| page.id == view.page)
                 && self.content_page.title().as_str() != page.title { self.content_page.set_title(&page.title); }
+            self.split.set_show_content(view.page_requested);
             self.search_toggle.set_tooltip_text(Some(&view.search_label));
             self.search.set_placeholder_text(Some(&view.search_placeholder));
             self.empty.set_text(&view.no_results);
@@ -1035,7 +1048,6 @@ impl Preferences {
             if self.search_focus.replace(view.search_focus) != view.search_focus
                 && view.search_focus != 0
             {
-                self.split.set_show_content(false);
                 self.search.grab_focus();
                 self.search.set_position(-1);
             }
@@ -1049,7 +1061,6 @@ impl Preferences {
                     w,
                     move |_| {
                         send(&w, action.clone());
-                        w.preferences.split.set_show_content(true);
                     }
                 ));
                 self.search_results.append(&row);
@@ -1079,11 +1090,14 @@ impl Preferences {
             self.error.set_text(view.error.as_deref().unwrap_or(""));
             self.error.set_visible(view.error.is_some());
             self.shortcut_page.refresh(w, &self.dialog, &view);
+            let minimum=[self.sidebar.measure(gtk::Orientation::Horizontal,-1).0 as f32,self.content_view.measure(gtk::Orientation::Horizontal,-1).0 as f32];
+            let subpage=w.gpu.borrow().as_ref().is_some_and(|gpu| gpu.session.state().preferences_layout(
+                [w.window.width() as f32,w.window.height() as f32],self.resize.width() as f32,minimum).subpage);
+            self.shortcut_page.back.set_visible(subpage);
             // A closing dialog remains rooted during its animation. Present
             // on the model's closed -> open transition, even while rooted.
             if !was_open {
-                crate::page_dialog::present(&self.dialog, &w.window);
-                self.split.set_show_content(view.page_requested);
+                crate::page_dialog::present_intent(&self.dialog, &w.window,view.dialog);
             }
             if self.reveal.replace(view.reveal) != view.reveal
                 && let Some(id) = view.reveal

@@ -69,6 +69,16 @@ pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
     minimum.iter().all(|width| *width > 0.) && width >= minimum.iter().sum::<f32>() + gap
 }
 
+pub fn preferences_content_width(width: f32, minimum: f32) -> f32 {
+    let lower = 400_f32.max(minimum + 24.);
+    let upper = 600_f32.max(lower);
+    let clamped = if width <= lower { width } else if upper == lower { lower } else {
+        let t = ((width - lower) / (3. * (upper - lower))).clamp(0., 1.);
+        lower + (upper - lower) * (1. - (1. - t).powi(3))
+    };
+    (clamped.floor() - 24.).max(0.)
+}
+
 impl UiState {
     pub fn dialog_presentation(&self, role: DialogRole, viewport: [f32; 2]) -> DialogPresentation {
         self.dialog_presentation_in(role, viewport, Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] })
@@ -150,5 +160,14 @@ mod tests {
         assert!(dialog_panes_fit(891., [232., 320.], 24.));
         assert!(!dialog_panes_fit(412., [232., 320.], 24.));
         assert!(!dialog_panes_fit(412., [280., 0.], 12.));
+        assert!(!dialog_panes_fit(390., [126., 265.], 0.));
+        assert!(dialog_panes_fit(391., [126., 265.], 0.));
+    }
+    #[test]
+    fn preferences_content_width_matches_native_clamp_at_measured_widths() {
+        for (available, expected) in [(350.,326.),(400.,376.),(450.,421.),(530.,479.),
+            (678.,545.),(1000.,576.)] {
+            assert_eq!(preferences_content_width(available,241.),expected,"available {available}");
+        }
     }
 }

@@ -151,6 +151,7 @@ impl Pages {
         for controller in &controllers { dialog.remove_controller(controller); frame.add_controller(controller.clone()); }
         let keys = gtk::EventControllerKey::new();
         let cancel = meta.cancel;
+        let back = meta.back;
         let handle = Rc::new(glib::clone!(#[weak] dialog, #[weak] frame, #[upgrade_or] glib::Propagation::Proceed, move |key: gtk::gdk::Key, modifiers: gtk::gdk::ModifierType| {
             if !owner(dialog.upcast_ref()).is_some_and(|w| w.pages.visible().as_ref() == Some(&dialog)) { return glib::Propagation::Proceed; }
             if key == gtk::gdk::Key::Tab || key == gtk::gdk::Key::ISO_Left_Tab {
@@ -158,7 +159,13 @@ impl Pages {
                 if !frame.child_focus(direction) { frame.set_focus_child(gtk::Widget::NONE); frame.child_focus(direction); }
                 return glib::Propagation::Stop;
             }
-            if key == gtk::gdk::Key::Escape { cancel.activate(&dialog); glib::Propagation::Stop } else { glib::Propagation::Proceed }
+            if key == gtk::gdk::Key::Escape {
+                match layer_ui::dialog_escape(back.as_ref().is_some_and(|back| back.is_mapped()),false,false) {
+                    layer_ui::DialogEscape::Back => back.as_ref().unwrap().emit_clicked(),
+                    _ => cancel.activate(&dialog),
+                }
+                glib::Propagation::Stop
+            } else { glib::Propagation::Proceed }
         }));
         keys.connect_key_pressed(glib::clone!(#[strong] handle, move |_, key, _, modifiers| handle(key, modifiers)));
         frame.add_controller(keys);
@@ -182,6 +189,8 @@ impl Pages {
         self.root.set_visible(true);
         self.root.set_transition_type(gtk::StackTransitionType::SlideDown);
         self.root.set_visible_child(&page.frame);
+        let page_default = page_default.filter(|button| button.is_mapped()).or_else(|| page.projected.iter().find_map(|(_, widget)|
+            widget.downcast_ref::<gtk::Button>().filter(|button| button.is_mapped() && button.has_css_class("suggested-action")).cloned()));
         w.window.set_default_widget(page_default.as_ref());
         gtk::prelude::GtkWindowExt::set_focus(&w.window, preferred_focus.as_ref().filter(|widget| widget.is_visible()));
     }

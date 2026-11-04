@@ -465,10 +465,10 @@ fn native_shortcut_page() {
     crate::capture(&d.w, output.join("category-transition.png").to_str().unwrap());
     pump(500);
     assert_eq!(navigation.visible_page_tag().as_deref(), Some("category"));
-    assert!(named(&d, "shortcut-category-back").is_visible());
+    assert!(named(&d, "dialog-start").is_visible());
     assert!(named(&d, "shortcut-command.Undo").is_mapped() && !named(&d, "shortcut-categories").is_mapped());
     shot(&d, "category-edit");
-    named(&d, "shortcut-category-back").emit_by_name::<()>("clicked", &[]);
+    named(&d, "dialog-start").emit_by_name::<()>("clicked", &[]);
     pump(500);
     assert!(named(&d, "shortcut-categories").is_mapped());
     assert_eq!(navigation.visible_page_tag().as_deref(), Some("shortcuts"));
@@ -486,7 +486,7 @@ fn native_shortcut_page() {
     assert!(page(&d).category.is_none() && state(&d.w).settings_open, "Escape leaves the category, not Preferences");
     named(&d, "shortcut-category-Brush presets").emit_by_name::<()>("activated", &[]);
     shot(&d, "category-brush-presets");
-    named(&d, "shortcut-category-back").emit_by_name::<()>("clicked", &[]);
+    named(&d, "dialog-start").emit_by_name::<()>("clicked", &[]);
     search.set_text("pencil");
     pump(400);
     assert!(named(&d, "shortcut-brush.2").is_mapped() && named(&d, "shortcut-command.Pencil").is_mapped());
@@ -593,7 +593,7 @@ fn native_shortcut_page() {
     let alt = state(&d.w).settings.hold_keys.clone().unwrap().into_iter().find(|h| h.key.key == "alt").unwrap();
     assert_eq!(alt.actions.get(&ToolCategory::Selection).map(String::as_str), Some("command.Move"));
     shot(&d, "modifier-alt-selection");
-    named(&d, "shortcut-category-back").emit_by_name::<()>("clicked", &[]);
+    named(&d, "dialog-start").emit_by_name::<()>("clicked", &[]);
     pump(500);
     assert!(modifier(&d).is_none() && navigation.visible_page_tag().as_deref() == Some("category"));
     named(&d, "add-modifier-key").emit_by_name::<()>("activated", &[]);
@@ -626,10 +626,10 @@ fn native_shortcut_page() {
     named(&d, "action-command.Pencil").emit_by_name::<()>("activated", &[]);
     pump(400);
     shot(&d, "modifier-ctrl-space");
-    named(&d, "shortcut-category-back").emit_by_name::<()>("clicked", &[]);
+    named(&d, "dialog-start").emit_by_name::<()>("clicked", &[]);
     pump(500);
     shot(&d, "modifier-keys-added");
-    named(&d, "shortcut-category-back").emit_by_name::<()>("clicked", &[]);
+    named(&d, "dialog-start").emit_by_name::<()>("clicked", &[]);
     pump(500);
     search.set_text("space");
     pump(400);
@@ -710,7 +710,7 @@ fn native_shortcut_page() {
     assert_eq!(actions.get(&ToolCategory::Drawing).map(String::as_str), Some("command.Pencil"));
     assert_eq!(actions.get(&ToolCategory::Selection).map(String::as_str), Some("command.Undo"));
     shot(&d, "pen-button-per-tool");
-    named(&d, "shortcut-category-back").emit_by_name::<()>("clicked", &[]);
+    named(&d, "dialog-start").emit_by_name::<()>("clicked", &[]);
     pump(500);
     assert_eq!(input.visible_page_tag().as_deref(), Some("input"));
     let action = named(&d, "trigger-pen.button.primary").downcast::<adw::ActionRow>().unwrap();

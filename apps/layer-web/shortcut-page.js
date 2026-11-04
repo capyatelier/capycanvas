@@ -1,5 +1,6 @@
 import { bindCopy } from './localization.js';
 import { latinKey } from "./text-input.js";
+import {createDialogHost} from './dialog-host.js';
 export function createShortcutPage({ app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
@@ -60,7 +61,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
     return row;
   }
 
-  function sheet(id, onDismiss) {
+  function sheet(id, onDismiss, search, clearSearch) {
     const node = element("dialog", "sheet"); node.id = id;
     const header = element("header", "dialog-header"), title = element("h2");
     const exit = button("", () => onDismiss(), "dialog-close"); exit.append(icon("window-close"));
@@ -68,36 +69,38 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
     header.append(title, exit);
     const body = element("div", "sheet-body");
     node.append(header, body); document.body.append(node);
-    node.addEventListener("cancel", e => { e.preventDefault(); onDismiss(); });
-    node.addEventListener("click", e => { if (e.target === node) onDismiss(); });
     node.addEventListener("close", () => { node.signature = ""; });
-    return { node, header, title, body, signature: "" };
+    const host=createDialogHost({app,dialog:node,header,cancel:exit,icon,copy:common,onCancel:onDismiss,search,clearSearch,cancelLabel:()=>common.close});
+    return { node, header, title, body, host, signature: "" };
   }
   const dismissRecording = close => () => (view()?.capture ? send({ type: "cancel_shortcut" }) : close());
   const editor = sheet("shortcut-editor", dismissRecording(() => send({ type: "close_shortcut_editor" })));
   const modifierSheet = sheet("modifier-key", () => send({ type: "cancel_shortcut" }));
-  const picker = sheet("action-picker", () => send({ type: "close_action_picker" }));
+  const pickerSearch = element("input", "preferences-search");
+  const picker = sheet("action-picker", () => send({ type: "close_action_picker" }),pickerSearch,()=>send({type:"search_action_picker",query:""}));
   picker.node.classList.add("picker");
   const pickerReset = button(()=>common.reset, () => { const trigger = view()?.shortcut_page.picker?.trigger; if (trigger) send({ type: "reset_trigger", trigger }); });
   pickerReset.id = "action-picker-reset"; pickerReset.classList.add("sheet-start");
   picker.header.prepend(pickerReset);
   const pickerDescription = element("p", "settings-description"); pickerDescription.id = "action-picker-description";
-  const pickerSearch = element("input", "preferences-search"); pickerSearch.type = "search"; pickerSearch.id = "action-picker-search";
+  pickerSearch.type = "search"; pickerSearch.id = "action-picker-search";
   bindCopy(pickerSearch,()=>copy.search_actions,"placeholder"); bindCopy(pickerSearch,()=>copy.search_actions,"ariaLabel");
   pickerSearch.addEventListener("input", () => send({ type: "search_action_picker", query: pickerSearch.value }));
-  pickerSearch.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "close_action_picker" }); } });
   const pickerList = element("div", "picker-list");
   picker.body.append(pickerDescription, pickerSearch, pickerList);
   const details = sheet("keymap-details", () => send({ type: "keymap_details", open: false }));
   details.node.classList.add("picker");
   const importDialog = element("dialog", "sheet"); importDialog.id = "keymap-import";
-  importDialog.addEventListener("cancel", e => { e.preventDefault(); send({ type: "cancel_keymap_import" }); });
-  document.body.append(importDialog);
-  let importSignature = "";
+  const importHeader=element('header','dialog-header'),importTitle=element('h2'),importBody=element('div','sheet-body'),importFooter=element('footer');
+  const importCancel=button(()=>common.cancel,()=>send({type:'cancel_keymap_import'}));
+  const importConfirm=button(()=>common.import,()=>send({type:'confirm_keymap_import'}),'suggested-action');importConfirm.id='confirm-keymap-import';
+  importHeader.append(importTitle);importFooter.append(importCancel,importConfirm);importDialog.append(importHeader,importBody,importFooter);document.body.append(importDialog);
+  const importHost=createDialogHost({app,dialog:importDialog,header:importHeader,cancel:importCancel,primary:importConfirm,icon,copy:common,onCancel:()=>send({type:'cancel_keymap_import'})});
+  let importSignature = '';
 
-  function present(target, open) {
-    if (open && !target.node.open) { target.node.showModal(); target.presented = true; }
-    else if (!open && target.node.open) target.node.close();
+  function present(target, intent) {
+    if(intent){target.presented=target.host.present(intent)||target.presented;}
+    else target.host.hide();
   }
 
   function buildShortcuts(node) {
@@ -302,7 +305,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
 
   function refreshEditor(model) {
     const spec = model.shortcut_editor;
-    if (!spec) return present(editor, false);
+    if (!spec) return present(editor, null);
     const capture = model.capture?.id === spec.id ? model.capture : null;
     const error = capture ? null : model.error;
     const signature = JSON.stringify([spec, capture, error]);
@@ -330,7 +333,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
       }
       editor.body.replaceChildren(...nodes);
     }
-    present(editor, true);
+    present(editor, spec.dialog);
     focusRecording(editor, capture);
   }
 
@@ -342,7 +345,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
 
   function refreshModifierSheet(model) {
     const capture = model.capture?.id === "modifier" ? model.capture : null;
-    if (!capture) return present(modifierSheet, false);
+    if (!capture) return present(modifierSheet, null);
     const signature = JSON.stringify(capture);
     if (modifierSheet.signature !== signature) {
       modifierSheet.signature = signature;
@@ -350,13 +353,13 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
       const section = group(); section.list.append(recordingRow(capture));
       modifierSheet.body.replaceChildren(element("p", "settings-description sheet-summary", ()=>copy.press_hold_key), section.section);
     }
-    present(modifierSheet, true);
+    present(modifierSheet, model.dialog);
     focusRecording(modifierSheet, capture);
   }
 
   function refreshPicker(model) {
     const spec = model.shortcut_page.picker;
-    if (!spec) return present(picker, false);
+    if (!spec) return present(picker, null);
     picker.title.textContent = spec.title;
     pickerDescription.textContent = spec.description;
     pickerReset.hidden = !spec.modified;
@@ -382,7 +385,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
       pickerList.replaceChildren(...sections);
     }
     const opening = !picker.node.open;
-    present(picker, true);
+    present(picker, spec.dialog);
     if (opening) pickerSearch.focus();
   }
 
@@ -404,25 +407,20 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
       list.list.append(...rowsOrEmpty.map(d => { const row = element("div", "preference-row"); const text = element("span", "preference-text"); text.append(element("span", "", d.trigger), element("p", "", d.note)); row.append(text); return row; }));
       details.body.replaceChildren(element("p", "settings-description", keymap.source), links, list.section);
     }
-    present(details, keymap.details);
+    present(details, keymap.details?keymap.dialog:null);
     const preview = keymap.import, signatureImport = JSON.stringify(preview);
     if (preview && signatureImport !== importSignature) {
-      const header = element("header", "dialog-header"); header.append(element("h2", "", preview.heading));
-      const body = element("div", "sheet-body");
+      importTitle.textContent=preview.heading;const body=importBody;body.replaceChildren();
       for (const [title, items] of [[copy.added, preview.added], [copy.changed, preview.changed], [copy.removed, preview.removed], [copy.not_available, preview.unavailable]]) {
         if (!items.length) continue;
         body.append(element("h3", "", `${title} (${items.length})`));
         const list = element("ul", "keymap-preview"); list.append(...items.map(item => element("li", "", item))); body.append(list);
       }
       if (!body.children.length) body.append(element("p", "", ()=>copy.no_changes));
-      const footer = element("footer");
-      const confirmImport = button(()=>common.import, () => send({ type: "confirm_keymap_import" }), "suggested-action"); confirmImport.id = "confirm-keymap-import";
-      footer.append(button(()=>common.cancel, () => send({ type: "cancel_keymap_import" })), confirmImport);
-      importDialog.replaceChildren(header, body, footer);
+
     }
     importSignature = preview ? signatureImport : "";
-    if (preview && !importDialog.open) importDialog.showModal();
-    else if (!preview && importDialog.open) importDialog.close();
+    if(preview)importHost.present(keymap.import_dialog);else importHost.hide();
   }
 
   function refreshFilters(model) {
@@ -437,16 +435,6 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
       if (pageId === "shortcuts") return buildShortcuts(node);
       if (pageId === "input") return buildInput(node);
       return node;
-    },
-    title(model) {
-      if (model.page === "shortcuts") return model.modifier_editor?.label ?? model.shortcut_page.categories.find(c=>c.id===model.shortcut_page.category)?.label ?? null;
-      if (model.page === "input") return model.pen_button_editor?.label ?? null;
-      return null;
-    },
-    back(model) {
-      if (model.page === "input" && model.pen_button_editor) send({ type: "close_pen_button" });
-      else if (model.modifier_editor) send({ type: "close_modifier_key" });
-      else send({ type: "shortcut_category", id: null });
     },
     refresh(model) {
       if (!keymapChoice) return;
@@ -466,7 +454,7 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
         pick: category => ({ type: "open_modifier_picker", key: modifierEditor.key, category }),
         remove: { label: copy.remove_modifier, action: { type: "remove_modifier_key", key: modifierEditor.key } },
       });
-      if (model.page === "shortcuts") showPane("shortcuts", modifierEditor ? "modifier" : model.shortcut_page.category ? "category" : "root", modifierEditor ? 2 : model.shortcut_page.category ? 1 : 0);
+      if(model.page==="shortcuts"){const path=model.navigation.shortcuts;showPane("shortcuts",path.at(-1),path.length-1);}
       const pen = model.pen_button_editor;
       if (pen && panes.has("input")) renderPerTool(panes.get("input").get("pen"), pen, {
         summary: copy.pen_action_help,
@@ -474,14 +462,14 @@ export function createShortcutPage({ app, element, button, icon, send, view, scr
         same: per_tool => ({ type: "pen_button_per_tool", trigger: pen.trigger, per_tool }),
         pick: category => ({ type: "open_pen_button_picker", trigger: pen.trigger, category }),
       });
-      if (model.page === "input" && panes.has("input")) showPane("input", pen ? "pen" : "root", pen ? 1 : 0);
+      if(model.page==="input"&&panes.has("input")){const path=model.navigation.input;showPane("input",path.at(-1),path.length-1);}
       refreshEditor(model);
       refreshModifierSheet(model);
       refreshPicker(model);
     },
     close() {
-      for (const target of [editor, modifierSheet, picker, details]) present(target, false);
-      if (importDialog.open) importDialog.close();
+      for (const target of [editor, modifierSheet, picker, details]) present(target, null);
+      importHost.hide();
     },
   };
 }

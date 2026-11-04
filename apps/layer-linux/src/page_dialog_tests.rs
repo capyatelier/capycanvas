@@ -338,7 +338,7 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
         assert!(b.x() >= 0. && b.y() >= 0. && b.x() + b.width() <= bounds.width() + 1.);
     }
     if let Some(default) = gtk::prelude::GtkWindowExt::default_widget(&d.w.window) {
-        assert!(default.is_mapped() && (default == frame || default.is_ancestor(&frame)), "the page owns its mapped default action");
+        assert!(default.is_mapped() && (default == frame || default.is_ancestor(&frame)), "the page owns its mapped default action: default={} mapped={} parent={:?} frame={} dialog={}", default.widget_name(), default.is_mapped(), default.parent().map(|parent| parent.widget_name()), frame.widget_name(), dialog.widget_name());
     }
     let title = header.ancestor(adw::NavigationPage::static_type()).and_downcast::<adw::NavigationPage>()
         .map_or_else(|| dialog.title(), |page| page.title());
@@ -387,7 +387,7 @@ pub(super) fn inventory(d: &mut Driver) {
     inventory_with(d, capture);
 }
 
-fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
+fn first_editor_pages(d: &mut Driver, visit: &mut impl FnMut(&mut Driver, &str)) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
     let (dialog, frame) = dialog_frame(d);
     let split = descendants::<adw::NavigationSplitView>(&frame).pop().unwrap();
@@ -398,7 +398,8 @@ fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     }
     visit(d, "preferences-root");
     let appearance = SettingsPage::Appearance.localized_title(&d.w.localization());
-    d.click(&mapped_label(&frame, &appearance).unwrap());
+    let sidebar = named::<adw::ToolbarView>(&frame,"preferences-sidebar");
+    d.click(&mapped_label(sidebar.upcast_ref(), &appearance).unwrap());
     until(|| split.shows_content(), "Preferences opens its page");
     if split.is_collapsed() { page_header(&frame); }
     visit(d, "preferences-subpage");
@@ -408,6 +409,23 @@ fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     let (dialog, _) = dialog_frame(d);
     visit(d, "new-drawing");
     close(d, &dialog);
+    crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
+    let (dialog, _) = dialog_frame(d);
+    visit(d, "color");
+    close(d, &dialog);
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_dialog_layout --native-storage; 600/700/800/1024x900 light/dark"]
+fn native_dialog_layout() {
+    let mut d = super::phone_motion::setup("art.capycanvas.DialogLayout");
+    assert!(matches!([d.w.surface.width(), d.w.surface.height()], [600, 900] | [700, 900] | [800, 900] | [1024, 900]));
+    first_editor_pages(&mut d, &mut capture);
+    d.finish();
+}
+
+fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
+    first_editor_pages(d, &mut visit);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
     let (dialog, frame) = dialog_frame(d);
     until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
@@ -420,10 +438,6 @@ fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
     let (dialog, _) = dialog_frame(d);
     visit(d, "canvas-size");
-    close(d, &dialog);
-    crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
-    let (dialog, _) = dialog_frame(d);
-    visit(d, "color");
     close(d, &dialog);
     d.w.workspaces.ui.show(&d.w, layer_workspace::ManagerPage::Workspaces);
     let (dialog, _) = dialog_frame(d);
@@ -459,14 +473,8 @@ fn restored_headers(headers: &[(adw::HeaderBar, gtk::Widget, bool, bool, Option<
     }
 }
 
-#[test]
-#[ignore = "private compositor: --native-test=native_phone_navigation_headers --native-storage; phone viewport, light/dark"]
-fn native_phone_navigation_headers() {
-    let mut d = super::phone_motion::setup("art.capycanvas.NavigationHeaders");
+fn navigation_headers_settings(mut d: &mut Driver) {
     let warnings = bounds::size_warnings();
-    assert!(adw::ComboRow::new().factory().is_some(), "a fresh native ComboRow exposes its built-in factory");
-    assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
-    let checkpoint = ui_session(&d.w).engine().checkpoint();
     let original = header_state(d.w.preferences.dialog.upcast_ref());
     super::phone::capture(&mut d, "rest");
     d.click(&d.named("zen-capy"));
@@ -656,13 +664,60 @@ fn native_phone_navigation_headers() {
         let (sheet, frame) = page(&d);
         assert_eq!(sheet.widget_name(), name);
         let header = done_header(&d, &frame, true);
-        capture(&mut d, name);
+        capture(&mut d, if name == "action-picker" { "choose-action" } else { name });
         d.click(done_button(&d, &header).upcast_ref());
         until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name() != name) && !d.w.pages.root.is_transition_running(), "Done closes its shortcut sheet");
     }
     d.click(done_button(&d, &header).upcast_ref());
     until(|| d.w.visible_dialog().is_none() && !d.w.servicing.get(), "Done closes direct Keyboard Shortcuts");
 
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a, phone viewport/theme external"]
+fn native_phone_dialogs() {
+    assert_eq!(std::env::var("LAYER_DIALOG_BATCH").unwrap(),"w6a");
+    let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    navigation_headers_settings(&mut d);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
+    let (dialog, _) = page(&d);
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::BeginShortcut { id: CommandId::Hand.shortcut_id() } });
+    let (recording, _) = page(&d);
+    capture(&mut d,"shortcut-recording");
+    keys(&mut d,101);
+    until(|| ui_session(&d.w).preferences().unwrap().capture.as_ref().is_some_and(|capture| capture.conflict.is_some()), "existing Eraser chord conflicts with Hand");
+    capture(&mut d,"shortcut-conflict");
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::CancelShortcut });
+    crate::page_dialog::close_dialog(&recording);
+    until(|| d.w.visible_dialog().as_ref() == Some(&dialog), "recording returns to Shortcuts");
+    let text = serde_json::json!({"format":"capycanvas-keymap","version":1,"keymap":{"id":"photoshop","revision":1}}).to_string();
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ImportKeymap { text } });
+    until(|| d.w.window.visible_dialog().is_some_and(|alert| alert.is::<adw::AlertDialog>() && alert.is_mapped()), "keymap import confirmation maps");
+    capture(&mut d,"keymap-import");
+    let alert = d.w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+    d.click(find_button(alert.upcast_ref(), &alert.response_label("cancel")).unwrap().upcast_ref());
+    let key = ui_session(&d.w).preferences().unwrap().shortcut_page.modifiers[0].key.clone();
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::EditModifierKey { key: key.clone() } });
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ModifierKeyPerTool { key, per_tool: true } });
+    until(|| ui_session(&d.w).preferences().unwrap().modifier_editor.as_ref().is_some_and(|editor| editor.per_tool), "modifier per-tool page opens");
+    capture(&mut d,"modifier-per-tool");
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Page { page: SettingsPage::Input } });
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::EditPenButton { trigger: "pen.button.primary".into() } });
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::PenButtonPerTool { trigger: "pen.button.primary".into(), per_tool: true } });
+    until(|| ui_session(&d.w).preferences().unwrap().pen_button_editor.as_ref().is_some_and(|editor| editor.per_tool), "pen button per-tool page opens");
+    capture(&mut d,"pen-button-per-tool");
+    close(&d,&dialog);
+    d.finish();
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_navigation_headers --native-storage; phone viewport, light/dark"]
+fn native_phone_navigation_headers() {
+    let mut d = super::phone_motion::setup("art.capycanvas.NavigationHeaders");
+    assert!(adw::ComboRow::new().factory().is_some(), "a fresh native ComboRow exposes its built-in factory");
+    assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
+    let checkpoint = ui_session(&d.w).engine().checkpoint();
+    navigation_headers_settings(&mut d);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
     let (dialog, frame) = page(&d);
     let nav = named::<adw::NavigationView>(&frame, "export-navigation");

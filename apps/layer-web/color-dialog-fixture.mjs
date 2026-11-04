@@ -10,6 +10,10 @@ export class Element extends FakeElement {
     this.classList = {add:name => classes.add(name), remove:name => classes.delete(name), toggle:(name, on = !classes.has(name)) => (on ? classes.add(name) : classes.delete(name), on), contains:name => classes.has(name)};
   }
   get firstChild() { return this.children[0]; }
+  get firstElementChild() { return this.children.find(node => node.tagName) ?? null; }
+  get parentElement() { return this.parentNode?.tagName ? this.parentNode : null; }
+  append(...nodes) { for(const node of nodes) { if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node); } }
+  get childNodes() { return this.children; }
   get textContent() { return this.children.map(node => node.nodeType === 3 ? node.nodeValue : node.textContent).join(''); }
   set textContent(value) { this.children.forEach(node => node.parentNode = null); this.children = []; if (value !== '') this.append(this.ownerDocument.createTextNode(value)); }
   get ariaLabel() { return this.getAttribute('aria-label'); }
@@ -43,7 +47,7 @@ export function colorDialogDom(t) {
   const doc = {createTextNode:nodeValue => ({nodeType:3, nodeValue:String(nodeValue)}), createElementNS:(_, tag) => new Element(tag, doc), createElement:tag => new Element(tag, doc), activeElement:null,
     querySelector:selector => selector === 'dialog[open]' ? doc.body.descendants().find(node => node.tagName === 'DIALOG' && node.open) ?? null : null};
   doc.body = new Element('body', doc);
-  Object.assign(globalThis, {document:doc, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} disconnect() {} }, devicePixelRatio:1});
+  Object.assign(globalThis, {document:doc, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, devicePixelRatio:1});
   t.after(() => Object.assign(globalThis, previous));
   const element = (tag, cls, text) => { const node = new Element(tag, doc); node.className = cls ?? ''; if (text != null) { if (typeof text === 'function') bindCopy(node, text); else node.textContent = text; } return node; };
   const button = (text, action, cls) => { const node = element('button', cls, text); node.addEventListener('click', action); return node; };

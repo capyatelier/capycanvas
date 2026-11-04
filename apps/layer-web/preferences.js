@@ -1,6 +1,7 @@
 import {chooseProfileLibrary} from './export-controls.js';
 import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
+import {createDialogHost} from './dialog-host.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
 export function createPreferences({ app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
@@ -127,7 +128,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   const root = element("div", "preferences-layout");
   const sidebar = element("aside", "preferences-sidebar");
   const sidebarHeader = element("header", "dialog-header");
-  const sidebarTitle = element("h2");
+  const sidebarTitle = element("h2");sidebarTitle.tabIndex=-1;
   sidebarHeader.append(sidebarTitle);
   const searchToggle = button("", () => send({ type: "toggle_search", open: !view()?.searching }), "preferences-search-toggle");
   searchToggle.append(icon("search")); searchToggle.setAttribute("aria-label", "");
@@ -136,36 +137,52 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   navigation.setAttribute("aria-label", "");
   const content = element("div", "preferences-content");
   const header = element("header", "dialog-header");
-  const title = element("h2"); title.id = "settings-title";
-  const back = button("", () => root.classList.remove("show-content"), "preferences-back");
+  const title = element("h2"); title.id = "settings-title";title.tabIndex=-1;
+  const back = button("", () => shell.dismiss(), "preferences-back");
+  back.id="shortcut-category-back";
   back.append(icon("go-previous")); back.setAttribute("aria-label", "");
-  const subpageBack = button("", () => shortcutPage.back(view()), "subpage-back"); subpageBack.append(icon("go-previous"));
-  subpageBack.id = "shortcut-category-back"; subpageBack.setAttribute("aria-label", bootstrap.common.back); subpageBack.hidden = true;
   const exit = button("", close, "dialog-close"); exit.append(icon("window-close")); exit.setAttribute("aria-label", "");
   exit.id = "close-settings";
-  header.append(back, subpageBack, title, exit);
+  header.append(back, title, exit);
   const search = element("input", "preferences-search");
   search.type = "search"; search.placeholder = ""; search.id = "settings-search";
   search.setAttribute("aria-label", "");
   search.addEventListener("input", () => send({ type: "search", query: search.value }));
-  search.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); send({ type: "toggle_search", open: false }); } });
   const searchResults = element("div", "preferences-search-results");
   const empty = element("p", "preferences-empty");
   sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
   const pages = element("div", "preferences-pages");
-  // Match the native page's gently tightening width (400→600), then its
-  // 12px inner margins. This is layout only; no setting policy lives here.
-  new ResizeObserver(([entry]) => {
-    const width = entry.contentRect.width;
-    const t = Math.max(0, Math.min(1, (width - 400) / 600));
-    const clamped = width <= 400 ? width : Math.floor(400 + 200 * (1 - (1 - t) ** 3));
-    pages.style.setProperty("--preference-width", `${Math.max(0, clamped - 24)}px`);
-  }).observe(pages);
   const error = element("span", "preferences-error"); error.setAttribute("role", "status");
   content.append(header, error, panelFrame(pages));
   root.append(sidebar, content); dialog.append(root);
-  dialog.addEventListener("close", () => { if (!dialog.open && view()) close(); });
-  dialog.addEventListener("cancel", (e) => { e.preventDefault(); if (view() && shortcutPage.title(view())) shortcutPage.back(view()); else close(); });
+  let layout,minimumKey,minimum;
+  function minWidth(node) {
+    const css=node.style.cssText,hidden=node.hidden;node.hidden=false;
+    node.style.cssText+=';position:absolute;visibility:hidden;width:min-content;max-width:none;min-width:0;display:flex;';
+    const width=node.getBoundingClientRect().width;node.style.cssText=css;node.hidden=hidden;return width;
+  }
+  function activeHeader() {
+    const row=layout?.single_pane&&!view()?.page_requested?sidebarHeader:header;
+    const focus=document.activeElement;
+    for(const control of [back,exit])if(control.parentNode!==row)row.append(control);
+    if((focus===back||focus===exit)&&document.activeElement!==focus)focus.focus({preventScroll:true});
+    return row;
+  }
+  const goBack=()=>{const action=view()?.navigation.back;if(action)send(action);};
+  const shell=createDialogHost({app,dialog,header:activeHeader,cancel:back,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
+    subpage:()=>!!layout?.subpage,search,clearSearch:()=>send({type:'search',query:''})});
+  root.dataset.dialogPart='panes';
+  function arrange() {
+    const model=view();if(!model||!dialog.open)return;
+    const key=JSON.stringify([model.page,model.navigation.title,document.documentElement.lang,getComputedStyle(root).font]);
+    if(key!==minimumKey){minimum=[minWidth(sidebar),minWidth(content),Math.max(0,minWidth(pages)-24)];minimumKey=key;}
+    layout=app.preferences_layout([innerWidth,innerHeight],root.getBoundingClientRect().width,minimum.slice(0,2));
+    root.classList.toggle('single-pane',layout.single_pane);
+    sidebar.hidden=layout.single_pane&&model.page_requested;content.hidden=layout.single_pane&&!model.page_requested;
+    pages.style.setProperty('--preference-width',`${app.preferences_content_width(pages.clientWidth,minimum[2])}px`);
+    shell.layout();
+  }
+  new ResizeObserver(arrange).observe(root);
 
   let searchSignature = "", searchFocus = 0n, revealed = null;
   const shortcutPage = createShortcutPage({ app, element, button, icon, send, view, scroller: pages, settingsGroup, dropdown, copy:nativeCopy.shortcuts, common:bootstrap.common });
@@ -202,7 +219,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   }
   function build(model) {
     for (const page of model.pages) {
-      const tab = button("", () => { send({ type: "page", page: page.id }); root.classList.add("show-content"); });
+      const tab = button("", () => { send({ type: "page", page: page.id }); });
       tab.dataset.settingsPage = page.id;
       tab.append(icon(page.icon), element("span", "", page.title));
       navigation.append(tab); tabs.set(page.id, tab);
@@ -315,13 +332,13 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       searchFocus = 0n;
       revealed = null;
       shortcutPage.close();
-      if (dialog.open) dialog.close();
+      shell.hide();
       return;
     }
     if (!fields.size) build(model);
     if (searchToggle.getAttribute("aria-label") !== model.search_label) searchToggle.setAttribute("aria-label", model.search_label);
     if (navigation.getAttribute("aria-label") !== model.title) navigation.setAttribute("aria-label", model.title);
-    if (back.getAttribute("aria-label") !== model.title) back.setAttribute("aria-label", model.title);
+    if (back.getAttribute("aria-label") !== model.title) back.setAttribute("aria-label", bootstrap.common.back);
     if (exit.getAttribute("aria-label") !== model.close_label) exit.setAttribute("aria-label", model.close_label);
     if (search.placeholder !== model.search_placeholder) search.placeholder = model.search_placeholder;
     if (search.getAttribute("aria-label") !== model.search_label) search.setAttribute("aria-label", model.search_label);
@@ -333,35 +350,28 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       else { context.setAttribute("aria-label",row.title); context.querySelector("[data-reset]").disabled = !row.reset.enabled; }
     }
     if (empty.hidden !== !model.empty) empty.hidden = !model.empty;
-    const subpage = shortcutPage.title(model);
-    const pageTitle = subpage ?? model.pages.find((p) => p.id === model.page).title;
-    if (title.textContent !== pageTitle) title.textContent = pageTitle;
-    if (subpageBack.hidden !== !subpage) subpageBack.hidden = !subpage;
-    root.classList.toggle("in-subpage", !!subpage);
+    const pageTitle=model.navigation.title??model.pages.find(p=>p.id===model.page).title;
+    if(title.textContent!==pageTitle)title.textContent=pageTitle;
     if (search.value !== model.query) search.value = model.query;
     const openingSearch = search.hidden && model.searching;
     if (search.hidden !== !model.searching) search.hidden = !model.searching;
     if (searchToggle.getAttribute("aria-pressed") !== String(model.searching)) searchToggle.setAttribute("aria-pressed", String(model.searching));
     if (navigation.hidden !== !!model.query) navigation.hidden = !!model.query;
-    if (openingSearch) search.focus();
+    const focusSearch=openingSearch||searchFocus!==model.search_focus;
     if (searchFocus !== model.search_focus) {
       searchFocus = model.search_focus;
-      root.classList.remove("show-content");
-      search.focus();
-      search.setSelectionRange(search.value.length, search.value.length);
     }
     const resultsSignature = JSON.stringify(model.search_results);
     if (searchSignature !== resultsSignature) {
       searchResults.replaceChildren();
       for (const result of model.search_results) {
-        const row = button("", () => { send(result.action); root.classList.add("show-content"); });
+        const row = button("", () => send(result.action));
         row.append(element("span", "", result.title));
         if (result.description) row.append(element("small", "", result.description));
         searchResults.append(row);
       }
       searchSignature = resultsSignature;
     }
-    subpageBack.setAttribute("aria-label",bootstrap.common.back);
     for (const page of model.pages) {
       tabs.get(page.id).querySelector("span").textContent=page.title;
       pageNodes.get(page.id).setAttribute("aria-label",page.title);
@@ -406,17 +416,19 @@ export function createPreferences({ app, element, button, icon, numberField, pan
       if (section.hidden !== hidden) section.hidden = hidden;
     }
     if (error.textContent !== (model.error || "")) error.textContent = model.error || "";
-    if (!dialog.open) { dialog.showModal(); root.classList.add("show-content"); }
+    const opening=shell.present(model.dialog);
+    arrange();
+    if(opening&&!model.searching&&!model.reveal)(layout.single_pane&&!model.page_requested?sidebarTitle:title).focus({preventScroll:true});
     if (revealed !== model.reveal) {
       revealed = model.reveal;
       const field = fields.get(revealed);
       if (field) {
-        root.classList.add("show-content");
         field.line.scrollIntoView({ block: "nearest" });
         (field.widget.querySelector("summary, button") || field.input).focus({ preventScroll: true });
       }
     }
     shortcutPage.refresh(model);
+    if(focusSearch){search.focus({preventScroll:true});search.setSelectionRange(search.value.length,search.value.length);}
     pages.dispatchEvent(new Event("scroll"));
   };
 }

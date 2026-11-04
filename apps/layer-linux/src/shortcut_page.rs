@@ -42,7 +42,7 @@ impl Sheet {
         let view = adw::ToolbarView::new();
         view.add_top_bar(&header);
         dialog.set_child(Some(&view));
-        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "title").header(&view, &header).done());
+        crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "title").header(&view, &header));
         Self { dialog, title, header, view, shown: Cell::new(false) }
     }
 
@@ -64,10 +64,10 @@ impl Sheet {
         self.dialog.add_controller(click);
     }
 
-    fn show(&self, open: bool, parent: &adw::Dialog) -> bool {
-        match (self.shown.replace(open), open) {
+    fn show(&self, intent: Option<DialogIntent>, parent: &adw::Dialog) -> bool {
+        match (self.shown.replace(intent.is_some()), intent.is_some()) {
             (false, true) => {
-                crate::page_dialog::present(&self.dialog, parent);
+                crate::page_dialog::present_intent(&self.dialog, parent,intent.unwrap());
                 true
             }
             (true, false) => {
@@ -145,8 +145,8 @@ impl Form {
         }
     }
 
-    fn present(&self, dialog: &adw::Dialog) {
-        let opened = self.sheet.show(true, dialog);
+    fn present(&self, dialog: &adw::Dialog, intent: DialogIntent) {
+        let opened = self.sheet.show(Some(intent), dialog);
         let (_, natural, _, _) = self.sheet.view.measure(gtk::Orientation::Vertical, self.sheet.dialog.content_width());
         if self.sheet.dialog.content_height() != natural {
             self.sheet.dialog.set_content_height(natural);
@@ -162,7 +162,7 @@ impl Form {
     }
 
     fn close(&self, dialog: &adw::Dialog) {
-        self.sheet.show(false, dialog);
+        self.sheet.show(None, dialog);
     }
 }
 
@@ -519,7 +519,7 @@ impl Results {
 impl ShortcutPage {
     pub(super) fn new() -> Self {
         let back = gtk::Button::from_icon_name("go-previous-symbolic");
-        back.set_widget_name("shortcut-category-back");
+        back.set_widget_name("dialog-start");
         back.set_visible(false);
         let navigation = adw::NavigationView::new();
         navigation.set_widget_name("shortcut-navigation");
@@ -641,13 +641,7 @@ impl ShortcutPage {
             w,
             move |_| {
                 let Some(view) = current(&w) else { return };
-                send(&w, if view.page == SettingsPage::Input && view.pen_button_editor.is_some() {
-                    PreferenceAction::ClosePenButton
-                } else if view.modifier_editor.is_some() {
-                    PreferenceAction::CloseModifierKey
-                } else {
-                    PreferenceAction::ShortcutCategory { id: None }
-                });
+                if let Some(action) = view.navigation.back { send(&w,action); }
             }
         ));
         let root = adw::NavigationPage::with_tag(content, "", "shortcuts");
@@ -656,13 +650,8 @@ impl ShortcutPage {
         self.navigation.connect_popped(glib::clone!(
             #[weak]
             w,
-            move |_, popped| {
-                let Some(view) = current(&w) else { return };
-                if *popped == w.preferences.shortcut_page.modifier_page.page && view.modifier_editor.is_some() {
-                    send(&w, PreferenceAction::CloseModifierKey);
-                } else if *popped == w.preferences.shortcut_page.category_page && view.shortcut_page.category.is_some() {
-                    send(&w, PreferenceAction::ShortcutCategory { id: None });
-                }
+            move |_, _| {
+                if let Some(action)=current(&w).and_then(|view| view.navigation.back) { send(&w,action); }
             }
         ));
         self.keymap_combo.connect_selected_notify(glib::clone!(
@@ -783,10 +772,12 @@ impl ShortcutPage {
                 }
             }
         ));
-        let picker = self.picker.dialog.clone();
-        crate::input::stop_search(&self.picker_search, move |_| {
-            crate::page_dialog::close_dialog(&picker);
-        });
+        crate::input::stop_search(&self.picker_search,glib::clone!(#[weak] w, move |search| {
+            send(&w,match dialog_escape(false,true,!search.text().is_empty()) {
+                DialogEscape::ClearSearch => PreferenceAction::SearchActionPicker { query: String::new() },
+                _ => PreferenceAction::CloseActionPicker,
+            });
+        }));
         self.picker_reset.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -922,12 +913,8 @@ impl ShortcutPage {
         self.input_navigation.connect_popped(glib::clone!(
             #[weak]
             w,
-            move |_, popped| {
-                if *popped == w.preferences.shortcut_page.pen_page.page
-                    && current(&w).is_some_and(|v| v.pen_button_editor.is_some())
-                {
-                    send(&w, PreferenceAction::ClosePenButton);
-                }
+            move |_, _| {
+                if let Some(action)=current(&w).and_then(|view| view.navigation.back) { send(&w,action); }
             }
         ));
         self.input_navigation.clone()
@@ -1023,35 +1010,20 @@ impl ShortcutPage {
                 remove: None,
             });
         }
+        let project = |root: adw::NavigationPage, route: &PreferencesRoute| match route {
+            PreferencesRoute::Root => root,
+            PreferencesRoute::Category => self.category_page.clone(),
+            PreferencesRoute::Modifier => self.modifier_page.page.clone(),
+            PreferencesRoute::Pen => self.pen_page.page.clone(),
+        };
         if let Some(root) = self.root.borrow().clone() {
-            let mut desired = vec![root];
-            if page.category.is_some() {
-                if desired.len() == 1 && self.navigation.visible_page() != Some(self.category_page.clone()) {
-                    self.category_results.page.scroll_to_top();
-                }
-                desired.push(self.category_page.clone());
-            }
-            if view.modifier_editor.is_some() {
-                desired.push(self.modifier_page.page.clone());
-            }
-            sync_stack(&self.navigation, &desired);
+            if page.category.is_some() && self.navigation.visible_page() != Some(self.category_page.clone()) { self.category_results.page.scroll_to_top(); }
+            sync_stack(&self.navigation,&view.navigation.shortcuts.iter().map(|route| project(root.clone(),route)).collect::<Vec<_>>());
         }
         if let Some(root) = self.input_root.borrow().clone() {
-            let mut desired = vec![root];
-            if view.pen_button_editor.is_some() {
-                desired.push(self.pen_page.page.clone());
-            }
-            sync_stack(&self.input_navigation, &desired);
+            sync_stack(&self.input_navigation,&view.navigation.input.iter().map(|route| project(root.clone(),route)).collect::<Vec<_>>());
         }
-        let title = match view.page {
-            SettingsPage::Shortcuts => view.modifier_editor.as_ref().map(|e| e.label.clone()).or_else(|| page.category.as_ref().map(|category| page.categories.iter().find(|c| &c.id == category).map_or_else(|| category.clone(), |c| c.label.clone()))),
-            SettingsPage::Input => view.pen_button_editor.as_ref().map(|e| e.label.clone()),
-            _ => None,
-        };
-        self.back.set_visible(title.is_some());
-        if let (Some(title), Some(outer)) = (title, &*self.outer.borrow()) {
-            outer.set_title(&title);
-        }
+        if let (Some(title),Some(outer)) = (&view.navigation.title,&*self.outer.borrow()) { outer.set_title(title); }
     }
 
     fn refresh_categories(&self, w: &Rc<Workspace>, categories: &[ShortcutCategoryView]) {
@@ -1230,7 +1202,7 @@ impl ShortcutPage {
                 }
         });
         if let (Some(row), Some(capture)) = (self.editor.recording.borrow().as_ref(), capture) { refresh_recording(row, capture, &localization); }
-        self.editor.present(dialog);
+        self.editor.present(dialog,editor.dialog);
     }
 
     fn refresh_modifier(&self, w: &Rc<Workspace>, dialog: &adw::Dialog, view: &PreferencesView) {
@@ -1249,7 +1221,7 @@ impl ShortcutPage {
             vec![group]
         });
         if let Some(row) = self.modifier.recording.borrow().as_ref() { refresh_recording(row, capture, &localization); }
-        self.modifier.present(dialog);
+        self.modifier.present(dialog,view.dialog);
     }
 
     fn refresh_modifier_rows(&self, w: &Rc<Workspace>, page: &ShortcutPageView) {
@@ -1366,7 +1338,7 @@ impl ShortcutPage {
 
     fn refresh_picker(&self, w: &Rc<Workspace>, dialog: &adw::Dialog, picker: Option<&ActionPickerView>) {
         let Some(picker) = picker else {
-            self.picker.show(false, dialog);
+            self.picker.show(None, dialog);
             return;
         };
         let localization = w.localization();
@@ -1449,7 +1421,7 @@ impl ShortcutPage {
                     status.set_description(Some(&localization.text(MessageId::SHORTCUT_SEARCH_EMPTY_HELP)));
                 }
         });
-        if self.picker.show(true, dialog) {
+        if self.picker.show(Some(picker.dialog), dialog) {
             self.picker_search.grab_focus();
         }
     }
@@ -1511,7 +1483,7 @@ impl ShortcutPage {
                     row.set_subtitle(&localization.text(MessageId::NATIVE_SHORTCUTS_DEFAULTS_HELP));
                 }
         });
-        self.details.show(keymap.details, dialog);
+        self.details.show(keymap.details.then_some(keymap.dialog), dialog);
         let shown = self.import.borrow().clone();
         match (&keymap.import, shown) {
             (Some(preview), None) => {
@@ -1531,7 +1503,7 @@ impl ShortcutPage {
                         PreferenceAction::CancelKeymapImport
                     })
                 ));
-                crate::page_dialog::present_role(&alert, dialog, layer_ui::DialogRole::Alert);
+                crate::page_dialog::present_intent(&alert, dialog,keymap.import_dialog);
                 *self.import.borrow_mut() = Some(alert);
             }
             (Some(preview), Some(alert)) => {

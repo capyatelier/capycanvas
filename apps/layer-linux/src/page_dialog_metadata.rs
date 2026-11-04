@@ -14,13 +14,18 @@ pub struct Metadata {
     pub(super) top_navigation: Option<(adw::NavigationSplitView, adw::NavigationPage)>,
     pub(super) primary: Option<Action>,
     pub(super) cancel: Action,
+    pub(super) back: Option<gtk::Button>,
     pub(super) secondary: Vec<Action>,
     pub(super) hidden: Vec<gtk::Widget>,
     pub(super) headers: Vec<adw::HeaderBar>,
 }
 impl Metadata {
     pub fn new() -> Self { Self::default() }
-    pub fn intent(mut self, intent: layer_ui::DialogIntent) -> Self { self.intent = Some(intent); self }
+    pub fn intent(mut self, intent: layer_ui::DialogIntent) -> Self {
+        if intent.primary == Some(layer_ui::DialogPrimary::Close) { self.primary = Some(Action::Close); }
+        for header in &self.headers { header.set_widget_name("dialog-header"); }
+        self.intent = Some(intent); self
+    }
     pub fn title(mut self, widget: &impl IsA<gtk::Widget>, property: &'static str) -> Self { self.title = Some((widget.clone().upcast(), property)); self.hide(widget) }
     pub fn hide(mut self, widget: &impl IsA<gtk::Widget>) -> Self { self.hidden.push(widget.clone().upcast()); self }
     pub fn header(mut self, view: &adw::ToolbarView, header: &adw::HeaderBar) -> Self { self.header = Some((view.clone(), header.clone())); self.navigation_header(header) }
@@ -32,6 +37,7 @@ impl Metadata {
     pub fn primary(mut self, button: &gtk::Button) -> Self { self.primary = Some(Action::Button(button.clone())); self }
     pub fn done(mut self) -> Self { self.primary = Some(Action::Close); self }
     pub fn cancel(mut self, button: &gtk::Button) -> Self { self.cancel = Action::Button(button.clone()); self.hide(button) }
+    pub fn back(mut self, button: &gtk::Button) -> Self { self.back = Some(button.clone()); self }
     pub fn responses(primary: Option<&str>, cancel: &str, secondary: &[&str]) -> Self {
         Self { primary: primary.map(|id| Action::Response(id.into())), cancel: Action::Response(cancel.into()),
             secondary: secondary.iter().map(|id| Action::Response((*id).into())).collect(), ..Self::default() }
@@ -84,6 +90,7 @@ impl Metadata {
     pub(super) fn project_header(&self, dialog: &adw::Dialog, w: &std::rc::Rc<Workspace>, frame: &gtk::Box) -> Header {
         let navigation = self.navigation_root.is_some();
         let header = self.navigation_root.clone().or_else(|| self.header.as_ref().map(|(_, header)| header.clone())).unwrap_or_default();
+        header.set_widget_name("dialog-header");
         let loan = self.header.as_ref().map(|(view, _)| view.clone());
         if let Some(toolbar) = &loan { toolbar.remove(&header); }
         let previous_title = header.title_widget();
@@ -104,6 +111,7 @@ impl Metadata {
         }
         let close = gtk::Button::from_icon_name("window-close-symbolic");
         close.add_css_class("flat");
+        close.set_widget_name("dialog-start");
         let intent = self.dialog_intent();
         close.set_visible(intent.header(false).start.is_some());
         let cancel_label = layer_ui::CommonCopy::new(&w.localization()).cancel;
@@ -131,6 +139,7 @@ impl Metadata {
                 }
                 let button = action.project(dialog, w);
                 button.add_css_class("suggested-action");
+                button.set_widget_name("dialog-end");
                 destination.pack_end(&button);
                 if let Action::Response(id) = action { responses.push((id.clone(), button.clone())); }
                 button.connect_map(glib::clone!(#[weak] w, move |button| w.window.set_default_widget(Some(button))));

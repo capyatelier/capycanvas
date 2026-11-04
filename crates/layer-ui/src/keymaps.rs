@@ -380,6 +380,8 @@ pub struct KeymapImportPreview {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct KeymapView {
+    pub dialog: crate::DialogIntent,
+    pub import_dialog: crate::DialogIntent,
     pub presets: Vec<KeymapChoice>,
     pub selected: String,
     pub title: String,
@@ -508,6 +510,8 @@ use crate::Settings;
 pub(crate) fn view(settings: &Settings, import: Option<&KeymapImport>, details: bool) -> KeymapView {
     let current = settings.keymap_preset().map_or(&KEYMAP_PRESETS[0], |p| p.preset);
     KeymapView {
+        dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
+        import_dialog: crate::DialogIntent::alert(),
         presets: KEYMAP_PRESETS.iter().map(|p| KeymapChoice { id: p.id.into(), title: p.title.into() }).collect(),
         selected: current.id.into(),
         title: current.title.into(),

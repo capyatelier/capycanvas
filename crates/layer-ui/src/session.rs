@@ -17981,6 +17981,64 @@ mod tests {
             assert!(saved.get("page_requested").is_none());
             assert!(s.state.requests.is_empty());
         }
+        for platform in [Platform::Gtk, Platform::Web] {
+            use crate::PreferencesRoute as Route;
+            let mut s = session(platform);
+            s.state.workspace.layout.phone = Some(Vec::new());
+            let close = crate::DialogIntent::editor(Some(crate::DialogPrimary::Close));
+            invoke(&mut s, CommandId::Settings);
+            let root = s.preferences().unwrap();
+            assert_eq!(root.dialog, close);
+            assert_eq!(root.keymap.dialog, close);
+            assert_eq!(root.keymap.import_dialog, crate::DialogIntent::alert());
+            assert_eq!(root.navigation.back, None);
+            assert_eq!(root.navigation.shortcuts, [Route::Root]);
+            for (viewport, single) in [([412.,891.],true),([891.,412.],true),([600.,900.],false)] {
+                let layout = s.state.preferences_layout(viewport,viewport[0],[126.,265.]);
+                assert_eq!(layout.single_pane,single,"root {platform:?}/{viewport:?}");
+                assert!(!layout.subpage,"root {platform:?}/{viewport:?}");
+            }
+            s.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts }).unwrap();
+            let direct = s.preferences().unwrap();
+            assert_eq!(direct.navigation.back,Some(PreferenceAction::PageList));
+            for (viewport, single) in [([412.,891.],true),([891.,412.],true),([600.,900.],false)] {
+                let layout = s.state.preferences_layout(viewport,viewport[0],[126.,265.]);
+                assert_eq!(layout.single_pane,single,"direct {platform:?}/{viewport:?}");
+                assert_eq!(layout.subpage,single,"direct {platform:?}/{viewport:?}");
+            }
+            preference(&mut s, direct.navigation.back.unwrap());
+            assert!(!s.preferences().unwrap().page_requested);
+            assert!(!s.state.preferences_layout([412.,891.],412.,[126.,265.]).subpage);
+            let id = CommandId::Brush.shortcut_id();
+            preference(&mut s, PreferenceAction::EditShortcut { id });
+            assert_eq!(s.preferences().unwrap().shortcut_editor.unwrap().dialog,close);
+            preference(&mut s, PreferenceAction::CloseShortcutEditor);
+            let category = s.preferences().unwrap().shortcut_page.categories[0].id.clone();
+            preference(&mut s, PreferenceAction::ShortcutCategory { id: Some(category) });
+            let view = s.preferences().unwrap();
+            assert_eq!(view.navigation.shortcuts,[Route::Root,Route::Category]);
+            assert!(view.navigation.title.is_some());
+            assert_eq!(view.navigation.back,Some(PreferenceAction::ShortcutCategory { id: None }));
+            let key = s.state.settings.hold_keys(platform)[0].key.clone();
+            preference(&mut s, PreferenceAction::EditModifierKey { key });
+            let view = s.preferences().unwrap();
+            assert_eq!(view.navigation.shortcuts,[Route::Root,Route::Category,Route::Modifier]);
+            assert_eq!(view.navigation.back,Some(PreferenceAction::CloseModifierKey));
+            assert_eq!(view.modifier_editor.unwrap().dialog,close);
+            preference(&mut s, view.navigation.back.unwrap());
+            assert_eq!(s.preferences().unwrap().navigation.shortcuts,[Route::Root,Route::Category]);
+            preference(&mut s, PreferenceAction::Page { page: SettingsPage::Input });
+            preference(&mut s, PreferenceAction::EditPenButton { trigger: "pen.button.primary".into() });
+            let view = s.preferences().unwrap();
+            assert_eq!(view.navigation.input,[Route::Root,Route::Pen]);
+            assert_eq!(view.navigation.back,Some(PreferenceAction::ClosePenButton));
+            assert_eq!(view.pen_button_editor.unwrap().dialog,close);
+            preference(&mut s, view.navigation.back.unwrap());
+            assert_eq!(s.preferences().unwrap().navigation.input,[Route::Root]);
+            preference(&mut s, PreferenceAction::OpenPenButtonPicker { trigger: "pen.button.primary".into(), category: None });
+            assert_eq!(s.preferences().unwrap().shortcut_page.picker.unwrap().dialog,close);
+            assert!(s.state.requests.is_empty());
+        }
     }
     #[test]
     fn settings_navigation_validation_and_autosave_are_shared() {

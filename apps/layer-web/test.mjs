@@ -450,6 +450,8 @@ try {
     [process.argv.includes("--phone-frame"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, frameOnly:true }), checkErrors],
     [process.argv.includes("--phone-input"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, canvasPixels, inputOnly:true }), checkErrors],
     [process.argv.includes("--phone-customize"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, customizeOnly:true }), checkErrors],
+    [process.argv.includes("--phone-dialogs"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, dialogs:{mode:'phone',batch:process.argv[process.argv.indexOf('--phone-dialogs')+1]?.startsWith('--')?'w6a':process.argv[process.argv.indexOf('--phone-dialogs')+1]??'w6a'} }), checkErrors],
+    [process.argv.includes("--dialog-layout"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle, dialogs:{mode:'desktop',batch:process.argv[process.argv.indexOf('--dialog-layout')+1]?.startsWith('--')?null:process.argv[process.argv.indexOf('--dialog-layout')+1]} }), checkErrors],
     [process.argv.includes("--phone-audit"), async () => (await import('./phone-audit.mjs')).checkPhoneAudit({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--settings-audit"), () => checkSettingsParity({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--workspace-constraints"), () => checkWorkspaceConstraints({call,evaluate,settle,reload}), checkErrors],
