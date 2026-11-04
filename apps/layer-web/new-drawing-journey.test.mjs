@@ -362,19 +362,20 @@ export async function checkNewDrawing({call,evaluate,settle}) {
   await call('Emulation.setDeviceMetricsOverride',{width:640,height:860,deviceScaleFactor:1,mobile:false});await settle();
   try {
     await open();
-    const narrow=await evaluate(`(()=>{const p=document.querySelector('#new-drawing-preview').getBoundingClientRect(),f=document.querySelector('.new-drawing-form').getBoundingClientRect();return{stacked:p.bottom<=f.top,width:Math.round(p.width)}})()`);
-    assert.deepEqual(narrow,{stacked:true,width:348},'Narrow windows stack the preview above the form');
+    const narrow=await evaluate(`(()=>{const p=document.querySelector('#new-drawing-preview').getBoundingClientRect(),f=document.querySelector('.new-drawing-form').getBoundingClientRect(),body=document.querySelector('.new-drawing-body');return{stacked:p.bottom<=f.top,width:Math.round(p.width),sharedWidth:Number(layerApp.app.new_drawing_layout(body.clientWidth).preview[0])}})()`);
+    assert.equal(narrow.stacked,true,'Narrow windows stack the preview above the form');
+    assert.equal(narrow.width,narrow.sharedWidth,'Narrow preview width follows the shared layout');
     await capture('narrow');
     await click('#new-drawing-texture');await slid('new-drawing-paper-drawer');
-    const footer=()=>evaluate(`(()=>{const f=document.querySelector('#new-drawing-paper-drawer footer'),label=f.querySelector('.new-drawing-relief-label'),row=document.querySelector('#new-drawing-paper-relief').getBoundingClientRect(),cancel=document.querySelector('#new-drawing-paper-cancel').getBoundingClientRect();
-      return{fits:f.scrollWidth<=f.clientWidth,clear:row.right<=cancel.left,ellipsized:label.scrollWidth>label.clientWidth,buttons:[...f.querySelectorAll(':scope > button')].map(n=>Math.round(n.getBoundingClientRect().height))}})()`);
-    assert.deepEqual(await footer(),{fits:true,clear:true,ellipsized:false,buttons:[34,34]},'The narrow paper footer keeps Texture visibility clear of the buttons');
+    const footer=()=>evaluate(`(()=>{const f=document.querySelector('#new-drawing-paper-drawer footer'),label=f.querySelector('.new-drawing-relief-label'),caption=label.getBoundingClientRect(),row=document.querySelector('#new-drawing-paper-relief').getBoundingClientRect(),cancel=document.querySelector('#new-drawing-paper-cancel').getBoundingClientRect();
+      return{fits:f.scrollWidth<=f.clientWidth,clear:row.right<=cancel.left||row.left>=cancel.right||row.bottom<=cancel.top||row.top>=cancel.bottom,labelShown:caption.width>0&&caption.height>0&&label.textContent===layerApp.state().new_drawing.copy.relief,ellipsized:label.scrollWidth>label.clientWidth,buttons:[...f.querySelectorAll(':scope > button')].map(n=>Math.round(n.getBoundingClientRect().height))}})()`);
+    assert.deepEqual(await footer(),{fits:true,clear:true,labelShown:true,ellipsized:false,buttons:[34,34]},'The narrow paper footer keeps Texture visibility clear of the buttons');
     await capture('narrow-paper');
-    await call('Emulation.setDeviceMetricsOverride',{width:420,height:860,deviceScaleFactor:1,mobile:false});await settle();
-    assert.deepEqual(await footer(),{fits:true,clear:true,ellipsized:true,buttons:[34,34]},'Texture visibility ellipsizes before the footer buttons shrink');
+    await call('Emulation.setDeviceMetricsOverride',{width:320,height:860,deviceScaleFactor:1,mobile:false});await settle();
+    assert.deepEqual(await footer(),{fits:true,clear:true,labelShown:true,ellipsized:false,buttons:[34,34]},'The narrowest footer wraps without hiding the caption or shrinking its buttons');
     await capture('narrower-paper');
     await click('#new-drawing-paper-cancel');await shut('new-drawing-paper-drawer');
-    await click('#new-drawing-cancel');await wait(`!document.querySelector('${dialog}')`);
+    await click(`${dialog} [data-dialog-part=start]`);await wait(`!document.querySelector('${dialog}')`);
   } finally {
     await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await settle();
   }
