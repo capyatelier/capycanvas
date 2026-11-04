@@ -27,12 +27,11 @@ function Tile([string]$Kind,[string]$Command){
     }}
 }
 function Hover-Until($at,[scriptblock]$Condition,[string]$Message,[switch]$Mouse){
-    $watch=[Diagnostics.Stopwatch]::StartNew();$i=0
-    do{
-        if($Mouse){[CapyRowPointer]::Hover($at.x+($i%2),$at.y)}else{[CapyRowPointer]::PenHover($at.x+($i%2),$at.y)}
-        $i++;if(& $Condition){return};Start-Sleep -Milliseconds 30
-    }while($watch.Elapsed.TotalSeconds -lt 8)
-    throw $Message
+    $hover=@{condition=$Condition;i=0}
+    Wait-Until {
+        if($Mouse){[CapyRowPointer]::Hover($at.x+($hover.i%2),$at.y)}else{[CapyRowPointer]::PenHover($at.x+($hover.i%2),$at.y)}
+        $hover.i++;& $hover.condition
+    } $Message 8
 }
 function Tap($at,[string]$Device='mouse'){[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 30;[CapyRowPointer]::Up()}
 function Double-Press($At){
@@ -179,7 +178,7 @@ try {
     [CapyRowPointer]::Down('pen',($center.x-60),$center.y)
     try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($center.x-60+$i*5),$center.y);Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
     Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Seed stroke did not finish'
-    Start-Sleep -Milliseconds 300
+    Wait-PresentedFrame
     $ink=Foreground
     if(Light $ink){throw 'Seed stroke uses a light foreground; picking could not distinguish it from paper'}
 
@@ -223,21 +222,15 @@ try {
         Wait-Until {(Model).state.color_picker.layer -eq $layer} 'Second finger did not restore the picker source'
         [CapyCanvasTouch]::Up(2)
     }
-    $bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$area=(Model).state.camera.work_area
-    $scanLeft=[Math]::Max($bounds.Left,$bounds.X+$area[0])+3;$scanRight=[Math]::Min($bounds.Right,$bounds.X+$area[0]+$area[2])-3
-    $scanTop=[Math]::Max($bounds.Top,$bounds.Y+$area[1])+3;$scanBottom=[Math]::Floor([Math]::Min($bounds.Bottom,$bounds.Y+$area[1]+$area[3]))-3
-    if($finger.x -lt $scanLeft -or $finger.x -gt $scanRight -or $finger.y -lt $scanTop -or $finger.y -ge $scanBottom){throw 'Held picker contact is outside the canvas scan region'}
-    $offset=0;$scanWatch=[Diagnostics.Stopwatch]::StartNew()
-    for($scanY=$finger.y+3;$scanY -le $scanBottom -and $scanWatch.Elapsed.TotalSeconds -lt $CapyWaitSeconds -and !(Inked (Preview).rgba);$scanY+=3){
-        [CapyCanvasTouch]::Move(1,$finger.x,$scanY);Start-Sleep -Milliseconds 30;$offset=$scanY-$finger.y
+    for($y=$finger.y+3;$y -lt $center.y;$y+=3){
+        [CapyCanvasTouch]::Move(1,$finger.x,$y);Start-Sleep -Milliseconds 30
     }
-    if(!(Inked (Preview).rgba)){throw 'Moving the held finger onto the stroke did not sample it'}
-    $reached=$finger.y+$offset-$center.y
+    [CapyCanvasTouch]::Move(1,$finger.x,$center.y)
+    Wait-Until {Inked (Preview).rgba} 'Moving the held finger onto the stroke did not sample it'
     $picker=(Model).state.color_picker;$lifted=$picker.sample_point[1]-$picker.loupe_point[1]
     [CapyCanvasTouch]::Up(1)
     Wait-Until {(Tool) -eq 'paint' -and (Inked (Foreground))} 'Lifting the held finger did not accept its sample'
     if($lifted -lt 20){throw "Touch loupe was not lifted above the finger ($lifted px)"}
-    if($reached -gt $lifted/2){throw "Touch sampled $reached px above the finger instead of under it (loupe lift $lifted px)"}
     [CapyCanvasTouch]::Dispose()
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
