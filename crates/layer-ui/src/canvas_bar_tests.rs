@@ -1983,6 +1983,8 @@ fn canvas_bar_measurement_admission_and_reveal_are_context_and_hold_checked() {
     s.input(pointer(ContactPhase::Up)).unwrap();
     let released = *s.canvas_bar_presentation().unwrap();
     assert!(released.hold % 2 == 0 && released.layout.is_none());
+    assert_ne!(released.hold, initial.hold, "a completed contact gives coalesced hosts a new reveal token");
+    assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context: initial.context, hold: initial.hold }).unwrap().regions, 0);
     assert_eq!(s.dispatch(UiAction::RevealCanvasBar { context: initial.context, hold: held.hold }).unwrap().regions, 0);
     let shown = s.dispatch(UiAction::RevealCanvasBar { context: released.context, hold: released.hold }).unwrap();
     assert_eq!(shown.regions, regions::CANVAS_BAR_GEOMETRY);

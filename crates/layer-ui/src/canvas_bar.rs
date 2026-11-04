@@ -1130,7 +1130,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let context = bar.context;
         let placement = bar.placement;
-        let hold = self.canvas_bar_hold();
+        let mut hold = self.canvas_bar_hold();
+        if previous.is_some_and(|old| old.context == context && old.hold % 2 == 1) && hold % 2 == 0 {
+            self.canvas_bar.hides = self.canvas_bar.hides.wrapping_add(1);
+            hold = self.canvas_bar_hold();
+        }
         if self.canvas_bar.hold.is_some_and(|old| old != hold) || hold % 2 == 1 {
             self.canvas_bar.suppressed = true;
         }

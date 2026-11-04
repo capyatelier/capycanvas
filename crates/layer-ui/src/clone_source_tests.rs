@@ -184,7 +184,7 @@ fn the_source_disc_drags_at_once_with_every_device_and_a_tap_shows_its_bar() {
     assert!(contact(&mut s, 22, PointerKind::Pen, ContactPhase::Down, [at[0] - 200., at[1] + 200.]).paint);
     assert_eq!(s.canvas_bar_hold() % 2, 1, "painting hides the bar");
     contact(&mut s, 22, PointerKind::Pen, ContactPhase::Up, [at[0] - 200., at[1] + 200.]);
-    assert!(s.canvas_bar_hold() == hold && s.state.canvas_bar.is_some(), "and it returns after");
+    assert!(s.canvas_bar_hold() != hold && s.canvas_bar_hold() % 2 == 0 && s.state.canvas_bar.is_some(), "and it returns after");
 
     let at = disc(&s);
     contact(&mut s, 23, PointerKind::Touch, ContactPhase::Down, at);
