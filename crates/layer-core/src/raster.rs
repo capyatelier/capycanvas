@@ -149,12 +149,17 @@ pub struct TileKey {
     pub coordinate: [u32; 2],
 }
 
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize,Deserialize)]
+pub(crate) enum TileContentIdentity {
+    Encoded([u8;32]),
+    Stored {bytes:u64,crc32:u32,descriptor:[u8;32]},
+}
 /// Independently compressed exact samples. Immutable backing
 /// can be written repeatedly without readback, conversion or recompression.
 pub struct TileBlob {
     resource_id: crate::authored::PortableId,
     owner_identity: u64,
-    encoded_fingerprint: Option<[u8; 32]>,
+    content_identity: Option<TileContentIdentity>,
     digest: OnceLock<[u8; 32]>,
     expected_digest: Option<[u8; 32]>,
     pub descriptor: PixelDescriptor,
@@ -209,11 +214,15 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 
 impl TileBlob {
     pub fn owner_identity(&self) -> u64 { self.owner_identity }
-    pub fn encoded_fingerprint(&self) -> Option<[u8; 32]> { self.encoded_fingerprint }
+    pub fn encoded_fingerprint(&self) -> Option<[u8; 32]> { match self.content_identity {Some(TileContentIdentity::Encoded(hash))=>Some(hash),_=>None} }
+    pub(crate) fn content_identity(&self)->Option<TileContentIdentity> {self.content_identity}
+    pub(crate) fn same_content(&self,other:&Self)->bool {
+        self.descriptor==other.descriptor && (self.owner_identity==other.owner_identity || self.content_identity.is_some_and(|identity|Some(identity)==other.content_identity))
+    }
     pub fn resource_id(&self) -> crate::authored::PortableId { self.resource_id }
     pub(crate) fn alias(&self, resource_id: crate::authored::PortableId) -> Self {
         Self { resource_id, owner_identity: self.owner_identity,
-            encoded_fingerprint: self.encoded_fingerprint, digest: self.digest.clone(), expected_digest: self.expected_digest, descriptor: self.descriptor, compressed: self.compressed.clone() }
+            content_identity: self.content_identity, digest: self.digest.clone(), expected_digest: self.expected_digest, descriptor: self.descriptor, compressed: self.compressed.clone() }
     }
     /// Worst-case encoded ownership reserved before a tile is published.
     pub fn max_compressed_len(descriptor: PixelDescriptor) -> Option<usize> {
@@ -243,11 +252,11 @@ impl TileBlob {
         // permutation, not a precision change.
         let shuffled = (descriptor.bits_per_channel > 8).then(|| shuffle_samples(descriptor, bytes));
         let compressed = compression::compress(shuffled.as_deref().unwrap_or(bytes))?;
-        let encoded_fingerprint = Some(Self::descriptor_digest(descriptor, &compressed));
+        let content_identity = Some(TileContentIdentity::Encoded(Self::descriptor_digest(descriptor, &compressed)));
         Ok(Self {
             resource_id,
             owner_identity: next_tile_owner(),
-            encoded_fingerprint,
+            content_identity,
             digest: OnceLock::new(),
             expected_digest: None,
             descriptor,
@@ -307,7 +316,7 @@ impl TileBlob {
     }
     pub(crate) fn from_store(resource_id:crate::PortableId,descriptor:PixelDescriptor,location:Arc<crate::package::session_store::StoreLocation>)->Result<Self,String> {
         if location.length==0 || location.length>MAX_COMPRESSED_TILE_BYTES as u64 || descriptor.byte_len([TILE_SIZE;2]).is_none() {return Err("Invalid stored raster tile".into());}
-        Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,encoded_fingerprint:None,digest:OnceLock::new(),expected_digest:None,
+        Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,content_identity:Some(location.content_identity()),digest:OnceLock::new(),expected_digest:None,
             compressed:Arc::new(crate::raster_storage::Bytes::stored(location))})
     }
     pub fn from_package(
@@ -317,9 +326,9 @@ impl TileBlob {
     ) -> Result<Self, String> {
         if compressed.len() > MAX_COMPRESSED_TILE_BYTES { return Err("Oversized compressed raster tile".into()); }
         Self::decode_samples(descriptor, &compressed)?;
-        let encoded_fingerprint=Some(Self::descriptor_digest(descriptor,&compressed));
+        let content_identity=Some(TileContentIdentity::Encoded(Self::descriptor_digest(descriptor,&compressed)));
         Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,
-            encoded_fingerprint, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(compressed.into()) })
+            content_identity, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(compressed.into()) })
     }
     pub fn from_compressed(
         descriptor: PixelDescriptor,
@@ -341,7 +350,7 @@ impl TileBlob {
             resource_id,
             descriptor,
             owner_identity: next_tile_owner(),
-            encoded_fingerprint: None,
+            content_identity: None,
             digest: OnceLock::new(),
             expected_digest: Some(digest),
             compressed: Arc::new(bytes.clone().into()),
@@ -364,11 +373,19 @@ impl TileBlob {
         bytes: Arc<[u8]>,
         encoded_fingerprint: Option<[u8;32]>,
     ) -> Result<Self, String> {
+        Self::from_verified_resource_with_content_identity(resource_id,descriptor,bytes,encoded_fingerprint.map(TileContentIdentity::Encoded))
+    }
+    pub(crate) fn from_verified_resource_with_content_identity(
+        resource_id:crate::PortableId,descriptor:PixelDescriptor,bytes:Arc<[u8]>,content_identity:Option<TileContentIdentity>,
+    )->Result<Self,String> {
         if bytes.is_empty() || bytes.len() > MAX_COMPRESSED_TILE_BYTES || descriptor.byte_len([TILE_SIZE; 2]).is_none() {
             return Err("Invalid raster worker blob".into());
         }
+        if let Some(TileContentIdentity::Stored {bytes:length,crc32,descriptor:digest})=content_identity {
+            crate::package::session_store::validate_tile_identity(resource_id,descriptor,&bytes,length,crc32,digest)?;
+        }
         Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,
-            encoded_fingerprint, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
+            content_identity, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
     }
 }
 

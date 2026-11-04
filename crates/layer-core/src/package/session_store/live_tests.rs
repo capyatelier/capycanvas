@@ -379,6 +379,24 @@ fn checkpoint_reuse_invalidates_changed_metadata_profiles_and_rejects_missing_ou
     assert_eq!(read_head(&directory.0).unwrap(),head);
 }
 #[test]
+fn stored_tile_identity_checks_worker_payload_without_reading_the_cold_owner() {
+    let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
+    let source=blob(83);let bytes=source.memory_compressed().unwrap().unwrap();
+    let editor=document_editor(source);let capture=captured_editor(&editor);
+    let mut store=SessionStore::open_with_cache(&directory.0,reads.cache.clone()).wait().unwrap();
+    store.checkpoint(&capture,serde_json::json!({}).into(),&cancel).wait().unwrap();
+    let cold=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
+    let identity=cold.content_identity();assert!(identity.is_some());assert!(cold.encoded_fingerprint().is_none());
+    let worker=TileBlob::from_verified_resource_with_content_identity(cold.resource_id(),cold.descriptor,bytes.clone(),identity).unwrap();
+    assert!(cold.same_content(&worker));assert!(cold.same_content(&worker.alias(PortableId::random())));
+    let mut different=bytes.to_vec();different[0]^=1;
+    assert!(TileBlob::from_verified_resource_with_content_identity(cold.resource_id(),cold.descriptor,different.into(),identity).is_err());
+    assert!(TileBlob::from_verified_resource_with_content_identity(cold.resource_id(),crate::color::PixelDescriptor::COVERAGE8,bytes.clone(),identity).is_err());
+    let unknown=TileBlob::from_verified_resource(cold.resource_id(),cold.descriptor,bytes).unwrap();assert!(!cold.same_content(&unknown));
+    assert_eq!(cold.resident_bytes(),0);assert_eq!(reads.calls(),0);
+}
+
+#[test]
 fn restore_binds_cold_tiles_and_defers_checksum_verification_until_the_first_read() {
     let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
     let editor=document_editor(blob(113));

@@ -49,6 +49,43 @@ fn capture() -> (SessionCapture, SessionStamp, RetainedTiles, Arc<layer_core::ra
     let session = layer_ui::UiSession::new(crate::Renderer::default(), document, [256; 2], layer_ui::Platform::Gtk).unwrap();
     (session.capture_session().unwrap(), session.session_stamp(), retained, tile)
 }
+
+#[test]
+fn cold_store_tiles_survive_color_job_worker_roundtrips() {
+    use layer_core::{Document,DocumentNames,Editor,SourceTarget,authored::{Image,ImageObject,PaintBase},color::{ColorProfile,RgbSpace,SampleDepth,source::{SourceChannels,SourceImage,SourceInterpretation}},package::{session_store::SessionStore,transfer::PreparedTransfer},raster::{TileBlob,TILE_SIZE}};
+    let fixture=Fixture::new();let cancel=AtomicBool::new(false);
+    let mut original=Document::new(PortableId::random(),19,11,DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+    let expected=[17,29,81,255].repeat((TILE_SIZE*TILE_SIZE) as usize);
+    let tile=Arc::new(TileBlob::encode(interpretation.descriptor(),&expected).unwrap());
+    let image=Image::new(Arc::new(SourceImage {extent:[19,11],resolution:None,tiles:[([0,0],tile)].into(),interpretation}));
+    let SourceTarget::Paint(paint)=original.working.target.unwrap() else {panic!("paint")};
+    original.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(image.clone()));
+    for index in 0..2 {let (_,edit)=original.create_object_layer_edit("Image",ImageObject::new(image.clone()),None,index).unwrap();original.apply(edit).unwrap();}
+    let editor=Editor::new(original);let captured=editor.capture_session(editor.capture(0,Default::default()).unwrap()).unwrap();
+    let mut store=pollster::block_on(SessionStore::open(&fixture.root.join("cold"))).unwrap();
+    pollster::block_on(store.checkpoint(&captured,serde_json::json!({}).into(),&cancel)).unwrap();
+    let original=pollster::block_on(store.load(Default::default(),&cancel)).unwrap().unwrap().editor.document().clone();
+    let image=original.artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.clone();
+    let cold=image.tiles[&[0,0]].clone();assert_eq!(cold.resident_bytes(),0);assert!(cold.encoded_fingerprint().is_none());
+    let roundtrip=|artwork| {
+        let capture=Editor::new(Document::from_artwork(artwork).unwrap()).capture(0,Default::default()).unwrap();
+        let transfer=PreparedTransfer::capture(&capture,&cancel).unwrap();
+        let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
+        let chunks=(0..transfer.payload_count()).map(|index|vec![Arc::from(transfer.read_chunk(index,0,transfer.payload_len(index).unwrap() as usize).unwrap())]).collect();
+        PreparedTransfer::from_chunks(descriptor,chunks).unwrap().adopt_verified(Default::default(),&cancel).unwrap().artwork.as_ref().clone()
+    };
+    let worker=Document::from_artwork(roundtrip(layer_color::color_job_artwork(&original.artwork))).unwrap();
+    let converted=layer_color::prepare_document_color(&worker,layer_color::DocumentColorChange::Depth {depth:SampleDepth::U8,dither:Default::default()},16*1024*1024,||false).unwrap();
+    let adopted=layer_color::adopt_color_job_artwork(&original,roundtrip(converted.document.artwork)).unwrap();
+    for (_,_,object) in adopted.artwork.objects.iter() {assert!(object.image.same_owner(&image));assert!(Arc::ptr_eq(&object.image.tiles[&[0,0]],&cold));}
+    let mut conflicting=original.artwork.clone();let mut source=(*image).clone();
+    let encoded=TileBlob::encode(cold.descriptor,&[19,29,81,255].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap().memory_compressed().unwrap().unwrap();
+    source.tiles.insert([0,0],Arc::new(TileBlob::from_verified_resource(cold.resource_id(),cold.descriptor,encoded).unwrap()));
+    let handle=conflicting.objects.iter().next().unwrap().0;conflicting.objects.get_mut(handle).unwrap().image=Image::with_id(image.id(),Arc::new(source));
+    assert!(layer_color::adopt_color_job_artwork(&original,conflicting).is_err());
+    assert_eq!(cold.resident_bytes(),0);assert_eq!(cold.decode_on_worker().unwrap(),expected);
+}
 fn named(capture: &SessionCapture, stamp: &SessionStamp, name: &str) -> (SessionCapture, SessionStamp) {
     let mut capture = capture.clone(); capture.state.unsaved_name = Some(name.into());
     let mut stamp = stamp.clone(); stamp.state = capture.state.clone();

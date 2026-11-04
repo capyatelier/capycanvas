@@ -17,7 +17,7 @@ impl Image {
         if self.id()!=other.id() {return false;}
         if Arc::ptr_eq(self.storage(),other.storage()) {return true;}
         if self!=other || self.interpretation.profile!=other.interpretation.profile {return false;}
-        self.tiles.iter().zip(&other.tiles).all(|((_,a),(_,b))|a.owner_identity()==b.owner_identity() || a.encoded_fingerprint().is_some_and(|fingerprint|Some(fingerprint)==b.encoded_fingerprint()))
+        self.tiles.iter().zip(&other.tiles).all(|((_,a),(_,b))|a.same_content(b))
     }
     pub fn import_foreign(images:&[Self])->Result<Vec<Self>,String> {
         let mut originals=BTreeMap::<super::PortableId,&Self>::new();
@@ -34,7 +34,7 @@ impl Image {
                 let id=tile.resource_id();
                 if originals.contains_key(&id) || profiles.contains_key(&id) {return Err("Conflicting foreign image namespace".into());}
                 if let Some(previous)=tiles.get(&id) {
-                    if previous.descriptor!=tile.descriptor || (previous.owner_identity()!=tile.owner_identity() && (previous.encoded_fingerprint().is_none() || previous.encoded_fingerprint()!=tile.encoded_fingerprint())) {return Err("Conflicting foreign tile identity".into());}
+                    if !previous.same_content(tile) {return Err("Conflicting foreign tile identity".into());}
                     *tile=previous.clone();
                 } else {
                     let remapped=Arc::new(tile.alias(super::PortableId::random()));tiles.insert(id,remapped.clone());*tile=remapped;
@@ -66,7 +66,7 @@ struct ImageResourceOwners {
 impl ImageResourceOwners {
     fn tile(&mut self,value:&Arc<crate::raster::TileBlob>)->Result<Arc<crate::raster::TileBlob>,String> {
         if let Some(original)=self.tiles.get(&value.resource_id()) {
-            if original.descriptor!=value.descriptor || (original.owner_identity()!=value.owner_identity() && original.encoded_fingerprint().is_none_or(|hash|Some(hash)!=value.encoded_fingerprint())) {return Err("Conflicting immutable image tile identity".into());}
+            if !original.same_content(value) {return Err("Conflicting immutable image tile identity".into());}
             Ok(original.clone())
         }else {self.tiles.insert(value.resource_id(),value.clone());Ok(value.clone())}
     }

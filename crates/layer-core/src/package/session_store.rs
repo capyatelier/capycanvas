@@ -828,6 +828,11 @@ impl RangeReader for Pack {
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {self.file.read(offset,length,crc,completion);}
 }
 struct StoreRange {pack:Arc<Pack>,source:ReadSource,offset:u64}
+pub(crate) fn validate_tile_identity(id:PortableId,descriptor:crate::color::PixelDescriptor,bytes:&[u8],length:u64,crc:u32,digest:[u8;32])->Result<(),String> {
+    if bytes.len() as u64!=length || crc32fast::hash(bytes)!=crc || StoredRecord::tile(id,descriptor)?.fingerprint(length,crc)?!=digest {
+        return Err("Conflicting immutable stored tile identity".into());
+    }Ok(())
+}
 pub(crate) struct StoreLocation {
     range:Mutex<Arc<StoreRange>>,
     pub(crate) length:u64,
@@ -835,6 +840,9 @@ pub(crate) struct StoreLocation {
     descriptor:[u8;32],
 }
 impl StoreLocation {
+    pub(crate) fn content_identity(&self)->crate::raster::TileContentIdentity {
+        crate::raster::TileContentIdentity::Stored {bytes:self.length,crc32:self.crc,descriptor:self.descriptor}
+    }
     fn new(pack:Arc<Pack>,source:ReadSource,offset:u64,length:u64,crc:u32,descriptor:[u8;32])->Self {
         Self {range:Mutex::new(Arc::new(StoreRange {pack,source,offset})),length,crc,descriptor}
     }

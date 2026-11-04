@@ -30,7 +30,7 @@ struct EncodedPayload {encoding:ResourceEncoding,payload:usize}
 enum VerifiedResource {
     Bytes {payload:usize,encoded:Option<EncodedPayload>},
     Code {payload:usize,encoded:Option<EncodedPayload>},
-    Tile {payload:usize,fingerprint:Option<[u8;32]>},
+    Tile {payload:usize,identity:Option<crate::raster::TileContentIdentity>},
     Lut {payload:usize,encoded:Option<EncodedPayload>,digest:[u8;32],spaces:u8},
     Coverage {payload:Option<usize>},
     Vector {payload:usize},
@@ -104,7 +104,7 @@ impl PreparedTransfer {
         for (id,entry) in &inventory.entries {
             active(cancel)?;
             let state=match &entry.payload {
-                Payload::Tile(tile)=>VerifiedResource::Tile{payload:push(&mut payloads,TransferPayload::Tile(tile.clone())),fingerprint:tile.encoded_fingerprint()},
+                Payload::Tile(tile)=>VerifiedResource::Tile{payload:push(&mut payloads,TransferPayload::Tile(tile.clone())),identity:tile.content_identity()},
                 Payload::Bytes(bytes) if entry.kind=="capy.lut3d/1"=>{let lut=luts.get(id).ok_or("Missing verified lookup owner")?;
                     VerifiedResource::Lut {payload:push(&mut payloads,TransferPayload::Bytes(bytes.storage().clone())),encoded:encoded(&mut payloads,bytes.encoded_if_ready()),digest:lut.digest(),spaces:lut.admitted_spaces()}},
                 Payload::Bytes(bytes)=>VerifiedResource::Bytes{payload:push(&mut payloads,TransferPayload::Bytes(bytes.storage().clone())),encoded:encoded(&mut payloads,bytes.encoded_if_ready())},
@@ -216,12 +216,12 @@ impl PreparedTransfer {
                 VerifiedResource::Tile{..}|VerifiedResource::Opaque{..}=>(),
             }
         }
-        for (id,state) in &self.descriptor.resources {if let VerifiedResource::Tile{payload,fingerprint}=state {
+        for (id,state) in &self.descriptor.resources {if let VerifiedResource::Tile{payload,identity}=state {
             let record=&manifest.resources[id].value;if record["type"]!="capy.raster-tile/1"{return Err("Transfer tile type mismatch".into());}
             let descriptor=resources::parse_descriptor(&record["data"]).map_err(|e|e.to_string())?;
             let raw=descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64;
             decoded=decoded.saturating_add(raw);
-            reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource_with_encoded_fingerprint(*id,descriptor,self.bytes(*payload)?,*fingerprint)?));
+            reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource_with_content_identity(*id,descriptor,self.bytes(*payload)?,*identity)?));
         }}
         for selection in &self.descriptor.selections {
             let words=match self.payloads.get(selection.payload){Some(TransferPayload::Words(words))=>words.clone(),_=>return Err("Missing decoded selection words".into())};decoded=decoded.saturating_add(words.len() as u64*4);
