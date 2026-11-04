@@ -111,6 +111,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const assumed=await readPackage(evaluate,'sdrFiles.get("untagged.capy")');
   assert.deepEqual(sourceSamples(assumed)[0],sourceSamples(source)[0]);
   await evaluate(`layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}})`);
+  assert.equal(await evaluate(`(async()=>{await layerApp.documents.autosave();const id=layerApp.app.document_tabs(0).selected;await layerApp.app.checkpoint_session(id,true);return layerApp.app.session_current(id);})()`),true,'Histogram inspects a durably checkpointed image');
   const scope=histogramJourney({evaluate,settle});
   const inspection={histogram:await scope.exact()};
   assert.deepEqual(inspection.histogram.color,{space:'AdobeRgb',depth:'U16'});

@@ -114,6 +114,7 @@ impl WgpuRasterizer {
     pub fn source_sample_cache_stats(&self) -> layer_core::raster::DecodedTileCacheStats {
         self.device.source_samples.stats()
     }
+    pub fn source_sample_cache(&self) -> Arc<layer_core::raster::DecodedTileCache> { self.device.source_samples.clone() }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
             analyses: self.effect_analyses.clone(),

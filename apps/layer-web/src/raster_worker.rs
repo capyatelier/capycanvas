@@ -443,6 +443,19 @@ pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Resu
     };
     let mut renderer = factory.rasterizer(color).map_err(js)?;
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| Box::pin(async move { encode_tiles(&bytes, descriptors) })));
+    let samples=renderer.source_sample_cache();
+    let image_samples=samples.clone();
+    renderer.set_browser_image_decoder(Rc::new(move |source,coordinate,destination| {
+        let samples=image_samples.clone();
+        Box::pin(async move {layer_render_wgpu::prepare_image_tile(&source,coordinate,destination,&samples,None)})
+    }));
+    renderer.set_browser_raster_decoder(Rc::new(move |blob,space,_destination| {
+        let samples=samples.clone();
+        Box::pin(async move {layer_render_wgpu::prepare_raster_tile(&blob,space,&samples)})
+    }));
+    renderer.set_browser_nearest_coordinate_decoder(Rc::new(|inverse,size,first,count| Box::pin(async move {
+        layer_render_wgpu::prepare_nearest_coordinates(inverse,size,first,count)
+    })));
     let gpu=renderer.snapshot_gpu();
     SNAPSHOT_GPU.with(|cache|*cache.borrow_mut()=Some((factory,color,gpu.clone())));
     Ok(gpu)
