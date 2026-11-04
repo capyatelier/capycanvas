@@ -678,6 +678,16 @@ function Invoke-Id([string]$Id){
     Wait-Until {$hit.item=Find $Id;$hit.item -and $hit.item.Current.IsEnabled} "Missing enabled control: $Id"
     Invoke $Id
 }
+function Assert-NoDrawingMemoryRefusal($View){
+    if(!$View -or !$View.state.notice){return}
+    $tag=$View.windows_active_tag;$text=$View.state.notice.text
+    if(!$tag -or !$text){return}
+    $admission=Catalog-Text $tag 'documents-refusal-admission-budget' 'documents'
+    $size=Catalog-Text $tag 'documents-too-large-memory' 'documents'
+    if($text -cne $admission -and $text -cne $size){return}
+    $caption=$View.state.new_drawing.page.memory
+    throw ('Memory refusal: '+$text+'; '+$caption)
+}
 function New-DrawingControl([string]$Id,$Within=$root){
     $condition=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id)
     $hit=$Within.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)

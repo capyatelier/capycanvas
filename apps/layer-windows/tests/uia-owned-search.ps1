@@ -1297,3 +1297,63 @@ public static class CapyImageDragPacingTest {
     try{Drag-Image @(100,200) @(180,240)}catch{if($_.Exception.ToString()-notlike'*Owned injection refused*'){throw};$rejected=$true}
     if(!$rejected-or[CapyImageDragPacingTest]::Cancelled-ne1-or[CapyImageDragPacingTest]::Events.Count-ne1){throw 'Refused image injection retried or escaped cleanup'}
 }
+
+& {
+    $tokens=$null;$errors=$null
+    $path=Join-Path $PSScriptRoot '../scripts/LocalizationProperties.ps1'
+    $source=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $notice=$source.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Notice-Surface'},$true)
+    if(!$notice){throw 'Notice-Surface is missing'}
+    $guard=@($notice.Body.FindAll({param($node)$node-is[Management.Automation.Language.IfStatementAst]-and$node.Clauses.Count-eq1-and$node.Clauses[0].Item1.Extent.Text-eq'$NoticeOnly'},$true))
+    if($guard.Count-ne1){throw 'Italian memory refusal stage is not gated to NoticeOnly'}
+    $italian=$guard[0].Find({param($node)$node-is[Management.Automation.Language.AssignmentStatementAst]-and$node.Extent.Text-like'$italian=1+*'},$true)
+    $drawing=$guard[0].Find({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'New-DrawingPixels'},$true)
+    $flat=$guard[0].Find({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Menu-Command'-and$node.Extent.Text-like"*'flat_all_areas'*"},$true)
+    if(!$italian-or!$drawing-or!$flat){throw 'NoticeOnly gate did not contain the complete Italian drawing refusal stage'}
+}
+
+& {
+    $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $helper=$source.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Assert-NoDrawingMemoryRefusal'},$true)
+    if(!$helper){throw 'Drawing memory refusal helper is missing'}
+    . ([scriptblock]::Create($helper.Extent.Text))
+    $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-localization.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $idle=$source.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Idle'},$true)
+    if(!$idle){throw 'Localization document wait is missing'}
+    . ([scriptblock]::Create($idle.Extent.Text))
+    $script:refusalView=$null
+    function Model {$script:refusalView}
+    function Catalog-Text([string]$Tag,[string]$Id,[string]$Domain){
+        if($Domain-ne'documents'){throw 'Wrong catalog domain'}
+        switch("$Tag/$Id"){
+            'it/documents-refusal-admission-budget' {'it-budget';return}
+            'it/documents-too-large-memory' {'it-size';return}
+            default {throw 'Unexpected refusal catalog lookup'}
+        }
+    }
+    function Wait-Until([scriptblock]$Check,[string]$Message,[int]$Seconds=0){if(!(& $Check)){throw $Message}}
+    function Refusal-View([string]$Text,[bool]$Busy){
+        [pscustomobject]@{windows_active_tag='it';state=[pscustomobject]@{
+            notice=$(if($Text){[pscustomobject]@{text=$Text}}else{$null})
+            new_drawing=[pscustomobject]@{page=[pscustomobject]@{memory='78 MB available'}}
+            document_file=[pscustomobject]@{busy=$Busy}
+            canvas_status="Too large for this device's available memory"
+        }}
+    }
+    function Expect-IdleError([string]$Expected){
+        $actual=$null
+        try{Idle}catch{$actual=$_.Exception.Message}
+        if($actual-cne$Expected){throw "Expected '$Expected', got '$actual'"}
+    }
+    $script:refusalView=Refusal-View 'it-size' $true;Expect-IdleError 'Memory refusal: it-size; 78 MB available'
+    $script:refusalView=Refusal-View 'it-budget' $false;Expect-IdleError 'Memory refusal: it-budget; 78 MB available'
+    $script:refusalView=Refusal-View 'en-size' $true;Expect-IdleError 'Document operation did not finish'
+    $script:refusalView=Refusal-View 'other-notice' $true;Expect-IdleError 'Document operation did not finish'
+    $script:refusalView=Refusal-View $null $true;Expect-IdleError 'Document operation did not finish'
+    $script:refusalView=Refusal-View $null $false;Idle
+}

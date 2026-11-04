@@ -888,6 +888,7 @@ function Notice-Surface{
  $modifiers=[uint16[]]@($(if($binding.command){0x11}),$(if($binding.shift){0x10}),$(if($binding.alt){0x12})|Where-Object {$_})
  [CapyRowPointer]::Chord([uint32]$review.Id,$modifiers,[uint16][char]$binding.key.ToUpperInvariant())
  Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected -and !(Model).state.notice} 'The working Move tool did not clear the immediate image explanation'
+ if($NoticeOnly){
  Use-Window $second
  $italian=1+[Array]::IndexOf($shippedTags,'it')
  if($italian -lt 1){throw 'The registered Italian locale is missing'}
@@ -925,6 +926,7 @@ function Notice-Surface{
  }finally{
   if((Model).state.new_drawing){Invoke 'new-drawing-cancel';Wait-Until {!(Model).state.new_drawing} 'The refused drawing dialog did not cancel'}
   if((Model).windows_tabs.selected -ne $original){Menu-Command 'file' 'close_document';Wait-Until {(Model).windows_tabs.selected -eq $original} 'The sparse refusal drawing did not close back to the image fixture'}
+ }
  }
  Focus-Canvas;Key 66
  Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected -and (Model).state.notice -and (Find 'canvas-notice-action-add_mask' -Within $noticeFrame -Visible)} 'Brush did not restore the immediate image notice'

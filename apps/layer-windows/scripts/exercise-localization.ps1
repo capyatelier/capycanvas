@@ -171,7 +171,7 @@ function Menu-Command([string]$Menu,[string]$Id){
  Invoke-Id $Id
 }
 function Key([uint16]$Code){[CapyRowPointer]::Key([uint32]$review.Id,$Code)}
-function Idle{Wait-Until {$view=Model;$view -and !$view.state.document_file.busy} 'Document operation did not finish' 90}
+function Idle{Wait-Until {$view=Model;Assert-NoDrawingMemoryRefusal $view;$view -and !$view.state.document_file.busy} 'Document operation did not finish' 90}
 function Choose-Path([string]$Path){
  $hit=@{edit=$null;picker=$null}
  Wait-Until {
