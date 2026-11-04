@@ -99,6 +99,12 @@ fn restore(d: &mut Driver, phone: bool) {
     }
     if phone { capture(d, "customize-phone-restore-confirm"); }
     else { capture_current(d, "customize-desktop-restore-confirm"); }
+    if phone && let Some(directory) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
+        let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap_or_else(|_| "light".into());
+        let path = std::path::PathBuf::from(directory).join(format!("phone-{}x{}-{theme}-customize-phone-restore-confirm.allocations.json", d.w.surface.width(), d.w.surface.height()));
+        let capture: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(capture["missing"].as_array().unwrap().is_empty(), "a compact alert is not a missing editor page: {}", capture["missing"]);
+    }
     let button = widgets(d.w.window.upcast_ref()).filter_map(|widget| widget.downcast::<gtk::Button>().ok())
         .find(|button| button.is_mapped() && button.label().as_deref() == Some("Restore")).unwrap();
     d.click(button.upcast_ref());

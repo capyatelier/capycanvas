@@ -109,7 +109,10 @@ older captures must be regenerated to record their encoding. PNG pixels and
 profiles are never changed by the capture metadata writer.
 
 Phone captures use a PNG and a same-stem allocation JSON from the existing GTK
-capture tests or Web's `--phone-audit` journey. Compare one matched state with:
+capture tests or Web's `--phone-audit` journey.
+GTK exports page allocations only for dialogs owned by its page presenter.
+Compact alerts keep their window capture without claiming a missing page.
+Compare one matched state with:
 
 ```sh
 python3 tools/visual/phone_audit.py gtk/state.allocations.json web/state.allocations.json --output artifacts/phone-audit/state

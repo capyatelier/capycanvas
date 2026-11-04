@@ -258,7 +258,7 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         && widget.widget_name().starts_with("column-drawer-")) {
         add(&format!("canvas-panel.{}",panel.widget_name().trim_start_matches("column-drawer-")),"canvas-panel",Some(panel.clone()));
     }
-    if let Some(dialog) = w.visible_dialog() {
+    if let Some(dialog) = w.pages.visible() {
         let page = named(&format!("page-{}",dialog.widget_name()));
         add("page","page",page.clone());
         if let Some(page) = page {
