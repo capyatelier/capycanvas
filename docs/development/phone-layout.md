@@ -324,6 +324,8 @@ Settings → Input or the phone layout's Capy menu to test finger painting.
   which today refuses while a pointer or stroke is active (`gesture_input.rs`),
   admits the provisional contact with its original time and position, so taps,
   scrubs and navigation start as if it had never painted.
+  While a finger is withdrawn, raw Finger samples are ignored. Its Pointer
+  events still move and finish the picker.
 - **A pen wins.** A pen landing withdraws any finger stroke, and the fingers it
   rejected stay ignored until each lifts; only contacts that start after the pen
   lifts behave normally. This is the iPad host's rule today (`PencilInput.swift`),

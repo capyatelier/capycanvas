@@ -133,6 +133,33 @@ fn finger_hold_withdraws_the_stroke_before_starting_the_picker() {
 }
 
 #[test]
+fn withdrawn_finger_raw_samples_cannot_operate_the_held_picker() {
+    for delivered in [false, true] {
+        let mut s = finger_session();
+        let checkpoint = s.engine.checkpoint();
+        let position = [250., 300.];
+        let raw = PenEvent { tool: ToolKind::Finger, timestamp_ns: 1_010_000_000,
+            surface_position: Point { x: position[0], y: position[1] }, ..event(&s, 1, PenPhase::Down, 1.) };
+        assert!(s.input(pointer_input(1, ContactPhase::Down, PointerKind::Touch, PointerButton::Primary, position, raw.timestamp_ns)).unwrap().paint);
+        if delivered { s.pen(raw); finger_frames(&mut s, 12); }
+        let reply = s.input(UiInput::ColorPickerHold { id: 1, position, offset: 44. }).unwrap();
+        assert!(reply.cancel_paint && s.color_picker_overlay().is_some());
+        if !delivered { s.pen(raw); }
+        for phase in [PenPhase::Move, PenPhase::Cancel] { s.pen(PenEvent { phase, ..raw }); }
+        finger_frames(&mut s, 550);
+        assert!(s.color_picker_overlay().is_some(), "delivered={delivered}");
+        picker_reply(&mut s, [1.; 4]);
+        finger_sample(&mut s, 1, ContactPhase::Up, position, 600);
+        finger_frames(&mut s, 602);
+        assert!(s.eyedropper.picking.previous.is_none());
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.metrics().committed_strokes, 0);
+        assert!(finger_sample(&mut s, 2, ContactPhase::Down, position, 650).paint);
+        finger_sample(&mut s, 2, ContactPhase::Cancel, position, 660);
+    }
+}
+
+#[test]
 fn finger_pen_wins_and_rejected_fingers_wait_for_lift() {
     let mut s = finger_session();
     finger_sample(&mut s, 1, ContactPhase::Down, [250., 300.], 10);

@@ -4640,6 +4640,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Shared numerical admission before cursor, tool and recording consumers.
     pub fn filter_pen(&mut self, event: PenEvent) -> Option<PenEvent> {
+        if event.tool == layer_engine::ToolKind::Finger && self.finger.withdrawn { return None; }
         let finish=self.stroke_contact_active();
         self.pen_input.filter(event).map(|mut event| {
             if finish && event.phase==PenPhase::Cancel {event.phase=PenPhase::Up;}
