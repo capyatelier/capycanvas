@@ -75,9 +75,9 @@ try{
     Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Model).brush_ready-and(Model).windows_workspace.ready-and!(Model).windows_workspace.busy} 'Owned panel bridge fixture did not start' 90
     $root=$owned.window.Root;$window=$owned.window.Handle
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Resize -Width 1500 -Height 1000
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Resize -Width 1500 -Height 1300
     [CapyWindowApi]::ShowWindow($window,9)|Out-Null
-    [CapyWindowExercise]::MoveWindow($window,40,40,1500,1000,$true)|Out-Null
+    [CapyWindowExercise]::MoveWindow($window,40,40,1500,1300,$true)|Out-Null
     [CapyRowPointer]::SetForegroundWindow($window)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Use-PaintWorkspace
