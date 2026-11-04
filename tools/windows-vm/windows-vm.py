@@ -343,7 +343,8 @@ def ssh_command(machine, *remote):
     return ["ssh", "-i", str(KEY), "-p", machine.ssh_port.read_text().strip(), "-o", "IdentitiesOnly=yes",
             "-o", "BatchMode=yes", "-o", f"UserKnownHostsFile={KNOWN_HOSTS}",
             "-o", "StrictHostKeyChecking=accept-new", "-o", "HostKeyAlias=capycanvas-windows-vm",
-            "-o", "ConnectTimeout=30", "-o", "LogLevel=ERROR", f"{USER}@127.0.0.1", *remote]
+            "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
+            "-o", "LogLevel=ERROR", f"{USER}@127.0.0.1", *remote]
 
 
 def guest(machine, command, **options):
@@ -426,6 +427,8 @@ def restart(machine):
         return guest(machine, "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.Ticks", stdin=subprocess.DEVNULL,
                      capture_output=True, text=True, check=False).stdout.strip()
     previous = booted()
+    if not previous:
+        sys.exit(f"Could not read the {machine.name} VM's boot time before restarting it.")
     guest(machine, "Restart-Computer -Force", check=False)
     deadline = time.monotonic() + 10 * 60
     while booted() in ("", previous):

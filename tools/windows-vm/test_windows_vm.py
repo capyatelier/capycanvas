@@ -92,6 +92,33 @@ class CheckTests(unittest.TestCase):
             self.assertTrue(guest.call_args.args[1].endswith(f"-Configuration {configuration}"))
 
 
+class GuestConnectionTests(unittest.TestCase):
+    def test_unreadable_boot_time_does_not_restart_or_mark_prepared(self):
+        with TemporaryDirectory() as directory:
+            machine = vm.Machine("owned", Path(directory))
+            replies = [subprocess.CompletedProcess([], 255, stdout="", stderr="Disconnected"),
+                       subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                       subprocess.CompletedProcess([], 0, stdout="old-boot", stderr="")]
+            with patch.object(vm, "guest_script") as prepare, patch.object(vm, "guest", side_effect=replies) as guest:
+                with self.assertRaisesRegex(SystemExit, r"Could not read the owned VM's boot time before restarting it\.$"):
+                    vm.prepare(machine)
+            prepare.assert_called_once()
+            self.assertEqual(guest.call_count, 1)
+            self.assertNotIn("Restart-Computer", guest.call_args.args[1])
+            self.assertFalse(machine.prepared.exists())
+
+    def test_ssh_checks_liveness_during_silent_remote_commands(self):
+        with TemporaryDirectory() as directory, patch.object(vm, "RUNTIME", Path(directory) / "runtime"):
+            machine = vm.Machine("owned", Path(directory) / "owned")
+            machine.runtime.mkdir(parents=True)
+            machine.ssh_port.write_text("22023")
+            command = vm.ssh_command(machine, "Write-Output done")
+        options = [command[index + 1] for index, part in enumerate(command[:-1]) if part == "-o"]
+        self.assertIn("ServerAliveInterval=15", options)
+        self.assertIn("ServerAliveCountMax=8", options)
+        self.assertIn("ConnectTimeout=30", options)
+
+
 class GpuLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()
