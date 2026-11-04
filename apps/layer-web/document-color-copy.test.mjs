@@ -25,7 +25,7 @@ class Element extends SharedElement {
   remove(){if(this.parentNode)this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);this.parentNode=null;}
 }
 const settle=()=>new Promise(done=>setImmediate(done));
-function harness(t,{source=false,missing=null,failure=null}={}) {
+function harness(t,{source=false,history=false,missing=null,failure=null}={}) {
   const previous=globalThis.ImageData;globalThis.ImageData=class{constructor(data,width,height){Object.assign(this,{data,width,height});}};t.after(()=>{globalThis.ImageData=previous;});
   const doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};
   doc.createElement=tag=>new Element(tag,doc);doc.body=new Element('body',doc);
@@ -33,9 +33,9 @@ function harness(t,{source=false,missing=null,failure=null}={}) {
   const previousDom={document:globalThis.document,window:globalThis.window,ResizeObserver:globalThis.ResizeObserver,innerWidth:globalThis.innerWidth,innerHeight:globalThis.innerHeight};
   Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},ResizeObserver:class{observe(){}unobserve(){}disconnect(){}},innerWidth:1200,innerHeight:900});
   t.after(()=>Object.assign(globalThis,previousDom));
-  let language='en',form,finish,resolver,freed=false,reads=0,prepares=0;
-  const fields=['assign_title','assign_help','repair_title','repair_help','space','correct_profile','composition_preview','outside_gamut','preparing','preview_help','prepared_composition','original_composition','before','after','preview','add_source','apply_profile'];
-  const documentCopy=()=>({...Object.fromEntries(fields.map(field=>[field,`${language}:${field}`])),common:{apply:`${language}:apply`,cancel:`${language}:cancel`},progress_dialog:{role:'alert',modal:true,primary:null}});
+  let language='en',form,finish,resolver,intent,title,freed=false,reads=0,prepares=0;
+  const fields=['assign_title','assign_help','repair_title','repair_help','space','correct_profile','composition_preview','outside_gamut','preparing','preparing_title','preparing_help','preview_help','prepared_composition','original_composition','before','after','preview','add_source','apply_profile'];
+  const documentCopy=()=>({...Object.fromEntries(fields.map(field=>[field,`${language}:${field}`])),dialog:{role:'editor',modal:true,primary:'action'},common:{apply:`${language}:apply`,cancel:`${language}:cancel`},progress_dialog:{role:'alert',modal:true,primary:null}});
   const app={...dialogProjection,bootstrap_view:()=>({common:{cancel:`${language}:cancel`}}),document_color:()=>({space:'Srgb',depth:'U8'}),document_color_copy:documentCopy,export_copy:()=>({}),profile_copy:()=>({import:`${language}:import`,saved_dialog:`${language}:saved`}),
     capture_control:()=>{let cancelled=false,freed=false;return{cancelled:()=>cancelled,cancel(){assert.equal(freed,false);cancelled=true;},free(){freed=true;}};},color_feature_error_copy:error=>`${language}:${error.color_feature_error}`,
     source_profile_name_copy:value=>value==null?`${language}:unnamed`:value,color_source_preview:(name,preview,adds)=>`${name} / ${preview} / ${adds}`,
@@ -45,8 +45,8 @@ function harness(t,{source=false,missing=null,failure=null}={}) {
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null){if(typeof text==='function')bind(node,text);else node.textContent=text;}return node;};
   const bind=(node,reader)=>{bindCopy(node,reader);return node;};
   const button=(text,action,cls)=>{const node=element('button',cls,text);node.click=action;return node;};
-  const result=chooseDocumentColor({app,element,button,icon:asset=>element('svg','',asset),dropdown:dropdownFactory({element,button}),id:7,request:source?{type:'repair_source_profile'}:{type:'document_color',operation:'assign'},gpuOperation:run=>run(),dialog:(title,build)=>new Promise(done=>{form=element('form');finish=done;build(form,done);})});
-  return {app,doc,form,result,candidate,switch(tag){language=tag;refreshCopy(app);form.localize();refreshBindings();},resolve(value=candidate){resolver(value);},stats:()=>({reads,prepares}),buttons:()=>form.querySelectorAll('button'),finish};
+  const result=chooseDocumentColor({app,element,button,icon:asset=>element('svg','',asset),dropdown:dropdownFactory({element,button}),id:7,request:history?{type:'color_history',redo:false}:source?{type:'repair_source_profile'}:{type:'document_color',operation:'assign'},gpuOperation:run=>run(),dialog:(readTitle,build,viewIntent)=>new Promise(done=>{title=readTitle;intent=viewIntent;form=element('form');finish=done;build(form,done);})});
+  return {app,doc,form,result,candidate,intent:()=>intent,title:()=>title(),switch(tag){language=tag;refreshCopy(app);form.localize();refreshBindings();},resolve(value=candidate){resolver(value);},stats:()=>({reads,prepares}),buttons:()=>form.querySelectorAll('button'),finish};
 }
 import {bindCopy} from './localization.js';
 
@@ -88,4 +88,23 @@ test('Cancel drains a superseded comparison without starting a queued successor 
   h.buttons().find(node=>node.textContent.endsWith(':cancel')).click();let discarded=false;h.resolve({free(){discarded=true;}});
   assert.equal(await h.result,null);assert.equal(discarded,true);await settle();assert.equal(h.stats().prepares,1);
   space.menuCommand('ProPhoto');assert.equal(h.stats().prepares,1,'retired menu callbacks cannot touch released control');
+});
+
+test('comparison preparation stays in its editor and never overlays its choices with another modal',async t=>{
+  const h=harness(t);await settle();
+  assert.deepEqual(h.intent(),{role:'editor',modal:true,primary:'action'});
+  assert.equal(h.doc.body.querySelectorAll('dialog').length,0,'Preparation must not create a second modal over the retained editor');
+  assert.equal(h.form.querySelectorAll('p').at(-1).textContent,'en:preparing');
+  const space=h.form.querySelectorAll('button').find(node=>node.menuModel);chooseDropdown(space,'DisplayP3');
+  assert.equal(h.stats().prepares,1,'The changed draft cancels and drains the in-flight preparation');
+  h.buttons().find(node=>node.textContent.endsWith(':cancel')).click();h.resolve();assert.equal(await h.result,null);
+});
+
+test('color history uses one cancel-only progress surface without an underlying editor',async t=>{
+  const h=harness(t,{history:true});await settle();
+  assert.deepEqual(h.intent(),{role:'alert',modal:true,primary:null});
+  assert.equal(h.title(),'en:preparing_title');
+  assert.equal(h.form.querySelectorAll('p').at(-1).textContent,'en:preparing_help');
+  assert.equal(h.doc.body.querySelectorAll('dialog').length,0,'The operation owns one surface');
+  assert.equal(h.buttons().length,1);h.resolve();assert.equal(await h.result,h.candidate);h.candidate.free();
 });

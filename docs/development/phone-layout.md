@@ -612,3 +612,6 @@ padding is outside that available width. Measured Color grid tracks must retain
 their content minima so the fit predicate cannot admit overlapping controls.
 Both hosts use shared `color_editor_layout` to stack panes and wrap fields when
 the complete row cannot fit.
+
+Document-color comparisons show preparation status inside their open editor.
+Color-history operations use the shared standalone progress intent.

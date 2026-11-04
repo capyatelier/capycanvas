@@ -1,4 +1,3 @@
-import {createProgressDialog} from './dialog-host.js';
 import { liveCopy, bindCopy } from './localization.js';
 import {importProfile,chooseProfileLibrary} from './export-controls.js';
 // A comparison owns one immutable candidate. Cancel drains its work before the
@@ -10,7 +9,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
   const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(Builtin=>({Builtin})),profileChoices=[["0","sRGB"],["1","Display P3"],["2","Adobe RGB (1998)"],["3","ProPhoto RGB"]];
   let candidate,control,running,closed=false,accepted=false,pending=false;
   try {
-    await dialog(()=>history?(request.redo?copy.redo_title:copy.undo_title):{assign:copy.assign_title,convert:copy.convert_title,depth:copy.depth_title,repair:copy.repair_title,rasterize:copy.rasterize_title}[operation],(form,finish)=>{
+    await dialog(()=>history?copy.preparing_title:{assign:copy.assign_title,convert:copy.convert_title,depth:copy.depth_title,repair:copy.repair_title,rasterize:copy.rasterize_title}[operation],(form,finish)=>{
       const inputs=[];
       const select=(title,choices,value)=>{
         const label=element("label","document-size",title),node=dropdown(title,()=>schedule());
@@ -30,7 +29,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
       const applyLabel=()=>source?(rasterize?copy.rasterize:presentation?.addsLayer?copy.add_source:copy.apply_profile):presentation?.isCopy?copy.create_copy:copy.common.apply;
       const apply=button(applyLabel,()=>{if(closed||!candidate||running||pending)return;accepted=true;closed=true;finish(true);},"suggested-action");apply.disabled=true;
       const cancel=button(()=>copy.common.cancel,()=>{if(closed)return;closed=true;pending=false;control?.cancel();finish(null);});
-      const statusLabel=()=>{if(failure)return app.color_feature_error_copy(failure,true);if(phase==="preparing")return copy.preparing;if(phase==="empty")return "";if(!presentation)return copy.preview_help;const preview=presentation.clipped?copy.outside_gamut:copy.composition_preview;return source?app.color_source_preview(app.source_profile_name_copy(presentation.sourceProfile),preview,presentation.addsLayer):preview;};
+      const statusLabel=()=>{if(failure)return app.color_feature_error_copy(failure,true);if(phase==="preparing")return history?copy.preparing_help:copy.preparing;if(phase==="empty")return "";if(!presentation)return copy.preview_help;const preview=presentation.clipped?copy.outside_gamut:copy.composition_preview;return source?app.color_source_preview(app.source_profile_name_copy(presentation.sourceProfile),preview,presentation.addsLayer):preview;};
       const present=()=>{bindCopy(status,statusLabel);bindCopy(apply,applyLabel);};
       const fail=error=>{failure=error;present();};
       const invalidate=()=>{candidate?.free();candidate=null;presentation=null;failure=null;phase="draft";apply.disabled=true;comparison.replaceChildren();present();};
@@ -42,7 +41,6 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
         const flattened=result?.value==="copy";
         const choice=source?(rasterize?null:profiles[Number(profile.value)]):history?null:operation==="assign"?{Assign:space.value}:operation==="depth"?{Depth:{depth:depth.value,dither:depth.value==="U8"?dither.value:"None"}}:{Convert:{space:space.value,options:{intent:intent.value,black_point_compensation:false}}};
         running=(async()=>{
-          const progress=createProgressDialog({app,element,button,icon,intent:copy.progress_dialog,title:()=>copy.preparing_title,body:()=>copy.preparing_help,onCancel:()=>cancel.click()});
           try {
             const next=await gpuOperation(async()=>{
               if(!source)return app.prepare_color(id,choice,control,flattened);
@@ -61,13 +59,13 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
             present();
             apply.disabled=false;
           }catch(error){const wasCancelled=control.cancelled();control.cancel();if(!closed&&!pending&&!wasCancelled)fail(error);}
-          finally{progress.remove();running=null;if(!closed){if(phase==="preparing"){phase="draft";present();}if(pending)queueMicrotask(prepare);}}
+          finally{running=null;if(!closed){if(phase==="preparing"){phase="draft";present();}if(pending)queueMicrotask(prepare);}}
         })();
       };
       footer.append(cancel);if(!history)footer.append(apply);
       form.localize=present;form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();
       pending=true;queueMicrotask(prepare);return {cancel,primary:history?null:apply};
-    },copy.dialog);
+    },history?copy.progress_dialog:copy.dialog);
     closed=true;pending=false;if(!accepted)control?.cancel();await running;
     return accepted?candidate:null;
   } finally {
