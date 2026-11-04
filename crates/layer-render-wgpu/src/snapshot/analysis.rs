@@ -98,7 +98,7 @@ impl SnapshotGpu {
         if count != 0 {
             let stride = u64::from(snapshot.renderer.device.scalar_format().block_copy_size(None).unwrap());
             let bytes = count.checked_mul(u64::from(PAGE_SIZE).pow(2) * stride).ok_or("Merge mask storage overflow")?;
-            masks._lease = Some(Arc::new(crate::effect_analysis::Lease::reserve(&snapshot.renderer.device, bytes)?));
+            masks._lease = Some(Arc::new(snapshot.renderer.reserve_effect_analysis(bytes)?));
             let r = &mut snapshot.renderer;
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             r.layer_masks.prepare_regions(&r.device, &mut encoder, (view, &[],None), snapshot.extent, false,

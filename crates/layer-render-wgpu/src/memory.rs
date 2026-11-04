@@ -242,6 +242,26 @@ impl WgpuRasterizer {
         self.factory.memory_budget().flush_reports();
         self.refresh_memory_limits();
     }
+    pub(crate) fn reserve_effect_analysis(&mut self, bytes: u64) -> Result<crate::effect_analysis::Lease, String> {
+        let required = (*self.device.analysis_memory.lock().unwrap()).saturating_add(bytes);
+        if required <= self.device.resource_limit.load(std::sync::atomic::Ordering::Acquire) {
+            return crate::effect_analysis::Lease::reserve(&self.device, bytes);
+        }
+        let mut demand = self.memory.demand.get();
+        let resources = demand[4];
+        demand[4] = resources.max(required);
+        self.memory.demand.set(demand);
+        self.publish_memory(true);
+        self.factory.memory_budget().flush_reports();
+        self.refresh_memory_limits();
+        let result = crate::effect_analysis::Lease::reserve(&self.device, bytes);
+        demand[4] = resources;
+        self.memory.demand.set(demand);
+        self.publish_memory(true);
+        self.factory.memory_budget().flush_reports();
+        self.refresh_memory_limits();
+        result
+    }
     pub(crate) fn preparation_memory(&self, bytes: u64) {
         let before = self.memory.preparation.replace(if bytes == 0 { 0 } else { bytes.saturating_add(self.memory.working_limit()) });
         if before.abs_diff(self.memory.preparation.get()) >= MIB { self.publish_memory(false); }

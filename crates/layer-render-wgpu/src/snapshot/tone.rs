@@ -86,7 +86,7 @@ impl SnapshotRenderer {
         self.check_cancelled().map_err(|e| e.to_string())?;
         Ok(guide)
     }
-    fn reserve_analysis(&self, output: scene::Output, reserved: u64) -> Result<Option<crate::effect_analysis::Lease>, String> {
+    fn reserve_analysis(&mut self, output: scene::Output, reserved: u64) -> Result<Option<crate::effect_analysis::Lease>, String> {
         if reserved.saturating_add(self.renderer.analysis_bytes()) > self.planned_pixel_bytes {
             return Err(GpuRasterError::CaptureBudget {
                 required: reserved.saturating_add(self.renderer.analysis_bytes()),
@@ -95,7 +95,7 @@ impl SnapshotRenderer {
             .to_string());
         }
         let lease = if matches!(output, scene::Output::EffectInput(_)) {
-            Some(crate::effect_analysis::Lease::reserve(&self.renderer.device, reserved)?)
+            Some(self.renderer.reserve_effect_analysis(reserved)?)
         } else { None };
         Ok(lease)
     }

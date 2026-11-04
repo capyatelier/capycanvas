@@ -13,6 +13,42 @@ fn document(id: &str) -> layer_core::Document {
 fn retained(renderer: &WgpuRasterizer) -> u64 { *renderer.device.analysis_memory.lock().unwrap() }
 
 #[test]
+fn analysis_admits_new_and_replacement_guides_before_the_next_frame() {
+    use layer_render::CanvasRenderer;
+    for id in ["shadows_highlights", "dehaze"] {
+        let mut document = crate::artwork_sample_tests::document_in([1024, 768], layer_core::color::RgbSpace::Srgb,
+            |_, _| [0.1, 0.2, 0.3, 1.]);
+        let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut renderer, crate::test_support::packet(document.scene(), document.composition().size));
+        let target = crate::artwork_sample_tests::insert_effect(&mut document,
+            EffectInstance::new(crate::tests::fixture(id).program()), 0);
+        let required = match id {
+            "dehaze" => crate::dehaze::Builder::allocation_bound(document.composition().size),
+            _ => crate::local_tone::Builder::allocation_bound(document.composition().size),
+        }.unwrap();
+        assert!(required > renderer.device.resource_limit.load(std::sync::atomic::Ordering::Acquire));
+        for opacity in [1., 0.5] {
+            let paint = crate::artwork_sample_tests::paint_occurrence(&document);
+            document.artwork.occurrences.get_mut(paint).unwrap().opacity = opacity;
+            let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(target));
+            assert!(renderer.request_effect_analysis(query).unwrap());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                if let Some(result) = renderer.take_effect_analysis() {
+                    result.unwrap_or_else(|error| panic!("{id} at opacity {opacity}: {error}; retained {}", retained(&renderer)));
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{id} analysis did not complete");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            renderer.accept_effect_analysis().unwrap();
+            assert_eq!(renderer.effect_analyses.len(), 1);
+            assert_eq!(renderer.effect_analyses[0].layer(), target);
+        }
+    }
+}
+
+#[test]
 fn analysis_lease_reserve_refusal_split_and_shared_drop_account_exactly() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let baseline = retained(&renderer);
@@ -28,6 +64,17 @@ fn analysis_lease_reserve_refusal_split_and_shared_drop_account_exactly() {
     assert_eq!(retained(&renderer), baseline + 1024);
     drop(handle);
     assert_eq!(retained(&renderer), baseline);
+}
+
+#[test]
+fn analysis_peak_admission_keeps_the_device_budget_and_releases_refused_demand() {
+    let mut renderer = crate::memory::memory_tests::renderer(Default::default(),
+        layer_core::DeviceMemoryFacts { budget_bytes: Some(128 << 20), ..Default::default() }).unwrap();
+    let baseline = retained(&renderer);
+    let limit = renderer.device.resource_limit.load(std::sync::atomic::Ordering::Acquire);
+    assert!(renderer.reserve_effect_analysis(128 << 20).is_err());
+    assert_eq!(retained(&renderer), baseline);
+    assert_eq!(renderer.device.resource_limit.load(std::sync::atomic::Ordering::Acquire), limit);
 }
 
 #[test]
