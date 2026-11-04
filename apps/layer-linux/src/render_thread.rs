@@ -1855,16 +1855,7 @@ impl Worker {
             // the quiet period keeps those batches from competing every frame.
             let thumbnail_ready = queued.is_none() && !pending_thumbnails.is_empty()
                 && last_canvas_frame.elapsed() >= Duration::from_millis(50);
-            if context_capture.is_some() {
-                match queued.map(Ok).unwrap_or_else(|| receiver.recv_timeout(Duration::from_millis(1))) {
-                    Ok(Command::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Ok(Command::Park(reply)) => { park = Some(reply); break; },
-                    Ok(command) => deferred.push_back(command),
-                    Err(mpsc::RecvTimeoutError::Timeout) => (),
-                }
-                continue;
-            }
-            let ready = !document_drawn && self.initial_completion.is_none() && startup_progress.canvas_ready
+            let ready = context_capture.is_none() && !document_drawn && self.initial_completion.is_none() && startup_progress.canvas_ready
                 && pending_frames.front().is_some_and(|frame|frame.dabs.is_empty() || startup_progress.brush_ready)
                 && self.renderer.can_submit() && self.renderer.raster_preparation_ready(preparation_progress);
             let queued = match queued.map(PreparationCommand::Command).unwrap_or_else(|| preparation_command(receiver,ready)) {
@@ -1873,7 +1864,9 @@ impl Worker {
                 PreparationCommand::Wait=>None,
                 PreparationCommand::Closed=>break,
             };
-            let next = if let Some(command) = queued {
+            let next = if context_capture.is_some() {
+                queued.map(Ok).unwrap_or_else(|| receiver.recv_timeout(Duration::from_millis(1)))
+            } else if let Some(command) = queued {
                 Ok(command)
             } else if !startup_progress.complete
                 || !pending_frames.is_empty()
@@ -1905,6 +1898,7 @@ impl Worker {
             };
             let mut command = match next {
                 Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) if context_capture.is_some() => continue,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !self.pending_present
                         && pending_frames.is_empty()
@@ -1939,6 +1933,21 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
+            #[cfg(test)]
+            if let Command::PendingDependency(reply) = command {
+                let missing = pending_frames.front().is_some_and(|frame|
+                    frame.pending_rasters.iter().any(|raster| raster.try_data().is_none()));
+                let _ = reply.send((pending_frames.len(), missing));
+                continue;
+            }
+            if context_capture.is_some() {
+                match command {
+                    Command::Stop => break,
+                    Command::Park(reply) => { park = Some(reply); break; },
+                    command => deferred.push_back(command),
+                }
+                continue;
+            }
             if self.initial_completion.is_some() && !matches!(command, Command::Stop | Command::Park(_) | Command::CanvasTransition(_) | Command::Wake | Command::PreparationReady | Command::ReleaseChrome(_)) {
                 deferred.push_back(command);
                 continue;
@@ -1963,11 +1972,7 @@ impl Worker {
             if let Some(presentation) = command.take_presentation() { self.pending_presentation = Some(presentation); }
             match command {
                 #[cfg(test)]
-                Command::PendingDependency(reply) => {
-                    let missing = pending_frames.front().is_some_and(|frame|
-                        frame.pending_rasters.iter().any(|raster| raster.try_data().is_none()));
-                    let _ = reply.send((pending_frames.len(), missing));
-                }
+                Command::PendingDependency(_) => unreachable!(),
                 Command::SeedContext(context) => self.renderer.seed_evaluation_context(context),
                 Command::CaptureContext(request) => context_capture = Some(request),
                 Command::LocalTone(guide, reply) => {
