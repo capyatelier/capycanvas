@@ -862,10 +862,9 @@ impl Task {
                 for key in ["copy", "profile_names", "recipe_profile_name"] { self.details["form"][key] = next[key].clone(); }
                 for key in ["suggested_name", "format_name"] { self.details[key] = next[key].clone(); }
                 if !self.preset_view.is_null() {
-                    let names = serde_json::from_value(self.preset_view["names"].clone()).map_err(|error| error.to_string())?;
-                    let mut view = layer_ui::ExportPresetView { names, index:None, recipe:None, changed:false };
-                    view.localize_names(task.document().composition().color, &self.localization);
-                    self.preset_view["names"] = json!(view.names);
+                    let mut names: Vec<String> = serde_json::from_value(self.preset_view["names"].clone()).map_err(|error| error.to_string())?;
+                    layer_ui::ExportPresetView::localize_names_in(&mut names,task.document().composition().color,&self.localization);
+                    self.preset_view["names"] = json!(names);
                     self.details["presets"]["names"] = self.preset_view["names"].clone();
                 }
             }

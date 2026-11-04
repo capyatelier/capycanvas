@@ -43,7 +43,7 @@ impl Drop for Guard {
         crate::page_dialog::force_close(&self.0);
     }
 }
-pub(super) async fn choose(dialog: &adw::Dialog, parent: &adw::ApplicationWindow, response: &Cell<&'static str>) -> &'static str {
+pub(super) async fn choose(dialog: &adw::Dialog, parent: &adw::ApplicationWindow, response: &Cell<&'static str>, intent: layer_ui::DialogIntent) -> &'static str {
     let closed = Rc::new(Cell::new(false));
     let waker: Rc<RefCell<Option<Waker>>> = Rc::new(RefCell::new(None));
     let handler = dialog.connect_closed({
@@ -51,7 +51,7 @@ pub(super) async fn choose(dialog: &adw::Dialog, parent: &adw::ApplicationWindow
         move |_| { closed.set(true); if let Some(waker) = waker.take() { waker.wake(); } }
     });
     let _guard = Guard(dialog.clone(), Some(handler));
-    crate::page_dialog::present(dialog, parent);
+    crate::page_dialog::present_intent(dialog, parent,intent);
     std::future::poll_fn(|cx| {
         if closed.get() { Poll::Ready(()) } else { *waker.borrow_mut() = Some(cx.waker().clone()); Poll::Pending }
     }).await;

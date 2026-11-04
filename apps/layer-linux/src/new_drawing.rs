@@ -12,10 +12,6 @@ use layer_core::color::RgbColor;
 use layer_ui::*;
 use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}, sync::Arc, task::{Poll, Waker}};
 
-const PREVIEW: [i32; 2] = [232, 250];
-const PREVIEW_FIT: [i32; 2] = [196, 214];
-const NARROW_PREVIEW: [i32; 2] = [232, 140];
-const NARROW_PREVIEW_FIT: [i32; 2] = [196, 104];
 const PRESET_TILE: i32 = 128;
 const PRESET_FRAME: [i32; 2] = [116, 86];
 const PRESET_FIT: i32 = 74;
@@ -322,7 +318,7 @@ pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<NewDrawingOrder>, St
     opened?;
     let dialog = NewDrawing::build(w);
     *w.new_drawing.borrow_mut() = Rc::downgrade(&dialog);
-    crate::page_dialog::present(&dialog.dialog, &w.window);
+    crate::page_dialog::present_intent(&dialog.dialog, &w.window,dialog.view().unwrap().dialog);
     let waiting = dialog.clone();
     std::future::poll_fn(move |context| {
         let mut done = waiting.done.borrow_mut();
@@ -341,7 +337,8 @@ impl NewDrawing {
         dialog.add_css_class("picker-dialog");
         dialog.add_css_class("new-drawing-dialog");
 
-        let art = SheetArt::new(PREVIEW, PREVIEW_FIT, false);
+        let wide = layer_ui::new_drawing_layout(f32::MAX);
+        let art = SheetArt::new(wide.preview, wide.fit, false);
         let preview = gtk::Button::builder().child(&art.root).build();
         preview.add_css_class("new-drawing-preview");
         preview.set_widget_name("new-drawing-preview");
@@ -356,7 +353,7 @@ impl NewDrawing {
         caption.append(&capacity);
         let left = gtk::Box::new(gtk::Orientation::Vertical, 8);
         left.set_valign(gtk::Align::Start);
-        left.set_size_request(PREVIEW[0], -1);
+        left.set_size_request(wide.preview[0], -1);
         left.append(&preview);
         left.append(&caption);
 
@@ -1370,8 +1367,7 @@ impl NewDrawing {
         });
         let weak = self.this.clone();
         crate::dialog_content::on_resize(&self.page.body, move |width| if let Some(dialog) = weak.upgrade() {
-            let minimum = [PREVIEW[0] as f32, 320.];
-            dialog.arrange(!dialog_panes_fit(width as f32, minimum, 24.));
+            dialog.arrange(layer_ui::new_drawing_layout(width as f32));
         });
         let weak = self.this.clone();
         self.dialog.connect_closed(move |_| {
@@ -1389,7 +1385,8 @@ impl NewDrawing {
         });
     }
 
-    fn arrange(&self, narrow: bool) {
+    fn arrange(&self, layout: layer_ui::NewDrawingLayout) {
+        let narrow = layout.single_pane;
         let page = &self.page;
         let orientation = if narrow { gtk::Orientation::Vertical } else { gtk::Orientation::Horizontal };
         if page.body.orientation() == orientation { return; }
@@ -1407,7 +1404,7 @@ impl NewDrawing {
         }
         page.left.set_halign(if narrow { gtk::Align::Center } else { gtk::Align::Fill });
         page.left.set_vexpand(!narrow);
-        let (bounds, fit) = if narrow { (NARROW_PREVIEW, NARROW_PREVIEW_FIT) } else { (PREVIEW, PREVIEW_FIT) };
+        let (bounds, fit) = (layout.preview, layout.fit);
         page.left.set_size_request(bounds[0], -1);
         page.art.resize(bounds, fit);
         if let (Some(w), Some(view)) = (self.workspace(), self.shown.borrow().as_ref()) { page.art.show(&w, &view.sheet); }

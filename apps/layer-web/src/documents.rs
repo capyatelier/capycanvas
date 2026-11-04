@@ -116,6 +116,7 @@ impl WebApp {
         let info: layer_color::InspectedDocumentInfo = serde_wasm_bindgen::from_value(info).map_err(js)?;
         serialize(&layer_ui::document_properties(&info, self.session.localization()))
     }
+    pub fn export_preset_name_valid(&self, name: &str) -> bool { layer_ui::ExportPresets::validate_name(name).is_ok() }
     pub fn export_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::color_feature_copy::ExportCopy::new(self.session.localization()))
     }

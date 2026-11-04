@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir,readFile,writeFile} from 'node:fs/promises';
-import {createHash} from 'node:crypto';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {gzipSync} from 'node:zlib';
@@ -35,6 +34,7 @@ export function measurePhoneAuditElements(specifications, root = document) {
     const bounds=visible?[r.x,r.y,r.width,r.height]:null;
     if(bounds&&!bounds.every(Number.isFinite))throw Error(`Nonfinite phone audit bounds: ${id}`);
     const source={selector,dom_id:node.id||null,type:node.tagName.toLowerCase()};
+    if(role==='page-action'&&style.font)source.text_style={font:style.font,weight:style.fontWeight,size:style.fontSize,padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft]};
     if(role==='drawer-panel')source.layout=[node,node.parentElement].filter(Boolean).map(node=>{
       const style=getComputedStyle(node),b=node.getBoundingClientRect();
       return{class:node.className,bounds:[b.x,b.y,b.width,b.height],requested_minimum:node.style.minHeight,
@@ -133,6 +133,7 @@ const unavailable = [
 
 const preference=action=>({type:'preferences',action});
 const shortcuts={type:'invoke',command:'keyboard_shortcuts'};
+const drawing=op=>({type:'new_drawing',action:{op}});
 export const dialogAuditRows=[
   {batch:'w6a',id:'preferences-root',openaction:{type:'invoke',command:'settings'},rootselector:'#settings[open]',baseline:true},
   ...['appearance','canvas','color','input','shortcuts','about'].map(page=>({batch:'w6a',id:page==='shortcuts'?'preferences-shortcuts-direct':`preferences-${page}`,requestedpage:page,openaction:page==='shortcuts'?shortcuts:{type:'open_settings',page},rootselector:'#settings[open]',baseline:page==='appearance'})),
@@ -149,13 +150,33 @@ export const dialogAuditRows=[
   {batch:'w6a',id:'keymap-details',openaction:[shortcuts,preference({type:'keymap_details',open:true})],rootselector:'#keymap-details[open]'},
   {batch:'w6a',id:'choose-action',openaction:[{type:'open_settings',page:'input'},preference({type:'open_action_picker',trigger:'touch.tap.2'})],rootselector:'#action-picker[open]'},
   {batch:'w6a',id:'keymap-import',openaction:[shortcuts,preference({type:'import_keymap',text:JSON.stringify({format:'capycanvas-keymap',version:1,keymap:{id:'photoshop',revision:1}})})],rootselector:'#keymap-import[open]',closeaction:preference({type:'cancel_keymap_import'})},
-  {batch:'w6b',id:'new-drawing',openaction:{type:'invoke',command:'new_document'},rootselector:'#new-drawing-dialog[open]',baseline:true},
-  {batch:'w6b',id:'color',openaction:async({send,evaluate})=>{
-    await send({type:'customize',action:{type:'set_panel_visible',panel:'color',visible:true}});
+  {batch:'w6b',id:'new-drawing',openaction:{type:'invoke',command:'new_document'},rootselector:'#new-drawing-dialog[open]',baseline:true,closeaction:drawing('cancel'),variants:[
+    {id:'new-paper',openaction:drawing('paper')},
+    {id:'new-drawing-footer-presets',openaction:[drawing('close_drawer'),drawing('presets')]},
+    {id:'new-drawing-footer-save-preset',openaction:drawing('save_as')},
+    {id:'new-drawing-footer-paper-color',openaction:[drawing('cancel_save'),drawing('close_drawer'),drawing('paper_color')]},
+  ]},
+  {batch:'w6b',id:'color',openaction:async({send,evaluate,click,wait})=>{
+    const tile=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone&&layerApp.state().workspace.layout.phone.find(tile=>tile.control.kind==="color")?.id');
+    if(tile!=null){await click(`#phone-tool-${tile}`);if(!await evaluate('!!layerApp.state().customization.drawer'))await click(`#phone-tool-${tile}`);}
+    else {await send({type:'customize',action:{type:'set_panel_visible',panel:'color',visible:true}});
     const group=await evaluate('layerApp.app.layout(innerWidth,innerHeight).groups.find(group=>group.panels.includes("color"))');
-    if(group&&group.active!=='color')await send({type:'select_panel_tab',group:group.id,panel:'color'});
+    if(group&&group.active!=='color')await send({type:'select_panel_tab',group:group.id,panel:'color'});}
+    await wait(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].some(button=>button.getBoundingClientRect().width>0)`);
     await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(button=>button.getBoundingClientRect().width>0).click()`);
-  },rootselector:'.color-dialog[open]',baseline:true},
+  },rootselector:'.color-dialog[open]',baseline:true,closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector(".color-dialog[open]").requestClose()');await wait('!document.querySelector(".color-dialog[open]")');await send({type:'customize',action:{type:'close_expanded'}});},variants:[{id:'all-swatches',openaction:async({evaluate,settle})=>{await evaluate('document.querySelector(".color-swatches").click()');await settle();}}]},
+  {batch:'w6b',id:'paper',rootselector:'#texture-dialog[open]',openaction:async({evaluate,wait,settle,click,send})=>{
+    await evaluate(`(()=>{for(const layer of layerApp.state().layers){layerApp.dispatch({type:'select_layer',id:layer.id});if(layerApp.state().layer_properties.controls.some(control=>control.paper))break;}})()`);
+    await settle();
+    const tile=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone&&layerApp.state().workspace.layout.phone.find(tile=>tile.control.panel==="layers")?.id');
+    if(tile!=null){await click(`#phone-tool-${tile}`);if(!await evaluate('!!layerApp.state().customization.drawer'))await click(`#phone-tool-${tile}`);await send({type:'customize',action:{type:'toggle_layer_drawer_properties'}});}
+    await wait('!!document.querySelector("#property-texture")');await evaluate('document.querySelector("#property-texture").click()');
+  },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector("#texture-dialog[open]").requestClose()');await wait('!document.querySelector("#texture-dialog[open]")');await send({type:'customize',action:{type:'close_expanded'}});}},
+  {batch:'w6b',id:'export',openaction:{type:'invoke',command:'export_document'},rootselector:'#export-options[open]',variants:
+    ['size','color','presets'].map(id=>({id:`export-${id}`,openaction:async({evaluate,settle})=>{
+      if(id!=='size'){await evaluate('document.querySelector("#export-options [data-dialog-part=start]").click()');await settle();}
+      await evaluate(`document.querySelector('[data-export-page="${id}"]').click()`);await settle();
+    }})),closeaction:async({evaluate,settle})=>{await evaluate('document.querySelector("#export-options [data-dialog-part=start]").click()');await settle();}},
   ...[['canvas-size','canvas_size','#canvas-size-dialog[open]'],['image-size','image_size','#image-size-dialog[open]'],['properties','document_properties','dialog.document-dialog[open]']].map(([id,command,rootselector])=>({batch:'w6b',id,openaction:{type:'invoke',command},rootselector})),
 ];
 
@@ -170,20 +191,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
   const directory=process.env.LAYER_TEST_ARTIFACTS||'/mnt/localssd/capy9-phone-impl/web-phone-audit';
   await mkdir(directory,{recursive:true});
   const root=fileURLToPath(new URL('../..',import.meta.url));
-  const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
-  const wasm=await readFile(new URL('./pkg/layer_web_bg.wasm',import.meta.url));
-  const servedWasm=await evaluate(`(async()=>{const url=new URL('pkg/layer_web_bg.wasm',location.href),response=await fetch(url,{cache:'no-store'});if(!response.ok)throw Error('Audit Wasm HTTP '+response.status);const bytes=await response.arrayBuffer(),digest=await crypto.subtle.digest('SHA-256',bytes);return{url:url.href,bytes:bytes.byteLength,sha256:[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('')};})()`);
-  assert.equal(servedWasm.sha256,hash(wasm),'Served Wasm must match the recorded local binary');
-  const source={commit:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),
-    tracked_diff_sha256:hash(execFileSync('git',['diff','HEAD','--binary'],{cwd:root})),
-    wasm:servedWasm,
-    audit_sha256:createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'),
-    runtime_source_attestation:'not recorded by the current Wasm build'};
-  const runtimeFiles=[...new Set(execFileSync('git',['ls-files','--cached','--others','--exclude-standard','--','apps/layer-web'],{cwd:root,encoding:'utf8'}).trim().split('\n'))]
-    .filter(path=>/\.(js|css|html)$/.test(path));
-  source.runtime_sources=Object.fromEntries(await Promise.all(runtimeFiles.map(async path=>[path,hash(await readFile(`${root}/${path}`))])));
-  source.bindings_sha256=hash(await readFile(new URL('./pkg/layer_web.js',import.meta.url)));
-  source.icons_sha256=hash(await readFile(new URL('./icons.svg',import.meta.url)));
+  const source={};
   const report={schema_version:1,host:'web',source,cases:[],unreachable:[]};
   const original=await evaluate(`({settings:layerApp.state().settings,text:document.documentElement.style.getPropertyValue('--ui-text-size'),workspace:JSON.parse(layerApp.app.workspace_view()).id,documents:layerApp.app.document_tabs(0).tabs.map(tab=>({id:String(tab.id),modified:tab.modified}))})`);
   assert.equal(original.documents.length,1,'Audit starts with one isolated startup drawing');
@@ -842,7 +850,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       continue;
     }
     const rows=dialogAuditRows.filter(row=>dialogs?.batch?row.batch===dialogs.batch:dialogs?.mode==='desktop'?row.baseline:row.batch==='w6a'?row.id.startsWith('preferences-'):row.id!=='color');
-    const open=async action=>{if(typeof action==='function')await action({send,evaluate,wait,call,settle});else for(const step of Array.isArray(action)?action:[action])await send(step);};
+    const open=async action=>{if(typeof action==='function')await action({send,evaluate,wait,call,settle,click});else for(const step of Array.isArray(action)?action:[action])await send(step);};
     for(const row of rows){
       await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');

@@ -1,3 +1,4 @@
+import {createDialogHost} from './dialog-host.js';
 import {createFileHandleStore} from './file-handles.js';
 import { liveCopy, bindCopy } from './localization.js';
 import {createDrawingTabs} from './drawing-tabs.js';
@@ -69,12 +70,15 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
-  const dialog=(title,build)=>new Promise(resolve=>{
+  const dialog=(title,build,intent)=>new Promise(resolve=>{
     const root=element("dialog","document-dialog"),form=element("form");
-    form.method="dialog";form.append(element("h2","",title));openDialogs.add(form);root.append(form);document.body.append(root);
-    let result=null;root.addEventListener("close",()=>{openDialogs.delete(form);root.remove();resolve(result);},{once:true});
-    const finish=value=>{result=value;root.close();};
-    build(form,finish);root.showModal();
+    const header=element("header","dialog-header"),caption=element("h2","",title);header.append(caption);
+    form.method="dialog";openDialogs.add(form);root.append(header,form);document.body.append(root);
+    let result=null,shell;root.addEventListener("close",()=>{shell?.dispose();openDialogs.delete(form);root.remove();resolve(result);},{once:true});
+    const finish=value=>{result=value;if(shell)shell.hide();else root.close();};
+    const controls=build(form,finish,{header,caption,layout:()=>shell?.layout(),dismiss:()=>shell?.dismiss()});
+    if(intent){shell=createDialogHost({app,dialog:root,header,icon,copy:common,onCancel:()=>finish(null),...controls});shell.present(intent);}
+    else root.showModal();
   });
   const cancel=(footer,finish)=>footer.append(button(()=>common.cancel,()=>finish(null)));
   const proof=createProof({app,dialog,element,button,icon,dropdown,applyChange,wake,dispatch,contentChanged});
@@ -243,10 +247,11 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         if(!app.state().requests.some(request=>request.id===id))return;
         let view=app.document_properties_copy(info);
         const appearance=await dialog(()=>view.title,(form,finish)=>{
+          form.parentNode.id="document-properties-dialog";
           for(const section of ['rows','sources'])for(const [index]of view[section].entries())form.append(element("h3","",()=>view[section][index][0]),element("p","source-details",()=>view[section][index][1]));
           form.localize=()=>{view=app.document_properties_copy(info);};
-          form.append(button(()=>view.proof,()=>finish(true)),button(()=>view.done,()=>finish(false)));
-        });
+          const done=button(()=>view.done,()=>finish(false));form.append(button(()=>view.proof,()=>finish(true)),done);return {cancel:done,primary:done};
+        },view.dialog);
         applyChange(app.finish_document(id,true));
         if(appearance)proof.run(id);
       } else if(["change_color","color_history","repair_source_profile","rasterize_source"].includes(r.type)) {

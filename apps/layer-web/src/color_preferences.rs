@@ -3,10 +3,10 @@ use super::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 #[wasm_bindgen]
 impl WebApp {
-    pub fn localize_export_presets(&self, view: JsValue) -> Result<JsValue, JsValue> {
-        let mut view: layer_ui::ExportPresetView = serde_wasm_bindgen::from_value(view).map_err(js)?;
-        view.localize_names(self.session.engine().document().composition().color, self.session.localization());
-        serialize(&view)
+    pub fn localize_export_presets(&self, names: JsValue) -> Result<JsValue, JsValue> {
+        let mut names: Vec<String> = serde_wasm_bindgen::from_value(names).map_err(js)?;
+        layer_ui::ExportPresetView::localize_names_in(&mut names,self.session.engine().document().composition().color,self.session.localization());
+        serialize(&names)
     }
     pub fn workspace_name_validation(&self, name: &str) -> Result<JsValue, JsValue> {
         serialize(&layer_workspace::name_validation(name, self.session.localization()))

@@ -461,7 +461,7 @@ test('dialog presentation retains controls and ignores a retired native close',a
   const inner=element('header'),originalIcon=icon('window-close');primary.append(originalIcon);primary.setAttribute('aria-label','Original close');
   header.append(cancel,primary);dialog.append(header,inner,search);doc.body.append(dialog);
   const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
-  let page=true,clears=0,cancels=0,backs=0,subpage=false,currentHeader=header;
+  let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header;
   const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},
     dialog_header:(intent,back)=>({start:back?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),
     dialog_escape:(back,focused,text)=>back?'back':focused&&text?'clear_search':'cancel'};
@@ -483,25 +483,31 @@ test('dialog presentation retains controls and ignores a retired native close',a
   assert.equal(dialog.open,true);
   page=true;host.present({...intent,primary:'close'});
   assert.equal(cancel.hidden,true);assert.equal(primary.hidden,true);
-  const done=header.children.find(node=>node!==cancel&&node!==primary&&node.tagName==='BUTTON');
+  const done=header.children.find(node=>node.dataset.dialogPart==='end');
   assert.ok(done);assert.equal(done.textContent,'Done');assert.deepEqual(primary.childNodes,[originalIcon],'The projected Done leaves the original primary untouched');
   subpage=true;currentHeader=inner;host.layout();
   assert.equal(header.classList.contains('page-header'),false);assert.equal(inner.classList.contains('page-header'),true);
   assert.equal(done.parentNode,inner,'The single projected action follows the active header');
-  assert.equal(cancel.getAttribute('aria-label'),'Back');assert.equal(cancel.hidden,false);
+  const back=inner.children.find(node=>node.dataset.dialogPart==='start');
+  assert.notEqual(back,cancel);assert.equal(back.getAttribute('aria-label'),'Back');assert.equal(cancel.hidden,true);
   search.value='retained subpage query';escape();
   assert.equal(backs,1);assert.equal(clears,1);assert.equal(cancels,1);assert.equal(search.value,'retained subpage query');
   subpage=true;host.dismiss();assert.equal(backs,2);
-  subpage=true;page=false;host.layout();assert.equal(cancel.getAttribute('aria-label'),'Back');assert.equal(cancel.hidden,false);
+  subpage=true;page=false;host.layout();assert.equal(back.getAttribute('aria-label'),'Back');assert.equal(back.hidden,false);assert.equal(cancel.hidden,true);assert.equal(back.parentNode,header);
   subpage=false;
   primary.textContent='Relabelled original';
   page=false;host.layout();assert.equal(primary.textContent,'Relabelled original');
   assert.equal(primary.hidden,false);assert.equal(done.hidden,true);
   assert.equal(primary.getAttribute('aria-label'),'Original close');assert.equal(cancel.hidden,true);
-  cancel.addEventListener('click',()=>host.dismiss());
-  for(const skin of [true,false]){page=skin;subpage=true;host.layout();cancel.click();}
-  assert.equal(backs,4,'Shared Back activates through the start control in both skins');
-  page=true;host.layout();done.click();assert.equal(cancels,2);
+  cancel.addEventListener('click',()=>{sourceCancels++;host.hide();});
+  for(const skin of [true,false]){page=skin;subpage=true;host.layout();assert.equal(cancel.hidden,true);assert.equal(back.parentNode,currentHeader);back.click();}
+  assert.equal(backs,4,'Shared Back activates through its projected control in both skins');assert.equal(sourceCancels,0);
+  page=true;host.present(intent);const close=header.children.find(node=>node.dataset.dialogPart==='start');
+  assert.notEqual(close,cancel);assert.equal(close.firstElementChild.dataset.asset,'window-close');assert.equal(cancel.hidden,true);
+  close.click();assert.equal(cancels,2);assert.equal(sourceCancels,0,'The projected X invokes shell cancellation, not the original callback');
+  host.present(intent);subpage=true;host.layout();cancel.click();assert.equal(sourceCancels,1,'Programmatic original Cancel remains terminal on a subpage');assert.equal(backs,4);
+  subpage=false;page=false;host.present(intent);assert.equal(cancel.hidden,false);cancel.click();assert.equal(sourceCancels,2,'The original Cancel callback still closes at the root');
+  page=true;host.present({...intent,primary:'close'});done.click();assert.equal(cancels,3);
   host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
 });
 
@@ -513,12 +519,15 @@ test('dialog Cancel keeps its bound text through page, floating and language cha
   t.after(()=>Object.assign(globalThis,previous));
   const dialog=element('dialog'),header=element('header'),cancel=element('button'),primary=element('button'),copy={cancel:'Cancel',back:'Back',done:'Done'};
   bindCopy(cancel,()=>copy.cancel);const bound=cancel.firstChild;
-  header.append(cancel,primary);dialog.append(header);doc.body.append(dialog);
+  const footer=element('footer');footer.append(cancel,primary);dialog.append(header,footer);doc.body.append(dialog);
   let page=true;
   const app={dialog_presentation:()=>page?{kind:'page',bounds:{x:0,y:0,width:412,height:891}}:{kind:'floating'},dialog_header:()=>({start:'cancel',end:'primary'})};
   const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy,onCancel(){}});
   host.present({role:'editor',modal:true,primary:'action'});
+  const close=header.children.find(node=>node.dataset.dialogPart==='start');
+  assert.notEqual(close,cancel);assert.deepEqual(header.children,[close,primary]);assert.deepEqual(footer.children,[cancel]);assert.equal(cancel.hidden,true);assert.equal(cancel.firstChild,bound);
   page=false;host.layout();
+  assert.deepEqual(footer.children,[cancel,primary]);assert.deepEqual(header.children,[close]);assert.equal(close.hidden,true);assert.equal(cancel.hidden,false);
   copy.cancel='Abbrechen';refreshBindings();
   assert.equal(bound.nodeValue,'Abbrechen');
   assert.equal(cancel.textContent,'Abbrechen','The original bound text remains visible after returning to floating');

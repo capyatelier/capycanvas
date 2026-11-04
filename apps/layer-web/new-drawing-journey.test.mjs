@@ -316,6 +316,13 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     assert.equal(await evaluate(`document.querySelector('.panel-context-menu').parentElement.id==='workspace'&&!document.querySelector('.panel-context-menu:popover-open')`),true,'Closing a dialog with a menu open returns it to the workspace');
     assert.equal(await evaluate('layerApp.app.document_tabs(0).tabs.length'),tabs,'Cancel creates nothing');
 
+    await open();await click('#new-drawing-presets-button');await slid('new-drawing-browser');
+    await call('Input.insertText',{text:'chalk'});await settle();await click('#new-drawing-save-as');
+    assert.equal((await drawer()).query,'chalk');assert.ok((await drawer()).save);
+    await evaluate("document.querySelector('#new-drawing-cancel').click()");await settle();
+    await wait(`!document.querySelector('${dialog}')&&!layerApp.state().new_drawing&&!layerApp.state().requests.some(r=>r.kind.type==='document')`);
+    assert.equal(await evaluate('layerApp.app.document_tabs(0).tabs.length'),tabs,'Footer Cancel closes naming, search and the drawer without creating a drawing');
+
     await open();
     await key('Escape','Escape',27);
     await wait(`!document.querySelector('${dialog}')&&!layerApp.state().requests.some(r=>r.kind.type==='document')`);

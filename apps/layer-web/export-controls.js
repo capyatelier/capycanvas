@@ -1,3 +1,4 @@
+import {createDialogHost} from './dialog-host.js';
 import { liveCopy, bindCopy } from './localization.js';
 // The shared recipe describes a delivery copy, independent of the master.
 const profileLibraries=new Set();
@@ -6,9 +7,11 @@ export const SDR_FORMATS=["Png","Tiff","Jpeg","Webp"];
 export async function chooseExport({app,dialog,element,button,dropdown,numberField,gpuOperation,id}) {
   let control,running,closed=false;
   const model=app.export_form(),copy=liveCopy(app,"export_copy"),profilesCopy=liveCopy(app,"profile_copy");
+  let page="main";
   let library=await app.export_presets({type:"get",index:0});
-  const localizeLibrary=()=>{library.names=app.localize_export_presets({names:library.names,index:null,recipe:null,changed:false}).names;};localizeLibrary();
-  try { const result=await dialog(()=>copy.title,(form,finish)=>{
+  const localizeLibrary=()=>{library.names=app.localize_export_presets(library.names);};localizeLibrary();
+  try { const result=await dialog(()=>({size:copy.image_size,color:copy.color_transparency,presets:copy.presets}[page]??copy.title),(form,finish,{caption,layout,dismiss})=>{
+    form.parentNode.id="export-options";
     let recipe=library.recipe,currentPreset=0;const choiceSets=new Map();
     const field=(label,node)=>{const root=element("label","document-size",label);if(typeof label==="function")bindCopy(node,label,"ariaLabel");else node.setAttribute("aria-label",label);root.append(node);form.append(root);return node;};
     const select=(label,choices,change)=>{const node=dropdown(label,value=>{if(node!==previewMode)invalidate();change?.(value);}),items=choices.map(([value,label])=>({value,label}));choiceSets.set(node,items);node.update({choices:items,value:items[0]?.value});return field(label,node);};
@@ -69,10 +72,22 @@ export async function chooseExport({app,dialog,element,button,dropdown,numberFie
       resolution:resolution.value==="Ppi"?{Ppi:ppi.numericValue}:resolution.value,metadata:readMetadata()});
     const selected=()=>app.export_validate(app.export_draft(readRecipe(),{type:"refresh"}).recipe);
     updateDraft({type:"refresh"});
-    const presetName=field(()=>copy.preset_name,element("input"));presetName.maxLength=80;
+    const presetName=element("input");presetName.maxLength=80;
     const presetButtons=element("div","document-size");
     const presetAction=type=>{if(!commitNumbers()||!form.reportValidity())return;try{preference(type==="save"?{type,name:presetName.value,recipe:selected()}:{type,index:Number(destination.value),recipe:selected()});}catch(e){fail(e);}};
-    const savePreset=button(()=>copy.save_preset,()=>presetAction("save"));
+    const savePreset=button(()=>copy.save_new_preset,async()=>{
+      presetName.value='';
+      const name=await dialog(()=>copy.save_preset_title,(form,finish)=>{
+        form.parentNode.id='export-preset-name-dialog';presetName.id='export-preset-name';
+        const label=element('label','document-size',()=>copy.preset_name);label.append(presetName);
+        const cancel=button(()=>copy.common.cancel,()=>finish(null)),save=button(()=>copy.common.save,()=>finish(presetName.value),'suggested-action');
+        const footer=element('footer');footer.append(cancel,save);form.append(label,footer);
+        const validate=()=>{save.disabled=!app.export_preset_name_valid(presetName.value);};presetName.oninput=validate;validate();
+        form.onsubmit=event=>{event.preventDefault();if(!save.disabled)save.click();};
+        return {cancel,primary:save};
+      },library.dialog);
+      if(name!=null){presetName.value=name;presetAction('save');}
+    });
     const updatePreset=button(()=>copy.update_preset,()=>presetAction("update"));
     const removePreset=button(()=>copy.delete_preset,()=>preference({type:"remove",index:Number(destination.value)}));
     const resetPreset=button(()=>copy.reset_destination,()=>preference({type:"reset",index:Number(destination.value)}));
@@ -101,7 +116,7 @@ export async function chooseExport({app,dialog,element,button,dropdown,numberFie
         const caption=()=>index?(output.sdr_preview?(previewMode.value==="sdr"?copy.sdr_base:copy.hdr_preview):copy.output):copy.artwork;
         figure.append(canvas,element("figcaption","",caption));comparison.append(figure);});
     };
-    const cancel=button(()=>copy.common.cancel,()=>{control?.cancel();finish(null);});
+    const cancel=button(()=>copy.common.cancel,dismiss);
     const commitNumbers=()=>[quality,width,height,ppi].filter(node=>!node.closest("label").hidden).every(node=>node.commit());
     const choose=button(()=>copy.choose_file,()=>{if(!commitNumbers()||!form.reportValidity())return;try{finish({recipe:selected(),destination:Number(destination.value)});}catch(e){fail(e);}},"suggested-action");
     const preview=button(()=>copy.preview,()=>{
@@ -122,7 +137,18 @@ export async function chooseExport({app,dialog,element,button,dropdown,numberFie
     });
     form.localize=()=>{localizeLibrary();metadataView=app.export_metadata_copy(recipe.format,recipe.metadata.keep);};
     footer.append(cancel,preview,choose);form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();
-  });
+    const panes=new Map(['main','size','color','presets'].map(id=>[id,element('section','document-page')]));
+    for(const node of [...form.children])if(node!==footer)panes.get('main').append(node);
+    for(const node of [size,width,height,enlarge,resolution,ppi])panes.get('size').append(node.closest('label'));
+    for(const node of [profile,depth,background,intent,dither,quality])panes.get('color').append(node.closest('label'));
+    panes.get('presets').append(destination.closest('label'));
+    panes.get('presets').append(presetButtons);
+    const show=id=>{page=id;for(const [key,node]of panes)node.hidden=key!==id;bindCopy(caption,()=>({size:copy.image_size,color:copy.color_transparency,presets:copy.presets}[page]??copy.title));layout();};
+    const links=element('div','document-navigation');
+    for(const [id,label]of [['size',()=>copy.size],['color',()=>copy.color_transparency],['presets',()=>copy.preset]]){const link=button(label,()=>show(id));link.dataset.exportPage=id;links.append(link);}
+    panes.get('main').append(links);form.replaceChildren(...panes.values(),footer);show('main');
+    return {cancel,primary:choose,subpage:()=>page!=='main',onBack:()=>show('main'),onCancel:()=>{control?.cancel();finish(null);}};
+  },model.dialog);
   closed=true;control?.cancel();await running;return result;
   }finally{control?.free();}
 
@@ -148,8 +174,8 @@ export function chooseSourceProfile({app,dialog,element,button,dropdown}) {
     let failure=null;const error=element("p","error-message"),fail=(value,profile)=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,profile));};form.append(error);
     form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;append(imported);fail(null);}catch(e){fail(e,true);}}));
     form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button});if(!imported)return;append(imported);}catch(e){fail(e,true);}}));
-    const footer=element("footer");footer.append(button(()=>copy.common.cancel,()=>finish(null)),button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"));form.append(footer);
-  });
+    const footer=element("footer"),cancel=button(()=>copy.common.cancel,()=>finish(null)),use=button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action");footer.append(cancel,use);form.append(footer);return {cancel,primary:use};
+  },copy.dialog);
 }
 
 export function chooseProfileLibrary({app,element,button,manage=false}) {
@@ -159,10 +185,10 @@ export function chooseProfileLibrary({app,element,button,manage=false}) {
     search.type="search";search.id="profile-library-search";bindCopy(search,()=>copy.search,"placeholder");bindCopy(search,()=>copy.search,"ariaLabel");
     form.method="dialog";let result=null,closed=false,failure=null,busy=false,entries=[];
     const fail=value=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,true));};
-    const finish=value=>{if(busy&&value==null)return;result=value;root.close();};
-    root.addEventListener("cancel",event=>{if(busy)event.preventDefault();});
-    root.addEventListener("close",()=>{closed=true;profileLibraries.delete(render);root.remove();resolve(result);},{once:true});
-    form.append(element("h2","",()=>copy.library_title),element("p","",()=>copy.library_help),search,list,error);
+    const finish=value=>{if(busy&&value==null)return;result=value;shell.hide();};
+    root.addEventListener("close",()=>{closed=true;shell.dispose();profileLibraries.delete(render);root.remove();resolve(result);},{once:true});
+    const header=element("header","dialog-header");header.append(element("h2","",()=>copy.library_title));
+    form.append(element("p","",()=>copy.library_help),search,list,error);
     const done=button(()=>copy.common.done,()=>finish(null));
     const render=()=>{
       search.hidden=entries.length<=7&&!search.value;search.disabled=busy;
@@ -184,6 +210,7 @@ export function chooseProfileLibrary({app,element,button,manage=false}) {
     };
     search.addEventListener("input",render);profileLibraries.add(render);
     form.append(button(()=>copy.import,()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();})),done);
-    form.onsubmit=e=>e.preventDefault();root.append(form);document.body.append(root);root.showModal();run(refresh);
+    form.onsubmit=e=>e.preventDefault();root.append(header,form);document.body.append(root);
+    const shell=createDialogHost({app,dialog:root,header,cancel:done,primary:done,copy:copy.common,onCancel:()=>finish(null),search,clearSearch:()=>{search.value="";render();}});shell.present(copy.library_dialog);run(refresh);
   });
 }

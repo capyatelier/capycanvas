@@ -997,7 +997,7 @@ impl PalettePanel {
             #[weak(rename_to=panel)]
             self,
             async move {
-                if crate::alert::choose_editor(dialog, &w.window, Some("save"), &[]).await == "save" {
+                if crate::alert::choose_intent(dialog, &w.window, layer_ui::PalettePanelView::EDIT_DIALOG, Some("save"), &[]).await == "save" {
                     let action = if let Some(id) = id {
                         Action::RenamePalette {
                             id,
@@ -1096,7 +1096,7 @@ impl PalettePanel {
             #[weak(rename_to=panel)]
             self,
             async move {
-                if crate::alert::choose(dialog, &w.window).await == "remove" {
+                if crate::alert::choose_intent(dialog, &w.window, layer_ui::PalettePanelView::DELETE_DIALOG, Some("remove"), &[]).await == "remove" {
                     panel.apply(Action::RemovePalette { id });
                 }
             }

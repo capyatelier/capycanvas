@@ -1,6 +1,6 @@
 import {openSizeDialog,sizeCheck,sizeFields} from './size-dialog.js';
 
-export function createCanvasSizeUi({state,element,button,dropdown,icon,numberField,resolve,dispatch,host=()=>document.body}) {
+export function createCanvasSizeUi({app,state,element,button,dropdown,icon,numberField,resolve,dispatch,host=()=>document.body}) {
   const send=action=>dispatch({type:'canvas_size',action});
   const view=()=>state().layer_tools.canvas_size;
   let shell=null,fields,unit,relative,anchorLabel,anchors;
@@ -21,7 +21,7 @@ export function createCanvasSizeUi({state,element,button,dropdown,icon,numberFie
       cell.append(icon('rectangle-fill'));grid.append(cell);return cell;
     });
     const anchorRow=element('div','size-dialog-row');anchorRow.append(anchorLabel,grid);
-    shell=openSizeDialog({element,button,host,copy:v,name:'canvas-size',body:[values,options,anchorRow],
+    shell=openSizeDialog({app,element,button,icon,host,copy:v,name:'canvas-size',body:[values,options,anchorRow],
       apply:()=>{if(fields.commit()&&view()?.can_apply)send({op:'apply'});},cancel:()=>send({op:'cancel'})});
   }
   function refresh() {

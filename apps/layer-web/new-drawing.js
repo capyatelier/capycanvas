@@ -1,3 +1,4 @@
+import {createDialogHost} from './dialog-host.js';
 import {createWorkflowStack} from './workflow-stack.js';
 import {colorForm} from './color-editor.js';
 import {paperThumbnail} from './paper-picker.js';
@@ -5,9 +6,7 @@ import {sizeFields} from './size-dialog.js';
 import {addScrollbar} from './scrollbars.js';
 import {rgba,json} from './color-wheel.js';
 
-const PREVIEW = [[232, 250], [196, 214]], NARROW_PREVIEW = [[348, 140], [312, 104]];
 const PRESET_ART = [[116, 86], [74, 74]], SUMMARY_ART = [[36, 36], [34, 34]];
-const NARROW = '(max-width: 744px)';
 const grains = new Map(), painted = new Map();
 
 function grain(app, id) {
@@ -87,7 +86,6 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
   }
 
   function build() {
-    const narrow = matchMedia(NARROW);
     const root = element('dialog', 'picker-dialog new-drawing-dialog'); root.id = 'new-drawing-dialog';
     const title = element('h2', 'dialog-title'); title.id = 'new-drawing-title'; title.tabIndex = -1; root.setAttribute('aria-labelledby', title.id);
     const menu = element('div', 'panel-context-menu new-drawing-menu'); menu.popover = 'auto'; menu.setAttribute('role', 'menu');
@@ -129,7 +127,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     };
     let shown = null;
 
-    const art = sheetArt(app, element, narrow.matches ? NARROW_PREVIEW : PREVIEW, false);
+    const art = sheetArt(app, element, [app.new_drawing_layout(Infinity).preview,app.new_drawing_layout(Infinity).fit], false);
     const preview = button('', () => send({op:'presets'}), 'new-drawing-preview'); preview.id = 'new-drawing-preview'; preview.append(art.node);
     const preset = element('span', 'new-drawing-preset'), orientationName = element('span', 'new-drawing-dim');
     const caption = element('span', 'new-drawing-caption-line'); caption.id = 'new-drawing-caption'; caption.append(preset, orientationName);
@@ -188,7 +186,8 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const form = element('div', 'new-drawing-form');
     form.append(nameRow, section(sizeHeading, sizeRows), section(colorHeading, colors), section(paperHeading, papers));
     const body = element('div', 'new-drawing-body'); body.append(left, form);
-    const page = element('div', 'dialog-page new-drawing-page'); page.append(title, body);
+    const header=element('header','dialog-header');header.append(title);
+    const page = element('div', 'dialog-page new-drawing-page'); page.append(body);
     const presetsLabel = element('span'), presetsIcon = icon('chevron-down');
     presetsIcon.classList.add('new-drawing-up');
     const presets = button('', () => send({op:'presets'}), 'dialog-button new-drawing-open-presets'); presets.id = 'new-drawing-presets-button'; presets.append(presetsLabel, presetsIcon);
@@ -205,10 +204,6 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     };
     const search = element('input'); search.id = 'new-drawing-search'; search.type = 'search'; search.autocomplete = 'off'; search.spellcheck = false;
     search.addEventListener('input', () => send({op:'search', query:search.value}));
-    search.addEventListener('keydown', e => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault(); e.stopPropagation(); send({op:'back'});
-    });
     const searchBox = element('label', 'new-drawing-search'); searchBox.append(icon('search'), search);
     const searchHead = element('div', 'new-drawing-drawer-head'); searchHead.append(searchBox);
     const tabs = element('div', 'new-drawing-tabs'); tabs.id = 'new-drawing-tabs'; tabs.setAttribute('role', 'tablist');
@@ -285,13 +280,12 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
 
     const report = element('p', 'new-drawing-error'); report.setAttribute('role', 'status'); report.hidden = true;
     const content = element('div', 'dialog-content'); content.append(main, browser, paperDrawer, colorDrawer, report);
-    root.append(content, menu); document.body.append(root);
+    root.append(header,content, menu); document.body.append(root);
     const drawers = {presets:browser, paper:paperDrawer, paper_color:colorDrawer};
-    const arrange = () => { art.resize(narrow.matches ? NARROW_PREVIEW : PREVIEW); };
-    narrow.addEventListener('change', arrange);
-    root.addEventListener('cancel', e => { e.preventDefault(); if (!colorUi?.form.closeMenus()) send({op:'back'}); });
-    root.addEventListener('close', () => { if (ui?.root === root) send({op:'cancel'}); });
-    root.addEventListener('keydown', e => { if (e.key === 'Escape' && colorUi?.form.closeMenus()) { e.preventDefault(); e.stopPropagation(); } });
+    const shell=createDialogHost({app,dialog:root,header,cancel,primary:createButton,icon,copy:app.bootstrap_view().common,onCancel:()=>send({op:'back'})});
+    const arrange=()=>{const layout=app.new_drawing_layout(body.clientWidth);root.classList.toggle('single-pane',layout.single_pane);art.resize([layout.preview,layout.fit]);};
+    const resize=new ResizeObserver(arrange);resize.observe(body);
+    root.addEventListener('keydown', e => { if (e.key === 'Escape' && colorUi?.form.closeMenus()) { e.preventDefault(); e.stopPropagation(); } },true);
 
     function slide(node, open) {
       if (open === node.classList.contains('open')) return;
@@ -455,7 +449,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     }
     function render(v) {
       const previous = shown; shown = v;
-      renderPage(v);
+      renderPage(v);const opened=shell.present(v.dialog);arrange();if(opened)title.focus();
       const kind = v.drawer?.kind ?? null, was = previous?.drawer?.kind ?? null, opening = kind !== was;
       if (opening && was === 'paper_color') closeColors();
       if (kind === 'presets') renderBrowser(v, opening);
@@ -471,14 +465,13 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
       else if (kind === 'paper_color') colorUi?.form.title.focus();
       else ({presets, paper:texture, paper_color:paperColor})[was]?.focus();
     }
-    root.showModal(); title.focus();
     return {root, render,
       commit:() => numbers.commit(),
       localize() { colorUi?.form.relocalize(); },
       report(message) { text(report, message); report.hidden = !message; },
       close() {
-        actionPages.finish();closeColors(); narrow.removeEventListener('change', arrange);
-        ui = null; if (root.open) root.close(); root.remove();
+        actionPages.finish();closeColors();resize.disconnect();shell.hide();shell.dispose();
+        ui = null; root.remove();
       }};
   }
   return {

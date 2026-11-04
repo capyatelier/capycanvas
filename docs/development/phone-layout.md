@@ -584,3 +584,11 @@ uses the shared content-width projection; GTK retains its native AdwClamp.
 The common Web dialog host retains each form and its bound labels across page
 and floating presentation. Shared header actions project Close as Done on a
 page, while the floating dialog keeps its own close control.
+
+Declare a form's dialog intent in its shared view and pass it to both hosts.
+Keep the form's controller and action controls when presentation changes. The
+Web shell projects page X, Back and Done without rebinding the form's Cancel;
+primary controls move into the page header and return when floating.
+New Drawing uses shared preview dimensions and pane fit. Edit Color reports
+natural pane widths and the body content width to the shared fit helper; its
+padding is outside that available width.

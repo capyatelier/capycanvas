@@ -1115,7 +1115,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     preset.notify("selected");
     if document.depth.is_float() && preset.selected()==0 { range.set_selected(1); recommend.set(true); }
     refresh_preview();
-    let response = navigation::choose(&dialog, w.window.upcast_ref(), &response).await;
+    let response = navigation::choose(&dialog, w.window.upcast_ref(), &response,copy.dialog).await;
     comparison.close();
     comparison.finish().await;
     if response != "export" {

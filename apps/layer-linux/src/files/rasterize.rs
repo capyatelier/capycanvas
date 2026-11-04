@@ -93,7 +93,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
             }
         }
     ));
-    let response = crate::alert::choose_editor(dialog, &w.window, Some("apply"), &[]).await;
+    let response = crate::alert::choose_intent(dialog, &w.window, layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).dialog, Some("apply"), &[]).await;
     control.cancel();
     let compared = comparison.ready.get();
     comparison.close();

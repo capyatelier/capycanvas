@@ -169,7 +169,7 @@ async fn interpret_window(
             crate::page_dialog::set_response_enabled(&dialog, "use", select().is_ok());
         }
     ));
-    if crate::alert::choose_editor(dialog, window, Some("use"), &[]).await != "use" {
+    if crate::alert::choose_intent(dialog, window, copy.dialog, Some("use"), &[]).await != "use" {
         return Ok(None);
     }
     source.interpretation.profile = (chooser.selected)()?.profile;

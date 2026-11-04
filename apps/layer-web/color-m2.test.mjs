@@ -253,36 +253,49 @@ export async function checkSourceEdits({call,evaluate,settle}) {
 
 export async function checkExportPresets({call,evaluate,settle}) {
   const {wait,click}=helpers(evaluate);
+  const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/document-color/web';await mkdir(directory,{recursive:true});
+  const settings=await evaluate('layerApp.state().settings');
+  const page=async id=>{await evaluate(`(()=>{const root=document.querySelector('#export-options'),back=root.querySelector('.dialog-back');if(back?.checkVisibility())back.click();${id?`root.querySelector('[data-export-page="${id}"]').click();`:''}})()`);await settle();};
+  const select=(label,value)=>evaluate(dropdownChoice(`#export-options .dropdown[aria-label="${label}"]`,value));
   await evaluate(`window.presetSavePicker=window.showSaveFilePicker;window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(bytes){if(!(bytes.size??bytes.byteLength))throw Error('Empty export')},async close(){},async abort(){}}}})`);
   try {
-  const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('.dropdown[aria-label="Destination"]')`);};
+  const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('#export-options[open]')`);};
   const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
-  const name='Tablet delivery '+Date.now();
-  await invoke();await captureDialogChoices({call,evaluate,settle},'export');await evaluate(dropdownChoice('dialog[open] [aria-label="Pixel size"]','Fit'));await captureCheckboxes({call,evaluate,settle},process.env.LAYER_TEST_ARTIFACTS??'artifacts/document-color/web','export-fit');await evaluate(dropdownChoice('dialog[open] [aria-label="Pixel size"]','Original'));await checkTextEntry(evaluate,'input[aria-label="Preset name"]');
-  await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const select=(label,value)=>{const node=d.querySelector('.dropdown[aria-label="'+label+'"]');(${chooseDropdown})(node,value);};
-    select('Format','Png');select('Output profile','1');select('Bit depth','U16');select('Pixel size','Fit');select('Resolution metadata','Ppi');
-    for(const[label,value]of[['Maximum width (px)','321'],['Maximum height (px)','123'],['Pixels per inch','287']]){const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}d.querySelector('input[aria-label="Preset name"]').value=${JSON.stringify(name)};})()`);
-  await click('Save Preset');await wait(`document.querySelector('.dropdown[aria-label="Destination"]')?.querySelector('.dropdown-label')?.textContent===${JSON.stringify(name)}`);
+  for(const theme of ['light','dark']) {
+  await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
+  const name='Tablet delivery '+theme+' '+Date.now();
+  await invoke();await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-root-${theme}`);
+  await select('Format','Png');await page('size');await select('Pixel size','Fit');await captureCheckboxes({call,evaluate,settle},directory,`export-fit-${theme}`);await select('Resolution metadata','Ppi');
+  await evaluate(`(()=>{const d=document.querySelector('#export-options');
+    for(const[label,value]of[['Maximum width (px)','321'],['Maximum height (px)','123'],['Pixels per inch','287']]){const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}})()`);
+  await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-size-${theme}`);
+  await page('color');await select('Output profile','1');await select('Bit depth','U16');await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-color-${theme}`);
+  await page('presets');await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-presets-${theme}`);
+  await click(await evaluate('layerApp.app.export_copy().save_new_preset'));await wait(`!!document.querySelector('#export-preset-name-dialog[open]')`);await checkTextEntry(evaluate,'#export-preset-name');
+  await evaluate(`(()=>{const n=document.querySelector('#export-preset-name');n.value=${JSON.stringify(name)};n.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#export-preset-name-dialog .suggested-action').click();})()`);
+  await wait(`!document.querySelector('#export-preset-name-dialog')&&document.querySelector('.dropdown[aria-label="Destination"]')?.querySelector('.dropdown-label')?.textContent===${JSON.stringify(name)}`);
   const index=await evaluate('Number(document.querySelector(\'.dropdown[aria-label="Destination"]\').value)');
   const saved=await preset(index);
   assert.equal(saved.recipe.profile.profile.Builtin,'DisplayP3');assert.equal(saved.recipe.depth,'U16');assert.deepEqual(saved.recipe.size,{Fit:{bounds:[321,123],enlarge:false}});assert.deepEqual(saved.recipe.resolution,{Ppi:287});
-  await click('Cancel');await wait('!layerApp.state().document_file.busy');await invoke();
+  await page();await click('Cancel');await wait('!layerApp.state().document_file.busy');await invoke();
+  await page('presets');
   await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
   await wait(`document.querySelector('.dropdown[aria-label="Bit depth"]').value==='U16' && document.querySelector('input[aria-label="Maximum width (px)"]').value==='321'`);
   assert.equal(await evaluate('document.querySelector(\'input[aria-label="Pixels per inch"]\').value'),'287');
-  await evaluate(`const node=document.querySelector('.dropdown[aria-label="Transparency"]');(${chooseDropdown})(node,'White');`);await click('Update Preset');
+  await page('color');await select('Transparency','White');await page('presets');await click('Update Preset');
   await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);
   assert.equal((await preset(index)).recipe.background,'White');
   await click('Choose File…');await wait('!layerApp.state().document_file.busy');
   const remembered=await preset(3);assert.equal(remembered.recipe.background,'White');assert.deepEqual(remembered.recipe.resolution,{Ppi:287});
-  await invoke();await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
+  await invoke();await page('presets');await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
   await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);await click('Delete Preset');
   await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').menuModel().sections.flat().some(o=>o.label===${JSON.stringify(name)})`);
   await click('Reset Destination');await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);
   const reset=await preset(0);assert.equal(reset.recipe.format,'Png');assert.equal(reset.recipe.profile.profile.Builtin,'Srgb');assert.equal(reset.recipe.size,'Original');
-  await click('Cancel');await wait('!layerApp.state().document_file.busy');
-  console.log('Named export presets save/update/delete, restore all size/profile/depth/DPI choices across dialog reopen, remember successful delivery and reset destinations passed');
-  } finally {await evaluate('window.showSaveFilePicker=presetSavePicker;delete window.presetSavePicker');}
+  await page();await click('Cancel');await wait('!layerApp.state().document_file.busy');
+  }
+  console.log('Named export presets save/update/delete, restore all size/profile/depth/DPI choices across dialog reopen, remember successful delivery and reset destinations passed in both themes');
+  } finally {await evaluate(`window.showSaveFilePicker=presetSavePicker;delete window.presetSavePicker;layerApp.dispatch({type:'restore_saved_settings',saved:${JSON.stringify(JSON.stringify(settings))}})`);}
 }
 
 export async function checkProfileLibrary({call,evaluate,settle}) {

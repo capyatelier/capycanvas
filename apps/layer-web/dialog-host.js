@@ -2,10 +2,9 @@ import {composingKey} from './text-input.js';
 import {bindCopy} from './localization.js';
 
 export function createDialogHost({app,dialog,header,cancel,primary,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel}) {
-  let intent,previousFocus,expectedCloses=0,observedHeader,done;
-  const footer=primary?.closest('footer'),label=document.createElement('span'),glyph=document.createElement('span');
-  label.className='dialog-action-label';glyph.className='dialog-action-icon';glyph.hidden=true;
-  const children=[...cancel.childNodes];cancel.replaceChildren(label,glyph);label.append(...children);
+  let intent,previousFocus,expectedCloses=0,observedHeader,done,back,close;
+  const slots=new Map([cancel,primary].filter(Boolean).map(node=>[node,{parent:node.parentNode,next:node.nextSibling}]));
+  const footer=primary?.closest('footer');
   dialog.dataset.dialogPart='page';
   function escape() {
     if(!intent)return;
@@ -31,17 +30,24 @@ export function createDialogHost({app,dialog,header,cancel,primary,icon,copy,onC
     const v=window.visualViewport,visible={x:v?.offsetLeft??0,y:v?.offsetTop??0,width:v?.width??innerWidth,height:v?.height??innerHeight};
     const presentation=app.dialog_presentation(intent.role,innerWidth,innerHeight,visible),page=presentation.kind==='page';
     const actions=app.dialog_header(intent,subpage());
+    if(page&&actions.start==='cancel'&&!close){close=document.createElement('button');close.type='button';close.append(icon('window-close'));bindCopy(close,cancelLabel,'ariaLabel');close.addEventListener('click',onCancel);resize.observe(close);}
+    if(close&&close.parentNode!==row)row.append(close);
+    if(actions.start==='back'&&!back){back=document.createElement('button');back.type='button';back.className='dialog-back';back.append(icon('go-previous'));bindCopy(back,()=>copy.back,'ariaLabel');back.addEventListener('click',onBack);resize.observe(back);}
+    if(back&&back.parentNode!==row)row.append(back);
     if(page&&actions.end==='close'&&!done){done=document.createElement('button');done.type='button';done.className='suggested-action';bindCopy(done,()=>copy.done);done.addEventListener('click',onCancel);resize.observe(done);}
     if(done&&done.parentNode!==row)row.append(done);
-    const start=actions.start?cancel:null,end=actions.end==='close'?(page?done:primary??cancel):actions.end?primary:null;
-    for(const control of new Set([cancel,primary,done].filter(Boolean))){
+    const start=actions.start==='back'?back:actions.start?(page?close:cancel):null,end=actions.end==='close'?(page?done:primary??cancel):actions.end?primary:null;
+    for(const control of new Set([cancel,primary,done,back,close].filter(Boolean))){
       control.hidden=control!==start&&control!==end;delete control.dataset.dialogPart;
       control.classList.toggle('page-action-start',page&&control===start);control.classList.toggle('page-action-end',page&&control===end);control.style.height='';
     }
+    const focus=document.activeElement;
+    for(const [control,slot]of slots){
+      if(page&&(control===start||control===end)){if(control.parentNode!==row)row.append(control);}
+      else if(!page&&control.parentNode!==slot.parent)slot.parent.insertBefore(control,slot.next?.parentNode===slot.parent?slot.next:null);
+    }
+    if((focus===start||focus===end)&&document.activeElement!==focus)focus.focus({preventScroll:true});
     if(start)start.dataset.dialogPart='start';if(end)end.dataset.dialogPart='end';
-    const showIcon=!!start&&(page||actions.start==='back');label.hidden=showIcon;glyph.hidden=!showIcon;
-    if(showIcon){const name=actions.start==='back'?'go-previous':'window-close';if(glyph.firstElementChild?.dataset.asset!==name)glyph.replaceChildren(icon(name));}
-    cancel.setAttribute('aria-label',actions.start==='back'?copy.back:cancelLabel());
     dialog.classList.toggle('dialog-page',page);row.classList.toggle('page-header',page);footer?.classList.toggle('projected-actions',page);
     for(const [name,key]of Object.entries({left:'x',top:'y',width:'width',height:'height'}))dialog.style[name]=page?`${presentation.bounds[key]}px`:'';
     const height=page?Math.max(start?.getBoundingClientRect().height??0,end?.getBoundingClientRect().height??0):0;
@@ -64,6 +70,6 @@ export function createDialogHost({app,dialog,header,cancel,primary,icon,copy,onC
     },
     layout,
     dismiss(){if(intent){if(app.dialog_header(intent,subpage()).start==='back')onBack();else onCancel();}},
-    dispose(){resize.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);done?.remove();},
+    dispose(){resize.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);done?.remove();back?.remove();close?.remove();},
   };
 }

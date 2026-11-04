@@ -1,3 +1,4 @@
+import {createDialogHost} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {addScrollbar} from './scrollbars.js';
 
@@ -54,30 +55,33 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   bindCopy(root, () => copy.choose, 'ariaLabel');
   const title = element('h2', 'dialog-title', () => copy.choose), grid = element('div', 'texture-grid');
   grid.setAttribute('role', 'radiogroup'); bindCopy(grid, () => copy.choose, 'ariaLabel');
-  const page = element('div', 'dialog-page texture-page'); page.append(title, grid);
-  const importButton = button('', () => { const action = shown.import?.action; root.close(); if (action) dispatch({type: 'effect', action}); }, 'dialog-button');
+  const header=element('header','dialog-header');header.append(title);
+  const page = element('div', 'dialog-page texture-page'); page.append(grid);
+  const importButton = button('', () => { const action = shown.import?.action; shell.hide(); if (action) dispatch({type: 'effect', action}); }, 'dialog-button');
   const cancel = button(() => bootstrap.common.cancel, () => root.close(), 'dialog-button');
-  const apply = button(() => copy.use_texture, () => { finish(); root.close(); }, 'suggested-action');
+  const apply = button(() => copy.use_texture, () => { finish(); shell.hide(); }, 'suggested-action');
   importButton.id = 'texture-import'; cancel.id = 'texture-cancel'; apply.id = 'texture-apply';
   const footer = element('footer', 'dialog-footer'); footer.append(importButton, element('span', 'dialog-gap'), cancel, apply);
   const content = element('div', 'dialog-content'); content.append(page, footer);
   const menu = element('div', 'panel-context-menu'); menu.popover = 'auto'; menu.setAttribute('role', 'menu');
   menu.addEventListener('toggle', e => { if (e.newState === 'closed' && !grid.contains(document.activeElement)) reveal(); });
-  root.append(content, menu); document.body.append(root); addScrollbar(page, content);
+  root.append(header,content, menu); document.body.append(root); addScrollbar(page, content);
+  const shell=createDialogHost({app,dialog:root,header,cancel,primary:apply,icon,copy:bootstrap.common,onCancel:()=>shell.hide()});
   let shown = null, shownKey = '', pending = null, tiles = [];
   function rename(action) {
     const form = element('dialog', 'workspace-form'); form.id = 'paper-rename-dialog';
     bindCopy(form, () => copy.rename_title, 'ariaLabel');
     const label = element('label', '', () => bootstrap.common.name), input = element('input'), error = element('p', 'workspace-error'), footer = element('footer');
     input.id = 'paper-rename-name'; input.value = action.name; input.maxLength = 64; label.append(input);
-    const save = button(() => copy.rename, () => { form.close(); dispatch({type: 'effect', action: {...action, name: input.value}}); }, 'suggested-action');
+    const save = button(() => copy.rename, () => { renameShell.hide(); dispatch({type: 'effect', action: {...action, name: input.value}}); }, 'suggested-action');
     const validate = () => { error.textContent = app.native_caption({type: 'paper_name_error', name: input.value}); save.disabled = !!error.textContent; };
     input.oninput = validate;
     input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); if (!save.disabled) save.click(); } };
-    footer.append(button(() => bootstrap.common.cancel, () => form.close()), save);
-    form.append(element('h2', '', () => copy.rename_title), label, error, footer);
-    form.addEventListener('close', () => { form.remove(); reveal(); });
-    validate(); document.body.append(form); form.showModal(); input.select();
+    const cancel=button(() => bootstrap.common.cancel, () => renameShell.hide()),header=element('header','dialog-header');header.append(element('h2', '', () => copy.rename_title));
+    footer.append(cancel,save);form.append(header,label,error,footer);
+    const renameShell=createDialogHost({app,dialog:form,header,cancel,primary:save,icon,copy:bootstrap.common,onCancel:()=>renameShell.hide()});
+    form.addEventListener('close', () => { renameShell.dispose();form.remove(); reveal(); });
+    validate(); document.body.append(form); renameShell.present(copy.rename_dialog); input.select();
   }
   function openMenu(index, e) {
     const items = shown.tiles[index].actions;
@@ -146,8 +150,8 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   });
   const refresh = () => { const current = String(state().document_file.epoch) === epoch && texturePicker(state, layer); if (current) update(current); };
   dialogs.add(refresh);
-  root.addEventListener('close', () => { dialogs.delete(refresh); root.remove(); });
+  root.addEventListener('close', () => { dialogs.delete(refresh);shell.dispose(); root.remove(); });
   update(opened);
-  root.showModal();
+  shell.present(opened.paper.dialog);
   reveal();
 }

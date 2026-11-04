@@ -7,6 +7,7 @@ pub(super) const SCALE: &str = "scale";
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaperPickerView {
+    pub dialog: crate::DialogIntent,
     pub tiles: Vec<PaperTileView>,
     pub import: Option<PropertyActionView>,
 }
@@ -157,6 +158,7 @@ pub(super) fn controls(token: u64, application: &EffectApplication, document: &D
     let action = |label: MessageId, icon: Option<&str>, action: EffectAction| PropertyActionView { label: l.text(label).to_string(), icon: icon.map(str::to_string), group: None, action };
     let library = papers.entries.is_some();
     let picker = PaperPickerView {
+        dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
         tiles: options.iter().enumerate().map(|(index, option)| PaperTileView {
             id: option.id.clone(),
             label: option.label.clone(),

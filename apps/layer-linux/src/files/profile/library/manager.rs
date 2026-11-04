@@ -390,7 +390,8 @@ pub(crate) async fn manage_for_window(
         move |_| state.render()
     ));
     state.render();
-    crate::page_dialog::present(&dialog, window);
+    let intent = state.copy.borrow().library_dialog;
+    crate::page_dialog::present_intent(&dialog, window,intent);
     Ok(())
 }
 

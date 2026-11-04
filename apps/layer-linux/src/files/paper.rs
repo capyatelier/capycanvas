@@ -112,7 +112,7 @@ pub(crate) async fn rename(w: &Rc<Workspace>, id: String, name: String) {
     entry.connect_changed(glib::clone!(#[weak] dialog, move |entry| {
         crate::page_dialog::set_response_enabled(&dialog, "rename", layer_ui::paper_library::paper_name(&entry.text()).is_some());
     }));
-    if crate::alert::choose_editor(dialog, &w.window, Some("rename"), &[]).await == "rename" {
+    if crate::alert::choose_intent(dialog, &w.window, layer_ui::NativeCopy::new(&localization).paper.rename_dialog, Some("rename"), &[]).await == "rename" {
         w.dispatch(layer_ui::UiAction::Effect { action: layer_ui::EffectAction::RenamePaper { id, name: entry.text().into() } });
     }
 }

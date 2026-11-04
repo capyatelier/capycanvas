@@ -1,16 +1,18 @@
+import {createDialogHost} from './dialog-host.js';
 
-export function openSizeDialog({element,button,host,name,body,copy,apply,cancel}) {
+export function openSizeDialog({app,element,button,icon,host,name,body,copy,apply,cancel}) {
   const dialog=element('dialog','document-dialog size-dialog');dialog.id=`${name}-dialog`;
   const form=element('form');form.method='dialog';
   const title=element('h2');title.id=`${name}-title`;title.tabIndex=-1;title.autofocus=true;dialog.setAttribute('aria-labelledby',title.id);
   const message=element('p','size-dialog-message');message.setAttribute('role','status');
   const footer=element('footer'),applyButton=button(copy.apply_label,apply,'suggested-action');
   const cancelButton=button(copy.cancel_label,cancel);footer.append(cancelButton,applyButton);
-  form.append(title,...body,message,footer);
+  const header=element('header','dialog-header');header.append(title);
+  form.append(...body,message,footer);
   form.addEventListener('submit',e=>{e.preventDefault();apply();});
-  dialog.addEventListener('cancel',e=>{e.preventDefault();cancel();});
-  dialog.append(form);host().append(dialog);dialog.showModal();
-  return {dialog,title,message,apply:applyButton,relabel(copy){applyButton.textContent=copy.apply_label;cancelButton.textContent=copy.cancel_label;},close(){dialog.close();dialog.remove();}};
+  dialog.append(header,form);host().append(dialog);
+  const shell=createDialogHost({app,dialog,header,cancel:cancelButton,primary:applyButton,icon,copy:app.bootstrap_view().common,onCancel:cancel});shell.present(copy.dialog);
+  return {dialog,title,message,apply:applyButton,relabel(copy){applyButton.textContent=copy.apply_label;cancelButton.textContent=copy.cancel_label;},close(){shell.hide();shell.dispose();dialog.remove();}};
 }
 
 export function sizeCheck({element,key,act}) {

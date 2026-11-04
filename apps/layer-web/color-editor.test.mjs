@@ -162,6 +162,8 @@ export async function checkColorEditor({call,evaluate,settle}) {
   await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
   await wait(`!!document.querySelector('${dialog}')`);await settle();
   await capture('narrow');
+  const narrowHeader=await evaluate(`(()=>{const d=document.querySelector('${dialog}'),pick=d.querySelector('.color-pick'),hex=d.querySelector('.color-hex'),p=pick.getBoundingClientRect(),h=hex.getBoundingClientRect();return {pick:[p.x,p.y,p.width,p.height],hex:[h.x,h.y,h.width,h.height],target:document.elementFromPoint(p.x+p.width/2,p.y+p.height/2)?.closest('.color-pick')===pick};})()`);
+  assert.equal(narrowHeader.target,true,`The narrow eyedropper has its full hit target: ${JSON.stringify(narrowHeader)}`);
   await click(`${dialog} .color-pick`);
   await wait(`!document.querySelector('${dialog}') && !document.querySelector('.color-strip').hidden`);await settle();
   const narrow=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return c.work_area[2]*r.width/c.viewport[0]})()`);

@@ -67,6 +67,7 @@ pub enum ImageSizeAction {
 /// resolution is in pixels per inch.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ImageSizeView {
+    pub dialog: crate::DialogIntent,
     pub title: Arc<str>,
     pub apply_label: Arc<str>,
     pub cancel_label: Arc<str>,
@@ -113,6 +114,7 @@ impl ImageSizeDraft {
             constrain: true,
             resample: ImageResample::Automatic,
             view: ImageSizeView {
+                dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
                 title: localization.text(MessageId::RESOURCES_SIZE_IMAGE_TITLE),
                 apply_label: localization.text(MessageId::COMMON_APPLY),
                 cancel_label: localization.text(MessageId::COMMON_CANCEL),

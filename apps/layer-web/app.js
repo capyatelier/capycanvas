@@ -1974,8 +1974,8 @@ try {
   frequencySeparationUi = createPreviewPanel({app,name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,
     value:radius=>separate({op:'radius',radius}),apply:()=>separate({op:'apply'}),cancel:()=>separate({op:'cancel'}),
     element,button,numberField,workspace,layout:()=>layout,bar:()=>canvasBar?.bounds()??null});
-  canvasSizeUi = createCanvasSizeUi({state:()=>state,element,button,dropdown,icon,numberField,resolve:request=>app.number_input(request),dispatch});
-  imageSizeUi = createImageSizeUi({state:()=>state,element,button,dropdown,numberField,resolve:request=>app.number_input(request),dispatch});
+  canvasSizeUi = createCanvasSizeUi({app,state:()=>state,element,button,dropdown,icon,numberField,resolve:request=>app.number_input(request),dispatch});
+  imageSizeUi = createImageSizeUi({app,state:()=>state,element,button,dropdown,icon,numberField,resolve:request=>app.number_input(request),dispatch});
   configureColorEditor({dispatch,icon,wasmModule});
   editor = createEditorPanels({selectionUi,app,wasmModule,state:()=>state,workspace,canvas,element,button,icon,dropdown,numberField,dispatch,asset,wake,applyChange,contentChanged:panelContentChanged,showContext:(node,point)=>customization.showContext(node,point)});
   palettes = createPalettes({ app, state: () => state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker,

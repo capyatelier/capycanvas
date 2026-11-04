@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { chooseExport, chooseProfileLibrary, localizeProfileLibraries, SDR_FORMATS } from "./export-controls.js";
+import {colorDialogDom,dialogProjection} from "./color-dialog-fixture.mjs";
 import { exportFormats } from "./documents.js";
 
 const ownerDocument={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};
@@ -12,8 +13,15 @@ class FakeElement extends SharedElement {
   constructor(tag, className = "", text = "") {
     super();
     this.tagName = tag.toUpperCase(); this.className = className; this.ownerDocument=ownerDocument;this.children = []; this.parentNode = null; this.attributes = new Map(); this.listeners = {};
-    this.hidden = false; this.disabled = false; this.value = ""; this.style = {};this.textContent=text??"";
+    this.dataset={}; this.hidden = false; this.disabled = false; this.value = ""; this.style = {};this.textContent=text??"";
   }
+  focus(){ownerDocument.activeElement=this;}
+  contains(node){for(let n=node;n;n=n.parentNode)if(n===this)return true;return false;}
+  get classList(){return {toggle(){},remove(){}};}
+  descendants(){return this.querySelectorAll("dialog,form,header,button,input,p,section,div,h2,h3");}
+  get childNodes(){return this.children;}
+  append(...nodes){for(const node of nodes){if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node);}}
+  getBoundingClientRect(){return {x:0,y:0,left:0,top:0,right:0,bottom:0,width:0,height:0};}
   showModal(){this.open=true;}
   close(){this.open=false;for(const listener of this.listeners.close??[])listener();}
   remove(){if(this.parentNode)this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);this.parentNode=null;}
@@ -24,7 +32,7 @@ class FakeElement extends SharedElement {
   getContext(){return {putImageData:image=>{this.image=image;}};}
   set ariaLabel(value){this.setAttribute("aria-label",value);}
   get ariaLabel(){return this.getAttribute("aria-label");}
-  replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  replaceChildren(...nodes) { for(const node of this.children)node.parentNode=null; this.children = []; this.append(...nodes); }
   closest(selector) { for (let n = this; n; n = n.parentNode) if (n.tagName === selector.toUpperCase()) return n; return null; }
   querySelectorAll(selector) {
     const tags = selector.split(",").map(s => s.trim().toUpperCase()), found = [];
@@ -69,7 +77,9 @@ function sharedCopy(name) {
     assert.ok(label, `${key} exists in the shared English catalog`);
     copy[field] = label[1];
   }
-  copy.common = { cancel: "Cancel", done: "Done", apply: "Apply" };
+  copy.dialog={role:"editor",modal:true,primary:"action"};
+  copy.library_dialog={role:"editor",modal:true,primary:"close"};
+  copy.common = { save:"Save", cancel: "Cancel", done: "Done", apply: "Apply" };
   return copy;
 }
 const exportCopy = sharedCopy("ExportCopy");
@@ -98,16 +108,17 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
   return {
     calls,
     language(next){language=next;},
-    localize_export_presets: view => ({...view,names:view.names.map((name,index)=>index<4?text(["Web","Print","Archive","Last"][index]):name)}),
+    localize_export_presets: names => names.map((name,index)=>index<4?text(["Web","Print","Archive","Last"][index]):name),
     profile_name_copy: name => name || text("Embedded profile"),
     export_profile_caption_copy: caption => caption.type==="original"?`${text("Original:")} ${caption.name}`:caption.type==="embedded"?text("Embedded profile"):caption.name,
     color_feature_error_copy: error => error?.color_feature_error?text(error.color_feature_error):String(error),
     export_metadata_copy: metadataCopy,
     export_preview_copy: (format,gainmap,clipped) => text(`${format}:prepared:${gainmap}:${clipped}`),
-    export_form: () => ({ profiles: [base.profile], metadata: photo, copy: exportCopy, numeric: { dimension: { min: 1, max: 32768 }, ppi: { min: 1, max: 65535 }, quality: { min: 1, max: 100 } } }),
+    export_form: () => ({ dialog:{role:"editor",modal:true,primary:"action"}, profiles: [base.profile], metadata: photo, copy: exportCopy, numeric: { dimension: { min: 1, max: 32768 }, ppi: { min: 1, max: 65535 }, quality: { min: 1, max: 100 } } }),
     export_copy: copy,
+    export_preset_name_valid:name=>!!name.trim(),
     profile_copy: () => sharedCopy("ProfileCopy"),
-    export_presets: async action => { calls.reads++;if (action?.type !== "get") calls.preferences.push(action); return { names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
+    export_presets: async action => { calls.reads++;if (action?.type !== "get") calls.preferences.push(action); return { dialog:{role:"editor",modal:true,primary:"action"}, names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
     document_color: () => ({ space: "Srgb", depth: "U8" }),
     export_draft: draft,
     export_validate: recipe => {
@@ -121,14 +132,22 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
 }
 
 async function openDialog(app) {
-  let form;
+  let form,prompt,controls;
   const result = chooseExport({ app, element, button, dropdown:dropdownFactory({element,button}), numberField, id: 7, gpuOperation: run => run(),
-    dialog: (title, build) => new Promise(resolve => { form = element("form"); build(form, resolve); }) });
+    dialog: (title, build, intent) => new Promise(resolve => { assert.deepEqual(intent,{role:"editor",modal:true,primary:"action"}); const body=element("form"); element("dialog").append(body); if(!form)form=body;else prompt=body; const actions=build(body, resolve,{header:element("header"),caption:element("h2"),layout(){},dismiss:()=>resolve(null)});if(body===form)controls=actions; }) });
   while (!form) await new Promise(resolve => setImmediate(resolve));
-  const labelled = name => form.querySelectorAll("button,input").find(n => n.getAttribute("aria-label") === name);
-  const pressed = name => form.querySelectorAll("button").find(n => n.textContent === name);
-  const error = form.children.find(n => n.className === "error-message");
-  return { form, result, labelled, pressed, error };
+  const reveal=node=>{
+    const pane=node?.closest("section"),page=["main","size","color","presets"][form.children.indexOf(pane)];
+    if(page){controls.onBack();if(page!=="main")form.querySelectorAll("button").find(button=>button.dataset.exportPage===page).click();}
+    return node;
+  };
+  const labelled = name => reveal(form.querySelectorAll("button,input").find(n => n.getAttribute("aria-label") === name));
+  const pressed = name => reveal(form.querySelectorAll("button").find(n => n.textContent === name));
+  const error = form.querySelectorAll("p").find(n => n.className === "error-message");
+  return { form, result, labelled, pressed, error,
+    preset(){pressed(exportCopy.save_new_preset).click();return prompt;},
+    async savePreset(){const own=this.preset(),name=own.querySelectorAll("input")[0];name.value="Literal preset";name.oninput();own.querySelectorAll("button").find(node=>node.textContent==="Save").click();await Promise.resolve();},
+  };
 }
 
 test("WebP joins the SDR formats with its file type", () => {
@@ -176,7 +195,7 @@ test("a photo's Metadata row drafts the kept fields and location through the sha
   const app = fakeApp({ extent: [800, 600], photo: true });
   const dialog = await openDialog(app);
   const metadata = dialog.labelled("Metadata"), location = dialog.labelled("Remove location");
-  const note = dialog.form.children.find(n => n.className === "export-metadata-note");
+  const note = dialog.form.querySelectorAll("p").find(n => n.className === "export-metadata-note");
   assert.deepEqual(dropdownChoices(metadata).map(o => [o.command, o.label]), METADATA_CHOICES, "labels come from the shared view");
   assert.equal(metadata.value, "All");
   assert.equal(location.checked, true, "location is removed by default");
@@ -203,7 +222,7 @@ test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata 
   const dialog = await openDialog(app);
   const range = dialog.labelled("Dynamic range");
   chooseDropdown(range,"exr");
-  const note = dialog.form.children.find(n => n.className === "export-metadata-note");
+  const note = dialog.form.querySelectorAll("p").find(n => n.className === "export-metadata-note");
   assert.equal(dialog.labelled("Metadata").closest("label").hidden, true);
   assert.equal(dialog.labelled("Remove location").closest("label").hidden, true);
   assert.equal(note.hidden, false);
@@ -211,7 +230,7 @@ test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata 
   const drawing = await openDialog(fakeApp({ extent: [800, 600] }));
   assert.equal(drawing.labelled("Metadata").closest("label").hidden, true, "a new drawing has no photo metadata");
   assert.equal(drawing.labelled("Remove location").closest("label").hidden, true);
-  assert.equal(drawing.form.children.find(n => n.className === "export-metadata-note").hidden, true);
+  assert.equal(drawing.form.querySelectorAll("p").find(n => n.className === "export-metadata-note").hidden, true);
 });
 
 test("export refuses unfinished numeric text before validating or rendering", async () => {
@@ -222,13 +241,13 @@ test("export refuses unfinished numeric text before validating or rendering", as
   for (const literal of ["bad", "Infinity", "２０４８"]) {
     width.value = literal;
     dialog.pressed("Choose File…").click(); dialog.pressed("Preview Output").click();
-    dialog.pressed(exportCopy.save_preset).click(); dialog.pressed(exportCopy.update_preset).click();
+    await dialog.savePreset(); dialog.pressed(exportCopy.update_preset).click();
     assert.equal(app.calls.validated.length, before); assert.equal(app.calls.rendered, 0);
     assert.equal(app.calls.preferences.length, 0);
   }
   width.value = "1024"; width.composing = true;
   dialog.pressed("Choose File…").click();
-  dialog.pressed(exportCopy.save_preset).click(); dialog.pressed(exportCopy.update_preset).click();
+  await dialog.savePreset(); dialog.pressed(exportCopy.update_preset).click();
   assert.equal(app.calls.validated.length, before);
   assert.equal(app.calls.preferences.length, 0);
   width.composing = false; dialog.pressed("Choose File…").click();
@@ -240,7 +259,7 @@ test("language publication retains export drafts and projects bounded labels wit
   const controls=dialog.form.querySelectorAll("input,button"),format=dialog.labelled("Format"),destination=dialog.labelled("Destination"),metadata=dialog.labelled("Metadata");
   const captions=[format,destination,metadata].map(node=>node.children[0]);
   const size=dialog.labelled("Pixel size");chooseDropdown(size,"Fit");
-  const width=dialog.labelled(exportCopy.maximum_width),name=dialog.labelled(exportCopy.preset_name);
+  const width=dialog.labelled(exportCopy.maximum_width),prompt=dialog.preset(),name=prompt.querySelectorAll("input")[0];
   width.value="２０４８ unfinished";width.selectionStart=2;width.selectionEnd=7;width.composing=true;name.value="İı ไทย Tiếng Việt { $name } 🎨";
   const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads};
   app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
@@ -257,14 +276,14 @@ test("pending and prepared export captions follow publication without recapturin
   app.export_image=()=>{app.calls.rendered++;return new Promise(done=>{resolve=done;});};
   const dialog=await openDialog(app);dialog.pressed("Preview Output").click();
   app.language("fr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.equal(app.calls.rendered,1);assert.equal(dialog.form.children.filter(node=>node.tagName==="P").at(-1).textContent,`fr:${exportCopy.preparing_comparison}`);
+  assert.equal(app.calls.rendered,1);assert.equal(dialog.form.querySelectorAll("p").at(-1).textContent,`fr:${exportCopy.preparing_comparison}`);
   const image={extent:[1,1],pixels:[255,0,0,255]};resolve({previews:[image,image],clipped_channels:0});await new Promise(done=>setImmediate(done));
   const canvases=dialog.form.querySelectorAll("canvas"),figures=dialog.form.querySelectorAll("figure"),pixels=canvases.map(node=>node.image);
-  assert.equal(canvases.length,2);assert.equal(dialog.form.children.filter(node=>node.tagName==="P").at(-1).textContent,"fr:Png:prepared:false:false");
+  assert.equal(canvases.length,2);assert.equal(dialog.form.querySelectorAll("p").at(-1).textContent,"fr:Png:prepared:false:false");
   const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,reads:app.calls.reads};
   app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
   assert.deepEqual(dialog.form.querySelectorAll("canvas"),canvases);assert.deepEqual(dialog.form.querySelectorAll("figure"),figures);assert.deepEqual(canvases.map(node=>node.image),pixels);assert.equal(app.calls.rendered,1);
-  assert.equal(canvases[0].ariaLabel,`tr:${exportCopy.artwork_preview}`);assert.equal(figures[1].querySelectorAll("figcaption")[0].textContent,`tr:${exportCopy.output}`);assert.equal(dialog.form.children.filter(node=>node.tagName==="P").at(-1).textContent,"tr:Png:prepared:false:false");
+  assert.equal(canvases[0].ariaLabel,`tr:${exportCopy.artwork_preview}`);assert.equal(figures[1].querySelectorAll("figcaption")[0].textContent,`tr:${exportCopy.output}`);assert.equal(dialog.form.querySelectorAll("p").at(-1).textContent,"tr:Png:prepared:false:false");
   assert.deepEqual({drafts:app.calls.drafts.length,validated:app.calls.validated.length,reads:app.calls.reads},before);
   dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
 });
@@ -298,10 +317,10 @@ test('fit enlargement follows the visible option into the validated export recip
 
 
 test('profile-library search uses shared metadata matching and Escape waits for its active write',async t=>{
-  const before=globalThis.document,body=element('body');globalThis.document={body};t.after(()=>globalThis.document=before);
+  const {doc}=colorDialogDom(t),body=element('body');doc.body=body;
   const entries=Array.from({length:8},(_,index)=>({id:String(index),entry_copy_source:{id:String(index)},visible:true}));
   let release,language='en';const queries=[];
-  const app={profile_copy:()=>({search:'Search profiles',library_title:'Profiles',library_help:'Help',remove:'Remove',show:'Show',hide:'Hide',import:'Import',common:{done:'Done'}}),language_tag:()=>language,
+  const app={...dialogProjection,profile_copy:()=>({search:'Search profiles',library_title:'Profiles',library_help:'Help',remove:'Remove',show:'Show',hide:'Hide',import:'Import',library_dialog:{role:'editor',modal:true,primary:'close'},common:{done:'Done'}}),language_tag:()=>language,
     profile_entry_copy:entry=>({name:`${language}:profile-${entry.id}`,details:'Details'}),
     profile_library_matches:(entry,query)=>{queries.push([entry.id,query]);return !query||entry.id===query;},
     profile_library:async(type)=>{if(type==='list')return entries;if(type==='remove')await new Promise(done=>release=done);},color_feature_error_copy:String};

@@ -138,12 +138,9 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   const content = element("div", "preferences-content");
   const header = element("header", "dialog-header");
   const title = element("h2"); title.id = "settings-title";title.tabIndex=-1;
-  const back = button("", () => shell.dismiss(), "preferences-back");
-  back.id="shortcut-category-back";
-  back.append(icon("go-previous")); back.setAttribute("aria-label", "");
   const exit = button("", close, "dialog-close"); exit.append(icon("window-close")); exit.setAttribute("aria-label", "");
   exit.id = "close-settings";
-  header.append(back, title, exit);
+  header.append(title, exit);
   const search = element("input", "preferences-search");
   search.type = "search"; search.placeholder = ""; search.id = "settings-search";
   search.setAttribute("aria-label", "");
@@ -164,12 +161,12 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   function activeHeader() {
     const row=layout?.single_pane&&!view()?.page_requested?sidebarHeader:header;
     const focus=document.activeElement;
-    for(const control of [back,exit])if(control.parentNode!==row)row.append(control);
-    if((focus===back||focus===exit)&&document.activeElement!==focus)focus.focus({preventScroll:true});
+    for(const control of [exit])if(control.parentNode!==row)row.append(control);
+    if(focus===exit&&document.activeElement!==focus)focus.focus({preventScroll:true});
     return row;
   }
   const goBack=()=>{const action=view()?.navigation.back;if(action)send(action);};
-  const shell=createDialogHost({app,dialog,header:activeHeader,cancel:back,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
+  const shell=createDialogHost({app,dialog,header:activeHeader,cancel:exit,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
     subpage:()=>!!layout?.subpage,search,clearSearch:()=>send({type:'search',query:''})});
   root.dataset.dialogPart='panes';
   function arrange() {
@@ -338,7 +335,6 @@ export function createPreferences({ app, element, button, icon, numberField, pan
     if (!fields.size) build(model);
     if (searchToggle.getAttribute("aria-label") !== model.search_label) searchToggle.setAttribute("aria-label", model.search_label);
     if (navigation.getAttribute("aria-label") !== model.title) navigation.setAttribute("aria-label", model.title);
-    if (back.getAttribute("aria-label") !== model.title) back.setAttribute("aria-label", bootstrap.common.back);
     if (exit.getAttribute("aria-label") !== model.close_label) exit.setAttribute("aria-label", model.close_label);
     if (search.placeholder !== model.search_placeholder) search.placeholder = model.search_placeholder;
     if (search.getAttribute("aria-label") !== model.search_label) search.setAttribute("aria-label", model.search_label);

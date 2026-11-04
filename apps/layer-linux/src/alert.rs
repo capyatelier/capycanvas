@@ -41,6 +41,11 @@ pub async fn choose_editor(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widg
     choose_role(dialog, parent, layer_ui::DialogRole::Editor, metadata).await
 }
 
+pub async fn choose_intent(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, intent: layer_ui::DialogIntent, primary: Option<&str>, secondary: &[&str]) -> glib::GString {
+    let metadata = crate::page_dialog::Metadata::responses(primary, &dialog.close_response(), secondary).intent(intent);
+    choose_role(dialog, parent, intent.role, metadata).await
+}
+
 async fn choose_role(dialog: adw::AlertDialog, parent: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole, metadata: crate::page_dialog::Metadata) -> glib::GString {
     let state = Rc::new(RefCell::new(Response::default()));
     let handler = dialog.connect_response(None, {

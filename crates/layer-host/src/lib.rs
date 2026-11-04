@@ -938,10 +938,9 @@ impl NativeHost {
                 Some(false) => reason.preset_message(self.session.localization()),
                 None => reason.message(self.session.localization()),
             }}),
-            Query::ExportPresetCopy { names } => {
-                let mut view = layer_ui::ExportPresetView { names, index: None, recipe: None, changed: false };
-                view.localize_names(self.session.engine().document().composition().color, self.session.localization());
-                json!(view.names)
+            Query::ExportPresetCopy { mut names } => {
+                layer_ui::ExportPresetView::localize_names_in(&mut names,self.session.engine().document().composition().color,self.session.localization());
+                json!(names)
             },
             Query::ExportProfileCaptionsCopy { captions } => json!(captions.iter().map(|caption| caption.message(self.session.localization())).collect::<Vec<_>>()),
             Query::ExportMetadataCopy { format, keep } => json!(layer_ui::ExportMetadataView::localized_for(format, keep, self.session.localization())),

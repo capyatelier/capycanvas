@@ -43,11 +43,11 @@ export class Element extends FakeElement {
 }
 
 export function colorDialogDom(t) {
-  const previous = Object.fromEntries(['document', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'devicePixelRatio'].map(key => [key, globalThis[key]]));
+  const previous = Object.fromEntries(['document', 'window', 'innerWidth', 'innerHeight', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'devicePixelRatio'].map(key => [key, globalThis[key]]));
   const doc = {createTextNode:nodeValue => ({nodeType:3, nodeValue:String(nodeValue)}), createElementNS:(_, tag) => new Element(tag, doc), createElement:tag => new Element(tag, doc), activeElement:null,
     querySelector:selector => selector === 'dialog[open]' ? doc.body.descendants().find(node => node.tagName === 'DIALOG' && node.open) ?? null : null};
   doc.body = new Element('body', doc);
-  Object.assign(globalThis, {document:doc, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, devicePixelRatio:1});
+  Object.assign(globalThis, {document:doc, window:{addEventListener() {}, removeEventListener() {}}, innerWidth:1200, innerHeight:900, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, devicePixelRatio:1});
   t.after(() => Object.assign(globalThis, previous));
   const element = (tag, cls, text) => { const node = new Element(tag, doc); node.className = cls ?? ''; if (text != null) { if (typeof text === 'function') bindCopy(node, text); else node.textContent = text; } return node; };
   const button = (text, action, cls) => { const node = element('button', cls, text); node.addEventListener('click', action); return node; };
@@ -60,14 +60,21 @@ export function colorDialogDom(t) {
 const row = (label, values, language) => ({form:label.toLowerCase(), label, forms:[{form:label.toLowerCase(), label}], space:label === 'RGB' ? 'sRGB' : null,
   values:values.map((text, i) => ({text, edit:text.replace(/[°%]/g, ''), name:`${language}:value${i}`})), copy:`${label.toLowerCase()}(${values.join(' ')})`});
 
+export const dialogProjection = {
+  dialog_presentation:() => ({kind:'floating'}),
+  dialog_header:() => ({start:'cancel', end:'primary'}),
+  dialog_escape:() => 'cancel',
+  dialog_panes_fit:(available, minimum, gap) => minimum.every(width => width > 0) && available >= minimum[0] + minimum[1] + gap,
+};
+
 export function fakeColorApp({language = () => 'en', selected = {space:'Srgb', rgba:[.25, .5, .75, 1]}, hdr = false} = {}) {
   const stats = {requests:0, actions:[]};
-  const view = editor => ({
+  const view = editor => ({dialog:{role:'editor', modal:true, primary:'action'},
     panel:{hdr, intensity:0, rgb_space:'Srgb', shape:'circle', rendition:null}, shapes:['circle', 'square', 'triangle'].map(shape => ({shape, label:shape, name:shape, selected:shape === 'circle'})),
     current:{rgba:[1, 1, 1, 1]}, new:{rgba:editor.value.rgba}, hex:editor.hex, hex_note:null,
     rows:[row('RGB', ['64', '128', '191'], language()), row('HSB', ['210°', '67%', '75%'], language()), row('OKLCH', ['58.1%', '0.112', '247°'], language())],
     intensity:hdr ? {text:'+1.00 EV', edit:'1', name:`${language()}:intensity`} : null, value:editor.value, current_value:{space:'Srgb', rgba:[1, 1, 1, 1]}, stops:hdr ? 1 : null, changed:editor.hex !== '#FFFFFF', search:editor.picker.editor.search});
-  const app = {
+  const app = {...dialogProjection,
     state:() => ({document_file:{epoch:1}, colors:{}, layer_tools:{}, color_library:{history:[]}}), language_tag:language,
     color_panel:() => ({rendition:null}), color_preview:() => ({picker:{editor:false, preview:null, picked:null}}), swatch_sheet:() => ({sections:[], empty:null}),
     catalog:() => ({native_copy:{color:Object.fromEntries(['edit', 'wheel', 'intensity', 'circle', 'square', 'triangle', 'current', 'new', 'pick_canvas', 'copy', 'hex', 'format', 'intensity_ev', 'swatch_search', 'close_swatches', 'all_swatches', 'use_color', 'picking_strip', 'copied'].map(key => [key, `${language()}:${key}`])), palettes:{add_current:`${language()}:add`}}}),

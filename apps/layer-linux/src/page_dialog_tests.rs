@@ -431,8 +431,13 @@ fn inventory_with(d: &mut Driver, mut visit: impl FnMut(&mut Driver, &str)) {
     until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
         .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its inventory preview");
     visit(d, "export");
-    export_page(d, &frame, "size");
-    visit(d, "export-size");
+    let nav = named::<adw::NavigationView>(&frame, "export-navigation");
+    for tag in ["size", "color", "presets"] {
+        export_page(d, &frame, tag);
+        visit(d, &format!("export-{tag}"));
+        d.click(icon_button(&page_header(&frame), "go-previous-symbolic").unwrap().upcast_ref());
+        until(|| nav.visible_page_tag().as_deref() == Some("main"), "Export Back returns to its draft");
+    }
     close(d, &dialog);
 
     d.w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
@@ -674,10 +679,44 @@ fn navigation_headers_settings(mut d: &mut Driver) {
 }
 
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a, phone viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a or w6b, phone viewport/theme external"]
 fn native_phone_dialogs() {
-    assert_eq!(std::env::var("LAYER_DIALOG_BATCH").unwrap(),"w6a");
+    let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    if batch == "w6b" {
+        inventory_with(&mut d, |d, name| {
+            if matches!(name, "new-drawing" | "color" | "export" | "export-size" | "export-color" | "export-presets" | "canvas-size") { capture(d, name); }
+        });
+        for (command, name) in [(CommandId::ImageSize, "image-size"), (CommandId::DocumentProperties, "properties")] {
+            d.w.dispatch(UiAction::Invoke { command });
+            let (dialog, _) = page(&d);
+            capture(&mut d, name);
+            close(&d, &dialog);
+        }
+        d.w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });
+        let (dialog, _) = page(&d);
+        d.w.dispatch(UiAction::NewDrawing { action: NewDrawingAction::Paper });
+        capture(&mut d, "new-paper");
+        keys(&mut d, 0xff1b);
+        close(&d, &dialog);
+        let selected = state(&d.w).layer_properties.layer.unwrap();
+        let paper = layer_ui::occurrence_token(ui_session(&d.w).engine().document().bottom_paper().unwrap());
+        d.w.dispatch(UiAction::SelectLayer { id: paper });
+        crate::paper_picker::open(&d.w, paper);
+        let (dialog, _) = page(&d);
+        capture(&mut d, "paper");
+        close(&d, &dialog);
+        d.w.dispatch(UiAction::SelectLayer { id: selected });
+        crate::color_editor::show(&d.w, layer_ui::ColorSlot::Foreground);
+        let (dialog, frame) = page(&d);
+        d.click(named::<gtk::Button>(&frame, "edit-color-swatches").upcast_ref());
+        until(|| d.w.color_editors.borrow().last().is_some_and(|editor| editor.slide.is_open()), "All Swatches opens");
+        capture(&mut d, "all-swatches");
+        close(&d, &dialog);
+        d.finish();
+        return;
+    }
+    assert_eq!(batch, "w6a");
     navigation_headers_settings(&mut d);
     d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
     let (dialog, _) = page(&d);

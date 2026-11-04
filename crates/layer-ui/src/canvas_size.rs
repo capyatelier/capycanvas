@@ -93,6 +93,7 @@ pub struct CanvasUnitChoice {
 /// the current size when `relative` is set.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasSizeView {
+    pub dialog: crate::DialogIntent,
     pub title: Arc<str>,
     pub apply_label: Arc<str>,
     pub cancel_label: Arc<str>,
@@ -152,6 +153,7 @@ impl CanvasSizeDraft {
             relative: false,
             anchor: CanvasAnchor::Center,
             view: CanvasSizeView {
+                dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
                 title: localization.text(MessageId::RESOURCES_SIZE_CANVAS_TITLE),
                 apply_label: localization.text(MessageId::COMMON_APPLY),
                 cancel_label: localization.text(MessageId::COMMON_CANCEL),

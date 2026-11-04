@@ -180,7 +180,7 @@ impl ExportPresets {
             Ok(())
         })
     }
-    fn validate_name(name: &str) -> Result<(), ColorFeatureError> {
+    pub fn validate_name(name: &str) -> Result<(), ColorFeatureError> {
         if name.trim() != name
             || name.is_empty()
             || name.chars().count() > 80
@@ -300,6 +300,9 @@ mod localized_name_tests {
             let context = crate::Localizer::shared(language);
             let color = DocumentColor {depth: layer_core::color::SampleDepth::F32, ..DocumentColor::default()};
             let names = presets.localized_names(color, &context);
+            let mut copied: Vec<_> = ExportPresets::DESTINATIONS.iter().map(|name| (*name).to_string()).chain(presets.names().map(str::to_string)).collect();
+            ExportPresetView::localize_names_in(&mut copied,color,&context);
+            assert_eq!(copied,names);
             assert_eq!(&names[4..], &["Further editing (SDR)", "カスタム", "自分の色", "내 프리셋"]);
             assert_eq!(presets.encode().unwrap(), saved);
             assert_eq!(ExportPresets::restore(&saved).localized_names(color, &context), names);
@@ -505,6 +508,7 @@ pub enum ExportPresetAction {
 }
 #[derive(Serialize, Deserialize)]
 pub struct ExportPresetView {
+    pub dialog: crate::DialogIntent,
     pub names: Vec<String>,
     pub index: Option<usize>,
     pub recipe: Option<ExportRecipe>,
@@ -512,9 +516,12 @@ pub struct ExportPresetView {
 }
 impl ExportPresetView {
     pub fn localize_names(&mut self, color: DocumentColor, localizer: &crate::Localizer) {
+        Self::localize_names_in(&mut self.names,color,localizer);
+    }
+    pub fn localize_names_in(names: &mut [String], color: DocumentColor, localizer: &crate::Localizer) {
         use crate::MessageId as M;
         let editing = if color.depth.is_float() {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING_SDR} else {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING};
-        for (name,id) in self.names.iter_mut().take(4).zip([M::COLOR_FEATURES_EXPORT_WEB_SHARE,M::COLOR_FEATURES_EXPORT_WIDE_COLOR,editing,M::COLOR_FEATURES_EXPORT_CUSTOM]) {
+        for (name,id) in names.iter_mut().take(4).zip([M::COLOR_FEATURES_EXPORT_WEB_SHARE,M::COLOR_FEATURES_EXPORT_WIDE_COLOR,editing,M::COLOR_FEATURES_EXPORT_CUSTOM]) {
             *name = localizer.text(id).to_string();
         }
     }
@@ -564,6 +571,7 @@ impl ExportPresets {
             recipe.validate_for_color(color)?;
         }
         Ok(ExportPresetView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             names: Self::DESTINATIONS
                 .iter()
                 .map(|s| (*s).to_string())
@@ -604,6 +612,7 @@ fn worker_protocol_validates_before_mutation_and_lists_only_names() {
             Default::default(),
         )
         .unwrap();
+    assert_eq!(view.dialog, crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)));
     assert_eq!(view.index, Some(4));
     assert!(view.changed);
     let mut restored = ExportPresets::decode(&library.encode().unwrap()).unwrap();

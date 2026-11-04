@@ -64,8 +64,8 @@ export async function chooseDocumentColor({app,dialog,element,button,dropdown,gp
       };
       footer.append(cancel);if(!history)footer.append(apply);
       form.localize=present;form.append(comparison,status,footer);form.onsubmit=e=>e.preventDefault();
-      pending=true;queueMicrotask(prepare);
-    });
+      pending=true;queueMicrotask(prepare);return {cancel,primary:history?null:apply};
+    },copy.dialog);
     closed=true;pending=false;if(!accepted)control?.cancel();await running;
     return accepted?candidate:null;
   } finally {

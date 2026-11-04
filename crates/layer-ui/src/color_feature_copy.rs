@@ -96,6 +96,8 @@ impl ProofCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ProfileCopy {
+    pub dialog: crate::DialogIntent,
+    pub library_dialog: crate::DialogIntent,
     pub read_bytes: usize,
     pub read_limit: Arc<str>,
     pub common: CommonCopy,
@@ -133,7 +135,7 @@ pub struct ProfileCopy {
 }
 impl ProfileCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { read_bytes: crate::profile_library::PROFILE_READ_LIMIT, read_limit: localizer.text(MessageId::COLOR_PROFILE_READ_LIMIT), common: CommonCopy::new(localizer),
+        Self { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), library_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)), read_bytes: crate::profile_library::PROFILE_READ_LIMIT, read_limit: localizer.text(MessageId::COLOR_PROFILE_READ_LIMIT), common: CommonCopy::new(localizer),
             reading: localizer.text(MessageId::COLOR_FEATURES_PROFILE_READING),
             choose: localizer.text(MessageId::COLOR_FEATURES_PROFILE_CHOOSE),
             choose_short: localizer.text(MessageId::COLOR_FEATURES_PROFILE_CHOOSE_SHORT),
@@ -171,6 +173,8 @@ impl ProfileCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ExportCopy {
+    pub dialog: crate::DialogIntent,
+    pub preset_dialog: crate::DialogIntent,
     pub common: CommonCopy,
     pub title: Arc<str>,
     pub help: Arc<str>,
@@ -294,7 +298,8 @@ pub struct ExportCopy {
 }
 impl ExportCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { common: CommonCopy::new(localizer),
+        Self { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
+            preset_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
             title: localizer.text(MessageId::COLOR_FEATURES_EXPORT_TITLE),
             help: localizer.text(MessageId::COLOR_FEATURES_EXPORT_HELP),
             export: localizer.text(MessageId::COLOR_FEATURES_EXPORT_EXPORT),
@@ -420,6 +425,7 @@ impl ExportCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct DocumentColorCopy {
+    pub dialog: crate::DialogIntent,
     pub common: CommonCopy,
     pub assign_title: Arc<str>,
     pub convert_title: Arc<str>,
@@ -487,7 +493,7 @@ pub struct DocumentColorCopy {
 }
 impl DocumentColorCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { common: CommonCopy::new(localizer),
+        Self { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
             preparing_comparison: localizer.text(MessageId::COLOR_FEATURES_COLOR_PREPARING_COMPARISON),
             choose_different: localizer.text(MessageId::COLOR_FEATURES_COLOR_CHOOSE_DIFFERENT),
             clipped_comparison: localizer.text(MessageId::COLOR_FEATURES_COLOR_CLIPPED_COMPARISON),

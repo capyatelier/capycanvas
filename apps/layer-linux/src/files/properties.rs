@@ -68,6 +68,6 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         }
         true
     });
-    if crate::alert::choose_editor(dialog, &w.window, None, &["appearance"]).await == "appearance" { super::proof::run(w)?; }
+    if crate::alert::choose_intent(dialog, &w.window, view.dialog, None, &["appearance"]).await == "appearance" { super::proof::run(w)?; }
     Ok(true)
 }

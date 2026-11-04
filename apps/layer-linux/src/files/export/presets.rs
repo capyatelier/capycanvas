@@ -241,7 +241,7 @@ pub(super) fn install(
                                     #[weak]
                                     dialog,
                                     move |entry| crate::page_dialog::set_response_enabled(&dialog, "save",
-                                        !entry.text().trim().is_empty()
+                                        layer_ui::ExportPresets::validate_name(&entry.text()).is_ok()
                                     )
                                 ));
                                 workspace.on_localization(glib::clone!(#[weak] entry, #[weak] dialog, #[upgrade_or] false, move |localization| {
@@ -252,7 +252,7 @@ pub(super) fn install(
                                     crate::page_dialog::set_response_label(&dialog, "save", &copy.common.save);
                                     true
                                 }));
-                                if crate::alert::choose_editor(dialog, &parent, Some("save"), &[]).await != "save" {
+                                if crate::alert::choose_intent(dialog, &parent, copy.preset_dialog, Some("save"), &[]).await != "save" {
                                     return Ok(None);
                                 }
                                 Some(entry.text().to_string())

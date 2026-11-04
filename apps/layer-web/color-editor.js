@@ -1,3 +1,4 @@
+import {createDialogHost} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {createRasterWorker} from './raster-worker-client.js';
 import {wheelPainter,wheelPicker,hueStopCache,wheelHit,rgba,json} from './color-wheel.js';
@@ -230,7 +231,17 @@ export function colorForm({app, root, element, button, open, rendition, copyable
     paint.style.background = rgba(entry.rgba); node.append(paint); node.title = entry.detail; node.setAttribute('aria-label', entry.detail);
     node.classList.toggle('selected', !!entry.current); return node;
   };
-  const resize = new ResizeObserver(() => { layoutKey = ''; paintKey = ''; queueDraw(); }); resize.observe(wheelBox);
+  let minimum,available=0;
+  const resize = new ResizeObserver(entries => {
+    const allocation=entries.find(entry=>entry.target===body);if(allocation)available=allocation.contentRect.width;
+    if(!available)return;
+    if(!minimum){
+      const measure=node=>{const before=node.style.cssText;node.style.cssText+=';position:absolute;width:max-content;min-width:0;max-width:none;';const width=node.getBoundingClientRect().width;node.style.cssText=before;return width;};
+      minimum=[232,Math.max(measure(head),measure(values))];
+    }
+    body.classList.toggle('single-pane',!app.dialog_panes_fit(available,minimum,24));
+    layoutKey = ''; paintKey = ''; queueDraw();
+  }); resize.observe(wheelBox);resize.observe(body);
   return {body, title, left, head, values, current, fresh, captions, pick:pickButton, hex:hex.show, act, request, render, draw, tile,
     view:() => view, editor:() => editor,
     closeMenus() {
@@ -238,7 +249,7 @@ export function colorForm({app, root, element, button, open, rendition, copyable
       rows.forEach(r => { if (!r.menu.hidden) { r.menu.hidden = true; r.format.focus(); } });
       return true;
     },
-    relocalize() { request(null); if (refused) error = request(refused); render(); },
+    relocalize() { minimum=null;request(null); if (refused) error = request(refused); render(); },
     dispose() { resize.disconnect(); painter.dispose(); cancelAnimationFrame(frame); }};
 }
 
@@ -256,7 +267,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     const apply = button(() => copy.use_color, () => {
       if (apply.disabled) return;
       if (app.state().document_file.epoch === epoch) { const view = form.view(); result = {color: view.value, intensity: view.stops ?? null}; }
-      root.close();
+      shell.hide();
     }, 'suggested-action');
     try {
       form = colorForm({app, root, element, button, rendition, open:{colors, ...(slot ? {slot} : {color}), opaque}, pick:canPick ? () => startPick() : null, live:() => !picking && root.open,
@@ -272,11 +283,12 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     miniPair.append(miniCurrent, miniNew); mini.append(miniPair, miniHex); mini.inert = true;
     const footerStack=element('div','color-footer-stack');footerStack.append(recent,mini);
     const more = button('', () => showSheet(sheet.hidden), 'color-swatches'); more.append(icon('chevron-down'));
-    const cancel = button(() => common.cancel, () => root.close(), 'color-cancel dialog-button');
+    const cancel = button(() => common.cancel, () => shell.hide(), 'color-cancel dialog-button');
     const footer = element('footer', 'dialog-footer'); footer.append(footerStack, more, cancel, apply);
     const page = element('div', 'color-editor-page'); page.append(form.body, sheet);
     const content = element('div', 'dialog-content'); content.append(page, footer);
-    root.append(content); document.body.append(root);
+    const header=element('header','dialog-header');header.append(form.title);root.append(header,content); document.body.append(root);
+    const shell=createDialogHost({app,dialog:root,header,cancel,primary:apply,icon,copy:common,onCancel:()=>shell.hide()});
     const strip = button('', () => { if (app.color_preview().picker.editor) dispatch({type:'color_picker', action:{kind:'toggle'}}); }, 'color-strip');
     const stripPair = element('span', 'color-pair'), stripOriginal = element('span'), stripSample = element('span'), stripHex = element('span', 'color-strip-hex'), stripEv = element('span', 'color-strip-ev'), stripSpace = element('span', 'color-strip-space'), stripValues = element('span', 'color-strip-values');
     const stripTop = element('span', 'color-strip-line'), stripLine = element('span', 'color-strip-line'), stripText = element('span', 'color-strip-text');
@@ -285,7 +297,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     root.addEventListener('keydown', e => {
       if (e.key === 'Escape' && form.closeMenus()) { e.preventDefault(); e.stopPropagation(); }
       else if (e.key === 'Escape' && !sheet.hidden) { e.preventDefault(); e.stopPropagation(); if (document.activeElement === search && search.value) { search.value = ''; searchChanged(); } else showSheet(false); }
-    });
+    },true);
     const fillRecent = () => {
       const sections = app.swatch_sheet('', form.view().value).sections;
       recent.replaceChildren(...(sections.find(section => section.palette == null)?.tiles ?? []).map(entry => form.tile(entry, 'recent')));
@@ -314,7 +326,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     }
     showSheet(false); more.blur();
     function startPick() {
-      picking = true; root.close();
+      picking = true; shell.hide();
       dispatch({type:'color_picker', action:{kind:'editor', original:form.view().value, touch_offset:44 * (devicePixelRatio || 1)}});
       refresh();
     }
@@ -342,17 +354,17 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
       }
       picking = false; strip.hidden = true;
       if (picker.picked) form.act({op:'color', color:picker.picked});
-      root.showModal(); form.pick.focus();
+      shell.present(form.view().dialog); form.pick.focus();
     }
     editors.add(refresh);
     Object.defineProperty(root, 'language', {set() { if (closed) return; form.relocalize(); if (!sheet.hidden) fillSheet(); }});
     bindCopy(root, () => app.language_tag(), 'language');
     root.addEventListener('close', () => {
       if (picking) return;
-      closed = true; editors.delete(refresh); form.dispose(); strip.remove(); root.remove();
+      closed = true; editors.delete(refresh);shell.dispose(); form.dispose(); strip.remove(); root.remove();
       if (json(form.editor().picker.editor) !== memory) dispatch({type:'color', action:{op:'editor_memory', memory:form.editor().picker.editor}});
       resolve(result);
     });
-    fillRecent(); form.render(); root.showModal(); form.draw(); form.current.blur(); form.title.tabIndex = -1; form.title.focus();
+    fillRecent(); form.render(); shell.present(form.view().dialog); form.draw(); form.current.blur(); form.title.tabIndex = -1; form.title.focus();
   });
 }

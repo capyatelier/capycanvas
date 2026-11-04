@@ -248,6 +248,7 @@ pub enum NewDrawingDrawerView {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NewDrawingDialogView {
+    pub dialog: crate::DialogIntent,
     pub copy: NewDrawingCopy,
     pub name: String,
     pub untitled: String,
@@ -373,6 +374,7 @@ impl NewDrawingDialog {
         let blending = NewDocumentBlending::new(l);
         let float = setup.color.depth.is_float();
         NewDrawingDialogView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             copy: NewDrawingCopy::new(l),
             name: self.name.clone(),
             untitled: crate::DocumentTabLabel::untitled(self.untitled, l),

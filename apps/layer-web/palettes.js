@@ -1,3 +1,4 @@
+import {createDialogHost} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 const SLOP = 8;
 const plain = (_, value) => typeof value === "bigint" ? Number(value) : value;
@@ -60,9 +61,9 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       report(metadata.notice, true);
     } catch (error) { report(String(error).replace(/^Error: /, "")); }
   }
-  function form({ title, text, value, confirm, destructive, check, submit }) {
+  function form({ title, text, value, confirm, destructive, check, submit, intent }) {
     const root = element("dialog", "workspace-form palette-form"), error = element("p", "workspace-error"), footer = element("footer");
-    root.append(element("h2", "", title)); if(typeof title==="function")bindCopy(root,title,"ariaLabel");else root.setAttribute("aria-label",title);
+    const header=element("header","dialog-header");header.append(element("h2", "", title));root.append(header); if(typeof title==="function")bindCopy(root,title,"ariaLabel");else root.setAttribute("aria-label",title);
     if (text) root.append(element("p", "", text));
     let input;
     if (value != null) {
@@ -71,13 +72,14 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     }
     const ok = button(confirm, () => {
       const message = submit(input?.value ?? "");
-      if (message) { error.textContent = message; input?.focus(); } else root.close();
+      if (message) { error.textContent = message; input?.focus(); } else shell.hide();
     }, destructive ? "destructive-action" : "suggested-action");
     const validate = () => { const message = check?.(input.value); ok.disabled = !!message; error.textContent = message || ""; };
     if (input) { input.oninput = validate; validate(); input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); if (!ok.disabled) ok.click(); } }; }
-    footer.append(button(() => common.cancel, () => root.close()), ok); root.append(error, footer);
-    root.addEventListener("close", () => root.remove());
-    document.body.append(root); root.showModal(); input?.select();
+    const cancel=button(() => common.cancel, () => shell.hide());footer.append(cancel,ok);root.append(error,footer);
+    const shell=createDialogHost({app,dialog:root,header,cancel,primary:ok,icon,copy:common,onCancel:()=>shell.hide()});
+    root.addEventListener("close", () => {shell.dispose();root.remove();});
+    document.body.append(root);shell.present(intent);input?.select();
   }
 
   function mount(root) {
@@ -169,7 +171,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
           const id = command.command === "rename_palette" ? command.id : null;
           if (id != null && paletteName(id) == null) return;
           const action = value => id != null ? { op: "rename_palette", id, name: value } : { op: "create_palette", name: value };
-          form({ title: id != null ? () => copy.rename_title : () => copy.new_title, value: id != null ? paletteName(id) : "", confirm: () => common.save,
+          form({ intent:view.edit_dialog, title: id != null ? () => copy.rename_title : () => copy.new_title, value: id != null ? paletteName(id) : "", confirm: () => common.save,
             check: value => app.palette_action_error(action(value)),
             submit: value => { let failure = null; if (library(action(value), text => { failure = text; })) browse(false); return failure; } });
           return;
@@ -178,7 +180,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         case "export_palette": exportPalette(command.id, command.format, item?.label, report); return;
         case "remove_palette": {
           const title = paletteName(command.id); if (title == null) return;
-          form({ title: () => copy.remove_title, text: () => app.native_caption({ type: "remove_palette", name: title }), confirm: () => common.remove, destructive: true,
+          form({ intent:view.delete_dialog, title: () => copy.remove_title, text: () => app.native_caption({ type: "remove_palette", name: title }), confirm: () => common.remove, destructive: true,
             submit: () => { let failure = null; library({ op: "remove_palette", id: command.id }, text => { failure = text; }); return failure; } });
           return;
         }

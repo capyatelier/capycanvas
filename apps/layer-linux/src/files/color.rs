@@ -327,7 +327,7 @@ pub(super) async fn run(
         move |_| refresh()
     });
     refresh();
-    let response = crate::alert::choose_editor(dialog, &w.window, Some("apply"), &[]).await;
+    let response = crate::alert::choose_intent(dialog, &w.window, layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).dialog, Some("apply"), &[]).await;
     let compared = state.comparison.ready.get();
     state.finish().await;
     if response != "apply" {

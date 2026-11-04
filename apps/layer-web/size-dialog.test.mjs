@@ -1,44 +1,29 @@
 import {dropdownFactory,dropdownChoices,chooseDropdown} from './dropdown-test-fixture.mjs';
-import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, {afterEach} from "node:test";
+import {colorDialogDom,dialogProjection,Element} from "./color-dialog-fixture.mjs";
+const cleanups=[];
+afterEach(()=>{while(cleanups.length)cleanups.pop()();});
 import { createCanvasSizeUi } from "./canvas-size.js";
 import { createImageSizeUi } from "./image-size.js";
 
-class FakeElement extends SharedElement {
-  constructor(tag, className = "") {
-    super();
-    this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
-    this.attributes = new Map(); this.dataset = {}; this.listeners = {}; this.textContent = ""; this.disabled = false; this.open = false;
-  }
-  get classList() {
-    const names = () => new Set(this.className.split(/\s+/).filter(Boolean));
-    return {
-      contains: name => names().has(name),
-      toggle: (name, force) => { const set = names(); if (force ?? !set.has(name)) set.add(name); else set.delete(name); this.className = [...set].join(" "); },
-    };
-  }
+class FakeElement extends Element {
+  constructor(tag, className = "") { super(tag,document); this.className=className; }
   dispatch(type, extra = {}) {
-    const event = { type, target: this, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...extra };
-    for (let node = this; node; node = node.parentNode) for (const listener of node.listeners[type] ?? []) listener(event);
+    const event = {type,target:this,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;},...extra};
+    for(let node=this;node;node=node.parentNode)for(const listener of node.listeners[type]??[])listener(event);
     return event;
   }
-  replaceWith(node) { const siblings = this.parentNode.children; node.parentNode = this.parentNode; siblings[siblings.indexOf(this)] = node; this.parentNode = null; }
-  remove() { if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1); this.parentNode = null; }
-  click() { if (!this.disabled) this.dispatch("click"); }
-  showModal() { this.open = true; }
-  close() { this.open = false; }
-  find(test) {
-    for (const child of this.children) { if (test(child)) return child; const found = child.find(test); if (found) return found; }
-    return null;
-  }
+  replaceWith(node){const siblings=this.parentNode.children;node.parentNode=this.parentNode;siblings[siblings.indexOf(this)]=node;this.parentNode=null;}
+  click(){if(!this.disabled)this.dispatch("click");}
+  find(test){return this.descendants().find(test);}
 }
 
 const numeric = (unit, max = 30000) => ({ kind: "number", min: unit === "%" ? 0.01 : 1, max, digits: unit === "%" ? 2 : 0, unit });
 const units = [{ unit: "pixels", label: "Pixels" }, { unit: "percent", label: "Percent" }];
 function view(overrides = {}) {
   return {
-    title: "Canvas Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
+    dialog:{role:"editor",modal:true,primary:"action"}, title: "Canvas Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
     unit: "pixels", units,
     relative: false, relative_label: "Relative", anchor: "center", anchor_label: "Anchor",
     anchors: ["top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right"]
@@ -50,7 +35,7 @@ const resamples = [["automatic", "Automatic"], ["bicubic", "Bicubic"], ["lanczos
   .map(([resample, label]) => ({ resample, label }));
 function imageView(overrides = {}) {
   return {
-    title: "Image Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
+    dialog:{role:"editor",modal:true,primary:"action"}, title: "Image Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
     unit: "pixels", units, resolution_label: "Resolution", resolution: 72, resolution_numeric: numeric("ppi", 10000),
     constrain: true, constrain_label: "Constrain proportions", resample: "automatic", resample_label: "Resample", resamples,
     message: "Current size: 800 × 600 px", can_apply: false, ...overrides,
@@ -58,7 +43,10 @@ function imageView(overrides = {}) {
 }
 
 function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "canvasSize", model = view } = {}) {
-  const body = new FakeElement("body"), sent = [], fields = [];
+  const {doc}=colorDialogDom({after:fn=>cleanups.push(fn)});
+  doc.createElement=tag=>new FakeElement(tag);
+  const body = doc.body = new FakeElement("body"), sent = [], fields = [];
+  const app={...dialogProjection,bootstrap_view:()=>({common:{cancel:"Cancel",done:"Done",back:"Back"}})};
   const state = { layer_tools: { [key]: model() } };
   const element = (tag, className, text) => { const node = new FakeElement(tag, className); if (text != null) node.textContent = text; return node; };
   const button = (text, action, className = "") => { const node = element("button", className, text); node.addEventListener("click", action); return node; };
@@ -80,7 +68,7 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
   const resolve = ({ operation }) => { const value = Number(operation.text); if (!operation.text || !Number.isFinite(value)) throw Error("Enter a number"); return { value }; };
   let ui;
   const dispatch = action => { assert.equal(action.type, key); sent.push(action.action); ui.refresh(); };
-  ui = create({ dropdown:dropdownFactory({element,button}), state: () => state, element, button, icon: name => element("svg", name), numberField, resolve, dispatch, host: () => body });
+  ui = create({ app, dropdown:dropdownFactory({element,button}), state: () => state, element, button, icon: name => element("svg", name), numberField, resolve, dispatch, host: () => body });
   const dialog = () => ui.dialog();
   const find = test => dialog()?.find(test);
   return {

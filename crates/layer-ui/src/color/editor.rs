@@ -376,6 +376,7 @@ pub struct ColorRowView {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ColorEditorView {
+    pub dialog: crate::DialogIntent,
     pub panel: ColorPanelView,
     pub shapes: [ColorShapeChoice; 3],
     pub current: ColorPreview,
@@ -671,6 +672,7 @@ impl ColorEditor {
         });
         let [a, b, c] = rows;
         Ok(ColorEditorView {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             panel,
             shapes: SHAPE_CHOICES.map(|(shape, label, name)| ColorShapeChoice { shape, label, name: localizer.text(name), selected: self.picker.shape == shape }),
             current: form::mapped_preview(self.start.definition(), space, display, rendition)?,

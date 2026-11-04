@@ -270,10 +270,15 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
             let headers = widgets(&page).filter(|widget| widget.is_mapped() && widget.widget_name() == "dialog-header").collect::<Vec<_>>();
             if phone_page { assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers"); }
             if phone_page || !headers.is_empty() { add("page.header","page-header",headers.first().cloned()); }
-            let start = shell("dialog-start");
+            let start = shell("dialog-start").or_else(|| headers.first().and_then(|header| widgets(header)
+                .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+                .find(|button| button.icon_name().as_deref() == Some("go-previous-symbolic")
+                    || widgets(button.upcast_ref()).any(|widget| widget.downcast_ref::<gtk::Image>()
+                        .is_some_and(|image| image.icon_name().as_deref() == Some("go-previous-symbolic"))))
+                .map(|button| { button.set_widget_name("dialog-start"); button.upcast() })));
             let end = shell("dialog-end");
             if let Some(start) = start { add("page.start","page-action",Some(start)); }
-            if let Some(end) = end { add("page.end","page-action",Some(end)); }
+            if let Some(end) = end.clone() { add("page.end","page-action",Some(end)); }
             let panes = shell("dialog-panes");
             if let Some(panes) = panes.clone() { add("page.panes","panes",Some(panes)); }
             let split = panes.as_ref().and_then(|panes| widgets(panes).find(|widget| widget.is::<adw::NavigationSplitView>()))
@@ -285,10 +290,29 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
                 let (minimum,natural,_,_) = widget.measure(gtk::Orientation::Horizontal,-1);
                 serde_json::json!({"allocated":widget.width(),"minimum":minimum,"natural":natural})
             };
+            let end_measure = end.as_ref().and_then(|widget| widget.downcast_ref::<gtk::Button>()).map(|button| {
+                let label = widgets(button.upcast_ref()).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                    .find(|label| label.is_mapped());
+                let padding = button.style_context().padding();
+                let border = button.style_context().border();
+                serde_json::json!({"button":width(button.upcast_ref()),"text":button.label().map(|text| text.to_string()),
+                    "padding":[padding.left(),padding.top(),padding.right(),padding.bottom()],
+                    "border":[border.left(),border.top(),border.right(),border.bottom()],
+                    "label":label.map(|label| {
+                        let font = label.pango_context().font_description();
+                        serde_json::json!({"text":label.text().to_string(),"allocated":width(label.upcast_ref()),
+                            "bounds":label.compute_bounds(button).map(|bounds| [bounds.x(),bounds.y(),bounds.width(),bounds.height()]),
+                            "layout_pixels":label.layout().pixel_size(),"font":font.as_ref().map(ToString::to_string),
+                            "weight":font.as_ref().map(|font| format!("{:?}",font.weight())),
+                            "size":font.as_ref().map(|font| font.size() as f64 / gtk::pango::SCALE as f64),
+                            "absolute":font.as_ref().map(|font| font.is_size_absolute())})
+                    })})
+            });
             dialog_measure = serde_json::json!({"page":width(&page),
                 "panes":panes.as_ref().map(&width),
                 "sidebar":sidebar.as_ref().map(&width),"content":content.as_ref().map(&width),
                 "first_group":first_group.as_ref().map(|widget| width(widget.upcast_ref())),
+                "end":end_measure,
                 "collapsed":split.as_ref().map(|split| split.is_collapsed()),
                 "shows_content":split.as_ref().map(|split| split.shows_content())});
             if dialog.widget_name() == "tool-picker" {

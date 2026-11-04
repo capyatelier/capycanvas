@@ -31,8 +31,8 @@ pub struct DialogIntent {
     pub primary: Option<DialogPrimary>,
 }
 impl DialogIntent {
-    pub fn editor(primary: Option<DialogPrimary>) -> Self { Self { role: DialogRole::Editor, modal: true, primary } }
-    pub fn alert() -> Self { Self { role: DialogRole::Alert, modal: true, primary: Some(DialogPrimary::Action) } }
+    pub const fn editor(primary: Option<DialogPrimary>) -> Self { Self { role: DialogRole::Editor, modal: true, primary } }
+    pub const fn alert() -> Self { Self { role: DialogRole::Alert, modal: true, primary: Some(DialogPrimary::Action) } }
     pub fn header(self, subpage: bool) -> DialogHeader {
         use DialogHeaderAction as A;
         DialogHeader {
@@ -67,6 +67,14 @@ impl DialogPresentation {
 
 pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
     minimum.iter().all(|width| *width > 0.) && width >= minimum.iter().sum::<f32>() + gap
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct NewDrawingLayout { pub single_pane: bool, pub preview: [i32; 2], pub fit: [i32; 2] }
+pub fn new_drawing_layout(width: f32) -> NewDrawingLayout {
+    let single_pane = !dialog_panes_fit(width, [232., 320.], 24.);
+    NewDrawingLayout { single_pane, preview: [232, if single_pane { 140 } else { 250 }],
+        fit: [196, if single_pane { 104 } else { 214 }] }
 }
 
 pub fn preferences_content_width(width: f32, minimum: f32) -> f32 {
@@ -162,6 +170,15 @@ mod tests {
         assert!(!dialog_panes_fit(412., [280., 0.], 12.));
         assert!(!dialog_panes_fit(390., [126., 265.], 0.));
         assert!(dialog_panes_fit(391., [126., 265.], 0.));
+    }
+    #[test]
+    fn drawing_preview_changes_only_when_its_two_panes_stop_fitting() {
+        for width in [280.,372.,575.] {
+            assert_eq!(new_drawing_layout(width),NewDrawingLayout { single_pane:true,preview:[232,140],fit:[196,104] });
+        }
+        for width in [576.,851.,1000.] {
+            assert_eq!(new_drawing_layout(width),NewDrawingLayout { single_pane:false,preview:[232,250],fit:[196,214] });
+        }
     }
     #[test]
     fn preferences_content_width_matches_native_clamp_at_measured_widths() {

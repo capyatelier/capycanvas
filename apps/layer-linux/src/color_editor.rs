@@ -1050,7 +1050,7 @@ impl Editor {
             let result = self.apply(ColorEditorAction::Color { color });
             self.report(Target::Dialog, result);
         }
-        crate::page_dialog::present(&self.dialog, &workspace.window);
+        if let Some(view) = self.view() { crate::page_dialog::present_intent(&self.dialog, &workspace.window,view.dialog); }
         self.pick.grab_focus();
     }
 
@@ -1312,7 +1312,7 @@ fn open(
     let can_pick = workspace.visible_dialog().is_none();
     let editor = Editor::build(workspace, draft, epoch, Box::new(accepted));
     editor.bind(workspace, can_pick);
-    crate::page_dialog::present(&editor.dialog, &workspace.window);
+    if let Some(view) = editor.view() { crate::page_dialog::present_intent(&editor.dialog, &workspace.window,view.dialog); }
 }
 
 pub struct ColorButton {

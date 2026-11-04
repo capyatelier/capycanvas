@@ -581,6 +581,7 @@ impl Default for ExportNumericControls {
 
 #[derive(Serialize)]
 pub struct ExportForm {
+    pub dialog: crate::DialogIntent,
     pub numeric: ExportNumericControls,
     pub copy: crate::color_feature_copy::ExportCopy,
     pub profiles: Vec<ExportProfile>,
@@ -623,6 +624,7 @@ impl ExportForm {
         }
         let profile_names = profile_captions.iter().map(|caption| caption.message(localizer)).collect();
         Self {
+            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
             numeric: ExportNumericControls::default(),
             copy: crate::color_feature_copy::ExportCopy::new(localizer),
             profiles,

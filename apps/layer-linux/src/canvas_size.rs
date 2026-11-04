@@ -242,7 +242,7 @@ impl CanvasSizeDialog {
         crate::page_dialog::set_response_enabled(&self.dialog, "apply", view.can_apply && self.numbers.borrow().iter().flatten().all(|(_, number)| number.input_valid()));
         self.updating.set(false);
         if !self.shown.replace(true) {
-            crate::page_dialog::present_with(&self.dialog, &w.window, layer_ui::DialogRole::Editor, crate::page_dialog::Metadata::responses(Some("apply"), "cancel", &[]));
+            crate::page_dialog::present_with(&self.dialog, &w.window, view.dialog.role, crate::page_dialog::Metadata::responses(Some("apply"), "cancel", &[]).intent(view.dialog));
         }
     }
 }

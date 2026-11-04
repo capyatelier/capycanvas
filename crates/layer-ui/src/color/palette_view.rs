@@ -83,6 +83,8 @@ pub struct PaletteChoiceView {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PalettePanelView {
+    pub edit_dialog: crate::DialogIntent,
+    pub delete_dialog: crate::DialogIntent,
     pub palette: u64,
     pub name: String,
     pub swatches: Vec<PaletteTileView>,
@@ -296,6 +298,8 @@ impl ColorLibrary {
 }
 
 impl PalettePanelView {
+    pub const EDIT_DIALOG: crate::DialogIntent = crate::DialogIntent::editor(Some(crate::DialogPrimary::Action));
+    pub const DELETE_DIALOG: crate::DialogIntent = crate::DialogIntent::alert();
     pub fn new(
         colors: &ColorState,
         library: &ColorLibrary,
@@ -316,6 +320,8 @@ impl PalettePanelView {
             current: id.is_some() && id == selected,
         };
         Self {
+            edit_dialog:Self::EDIT_DIALOG,
+            delete_dialog:Self::DELETE_DIALOG,
             palette: palette.id,
             name: palette.name.clone(),
             swatches: palette

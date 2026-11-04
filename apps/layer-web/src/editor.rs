@@ -67,6 +67,8 @@ impl WebApp {
         serialize(&self.session.state().preferences_layout(serde_wasm_bindgen::from_value(viewport).map_err(js)?, width,
             serde_wasm_bindgen::from_value(minimum).map_err(js)?))
     }
+    pub fn new_drawing_layout(&self, width: f32) -> Result<JsValue, JsValue> { serialize(&layer_ui::new_drawing_layout(width)) }
+    pub fn dialog_panes_fit(&self, width: f32, minimum: JsValue, gap: f32) -> Result<bool, JsValue> { Ok(layer_ui::dialog_panes_fit(width,serde_wasm_bindgen::from_value(minimum).map_err(js)?,gap)) }
     pub fn preferences_content_width(&self, width: f32, minimum: f32) -> f32 { layer_ui::preferences_content_width(width, minimum) }
     pub fn dialog_header(&self, intent: JsValue, subpage: bool) -> Result<JsValue, JsValue> {
         let intent: layer_ui::DialogIntent = serde_wasm_bindgen::from_value(intent).map_err(js)?;

@@ -479,7 +479,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await type('#shortcuts-search', '');
   await click('[data-category="Tools"]');
   assert.equal(await evaluate("document.querySelector('#settings-title').textContent"), "Tools");
-  assert.ok(await visible('#shortcut-category-back') && await visible('[data-shortcut="tools.paint"]') && !(await visible('#shortcut-categories')));
+  assert.ok(await visible('#settings [data-dialog-part=start]') && await visible('[data-shortcut="tools.paint"]') && !(await visible('#shortcut-categories')));
   await capture("category-tools");
   await click('[data-shortcut="tools.paint"] .shortcut-choose');
   assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), true);
@@ -516,7 +516,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), false);
     await capture(`shortcut-modified-${theme}`);
   }
-  await click('#shortcut-category-back');
+  await click('#settings [data-dialog-part=start]');
   assert.ok(await visible('#shortcut-categories'));
   await type('#shortcuts-search', 'preferences');
   await click('[data-shortcut="command.Settings"] .shortcut-choose');
@@ -544,7 +544,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('[id="action-command.Move"]');
   assert.equal(await evaluate("layerApp.state().settings.hold_keys.find(h=>h.key.key==='alt').actions.selection"), "command.Move");
   await capture("modifier-alt");
-  await click('#shortcut-category-back');
+  await click('#settings [data-dialog-part=start]');
   assert.equal(await evaluate("document.querySelector('#settings-title').textContent"), "Modifier keys");
   await click('#add-modifier-key');
   assert.equal(await evaluate("document.querySelector('#modifier-key').open"), true);
@@ -559,8 +559,8 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('#modifier-action-all');
   await click('[id="action-command.Pencil"]');
   assert.equal(await evaluate("layerApp.state().settings.hold_keys.find(h=>h.key.key==='f13').actions.drawing"), "command.Pencil");
-  await click('#shortcut-category-back');
-  await click('#shortcut-category-back');
+  await click('#settings [data-dialog-part=start]');
+  await click('#settings [data-dialog-part=start]');
   assert.ok(await visible('#shortcut-categories'));
 
   await preference({ type: "page", page: "input" });
@@ -575,7 +575,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('[id="action-command.Undo"]');
   assert.equal(await evaluate("layerApp.state().settings.pen_buttons['pen.button.primary'].selection"), "command.Undo");
   await capture("pen-button");
-  await click('#shortcut-category-back');
+  await click('#settings [data-dialog-part=start]');
   assert.equal(await evaluate(`document.querySelector('[data-trigger="pen.button.primary"] .shortcut-hint').textContent`), "Undo");
   assert.equal(await evaluate(`document.querySelector('[data-trigger="pen.button.primary"] p').textContent`), "With selection tools");
   await click('[data-trigger="touch.tap.4"]');
@@ -633,7 +633,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await call("Emulation.setDeviceMetricsOverride", { width: 412, height: 891, deviceScaleFactor: 1, mobile: false });
   await capture("narrow");
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.preferences-sidebar')).display"), "none");
-  await click('.preferences-back');
+  await click('#settings [data-dialog-part=start]');
   assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.preferences-sidebar')).display"), "none");
   await click('[data-settings-page="appearance"]');
   assert.equal(await evaluate("layerApp.app.preferences().page"), "appearance");

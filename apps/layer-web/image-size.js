@@ -1,6 +1,6 @@
 import {openSizeDialog,sizeCheck,sizeFields} from './size-dialog.js';
 
-export function createImageSizeUi({state,element,button,dropdown,numberField,resolve,dispatch,host=()=>document.body}) {
+export function createImageSizeUi({app,state,element,button,dropdown,icon,numberField,resolve,dispatch,host=()=>document.body}) {
   const send=action=>dispatch({type:'image_size',action});
   const view=()=>state().layer_tools.image_size;
   let shell=null,fields,unit,constrain,resampleLabel,resample;
@@ -15,7 +15,7 @@ export function createImageSizeUi({state,element,button,dropdown,numberField,res
     resampleLabel=element('span');
     resample=dropdown('',value=>act({op:'resample',resample:value}));
     const resampleRow=element('div','size-dialog-row');resampleRow.append(resampleLabel,resample);
-    shell=openSizeDialog({element,button,host,copy:v,name:'image-size',body:[size,options,resolution,resampleRow],
+    shell=openSizeDialog({app,element,button,icon,host,copy:v,name:'image-size',body:[size,options,resolution,resampleRow],
       apply:()=>{if(fields.commit()&&view()?.can_apply)send({op:'apply'});},cancel:()=>send({op:'cancel'})});
   }
   function refresh() {

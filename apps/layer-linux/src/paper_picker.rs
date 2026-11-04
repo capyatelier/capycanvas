@@ -124,7 +124,7 @@ pub(crate) fn open(workspace: &Rc<Workspace>, layer: u64) {
     let dialog = TextureDialog::build(workspace, layer, state.document_file.epoch);
     dialog.update(&view, selected);
     *workspace.texture_dialog.borrow_mut() = Some(dialog.clone());
-    crate::page_dialog::present(&dialog.dialog, &workspace.window);
+    crate::page_dialog::present_intent(&dialog.dialog, &workspace.window,view.dialog);
     let viewport = dialog.viewport.clone();
     dialog.grid.add_tick_callback(move |grid, _| {
         let Some(child) = grid.selected_children().into_iter().next() else { return glib::ControlFlow::Break };

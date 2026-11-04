@@ -162,7 +162,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let profile = gio::spawn_blocking(move || super::profile::describe(embedded)).await
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization()))?.map_err(|reason| reason.profile_message(&w.localization()))?;
     (chooser.restore)(profile);
-    let response = crate::alert::choose_editor(dialog, &w.window, Some("apply"), &[]).await;
+    let response = crate::alert::choose_intent(dialog, &w.window, layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).dialog, Some("apply"), &[]).await;
     let compared = comparison.ready.get();
     comparison.close();
     comparison.finish().await;
