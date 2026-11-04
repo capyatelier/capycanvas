@@ -1907,7 +1907,7 @@ mod tests {
         assert!(host.session.engine().can_undo());
     }
     #[test]
-    fn blurring_a_contact_held_for_shaders_discards_it_before_readiness() {
+    fn blurring_a_contact_held_for_shaders_finishes_its_prefix_after_readiness() {
         let mut document = layer_ui::new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let mut object = layer_core::authored::ImageObject::new(layer_core::color::source::rgba8_source([200, 150], |_, _| [200, 40, 30, 255]).into());
         object.affine = layer_core::Affine64([1., 0., 0., 1., 100., 100.]);
@@ -1925,12 +1925,16 @@ mod tests {
         assert!(host.session.holding_input());
         assert!(host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_some());
         assert!(host.input(UiInput::Blur).unwrap().cancel_paint);
-        assert!(!host.session.holding_input());
-        assert!(host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_none());
-        while !host.session.paint_ready() { frame_step(&mut host, &clock, deadline); }
+        assert!(host.session.holding_input());
+        assert!(host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_some());
+        while host.session.holding_input() || host.session.engine().has_active_stroke() || host.session.engine().has_pending_document_edits() { frame_step(&mut host, &clock, deadline); }
         for _ in 0..4 { frame_step(&mut host, &clock, deadline); }
+        assert!(!host.session.holding_input());
         assert!(!host.session.engine().has_active_stroke());
-        assert_eq!(host.session.engine().metrics().committed_strokes, 0);
+        assert!(host.session.command_disabled_reason(layer_ui::CommandId::SaveDocumentAs).is_none());
+        assert_eq!(host.session.engine().metrics().committed_strokes, 1);
+        assert_ne!(host.session.engine().checkpoint(), checkpoint);
+        host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Undo }).unwrap();
         assert_eq!(host.session.engine().checkpoint(), checkpoint);
     }
 
