@@ -5,6 +5,21 @@ import test from 'node:test';
 
 const source=readFileSync(new URL('editor-panels.js',import.meta.url),'utf8');
 
+test('New Drawing acknowledges creation only when the shared dialog closes',()=>{
+  const source=readFileSync(new URL('new-drawing.js',import.meta.url),'utf8');
+  let drawing={},accepted,create=false;
+  const context={state:()=>({new_drawing:drawing}),app:{dispatch(){if(create)drawing=null;return{};}},applyChange(){context.refresh();}};
+  runInNewContext(source.slice(source.indexOf('  let ui = null, finish = null, creating = false;'),source.indexOf('  function build() {'))+
+    '\nglobalThis.create=create;globalThis.refresh=refresh;globalThis.open=(dialog,done)=>{ui=dialog;finish=done;};',context);
+  const dialog={commit:()=>true,report(){},render(){},close(){}};
+  context.open(dialog,value=>accepted=value);context.create();
+  assert.equal(accepted,undefined);
+  drawing=null;context.refresh();assert.equal(accepted,false,'Cancel after a refused Create must not acknowledge a new drawing');
+  drawing={};create=true;accepted=undefined;
+  context.open(dialog,value=>accepted=value);context.create();
+  assert.equal(accepted,true,'A successful Create acknowledges the synchronous close');
+});
+
 test('Palette sizing consumes shared rows before measuring and keeps history controls',()=>{
   const source=readFileSync(new URL('palettes.js',import.meta.url),'utf8');
   const nodes=Array.from({length:12},()=>({hidden:false,style:{}})),properties={},requests=[];

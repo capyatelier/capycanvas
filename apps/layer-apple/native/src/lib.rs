@@ -540,7 +540,11 @@ pub unsafe extern "C" fn capy_apple_request(
         let result = match request {
             0 => {
                 a.host
-                    .dispatch(serde_json::from_value(value).map_err(|e| e.to_string())?)?;
+                    .dispatch_user_action(serde_json::from_value(value).map_err(|e| e.to_string())?)?;
+                Some(serde_json::Value::Null)
+            }
+            3 => {
+                a.host.dispatch(serde_json::from_value(value).map_err(|e| e.to_string())?)?;
                 Some(serde_json::Value::Null)
             }
             1 => {

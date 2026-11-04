@@ -106,7 +106,7 @@ impl DrawingSetup {
         Ok(())
     }
     pub fn project(&self, id: PortableId, paper: TextureSource, limits: CanvasLimits, l: &Localizer) -> Result<Document, String> {
-        self.validate(limits).map_err(|problem| problem.message(l))?;
+        self.validate(limits).map_err(|problem| problem.error(l))?;
         let mut document = self.options().document_on(id, paper, l);
         document.set_paper_color(self.paper.color);
         document.set_paper_relief(self.paper.relief as f32);
@@ -137,7 +137,11 @@ pub enum SetupProblem {
     Side(u32),
     Memory,
 }
+pub const DRAWING_MEMORY_EXCEEDED: &str = "drawing_memory_exceeded";
 impl SetupProblem {
+    pub(crate) fn error(self, l: &Localizer) -> String {
+        if self == Self::Memory { DRAWING_MEMORY_EXCEEDED.into() } else { self.message(l) }
+    }
     pub fn message(self, l: &Localizer) -> String {
         match self {
             Self::Resolution => NewDocumentError::Resolution.message(l),
@@ -1019,7 +1023,7 @@ mod tests {
         heavy.apply(NewDrawingEdit::Depth(SampleDepth::F32));
         let tight = CanvasLimits::new(16384, Some(200 * 1024 * 1024)).with_working_bytes(Some(256*1024*1024));
         assert_eq!(heavy.setup.validate(tight), Err(SetupProblem::Memory));
-        assert_eq!(heavy.setup.project(PortableId::random(), layer_core::paper::default_texture(), tight, &l).unwrap_err(), "Too large for this device’s available memory");
+        assert_eq!(heavy.setup.project(PortableId::random(), layer_core::paper::default_texture(), tight, &l).unwrap_err(), DRAWING_MEMORY_EXCEEDED);
     }
 
     #[test]

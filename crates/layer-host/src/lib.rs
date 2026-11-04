@@ -445,13 +445,15 @@ impl NativeHost {
         self.dirty |= !self.startup.complete || self.session.holding_input();
         Ok(())
     }
-    pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
+    pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {self.dispatch_with(action,UiSession::dispatch)}
+    pub fn dispatch_user_action(&mut self,action:UiAction)->Result<(),String> {self.dispatch_with(action,UiSession::dispatch_user_action)}
+    fn dispatch_with(&mut self,action:UiAction,dispatch:impl FnOnce(&mut UiSession<Renderer>,UiAction)->Result<layer_ui::UiChange,String>)->Result<(),String> {
         if !action.is_host_report() { self.require_document_owner()?; }
         if matches!(action, UiAction::RestoreWorkspace { .. }) {
             self.header_drag = None;
         }
         let previous = self.session.state().revision;
-        let change = self.session.dispatch(action)?;
+        let change = dispatch(&mut self.session,action)?;
         self.apply_change(previous, change);
         Ok(())
     }
@@ -1239,6 +1241,19 @@ mod test_storage;
 #[cfg(all(test,not(target_arch="wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn action_refusals_keep_the_native_host_usable() {
+        let mut host=NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::Italian));
+        let before=host.session.engine().document().clone();let checkpoint=host.session.engine().checkpoint();
+        assert!(host.dispatch(UiAction::Invoke {command:layer_ui::CommandId::PlacementOriginalSize}).is_err());
+        assert!(host.session.state().notice.is_none());
+        host.dispatch_user_action(UiAction::Invoke {command:layer_ui::CommandId::PlacementOriginalSize}).unwrap();
+        assert!(host.session.state().notice.is_some());assert!(host.error.is_none());assert!(host.poisoned().is_none());
+        assert_eq!(host.session.engine().document(),&before);assert_eq!(host.session.engine().checkpoint(),checkpoint);
+        host.dispatch(UiAction::SetBrushSize {value:31.}).unwrap();assert_eq!(host.session.state().brush.diameter,31.);
+    }
 
     #[test]
     fn idle_theme_presentation_marks_the_native_host_dirty_without_engine_work() {

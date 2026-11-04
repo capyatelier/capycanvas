@@ -2441,7 +2441,7 @@ impl Workspace {
             .gpu
             .borrow_mut()
             .as_mut()
-            .map(|g| g.session.dispatch(action));
+            .map(|g| g.session.dispatch_user_action(action));
         if let Some(result) = result {
             let succeeded = result.is_ok();
             if navigation { self.navigation_changed(result); }

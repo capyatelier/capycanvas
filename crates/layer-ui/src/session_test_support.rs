@@ -66,7 +66,7 @@ pub(crate) struct Recorder {
     pub(crate) transform: Option<layer_render::TransformPreview>,
     pub(crate) moving_layer: Option<OccurrenceHandle>,
     pub(crate) image_affine_requests:std::cell::RefCell<Vec<(layer_core::ImageObjectHandle,layer_core::Affine64,layer_render::ViewState)>>,
-    pub(crate) reject_image_affines:bool,
+    pub(crate) image_affine_error:Option<BackendError>,
     pub(crate) moving_pixels: Option<(SourceTarget, layer_core::Selection)>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
     pub(crate) filter_preview: Option<FilterPreviewRequest>,
@@ -125,7 +125,7 @@ impl CanvasRenderer for Recorder {
     fn region_fits(&self, extent: [u32; 2]) -> bool { self.region_pixels.is_none_or(|limit| u64::from(extent[0]) * u64::from(extent[1]) <= limit) }
     fn preflight_image_object_affine(&self,_scene:layer_core::SceneView<'_>,object:layer_core::ImageObjectHandle,affine:layer_core::Affine64,view:layer_render::ViewState)->Result<(),Self::Error> {
         self.image_affine_requests.borrow_mut().push((object,affine,view));
-        if self.reject_image_affines {Err(BackendError("Image sampling request is unsupported"))}else {Ok(())}
+        self.image_affine_error.clone().map_or(Ok(()),Err)
     }
     fn set_crop_overlay(&mut self, overlay: Option<layer_render::CropOverlay>) { self.crop_overlay = overlay; }
     fn set_paper_overlay(&mut self, overlay: Option<layer_render::PaperOverlay>) { self.paper_overlay = overlay; }

@@ -335,7 +335,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub fn set_host_error(&mut self, error: Option<String>) {
-        self.state.host_error=error;self.files.host_error_copy=None;
+        self.files.host_error_copy=None;
+        if let Some(message)=error.as_deref().and_then(super::refusal_message) {
+            self.state.host_error=None;self.raise_message_notice(message);
+        }else {self.state.host_error=error;}
     }
     pub fn set_host_error_copy(&mut self, reason: Option<DocumentHostErrorCopy>) {
         self.set_host_error(reason.as_ref().map(|reason| reason.message(self.localization())));

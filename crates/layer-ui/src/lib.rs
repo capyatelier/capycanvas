@@ -194,7 +194,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericError, WorkspaceValidationError, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericSliderSnap, NumericValue,
 };
-pub use session::{Notice, NoticeAction, NoticeActionId};
+pub use session::{Notice, NoticeAction, NoticeActionId, refusal_message};
 pub use session::{ScreenChip, ScreenDetails, ScreenState};
 pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSizeUnit, CanvasSizeView, CanvasUnitChoice};
 pub use session::{ImageResample, ImageResampleChoice, ImageSizeAction, ImageSizeView};

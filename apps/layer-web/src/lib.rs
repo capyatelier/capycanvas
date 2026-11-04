@@ -955,7 +955,7 @@ impl WebApp {
     }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
         let action: UiAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
-        let change = self.session.dispatch(action).map_err(js)?;
+        let change = self.session.dispatch_user_action(action).map_err(js)?;
         self.request_language();
         serialize(&change)
     }

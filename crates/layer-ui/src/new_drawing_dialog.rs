@@ -526,7 +526,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let dialog = self.new_drawing.as_ref().ok_or("New drawing is not open")?;
         let limits = self.canvas_limits();
         let setup = dialog.draft.setup.clone();
-        setup.validate(limits).map_err(|problem| problem.message(self.localization()))?;
+        setup.validate(limits).map_err(|problem| problem.error(self.localization()))?;
         let imported = self.imported_papers();
         let preset = dialog.catalog(&self.state.settings.new_document, &imported, &self.state.localization).matching(&setup, true)
             .map(|view| view.key).filter(|key| *key != PresetKey::Last);

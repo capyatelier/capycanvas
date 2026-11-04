@@ -148,7 +148,7 @@ mod object_editing;
 pub use object_editing::{object_handle, object_token};
 pub use source_edit::SourceUse;
 pub use clipboard::{clipboard_document, clipboard_color_changes, ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
-pub use notices::{Notice, NoticeAction, NoticeActionId};
+pub use notices::{Notice, NoticeAction, NoticeActionId, refusal_message};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarPresentation, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
     GradientToolSettings, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropHint, LayerDropPosition, LayerDropSurface, LayerFooterButton, LayerFooterSlot, LayersView, RegionSource, layer_footer_overflow,
@@ -3023,6 +3023,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         let result=self.dispatch_inner(action);
         self.sync_workspace_view();
         result
+    }
+
+    pub fn dispatch_user_action(&mut self,action:UiAction)->Result<UiChange,String> {
+        let host_report=action.is_host_report();
+        match self.dispatch(action) {
+            Err(error) if !host_report=>{self.notify(error);Ok(self.changed(0,false))},
+            result=>result,
+        }
     }
 
     fn dispatch_inner(&mut self, action: UiAction) -> Result<UiChange, String> {

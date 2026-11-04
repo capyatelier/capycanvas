@@ -1115,7 +1115,7 @@ pub extern "system" fn Java_art_capycanvas_Native_dispatch(
     crate::jni_entry!(env, handle, capy_app, {
     let result = read(&mut env, &action)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|action| capy_app.host.dispatch(action));
+        .and_then(|action| capy_app.host.dispatch_user_action(action));
     fail(&mut env, result);
     })
 }

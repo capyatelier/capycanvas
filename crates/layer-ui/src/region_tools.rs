@@ -262,7 +262,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let bytes=doc.composition().color.paint_descriptor().byte_len([layer_core::raster::TILE_SIZE;2]).map(|bytes|bytes as u64);
         let fits=bytes.and_then(|bytes|pages[0].checked_mul(pages[1]).and_then(|count|count.checked_mul(bytes)))
             .is_some_and(|bytes|bytes<=layer_core::raster::MAX_PUBLICATION_BYTES);
-        if !fits || !self.engine.backend().region_fits(extent) {return Err(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string());}
+        if !fits || !self.engine.backend().region_fits(extent) {return Err(crate::DRAWING_MEMORY_EXCEEDED.into());}
         let source=self.lines_from(self.region_tools.source[1]);
         let target=doc.working.occurrence.and_then(|id|doc.scene().source_target(id));
         let reference_count=(source==RegionSource::Reference).then(||doc.scene().reference_leaves().len());
@@ -410,7 +410,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return self.insert_vector_fills(layer,vec![face.geometry],std::sync::Arc::new(Style::new(fill.into_iter().collect())),false);
         }
         if !raster {return Ok(());}
-        if !self.engine.backend().region_fits(doc.composition().size) { return Err(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string()); }
+        if !self.engine.backend().region_fits(doc.composition().size) { return Err(crate::DRAWING_MEMORY_EXCEEDED.into()); }
         self.request_region_at(point, None, Some(source), None);
         Ok(())
     }
@@ -567,7 +567,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             resolved=layer_render::RegionSource::Intersection(sources);
         }
         if !self.engine.backend().region_fits(extent) {
-            self.notify(self.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).to_string());
+            self.raise_message_notice(MessageId::DOCUMENTS_TOO_LARGE_MEMORY);
             return;
         }
         let colour_mode=if from.is_some() {layer_render::RegionColourMode::AlphaBorder}else{match source {

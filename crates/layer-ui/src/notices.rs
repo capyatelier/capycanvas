@@ -7,6 +7,14 @@ use layer_core::{DrawingRefusal, RetouchSource};
 use layer_engine::StrokeRefusal;
 use serde::Serialize;
 
+pub fn refusal_message(error: &str) -> Option<MessageId> {
+    match error {
+        layer_core::MEMORY_BUDGET_EXCEEDED => Some(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET),
+        crate::DRAWING_MEMORY_EXCEEDED => Some(MessageId::DOCUMENTS_TOO_LARGE_MEMORY),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Notice {
     /// Increases with every notice, so a repeated refusal is shown again.
@@ -200,9 +208,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn notify(&mut self, text: impl Into<String>) {
         let text=text.into();
-        if text==layer_core::MEMORY_BUDGET_EXCEEDED {
-            self.raise_message_notice(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET);
-        } else { self.raise_notice(text, Vec::new()); }
+        if let Some(message)=refusal_message(&text) {self.raise_message_notice(message);}
+        else { self.raise_notice(text, Vec::new()); }
     }
     pub fn notify_window(&mut self, text: impl Into<String>) {
         self.notify(text);
@@ -610,5 +617,57 @@ mod localization_tests {
         assert_eq!(session.state.notice.as_ref().unwrap().text, "current result");
         session.dismiss_notice();
         assert!(!session.update_notice_text(id, "late result".into()));
+    }
+    #[test]
+    fn refused_user_actions_raise_localized_notices_and_keep_the_session_usable() {
+        for platform in Platform::ALL {
+            let mut s=session(platform);s.renderer_mut().tiled_sources=true;s.set_localization(Localizer::shared(UiLanguage::Italian));
+            let source=std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([8;2],|_,_|[17,33,65,255]));
+            s.place_layer_source("Photo",source,None).unwrap();
+            assert!(s.command(CommandId::PlacementOriginalSize).enabled);
+            let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+            let history=(s.engine.can_undo(),s.engine.can_redo());
+            s.engine.backend_mut().image_affine_error=Some(layer_render::BackendError(layer_core::MEMORY_BUDGET_EXCEEDED));
+            let change=s.dispatch_user_action(UiAction::Invoke {command:CommandId::PlacementOriginalSize}).unwrap();
+            assert_ne!(change.regions&regions::HOST,0);
+            let notice=s.state.notice.clone().unwrap();
+            assert_eq!(notice.text,s.localization().text(MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET).as_ref());
+            assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert_eq!((s.engine.can_undo(),s.engine.can_redo()),history);
+            s.dispatch_user_action(UiAction::Notice {id:notice.id,accept:false,action:None}).unwrap();
+            assert!(s.state.notice.is_none());
+            s.engine.backend_mut().image_affine_error=None;
+            s.dispatch_user_action(UiAction::Invoke {command:CommandId::PlacementOriginalSize}).unwrap();
+        }
+    }
+
+    #[test]
+    fn memory_refusal_notices_follow_the_active_language() {
+        for (text,message) in [
+            (layer_core::MEMORY_BUDGET_EXCEEDED.to_string(),MessageId::DOCUMENTS_REFUSAL_ADMISSION_BUDGET),
+            (crate::DRAWING_MEMORY_EXCEEDED.to_string(),MessageId::DOCUMENTS_TOO_LARGE_MEMORY),
+        ] {
+            let mut s=session(Platform::Windows);s.set_localization(Localizer::shared(UiLanguage::Italian));
+            s.notify(text);
+            let notice=s.state.notice.clone().unwrap();
+            assert_eq!(notice.text,s.localization().text(message).as_ref());
+            s.set_localization(Localizer::shared(UiLanguage::Japanese));
+            let after=s.state.notice.as_ref().unwrap();assert_eq!(after.id,notice.id);assert_eq!(after.text,s.localization().text(message).as_ref());
+        }
+    }
+
+    #[test]
+    fn malformed_host_reports_keep_their_error_result() {
+        let mut s=session(Platform::Windows);
+        assert!(s.dispatch_user_action(UiAction::MeasureHeader {height:f32::NAN,items:Vec::new()}).is_err());
+        assert!(s.state.notice.is_none());
+    }
+
+    #[test]
+    fn document_memory_refusals_raise_notices_instead_of_raw_host_errors() {
+        let mut s=session(Platform::Windows);s.set_localization(Localizer::shared(UiLanguage::Italian));
+        s.set_host_error(Some(crate::DRAWING_MEMORY_EXCEEDED.into()));
+        assert!(s.state.host_error.is_none());
+        assert_eq!(s.state.notice.as_ref().unwrap().text,s.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).as_ref());
     }
 }

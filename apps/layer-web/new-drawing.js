@@ -82,7 +82,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
   function create() {
     if (!ui.commit()) return;
     creating = true;
-    if (!send({op:'create'})) creating = false;
+    if (!send({op:'create'}) || view()) creating = false;
   }
 
   function build() {

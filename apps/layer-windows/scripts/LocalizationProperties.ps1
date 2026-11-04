@@ -888,6 +888,44 @@ function Notice-Surface{
  $modifiers=[uint16[]]@($(if($binding.command){0x11}),$(if($binding.shift){0x10}),$(if($binding.alt){0x12})|Where-Object {$_})
  [CapyRowPointer]::Chord([uint32]$review.Id,$modifiers,[uint16][char]$binding.key.ToUpperInvariant())
  Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected -and !(Model).state.notice} 'The working Move tool did not clear the immediate image explanation'
+ Use-Window $second
+ $italian=1+[Array]::IndexOf($shippedTags,'it')
+ if($italian -lt 1){throw 'The registered Italian locale is missing'}
+ Language-Choice $italian|Out-Null
+ Wait-Until {(Model $first).windows_active_tag -eq 'it'} 'The refusal owner did not adopt Italian' 30
+ Use-Window $first $drawingRoot
+ $refusal=@{view=$null};$original=(Model).windows_tabs.selected
+ try{
+  Menu-Command 'file' 'new_document'
+  Wait-Until {(Model).state.new_drawing -and (Find 'new-drawing-name' -Visible)} 'The refusal drawing dialog did not open'
+  if((Model).state.new_drawing.linked){Invoke-Id 'new-drawing-link';Wait-Until {!(Model).state.new_drawing.linked} 'The refusal drawing did not unlink dimensions'}
+  New-DrawingPixels 16384 16384
+  $depth=@((Model).state.new_drawing.depths|Where-Object value -eq 'F32')[0]
+  if(!$depth){throw 'The shared drawing inventory has no F32 depth'}
+  Choose-Option 'document-depth' $depth.label;Invoke-Id 'new-drawing-create'
+  Wait-Until {$view=Model;$view.windows_tabs.selected -ne $original -and !$view.state.new_drawing -and $view.brush_ready -and $view.state.tabs[-1].width -eq 16384 -and $view.state.tabs[-1].height -eq 16384 -and $view.color_panel.document_depth -eq 'F32'} 'The sparse refusal drawing did not prepare' 90
+  $expected=Catalog-Text 'it' 'documents-too-large-memory' 'documents'
+  Menu-Command 'edit' 'flat_all_areas'
+  Wait-Until {
+   $view=Model;$frame=Find 'canvas-notice' -Visible -NoPopups;$text=Find 'canvas-notice-text' -Visible -NoPopups
+   if(!$view -or $view.windows_active_tag -ne 'it' -or !$view.state.notice -or $view.state.notice.text -ne $expected -or !$frame -or !$text){return $false}
+   $bounds=$frame.Current.BoundingRectangle
+   if($text.Current.Name -ne $expected -or $bounds.IsEmpty -or !$bounds.Contains($text.Current.BoundingRectangle)){return $false}
+   $refusal.view=$view.state.notice;$true
+  } 'The refused user action did not show its localized native notice'
+  $status=Find 'canvas-status'
+  if($status -and !$status.Current.IsOffscreen){throw ('The refused action latched canvas status: '+$status.Current.Name)}
+  $refusal.view|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'notice-memory-refusal-it.json')
+  Capture-Window $first 'notice-memory-refusal-it'
+  Focus-Canvas
+  [CapyRowPointer]::Chord([uint32]$review.Id,$modifiers,[uint16][char]$binding.key.ToUpperInvariant())
+  Wait-Until {((Model).state.commands|Where-Object id -eq 'move').selected -and !(Model).state.notice} 'A valid action did not clear the refusal and update the tool'
+  $status=Find 'canvas-status'
+  if($status -and !$status.Current.IsOffscreen){throw ('A valid action left canvas status latched: '+$status.Current.Name)}
+ }finally{
+  if((Model).state.new_drawing){Invoke 'new-drawing-cancel';Wait-Until {!(Model).state.new_drawing} 'The refused drawing dialog did not cancel'}
+  if((Model).windows_tabs.selected -ne $original){Menu-Command 'file' 'close_document';Wait-Until {(Model).windows_tabs.selected -eq $original} 'The sparse refusal drawing did not close back to the image fixture'}
+ }
  Focus-Canvas;Key 66
  Wait-Until {((Model).state.commands|Where-Object id -eq 'brush').selected -and (Model).state.notice -and (Find 'canvas-notice-action-add_mask' -Within $noticeFrame -Visible)} 'Brush did not restore the immediate image notice'
  $addMask=Control 'canvas-notice-action-add_mask' -Within $noticeFrame;$identities=@{}

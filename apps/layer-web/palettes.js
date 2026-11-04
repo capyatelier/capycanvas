@@ -11,6 +11,8 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
   const instances = new Set();
   let view = null, viewKey = "", seen = [];
   const library = (action, report) => {
+    const error = app.palette_action_error(action);
+    if (error) { report?.(error); return false; }
     try { applyChange(app.dispatch({ type: "color", action: { op: "library", action } })); report?.(null); return true; }
     catch (error) { report?.(String(error)); return false; }
   };

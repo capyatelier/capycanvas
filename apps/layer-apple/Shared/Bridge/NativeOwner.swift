@@ -274,7 +274,7 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func request(_ kind: UInt32, _ value: JSON = JSON()) throws -> JSON? {
         guard let handle else { throw HostFailure(message: launchFailure ?? "Native session is unavailable") }
-        if kind == 0 && value["type"].string == "preferences" && value["action"]["id"].string == "language" {
+        if (kind == 0 || kind == 3) && value["type"].string == "preferences" && value["action"]["id"].string == "language" {
             requestedLanguagePreference = nil
         }
         let source = try value.encoded()
@@ -843,7 +843,7 @@ final class NativeOwner: @unchecked Sendable {
     func edit(_ action: JSON, completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             var failure: String?
-            do { _ = try request(0, action) }
+            do { _ = try request(3, action) }
             catch { failure = error.localizedDescription }
             do { try publish() }
             catch { receive(nil, error.localizedDescription) }

@@ -108,7 +108,7 @@ fn unsupported_image_sampling_leaves_document_checkpoint_and_redo_intact() {
     let accepted=session.engine.document().clone();
     session.engine.undo().unwrap();let before=session.engine.document().clone();let checkpoint=session.engine.checkpoint();
     let history=(session.engine.can_undo(),session.engine.can_redo());assert!(history.1);
-    session.engine.backend_mut().image_affine_requests.borrow_mut().clear();session.engine.backend_mut().reject_image_affines=true;
+    session.engine.backend_mut().image_affine_requests.borrow_mut().clear();session.engine.backend_mut().image_affine_error=Some(layer_render::BackendError("Image sampling request is unsupported"));
     let delta=Affine64([0.001,0.,0.,0.001,12.,9.]);let view=session.engine.view();
     session.begin_object_motion(&[object]).unwrap();
     assert_eq!(session.preview_object_motion(delta).unwrap_err(),"Image sampling request is unsupported");

@@ -1319,13 +1319,13 @@ mod fill_option_checks {
         layer(&mut s,LayerAction::New {group:false,clipped:false});layer(&mut s,LayerAction::Lock {id:occurrence_token(group),value:true});
         assert!(!s.command(CommandId::FlatAllAreas).enabled);
         let mut s=session(Platform::Gtk);s.renderer_mut().region_pixels=Some(1);let before=s.engine.checkpoint();
-        assert_eq!(s.flat_all_areas().unwrap_err(),s.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).as_ref());
+        assert_eq!(s.flat_all_areas().unwrap_err(),crate::DRAWING_MEMORY_EXCEEDED);
         assert_eq!(s.engine.checkpoint(),before);assert!(s.renderer_mut().flat_requests.is_empty());
         let mut document=Document::new(layer_core::PortableId::random(),8193,8193,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
         document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=layer_core::color::SampleDepth::F32;
         let mut s=UiSession::new(Recorder {color:document.composition().color,..Default::default()},document,[1000;2],Platform::Gtk).unwrap();
         let before=s.engine.checkpoint();assert!(s.engine.backend().region_fits([8193;2]));
-        assert_eq!(s.flat_all_areas().unwrap_err(),s.localization().text(MessageId::DOCUMENTS_TOO_LARGE_MEMORY).as_ref());
+        assert_eq!(s.flat_all_areas().unwrap_err(),crate::DRAWING_MEMORY_EXCEEDED);
         assert_eq!(s.engine.checkpoint(),before);assert!(s.renderer_mut().flat_requests.is_empty());
     }
 

@@ -151,7 +151,7 @@ impl Action {
             Self::Ordinary(action) => action,
         };
         let timeout = matches!(action, UiAction::Notice { accept: false, .. });
-        host.dispatch(action)
+        host.dispatch_user_action(action)
             .or_else(|error| if timeout { Ok(()) } else { Err(error) })
     }
 }

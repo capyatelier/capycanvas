@@ -49,7 +49,10 @@ impl WebApp {
         if js_sys::Reflect::has(&error, &js("color_feature_error")).unwrap_or(false) {
             let reason = color_feature_reason(error);
             match profile { Some(true)=>reason.profile_message(self.session.localization()), Some(false)=>reason.preset_message(self.session.localization()), None=>reason.message(self.session.localization()) }
-        } else { diagnostic_text(&error) }
+        } else {
+            let text=diagnostic_text(&error);
+            layer_ui::refusal_message(&text).map_or(text,|message|self.session.localization().text(message).to_string())
+        }
     }
     pub fn profile_library(
         &self,
