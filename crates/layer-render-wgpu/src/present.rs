@@ -1141,6 +1141,21 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
+        let result=self.encode_content_frame(renderer,encoder,target,view,surround_linear,overview_only);
+        self.uploads.finish(encoder);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_content_frame(
+        &mut self,
+        renderer: &WgpuRasterizer,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        view: ViewState,
+        surround_linear: [f32; 4],
+        overview_only: bool,
+    ) -> Result<(), GpuRasterError> {
         let size = [target.texture().width(),target.texture().height()];
         if self.presented_drawing.is_some_and(|old|old.showing && old.document!=renderer.presentation.document) {
             let held=self.capture_into(encoder);
@@ -1656,9 +1671,6 @@ impl ViewportPresenter {
                 }
             }
         }
-        // Return upload chunks only after this encoder's GPU work completes.
-        // Works both for present() and hosts submitting encode() themselves.
-        self.uploads.finish(encoder);
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
         if showing {self.last_artwork_pipeline=Some((**pipeline).clone());}
         self.held_alpha=fade;
@@ -1821,6 +1833,41 @@ mod tests {
         assert!(presenter.held.is_none());
         renderer.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
         assert_eq!(renderer.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
+    }
+    #[test]
+    fn held_transition_uploads_finish_when_showing_has_no_views() {
+        use crate::layer_tests::placement::{paint_document,set_source};
+        let extent=[64;2];
+        let mut document=paint_document(extent,"red");
+        set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[255,0,0,255]));
+        let mut renderer=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        let mut presenter=ViewportPresenter::for_renderer(&renderer,wgpu::TextureFormat::Rgba8Unorm);
+        pollster::block_on(presenter.prepare(&renderer)).unwrap();
+        presenter.set_target_retention(true);
+        let (texture,target)=crate::create_target(renderer.device(),extent,wgpu::TextureFormat::Rgba8Unorm,"missing presentation views");
+        let view=crate::test_support::view(extent);
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        assert_eq!(&crate::layer_tests::page_bytes(&renderer,&texture)[..4],&[255,0,0,255]);
+        let held=presenter.capture_held(renderer.device(),renderer.queue()).unwrap();
+        presenter.adopt_held(Some(held));
+        renderer.set_canvas_transition(layer_render::CanvasFade::WAITING);
+        let cache=renderer.scale_display.take();let backup=renderer.display_backup.take();
+        assert!(renderer.presentation.showing && renderer.presentation_views().is_none());
+        let presented=presenter.presented_drawing;
+        let scope=renderer.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        renderer.wait_idle().unwrap();
+        assert!(pollster::block_on(scope.pop()).is_none());
+        assert!(presenter.held_draw.is_some());
+        assert!(presenter.presented_drawing==presented);
+        renderer.scale_display=cache;renderer.display_backup=backup;
+        renderer.set_canvas_transition(Default::default());
+        set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
+        crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        presenter.present(&renderer,&target,view,[0.,1.,0.,1.]).unwrap();
+        assert!(crate::layer_tests::page_bytes(&renderer,&texture).as_chunks::<4>().0.iter().all(|pixel|*pixel==[0,0,255,255]));
+        assert!(presenter.held.is_none());
     }
     #[test]
     fn navigator_transition_holds_fades_and_clips_in_surface_and_standalone() {
