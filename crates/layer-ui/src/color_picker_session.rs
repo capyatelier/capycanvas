@@ -35,6 +35,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Contacts already resting on the canvas must not resume navigation
         // after picking. This also invalidates their pending native holds.
         self.touch.clear();
+        self.interaction.gestures.fail();
         self.eyedropper.cancel();
         self.eyedropper.preview_only = true;
         let previous = self.layer_interaction.tool;

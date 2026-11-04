@@ -146,8 +146,12 @@ fn held_fingers_repeat_history_and_release_never_adds_a_tap() {
         assert!(down.change.canvas_wake && s.wants_continuous_frames());
         for time in [1_020_000_000, 1_519_999_999] { s.frame(time, time).unwrap(); }
         assert_eq!(s.state.layers.len(), count);
+        for id in [10, 11] {
+            assert!(!s.input(UiInput::ColorPickerHold { id, position: [300., 400.], offset: 44. }).unwrap().handled);
+        }
         s.frame(1_520_000_000, 1_520_000_000).unwrap();
         assert_eq!(s.state.layers.len(), count - 1, "{platform:?}");
+        assert!(!s.input(UiInput::ColorPickerHold { id: 11, position: [400., 400.], offset: 44. }).unwrap().handled);
         s.frame(1_600_000_000, 1_600_000_000).unwrap();
         assert_eq!(s.state.layers.len(), count - 2);
         finger(&mut s, 10, ContactPhase::Up, [300., 400.], 700);
@@ -156,7 +160,11 @@ fn held_fingers_repeat_history_and_release_never_adds_a_tap() {
         s.frame(1_900_000_000, 1_900_000_000).unwrap();
         assert_eq!(s.engine.checkpoint(), checkpoint);
         for id in 0..3 { finger(&mut s, 10 + id, ContactPhase::Down, [300. + id as f32 * 80., 400.], 1000 + id * 10); }
-        for time in [2_030_000_000, 2_530_000_000, 2_610_000_000] { s.frame(time, time).unwrap(); }
+        s.frame(2_030_000_000, 2_030_000_000).unwrap();
+        for id in 10..13 {
+            assert!(!s.input(UiInput::ColorPickerHold { id, position: [300., 400.], offset: 44. }).unwrap().handled);
+        }
+        for time in [2_530_000_000, 2_610_000_000] { s.frame(time, time).unwrap(); }
         for id in 0..3 { finger(&mut s, 10 + id, ContactPhase::Up, [300. + id as f32 * 80., 400.], 1700 + id * 10); }
         assert_live_artwork_eq(s.engine.document(), &painted);
     }
@@ -164,7 +172,7 @@ fn held_fingers_repeat_history_and_release_never_adds_a_tap() {
 
 #[test]
 fn held_history_stops_for_motion_blur_and_custom_tap_actions() {
-    for case in 0..4 {
+    for case in 0..5 {
         let mut s = painted_session();
         if case == 3 { bind(&mut s, "touch.tap.2", "command.AddLayer"); }
         let painted = s.engine.document().clone();
@@ -175,6 +183,7 @@ fn held_history_stops_for_motion_blur_and_custom_tap_actions() {
             0 => { finger(&mut s, 11, ContactPhase::Move, [450., 400.], 100); }
             1 => { s.input(UiInput::Blur).unwrap(); }
             2 => { finger(&mut s, 11, ContactPhase::Cancel, [400., 400.], 100); }
+            4 => { invoke(&mut s, CommandId::Eyedropper); }
             _ => (),
         }
         s.frame(1_800_000_000, 1_800_000_000).unwrap();
@@ -288,6 +297,9 @@ fn three_finger_scrub_clears_once_at_every_angle_and_undo_restores_the_layer() {
             let angle = (degrees as f32).to_radians();
             let offset = |length: f32| [angle.cos() * length, angle.sin() * length];
             scrub_contacts(&mut s, ContactPhase::Down, [0.; 2], 0, 3);
+            for id in 10..13 {
+                assert!(!s.input(UiInput::ColorPickerHold { id, position: [300., 400.], offset: 44. }).unwrap().handled);
+            }
             for (step, length) in [60., 0., 60.].into_iter().enumerate() {
                 scrub_contacts(&mut s, ContactPhase::Move, offset(length), 100 + step as u64 * 100, 3);
                 if step < 2 { assert_live_artwork_eq(s.engine.document(), &painted); }
@@ -366,7 +378,7 @@ fn scrub_cancellation_and_ineligible_contacts_never_clear() {
             }
             5 => { s.interaction.facts.popup_open = true; }
             6 => { invoke(&mut s, CommandId::KeyboardShortcuts); }
-            7 => { s.input(UiInput::ColorPickerHold { id: 10, position: [360., 400.], offset: 40. }).unwrap(); }
+            7 => { invoke(&mut s, CommandId::Eyedropper); assert!(s.eyedropper.picking.previous.is_some()); }
             8 => { scrub_contacts(&mut s, ContactPhase::Move, [60., 0.], 90, 3); }
             _ => { scrub_contacts(&mut s, ContactPhase::Move, [60., 0.], 2100, 3); }
         }

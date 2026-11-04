@@ -40,7 +40,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.gestures.contact(id, phase, position, time_ns, policy, eligible)
                     .filter(|gesture| !indirect || matches!(gesture, TouchGesture::Scrub | TouchGesture::QuickPinch { .. }))
             }
-            UiInput::Pointer { phase: ContactPhase::Down, .. } | UiInput::ColorPickerHold { .. } => {
+            UiInput::Pointer { phase: ContactPhase::Down, .. } => {
                 self.interaction.gestures.fail();
                 None
             }
