@@ -81,6 +81,12 @@ pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct ColorEditorLayout { pub split: bool, pub compact_fields: bool }
+pub fn color_editor_layout(width: f32, minimum: [f32; 2]) -> ColorEditorLayout {
+    ColorEditorLayout { split: dialog_panes_fit(width, minimum, 24.), compact_fields: width < minimum[1] }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct NewDrawingLayout { pub single_pane: bool, pub preview: [i32; 2], pub fit: [i32; 2] }
 pub fn new_drawing_layout(width: f32) -> NewDrawingLayout {
     let single_pane = !dialog_panes_fit(width, [232., 320.], 24.);
@@ -119,6 +125,12 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn color_fields_wrap_only_after_the_stacked_form_cannot_fit_them() {
+        for (width, split, compact_fields) in [(600.,true,false),(500.,false,false),(320.,false,false),(244.,false,true)] {
+            assert_eq!(color_editor_layout(width,[232.,320.]),ColorEditorLayout {split,compact_fields});
+        }
+    }
     #[test]
     fn floating_editor_width_matches_native_sheet_allocation() {
         for (window, width) in [(600.,540.),(700.,640.),(800.,720.),(1024.,888.)] {

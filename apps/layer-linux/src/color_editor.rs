@@ -408,8 +408,9 @@ impl ColorForm {
         let weak = form.this.clone();
         crate::dialog_content::on_resize(&form.body, move |width| if let Some(form) = weak.upgrade() {
             let minimum = form.wide_minimum();
-            form.arrange(!layer_ui::dialog_panes_fit(width as f32, minimum, 24.));
-            form.arrange_fields((width as f32) < minimum[1], width);
+            let layout = layer_ui::color_editor_layout(width as f32, minimum);
+            form.arrange(!layout.split);
+            form.arrange_fields(layout.compact_fields, width);
         });
         form
     }

@@ -92,6 +92,9 @@ impl WebApp {
     pub fn calibration_extent(&self, area: JsValue, natural: JsValue) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::calibration_extent(serde_wasm_bindgen::from_value(area).map_err(js)?,serde_wasm_bindgen::from_value(natural).map_err(js)?))
     }
+    pub fn color_editor_layout(&self, width: f32, minimum: JsValue) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::color_editor_layout(width,serde_wasm_bindgen::from_value(minimum).map_err(js)?))
+    }
     pub fn floating_dialog_width(&self, window: f32, natural: f32) -> f32 {
         layer_ui::floating_dialog_width(window,natural)
     }

@@ -2,6 +2,27 @@ import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
+export async function assertColorEditorCells(evaluate) {
+  const {groups,...facts}=await evaluate(`(()=>{
+    const dialog=document.querySelector('.color-dialog[open]'),body=dialog.querySelector('.color-editor-body'),outer=dialog.getBoundingClientRect();
+    const visible=node=>node.getClientRects().length&&getComputedStyle(node).visibility!=='hidden';
+    const groups=[...dialog.querySelectorAll('.color-rows,.color-editor-head')].filter(visible).map(grid=>({
+      name:grid.className,cells:[...grid.children].filter(visible).map(node=>{const r=node.getBoundingClientRect();return{name:node.className,text:node.textContent.trim().slice(0,80),bounds:[r.x,r.y,r.width,r.height]};}).filter(cell=>cell.bounds[2]>0&&cell.bounds[3]>0)
+    }));
+    return{split:!body.classList.contains('single-pane'),outer_width:outer.width,outer_bounds:[outer.x,outer.y,outer.width,outer.height],groups};
+  })()`);
+  for(const group of groups)for(const cell of group.cells){
+    const [x,,width]=cell.bounds,[left,,outerWidth]=facts.outer_bounds;
+    assert.ok(x>=left-1&&x+width<=left+outerWidth+1,`Color Editor cell leaves the page: ${JSON.stringify({...facts,group:group.name,cell})}`);
+  }
+  for(const group of groups)for(let i=0;i<group.cells.length;i++)for(const right of group.cells.slice(i+1)){
+    const left=group.cells[i],a=left.bounds,b=right.bounds;
+    const overlap=[Math.min(a[0]+a[2],b[0]+b[2])-Math.max(a[0],b[0]),Math.min(a[1]+a[3],b[1]+b[3])-Math.max(a[1],b[1])];
+    assert.ok(overlap[0]<=1||overlap[1]<=1,`Color Editor grid cells overlap: ${JSON.stringify({...facts,group:group.name,left,right,overlap})}`);
+  }
+  return {...facts,grids:groups};
+}
+
 export async function checkColorEditor({call,evaluate,settle}) {
   const output=process.env.LAYER_TEST_ARTIFACTS||'artifacts/color-editor/web';
   await mkdir(output,{recursive:true});
@@ -39,6 +60,7 @@ export async function checkColorEditor({call,evaluate,settle}) {
     const original=await foreground();
     await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
     await wait(`!!document.querySelector('${dialog}')`);await wait(`document.querySelector('${dialog} .color-wheel').width>0`);await settle();
+    await assertColorEditorCells(evaluate);
     await capture(`editor-${theme}`);
     const layout=await evaluate(`(()=>{const d=document.querySelector('${dialog}'),box=s=>d.querySelector(s).getBoundingClientRect(),middle=r=>r.top+r.height/2,dialogBox=d.getBoundingClientRect(),title=box('.color-editor-title'),pair=box('.color-editor-head .color-pair');return{title:title.left+title.width/2-(dialogBox.left+dialogBox.width/2),pair:pair.height,pick:box('.color-pick').height,icon:box('.color-pick svg').width,centers:[box('.color-pick'),box('.color-hex .color-value')].map(r=>middle(r)-middle(pair)),copies:[...d.querySelectorAll('.color-copy')].map(b=>Math.round(b.getBoundingClientRect().right)),footer:Math.round(box('.suggested-action').right),overflow:d.querySelector('.color-editor-body').scrollWidth>d.querySelector('.color-editor-body').clientWidth}})()`);
     assert.ok(Math.abs(layout.title)<=1,`the title is centered ${JSON.stringify(layout)}`);
@@ -168,6 +190,7 @@ export async function checkColorEditor({call,evaluate,settle}) {
   await call('Emulation.setDeviceMetricsOverride',{width:640,height:900,deviceScaleFactor:1,mobile:false});await settle();
   await evaluate(`[...document.querySelectorAll('button[aria-label="Edit Color"]')].find(b=>b.getBoundingClientRect().width>0).click()`);
   await wait(`!!document.querySelector('${dialog}')`);await settle();
+  await assertColorEditorCells(evaluate);
   await capture('narrow');
   const narrowHeader=await evaluate(`(()=>{const d=document.querySelector('${dialog}'),pick=d.querySelector('.color-pick'),hex=d.querySelector('.color-hex'),p=pick.getBoundingClientRect(),h=hex.getBoundingClientRect();return {pick:[p.x,p.y,p.width,p.height],hex:[h.x,h.y,h.width,h.height],target:document.elementFromPoint(p.x+p.width/2,p.y+p.height/2)?.closest('.color-pick')===pick};})()`);
   assert.equal(narrowHeader.target,true,`The narrow eyedropper has its full hit target: ${JSON.stringify(narrowHeader)}`);

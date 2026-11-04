@@ -608,4 +608,7 @@ Web shell projects page X, Back and Done without rebinding the form's Cancel;
 primary controls move into the page header and return when floating.
 New Drawing uses shared preview dimensions and pane fit. Edit Color reports
 minimum pane widths and the body content width to the shared fit helper; its
-padding is outside that available width.
+padding is outside that available width. Measured Color grid tracks must retain
+their content minima so the fit predicate cannot admit overlapping controls.
+Both hosts use shared `color_editor_layout` to stack panes and wrap fields when
+the complete row cannot fit.

@@ -66,6 +66,7 @@ export const dialogProjection = {
   floating_dialog_width:(_window,natural)=>natural,
   dialog_header:() => ({start:'cancel', end:'primary'}),
   dialog_escape:() => 'cancel',
+  color_editor_layout:(available,minimum)=>({split:minimum.every(width=>width>0)&&available>=minimum[0]+minimum[1]+24,compact_fields:available<minimum[1]}),
   dialog_panes_fit:(available, minimum, gap) => minimum.every(width => width > 0) && available >= minimum[0] + minimum[1] + gap,
 };
 

@@ -239,7 +239,9 @@ export function colorForm({app, root, element, button, open, rendition, copyable
       const measure=node=>{const before=node.style.cssText;node.style.cssText+=';position:absolute;width:min-content;min-width:0;max-width:none;';const width=node.getBoundingClientRect().width;node.style.cssText=before;return width;};
       minimum=[232,Math.max(measure(head),measure(values))];
     }
-    body.classList.toggle('single-pane',!app.dialog_panes_fit(available,minimum,24));
+    const layout=app.color_editor_layout(available,minimum);
+    body.classList.toggle('single-pane',!layout.split);
+    body.classList.toggle('compact-fields',layout.compact_fields);
     layoutKey = ''; paintKey = ''; queueDraw();
   }); resize.observe(wheelBox);resize.observe(body);
   return {body, title, left, head, values, current, fresh, captions, pick:pickButton, hex:hex.show, act, request, render, draw, tile,
