@@ -17,7 +17,7 @@ struct Contact {
 }
 #[derive(Default)]
 pub(super) struct FingerInput {
-    device: DeviceClass,
+    pub(super) device: DeviceClass,
     touches: BTreeSet<u64>,
     rejected: BTreeSet<u64>,
     pen: Option<u64>,

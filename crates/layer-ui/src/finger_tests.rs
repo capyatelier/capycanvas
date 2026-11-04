@@ -46,6 +46,26 @@ fn finger_policy_uses_device_class_independently_of_window_and_persists_modes() 
 }
 
 #[test]
+fn drawing_activation_keeps_the_windows_device_class_without_contacts() {
+    for platform in Platform::ALL {
+        for device in [DeviceClass::Desktop, DeviceClass::Phone, DeviceClass::Tablet] {
+            let mut previous = session(platform);
+            previous.set_device_class(device);
+            finger_sample(&mut previous, 1, ContactPhase::Down, [250., 300.], 10);
+            for initial in [DeviceClass::Desktop, DeviceClass::Phone, DeviceClass::Tablet] {
+                let mut next = session(platform);
+                next.set_device_class(initial);
+                next.inherit_window_state(&previous).unwrap();
+                assert_eq!(next.finger.device, device, "{platform:?}/{device:?}/{initial:?}");
+                assert_eq!(next.finger_drawing(), previous.finger_drawing());
+                assert!(!next.finger.recognizing());
+                assert!(next.finger.raw.is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn finger_on_starts_immediately_and_finishes_once_while_off_keeps_gestures() {
     for mode in [FingerDrawing::On, FingerDrawing::Off] {
         let mut s = finger_session();
