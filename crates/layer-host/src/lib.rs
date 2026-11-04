@@ -3012,6 +3012,8 @@ mod tests {
         };
         finger(&mut app, 1, 400., 1.);
         finger(&mut app, 2, 600., 1.);
+        let contact = app.take_value().unwrap();
+        assert_eq!(contact["state"]["camera"], json!(app.session.state().camera));
         for i in 1..100 {
             finger(&mut app, 2, 600. + i as f64, 2.);
             let patch = app.take_value().unwrap();
