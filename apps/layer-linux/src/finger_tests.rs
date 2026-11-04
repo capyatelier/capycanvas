@@ -125,8 +125,9 @@ fn drawing(d: &mut Driver) {
     super::phone::clear_canvas_pointer(d);
     assert_eq!(pixels(d, line), before);
     d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
-    let choice = named::<adw::ComboRow>(d.w.preferences.dialog.upcast_ref(), "setting-finger-drawing");
-    until(|| d.w.preferences.dialog.is_mapped() && choice.is_mapped(), "Settings Input and its native choice are mapped");
+    let page = crate::page_dialog::parent(&d.w.preferences.dialog);
+    let choice = named::<adw::ComboRow>(&page, "setting-finger-drawing");
+    until(|| page.is_mapped() && choice.is_mapped(), "Settings Input and its native choice are mapped");
     assert!(choice.grab_focus());
     until(|| choice.compute_bounds(&d.w.window).is_some_and(|b| b.width() > 0. && b.height() > 0.
         && b.x() >= 0. && b.x() + b.width() <= d.w.window.width() as f32
@@ -148,7 +149,7 @@ fn drawing(d: &mut Driver) {
     }
     capture(d, "settings-on");
     d.w.dispatch(UiAction::CloseSettings);
-    until(|| !d.w.preferences.dialog.is_mapped(), "Settings closes before testing canvas hit targets");
+    until(|| !page.is_mapped(), "Settings closes before testing canvas hit targets");
     let layout = state(&d.w).workspace.layout;
     let color = layout.phone.unwrap().iter().find(|t| t.control == ToolbarControl::Color).unwrap().id;
     let button = d.named(&format!("phone-tool-{color}"));

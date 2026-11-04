@@ -164,6 +164,10 @@ native compositor keys.
 
 ## Tests
 
+Find dialog controls under `page_dialog::parent(&dialog)` in native journeys.
+Phone pages reparent the body; check that presented widget when waiting for the
+page to map or close.
+
 `native_phone_window_move` uses `--native-storage` and a 1600×1000 private display to check unmaximized phone-bar movement with mouse and touch in both orientations.
 
 Model tests run with `cargo test --locked -p layer-linux`, which also builds
