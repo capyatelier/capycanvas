@@ -3,16 +3,22 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement} from './fake-dom.mjs';
 import {chooseColor} from './color-editor.js';
-import {colorDialogDom,fakeColorApp} from './color-dialog-fixture.mjs';
+import {colorDialogDom,fakeColorApp,dialogProjection} from './color-dialog-fixture.mjs';
 import {createEffectPanels} from './effects.js';
 import {createEditorPanels} from './editor-panels.js';
 import {createSelectionUi} from './selection-masks.js';
 import {createDocuments} from './documents.js';
+import {createDialogHost} from './dialog-host.js';
 import {bindCopy,refreshCopy,refreshBindings,liveCopy} from './localization.js';
 
 class Element extends FakeElement {
   constructor(tag,doc){super();Object.assign(this,{tagName:tag.toUpperCase(),ownerDocument:doc,children:[],attributes:new Map(),listeners:{},value:'',style:{setProperty(name,value){this[name]=value;}},dataset:{},selectionStart:0,selectionEnd:0});const classes=new Set();this.classList={add:name=>classes.add(name),remove:name=>classes.delete(name),toggle:(name,on)=>on?classes.add(name):classes.delete(name),contains:name=>classes.has(name)};}
   get firstChild(){return this.children[0];}
+  get parentElement(){return this.parentNode;}
+  get nextSibling(){return this.parentNode?.children[this.parentNode.children.indexOf(this)+1]??null;}
+  get isConnected(){return !!this.parentNode;}
+  closest(selector){for(let node=this;node;node=node.parentElement)if(node.tagName===selector.toUpperCase())return node;return null;}
+  removeAttribute(name){this.attributes.delete(name);}
   contains(node){return node===this||this.children.some(child=>child.contains?.(node));}
   get textContent(){return this.children.map(node=>node.nodeType===3?node.nodeValue:node.textContent).join('');}
   set textContent(value){this.children.forEach(node=>node.parentNode=null);this.children=[];this.append(this.ownerDocument.createTextNode(value));}
@@ -105,21 +111,26 @@ test('sampler and selection menu publication retains native controls and semanti
 
 
 function documentsHarness(t,{refreshInputContext,clipboardItem}={}){
-  const previous=Object.fromEntries(['document','window','navigator','innerWidth','innerHeight','ResizeObserver','matchMedia','setInterval','clearInterval','ClipboardItem'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
-  const listeners=new Map();let dispatchAction=()=>{};
+  const previous=Object.fromEntries(['document','window','navigator','innerWidth','innerHeight','ResizeObserver','matchMedia','setInterval','clearInterval','ClipboardItem','getComputedStyle'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  const listeners=new Map(),modalHosts=[];let dispatchAction=()=>{};
   const doc={hidden:true,createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener(type,fn){listeners.set(type,fn);},querySelectorAll:()=>[],querySelector:selector=>selector.startsWith('#')?doc.getElementById(selector.slice(1)):doc.body.querySelectorAll('dialog,details,div').find(node=>node.open&&selector.includes(node.tagName.toLowerCase()+'[open]')||node.popoverOpen&&selector.includes(':popover-open'))??null,getElementById:id=>[doc.body,...doc.body.querySelectorAll('div,canvas')].find(node=>node.id===id)};doc.body=new Element('body',doc);
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null){if(typeof text==='function')bindCopy(node,text);else node.textContent=text;}return node;},button=(text,action,cls)=>{const node=element('button',cls,text);node.click=action;return node;};
   for(const id of ['document-title','canvas-status','canvas']){const node=element('div');node.id=id;doc.body.append(node);}
-  Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1200,innerHeight:900,ResizeObserver:class{observe(){}},matchMedia:()=>({matches:false,addEventListener(){}}),setInterval:()=>0,clearInterval(){}});Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});if(clipboardItem)globalThis.ClipboardItem=clipboardItem;
-  t.after(()=>{for(const[key,descriptor]of Object.entries(previous))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
+  Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1200,innerHeight:900,ResizeObserver:class{observe(){}unobserve(){}disconnect(){}},getComputedStyle:()=>({boxSizing:'border-box'}),matchMedia:()=>({matches:false,addEventListener(){}}),setInterval:()=>0,clearInterval(){}});Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});if(clipboardItem)globalThis.ClipboardItem=clipboardItem;
+  t.after(()=>{for(const host of modalHosts){host.hide();host.dispose();}for(const[key,descriptor]of Object.entries(previous))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
   let language='en',inspections=0,copyCalls=0,resolveInspection,rejectInspection;const info={sources:[{name:'Literal Éİı 雪 {draft}'}]},requests=[],completed=[],responses=[],messages=[];
-  const app={catalog:()=>({native_copy:{color:{},header:{}}}),bootstrap_view:()=>({preparing_document:language+':Preparing',common:{cancel:language+':Cancel',save:language+':Save',done:language+':Done'}}),document_delivery_copy:()=>({cancelling:language+':Cancelling'}),export_copy:()=>({}),document_color_copy:()=>({}),proof_copy:()=>({}),profile_copy:()=>({}),proof_choices_copy:()=>({}),session_checkpoint_interval:()=>0,gpu_ready:()=>false,proof_status:()=>({text:'',needed:false}),state:()=>({requests,commands:[{id:'paste_image',enabled:true}],document_file:{epoch:1},customization:{header_editing:false}}),document_tabs:()=>({selected:1,tabs:[],compact:false}),
+  const app={...dialogProjection,catalog:()=>({native_copy:{color:{},header:{}}}),bootstrap_view:()=>({preparing_document:language+':Preparing',common:{cancel:language+':Cancel',save:language+':Save',done:language+':Done'}}),document_delivery_copy:()=>({cancelling:language+':Cancelling',progress_dialog:{role:'alert',modal:true,primary:null}}),document_request_title:()=>language+':Paste',export_copy:()=>({}),document_color_copy:()=>({}),proof_copy:()=>({}),profile_copy:()=>({}),proof_choices_copy:()=>({}),session_checkpoint_interval:()=>0,gpu_ready:()=>false,proof_status:()=>({text:'',needed:false}),state:()=>({requests,commands:[{id:'paste_image',enabled:true}],document_file:{epoch:1},customization:{header_editing:false}}),document_tabs:()=>({selected:1,tabs:[],compact:false}),
     shortcut_key_is:(key,_latin,expected)=>key.toLowerCase()===expected,
-    editor_models:()=>({document_options:{unsaved_description:language+':Unsaved',discard_label:language+':Discard'}}),
-    document_properties(){inspections++;return new Promise((resolve,reject)=>{resolveInspection=resolve;rejectInspection=reject;});},document_properties_copy(value){assert.equal(value,info);copyCalls++;return{title:language+':Properties',done:language+':Done',rows:[[language+':Canvas','96 × 96 px']],sources:[[info.sources[0].name,language+':Source']]};},
+    editor_models:()=>({document_options:{dialog:{role:'alert',modal:true,primary:'action'},unsaved_description:language+':Unsaved',discard_label:language+':Discard'}}),
+    document_properties(){inspections++;return new Promise((resolve,reject)=>{resolveInspection=resolve;rejectInspection=reject;});},document_properties_copy(value){assert.equal(value,info);copyCalls++;return{dialog:{role:'editor',modal:true,primary:'close'},title:language+':Properties',done:language+':Done',rows:[[language+':Canvas','96 × 96 px']],sources:[[info.sources[0].name,language+':Source']]};},
     finish_document(id,success,error){assert.ok(requests.some(request=>request.id===id));completed.push({id,success,error});requests.splice(requests.findIndex(request=>request.id===id),1);return{};},respond_document(id,decision){responses.push({id,decision});return{};}};
   const docs=createDocuments({dropdown:dropdownFactory({element,button}),app,bootstrap:liveCopy(app,'bootstrap_view'),delivery:liveCopy(app,'document_delivery_copy'),state:app.state,canvas:element('canvas'),canvasReady:()=>app.gpu_ready(),element,button,icon:()=>element('svg'),dispatch(action){dispatchAction(action);},applyChange(){},wake(){},message:error=>messages.push(error),gpuOperation:fn=>fn(),rasterWorker:async()=>{},contentChanged(){},refreshInputContext});
-  return{app,docs,doc,info,requests,completed,responses,messages,listeners,onDispatch(fn){dispatchAction=fn;},resolve:()=>resolveInspection(info),reject:error=>rejectInspection(error),stats:()=>({inspections,copyCalls}),switch(next){language=next;requests.filter(request=>request.kind.request.type==='confirm_close').forEach(request=>request.kind.request.title=language+':Close Literal Éİı 雪 {draft}');refreshCopy(app);docs.localize();refreshBindings();}};
+  const openModal=()=>{
+    const dialog=element('dialog'),header=element('header'),cancel=button('Cancel',()=>{});header.append(cancel);dialog.append(header);doc.body.append(dialog);
+    const host=createDialogHost({app,dialog,header,cancel,icon:()=>element('svg'),copy:app.bootstrap_view().common,onCancel:()=>host.hide()});
+    host.present({role:'editor',modal:true,primary:'close'});modalHosts.push(host);
+  };
+  return{app,docs,doc,info,requests,completed,responses,messages,listeners,openModal,onDispatch(fn){dispatchAction=fn;},resolve:()=>resolveInspection(info),reject:error=>rejectInspection(error),stats:()=>({inspections,copyCalls}),switch(next){language=next;requests.filter(request=>request.kind.request.type==='confirm_close').forEach(request=>request.kind.request.title=language+':Close Literal Éİı 雪 {draft}');refreshCopy(app);docs.localize();refreshBindings();}};
 }
 
 test('document properties retain inspected metadata and native rows while close decisions use current pending copy',async t=>{
@@ -149,7 +160,7 @@ test('known clipboard delivery guards and active-document transport refusals ret
   }
   let cancelCalls=0,prepareCalls=0,rejectPreparation;h.app.document_delivery_message=()=> 'Literal Éİı 雪.png';h.app.capture_control=()=>({cancel(){cancelCalls++;},cancelled:()=>cancelCalls>0,free(){}});h.app.prepare_images=()=>{prepareCalls++;return new Promise((resolve,reject)=>{rejectPreparation=reject;});};
   navigator.clipboard={read:async()=>[{types:['image/png'],getType:async()=>new Blob(['x'],{type:'image/png'})}]};const importing={id:49,kind:{type:'document',request:{type:'paste'}}};h.requests.push(importing);const preparation=h.docs.handle(importing);await new Promise(resolve=>setImmediate(resolve));
-  const progress=h.doc.body.querySelectorAll('aside')[0],label=progress.querySelector('span'),cancel=progress.querySelector('button');cancel.focus();h.switch('fr');assert.equal(progress.querySelector('span'),label);assert.equal(progress.querySelector('button'),cancel);assert.equal(h.doc.activeElement,cancel);assert.equal(label.textContent,'fr:Preparing');assert.equal(cancel.textContent,'fr:Cancel');assert.equal(prepareCalls,1);
+  const progress=h.doc.body.querySelectorAll('dialog')[0],label=progress.querySelector('p'),cancel=progress.querySelector('button');cancel.focus();h.switch('fr');assert.equal(progress.querySelector('p'),label);assert.equal(progress.querySelector('button'),cancel);assert.equal(h.doc.activeElement,cancel);assert.equal(label.textContent,'fr:Preparing');assert.equal(cancel.textContent,'fr:Cancel');assert.equal(prepareCalls,1);
   cancel.click();h.switch('th');assert.equal(label.textContent,'th:Cancelling');assert.equal(cancel.textContent,'th:Cancel');assert.equal(h.doc.activeElement,cancel);assert.equal(cancelCalls,1);assert.equal(prepareCalls,1);rejectPreparation(new Error('Literal native cancellation'));await preparation;assert.equal(h.completed.at(-1).error,undefined);
   const request={id:50,kind:{type:'document',request:{type:'properties'}}};h.requests.push(request);const task=h.docs.handle(request);
   const reason={document_host_error:{type:'transport',reason:'switch_dialog'}};await assert.rejects(h.docs.select(2),error=>{assert.deepEqual(error,reason);return true;});await assert.rejects(h.docs.openFiles([]),error=>{assert.deepEqual(error,{document_host_error:{type:'transport',reason:'open_drawings_operation'}});return true;});
@@ -176,8 +187,8 @@ test('Copy Cut and Copy Merged progress reads shared title after the capture han
     const request={id:70+index,kind:{type:'document',request:{type:'copy',...flags}}};assert.equal(Object.hasOwn(request.kind.request,'title'),false);h.requests.push(request);let consumed=false;
     h.app.document_request_title=id=>h.requests.some(request=>request.id===id)?h.app.bootstrap_view().common.cancel.split(':')[0]+':'+['Copy','Cut','Copy Merged'][index]:undefined;
     h.app.capture_clip=()=>({large(){assert.equal(consumed,false);return true;},run(){consumed=true;runs++;return new Promise((resolve,reject)=>{rejectCopy=reject;});}});
-    const task=h.docs.handle(request);await new Promise(resolve=>setImmediate(resolve));const progress=h.doc.body.querySelectorAll('aside')[0],label=progress.querySelector('span'),cancel=progress.querySelector('button');cancel.focus();
-    h.switch('fr');assert.equal(label.textContent,'fr:'+['Copy','Cut','Copy Merged'][index]);assert.equal(h.doc.activeElement,cancel);h.switch('th');assert.equal(label.textContent,'th:'+['Copy','Cut','Copy Merged'][index]);assert.equal(progress.querySelector('span'),label);assert.equal(progress.querySelector('button'),cancel);assert.equal(consumed,true);
+    const task=h.docs.handle(request);await new Promise(resolve=>setImmediate(resolve));const progress=h.doc.body.querySelectorAll('dialog')[0],label=progress.querySelector('h2'),cancel=progress.querySelector('button');cancel.focus();
+    h.switch('fr');assert.equal(label.textContent,'fr:'+['Copy','Cut','Copy Merged'][index]);assert.equal(h.doc.activeElement,cancel);h.switch('th');assert.equal(label.textContent,'th:'+['Copy','Cut','Copy Merged'][index]);assert.equal(progress.querySelector('h2'),label);assert.equal(progress.querySelector('button'),cancel);assert.equal(consumed,true);
     cancel.click();h.switch('vi');assert.equal(label.textContent,'vi:Cancelling');assert.equal(cancel.textContent,'vi:Cancel');rejectCopy(new Error('Literal cancelled capture'));await task;refreshBindings();assert.equal(h.completed.at(-1).error,undefined);
   }
   assert.equal(runs,3);assert.equal(cancels,3);
@@ -286,7 +297,8 @@ for(const owner of ['popup','editor','dialog'])test(`browser-menu paste refreshe
     const h=nativeClipboardHarness(t,{refreshInputContext(){refreshed++;popup=!!h.doc.querySelector('details[open]');}});
     h.app.native_paste_input=()=>{checked++;assert.equal(popup,true);return {regions:0};};
     if(owner==='editor')h.doc.activeElement={closest:()=>({})};
-    else {const node=new Element(owner==='dialog'?'dialog':'details',h.doc);node.open=true;h.doc.body.append(node);}
+    else if(owner==='dialog')h.openModal();
+    else {const node=new Element('details',h.doc);node.open=true;h.doc.body.append(node);}
     h.listeners.get('paste')(h.event);
     assert.equal(refreshed,1);
     assert.equal(checked,0);
@@ -296,7 +308,7 @@ for(const owner of ['popup','editor','dialog'])test(`browser-menu paste refreshe
 for(const owner of ['editor','dialog','stale'])test(`pending native paste retires after ${owner} ownership`,async t=>{
     const h=nativeClipboardHarness(t);const task=h.arm(110);
     if(owner==='editor')h.doc.activeElement={closest:()=>({})};
-    else if(owner==='dialog'){const node=new Element('dialog',h.doc);node.showModal();h.doc.body.append(node);}
+    else if(owner==='dialog')h.openModal();
     else h.requests.length=0;
     h.listeners.get('paste')(h.event);await task;
     assert.equal(h.prepared(),0);assert.equal(h.docs.busy(),false);

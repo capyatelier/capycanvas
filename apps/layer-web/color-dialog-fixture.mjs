@@ -44,11 +44,11 @@ export class Element extends FakeElement {
 }
 
 export function colorDialogDom(t) {
-  const previous = Object.fromEntries(['document', 'window', 'innerWidth', 'innerHeight', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'devicePixelRatio'].map(key => [key, globalThis[key]]));
+  const previous = Object.fromEntries(['document', 'window', 'innerWidth', 'innerHeight', 'requestAnimationFrame', 'cancelAnimationFrame', 'ResizeObserver', 'getComputedStyle', 'devicePixelRatio'].map(key => [key, globalThis[key]]));
   const doc = {createTextNode:nodeValue => ({nodeType:3, nodeValue:String(nodeValue)}), createElementNS:(_, tag) => new Element(tag, doc), createElement:tag => new Element(tag, doc), activeElement:null,
     querySelector:selector => selector === 'dialog[open]' ? doc.body.descendants().find(node => node.tagName === 'DIALOG' && node.open) ?? null : null};
   doc.body = new Element('body', doc);
-  Object.assign(globalThis, {document:doc, window:{addEventListener() {}, removeEventListener() {}}, innerWidth:1200, innerHeight:900, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, devicePixelRatio:1});
+  Object.assign(globalThis, {document:doc, window:{addEventListener() {}, removeEventListener() {}}, innerWidth:1200, innerHeight:900, requestAnimationFrame:() => 0, cancelAnimationFrame() {}, ResizeObserver:class { observe() {} unobserve() {} disconnect() {} }, getComputedStyle:()=>({boxSizing:'border-box'}), devicePixelRatio:1});
   t.after(() => Object.assign(globalThis, previous));
   const element = (tag, cls, text) => { const node = new Element(tag, doc); node.className = cls ?? ''; if (text != null) { if (typeof text === 'function') bindCopy(node, text); else node.textContent = text; } return node; };
   const button = (text, action, cls) => { const node = element('button', cls, text); node.addEventListener('click', action); return node; };

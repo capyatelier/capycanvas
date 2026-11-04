@@ -116,6 +116,10 @@ node --test apps/layer-web/{run,package,frame,phone-audit,bubbles,glass,pointer,
 node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
 ```
 
+Run both Node batches for every Web gate. Dialog fakes must include the shared
+`dialog` intent and projection APIs. Present modal fixtures through
+`createDialogHost` so input admission sees their declared modality.
+
 Run `bash tools/performance/workspace-motion.sh web --phone-customize` for
 phone toolbar holds, reorder, capacity, picker pages and scoped Restore.
 `LAYER_PHONE_AUDIT_CASES=412x891-light,891x412-dark` selects focused cases from
