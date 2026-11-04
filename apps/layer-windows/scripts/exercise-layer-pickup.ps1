@@ -243,7 +243,7 @@ function Check-ClippedEdges{
         $before=Rows;$at=Point ("layer-"+$source.id+'-drag')
         [CapyRowPointer]::Down($Device,$at.x,$at.y);Move-To @{x=$at.x-30;y=$at.y}
         Wait-Until {(Gesture).phase -eq 'dragging'} 'Clipped-edge handle did not begin dragging'
-        $outside=if($edge -eq 'before'){$viewport.Top-1}else{$viewport.Bottom+1}
+        $outside=if($edge -eq 'before'){$viewport.Top-1}else{(Control 'layer-footer' -Arranged).Current.BoundingRectangle.Top+1}
         [CapyRowPointer]::Move([int]($viewport.Left+$viewport.Width*.5),[int]$outside);[CapyRowPointer]::Up()
         Wait-Until {$g=Gesture;$g.phase -eq 'idle' -and $g.last_release.commit} 'Clipped-edge drop did not commit'
         $released=(Gesture).last_release;$position=if($edge -eq 'before'){'above'}else{'below'}
