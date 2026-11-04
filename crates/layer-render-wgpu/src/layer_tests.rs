@@ -32,7 +32,7 @@ mod liquify;
 #[path = "crop_overlay_tests.rs"]
 mod crop_overlay;
 #[path = "paper_shade_tests.rs"]
-pub(crate) mod paper_shade;
+mod paper_shade;
 #[path = "paint_mixing_tests.rs"]
 mod paint_mixing;
 

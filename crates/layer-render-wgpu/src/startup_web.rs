@@ -109,8 +109,8 @@ impl Compiler {
     }
     pub fn ready_through(&self, priority: u8) -> bool {
         let queue = self.queue.borrow();
-        !queue.busy.is_some_and(|(p, tracked)| tracked && p <= priority)
-            && !queue.jobs.iter().any(|j| j.tracked && j.priority <= priority)
+        !queue.busy.is_some_and(|(p, _)| p <= priority)
+            && !queue.jobs.iter().any(|j| j.priority <= priority)
     }
     pub fn check(&self) -> Result<(), GpuRasterError> {
         self.queue

@@ -1923,51 +1923,6 @@ the binary and source snapshot are under `artifacts/layer-modes/rebased-build/`.
 
 Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.
 
-### Thin contacts and brush readiness
-
-Measured 2026-11-04 UTC: `b1b02aebb` → `20da05962` on TCL TAB 11 Gen 2, 4248 × 2832. One
-ABBA block, two independent processes per arm, three warmed ten-second constant-pressure
-contacts per process. Full descriptive intervals and per-run details are in the
-[campaign report](../../artifacts/pencil-speed/report.local.md).
-
-P/C/U/F classify preview cost, committed cost, pooled completed-update rate and pooled
-fresh-gap p99. N means no evidence of regression under the MAIN-only noise rule; I is
-inconclusive; R is regression. Fresh-rate ranges and worst-contact gaps are separate
-observations. GPU costs and noise decisions do not establish sustained frame capacity.
-
-| Row | Preview ms/update | Committed ms/unique dab | Completed updates/s | Fresh completions/s range | Worst contact fresh-gap p99 ms | P/C/U/F |
-| --- | --- | --- | --- | --- | --- | --- |
-| Pencil 9 | 7.050→2.526 (-64.2%) | 0.7455→0.2403 (-67.8%) | 74.81→90.08 | 73.93–75.48→89.09–91.10 | 23.24→18.65 | N/N/N/N |
-| Pencil 16 | 5.492→3.114 (-43.3%) | 0.7323→0.4247 (-42.0%) | 82.57→87.89 | 81.32–83.88→86.70–89.28 | 23.09→19.95 | N/N/N/N |
-| Pencil 24 | 3.475→2.238 (-35.6%) | 0.1136→0.1173 (+3.3%) | 88.70→90.55 | 87.89–89.82→89.85–91.80 | 19.99→18.93 | N/I/N/N |
-| Pencil 36 | 1.287→1.282 (-0.4%) | 0.1418→0.1431 (+0.9%) | 85.80→87.59 | 84.22–87.68→86.09–88.39 | 20.34→18.76 | N/I/N/N |
-| Pencil 64 | 1.624→1.626 (+0.1%) | 0.2751→0.2688 (-2.3%) | 87.67→85.85 | 86.23–89.42→84.24–87.35 | 20.60→20.44 | N/N/I/N |
-| Pencil 100 | 2.123→2.123 (-0.0%) | 0.4739→0.4719 (-0.4%) | 82.30→82.85 | 81.18–83.68→81.92–83.31 | 20.74→20.67 | N/N/N/N |
-| Pencil 1024 | 29.974→30.062 (+0.3%) | 24.3335→24.2922 (-0.2%) | 0.80→0.80 | 0.80–0.80→0.80–0.80 | 4469.99→4355.15 | N/N/N/N |
-| Charcoal 24 | 4.430→2.616 (-41.0%) | 0.0968→0.0919 (-5.1%) | 86.50→88.00 | 83.74–89.45→86.11–89.44 | 20.31→19.67 | N/N/N/N |
-| Charcoal 48 | 1.343→1.319 (-1.8%) | 0.1541→0.1570 (+1.9%) | 85.16→87.19 | 84.83–85.51→85.79–89.29 | 19.47→20.43 | N/I/N/N |
-| Chalk default | 1.548→1.497 (-3.4%) | 0.1218→0.1197 (-1.7%) | 88.05→86.73 | 87.41–89.31→85.74–87.97 | 19.08→19.21 | N/N/I/N |
-| Pastel 64 | 2.408→2.410 (+0.1%) | 0.3415→0.3396 (-0.6%) | 86.39→87.33 | 85.32–88.30→85.71–87.94 | 19.87→20.03 | N/N/N/N |
-
-Shared fresh-completion gap misses against the two-frame budget: Pencil 1024
-(4469.99→4355.15 ms). These remain pre-existing target misses, separate from the matched
-noise decisions.
-
-Initial brush preparation latency diagnostic: `prepare_startup`→`brush_ready`, excluding
-construction/shutdown and application launch. Medians use two fresh processes per arm.
-Required-kernel readiness can precede exact-variant warming.
-
-| Preset | Control→candidate ms |
-| --- | --- |
-| Pencil 9 | 11087.0→8613.1 |
-| Pencil 36 | 13628.9→8606.9 |
-| Charcoal | 13565.8→8635.1 |
-| Chalk | 11789.9→7978.2 |
-
-Completed GPU updates and actual display presentations are separate; presentation
-correspondence and individual contacts remain in the final campaign artifacts. OEM
-driver caches are uncontrolled.
-
 ### Physical tilt response
 
 Measured 2026-10-24 on the reference TCL with `9bb23c036`, benchmark APK and
