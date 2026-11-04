@@ -290,6 +290,13 @@ try {
  Visit-ProfileManager
  $checks.profile_manager_returns_to_preferences='passed'
 
+ Wait-Until {
+  $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+  $focused=[System.Windows.Automation.AutomationElement]::FocusedElement
+  $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
+  while($focused){if($focused -eq $dialog){return $true};$focused=$walker.GetParent($focused)}
+  $false
+ } 'Preferences did not take keyboard focus before Escape'
  Press 0x1B
  Wait-Until {!(Prefs)} 'Escape on the root page did not close Preferences'
  $checks.escape_closes_preferences='passed'

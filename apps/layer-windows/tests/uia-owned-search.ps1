@@ -1,4 +1,49 @@
 $ErrorActionPreference='Stop'
+& {
+ Add-Type -TypeDefinition @'
+namespace CapyShortcutFocusTest {
+ public class Node {public Node Parent;}
+ public class TreeWalker {
+  public static TreeWalker ControlViewWalker=new TreeWalker();
+  public Node GetParent(Node value){return value.Parent;}
+ }
+ public static class ControlType {public static object Window="window";}
+ public static class AutomationElement {
+  public static Node Outside=new Node(),Dialog=new Node(),Child=new Node{Parent=Dialog};
+  public static int Reads;public static bool Lost;
+  public static Node FocusedElement {get {Reads++;return Lost||Reads<=3?Outside:Child;}}
+ }
+}
+'@
+ $tokens=$null;$errors=$null
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-shortcut-page.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $end=$source.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Wait-Until'-and@($n.CommandElements|Where-Object {$_.Value-eq'Escape on the root page did not close Preferences'}).Count-eq1},$true)
+ if(!$end){throw 'Missing actual Preferences root Escape assertion'}
+ $statements=@($end.Parent.Statements);$index=[array]::IndexOf($statements,$end.Parent)
+ if($index-lt0){
+  $statements=@($end.Parent.Parent.Statements);$index=[array]::IndexOf($statements,$end.Parent)
+ }
+ if($index-lt1){throw 'Missing actual root Escape sequence'}
+ $first=$index-1
+ if($index-ge2-and$statements[$index-2].Extent.Text-like'*Preferences did not take keyboard focus before Escape*'){$first=$index-2}
+ $sequence=($statements[$first..($index-1)]|ForEach-Object {$_.Extent.Text})-join"`n"
+ function Control($Id,[switch]$Name,$Type){[CapyShortcutFocusTest.AutomationElement]::Dialog}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt8;$poll++){if(& $Condition){return}};throw $Message}
+ function Press($Key){
+  if($Key-ne0x1b){throw 'Unexpected shortcut input'}
+  if([CapyShortcutFocusTest.AutomationElement]::Reads-le3-or[CapyShortcutFocusTest.AutomationElement]::Lost){throw 'Escape preceded Preferences keyboard focus'}
+  $script:shortcutEscapes++
+ }
+ foreach($lost in $false,$true){
+  [CapyShortcutFocusTest.AutomationElement]::Reads=0;[CapyShortcutFocusTest.AutomationElement]::Lost=$lost;$script:shortcutEscapes=0
+  $failure=$null;try{. ([scriptblock]::Create($sequence.Replace('System.Windows.Automation.','CapyShortcutFocusTest.')))}catch{$failure=$_}
+  if($lost){if(!$failure-or$failure.Exception.Message-cne'Preferences did not take keyboard focus before Escape'-or$script:shortcutEscapes-ne0){throw 'Missing Preferences focus reached Escape'}}
+  elseif($failure-or$script:shortcutEscapes-ne1){throw "Actual root Escape did not await dialog descendant focus: $failure"}
+ }
+ 'Actual Preferences root Escape: delayed descendant focus admitted once; missing dialog focus prevents Escape.'
+}
+
 $tokens=$null;$errors=$null
 $path=Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'
 $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
