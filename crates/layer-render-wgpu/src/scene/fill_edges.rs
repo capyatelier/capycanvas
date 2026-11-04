@@ -158,22 +158,20 @@ pub(crate) fn read_bounds(operation:&layer_core::RasterOperation,bounds:PixelRec
 
 type Texture=(wgpu::Texture,wgpu::TextureView);
 struct LineCapture<'a> {
-    source:&'a mut artwork::Capture,next:&'a Texture,seeds:&'a wgpu::Texture,lines:&'a wgpu::TextureView,cover:&'a wgpu::TextureView,
+    source:&'a mut artwork::Capture,next:&'a Texture,seeds:&'a wgpu::Texture,
 }
 impl LineCapture<'_> {
-    fn capture(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,line:&layer_core::FillLine,index:usize,crop:PixelRect,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
-        scene.jobs.push(Job::Clear(self.next.1.clone(),wgpu::Color::TRANSPARENT));scene.encode_jobs(r,encoder)?;
+    fn capture(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,index:usize,crop:PixelRect,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         self.source.region_into(r,packet,crop,&self.next.0,encoder)?;
         copy(encoder,&self.seeds,&self.next.0,[0,index as u32],[0,SIDE],[1;2]);
-        let mut data=[0.;32];data[..8].copy_from_slice(&[0.,0.,SIDE as f32,SIDE as f32,SIDE as f32,SIDE as f32,0.,0.]);
-        data[8..12].copy_from_slice(&[23.,1.,1.,0.]);
-        scene.jobs.push(Job::Draw {target:self.lines.clone(),sources:[self.next.1.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
-            data,over:true,clip:None,source_target:None,edges:None});scene.encode_jobs(r,encoder)?;
-        if line.fill_above {
-            scene.jobs.push(Job::Draw {target:self.cover.clone(),sources:[self.next.1.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
-                data,over:true,clip:None,source_target:None,edges:None});scene.encode_jobs(r,encoder)?;
-        }
         Ok(())
+    }
+    fn draw(scene:&mut Scene,r:&WgpuRasterizer,next:&Texture,target:&wgpu::TextureView,crop:PixelRect) {
+        let [w,h]=[crop.width(),crop.height()].map(|v|v as f32);
+        let mut data=[0.;32];data[..8].copy_from_slice(&[0.,0.,w,h,SIDE as f32,SIDE as f32,0.,0.]);
+        data[8..12].copy_from_slice(&[23.,1.,1.,0.]);
+        scene.jobs.push(Job::Draw {target:target.clone(),sources:[next.1.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
+            data,over:true,clip:None,source_target:None,edges:None});
     }
 }
 
@@ -233,19 +231,24 @@ impl Scene {
                 origin:wgpu::Origin3d {x:0,y:SIDE,z:0},mip_level:0,aspect:wgpu::TextureAspect::All},wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1});
             let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.input(target,edges,&capture.external,extent,offset)
                 .and_then(|input|state.pages.iter().find(|(key,_,_)|*key==(input,coordinate))))
-                .map(|(_,lines,cover)|(lines.0.clone(),cover.0.clone()));
-            if let Some((lines,cover))=&prepared {
-                copy(encoder,lines,&capture.lines.0,[0;2],[0;2],[SIDE;2]);copy(encoder,cover,&capture.cover.0,[0;2],[0;2],[SIDE;2]);
-            }else {
-                self.jobs.push(Job::Clear(capture.lines.1.clone(),wgpu::Color::TRANSPARENT));self.encode_jobs(r,encoder)?;
-                self.jobs.push(Job::Clear(capture.cover.1.clone(),wgpu::Color::TRANSPARENT));self.encode_jobs(r,encoder)?;
-            }
-            for (index,line) in edges.lines.iter().enumerate() {
-                if prepared.is_some() && capture.external[index] {continue;}
-                LineCapture {source:&mut capture.source,next:&capture.next,seeds:&capture.line_seeds,lines:&capture.lines.1,cover:&capture.cover.1}
-                    .capture(self,r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),line,index,crop,encoder)?;
-            }
-            Ok(Some((binding(r,&capture.color.1,&capture.lines.1,&capture.cover.1,&capture.mask,capture.precision.as_ref()),[crop.min_x() as f32,crop.min_y() as f32,crop.width() as f32,crop.height() as f32])))
+                .map(|(_,lines,cover)|(lines.clone(),cover.clone()));
+            let (lines,cover)=if let Some((lines,cover))=&prepared && capture.external.iter().all(|v|*v) {(&lines.1,&cover.1)}else {
+                if let Some((lines,cover))=&prepared {
+                    copy(encoder,&lines.0,&capture.lines.0,[0;2],[0;2],[SIDE;2]);copy(encoder,&cover.0,&capture.cover.0,[0;2],[0;2],[SIDE;2]);
+                }else {
+                    self.jobs.push(Job::Clear(capture.lines.1.clone(),wgpu::Color::TRANSPARENT));
+                    self.jobs.push(Job::Clear(capture.cover.1.clone(),wgpu::Color::TRANSPARENT));self.encode_jobs(r,encoder)?;
+                }
+                for (index,line) in edges.lines.iter().enumerate() {
+                    if prepared.is_some() && capture.external[index] {continue;}
+                    LineCapture {source:&mut capture.source,next:&capture.next,seeds:&capture.line_seeds}
+                        .capture(r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),index,crop,encoder)?;
+                    LineCapture::draw(self,r,&capture.next,&capture.lines.1,crop);self.encode_jobs(r,encoder)?;
+                    if line.fill_above {LineCapture::draw(self,r,&capture.next,&capture.cover.1,crop);self.encode_jobs(r,encoder)?;}
+                }
+                (&capture.lines.1,&capture.cover.1)
+            };
+            Ok(Some((binding(r,&capture.color.1,lines,cover,&capture.mask,capture.precision.as_ref()),[crop.min_x() as f32,crop.min_y() as f32,crop.width() as f32,crop.height() as f32])))
         })();
         self.fill_capture=Some(capture);result
     }
@@ -257,7 +260,7 @@ struct Input {
 enum Step {Seed(usize),Page(usize,[u32;2])}
 pub(crate) struct FillEdgesPreflight {
     owner:u64,color:layer_core::color::DocumentColor,inputs:Vec<Input>,steps:Vec<Step>,next:usize,
-    capture:artwork::Capture,scene:Option<Box<Scene>>,seed:Texture,scratch:Texture,line_seeds:Vec<wgpu::Texture>,
+    capture:artwork::Capture,scene:Option<Box<Scene>>,seed:Texture,scratch:Vec<Texture>,zero:Texture,line_seeds:Vec<wgpu::Texture>,
     pages:Vec<((usize,[u32;2]),Texture,Texture)>,failure:Option<GpuRasterError>,
 }
 impl FillEdgesPreflight {
@@ -286,13 +289,21 @@ impl FillEdgesPreflight {
                     }
                 }
                 Step::Page(id,coordinate)=> {
-                    let lines=create_target(&r.device,[SIDE;2],r.device.scalar_format(),"prepared fill lines");let cover=create_target(&r.device,[SIDE;2],r.device.scalar_format(),"prepared fill cover");
-                    scene.jobs.push(Job::Clear(lines.1.clone(),wgpu::Color::TRANSPARENT));
-                    scene.jobs.push(Job::Clear(cover.1.clone(),wgpu::Color::TRANSPARENT));scene.encode_jobs(r,encoder)?;
-                    for (index,line) in edges.lines.iter().enumerate().filter(|(index,_)|input.external[*index]) {
-                        LineCapture {source:&mut self.capture,next:&self.scratch,seeds:&self.line_seeds[id],lines:&lines.1,cover:&cover.1}
-                            .capture(scene,r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),line,index,page_rect(coordinate).expand(HALO,extent),encoder)?;
+                    let lines=create_target(&r.device,[SIDE;2],r.device.scalar_format(),"prepared fill lines");
+                    let cover=if edges.lines.iter().enumerate().any(|(index,line)|input.external[index] && line.fill_above) {
+                        create_target(&r.device,[SIDE;2],r.device.scalar_format(),"prepared fill cover")
+                    }else{self.zero.clone()};
+                    let crop=page_rect(coordinate).expand(HALO,extent);
+                    for ((index,line),next) in edges.lines.iter().enumerate().filter(|(index,_)|input.external[*index]).zip(&self.scratch) {
+                        LineCapture {source:&mut self.capture,next,seeds:&self.line_seeds[id]}
+                            .capture(r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),index,crop,encoder)?;
                     }
+                    for next in self.scratch.iter().take(input.external.iter().filter(|v|**v).count()) {LineCapture::draw(scene,r,next,&lines.1,crop);}
+                    scene.encode_jobs(r,encoder)?;
+                    for ((_,line),next) in edges.lines.iter().enumerate().filter(|(index,_)|input.external[*index]).zip(&self.scratch) {
+                        if line.fill_above {LineCapture::draw(scene,r,next,&cover.1,crop);}
+                    }
+                    scene.encode_jobs(r,encoder)?;
                     self.pages.push(((id,coordinate),lines,cover));
                 }
             }
@@ -323,11 +334,17 @@ impl WgpuRasterizer {
             let steps=inputs.iter().enumerate().filter(|(_,input)|input.external.iter().any(|external|*external)).flat_map(|(id,input)| {
                 std::iter::once(Step::Seed(id)).chain(page_coordinates(requested[id].2).filter(move |coordinate|band_intersects(&input.operation,*coordinate,input.extent,0)).map(move |coordinate|Step::Page(id,coordinate)))
             }).collect::<Vec<_>>();
-            let bytes=(steps.iter().filter(|step|matches!(step,Step::Page(..))).count() as u64).checked_mul(2*u64::from(SIDE).pow(2)*u64::from(self.device.scalar_format().block_copy_size(None).unwrap()));
+            let scratch_count=inputs.iter().map(|input|input.external.iter().filter(|v|**v).count()).max().unwrap_or(0);
+            let scalar_bytes=u64::from(SIDE).pow(2)*u64::from(self.device.scalar_format().block_copy_size(None).unwrap());
+            let scratch_bytes=scratch_count as u64*u64::from(SIDE)*u64::from(SIDE+1)*u64::from(self.device.working_format().block_copy_size(None).unwrap());
+            let bytes=(steps.iter().filter(|step|matches!(step,Step::Page(..))).count() as u64).checked_mul(2*scalar_bytes).and_then(|bytes|bytes.checked_add(scratch_bytes+scalar_bytes));
             let failure=bytes.ok_or(GpuRasterError::SourceWorkingSetExceeded).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes)).err();
+            let scratch_count=if failure.is_none(){scratch_count}else{0};
             let line_seeds=inputs.iter().map(|input|create_color_target(&self.device,[1,input.external.len().max(1) as u32],"prepared fill line seeds").0).collect();
             FillEdgesPreflight {owner:packet.scene.owner(),color:self.document_color(),inputs,steps,next:0,capture:Default::default(),scene:None,
-                seed:create_color_target(&self.device,[1;2],"prepared fill seed"),scratch:create_color_target(&self.device,[SIDE,SIDE+1],"prepared fill line source"),line_seeds,pages:Vec::new(),failure}
+                seed:create_color_target(&self.device,[1;2],"prepared fill seed"),
+                scratch:(0..scratch_count).map(|_|create_color_target(&self.device,[SIDE,SIDE+1],"prepared fill line source")).collect(),
+                zero:create_target(&self.device,[SIDE;2],self.device.scalar_format(),"prepared fill empty cover"),line_seeds,pages:Vec::new(),failure}
         };
         if state.pending() {
             let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
@@ -337,7 +354,10 @@ impl WgpuRasterizer {
         }
         let ready=!state.pending();self.fill_edges_preflight=Some(state);ready
     }
-    pub(crate) fn take_fill_edges_failure(&mut self)->Option<GpuRasterError> {self.fill_edges_preflight.as_mut().and_then(|state|state.failure.take())}
+    pub(crate) fn take_fill_edges_failure(&mut self)->Option<GpuRasterError> {
+        self.fill_edges_preflight.as_ref()?.failure.as_ref()?;
+        self.fill_edges_preflight.take()?.failure
+    }
 }
 
 #[cfg(test)]
@@ -346,13 +366,16 @@ mod tests {
     use crate::{layer_tests::placement,test_support::{packet,submit_ready}};
 
     fn fixture()->(layer_core::Document,SourceTarget,layer_core::RasterOperation) {
-        let extent=[384;2];let mut document=placement::paint_document(extent,"Fill target");
+        fixture_extent([384;2])
+    }
+    fn fixture_extent(extent:[u32;2])->(layer_core::Document,SourceTarget,layer_core::RasterOperation) {
+        let mut document=placement::paint_document(extent,"Fill target");
         let target=placement::target(&document);
         let image=layer_core::color::source::rgba8_source(extent,|x,_|if (252..260).contains(&x) {[24,48,80,192]}else{[0;4]});
         let reference=placement::append_paint(&mut document,"Reference",layer_core::authored::PaintSource {domain:extent,color_mode:Default::default(),
             raster:Default::default(),base:Some(layer_core::authored::PaintBase::new(image.into())),operations:Default::default()}).1;
         let rectangle=|x0,x1|layer_core::Selection::polygon(vec![layer_core::Point{x:x0,y:0.},layer_core::Point{x:x1,y:0.},
-            layer_core::Point{x:x1,y:384.},layer_core::Point{x:x0,y:384.}]).unwrap();
+            layer_core::Point{x:x1,y:extent[1] as f32},layer_core::Point{x:x0,y:extent[1] as f32}]).unwrap();
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(rectangle(0.,256.));
         let snapshot=document.snapshot();
@@ -406,5 +429,65 @@ mod tests {
         r.set_fill_preview(Some(preview));submit_ready(&mut r,packet(document.scene(),[384;2])).unwrap();
         assert_ne!(r.fill_edges_preflight.as_ref().unwrap().line_seeds,seeds);
         assert_eq!(r.readback_srgb_rgba8().unwrap(),pixels);
+    }
+    #[test]
+    fn three_external_lines_match_when_prepared_pages_are_dropped() {
+        let mut results=Vec::new();
+        for live in [false,true] {
+            let (mut document,target,mut operation)=fixture();
+            for index in 0..2 {
+                let image=layer_core::color::source::rgba8_source([384;2],move|x,y| {
+                    let ink=if index==0 {(220..230).contains(&y)}else{(i64::from(x)+i64::from(y)-480).abs()<8};
+                    if ink {[80,24,48,128]}else{[0;4]}
+                });
+                let reference=placement::append_paint(&mut document,"Reference",layer_core::authored::PaintSource {domain:[384;2],color_mode:Default::default(),
+                    raster:Default::default(),base:Some(layer_core::authored::PaintBase::new(image.into())),operations:Default::default()}).1;
+                let RasterOperationKind::Fill {edges:Some(edges),..}=&mut operation.kind else {unreachable!()};
+                edges.lines.push(layer_core::FillLine {snapshot:document.snapshot(),scope:SceneScope::Raw(reference),fill_above:true});
+            }
+            let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+            submit_ready(&mut r,FramePacket {reset_layers:true,..packet(document.scene(),[384;2])}).unwrap();
+            let before=r.readback_srgb_rgba8().unwrap();
+            let batch=commit(&mut document,target,operation);
+            let frame=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(document.scene(),[384;2])};
+            crate::test_support::prepare_raster(&mut r,|r|if r.raster_dependencies_ready(frame,None){Ok(())}else{Err(GpuRasterError::DeferredObjectWork)}).unwrap();
+            let state=r.fill_edges_preflight.as_ref().unwrap();
+            assert!(!state.pending());assert_eq!(state.inputs[0].external,[true;3]);assert!(!state.pages.is_empty());
+            if live {r.fill_edges_preflight=None;}
+            r.submit(frame).unwrap();let pixels=r.readback_srgb_rgba8().unwrap();assert_ne!(pixels,before);results.push(pixels);
+        }
+        assert_eq!(results[0],results[1]);
+    }
+    #[test]
+    fn fill_preflight_retries_after_memory_pressure() {
+        let extent=[384,8192];let (mut document,target,mut operation)=fixture_extent(extent);
+        let RasterOperationKind::Fill {edges:Some(edges),..}=&mut operation.kind else {unreachable!()};
+        let SceneScope::Raw(SourceTarget::Paint(reference))=edges.lines[0].scope else {unreachable!()};
+        let image=layer_core::color::source::rgba8_source(extent,|x,_|if (252..258).contains(&x) {[24,48,80,192]}else{[0;4]});
+        document.artwork.paint.get_mut(reference).unwrap().base=Some(layer_core::authored::PaintBase::new(image.into()));
+        edges.snapshot=document.snapshot();edges.lines[0].snapshot=edges.snapshot.clone();
+        let source=document.artwork.paint.get(reference).unwrap().clone();
+        for _ in 1..8 {
+            let reference=placement::append_paint(&mut document,"Reference",source.clone()).1;
+            edges.lines.push(layer_core::FillLine {snapshot:document.snapshot(),scope:SceneScope::Raw(reference),fill_above:false});
+        }
+        let references:Vec<_>=document.scene().order().iter().copied().filter(|handle|document.scene().source_target(*handle).is_some_and(|source|source!=target)).collect();
+        for reference in references {document.artwork.occurrences.get_mut(reference).unwrap().visible=false;}
+        let mut r=crate::memory::memory_tests::renderer(Default::default(),layer_core::DeviceMemoryFacts {unified:true,..Default::default()}).unwrap();
+        let frame=FramePacket {view:layer_render::ViewState {width_px:384,height_px:384,document_to_surface:[0.046875,0.,0.,0.046875,0.,0.]},..packet(document.scene(),extent)};
+        submit_ready(&mut r,frame).unwrap();
+        let budget=r.factory.memory_budget().clone();budget.set_ram_override(Some(384<<20));
+        r.publish_memory(true);budget.flush_reports();r.refresh_memory_limits();
+        let pressure=budget.admit_import(budget.import_headroom_bytes()).unwrap();r.refresh_memory_limits();
+        let preview=layer_render::FillPreview {transaction:42,revision:0,target,operation};
+        r.set_fill_preview(Some(preview.clone()));
+        crate::test_support::prepare_raster(&mut r,|r|if r.prepare_fill_edges(frame){Ok(())}else{Err(GpuRasterError::DeferredObjectWork)}).unwrap();
+        assert!(matches!(r.submit(frame),Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::DeferredObjectWork)));
+        drop(pressure);r.refresh_memory_limits();crate::test_support::prepare_raster(&mut r,|r|submit_ready(r,frame)).unwrap();
+        let pixels=r.readback_srgb_rgba8().unwrap();
+        let mut control=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        submit_ready(&mut control,FramePacket {reset_layers:true,..frame}).unwrap();
+        control.set_fill_preview(Some(preview));submit_ready(&mut control,frame).unwrap();
+        assert!(pixels==control.readback_srgb_rgba8().unwrap());
     }
 }
