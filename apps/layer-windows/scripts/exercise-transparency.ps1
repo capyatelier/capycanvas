@@ -55,7 +55,7 @@ function Sample([string]$Name,$Points){
     $image=[System.Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
     try{@($Points|ForEach-Object {$image.GetPixel($_.x-$origin[0],$_.y-$origin[1]).G})}finally{$image.Dispose()}
 }
-function Tab-Shades([string]$Name){
+function Tab-Shades([string]$Name,[switch]$Pending){
     $origin=[int[]]@(0,0);$null=[Capy.GlassWindow]::ClientToScreen($drawingWindow,$origin)
     $image=[System.Drawing.Bitmap]::new((Join-Path $run ($Name+'.png')))
     try{
@@ -65,8 +65,9 @@ function Tab-Shades([string]$Name){
             $shade,$body=@(($tab.Bottom-3*$scale),($tab.Bottom+3*$scale))|ForEach-Object {$image.GetPixel($x,[int]($_-$origin[1]))}
             $difference=[Math]::Max([Math]::Max([Math]::Abs($shade.R-$body.R),[Math]::Abs($shade.G-$body.G)),[Math]::Abs($shade.B-$body.B))
             $line="$Name $($group.active): tab $($shade.R),$($shade.G),$($shade.B) panel $($body.R),$($body.G),$($body.B)"
-            $tabShades.Add($line);if($difference -gt 2){$tabMismatches.Add($line)}
+            if($Pending){if($difference -gt 2){return $false}}else{$tabShades.Add($line);if($difference -gt 2){$tabMismatches.Add($line)}}
         }
+        if($Pending){return $true}
     }finally{$image.Dispose()}
 }
 function Tab-Feedback([string]$Name){
@@ -94,13 +95,18 @@ function Tab-Feedback([string]$Name){
                 Wait-Until {@((Model).layout.groups|Where-Object {$_.id -eq $group.id})[0].active -eq $next} 'Primary down did not select the inactive tab before release'
             }
             if($state -eq 'release'){[CapyRowPointer]::Up()}
-            Start-Sleep -Milliseconds 200
-            $capture="$Name-feedback-$index-$state";Capture $capture -Composed
-            $image=[System.Drawing.Bitmap]::new((Join-Path $run ($capture+'.png')))
-            try{
-                $pixels=(@($foot|ForEach-Object {$image.GetPixel($_.x,$_.y).ToArgb()}) -join ',')
-                $fill=(@($interior|ForEach-Object {$image.GetPixel($_.x,$_.y).ToArgb()}) -join ',')
-            }finally{$image.Dispose()}
+            $capture="$Name-feedback-$index-$state";$presented=@{pixels=$null;fill=$null}
+            Wait-Until {
+                Capture $capture -Composed
+                $image=[System.Drawing.Bitmap]::new((Join-Path $run ($capture+'.png')))
+                try{
+                    $presented.pixels=(@($foot|ForEach-Object {$image.GetPixel($_.x,$_.y).ToArgb()}) -join ',')
+                    $presented.fill=(@($interior|ForEach-Object {$image.GetPixel($_.x,$_.y).ToArgb()}) -join ',')
+                }finally{$image.Dispose()}
+                if($state -eq 'hover'){return $presented.pixels -eq $expectedFoot -and $presented.fill -ne $expectedInterior}
+                Tab-Shades $capture -Pending
+            } "$capture did not present its tab feedback"
+            $pixels=$presented.pixels;$fill=$presented.fill
             if($state -eq 'rest'){$expectedFoot=$pixels;$expectedInterior=$fill}
             if($state -eq 'hover'){
                 if($pixels -ne $expectedFoot){throw "$capture changed the active tab's foot"}
