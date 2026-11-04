@@ -535,7 +535,7 @@ function Navigation-Double([string]$Command,[long]$HeaderId=0) {
   $spec=@((Model).header.items|Where-Object id -eq $HeaderId)[0]
   $element=Control ('header-item-'+$HeaderId) -Arranged
  }else{
-  $id=Tool-Tile 'hand';$element=Control $id -Arranged
+  $id=Tool-Tile $Command;$element=Control $id -Arranged
   foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if("tile-$($panel.id)-$($tile.id)" -eq $id){$spec=$tile}}}
  }
  if($spec.resolved_control.command -ne $Command -or !$spec.double_click -or ($HeaderId -and !$spec.has_variants)){throw "Navigation button did not resolve its live $Command double action"}
@@ -821,7 +821,7 @@ function Navigation-Journey {
  Assert-Camera $saved (Camera)
  foreach($command in @('fit_canvas','fit_width','fill_view','reset_view')){Navigation-Command $command}
  $headerId=Navigation-Header
- foreach($command in @('zoom','rotate_view','hand')){Navigation-Double $command;Navigation-Double $command $headerId}
+ foreach($command in @('zoom','rotate_view','hand')){Navigation-Double $command;if($command -in 'rotate_view','hand'){Navigation-Double $command $headerId}}
  if((Navigation-PaintState) -ne $kept){throw 'Navigation changed artwork or Undo history'}
  Capture "navigation-final-$Device-$Theme" -Composed -WithModel
  Navigation-Polygon

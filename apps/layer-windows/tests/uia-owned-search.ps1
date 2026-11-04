@@ -1168,3 +1168,32 @@ namespace CapyBubbleOverlayTest {
     }finally{Remove-Item -LiteralPath $script:run -Recurse -Force -ErrorAction SilentlyContinue}
 }
 Write-Output 'Actual bubble overlay sequence waits for applied Fill before composed pixels, rejects missing and wrong owned phase, and retains its pressed pixel assertion.'
+
+& {
+    $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-zoom-readout.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $actual=$source.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Navigation-Double'},$true)
+    . ([scriptblock]::Create($actual.Extent.Text))
+    function Navigation-Command($Command){}
+    function Navigation-Selected($Command){$true}
+    function Navigation-Focus{}
+    function Camera{@{zoom=2;rotation=1}}
+    function Near($First,$Second){$false}
+    function Changed-Camera($Before,$Message,$Condition){Camera}
+    function Wait-Until($Condition,$Message){if(!(& $Condition)){throw $Message}}
+    function Tool-Tile($Command){$script:requestedNavigationTile=$Command;'tile-'+$Command}
+    function Control($Id,[switch]$Arranged){throw 'navigation tile reached'}
+    $script:requestedNavigationTile=$null
+    try{Navigation-Double 'zoom';throw 'Navigation did not request its tile'}catch{if($_.Exception.Message-ne'navigation tile reached'){throw}}
+    if($script:requestedNavigationTile-ne'zoom'){throw 'Zoom double action selected another tool tile'}
+    $cases=[Collections.Generic.List[string]]::new()
+    function Navigation-Double($Command,$HeaderId=0){$cases.Add("${Command}:$HeaderId")}
+    $headerId=71
+    $loop=$source.Find({param($node)
+        $node-is[Management.Automation.Language.ForEachStatementAst]-and
+        $null-ne$node.Body.Find({param($child)$child-is[Management.Automation.Language.CommandAst]-and$child.GetCommandName()-eq'Navigation-Double'},$true)
+    },$true)
+    . ([scriptblock]::Create($loop.Extent.Text))
+    if(($cases-join',')-ne'zoom:0,rotate_view:0,rotate_view:71,hand:0,hand:71'){throw 'Navigation did not cover each tile and its supported header action'}
+}
