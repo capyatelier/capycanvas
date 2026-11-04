@@ -48,6 +48,20 @@ function dialogHarness(t,hdr){
   return {...dom,app,stats,root,result,nodes,value,input,apply,status,switch(tag){language=tag;refreshCopy(app);}};
 }
 
+test('Edit Color measures the narrow form before deciding whether to stack its panes',async t=>{
+  const dom=colorDialogDom(t),{app}=fakeColorApp(),observers=[];
+  globalThis.ResizeObserver=class {constructor(callback){this.callback=callback;this.targets=[];observers.push(this);}observe(node){this.targets.push(node);}unobserve(){}disconnect(){}};
+  const result=chooseColor({app,slot:'foreground',element:dom.element,button:dom.button});
+  const root=dom.doc.body.children.find(node=>node.tagName==='DIALOG'),nodes=root.descendants(),body=nodes.find(node=>node.className?.includes('color-editor-body'));
+  const head=nodes.find(node=>node.className==='color-editor-head'),values=nodes.find(node=>node.className==='color-editor-values');
+  head.getBoundingClientRect=()=>({width:head.style.cssText?.includes('min-content')?270:450});
+  values.getBoundingClientRect=()=>({width:values.style.cssText?.includes('min-content')?270:450});
+  const observer=observers.find(item=>item.targets.includes(body));assert.ok(observer,'The actual Color form observes its body');
+  observer.callback([{target:body,contentRect:{width:540}}]);
+  assert.equal(body.classList.contains('single-pane'),false,'A long natural label does not force a stacked form when its minimum fits');
+  root.close();assert.equal(await result,null);
+});
+
 test('Edit Color keeps a refused number, its selection and the retained controls while relabeling',async t=>{
   for(const hdr of [false,true]){
     const h=dialogHarness(t,hdr),controls=h.nodes();

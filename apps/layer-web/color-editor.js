@@ -236,7 +236,7 @@ export function colorForm({app, root, element, button, open, rendition, copyable
     const allocation=entries.find(entry=>entry.target===body);if(allocation)available=allocation.contentRect.width;
     if(!available)return;
     if(!minimum){
-      const measure=node=>{const before=node.style.cssText;node.style.cssText+=';position:absolute;width:max-content;min-width:0;max-width:none;';const width=node.getBoundingClientRect().width;node.style.cssText=before;return width;};
+      const measure=node=>{const before=node.style.cssText;node.style.cssText+=';position:absolute;width:min-content;min-width:0;max-width:none;';const width=node.getBoundingClientRect().width;node.style.cssText=before;return width;};
       minimum=[232,Math.max(measure(head),measure(values))];
     }
     body.classList.toggle('single-pane',!app.dialog_panes_fit(available,minimum,24));
