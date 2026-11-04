@@ -61,7 +61,7 @@ jobs:
           exit "$failed"
       - name: Web unit tests
         if: ${{ !cancelled() }}
-        run: node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization,numeric,histogram,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,color-button-lifecycle,gpu-diagnostics,raster-worker-client,pipeline-wait}.test.mjs 2>&1 | tee artifacts/release-tests/web.log
+        run: node --test apps/layer-web/{run,package,frame,phone-audit,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization,numeric,histogram,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,color-button-lifecycle,gpu-diagnostics,raster-worker-client,pipeline-wait}.test.mjs 2>&1 | tee artifacts/release-tests/web.log
       - name: Packaging, capture and report unit tests
         if: ${{ !cancelled() }}
         run: node --test apps/layer-linux/bench/window-capture.test.mjs tools/build/*.test.mjs tools/performance/windows-pen-report.test.mjs tools/cdp.test.mjs 2>&1 | tee artifacts/release-tests/node.log

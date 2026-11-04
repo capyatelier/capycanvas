@@ -5,6 +5,13 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {gzipSync} from 'node:zlib';
 
+export function takeStrokeRecording(app) {
+  app.stop_stroke_recording();
+  const data=Array.from(app.stroke_recording_data());
+  app.stroke_recording_saved();
+  return data;
+}
+
 export const phoneAuditMatrix = [
   {viewport:[412,891],text_pt:11},
   {viewport:[891,412],text_pt:11},
@@ -795,6 +802,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
     const touch=(type,touchPoints=[])=>call('Input.dispatchTouchEvent',{type,touchPoints});
     for(const cancelled of [false,true]){
       const history=await evaluate('layerApp.state().commands.filter(c=>c.id==="undo"||c.id==="redo").map(c=>[c.id,c.enabled])');
+      assert.equal(await evaluate(`document.elementFromPoint(${origin.x},${origin.y})===layerApp.canvas`),true,'A recorded contact reaches the canvas rather than a completion prompt');
       await evaluate('layerApp.app.start_stroke_recording();null');
       await touch('touchStart',[{id:100,...origin}]);
       for(let i=1;i<=4;i++)await touch('touchMove',[{id:100,x:origin.x+5*i,y:origin.y}]);
@@ -802,7 +810,7 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       if(cancelled)await touch('touchStart',[{id:100,x:origin.x+20,y:origin.y},{id:101,x:origin.x+60,y:origin.y}]);
       await touch('touchEnd');
       await wait('layerApp.app.document_park_ready()');
-      const data=await evaluate('(()=>{layerApp.app.stop_stroke_recording();return Array.from(layerApp.app.stroke_recording_data());})()');
+      const data=await evaluate(`(${takeStrokeRecording})(layerApp.app)`);
       const path=`${directory}/finger-${cancelled?'withdrawn':'paint'}.capystrokes`;
       await writeFile(path,Buffer.concat([Buffer.from('CAPYPEN4'),gzipSync(Buffer.from(data))]));
       const records=execFileSync('cargo',['run','--locked','-q','-p','layer-engine','--features','prediction-bench','--example','stroke-recording','--','dump',path],{cwd:root,encoding:'utf8'}).trim().split('\n').map(line=>JSON.parse(line));
@@ -816,7 +824,6 @@ export async function checkPhoneAudit({call,evaluate,settle,frameOnly=false,draw
       assert.equal(ends[0].interrupted,false,'The recording includes the engine stroke end before it stops');
       if(!cancelled)assert.equal(events.at(-1).phase,'Up');
       await writeFile(`${path}.json`,JSON.stringify(records,null,2)+'\n');
-      await evaluate('layerApp.app.stroke_recording_saved();null');
       if(!cancelled){
         assert.equal(await evaluate('layerApp.state().commands.find(c=>c.id==="undo").enabled'),true,'The completed stroke is undoable');
         await send({type:'invoke',command:'undo'});

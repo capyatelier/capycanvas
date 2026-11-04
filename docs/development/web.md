@@ -112,7 +112,7 @@ events request final writes, but browsers may stop async work during exit.
 Pure unit tests need no browser or GPU:
 
 ```bash
-node --test apps/layer-web/{run,package,frame,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,text-layout,menu,localization,dropdown}.test.mjs
+node --test apps/layer-web/{run,package,frame,phone-audit,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,text-layout,menu,localization,dropdown}.test.mjs
 node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
 ```
 
@@ -122,6 +122,10 @@ phone toolbar holds, reorder, capacity, picker pages and scoped Restore.
 the phone audit matrix. The same picker and prompt controls survive page,
 floating and visual-viewport changes; shared Rust supplies role, headers,
 Escape and contact outcomes.
+
+When collecting recordings directly from Wasm, use `takeStrokeRecording` in one
+browser evaluation before writing or decoding the copied payload in Node. This
+acknowledges the transfer before the recording-complete prompt can open.
 
 The launcher fixture uses Bash; `LAYER_TEST_BASH` selects its executable
 (default `/bin/bash`). On Windows, set it in Git Bash before those commands:

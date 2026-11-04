@@ -1,6 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {measurePhoneAuditElements,phoneAuditMatrix,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording} from './phone-audit.mjs';
+import {strokeRecordingControl} from './stroke-recording.js';
+
+test('collecting a recording cannot leave its completion prompt over the next contact',t=>{
+  const saved={document:globalThis.document,setInterval:globalThis.setInterval};
+  t.after(()=>Object.assign(globalThis,saved));
+  let tick,recording=false,ready=false,dialogs=0;
+  globalThis.setInterval=callback=>{tick=callback;};
+  globalThis.document={createElement:()=>({append(){},showModal(){dialogs++;}}),body:{append(){}}};
+  const app={
+    stroke_recording_status:()=>({recording,ready,label:'',elapsed_seconds:0,raw_events:1}),
+    start_stroke_recording(){assert.equal(ready,false);recording=true;},
+    stop_stroke_recording(){recording=false;ready=true;},
+    stroke_recording_data:()=>new Uint8Array([4,8,15,16,23,42]),
+    stroke_recording_saved(){ready=false;},
+  };
+  strokeRecordingControl(app,{dataset:{}});
+  app.start_stroke_recording();tick();
+  const bytes=takeStrokeRecording(app);
+  tick();
+  assert.equal(dialogs,0,'Node file I/O must not expose a stopped, unclaimed recording to the completion controller');
+  assert.deepEqual(bytes,[4,8,15,16,23,42]);
+  assert.equal(ready,false);
+  app.start_stroke_recording();tick();
+  assert.equal(dialogs,0);
+});
 
 test('phone frame IDs preserve authored tiles and expose actual slider parts',()=>{
   const specs=phoneAuditFrameSpecifications([{id:88,control:{kind:'color'}},{id:91,control:{kind:'divider'}},{id:204,control:{kind:'command',command:'eraser'}}]);
