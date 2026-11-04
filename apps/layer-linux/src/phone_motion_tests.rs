@@ -344,6 +344,18 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
     let text_pt = std::env::var("LAYER_PHONE_TEXT_PT").ok().map(|value| value.parse::<f32>().unwrap())
         .unwrap_or(layer_ui::UI_TEXT_PT as f32);
     let font = w.window.pango_context().font_description().map(|font| font.to_string().as_str().to_owned());
+    let rows = |body: &gtk::Widget| widgets(body).filter(|widget| widget.is_mapped() && widget.widget_name().as_str() != widget.type_().name()).map(|widget| {
+        let bounds = |widget: &gtk::Widget| widget.compute_bounds(&w.window).map(|r| [r.x(),r.y(),r.width(),r.height()]);
+        let labels = widgets(&widget).filter(|child| child.is_mapped()).filter_map(|child| child.downcast::<gtk::Label>().ok()).map(|label| label.text().to_string()).collect::<Vec<_>>();
+        let selected=widget.downcast_ref::<adw::ComboRow>().map(|row| row.selected());
+        serde_json::json!({"name":widget.widget_name().to_string(),"type":widget.type_().name(),"bounds":bounds(&widget),
+            "parent_bounds":widget.parent().as_ref().and_then(bounds),"labels":labels,"selected":selected})
+    }).collect::<Vec<_>>();
+    let drawer_rows = state.customization.drawer.as_ref().map(|drawer| drawer.panels().filter_map(|panel| {
+        let body = named(&format!("drawer-panel-{panel:?}"))?;
+        Some(serde_json::json!({"panel":panel,"rows":rows(&body)}))
+    }).collect::<Vec<_>>());
+    let dialog_rows=presented.as_ref().map(|dialog| rows(&crate::page_dialog::parent(dialog)));
     let report = serde_json::json!({"schema_version":1,"host":"gtk","state":state_name,"viewport":viewport,"dpr":dpr,
         "theme":format!("{:?}",state.theme).to_lowercase(),"text_scale":text_pt as f64/layer_ui::UI_TEXT_PT as f64,
         "preset":w.workspaces.view().id,"phone_active":phone.is_some(),
@@ -353,7 +365,8 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
             "font":font,"text_pt":text_pt,"base_text_pt":layer_ui::UI_TEXT_PT,"requested":phone,
             "document":document,"camera":camera,
             "swapped":state.phone.swapped,"hidden":state.phone.hidden,"widgets":widget_sources,
-            "tiles":state.workspace.layout.phone,"dialog_measure":dialog_measure}});
+            "tiles":state.workspace.layout.phone,"dialog_measure":dialog_measure,"drawer_rows":drawer_rows,"dialog_rows":dialog_rows,
+            "command_search":state.command_search.as_ref().map(|search| serde_json::json!({"query":search.query,"result_ids":search.results.iter().map(|result| &result.id).collect::<Vec<_>>() }))}});
     let path = std::path::PathBuf::from(directory).join(format!("{capture_name}.allocations.json"));
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || std::fs::write(path,bytes))).unwrap().unwrap();

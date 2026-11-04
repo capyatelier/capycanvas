@@ -2034,7 +2034,6 @@ fn native_phone_inventory() {
         d.input.perform(serde_json::json!([{ "touch": "up" }]));
         until(|| ui_session(&d.w).color_picker_overlay().is_none(), "the inventory hold finishes");
     } else { inventory_close(&mut d); }
-    super::page_dialog::inventory(&mut d);
     d.finish();
 }
 

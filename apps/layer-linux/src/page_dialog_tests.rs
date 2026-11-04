@@ -323,6 +323,11 @@ pub(super) fn dialog_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     (dialog, frame)
 }
 
+fn dialog_frame_named(d: &Driver, name: &str) -> (adw::Dialog, gtk::Widget) {
+    until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name()==name),name);
+    dialog_frame(d)
+}
+
 fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
     let (dialog, frame) = dialog_frame(d);
     assert!(!dialog.is_mapped(), "the original native dialog is detached");
@@ -383,10 +388,6 @@ fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
     page_header(frame);
 }
 
-pub(super) fn inventory(d: &mut Driver) {
-    inventory_with(d, capture);
-}
-
 fn first_editor_pages(d: &mut Driver, visit: &mut impl FnMut(&mut Driver, &str)) {
     d.w.dispatch(UiAction::Invoke { command: CommandId::Settings });
     let (dialog, frame) = dialog_frame(d);
@@ -419,8 +420,20 @@ fn first_editor_pages(d: &mut Driver, visit: &mut impl FnMut(&mut Driver, &str))
 #[ignore = "private compositor: --native-test=native_dialog_layout --native-storage; 600/700/800/1024x900 light/dark"]
 fn native_dialog_layout() {
     let mut d = super::phone_motion::setup("art.capycanvas.DialogLayout");
+    let settings=gtk::Settings::default().unwrap();
+    struct RestoreAnimations(gtk::Settings,bool);
+    impl Drop for RestoreAnimations { fn drop(&mut self) { self.0.set_gtk_enable_animations(self.1); } }
+    let _restore=RestoreAnimations(settings.clone(),settings.is_gtk_enable_animations());
+    settings.set_gtk_enable_animations(false);
     assert!(matches!([d.w.surface.width(), d.w.surface.height()], [600, 900] | [700, 900] | [800, 900] | [1024, 900]));
-    first_editor_pages(&mut d, &mut capture);
+    first_editor_pages(&mut d, &mut |d,name| {
+        capture(d,name);
+        if name=="color" {
+            let editor=d.w.color_editors.borrow().last().unwrap().clone();let form=&editor.form;
+            let expected=if d.w.surface.width()<800 {gtk::Orientation::Vertical} else {gtk::Orientation::Horizontal};
+            assert_eq!(form.body.orientation(),expected,"the measured desktop Color pane state is retained");
+        }
+    });
     d.finish();
 }
 
@@ -878,25 +891,20 @@ fn w6c_profile_library(d: &mut Driver) {
 }
 
 fn w6d_canvas(d: &mut Driver) {
-    let (layer, [width,height]) = {
-        let session=ui_session(&d.w);let document=session.engine().document();
-        (layer_ui::occurrence_token(document.working.occurrence.unwrap()),document.composition().size.map(|side| side as f32))
-    };
-    d.w.dispatch(UiAction::SelectLayer { id:layer });
-    d.w.dispatch(UiAction::Invoke { command:CommandId::Lasso });
-    native_pen_path(&d.w,&[[width*0.5,height*0.5],[width*0.85,height*0.5],[width*0.85,height*0.85],[width*0.5,height*0.85],[width*0.5,height*0.5]]);
-    d.w.dispatch(UiAction::Layer { action:LayerAction::FillSelection });
+    d.w.dispatch(UiAction::Invoke { command:CommandId::SelectAll });
     d.w.dispatch(UiAction::Invoke { command:CommandId::FeatherSelection });
     until(|| state(&d.w).layer_tools.selection_resize.is_some() && find_named(d.w.window.upcast_ref(),"selection-refine-value").is_some_and(|widget|widget.is_mapped()),"Refine opens its canvas panel");
     capture(d,"selection-refine");
     d.w.dispatch(UiAction::Selection { action:SelectionAction::CancelResize });
 
-    d.w.dispatch(UiAction::Invoke { command:CommandId::BlendPerceptual });
     d.w.dispatch(UiAction::Invoke { command:CommandId::FrequencySeparation });
     until(|| state(&d.w).layer_tools.frequency_separation.is_some() && find_named(d.w.window.upcast_ref(),"frequency-separation-radius").is_some_and(|widget|widget.is_mapped()),"Frequency Separation opens its canvas panel");
     capture(d,"frequency-separation");
     d.w.dispatch(UiAction::FrequencySeparation { action:FrequencySeparationAction::Cancel });
 
+    d.w.dispatch(UiAction::Invoke { command:CommandId::AddLayer });
+    if ui_session(&d.w).command(CommandId::Deselect).enabled { d.w.dispatch(UiAction::Invoke { command:CommandId::Deselect }); }
+    until(|| ui_session(&d.w).command(CommandId::SearchCommands).enabled,"Command Search is offered after Frequency cancellation");
     d.w.dispatch(UiAction::Invoke { command:CommandId::SearchCommands });
     until(|| d.w.command_bar.is_open() && find_named(d.w.window.upcast_ref(),"command-bar").is_some_and(|widget|widget.is_mapped()),"Command Search opens");
     capture(d,"command-search");
@@ -934,11 +942,112 @@ fn w6d_canvas(d: &mut Driver) {
     until(|| d.w.documents.len()==1 && d.w.documents.selected()==original && !d.w.documents.changing.get(),"the original drawing returns");
 }
 
+fn photo_launcher(d: &Driver) -> Rc<RefCell<Vec<Rc<Workspace>>>> {
+    let windows=Rc::new(RefCell::new(vec![d.w.clone()]));
+    let app=d.w.window.application().unwrap().downcast::<adw::Application>().unwrap();
+    crate::files::launch::install(&app,&windows);
+    windows
+}
+
+fn photo_file(d: &Driver, path: &std::path::Path) {
+    crate::files::launch::open_in(&d.w,vec![gtk::gio::File::for_path(path)]);
+}
+
+fn w7_photo(d: &mut Driver) {
+    let path=std::path::PathBuf::from(std::env::var_os("LAYER_PHOTO_FIXTURE").unwrap());
+    let _windows=photo_launcher(d);
+    let original=d.w.documents.selected();let count=d.w.documents.len();
+    photo_file(d,&path);
+    until(|| d.w.documents.len()==count+1,"the authored photo opens in its own drawing");
+    super::new_photo::ready(&d.w);
+    let photo=d.w.documents.selected();
+    let before=super::place_source::authored_snapshot(&d.w);
+    let composition=ui_session(&d.w).engine().document().composition().clone();
+    assert_eq!(composition.size,[513,257]);
+    assert_eq!(composition.color,layer_core::color::DocumentColor {space:layer_core::color::RgbSpace::ProPhoto,depth:layer_core::color::SampleDepth::U16});
+    for (name,command) in [("assign-profile",CommandId::AssignProfile),("convert-color-space",CommandId::ConvertColorSpace),
+        ("change-bit-depth",CommandId::ChangeBitDepth),("repair-source-profile",CommandId::RepairSourceProfile),("rasterize-source",CommandId::RasterizeSource)] {
+        d.w.dispatch(UiAction::Invoke { command });let (dialog,frame)=dialog_frame(d);
+        match command {
+            CommandId::AssignProfile|CommandId::ConvertColorSpace => named::<adw::ComboRow>(&frame,"document-color-space").set_selected(0),
+            CommandId::ChangeBitDepth => named::<adw::ComboRow>(&frame,"document-color-depth").set_selected(0),
+            CommandId::RepairSourceProfile => super::new_photo::profile_action(&d.w,"source","builtin-0"),
+            _=>{},
+        }
+        until(|| ["color-preview-before","color-preview-after"].iter().all(|name| find_named(&frame,name)
+            .and_then(|widget| widget.downcast::<gtk::Picture>().ok()).is_some_and(|picture| picture.paintable().is_some())),"both source comparison previews are painted");
+        capture(d,name);close(d,&dialog);super::new_photo::finish(&d.w);
+        assert_eq!(super::place_source::authored_snapshot(&d.w),before);
+    }
+    assert!(state(&d.w).document_file.modified);
+    d.w.documents.select(&d.w,photo,true);
+    until(|| d.w.window.visible_dialog().is_some_and(|dialog| dialog.is::<adw::AlertDialog>()),"closing the unpublished photo offers Save/Discard/Cancel");
+    super::new_photo::response(&d.w,"discard");super::new_photo::finish(&d.w);
+    until(|| d.w.documents.len()==count && d.w.documents.selected()==original,"discard closes only the owned imported photo");
+    assert_eq!(d.w.documents.len(),count);assert_eq!(d.w.documents.selected(),original);
+}
+
+fn w7_untagged(d: &mut Driver) {
+    let _windows=photo_launcher(d);
+    let path=std::path::PathBuf::from(std::env::var_os("LAYER_PHOTO_FIXTURE").unwrap());
+    let original=d.w.documents.selected();let count=d.w.documents.len();
+    let untagged=path.with_file_name("untagged.png");
+    let untagged=glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+        let bytes=std::fs::read(path).unwrap();let mut output=bytes[..8].to_vec();let mut offset=8;
+        while offset<bytes.len() {let size=u32::from_be_bytes(bytes[offset..offset+4].try_into().unwrap()) as usize;
+            if ![b"iCCP",b"sRGB",b"gAMA",b"cHRM",b"cICP"].iter().any(|tag| tag.as_slice()==&bytes[offset+4..offset+8]) {output.extend_from_slice(&bytes[offset..offset+size+12]);}offset+=size+12;}
+        std::fs::write(&untagged,output).unwrap();untagged
+    })).unwrap();
+    let settings=state(&d.w).settings;
+    d.w.dispatch(UiAction::Preferences { action:PreferenceAction::Edit { id:layer_ui::PreferenceId::MissingProfile,value:layer_ui::PreferenceValue::Choice(1) } });
+    photo_file(d,&untagged);
+    let (dialog,_)=dialog_frame_named(d,"untagged-profile-dialog");
+    capture(d,"untagged-source-profile");close(d,&dialog);super::new_photo::finish(&d.w);
+    d.w.dispatch(UiAction::RestoreSettings { settings:Box::new(settings) });
+    assert_eq!(d.w.documents.len(),count);assert_eq!(d.w.documents.selected(),original);
+}
+
+fn w7_calibration(d: &mut Driver, tilt: bool) {
+    let point=super::photo_edit::window_point(&d.w,[600.,800.]);
+    d.input.perform(serde_json::json!([{"pen":"move","point":point,"tilt":[30.,0.]},{"pen":"leave"}]));
+    d.w.dispatch(UiAction::OpenSettings { page:SettingsPage::Input });
+    let (_,frame)=page(d);
+    let name=if tilt {"setting-pen-tilt-action"} else {"setting-pen-pressure-action"};
+    let action=find_named(&frame,name).unwrap();super::histogram::scroll_to(&action);d.click(&action);
+    until(|| d.w.pressure_calibration.root.is_mapped(),"the real Settings contact opens its calibration panel");
+    capture(d,if tilt {"tilt-calibration"} else {"pressure-calibration"});
+    let action=layer_ui::PressureCalibrationAction::Cancel;
+    d.w.dispatch(if tilt {UiAction::TiltCalibration {action:layer_ui::TiltCalibrationAction::Panel {action}}} else {UiAction::PressureCalibration {action}});
+    until(|| !d.w.pressure_calibration.root.is_mapped(),"calibration cancellation releases its panel");
+}
+
+fn w7_toolbar(d: &mut Driver, kind: &str) {
+    manager_offered(d,layer_workspace::ManagerPage::ThisWorkspace,kind,false);
+    dialog_frame(d);capture(d,&kind.replace('_',"-"));
+    d.w.dispatch(UiAction::Customize {action:CustomizationAction::CancelToolbar});
+    manager_close(d);
+}
+
+fn w7_file_failure(d: &mut Driver) {
+    let path=std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap()).join("broken.png");
+    let path=glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || { std::fs::write(&path,b"not an image").unwrap();path })).unwrap();
+    let _windows=photo_launcher(d);
+    crate::files::launch::open_in(&d.w,vec![gtk::gio::File::for_path(path)]);
+    let (dialog,_)=dialog_frame_named(d,"file-launch-error");
+    capture(d,"cannot-open-file");close(d,&dialog);
+    until(|| !d.w.documents.loading.get(),"failed launch releases the current drawing");
+}
+
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6b/w6c/w6d, phone viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6b/w6c/w6d/w7-photo, phone viewport/theme external"]
 fn native_phone_dialogs() {
     let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    if let Some(kind)=batch.strip_prefix("w7-toolbar-") { w7_toolbar(&mut d,&format!("{kind}_toolbar"));d.finish();return; }
+    if batch=="w7-file-failure" { w7_file_failure(&mut d);d.finish();return; }
+    if matches!(batch.as_str(),"w7-pressure"|"w7-tilt") { w7_calibration(&mut d,batch=="w7-tilt");d.finish();return; }
+    if batch == "w7-untagged" { w7_untagged(&mut d);d.finish();return; }
+    if batch == "w7-photo" { w7_photo(&mut d);d.finish();return; }
     if batch == "w6d" { w6d_canvas(&mut d); d.finish(); return; }
     if batch == "w6c" {
         w6c_catchup(&mut d); w6c_managers(&mut d); w6c_profile_library(&mut d);

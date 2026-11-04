@@ -121,7 +121,9 @@ Run both Node batches for every Web gate. Dialog fakes must include the shared
 `createDialogHost` so input admission sees their declared modality.
 
 Run `bash tools/performance/workspace-motion.sh web --phone-customize` for
-phone toolbar holds, reorder, capacity, picker pages and scoped Restore.
+phone toolbar holds, reorder, capacity, picker pages and scoped Restore. Set
+`LAYER_PHONE_GTK_ALLOCATIONS` to the matching native capture directory; picker
+checks consume its exported allocations instead of fixed expected bounds.
 `LAYER_PHONE_AUDIT_CASES=412x891-light,891x412-dark` selects focused cases from
 the phone audit matrix. The same picker and prompt controls survive page,
 floating and visual-viewport changes; shared Rust supplies role, headers,
@@ -233,14 +235,23 @@ Chrome tests can miss; it doesn't exercise pen pressure.
 | `--phone-menus` | Visits the typed Capy menu pages and nested pages, checks fixed outer bounds, strip row sizing, keep-open checks, Search Escape and the Drawings opener; uses the same phone audit schema and matrix. |
 | `--phone-frame` | Checks the shared frame allocations across the phone audit matrix, swapping and hidden/revealed bars, then decodes real Finger paint and withdrawal recordings through the existing `stroke-recording` example. Run headed with the Cargo target on scratch storage. |
 | `--phone-input` | Exercises coarse-screen Auto/On/Off, pen takeover, held-picker rendering and recordings, rollback, navigation, taps and transient Zen through browser input. Uses the phone audit matrix and common capture schema; run headed with the Cargo target on scratch storage. |
-| `--phone-dialogs <batch>` | Visits Settings (`w6a`), forms (`w6b`), managers/alerts and no-photo form catch-up (`w6c`), or canvas panels/search (`w6d`) through the common dialog table at 412×891 light and 891×412 dark, exporting actual shell parts for GTK geometry comparison. |
-| `--phone-audit` | Collects phone-reference PNGs and actual DOM allocation JSON at five sizes in both themes, DPR1; 320×320 uses 16 pt text. Gated or unavailable views remain explicit failures of parity. Use `LAYER_TEST_ARTIFACTS` for output. Run headed through `workspace-motion.sh web` for canvas pixels; pair with the existing GTK `native_phone_navigation_headers` captures and the [phone comparator](../../tools/visual/README.md#comparing-images). |
+| `--phone-dialogs <batch>` | Visits Settings (`w6a`), forms (`w6b`), managers/alerts (`w6c`), canvas panels/search (`w6d`), or photo forms (`w7-photo`); `all` selects every row. Uses 412×891 light and 891×412 dark and exports actual shell parts for GTK comparison. Generate `pkg/prophoto16.png` before photo rows. |
+| `--dialog-layout` | Captures the shared dialog table's desktop baselines at 600/700/800/1024×900 in both themes. |
+| `--phone-audit` | Captures the resting frame at five sizes in both themes, DPR1; 320×320 uses 16 pt text. Use the family flags for frame interactions, drawers, menus, input and customization, and `--phone-dialogs` for dialog rows. Use `LAYER_TEST_ARTIFACTS` for output. Run headed through `workspace-motion.sh web`; pair with GTK allocations using the [phone comparator](../../tools/visual/README.md#comparing-images). |
 | `--palettes` | Imports its own exports unless `LAYER_PALETTE_SAMPLES` names a directory with `gpl`, `aco`, `ase`, `swatches` and `kpl` subdirectories of files from other applications. |
 | `--image-object-fixture` | Opens the packages in `apps/layer-web/fixtures/`, authored with the `layer-color` `object_fixture` example from generated sample patterns. `LAYER_OBJECT_FIXTURE_URLS` selects equivalent fixtures as a JSON URL array. |
 | `--tool-bubbles`, `--hdr-bubbles` | `LAYER_BUBBLE_THEMES` and `LAYER_BUBBLE_DEVICES` take comma-separated focused cases. With `--tool-bubbles`, `LAYER_BUBBLE_INPUT_TRACE=1` records native event cancellation on failure. |
 | `--workspace-constraints` | `LAYER_CONSTRAINT_AXES=1` selects the focused 1257 × 691 case with German labels at device pixel ratios 1, 1.25 and 1.5. |
 | `--session-restart-performance` | Writes its records under `artifacts/seamless-restart/web` unless `LAYER_TEST_ARTIFACTS` is set. |
 | `--legacy-session-import` | Seeds the released paint-session fixture with the frozen 1.0.15 writer and checks upgrade, downgrade edits, and separate recovered branches. |
+
+Generate the photo fixture from the built-in profile bytes before its journeys.
+Keep `CARGO_TARGET_DIR` on scratch storage:
+
+```sh
+cargo run --locked --profile dev-perf -p layer-color --example proof_profiles -- "$CARGO_TARGET_DIR/phone-profiles"
+python3 tools/fixtures/prophoto16.py "$CARGO_TARGET_DIR/phone-profiles/prophoto.icc" apps/layer-web/pkg/prophoto16.png
+```
 
 ### Writing a journey
 

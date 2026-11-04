@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {runInNewContext} from 'node:vm';
-import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,dialogAuditRows,selectDialogAuditRows,dialogAuditSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording} from './phone-audit.mjs';
+import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
 
 test('collecting a recording cannot leave its completion prompt over the next contact',t=>{
@@ -50,6 +53,15 @@ test('phone audit covers both themes at DPR1 and actual 16pt enlarged text',()=>
     assert.equal(entry.text_scale,entry.text_pt/11);
     assert.equal(entry.text_pt,entry.viewport.join('x')==='320x320'?16:11);
   }
+});
+
+test('one audit mode table keeps ten phone cases and two case dialog captures separate',()=>{
+  assert.deepEqual(Object.keys(auditModes),['audit','frame','drawers','menus','input','customize','dialogs-phone','dialogs-desktop']);
+  for(const mode of ['audit','frame','drawers','menus','input','customize'])assert.equal(auditModes[mode].matrix.length,10);
+  assert.deepEqual(auditModes['dialogs-phone'].defaultCases,['412x891-light','891x412-dark']);
+  assert.equal(auditModes['dialogs-desktop'].matrix.length,8);
+  assert.equal(selectDialogAuditRows({mode:'phone',batch:'all'}).length,dialogAuditRows.length);
+  assert.deepEqual(selectDialogAuditRows({mode:'phone',batch:'w6a'}),dialogAuditRows.filter(row=>row.batch==='w6a'));
 });
 
 test('phone audit measures DOM allocations and keeps missing separate from hidden',()=>{
@@ -130,6 +142,16 @@ test('W6d uses real panels, the existing Proof drawer collector and an explicit 
   assert.ok(rows.filter(row=>row.blocked).every(row=>!row.openaction&&!row.rootselector&&row.blocked.length));
 });
 
+test('W7 photo rows use the owned ProPhoto source and the existing source-profile chooser',()=>{
+  const rows=selectDialogAuditRows({batch:'w7-photo'});
+  assert.deepEqual(rows.map(row=>row.id),['assign-profile','convert-color-space','change-bit-depth','repair-source-profile','rasterize-source','untagged-source-profile']);
+  for(const [index,row] of rows.slice(0,5).entries()){
+    assert.deepEqual(row.document,{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(index<4?{draft:[{label:'Color space',value:'Srgb'},{label:'Color space',value:'Srgb'},{label:'Bit depth',value:'U8'},{label:'Correct source profile',value:'0'}][index]}:{})});
+    assert.equal(typeof row.openaction,'function');assert.equal(typeof row.closeaction,'function');
+  }
+  assert.match(rows[5].rootselector,/Interpret as/);
+});
+
 test('calibration inventory opens the actual Input row and uses its retained Cancel button',async()=>{
   for(const kind of ['pressure','tilt']){
     const row=dialogAuditRows.find(row=>row.id===`${kind}-calibration`),actions=[],clicks=[];
@@ -141,7 +163,7 @@ test('calibration inventory opens the actual Input row and uses its retained Can
 
 test('W6c routes retain manager lists, details, forms and blocked checks in one inventory',()=>{
   const rows=dialogAuditRows.filter(row=>row.batch==='w6c');
-  for(const id of ['workspaces','layout-history','this-workspace','saved-toolbars','this-workspace-details','saved-toolbar-details','new-workspace','new-toolbar','save-toolbar','replace-toolbar','rename-saved-toolbar','delete-saved-toolbar','update-saved-toolbar','rename-toolbar','duplicate-toolbar','delete-toolbar','reset-workspace','reset-brushes','unsaved-changes','rename-workspace','delete-workspace','save-as-new-workspace','delete-inactive-workspace','add-tools','insert-tools'])assert.ok(rows.some(row=>row.id===id&&row.openaction&&row.rootselector));
+  for(const id of ['workspaces','layout-history','this-workspace','saved-toolbars','this-workspace-details','saved-toolbar-details','new-workspace','new-toolbar','save-toolbar','replace-toolbar','rename-saved-toolbar','delete-saved-toolbar','update-saved-toolbar','rename-toolbar','duplicate-toolbar','delete-toolbar','reset-workspace','reset-brushes','unsaved-changes','cannot-open-file','rename-workspace','delete-workspace','save-as-new-workspace','delete-inactive-workspace','add-tools','insert-tools'])assert.ok(rows.some(row=>row.id===id&&row.openaction&&row.rootselector));
   assert.equal(rows.find(row=>row.id==='rename-workspace').aliasof,'workspaces');
   assert.equal(rows.find(row=>row.id==='legacy-toolbar-manager').aliasof,'this-workspace');
   assert.match(rows.find(row=>row.id==='legacy-toolbar-manager').blocked,/Managed workspace/);
@@ -192,4 +214,31 @@ test('dialog allocations use only shared shell part attributes and require the h
   const alert={getAttribute:()=> 'alertdialog',querySelector:()=>null};
   assert.deepEqual(dialogAuditSpecifications('#alert',{querySelector:()=>alert}).map(spec=>spec.id),['page']);
   assert.ok(specs.slice(1).every(spec=>spec.selector.includes('[data-dialog-part=')));
+});
+
+test('phone dialogs include the actual frame allocations while desktop dialogs keep only their own parts',()=>{
+  const frame=phoneAuditFrameSpecifications([{id:42,control:{kind:'command',command:'brush'}}]);
+  const parts=[{id:'page',role:'page',selector:'#dialog'},{id:'page.header',role:'page-header',selector:'#dialog > header'}];
+  const phone=dialogPhoneSpecifications(frame,parts,true);
+  assert.equal(new Set(phone.map(part=>part.id)).size,phone.length);
+  assert.ok(phone.some(part=>part.id==='bar.tools')&&phone.some(part=>part.id==='tile.42'));
+  assert.deepEqual(dialogPhoneSpecifications(frame,parts,false),parts);
+});
+
+test('picker comparison uses paired GTK allocations and rejects metadata, missing parts and geometry',async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'capy-picker-allocations-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const gtk=join(directory,'gtk.json'),web=join(directory,'web.json');
+  const element=(id,role)=>({id,role,bounds:[10,20,80,30],visible:true,source:{}});
+  const parts=[element('page','page'),element('page.header','page-header'),element('page.start','page-action'),element('page.end','page-action'),
+    element('picker.body','body'),element('picker.catalog','catalog'),element('picker.search','search'),element('picker.choices','scroll'),
+    element('picker.row.0','row'),element('picker.row.0.title','title'),element('picker.row.0.subtitle','subtitle')];
+  const record=(host,elements=parts,theme='light')=>({schema_version:1,host,state:'customize-insert-two',viewport:[412,891],dpr:1,theme,text_scale:1,
+    preset:'builtin:workspace:painter',status:'captured',phone_active:true,elements,missing:[]});
+  await writeFile(gtk,JSON.stringify(record('gtk')));await writeFile(web,JSON.stringify(record('web')));
+  assert.equal((await verifyPickerAllocations(gtk,web)).metadata_mismatches.length,0);
+  await writeFile(web,JSON.stringify(record('web',parts,'dark')));await assert.rejects(()=>verifyPickerAllocations(gtk,web),/GTK picker allocations/);
+  await writeFile(web,JSON.stringify(record('web',parts.filter(part=>part.id!=='picker.choices'))));await assert.rejects(()=>verifyPickerAllocations(gtk,web),/picker.choices/);
+  await writeFile(web,JSON.stringify(record('web',parts.filter(part=>part.id!=='picker.row.0.title'))));await assert.rejects(()=>verifyPickerAllocations(gtk,web),/picker.row.0.title/);
+  await writeFile(web,JSON.stringify(record('web',parts.map(part=>part.id==='picker.search'?{...part,bounds:[14,20,80,30]}:part))));
+  await assert.rejects(()=>verifyPickerAllocations(gtk,web),/picker.search/);
 });

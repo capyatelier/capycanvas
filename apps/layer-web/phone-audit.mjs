@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
-import {execFileSync} from 'node:child_process';
+import {globSync} from 'node:fs';
+import {execFile,execFileSync} from 'node:child_process';
+import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {gzipSync} from 'node:zlib';
+import {dropdownChoice} from './dropdown-fixture.mjs';
 
 export function takeStrokeRecording(app) {
   app.stop_stroke_recording();
@@ -20,6 +23,13 @@ export const phoneAuditMatrix = [
 ].flatMap(size=>['light','dark'].map(theme=>({...size,theme,dpr:1,text_scale:size.text_pt/11})));
 
 export const dialogAuditMatrix=[600,700,800,1024].flatMap(width=>['light','dark'].map(theme=>({viewport:[width,900],text_pt:11,text_scale:1,dpr:1,theme})));
+
+export const auditModes={
+  audit:{matrix:phoneAuditMatrix},frame:{matrix:phoneAuditMatrix},drawers:{matrix:phoneAuditMatrix},
+  menus:{matrix:phoneAuditMatrix},input:{matrix:phoneAuditMatrix,mobile:true},customize:{matrix:phoneAuditMatrix},
+  'dialogs-phone':{matrix:phoneAuditMatrix,dialogMode:'phone',defaultCases:['412x891-light','891x412-dark']},
+  'dialogs-desktop':{matrix:dialogAuditMatrix,dialogMode:'desktop'},
+};
 
 export function measurePhoneAuditElements(specifications, root = document) {
   const elements=[],missing=[],ids=new Set();
@@ -106,30 +116,22 @@ export function phoneAuditFrameSpecifications(tiles) {
   ];
 }
 
-const unavailable = [
-  ['inventory-hidden',['bar.capy','chip.capy']],
-  ['inventory-swapped',['bar.tools','bar.capy']],
-  ['inventory-menu-root',['menu','menu.list','menu.separator','menu.tile.preferences','menu.tile.search','menu.tile.finger','menu.tile.zen','menu.tile.swap']],
-  ['inventory-menu-drawings',['menu','menu.page','menu.back']],
-  ['inventory-menu-file',['menu','menu.page','menu.back']],
-  ['inventory-menu-workspaces',['menu','menu.page','menu.back']],
-  ['inventory-capy-layers',['drawer','drawer.bridge']],
-  ['slider-track',['slider.size','slider.size.preview']],
-  ['slider-away',['slider.size','slider.size.preview']],
-  ['finger-hold',['finger.loupe']],
-  ['customize-insert-two',['page','page.header','page.primary']],
-  ['customize-capacity',['page','page.header','page.primary']],
-  ['customize-capacity-divider',['page','page.header','page.primary']],
-  ['customize-offbar-cancelled',['bar.tools','chip.tools']],
-  ['customize-phone-restore-confirm',['alert']],
-  ['customize-phone-restored',['bar.tools','chip.tools']],
-  ...[
-    ['sketch',['adjustments','select','scalerotate','drawingbrush','sculpt','eraser','layers','color']],
-    ['paint',['select','gradient','drawingbrush','blend','eraser','fill','layers','color']],
-    ['photo',['crop','select','healing','drawingbrush','eraser','adjustments','layers','color']],
-  ].flatMap(([preset,controls])=>controls.map(control=>[`inventory-${preset}-${control}`,['drawer','drawer.bridge']])),
-  ...['drawingbrush','fill','select'].map(control=>[`inventory-settings-${control}`,['drawer','drawer.bridge']]),
-];
+export const dialogPhoneSpecifications=(frame,parts,phoneActive)=>phoneActive?[...frame,...parts]:parts;
+
+export async function verifyPickerAllocations(reference,candidate){
+  const source=fileURLToPath(new URL('../..',import.meta.url));
+  const script='import json,sys;from pathlib import Path;from tools.visual.phone_audit import compare,load;a,b=map(Path,sys.argv[1:3]);result=compare(a,b);result["gtk_ids"]=list(load(a)[1]);result["web_ids"]=list(load(b)[1]);print(json.dumps(result))';
+  const output=await new Promise((resolve,reject)=>execFile('python3',['-c',script,reference,candidate],{cwd:source,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)));
+  const report=JSON.parse(output);
+  const required=['page','page.header','page.start','page.end','picker.body','picker.catalog','picker.search','picker.choices','picker.row.0','picker.row.0.title','picker.row.0.subtitle'];
+  const missing=required.filter(id=>!report.gtk_ids.includes(id)||!report.web_ids.includes(id));
+  const picked=id=>id==='page'||id.startsWith('page.')||id.startsWith('picker.');
+  const differences=report.allocation_differences.filter(({id})=>picked(id));
+  const absent=report.missing.filter(picked);
+  assert.deepEqual({metadata:report.metadata_mismatches,unavailable:report.unavailable,missing:[...new Set([...missing,...absent])],differences},
+    {metadata:[],unavailable:[],missing:[],differences:[]},`GTK picker allocations: ${reference} versus ${candidate}`);
+  return report;
+}
 
 const preference=action=>({type:'preferences',action});
 const shortcuts={type:'invoke',command:'keyboard_shortcuts'};
@@ -175,6 +177,41 @@ async function managerOffered(context,page,type,form=true){
   assert.ok(action,`Manager offers ${type}`);
   if(form)await managerInput(context,{type:'form',action});
   else {await context.wait(`!!document.querySelector('.workspace-details [data-action="${type}"]')`);await context.click(`.workspace-details [data-action="${type}"]`);}
+}
+
+async function photoAuditOpen({send,evaluate,wait}){
+  await evaluate(`(async()=>{window.phoneAuditOriginal=String(layerApp.app.document_tabs(0).selected);window.phoneAuditPicker=window.showOpenFilePicker;
+    const bytes=new Uint8Array(await(await fetch('/pkg/prophoto16.png')).arrayBuffer());window.phoneAuditPhotoBytes=bytes;
+    window.showOpenFilePicker=async()=>[{name:'prophoto16.png',async getFile(){return new File([bytes],'prophoto16.png')}}];})()`);
+  await send({type:'invoke',command:'open_document'});
+  await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()&&layerApp.app.document_color().space==="ProPhoto"&&layerApp.app.document_color().depth==="U16"');
+  await evaluate('window.phoneAuditPhotoCount=layerApp.app.document_tabs(0).tabs.length');
+}
+async function photoAuditClose({evaluate,wait}){
+  await evaluate('document.querySelector("dialog.document-dialog:not(.file-progress)[open]")?.requestClose()');
+  await wait('!document.querySelector("dialog.document-dialog:not(.file-progress)[open]")&&!layerApp.documents.busy()');
+  await evaluate('layerApp.documents.close(layerApp.app.document_tabs(0).selected);null');
+  const discard=await evaluate('layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label');
+  await wait(`[...document.querySelectorAll('dialog[open] button')].some(button=>button.textContent===${JSON.stringify(discard)})`);
+  await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent===${JSON.stringify(discard)}).click()`);
+  await wait('layerApp.app.document_tabs(0).tabs.length===phoneAuditPhotoCount-1&&String(layerApp.app.document_tabs(0).selected)===phoneAuditOriginal&&!layerApp.documents.busy()');
+  await evaluate('window.showOpenFilePicker=phoneAuditPicker;delete window.phoneAuditPicker;delete window.phoneAuditPhotoBytes;delete window.phoneAuditPhotoCount;delete window.phoneAuditOriginal');
+}
+async function untaggedAuditOpen({send,evaluate,wait}){
+  await evaluate(`(async()=>{window.phoneAuditPicker=window.showOpenFilePicker;window.phoneAuditMissingProfile=layerApp.state().settings.missing_profile;
+    const bytes=new Uint8Array(await(await fetch('/pkg/prophoto16.png')).arrayBuffer()),parts=[bytes.slice(0,8)];
+    for(let offset=8;offset<bytes.length;){const size=new DataView(bytes.buffer,bytes.byteOffset+offset,4).getUint32(0),tag=new TextDecoder().decode(bytes.slice(offset+4,offset+8));
+      if(!['iCCP','sRGB','gAMA','cHRM','cICP'].includes(tag))parts.push(bytes.slice(offset,offset+size+12));offset+=size+12;}
+    window.showOpenFilePicker=async()=>[{name:'untagged.png',async getFile(){return new File(parts,'untagged.png')}}];})()`);
+  await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:1}});
+  await send({type:'invoke',command:'open_document'});
+  await wait('!!document.querySelector(`dialog[open] .dropdown[aria-label="Interpret as"]`)');
+}
+async function untaggedAuditClose({send,evaluate,wait}){
+  await evaluate('document.querySelector(`dialog[open]:has(.dropdown[aria-label="Interpret as"])`)?.requestClose()');
+  await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');
+  await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:await evaluate('phoneAuditMissingProfile')}});
+  await evaluate('window.showOpenFilePicker=phoneAuditPicker;delete window.phoneAuditPicker;delete window.phoneAuditMissingProfile');
 }
 
 export const dialogAuditRows=[
@@ -276,6 +313,14 @@ export const dialogAuditRows=[
   {batch:'w6c',id:'unsaved-changes',rootselector:'dialog.document-dialog[open]',openaction:async({send,evaluate})=>{
     await send({type:'invoke',command:'add_layer'});await evaluate('layerApp.documents.close(layerApp.app.document_tabs(0).selected);null');
   }},
+  {batch:'w6c',id:'cannot-open-file',rootselector:'#file-launch-error[open]',openaction:async({evaluate,wait})=>{
+    await evaluate(`window.phoneAuditOpenFailure=null;void layerApp.documents.openFiles([new File(['invalid'],'own-broken.capy')]).then(()=>phoneAuditOpenFailure={resolved:true},error=>phoneAuditOpenFailure={message:error?.message??String(error)});`);
+    await wait('!!document.querySelector("#file-launch-error[open]")');
+  },closeaction:async({evaluate,wait})=>{
+    await evaluate(`[...document.querySelectorAll('#file-launch-error button')].find(button=>button.textContent===layerApp.app.bootstrap_view().ok).click()`);
+    await wait('phoneAuditOpenFailure!==null&&!layerApp.documents.busy()');
+    await evaluate('delete window.phoneAuditOpenFailure');
+  }},
 
   ...[
     ['recover-interrupted-workspaces','Requires the existing interrupted-store setup; no short opener from a healthy manager.'],
@@ -284,7 +329,6 @@ export const dialogAuditRows=[
     ['workspace-not-saved','Requires an actual failed workspace write; no short healthy-store opener.'],
     ['preserved-package-preview','Requires the existing package fixture preparation in package-view.'],
     ['stroke-recording-failure','Existing desktop recording journey asserts the actual failure alert; paired phone capture needs the native failure setup extracted.'],
-    ['cannot-open-file','Existing desktop document-errors journey asserts the actual alert; paired phone capture needs the native failure setup extracted.'],
     ['workspace-save-status','Requires a real pending/failed store operation; healthy idle storage has no notice.'],
   ].map(([id,blocked])=>({batch:'w6c',id,blocked})),
   {batch:'w6d',id:'selection-refine',rootselector:'#selection-refine-panel',openaction:async({send,evaluate,settle,wait})=>{
@@ -310,7 +354,9 @@ export const dialogAuditRows=[
     await wait('layerApp.app.document_color().depth==="F32"&&layerApp.app.brush_ready()&&!layerApp.documents.busy()');
     await send({type:'invoke',command:'sdr_rendition'});await wait('layerApp.app.proof_form().mode==="sdr"&&!!document.querySelector(".content-drawer .proof-panel")');
   },closeaction:async({send,evaluate,wait})=>{await send({type:'customize',action:{type:'close_expanded'}});await evaluate('layerApp.documents.close(layerApp.app.document_tabs(0).selected)');await wait('String(layerApp.app.document_tabs(0).selected)===phoneSdrOriginal&&!layerApp.documents.busy()');await evaluate('delete window.phoneSdrOriginal');}},
-  {batch:'w6d',id:'command-search',rootselector:'#command-bar[open]',openaction:{type:'invoke',command:'search_commands'},closeaction:async({evaluate})=>{await evaluate('document.querySelector("#command-bar").requestClose()');}},
+  {batch:'w6d',id:'command-search',rootselector:'#command-bar[open]',openaction:async({send,evaluate})=>{
+    await send({type:'invoke',command:'add_layer'});if(await evaluate('layerApp.state().commands.some(command=>command.id==="deselect"&&command.enabled)'))await send({type:'invoke',command:'deselect'});await send({type:'invoke',command:'search_commands'});
+  },closeaction:async({evaluate})=>{await evaluate('document.querySelector("#command-bar").requestClose()');}},
   ...[
     ['document-opening-progress','The existing opening/cancellation journey needs owned package preparation and an active read; stable progress capture exceeds the short opener without an operation gate.'],
     ['image-import-progress','The existing image-import journey needs its owned image and in-flight decoder/provider setup; no stable progress stage is reachable from the healthy audit drawing in a short opener.'],
@@ -318,6 +364,14 @@ export const dialogAuditRows=[
     ['document-color-progress','The existing conversion journey needs an actual color candidate and in-flight preparation; that setup is not a short healthy-drawing opener.'],
     ['clipboard-progress','The existing clipboard cancellation journey needs browser clipboard permission, owned image payload and an in-flight capture/provider; no short stable progress opener exists.'],
   ].map(([id,blocked])=>({batch:'w6d',id,blocked})),
+  ...[['assign-profile','assign_profile','Color space','Srgb'],['convert-color-space','convert_color_space','Color space','Srgb'],['change-bit-depth','change_bit_depth','Bit depth','U8'],['repair-source-profile','repair_source_profile','Correct source profile','0'],['rasterize-source','rasterize_source']].map(([id,command,label,value])=>({
+    batch:'w7-photo',id,rootselector:'dialog.document-dialog:not(.file-progress)[open]',document:{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(label?{draft:{label,value}}:{})},
+    openaction:async context=>{await photoAuditOpen(context);await context.send({type:'invoke',command});
+      if(label){const selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(label)}]`;await context.wait(`!!document.querySelector(${JSON.stringify(selector)})`);await context.evaluate(dropdownChoice(selector,value));}
+      await context.wait('!!document.querySelector("dialog.document-dialog:not(.file-progress)[open] .color-comparison canvas")&&!document.querySelector("dialog.file-progress[open]")');},
+    closeaction:photoAuditClose,
+  })),
+  {batch:'w7-photo',id:'untagged-source-profile',rootselector:'dialog[open]:has(.dropdown[aria-label="Interpret as"])',openaction:untaggedAuditOpen,closeaction:untaggedAuditClose},
 ];
 
 export function dialogAuditSpecifications(rootselector,root=document){
@@ -328,7 +382,7 @@ export function dialogAuditSpecifications(rootselector,root=document){
 }
 
 export function selectDialogAuditRows(dialogs,requested){
-  const rows=dialogAuditRows.filter(row=>dialogs?.batch?row.batch===dialogs.batch:dialogs?.mode==='desktop'?row.baseline:row.batch==='w6a'?row.id.startsWith('preferences-'):row.id!=='color');
+  const rows=dialogAuditRows.filter(row=>dialogs?.batch?dialogs.batch==='all'||row.batch===dialogs.batch:dialogs?.mode==='desktop'?row.baseline:row.batch==='w6a'&&row.id.startsWith('preferences-'));
   if(requested==null)return rows;
   assert.ok(dialogs?.batch,'LAYER_PHONE_DIALOG_ROWS requires a selected dialog batch');
   const ids=requested.split(',').map(id=>id.trim());
@@ -337,13 +391,17 @@ export function selectDialogAuditRows(dialogs,requested){
   return rows.filter(row=>ids.includes(row.id));
 }
 
-export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOnly=false,drawersOnly=false,menusOnly=false,customizeOnly=false,inputOnly=false,dialogs=null}) {
+export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='audit',batch=null}) {
+  const audit=auditModes[mode];assert.ok(audit,`Unknown phone audit mode: ${mode}`);
+  const gtkAllocations=process.env.LAYER_PHONE_GTK_ALLOCATIONS;
+  if(mode==='customize')assert.ok(gtkAllocations,'LAYER_PHONE_GTK_ALLOCATIONS must point to the matching GTK phone customization captures');
+  const dialogs=audit.dialogMode?{mode:audit.dialogMode,batch:batch??(mode==='dialogs-phone'?'w6a':null)}:null;
   const {createDrawing}=await import('./new-drawing-fixture.mjs');
   const directory=process.env.LAYER_TEST_ARTIFACTS||'/mnt/localssd/capy9-phone-impl/web-phone-audit';
   await mkdir(directory,{recursive:true});
   const root=fileURLToPath(new URL('../..',import.meta.url));
   const source={};
-  const requestedRows=process.env.LAYER_PHONE_DIALOG_ROWS,rows=selectDialogAuditRows(dialogs,requestedRows);
+  const requestedRows=process.env.LAYER_PHONE_DIALOG_ROWS,rows=dialogs?selectDialogAuditRows(dialogs,requestedRows):[];
   const report={schema_version:1,host:'web',source,dialog_batch:dialogs?.batch??null,requested_dialog_rows:requestedRows?.split(',').map(id=>id.trim())??null,cases:[],unreachable:[]};
   const original=await evaluate(`({settings:layerApp.state().settings,text:document.documentElement.style.getPropertyValue('--ui-text-size'),workspace:JSON.parse(layerApp.app.workspace_view()).id,documents:layerApp.app.document_tabs(0).tabs.map(tab=>({id:String(tab.id),modified:tab.modified}))})`);
   assert.equal(original.documents.length,1,'Audit starts with one isolated startup drawing');
@@ -364,7 +422,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
     await wait('!layerApp.state().requests.length');
   };
   const collect=specifications=>evaluate(`(${measurePhoneAuditElements.toString()})(${JSON.stringify(specifications)})`);
-  const capture=async (test,state,specifications,availability,requested_page=null,expected_documents=1,expected_color={space:'Srgb',depth:'U8'})=>{
+  const capture=async (test,state,specifications,availability,requested_page=null,expected_documents=1,expected_color={space:'Srgb',depth:'U8'},expected_extent=[1200,1600],expected_draft=null)=>{
     const actual=await collect(specifications);
     const context=actual.elements.filter(element=>element.role==='context');
     actual.elements=actual.elements.filter(element=>element.role!=='context');
@@ -372,15 +430,18 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
     assert.deepEqual(metadata.viewport,test.viewport,'Capture logical viewport');assert.equal(metadata.dpr,1,'Capture DPR');
     assert.equal(metadata.theme,test.theme,'Capture theme');
     metadata.phone_tiles=await evaluate('layerApp.state().workspace.layout.phone??[]');
-    if(frameOnly)metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
-    if(inputOnly)metadata.input=await evaluate('({coarse:matchMedia("(pointer: coarse)").matches,screen:[screen.width,screen.height],mode:layerApp.state().settings.finger_drawing,pen_seen:layerApp.state().settings.pen_seen,picker:layerApp.state().color_picker})');
+    if(state==='command-search')metadata.command_search=await evaluate('({query:layerApp.state().command_search?.query??"",result_ids:(layerApp.state().command_search?.results??[]).map(result=>result.id)})');
+    if(state==='soft-proof'||state==='sdr-rendition')metadata.proof_body_rows=await evaluate(`(()=>{const body=document.querySelector('.content-drawer .proof-panel');return [...body.querySelectorAll('.proof-modes button,.proof-print .document-size,.proof-sdr .document-size,.proof-tone-pad')].filter(node=>node.getClientRects().length).map(node=>{const r=node.getBoundingClientRect();return{label:node.textContent.trim(),bounds:[r.x,r.y,r.width,r.height]};});})()`);
+    if(mode==='frame')metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
+    if(mode==='input')metadata.input=await evaluate('({coarse:matchMedia("(pointer: coarse)").matches,screen:[screen.width,screen.height],mode:layerApp.state().settings.finger_drawing,pen_seen:layerApp.state().settings.pen_seen,picker:layerApp.state().color_picker})');
     const document=await evaluate(`(()=>{const s=layerApp.state(),tab=s.tabs.find(t=>t.active);return {extent:tab?[tab.width,tab.height]:null,color:layerApp.app.document_color(),count:layerApp.app.document_tabs(0).tabs.length,busy:s.document_file.busy,host_busy:layerApp.documents.busy()};})()`);
     assert.equal(document.count,expected_documents,'Captured drawing count');
-    assert.deepEqual(document.extent,[1200,1600],'Captured active drawing extent');
+    assert.deepEqual(document.extent,expected_extent,'Captured active drawing extent');
     assert.deepEqual(document.color,expected_color,'Captured active drawing color');
     metadata.document=document;
+    if(expected_draft){const selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(expected_draft.label)}]`;const value=await evaluate(`document.querySelector(${JSON.stringify(selector)})?.value??null`);assert.equal(value,expected_draft.value,'Captured photo draft choice');metadata.draft_choice={label:expected_draft.label,value};}
     metadata.camera=await evaluate(`JSON.parse(JSON.stringify(layerApp.state().camera,(_,value)=>typeof value==='bigint'?String(value):value))`);
-    if(drawersOnly)metadata.drawer=await evaluate(`(()=>{const s=layerApp.state(),d=s.customization.drawer;if(!d)return null;return JSON.parse(JSON.stringify({model:d,measure:layerApp.app.drawer_measure({viewport:[innerWidth,innerHeight],column:null,tiles:[]}),tools:d.columns.flat().filter(p=>['brushes','brush_sets','sculpt_sets','tools'].includes(p)).map(panel=>({panel,view:layerApp.app.tool_panel(panel,d.anchor)}))},(_,value)=>typeof value==='bigint'?String(value):value));})()`);
+    if(mode==='drawers')metadata.drawer=await evaluate(`(()=>{const s=layerApp.state(),d=s.customization.drawer;if(!d)return null;return JSON.parse(JSON.stringify({model:d,measure:layerApp.app.drawer_measure({viewport:[innerWidth,innerHeight],column:null,tiles:[]}),tools:d.columns.flat().filter(p=>['brushes','brush_sets','sculpt_sets','tools'].includes(p)).map(panel=>({panel,view:layerApp.app.tool_panel(panel,d.anchor)}))},(_,value)=>typeof value==='bigint'?String(value):value));})()`);
     assert.ok(Math.abs(metadata.font_px-test.text_pt*4/3)<.05,`Measured ${metadata.font_px}px does not match ${test.text_pt}pt`);
     const issues=[];
     if(requested_page){
@@ -404,7 +465,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
     return record;
   };
   await send({type:'invoke',command:'new_document'});
-  const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:menusOnly?'Untitled 1':null}));
+  const setup=await evaluate(createDrawing({width:1200,height:1600,resolution:300,space:'Srgb',depth:'U8',paper:'white',relief:0,name:mode==='menus'?'Untitled 1':null}));
   assert.equal(setup.resolution,300,'New drawing recipe resolution');
   assert.deepEqual(setup.color,{space:'Srgb',depth:'U8'},'New drawing recipe color');
   assert.deepEqual(setup.paper.color.rgba,[1,1,1,1],'New drawing recipe white paper');
@@ -445,7 +506,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
     const records=execFileSync('cargo',['run','--locked','-q','-p','layer-engine','--features','prediction-bench','--example','stroke-recording','--','dump',path],{cwd:root,encoding:'utf8'}).trim().split('\n').map(line=>JSON.parse(line));
     await writeFile(`${path}.json`,JSON.stringify(records,null,2)+'\n');return records;
   };
-  if(drawersOnly){
+  if(mode==='drawers'){
     await send({type:'invoke',command:'brush'});await wait('layerApp.app.brush_ready()');
     const center=await evaluate('(()=>{const b=document.querySelector("#canvas").getBoundingClientRect();return{x:b.x+b.width/2,y:b.y+b.height/2}})()');
     await call('Input.dispatchMouseEvent',{type:'mousePressed',...center,button:'left',buttons:1,clickCount:1});
@@ -454,26 +515,26 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
     await wait('layerApp.app.document_park_ready()');
   }
   const requestedCases=process.env.LAYER_PHONE_AUDIT_CASES?.split(',').map(value=>value.trim());
-  const availableCases=dialogs?.mode==='desktop'?dialogAuditMatrix:phoneAuditMatrix;
+  const availableCases=audit.matrix;
   for(const key of requestedCases??[])assert.ok(availableCases.some(test=>`${test.viewport.join('x')}-${test.theme}`===key),`Unknown phone audit case: ${key}`);
-  const selectedCases=requestedCases??(dialogs?.mode==='phone'?['412x891-light','891x412-dark']:null);
+  const selectedCases=requestedCases??audit.defaultCases??null;
   const matrix=availableCases.filter(test=>!selectedCases||selectedCases.includes(`${test.viewport.join('x')}-${test.theme}`));
   assert.ok(matrix.length,'The requested audit cases exist');
   for(const test of matrix){
     await close();
     await wait('layerApp.state().workspace_ready&&!JSON.parse(layerApp.app.workspace_view()).busy');
-    await call('Emulation.setDeviceMetricsOverride',{width:test.viewport[0],height:test.viewport[1],deviceScaleFactor:1,mobile:inputOnly,...(inputOnly?{screenWidth:412,screenHeight:891}:{})});
+    await call('Emulation.setDeviceMetricsOverride',{width:test.viewport[0],height:test.viewport[1],deviceScaleFactor:1,mobile:!!audit.mobile,...(audit.mobile?{screenWidth:412,screenHeight:891}:{})});
     await send({type:'set_theme',theme:test.theme});
     await evaluate(`document.documentElement.style.setProperty('--ui-text-size',${JSON.stringify(`${test.text_pt}pt`)});null`);
     await settle();
     await send({type:'invoke',command:'fit_canvas'});
-    const frame=dialogs?[]:phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]'));
+    const frame=dialogs?.mode==='desktop'?[]:phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]'));
     const active=await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone');
     if(!dialogs)await capture(test,'rest',[...frame,
       {id:'current.header',role:'context',selector:'#header'},
       {id:'current.canvas',role:'context',selector:'#canvas'},
       {id:'current.capy',role:'context',selector:'#zen-capy'}],active?'phone':'desktop fallback: Web phone presentation is not enabled');
-    if(inputOnly){
+    if(mode==='input'){
       assert.equal(await evaluate('matchMedia("(pointer: coarse)").matches'),true,'The primary browser pointer is coarse');
       await send({type:'restore_settings',settings:{...original.settings,theme:test.theme,finger_drawing:'auto',pen_seen:false}});
       await send({type:'invoke',command:'drawing_brush'});await send({type:'set_brush_size',value:40});await send({type:'set_color',rgba:[0,0,0,1]});
@@ -510,6 +571,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await tap(2);await wait('layerApp.app.document_park_ready()');assert.deepEqual(await pixels(),blank);
       await evaluate('layerApp.app.start_stroke_recording();null');await touch('touchStart',[{id:100,...start}]);
       await wait('layerApp.state().color_picker.preview!=null&&layerApp.state().color_picker.loupe_point!=null');
+      await ready();
       const picker=await evaluate('layerApp.state().color_picker');
       assert.ok(Math.abs(picker.sample_point[0]-start.x)<=1&&Math.abs(picker.sample_point[1]-start.y)<=1);
       assert.ok(Math.abs(picker.sample_point[1]-picker.loupe_point[1]-44)<=1,'The shared browser fallback lifts the actual picker by 44 logical pixels');
@@ -548,7 +610,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await send({type:'restore_settings',settings:original.settings});
       continue;
     }
-    if(customizeOnly){
+    if(mode==='customize'){
       const durable=()=>evaluate('layerApp.app.workspace_persistence()');
       const history=()=>evaluate('JSON.parse(layerApp.app.workspace_capture()).history');
       const before=await durable(),oldHistory=await history();
@@ -573,10 +635,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
         const specs=phoneAuditFrameSpecifications(await tiles());
         if(await evaluate('!!document.querySelector("#tool-picker[open]")')){
           specs.push(
-            {id:'page',role:'page',selector:'#tool-picker'},
-            {id:'page.header',role:'page-header',selector:'#tool-picker > header'},
-            {id:'page.close',role:'page-action',selector:'#cancel-tools'},
-            {id:'page.primary',role:'page-action',selector:'#confirm-tools'},
+            ...(await evaluate(`(${dialogAuditSpecifications.toString()})('#tool-picker[open]')`)),
             ...[['body','body','.tool-picker-body'],['catalog','catalog','.tool-picker-catalog'],['search','search','.tool-search'],['choices','scroll','.tool-picker-catalog > .panel-frame']].map(([id,role,selector])=>({id:`picker.${id}`,role,selector:`#tool-picker ${selector}`})));
           if(await evaluate('(()=>{const row=document.querySelector(".tool-choice:first-child").getBoundingClientRect(),clip=document.querySelector(".tool-picker-catalog > .panel-frame").getBoundingClientRect();return row.bottom>clip.top&&row.top<clip.bottom;})()'))specs.push(
             ...[['row.0','row','.tool-choice:first-child'],['row.0.title','label','.tool-choice:first-child > span > span'],['row.0.subtitle','label','.tool-choice:first-child > span > small']].map(([id,role,selector])=>({id:`picker.${id}`,role,selector:`#tool-picker ${selector}`})));
@@ -593,11 +652,9 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       const anchor=(await tiles())[0].id;
       await menu(anchor);await menuAction('Insert Tools…');
       await wait('!!document.querySelector("#tool-picker.dialog-page[open]")');
-      const bounds=await evaluate('(()=>{const n=document.querySelector("#tool-picker"),r=n.getBoundingClientRect(),p=layerApp.app.dialog_presentation("editor",innerWidth,innerHeight,{x:0,y:0,width:innerWidth,height:innerHeight});return{actual:[r.x,r.y,r.width,r.height],expected:Object.values(p.bounds),modal:n.matches(":modal"),header:getComputedStyle(n.firstElementChild).display,header_height:n.firstElementChild.getBoundingClientRect().height,actions:["#cancel-tools","#confirm-tools"].map(s=>document.querySelector(s).getBoundingClientRect().height)};})()');
+      const bounds=await evaluate('(()=>{const n=document.querySelector("#tool-picker"),r=n.getBoundingClientRect(),p=layerApp.app.dialog_presentation("editor",innerWidth,innerHeight,{x:0,y:0,width:innerWidth,height:innerHeight});return{actual:[r.x,r.y,r.width,r.height],expected:Object.values(p.bounds),modal:n.matches(":modal"),header:getComputedStyle(n.firstElementChild).display};})()');
       assert.equal(bounds.modal,true);assert.equal(bounds.header,'grid');
       assert.ok(bounds.actual.every((value,i)=>Math.abs(value-bounds.expected[i])<=1),'The picker consumes shared page bounds');
-      const nativeHeight=test.text_pt===16?36:34;
-      assert.ok(bounds.actions.every(height=>Math.abs(height-nativeHeight)<=1)&&Math.abs(bounds.header_height-nativeHeight-13)<=1,`Measured GTK action/header height: ${JSON.stringify(bounds)}`);
       await evaluate('document.querySelector("#tool-search").value="brush";document.querySelector("#tool-search").dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#tool-search").focus();null');
       await escape();assert.equal(await evaluate('layerApp.app.tool_picker().query'),'');
       assert.equal(await evaluate('document.querySelector("#tool-picker").open'),true,'First Escape clears focused search');
@@ -605,11 +662,11 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       for(const control of selected)await send({type:'customize',action:{type:'picker_select',control,selected:true}});
       const wrapped=await evaluate('[...document.querySelectorAll(".tool-choice > span > :is(span,small)")].filter(n=>{const range=document.createRange();range.selectNodeContents(n);const rects=[...range.getClientRects()];return rects.some(r=>Math.abs(r.top-rects[0].top)>1);}).map(n=>n.textContent)');
       assert.deepEqual(wrapped,[],'Picker titles and descriptions stay on one line');
-      const content=await evaluate('(()=>{const bounds=s=>{const r=document.querySelector(s).getBoundingClientRect();return[r.x,r.y,r.width,r.height];};return{search:bounds("#tool-picker .tool-search"),row:bounds("#tool-picker .tool-choice"),title:bounds("#tool-picker .tool-choice > span > span"),subtitle:bounds("#tool-picker .tool-choice > span > small")};})()');
-      const large=test.text_pt===16,headerHeight=large?49:47;
-      const expectedPicker={search:[18,headerHeight+30,test.viewport[0]-36,34],row:[18,headerHeight+72,test.viewport[0]-36,large?68:55],title:[60,headerHeight+(large?80:81),test.viewport[0]-124,large?26:18],subtitle:[60,headerHeight+(large?109:102),test.viewport[0]-124,large?22:15]};
-      for(const [name,actual]of Object.entries(content))assert.ok(actual.every((v,i)=>Math.abs(v-expectedPicker[name][i])<=1),`Measured GTK picker ${name}: ${JSON.stringify({actual,expected:expectedPicker[name]})}`);
       await captureCustom('customize-insert-two');
+      const name=`phone-${test.viewport.join('x')}-${test.theme}-`;
+      const references=globSync('**/*customize-insert-two.allocations.json',{cwd:gtkAllocations}).filter(path=>path.split('/').at(-1).startsWith(name));
+      assert.equal(references.length,1,`Expected one matching GTK picker allocation file for ${name} in ${gtkAllocations}; found ${references.length}`);
+      await verifyPickerAllocations(join(gtkAllocations,references[0]),join(directory,`phone-${test.viewport.join('x')}-${test.theme}-${test.text_pt}pt-customize-insert-two.allocations.json`));
       const prior=(await history()).undo.length;await click('#confirm-tools');
       assert.deepEqual((await tiles()).slice(0,2).map(t=>t.control),selected);
       assert.equal((await tiles())[2].id,anchor);assert.equal((await history()).undo.length,prior+1);
@@ -661,7 +718,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await send({type:'restore_workspace',workspace:before});
       continue;
     }
-    if(menusOnly){
+    if(mode==='menus'){
       await send({type:'preferences',action:{type:'edit',id:'finger_drawing',value:2}});
       const route=()=>evaluate('JSON.stringify(layerApp.state().phone.menu_route)');
       const rootRoute=await route();
@@ -811,7 +868,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await send({type:'restore_saved_settings',saved:JSON.stringify(original.settings)});
       await close();continue;
     }
-    if(drawersOnly){
+    if(mode==='drawers'){
       const captureDrawer=async name=>{
         try {await drawerReady();}
         catch(error){
@@ -922,7 +979,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await closeDrawer();
       continue;
     }
-    if(frameOnly){
+    if(mode==='frame'){
       assert.equal(active,true,'Web phone capability is presented');
       const check=async(name)=>{
         const p=await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone');
@@ -1006,7 +1063,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       continue;
     }
     const open=async action=>{if(typeof action==='function')await action({send,evaluate,wait,call,settle,click});else for(const step of Array.isArray(action)?action:[action])await send(step);};
-    for(const row of rows){
+    if(dialogs)for(const row of rows){
       if(row.blocked){report.unreachable.push({state:row.id,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:'unavailable',missing:[],reason:row.blocked,png:null});continue;}
       await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
       if(row.id==='preferences-shortcuts-direct'&&active){
@@ -1018,20 +1075,21 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
         await send(shortcuts);await settle();
       }
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');
-      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);const specifications=await evaluate(row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,row.document?.count??1,row.document?.color);};
+      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);const parts=await evaluate(row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
+      if(row.id==='color'){
+        const {assertColorEditorCells}=await import('./color-editor.test.mjs');
+        await assertColorEditorCells(evaluate);
+      }
+      if(row.id==='sdr-rendition'){const {assertSdrDialLayout}=await import('./hdr.test.mjs');await assertSdrDialLayout(evaluate);}
       await shot(row);
       for(const variant of row.variants??[]){await open(variant.openaction);await shot(variant);}
       if(row.closeaction)await open(row.closeaction);
       if(row.batch==='w6a')await send({type:'close_settings'});
       await close();
     }
-    if(!dialogs)for(const [state,missing]of unavailable){
-      report.unreachable.push({state,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:active?'unavailable':'gated',missing,
-        reason:active?'The existing phone audit has no interaction visitor for this state yet':'Web phone presentation is GTK-gated; target view is not reachable',png:null});
-    }
     await writeFile(`${directory}/index.json`,JSON.stringify(report,null,2)+'\n');
   }
-  if(menusOnly){
+  if(mode==='menus'){
     await close();
     await call('Emulation.setDeviceMetricsOverride',{width:1600,height:1000,deviceScaleFactor:1,mobile:false});
     await evaluate("document.documentElement.style.setProperty('--ui-text-size','11pt');null");
@@ -1054,7 +1112,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
       await click(`${selector} > summary`);
     }
   }
-  if(frameOnly){
+  if(mode==='frame'){
     const settings=await evaluate('layerApp.state().settings');
     await send({type:'restore_settings',settings:{...settings,finger_drawing:'on'}});
     await send({type:'invoke',command:'brush'});
@@ -1107,6 +1165,6 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,frameOn
   await evaluate(`document.documentElement.style.setProperty('--ui-text-size',${JSON.stringify(original.text)});null`);
   await send({type:'restore_saved_settings',saved:JSON.stringify(original.settings)});
   await call('Emulation.clearDeviceMetricsOverride');
-  console.log(`PHONE ${frameOnly?'FRAME':drawersOnly?'DRAWERS':'AUDIT'}: ${report.cases.length} captures; ${report.unreachable.length} unreachable states; ${report.requested_dialog_rows?`selected rows ${report.requested_dialog_rows.join(',')}; `:''}${directory}/index.json ${frameOnly?'(shared allocation checks passed; cross-host pixels pending)':'(not a parity pass)'}`);
+  console.log(`PHONE ${mode.toUpperCase()}: ${report.cases.length} captures; ${report.unreachable.length} unreachable states; ${report.requested_dialog_rows?`selected rows ${report.requested_dialog_rows.join(',')}; `:''}${directory}/index.json ${mode==='frame'?'(shared allocation checks passed; cross-host pixels pending)':'(not a parity pass)'}`);
   } finally {if(dialogs)await call('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:reducedMotion}]});}
 }
