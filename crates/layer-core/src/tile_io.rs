@@ -3,7 +3,7 @@ use crate::package::{ByteRange, RangeState, MAX_RANGE_BYTES};
 use std::{collections::HashMap, sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}, task::{Context, Poll, Waker}};
 
 pub const HOT_SET_BYTES: u64 = 256 * 1024 * 1024;
-const QUEUED_READS: usize = 18;
+pub(crate) const QUEUED_READS: usize = 18;
 const ACTIVE_READS: usize = 2;
 
 pub fn read_buffer(length:usize)->Arc<[u8]> {
@@ -41,6 +41,7 @@ pub fn verify_crc(bytes:&[u8],expected:Option<u32>)->Result<(),String> {
 }
 
 pub trait RangeReader: Send + Sync {
+    fn result_bounds(&self,_offset:u64,length:usize)->std::ops::RangeInclusive<usize> {length..=length}
     fn read(&self, offset: u64, length: usize, crc:Option<u32>, completion: ReadCompletion);
 }
 
@@ -75,7 +76,9 @@ struct Entry {
     leases: usize,
     waiters: Vec<(u64, Option<Waker>)>,
     crc:Option<u32>,
+    bounds:std::ops::RangeInclusive<usize>,
 }
+impl Entry {fn bytes(&self)->usize {match &self.phase {Phase::Ready(bytes)=>bytes.len(),Phase::Reading=>*self.bounds.end(),_=>0}}}
 enum Phase { Cold, Queued, Reading, Ready(Arc<[u8]>), Failed(String) }
 struct Source { id: u64, length: AtomicU64, reader: Arc<dyn RangeReader>, cache: ReadCache }
 impl Drop for Source { fn drop(&mut self) { self.cache.0.expired.store(true,Ordering::Release);self.cache.schedule(); } }
@@ -95,15 +98,18 @@ impl Drop for Lease {
         let mut state=cache.0.state.lock().unwrap();
         if let Some(entry)=state.entries.get_mut(&self.key) {
             entry.leases-=1;
-            if entry.leases==0 && entry.waiters.is_empty() { state.pinned-=self.key.2 as u64; }
+            if entry.leases==0 && entry.waiters.is_empty() { state.pinned-=entry.bytes() as u64; }
         }
         let trim=state.physical>cache.limit_bytes();cache.publish(&state);drop(state);if trim {cache.schedule();}
     }
 }
 
-pub struct ReadCompletion { cache: ReadCache, key: Key, done: bool }
+type ReadTransform=Box<dyn FnOnce(Result<Arc<[u8]>,String>)->Result<Arc<[u8]>,String>+Send>;
+pub struct ReadCompletion { cache: ReadCache, key: Key, done: bool,transform:Option<ReadTransform> }
 impl ReadCompletion {
+    pub(crate) fn map(mut self,transform:ReadTransform)->Self {let previous=self.transform.take();self.transform=Some(Box::new(move |result|match previous {Some(previous)=>previous(transform(result)),None=>transform(result)}));self}
     pub fn complete(mut self, result: Result<Arc<[u8]>, String>) {
+        let result=match self.transform.take() {Some(transform)=>transform(result),None=>result};
         self.done=true;self.cache.complete(self.key,result);
     }
 }
@@ -147,7 +153,7 @@ impl ReadCache {
             let dead=state.entries.iter().filter(|(_,entry)|entry.source.strong_count()==0 && entry.leases==0 && entry.waiters.is_empty() && !matches!(entry.phase,Phase::Reading))
                 .map(|(&key,_)|key).collect::<Vec<_>>();
             for key in dead {match state.entries.remove(&key).unwrap().phase {
-                Phase::Ready(_)=>state.physical-=key.2 as u64,Phase::Queued=>state.queued-=1,_=>{},
+                Phase::Ready(bytes)=>state.physical-=bytes.len() as u64,Phase::Queued=>state.queued-=1,_=>{},
             }}
         }
         if state.physical<=limit {return;}
@@ -156,18 +162,18 @@ impl ReadCache {
         candidates.sort_unstable_by_key(|(used,_)|*used);
         for (_,key) in candidates {
             if state.physical<=limit {break;}
-            state.entries.remove(&key);state.physical-=key.2 as u64;
+            state.physical-=state.entries.remove(&key).unwrap().bytes() as u64;
         }
     }
     fn ready(&self, state: &mut State, key: Key, source: &Arc<Source>, crc:Option<u32>) -> Result<RangeState,String> {
         state.clock=state.clock.saturating_add(1);
         let queued=state.queued;
-        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(source),phase:Phase::Cold,used:state.clock,leases:0,waiters:Vec::new(),crc});
+        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(source),phase:Phase::Cold,used:state.clock,leases:0,waiters:Vec::new(),crc,bounds:source.reader.result_bounds(key.1,key.2)});
         if crc.is_some() && entry.crc!=crc {return Err("Conflicting immutable range checksum".into());}
         match &entry.phase {
             Phase::Ready(bytes)=>{
                 entry.used=state.clock;
-                if entry.leases==0 && entry.waiters.is_empty() {state.pinned+=key.2 as u64;}
+                if entry.leases==0 && entry.waiters.is_empty() {state.pinned+=bytes.len() as u64;}
                 entry.leases+=1;
                 Ok(RangeState::Ready(ByteRange::leased(bytes.clone(),Arc::new(Lease {source:source.clone(),key}))))
             },
@@ -178,15 +184,16 @@ impl ReadCache {
     }
     fn complete(&self, key: Key, result: Result<Arc<[u8]>,String>) {
         let mut state=self.0.state.lock().unwrap();
-        let result=result.and_then(|bytes|if bytes.len()==key.2 {Ok(bytes)}else{Err("Incomplete tile read".into())});
         let entry=state.entries.get_mut(&key).unwrap();
+        let result=result.and_then(|bytes|if entry.bounds.contains(&bytes.len()) && bytes.len()<=MAX_RANGE_BYTES {Ok(bytes)}else{Err("Incomplete tile read".into())});
+        let reserved=entry.bytes() as u64;
         let pinned=entry.leases>0 || !entry.waiters.is_empty();
         let wakers=entry.waiters.iter().filter_map(|(_,wake)|wake.clone()).collect::<Vec<_>>();
-        let success=result.is_ok();
         entry.phase=match result {Ok(bytes)=>Phase::Ready(bytes),Err(error)=>Phase::Failed(error)};
+        let actual=entry.bytes() as u64;
         state.running-=1;
-        if !success {state.physical-=key.2 as u64;}
-        if !success || !pinned {state.pinned-=key.2 as u64;}
+        state.physical=state.physical-reserved+actual;
+        state.pinned=state.pinned-reserved+if pinned {actual}else {0};
         self.publish(&state);
         #[cfg(not(target_arch="wasm32"))] self.0.changed.notify_all();
         let drive=state.queued>0 || state.physical>self.limit_bytes();
@@ -215,8 +222,9 @@ impl ReadCache {
             let mut task=None;
             for (_,key) in pending {
                 let Some(source)=state.entries[&key].source.upgrade() else {state.entries.remove(&key);state.queued-=1;continue;};
-                state.entries.get_mut(&key).unwrap().phase=Phase::Reading;
-                state.physical+=key.2 as u64;state.pinned+=key.2 as u64;state.running+=1;state.queued-=1;
+                let entry=state.entries.get_mut(&key).unwrap();
+                entry.phase=Phase::Reading;let bytes=entry.bytes() as u64;
+                state.physical+=bytes;state.pinned+=bytes;state.running+=1;state.queued-=1;
                 self.0.pending_reads.store(state.queued+state.running,Ordering::Release);
                 task=Some((source,key,state.entries[&key].crc));break;
             }
@@ -225,13 +233,16 @@ impl ReadCache {
         };
         if let Some((source,key,crc))=task {
             if self.has_pending_reads() && self.0.state.lock().unwrap().queued>0 {self.schedule();}
-            source.reader.read(key.1,key.2,crc,ReadCompletion {cache:self.clone(),key,done:false});
+            source.reader.read(key.1,key.2,crc,ReadCompletion {cache:self.clone(),key,done:false,transform:None});
         }
     }
     pub fn drive(&self) {self.drive_inner();}
 }
 
 impl ReadSource {
+    pub(crate) fn read_direct(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
+        match self.key(offset,length) {Ok(_)=>self.0.reader.read(offset,length,crc,completion),Err(error)=>completion.complete(Err(error))}
+    }
     pub(crate) fn cached(&self,offset:u64,length:u64)->bool {
         let Ok(length)=usize::try_from(length) else {return false;};
         self.0.cache.0.state.lock().unwrap().entries.get(&Key(self.0.id,offset,length)).is_some_and(|entry|matches!(entry.phase,Phase::Ready(_)))
@@ -241,6 +252,8 @@ impl ReadSource {
     pub fn file(file:Arc<std::fs::File>, length:u64)->Self {ReadCache::process().source(length,Arc::new(FileReader(file)))}
     fn key(&self, offset:u64, length:usize)->Result<Key,String> {
         if length>MAX_RANGE_BYTES || offset.checked_add(length as u64).is_none_or(|end|end>self.0.length.load(Ordering::Acquire)) {return Err("Tile read exceeds backing".into());}
+        let bounds=self.0.reader.result_bounds(offset,length);
+        if bounds.is_empty() || *bounds.end()>MAX_RANGE_BYTES {return Err("Tile result exceeds bounded range".into());}
         Ok(Key(self.0.id,offset,length))
     }
     pub(crate) fn extend_to(&self,length:u64) {self.0.length.fetch_max(length,Ordering::Release);}
@@ -260,7 +273,7 @@ impl ReadSource {
         let mut state=self.0.cache.0.state.lock().unwrap();
         let keys=state.entries.iter().filter(|(key,entry)|key.0==self.0.id && entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)))
             .map(|(&key,_)|key).collect::<Vec<_>>();
-        for key in keys {state.entries.remove(&key);state.physical-=key.2 as u64;}
+        for key in keys {state.physical-=state.entries.remove(&key).unwrap().bytes() as u64;}
         self.0.cache.publish(&state);
     }
     pub fn wait(&self,offset:u64,length:usize)->Result<ReadWait,String> {self.wait_range(offset,length,None)}
@@ -273,8 +286,9 @@ impl ReadSource {
         let existed=state.entries.get(&key).is_some_and(|entry|entry.leases>0 || !entry.waiters.is_empty());
         let ready=state.entries.get(&key).is_some_and(|entry|matches!(entry.phase,Phase::Ready(_)));
         state.clock+=1;let used=state.clock;
-        state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(&self.0),phase:Phase::Cold,used,leases:0,waiters:Vec::new(),crc}).waiters.push((id,None));
-        if ready && !existed {state.pinned+=length as u64;}
+        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(&self.0),phase:Phase::Cold,used,leases:0,waiters:Vec::new(),crc,bounds:self.0.reader.result_bounds(offset,length)});
+        entry.waiters.push((id,None));let bytes=entry.bytes() as u64;
+        if ready && !existed {state.pinned+=bytes;}
         self.0.cache.publish(&state);drop(state);
         Ok(ReadWait {source:self.clone(),key,id,crc})
     }
@@ -301,6 +315,7 @@ impl ReadSource {
 impl crate::package::ByteSource for ReadSource {
     fn byte_len(&self)->u64 {self.byte_len()}
     fn resident_bytes(&self)->usize {0}
+    fn read_source(&self)->Option<ReadSource> {Some(self.clone())}
     fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.poll(offset,length)}
     #[cfg(not(target_arch="wasm32"))]
     fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {self.wait_on_worker(offset,length).map(RangeState::Ready)}
@@ -332,7 +347,7 @@ impl Drop for ReadWait {
         let mut state=cache.0.state.lock().unwrap();
         if let Some(entry)=state.entries.get_mut(&self.key) {
             entry.waiters.retain(|(id,_)|*id!=self.id);
-            if entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)) {state.pinned-=self.key.2 as u64;}
+            if entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)) {state.pinned-=entry.bytes() as u64;}
         }
         let trim=state.physical>cache.limit_bytes();cache.publish(&state);drop(state);if trim {cache.schedule();}
     }
@@ -391,6 +406,48 @@ mod tests {
         (budget,cache,reader,source)
     }
     #[test]
+    fn transfer_preparation_registers_only_a_bounded_window_of_lazy_tiles() {
+        use crate::{Document,DocumentNames,Editor,Image,PaintBase,SourceTarget,
+            color::{ColorProfile,RgbSpace,SampleDepth,source::{SourceChannels,SourceImage,SourceInterpretation}},
+            package::{ImmutableBacking,PackageLease,transfer::PreparedTransfer},raster::{TileBlob,TILE_SIZE}};
+        struct Held {reader:Controlled,closed:AtomicBool}
+        impl RangeReader for Held {
+            fn read(&self,offset:u64,length:usize,_crc:Option<u32>,completion:ReadCompletion) {
+                let mut requests=self.reader.requests.lock().unwrap();
+                if self.closed.load(Ordering::Acquire) {drop(requests);completion.complete(Err("Read owner closed".into()));}
+                else {requests.push_back((offset,length,completion));}
+            }
+        }
+        impl Held {
+            fn close(&self) {
+                let requests={let mut requests=self.reader.requests.lock().unwrap();self.closed.store(true,Ordering::Release);std::mem::take(&mut *requests)};
+                for (_,_,completion) in requests {completion.complete(Err("Read owner closed".into()));}
+            }
+        }
+        let cache=ReadCache::process();let held=Arc::new(Held {reader:Default::default(),closed:AtomicBool::new(false)});
+        let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+        let descriptor=interpretation.descriptor();
+        let mut encoder=flate2::write::DeflateEncoder::new(Vec::new(),flate2::Compression::fast());
+        std::io::Write::write_all(&mut encoder,&vec![0;(TILE_SIZE*TILE_SIZE*4) as usize]).unwrap();let encoded=encoder.finish().unwrap();
+        let backing=ImmutableBacking::new(Arc::new(cache.source(encoded.len() as u64*100,held.clone()))).unwrap();
+        let lease=PackageLease::new(backing);
+        let tiles=(0..100).map(|index| {
+            let range=lease.range(index*encoded.len() as u64,encoded.len() as u64,crc32fast::hash(&encoded),descriptor,true).unwrap();
+            ([index as u32%10,index as u32/10],Arc::new(TileBlob::from_package_range(crate::PortableId::random(),descriptor,range).unwrap()))
+        }).collect();
+        let mut document=Document::new(crate::PortableId::random(),10*TILE_SIZE,10*TILE_SIZE,DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+        document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(Arc::new(SourceImage {extent:[10*TILE_SIZE;2],resolution:None,tiles,interpretation}))));
+        let editor=Editor::new(document);let capture=editor.capture(0,Default::default()).unwrap();
+        let before=cache.0.state.lock().unwrap().entries.keys().copied().collect::<std::collections::HashSet<_>>();
+        let cancelled=AtomicBool::new(false);let selection=None;
+        let budget=MemoryBudget::process();let mut preparing=Box::pin(PreparedTransfer::capture_async(&capture,&selection,&cancelled,&budget));
+        let pending=std::future::Future::poll(preparing.as_mut(),&mut Context::from_waker(Waker::noop())).is_pending();
+        let registered=cache.0.state.lock().unwrap().entries.keys().filter(|key|!before.contains(key)).count();
+        drop(preparing);drop(capture);drop(editor);drop(lease);held.close();
+        assert!(pending);assert!(registered>0 && registered<=QUEUED_READS,"registered {registered} tile ranges");
+    }
+    #[test]
     fn a_terabyte_budget_keeps_the_hot_set_demand_at_256_mib() {
         let (budget,cache,reader,source)=setup();
         assert_eq!(cache.limit_bytes(),HOT_SET_BYTES);
@@ -406,6 +463,25 @@ mod tests {
         }
         assert_eq!(cache.0.owner.reported().pinned_ram_bytes,0);
         assert_eq!(reader.calls.load(Ordering::Relaxed),32);
+    }
+    #[test]
+    fn transformed_ranges_charge_the_result_size_and_keep_it_pinned_until_consumed() {
+        struct Expanded(Arc<Controlled>);
+        impl RangeReader for Expanded {
+            fn result_bounds(&self,_:u64,_:usize)->std::ops::RangeInclusive<usize> {1..=256}
+            fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
+                self.0.read(offset,length,crc,completion.map(Box::new(|bytes|bytes.map(|_|Arc::from([17u8;192])))));
+            }
+        }
+        let (budget,cache,reader,_source)=setup();let source=cache.source(1024,Arc::new(Expanded(reader.clone())));
+        let mut wait=Box::pin(source.wait(0,64).unwrap());let mut context=Context::from_waker(Waker::noop());
+        assert!(std::future::Future::poll(wait.as_mut(),&mut context).is_pending());cache.drive_inner();budget.flush_reports();
+        assert_eq!(cache.0.owner.reported().ram_bytes,256);assert_eq!(cache.0.owner.reported().pinned_ram_bytes,256);
+        reader.finish(1);budget.flush_reports();
+        assert_eq!(cache.0.owner.reported().ram_bytes,192);assert_eq!(cache.0.owner.reported().pinned_ram_bytes,192);
+        let Poll::Ready(Ok(bytes))=std::future::Future::poll(wait.as_mut(),&mut context) else {panic!("transformed read completed")};drop(wait);
+        source.evict();assert_eq!(&*bytes,&[17u8;192]);drop(bytes);source.evict();budget.flush_reports();
+        assert_eq!(cache.0.owner.reported().ram_bytes,0);assert_eq!(cache.0.owner.reported().pinned_ram_bytes,0);
     }
     #[test]
     fn polling_deduplicates_without_reading_and_leases_survive_eviction() {

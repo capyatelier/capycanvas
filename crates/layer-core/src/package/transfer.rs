@@ -83,14 +83,54 @@ fn manifest(descriptor:&TransferDescriptor,limits:ProjectLimits)->Result<Manifes
     }
 }
 impl PreparedTransfer {
+    pub async fn capture_async(capture:&ArtworkCapture,selection:&Option<crate::Selection>,cancel:&AtomicBool,budget:&crate::MemoryBudget)->Result<Self,String> {
+        let inventory=Self::inventory(capture,cancel)?;
+        let mut bytes=0u64;let mut owners=BTreeSet::new();
+        for entry in inventory.1.entries.values() {
+            if let Payload::Tile(tile)=&entry.payload && tile.compressed.package_origin() && tile.compressed.needs_store()? && owners.insert(Arc::as_ptr(&tile.compressed) as usize) {
+                let length=if tile.compressed.needs_preparation() {crate::raster::TileBlob::max_compressed_len(tile.descriptor).ok_or("Invalid package tile descriptor")?}else {tile.compressed_len()};
+                bytes=bytes.checked_add(length as u64).ok_or("Transfer length overflow")?;
+            }
+        }
+        let admission=if bytes==0 {None}else {Some(budget.admit_import(bytes).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?)};
+        let mut tiles=inventory.1.entries.values().filter_map(|entry|match &entry.payload {
+            Payload::Tile(tile) if tile.compressed.needs_preparation()=>Some(tile),_=>None,
+        });
+        async fn prepare(tile:&crate::raster::TileBlob)->Result<(),String> {
+            tile.read_compressed().await.map(|_|())
+        }
+        let mut window=std::collections::VecDeque::new();
+        std::future::poll_fn(|cx|loop {
+            active(cancel)?;
+            while window.len()<crate::tile_io::QUEUED_READS {
+                let Some(tile)=tiles.next() else {break;};window.push_back(Some(Box::pin(prepare(tile))));
+            }
+            if window.is_empty() {return std::task::Poll::Ready(Ok::<_,String>(()));}
+            for slot in &mut window {
+                if let Some(read)=slot && let std::task::Poll::Ready(result)=read.as_mut().poll(cx) {result?;*slot=None;}
+            }
+            if window.front().unwrap().is_some() {return std::task::Poll::Pending;}
+            while window.front().is_some_and(Option::is_none) {window.pop_front();}
+        }).await?;
+        drop(window);drop(tiles);
+        let mut transfer=Self::from_inventory(capture,selection,cancel,inventory)?;
+        transfer.admission=admission;Ok(transfer)
+    }
     pub fn capture(capture:&ArtworkCapture,cancel:&AtomicBool)->Result<Self,String>{
         Self::capture_with_selection(capture,&None,cancel)
     }
     pub fn capture_with_selection(capture:&ArtworkCapture,selection:&Option<crate::Selection>,cancel:&AtomicBool)->Result<Self,String>{
+        Self::from_inventory(capture,selection,cancel,Self::inventory(capture,cancel)?)
+    }
+    fn inventory(capture:&ArtworkCapture,cancel:&AtomicBool)->Result<(Vec<Value>,ResourceInventory),String> {
         active(cancel)?;let art=&capture.artwork;
         if capture.checkpoint.document!=art.id{return Err("Capture belongs to another artwork".into());}
         if art.paint.iter().any(|(_,_,s)|!s.operations.is_empty())||art.coverage.iter().any(|(_,_,s)|!s.operations.is_empty()){return Err("Wait for the current edit before transferring".into());}
-        let (mut objects,mut inventory)=artwork_records::encode_with_inventory(art,cancel,ResourceInventory::for_transfer())?;
+        let inventory=artwork_records::encode_with_inventory(art,cancel,ResourceInventory::for_transfer())?;
+        Ok(inventory)
+    }
+    fn from_inventory(capture:&ArtworkCapture,selection:&Option<crate::Selection>,cancel:&AtomicBool,(mut objects,mut inventory):(Vec<Value>,ResourceInventory))->Result<Self,String> {
+        let art=&capture.artwork;
         let working_selection=selection.as_ref().map(|selection|super::selection_records::encode_selection(selection,&mut inventory)).transpose()?;
         let live=objects.iter().map(|r|r["id"].as_str().ok_or("Missing object ID")?.parse().map_err(str::to_string)).collect::<Result<BTreeSet<_>,String>>()?;
         let (extensions,retained)=art.extensions.edited_retained(&live)?;objects.extend(extensions);
@@ -103,6 +143,7 @@ impl PreparedTransfer {
         fn encoded(payloads:&mut Vec<TransferPayload>,bytes:Option<&EncodedBytes>)->Option<EncodedPayload>{bytes.map(|v|EncodedPayload{encoding:v.encoding,payload:push(payloads,TransferPayload::Bytes(v.bytes.clone()))})}
         for (id,entry) in &inventory.entries {
             active(cancel)?;
+            if let Payload::Tile(tile)=&entry.payload && tile.compressed.needs_preparation() {return Err("Package normalization must finish before transfer capture".into());}
             let state=match &entry.payload {
                 Payload::Tile(tile)=>VerifiedResource::Tile{payload:push(&mut payloads,TransferPayload::Tile(tile.clone())),identity:tile.content_identity()},
                 Payload::Bytes(bytes) if entry.kind=="capy.lut3d/1"=>{let lut=luts.get(id).ok_or("Missing verified lookup owner")?;
@@ -324,6 +365,67 @@ mod tests {
             let count=(length-offset).min(MAX_RANGE_BYTES as u64) as usize;
             receiver.push_chunk(index,&prepared.read_chunk(index,offset,count).unwrap()).unwrap();offset+=count as u64;
         }}receiver.finish().unwrap()
+    }
+    fn lazy_capture(bytes:Arc<[u8]>,reads:Arc<std::sync::atomic::AtomicUsize>)->ArtworkCapture {
+        struct Source {bytes:Arc<[u8]>,reads:Arc<std::sync::atomic::AtomicUsize>}
+        impl super::super::ByteSource for Source {
+            fn byte_len(&self)->u64 {self.bytes.len() as u64}
+            fn resident_bytes(&self)->usize {0}
+            fn poll(&self,offset:u64,length:usize)->Result<super::super::RangeState,String> {
+                self.reads.fetch_add(1,Ordering::SeqCst);
+                Ok(super::super::RangeState::Ready(super::super::ByteRange::new(self.bytes.clone(),offset as usize..offset as usize+length).unwrap()))
+            }
+        }
+        let mut capture=capture();let artwork=Arc::make_mut(&mut capture.artwork);
+        let handle=artwork.paint.iter().next().unwrap().0;let base=artwork.paint.get_mut(handle).unwrap().base.as_mut().unwrap();
+        let mut image=(**base.image.storage()).clone();let (coordinate,tile)=image.tiles.iter().next().unwrap();
+        let lease=super::super::PackageLease::new(ImmutableBacking::new(Arc::new(Source {bytes:bytes.clone(),reads})).unwrap());
+        let range=lease.range(0,bytes.len() as u64,crc32fast::hash(&bytes),tile.descriptor,false).unwrap();
+        image.tiles.insert(*coordinate,Arc::new(crate::raster::TileBlob::from_package_range(tile.resource_id(),tile.descriptor,range).unwrap()));
+        base.image=Image::with_id(base.image.id(),Arc::new(image));capture
+    }
+    #[test]
+    fn lazy_transfer_refuses_materialization_before_reading_any_tile() {
+        let reads=Arc::new(std::sync::atomic::AtomicUsize::new(0));let bytes:Arc<[u8]>=vec![7;1024].into();
+        let capture=lazy_capture(bytes.clone(),reads.clone());let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(384*1024*1024),..Default::default()});
+        let owner=budget.register_owner(crate::MemoryOwnerKind::Authored,crate::MemoryClass::Pinned,None);
+        let pinned=budget.ram_limit_bytes()-bytes.len() as u64;
+        let report=|bytes|crate::MemoryReport {ram_bytes:bytes,pinned_ram_bytes:bytes,..Default::default()};
+        owner.report(report(pinned+1));let cancel=AtomicBool::new(false);
+        assert!(matches!(pollster::block_on(PreparedTransfer::capture_async(&capture,&None,&cancel,&budget)),Err(error) if error==crate::MEMORY_BUDGET_EXCEEDED));
+        assert_eq!(reads.load(Ordering::SeqCst),0);
+        owner.report(report(pinned));
+        let transfer=pollster::block_on(PreparedTransfer::capture_async(&capture,&None,&cancel,&budget)).unwrap();
+        assert_eq!(reads.load(Ordering::SeqCst),0);assert_eq!(budget.import_headroom_bytes(),0);
+        assert!(transfer.reserve_copy(&budget,0).is_err());
+        drop(transfer);assert_eq!(budget.import_headroom_bytes(),bytes.len() as u64);
+    }
+    #[test]
+    fn compressed_package_transfer_defers_sample_validation_until_decode() {
+        let reads=Arc::new(std::sync::atomic::AtomicUsize::new(0));let bytes:Arc<[u8]>=vec![7;1024].into();
+        let capture=lazy_capture(bytes.clone(),reads.clone());let cancel=AtomicBool::new(false);
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(384*1024*1024),..Default::default()});
+        let transfer=pollster::block_on(PreparedTransfer::capture_async(&capture,&None,&cancel,&budget)).unwrap();assert_eq!(reads.load(Ordering::SeqCst),0);
+        let tile=transfer.payloads.iter().position(|payload|matches!(payload,TransferPayload::Tile(_))).unwrap();
+        assert_eq!(&*pollster::block_on(transfer.read_chunk_async(tile,0,bytes.len())).unwrap(),&*bytes);
+        assert!(reads.load(Ordering::SeqCst)>0);
+        let TransferPayload::Tile(tile)=&transfer.payloads[tile] else {unreachable!()};
+        assert!(tile.decode_bytes_on_worker(&bytes).is_err());assert!(tile.compressed.healthy().is_err());
+    }
+    #[test]
+    fn lazy_transfer_materialization_charges_shared_tile_owners_once() {
+        let bytes:Arc<[u8]>=vec![7;1024].into();let original=lazy_capture(bytes.clone(),Default::default());
+        let mut document=Document::from_artwork((*original.artwork).clone()).unwrap();
+        let source=document.artwork.paint.iter().find_map(|(_,_,paint)|paint.base.as_ref()).unwrap().image.storage();
+        let mut image=(**source).clone();
+        for tile in image.tiles.values_mut() {*tile=Arc::new(tile.alias(PortableId::random()));}
+        let (_,edit)=document.create_object_layer_edit("Alias",ImageObject::new(Image::new(Arc::new(image))),None,1).unwrap();document.apply(edit).unwrap();
+        let capture=Editor::new(document).capture(0,Default::default()).unwrap();
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(384*1024*1024),..Default::default()});
+        let owner=budget.register_owner(crate::MemoryOwnerKind::Authored,crate::MemoryClass::Pinned,None);let pinned=budget.ram_limit_bytes()-bytes.len() as u64;
+        owner.report(crate::MemoryReport {ram_bytes:pinned,pinned_ram_bytes:pinned,..Default::default()});
+        let transfer=pollster::block_on(PreparedTransfer::capture_async(&capture,&None,&AtomicBool::new(false),&budget)).unwrap();
+        assert_eq!(transfer.admission.as_ref().unwrap().reserved_bytes(),bytes.len() as u64);assert_eq!(budget.import_headroom_bytes(),0);
     }
     #[cfg(any(unix,windows))]
     #[test]

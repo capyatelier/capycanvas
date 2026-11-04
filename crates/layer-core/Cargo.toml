@@ -22,7 +22,6 @@ sha2 = "=0.11.0"
 half = "=2.7.1"
 crc32fast = "=1.5.1"
 flate2.workspace = true
-zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2"] }
 uuid = { version = "=1.26.1", features = ["v4", "js"] }
 png = "=0.18.1"
 web-time = "1.1.0"
@@ -36,5 +35,9 @@ windows = { version = "0.62.2", features = ["Win32_System_SystemInformation", "W
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.4"
+
 [dev-dependencies]
+zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2"] }
 pollster = "0.4"

@@ -490,13 +490,13 @@ pub fn raster_worker_properties(metadata: &str) -> Result<JsValue, JsValue> {
 }
 
 pub(super) async fn prepare_session(
-    project:layer_core::Document,factory:RendererFactory,
+    mut project:layer_core::Document,factory:RendererFactory,
     brush:&layer_core::BrushSnapshot,viewport:[u32;2],localization:std::sync::Arc<layer_ui::Localizer>,
     writer:Option<layer_ui::AssetWriter>,
     cancelled:Option<&js_sys::Function>,
 )->Result<UiSession<AttachedRenderer>,JsValue>{
     let writer=writer.as_ref().map(|writer|writer.for_document(&project)).transpose().map_err(js)?;
-    if let Some(writer)=&writer {writer.store_document(&project).await.map_err(js)?;}
+    if let Some(writer)=&writer {writer.prepare_document(&mut project).await.map_err(js)?;}
     hdr::admit_document(&project)?;
     let mut renderer = factory.rasterizer(project.composition().color).map_err(js)?;
     raster_worker::install(&mut renderer);

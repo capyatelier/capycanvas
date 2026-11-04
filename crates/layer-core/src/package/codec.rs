@@ -1,5 +1,5 @@
 use super::{archive::{self, Directory, InputMember}, manifest::{Manifest, ManifestLimits, ManifestRead},
-    resources::{self, ResourceInventory, PreparedResources}, preview::{Preview, MAX_PREVIEW_BYTES, MAX_PREVIEW_DIMENSION}, transport::BackingReader, ImmutableBacking};
+    resources::{self, ResourceInventory, PreparedResources}, preview::{Preview, MAX_PREVIEW_BYTES, MAX_PREVIEW_DIMENSION}, ImmutableBacking};
 use crate::authored::{Artwork, ArtworkCapture, CaptureCheckpoint, EvaluationContext, PortableId, Support};
 use serde_json::{Value, json};
 use std::{io::{Cursor, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
@@ -147,10 +147,6 @@ impl PreparedPackage {
     }
 }
 
-fn preview(directory:&Directory,reader:&mut BackingReader<'_>) -> Option<Preview> {
-    let member=directory.member("preview.png")?;
-    Preview::decode(directory.read_member(reader,member,MAX_PREVIEW_BYTES).ok()?.into()).ok()
-}
 fn failed(source:ImmutableBacking,preview:Option<Preview>,error:super::values::DecodeError) -> OpenOutcome {
     let cause = match &error {
         super::values::DecodeError::Unsupported(_) => Some(PackageCause::Unsupported),
@@ -189,15 +185,30 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     open_with_budget(source, limits, cancelled, crate::MemoryBudget::process())
 }
 pub fn open_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget) -> Result<OpenOutcome,String> {
+    #[cfg(not(target_arch="wasm32"))]
+    {pollster::block_on(open_async_with_budget(source,limits,cancelled,budget))}
+    #[cfg(target_arch="wasm32")]
+    {
+        let mut future=std::pin::pin!(open_async_with_budget(source,limits,cancelled,budget));
+        match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+            std::task::Poll::Ready(result)=>result,std::task::Poll::Pending=>Err("Use asynchronous package metadata opening for pending sources".into()),
+        }
+    }
+}
+pub async fn open_async(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool)->Result<OpenOutcome,String> {
+    open_async_with_budget(source,limits,cancelled,crate::MemoryBudget::process()).await
+}
+pub async fn open_async_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget)->Result<OpenOutcome,String> {
     active(cancelled)?;
-    let mut reader=BackingReader::new(&source,cancelled);
-    let directory=match Directory::read(&mut reader,262_144,limits.metadata_bytes) {
+    let directory=match Directory::read_async(&source,cancelled,262_144,limits.metadata_bytes).await {
         Ok(directory)=>directory,
         Err(super::values::DecodeError::Unsupported(reason))=>{active(cancelled)?;return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview:None,reason});},
         Err(error)=>{active(cancelled)?;return Ok(failed(source,None,error));}
     };
-    let preview=preview(&directory,&mut reader);
-    let bytes=match directory.read_member(&mut reader,directory.member("manifest.json").unwrap(),limits.metadata_bytes.min(usize::MAX as u64) as usize) {
+    let preview=if let Some(member)=directory.member("preview.png") {
+        directory.read_member_async(&source,cancelled,member,MAX_PREVIEW_BYTES).await.ok().and_then(|bytes|Preview::decode(bytes.into()).ok())
+    }else {None};
+    let bytes=match directory.read_member_async(&source,cancelled,directory.member("manifest.json").unwrap(),limits.metadata_bytes.min(usize::MAX as u64) as usize).await {
         Ok(bytes)=>bytes,Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}
     };
     let manifest=match Manifest::parse(&bytes,&directory,ManifestLimits {metadata_bytes:limits.metadata_bytes.min(usize::MAX as u64) as usize,..Default::default()}) {
@@ -212,7 +223,7 @@ pub fn open_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,canc
         return Ok(failed(source,preview,"Unindexed data member".into()));
     }
     let mut resources=resources::ResourceReader::with_budget(&manifest,&source,cancelled,limits,budget.clone());
-    let decoded=super::artwork_records::decode(&manifest,&mut resources);
+    let decoded=match resources.prepare_metadata().await {Ok(())=>super::artwork_records::decode(&manifest,&mut resources),Err(error)=>Err(error)};
     active(cancelled)?;
     match decoded {
         Ok(mut artwork)=>{
@@ -222,7 +233,7 @@ pub fn open_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,canc
                 Err(reason)=>return Ok(failed(source,preview,reason.to_string().into())),
                 Ok(document)=>if let Err(reason)=document.admit(limits) {if reason==crate::MEMORY_BUDGET_EXCEEDED{return Err(reason);}return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason});},
             }
-            artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
+            artwork.extensions=match crate::authored::Extensions::load_async(&manifest,&source,cancelled).await {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
             let memory=crate::DocumentMemory::new(budget,resources.admission.clone());
             Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview),memory})
         }

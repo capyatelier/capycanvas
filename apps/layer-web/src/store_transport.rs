@@ -34,8 +34,9 @@ thread_local! {
 pub fn configure_store_transport(transport:js_sys::Function,wake:js_sys::Function) {
     WAKE.with_borrow_mut(|slot|*slot=Some(wake));
     TRANSPORT.with_borrow_mut(|slot|*slot=Some(transport));
-    ReadCache::process().set_scheduler(Arc::new(|cache|spawn_local(async move {cache.drive();})));
+    configure_reads();
 }
+pub(crate) fn configure_reads() {ReadCache::process().set_scheduler(Arc::new(|cache|spawn_local(async move {cache.drive();})));}
 fn error(value:JsValue)->String {
     if js_sys::Reflect::get(&value,&js("name")).ok().and_then(|name|name.as_string()).as_deref()==Some("QuotaExceededError") {return layer_core::package::storage_budget::STORAGE_UNAVAILABLE.into();}
     value.as_string().or_else(||js_sys::Reflect::get(&value,&js("message")).ok().and_then(|message|message.as_string())).unwrap_or_else(||format!("{value:?}"))

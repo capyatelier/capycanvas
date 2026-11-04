@@ -55,7 +55,8 @@ async fn pack_capture(capture:ArtworkCapture)->Result<PackedArtwork,JsValue>{pac
 async fn pack_with_selection(capture:ArtworkCapture,selection:Option<layer_core::Selection>)->Result<PackedArtwork,JsValue>{
     seed_memory_budget();
     wait_backing(&capture.artwork).await?;
-    let transfer=PreparedTransfer::capture_with_selection(&capture,&selection,&AtomicBool::new(false)).map_err(js)?;
+    crate::store_transport::configure_reads();
+    let transfer=PreparedTransfer::capture_async(&capture,&selection,&AtomicBool::new(false),&layer_core::MemoryBudget::process()).await.map_err(js)?;
     let chunks=(0..transfer.payload_count()).map(|index|usize::try_from(transfer.payload_len(index).map_err(js)?).map(|length|length.div_ceil(BLOCK)).map_err(js)).collect::<Result<Vec<_>,JsValue>>()?;
     let metadata=serde_json::to_string(&Envelope{transfer:transfer.descriptor().clone(),chunks}).map_err(js)?;
     let overhead=(metadata.len() as u64).checked_mul(3).and_then(|bytes|bytes.checked_add(BLOCK as u64)).ok_or_else(||js(layer_core::MEMORY_BUDGET_EXCEEDED))?;

@@ -98,6 +98,15 @@ impl AssetWriter {
         AssetStore::for_writer(self)?.attach(resolver)?;*target=Some(binding.clone());Ok(binding)
     }
     pub fn storage_failed(&self,error:String) {if let Ok(store)=AssetStore::for_writer(self) {store.fail(error);}}
+    pub async fn prepare_document(&self,document:&mut Document)->Result<(),String> {
+        document.initialize_memory();
+        let binding=self.resolve()?;
+        if document.memory().has_package() {
+            if let Some(binding)=binding {document.memory().bind_storage(binding.store)?;}
+            document.reserve_import()
+        }else if let Some(binding)=binding {binding.store_document(document).await}
+        else {document.reserve_import()}
+    }
     pub async fn store_document(&self,document:&Document)->Result<(),String> {
         let Some(binding)=self.resolve()? else {return Ok(());};
         binding.store_document(document).await

@@ -231,7 +231,8 @@ fn import_above_512_mib_saves_reopens_and_recovers_with_the_same_budget() {
     let package::codec::OpenOutcome::Candidate {artwork,memory:admission,..}=package::codec::open_with_budget(backing(&package_path),limits(&fresh),&cancelled,fresh.clone()).unwrap() else {panic!("large artwork must reopen")};
     let reopened=Editor::new(Document::from_artwork(artwork).unwrap().with_memory(admission));
     assert_roundtrip(&reopened, &original, &source_ids, &source_digests);
-    assert_eq!(fresh.snapshot().reserved_bytes,0);assert!(fresh.snapshot().ram_pinned_bytes>512*1024*1024);
+    assert_eq!(fresh.snapshot().reserved_bytes,0);assert_eq!(reopened.retained_tiles().resident_bytes(),0);
+    assert!(fresh.snapshot().ram_pinned_bytes<16*1024*1024);
     let capture=reopened.capture_session(reopened.capture(1,Default::default()).unwrap()).unwrap();
     let mut store=pollster::block_on(package::session_store::SessionStore::open(&recovery_path)).unwrap();
     pollster::block_on(store.checkpoint(&capture,serde_json::json!({}).into(),&cancelled)).unwrap();

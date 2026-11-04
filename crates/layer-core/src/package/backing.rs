@@ -29,6 +29,7 @@ pub enum RangeState { Pending, Ready(ByteRange) }
 pub trait ByteSource: Send + Sync {
     fn byte_len(&self) -> u64;
     fn resident_bytes(&self) -> usize { self.byte_len().min(usize::MAX as u64) as usize }
+    fn read_source(&self)->Option<crate::tile_io::ReadSource> {None}
     fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String>;
     fn poll_on_worker(&self, offset:u64, len:usize)->Result<RangeState,String> {self.poll(offset,len)}
     fn wait(&self,offset:u64,len:usize)->super::store_io::FileFuture<'_,ByteRange> {
@@ -56,13 +57,13 @@ impl std::fmt::Debug for ImmutableBacking {
         f.debug_struct("ImmutableBacking").field("identity", &self.identity()).field("length", &self.byte_len()).finish()
     }
 }
-struct Owner { identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>>, integrity_failure: Mutex<Option<String>> }
+struct Owner { generation:crate::PortableId,package:Mutex<super::lease::WeakPackageLease>,identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>>, integrity_failure: Mutex<Option<String>> }
 impl ImmutableBacking {
     pub fn new(source: Arc<dyn ByteSource>) -> Result<Self, &'static str> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let identity = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| "Package owner identity exhausted")?;
-        Ok(Self { owner: Arc::new(Owner { identity, length: source.byte_len(), source, failure: Mutex::new(None), integrity_failure: Mutex::new(None) }) })
+        Ok(Self { owner: Arc::new(Owner { generation:crate::PortableId::random(),package:Default::default(),identity, length: source.byte_len(), source, failure: Mutex::new(None), integrity_failure: Mutex::new(None) }) })
     }
     pub fn fail(&self, error: String) -> String {
         match self.owner.integrity_failure.lock() {
@@ -71,6 +72,17 @@ impl ImmutableBacking {
         }
     }
     pub fn identity(&self) -> u64 { self.owner.identity }
+    pub(crate) fn package_lease(&self)->super::PackageLease {
+        let mut slot=self.owner.package.lock().unwrap();
+        if let Some(lease)=slot.upgrade() {return lease;}
+        let lease=super::PackageLease::create(self.clone(),self.owner.generation);*slot=lease.downgrade();lease
+    }
+    pub(crate) fn read_source(&self)->Option<crate::tile_io::ReadSource> {self.owner.source.read_source()}
+    pub(crate) fn healthy(&self)->Result<(),String> {
+        for failure in [&self.owner.integrity_failure,&self.owner.failure] {
+            if let Some(error)=failure.lock().map_err(|_|"Package failure lock")?.as_ref() {return Err(error.clone());}
+        }Ok(())
+    }
     pub(crate) fn weak_owner(&self)->std::sync::Weak<dyn Send+Sync> {Arc::downgrade(&(self.owner.clone() as Arc<dyn Send+Sync>))}
     pub fn byte_len(&self) -> u64 { self.owner.length }
     pub fn resident_bytes(&self) -> usize { self.owner.source.resident_bytes() }

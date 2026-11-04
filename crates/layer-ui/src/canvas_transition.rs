@@ -45,6 +45,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn advance_canvas_transition(&mut self, now_ns: u64) -> bool {
+        if !self.canvas_transition.drawing.showing && self.engine.showing_drawing() {self.engine.document().memory().presented();}
         let drawing = self.canvas_transition.drawing.advance(self.engine.showing_drawing(), now_ns);
         let navigator = self.canvas_transition.navigator.advance(self.engine.showing_navigator(), now_ns);
         if drawing || navigator {

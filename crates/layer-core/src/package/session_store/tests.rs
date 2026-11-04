@@ -1373,3 +1373,23 @@
         let mut store = SessionStore::open(&path).wait().unwrap();
         assert_eq!(marker(&mut store), 7);
     }
+
+    #[test]
+    fn late_package_decode_failure_refuses_reuse_and_checkpoint_without_rotating_the_head() {
+        let directory=Directory::new();let mut store=SessionStore::open(&directory.0).wait().unwrap();let cancel=AtomicBool::new(false);
+        let mut document=Document::new(PortableId::random(),256,256,DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let descriptor=RasterPlane::Color.descriptor(Default::default());let encoded:Arc<[u8]>=Arc::from([1,2,3]);
+        let backing=ImmutableBacking::new(Arc::new(encoded.clone())).unwrap();let lease=super::super::lease::PackageLease::new(backing);
+        let range=lease.range(0,encoded.len() as u64,crc32fast::hash(&encoded),descriptor,false).unwrap();
+        let blob=Arc::new(TileBlob::from_package_range(PortableId::random(),descriptor,range).unwrap());
+        *document.target_raster_mut(document.working.target.unwrap()).unwrap()=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed_shared(blob.clone()))].into(),..Default::default()});
+        let editor=Editor::new(document);let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+        let first=store.checkpoint(&capture,serde_json::Value::Null.into(),&cancel).wait().unwrap();let sequence=store.sequence;
+        let input=StoreInput::entry(&super::super::resources::ResourceEntry {kind:"capy.raster-tile/1",data:super::super::resources::encode_descriptor(descriptor).unwrap(),raw_encoding:"capy.lz4-tile/1",payload:Payload::Tile(blob.clone())},&cancel).unwrap();
+        assert!(blob.decode_on_worker().is_err());
+        assert!(store.store_inputs(vec![input],&cancel).wait().is_err());
+        assert!(store.checkpoint(&capture,serde_json::json!({"camera":"later"}).into(),&cancel).wait().is_err());
+        assert_eq!(store.generation(),Some(first));assert_eq!(store.sequence,sequence);
+        assert!(super::super::codec::PreparedPackage::prepare(capture.artwork(),None,&cancel).is_err());
+        assert!(blob.read_compressed().wait().is_err());
+    }

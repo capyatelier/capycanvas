@@ -17,17 +17,36 @@ fn io(error: std::io::Error) -> String { format!("Package I/O failed: {error}") 
 fn u16_at(bytes: &[u8], offset: usize) -> u16 { u16::from_le_bytes(bytes[offset..offset+2].try_into().unwrap()) }
 fn u32_at(bytes: &[u8], offset: usize) -> u32 { u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap()) }
 fn u64_at(bytes: &[u8], offset: usize) -> u64 { u64::from_le_bytes(bytes[offset..offset+8].try_into().unwrap()) }
-fn at<const N: usize>(input: &mut (impl Read + Seek), offset: u64) -> DecodeResult<[u8; N]> {
-    input.seek(SeekFrom::Start(offset))?;
-    let mut bytes = [0; N]; input.read_exact(&mut bytes)?; Ok(bytes)
+trait Input {
+    fn length(&mut self)->DecodeResult<u64>;
+    async fn bytes(&mut self,offset:u64,length:usize)->DecodeResult<Vec<u8>>;
 }
-fn zip_error(error: zip::result::ZipError) -> DecodeError {
-    match error {
-        zip::result::ZipError::Io(error) => error.into(),
-        zip::result::ZipError::UnsupportedArchive(reason) => DecodeError::Unsupported(reason.into()),
-        error => DecodeError::Invalid(error.to_string()),
+struct SeekInput<'a,T>(&'a mut T);
+impl<T:Read+Seek> Input for SeekInput<'_,T> {
+    fn length(&mut self)->DecodeResult<u64> {Ok(self.0.seek(SeekFrom::End(0))?)}
+    async fn bytes(&mut self,offset:u64,length:usize)->DecodeResult<Vec<u8>> {
+        self.0.seek(SeekFrom::Start(offset))?;let mut bytes=vec![0;length];self.0.read_exact(&mut bytes)?;Ok(bytes)
     }
 }
+struct BackingInput<'a>(&'a super::ImmutableBacking,&'a std::sync::atomic::AtomicBool);
+impl Input for BackingInput<'_> {
+    fn length(&mut self)->DecodeResult<u64> {Ok(self.0.byte_len())}
+    async fn bytes(&mut self,mut offset:u64,length:usize)->DecodeResult<Vec<u8>> {
+        let mut bytes=Vec::with_capacity(length);
+        while bytes.len()<length {
+            if self.1.load(std::sync::atomic::Ordering::Relaxed) {return Err("Package operation cancelled".into());}
+            let chunk=self.0.wait(offset,(length-bytes.len()).min(super::MAX_RANGE_BYTES)).await.map_err(DecodeError::Io)?;
+            offset+=chunk.len() as u64;bytes.extend_from_slice(&chunk);
+        }Ok(bytes)
+    }
+}
+fn ready<T>(future:impl std::future::Future<Output=DecodeResult<T>>)->DecodeResult<T> {
+    let mut future=std::pin::pin!(future);
+    match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
+        std::task::Poll::Ready(result)=>result,std::task::Poll::Pending=>unreachable!("Seek input is synchronous"),
+    }
+}
+async fn at<const N:usize>(input:&mut impl Input,offset:u64)->DecodeResult<[u8;N]> {Ok(input.bytes(offset,N).await?.try_into().unwrap())}
 fn name_valid(name: &str) -> bool {
     !name.is_empty() && name.len() <= 255 && name.bytes().all(|c| c.is_ascii_alphanumeric() || b"/._-".contains(&c))
         && name.split('/').all(|part| !matches!(part, "" | "." | ".."))
@@ -44,9 +63,15 @@ fn extras(bytes: &[u8], expected: &[u64]) -> Result<(), String> {
 
 impl Directory {
     pub fn read(input: &mut (impl Read + Seek), max_entries: usize, max_metadata: u64) -> DecodeResult<Self> {
-        let length = input.seek(SeekFrom::End(0))?;
+        ready(Self::read_input(&mut SeekInput(input),max_entries,max_metadata))
+    }
+    pub async fn read_async(backing:&super::ImmutableBacking,cancelled:&std::sync::atomic::AtomicBool,max_entries:usize,max_metadata:u64)->DecodeResult<Self> {
+        Self::read_input(&mut BackingInput(backing,cancelled),max_entries,max_metadata).await
+    }
+    async fn read_input(input:&mut impl Input,max_entries:usize,max_metadata:u64)->DecodeResult<Self> {
+        let length=input.length()?;
         let end_offset = length.checked_sub(22).ok_or("Incomplete ZIP end record")?;
-        let end = at::<22>(input, end_offset)?;
+        let end = at::<22>(input, end_offset).await?;
         if u32_at(&end, 0) != 0x06054b50 || u16_at(&end, 4) != 0 || u16_at(&end, 6) != 0 || u16_at(&end, 20) != 0 {
             return Err("Invalid terminal ZIP directory".into());
         }
@@ -55,7 +80,7 @@ impl Directory {
         let zip64 = count == LIMIT16 || size == LIMIT32 || offset == LIMIT32;
         let directory_end = if zip64 {
             let start = end_offset.checked_sub(76).ok_or("Incomplete ZIP64 end records")?;
-            let tail = at::<76>(input, start)?;
+            let tail = at::<76>(input, start).await?;
             if u32_at(&tail, 0) != 0x06064b50 || u64_at(&tail, 4) != 44
                 || u16_at(&tail, 14) != 45 || u32_at(&tail, 16) != 0 || u32_at(&tail, 20) != 0
                 || u64_at(&tail, 24) != u64_at(&tail, 32) || u32_at(&tail, 56) != 0x07064b50
@@ -73,35 +98,45 @@ impl Directory {
             return Err("Invalid ZIP directory".into());
         }
         if count > max_entries as u64 || size > max_metadata { return Err(DecodeError::Unsupported("ZIP directory exceeds admission".into())); }
-        let mut archive = zip::ZipArchive::with_config(zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(0) }, &mut *input)
-            .map_err(zip_error)?;
-        if archive.len() as u64 != count || archive.offset() != 0 { return Err("Ambiguous ZIP member inventory".into()); }
         let mut members = Vec::with_capacity(count as usize);
         let mut headers = Vec::with_capacity(count as usize);
         let mut names = BTreeSet::new();
-        for index in 0..archive.len() {
-            let file = archive.by_index_raw(index).map_err(zip_error)?;
-            let name = std::str::from_utf8(file.name_raw()).map_err(|_| "Non-ASCII ZIP member")?;
-            if name.len()>255 { return Err(DecodeError::Unsupported("ZIP member name exceeds admission".into())); }
-            if name == "manifest.json" && file.size() > max_metadata { return Err(DecodeError::Unsupported("Package metadata exceeds limit".into())); }
-            if !name_valid(name) || !names.insert(name.to_ascii_lowercase()) || file.encrypted()
-                || match file.compression() {
-                    zip::CompressionMethod::Stored => file.size() != file.compressed_size(),
-                    zip::CompressionMethod::Deflated => name != "manifest.json" || file.compressed_size() >= file.size(),
-                    _ => true,
-                }
-                || file.unix_mode().is_some_and(|m| m & 0o170000 != 0 && m & 0o170000 != 0o100000) {
-                return Err("Unsupported or ambiguous ZIP member".into());
-            }
-            headers.push((file.header_start(), file.central_header_start()));
-            members.push(Member { name: name.into(), offset: file.data_start().ok_or("Missing ZIP data offset")?, length: file.size(), compressed_length: (file.compression() == zip::CompressionMethod::Deflated).then_some(file.compressed_size()), crc32: file.crc32() });
+        let mut central=offset;let mut local=0;
+        for _ in 0..count {
+            let c=at::<46>(input,central).await?;
+            if u32_at(&c,0)!=0x02014b50 {return Err("Invalid ZIP member directory".into());}
+            let name_size=usize::from(u16_at(&c,28));let extra_size=usize::from(u16_at(&c,30));
+            if name_size>255 {return Err(DecodeError::Unsupported("ZIP member name exceeds admission".into()));}
+            if extra_size>28 || u16_at(&c,32)!=0 {return Err("Noncanonical ZIP member metadata".into());}
+            let next=add(central,46+name_size as u64+extra_size as u64)?;
+            if next>directory_end {return Err("ZIP member exceeds directory".into());}
+            let name=input.bytes(add(central,46)?,name_size).await?;
+            let name=std::str::from_utf8(&name).map_err(|_|"Non-ASCII ZIP member")?;
+            let extra=input.bytes(add(central,46+name_size as u64)?,extra_size).await?;
+            let mut values=[u32_at(&c,24) as u64,u32_at(&c,20) as u64,u32_at(&c,42) as u64];
+            let saturated=values.iter().filter(|value|**value==LIMIT32).count();
+            if saturated>0 {
+                if extra.len()!=4+8*saturated || u16_at(&extra,0)!=1 || usize::from(u16_at(&extra,2))!=8*saturated {return Err("Noncanonical ZIP64 extra field".into());}
+                let mut index=4;for value in &mut values {if *value==LIMIT32 {*value=u64_at(&extra,index);index+=8;}}
+            }else if !extra.is_empty() {return Err("Unexpected ZIP extra field".into());}
+            let [length,encoded,header]=values;
+            if header!=local {return Err("Gapped or overlapping ZIP members".into());}
+            let method=u16_at(&c,10);
+            if !name_valid(name) || !names.insert(name.to_ascii_lowercase()) || match method {
+                0=>length!=encoded,8=>name!="manifest.json" || encoded>=length,_=>true,
+            } {return Err("Unsupported or ambiguous ZIP member".into());}
+            if name=="manifest.json" && length>max_metadata {return Err(DecodeError::Unsupported("Package metadata exceeds limit".into()));}
+            let l=at::<30>(input,header).await?;
+            let data=add(header,30+u64::from(u16_at(&l,26))+u64::from(u16_at(&l,28)))?;
+            headers.push((header,central));
+            members.push(Member {name:name.into(),offset:data,length,compressed_length:(method==8).then_some(encoded),crc32:u32_at(&c,16)});
+            local=add(data,encoded)?;central=next;
         }
-        drop(archive);
         let (mut local, mut central) = (0, offset);
         for (member, (header, directory)) in members.iter().zip(headers) {
             if local != header || central != directory { return Err("Gapped or overlapping ZIP members".into()); }
-            let l = at::<30>(input, local)?;
-            let c = at::<46>(input, central)?;
+            let l = at::<30>(input, local).await?;
+            let c = at::<46>(input, central).await?;
             let encoded_length = member.compressed_length.unwrap_or(member.length);
             let method = if member.compressed_length.is_some() { 8 } else { 0 };
             let large = member.length >= LIMIT32 || encoded_length >= LIMIT32;
@@ -124,10 +159,9 @@ impl Directory {
                 (local, 30, u16_at(&l, 26), u16_at(&l, 28), false),
                 (central, 46, u16_at(&c, 28), u16_at(&c, 30), true),
             ] {
-                input.seek(SeekFrom::Start(add(base, fixed)?))?;
-                let mut name = vec![0; name_size as usize]; input.read_exact(&mut name)?;
+                let name=input.bytes(add(base,fixed)?,name_size as usize).await?;
                 if name != member.name.as_bytes() { return Err("Conflicting ZIP member names".into()); }
-                let mut extra = vec![0; extra_size as usize]; input.read_exact(&mut extra)?;
+                let extra=input.bytes(add(base,fixed+u64::from(name_size))?,extra_size as usize).await?;
                 if is_central && header >= LIMIT32 { expected.push(header); }
                 extras(&extra, &expected)?;
             }
@@ -139,7 +173,7 @@ impl Directory {
         let directory = Self { members, length };
         let first = &directory.members[0];
         if first.name != "mimetype" || first.length != MIMETYPE.len() as u64
-            || directory.read_member(input, first, MIMETYPE.len())? != MIMETYPE {
+            || directory.read_member_input(input,first,MIMETYPE.len()).await? != MIMETYPE {
             return Err("Not a Capy Canvas package".into());
         }
         if !directory.members.iter().any(|m| m.name == "manifest.json") { return Err("Missing artwork manifest".into()); }
@@ -147,11 +181,16 @@ impl Directory {
     }
     pub fn member(&self, name: &str) -> Option<&Member> { self.members.iter().find(|m| m.name == name) }
     pub fn read_member(&self, input: &mut (impl Read + Seek), member: &Member, limit: usize) -> DecodeResult<Vec<u8>> {
+        ready(self.read_member_input(&mut SeekInput(input),member,limit))
+    }
+    pub async fn read_member_async(&self,backing:&super::ImmutableBacking,cancelled:&std::sync::atomic::AtomicBool,member:&Member,limit:usize)->DecodeResult<Vec<u8>> {
+        self.read_member_input(&mut BackingInput(backing,cancelled),member,limit).await
+    }
+    async fn read_member_input(&self,input:&mut impl Input,member:&Member,limit:usize)->DecodeResult<Vec<u8>> {
         let encoded_length = member.compressed_length.unwrap_or(member.length);
         if member.length > limit as u64 || encoded_length > limit as u64 || !self.members.contains(member)
             || member.offset.checked_add(encoded_length).is_none_or(|end| end > self.length) { return Err("ZIP member exceeds read bound".into()); }
-        input.seek(SeekFrom::Start(member.offset))?;
-        let mut bytes = vec![0; encoded_length as usize]; input.read_exact(&mut bytes)?;
+        let mut bytes=input.bytes(member.offset,encoded_length as usize).await?;
         if member.compressed_length.is_some() { bytes = inflate(&bytes, member.length as usize, false)?; }
         verify(member, crc32fast::hash(&bytes))?;
         Ok(bytes)

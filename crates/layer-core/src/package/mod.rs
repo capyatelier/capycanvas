@@ -2,6 +2,8 @@ pub const RASTER_TILE_SIZE: u32 = 256;
 pub(crate) const SELECTION_CHUNK_BYTES: usize = 65536;
 
 mod backing;
+pub(crate) mod lease;
+pub use lease::PackageLease;
 mod json;
 pub use backing::{ByteRange, ByteSource, ImmutableBacking, RangeState, MAX_RANGE_BYTES};
 pub use json::{parse_json, references, remap_references};

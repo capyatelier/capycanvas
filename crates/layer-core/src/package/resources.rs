@@ -338,6 +338,8 @@ pub struct ResourceReader<'a> {
     pub(crate) programs: BTreeMap<Vec<u8>, Arc<crate::EffectProgram>>,
     pub(crate) vectors: BTreeMap<PortableId, (u32, u32, usize, u64, Resource<VectorChunk>)>,
     pub(crate) opaque: BTreeMap<PortableId, Arc<OpaqueResource>>,
+    package:super::PackageLease,
+    prepared:BTreeMap<PortableId,Arc<[u8]>>,prepared_bytes:u64,
 }
 #[derive(Default)]
 pub(crate) struct ResourceCache {
@@ -355,8 +357,37 @@ impl<'a> ResourceReader<'a> {
         Self::with_budget(manifest, backing, cancelled, limits, crate::MemoryBudget::process())
     }
     pub(crate) fn with_budget(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits, budget: crate::MemoryBudget) -> Self {
-        Self {admission:budget.admit_import(0),manifest,backing,cancelled,limits,private:false,
+        Self {admission:budget.admit_import(0),package:super::PackageLease::new(backing.clone()),prepared:Default::default(),prepared_bytes:0,manifest,backing,cancelled,limits,private:false,
             store:None,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
+    }
+    pub(crate) async fn prepare_metadata(&mut self)->DecodeResult<()> {
+        for (&id,record) in &self.manifest.resources {
+            if record.value["type"]=="capy.raster-tile/1" {continue;}
+            let Some(bound)=stored_decode_bound(&record.value)? else {continue;};
+            if record.bytes>lz4_flex::block::get_maximum_output_size(bound) as u64 {return Err(DecodeError::Unsupported("Resource exceeds encoded size bound".into()));}
+            self.prepared_bytes=self.prepared_bytes.checked_add(record.bytes).ok_or("Metadata range size overflow")?;
+            self.charge(0)?;
+            let range=record.range.ok_or("Missing metadata resource range")?;
+            let mut bytes=Vec::with_capacity(record.bytes as usize);
+            while bytes.len()<record.bytes as usize {
+                if self.cancelled.load(Ordering::Relaxed) {return Err("Package operation cancelled".into());}
+                let chunk=self.backing.wait(range.offset+bytes.len() as u64,(record.bytes as usize-bytes.len()).min(MAX_RANGE_BYTES)).await.map_err(DecodeError::Io)?;
+                bytes.extend_from_slice(&chunk);
+            }
+            if crc32fast::hash(&bytes)!=record.crc32 {return Err(self.backing.fail("Resource checksum failed".into()).into());}
+            self.prepared.insert(id,bytes.into());
+        }
+        let mut slots=std::collections::BTreeSet::new();
+        for object in self.manifest.objects.values() {
+            if let Some(values)=object["data"]["slots"].as_array() {for value in values {
+                let id=reference_id(value)?;if self.manifest.resources.contains_key(&id) {slots.insert(id);}
+            }}
+        }
+        for id in slots {
+            let resource=self.opaque_location(id)?;self.charge(resource.length)?;
+            resource.verify_async(self.cancelled).await?;self.decoded+=resource.length;self.opaque.insert(id,resource);
+        }
+        Ok(())
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
         self.admission=cache.admission.or_else(||self.admission.take());
@@ -388,7 +419,7 @@ impl<'a> ResourceReader<'a> {
     fn charge(&self, bytes: u64) -> DecodeResult<()> {
         let decoded = self.decoded.checked_add(bytes).ok_or("Decoded resource size overflow")?;
         if decoded > self.limits.raster_bytes.saturating_add(self.limits.asset_bytes) { return Err(DecodeError::MemoryBudgetExceeded); }
-        if self.admission.as_ref().is_some_and(|admission| !admission.resize(decoded.max(admission.reserved_bytes()))) { return Err(DecodeError::MemoryBudgetExceeded); }
+        if self.admission.as_ref().is_some_and(|admission| !admission.resize(decoded.saturating_add(self.prepared_bytes).max(admission.reserved_bytes()))) { return Err(DecodeError::MemoryBudgetExceeded); }
         Ok(())
     }
     pub fn raster_tile(&mut self, reference:&Value) -> DecodeResult<crate::raster::RasterTile> {
@@ -417,6 +448,7 @@ impl<'a> ResourceReader<'a> {
             let bytes=store.loaded.get(&id).ok_or("Stored resource bytes are not prepared")?.clone();
             return Ok((bytes,EncodedIntegrity {bytes:record.bytes,crc32:record.crc32}));
         }
+        if let Some(bytes)=self.prepared.get(&id) {return Ok((bytes.clone(),EncodedIntegrity {bytes:record.bytes,crc32:record.crc32}));}
         let mut bytes = Vec::new(); bytes.try_reserve_exact(record.bytes as usize).map_err(|_| DecodeError::Unsupported("Resource allocation failed".into()))?;
         while bytes.len() < record.bytes as usize {
             if self.cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
@@ -473,8 +505,7 @@ impl<'a> ResourceReader<'a> {
             if let Some(store)=self.store {return Ok((store.locations.get(&_id).ok_or("Missing stored resource location")?.backing()?,0));}
         Ok((self.backing.clone(),offset))
     }
-    fn opaque_resource(&mut self, id: PortableId) -> DecodeResult<Arc<OpaqueResource>> {
-        if let Some(resource) = self.opaque.get(&id) { return Ok(resource.clone()); }
+    fn opaque_location(&self, id:PortableId) -> DecodeResult<Arc<OpaqueResource>> {
         let record = &self.manifest.resources[&id];
         if !super::references(&record.value, super::manifest::ManifestLimits::default().traversal_nodes)?.is_empty() {
             return Err(DecodeError::Unsupported("A slot resource references other records".into()));
@@ -482,11 +513,14 @@ impl<'a> ResourceReader<'a> {
         let range = record.range.ok_or("Missing slot resource range")?;
         let (backing,offset)=self.resource_backing(id,range.offset)?;
         let resource = Arc::new(OpaqueResource::from_record(id, &record.value, backing, offset, record.bytes, record.crc32).map_err(DecodeError::from)?);
-        self.charge(record.bytes)?;
-        if let Some(store)=self.store {store.verify_opaque(id);}else {resource.verify(self.cancelled)?;}
-        self.decoded += record.bytes;
-        self.opaque.insert(id, resource.clone());
         Ok(resource)
+    }
+    fn opaque_resource(&mut self,id:PortableId)->DecodeResult<Arc<OpaqueResource>> {
+        if let Some(resource)=self.opaque.get(&id) {return Ok(resource.clone());}
+        let resource=self.opaque_location(id)?;
+        self.charge(resource.length)?;
+        if let Some(store)=self.store {store.verify_opaque(id);}else {resource.verify(self.cancelled)?;}
+        self.decoded+=resource.length;self.opaque.insert(id,resource.clone());Ok(resource)
     }
     pub fn vector_object(&mut self, items: &[Value], slots: Arc<[Slot]>, next_item: Option<u64>) -> DecodeResult<VectorObject> {
         let mut reading = super::vector_records::Reading::slots(slots.len());
@@ -544,28 +578,16 @@ impl<'a> ResourceReader<'a> {
             self.tiles.insert(id,tile.clone()); return Ok(tile);
         }
         let descriptor=parse_descriptor(&record["data"])?;
-        let size=descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
+        descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
             if let Some(store)=self.store && !filtered {
             let location=store.locations.get(&id).ok_or("Missing stored tile location")?.clone();
             let tile=Arc::new(TileBlob::from_store(id,descriptor,location)?);
             self.remember_alias(id);self.tiles.insert(id,tile.clone());return Ok(tile);
         }
-        let retained=self.manifest.resources[&id].bytes;
-        self.charge(retained)?;
-        let (bytes,integrity)=self.stored(id,lz4_flex::block::get_maximum_output_size(size))?;
-        let tile=if filtered {
-            let tile=Arc::new(TileBlob::from_filtered_deflate(id,descriptor,&bytes).map_err(|e|self.backing.fail(e))?);
-            let resident=tile.compressed_len() as u64;
-            self.charge(resident.max(retained))?;
-            self.decoded+=resident.saturating_sub(retained);
-            tile
-        } else {
-            let tile=Arc::new(TileBlob::from_package(id,descriptor,bytes).map_err(|e|self.backing.fail(e))?);
-            tile.compressed.set_integrity(integrity)?;
-            tile
-        };
-        self.decoded+=retained; self.remember_alias(id);
-        self.tiles.insert(id,tile.clone()); Ok(tile)
+        let record=&self.manifest.resources[&id];let range=record.range.ok_or("Missing tile range")?;
+        let range=self.package.range(range.offset,record.bytes,record.crc32,descriptor,filtered)?;
+        let tile=Arc::new(TileBlob::from_package_range(id,descriptor,range)?);
+        self.remember_alias(id);self.tiles.insert(id,tile.clone());Ok(tile)
     }
 }
 

@@ -86,6 +86,15 @@ impl OpaqueResource {
         if checksum.finalize() != self.crc32 { return Err(self.backing.fail("Opaque resource checksum failed".into()).into()); }
         check(cancelled).map_err(DecodeError::from)
     }
+    pub async fn verify_async(&self,cancelled:&AtomicBool)->DecodeResult<()> {
+        let mut offset=0;let mut checksum=crc32fast::Hasher::new();
+        loop {
+            let length=(self.length-offset).min(MAX_RANGE_BYTES as u64) as usize;
+            checksum.update(&self.read_chunk_async(offset,length,cancelled).await?);offset+=length as u64;
+            if offset==self.length {break;}
+        }
+        if checksum.finalize()!=self.crc32 {return Err(self.backing.fail("Opaque resource checksum failed".into()).into());}Ok(())
+    }
     fn references(&self) -> Result<Vec<PortableId>, String> {
         let mut result = references(&self.data, REFERENCE_NODES)?;
         for value in self.extra_fields.values() { result.extend(references(value, REFERENCE_NODES)?); }
@@ -95,6 +104,14 @@ impl OpaqueResource {
 }
 impl Extensions {
     pub fn load(manifest: &Manifest, backing: &ImmutableBacking, cancelled: &AtomicBool) -> DecodeResult<Self> {
+        let result=Self::locations(manifest,backing,cancelled)?;
+        for resource in result.resources.values() {resource.verify(cancelled)?;}Ok(result)
+    }
+    pub async fn load_async(manifest:&Manifest,backing:&ImmutableBacking,cancelled:&AtomicBool)->DecodeResult<Self> {
+        let result=Self::locations(manifest,backing,cancelled)?;
+        for resource in result.resources.values() {resource.verify_async(cancelled).await?;}Ok(result)
+    }
+    fn locations(manifest:&Manifest,backing:&ImmutableBacking,cancelled:&AtomicBool)->DecodeResult<Self> {
         check(cancelled)?;
         let records: BTreeMap<_, _> = manifest.objects.iter().filter(|(_, record)| record["ancillary"] == true)
             .map(|(id, record)| (*id, record.clone())).collect();
@@ -117,7 +134,6 @@ impl Extensions {
             let record = &manifest.resources[&id];
             let range = record.range.ok_or("Unknown ancillary resource location")?;
             let resource = Arc::new(OpaqueResource::from_record(id, &record.value, backing.clone(), range.offset, record.bytes, record.crc32)?);
-            resource.verify(cancelled)?;
             resources.insert(id, resource);
         }
         check(cancelled)?;

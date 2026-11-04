@@ -6,6 +6,7 @@ pub(super) const CHUNK_BYTES:u64=4*1024*1024;
 pub(super) const DEAD_BYTES:u64=16*1024*1024;
 pub(super) const DEAD_TRIGGER:u64=256*1024*1024;
 pub(super) const IDLE_MS:u64=2000;
+pub(super) const CHECKPOINT_QUIET_MS:u64=250;
 
 #[derive(Default)]
 pub(super) struct Activity {pub last:AtomicU64,pub busy:AtomicUsize,pub background:AtomicBool,epoch:AtomicU64,copying:AtomicBool,next_chunk:AtomicU64}
@@ -26,11 +27,20 @@ impl CompactionActivity {
         }
     }
     pub fn set_background(background:bool) {let state=Self::process();state.background.store(background,Ordering::Release);state.last.store(crate::MemoryBudget::now_ms(),Ordering::Release);state.epoch.fetch_add(1,Ordering::Release);}
-    pub fn idle()->bool {Self::idle_at(&Self::process(),crate::MemoryBudget::now_ms())}
-    pub(super) fn idle_at(state:&Activity,now:u64)->bool {state.busy.load(Ordering::Acquire)==0 && !state.background.load(Ordering::Acquire) && now.saturating_sub(state.last.load(Ordering::Acquire))>=IDLE_MS}
+    pub fn ready(checkpoint:bool)->bool {
+        Self::idle_at(&Self::process(),crate::MemoryBudget::now_ms(),if checkpoint {CHECKPOINT_QUIET_MS}else {IDLE_MS})
+    }
+    fn available(state:&Activity)->bool {state.busy.load(Ordering::Acquire)==0 && !state.background.load(Ordering::Acquire)}
+    pub(super) fn chunk(&self,checkpoint:bool)->Option<ChunkLease> {
+        if !Self::ready(checkpoint) || self.state.copying.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {return None;}
+        let permit=ChunkLease(self.state.clone());
+        Self::ready(checkpoint).then_some(permit)
+    }
+    pub fn idle()->bool {Self::ready(false)}
+    pub(super) fn idle_at(state:&Activity,now:u64,quiet_ms:u64)->bool {Self::available(state) && now.saturating_sub(state.last.load(Ordering::Acquire))>=quiet_ms}
 }
 impl Drop for CompactionActivity {fn drop(&mut self) {self.set_busy(false);}}
-struct ChunkLease(Arc<Activity>);
+pub(super) struct ChunkLease(Arc<Activity>);
 impl Drop for ChunkLease {fn drop(&mut self) {self.0.copying.store(false,Ordering::Release);}}
 
 

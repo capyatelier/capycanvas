@@ -153,6 +153,7 @@ pub struct TileKey {
 pub(crate) enum TileContentIdentity {
     Encoded([u8;32]),
     Stored {bytes:u64,crc32:u32,descriptor:[u8;32]},
+    Package {generation:crate::PortableId,offset:u64,bytes:u64,crc32:u32,descriptor:[u8;32]},
 }
 /// Independently compressed exact samples. Immutable backing
 /// can be written repeatedly without readback, conversion or recompression.
@@ -215,9 +216,9 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 impl TileBlob {
     pub fn owner_identity(&self) -> u64 { self.owner_identity }
     pub fn encoded_fingerprint(&self) -> Option<[u8; 32]> { match self.content_identity {Some(TileContentIdentity::Encoded(hash))=>Some(hash),_=>None} }
-    pub(crate) fn content_identity(&self)->Option<TileContentIdentity> {self.content_identity}
+    pub(crate) fn content_identity(&self)->Option<TileContentIdentity> {self.content_identity.or_else(||self.compressed.package_identity(self.resource_id).ok().flatten())}
     pub(crate) fn same_content(&self,other:&Self)->bool {
-        self.descriptor==other.descriptor && (self.owner_identity==other.owner_identity || self.content_identity.is_some_and(|identity|Some(identity)==other.content_identity))
+        self.descriptor==other.descriptor && (self.owner_identity==other.owner_identity || self.content_identity().is_some_and(|identity|Some(identity)==other.content_identity()))
     }
     pub fn resource_id(&self) -> crate::authored::PortableId { self.resource_id }
     pub(crate) fn alias(&self, resource_id: crate::authored::PortableId) -> Self {
@@ -277,6 +278,7 @@ impl TileBlob {
     pub fn memory_compressed(&self)->Result<Option<Arc<[u8]>>,String> {self.compressed.memory()}
     pub fn poll_compressed(&self)->Result<crate::package::RangeState,String> {self.compressed.poll()}
     pub async fn read_compressed(&self)->Result<crate::package::ByteRange,String> {self.compressed.read().await}
+    pub(crate) fn has_package_origin(&self)->bool {matches!(self.content_identity,Some(TileContentIdentity::Package {..})) || self.compressed.package_origin()}
     pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     fn decode_samples(descriptor: PixelDescriptor, compressed: &[u8]) -> Result<Vec<u8>, String> {
         let size = descriptor.byte_len([TILE_SIZE; 2]).ok_or("Unsupported raster pixels")?;
@@ -291,10 +293,10 @@ impl TileBlob {
         self.decode_bytes_on_worker(&compressed)
     }
     pub fn decode_bytes_on_worker(&self,compressed:&[u8])->Result<Vec<u8>,String> {
-        let bytes=Self::decode_samples(self.descriptor,compressed)?;
+        let bytes=Self::decode_samples(self.descriptor,compressed).map_err(|error|self.compressed.fail(error))?;
         if let Some(expected) = self.expected_digest {
             let actual = Self::descriptor_digest(self.descriptor, &bytes);
-            if actual != expected { return Err("Raster tile integrity check failed".into()); }
+            if actual != expected { return Err(self.compressed.fail("Raster tile integrity check failed".into())); }
             let _ = self.digest.set(actual);
         }
         Ok(bytes)
@@ -318,6 +320,12 @@ impl TileBlob {
         if location.length==0 || location.length>MAX_COMPRESSED_TILE_BYTES as u64 || descriptor.byte_len([TILE_SIZE;2]).is_none() {return Err("Invalid stored raster tile".into());}
         Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,content_identity:Some(location.content_identity()),digest:OnceLock::new(),expected_digest:None,
             compressed:Arc::new(crate::raster_storage::Bytes::stored(location))})
+    }
+    pub(crate) fn from_package_range(resource_id:crate::PortableId,descriptor:PixelDescriptor,range:Arc<crate::package::lease::PackageRange>)->Result<Self,String> {
+        if range.identity.length()>MAX_COMPRESSED_TILE_BYTES || descriptor.byte_len([TILE_SIZE;2]).is_none() {return Err("Invalid package raster tile".into());}
+        let content_identity=range.identity.identity(resource_id).ok();
+        Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,content_identity,digest:OnceLock::new(),expected_digest:None,
+            compressed:Arc::new(crate::raster_storage::Bytes::package(range))})
     }
     pub fn from_package(
         resource_id: crate::authored::PortableId,
@@ -381,7 +389,7 @@ impl TileBlob {
         if bytes.is_empty() || bytes.len() > MAX_COMPRESSED_TILE_BYTES || descriptor.byte_len([TILE_SIZE; 2]).is_none() {
             return Err("Invalid raster worker blob".into());
         }
-        if let Some(TileContentIdentity::Stored {bytes:length,crc32,descriptor:digest})=content_identity {
+        if let Some(TileContentIdentity::Stored {bytes:length,crc32,descriptor:digest}|TileContentIdentity::Package {bytes:length,crc32,descriptor:digest,..})=content_identity {
             crate::package::session_store::validate_tile_identity(resource_id,descriptor,&bytes,length,crc32,digest)?;
         }
         Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,

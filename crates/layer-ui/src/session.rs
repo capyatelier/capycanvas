@@ -5163,9 +5163,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let preview = self.sync_previews(now_ns, presentation_ns);
         let clone_source = self.engine.clone_source();
         let budget_completions=self.engine.metrics().input_budget_completions;
-        self.engine
-            .render_frame_for(now_ns, presentation_ns)
-            .map_err(error)?;
+        if let Err(cause)=self.engine.render_frame_for(now_ns,presentation_ns) {
+            if self.engine.document().memory().package_failure().is_some() {
+                self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
+                return Err(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string());
+            }
+            return Err(error(cause));
+        }
         if self.drawing_switch_pending && !self.rendering_suspended && self.paint_ready() {
             self.drawing_switch_pending = false;
         }

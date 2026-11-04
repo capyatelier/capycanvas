@@ -32,6 +32,7 @@ pub(crate) struct Owner {
     history_metadata: AtomicU64,
     parked: AtomicBool,
     initialized: AtomicBool,
+    package:AtomicBool,package_pending:AtomicBool,presented:AtomicBool,
     storage:Mutex<Option<crate::package::session_store::DrawingStore>>,
 }
 impl std::fmt::Debug for DocumentMemory {
@@ -45,7 +46,18 @@ impl DocumentMemory {
         static NEXT:AtomicU64=AtomicU64::new(1);
         Self { _capture: None, owner: Arc::new(Owner {storage_identity:NEXT.fetch_add(1,Ordering::Relaxed), inventories:Mutex::new(Inventories::default()), captured_resident:AtomicU64::new(0), memory: budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None),
             history: budget.register_owner(MemoryOwnerKind::History, MemoryClass::Pinned, None), budget,
-            resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false),storage:Default::default() }), reservation, preview_inventory: None }
+            resident: AtomicU64::new(0), history_resident: AtomicU64::new(0), metadata: AtomicU64::new(0), history_metadata: AtomicU64::new(0), parked: AtomicBool::new(false), initialized: AtomicBool::new(false),package:AtomicBool::new(false),package_pending:AtomicBool::new(false),presented:AtomicBool::new(false),storage:Default::default() }), reservation, preview_inventory: None }
+    }
+    pub fn package_failure(&self)->Option<String> {
+        if !self.has_package() {return None;}
+        self.owner.inventories.lock().unwrap().current.check_integrity().err()
+    }
+    pub fn release_package_wait(&self) {self.owner.package_pending.store(false,Ordering::Release);}
+    pub fn package_pending(&self)->bool {self.owner.package_pending.load(Ordering::Acquire)}
+    pub fn has_package(&self)->bool {self.owner.package.load(Ordering::Acquire)}
+    pub fn presented(&self) {self.owner.presented.store(true,Ordering::Release);}
+    pub fn package_inventory(&self)->Option<Arc<crate::raster_storage::RetainedTiles>> {
+        (self.package_pending() && self.owner.presented.load(Ordering::Acquire)).then(||self.owner.inventories.lock().unwrap().current.clone())
     }
     pub fn storage_identity(&self)->u64 {self.owner.storage_identity}
     pub fn storage(&self)->Option<crate::package::session_store::DrawingStore> {self.owner.storage.lock().unwrap().clone()}
@@ -87,6 +99,7 @@ impl DocumentMemory {
         self.preview_inventory=Some(Arc::new(inventory));
     }
     pub(crate) fn report(&mut self, inventory: crate::raster_storage::RetainedTiles, force: bool) {
+        if !self.owner.initialized.load(Ordering::Relaxed) && inventory.try_blobs().ok().flatten().is_some_and(|blobs|blobs.iter().any(|blob|blob.has_package_origin())) {self.owner.package.store(true,Ordering::Release);self.owner.package_pending.store(true,Ordering::Release);}
         self.owner.inventories.lock().unwrap().current=Arc::new(inventory);
         self.preview_inventory=None;
         let (parts,_captures)=self.owner.parts(true);
@@ -158,6 +171,11 @@ impl crate::Document {
             owner: self.owner, document: self.artwork.id, session_generation: 0,
             artwork_generation: self.revision, working_generation: self.working.generation, edit_checkpoint: 0,
         }, memory: Some(self.memory.capture(self)) }
+    }
+    pub fn initialize_memory(&mut self) {
+        if self.memory.initialized() {return;}
+        let editor=crate::Editor {document:self.clone(),undo:Vec::new(),redo:Vec::new(),checkpoint:0,next_checkpoint:1,ledger:Default::default(),memory_dirty:false};
+        self.memory.report(editor.retained_tiles(),true);
     }
     pub fn reserve_import(&mut self) -> Result<(), String> {
         let editor = crate::Editor { document: self.clone(), undo: Vec::new(), redo: Vec::new(), checkpoint: 0, next_checkpoint: 1, ledger: Default::default(), memory_dirty: false };

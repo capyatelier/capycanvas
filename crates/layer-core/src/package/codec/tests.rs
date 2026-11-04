@@ -351,8 +351,12 @@ fn corrupt_authorship_returns_only_a_verified_preview_and_latches_resource_failu
     for mutation in [0,1] {
         let mut broken=bytes.clone();
         let directory=Directory::read(&mut Cursor::new(&broken),262144,64*1024*1024).unwrap();
-        let name=if mutation==0 {"manifest.json"} else {"data/tiles-1.bin"};
-        broken[directory.member(name).unwrap().offset as usize]^=1;
+        let offset=if mutation==0 {directory.member("manifest.json").unwrap().offset} else {
+            let bytes=directory.read_member(&mut Cursor::new(&broken),directory.member("manifest.json").unwrap(),64*1024*1024).unwrap();
+            let ManifestRead::Known(manifest)=Manifest::parse(&bytes,&directory,Default::default()).unwrap() else {panic!("known fixture")};
+            manifest.resources.values().find(|resource|resource.value["type"]=="capy.icc/1").unwrap().range.unwrap().offset
+        };
+        broken[offset as usize]^=1;
         let source=backing(broken.clone()); let owner=source.clone();
         match open(source,Default::default(),&AtomicBool::new(false)).unwrap() {
             OpenOutcome::RecoveredView {preview:recovered,reason,..}=>{
@@ -527,6 +531,80 @@ impl ByteSource for CountingSource {
     }
 }
 impl Drop for CountingSource {fn drop(&mut self) {self.drops.fetch_add(1,Ordering::Relaxed);}}
+
+#[test]
+fn async_metadata_waits_without_reading_tiles_or_treating_pending_as_damage() {
+    struct PendingSource(Arc<[u8]>);
+    impl ByteSource for PendingSource {
+        fn byte_len(&self)->u64 {self.0.len() as u64}
+        fn resident_bytes(&self)->usize {0}
+        fn poll(&self,_:u64,_:usize)->Result<RangeState,String> {Ok(RangeState::Pending)}
+        fn wait(&self,offset:u64,length:usize)->crate::package::store_io::FileFuture<'_,crate::package::ByteRange> {
+            let mut yielded=false;Box::pin(std::future::poll_fn(move |cx| {
+                if !yielded {yielded=true;cx.waker().wake_by_ref();return std::task::Poll::Pending;}
+                std::task::Poll::Ready(crate::package::ByteRange::new(self.0.clone(),offset as usize..offset as usize+length).map_err(str::to_string))
+            }))
+        }
+    }
+    let source=ImmutableBacking::new(Arc::new(PendingSource(serialize(&prepare(&fixture(SampleDepth::U8),false)).into()))).unwrap();
+    let cancel=AtomicBool::new(false);
+    let OpenOutcome::Candidate {artwork,..}=pollster::block_on(open_async(source.clone(),Default::default(),&cancel)).unwrap() else {panic!("editable pending source")};
+    let tile=artwork.paint.iter().next().unwrap().2.raster.wait_data().unwrap().tiles.values().next().unwrap().wait_backing().unwrap();
+    let mut read=Box::pin(tile.read_compressed());
+    let wake=std::task::Waker::noop();let mut context=std::task::Context::from_waker(wake);
+    assert!(read.as_mut().poll(&mut context).is_pending());
+    let bytes=pollster::block_on(read).unwrap();assert!(!tile.decode_bytes_on_worker(&bytes).unwrap().is_empty());
+    assert!(source.healthy().is_ok());
+}
+
+#[test]
+fn pressure_skips_file_package_ranges_and_releases_ram_package_backings() {
+    struct FileRanges(Arc<CountingSource>);
+    impl ByteSource for FileRanges {
+        fn byte_len(&self)->u64 {self.0.byte_len()}
+        fn resident_bytes(&self)->usize {0}
+        fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {self.0.poll(offset,length)}
+    }
+    let bytes=serialize(&prepare(&fixture(SampleDepth::U8),false));let cancel=AtomicBool::new(false);
+    for resident in [false,true] {
+        let source=Arc::new(CountingSource {bytes:ChunkedBytes::new(bytes.chunks(MAX_RANGE_BYTES).map(Arc::<[u8]>::from).collect()).unwrap(),requests:Default::default(),drops:Default::default()});
+        let backing=ImmutableBacking::new(if resident {source.clone()}else {Arc::new(FileRanges(source.clone()))}).unwrap();
+        let OpenOutcome::Candidate {artwork,memory,..}=open(backing,Default::default(),&cancel).unwrap() else {panic!("editable fixture")};
+        let editor=crate::Editor::new(crate::Document::from_artwork(artwork).unwrap().with_memory(memory));let retained=editor.retained_tiles();
+        let before=retained.resident_bytes();source.requests.lock().unwrap().clear();
+        let mut store=crate::raster_storage::tests::Store::new(&crate::raster_storage::RetainedTiles::default());
+        pollster::block_on(store.store.make_durable(&retained,&cancel)).unwrap();
+        let written=std::fs::read_dir(store.path.join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>();
+        if resident {
+            assert!(written>0);assert!(!source.requests.lock().unwrap().is_empty());assert!(before-retained.resident_bytes()>=bytes.len());
+            assert!(retained.blobs().unwrap().iter().all(|tile|tile.compressed.location().unwrap().is_some()));
+        }else {assert_eq!(written,0);assert!(source.requests.lock().unwrap().is_empty());assert_eq!(retained.resident_bytes(),before);}
+    }
+}
+
+#[test]
+fn opening_tiles_keeps_immutable_ranges_without_reading_or_reserving_their_payloads() {
+    let bytes=serialize(&prepare(&fixture(SampleDepth::U8),false));
+    let directory=Directory::read(&mut Cursor::new(&bytes),262144,64*1024*1024).unwrap();
+    let manifest=directory.read_member(&mut Cursor::new(&bytes),directory.member("manifest.json").unwrap(),64*1024*1024).unwrap();
+    let ManifestRead::Known(manifest)=Manifest::parse(&manifest,&directory,Default::default()).unwrap() else {panic!("known fixture")};
+    let ranges=manifest.resources.values().filter(|resource|resource.value["type"]=="capy.raster-tile/1")
+        .map(|resource|resource.range.unwrap()).collect::<Vec<_>>();
+    let source=Arc::new(CountingSource {bytes:ChunkedBytes::new(bytes.chunks(MAX_RANGE_BYTES).map(Arc::<[u8]>::from).collect()).unwrap(),
+        requests:Default::default(),drops:Arc::new(AtomicUsize::new(0))});
+    let original=ImmutableBacking::new(source.clone()).unwrap();
+    let OpenOutcome::Candidate {artwork,memory,..}=open(original,Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("editable fixture")};
+    let requests=source.requests.lock().unwrap();
+    assert!(requests.iter().all(|&(offset,length)|ranges.iter().all(|range|offset+length as u64<=range.offset || offset>=range.offset+range.length)),
+        "opening read a tile payload: {requests:?}");drop(requests);
+    let document=crate::Document::from_artwork(artwork).unwrap().with_memory(memory);
+    let editor=crate::Editor::new(document);let retained=editor.retained_tiles();
+    assert!(retained.blobs().unwrap().iter().all(|blob|blob.resident_bytes()==0));
+    let blobs=retained.blobs().unwrap();assert!(blobs.len()>=3);
+    let cold=blobs[0].clone();let encoded=cold.compressed_on_worker().unwrap();
+    assert!(!encoded.is_empty());assert!(source.requests.lock().unwrap().iter().any(|&(offset,_)|ranges.iter().any(|range|offset==range.offset)));
+    assert_eq!(cold.decode_on_worker().unwrap().len(),cold.descriptor.byte_len([TILE_SIZE;2]).unwrap());
+}
 
 #[test]
 fn opaque_attachment_ranges_are_bounded_and_live_until_the_last_captured_save_owner() {

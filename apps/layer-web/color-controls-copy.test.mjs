@@ -144,7 +144,7 @@ function documentsHarness(t,{refreshInputContext,clipboardItem}={}){
   Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:1200,innerHeight:900,ResizeObserver:class{observe(){}unobserve(){}disconnect(){}},MutationObserver:class{observe(){}disconnect(){}},getComputedStyle:()=>({boxSizing:'border-box'}),matchMedia:()=>({matches:false,addEventListener(){}}),setInterval:()=>0,clearInterval(){}});Object.defineProperty(globalThis,'navigator',{configurable:true,value:{}});if(clipboardItem)globalThis.ClipboardItem=clipboardItem;
   t.after(()=>{for(const host of modalHosts){host.hide();host.dispose();}for(const[key,descriptor]of Object.entries(previous))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];});
   let language='en',inspections=0,copyCalls=0,resolveInspection,rejectInspection;const info={sources:[{name:'Literal Éİı 雪 {draft}'}]},requests=[],completed=[],responses=[],messages=[];
-  const app={...dialogProjection,catalog:()=>({native_copy:{color:{},header:{}}}),bootstrap_view:()=>({preparing_document:language+':Preparing',common:{cancel:language+':Cancel',save:language+':Save',done:language+':Done'}}),document_delivery_copy:()=>({cancelling:language+':Cancelling',progress_dialog:{role:'alert',modal:true,primary:null}}),document_request_title:()=>language+':Paste',export_copy:()=>({}),document_color_copy:()=>({}),proof_copy:()=>({}),profile_copy:()=>({}),proof_choices_copy:()=>({}),session_checkpoint_interval:()=>0,gpu_ready:()=>false,proof_status:()=>({text:'',needed:false}),state:()=>({requests,commands:[{id:'paste_image',enabled:true}],document_file:{epoch:1},customization:{header_editing:false}}),document_tabs:()=>({selected:1,tabs:[],compact:false}),
+  const app={...dialogProjection,catalog:()=>({native_copy:{color:{},header:{}}}),bootstrap_view:()=>({preparing_document:language+':Preparing',opening_files:'Opening',cannot_open_file:'Cannot open',ok:'OK',progress_dialog:{role:'alert',modal:true,primary:null},file_error_dialog:{role:'alert',modal:true,primary:'action'},common:{cancel:language+':Cancel',save:language+':Save',done:language+':Done'}}),document_delivery_copy:()=>({cancelling:language+':Cancelling',progress_dialog:{role:'alert',modal:true,primary:null}}),document_request_title:()=>language+':Paste',export_copy:()=>({}),document_color_copy:()=>({}),proof_copy:()=>({}),profile_copy:()=>({}),proof_choices_copy:()=>({}),session_checkpoint_interval:()=>0,gpu_ready:()=>false,proof_status:()=>({text:'',needed:false}),state:()=>({requests,commands:[{id:'paste_image',enabled:true}],document_file:{epoch:1},customization:{header_editing:false}}),document_tabs:()=>({selected:1,tabs:[],compact:false}),
     shortcut_key_is:(key,_latin,expected)=>key.toLowerCase()===expected,
     editor_models:()=>({document_options:{dialog:{role:'alert',modal:true,primary:'action'},unsaved_description:language+':Unsaved',discard_label:language+':Discard'}}),
     document_properties(){inspections++;return new Promise((resolve,reject)=>{resolveInspection=resolve;rejectInspection=reject;});},document_properties_copy(value){assert.equal(value,info);copyCalls++;return{dialog:{role:'editor',modal:true,primary:'close'},title:language+':Properties',done:language+':Done',rows:[[language+':Canvas','96 × 96 px']],sources:[[info.sources[0].name,language+':Source']]};},
@@ -162,6 +162,33 @@ test('document properties retain inspected metadata and native rows while close 
   const h=documentsHarness(t),request={id:7,kind:{type:'document',request:{type:'properties'}}};h.requests.push(request);const task=h.docs.handle(request);h.switch('fr');h.resolve();await new Promise(resolve=>setImmediate(resolve));
   const root=h.doc.body.querySelectorAll('dialog')[0],controls=root.querySelectorAll('h2,h3,p,button');assert.equal(controls[0].textContent,'fr:Properties');assert.equal(controls[3].textContent,'Literal Éİı 雪 {draft}');controls.at(-1).focus();h.switch('th');assert.deepEqual(root.querySelectorAll('h2,h3,p,button'),controls);assert.equal(h.doc.activeElement,controls.at(-1));assert.equal(controls[0].textContent,'th:Properties');assert.equal(controls[3].textContent,'Literal Éİı 雪 {draft}');assert.equal(h.stats().inspections,1);controls.at(-1).click();await task;assert.deepEqual(h.completed,[{id:7,success:true,error:undefined}]);
   const close={id:8,kind:{type:'document',request:{type:'confirm_close',title:'th:Close Literal Éİı 雪 {draft}'}}};h.requests.push(close);const closing=h.docs.handle(close),dialog=h.doc.body.querySelectorAll('dialog')[0],buttons=dialog.querySelectorAll('button');buttons[1].focus();h.switch('vi');assert.deepEqual(dialog.querySelectorAll('button'),buttons);assert.equal(h.doc.activeElement,buttons[1]);assert.equal(dialog.querySelector('h2').textContent,'vi:Close Literal Éİı 雪 {draft}');assert.equal(dialog.querySelector('p').textContent,'vi:Unsaved');assert.equal(buttons[1].textContent,'vi:Discard');buttons[0].click();await closing;assert.deepEqual(h.responses,[{id:8,decision:'cancel'}]);
+});
+
+test('opening exposes refusal, adoption failure and a preserved master as distinct outcomes',async t=>{
+  for(const phase of ['prepare','adopt','preserved'])await t.test(phase,async t=>{
+    const h=documentsHarness(t),error=new Error(`Failed ${phase}`);let adoptions=0;
+    h.app.dispatch=()=>{h.requests.push({id:9,kind:{type:'document',request:{type:'open'}}});return{};};
+    h.app.admit_document_input=()=>{};h.app.file_open_failure=()=>error.message;
+    h.app.prepare_document=async()=>{if(phase==='prepare')throw error;return{free(){}};};
+    h.app.package_view=()=>phase==='preserved'?{status:'Unsupported',body:error.message,outputs:[],capabilities:{copy_original:true,export:false},copy_original:'Copy original',close:'Close',dialog:{role:'alert',modal:true,primary:'close'}}:null;
+    h.app.package_preview=()=>null;h.app.prepare_document_switch=()=>({free(){}});h.app.document_park_ready=()=>true;
+    h.app.adopt_document=()=>{adoptions++;throw error;};
+    const file=new Blob([phase==='prepare'?'photo':'PK\x03\x04']);file.name=phase==='prepare'?'owned.png':'owned.capy';
+    const opening=h.docs.openFiles([file]);let settled=false;
+    if(phase==='preserved') {
+      const completed=opening.then(()=>{settled=true;});
+      for(let i=0;i<20&&!h.doc.body.querySelectorAll('h2').some(node=>node.textContent==='Unsupported');i++)await new Promise(resolve=>setImmediate(resolve));
+      const view=h.doc.body.querySelectorAll('dialog').find(node=>node.querySelector('h2')?.textContent==='Unsupported');assert.ok(view);
+      assert.equal(h.doc.body.querySelectorAll('dialog').some(node=>node.id==='file-launch-error'),false);assert.equal(settled,false);assert.equal(adoptions,0);assert.equal(h.requests.length,1);
+      view.querySelectorAll('button').at(-1).click();await completed;assert.deepEqual(h.completed,[{id:9,success:false,error:undefined}]);assert.equal(h.docs.busy(),false);return;
+    }
+    const rejected=assert.rejects(opening,value=>value===error).then(()=>{settled=true;});
+    for(let i=0;i<20&&!h.doc.body.querySelectorAll('dialog').some(node=>node.id==='file-launch-error');i++)await new Promise(resolve=>setImmediate(resolve));
+    const failure=h.doc.body.querySelectorAll('dialog').find(node=>node.id==='file-launch-error');assert.ok(failure,'A failed open has an explicit terminal error outcome');
+    assert.equal(settled,false);assert.equal(adoptions,Number(phase==='adopt'));assert.equal(h.requests.length,0);
+    if(phase==='prepare')assert.deepEqual(h.completed,[{id:9,success:false,error}]);
+    failure.querySelectorAll('button').at(-1).click();await rejected;assert.equal(h.docs.busy(),false);
+  });
 });
 
 test('document async completion retains nominal color failures, literal diagnostics, cancellation and stale ownership',async t=>{

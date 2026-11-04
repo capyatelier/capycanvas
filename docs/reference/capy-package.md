@@ -766,8 +766,8 @@ still needed by another accepted job, document or undo entry.
 
 `package::transport::spool` copies native readers, including pipes, into a private
 owned file using bounded buffers. `BackingReader` adapts a ready immutable owner
-to the archive reader's checked U64 seeks. A host providing pending ranges must
-finish supplying those ranges on its worker before calling the synchronous codec.
+to the archive reader's checked U64 seeks. Pending sources use `codec::open_async`;
+metadata reads await completion on the worker without fetching tile payloads.
 `ChunkedBytes` supports bounded in-memory owners without retaining a whole archive
 through a tiny read. `PreparedResources` can enumerate or stream immutable blocks
 independently of `PreparedPackage` and its ZIP writer.
@@ -778,9 +778,12 @@ are copied in bounded chunks before random-access ZIP parsing. Browser workers
 retain package/Blob or private-store owners and service bounded range requests;
 U64 values cross bridges as strings or explicit integer halves, never JavaScript
 numbers. No input callback reads files, decompresses samples or copies pixels.
-The integrated baseline uses bounded eager preparation through this interface.
-Optional M4 demand loading remains separate work; hosts do not build another full
-archive or recreate an artwork schema beside shared Rust.
+Tile descriptors retain checked package ranges through one lease per immutable
+backing. Reads verify resource CRC; sample decoding validates pixels on workers.
+Legacy DEFLATE normalizes to runtime LZ4 through the shared bounded read cache.
+After the first picture, idle store work copies bounded chunks and yields to input;
+checkpoint publication requires its referenced dependencies to be durable. Hosts
+do not build another archive or recreate an artwork schema beside shared Rust.
 
 A shared capture from the ordered editor owner contains immutable artwork roots,
 document/session generation, edit checkpoint, working-state generation and output

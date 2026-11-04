@@ -1097,3 +1097,91 @@ fn compaction_yields_its_queue_position_to_restore_pressure_and_checkpoint() {
     assert!(matches!(pending.push(request(Work::Retire)).pop().unwrap().work,Work::Compact));
     assert!(matches!(pending.take().unwrap().work,Work::Retire));assert!(pending.take().is_none());
 }
+
+fn package_session(fixture:&Fixture)->layer_ui::UiSession<Photos> {
+    use layer_core::package::{codec::{PreparedPackage,OpenOutcome},transport};
+    use std::future::Future;
+    let (source,_,_,_)=capture();let cancel=AtomicBool::new(false);
+    let prepared=PreparedPackage::prepare(source.artwork(),None,&cancel).unwrap();
+    let mut bytes=Vec::new();prepared.write(&mut bytes,&cancel).unwrap();
+    let backing=transport::spool(&mut std::io::Cursor::new(bytes),&std::env::temp_dir(),u64::MAX,&cancel).unwrap();
+    let OpenOutcome::Candidate {artwork,memory,..}=layer_core::package::codec::open(backing,ProjectLimits::default(),&cancel).unwrap() else {panic!("editable package")};
+    let mut document=layer_core::Document::from_artwork(artwork).unwrap().with_memory(memory);
+    let writer=fixture.stores.asset_writer(1).unwrap();
+    let mut preparing=Box::pin(writer.prepare_document(&mut document));
+    assert!(matches!(preparing.as_mut().poll(&mut std::task::Context::from_waker(Waker::noop())),Poll::Ready(Ok(()))));drop(preparing);
+    assert!(fixture.queue.lock().unwrap().is_empty());assert!(!fixture.root.exists());
+    let session=layer_ui::UiSession::new(Photos(document.composition().color),document,[256;2],layer_ui::Platform::Gtk).unwrap();
+    fixture.stores.install_storage(1,&session).unwrap();session
+}
+
+fn queue_package_copy(fixture:&Fixture,stamp:&SessionStamp) {
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+    while fixture.queue.lock().unwrap().is_empty() && std::time::Instant::now()<deadline {
+        assert!(!fixture.stores.checkpoint_due(1,stamp.clone(),false).unwrap());
+        if fixture.queue.lock().unwrap().is_empty() {std::thread::sleep(std::time::Duration::from_millis(10));}
+    }
+    assert_eq!(fixture.queue.lock().unwrap().len(),1);
+}
+
+#[test]
+fn package_open_does_not_queue_a_copy_or_checkpoint_before_the_first_picture() {
+    let fixture=Fixture::new();let session=package_session(&fixture);
+    assert!(session.engine().document().memory().package_pending());
+    assert!(session.engine().document().memory().package_inventory().is_none());
+    assert!(!fixture.stores.checkpoint_due(1,session.session_stamp(),false).unwrap());
+    assert!(!fixture.stores.copy_package(fixture.stores.bind(1,None).unwrap().key()));
+    assert!(fixture.queue.lock().unwrap().is_empty());assert!(!fixture.root.exists());
+}
+
+#[test]
+fn continuous_input_cannot_starve_package_durability_before_a_host_captures() {
+    use layer_core::package::session_store::CompactionActivity;
+    use std::sync::atomic::AtomicU64;
+    static NOW:AtomicU64=AtomicU64::new(0);
+    fn now()->u64 {NOW.load(Ordering::SeqCst)}
+    NOW.store(0,Ordering::SeqCst);
+    let mut fixture=Fixture::new();let queue=fixture.queue.clone();
+    fixture.stores=SessionStores::with_opener(fixture.root.clone(),Arc::new(layer_core::package::session_store::NativeStoreOpener),
+        Arc::new(move |work|queue.lock().unwrap().push_back(work)),Arc::new(||{}),now);
+    let session=package_session(&fixture);let memory=session.engine().document().memory();memory.presented();
+    let binding=fixture.stores.bind(1,None).unwrap();let bound=5*SessionStores::checkpoint_interval_ms();
+    for elapsed in (0..=bound).step_by(1000) {
+        NOW.store(elapsed,Ordering::SeqCst);CompactionActivity::interrupt();
+        let mut stamp=session.session_stamp();stamp.state.unsaved_name=Some(elapsed.to_string());
+        assert!(!fixture.stores.checkpoint_due(1,stamp,false).unwrap());
+        assert!(fixture.queue.lock().unwrap().is_empty());
+        assert!(fixture.stores.0.state.lock().unwrap().drawings[binding.key()].pending.checkpoint.is_none());
+    }
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+    while memory.package_pending() && std::time::Instant::now()<deadline {
+        assert!(!fixture.stores.checkpoint_due(1,session.session_stamp(),false).unwrap());
+        if fixture.queue.lock().unwrap().is_empty() {std::thread::sleep(std::time::Duration::from_millis(10));}else {fixture.run();}
+    }
+    assert!(fixture.queue.lock().unwrap().is_empty());assert!(!memory.package_pending());
+    assert!(fixture.stores.0.state.lock().unwrap().drawings[binding.key()].deferred_since.is_none());
+    let stamp=session.session_stamp();assert!(fixture.stores.checkpoint_due(1,stamp.clone(),false).unwrap());
+    let reply=fixture.stores.checkpoint(1,session.capture_session().unwrap(),stamp.clone(),true).unwrap();fixture.run();
+    assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Checkpoint(_)))));assert!(fixture.stores.is_current(1,&stamp));
+}
+
+#[test]
+fn forced_checkpoint_is_due_immediately_while_a_package_copy_is_pending() {
+    use layer_core::package::session_store::CompactionActivity;
+    use std::sync::atomic::AtomicU64;
+    static NOW:AtomicU64=AtomicU64::new(0);
+    fn now()->u64 {NOW.load(Ordering::SeqCst)}
+    NOW.store(0,Ordering::SeqCst);
+    let mut fixture=Fixture::new();let queue=fixture.queue.clone();
+    fixture.stores=SessionStores::with_opener(fixture.root.clone(),Arc::new(layer_core::package::session_store::NativeStoreOpener),
+        Arc::new(move |work|queue.lock().unwrap().push_back(work)),Arc::new(||{}),now);
+    let session=package_session(&fixture);session.engine().document().memory().presented();
+    CompactionActivity::interrupt();assert!(!fixture.stores.checkpoint_due(1,session.session_stamp(),false).unwrap());
+    NOW.store(5*SessionStores::checkpoint_interval_ms(),Ordering::SeqCst);
+    queue_package_copy(&fixture,&session.session_stamp());
+    assert!(session.engine().document().memory().package_pending());
+    assert!(fixture.stores.checkpoint_due(1,session.session_stamp(),true).unwrap());
+    let reply=fixture.stores.checkpoint(1,session.capture_session().unwrap(),session.session_stamp(),true).unwrap();
+    fixture.run();fixture.run();assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Checkpoint(_)))));
+    assert!(!session.engine().document().memory().package_pending());
+}

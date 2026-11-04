@@ -12,11 +12,14 @@ pub(crate) struct Bytes {
     len: usize,
     value: Mutex<Value>,
     integrity: crate::authored::IntegrityCache,
+    failure:std::sync::OnceLock<String>,
+    package:Option<Arc<crate::package::lease::PackageIdentity>>,
 }
 #[derive(Clone)]
 enum Value {
     Memory(Arc<[u8]>),
     Store(Arc<crate::package::session_store::StoreLocation>),
+    Package(Arc<crate::package::lease::PackageRange>),
 }
 impl From<Arc<[u8]>> for Bytes {
     fn from(bytes: Arc<[u8]>) -> Self {
@@ -24,6 +27,7 @@ impl From<Arc<[u8]>> for Bytes {
             len: bytes.len(),
             value: Mutex::new(Value::Memory(bytes)),
             integrity: crate::authored::IntegrityCache::default(),
+            failure:Default::default(),package:None,
         }
     }
 }
@@ -31,9 +35,33 @@ impl Bytes {
     pub(crate) fn stored(location:Arc<crate::package::session_store::StoreLocation>)->Self {
         let integrity=crate::authored::IntegrityCache::default();
         integrity.seed(crate::authored::EncodedIntegrity {bytes:location.length,crc32:location.crc}).unwrap();
-        Self {len:location.length as usize,value:Mutex::new(Value::Store(location)),integrity}
+        Self {len:location.length as usize,value:Mutex::new(Value::Store(location)),integrity,failure:Default::default(),package:None}
+    }
+    pub(crate) fn package(range:Arc<crate::package::lease::PackageRange>)->Self {
+        let integrity=crate::authored::IntegrityCache::default();
+        if let Some(value)=range.identity.integrity() {integrity.seed(value).unwrap();}
+        Self {len:range.identity.length(),package:Some(range.identity.clone()),value:Mutex::new(Value::Package(range)),integrity,failure:Default::default()}
+    }
+    pub(crate) fn package_identity(&self,id:crate::PortableId)->Result<Option<crate::raster::TileContentIdentity>,String> {
+        self.package.as_ref().map(|package|package.identity(id)).transpose()
+    }
+    pub(crate) fn needs_preparation(&self)->bool {self.package.as_ref().is_some_and(|package|package.integrity().is_none())}
+    pub(crate) fn needs_store(&self)->Result<bool,String> {Ok(!matches!(self.snapshot()?,Value::Store(_)))}
+    pub(crate) fn package_origin(&self)->bool {self.package.is_some()}
+    pub(crate) fn needs_pressure_store(&self)->Result<bool,String> {
+        Ok(match self.snapshot()? {Value::Memory(_)=>true,Value::Package(range)=>range.backing_owner().1>0,Value::Store(_)=>false})
+    }
+    pub(crate) fn healthy(&self)->Result<(),String> {
+        if let Some(error)=self.failure.get() {return Err(error.clone());}
+        if let Value::Package(range)=self.snapshot()? {range.healthy()?;}Ok(())
+    }
+    pub(crate) fn fail(&self,error:String)->String {
+        let error=self.failure.get_or_init(||error).clone();
+        if let Ok(Value::Package(range))=self.snapshot() {range.fail(error.clone());}error
     }
     pub(crate) fn integrity(&self, cancelled:&std::sync::atomic::AtomicBool) -> Result<crate::authored::EncodedIntegrity,String> {
+        self.healthy()?;
+        if let Some(value)=self.package.as_ref().and_then(|package|package.integrity()) {self.integrity.seed(value)?;}
         self.integrity.get_or_compute(cancelled,|| {
             #[cfg(not(target_arch="wasm32"))]
             {self.read_on_worker().map(crate::package::ByteRange::into_arc)}
@@ -49,10 +77,6 @@ impl Bytes {
             {self.memory()?.ok_or_else(||"Tile bytes must be prepared before hashing".into())}
         })
     }
-    pub(crate) fn set_integrity(&self,value:crate::authored::EncodedIntegrity)->Result<(),String> {
-        if value.bytes!=self.len as u64 {return Err("Immutable tile integrity length mismatch".into());}
-        self.integrity.seed(value)
-    }
     fn snapshot(&self) -> Result<Value, String> {
         Ok(self.value.lock().map_err(|_| "Tile storage lock failed")?.clone())
     }
@@ -60,45 +84,55 @@ impl Bytes {
         match self.snapshot().unwrap() {
             Value::Memory(bytes) => (Arc::as_ptr(&bytes) as *const () as usize, bytes.len()),
             Value::Store(_) => (0, 0),
+            Value::Package(_) => (0,0),
         }
     }
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize { self.package.as_ref().map_or(self.len,|package|package.length()) }
     pub fn resident_bytes(&self) -> usize {
         match self.snapshot().unwrap() {
             Value::Memory(_) => self.len,
             Value::Store(_) => 0,
+            Value::Package(_) => 0,
         }
     }
+    pub(crate) fn backing_owner(&self)->Option<(u64,usize)> {self.package.as_ref().map(|package|package.backing_owner())}
     pub(crate) fn memory(&self) -> Result<Option<Arc<[u8]>>,String> {
         Ok(match self.snapshot()? {Value::Memory(bytes)=>Some(bytes),_=>None})
     }
     pub(crate) fn location(&self)->Result<Option<Arc<crate::package::session_store::StoreLocation>>,String> {
         Ok(match self.snapshot()? {Value::Store(location)=>Some(location),_=>None})
     }
-    pub(crate) fn bind(&self, bytes:&Arc<[u8]>, location:Arc<crate::package::session_store::StoreLocation>) -> Result<bool,String> {
+    pub(crate) fn bind(&self, location:Arc<crate::package::session_store::StoreLocation>) -> Result<bool,String> {
         let mut value=self.value.lock().map_err(|_|"Tile storage lock failed")?;
-        if !matches!(&*value,Value::Memory(current) if Arc::ptr_eq(bytes,current)) {return Ok(false);}
+        if matches!(&*value,Value::Store(_)) {return Ok(false);}
+        let integrity=self.integrity.get().ok_or("Tile integrity must precede storage binding")?;
+        if integrity.bytes!=location.length || integrity.crc32!=location.crc {return Err("Immutable tile storage mismatch".into());}
         *value=Value::Store(location);Ok(true)
     }
     pub(crate) fn poll(&self)->Result<crate::package::RangeState,String> {
+        self.healthy()?;
         use crate::package::{ByteRange,RangeState};
         match self.snapshot()? {
             Value::Memory(bytes)=>Ok(RangeState::Ready(ByteRange::new(bytes,0..self.len)?)),
             Value::Store(location)=>location.poll(),
-
+            Value::Package(range)=>range.poll(),
         }
     }
     pub(crate) async fn read(&self)->Result<crate::package::ByteRange,String> {
+        self.healthy()?;
         match self.snapshot()? {
             Value::Memory(bytes)=>Ok(crate::package::ByteRange::new(bytes,0..self.len)?),
             Value::Store(location)=>location.read().await,
+            Value::Package(range)=>range.read().await,
         }
     }
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn read_on_worker(&self)->Result<crate::package::ByteRange,String> {
+        self.healthy()?;
         match self.snapshot()? {
             Value::Memory(bytes)=>Ok(crate::package::ByteRange::new(bytes,0..self.len)?),
             Value::Store(location)=>location.read_on_worker(),
+            Value::Package(range)=>range.read_on_worker(),
         }
     }
 
@@ -202,6 +236,15 @@ impl RetainedTiles {
         }
         result
     }
+    pub fn check_integrity(&self)->Result<(),String> {
+        for blob in &self.sources {blob.compressed.healthy()?;}
+        for raster in &self.rasters {
+            if let Some(data)=raster.try_data() {for tile in data?.tiles.values() {
+                if let Some(blob)=tile.try_backing() {blob?.compressed.healthy()?;}
+            }}
+        }
+        for backing in &self.backings {backing.healthy()?;}Ok(())
+    }
     pub async fn await_blobs(&self)->Result<Vec<Arc<TileBlob>>,String> {
         #[cfg(not(target_arch="wasm32"))]
         {self.blobs()}
@@ -261,6 +304,7 @@ impl RetainedTiles {
         }
         let blob=|owners:&mut std::collections::HashMap<(u8,u64),(usize,bool)>,blob:&Arc<TileBlob>,current|{
             let (identity,size)=blob.compressed.resident_owner();charge(owners,(0,identity as u64),size,current);
+            if let Some((identity,size))=blob.compressed.backing_owner() {charge(owners,(1,identity),size,current);}
         };
         for source in &self.sources {blob(owners,source,self.authored_sources.contains(&source.owner_identity()));}
         for raster in &self.rasters {

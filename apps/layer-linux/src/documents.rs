@@ -1034,9 +1034,9 @@ impl Documents {
             return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
         }
         let writer=w.restart.stores.asset_writer(self.selected())?.for_document(&project)?;
-        let stored=project.clone();
-        gio::spawn_blocking(move || pollster::block_on(writer.store_document(&stored)))
-            .await.map_err(|_|"Drawing storage worker failed".to_string())??;
+        let project=gio::spawn_blocking(move || {
+            let mut project=project;pollster::block_on(writer.prepare_document(&mut project))?;Ok::<_,String>(project)
+        }).await.map_err(|_|"Drawing storage worker failed".to_string())??;
         let retry_storage = self.model.borrow().storage_error().is_some();
         if retry_storage {
             self.trim(w).await;

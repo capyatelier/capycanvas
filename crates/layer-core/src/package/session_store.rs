@@ -121,6 +121,14 @@ struct IndexedResource {record:StoredRecord,location:Arc<StoreLocation>,owner:Op
 struct StoreInput {
     id:PortableId,record:StoredRecord,payload:Payload,length:u64,crc:u32,descriptor:[u8;32],owner:Weak<dyn Send+Sync>,
 }
+pub struct PackageCopy {tiles:Vec<Arc<crate::raster::TileBlob>>,next:usize}
+impl PackageCopy {
+    pub async fn new(inventory:&crate::raster_storage::RetainedTiles)->Result<Self,String> {
+        Ok(Self {tiles:inventory.await_blobs().await?.into_iter().filter(|tile|tile.has_package_origin()).collect(),next:0})
+    }
+    pub fn remaining(&self)->usize {self.tiles.len()-self.next}
+    pub fn complete(&self)->bool {self.next==self.tiles.len()}
+}
 struct StoredInputs {
     ids:Vec<PortableId>,
     bindings:Vec<(Arc<crate::raster::TileBlob>,Arc<StoreLocation>)>,
@@ -129,7 +137,8 @@ struct StoredInputs {
 impl StoredInputs {
     fn commit(self)->Result<(),String> {
         for (tile,location) in self.bindings {
-            if let Some(memory)=tile.compressed.memory()? {tile.compressed.bind(&memory,location)?;}
+            tile.compressed.healthy()?;
+            tile.compressed.bind(location)?;
         }
         Ok(())
     }
@@ -368,7 +377,7 @@ impl SessionStore {
         let memory=capture.artwork().memory.as_ref().map(|memory|memory.weak());
         let key=CheckpointKey::of(capture);let profiles=metadata.profiles.clone();
         let result=async {
-        capture.validate_identity()?;self.refresh_head().await?;
+        capture.validate_identity()?;let tiles=capture.retained_tiles();tiles.check_integrity()?;self.refresh_head().await?;
         if let Some(published)=&self.published_capture && published.key==key && self.loaded_generation()==Some(published.generation) && self.generation()==Some(published.generation)
             && same_profiles(&published.profiles,&metadata.profiles) {
             let generation=self.head.as_ref().unwrap().current.clone();
@@ -376,10 +385,9 @@ impl SessionStore {
             let metadata=update_session_metadata(&bytes,&metadata.value)?;
             let roots=self.generation_roots.get(&generation.id).ok_or("Missing published generation roots")?.1.clone();
             let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
-            return self.publish_packed(metadata,roots,&programs,cancelled).await;
+            tiles.check_integrity()?;return self.publish_packed(metadata,roots,&programs,cancelled).await;
         }
-        #[cfg(target_arch="wasm32")]
-        capture.retained_tiles().await_blobs().await?;
+        for blob in capture.retained_tiles().await_blobs().await? {if blob.compressed.needs_preparation() {blob.read_compressed().await?;}}
         let draft=super::session::SessionDraft::capture(capture,metadata,cancelled)?;
         let mut inputs=draft.inventory.entries.values().map(|entry|StoreInput::entry(entry,cancelled)).collect::<Result<Vec<_>,_>>()?;
         for opaque in &draft.opaque {inputs.push(StoreInput::opaque(opaque.clone())?);}
@@ -391,6 +399,7 @@ impl SessionStore {
         let programs=draft.trusted_programs.clone();
         let metadata=draft.packed_metadata(&records,&extents)?;
         let roots=GenerationRoots {identities:stored.ids.iter().copied().collect(),packs:extents.into_keys().collect(),..Default::default()};
+        tiles.check_integrity()?;
         let generation=self.publish_packed(metadata,roots,&programs,cancelled).await?;
         stored.commit()?;Ok(generation)
         }.await;
@@ -465,6 +474,7 @@ impl SessionStore {
         Ok(stored)
     }
     fn existing(&self,input:&StoreInput)->Result<Option<Arc<StoreLocation>>,String> {
+        if let Payload::Tile(tile)=&input.payload {tile.compressed.healthy()?;}
         if let Payload::Tile(tile)=&input.payload && let Some(location)=tile.compressed.location()? && Arc::ptr_eq(&location.range().pack.owner,&self._owner) {
             if location.length!=input.length || location.crc!=input.crc || location.descriptor!=input.descriptor {return Err("Conflicting immutable recovery resource descriptor".into());}
             return Ok(Some(location));
@@ -529,16 +539,40 @@ impl SessionStore {
         }Ok(())
     }
     fn remember(&mut self,input:StoreInput,location:Arc<StoreLocation>,stored:&mut StoredInputs)->Result<(),String> {
-        if let Payload::Tile(tile)=&input.payload && tile.compressed.memory()?.is_some() {stored.bindings.push((tile.clone(),location.clone()));}
+        if let Payload::Tile(tile)=&input.payload && tile.compressed.needs_store()? {stored.bindings.push((tile.clone(),location.clone()));}
         self.by_owner.insert(input.owner_key(),input.id);
         self.index.insert(input.id,IndexedResource {record:input.record,location,owner:Some(input.owner)});Ok(())
     }
+    pub async fn copy_package_step(&mut self,copy:&mut PackageCopy,cancelled:&AtomicBool,checkpoint:bool)->Result<(),String> {
+        let activity=CompactionActivity::default();let epoch=activity.revision();
+        let Some(_permit)=activity.chunk(checkpoint) else {return Ok(());};
+        self.copy_package_ready(copy,cancelled,&activity,epoch).await
+    }
+    async fn copy_package_ready(&mut self,copy:&mut PackageCopy,cancelled:&AtomicBool,activity:&CompactionActivity,epoch:u64)->Result<(),String> {
+        let mut bytes=0;let mut next=copy.next;let mut inputs=Vec::new();
+        while let Some(blob)=copy.tiles.get(next) {
+            if activity.revision()!=epoch {break;}
+            if !blob.compressed.needs_store()? {next+=1;continue;}
+            let bound=if blob.compressed.needs_preparation() {crate::raster::TileBlob::max_compressed_len(blob.descriptor).ok_or("Invalid package tile descriptor")?}
+                else {blob.compressed_len()} as u64;
+            if bytes>0 && bytes+bound>compaction::CHUNK_BYTES {break;}
+            if blob.compressed.needs_preparation() {blob.read_compressed().await?;}
+            let entry=super::resources::ResourceEntry {kind:"capy.raster-tile/1",data:super::resources::encode_descriptor(blob.descriptor)?,raw_encoding:"capy.lz4-tile/1",payload:Payload::Tile(blob.clone())};
+            inputs.push(StoreInput::entry(&entry,cancelled)?);bytes+=bound;next+=1;
+        }
+        if activity.revision()!=epoch {return Ok(());}
+        if !inputs.is_empty() {self.store_inputs(inputs,cancelled).await?.commit()?;}
+        copy.next=next;Ok(())
+    }
     pub async fn make_durable(&mut self,tiles:&crate::raster_storage::RetainedTiles,cancelled:&AtomicBool)->Result<usize,String> {
         let before=tiles.resident_bytes();
-        let inputs=tiles.await_blobs().await?.into_iter().filter(|blob|blob.resident_bytes()>0).map(|blob| {
+        let mut inputs=Vec::new();
+        for blob in tiles.await_blobs().await? {
+            if !blob.compressed.needs_pressure_store()? {continue;}
+            if blob.compressed.needs_preparation() {blob.read_compressed().await?;}
             let entry=super::resources::ResourceEntry {kind:"capy.raster-tile/1",data:super::resources::encode_descriptor(blob.descriptor)?,raw_encoding:"capy.lz4-tile/1",payload:Payload::Tile(blob)};
-            StoreInput::entry(&entry,cancelled)
-        }).collect::<Result<Vec<_>,String>>()?;
+            inputs.push(StoreInput::entry(&entry,cancelled)?);
+        }
         let result=match self.store_inputs(inputs,cancelled).await {Ok(stored)=>stored.commit(),Err(error)=>Err(error)};
         let released=before.saturating_sub(tiles.resident_bytes());
         if released>0 && let Some(owner)=tiles.owner.as_ref().and_then(Weak::upgrade) {owner.refresh();}
@@ -828,8 +862,9 @@ impl RangeReader for Pack {
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {self.file.read(offset,length,crc,completion);}
 }
 struct StoreRange {pack:Arc<Pack>,source:ReadSource,offset:u64}
+pub(crate) fn tile_fingerprint(id:PortableId,descriptor:crate::color::PixelDescriptor,length:u64,crc:u32)->Result<[u8;32],String> {StoredRecord::tile(id,descriptor)?.fingerprint(length,crc)}
 pub(crate) fn validate_tile_identity(id:PortableId,descriptor:crate::color::PixelDescriptor,bytes:&[u8],length:u64,crc:u32,digest:[u8;32])->Result<(),String> {
-    if bytes.len() as u64!=length || crc32fast::hash(bytes)!=crc || StoredRecord::tile(id,descriptor)?.fingerprint(length,crc)?!=digest {
+    if bytes.len() as u64!=length || crc32fast::hash(bytes)!=crc || tile_fingerprint(id,descriptor,length,crc)?!=digest {
         return Err("Conflicting immutable stored tile identity".into());
     }Ok(())
 }
@@ -941,10 +976,7 @@ async fn write_payload(file:&dyn super::store_io::StoreFile,offset:u64,input:&St
     if let Payload::Tile(tile)=&input.payload {
         let integrity=tile.compressed.integrity(cancelled)?;
         if integrity.bytes!=input.length || integrity.crc32!=input.crc {return Err("Recovery tile integrity changed".into());}
-        let bytes=match tile.compressed.memory()? {
-            Some(bytes)=>ByteRange::new(bytes,0..input.length as usize)?,
-            None=>tile.compressed.location()?.ok_or("Tile has no durable location")?.read().await?,
-        };
+        let bytes=tile.read_compressed().await?;
         for (index,chunk) in bytes.chunks(MAX_RANGE_BYTES).enumerate() {check_cancelled(cancelled)?;file.write_at(offset+(index*MAX_RANGE_BYTES) as u64,chunk).await?;}
     }else if let Payload::Opaque(resource)=&input.payload {
         let mut checksum=crc32fast::Hasher::new();let mut position=0;

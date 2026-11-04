@@ -109,9 +109,8 @@ impl OpenEnvironment {
         check()?;
         project.validate(ProjectLimits { dimension: self.limits().dimension, ..Default::default() })?;
         let writer=self.asset_writer.as_ref().map(|writer|writer.for_document(&project)).transpose()?;
-        if let Some(ready)=writer.as_ref().map(layer_ui::AssetWriter::resolve).transpose()?.flatten() {
-            pollster::block_on(ready.store_document(&project))?;
-        }else {project.reserve_import()?;}
+        if let Some(writer)=&writer {pollster::block_on(writer.prepare_document(&mut project))?;}
+        else {project.reserve_import()?;}
         self.admission.admit(&project).map_err(|reason| reason.message(&self.localization))?;
         check()?;
         layer_color::validate_document_color(&project)?;

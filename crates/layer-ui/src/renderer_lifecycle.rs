@@ -350,7 +350,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_document();
         self.poll_document_close();
         self.refresh_commands();
-        if recovered? > 0 || interrupted_selection {
+        if self.engine.document().memory().package_failure().is_some() {
+            self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
+            self.set_host_error(Some(self.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).to_string()));
+        }else if recovered? > 0 || interrupted_selection {
             self.set_host_error(Some("Painting stopped. Edits whose pixels could not be recovered were canceled; earlier edits are retained.".into()));
         }
         Ok(self.changed(
@@ -421,6 +424,59 @@ mod tests {
 
     fn source(pixel: [u8; 4]) -> layer_core::color::source::SourceImage {
         std::sync::Arc::unwrap_or_clone(layer_core::color::source::rgba8_source([1, 1], |_, _| pixel))
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn an_unread_package_failure_after_a_picture_preserves_roots_and_reports_damage() {
+        use layer_core::{SourceTarget,raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE},package::{ImmutableBacking,codec::{self,OpenOutcome}}};
+        use std::sync::{Arc,atomic::AtomicBool};
+        for malformed in [false,true] {
+            let mut document=Document::new(layer_core::PortableId::random(),2*TILE_SIZE,TILE_SIZE,
+                layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+            let descriptor=document.composition().color.paint_descriptor();
+            let samples=[12,34,56,255].repeat((TILE_SIZE*TILE_SIZE) as usize);
+            let good=Arc::new(TileBlob::encode(descriptor,&samples).unwrap());
+            let bad=Arc::new(if malformed {TileBlob::from_verified_resource(layer_core::PortableId::random(),descriptor,Arc::from([0u8])).unwrap()}
+                else {TileBlob::encode(descriptor,&[78,90,123,255].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap()});
+            let key=|x|TileKey {plane:RasterPlane::Color,coordinate:[x,0]};
+            let SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+            document.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {
+                tiles:[(key(0),RasterTile::backed_shared(good)),(key(1),RasterTile::backed_shared(bad.clone()))].into(),..Default::default()
+            });
+            let capture=layer_core::Editor::new(document).capture(0,Default::default()).unwrap();
+            let mut bytes=package_bytes(&capture);
+            if !malformed {
+                let encoded=bad.memory_compressed().unwrap().unwrap();
+                let positions=bytes.windows(encoded.len()).enumerate().filter_map(|(at,bytes)|(bytes==&*encoded).then_some(at)).collect::<Vec<_>>();
+                assert_eq!(positions.len(),1);bytes[positions[0]+encoded.len()/2]^=1;
+            }
+            let bytes:Arc<[u8]>=bytes.into();let backing=ImmutableBacking::new(Arc::new(bytes.clone())).unwrap();
+            let cancelled=AtomicBool::new(false);
+            let OpenOutcome::Candidate {artwork,memory,..}=codec::open(backing.clone(),Default::default(),&cancelled).unwrap() else {panic!("lazy package must open before its unread tile is inspected")};
+            let document=Document::from_artwork(artwork).unwrap().with_memory(memory);
+            let raster=document.artwork.paint.iter().find(|(_,_,paint)|!paint.raster.is_empty()).unwrap().2.raster.wait_data().unwrap();
+            let good=raster.tiles[&key(0)].wait_backing().unwrap();let bad=raster.tiles[&key(1)].wait_backing().unwrap();
+            assert_eq!(good.resident_bytes(),0);assert_eq!(bad.resident_bytes(),0);
+            assert_eq!(good.decode_on_worker().unwrap(),samples);
+            let mut drawing=UiSession::new(Recorder {showing_drawing:true,..sources()},document,[256,256],Platform::Gtk).unwrap();
+            drawing.frame(0,0).unwrap();assert!(drawing.engine.backend().composites>0);assert!(drawing.engine.showing_drawing());
+            assert!(drawing.engine.document().memory().package_failure().is_none());assert!(notice_text(&drawing).is_none());
+            let before=drawing.engine.document().clone();let checkpoint=drawing.engine.checkpoint();
+            let unread=bad.clone();let failure=std::thread::spawn(move ||unread.decode_on_worker()).join().unwrap().unwrap_err();
+            if !malformed {assert!(failure.contains("checksum"),"{failure}");}
+            assert!(bad.poll_compressed().is_err());assert!(backing.poll(0,1).is_err());
+            drawing.suspend_renderer().unwrap();
+            assert!(drawing.rendering_suspended());
+            assert_eq!(notice_text(&drawing),Some(drawing.localization().text(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY).as_ref()));
+            assert_live_artwork_eq(drawing.engine.document(),&before);assert_eq!(drawing.engine.checkpoint(),checkpoint);
+            let retained=drawing.engine.document().artwork.paint.iter().find(|(_,_,paint)|!paint.raster.is_empty()).unwrap().2.raster.wait_data().unwrap();
+            assert!(Arc::ptr_eq(&retained.tiles[&key(0)].wait_backing().unwrap(),&good));
+            assert!(Arc::ptr_eq(&retained.tiles[&key(1)].wait_backing().unwrap(),&bad));
+            assert_eq!(backing.byte_len(),bytes.len() as u64);assert_eq!(bad.resident_bytes(),0);
+            let capture=layer_core::Editor::new(before).capture(0,Default::default()).unwrap();
+            assert!(codec::PreparedPackage::prepare(&capture,None,&cancelled).is_err());
+        }
     }
 
     #[test]

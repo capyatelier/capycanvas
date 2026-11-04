@@ -48,9 +48,14 @@ fn qualification_trigger_ratio_and_idle_boundaries_are_exact() {
     let reserve=PACK_BYTES+MAX_RANGE_BYTES as u64;
     assert!(!triggered(400,0,Some(reserve)));assert!(triggered(400,0,Some(reserve-1)));
     let state=Activity::default();state.last.store(7,Ordering::Relaxed);
-    assert!(!CompactionActivity::idle_at(&state,7+IDLE_MS-1));assert!(CompactionActivity::idle_at(&state,7+IDLE_MS));
-    state.busy.store(1,Ordering::Relaxed);assert!(!CompactionActivity::idle_at(&state,u64::MAX));
-    state.busy.store(0,Ordering::Relaxed);state.background.store(true,Ordering::Relaxed);assert!(!CompactionActivity::idle_at(&state,u64::MAX));
+    assert!(!CompactionActivity::idle_at(&state,7+IDLE_MS-1,IDLE_MS));assert!(CompactionActivity::idle_at(&state,7+IDLE_MS,IDLE_MS));
+    for now in (7..10007).step_by(100) {state.last.store(now,Ordering::Relaxed);assert!(!CompactionActivity::idle_at(&state,now+100,CHECKPOINT_QUIET_MS));}
+    let last=state.last.load(Ordering::Relaxed);
+    assert!(!CompactionActivity::idle_at(&state,last+CHECKPOINT_QUIET_MS-1,CHECKPOINT_QUIET_MS));
+    assert!(CompactionActivity::idle_at(&state,last+CHECKPOINT_QUIET_MS,CHECKPOINT_QUIET_MS));
+    assert!(CompactionActivity::idle_at(&state,last+1000,CHECKPOINT_QUIET_MS));
+    state.busy.store(1,Ordering::Relaxed);assert!(!CompactionActivity::idle_at(&state,u64::MAX,CHECKPOINT_QUIET_MS));
+    state.busy.store(0,Ordering::Relaxed);state.background.store(true,Ordering::Relaxed);assert!(!CompactionActivity::idle_at(&state,u64::MAX,CHECKPOINT_QUIET_MS));
 }
 #[test]
 fn copy_steps_are_bounded_and_remap_live_ranges_without_copying_aliases_twice() {
@@ -281,4 +286,45 @@ fn reopen_indexes_missing_generations_on_the_first_idle_turn_only() {
     assert!(after.opens>before.opens);assert!(after.reads>before.reads);
     let before=after;
     for _ in 0..2 {assert_eq!(step(&mut store).unwrap(),CompactionStep::Idle);assert_eq!(state.lock().unwrap().io,before);}
+}
+
+#[test]
+fn package_copy_bounds_each_idle_chunk_and_stops_on_input_before_writing() {
+    let directory=Directory::new();let mut store=open_store(&directory.0).wait().unwrap();let cancelled=AtomicBool::new(false);
+    let descriptor=RasterPlane::Color.descriptor(Default::default());let mut random=17u32;let mut bytes=Vec::new();let mut records=Vec::new();
+    for _ in 0..24 {
+        let raw=(0..256*256*4).map(|_|{random^=random<<13;random^=random>>17;random^=random<<5;random as u8}).collect::<Vec<_>>();
+        let tile=TileBlob::encode(descriptor,&raw).unwrap();let encoded=tile.memory_compressed().unwrap().unwrap();
+        records.push((bytes.len() as u64,encoded.len() as u64,crc32fast::hash(&encoded)));bytes.extend_from_slice(&encoded);
+    }
+    let lease=super::super::PackageLease::new(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap());
+    let tiles=crate::raster_storage::RetainedTiles {sources:records.iter().map(|&(offset,length,crc)|Arc::new(TileBlob::from_package_range(PortableId::random(),descriptor,lease.range(offset,length,crc,descriptor,false).unwrap()).unwrap())).collect(),..Default::default()};
+    let mut copy=PackageCopy::new(&tiles).wait().unwrap();let activity=CompactionActivity {state:Arc::new(Activity::default()),busy:false};
+    let epoch=activity.revision();activity.touch();
+    store.copy_package_ready(&mut copy,&cancelled,&activity,epoch).wait().unwrap();
+    assert_eq!(copy.remaining(),24);assert!(store.index.is_empty());
+    let mut previous=0;let mut chunks=0;
+    while !copy.complete() {
+        let before=copy.remaining();store.copy_package_ready(&mut copy,&cancelled,&activity,activity.revision()).wait().unwrap();
+        let bytes=fs::read_dir(directory.0.join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>();
+        assert!(copy.remaining()<before);assert!(bytes-previous<=CHUNK_BYTES);previous=bytes;chunks+=1;
+        assert_eq!(store.generation(),None);
+    }
+    assert!(chunks>1);assert!(tiles.blobs().unwrap().iter().all(|tile|tile.compressed.location().unwrap().is_some()));
+}
+
+#[test]
+fn package_copy_admits_a_full_chunk_of_known_compressed_tiles() {
+    let directory=Directory::new();let mut store=open_store(&directory.0).wait().unwrap();let cancel=AtomicBool::new(false);
+    let descriptor=RasterPlane::Color.descriptor(Default::default());let mut bytes=Vec::new();let mut records=Vec::new();
+    for marker in 0..64 {
+        let tile=TileBlob::encode(descriptor,&vec![marker;256*256*4]).unwrap();let encoded=tile.memory_compressed().unwrap().unwrap();
+        records.push((bytes.len() as u64,encoded.len() as u64,crc32fast::hash(&encoded)));bytes.extend_from_slice(&encoded);
+    }
+    assert!((bytes.len() as u64)<CHUNK_BYTES);assert!(64*TileBlob::max_compressed_len(descriptor).unwrap() as u64>CHUNK_BYTES);
+    let lease=super::super::PackageLease::new(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap());
+    let tiles=crate::raster_storage::RetainedTiles {sources:records.iter().map(|&(offset,length,crc)|Arc::new(TileBlob::from_package_range(PortableId::random(),descriptor,lease.range(offset,length,crc,descriptor,false).unwrap()).unwrap())).collect(),..Default::default()};
+    let mut copy=PackageCopy::new(&tiles).wait().unwrap();let activity=CompactionActivity {state:Arc::new(Activity::default()),busy:false};
+    store.copy_package_ready(&mut copy,&cancel,&activity,activity.revision()).wait().unwrap();
+    assert!(copy.complete());assert_eq!(store.index.len(),64);
 }
