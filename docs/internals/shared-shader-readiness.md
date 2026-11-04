@@ -79,7 +79,7 @@ ping-pong pair. Sampling a page inside the evaluator, even on a branch commits
 never take, costs Adreno and Mali tablets up to a third of their painting rate.
 
 The native compiler workers and browser task runner share `shader_admission.rs`.
-Native hosts use `available_parallelism() / 8`, clamped to one through four
+Native hosts use `available_parallelism() / 4`, clamped to one through four
 workers. Only independent required pipeline recipes compile concurrently.
 Generic recipes, effect preparation, validation and optional pipelines run alone;
 ordered jobs retain queue order. Optional work waits for required jobs to finish.

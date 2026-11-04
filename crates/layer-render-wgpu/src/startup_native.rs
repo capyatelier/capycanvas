@@ -66,7 +66,7 @@ impl Compiler {
         queue.admission.delay(queue.jobs.iter().map(|job| job.priority))
     }
     pub fn new() -> Result<Self, GpuRasterError> {
-        let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 8).clamp(1, 4));
+        let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 4).clamp(1, 4));
         Self::with_workers(workers)
     }
     fn with_workers(workers: usize) -> Result<Self, GpuRasterError> {
