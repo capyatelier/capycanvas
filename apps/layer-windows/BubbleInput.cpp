@@ -71,7 +71,7 @@ void WorkspaceBubbles::Impl::restore(std::shared_ptr<Contact> const& c){
     if(c->mode==L"moving")drag(c->grab,L"cancel",c->last);
     c->mode=L"pending";
 }
-void WorkspaceBubbles::Impl::begin(std::shared_ptr<Contact> const& c,Point at){
+void WorkspaceBubbles::Impl::begin(std::shared_ptr<Contact> const& c,Point at,uint64_t timestamp){
     auto hitKind=kind(c->hit);auto local=relative(at,c->record->center);
     if(hitKind==L"wheel"){
         c->mode=L"wheel";auto size=num(c->record->view,L"diameter")-14;
@@ -80,8 +80,8 @@ void WorkspaceBubbles::Impl::begin(std::shared_ptr<Contact> const& c,Point at){
     }else if(hitKind==L"ring"||hitKind==L"intensity"){
         auto scale=workspace.XamlRoot()?workspace.XamlRoot().RasterizationScale():1.;
         auto slop=std::max(8.,double(std::max(GetSystemMetrics(SM_CXDOUBLECLK),GetSystemMetrics(SM_CYDOUBLECLK)))/scale);
-        bool repeated=lastRing&&std::get<0>(*lastRing)==c->record->id&&milliseconds()-std::get<1>(*lastRing)<=GetDoubleClickTime()&&distance(at,std::get<2>(*lastRing))<=slop;
-        if(repeated)lastRing.reset();else lastRing=std::tuple(c->record->id,milliseconds(),at);
+        bool repeated=lastRing&&std::get<0>(*lastRing)==c->record->id&&timestamp-std::get<1>(*lastRing)<=uint64_t(GetDoubleClickTime())*1000&&distance(at,std::get<2>(*lastRing))<=slop;
+        if(repeated)lastRing.reset();else lastRing=std::tuple(c->record->id,timestamp,at);
         if(hitKind==L"intensity"){
             c->wheel=3;c->mode=repeated?L"reset":L"intensity";
             if(repeated)send(O({{L"type",S(L"set_intensity")},{L"id",N(c->record->id)},{L"stops",N(0)}}));else pick(c,at);
@@ -146,7 +146,7 @@ void WorkspaceBubbles::Impl::down(PointerRoutedEventArgs const& e){
         }
         bool native=kind(h)==L"card";
         if(native)c->mode=L"native";
-        else {if(!capture(c->pointer,c->path)){cancel();return;}begin(c,at);}
+        else {if(!capture(c->pointer,c->path)){cancel();return;}begin(c,at,p.Timestamp());}
         if(!native||!e.Handled()&&!nativeControl){
             auto weak=weak_from_this();std::weak_ptr<Contact> owner=c;
             c->recognizer.Holding([weak,owner](auto&&,NativeInput::HoldingEventArgs const& event){if(auto self=weak.lock())if(auto c=owner.lock();c&&self->contact==c&&c->recognizing&&event.HoldingState()==NativeInput::HoldingState::Started){
@@ -213,7 +213,7 @@ void WorkspaceBubbles::Impl::move(PointerRoutedEventArgs const& e){
         if(c->nativeDrags||!moved||e.Handled())return;
         if(!capture(c->pointer,c->path)){cancel();return;}c->mode=L"pending";
     }
-    if(c->held){if(!moved){e.Handled(true);return;}c->held=false;dismiss();if(kind(c->hit)==L"wheel")c->mode=L"wheel";else begin(c,at);}
+    if(c->held){if(!moved){e.Handled(true);return;}c->held=false;dismiss();if(kind(c->hit)==L"wheel")c->mode=L"wheel";else begin(c,at,p.Timestamp());}
     if(c->mode==L"wheel"){
         if(ui(data,O({{L"type",S(L"color_drag_out")},{L"size",N(num(c->record->view,L"diameter"))},{L"point",point(relative(at,c->record->center))}})).GetBoolean()){
             restore(c);c->grab=grab(c->record->id,L"rim");drag(c->grab,L"down",at);c->mode=L"moving";

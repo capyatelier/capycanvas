@@ -6,6 +6,7 @@
 #include "WorkspaceManagerView.h"
 #include "WorkspaceDialogs.h"
 #include "WorkspaceView.h"
+#include "BubblePresentation.h"
 #include "PressureCalibration.h"
 #include "CanvasActionBar.h"
 #include "EffectControls.h"
@@ -857,10 +858,59 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }
     }
 
+    winrt::Windows::Foundation::IAsyncAction bubblePressTimestamps(){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source);
+        auto actions=std::make_shared<std::vector<J>>();
+        source->send=[actions](std::string json){actions->push_back(J::Parse(to_hstring(json)));};
+        auto bubbles=std::make_shared<WorkspaceBubbles::Impl>();bubbles->data=source;bubbles->workspace=Canvas{};
+        auto record=std::make_shared<CapyBubbles::Record>();record->id=17;
+        using Device=winrt::Microsoft::UI::Input::PointerDeviceType;
+        auto press=[&](hstring hit,uint64_t timestamp,Point at=Point{},Device device=Device::Pen){
+            auto contact=std::make_shared<CapyBubbles::Contact>();contact->record=record;contact->hit=S(hit);contact->device=device;
+            contact->started=CapyBubbles::milliseconds();bubbles->begin(contact,at,timestamp);return contact;
+        };
+        auto threshold=uint64_t(GetDoubleClickTime())*1000;
+        for(auto hit:{hstring(L"ring"),hstring(L"intensity")}){
+            auto downMode=hit==L"ring"?L"ring":L"intensity";
+            auto resetType=hit==L"ring"?L"reset_ring":L"set_intensity";
+            bubbles->lastRing.reset();actions->clear();
+            press(hit,1000000);
+            co_await winrt::resume_after(std::chrono::milliseconds(GetDoubleClickTime()+50));co_await apartment;
+            auto repeated=press(hit,1000000+threshold/2);
+            require(actions->size()==2,L"Delayed bubble presses dispatched extra actions");
+            auto action=object(actions->back(),L"action");
+            require(repeated->mode==L"reset",L"Delayed handling lost the bubble event double tap");
+            require(str(action,L"type")==resetType,L"Bubble event double tap dispatched the wrong reset");
+            if(hit==L"intensity")require(num(action,L"stops",-1)==0,L"Intensity double tap did not reset stops");
+            bubbles->lastRing.reset();actions->clear();
+            press(hit,2000000);auto separate=press(hit,2000000+threshold+1000);
+            action=object(actions->back(),L"action");
+            require(actions->size()==2&&separate->mode==downMode&&str(action,L"type")==hit&&str(action,L"phase")==L"down",L"Compressed handling invented a bubble event double tap");
+            bubbles->lastRing.reset();actions->clear();
+            press(hit,3000000);record->id=18;auto another=press(hit,3000000+threshold/2);record->id=17;
+            action=object(actions->back(),L"action");
+            require(another->mode==downMode&&str(action,L"type")==hit&&str(action,L"phase")==L"down",L"Bubble double tap crossed record identity");
+            bubbles->lastRing.reset();actions->clear();
+            auto slop=std::max(8.,double(std::max(GetSystemMetrics(SM_CXDOUBLECLK),GetSystemMetrics(SM_CYDOUBLECLK))));
+            press(hit,4000000);auto distant=press(hit,4000000+threshold/2,{float(slop+1),0});
+            action=object(actions->back(),L"action");
+            require(distant->mode==downMode&&str(action,L"type")==hit&&str(action,L"phase")==L"down",L"Bubble double tap crossed its existing slop");
+            bubbles->lastRing.reset();actions->clear();
+            press(hit,5000000,{},Device::Mouse);auto pen=press(hit,5000000+threshold/2,{},Device::Pen);
+            require(pen->mode==L"reset"&&str(object(actions->back(),L"action"),L"type")==resetType,L"Bubble event timing changed cross-device pairing");
+            bubbles->lastRing.reset();actions->clear();
+            auto resumed=press(hit,6000000);bubbles->restore(resumed);
+            bubbles->begin(resumed,{},6000000+threshold+1000);
+            action=object(actions->back(),L"action");
+            require(resumed->mode==downMode&&str(action,L"type")==hit&&str(action,L"phase")==L"down",L"Resumed bubble reused its original press event time");
+        }
+    }
+
     winrt::fire_and_forget run(){
         auto self=shared_from_this();hstring error;
         try {
             co_await wait([this]{return anchor.IsLoaded()&&untagged.ActualWidth()>0&&GetForegroundWindow()==hwnd;},L"Fixture did not become arranged and foreground");privacy();
+            phase=L"bubble-press-timestamps";co_await bubblePressTimestamps();
             phase=L"tooltip-help";
             Border semantic,owned;TranslateTransform metadata;
             AutomationProperties::SetHelpText(semantic,L"Selected texture");tooltip(semantic,L"Texture");tooltip(semantic,L"Texture updated");

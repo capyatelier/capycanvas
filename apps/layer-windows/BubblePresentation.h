@@ -170,7 +170,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     bool busy=false,active=false,stroke=false,releasing=false,disposed=false,hovering=false;
     bool pointerPen=false,pointerHidden=false;
     double restoreAt=-1;
-    std::optional<std::tuple<uint32_t,double,CapyUi::Point>> lastRing;
+    std::optional<std::tuple<uint32_t,uint64_t,CapyUi::Point>> lastRing;
     CapyUi::ColorTouches colorTouches;
     ~Impl();
     void init();
@@ -199,7 +199,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     void up(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,bool);
     bool cancel(bool abandon=false);
     void restore(std::shared_ptr<CapyBubbles::Contact> const&);
-    void begin(std::shared_ptr<CapyBubbles::Contact> const&,CapyUi::Point);
+    void begin(std::shared_ptr<CapyBubbles::Contact> const&,CapyUi::Point,uint64_t);
     void pick(std::shared_ptr<CapyBubbles::Contact> const&,CapyUi::Point);
     void finishColor(std::shared_ptr<CapyBubbles::Contact> const&,bool);
     void hold();
