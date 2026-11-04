@@ -48,10 +48,12 @@ function Model($Window=$current){
 function Use-Window($Window){
     [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$Window.hwnd)
     $script:current=$Window
-    $script:root=(Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory).Root
+    $owned=Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory
+    if(!$owned){throw 'The requested owned window is not ready'}
+    $script:root=$owned.Root
 }
 function Ready($Window){
-    Wait-Until {(Model $Window).brush_ready -and (Model $Window).windows_workspace.ready} "Window $($Window.id) did not become ready" 45
+    Wait-Until {(Model $Window).brush_ready -and (Model $Window).windows_workspace.ready -and (Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory)} "Window $($Window.id) did not become ready" 45
 }
 function Preferences {Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)}
 function Invoke-Edit([string]$Name) {

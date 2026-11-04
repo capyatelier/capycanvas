@@ -1357,3 +1357,22 @@ public static class CapyImageDragPacingTest {
     $script:refusalView=Refusal-View $null $true;Expect-IdleError 'Document operation did not finish'
     $script:refusalView=Refusal-View $null $false;Idle
 }
+
+& {
+    $tokens=$null;$errors=$null
+    $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-multiwindow.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    foreach($name in 'Ready','Use-Window'){
+        $actual=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq$name},$true)
+        . ([scriptblock]::Create($actual.Extent.Text.Replace('[CapyWindowTest]','[CapyOwnedSearchTest.Driver]')))
+    }
+    $review=@{Id=33};$directory='owned-registry';$window=@{id=9;hwnd=77};$seen=@{reads=0;polls=0}
+    function Model($Window){@{brush_ready=$true;windows_workspace=@{ready=$true}}}
+    function Owned-DrawingWindow($Process,$WindowHandle,$TraceDirectory){
+        if($Process.Id-ne33-or$WindowHandle-ne77-or$TraceDirectory-ne'owned-registry'){throw 'Ready queried another window registry'}
+        $seen.reads++;if($seen.reads-ge3){@{Root='owned-root'}}
+    }
+    function Wait-Until($Condition,$Message,$Seconds){for($i=0;$i-lt3;$i++){$seen.polls++;if(& $Condition){return}};throw $Message}
+    Ready $window
+    if($seen.reads-ne3-or$seen.polls-ne3){throw 'Ready accepted UI state before owned registry readiness'}
+}
