@@ -1236,6 +1236,8 @@ impl NativeHost {
 }
 
 #[cfg(all(test,not(target_arch="wasm32")))]
+mod test_storage;
+#[cfg(all(test,not(target_arch="wasm32")))]
 mod tests {
     use super::*;
 
@@ -1426,18 +1428,18 @@ mod tests {
         }
     }
 
-    fn gpu_host(platform: layer_ui::Platform, size: [u32; 2]) -> (GpuReference, NativeHost) {
+    fn gpu_host(platform: layer_ui::Platform, size: [u32; 2]) -> (GpuReference, crate::test_storage::StoredHost) {
         gpu_document_host(platform, layer_ui::new_drawing(size[0], size[1], &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap())
     }
 
-    fn gpu_document_host(platform: layer_ui::Platform, document: layer_core::Document) -> (GpuReference, NativeHost) {
+    fn gpu_document_host(platform: layer_ui::Platform, document: layer_core::Document) -> (GpuReference, crate::test_storage::StoredHost) {
         let reference = GpuReference::new();
         let gpu = GpuContext::of(&reference).rasterizer(Default::default(), &RendererOptions::default(), true).unwrap();
         let mut host = NativeHost::new(platform).unwrap();
         *host.session = UiSession::from_project(Renderer(Some(gpu)), document, None, [640, 480], platform).unwrap();
         host.startup = Default::default();
         host.resize(640, 480, 1.).unwrap();
-        (reference, host)
+        (reference, crate::test_storage::StoredHost::new(host))
     }
 
     fn frame_step(host: &mut NativeHost, clock: &std::cell::Cell<u64>, deadline: std::time::Instant) {

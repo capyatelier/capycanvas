@@ -821,11 +821,12 @@ mod tests {
 
     type Window = DocumentWindow<Box<UiSession<Renderer>>>;
 
-    fn host() -> NativeHost {
+    fn host() -> crate::test_storage::StoredHost {
         let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         *host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Mac).unwrap();
+        let mut host=crate::test_storage::StoredHost::new(host);
         host.session.set_document_replacement(false);
         settle(&mut host);
         host
@@ -918,8 +919,9 @@ mod tests {
         settle(host);
     }
 
-    fn finish(host: NativeHost, window: Window) {
-        drop((host, window));
+    fn finish(host: crate::test_storage::StoredHost, window: Window) {
+        drop(window);
+        drop(host);
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 
@@ -1339,8 +1341,9 @@ mod tests {
         next.park_document().unwrap();
         drop(next.renderer_mut().0.take());
         let mut next = Some(next);
+        let view_revision=host.session.state().camera.revision;
         host.session.pen(layer_engine::PenEvent {
-            device_id:1,sequence:1,timestamp_ns:1,view_revision:host.session.state().camera.revision,
+            device_id:1,sequence:1,timestamp_ns:1,view_revision,
             surface_position:layer_core::Point {x:16.,y:16.},pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,
             phase:layer_engine::PenPhase::Down,tool:layer_engine::ToolKind::Pen,flags:layer_engine::SampleFlags::NONE,
         });
