@@ -1694,14 +1694,6 @@ impl Scene {
         self.capture_query_region(r, packet, destination, region, output, false, encoder)
     }
 
-    pub(super) fn capture_above(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &wgpu::Texture, region: PixelRect,
-        backdrop: OccurrenceHandle, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        self.presented_backdrop = Some(backdrop);
-        let captured = self.capture_region(r, packet, destination, region, Output::Artwork(None), encoder);
-        self.presented_backdrop = None;
-        captured
-    }
-
     #[expect(clippy::too_many_arguments, reason = "Query capture keeps output encoding, preview mode, and destination region explicit")]
     pub(super) fn capture_query_region(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &wgpu::Texture,
@@ -1818,49 +1810,70 @@ impl Scene {
     #[expect(clippy::too_many_arguments, reason = "Tiled capture keeps submission size and generic tile consumer explicit")]
     pub(super) async fn capture_query_tiles(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, output: Output, preview:bool, tiles_per_submission:u32,
-        encoder: &mut crate::submission::CommandEncoder,
+        backdrop:Option<OccurrenceHandle>, encoder: &mut crate::submission::CommandEncoder,
         mut consume: impl FnMut(&mut WgpuRasterizer, &wgpu::TextureView, PixelRect, &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError>,
     ) -> Result<(), GpuRasterError> {
-        let window = if matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
-        loop {
-            match self.prepare_region(r, packet, (region, window), window.in_frame(packet.document_extent), matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)), encoder) {
-                Err(GpuRasterError::DeferredObjectWork)=> {
-                    r.uploads.finish(encoder);
-                    std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
-                    crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
-                    self.prepare_capture_work_async(r).await?;
-                },
-                result=> {result?;break;},
-            }
-        }
-        let (texture, view) = create_color_target(&r.device, [PAGE_SIZE;2], "statistics tile");
-        let mut tiles=0;
-        for tile in page_coordinates(region) {
-            let grid = [tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]];
-            if preview && query_grid_size(grid).contains(&0) {continue;}
-            let region = page_rect(tile).intersect(region);
-            let destination = Image {texture:texture.clone(),view:view.clone(),plan:display_mips::Plan::window(packet.document_extent,0,region)};
+        let ordered=self.ordered;let previous_backdrop=self.presented_backdrop;
+        self.ordered|=!objects::inline_sampling(r);self.presented_backdrop=backdrop;
+        let result=async {
+            let window = if matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)) {region.into()} else {self.cached_capture_window(packet.scene, region)};
+            let mut preparing=false;
             loop {
-                match self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, None, encoder) {
+                let result=if preparing {self.encode_query_jobs(r,encoder,None)} else {
+                    self.prepare_region(r, packet, (region, window), window.in_frame(packet.document_extent), matches!(output,Output::Source(_) | Output::MaskImage(_) | Output::Objects(_)), encoder)
+                };
+                match result {
                     Err(GpuRasterError::DeferredObjectWork)=> {
                         r.uploads.finish(encoder);
                         std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
                         crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        preparing=self.ordered&&!self.jobs.is_empty();
                         self.prepare_capture_work_async(r).await?;
+                    },
+                    Ok(()) if preparing=> {
+                        r.uploads.finish(encoder);
+                        std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
+                        crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                        preparing=false;
                     },
                     result=> {result?;break;},
                 }
             }
-            consume(r, &view, region, encoder)?;
-            tiles+=1;
-            if !preview && tiles%tiles_per_submission==0 {
-                r.uploads.finish(encoder);
-                std::mem::replace(encoder, crate::submission::CommandEncoder::new(&r.device, &Default::default())).submit(&r.queue);
-                crate::local_tone::wait_async(&r.device, &r.queue).await.map_err(GpuRasterError::Color)?;
+            let (texture, view) = create_color_target(&r.device, [PAGE_SIZE;2], "statistics tile");
+            let mut tiles=0;
+            for tile in page_coordinates(region) {
+                let grid = [tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]];
+                if preview && query_grid_size(grid).contains(&0) {continue;}
+                let region = page_rect(tile).intersect(region);
+                let destination = Image {texture:texture.clone(),view:view.clone(),plan:display_mips::Plan::window(packet.document_extent,0,region)};
+                let mut pending=false;
+                loop {
+                    let result=if pending {self.encode_query_jobs(r,encoder,preview.then_some(grid))}
+                        else {self.capture_prepared_regions(r, packet, &destination, &[region], output, preview, None, encoder)};
+                    match result {
+                        Err(GpuRasterError::DeferredObjectWork)=> {
+                            pending=self.ordered&&!self.jobs.is_empty();
+                            r.uploads.finish(encoder);
+                            std::mem::replace(encoder,crate::submission::CommandEncoder::new(&r.device,&Default::default())).submit(&r.queue);
+                            crate::local_tone::wait_async(&r.device,&r.queue).await.map_err(GpuRasterError::Color)?;
+                            self.prepare_capture_work_async(r).await?;
+                        },
+                        result=> {result?;break;},
+                    }
+                }
+                self.object_results.flush_retired(encoder);self.exact_object_results.flush_retired(encoder);
+                consume(r, &view, region, encoder)?;
+                tiles+=1;
+                if !preview && tiles%tiles_per_submission==0 {
+                    r.uploads.finish(encoder);
+                    std::mem::replace(encoder, crate::submission::CommandEncoder::new(&r.device, &Default::default())).submit(&r.queue);
+                    crate::local_tone::wait_async(&r.device, &r.queue).await.map_err(GpuRasterError::Color)?;
+                }
             }
-        }
-        self.release_exact_objects(encoder);
-        Ok(())
+            self.release_exact_objects(encoder);
+            Ok(())
+        }.await;
+        self.ordered=ordered;self.presented_backdrop=previous_backdrop;result
     }
 
     #[expect(clippy::too_many_arguments, reason = "Prepared capture keeps output encoding and independent destination regions explicit")]
@@ -2159,20 +2172,20 @@ impl Scene {
         {false}
     }
     fn encode_query_jobs(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>) -> Result<(), GpuRasterError> {
-        if self.ordered {return self.encode_ordered_jobs(r,encoder).and_then(|ready|if ready {Ok(())}else {Err(GpuRasterError::DeferredObjectWork)});}
+        if self.ordered {return self.encode_ordered_jobs(r,encoder,grid).and_then(|ready|if ready {Ok(())}else {Err(GpuRasterError::DeferredObjectWork)});}
         if !self.jobs_ready(r) {self.discard_unencoded_jobs();return Err(GpuRasterError::DeferredObjectWork);}
         let result = self.encode_jobs_inner(r, encoder, grid);
         if result.is_err() {self.discard_unencoded_jobs();}
         result
     }
 
-    fn encode_ordered_jobs(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<bool,GpuRasterError> {
+    fn encode_ordered_jobs(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,grid:Option<[u32;4]>)->Result<bool,GpuRasterError> {
         if !self.jobs_ready(r) {return Ok(false);}
         let end=self.jobs.iter().position(|job|matches!(job,Job::DecodedTile(source) if source.prepared().is_none())).unwrap_or(self.jobs.len());
         let remaining=self.jobs.split_off(end);
         let ranges=std::mem::take(&mut self.source_jobs);
         self.source_jobs=ranges.iter().filter_map(|range|{let end=range.end.min(end);(range.start<end).then_some(range.start..end)}).collect();
-        let result=self.encode_jobs_inner(r,encoder,None);
+        let result=self.encode_jobs_inner(r,encoder,grid);
         self.jobs=remaining;
         self.source_jobs=ranges.into_iter().filter_map(|range|{let start=range.start.max(end);(start<range.end).then(||start-end..range.end-end)}).collect();
         result?;

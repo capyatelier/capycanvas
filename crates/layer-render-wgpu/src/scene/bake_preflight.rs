@@ -92,7 +92,7 @@ impl BakePreflight {
         let result=(|| {
             r.drain_image_decodes(&mut encoder)?;
             if !compositor.jobs.is_empty() {
-                if !compositor.encode_ordered_jobs(r,&mut encoder)? {return Ok(());}
+                if !compositor.encode_ordered_jobs(r,&mut encoder,None)? {return Ok(());}
                 if self.output_recorded {
                     self.pages.push((self.next,coordinate,self.output.take().unwrap()));self.coordinate+=1;
                     self.output_recorded=false;self.planning=false;return Ok(());
@@ -112,7 +112,7 @@ impl BakePreflight {
                 let (texture,view)=create_color_target(&r.device,[PAGE_SIZE;2],"prepared bake page");
                 let image=Image {texture,view,plan:display_mips::Plan::window(input.key.extent,0,page_rect(coordinate).intersect(PixelRect::full(input.key.extent)))};
                 compositor.copy_window_tile(tile,&image,coordinate);self.output=Some(image);self.output_recorded=true;
-                if compositor.encode_ordered_jobs(r,&mut encoder)? {
+                if compositor.encode_ordered_jobs(r,&mut encoder,None)? {
                     self.pages.push((self.next,coordinate,self.output.take().unwrap()));self.coordinate+=1;
                     self.output_recorded=false;self.planning=false;
                 }

@@ -540,25 +540,32 @@ impl SnapshotRenderer {
     ) -> Result<T, GpuRasterError> {
         let output=if matches!(output,scene::Output::Artwork(None)) {scene::raw_output(&self.scope).unwrap_or(output)}else{output};
         self.prepare_scene_pipelines().await?;
-        let mut consume=Some(consume);
-        self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
-            let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
-            let mut scene = r.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(r))?;
-            let captured = scene.capture_region(r, packet, &target, region, output, encoder).and_then(|()| {
-                let separated = layer_core::paper::separate_paper(packet.scene).filter(|_| matches!(output, scene::Output::Artwork(None)));
-                separated.map(|(paper, _)| {
-                    let (coverage, _) = create_color_target(&r.device, [width, height], "paper coverage");
-                    scene.capture_above(r, packet, &coverage, region, paper, encoder).map(|()| coverage)
-                }).transpose()
-            });
-            r.scene = Some(scene);
-            let coverage = captured?;
-            let target = match output {
-                scene::Output::Artwork(None) => r.shade_paper_export(packet.scene, &target, coverage.as_ref(), [x, y], encoder)?.unwrap_or(target),
-                _ => target,
+        let paper=layer_core::paper::separate_paper(self.scene.view().with_scope(&self.scope).with_offset(self.offset))
+            .filter(|_|matches!(output,scene::Output::Artwork(None))).map(|(paper,_)|paper);
+        let reserved=reserved_bytes.saturating_add(scene::sources::FLOAT_TILE_BYTES*(1+u64::from(paper.is_some())));
+        let control=self.control.clone();
+        let (r,packet,region,mut encoder)=self.prepare_region_gpu([x,y,width,height],reserved)?;
+        let (target,_) = create_color_target(&r.device,[width,height],"snapshot region");
+        let mut scene=r.scene.take().map(Ok).unwrap_or_else(||scene::Scene::new(r))?;
+        let result=async {
+            scene.capture_query_tiles(r,packet,region,output,false,SOURCE_SLOTS as u32,None,&mut encoder,|_,view,cell,encoder| {
+                copy_snapshot_tile(view,&target,cell,[x,y],encoder);Ok(())
+            }).await?;
+            let coverage=if let Some(paper)=paper {
+                let (coverage,_)=create_color_target(&r.device,[width,height],"paper coverage");
+                scene.capture_query_tiles(r,packet,region,scene::Output::Artwork(None),false,SOURCE_SLOTS as u32,Some(paper),&mut encoder,|_,view,cell,encoder| {
+                    copy_snapshot_tile(view,&coverage,cell,[x,y],encoder);Ok(())
+                }).await?;
+                Some(coverage)
+            } else {None};
+            let target=match output {
+                scene::Output::Artwork(None)=>r.shade_paper_export(packet.scene,&target,coverage.as_ref(),[x,y],&mut encoder)?.unwrap_or(target),
+                _=>target,
             };
-            Ok(consume.take().unwrap()(&r.device, &target, encoder))
-        }).await
+            let result=consume(&r.device,&target,&mut encoder);
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);control.observe_allocations(&r.device);Ok(result)
+        }.await;
+        r.scene=Some(scene);result
     }
 
     async fn with_region_gpu<T>(
@@ -765,7 +772,7 @@ impl SnapshotRenderer {
                     let (r,packet,region,mut encoder)=self.prepare_region_gpu(region,reserved)?;
                     if let Some(selection)=selection {r.selection_clip.prepare_region(&r.device,&mut encoder,extent,selection,Some(region))?;}
                     let mut scene=r.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(r))?;
-                    let result=scene.capture_query_tiles(r,packet,region,output,preview,tiles_per_submission,&mut encoder,|r,view,region,encoder| {
+                    let result=scene.capture_query_tiles(r,packet,region,output,preview,tiles_per_submission,None,&mut encoder,|r,view,region,encoder| {
                         control.check()?;consume(r,view,region,encoder)
                     }).await;
                     r.scene=Some(scene);result?;
@@ -915,6 +922,11 @@ impl SnapshotRenderer {
         self.check_cancelled()?;
         Ok(pixels)
     }
+}
+
+fn copy_snapshot_tile(view:&wgpu::TextureView,target:&wgpu::Texture,region:PixelRect,origin:[u32;2],encoder:&mut submission::CommandEncoder) {
+    let destination=wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:region.min_x()-origin[0],y:region.min_y()-origin[1],z:0},..target.as_image_copy()};
+    encoder.copy_texture_to_texture(view.texture().as_image_copy(),destination,wgpu::Extent3d {width:region.width(),height:region.height(),depth_or_array_layers:1});
 }
 
 struct RegionReadback {

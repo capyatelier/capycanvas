@@ -116,3 +116,69 @@ fn nearest_object_captures_finish_while_their_coordinates_are_prepared() {
     assert_eq!(pixels, 1024 * 768);
     assert!(drains <= 64, "coordinate preparation waits without resubmitting: {drains} submissions");
 }
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn deferred_capture_finishes_two_bands_at_the_drained_working_floor() {
+    fn document(layers:usize)->Document {
+        let extent=[256,512];
+        let mut doc=layered_painting(extent,1,false);
+        let descriptor=doc.composition().color.paint_descriptor();
+        let stack=doc.composition().result;
+        let first=paint_id(&doc);
+        for layer in 0..layers.max(1) {
+            let paint=if layer==0 {first} else {
+                let paint=doc.artwork.paint.insert(PortableId::random(),PaintSource {color_mode:Default::default(),domain:extent,raster:Default::default(),base:None,operations:Default::default()}).unwrap();
+                let owner=doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),format!("Paint {layer}"))).unwrap();
+                doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,owner);paint
+            };
+            let pixel=[layer as u8,(layer>>8) as u8,128,if layer==0 {255}else{128}];
+            let tiles=if layers==0 {Default::default()}else{[(TileKey {plane:RasterPlane::Color,coordinate:[0,1]},RasterTile::backed(TileBlob::encode(descriptor,&pixel.repeat(65536)).unwrap()))].into()};
+            doc.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {tiles,..Default::default()});
+        }
+        let source=layer_core::color::source::rgba8_source([16;2],|_,_|[255,0,0,255]);
+        let image=doc.artwork.objects.insert(PortableId::random(),ImageObject::new(layer_core::authored::Image::new(source))).unwrap();
+        let owner=doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(image),"Image")).unwrap();
+        doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,owner);refresh(&mut doc);doc
+    }
+    let seed=document(0);
+    let hardware=crate::memory::memory_tests::renderer(seed.composition().color,layer_core::DeviceMemoryFacts {unified:true,..Default::default()}).unwrap();
+    let budget=hardware.factory.memory_budget().clone();budget.set_ram_override(Some(384<<20));
+    let private_gpu=hardware.snapshot_gpu();drop(hardware);
+    let mut floor=private_gpu.capture_scene(seed.snapshot(),SceneScope::All,Default::default()).unwrap();
+    floor.renderer.publish_memory(true);budget.flush_reports();
+    let _import=budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    assert_eq!(budget.import_headroom_bytes(),0);
+    floor.renderer.refresh_memory_limits();
+    let capacity=floor.renderer.source_tiles.borrow().free_slots();
+    assert!(capacity>=SOURCE_SLOTS,"the production working floor remains granted: {capacity}");
+    drop(floor);
+    let doc=document(capacity+1);
+    let mut reference=gpu().capture_scene(doc.snapshot(),SceneScope::All,Default::default()).unwrap();
+    let expected=[pollster::block_on(reference.read_region_async([0,0,256,256])).unwrap(),pollster::block_on(reference.read_region_async([0,256,256,256])).unwrap()];
+    drop(reference);
+    let control=CaptureControl::default();let cancel=control.clone();
+    let completed=Arc::new(std::sync::atomic::AtomicUsize::new(0));let progress=completed.clone();
+    let (send,receive)=std::sync::mpsc::channel();
+    let worker=std::thread::spawn(move || {
+        let result=(|| {
+            let mut reader=private_gpu.capture_scene(doc.snapshot(),SceneScope::All,control)?;
+            reader.renderer.snapshot_worker=false;
+            reader.renderer.publish_memory(true);budget.flush_reports();
+            let _rest=budget.admit_import(budget.import_headroom_bytes()).unwrap();
+            assert_eq!(budget.import_headroom_bytes(),0);reader.renderer.refresh_memory_limits();
+            assert_eq!(reader.renderer.source_tiles.borrow().free_slots(),capacity,"the cold input count is the actual drained capacity plus one");
+            let first=pollster::block_on(reader.read_region_async([0,0,256,256]))?;
+            progress.store(1,Ordering::Release);
+            let second=pollster::block_on(reader.read_region_async([0,256,256,256]))?;
+            progress.store(2,Ordering::Release);
+            Ok::<_,GpuRasterError>([first,second])
+        })();
+        let _=send.send(result);
+    });
+    let received=receive.recv_timeout(std::time::Duration::from_secs(10));
+    if received.is_err() {cancel.cancel();}
+    worker.join().expect("capture worker exits after completion or cancellation");
+    let actual=received.unwrap_or_else(|error|panic!("two-band capture stops after {} completed bands at {capacity} decoded slots and {} cold inputs: {error}",completed.load(Ordering::Acquire),capacity+1)).unwrap();
+    for (actual,expected) in actual.iter().zip(&expected) {assert!(crate::test_support::max_error(actual,expected)<3e-5);}
+}

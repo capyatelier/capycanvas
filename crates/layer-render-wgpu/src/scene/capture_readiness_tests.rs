@@ -200,13 +200,13 @@ fn ordered_cold_fusion_retains_all_jobs_and_source_ranges_until_prepared() {
     let jobs: Vec<_> = scene.jobs.iter().map(std::mem::discriminant).collect();
     scene.source_jobs = vec![0..1, 1..scene.jobs.len()];
     let ranges = scene.source_jobs.clone();
-    assert!(!scene.encode_ordered_jobs(&mut r, &mut encoder).unwrap());
+    assert!(!scene.encode_ordered_jobs(&mut r, &mut encoder,None).unwrap());
     assert_eq!(scene.jobs.iter().map(std::mem::discriminant).collect::<Vec<_>>(), jobs);
     assert_eq!(scene.source_jobs, ranges);
     assert_eq!(scene.record_count, 0);
     assert_eq!(encoder.pass_count(), 0);
     pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
-    assert!(scene.encode_ordered_jobs(&mut r, &mut encoder).unwrap());
+    assert!(scene.encode_ordered_jobs(&mut r, &mut encoder,None).unwrap());
     assert!(scene.jobs.is_empty());
     assert!(scene.source_jobs.is_empty());
     assert!(encoder.pass_count() > 0);
