@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {readPackage,packageObjects,packageOccurrences,packageObject,sourceIdentity} from './package-fixture.test.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
+import {dropdownChoice} from './dropdown-fixture.mjs';
+import {installSessionStoreFixture} from './session-store-fixture.mjs';
 
 export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels}) {
   const onlyObjects=process.env.LAYER_OBJECT_ONLY_FIXTURE==='1';
@@ -103,7 +105,7 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
         await comparison('rasterize_source',before);
         }
         await begin('change_bit_depth');
-        await evaluate(`(()=>{const select=document.querySelector('dialog[open] select[aria-label="Bit depth"]');select.value='F32';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+        await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Bit depth"]','F32'));
         await wait("document.querySelectorAll('dialog[open] .color-comparison canvas').length===2");assert.ok(await opaque('dialog[open] .color-comparison canvas'));await click('Cancel');await idle();
         await begin('export_document');await click('Preview Output');
         await wait(`!!document.querySelector('dialog[open] canvas[aria-label="Output preview"]')`);assert.ok(await opaque('dialog[open] canvas[aria-label="Output preview"]'));await click('Cancel');await idle();
@@ -113,7 +115,8 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'visibility',id:${runtime},value:false}})`);await settle();
       const hidden=await histogram();await invoke('undo');const visible=await histogram();
       assert.equal(await evaluate("layerApp.state().commands.find(command=>command.id==='redo').enabled"),true);
-      await wait('layerApp.app.document_park_ready()');await evaluate('layerApp.documents.autosave()');
+      await wait('layerApp.app.document_park_ready()');await installSessionStoreFixture(evaluate);await evaluate('sessionStoreFixture.checkpoint()');
+      assert.equal(await evaluate('layerApp.app.session_current(BigInt(layerApp.app.document_tabs(0).selected))'),true,'Private restart waits for the current drawing checkpoint');
       const old=await evaluate('performance.timeOrigin');await call('Page.reload',{ignoreCache:true});
       await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()&&!layerApp.documents.busy()`);
       await evaluate('layerApp.documents.startRecovery()');await idle();await install();
@@ -121,7 +124,7 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
       await invoke('redo');assert.deepEqual(await histogram(),hidden,'Private restart retains pending object-owner redo');
       await invoke('undo');assert.deepEqual(await histogram(),visible);
       const recovered=await save();assert.deepEqual(packageObjects(recovered,'capy.image-object/1'),objects);assert.equal(packageObjects(recovered,'capy.image/1')[0].id,imageId);
-      console.log(`${url}: real IndexedDB restart restores pending object visibility redo/undo and exact F64/shared image identity`);
+      console.log(`${url}: durable browser restart restores pending object visibility redo/undo and exact F64/shared image identity`);
     }
     for(const theme of ['light','dark']) {
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();

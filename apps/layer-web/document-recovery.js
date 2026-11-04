@@ -1,5 +1,5 @@
 export function createDocumentRecovery({app,message,restore,remember=async()=>{},settled=()=>{},canOffer=()=>true,handles=()=>[],order=()=>{},failed=async()=>'later',reserve=()=>{}}) {
-  let initialization,job,windowStore,manifest=null,restoring=false,storageKept=false,keepingStorage;
+  let initialization,job,pending,windowStore,manifest=null,restoring=false,storageKept=false,keepingStorage;
   const tabs=()=>app.document_tabs(0),same=(a,b)=>String(a)===String(b);
   const irreplaceable=tab=>tab.uri==null&&tab.modified;
   const fail=error=>message(()=>app.document_recovery_unavailable(String(error)));
@@ -37,14 +37,22 @@ export function createDocumentRecovery({app,message,restore,remember=async()=>{}
     }
     if(tabs().tabs.some(tab=>same(tab.id,id)&&irreplaceable(tab)))await keepStorage();
   }
-  function autosave(clean_exit=false) {
+  function autosave(clean_exit=false,force=clean_exit) {
     if(restoring)return Promise.resolve();
-    if(job)return job;
+    if(job){
+      if(force||clean_exit){pending??={force:false,clean_exit:false};pending.force||=force;pending.clean_exit||=clean_exit;}
+      return job;
+    }
     job=(async()=>{
-      await current();let failure;
-      for(const tab of tabs().tabs)try{await captureOne(tab.id,clean_exit);}catch(error){failure??=error;}
-      await publish(clean_exit);await settled();if(failure)throw failure;
-    })().finally(()=>{job=null;});
+      try{
+        await current();let request={force,clean_exit},failure;
+        do{
+          for(const tab of tabs().tabs)try{await captureOne(tab.id,request.force);}catch(error){failure??=error;}
+          await publish(request.clean_exit);await settled();request=pending;pending=null;
+        }while(request);
+        if(failure)throw failure;
+      }finally{job=null;pending=null;}
+    })();
     return job;
   }
   async function retire(id=tabs().selected,closed=false) {
@@ -132,8 +140,8 @@ export function createDocumentRecovery({app,message,restore,remember=async()=>{}
     }catch{return false;}
   };
   setInterval(()=>{if(!restoring&&canOffer())autosave().catch(fail);},app.session_checkpoint_interval());
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&!restoring)autosave().catch(fail);});
-  window.addEventListener('pagehide',()=>{if(!restoring)autosave(true).catch(fail);});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&!restoring)autosave(false,true).catch(fail);});
+  window.addEventListener('pagehide',()=>{if(!restoring)autosave(true,true).catch(fail);});
   window.addEventListener('beforeunload',event=>{if(!protectedSession()){event.preventDefault();event.returnValue='';}});
   return {ensure,capture:()=>autosave(),retire,autosave,start:()=>initialization??=initialize(),protected:protectedSession};
 }
