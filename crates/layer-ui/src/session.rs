@@ -4635,6 +4635,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) {
+        if event.tool == layer_engine::ToolKind::Finger && self.finger.withdrawn { return; }
         let Some(event)=self.filter_pen(event) else {return;};
         if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();}
         if event.tool == layer_engine::ToolKind::Finger {
@@ -4653,7 +4654,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Shared numerical admission before cursor, tool and recording consumers.
     pub fn filter_pen(&mut self, event: PenEvent) -> Option<PenEvent> {
-        if event.tool == layer_engine::ToolKind::Finger && self.finger.withdrawn { return None; }
         let finish=self.stroke_contact_active();
         self.pen_input.filter(event).map(|mut event| {
             if finish && event.phase==PenPhase::Cancel {event.phase=PenPhase::Up;}

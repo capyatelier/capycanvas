@@ -144,6 +144,9 @@ fn withdrawn_finger_raw_samples_cannot_operate_the_held_picker() {
         if delivered { s.pen(raw); finger_frames(&mut s, 12); }
         let reply = s.input(UiInput::ColorPickerHold { id: 1, position, offset: 44. }).unwrap();
         assert!(reply.cancel_paint && s.color_picker_overlay().is_some());
+        for phase in [PenPhase::Move, PenPhase::Up, PenPhase::Cancel] {
+            assert!(s.filter_pen(PenEvent { phase, ..raw }).is_some());
+        }
         if !delivered { s.pen(raw); }
         for phase in [PenPhase::Move, PenPhase::Cancel] { s.pen(PenEvent { phase, ..raw }); }
         finger_frames(&mut s, 550);

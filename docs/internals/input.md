@@ -56,6 +56,10 @@ Hosts preserve native identity instead of treating every gesture cancellation as
 `buttons_and_keys_preserve_an_owned_stroke` covers this policy without a window.
 `another_down_keeps_the_owned_stroke_and_captured_settings` covers direct engine admission.
 
+Native Pointer routing still receives withdrawn fingers after sample admission.
+Only raw drawing ingress suppresses their samples, so navigation and release
+continue while a withdrawn stroke cannot operate the picker.
+
 Touch timestamps are ordered within each contact. Coalesced histories for
 different fingers can overlap in time when a host delivers each pointer's batch
 separately. Canvas and layer gesture recognition validate each finger's timestamp
