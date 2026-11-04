@@ -235,6 +235,7 @@ final class CanvasView: UIView {
     func setSceneActive(_ active: Bool) {
         guard sceneActive != active else { return }
         sceneActive = active
+        capy_session_set_background(UIApplication.shared.applicationState != .active)
         if !active { endKeyRepeat() }
         wake()
     }

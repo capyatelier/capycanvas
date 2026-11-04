@@ -829,7 +829,8 @@ impl Documents {
             }
         ));
     }
-    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<crate::render_thread::CanvasTransition, String> {
+    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<(crate::render_thread::CanvasTransition,layer_core::package::session_store::CompactionActivity), String> {
+        let activity=layer_core::package::session_store::CompactionActivity::hold();
         w.restart.stores.adopt_binding(self.selected(),w.recovery().binding.clone())?;
         if w.gpu.borrow().is_none() {
             return Err("Wait for the drawing canvas to finish opening".into());
@@ -903,7 +904,7 @@ impl Documents {
             w.local_tone.resume();
             return Err(error);
         }
-        Ok(transition)
+        Ok((transition,activity))
     }
     fn park(&self, w: &Workspace) -> Option<GpuCanvas> {
         w.gpu.borrow_mut().take()
@@ -940,7 +941,7 @@ impl Documents {
         if !self.model.borrow().contains_parked(id) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(&w.localization()));
         }
-        let transition = self.prepare_switch(w).await?;
+        let (transition,_activity) = self.prepare_switch(w).await?;
         let previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
         let tiles = previous.session.retained_document_tiles();
         let error = {
@@ -1046,7 +1047,7 @@ impl Documents {
             return self.show_unsupported(w, imported.as_ref(), original, reason).await;
         }
         let mut replace_initial=replace_initial&&w.gpu.borrow().as_ref().is_some_and(|gpu|startup.as_ref().is_some_and(|stamp|gpu.session.can_replace_startup_session(stamp)));
-        let mut transition = self.prepare_switch(w).await?;
+        let (mut transition,_activity) = self.prepare_switch(w).await?;
         let mut previous = Box::new(self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?);
         if self.closing_window.get() || self.cancel_open.get() {
             let error = previous.reattach_with_transition(&w.area, Some(transition.clone())).err();
@@ -1184,7 +1185,7 @@ impl Documents {
             w,
             async move {
                 w.documents.changing.set(false);
-                let transition = match w.documents.prepare_switch(&w).await {
+                let (transition,_activity) = match w.documents.prepare_switch(&w).await {
                     Ok(transition) => transition,
                     Err(error) => {
                     w.documents.closing_tab.set(false);w.documents.closing_window.set(false);

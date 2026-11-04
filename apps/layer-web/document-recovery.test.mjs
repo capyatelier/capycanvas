@@ -23,7 +23,7 @@ function fixture(t,{blocked=false,destinationError}={}) {
     if(!next.drawings.some(drawing=>drawing.key==='saved-drawing'))assert.equal(destinationDurable,true,'Source membership can disappear only after durable destination publication');
     stored=structuredClone(next);
   },free(){freed++;}};
-  const app={document_tabs:()=>({tabs,selected:adopted??0}),session_stamp_for:()=>({}),session_checkpoint_interval:()=>2000,
+  const app={session_maintenance(){},document_tabs:()=>({tabs,selected:adopted??0}),session_stamp_for:()=>({}),session_checkpoint_interval:()=>2000,
     session_binding:()=> 'saved-drawing',session_existing_binding:()=>adopted??null,session_current:()=>true,
     open_session_window:async key=>key==null?own:origin,session_windows:async()=>['abandoned'],
     import_legacy_sessions:async()=>{operations.push('import_legacy');return [];},
@@ -92,21 +92,21 @@ function lifecycleFixture(t,{held=false}={}) {
   let interval,current=false,release,started;
   const pending=new Promise(resolve=>{release=resolve;}),begun=new Promise(resolve=>{started=resolve;});
   t.mock.method(globalThis,'setInterval',callback=>{interval=callback;return 0;});
-  const checkpoints=[],published=[],messages=[];
-  const app={document_tabs:()=>({selected:1,tabs:[{id:1,uri:'file:///private.capy',modified:true}]}),
-    session_binding:()=> 'private-drawing',session_current:()=>current,session_checkpoint_interval:()=>2000,
+  const checkpoints=[],published=[],messages=[],background=[];
+  const app={session_maintenance(){},document_tabs:()=>({selected:1,tabs:[{id:1,uri:'file:///private.capy',modified:true}]}),
+    session_background:hidden=>background.push(hidden),session_binding:()=> 'private-drawing',session_current:()=>current,session_checkpoint_interval:()=>2000,
     open_session_window:async()=>({key:'private-window',async publish(value){published.push(structuredClone(value));}}),
     session_manifest_update(raw,event){const value=raw?JSON.parse(raw):{generation:0};return {...value,generation:value.generation+1,drawings:event.drawings,active:event.active,clean_exit:event.clean_exit??false};},
     async checkpoint_session(id,force){assert.equal(id,1n);checkpoints.push(force);started();if(held&&checkpoints.length===1)await pending;if(force)current=true;return force;},
     document_recovery_unavailable:detail=>detail};
   const recovery=createDocumentRecovery({app,message:reader=>messages.push(reader())});
-  return {recovery,checkpoints,published,messages,begun,release,
+  return {recovery,checkpoints,published,messages,background,begun,release,
     tick:()=>interval(),hide(){document.hidden=true;documentEvents.get('visibilitychange')();},pagehide:()=>windowEvents.get('pagehide')()};
 }
 
 test('hiding the page forces its drawing checkpoint without marking a clean exit',async t=>{
   const f=lifecycleFixture(t);f.hide();await f.recovery.autosave();
-  assert.deepEqual(f.checkpoints,[true]);assert.equal(f.published.at(-1).clean_exit,false);assert.deepEqual(f.messages,[]);
+  assert.deepEqual(f.checkpoints,[true]);assert.equal(f.published.at(-1).clean_exit,false);assert.deepEqual(f.messages,[]);assert.deepEqual(f.background,[true]);
 });
 
 test('the ordinary recovery interval keeps checkpoint cadence',async t=>{

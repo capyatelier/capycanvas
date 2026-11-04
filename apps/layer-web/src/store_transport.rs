@@ -51,7 +51,7 @@ fn begin_call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Re
     transport.call1(&JsValue::NULL,&request).map_err(error)?.dyn_into::<js_sys::Promise>().map_err(error)
 }
 pub(super) async fn call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Result<JsValue,String> {
-    let transfer_bytes=bytes.map_or_else(||if matches!(operation,"read_at"|"legacy-range") {metadata["length"].as_u64().unwrap_or(0)}else {0},|bytes|bytes.len() as u64);
+    let transfer_bytes=bytes.map_or_else(||if matches!(operation,"read_at"|"copy_read_at"|"legacy-range") {metadata["length"].as_u64().unwrap_or(0)}else {0},|bytes|bytes.len() as u64);
     let _transfer=BufferUse::new(transfer_bytes);
     JsFuture::from(begin_call(operation,metadata,bytes)?).await.map_err(error)
 }
@@ -155,9 +155,10 @@ impl FileTransport for BrowserTransport {
 #[derive(Clone)]
 struct BrowserFile {name:String,_lease:Arc<Lease>,writable:bool}
 impl BrowserFile {
-    async fn range(&self,offset:u64,length:usize,crc:Option<u32>)->Result<Arc<[u8]>,String> {
+    async fn range(&self,offset:u64,length:usize,crc:Option<u32>)->Result<Arc<[u8]>,String> {self.range_using("read_at",offset,length,crc).await}
+    async fn range_using(&self,operation:&str,offset:u64,length:usize,crc:Option<u32>)->Result<Arc<[u8]>,String> {
         store_io::check_range(offset,length)?;
-        let response=call("read_at",serde_json::json!({"name":self.name,"offset":offset,"length":length,"crc":crc}),None).await?;
+        let response=call(operation,serde_json::json!({"name":self.name,"offset":offset,"length":length,"crc":crc}),None).await?;
         let buffers=js_sys::Reflect::get(&response,&js("buffers")).map_err(error)?.dyn_into::<js_sys::Array>().map_err(error)?;
         let bytes=buffers.get(0).dyn_into::<js_sys::Uint8Array>().map_err(error)?;
         if buffers.length()!=1 || bytes.length() as usize!=length {return Err("Incomplete drawing store range".into());}
@@ -177,6 +178,7 @@ impl StoreFile for BrowserFile {
         })
     }
     fn read_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {Box::pin(self.range(offset,length,None))}
+    fn read_cold_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {Box::pin(self.range_using("copy_read_at",offset,length,None))}
     fn write_at<'a>(&'a self,offset:u64,bytes:&'a [u8])->FileFuture<'a,()> {
         Box::pin(async move {
             if !self.writable {return Err("Drawing store file is read only".into());}store_io::check_range(offset,bytes.len())?;

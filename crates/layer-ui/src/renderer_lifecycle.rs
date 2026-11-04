@@ -135,6 +135,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.release_idle_document_buffers();
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
+        self.storage_activity.set_busy(false);self.storage_activity.touch();
         self.drawing_switch_pending = true;
         self.refresh_commands();
         Ok(tiles)
@@ -344,6 +345,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
+        self.storage_activity.set_busy(false);self.storage_activity.touch();
         let recovered = self.engine.recover_failed_rasters().map_err(error);
         self.refresh_document();
         self.poll_document_close();

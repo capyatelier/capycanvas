@@ -292,6 +292,7 @@ pub struct UiSession<R: CanvasRenderer> {
     pen_contact: bool,
     discarded_contacts: Vec<u64>,
     rendering_suspended: bool,
+    storage_activity:layer_core::package::session_store::CompactionActivity,
     drawing_switch_pending: bool,
     touch: TouchGesture,
     navigation: navigation::Navigation,
@@ -567,6 +568,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             finger: finger_input::FingerInput::new(platform),
             discarded_contacts: Vec::new(),
             rendering_suspended: false,
+            storage_activity:Default::default(),
             drawing_switch_pending: false,
             touch: TouchGesture::default(),
             navigation: Default::default(),
@@ -1202,6 +1204,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
+        self.storage_activity.touch();
         let mut reply = self.route_input(input)?;
         self.finger.finish_input();
         if self.canvas_bar_presentation().map(|value| value.hold) != self.state.canvas_bar.as_ref().map(|_| self.canvas_bar_hold()) {
@@ -3019,6 +3022,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if !action.is_host_report() {self.storage_activity.touch();}
         self.sync_workspace_view();
         let result=self.dispatch_inner(action);
         self.sync_workspace_view();
@@ -4643,6 +4647,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) {
+        self.storage_activity.touch();
         if event.tool == layer_engine::ToolKind::Finger && self.finger.withdrawn { return; }
         let Some(event)=self.filter_pen(event) else {return;};
         if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();}
@@ -4798,6 +4803,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn touch(&mut self, id: u64, phase: PenPhase, position: [f32; 2]) -> UiChange {
+        self.storage_activity.touch();
         if !self.navigation_idle() {
             self.touch.clear();
             return self.changed(0, false);
@@ -4868,6 +4874,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn multi_touch_gesture(&mut self, from: [f32; 2], to: [f32; 2], scale: f32, rotation: f32) -> Result<UiChange, String> {
+        self.storage_activity.touch();
         if !rotation.is_finite() { return Err("Invalid camera gesture".into()); }
         self.navigation_gesture(from, to, scale, if self.state.settings.rotate_with_two_fingers {rotation} else {0.},
             self.state.settings.rotate_with_two_fingers)
@@ -6526,7 +6533,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_toolbar_context();
         self.note_tool();
         if regions & regions::CAMERA != 0 {
-            self.canvas_bar_camera_moved();
+            self.storage_activity.touch();self.canvas_bar_camera_moved();
         }
         let narrow = resolved_bar.as_ref().and_then(|layout| self.state.canvas_bar.as_ref().map(|bar|
             (bar.context.kind, matches!(bar.context.kind, CanvasBarKind::Transform | CanvasBarKind::Placement) && layout.work_area.width < canvas_bar::CANVAS_BAR_NARROW_WIDTH)))

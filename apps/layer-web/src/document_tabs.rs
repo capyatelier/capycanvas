@@ -9,6 +9,9 @@ pub(super) struct DocumentGpu {
 }
 
 #[wasm_bindgen]
+pub struct WebDocumentTransition { _activity:layer_core::package::session_store::CompactionActivity }
+
+#[wasm_bindgen]
 pub struct WebDocumentClose {
     blank:Option<(UiSession<AttachedRenderer>,layer_ui::DocumentSessions<UiSession<AttachedRenderer>>)>,
 }
@@ -69,8 +72,9 @@ impl WebApp {
         }))
     }
 
-    pub fn prepare_document_switch(&mut self) -> Result<(), JsValue> {
-        self.session.prepare_document_switch().map_err(js)
+    pub fn prepare_document_switch(&mut self) -> Result<WebDocumentTransition, JsValue> {
+        self.session.prepare_document_switch().map_err(js)?;
+        Ok(WebDocumentTransition {_activity:layer_core::package::session_store::CompactionActivity::hold()})
     }
 
     /// Poll without blocking the browser: an immediate Undo may have moved an

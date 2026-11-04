@@ -386,14 +386,15 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   async function transition(action){
     if(changing)throw transportFailure("change_in_progress");
     changing=true;tabs.cancel();
+    let activity;
     const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
     try{
-      app.prepare_document_switch();await proof.pause();await readyToPark();
+      activity=app.prepare_document_switch();await proof.pause();await readyToPark();
       await action();
       await resumeCanvas();
       trim().catch(message);
       recovery.autosave().catch(message);
-    }finally{changing=false;blocker.remove();proof.resume();tabs.refresh(true);pruneHandles();wake();}
+    }finally{activity?.free();changing=false;blocker.remove();proof.resume();tabs.refresh(true);pruneHandles();wake();}
   }
   async function select(id){
     if(id==null||String(id)===String(app.document_tabs(0).selected))return;

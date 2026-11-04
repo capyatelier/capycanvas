@@ -1,7 +1,7 @@
 use super::{Head,parse_head};
 use crate::package::store_io::{FileAccess,FileTransport};
 
-const SLOT_BYTES:usize=2048;
+pub(super) const SLOT_BYTES:usize=2048;
 const HEADER_BYTES:usize=24;
 const MAGIC:&[u8;8]=b"CAPYSH01";
 const NAMES:[&str;2]=["head.0","head.1"];

@@ -67,6 +67,6 @@ impl Serialize for PackName {fn serialize<S:Serializer>(&self,serializer:S)->Res
 struct Location<'a>(&'a StoreLocation);
 impl Serialize for Location<'_> {
     fn serialize<S:Serializer>(&self,serializer:S)->Result<S::Ok,S::Error> {
-        let mut map=serializer.serialize_map(Some(2))?;map.serialize_entry("pack",&PackName(self.0.pack.id))?;map.serialize_entry("offset",&Decimal(self.0.offset))?;map.end()
+        let range=self.0.range();let mut map=serializer.serialize_map(Some(2))?;map.serialize_entry("pack",&PackName(range.pack.id))?;map.serialize_entry("offset",&Decimal(range.offset))?;map.end()
     }
 }

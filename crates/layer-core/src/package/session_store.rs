@@ -113,6 +113,8 @@ fn update_session_metadata(bytes:&[u8],metadata:&serde_json::Value)->Result<Vec<
     serde_json::to_vec(&Updated {format:packed.format,version:packed.version,session,extents:packed.extents}).map_err(|error|error.to_string())
 }
 mod record;
+mod compaction;
+pub use compaction::{CompactionActivity,CompactionStep};
 use record::StoredRecord;
 struct IndexedResource {record:StoredRecord,location:Arc<StoreLocation>,owner:Option<Weak<dyn Send+Sync>>}
 #[derive(Clone)]
@@ -265,6 +267,10 @@ pub struct SessionStore {
     reads: crate::tile_io::ReadCache,
     generation_roots:BTreeMap<PortableId,(Generation,GenerationRoots)>,
     published_capture:Option<PublishedCapture>,
+    compaction:Option<compaction::Copy>,
+    compaction_refusal:Option<super::storage_budget::StorageRefusal>,
+    compaction_fallback:Option<Head>,
+    storage_scope:Option<String>,
 }
 #[derive(Clone,Default)]
 struct GenerationRoots {resources:BTreeSet<PortableId>,packs:BTreeSet<PortableId>,identities:BTreeSet<PortableId>}
@@ -300,7 +306,7 @@ fn claim_store_with(path:&Path,claim:impl FnOnce()->Result<Option<TransportClaim
 impl SessionStore {
     fn for_retirement(path:PathBuf,owner:Arc<StoreOwner>,writer:Arc<()>)->Self {
         Self {path,_owner:owner,_writer:writer,head:None,sequence:0,loaded:None,index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,
-            programs:BTreeMap::new(),reads:ReadCache::process(),generation_roots:BTreeMap::new(),published_capture:None}
+            programs:BTreeMap::new(),reads:ReadCache::process(),generation_roots:BTreeMap::new(),published_capture:None,compaction:None,compaction_refusal:None,compaction_fallback:None,storage_scope:None}
     }
     pub async fn retirement_transport(path:PathBuf,transport:Arc<dyn super::store_io::FileTransport>,lease:Arc<dyn Send+Sync>)->Result<Option<Self>,String> {
         let (owner,writer)=claim_store_with(&path,||Ok(Some((transport,lease))))?.ok_or("Recovery drawing is already open")?;
@@ -334,7 +340,10 @@ impl SessionStore {
             None=>(io::read_optional(&*owner.io,"head.json",1024).await?.map(|bytes|parse_head(&bytes)).transpose()?,0),
         };
         let mut store=Self {path,_owner:owner,_writer:writer,head,sequence,loaded:None,
-            index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,programs:BTreeMap::new(),reads,generation_roots:BTreeMap::new(),published_capture:None};
+            index:BTreeMap::new(),by_owner:BTreeMap::new(),append:None,programs:BTreeMap::new(),reads,generation_roots:BTreeMap::new(),published_capture:None,compaction:None,compaction_refusal:None,compaction_fallback:None,storage_scope:None};
+        if let Ok(facts)=store._owner.io.storage_facts().await {
+            store.storage_scope=Some(facts.scope.clone());super::storage_budget::StorageBudget::process().publish(facts);
+        }
         if let Some(head)=&store.head {
             for generation in std::iter::once(&head.current).chain(head.previous.as_ref()) {
                 if let Ok(bytes)=store.generation_metadata(generation,ProjectLimits::default().metadata_bytes).await
@@ -396,7 +405,7 @@ impl SessionStore {
     async fn pack_extents(&self,ids:&[PortableId])->Result<BTreeMap<PortableId,u64>,String> {
         let mut extents=BTreeMap::new();
         for id in ids {
-            let location=&self.index.get(id).ok_or("Missing durable resource index")?.location;let pack=location.pack.id;
+            let location=self.index.get(id).ok_or("Missing durable resource index")?.location.range();let pack=location.pack.id;
             let extent=location.pack.extent.load(Ordering::Acquire);
             if !extents.contains_key(&pack) {
                 if location.pack.file.len().await?<extent {return Err("Recovery pack is shorter than its committed extent".into());}
@@ -408,7 +417,7 @@ impl SessionStore {
         check_cancelled(cancelled)?;self.validate_layout().await?;self.refresh_head().await?;
         if io::marker(&*self._owner.io,".retired",b"").await? {return Err("This drawing's session copy was retired".into());}
         if metadata.len() as u64>ProjectLimits::default().metadata_bytes {return Err("Packed recovery metadata exceeds admission limit".into());}
-        let mut reservation=super::storage_budget::reserve(&*self._owner.io,metadata.len() as u64+2048).await?;
+        let mut reservation=super::storage_budget::reserve(&*self._owner.io,metadata.len() as u64+head::SLOT_BYTES as u64).await?;
         let generation=PortableId::random();
         let created=io::create(&*self._owner.io,&format!("generations/{generation}.json"),&metadata,cancelled).await;
         reservation.written(metadata.len() as u64)?;created?;
@@ -416,7 +425,7 @@ impl SessionStore {
         let head=Head {current:reference.clone(),previous:self.loaded.clone().or_else(||self.head.as_ref().map(|head|head.current.clone()))};
         check_cancelled(cancelled)?;
         let published=head::publish(&*self._owner.io,self.sequence,&head).await;
-        reservation.written(2048)?;
+        reservation.written(head::SLOT_BYTES as u64)?;
         let sequence=match &published {
             Ok(sequence)=>*sequence,
             Err(error)=>match head::read(&*self._owner.io).await {
@@ -426,7 +435,7 @@ impl SessionStore {
         };
         self.generation_roots.insert(generation,(reference.clone(),roots));
         self.head=Some(head);self.sequence=sequence;
-        if published.is_ok() {self.loaded=Some(reference);}
+        if published.is_ok() {self.loaded=Some(reference);self.compaction_fallback=None;}
         self.programs.insert(generation,programs.clone());
         let previous=self.head.as_ref().and_then(|head|head.previous.as_ref()).map(|previous|previous.id);
         self.programs.retain(|id,_|*id==generation || Some(*id)==previous);
@@ -434,6 +443,7 @@ impl SessionStore {
         self.collect_garbage().await?;Ok(generation)
     }
     async fn store_inputs(&mut self,inputs:Vec<StoreInput>,cancelled:&AtomicBool)->Result<StoredInputs,String> {
+        self.seal_compaction_output();
         self.validate_layout().await?;
         if io::marker(&*self._owner.io,".retired",b"").await? {return Err("This drawing's session copy was retired".into());}
         let mut owners=BTreeSet::new();let mut bytes=0u64;
@@ -455,7 +465,7 @@ impl SessionStore {
         Ok(stored)
     }
     fn existing(&self,input:&StoreInput)->Result<Option<Arc<StoreLocation>>,String> {
-        if let Payload::Tile(tile)=&input.payload && let Some(location)=tile.compressed.location()? && Arc::ptr_eq(&location.pack.owner,&self._owner) {
+        if let Payload::Tile(tile)=&input.payload && let Some(location)=tile.compressed.location()? && Arc::ptr_eq(&location.range().pack.owner,&self._owner) {
             if location.length!=input.length || location.crc!=input.crc || location.descriptor!=input.descriptor {return Err("Conflicting immutable recovery resource descriptor".into());}
             return Ok(Some(location));
         }
@@ -511,7 +521,7 @@ impl SessionStore {
             let extent=start.checked_add(length).ok_or("Recovery pack extent overflow")?;
             let owner=self.pack(pack,extent).await?;let source=owner.source(&self.reads);let mut shared=BTreeMap::new();
             for (input,&(input_pack,offset,_)) in inputs[first..last].iter().zip(&offsets) {
-                let location=if input_pack==pack {shared.entry(offset).or_insert_with(||Arc::new(StoreLocation {pack:owner.clone(),source:source.clone(),offset,length:input.length,crc:input.crc,descriptor:input.descriptor})).clone()}
+                let location=if input_pack==pack {shared.entry(offset).or_insert_with(||Arc::new(StoreLocation::new(owner.clone(),source.clone(),offset,input.length,input.crc,input.descriptor))).clone()}
                     else {self.existing(input)?.ok_or("Missing aliased recovery location")?};
                 self.remember(input.clone(),location,stored)?;
             }
@@ -577,8 +587,9 @@ impl SessionStore {
             let pack=Arc::new(Pack {id,file,owner:self._owner.clone(),source:Default::default(),extent:AtomicU64::new(extent)});
             self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.insert(id,Arc::downgrade(&pack));pack
         };
-        if pack.file.len().await?<extent {return Err("Recovery pack is shorter than its committed extent".into());}
-        pack.extent.fetch_max(extent,Ordering::Release);Ok(pack)
+        let length=pack.file.len().await?;
+        if length<extent {return Err("Recovery pack is shorter than its committed extent".into());}
+        pack.extent.fetch_max(length,Ordering::Release);Ok(pack)
     }
 
     pub async fn load(&mut self, limits: ProjectLimits, cancelled: &AtomicBool) -> Result<Option<OpenSession>, String> {
@@ -630,13 +641,19 @@ impl SessionStore {
             let mut locations=BTreeMap::new();
             for record in value["resources"].as_array().unwrap() {
                 let id:PortableId=record["id"].as_str().unwrap().parse().map_err(str::to_string)?;
-                let location=&self.index[&id].location;
+                let location=self.index[&id].location.range();
                 stored.extents.insert(location.pack.id,location.pack.extent.load(Ordering::Acquire));
                 locations.insert(id,PackRange {pack:location.pack.id,offset:location.offset});
             }
             stored.locations=Some(locations);
         }
-        let mut locations=BTreeMap::new();
+        let (resources,value)=self.index_generation_parts(&stored,cancelled).await?;
+        self.recover_append(&stored.extents);
+        Ok((stored,resources,value))
+    }
+    async fn index_generation_parts(&mut self,stored:&StoredGeneration,cancelled:&AtomicBool)->Result<(StoreResources,serde_json::Value),super::session::OpenFailure> {
+        let limits=ProjectLimits::default();
+        let mut locations=BTreeMap::new();let mut extents=BTreeMap::new();
         let mut packs=BTreeMap::new();
         for (&id,&extent) in &stored.extents {packs.insert(id,self.pack(id,extent).await?);}
         let value:serde_json::Value=serde_json::from_slice(&stored.metadata).map_err(|error|error.to_string())?;
@@ -645,14 +662,15 @@ impl SessionStore {
             check_cancelled(cancelled)?;
             let range=stored.locations.as_ref().unwrap().get(&record.id).ok_or("Missing recovery pack location")?;
             let pack=packs[&range.pack].clone();
-            let location=Arc::new(StoreLocation {source:pack.source(&self.reads),pack,offset:range.offset,length:record.length,crc:record.crc,descriptor:record.descriptor});
+            let location=self.index.get(&record.id).filter(|entry|entry.location.descriptor==record.descriptor).map(|entry|entry.location.clone())
+                .unwrap_or_else(||Arc::new(StoreLocation::new(pack.clone(),pack.source(&self.reads),range.offset,record.length,record.crc,record.descriptor)));
             let stored_record=StoredRecord::parse(value.clone())?;
             self.index.entry(record.id).or_insert_with(||IndexedResource {record:stored_record,location:location.clone(),owner:None});
+            let range=location.range();extents.insert(range.pack.id,range.pack.extent.load(Ordering::Acquire));
             locations.insert(record.id,location);
         }
-        self.recover_append(&stored.extents);
-        let resources=StoreResources {locations,extents:stored.extents.clone(),..Default::default()};
-        Ok((stored,resources,value))
+        let resources=StoreResources {locations,extents,..Default::default()};
+        Ok((resources,value))
     }
     async fn load_generation(&mut self,generation:&Generation,limits:ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget)->Result<OpenSession,super::session::OpenFailure> {
         let (stored,mut resources,value)=self.indexed_generation(generation,limits,cancelled).await?;
@@ -667,7 +685,7 @@ impl SessionStore {
         io::marker(&*self._owner.io,".retiring",b"retiring\n").await?;
         if !io::marker(&*self._owner.io,".retired",b"").await? {io::create(&*self._owner.io,".retired",b"",&AtomicBool::new(false)).await?;}
         for name in [".retiring","head.0","head.1","head.json"] {super::storage_budget::remove(&*self._owner.io,name).await?;}
-        self.head=None;self.loaded=None;self.programs.clear();self.collect_garbage().await
+        self.head=None;self.loaded=None;self.programs.clear();self.compaction=None;self.compaction_fallback=None;self.compaction_refusal=None;self.collect_garbage().await
     }
     pub async fn prepare_retirement(&mut self)->Result<(),String> {
         if io::marker(&*self._owner.io,".retired",b"").await? {return Err("This drawing's session copy was retired".into());}
@@ -681,9 +699,9 @@ impl SessionStore {
     }
     async fn resource_roots(&mut self)->Result<StoreRoots,String> {
         let mut roots=StoreRoots {generations:BTreeSet::new(),resources:BTreeSet::new(),packs:BTreeSet::new(),identities:BTreeSet::new()};
-        if let Some(head)=self.head.clone() {
+        for head in self.head.iter().chain(self.compaction_fallback.iter()).cloned() {
             for generation in std::iter::once(head.current).chain(head.previous) {
-                roots.generations.insert(generation.id);
+                if !roots.generations.insert(generation.id) {continue;}
                 let metadata=self.generation_metadata(&generation,ProjectLimits::default().metadata_bytes).await?;
                 if self.generation_roots.get(&generation.id).is_none_or(|(known,_)|*known!=generation) {
                     let stored=StoredGeneration::parse(&metadata,ProjectLimits::default()).map_err(|error|error.message())?;
@@ -698,20 +716,27 @@ impl SessionStore {
         }
         self.generation_roots.retain(|id,_|roots.generations.contains(id));Ok(roots)
     }
+    fn retain_index(&mut self,identities:&BTreeSet<PortableId>) {
+        let mut references=BTreeMap::new();
+        for entry in self.index.values() {*references.entry(Arc::as_ptr(&entry.location)).or_insert(0usize)+=1;}
+        self.index.retain(|id,entry|identities.contains(id) || entry.owner.as_ref().is_some_and(|owner|owner.strong_count()!=0)
+            || Arc::strong_count(&entry.location)>references[&Arc::as_ptr(&entry.location)]);
+        self.by_owner.retain(|_,id|self.index.contains_key(id));
+    }
     async fn collect_roots(&mut self,roots:StoreRoots)->Result<(),String> {
         let StoreRoots {generations,resources,mut packs,identities}=roots;
-        self.index.retain(|id,entry|identities.contains(id) || entry.owner.as_ref().is_some_and(|owner|owner.strong_count()!=0));
-        self.by_owner.retain(|_,id|self.index.contains_key(id));
-        self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.retain(|id,weak| {
-            if weak.strong_count()==0 {false}else {packs.insert(*id);true}
-        });
+        self.retain_index(&identities);
+        for (&id,weak) in self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.iter() {
+            if weak.strong_count()!=0 {packs.insert(id);}
+        }
         if self.append.is_some_and(|(id,_)|!packs.contains(&id)) {self.append=None;}
         let terminal=io::marker(&*self._owner.io,".retired",b"").await?;
         for (name,retained,suffix) in [("generations",&generations,".json"),("resources",&resources,".bin"),("packs",&packs,".bin")] {
             io::clean(&*self._owner.io,name,retained,suffix).await?;
             if terminal && retained.is_empty() && self._owner.io.list(name).await?.is_empty() {super::storage_budget::remove(&*self._owner.io,name).await?;}
         }
-        io::clean(&*self._owner.io,"",&BTreeSet::new(),".unused").await?;Ok(())
+        io::clean(&*self._owner.io,"",&BTreeSet::new(),".unused").await?;
+        self._owner.packs.lock().map_err(|_|"Recovery pack lock failed")?.retain(|_,pack|pack.strong_count()!=0);Ok(())
     }
     async fn validate_layout(&self)->Result<(),String> {
         for entry in self._owner.io.list("").await? {
@@ -802,58 +827,61 @@ impl Pack {
 impl RangeReader for Pack {
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {self.file.read(offset,length,crc,completion);}
 }
+struct StoreRange {pack:Arc<Pack>,source:ReadSource,offset:u64}
 pub(crate) struct StoreLocation {
-    pack:Arc<Pack>,
-    source:ReadSource,
-    offset:u64,
+    range:Mutex<Arc<StoreRange>>,
     pub(crate) length:u64,
     pub(crate) crc:u32,
     descriptor:[u8;32],
 }
 impl StoreLocation {
+    fn new(pack:Arc<Pack>,source:ReadSource,offset:u64,length:u64,crc:u32,descriptor:[u8;32])->Self {
+        Self {range:Mutex::new(Arc::new(StoreRange {pack,source,offset})),length,crc,descriptor}
+    }
+    fn range(&self)->Arc<StoreRange> {self.range.lock().unwrap().clone()}
     async fn read_all(&self)->Result<Arc<[u8]>,String> {
+        let range=self.range();
         let length=usize::try_from(self.length).map_err(|_|"Stored resource exceeds address space")?;
         let mut bytes=Vec::new();bytes.try_reserve_exact(length).map_err(|_|"Stored resource allocation failed")?;
         let mut checksum=crc32fast::Hasher::new();
         while bytes.len()<length {
             let count=(length-bytes.len()).min(MAX_RANGE_BYTES);
-            let chunk=self.source.wait(self.offset+bytes.len() as u64,count)?.await?;
+            let chunk=range.source.wait(range.offset+bytes.len() as u64,count)?.await?;
             checksum.update(&chunk);bytes.extend_from_slice(&chunk);
         }
         if checksum.finalize()!=self.crc {return Err("Recovery resource checksum failed".into());}Ok(bytes.into())
     }
     async fn verify(&self)->Result<(),String> {
-        let mut offset=0;let mut checksum=crc32fast::Hasher::new();
+        let range=self.range();let mut offset=0;let mut checksum=crc32fast::Hasher::new();
         while offset<self.length {
             let count=(self.length-offset).min(MAX_RANGE_BYTES as u64) as usize;
-            let bytes=self.source.wait(self.offset+offset,count)?.await?;checksum.update(&bytes);offset+=count as u64;
+            let bytes=range.source.wait(range.offset+offset,count)?.await?;checksum.update(&bytes);offset+=count as u64;
         }
         if checksum.finalize()!=self.crc {return Err("Recovery resource checksum failed".into());}Ok(())
     }
-    pub(crate) async fn read(&self)->Result<ByteRange,String> {self.source.wait_checked(self.offset,self.length as usize,self.crc)?.await}
-    pub(crate) fn poll(&self)->Result<RangeState,String> {self.source.poll_checked(self.offset,self.length as usize,self.crc)}
+    pub(crate) async fn read(&self)->Result<ByteRange,String> {let range=self.range();range.source.wait_checked(range.offset,self.length as usize,self.crc)?.await}
+    pub(crate) fn poll(&self)->Result<RangeState,String> {let range=self.range();range.source.poll_checked(range.offset,self.length as usize,self.crc)}
     #[cfg(not(target_arch="wasm32"))]
-    pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {self.source.read_checked_on_worker(self.offset,self.length as usize,self.crc)}
+    pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {let range=self.range();range.source.read_checked_on_worker(range.offset,self.length as usize,self.crc)}
     pub(crate) fn backing(self:&Arc<Self>)->Result<ImmutableBacking,String> {ImmutableBacking::new(self.clone()).map_err(str::to_string)}
-
 }
 impl ByteSource for StoreLocation {
     fn byte_len(&self)->u64 {self.length}
     fn resident_bytes(&self)->usize {0}
     fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {
         if offset.checked_add(length as u64).is_none_or(|end|end>self.length) {return Err("Stored resource range exceeds extent".into());}
-        self.source.poll(self.offset+offset,length)
+        let range=self.range();range.source.poll(range.offset+offset,length)
     }
     fn wait(&self,offset:u64,length:usize)->super::store_io::FileFuture<'_,ByteRange> {
         Box::pin(async move {
             if offset.checked_add(length as u64).is_none_or(|end|end>self.length) {return Err("Stored resource range exceeds extent".into());}
-            self.source.wait(self.offset+offset,length)?.await
+            let range=self.range();range.source.wait(range.offset+offset,length)?.await
         })
     }
     #[cfg(not(target_arch="wasm32"))]
     fn poll_on_worker(&self,offset:u64,length:usize)->Result<RangeState,String> {
         if offset.checked_add(length as u64).is_none_or(|end|end>self.length) {return Err("Stored resource range exceeds extent".into());}
-        self.source.wait_on_worker(self.offset+offset,length).map(RangeState::Ready)
+        let range=self.range();range.source.wait_on_worker(range.offset+offset,length).map(RangeState::Ready)
     }
 }
 #[derive(Default)]
@@ -890,7 +918,8 @@ impl StoreResources {
         for record in records {
             let id:PortableId=record["id"].as_str().ok_or("Missing stored resource identity")?.parse().map_err(str::to_string)?;
             let location=self.locations.get(&id).ok_or("Missing stored resource location")?;
-            record["location"]["pack"]=packs[&location.pack.id].clone().into();
+            let range=location.range();record["location"]["pack"]=packs[&range.pack.id].clone().into();
+            record["location"]["offset"]=range.offset.to_string().into();
         }Ok(())
     }
     pub(crate) fn directory(&self)->super::archive::Directory {
@@ -937,3 +966,6 @@ mod live_tests;
 
 #[cfg(test)]
 mod writer_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+mod compaction_tests;

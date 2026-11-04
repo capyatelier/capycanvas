@@ -16,6 +16,15 @@ pub struct StorageFacts {
     pub epoch: u64,
 }
 
+#[derive(Clone)]
+pub struct StorageRefusal {pub facts:Option<StorageFacts>,pub epoch:u64}
+impl StorageRefusal {
+    pub fn allows(&self,facts:&StorageFacts)->bool {
+        StorageBudget::process().removal(&facts.scope).1>self.epoch
+            || facts.available_bytes.is_some_and(|available|available>0 && self.facts.as_ref().map_or(facts.epoch>self.epoch,|old|facts.epoch>old.epoch && available>old.available_bytes.unwrap_or(0)))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct StorageBudget(Arc<Mutex<State>>);
 #[derive(Default)]
@@ -67,6 +76,7 @@ impl StorageBudget {
         volume.reserved += bytes;
         StorageAdmission::Granted(StorageReservation { budget: self.clone(), scope: scope.into(), bytes, written: 0 })
     }
+    pub fn facts(&self,scope:&str)->Option<StorageFacts> {self.0.lock().unwrap().volumes.get(scope).map(|volume|volume.facts.clone())}
     pub fn available_bytes(&self, scope: &str) -> Option<u64> {
         let state = self.0.lock().unwrap();let volume = state.volumes.get(scope)?;
         let written = volume.written.iter().fold(0u64, |total, (_, bytes)| total.saturating_add(*bytes));

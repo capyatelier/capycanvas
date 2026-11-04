@@ -48,7 +48,7 @@ export function createDocumentRecovery({app,message,restore,remember=async()=>{}
         await current();let request={force,clean_exit},failure;
         do{
           for(const tab of tabs().tabs)try{await captureOne(tab.id,request.force);}catch(error){failure??=error;}
-          await publish(request.clean_exit);await settled();request=pending;pending=null;
+          await publish(request.clean_exit);await settled();app.session_maintenance();request=pending;pending=null;
         }while(request);
         if(failure)throw failure;
       }finally{job=null;pending=null;}
@@ -140,7 +140,7 @@ export function createDocumentRecovery({app,message,restore,remember=async()=>{}
     }catch{return false;}
   };
   setInterval(()=>{if(!restoring&&canOffer())autosave().catch(fail);},app.session_checkpoint_interval());
-  document.addEventListener('visibilitychange',()=>{if(document.hidden&&!restoring)autosave(false,true).catch(fail);});
+  document.addEventListener('visibilitychange',()=>{app.session_background(document.hidden);if(document.hidden&&!restoring)autosave(false,true).catch(fail);});
   window.addEventListener('pagehide',()=>{if(!restoring)autosave(true,true).catch(fail);});
   window.addEventListener('beforeunload',event=>{if(!protectedSession()){event.preventDefault();event.returnValue='';}});
   return {ensure,capture:()=>autosave(),retire,autosave,start:()=>initialization??=initialize(),protected:protectedSession};

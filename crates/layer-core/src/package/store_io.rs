@@ -13,6 +13,8 @@ pub trait StoreFile: RangeReader {
     fn read_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>>;
     fn write_at<'a>(&'a self,offset:u64,bytes:&'a [u8])->FileFuture<'a,()>;
     fn flush(&self)->FileFuture<'_,()>;
+    fn read_cold_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {self.read_at(offset,length)}
+    fn discard_cold(&self,_offset:u64,_length:u64)->FileFuture<'_,()> {Box::pin(async {Ok(())})}
 }
 #[derive(Clone,Debug,serde::Deserialize,PartialEq,Eq)]
 pub struct Removal {pub scope:String,pub bytes:u64}
@@ -20,6 +22,7 @@ pub struct Removal {pub scope:String,pub bytes:u64}
 pub trait FileTransport: Send+Sync {
     fn storage_facts(&self)->FileFuture<'_,super::storage_budget::StorageFacts>;
     fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>>;
+    fn open_copy<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {self.open(name,access)}
     fn list<'a>(&'a self,directory:&'a str)->FileFuture<'a,Vec<DirectoryEntry>>;
     fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,Removal>;
 }
@@ -54,6 +57,26 @@ mod native {
                     Ok(_)=>{},Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},Err(error)=>return Err(error.to_string()),
                 }
             }Ok(path)
+        }
+    }
+    impl NativeTransport {
+        fn open_file<'a>(&'a self,name:&'a str,access:FileAccess,cold:bool)->FileFuture<'a,Arc<dyn StoreFile>> {
+            Box::pin(async move {
+                let path=self.member(name)?;
+                if access==FileAccess::Create {
+                    let parent=path.parent().unwrap();
+                    super::super::session_store::create_directory(parent)?;
+                    if let Some(ancestor)=parent.parent() {super::super::session_store::sync_directory(ancestor)?;}
+                }
+                let mut options=OpenOptions::new();options.read(true).write(access!=FileAccess::Read).create_new(access==FileAccess::Create);
+                #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+                #[cfg(windows)] {use std::os::windows::fs::OpenOptionsExt;if cold {options.custom_flags(0x08000000);}}
+                let file=options.open(&path).map_err(storage_error)?;
+                #[cfg(any(target_os="macos",target_os="ios"))]
+                if cold {use std::os::fd::AsRawFd;unsafe {libc::fcntl(file.as_raw_fd(),libc::F_NOCACHE,1);}}
+                let _=cold;
+                Ok(Arc::new(NativeFile {file,path,new_name:AtomicBool::new(access==FileAccess::Create),writable:access!=FileAccess::Read}) as Arc<dyn StoreFile>)
+            })
         }
     }
     fn existing_path(mut path:&std::path::Path)->Result<&std::path::Path,String> {
@@ -127,6 +150,14 @@ mod native {
                 }Ok(())
             })
         }
+        #[cfg(any(target_os="linux",target_os="android"))]
+        fn discard_cold(&self,offset:u64,length:u64)->FileFuture<'_,()> {
+            Box::pin(async move {
+                use std::os::fd::AsRawFd;
+                unsafe {libc::posix_fadvise(self.file.as_raw_fd(),offset as libc::off_t,length as libc::off_t,libc::POSIX_FADV_DONTNEED);}
+                Ok(())
+            })
+        }
         fn flush(&self)->FileFuture<'_,()> {
             Box::pin(async {
                 super::super::session_store::sync_file(&self.file).map_err(storage_error)?;
@@ -139,20 +170,8 @@ mod native {
     }
     impl FileTransport for NativeTransport {
         fn storage_facts(&self)->FileFuture<'_,super::super::storage_budget::StorageFacts> {Box::pin(async {storage_facts(&self.root)})}
-        fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {
-            Box::pin(async move {
-                let path=self.member(name)?;
-                if access==FileAccess::Create {
-                    let parent=path.parent().unwrap();
-                    super::super::session_store::create_directory(parent)?;
-                    if let Some(ancestor)=parent.parent() {super::super::session_store::sync_directory(ancestor)?;}
-                }
-                let mut options=OpenOptions::new();options.read(true).write(access!=FileAccess::Read).create_new(access==FileAccess::Create);
-                #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
-                let file=options.open(&path).map_err(storage_error)?;
-                Ok(Arc::new(NativeFile {file,path,new_name:AtomicBool::new(access==FileAccess::Create),writable:access!=FileAccess::Read}) as Arc<dyn StoreFile>)
-            })
-        }
+        fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {self.open_file(name,access,false)}
+        fn open_copy<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {self.open_file(name,access,true)}
         fn list<'a>(&'a self,directory:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {
             Box::pin(async move {
                 let path=if directory.is_empty() {self.root.clone()}else {self.member(directory)?};

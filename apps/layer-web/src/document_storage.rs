@@ -3,6 +3,8 @@ use wasm_bindgen_futures::future_to_promise;
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn session_maintenance(&self)->Result<(),JsValue> {self.stores.maintain().map_err(js)}
+    pub fn session_background(&self,background:bool) {layer_core::package::session_store::CompactionActivity::set_background(background);}
     pub fn set_document_cache_budget(&mut self,bytes:u32) {
         self.documents.set_inactive_ram_budget((bytes as usize).min(layer_ui::DocumentBudget::default().inactive_ram));
     }

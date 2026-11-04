@@ -79,6 +79,7 @@ pub enum TabRequest {
 
 /// Worker half of a drawing switch, using the window's shared GPU factory.
 pub struct Activation {
+    _activity:layer_core::package::session_store::CompactionActivity,
     selected: u64,
     epoch: u64,
     gpu: Option<GpuContext>,
@@ -147,6 +148,7 @@ pub struct OpenAdoption {
 pub type SessionIdentityMap = Vec<(u64, u64)>;
 
 pub struct PreparedClose {
+    activity:layer_core::package::session_store::CompactionActivity,
     suspended: bool,
     options: RendererOptions,
     selected: u64,
@@ -370,6 +372,7 @@ impl<P: Parked> DocumentWindow<P> {
         if !self.documents.contains_parked(target) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()));
         }
+        let activity=layer_core::package::session_store::CompactionActivity::hold();
         host.session.prepare_document_switch()?;
         if !self.park_ready(host)? {
             return Err("Wait for drawing capture before switching drawings".into());
@@ -390,6 +393,7 @@ impl<P: Parked> DocumentWindow<P> {
         self.changed(host);
         host.startup = Default::default();
         let activation = Activation {
+            _activity:activity,
             selected: self.documents.selected(),
             epoch: host.session.state().document_file.epoch,
             gpu: self.gpu.clone(),
@@ -420,7 +424,7 @@ impl<P: Parked> DocumentWindow<P> {
         host.document_close_prepared = true;
         host.invalidate_snapshot();
         let target = self.documents.after_close().map(|id| (id, CloseDocumentFence::capture(self.session(host, id).unwrap())));
-        Ok(PreparedClose {suspended,options,selected:self.documents.selected(),order:self.documents.order().to_vec(),
+        Ok(PreparedClose {activity:layer_core::package::session_store::CompactionActivity::hold(),suspended,options,selected:self.documents.selected(),order:self.documents.order().to_vec(),
             source:CloseDocumentFence::capture(&host.session),target})
     }
 
@@ -468,7 +472,7 @@ impl<P: Parked> DocumentWindow<P> {
         host.document_close_prepared = false;
         self.changed(host);
         host.startup = Default::default();
-        Ok((Activation {selected:self.documents.selected(),epoch:host.session.state().document_file.epoch,
+        Ok((Activation {_activity:prepared.activity,selected:self.documents.selected(),epoch:host.session.state().document_file.epoch,
             gpu:self.gpu.clone(),color:host.session.engine().document().composition().color,
             options:prepared.options,retired,retirement_barrier:true,renderer:None}, closed))
     }

@@ -24,6 +24,7 @@ try {
     await call('claim',{name:'scheduler'});await call('open',{name,access:'create'});
     await call('write_at',{name,offset:0},[expected]);await call('flush',{name});
     const read=()=>call('read_at',{name,offset:0,length:9,crc});
+    const cold=await call('copy_read_at',{name,offset:0,length:9});if(new TextDecoder().decode(cold.buffers[0])!=='123456789')throw Error('Background copy changed bytes');
     const first=await read();if(new TextDecoder().decode(first.buffers[0])!=='123456789')throw Error('Correct CRC changed bytes');
     const refusal=async request=>{try{await call('read_at',{name,offset:0,length:9,...request});return false;}catch(error){return error.message==='Recovery resource checksum failed';}};
     const mismatch=await refusal({crc:(crc+1)>>>0}),strict=await refusal({crc:String(crc)});

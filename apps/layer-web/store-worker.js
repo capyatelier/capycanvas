@@ -72,6 +72,7 @@ async function execute({operation,metadata:meta={},buffers=[],handles=[]}) {
       return;
     }
     case 'len': return (await file(meta.name)).getSize();
+    case 'copy_read_at':
     case 'read_at': {
       range(meta.offset,meta.length);const bytes=new Uint8Array(meta.length);
       if((await file(meta.name)).read(bytes,{at:meta.offset})!==bytes.length)throw Error('Incomplete drawing store read');

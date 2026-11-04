@@ -232,6 +232,11 @@ impl ReadCache {
 }
 
 impl ReadSource {
+    pub(crate) fn cached(&self,offset:u64,length:u64)->bool {
+        let Ok(length)=usize::try_from(length) else {return false;};
+        self.0.cache.0.state.lock().unwrap().entries.get(&Key(self.0.id,offset,length)).is_some_and(|entry|matches!(entry.phase,Phase::Ready(_)))
+    }
+
     #[cfg(not(target_arch="wasm32"))]
     pub fn file(file:Arc<std::fs::File>, length:u64)->Self {ReadCache::process().source(length,Arc::new(FileReader(file)))}
     fn key(&self, offset:u64, length:usize)->Result<Key,String> {

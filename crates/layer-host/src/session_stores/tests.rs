@@ -937,3 +937,20 @@ fn disk_refusal_preserves_each_write_kind_and_waits_for_changed_space_without_re
         else {if kind!="legacy-import" {assert_eq!(tile.resident_bytes(),0);}assert_ne!(heads(binding.path()),before);}
     }
 }
+
+#[test]
+fn compaction_yields_its_queue_position_to_restore_pressure_and_checkpoint() {
+    let (capture,stamp,_,_)=capture();let mut pending=Pending::default();
+    let request=|work|Request {work,replies:Vec::new()};
+    assert!(pending.push(request(Work::Compact)).is_empty());
+    assert!(pending.push(request(Work::Checkpoint {capture,stamp,forced:false,prepare:None})).is_empty());
+    assert!(pending.push(request(Work::Pressure(Vec::new()))).is_empty());
+    assert!(pending.push(request(Work::Restore(ProjectLimits::default()))).is_empty());
+    assert!(matches!(pending.take().unwrap().work,Work::Restore(_)));
+    assert!(matches!(pending.take().unwrap().work,Work::Pressure(_)));
+    assert!(matches!(pending.take().unwrap().work,Work::Checkpoint {..}));
+    assert!(matches!(pending.take().unwrap().work,Work::Compact));assert!(pending.take().is_none());
+    pending.push(request(Work::Compact));
+    assert!(matches!(pending.push(request(Work::Retire)).pop().unwrap().work,Work::Compact));
+    assert!(matches!(pending.take().unwrap().work,Work::Retire));assert!(pending.take().is_none());
+}

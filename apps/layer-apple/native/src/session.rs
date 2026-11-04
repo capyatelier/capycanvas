@@ -476,3 +476,6 @@ pub unsafe extern "C" fn capy_session_free(task: u64) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn capy_session_checkpoint_interval_ms()->u64 {SessionStores::checkpoint_interval_ms()}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_session_set_background(background:bool) {layer_core::package::session_store::CompactionActivity::set_background(background);}

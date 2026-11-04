@@ -232,13 +232,13 @@ fn thousands_of_durable_tiles_share_one_file_and_read_source_per_pack() {
     assert_eq!(file_owners.len(),physical.len());
     for blob in &blobs {
         let location=blob.compressed.location().unwrap().unwrap();
-        assert!(packs.iter().any(|pack|Arc::ptr_eq(pack,&location.pack)));
+        assert!(packs.iter().any(|pack|Arc::ptr_eq(pack,&location.range().pack)));
     }
     let original = blobs[0].compressed.location().unwrap().unwrap();
     let aliased = alias.compressed.location().unwrap().unwrap();
     assert!(Arc::ptr_eq(&original, &aliased));
-    assert!(Arc::ptr_eq(&original.pack, &aliased.pack));
-    assert_eq!(original.offset, aliased.offset);
+    assert!(Arc::ptr_eq(&original.range().pack, &aliased.range().pack));
+    assert_eq!(original.range().offset, aliased.range().offset);
     assert_eq!(retained.resident_bytes(), 0);
 }
 
@@ -388,9 +388,9 @@ fn restore_binds_cold_tiles_and_defers_checksum_verification_until_the_first_rea
     let tile=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
     assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),0);
     let location=tile.compressed.location().unwrap().unwrap();
-    let mut file=OpenOptions::new().write(true).open(store.pack_path(location.pack.id)).unwrap();
-    use std::io::{Seek,SeekFrom};let byte=location.pack.file.read_at(location.offset,1).wait().unwrap();
-    file.seek(SeekFrom::Start(location.offset)).unwrap();file.write_all(&[byte[0]^0xff]).unwrap();file.sync_all().unwrap();
+    let mut file=OpenOptions::new().write(true).open(store.pack_path(location.range().pack.id)).unwrap();
+    use std::io::{Seek,SeekFrom};let byte=location.range().pack.file.read_at(location.range().offset,1).wait().unwrap();
+    file.seek(SeekFrom::Start(location.range().offset)).unwrap();file.write_all(&[byte[0]^0xff]).unwrap();file.sync_all().unwrap();
     assert!(tile.decode_on_worker().unwrap_err().contains("checksum"));
     assert!(reads.calls()>0);
     assert_eq!(store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.document().composition().size,[256;2]);

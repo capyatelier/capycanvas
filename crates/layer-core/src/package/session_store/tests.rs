@@ -17,9 +17,12 @@
         Exit(&'static str),
         HeadWrite(usize),
         StorageFull,
+        Remove,
     }
+    #[derive(Clone,Copy,Debug,Default,PartialEq,Eq)]
+    pub(super) struct IoCounts {pub opens:u64,pub lists:u64,pub reads:u64,pub facts:u64}
     #[derive(Default)]
-    pub(super) struct Control {pub fault:Option<Fault>,space:Option<Option<u64>>,count:usize,operations:Vec<String>,hold_reads:bool,reads:std::collections::VecDeque<(Arc<dyn StoreFile>,u64,usize,Option<u32>,ReadCompletion)>}
+    pub(super) struct Control {pub fault:Option<Fault>,pub(super) io:IoCounts,pub(super) space:Option<Option<u64>>,pub(super) count:usize,pub(super) operations:Vec<String>,hold_reads:bool,reads:std::collections::VecDeque<(Arc<dyn StoreFile>,u64,usize,Option<u32>,ReadCompletion)>}
     fn controls()->&'static Mutex<BTreeMap<PathBuf,Weak<Transport>>> {
         static CONTROLS:OnceLock<Mutex<BTreeMap<PathBuf,Weak<Transport>>>>=OnceLock::new();CONTROLS.get_or_init(Default::default)
     }
@@ -35,7 +38,7 @@
     }
     impl StoreFile for TransportFile {
         fn len(&self)->FileFuture<'_,u64> {self.inner.len()}
-        fn read_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {self.inner.read_at(offset,length)}
+        fn read_at(&self,offset:u64,length:usize)->FileFuture<'_,Arc<[u8]>> {self.control.lock().unwrap().io.reads+=1;self.inner.read_at(offset,length)}
         fn write_at<'a>(&'a self,offset:u64,bytes:&'a [u8])->FileFuture<'a,()> {
             Box::pin(async move {
                 if matches!(self.control.lock().unwrap().fault,Some(Fault::StorageFull)) {return Err(crate::package::storage_budget::STORAGE_UNAVAILABLE.into());}
@@ -73,15 +76,18 @@
     }
     impl FileTransport for Transport {
         fn storage_facts(&self)->FileFuture<'_,crate::package::storage_budget::StorageFacts> {Box::pin(async {
+            self.control.lock().unwrap().io.facts+=1;
             let mut facts=self.inner.storage_facts().await?;
             if let Some(space)=self.control.lock().unwrap().space {facts.scope=format!("test:{:p}",Arc::as_ptr(&self.control));facts.available_bytes=space;}
             Ok(facts)
         })}
         fn open<'a>(&'a self,name:&'a str,access:FileAccess)->FileFuture<'a,Arc<dyn StoreFile>> {Box::pin(async move {
+            self.control.lock().unwrap().io.opens+=1;
             Ok(Arc::new(TransportFile {inner:self.inner.open(name,access).await?,name:name.into(),control:self.control.clone()}) as Arc<dyn StoreFile>)
         })}
-        fn list<'a>(&'a self,name:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {self.inner.list(name)}
+        fn list<'a>(&'a self,name:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {self.control.lock().unwrap().io.lists+=1;self.inner.list(name)}
         fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,super::super::store_io::Removal> {Box::pin(async move {
+            if matches!(self.control.lock().unwrap().fault,Some(Fault::Remove)) {return Err("Interrupted remove".into());}
             let mut removed=self.inner.remove(name).await?;
             if self.control.lock().unwrap().space.is_some() {removed.scope=format!("test:{:p}",Arc::as_ptr(&self.control));}Ok(removed)
         })}
@@ -175,8 +181,8 @@
         }
         pub(crate) fn resource_count(&self)->usize {self.store.borrow().as_ref().unwrap().index.len()}
         pub(crate) fn corrupt_payload(&self,missing:bool) {
-            let borrowed=self.store.borrow();let store=borrowed.as_ref().unwrap();let location=&store.index.values().next().unwrap().location;let path=store.pack_path(location.pack.id);
-            if missing {fs::remove_file(path).unwrap();}else {let mut bytes=fs::read(&path).unwrap();bytes[location.offset as usize]^=1;fs::write(path,bytes).unwrap();}
+            let borrowed=self.store.borrow();let store=borrowed.as_ref().unwrap();let location=&store.index.values().next().unwrap().location;let path=store.pack_path(location.range().pack.id);
+            if missing {fs::remove_file(path).unwrap();}else {let mut bytes=fs::read(&path).unwrap();bytes[location.range().offset as usize]^=1;fs::write(path,bytes).unwrap();}
         }
     }
     struct Captured {editor:EditorCapture,metadata:SessionMetadata,tiles:Vec<Arc<TileBlob>>}
@@ -269,12 +275,12 @@
         assert!(read.as_mut().poll(&mut context).is_pending());cache.drive();
         let (file,offset,length,crc,completion)=control.lock().unwrap().reads.pop_front().expect("one leased tile read");
         assert_eq!(crc,Some(location.crc));file.read(offset,length,crc,completion);
-        location.source.evict();cache.drive();budget.flush_reports();
+        location.range().source.evict();cache.drive();budget.flush_reports();
         assert_eq!(budget.snapshot().ram_physical_bytes,physical+expected.len() as u64);
         let Poll::Ready(Ok(bytes))=read.as_mut().poll(&mut context) else {panic!("completed tile read retains its result")};drop(read);
         assert_eq!(&*bytes,&*expected);assert_eq!(crc32fast::hash(&bytes),location.crc);
-        location.source.evict();budget.flush_reports();assert_eq!(budget.snapshot().ram_physical_bytes,physical+expected.len() as u64);
-        drop(bytes);location.source.evict();cache.drive();budget.flush_reports();
+        location.range().source.evict();budget.flush_reports();assert_eq!(budget.snapshot().ram_physical_bytes,physical+expected.len() as u64);
+        drop(bytes);location.range().source.evict();cache.drive();budget.flush_reports();
         assert_eq!(budget.snapshot().ram_physical_bytes,physical);assert!(control.lock().unwrap().reads.is_empty());drop(drain);
     }
     #[test]
@@ -297,7 +303,7 @@
         file.write_at(length-1,&[0]).wait().unwrap();file.flush().wait().unwrap();
         let reads=Arc::new(AtomicU64::new(0));let cache=ReadCache::new(crate::MemoryBudget::default());
         let pack=Arc::new(Pack {id:pack_id,file:Arc::new(CountedFile {inner:file,reads:reads.clone()}),owner:store._owner.clone(),source:Default::default(),extent:AtomicU64::new(length)});
-        let location=Arc::new(StoreLocation {source:pack.source(&cache),pack,offset:0,length,crc:0,descriptor:[0;32]});
+        let location=Arc::new(StoreLocation::new(pack.clone(),pack.source(&cache),0,length,0,[0;32]));
         let mut resources=StoreResources {locations:[(id,location)].into(),..Default::default()};
         let metadata=json!({"resources":[{"id":id,"type":"capy.wgsl/1","encoding":"utf8","bytes":length.to_string(),"crc32":"00000000","data":{},"location":{"pack":"data/tiles-1.bin","offset":"0"}}]});
         assert!(resources.prepare(&metadata,&crate::MemoryBudget::default()).wait().is_err());
@@ -371,7 +377,7 @@
         assert_eq!(fs::read_dir(directory.0.join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>(),lengths);
         for ids in aliases.values().filter(|ids|ids.len()>1) {
             let first=&store.index[&ids[0]].location;
-            for id in &ids[1..] {let alias=&store.index[id].location;assert_eq!(first.pack.id,alias.pack.id);assert_eq!(first.offset,alias.offset);}
+            for id in &ids[1..] {let alias=&store.index[id].location;assert_eq!(first.range().pack.id,alias.range().pack.id);assert_eq!(first.range().offset,alias.range().offset);}
         }
         let mut opened=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap();assert_eq!(restored_history(&mut opened),expected);drop(opened);
         let before=input_bytes(&directory.0);
@@ -485,7 +491,7 @@
         assert_eq!(fs::metadata(&owner.path).unwrap().len(), tail);
         checkpoint(&mut store, &second, &cancel).unwrap();
         let next = resource_owner(&store, tile_resource(&second).payload.resource_id(), tile_resource(&second).bytes);
-        assert_eq!(owner.path, next.path); assert!(next.offset >= tail);
+        assert_eq!(owner.path, next.path); assert!(next.range().offset >= tail);
         assert_eq!(marker(&mut store), 2);
         let bytes = fs::read(&owner.path).unwrap(); assert_eq!(&bytes[committed as usize..tail as usize], b"partial append");
     }
@@ -547,7 +553,7 @@
         let first=owner.id();let second=alias.id();let separate:crate::authored::Resource<[u8]>=vec![29;16].into();let separate_id=separate.id();
         store.store_inputs(vec![input(owner),input(separate),input(alias)],&cancel).wait().unwrap().commit().unwrap();
         let first=&store.index[&first].location;let second=&store.index[&second].location;
-        assert!(Arc::ptr_eq(first,second));assert_eq!(first.pack.id,pack);
+        assert!(Arc::ptr_eq(first,second));assert_eq!(first.range().pack.id,pack);
         assert_eq!(&*first.read().wait().unwrap(),&[17;8]);assert_eq!(&*second.read().wait().unwrap(),&[17;8]);
         assert_eq!(&*store.index[&separate_id].location.read().wait().unwrap(),&[29;16]);
         let bytes=fs::read_dir(directory.0.join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>();
@@ -726,7 +732,7 @@
             let capture = editor.capture_session(editor.capture(1, Default::default()).unwrap()).unwrap();
             let prepared = captured(&capture, json!({}));
             let mut store = SessionStore::open(&directory.0).wait().unwrap(); checkpoint(&mut store, &prepared, &cancel).unwrap();
-            let owner = resource_owner(&store, id, length); assert_eq!(owner.offset, 0); assert_eq!(fs::metadata(&owner.path).unwrap().len(), length.max(1));
+            let owner = resource_owner(&store, id, length); assert_eq!(owner.range().offset, 0); assert_eq!(fs::metadata(&owner.path).unwrap().len(), length.max(1));
             if length == 0 {
                 let path = owner.path.clone();
                 drop((owner, prepared, capture, editor, store));
@@ -853,7 +859,7 @@
     impl std::ops::Deref for ReaderLease {type Target=StoreLocation;fn deref(&self)->&Self::Target {&self.location}}
     fn resource_owner(store:&SessionStore,id:PortableId,length:u64)->ReaderLease {
         let location=store.index[&id].location.clone();assert_eq!(location.length,length);
-        ReaderLease {path:store.pack_path(location.pack.id),location}
+        ReaderLease {path:store.pack_path(location.range().pack.id),location}
     }
     struct TileResource<'a> {payload:&'a Arc<TileBlob>,bytes:u64}
     fn tile_resource(capture:&Captured)->TileResource<'_> {
@@ -1025,7 +1031,7 @@
                     let owner = resource_owner(&store, tile_resource(&second).payload.resource_id(), tile_resource(&second).bytes);
                     let mut file = OpenOptions::new().write(true).open(&owner.path).unwrap();
                     use std::io::{Seek, SeekFrom};
-                    file.seek(SeekFrom::Start(owner.offset)).unwrap(); file.write_all(b"broken").unwrap();
+                    file.seek(SeekFrom::Start(owner.range().offset)).unwrap(); file.write_all(b"broken").unwrap();
                 }
                 1 => fs::write(store.generation_path(generation), b"broken").unwrap(),
                 3 => {

@@ -82,6 +82,7 @@ pub(super) fn validate_catalog_labels(catalog: &layer_core::EffectCatalog, l: &L
 
 impl<B: CanvasRenderer> UiSession<B> {
     pub(crate) fn update_shader_idle(&mut self) {
+        self.storage_activity.set_busy(!self.rendering_suspended && (!self.background_readback_idle() || self.operation.transforming() || self.workspace_transition || self.drawing_switch_pending));
         let idle = self.filter_previews_idle() && !self.state.settings_open;
         let speculative_idle = idle && !self.engine.wants_continuous_frames();
         self.engine.backend_mut().shader_idle(idle, speculative_idle);
