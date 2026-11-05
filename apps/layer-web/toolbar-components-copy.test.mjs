@@ -29,7 +29,7 @@ class Element extends FakeElement {
   setPointerCapture(){}
   getBoundingClientRect(){return {x:10,y:10,right:110,bottom:110,width:100,height:100};}
   showPopover(){this.open=true;}
-  getContext(){return {resetTransform(){},clearRect:()=>{this.drawnImage=undefined;},scale(){},save(){},beginPath(){},rect(){},clip(){},drawImage:image=>{this.drawnImage=image;this.drawCount=(this.drawCount??0)+1;},fillRect(){},restore(){},measureText:text=>({width:text.length*6})};}
+  getContext(){return {createLinearGradient:(...bounds)=>{const gradient={bounds,stops:[]};(this.gradients??=[]).push(gradient);return {addColorStop:(offset,color)=>gradient.stops.push([offset,color])};},resetTransform(){},clearRect:()=>{this.drawnImage=undefined;},scale(){},save(){},beginPath(){},rect(){},clip(){},drawImage:image=>{this.drawnImage=image;this.drawCount=(this.drawCount??0)+1;},fillRect(){},restore(){},measureText:text=>({width:text.length*6})};}
 }
 function harness(t,standalone=false,fixed=false,initiallyDisabled=false){
   const globals=['document','window','getComputedStyle','innerWidth','innerHeight','devicePixelRatio','requestAnimationFrame','cancelAnimationFrame'],original=Object.fromEntries(globals.map(key=>[key,globalThis[key]])),doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener(){},removeEventListener(){}};
@@ -274,4 +274,18 @@ test('disabling an active slider keeps a newer synchronous publication',t=>{
   const sliders=h.root.querySelectorAll('.number-slider');assert.equal(sliders.length,1);
   assert.equal(sliders[0].disabled,false);assert.equal(sliders[0].value,.81);
   assert.deepEqual(h.actions.filter(a=>a.type==='phone').map(a=>a.action.phase),['down','cancel']);
+});
+
+
+test('brush preview header fade keeps the panel RGB at its transparent endpoint in both themes',async t=>{
+  const h=harness(t,true),ui=h.app.toolbar_ui,computed=globalThis.getComputedStyle;let panel;
+  h.app.toolbar_ui=request=>{const view=ui(request);return request.type==='slider_preview'?{...view,header_fade:18,header_fade_opacity:.8}:view;};
+  globalThis.getComputedStyle=node=>({...computed(node),getPropertyValue:name=>{assert.equal(name,'--panel');return `  ${panel}  `;}});
+  for(const [theme,color]of [['light','#fafafa'],['dark','#333333']]){
+    panel=color;
+    if(theme==='light')h.root.querySelector('.toolbar-slider-cap').click();else h.root.updateComponent(h.tile());
+    await h.flush();const canvas=h.root.querySelector('.toolbar-brush-preview').querySelector('canvas'),gradient=canvas.gradients.at(-1);
+    assert.deepEqual(gradient.bounds,[0,0,0,18]);assert.deepEqual(gradient.stops,[[0,color],[1,`${color}00`]],`${theme} Cairo-style alpha fade keeps both endpoints on the same panel RGB`);
+  }
+  assert.deepEqual(h.actions,[]);
 });

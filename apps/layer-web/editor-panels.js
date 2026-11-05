@@ -49,7 +49,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
       if(groups){
         const buttons=[...groups.children];
         for(const node of buttons){node.style.width='max-content';node.style.maxWidth='none';}
-        const natural=buttons.map(node=>node.offsetWidth);
+        const natural=buttons.map(node=>Math.ceil(node.getBoundingClientRect().width));
         for(const node of buttons){node.style.width='';node.style.maxWidth='';}
         const columns=app.toolbar_ui({type:'tool_set_columns',width,natural,rows:view.groups_are_rows});
         groups.style.gridTemplateColumns=columns.map(width=>`${width}px`).join(' ');

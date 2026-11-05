@@ -187,6 +187,7 @@ their native GPU backend.
 | `LAYER_TEST_VERBOSE=1` | Prints browser diagnostics. |
 | `LAYER_TEST_ARTIFACTS` | Where journeys that save captures write them. |
 | `LAYER_PHONE_AUDIT_CASES` | Comma-separated phone audit cases such as `412x891-light,891x412-dark`; omitted means the full matrix. |
+| `LAYER_PHONE_DRAWER_STATES` | Comma-separated existing `--phone-drawers` state IDs for focused captures; omitted runs every drawer state. |
 | `LAYER_PHONE_DIALOG_ROWS` | Comma-separated row IDs from the selected `--phone-dialogs` batch; captures retain each row's variants and report the requested subset. |
 
 The `runJourney` table in `test.mjs` maps each flag to its check and error check

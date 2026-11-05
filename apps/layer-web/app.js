@@ -724,6 +724,8 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
   // The help occupies the same unobstructed area used for fitting the document.
   // Panels remain native UI siblings above the full-window drawing surface.
   place($("gpu-notice"), layout.work_area);
+  workspace.style.setProperty('--work-area-center',`${layout.work_area.x+layout.work_area.width/2}px`);
+  workspace.style.setProperty('--work-area-bottom',`${Math.max(0,workspace.clientHeight-layout.work_area.y-layout.work_area.height)}px`);
   if (!layoutOnly) {
     resizeCanvas();
     updateZen();
@@ -1957,7 +1959,7 @@ try {
   catalog = liveCopy(app, "catalog");
   performance.mark("capy.startup.model");
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
-  for(const [key,value] of Object.entries(catalog.panel_metrics))document.documentElement.style.setProperty(`--panel-${key.replaceAll("_","-")}`,`${value}px`);
+  for(const [key,value] of Object.entries(catalog.panel_metrics))document.documentElement.style.setProperty(`--panel-${key.replaceAll("_","-")}`,`${value}${key.endsWith('_chars')?'ch':'px'}`);
   for(const [key,value] of Object.entries(app.divider_metrics()))document.documentElement.style.setProperty(`--divider-${key}`,`${value}px`);
   publishAppName();
   fillGesture=createFillGesture({workspace,canvas,element,glassChanged:()=>glass?.queue()});

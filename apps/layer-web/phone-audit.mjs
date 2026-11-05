@@ -47,6 +47,18 @@ export const auditModes={
   'dialogs-desktop':{matrix:dialogAuditMatrix,dialogMode:'desktop'},
 };
 
+export function selectPhoneDrawerStates(value) {
+  if(value===undefined)return null;
+  const states=new Set(value.split(',').map(state=>state.trim()).filter(Boolean));
+  assert.ok(states.size,'LAYER_PHONE_DRAWER_STATES needs at least one state');
+  return states;
+}
+
+export async function openPhoneDrawerTile(click,hasDrawer,selector) {
+  await click(selector);
+  if(!await hasDrawer())await click(selector);
+}
+
 export function measurePhoneAuditElements(specifications, root = document) {
   const elements=[],missing=[],ids=new Set();
   for(const {id,role,selector,optional=false} of specifications) {
@@ -100,6 +112,17 @@ export function phoneAuditDrawerSpecifications(root = document) {
         add(`${key}.icon`,'icon',row.querySelector('.tool-caption-icon,.tool-choice-icon'));add(`${key}.label`,'label',row.querySelector('.tool-caption-name,.tool-choice-name'));add(`${key}.preview`,'preview',row.querySelector('.brush-preview'));
       });
     }
+    [...drawer.querySelectorAll('.number-control')].forEach((number,index)=>{
+      const key=`${id}.number.${index}`;add(key,'number',number);
+      for(const [part,query]of [['track','.number-track'],['slider','.number-slider'],['value','.number-value'],['entry','.number-entry'],['title','.number-title']])
+        add(`${key}.${part}`,part,number.querySelector(query));
+    });
+    [...drawer.querySelectorAll('.tool-action-choice,.picker-setting')].forEach((choice,index)=>{
+      const key=`${id}.choice.${index}`;
+      add(`${key}.label`,'label',choice.querySelector(':scope > span'));
+      add(`${key}.control`,'button',choice.querySelector(':scope > .dropdown'));
+      add(`${key}.value`,'label',choice.querySelector(':scope > .dropdown .dropdown-label'));
+    });
     for(const [key,query]of [['layers','.layer-inspector'],['layers.rows','.layer-rows'],['layers.footer','.layer-inspector-footer'],['color','.color-wheel-control'],['color.disc','.color-wheel-control canvas']])
       add(`${id}.${key}`,'context',drawer.querySelector(query));
   }
@@ -1144,6 +1167,10 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     }
     if(mode==='drawers'){
       const fixture={send,evaluate,wait,call,settle,click};
+      const selectedStates=selectPhoneDrawerStates(process.env.LAYER_PHONE_DRAWER_STATES);
+      const wanted=name=>!selectedStates||selectedStates.has(name);
+      const capturedStates=new Set();
+      const assertRequested=()=>assert.deepEqual([...selectedStates].filter(name=>!capturedStates.has(name)),[],`Requested drawer states were not captured`);
       const captureDrawer=async name=>{
         try {await drawerReady();}
         catch(error){
@@ -1153,6 +1180,8 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
           throw Error(`${name}: drawer did not settle`,{cause:error});
         }
         await settle();
+        if(await evaluate('!!document.querySelector(".content-drawer .layer-rows")'))
+          await wait(`(()=>{const rows=document.querySelector('.content-drawer .layer-rows'),top=Math.max(0,rows.getBoundingClientRect().top);return layerApp.state().layers.filter(layer=>layer.has_thumbnail).every(layer=>{const row=rows.querySelector('.layer-row[data-layer="'+String(layer.id)+'"]');if(!row||!row.checkVisibility())return true;const rect=row.getBoundingClientRect();if(rect.bottom<top||rect.top>innerHeight)return true;return row.querySelector('.layer-thumbnail canvas')?.dataset.previewRevision===String(layerApp.state().document_file.epoch)+':'+String(layer.paint_revision);});})()`);
         const actual=await evaluate(`(${phoneAuditDrawerSpecifications.toString()})()`);
         const record=await capture(test,name,[...phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),...actual],'existing shared drawer owner');
         assert.equal(record.status,'captured');assert.deepEqual(record.missing,[]);
@@ -1161,6 +1190,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         assert.equal(record.elements.filter(e=>e.role==='drawer-column').length,(await evaluate('layerApp.state().customization.drawer')).columns.length);
         const naturals=await evaluate(`(()=>{const minimums=layerApp.app.drawer_measure({viewport:[innerWidth,innerHeight],column:null,tiles:[]}).minimums;return [...document.querySelectorAll('.content-drawer[data-drawer="tool"] > .drawer-contents > .drawer-column')].flatMap((column,i)=>[...column.children].map((panel,j)=>{const s=getComputedStyle(panel);return{minimum:minimums[i][j],height:panel.getBoundingClientRect().height+parseFloat(s.marginTop)+parseFloat(s.marginBottom)};}));})()`);
         for(const {minimum,height}of naturals)if(minimum)assert.ok(Math.abs(height-minimum)<=1,`A scroll body keeps its requested natural extent: ${height} versus ${minimum}`);
+        capturedStates.add(name);
         return record;
       };
       for(const [preset,tag]of [['painter','sketch'],['illustrator','paint'],['photographer','photo']]){
@@ -1169,15 +1199,13 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         const tiles=await evaluate('layerApp.state().workspace.layout.phone');
         for(const tile of tiles.filter(tile=>tile.control.kind!=='divider')){
           const name=tile.control.command??tile.control.slot??tile.control.panel??tile.control.kind;
+          const state=`inventory-${tag}-${name.replaceAll('_','')}`;
+          if(selectedStates&&![state,`${state}-bottom`,...(tile.control.panel==='layers'?[`inventory-${tag}-layers-properties`]:[])].some(wanted))continue;
           const transforming=name==='scale_rotate';
           if(transforming)await auditOwnedImage(fixture);
           const selector=`#phone-tool-${tile.id}`;
-          await click(selector);
-          if(!await evaluate('!!layerApp.state().customization.drawer')){
-            await wait(`document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-pressed')==='true'`);
-            await click(selector);
-          }
-          await captureDrawer(`inventory-${tag}-${name.replaceAll('_','')}`);
+          await openPhoneDrawerTile(click,()=>evaluate('!!layerApp.state().customization.drawer'),selector);
+          if(wanted(state))await captureDrawer(state);
           const color=await evaluate(`(()=>{const n=document.querySelector('.content-drawer .color-wheel'),c=n?.closest('.drawer-column');if(!n||!c)return null;return{wheel:n.getBoundingClientRect().toJSON(),column:c.getBoundingClientRect().toJSON()}})()`);
           if(color)assert.ok(color.wheel.left>=color.column.left-1&&color.wheel.right<=color.column.right+1&&color.wheel.top>=color.column.top-1&&color.wheel.bottom<=color.column.bottom+1,'The Color wheel stays inside its live column');
           if(color){
@@ -1186,14 +1214,14 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
             if(scroll.extent>scroll.height+1){
               await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:scroll.x,y:scroll.y,deltaX:0,deltaY:scroll.extent});
               await wait(`(()=>{const n=document.querySelector('.content-drawer .drawer-contents');return n.scrollTop+n.clientHeight>=n.scrollHeight-1;})()`);
-              await captureDrawer(`inventory-${tag}-${name.replaceAll('_','')}-bottom`);
+              if(wanted(`${state}-bottom`))await captureDrawer(`${state}-bottom`);
               assert.equal(await evaluate(`(()=>{const n=document.querySelector('.content-drawer .drawer-contents').getBoundingClientRect(),f=document.querySelector('.content-drawer .palette-footer').getBoundingClientRect();return f.top>=n.top-1&&f.bottom<=n.bottom+1;})()`),true,'The Color footer is reachable at the whole drawer bottom');
             }
           }
           const rows=await evaluate('document.querySelectorAll(".content-drawer .tool-subtools .tool-choice-button").length');
           if(rows){
             await evaluate(`(()=>{const n=document.querySelector('.content-drawer .tool-subtools .tool-choice-button:last-child').closest('.drawer-column');n.scrollTop=n.scrollHeight;})()`);await settle();
-            await captureDrawer(`inventory-${tag}-${name.replaceAll('_','')}-bottom`);
+            if(wanted(`${state}-bottom`))await captureDrawer(`${state}-bottom`);
           }
           if(name==='sculpt'){
             const previous=await evaluate(`document.querySelector('.content-drawer .tool-groups button[aria-pressed="true"]').getAttribute('aria-label')`);
@@ -1203,7 +1231,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
             await click(`.content-drawer .tool-groups button[aria-label=${JSON.stringify(previous)}]`);
             await wait(`[...document.querySelectorAll('.content-drawer .tool-groups button')].some(n=>n.getAttribute('aria-label')===${JSON.stringify(previous)}&&n.getAttribute('aria-pressed')==='true')`);
           }
-          if(tile.control.panel==='layers'){
+          if(tile.control.panel==='layers'&&wanted(`inventory-${tag}-layers-properties`)){
             await click('.content-drawer .layer-properties-disclosure');
             await wait(`getComputedStyle(document.querySelector('.content-drawer .layer-properties-pages > .layers-panel')).visibility==='hidden'`);
             await captureDrawer(`inventory-${tag}-layers-properties`);
@@ -1213,15 +1241,19 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
           await closeDrawer();
           if(transforming)await auditLayerClose(fixture);
         }
-        await click('#phone-tool-settings');await captureDrawer(`inventory-${tag}-settings`);
-        assert.deepEqual((await evaluate('layerApp.state().customization.drawer')).columns,[['tool_settings']]);
+        if(wanted(`inventory-${tag}-settings`)){
+          await click('#phone-tool-settings');await captureDrawer(`inventory-${tag}-settings`);
+          assert.deepEqual((await evaluate('layerApp.state().customization.drawer')).columns,[['tool_settings']]);
+        }
       }
       await closeDrawer();
       for(const panel of ['navigator','histogram','waveform','stats','sizes','brushes']){
+        if(!wanted(`inventory-window-${panel}`))continue;
         await send({type:'phone',action:{kind:'panel',panel}});await captureDrawer(`inventory-window-${panel}`);await closeDrawer();
       }
-      await send({type:'select_brush',id:2});
+      if(!selectedStates||[...selectedStates].some(state=>state.startsWith('inventory-settings-')))await send({type:'select_brush',id:2});
       for(const command of await evaluate('layerApp.app.catalog().tool_commands')){
+        if(!wanted(`inventory-settings-${command}`))continue;
         let offered=await evaluate(`layerApp.state().commands.find(item=>item.id===${JSON.stringify(command)})`);
         const transforming=command==='scale_rotate';
         if(transforming){await auditOwnedImage(fixture);offered=await evaluate(`layerApp.state().commands.find(item=>item.id===${JSON.stringify(command)})`);}
@@ -1237,18 +1269,24 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       for(const swapped of [false,true]){
         if(await evaluate('layerApp.state().phone.swapped')!==swapped)await send({type:'phone',action:{kind:'swap_sides'}});
         for(const material of [0,2]){
+          const variant=`${swapped?'swapped':'normal'}-${material?'glass':'opaque'}`;
+          if(!wanted(`drawer-capy-layers-${variant}`)&&!wanted(`drawer-settings-${variant}`))continue;
           await send({type:'preferences',action:{type:'edit',id:'transparency',value:material}});
-          await send({type:'phone',action:{kind:'panel',panel:'layers'}});
-          await captureDrawer(`drawer-capy-layers-${swapped?'swapped':'normal'}-${material?'glass':'opaque'}`);
-          const anchor=await evaluate('layerApp.state().customization.drawer.anchor');
-          assert.equal(anchor.kind,'phone');assert.equal(anchor.anchor.kind,'capy');
-          await closeDrawer();await click('#phone-tool-settings');
-          await captureDrawer(`drawer-settings-${swapped?'swapped':'normal'}-${material?'glass':'opaque'}`);
-          await closeDrawer();
+          if(wanted(`drawer-capy-layers-${variant}`)){
+            await send({type:'phone',action:{kind:'panel',panel:'layers'}});
+            await captureDrawer(`drawer-capy-layers-${variant}`);
+            const anchor=await evaluate('layerApp.state().customization.drawer.anchor');
+            assert.equal(anchor.kind,'phone');assert.equal(anchor.anchor.kind,'capy');
+            await closeDrawer();
+          }
+          if(wanted(`drawer-settings-${variant}`)){
+            await click('#phone-tool-settings');await captureDrawer(`drawer-settings-${variant}`);await closeDrawer();
+          }
         }
       }
       await send({type:'phone',action:{kind:'swap_sides'}});
       await send({type:'preferences',action:{type:'edit',id:'transparency',value:transparency}});
+      if(!wanted('layers-live-capped')){await closeDrawer();if(selectedStates)assertRequested();continue;}
       await send({type:'phone',action:{kind:'panel',panel:'layers'}});
       await drawerReady();await settle();
       const count=await evaluate('layerApp.state().layers.length');
@@ -1268,6 +1306,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         await wait(`layerApp.state().layers.length===${count+23-i}`);
       }
       await closeDrawer();
+      if(selectedStates)assertRequested();
       continue;
     }
     if(mode==='frame'){
@@ -1348,7 +1387,12 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         await capture(test,`slider-${name}-tap`,[...phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),preview],'existing shared slider preview');
         const strip=await evaluate(`document.querySelector(${JSON.stringify(`#component-slider-${name}`)}).getBoundingClientRect().toJSON()`);
         const end=vertical?{x:strip.right+2*p.tile,y:test.viewport[1]*.65}:{x:test.viewport[0]*.65,y:strip.y-2*p.tile};
-        await mouse('mousePressed',start);await mouse('mouseMoved',end);await settle();
+        const from={x:b.x+b.width/2,y:b.y+b.height/2};
+        const along=vertical?{x:from.x,y:from.y-12}:{x:from.x+12,y:from.y};
+        await mouse('mousePressed',from);await mouse('mouseMoved',along);await settle();
+        await wait('!!document.querySelector(".toolbar-brush-preview:popover-open")');
+        await capture(test,`slider-${name}-track`,[...phoneAuditFrameSpecifications(await evaluate('layerApp.state().workspace.layout.phone??[]')),preview],'held native slider track contact');
+        await mouse('mouseMoved',end);await settle();
         const actual=await evaluate(`layerApp.app.toolbar_component({kind:${JSON.stringify(name==='size'?'brush_size_slider':'brush_strength_slider')}}).numeric`);
         const expected=await evaluate(`layerApp.app.number_input({control:layerApp.app.toolbar_component({kind:${JSON.stringify(name==='size'?'brush_size_slider':'brush_strength_slider')}}).numeric.numeric,value:${actual.value},operation:{type:'position',position:${vertical ? .35 : .65}}}).value`);
         assert.ok(Math.abs(actual.value-expected)<=Math.max(.001,Math.abs(expected)*.001),`${name}: far mapping uses the window extent, ${actual.value} vs ${expected}`);

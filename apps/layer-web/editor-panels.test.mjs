@@ -5,6 +5,23 @@ import test from 'node:test';
 
 const source=readFileSync(new URL('editor-panels.js',import.meta.url),'utf8');
 
+test('tool category measurements reserve every fractional pixel before shared packing',()=>{
+  const widths=[61.234375,78.359375,78.515625,70.28125,113.25,93.625,96.8125];
+  const children=widths.map(width=>({style:{},offsetWidth:Math.round(width),getBoundingClientRect:()=>({width})}));
+  const groups={children,style:{}},requests=[];
+  const context={root:{clientWidth:380,querySelector:()=>groups},view:{groups_are_rows:false},dirty:true,layoutWidth:0,rows:[],
+    app:{toolbar_ui(request){requests.push(request);return [121,138,117];}}};
+  const begin=source.indexOf('    function arrange(){'),end=source.indexOf('    return () => {',begin);
+  runInNewContext(source.slice(begin,end)+'\nglobalThis.arrange=arrange;',context);
+  context.arrange();
+  const natural=Array.from(requests[0].natural);
+  assert.deepEqual(natural,[62,79,79,71,114,94,97]);
+  assert.ok(natural.every((width,index)=>Number.isInteger(width)&&width>=widths[index]&&width-widths[index]<1));
+  assert.ok(widths.some((width,index)=>children[index].offsetWidth<width));
+  assert.ok(children.every(node=>node.style.width===''&&node.style.maxWidth===''));
+  context.arrange();assert.equal(requests.length,1);
+});
+
 test('New Drawing acknowledges creation only when the shared dialog closes',()=>{
   const source=readFileSync(new URL('new-drawing.js',import.meta.url),'utf8');
   let drawing={},accepted,create=false;

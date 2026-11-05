@@ -226,8 +226,8 @@ export function createToolbarComponent({ app, tile, control = tile?.control, pre
       ctx.globalAlpha = geometry.opacity; const b = geometry.stamp; if (stamp) ctx.drawImage(stamp.image, b.x, b.y, b.width, b.height);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-in'; ctx.fillStyle = getComputedStyle(root).color; ctx.fillRect(0, 0, side, side); ctx.restore();
       if (geometry.header_fade) {
-        const fade = ctx.createLinearGradient(0, 0, 0, geometry.header_fade), background = getComputedStyle(popup).backgroundColor;
-        fade.addColorStop(0, background); fade.addColorStop(1, 'transparent');
+        const fade = ctx.createLinearGradient(0, 0, 0, geometry.header_fade), background = getComputedStyle(popup).getPropertyValue('--panel').trim();
+        fade.addColorStop(0, background); fade.addColorStop(1, `${background}00`);
         ctx.save(); ctx.globalAlpha = geometry.header_fade_opacity; ctx.fillStyle = fade; ctx.fillRect(0, 0, side, geometry.header_fade); ctx.restore();
       }
     }

@@ -4,7 +4,7 @@ import {runInNewContext} from 'node:vm';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,selectPhoneDrawerStates,openPhoneDrawerTile,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
 
 test('dialog scroll audit rejects browser bars, scrolling chrome and missing indicators',t=>{
@@ -64,6 +64,21 @@ test('phone audit covers both themes at DPR1 and actual 16pt enlarged text',()=>
     assert.equal(entry.text_scale,entry.text_pt/11);
     assert.equal(entry.text_pt,entry.viewport.join('x')==='320x320'?16:11);
   }
+});
+
+test('focused drawer capture selects existing state names without changing the full journey',()=>{
+  assert.equal(selectPhoneDrawerStates(undefined),null);
+  assert.deepEqual([...selectPhoneDrawerStates(' inventory-sketch-sculpt, inventory-photo-crop,inventory-sketch-sculpt ')],['inventory-sketch-sculpt','inventory-photo-crop']);
+  assert.throws(()=>selectPhoneDrawerStates(' , '),/at least one state/);
+});
+
+test('tool drawer opener clicks a second time when a noncheckable command only changes tools',async()=>{
+  const events=[];
+  await openPhoneDrawerTile(async()=>events.push('click'),async()=>{events.push('drawer');return false;},'#phone-tool-24');
+  assert.deepEqual(events,['click','drawer','click']);
+  events.length=0;
+  await openPhoneDrawerTile(async()=>events.push('click'),async()=>{events.push('drawer');return true;},'#phone-tool-24');
+  assert.deepEqual(events,['click','drawer']);
 });
 
 test('one audit mode table keeps ten phone cases and two case dialog captures separate',()=>{

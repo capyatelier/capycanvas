@@ -131,7 +131,7 @@ pub fn row(title: &str, control: &impl IsA<gtk::Widget>, spacing: i32, labels: O
     let row = action_row(spacing);
     let label = gtk::Label::new(Some(title));
     label.set_xalign(0.);
-    label.set_width_chars(9);
+    label.set_width_chars(layer_ui::PANEL_CONTROL_METRICS.label_width_chars as i32);
     label.set_mnemonic_widget(Some(control));
     if let Some(labels) = labels { labels.add_widget(&label); }
     row.append(&label);
