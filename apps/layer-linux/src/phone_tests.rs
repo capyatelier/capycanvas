@@ -1760,6 +1760,42 @@ fn open_menu_page(d: &mut Driver, label: &str) -> gtk::Stack {
     stack
 }
 
+#[test]
+#[ignore = "private compositor: --native-test=native_phone_disabled_menu_icons --native-storage; GTK_A11Y=test, phone viewport/theme external"]
+fn native_phone_disabled_menu_icons() {
+    fn alpha(image: &gtk::Image) -> u8 {
+        let snapshot = gtk::Snapshot::new();
+        gtk::WidgetPaintable::new(Some(image)).snapshot(&snapshot, image.width() as f64, image.height() as f64);
+        let node = snapshot.to_node().unwrap();
+        let mut surface = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, image.width(), image.height()).unwrap();
+        { node.draw(&gtk::cairo::Context::new(&surface).unwrap()); }
+        surface.flush();
+        let alpha = surface.data().unwrap().chunks_exact(4).map(|pixel| pixel[3]).max().unwrap();
+        alpha
+    }
+    let mut d = setup("art.capycanvas.DisabledPhoneMenuIcons");
+    let localization = d.w.localization();
+    menu(&mut d);
+    open_menu_page(&mut d, &ApplicationMenu::Layer.localized_label(&localization));
+    open_menu_page(&mut d, &localization.text(layer_ui::MessageId::RESOURCES_LAYER_MENU_LAYER_SETTINGS));
+    let image = widgets(d.w.window.upcast_ref()).find(|widget| widget.is_mapped()
+        && widget.widget_name() == "layer-clip-symbolic").unwrap().downcast::<gtk::Image>().unwrap();
+    let row = image.ancestor(gtk::Button::static_type()).unwrap();
+    assert!(!row.is_sensitive(), "the initial layer cannot clip to a layer below");
+    super::phone_motion::settle_presentation(&d.w);
+    let disabled = alpha(&image);
+    row.set_sensitive(true);
+    super::phone_motion::settle_presentation(&d.w);
+    assert!(row.is_sensitive());
+    let enabled = alpha(&image);
+    row.set_sensitive(false);
+    super::phone_motion::settle_presentation(&d.w);
+    assert!(enabled > 0 && disabled > 0 && disabled < enabled,
+        "disabled menu images use the theme's dimming: disabled {disabled}, enabled {enabled}");
+    capture(&mut d, "disabled-menu-icons");
+    d.finish();
+}
+
 fn menu_rows_released(stack: &gtk::Stack) {
     let active = widgets(stack.upcast_ref()).filter(|widget| widget.is_mapped()
         && widget.css_name() == "modelbutton" && widget.state_flags().contains(gtk::StateFlags::ACTIVE))
