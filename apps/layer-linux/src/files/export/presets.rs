@@ -26,19 +26,7 @@ pub(super) async fn load(
 ) -> Result<ExportPresets, layer_ui::ColorFeatureError> {
     gio::spawn_blocking(move || {
         let library = path().map_or(Ok(ExportPresets::default()), |path| read(&path))?;
-        let mut checked = Vec::new();
-        for index in 0..4 + library.names().count() {
-            let recipe = library.recipe(index, document)?;
-            if checked.contains(&recipe.profile) {
-                continue;
-            }
-            let actual = layer_color::profile_channels(&recipe.profile.profile)?;
-            if actual != recipe.profile.channels {
-                return Err(layer_ui::ColorFeatureError::ProfileChannels);
-            }
-            ProfilePurpose::Output.validate(&recipe.profile, document.space)?;
-            checked.push(recipe.profile);
-        }
+        library.validate_profiles(document)?;
         Ok::<_,layer_ui::ColorFeatureError>(library)
     })
     .await
@@ -67,238 +55,73 @@ pub(super) async fn save(expected: ExportPresets, next: ExportPresets) -> Result
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset writer failed".into()))?
 }
 
-/// Editing a destination changes temporary controls; saving a named preset is an
-/// explicit application preference action and does not depend on exporting a file.
-pub(super) fn install(
-    workspace: &Rc<Workspace>,
-    hdr_document: bool,
-    (group, preset): (&gtk::Box, &adw::ComboRow),
-    library: Rc<std::cell::RefCell<ExportPresets>>,
-    destination: Rc<std::cell::Cell<usize>>,
-    updating: Rc<std::cell::Cell<bool>>,
-    read_recipe: Rc<dyn Fn() -> Result<ExportRecipe, layer_ui::ColorFeatureError>>,
-) {
-    let parent = &workspace.window;
-    let copy = layer_ui::color_feature_copy::ExportCopy::new(&workspace.localization());
-    let buttons = adw::PreferencesGroup::new();
-    group.append(&buttons);
-    let status = adw::ActionRow::builder()
-        .use_markup(false)
-        .visible(false)
-        .build();
-    status.set_widget_name("export-presets-status");
-    buttons.add(&status);
-    let refresh: Rc<dyn Fn(usize)> = Rc::new(glib::clone!( #[weak] workspace,
-        #[weak]
-        preset,
-        #[strong]
-        library,
-        #[strong]
-        updating,
-        move |selected| {
-            let localization = workspace.localization();
-            preset.set_title(&layer_ui::color_feature_copy::ExportCopy::new(&localization).preset);
-            let library = library.borrow();
-            let color = layer_core::color::DocumentColor { depth: if hdr_document {layer_core::color::SampleDepth::F16} else {layer_core::color::SampleDepth::U8}, ..Default::default() };
-            let names = library.localized_names(color, &localization);
-            let names: Vec<_> = names.iter().map(String::as_str).collect();
-            updating.set(true);
-            preset.set_model(Some(&gtk::StringList::new(&names)));
-            preset.set_selected(selected as u32);
-            updating.set(false);
+pub(super) struct Presentation {
+    group: adw::PreferencesGroup,
+    status: adw::ActionRow,
+    buttons: Vec<(ExportDialogPresetOperation,adw::ButtonRow)>,
+}
+impl Presentation {
+    pub(super) fn new(body:&gtk::Box,view:&ExportDialogView)->Self {
+        let group=adw::PreferencesGroup::new();body.append(&group);
+        let status=adw::ActionRow::builder().use_markup(false).visible(false).build();status.set_widget_name("export-presets-status");group.add(&status);
+        let buttons=[ExportDialogPresetOperation::Save,ExportDialogPresetOperation::Update,ExportDialogPresetOperation::Remove,ExportDialogPresetOperation::Reset].into_iter().enumerate().map(|(i,operation)|{
+            let button=adw::ButtonRow::builder().title(&view.preset_labels[i]).use_markup(false).build();
+            button.set_widget_name(["export-preset-save","export-preset-update","export-preset-remove","export-preset-reset"][i]);
+            if operation==ExportDialogPresetOperation::Remove {button.add_css_class("destructive-action");}
+            group.add(&button);(operation,button)
+        }).collect();
+        Self {group,status,buttons}
+    }
+    pub(super) fn render(&self,view:&ExportDialogView) {
+        self.group.set_sensitive(!view.preset_busy);
+        self.status.set_title(view.preset_status.as_deref().unwrap_or_default());self.status.set_visible(view.preset_status.is_some());
+        if view.preset_error {self.status.add_css_class("error");}else{self.status.remove_css_class("error");}
+        let copy=&view.copy;
+        for (i,(_,button)) in self.buttons.iter().enumerate(){
+            button.set_title(&view.preset_labels[i]);button.set_visible([view.preset_save,view.preset_update,view.preset_remove,view.preset_reset][i]);
+            button.set_tooltip_text(Some([copy.save_preset_help.as_ref(),copy.update_preset_help.as_ref(),copy.remove_preset_help.as_ref(),copy.reset_preset_help.as_ref()][i]));
         }
-    ));
-    refresh(0);
-    let outcome = Rc::new(std::cell::RefCell::new(None::<Result<usize, layer_ui::ColorFeatureError>>));
-    let refresh_status: Rc<dyn Fn()> = Rc::new(glib::clone!(#[weak] workspace, #[weak] status, #[strong] outcome, move || {
-        let localization = workspace.localization();
-        let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
-        let outcome = outcome.borrow();
-        let Some(outcome) = outcome.as_ref() else { return; };
-        status.set_title(&match outcome {
-            Ok(2) => copy.preset_removed.to_string(),
-            Ok(3) => copy.preset_reset.to_string(),
-            Ok(_) => copy.preset_saved.to_string(),
-            Err(error) => error.preset_message(&localization),
-        });
-        status.set_visible(true);
-        if outcome.is_err() { status.add_css_class("error"); } else { status.remove_css_class("error"); }
-    }));
-    workspace.on_localization(glib::clone!(#[weak] preset, #[strong] refresh, #[strong] refresh_status, #[upgrade_or] false, move |_| {
-        refresh(preset.selected() as usize);
-        refresh_status();
-        true
-    }));
-    for (operation, label) in [(0, copy.save_new_preset.as_ref()), (1, copy.update_saved_preset.as_ref()), (2, copy.remove_saved_preset.as_ref()), (3, copy.restore_original.as_ref())] {
-        let button = adw::ButtonRow::builder().title(label).use_markup(false).build();
-        button.set_widget_name(
-            [
-                "export-preset-save",
-                "export-preset-update",
-                "export-preset-remove",
-                "export-preset-reset",
-            ][operation],
-        );
-        button.set_tooltip_text(Some(
-            [
-                copy.save_preset_help.as_ref(),
-                copy.update_preset_help.as_ref(),
-                copy.remove_preset_help.as_ref(),
-                copy.reset_preset_help.as_ref(),
-            ][operation],
-        ));
-        if operation == 2 { button.add_css_class("destructive-action"); }
-        buttons.add(&button);
-        let refresh_button = glib::clone!( #[weak] workspace,
-            #[weak]
-            button,
-            #[strong]
-            destination,
-            move |preset: &adw::ComboRow| {
-                let localization = workspace.localization();
-                let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
-                button.set_tooltip_text(Some([copy.save_preset_help.as_ref(), copy.update_preset_help.as_ref(), copy.remove_preset_help.as_ref(), copy.reset_preset_help.as_ref()][operation]));
-                if let Some(value) = preset.model().and_then(|model| model.item(destination.get() as u32)).and_downcast::<gtk::StringObject>() {
-                    let name = value.string();
-                    button.set_title(&match operation {
-                        1 => layer_ui::color_feature_copy::named(&localization, layer_ui::MessageId::COLOR_FEATURES_EXPORT_UPDATE_NAMED, &name),
-                        2 => layer_ui::color_feature_copy::named(&localization, layer_ui::MessageId::COLOR_FEATURES_EXPORT_REMOVE_NAMED, &name),
-                        3 => layer_ui::color_feature_copy::named(&localization, layer_ui::MessageId::COLOR_FEATURES_EXPORT_RESET_NAMED, &name),
-                        _ => copy.save_new_preset.to_string(),
-                    });
+    }
+    pub(super) fn bind(&self,p:&Rc<super::dialog::Projection>) {
+        for (operation,button) in &self.buttons {
+            let weak=Rc::downgrade(p);let operation=*operation;
+            button.connect_activated(move|_|if let Some(p)=weak.upgrade(){p.preset_operation(operation);});
+        }
+    }
+}
+
+impl super::dialog::Projection {
+    fn preset_operation(self:&Rc<Self>,operation:ExportDialogPresetOperation) {
+        if self.view().is_none_or(|view|view.preset_busy){return;}
+        let Some(w)=self.w.upgrade()else{return;};
+        self.send(ExportDialogAction::BeginPreset {operation});
+        if self.view().is_none_or(|view|!view.preset_busy){return;}
+        let p=self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            if p.view().is_some_and(|view|view.page==ExportDialogPage::SavePreset) {
+                let Some(view)=p.view()else{return;};let copy=&view.copy;
+                let entry=adw::EntryRow::builder().title(copy.preset_name.as_ref()).text(&view.name).build();entry.set_widget_name("export-preset-name");
+                let group=adw::PreferencesGroup::new();group.add(&entry);
+                let dialog=adw::AlertDialog::builder().heading(copy.save_preset_title.as_ref()).extra_child(&group).build();dialog.set_widget_name("export-preset-name-dialog");
+                dialog.add_responses(&[("cancel",copy.common.cancel.as_ref()),("save",copy.common.save.as_ref())]);dialog.set_close_response("cancel");dialog.set_default_response(Some("save"));dialog.set_response_appearance("save",adw::ResponseAppearance::Suggested);
+                crate::page_dialog::set_response_enabled(&dialog,"save",view.name_valid);
+                entry.connect_changed({let weak=Rc::downgrade(&p);let dialog=dialog.downgrade();move|entry|if let Some(p)=weak.upgrade(){
+                    p.send(ExportDialogAction::Name {value:entry.text().to_string()});
+                    if let Some(dialog)=dialog.upgrade(){crate::page_dialog::set_response_enabled(&dialog,"save",p.view().is_some_and(|view|view.name_valid));}
+                }});
+                w.on_localization(glib::clone!(#[weak] entry,#[weak] dialog,#[upgrade_or] false,move|localization|{
+                    let copy=layer_ui::color_feature_copy::ExportCopy::new(localization);entry.set_title(&copy.preset_name);dialog.set_heading(Some(&copy.save_preset_title));
+                    crate::page_dialog::set_response_label(&dialog,"cancel",&copy.common.cancel);crate::page_dialog::set_response_label(&dialog,"save",&copy.common.save);true
+                }));
+                if crate::alert::choose_intent(dialog,&w.window,copy.preset_dialog,Some("save"),&[]).await!="save" {
+                    p.send(ExportDialogAction::PresetCancel);return;
                 }
-                button.set_visible(match operation {
-                    1 | 2 => destination.get() >= 4,
-                    3 => destination.get() < 4,
-                    _ => true,
-                });
+                p.send(ExportDialogAction::Back);
             }
-        );
-        refresh_button(preset);
-        preset.connect_selected_notify(refresh_button.clone());
-        workspace.on_localization(glib::clone!(#[weak] preset, #[strong] refresh_button, #[upgrade_or] false, move |_| {
-            refresh_button(&preset);
-            true
-        }));
-        button.connect_activated(glib::clone!( #[weak] workspace,
-            #[weak]
-            parent,
-            #[weak]
-            preset,
-            #[weak]
-            buttons,
-            #[strong]
-            library,
-            #[strong]
-            destination,
-            #[strong]
-            read_recipe,
-            #[strong]
-            refresh,
-            #[strong] outcome,
-            #[strong] refresh_status,
-            move |_| {
-                buttons.set_sensitive(false);
-                let index = destination.get();
-                let recipe = read_recipe();
-                glib::MainContext::default().spawn_local(glib::clone!( #[weak] workspace,
-                    #[weak]
-                    parent,
-                    #[weak]
-                    preset,
-                    #[weak]
-                    buttons,
-                    #[strong]
-                    library,
-                    #[strong]
-                    refresh,
-                    #[strong] outcome,
-                    #[strong] refresh_status,
-                    async move {
-                        let result: Result<Option<(ExportPresets, usize)>, layer_ui::ColorFeatureError> = async {
-                            let copy = layer_ui::color_feature_copy::ExportCopy::new(&workspace.localization());
-                            let name = if operation == 0 {
-                                // Validate first; an unavailable ICC is never saved as a fallback.
-                                recipe.as_ref().map_err(Clone::clone)?;
-                                let entry = adw::EntryRow::builder().title(copy.preset_name.as_ref()).build();
-                                entry.set_widget_name("export-preset-name");
-                                let group = adw::PreferencesGroup::new();
-                                group.add(&entry);
-                                let dialog = adw::AlertDialog::builder()
-                                    .heading(copy.save_preset_title.as_ref())
-                                    .extra_child(&group)
-                                    .build();
-                                dialog.set_widget_name("export-preset-name-dialog");
-                                dialog.add_responses(&[("cancel", copy.common.cancel.as_ref()), ("save", copy.common.save.as_ref())]);
-                                dialog.set_close_response("cancel");
-                                dialog.set_default_response(Some("save"));
-                                dialog.set_response_appearance(
-                                    "save",
-                                    adw::ResponseAppearance::Suggested,
-                                );
-                                crate::page_dialog::set_response_enabled(&dialog, "save", false);
-                                entry.connect_changed(glib::clone!(
-                                    #[weak]
-                                    dialog,
-                                    move |entry| crate::page_dialog::set_response_enabled(&dialog, "save",
-                                        layer_ui::ExportPresets::validate_name(&entry.text()).is_ok()
-                                    )
-                                ));
-                                workspace.on_localization(glib::clone!(#[weak] entry, #[weak] dialog, #[upgrade_or] false, move |localization| {
-                                    let copy = layer_ui::color_feature_copy::ExportCopy::new(localization);
-                                    entry.set_title(&copy.preset_name);
-                                    dialog.set_heading(Some(&copy.save_preset_title));
-                                    crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel);
-                                    crate::page_dialog::set_response_label(&dialog, "save", &copy.common.save);
-                                    true
-                                }));
-                                if crate::alert::choose_intent(dialog, &parent, copy.preset_dialog, Some("save"), &[]).await != "save" {
-                                    return Ok(None);
-                                }
-                                Some(entry.text().to_string())
-                            } else {
-                                None
-                            };
-                            let expected = library.borrow().clone();
-                            let mut next = expected.clone();
-                            let selected = match operation {
-                                0 => next.save(name.as_deref().unwrap(), recipe?)?,
-                                1 => {
-                                    next.update(index, recipe?)?;
-                                    index
-                                }
-                                2 => {
-                                    next.remove(index)?;
-                                    3
-                                }
-                                _ => {
-                                    next.reset_destination(index)?;
-                                    index
-                                }
-                            };
-                            save(expected, next.clone()).await?;
-                            Ok(Some((next, selected)))
-                        }
-                        .await;
-                        match result {
-                            Ok(Some((next, selected))) => {
-                                *library.borrow_mut() = next;
-                                refresh(selected);
-                                preset.notify("selected");
-                                *outcome.borrow_mut() = Some(Ok(operation));
-                                refresh_status();
-                            }
-                            Ok(None) => (),
-                            Err(error) => {
-                                *outcome.borrow_mut() = Some(Err(error));
-                                refresh_status();
-                            }
-                        }
-                        buttons.set_sensitive(true);
-                    }
-                ));
-            }
-        ));
+            let write={let gpu=w.gpu.borrow();gpu.as_ref().ok_or(layer_ui::ColorFeatureError::ExportCombination).and_then(|gpu|gpu.session.export_dialog_preset_write(p.id,operation))};
+            let result=match write {Ok(write)=>save(write.expected.clone(),write.next.clone()).await.map(|_|write),Err(error)=>Err(error)};
+            p.send(ExportDialogAction::PresetResult {result});
+        });
     }
 }
 

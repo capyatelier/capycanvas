@@ -108,11 +108,17 @@ impl WebApp {
         preview: Option<bool>,
     ) -> Result<js_sys::Promise, JsValue> {
         let preview = preview.unwrap_or(false);
-        let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
-        let document = self.session.engine().document();
+        let (snapshot, recipe) = if value.is_null() || value.is_undefined() {
+            (self.session.export_dialog_source(id).map_err(js)?,
+                self.session.export_dialog_recipe(id).map_err(color_preferences::color_feature_rejection)?)
+        } else {
+            (self.session.capture_project_export(id).map_err(js)?, serde_wasm_bindgen::from_value::<ExportRecipe>(value).map_err(js)?)
+        };
         recipe.validate().map_err(color_preferences::color_feature_rejection)?;
-        recipe.output_extent(document.composition().size).map_err(color_preferences::color_feature_rejection)?;
-        let snapshot = self.session.capture_project_export(id).map_err(js)?;
+        recipe.output_extent(snapshot.composition().size).map_err(color_preferences::color_feature_rejection)?;
+        recipe.output_resolution(snapshot.composition().resolution).map_err(color_preferences::color_feature_rejection)?;
+        let format = recipe.format;
+        let localization = self.session.localization().clone();
         let gpu = self
             .session
             .engine()
@@ -123,13 +129,19 @@ impl WebApp {
             .snapshot_gpu();
         let control = control.inner.clone();
         Ok(future_to_promise(async move {
-            render_output(gpu, snapshot, recipe, control, preview, None).await.map_err(|error| {
+            let result = render_output(gpu, snapshot, recipe, control, preview, None).await.map_err(|error| {
                 if js_sys::Reflect::get(&error, &js("name")).ok().and_then(|name| name.as_string()).as_deref() == Some("AbortError") {
                     error
                 } else {
                     color_preferences::color_feature_rejection(color_preferences::color_feature_reason(error))
                 }
-            })
+            })?;
+            if preview {
+                let clipped = serde_wasm_bindgen::from_value::<u64>(js_sys::Reflect::get(&result, &js("clipped_channels"))?).map_err(js)? > 0;
+                js_sys::Reflect::set(&result, &js("range_exceeded"), &JsValue::from_bool(clipped && format.is_hdr() && !format.maps_hdr_range()))?;
+                js_sys::Reflect::set(&result, &js("status"), &js(&layer_ui::color_feature_copy::export_preview_status(&localization, format, clipped)))?;
+            }
+            Ok(result)
         }))
     }
 }
@@ -166,18 +178,8 @@ pub(super) async fn render_output(
             control.clone(),
         )
         .map_err(js)?;
-    let before = if preview && metadata.rendition.is_none() {
-        Some(
-            capture
-                .preview_document_async([512, 384], layer_core::color::RgbSpace::Srgb)
-                .await
-                .map_err(js)?,
-        )
-    } else {
-        None
-    };
     let extent = metadata.recipe.output_extent(metadata.extent).map_err(color_preferences::color_feature_rejection)?;
-    let original = (flatten.is_none() && !metadata.recipe.format.is_hdr()).then(|| capture.output_source(
+    let original = (!preview && flatten.is_none() && !metadata.recipe.format.is_hdr()).then(|| capture.output_source(
         extent, &metadata.recipe.interpretation(), metadata.recipe.encoding, metadata.recipe.background.matte(),
     )).flatten();
     let mut packed = if let Some(original) = original {
@@ -255,12 +257,6 @@ pub(super) async fn render_output(
     }
     cancelled(&control)?;
     let result = result?;
-    if let Some(before) = before {
-        let previews = js_sys::Array::new();
-        previews.push(&preview_value(&before)?);
-        previews.push(&js_sys::Reflect::get(&result, &js("preview"))?);
-        js_sys::Reflect::set(&result, &js("previews"), &previews)?;
-    }
     Ok(result)
 }
 
@@ -361,6 +357,7 @@ pub async fn raster_worker_output(
     };
     let row_bytes = metadata.extent[0] as usize * 16;
     let mut bytes = vec![0; row_bytes];
+    let transparent = std::cell::Cell::new(false);
     let mut read_row = |y: u32, pixels: &mut [[f32;4]]| {
                 let result = read
                     .call2(
@@ -378,6 +375,7 @@ pub async fn raster_worker_output(
                     *pixel = std::array::from_fn(|c| {
                         f32::from_le_bytes(source[c * 4..c * 4 + 4].try_into().unwrap())
                     });
+                    if metadata.preview && pixel[3] < 1. { transparent.set(true); }
                 }
                 Ok(())
             };
@@ -411,8 +409,13 @@ pub async fn raster_worker_output(
         js_sys::Reflect::set(&result,&js("png"),&JsValue::from(png))?;
         return Ok(result.into_js());
     }
-    let before = if metadata.preview && metadata.rendition.is_some() {
-        Some(mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, guide.as_ref(), &mut read_row).map_err(js)?)
+    let before = if metadata.preview {
+        Some(if metadata.rendition.is_some() {
+            mapped_preview(metadata.extent, metadata.color.space, metadata.rendition, guide.as_ref(), &mut read_row)
+        } else {
+            layer_ui::color_comparison::master_preview(metadata.extent, metadata.color.space, &mut read_row)
+                .map(|(extent,pixels)|layer_render_wgpu::snapshot::SnapshotPreview {extent,pixels,space:layer_core::color::RgbSpace::Srgb})
+        }.map_err(js)?)
     } else { None };
     if recipe.format.is_hdr() {
         if !metadata.color.depth.is_float() { return Err(js("HDR output requires HDR artwork")); }
@@ -431,7 +434,7 @@ pub async fn raster_worker_output(
             if metadata.preview {
                 let (size, mut hdr, sdr, stats) = layer_color::photo::preview_gainmap_rows(
                     layer_color::photo::GainMapRender { extent, space: metadata.color.space, rendition, guide, matte: recipe.background.matte(), clip: true },
-                    [512, 384],
+                    layer_ui::color_comparison::RASTER_BOUNDS,
                     format,
                     options,
                     &cancel,
@@ -446,12 +449,12 @@ pub async fn raster_worker_output(
                             * metadata.extent[c] as f32 / size[c] as f32), guide);
                 }
                 let image = |pixels| layer_render_wgpu::snapshot::SnapshotPreview { extent: size, space, pixels };
-                let result = serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent}))?;
+                let result = serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent, "transparent": transparent.get()}))?;
                 let previews = js_sys::Array::new();
-                previews.push(&preview_value(before.as_ref().ok_or_else(|| js("Missing artwork preview"))?)?);
-                previews.push(&preview_value(&image(hdr))?);
+                previews.push(&output_preview_value(before.as_ref().ok_or_else(|| js("Missing artwork preview"))?)?);
+                previews.push(&output_preview_value(&image(hdr))?);
                 js_sys::Reflect::set(&result, &js("previews"), &previews)?;
-                js_sys::Reflect::set(&result, &js("sdr_preview"), &preview_value(&image(sdr))?)?;
+                js_sys::Reflect::set(&result, &js("sdr_preview"), &output_preview_value(&image(sdr))?)?;
                 return Ok(result);
             }
             let stats = layer_color::photo::write_gainmap_rows(
@@ -463,7 +466,7 @@ pub async fn raster_worker_output(
                 &cancel,
                 rows,
             ).map_err(js)?;
-            return serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent}));
+            return serialize(&serde_json::json!({"clipped_channels": stats.clipped_channels, "extent": extent, "transparent": transparent.get()}));
         }
         if recipe.format == ExportFormat::Exr {
             let after=if metadata.preview {
@@ -471,12 +474,12 @@ pub async fn raster_worker_output(
             } else {
                 layer_color::photo::write_exr_rows(output,extent,metadata.color.space,metadata.resolution,rows).map_err(js)?;None
             };
-            let result=serialize(&serde_json::json!({"clipped_channels":0,"extent":extent}))?;
-            if let Some(after)=after {let values=js_sys::Array::new();values.push(&preview_value(&before.unwrap())?);values.push(&preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?;}
+            let result=serialize(&serde_json::json!({"clipped_channels":0,"extent":extent,"transparent":transparent.get()}))?;
+            if let Some(after)=after {let values=js_sys::Array::new();values.push(&output_preview_value(&before.unwrap())?);values.push(&output_preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?;}
             return Ok(result);
         }
         let (preview, stats) = if metadata.preview {
-            let (size, mut pixels, stats) = layer_color::photo::preview_hdr_rows(extent,[512,384],metadata.color.space,&mut rows).map_err(js)?;
+            let (size, mut pixels, stats) = layer_color::photo::preview_hdr_rows(extent,layer_ui::color_comparison::RASTER_BOUNDS,metadata.color.space,&mut rows).map_err(js)?;
             let guide = guide.as_ref().ok_or_else(|| js("Missing output illumination guide"))?;
             let to_working = layer_core::color::RgbSpace::Srgb.linear_transform(metadata.color.space);
             let mapper = metadata.rendition.unwrap_or_default().mapper(metadata.color.space,layer_core::color::RgbSpace::Srgb);
@@ -489,8 +492,8 @@ pub async fn raster_worker_output(
         } else {
             (None,layer_color::photo::write_hdr_png_rows(output,extent,metadata.color.space,&delivery,recipe.format.maps_hdr_range(),rows).map_err(js)?)
         };
-        let result=serialize(&serde_json::json!({"clipped_channels":stats.clipped_channels,"extent":extent}))?;
-        if let Some(after)=preview { let values=js_sys::Array::new(); values.push(&preview_value(&before.unwrap())?);values.push(&preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?; }
+        let result=serialize(&serde_json::json!({"clipped_channels":stats.clipped_channels,"extent":extent,"transparent":transparent.get()}))?;
+        if let Some(after)=preview { let values=js_sys::Array::new(); values.push(&output_preview_value(&before.unwrap())?);values.push(&output_preview_value(&after)?);js_sys::Reflect::set(&result,&js("previews"),&values)?; }
         return Ok(result);
     }
     let mut preview = None;
@@ -510,7 +513,7 @@ pub async fn raster_worker_output(
         if metadata.preview {
             let (extent, pixels) = layer_color::preview_encoded_rows(
                 extent,
-                [512, 384],
+                layer_ui::color_comparison::RASTER_BOUNDS,
                 layer_core::color::RgbSpace::Srgb,
                 target,
                 rows,
@@ -588,12 +591,21 @@ pub async fn raster_worker_output(
         js_sys::Reflect::set(&wire, &js("clipped"), &JsValue::from_f64(clipped as f64))?;
         return Ok(wire.into_js());
     }
-    let result = serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent}))?;
+    let result = serialize(&serde_json::json!({"clipped_channels": clipped, "extent": extent, "transparent": transparent.get()}))?;
     if let Some(preview) = preview {
-        js_sys::Reflect::set(&result, &js("preview"), &preview_value(&preview)?)?;
-        if let Some(before)=before { let values=js_sys::Array::new(); values.push(&preview_value(&before)?); values.push(&preview_value(&preview)?); js_sys::Reflect::set(&result,&js("previews"),&values)?; }
+        js_sys::Reflect::set(&result, &js("preview"), &output_preview_value(&preview)?)?;
+        if let Some(before)=before { let values=js_sys::Array::new(); values.push(&output_preview_value(&before)?); values.push(&output_preview_value(&preview)?); js_sys::Reflect::set(&result,&js("previews"),&values)?; }
     }
     Ok(result)
+}
+
+fn output_preview_value(preview: &layer_render_wgpu::snapshot::SnapshotPreview) -> Result<JsValue, JsValue> {
+    let checker = layer_ui::TRANSPARENCY_CHECKER.map(|gray| gray.linear()[0]);
+    let pixels = preview.pixels.iter().enumerate().map(|(index,pixel)| {
+        let rgb = layer_ui::color_comparison::over_checker(*pixel, [index as u32 % preview.extent[0], index as u32 / preview.extent[0]], checker);
+        [rgb[0] as f32,rgb[1] as f32,rgb[2] as f32,1.]
+    }).collect();
+    preview_value(&layer_render_wgpu::snapshot::SnapshotPreview {extent:preview.extent,space:preview.space,pixels})
 }
 
 pub(super) fn preview_value(
@@ -619,7 +631,7 @@ fn mapped_preview(extent:[u32;2],space:layer_core::color::RgbSpace,rendition:Opt
         layer_color::WorkingRowsOptions { target: &target, encoding: Default::default(), matte: None, rendition, guide },
         read,
         |size,target,rows| {
-        let (extent,pixels)=layer_color::preview_encoded_rows(size,[512,384],layer_core::color::RgbSpace::Srgb,target,rows)?;
+        let (extent,pixels)=layer_color::preview_encoded_rows(size,layer_ui::color_comparison::RASTER_BOUNDS,layer_core::color::RgbSpace::Srgb,target,rows)?;
         preview=Some(layer_render_wgpu::snapshot::SnapshotPreview{extent,pixels,space:layer_core::color::RgbSpace::Srgb});Ok(())
     },
     )?;

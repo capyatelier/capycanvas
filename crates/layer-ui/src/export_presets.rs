@@ -1,4 +1,4 @@
-//! Application delivery preferences; hosts own storage and validate ICC support.
+//! Application delivery preferences; hosts own storage.
 //! Profile bytes are retained once, independent of external profile-library files.
 use crate::{ExportProfile, ExportRecipe};
 use layer_core::{binary_payload, color::{ColorProfile, DocumentColor, ProfileChannels, ProfileReference}};
@@ -30,6 +30,19 @@ impl ExportPresets {
         "Custom",
     ];
 
+    pub fn validate_profiles(&self,color:DocumentColor)->Result<(),ColorFeatureError> {
+        let mut checked=Vec::new();
+        for index in 0..4+self.names().count() {
+            let recipe=self.recipe(index,color)?;
+            if checked.contains(&recipe.profile) {continue;}
+            if layer_color::profile_channels(&recipe.profile.profile)?!=recipe.profile.channels {
+                return Err(ColorFeatureError::ProfileChannels);
+            }
+            crate::profile_library::ProfilePurpose::Output.validate(&recipe.profile,color.space)?;
+            checked.push(recipe.profile);
+        }
+        Ok(())
+    }
     pub fn localized_names(&self, color: DocumentColor, localizer: &crate::Localizer) -> Vec<String> {
         use crate::MessageId as M;
         let editing = if color.depth.is_float() {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING_SDR} else {M::COLOR_FEATURES_EXPORT_FURTHER_EDITING};
@@ -314,6 +327,18 @@ mod localized_name_tests {
 mod tests {
     use super::*;
     use layer_core::color::{SampleDepth, RgbSpace};
+    #[test]
+    fn export_dialog_preset_profiles_validate_embedded_bytes_and_channel_metadata() {
+        let mut library=ExportPresets::default();
+        let mut recipe=ExportRecipe::web_share();
+        recipe.profile.profile=ColorProfile::Icc(layer_color::profile_bytes(&recipe.profile.profile).unwrap().into());
+        library.save("Delivery",recipe).unwrap();
+        library.validate_profiles(DocumentColor::default()).unwrap();
+        let mut corrupt=library.clone();corrupt.profiles[0].profile=ColorProfile::Icc(vec![0;128].into());
+        assert!(corrupt.validate_profiles(DocumentColor::default()).is_err());
+        library.profiles[0].channels=ProfileChannels::Gray;
+        assert!(library.validate_profiles(DocumentColor::default()).is_err());
+    }
     #[test]
     fn saved_documents_tolerate_missing_and_unknown_fields() {
         let input=include_bytes!("../../layer-workspace/tests/compat/1.0.15/export-presets");

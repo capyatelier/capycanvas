@@ -12,7 +12,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1600)));else setTimeout(poll,30)}catch(e){reject(e)}}poll()})`);
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
-  const set=(label,value)=>evaluate(`(()=>{const d=document.querySelector('dialog[open]'),selector='[aria-label="'+${JSON.stringify(label)}+'"]',n=d.querySelector('.dropdown'+selector+',input:not([type="range"])'+selector);if(!n||n.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});if(n.matches('.dropdown'))(${chooseDropdown})(n,${JSON.stringify(value)});else{n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}));}})()`);
+  const set=(label,value)=>evaluate(`(()=>{const d=document.querySelector('dialog[open]');if(${JSON.stringify(label)}==='Preview rendition'){d.querySelector('[data-rendition="'+(${JSON.stringify(value)}==='sdr')+'"]').click();return;}const selector='[aria-label="'+${JSON.stringify(label)}+'"]',n=d.querySelector('.dropdown'+selector+',input:not([type="range"])'+selector);if(!n||n.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});if(n.matches('.dropdown')){let value=${JSON.stringify(value)};if(${JSON.stringify(label)}==='Resolution metadata'&&value==='Ppi'){const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;value=String(layerApp.app.export_dialog_view(id).resolutions.findIndex(c=>typeof c.value==='object'&&'Ppi'in c.value));}(${chooseDropdown})(n,value);}else{n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}));}})()`);
   const idle=()=>wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
   const open=async name=>{
     const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');
@@ -20,9 +20,9 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
     await wait(`Number(layerApp.state().document_file.epoch)!==${epoch}&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()`);
   };
   const histogram=histogramJourney({evaluate,settle}).exact;
-  const begin=async range=>{await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);await set('Dynamic range',range);};
-  const preview=async()=>{await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2&&!Array.from(document.querySelectorAll('dialog[open] button')).find(b=>b.textContent==='Preview Output').disabled`);};
-  const outputPixels=()=>evaluate(`(()=>{const c=document.querySelector('canvas[aria-label="Output preview"]');return {extent:[c.width,c.height],pixels:Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data)}})()`);
+  const begin=async range=>{await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Output"]')`);await set('Output',range);};
+  const preview=async()=>{await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);};
+  const outputPixels=()=>evaluate(`(()=>{const c=document.querySelectorAll('dialog[open] .color-comparison canvas')[1];return {extent:[c.width,c.height],pixels:Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data)}})()`);
   const close=async()=>{await click('Cancel');await idle();};
   const save=async name=>{
     await evaluate('portablePhoto.last=null');await click('Choose File…');await idle();
@@ -59,15 +59,15 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
       const before=await state(),master=await histogram();
       assert.ok(master.channels.some(c=>c.above>0),'Edited HDR samples exceed SDR white');
       await begin(range);
-      assert.ok(await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Dynamic range"]').menuModel().sections.flat().filter(o=>['jpeg','avif'].includes(o.command)).every(o=>o.enabled!==false)`));
+      assert.ok(await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Output"]').menuModel().sections.flat().filter(o=>['jpeg','avif'].includes(o.command)).every(o=>o.enabled!==false)`));
       if(range==='jpeg') {
-        await click('Preview Output');
+
         await wait(`!!document.querySelector('dialog[open] .error-message').textContent`);
         assert.match(await evaluate(`document.querySelector('dialog[open] .error-message').textContent`),/transparen|background|flatten/i);
-        await set('Transparency','White');
+        await set('Background','White');
       }
       await set('Quality',90);
-      await set('Pixel size','Fit');await set('Maximum width (px)',32);await set('Maximum height (px)',24);
+      await set('Size','Fit');await set('Maximum width (px)',32);await set('Maximum height (px)',24);
       await set('Resolution metadata','Ppi');await set('Pixels per inch',144);
       await preview();
       const hdr=await outputPixels();await set('Preview rendition','sdr');const sdr=await outputPixels();
@@ -110,22 +110,21 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
 
     // A saved cross-platform gain-map preset remains editable and selectable.
     await begin('avif');
-    await set('Preset name','Portable HDR');await click('Save Preset');
-    await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Destination"]').menuModel().sections.flat().some(o=>o.label==='Portable HDR')`);
+    await evaluate(`document.querySelector('[data-export-page="presets"]').click()`);await evaluate(`document.querySelector('#export-preset-save').click()`);await wait(`!!document.querySelector('#export-preset-name-dialog[open]')`);await evaluate(`(()=>{const entry=document.querySelector('#export-preset-name');entry.value='Portable HDR';entry.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#export-preset-name-dialog .suggested-action').click();})()`);
+    await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Preset"]').menuModel().sections.flat().some(o=>o.label==='Portable HDR')`);
     await close();await begin('jpeg');
-    const index=await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Destination"]').menuModel().sections.flat().find(o=>o.label==='Portable HDR').command`);
-    await set('Destination',index);await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Dynamic range"]').value==='avif'&&!document.querySelector('dialog[open] .dropdown[aria-label="Destination"]').disabled`);
+    const index=await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Preset"]').menuModel().sections.flat().find(o=>o.label==='Portable HDR').command`);
+    await set('Preset',index);await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Output"]').value==='avif'&&!document.querySelector('dialog[open] .dropdown[aria-label="Preset"]').disabled`);
     await close();
 
     // Cancel a live file worker, check that its temporary OPFS job disappears,
     // and retry without touching the document or publishing a partial file.
     await begin('avif');
     const cancellation=await evaluate(`(async()=>{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;
-      const recipe=layerApp.app.export_draft((await layerApp.app.export_presets({type:'get',index:0})).recipe,{type:'format',value:'AvifHdrMapped'}).recipe;
-      recipe.size={Fit:{bounds:[1024,1024],enlarge:true}};const c=layerApp.app.capture_control();
+      layerApp.app.export_dialog_action(id,{type:'output',value:'avif'});layerApp.app.export_dialog_action(id,{type:'rendition',sdr:true});layerApp.app.export_dialog_action(id,{type:'fit',enabled:true});for(const axis of [0,1])layerApp.app.export_dialog_action(id,{type:'bound',axis,value:1024});layerApp.app.export_dialog_action(id,{type:'enlarge',enabled:true});const c=layerApp.app.capture_control();
       const post=Worker.prototype.postMessage;let timer,encoding=false,started;
       Worker.prototype.postMessage=function(message,...args){const result=post.call(this,message,...args);if(message.request?.operation==='output-encode'){encoding=true;started=performance.now();timer=setTimeout(()=>c.cancel(),25)}return result};
-      try{await layerApp.app.export_image(id,recipe,c,true);return {error:null,encoding}}catch(e){return {error:String(e),encoding,milliseconds:performance.now()-started}}finally{Worker.prototype.postMessage=post;clearTimeout(timer);c.free()}})()`);
+      try{await layerApp.app.export_image(id,null,c,true);return {error:null,encoding}}catch(e){return {error:String(e),encoding,milliseconds:performance.now()-started}}finally{Worker.prototype.postMessage=post;clearTimeout(timer);c.free()}})()`);
     assert.equal(cancellation.encoding,true,'Cancellation starts after dispatching the codec worker');
     assert.match(cancellation.error,/cancel/i);
     assert.ok(cancellation.milliseconds<3000,`Worker cancellation took ${cancellation.milliseconds}ms`);
@@ -141,10 +140,10 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
         const start=performance.now();await open('large-input.avif');
         const entry={format:range,openMs:performance.now()-start};results.large.push(entry);
         const before=await state(),master=await histogram();
-        entry.extent=await evaluate('layerApp.app.export_form().extent');
+        entry.extent=await evaluate('(async()=>(await layerApp.app.document_properties()).extent)()');
         assert.ok(master.channels.some(c=>c.above>0));
-        await begin(range);await set('Quality',90);await set('Pixel size','Original');
-        if(range==='jpeg')await set('Transparency','White');
+        await begin(range);await set('Quality',90);await set('Size','Original');
+        if(range==='jpeg')await set('Background','White');
         await evaluate(`(()=>{const n=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');n.checked=true;n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
         const previewStart=performance.now();await preview();entry.previewMs=performance.now()-previewStart;
         const name=`large-hdr.${range==='jpeg'?'jpg':'avif'}`,encodeStart=performance.now();
@@ -153,7 +152,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
         const decoded=await evaluate(`(async()=>{const image=await createImageBitmap(new Blob([portablePhoto.files.get(${JSON.stringify(name)})],{type:${JSON.stringify('image/'+range)}}));try{return [image.width,image.height]}finally{image.close()}})()`);
         assert.deepEqual(decoded,entry.extent,'Independent browser decoder retains full dimensions');
         const reopenStart=performance.now();await open(name);entry.reopenMs=performance.now()-reopenStart;
-        assert.deepEqual(await evaluate('layerApp.app.export_form().extent'),entry.extent);
+        assert.deepEqual(await evaluate('(async()=>(await layerApp.app.document_properties()).extent)()'),entry.extent);
         const restored=await histogram();assert.equal(restored.color.depth,'F16');
         assert.ok(restored.channels.some(c=>c.above>0));
         console.log(`Large portable photo: ${JSON.stringify(entry)}`);

@@ -454,18 +454,19 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
     const files=`window.zoomFiles`;
     await evaluate(`window.zoomPicker=window.showSaveFilePicker;${files}=new Map();window.zoomPicks=0;
       window.showSaveFilePicker=async options=>{zoomPicks++;return{name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){${files}.set(options.suggestedName,bytes)},async abort(){}}}}};`);
-    const exportAs=async(format,{expectError=null,destination=null}={})=>{
+    const exportAs=async(format,{expectError=null,destination=null,oversized=false}={})=>{
       await invoke('export_document');
       await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
       if(destination!==null) {
-        await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Destination"]',String(destination)));
-        await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Pixel size"]').value==='Fit'&&!document.querySelector('dialog[open] .dropdown[aria-label="Format"]').disabled`);
+        await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Preset"]',String(destination)));
+        await wait(`document.querySelector('dialog[open] .dropdown[aria-label="Size"]').value==='Fit'&&!document.querySelector('dialog[open] .dropdown[aria-label="Format"]').disabled`);
       }
       await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Format"]',format));
       await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Bit depth"]','U8'));
       const depth=await evaluate(`document.querySelector('dialog[open] .dropdown[aria-label="Bit depth"]').menuModel().sections.flat().filter(o=>o.enabled!==false).map(o=>o.command)`);
       if(format==='Webp')assert.deepEqual(depth,['U8'],'WebP is 8-bit only');
-      await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Dither"]','None'));
+      await evaluate(`(()=>{const node=document.querySelector('#export-dither');node.checked=false;node.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      if(oversized)await evaluate(`(()=>{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;for(const action of [{type:'fit',enabled:true},{type:'bound',axis:0,value:20000},{type:'bound',axis:1,value:20000},{type:'enlarge',enabled:true}])layerApp.app.export_dialog_action(id,action);document.querySelector('#export-options form').localize();})()`);
       const picks=await evaluate('zoomPicks');
       await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Choose File…').click()`);
       if(expectError) {
@@ -505,11 +506,7 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
     assert.ok(decoded.ink>20,`the stroke is in the export: ${decoded.ink}`);
     assert.ok(decoded.diff<=1,`the WebP matches the 8-bit PNG export: ${decoded.diff}`);
 
-    const poster=await evaluate(`(async()=>{const base=(await layerApp.app.export_presets({type:'get',index:0})).recipe;
-      const recipe=layerApp.app.export_draft({...base,size:{Fit:{bounds:[20000,20000],enlarge:true}}},{type:'format',value:'Webp'}).recipe;
-      return Number((await layerApp.app.export_presets({type:'save',name:'Poster WebP',recipe})).index)})()`);
-    try { await exportAs('Webp',{expectError:WEBP_LIMIT,destination:poster}); }
-    finally { await evaluate(`layerApp.app.export_presets({type:'remove',index:${poster}}).then(()=>true)`); }
+    await exportAs('Webp',{expectError:WEBP_LIMIT,oversized:true});
     console.log(`Zoom readout (mouse, touch, pen${device&&process.env.CAPY_ANDROID_SERIAL?', OS taps':''}), rotation snapping and reload in both themes, Actual Pixels, typed zoom, chords and WebP export passed`);
   } finally {
     await evaluate(`if(window.zoomPicker!==undefined)window.showSaveFilePicker=zoomPicker;document.querySelector('${menu}:popover-open')?.hidePopover();const workspace=${workspace};if(!workspace.layout.canvas_info.visible)layerApp.dispatch({type:'restore_workspace',workspace});layerApp.dispatch({type:'set_rotation_snapping',enabled:${snapRotation}})`);

@@ -379,10 +379,13 @@ impl ExportRecipe {
 }
 
 /// Product-dependent draft transitions, shared by all native/browser forms.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ExportDraftAction {
     Refresh,
+    Size(ExportSize),
+    Resolution(ExportResolution),
+    Quality(u8),
     ClipHdrRange(bool),
     Format(ExportFormat),
     Profile(ExportProfile),
@@ -503,6 +506,9 @@ impl ExportRecipe {
         use layer_core::color::OutputDither;
         match action {
             ExportDraftAction::Refresh => (),
+            ExportDraftAction::Size(value) => self.size = value,
+            ExportDraftAction::Resolution(value) => self.resolution = value,
+            ExportDraftAction::Quality(value) => self.jpeg_quality = value,
             ExportDraftAction::ClipHdrRange(v) => self.format=self.format.with_hdr_range_mapping(v),
             ExportDraftAction::Format(v) => self.format = v,
             ExportDraftAction::Profile(v) => self.profile = v,

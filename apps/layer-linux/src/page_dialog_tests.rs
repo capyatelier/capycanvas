@@ -152,7 +152,7 @@ fn native_export_narrow_bounds() {
     let (dialog, frame) = dialog_frame(&d);
     until(|| find_named(&frame, "color-preview-after").and_then(|widget| widget.downcast::<gtk::Picture>().ok())
         .is_some_and(|picture| picture.paintable().is_some()), "Export publishes its preview");
-    super::phone::capture(&mut d, "export-narrow-bounds");
+    capture(&mut d, "export");
     let headers = descendants::<adw::HeaderBar>(&frame).into_iter().filter(|header| header.is_mapped()).collect::<Vec<_>>();
     assert_eq!(headers.len(), 1, "Export has one mapped navigation header");
     let minimum = headers[0].measure(gtk::Orientation::Horizontal, -1).0;
@@ -160,6 +160,26 @@ fn native_export_narrow_bounds() {
     for name in ["export-format", "export-open-size", "export-open-color", "color-preview-before", "color-preview-after"] {
         let bounds = find_named(&frame, name).unwrap().compute_bounds(&frame).unwrap();
         assert!(bounds.x() >= 0. && bounds.x() + bounds.width() <= frame.width() as f32 + 1., "Export control fits: {name} {bounds:?}");
+    }
+    let nav = named::<adw::NavigationView>(&frame, "export-navigation");
+    for tag in ["size", "color", "presets"] {
+        export_page(&mut d, &frame, tag);
+        capture(&mut d, &format!("export-{tag}"));
+        if tag == "presets" {
+            named::<adw::ButtonRow>(&frame, "export-preset-save").emit_by_name::<()>("activated", &[]);
+            let (name_dialog, name_frame) = dialog_frame_named(&d, "export-preset-name-dialog");
+            let name = named::<adw::EntryRow>(&name_frame, "export-preset-name");
+            until(|| name.is_mapped(), "Save Export Preset opens its name field");
+            assert!(name.text().is_empty(), "Save Export Preset starts with an empty name");
+            capture(&mut d, "save-export-preset");
+            crate::page_dialog::close_dialog(&name_dialog);
+            until(|| d.w.visible_dialog().as_ref() == Some(&dialog), "Save Export Preset Cancel returns to Export");
+        }
+        let outgoing = nav.visible_page().unwrap();
+        let header = if ui_session(&d.w).phone_layout().is_some() { page_header(&frame) }
+            else { descendants::<adw::HeaderBar>(&frame).into_iter().find(|header| header.is_mapped()).unwrap() };
+        d.click(icon_button(&header, "go-previous-symbolic").unwrap().upcast_ref());
+        until(|| nav.visible_page_tag().as_deref() == Some("main") && !outgoing.is_mapped(), "Export Back returns to its draft");
     }
     if ui_session(&d.w).phone_layout().is_some() { page(&d); }
     close(&d, &dialog);
@@ -440,7 +460,7 @@ fn export_page(d: &mut Driver, frame: &gtk::Widget, tag: &str) {
     }), "Export link scrolls into its native viewport");
     d.click(row.upcast_ref());
     until(|| nav.visible_page_tag().as_deref() == Some(tag), &format!("Export opens its native {tag} subpage"));
-    page_header(frame);
+    if ui_session(&d.w).phone_layout().is_some() { page_header(frame); }
 }
 
 fn first_editor_pages(d: &mut Driver, visit: &mut impl FnMut(&mut Driver, &str)) {
@@ -957,8 +977,12 @@ fn w6c_named_forms(d: &mut Driver) {
     named::<adw::ButtonRow>(&frame, "export-preset-save").emit_by_name::<()>("activated", &[]);
     until(|| d.w.visible_dialog().is_some_and(|dialog| dialog.widget_name()=="export-preset-name-dialog"
         && find_named(&crate::page_dialog::parent(&dialog), "export-preset-name").is_some_and(|entry|entry.is_mapped())), "Save Export Preset opens its actual name form");
+    let (name_dialog, _) = dialog_frame_named(d, "export-preset-name-dialog");
+    let intent = crate::page_dialog::declared_intent(&name_dialog).unwrap();
+    assert_eq!(intent.frame, layer_ui::DialogFrame::Alert { prefer_wide: false });
+    assert!(!name_dialog.downcast_ref::<adw::AlertDialog>().unwrap().prefers_wide_layout());
     capture(d, "save-export-preset");
-    crate::page_dialog::close_dialog(&d.w.visible_dialog().unwrap());
+    crate::page_dialog::close_dialog(&name_dialog);
     until(|| d.w.visible_dialog().as_ref() == Some(&export), "Save Export Preset closes");
     close(d, &export);
 

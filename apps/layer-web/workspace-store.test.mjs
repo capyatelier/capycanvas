@@ -272,7 +272,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   const zen = await evaluate(snapshot(`database => Object.values(database.items).map(item => item.entity.working.zen_mode)`));
   assert.ok(zen.length >= 3 && zen.every(value => typeof value === "boolean"));
   assert.equal(await evaluate("(async () => Array.isArray(await layerApp.app.profile_library('list')))()"), true);
-  assert.equal(await evaluate("(async () => !!(await layerApp.app.export_presets({type: 'get', index: 0})).recipe)()"), true);
+  assert.equal(await evaluate("(async () => (await layerApp.app.load_export_dialog()) instanceof Uint8Array)()"), true);
   assert.deepEqual(await evaluate(keptProfile), [1, 2, 3], "Upgrading color preferences keeps stored profiles");
   await wait('!layerApp.documents.busy() && layerApp.state().commands.find(c => c.id === "export_document")?.enabled');
   await evaluate("layerApp.dispatch({type: 'invoke', command: 'export_document'})");
@@ -290,7 +290,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
     };
   })`);
   assert.equal(await evaluate("(async () => Array.isArray(await layerApp.app.profile_library('list')))()"), true);
-  assert.equal(await evaluate("(async () => !!(await layerApp.app.export_presets({type: 'get', index: 0})).recipe)()"), true);
+  assert.equal(await evaluate("(async () => (await layerApp.app.load_export_dialog()) instanceof Uint8Array)()"), true);
   await restart();
   assert.equal(JSON.parse(await evaluate("layerApp.app.workspace_view()")).error, null);
   assert.equal(await evaluate("!!layerApp.state().notice"), false);

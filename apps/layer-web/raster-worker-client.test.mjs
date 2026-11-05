@@ -51,6 +51,28 @@ for(const failure of ['cleanup','transfer-list','post',null])test(`worker packed
   if(failure)assert.match(replies[0].error,new RegExp(failure+' failed'));else assert.equal(replies[0].result,result);
 });
 
+test('export preset worker rejects a stale expected library without replacing current storage',async()=>{
+  let current=new Uint8Array([2]),writes=0,aborts=0;
+  const database={objectStoreNames:{contains:()=>true},close(){},transaction(){
+    const transaction={error:null,abort(){aborts++;queueMicrotask(()=>transaction.onabort());}};
+    const store={transaction,get(){
+      const request={result:current,error:null};queueMicrotask(()=>request.onsuccess());
+      queueMicrotask(()=>{if(!aborts)transaction.oncomplete();});return request;
+    },put(next){writes++;current=next;}};
+    transaction.objectStore=()=>store;return transaction;
+  }};
+  const scope={Uint8Array,queueMicrotask,indexedDB:{open(){
+    const request={result:database};queueMicrotask(()=>request.onsuccess());return request;
+  }},wasm:{raster_worker_export_presets(_metadata,[stored,expected,next]){
+    if(stored[0]!==expected[0])throw {color_feature_error:'PresetChanged'};
+    return next;
+  }},self:{postMessage(){}}};
+  const source=readFileSync(new URL('./raster-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
+  runInNewContext(source+'\nglobalThis.writeExportPresets=exportPresets;',scope);
+  await assert.rejects(scope.writeExportPresets('{"operation":"write"}',[new Uint8Array([1]),new Uint8Array([3])]),error=>error.color_feature_error==='PresetChanged');
+  assert.equal(writes,0);assert.equal(aborts,1);assert.equal(current[0],2);
+});
+
 test('sender reservations release before a raster worker replies',()=>withFixture(async f=>{
   const buffers=[new Uint8Array(4)];let released=0;
   buffers.admission={release(){released++;}};

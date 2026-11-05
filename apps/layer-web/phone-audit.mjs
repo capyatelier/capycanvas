@@ -493,7 +493,10 @@ export const dialogAuditRows=[
     if(tile!=null){await click(`#phone-tool-${tile}`);if(!await evaluate('!!layerApp.state().customization.drawer'))await click(`#phone-tool-${tile}`);await send({type:'customize',action:{type:'toggle_layer_drawer_properties'}});}
     await wait('!!document.querySelector("#property-texture")');await evaluate('document.querySelector("#property-texture").click()');
   },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector("#texture-dialog[open]").requestClose()');await wait('!document.querySelector("#texture-dialog[open]")');await send({type:'customize',action:{type:'close_expanded'}});}},
-  {batch:'w6b',id:'export',openaction:{type:'invoke',command:'export_document'},rootselector:'#export-options[open]',variants:
+  {batch:'w6b',id:'export',openaction:async({send,wait})=>{
+    await send({type:'invoke',command:'export_document'});
+    await wait('document.querySelectorAll("#export-options .native-comparison canvas").length===2');
+  },rootselector:'#export-options[open]',variants:
     ['size','color','presets'].map(id=>({id:`export-${id}`,openaction:async({evaluate,settle})=>{
       if(id!=='size'){await evaluate('document.querySelector("#export-options [data-dialog-part=start]").click()');await settle();}
       await evaluate(`document.querySelector('[data-export-page="${id}"]').click()`);await settle();
@@ -514,6 +517,7 @@ export const dialogAuditRows=[
   },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector("#paper-rename-dialog").requestClose()');await wait('!document.querySelector("#paper-rename-dialog")');await evaluate('document.querySelector("#texture-dialog").requestClose()');const id=await evaluate('layerApp.state().layer_properties.controls.find(control=>control.paper).paper.tiles.find(tile=>tile.label==="Linen scan").id');await send({type:'effect',action:{op:'delete_paper',id}});await send({type:'customize',action:{type:'close_expanded'}});}},
   {batch:'w6c',id:'save-export-preset',rootselector:'#export-preset-name-dialog[open]',openaction:async({send,evaluate,wait})=>{
     await send({type:'invoke',command:'export_document'});await wait('!!document.querySelector("#export-options[open]")');
+    await wait('document.querySelectorAll("#export-options .native-comparison canvas").length===2');
     await evaluate(`(()=>{const root=document.querySelector('#export-options');root.querySelector('[data-export-page="presets"]').click();[...root.querySelectorAll('button')].find(button=>button.textContent===layerApp.app.export_copy().save_new_preset).click();})()`);
   },closeaction:async({evaluate,wait})=>{await evaluate('document.querySelector("#export-preset-name-dialog").requestClose()');await wait('!document.querySelector("#export-preset-name-dialog")');await evaluate('document.querySelector("#export-options [data-dialog-part=start]").click()');}},
   ...[['new-palette','new_palette'],['rename-palette','rename_palette'],['delete-palette','remove_palette']].map(([id,command])=>({batch:'w6c',id,rootselector:'dialog.palette-form[open]',openaction:async({send,evaluate,wait})=>{

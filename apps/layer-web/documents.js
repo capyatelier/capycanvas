@@ -177,7 +177,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       },delivery.download_dialog);
     } finally {URL.revokeObjectURL(url);}
   }
-  async function destination(request,recipe) {
+  async function destination(request,format) {
     const old=request.location && handles.get(request.location.uri);
     if(old&&request.type==='save'&&(!old.queryPermission||await old.queryPermission({mode:'readwrite'})==='granted')) {
       let observed=null;
@@ -194,13 +194,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
 
     }
     if(window.showSaveFilePicker) {
-      const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/vnd.capycanvas"];
-      const description=recipe?formatLabels()[recipe.format]:delivery.drawing_type;
-      const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
+      const [extension,mime]=format?exportFormats[format]:["capy","application/vnd.capycanvas"];
+      const description=format?formatLabels()[format]:delivery.drawing_type;
+      const name=format?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
       const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
       return{location:location(handle.name,handle),handle};
     }
-    const extension=recipe?exportFormats[recipe.format][0]:null;
+    const extension=format?exportFormats[format][0]:null;
     return {location:location(extension?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name)};
   }
   const choosePaperImage=()=>new Promise(resolve=>{
@@ -311,12 +311,12 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
           } catch(error) { message(error); }
           return;
         }
-        const choice=r.repeat?{recipe:r.repeat.recipe}:r.type==="export"?await chooseExport({app,dialog,element,button,icon,dropdown,numberField,gpuOperation,id}):null;
-        const recipe=choice?.recipe??null;
-        if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
-        const target=await destination(r.repeat?{...r,location:r.repeat.location}:r,recipe);
-        if(recipe){
-          const extension=exportFormats[recipe.format][0];
+        const choice=r.repeat?null:r.type==="export"?await chooseExport({app,dialog,element,button,icon,dropdown,numberField,gpuOperation,id}):null;
+        const recipe=r.repeat?.recipe??null,format=recipe?.format??choice?.format??null;
+        if(r.type==="export"&&!format){applyChange(app.finish_document(id,false));return;}
+        const target=await destination(r.repeat?{...r,location:r.repeat.location}:r,format);
+        if(format){
+          const extension=exportFormats[format][0];
           const extensions=extension==='jpg'?['jpg','jpeg']:extension==='tif'?['tif','tiff']:[extension];
           if(!extensions.includes(target.location.name.split('.').at(-1).toLowerCase()))throw deliveryFailure("export_extension",{extension:extensions[0]});
           const master=handles.get(app.state().document_file.location?.uri);
@@ -325,11 +325,12 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         let output,control,progress,progressLabel,progressPhase="preparing";
         const progressCaption=()=>progressPhase==="cancelling"?delivery.cancelling:exportCopy[progressPhase];
         try {
-          if(recipe){
+          if(format){
             control=app.capture_control();progress=createProgressDialog({app,element,button,icon,intent:exportCopy.progress_dialog,title:()=>exportCopy.exporting,body:progressCaption,
               onCancel:()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}});progressLabel=progress.label;
           }
           if(recipe)applyChange(app.dispatch({type:"prepare_export",id,owner:r.owner,recipe,location:target.location}));
+          else if(format)applyChange(app.prepare_export_dialog(id,r.owner,target.location));
           const bytes=(output=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
           if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.cancel.disabled=true;}
 
@@ -342,12 +343,11 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
             const stream=await target.handle.createWritable();
             try {await stream.write(bytes);await stream.close();success=true;}
             catch(error){try{await stream.abort();}catch{}throw error;}
-          } else success=!!await download(bytes,target.location.name,recipe?exportFormats[recipe.format][1]:"application/octet-stream");
+          } else success=!!await download(bytes,target.location.name,format?exportFormats[format][1]:"application/octet-stream");
+          if(success&&format&&!r.repeat)try{await app.remember_export_dialog(id);}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:'export_preferences',reason:error.color_feature_error}}:deliveryFailure('export_preferences',{detail:String(error)}));}
           applyChange(app.finish_document(id,success));
           if(success&&r.type==='save'&&output.fingerprint&&app.state().document_file.location?.uri===target.location.uri)
             app.session_record_destination(target.location,output.fingerprint);
-          if(success&&recipe&&!r.repeat)try{await app.export_presets({type:'remember',index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:'export_preferences',reason:error.color_feature_error}}:deliveryFailure('export_preferences',{detail:String(error)}));}
-
           if(success && r.type==="save" && !app.state().document_file.modified) {
             await recovery.capture();
           }

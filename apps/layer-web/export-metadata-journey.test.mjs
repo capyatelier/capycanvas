@@ -130,9 +130,8 @@ export async function checkExportMetadata({call,evaluate,settle}) {
   const contains=(bytes,text)=>bytes.includes(Buffer.from(text));
   try {
     await open('camera.jpg');
-    assert.equal(await evaluate('layerApp.app.export_form().metadata'),true,'the opened photo keeps its metadata');
     for(const [format,name] of [['Jpeg','copy.jpg'],['Webp','copy.webp']]) {
-      await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Metadata"]')`);
+      await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Metadata"]')`);assert.equal(await evaluate(`layerApp.app.export_dialog_source(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).metadata`),true,'the frozen export source keeps the photo metadata');
       await set('Format',format);await settle();
       assert.deepEqual(await evaluate(`document.querySelector('dialog[open] [aria-label="Metadata"]').menuModel().sections.flat().map(o=>o.label)`),['All','Copyright & Contact','None']);
       assert.equal(await evaluate(`document.querySelector('dialog[open] [aria-label="Metadata"]').value`),'All');
@@ -157,8 +156,7 @@ export async function checkExportMetadata({call,evaluate,settle}) {
     }
     await saved('camera.capy',()=>invoke('save_document'));
     await open('camera.capy');
-    assert.equal(await evaluate('layerApp.app.export_form().metadata'),true,'the saved drawing keeps the photo metadata');
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Metadata"]')`);
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Metadata"]')`);assert.equal(await evaluate(`layerApp.app.export_dialog_source(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).metadata`),true,'the frozen export source keeps the photo metadata');
     await set('Format','Jpeg');await set('Metadata','None');
     const none=await saved('none.jpg',()=>click('Choose File…'));
     for(const dropped of ['Capycam','Ada Painter']) assert.ok(!contains(none,dropped),`None leaves out ${dropped}`);

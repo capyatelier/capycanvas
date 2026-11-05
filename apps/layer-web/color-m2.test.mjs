@@ -3,7 +3,7 @@ import {histogramJourney} from './histogram-journey.mjs';
 import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
-import {checkTextEntry,checkSearchField,captureCheckboxes} from './control-style-fixture.mjs';
+import {checkTextEntry,checkSearchField} from './control-style-fixture.mjs';
 import {paintBaseImage,authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples,packageObjects,imageIdentity,imageContent} from './package-fixture.test.mjs';
 const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
 const compositionColor=m=>({space:'srgb',depth:'u8',...packageComposition(m).data.color});
@@ -62,16 +62,16 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const restored=await readPackage(evaluate,'sdrFiles.get("photo-master.capy")');assert.deepEqual(sourceIdentity(restored),sourceIdentity(source));assert.deepEqual(packageResourceIdentity(restored),packageResourceIdentity(source));assert.deepEqual(compositionColor(restored),compositionColor(source));
   const exported = async(format,profile,depth='U16',resize=false)=>{
     await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
-    await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const set=(label,value)=>{const s=d.querySelector('.dropdown[aria-label="'+label+'"]');(${chooseDropdown})(s,value);};
-      set('Format',${JSON.stringify(format)});set('Output profile',${JSON.stringify(profile)});set('Bit depth',${JSON.stringify(depth)});set('Pixel size','Original');set('Dither','None');
-      if(${resize}){const number=(label,value)=>{const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));};set('Pixel size','Fit');number('Maximum width (px)','257');number('Maximum height (px)','257');set('Resolution metadata','Ppi');number('Pixels per inch','300');}})()`);
-    if(resize){await click('Preview Output');await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')`);
-      assert.deepEqual(await evaluate(`(()=>{const canvas=document.querySelector('canvas[aria-label="Output preview"]');return[canvas.width,canvas.height]})()`),[257,129]);
+    await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const set=(label,value)=>{const s=d.querySelector('.dropdown[aria-label="'+label+'"]');if(label==='Output profile'){const profiles=layerApp.app.export_dialog_profiles(id);value=value==='original'?'original:'+profiles.findIndex(p=>p.profile.Icc):'standard:'+layerApp.app.profile_picker_standard({kind:'output'}).findIndex(p=>p.profile.Builtin===(value==='1'?'DisplayP3':'Srgb'));}if(label==='Resolution metadata'&&value==='Ppi')value=String(layerApp.app.export_dialog_view(id).resolutions.findIndex(c=>typeof c.value==='object'&&'Ppi'in c.value));(${chooseDropdown})(s,value);};
+      set('Format',${JSON.stringify(format)});set('Output profile',${JSON.stringify(profile)});set('Bit depth',${JSON.stringify(depth)});set('Size','Original');d.querySelector('#export-dither').checked=false;d.querySelector('#export-dither').dispatchEvent(new Event('change'));
+      if(${resize}){const number=(label,value)=>{const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));};set('Size','Fit');number('Maximum width (px)','257');number('Maximum height (px)','257');set('Resolution metadata','Ppi');number('Pixels per inch','300');}})()`);
+    if(resize){await wait(`!!document.querySelector('canvas[aria-label="Output"]')`);
+      assert.deepEqual(await evaluate(`(()=>{const canvas=document.querySelector('canvas[aria-label="Output"]');return[canvas.width,canvas.height]})()`),[257,129]);
       assert.ok(await evaluate(`document.querySelector('dialog[open]').textContent.includes('excludes JPEG compression artifacts')`));}
     await click('Choose File…');await wait('!layerApp.state().document_file.busy');
     assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   };
-  const originalProfile=await evaluate('String(layerApp.app.export_form().profiles.length-1)');
+  const originalProfile='original';
   for(const [format,extension] of [['Png','png'],['Tiff','tif']]){
     await exported(format,originalProfile);
     await evaluate(`window.sdrOutput=sdrFiles.get('photo-master.${extension}').slice();window.showOpenFilePicker=async()=>[{name:'identity.${extension}',async getFile(){return new File([sdrOutput],'identity.${extension}')}}];`);
@@ -122,7 +122,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   assert.deepEqual(await scope.exact(),inspection.histogram,'Revealing a retired subscription recaptures the same source');
   await scope.hide();
   await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
-  await click('Preview Output');await click('Cancel');await wait('!layerApp.state().document_file.busy');
+  await click('Cancel');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   const fileCount=await evaluate('sdrFiles.size');
   await evaluate(`window.sdrCancelObserver=new MutationObserver(()=>{const b=document.querySelector('.file-progress button');if(b){b.click();sdrCancelObserver.disconnect();}});sdrCancelObserver.observe(document.body,{childList:true,subtree:true});`);
@@ -256,41 +256,41 @@ export async function checkExportPresets({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/document-color/web';await mkdir(directory,{recursive:true});
   const settings=await evaluate('layerApp.state().settings');
   const page=async id=>{await evaluate(`(()=>{const root=document.querySelector('#export-options'),back=root.querySelector('.dialog-back');if(back?.checkVisibility())back.click();${id?`root.querySelector('[data-export-page="${id}"]').click();`:''}})()`);await settle();};
-  const select=(label,value)=>evaluate(dropdownChoice(`#export-options .dropdown[aria-label="${label}"]`,value));
+  const select=async(label,value)=>{if(label==='Output profile')value=await evaluate(`'standard:'+layerApp.app.profile_picker_standard({kind:'output'}).findIndex(p=>p.profile.Builtin===${JSON.stringify(value==='1'?'DisplayP3':'Srgb')})`);if(label==='Resolution metadata'&&value==='Ppi')value=await evaluate(`String(layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).resolutions.findIndex(c=>typeof c.value==='object'&&'Ppi'in c.value))`);return evaluate(dropdownChoice(`#export-options .dropdown[aria-label="${label}"]`,value));};
   await evaluate(`window.presetSavePicker=window.showSaveFilePicker;window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(bytes){if(!(bytes.size??bytes.byteLength))throw Error('Empty export')},async close(){},async abort(){}}}})`);
   try {
   const invoke=async()=>{await wait('!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id==="export_document")?.enabled');await evaluate(`layerApp.dispatch({type:'invoke',command:'export_document'})`);await wait(`!!document.querySelector('#export-options[open]')`);};
-  const preset=index=>evaluate(`(async()=>JSON.parse(JSON.stringify(await layerApp.app.export_presets({type:'get',index:${index}}),(_,v)=>typeof v==='bigint'?Number(v):v)))()`);
+  const preset=index=>evaluate(`(()=>{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const view=layerApp.app.export_dialog_action(id,{type:'preset',index:${index}});document.querySelector('#export-options form').localize();return JSON.parse(JSON.stringify({recipe:{...view.fields,profile:layerApp.app.export_dialog_profile(id,Number(view.fields.profile))}},(_,v)=>typeof v==='bigint'?Number(v):v));})()`);
   for(const theme of ['light','dark']) {
   await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
   const name='Tablet delivery '+theme+' '+Date.now();
   await invoke();await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-root-${theme}`);
-  await select('Format','Png');await page('size');await select('Pixel size','Fit');await captureCheckboxes({call,evaluate,settle},directory,`export-fit-${theme}`);await select('Resolution metadata','Ppi');
+  await select('Format','Png');await page('size');await select('Size','Fit');assert.ok(await evaluate(`document.querySelector('#export-enlarge').checkVisibility()&&document.querySelector('#export-enlarge').getAttribute('role')==='switch'`),'Fit exposes its native enlargement switch');await select('Resolution metadata','Ppi');
   await evaluate(`(()=>{const d=document.querySelector('#export-options');
     for(const[label,value]of[['Maximum width (px)','321'],['Maximum height (px)','123'],['Pixels per inch','287']]){const entry=d.querySelector('input.number-entry[aria-label="'+label+'"]');entry.closest('.number-control').querySelector('.number-value').click();entry.value=value;entry.dispatchEvent(new Event('input',{bubbles:true}));}})()`);
   await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-size-${theme}`);
   await page('color');await select('Output profile','1');await select('Bit depth','U16');await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-color-${theme}`);
   await page('presets');await captureDropdowns({call,evaluate,settle},'#export-options',directory,`export-presets-${theme}`);
-  await click(await evaluate('layerApp.app.export_copy().save_new_preset'));await wait(`!!document.querySelector('#export-preset-name-dialog[open]')`);await checkTextEntry(evaluate,'#export-preset-name');
+  await click(await evaluate('layerApp.app.export_copy().save_new_preset'));await wait(`!!document.querySelector('#export-preset-name-dialog[open]')`);assert.ok(await evaluate(`document.querySelector('#export-preset-name').closest('.preference-entry-row')&&document.querySelector('#export-preset-name').value===''`),'Save Preset presents its empty native EntryRow');
   await evaluate(`(()=>{const n=document.querySelector('#export-preset-name');n.value=${JSON.stringify(name)};n.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#export-preset-name-dialog .suggested-action').click();})()`);
-  await wait(`!document.querySelector('#export-preset-name-dialog')&&document.querySelector('.dropdown[aria-label="Destination"]')?.querySelector('.dropdown-label')?.textContent===${JSON.stringify(name)}`);
-  const index=await evaluate('Number(document.querySelector(\'.dropdown[aria-label="Destination"]\').value)');
+  await wait(`!document.querySelector('#export-preset-name-dialog')&&document.querySelector('.dropdown[aria-label="Preset"]')?.querySelector('.dropdown-label')?.textContent===${JSON.stringify(name)}`);
+  const index=await evaluate('Number(document.querySelector(\'.dropdown[aria-label="Preset"]\').value)');
   const saved=await preset(index);
   assert.equal(saved.recipe.profile.profile.Builtin,'DisplayP3');assert.equal(saved.recipe.depth,'U16');assert.deepEqual(saved.recipe.size,{Fit:{bounds:[321,123],enlarge:false}});assert.deepEqual(saved.recipe.resolution,{Ppi:287});
   await page();await click('Cancel');await wait('!layerApp.state().document_file.busy');await invoke();
   await page('presets');
-  await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
+  await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Preset"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
   await wait(`document.querySelector('.dropdown[aria-label="Bit depth"]').value==='U16' && document.querySelector('input[aria-label="Maximum width (px)"]').value==='321'`);
   assert.equal(await evaluate('document.querySelector(\'input[aria-label="Pixels per inch"]\').value'),'287');
-  await page('color');await select('Transparency','White');await page('presets');await click('Update Preset');
-  await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);
+  await page('color');await select('Background','White');await page('presets');await click(await evaluate(`layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).preset_labels[1]`));
+  await wait(`!layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).preset_busy`);
   assert.equal((await preset(index)).recipe.background,'White');
-  await click('Choose File…');await wait('!layerApp.state().document_file.busy');
-  const remembered=await preset(3);assert.equal(remembered.recipe.background,'White');assert.deepEqual(remembered.recipe.resolution,{Ppi:287});
-  await invoke();await page('presets');await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Destination"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
-  await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);await click('Delete Preset');
-  await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').menuModel().sections.flat().some(o=>o.label===${JSON.stringify(name)})`);
-  await click('Reset Destination');await wait(`!document.querySelector('.dropdown[aria-label="Destination"]').disabled`);
+  await page();await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+  await invoke();const remembered=await preset(3);assert.equal(remembered.recipe.background,'White');assert.deepEqual(remembered.recipe.resolution,{Ppi:287});
+  await page('presets');await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Preset"]');(${chooseDropdown})(node,${JSON.stringify(String(index))});})()`);
+  await wait(`!layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).preset_busy`);await click(await evaluate(`layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).preset_labels[2]`));
+  await wait(`!document.querySelector('.dropdown[aria-label="Preset"]').menuModel().sections.flat().some(o=>o.label===${JSON.stringify(name)})`);
+  await click(await evaluate(`layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).preset_labels[3]`));await wait(`!layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).preset_busy`);
   const reset=await preset(0);assert.equal(reset.recipe.format,'Png');assert.equal(reset.recipe.profile.profile.Builtin,'Srgb');assert.equal(reset.recipe.size,'Original');
   await page();await click('Cancel');await wait('!layerApp.state().document_file.busy');
   }
@@ -302,8 +302,9 @@ export async function checkProfileLibrary({call,evaluate,settle}) {
   const {wait,invoke,click,idle}=helpers(evaluate);
   await evaluate(`(async()=>{const bytes=await(await fetch('/pkg/prophoto16.png')).arrayBuffer();window.showOpenFilePicker=async()=>[{name:'profile-library.png',async getFile(){return new File([bytes],'profile-library.png')}}]})()`);
   await invoke('open_document');await idle();
+  await invoke('export_document');await wait(`!!document.querySelector('#export-options[open]')`);
   const report=await evaluate(`(async()=>{
-    window.libraryBytes=new Uint8Array(layerApp.app.export_form().profiles.find(p=>p.profile.Icc).profile.Icc);
+    const exportId=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;window.libraryBytes=new Uint8Array(layerApp.app.export_dialog_profiles(exportId).find(p=>p.profile.Icc).profile.Icc);
     window.libraryId=[...new Uint8Array(await crypto.subtle.digest('SHA-256',libraryBytes))].map(b=>b.toString(16).padStart(2,'0')).join('');
     const before=await layerApp.app.profile_library('list');
     const profile=await layerApp.app.profile_library('import',undefined,libraryBytes);await layerApp.app.profile_library('import',undefined,libraryBytes);
@@ -313,16 +314,16 @@ export async function checkProfileLibrary({call,evaluate,settle}) {
     const corrupt=(await layerApp.app.profile_library('list')).find(p=>p.id===libraryId).issue;
     let rejected=false;try{await layerApp.app.profile_library('get',libraryId)}catch(e){rejected=e?.color_feature_error==='ProfileChanged'&&layerApp.app.color_feature_error_copy(e,true).includes('changed')}
     await layerApp.app.profile_library('import',undefined,libraryBytes);
-    const recipe={...(await layerApp.app.export_presets({type:'get',index:0})).recipe,profile};const saved=await layerApp.app.export_presets({type:'save',name:'Library ownership '+Date.now(),recipe});
+    layerApp.app.export_dialog_action(exportId,{type:'profile',result:{Ok:profile}});layerApp.app.export_dialog_action(exportId,{type:'begin_preset',operation:'save'});layerApp.app.export_dialog_action(exportId,{type:'name',value:'Library ownership '+Date.now()});const write=layerApp.app.begin_export_preset_write(exportId,'save');await write.store();const saved=layerApp.app.finish_export_preset_write(exportId,write,null);
     await layerApp.app.profile_library('remove',libraryId);
-    const retained=JSON.stringify((await layerApp.app.export_presets({type:'get',index:Number(saved.index)})).recipe.profile.profile.Icc)===JSON.stringify(profile.profile.Icc);
-    await layerApp.app.export_presets({type:'remove',index:Number(saved.index)});await layerApp.app.profile_library('import',undefined,libraryBytes);
+    const selected=layerApp.app.export_dialog_action(exportId,{type:'preset',index:Number(saved.preset)});const retained=JSON.stringify(layerApp.app.export_dialog_profile(exportId,Number(selected.fields.profile)).profile.Icc)===JSON.stringify(profile.profile.Icc);
+    layerApp.app.export_dialog_action(exportId,{type:'begin_preset',operation:'remove'});const removal=layerApp.app.begin_export_preset_write(exportId,'remove');await removal.store();layerApp.app.finish_export_preset_write(exportId,removal,null);await layerApp.app.profile_library('import',undefined,libraryBytes);
     return{exact,corrupt:!!corrupt,rejected,retained,count:entries.filter(e=>e.id===libraryId).length};
   })()`);
-  assert.deepEqual(report,{exact:true,corrupt:true,rejected:true,retained:true,count:1});
+  assert.deepEqual(report,{exact:true,corrupt:true,rejected:true,retained:true,count:1});await click('Cancel');await idle();
   await evaluate(`(async()=>{window.librarySearchIds=[];for(let year=2021;year<2030;year++){const bytes=libraryBytes.slice();new DataView(bytes.buffer).setUint16(24,year);await layerApp.app.profile_library('import',undefined,bytes);librarySearchIds.push([...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join(''));}})()`);
 
-  await invoke('export_document');await wait(`!!document.querySelector('.dropdown[aria-label="Output profile"]')`);await click('Saved Profiles…');
+  await invoke('export_document');await wait(`!!document.querySelector('.dropdown[aria-label="Output profile"]')`);await evaluate(dropdownChoice('.dropdown[aria-label="Output profile"]','manage'));
   await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   assert.equal(await evaluate('document.querySelector("#profile-library-search").hidden'),false);
   await checkTextEntry(evaluate,'#profile-library-search');
@@ -330,17 +331,18 @@ export async function checkProfileLibrary({call,evaluate,settle}) {
   await wait(`document.querySelectorAll('.profile-library .profile-entry').length===1`);
   await checkSearchField({call,evaluate,settle},'#profile-library-search','profile-library-search');
 
-  await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('button').click()`);
+  await evaluate(`[...document.querySelectorAll('.profile-library button')].find(button=>button.textContent==='Done').click()`);
   // close() clears `open` before the queued close event resolves the picker.
   // Wait for that event's removal before inspecting its selected result.
   await wait(`!document.querySelector('.profile-library')`);
+  await evaluate(`(()=>{const node=document.querySelector('.dropdown[aria-label="Output profile"]');(${chooseDropdown})(node,'saved:'+libraryId);})()`);await wait(`!document.querySelector('.dropdown[aria-label="Output profile"]').disabled`);
   const chosen=await evaluate(`document.querySelector('.dropdown[aria-label="Output profile"]').querySelector('.dropdown-label').textContent`);assert.match(chosen,/ProPhoto/i);
   await click('Cancel');await idle();
   await evaluate(`layerApp.dispatch({type:'open_settings',page:'color'})`);
   await wait(`!![...document.querySelectorAll('#settings button')].find(b=>b.textContent==='Manage Profiles…')`);
   await evaluate(`[...document.querySelectorAll('#settings button')].find(b=>b.textContent==='Manage Profiles…').click()`);
   await wait(`!![...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12)))`);
-  await evaluate(`[...[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelectorAll('button')].find(b=>b.textContent==='Remove').click()`);
+  await evaluate(`[...document.querySelectorAll('.profile-library .profile-entry')].find(e=>e.textContent.includes(libraryId.slice(0,12))).querySelector('.profile-library-more').menuCommand('remove')`);
   await wait(`![...document.querySelectorAll('.profile-library .profile-entry')].some(e=>e.textContent.includes(libraryId.slice(0,12)))`);
   await evaluate(`[...document.querySelectorAll('.profile-library button')].find(b=>b.textContent==='Done').click();layerApp.dispatch({type:'close_settings'});`);
   await evaluate(`(async()=>{for(const id of librarySearchIds)if(id!==libraryId)await layerApp.app.profile_library('remove',id)})()`);

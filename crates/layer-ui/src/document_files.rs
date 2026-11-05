@@ -317,10 +317,11 @@ pub(super) struct DocumentFiles {
     host_error_copy: Option<DocumentHostErrorCopy>,
     pub(super) last_export: Option<ExportRepeat>,
     pending_export: Option<(u64, u64, ExportRepeat)>,
+    export_dialog: Option<(u32, ExportDialogState)>,
 }
 impl DocumentFiles {
     pub(super) fn session_state(&self,file:&DocumentFileState,camera:super::session_recovery::SessionCamera)->super::session_recovery::SessionDocumentState {
-        let Self {startup:_,saved_checkpoint,unpublished,destination,last_export,pending_export:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,paste_center:_,host_error_copy:_}=self;
+        let Self {startup:_,saved_checkpoint,unpublished,destination,last_export,pending_export:_,export_dialog:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,paste_center:_,host_error_copy:_}=self;
         let DocumentFileState {epoch:_,revision:_,location,export_uri:_,unsaved_name,modified:_,recovered,busy:_,close_ready:_,untitled:_}=file;
         super::session_recovery::SessionDocumentState {camera,location:location.clone(),unsaved_name:unsaved_name.clone(),saved_checkpoint:*saved_checkpoint,
             unpublished:*unpublished,recovered:*recovered,destination:destination.clone(),last_export:last_export.as_ref().map(super::session_recovery::detach_export)}
@@ -614,6 +615,52 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
+    pub fn begin_export_dialog(&mut self, id: u32, context: ExportDialogContext, library: ExportPresets) -> Result<ExportDialogView, String> {
+        if !matches!(self.document_request(id)?,DocumentRequest::Export {owner,epoch,..}
+            if *owner==context.source.capture.checkpoint.owner && *owner==self.engine.document().owner && *epoch==self.state.document_file.epoch) {
+            return Err(FileFailure::NotExportRequest.message(self.localization()));
+        }
+        let state=ExportDialogState::new(context,library).map_err(|error|error.message(self.localization()))?;
+        let view=state.view(self.localization());self.files.export_dialog=Some((id,state));Ok(view)
+    }
+    fn export_dialog_state(&self,id:u32)->Result<&ExportDialogState,String> {
+        self.document_request(id)?;
+        self.files.export_dialog.as_ref().filter(|(request,_)|*request==id).map(|(_,state)|state)
+            .ok_or_else(||FileFailure::NotExportRequest.message(self.localization()))
+    }
+    pub fn export_dialog_view(&self,id:u32)->Result<ExportDialogView,String> {Ok(self.export_dialog_state(id)?.view(self.localization()))}
+    pub fn export_dialog_action(&mut self,id:u32,action:ExportDialogAction)->Result<ExportDialogView,String> {
+        self.document_request(id)?;
+        let localization=self.localization().clone();
+        let state=self.files.export_dialog.as_mut().filter(|(request,_)|*request==id).map(|(_,state)|state)
+            .ok_or_else(||FileFailure::NotExportRequest.message(&localization))?;
+        state.apply(action).map_err(|error|error.message(&localization))?;Ok(state.view(&localization))
+    }
+    pub fn export_dialog_recipe(&self,id:u32)->Result<ExportRecipe,ColorFeatureError> {
+        self.files.export_dialog.as_ref().filter(|(request,_)|*request==id).ok_or(ColorFeatureError::ExportCombination)?.1.recipe()
+    }
+    pub fn export_dialog_profile(&self,id:u32,index:usize)->Result<ExportProfile,String> {
+        self.export_dialog_state(id)?.profile(index).cloned().ok_or_else(||ColorFeatureError::ProfileMissing.message(self.localization()))
+    }
+    pub fn export_dialog_profiles(&self,id:u32)->Result<Vec<ExportProfile>,String> {
+        let state=self.export_dialog_state(id)?;
+        Ok((0..).map_while(|index|state.profile(index).cloned()).collect())
+    }
+    pub fn export_dialog_print_profile(&self,id:u32)->Result<Option<(layer_core::color::ColorProfile,String,layer_core::color::RenderingIntent)>,String> {
+        Ok(self.export_dialog_state(id)?.print_profile())
+    }
+    pub fn export_dialog_source(&self,id:u32)->Result<DocumentExport,String> {Ok(self.export_dialog_state(id)?.context.source.clone())}
+    pub fn export_dialog_library(&self,id:u32)->Result<ExportPresets,String> {Ok(self.export_dialog_state(id)?.library.clone())}
+    pub fn export_dialog_remember_write(&self,id:u32)->Result<(ExportPresets,ExportPresets),ColorFeatureError> {
+        let state=self.export_dialog_state(id).map_err(|_|ColorFeatureError::ExportCombination)?;
+        let expected=state.library.clone();let mut next=expected.clone();
+        next.remember(state.view(self.localization()).destination.min(3),state.recipe()?)?;
+        Ok((expected,next))
+    }
+    pub fn export_dialog_preset_write(&self,id:u32,operation:ExportDialogPresetOperation)->Result<ExportDialogPresetWrite,ColorFeatureError> {
+        self.files.export_dialog.as_ref().filter(|(request,_)|*request==id).ok_or(ColorFeatureError::ExportCombination)?.1.preset_write(operation)
+    }
+
     /// A manual save additionally reserves the checkpoint to acknowledge once
     /// the destination is durable. Recovery never changes that checkpoint.
     pub fn capture_project_save(
@@ -686,6 +733,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::UnknownRequest.message(self.localization()));
         }
         let (_, snapshot) = self.files.pending.take().unwrap();
+        self.files.export_dialog=None;
         self.files.pending_copy = None;
         self.state.requests.retain(|r| r.id != id);
         let success = result == Ok(true);

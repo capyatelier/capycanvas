@@ -49,11 +49,6 @@ impl WebApp {
         serialize(&layer_core::color::RgbSpace::ALL.into_iter().filter(|_|purpose.accepts(layer_core::color::ProfileChannels::Rgb))
             .map(layer_ui::ExportProfile::builtin).collect::<Vec<_>>())
     }
-    pub fn localize_export_presets(&self, names: JsValue) -> Result<JsValue, JsValue> {
-        let mut names: Vec<String> = serde_wasm_bindgen::from_value(names).map_err(js)?;
-        layer_ui::ExportPresetView::localize_names_in(&mut names,self.session.engine().document().composition().color,self.session.localization());
-        serialize(&names)
-    }
     pub fn workspace_name_validation(&self, name: &str) -> Result<JsValue, JsValue> {
         serialize(&layer_workspace::name_validation(name, self.session.localization()))
     }
@@ -77,19 +72,6 @@ impl WebApp {
     }
     pub fn proof_choices_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&serde_json::json!({"intents":layer_ui::proof_panel::proof_intents(self.session.localization()),"simulations":layer_ui::proof_panel::proof_simulations(self.session.localization())}))
-    }
-    pub fn export_profile_caption_copy(&self, caption: JsValue) -> Result<String, JsValue> {
-        let caption: layer_ui::ExportProfileCaption = serde_wasm_bindgen::from_value(caption).map_err(js)?;
-        Ok(caption.message(self.session.localization()))
-    }
-    pub fn export_metadata_copy(&self, format: JsValue, keep: JsValue) -> Result<JsValue, JsValue> {
-        let format = serde_wasm_bindgen::from_value(format).map_err(js)?;
-        let keep = serde_wasm_bindgen::from_value(keep).map_err(js)?;
-        serialize(&layer_ui::ExportMetadataView::localized_for(format, keep, self.session.localization()))
-    }
-    pub fn export_preview_copy(&self, format: JsValue, gainmap: bool, clipped: bool) -> Result<String, JsValue> {
-        let format = serde_wasm_bindgen::from_value(format).map_err(js)?;
-        Ok(layer_ui::color_feature_copy::export_preview_status(self.session.localization(), format, gainmap, clipped))
     }
     pub fn color_feature_error_copy(&self, error: JsValue, profile: Option<bool>) -> String {
         if js_sys::Reflect::has(&error, &js("document_host_error")).unwrap_or(false) {
@@ -143,22 +125,29 @@ impl WebApp {
             } else { Ok(result) }
         }))
     }
-    pub fn export_presets(&self, action: JsValue) -> Result<js_sys::Promise, JsValue> {
-        let action: layer_ui::ExportPresetAction =
-            serde_wasm_bindgen::from_value(action).map_err(js)?;
-        let metadata = serde_json::to_string(
-            &serde_json::json!({"action":action,"color":self.session.engine().document().composition().color}),
-        )
-        .map_err(js)?;
-        let color = self.session.engine().document().composition().color;
-        let localizer = self.session.localization().clone();
+    pub fn load_export_dialog(&self)->Result<js_sys::Promise,JsValue> {
+        let color=self.session.engine().document().composition().color;
+        let metadata=serde_json::to_string(&serde_json::json!({"operation":"load","color":color})).map_err(js)?;
         Ok(future_to_promise(async move {
-            let result = JsFuture::from(raster_worker::call("export-presets", &metadata, &js_sys::Array::new())?).await.map_err(|error|color_feature_rejection(color_feature_reason(error)))?;
-            let mut view: layer_ui::ExportPresetView = serde_wasm_bindgen::from_value(result).map_err(js)?;
-            view.localize_names(color, &localizer);
-            serialize(&view)
+            JsFuture::from(raster_worker::call("export-presets",&metadata,&js_sys::Array::new())?).await
+                .map_err(|error|color_feature_rejection(color_feature_reason(error)))
         }))
     }
+    pub fn begin_export_preset_write(&self,id:u32,operation:JsValue)->Result<WebExportPresetWrite,JsValue> {
+        self.session.export_dialog_view(id).map_err(js)?;
+        let operation=serde_wasm_bindgen::from_value(operation).map_err(js)?;
+        Ok(WebExportPresetWrite {id,write:self.session.export_dialog_preset_write(id,operation).map_err(color_feature_rejection)?})
+    }
+    pub fn finish_export_preset_write(&mut self,id:u32,candidate:WebExportPresetWrite,error:JsValue)->Result<JsValue,JsValue> {
+        if candidate.id!=id {return Err(color_feature_rejection(layer_ui::ColorFeatureError::ExportCombination));}
+        let result=if error.is_null()||error.is_undefined() {Ok(candidate.write)} else {Err(color_feature_reason(error))};
+        serialize(&self.session.export_dialog_action(id,layer_ui::ExportDialogAction::PresetResult {result}).map_err(js)?)
+    }
+    pub fn remember_export_dialog(&self,id:u32)->Result<js_sys::Promise,JsValue> {
+        let (expected,next)=self.session.export_dialog_remember_write(id).map_err(color_feature_rejection)?;
+        store_export_presets(&expected,&next)
+    }
+
 }
 #[wasm_bindgen]
 pub fn raster_worker_profile_inventory(metadata: &str) -> Result<JsValue, JsValue> {
@@ -179,30 +168,40 @@ pub fn raster_worker_validate_profile(metadata: &str) -> Result<JsValue, JsValue
     serialize(&profile)
 }
 #[wasm_bindgen]
-pub fn raster_worker_export_presets(
-    metadata: &str,
-    bytes: js_sys::Uint8Array,
-) -> Result<JsValue, JsValue> {
+pub struct WebExportPresetWrite {id:u32,write:layer_ui::ExportDialogPresetWrite}
+#[wasm_bindgen]
+impl WebExportPresetWrite {
+    pub fn store(&self)->Result<js_sys::Promise,JsValue> {store_export_presets(&self.write.expected,&self.write.next)}
+}
+fn store_export_presets(expected:&layer_ui::ExportPresets,next:&layer_ui::ExportPresets)->Result<js_sys::Promise,JsValue> {
+    let buffers=js_sys::Array::new();
+    for library in [expected,next] {buffers.push(&js_sys::Uint8Array::from(library.encode().map_err(color_feature_rejection)?.as_slice()));}
+    Ok(future_to_promise(async move {
+        JsFuture::from(raster_worker::call("export-presets",r#"{"operation":"write"}"#,&buffers)?).await
+            .map_err(|error|color_feature_rejection(color_feature_reason(error)))?;
+        Ok(JsValue::UNDEFINED)
+    }))
+}
+#[wasm_bindgen]
+pub fn raster_worker_export_presets(metadata:&str,buffers:js_sys::Array)->Result<JsValue,JsValue> {
     #[derive(Deserialize)]
-    struct Request {
-        action: layer_ui::ExportPresetAction,
-        color: layer_core::color::DocumentColor,
+    #[serde(tag="operation",rename_all="snake_case")]
+    enum Request {Load {color:layer_core::color::DocumentColor},Write}
+    let bytes=js_sys::Uint8Array::new(&buffers.get(0));
+    let library=layer_ui::ExportPresets::restore(&bytes.to_vec());
+    match serde_json::from_str(metadata).map_err(js)? {
+        Request::Load {color}=>{
+            library.validate_profiles(color).map_err(color_feature_rejection)?;
+            Ok(bytes.into())
+        }
+        Request::Write=>{
+            let expected=layer_ui::ExportPresets::restore(&js_sys::Uint8Array::new(&buffers.get(1)).to_vec());
+            if library!=expected {return Err(color_feature_rejection(layer_ui::ColorFeatureError::PresetChanged));}
+            let next=js_sys::Uint8Array::new(&buffers.get(2));
+            layer_ui::ExportPresets::decode(&next.to_vec()).map_err(color_feature_rejection)?;
+            Ok(next.into())
+        }
     }
-    let request: Request = serde_json::from_str(metadata).map_err(js)?;
-    let mut library = layer_ui::ExportPresets::restore(&bytes.to_vec());
-    let view = library
-        .operate(request.action, request.color)
-        .map_err(color_feature_rejection)?;
-    let result = js_sys::Object::new();
-    js_sys::Reflect::set(&result, &js("view"), &serialize(&view)?)?;
-    if view.changed {
-        js_sys::Reflect::set(
-            &result,
-            &js("bytes"),
-            &js_sys::Uint8Array::from(library.encode().map_err(color_feature_rejection)?.as_slice()),
-        )?;
-    }
-    Ok(result.into())
 }
 
 #[wasm_bindgen]

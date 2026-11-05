@@ -272,11 +272,7 @@ impl Comparison {
         let copy = self.copy.borrow();
         let hdr_view = self.headroom.get() > 1.;
         let labels = match self.output_labels.get() {
-            Some((hdr_document, hdr_output)) => [
-                if hdr_document { if hdr_view { &copy.hdr_master } else { &copy.master_sdr } } else { &copy.master },
-                if self.show_sdr.get() { &copy.sdr_fallback } else if hdr_output { if hdr_view { &copy.hdr_output } else { &copy.output_sdr } }
-                    else if hdr_document { &copy.sdr_output } else { &copy.output },
-            ],
+            Some((hdr_document, hdr_output)) => copy.output_labels(hdr_document, hdr_output, hdr_view, self.show_sdr.get()),
             None => [&copy.before, &copy.after],
         };
         for ((label, picture), text) in self.labels.iter().zip([&self.before, &self.after]).zip(labels) {
@@ -284,15 +280,7 @@ impl Comparison {
         }
     }
     fn status_message(&self, (kind, display_hdr, space): (u8, bool, layer_core::color::RgbSpace)) -> String {
-        let copy = self.copy.borrow();
-        let localization = self.localization.borrow();
-        let description = [&copy.outside_hdr, &copy.hdr_checked, &copy.hdr_clipped, &copy.output_preview, &copy.output_gamut, &copy.complete_canvas][kind as usize];
-        let viewing = if display_hdr { copy.hdr_view.to_string() } else {
-            let mut args = layer_ui::FluentArgs::new(); args.set("space", space.name());
-            localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_VIEW, &args)
-        };
-        let mut args = layer_ui::FluentArgs::new(); args.set("description", description.as_ref()); args.set("view", viewing.as_str());
-        localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_STATUS, &args)
+        self.copy.borrow().status_message(&self.localization.borrow(),(kind,display_hdr,space))
     }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
         self.output_labels.set(Some((snapshot.composition().color.depth.is_float(), recipe.format.is_hdr())));

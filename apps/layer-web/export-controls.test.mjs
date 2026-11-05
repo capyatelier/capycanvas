@@ -4,9 +4,8 @@ import { FakeElement as SharedElement } from "./fake-dom.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { createProfilePicker, chooseSourceProfile, chooseExport, chooseProfileLibrary, localizeProfileLibraries, SDR_FORMATS } from "./export-controls.js";
+import { createProfilePicker, chooseSourceProfile, chooseExport, chooseProfileLibrary, localizeProfileLibraries } from "./export-controls.js";
 import {colorDialogDom,dialogProjection} from "./color-dialog-fixture.mjs";
-import { exportFormats } from "./documents.js";
 
 const ownerDocument={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};
 class FakeElement extends SharedElement {
@@ -21,19 +20,22 @@ class FakeElement extends SharedElement {
   descendants(){return this.querySelectorAll("dialog,form,header,button,input,p,section,div,h2,h3");}
   get childNodes(){return this.children;}
   append(...nodes){for(const node of nodes){if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node);}}
+  prepend(...nodes){for(const node of nodes.reverse())this.insertBefore(node,this.firstChild);}
   getBoundingClientRect(){return {x:0,y:0,left:0,top:0,right:0,bottom:0,width:0,height:0};}
   showModal(){this.open=true;}
   close(){this.open=false;for(const listener of this.listeners.close??[])listener();}
   remove(){if(this.parentNode)this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);this.parentNode=null;}
   get firstChild(){return this.children[0];}
+  get lastChild(){return this.children.at(-1);}
   get textContent(){return this.children.map(node=>node.nodeType===3?node.nodeValue:node.textContent).join("");}
-  set textContent(value){this.replaceChildren(this.ownerDocument.createTextNode(value));}
+  set textContent(value){this.replaceChildren(...(value===""?[]:[this.ownerDocument.createTextNode(value)]));}
   insertBefore(node,before){node.parentNode=this;this.children.splice(before?this.children.indexOf(before):this.children.length,0,node);return node;}
   getContext(){return {putImageData:image=>{this.image=image;}};}
   set ariaLabel(value){this.setAttribute("aria-label",value);}
   get ariaLabel(){return this.getAttribute("aria-label");}
   replaceChildren(...nodes) { for(const node of this.children)node.parentNode=null; this.children = []; this.append(...nodes); }
   closest(selector) { for (let n = this; n; n = n.parentNode) if (n.tagName === selector.toUpperCase()) return n; return null; }
+  querySelector(selector){return this.querySelectorAll(selector)[0]??null;}
   querySelectorAll(selector) {
     const tags = selector.split(",").map(s => s.trim().toUpperCase()), found = [];
     const walk = node => { for (const child of node.children??[]) { if (tags.includes(child.tagName)) found.push(child); walk(child); } };
@@ -49,6 +51,7 @@ const numberField = (control, label, changed) => {
   const root = element("div"), entry = element("input"); root.append(entry); root.entry = entry;
   root.setAttribute = (name, value) => entry.setAttribute(name, value);
   root.update = value => { entry.value = String(value); };
+  root.setShowUnits = () => {};
   root.cancelEditing = () => { entry.composing = false; };
   root.commit = () => {
     if (entry.composing || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(entry.value)) return false;
@@ -58,14 +61,6 @@ const numberField = (control, label, changed) => {
   };
   return root;
 };
-const WEBP_LIMIT = "WebP export is limited to 16,384 pixels per side. Fit the size within that or choose another format.";
-const base = {
-  format: "Png", profile: { name: "sRGB", profile: { Builtin: "Srgb" } }, depth: "U16", background: "Preserve",
-  encoding: { conversion: { intent: "RelativeColorimetric", black_point_compensation: false }, dither: "None" },
-  jpeg_quality: 90, size: "Original", resolution: "Master", metadata: { keep: "All", remove_location: true },
-};
-const METADATA_CHOICES = [["All", "All"], ["CopyrightContact", "Copyright & Contact"], ["None", "None"]];
-
 const catalog = readFileSync(new URL("../../assets/locales/en/color-features.ftl", import.meta.url), "utf8") + "\n" + readFileSync(new URL("../../assets/locales/en/common.ftl", import.meta.url), "utf8");
 const source = readFileSync(new URL("../../crates/layer-ui/src/color_feature_copy.rs", import.meta.url), "utf8");
 function sharedCopy(name) {
@@ -83,238 +78,84 @@ function sharedCopy(name) {
   return copy;
 }
 const exportCopy = sharedCopy("ExportCopy");
-const sdrLabels = SDR_FORMATS.map(id => [id, ({Png:exportCopy.format_png,Tiff:exportCopy.format_tiff,Jpeg:exportCopy.format_jpeg,Webp:exportCopy.format_webp})[id]]);
-
-function fakeApp({ extent = [20000, 400], photo = false } = {}) {
-  const calls = { drafts: [], validated: [], rendered: 0, preferences: [], reads:0 };
-  let language="en";const text=value=>language==="en"?value:`${language}:${value}`;const copy=()=>Object.fromEntries(Object.entries(exportCopy).map(([key,value])=>[key,typeof value==="string"?text(value):value]));
-  const metadataCopy=(format,keep)=>({label:text("Metadata"),choices:METADATA_CHOICES.map(([value,label])=>({value,label:text(label)})),remove_location:text("Remove location"),location:format!=="Exr"&&keep==="All",available:format!=="Exr",note:format==="Exr"?text("OpenEXR keeps no camera or copyright details. Choose another format to keep them."):null});
-  const draft = (recipe, action) => {
-    const format = action.type === "format" ? action.value : recipe.format;
-    const metadata = action.type === "metadata" ? action.value : recipe.metadata;
-    const webp = format === "Webp", exr = format === "Exr";
-    calls.drafts.push(action);
-    return {
-      recipe: { ...recipe, format, metadata, depth: webp ? "U8" : recipe.depth },
-      formats: ["Png", "Tiff", "Jpeg", "Webp"], depths: webp ? ["U8"] : ["U8", "U16"],
-      backgrounds: ["Preserve", "White", "Black"], dithers: ["None", "Stochastic8"],
-      metadata: {
-        label: "Metadata", choices: METADATA_CHOICES.map(([value, label]) => ({ value, label })),
-        remove_location: "Remove location", location: !exr && metadata.keep === "All", available: !exr,
-        note: exr ? "OpenEXR keeps no camera or copyright details. Choose another format to keep them." : null,
-      },
-    };
-  };
-  return {
-    calls,
-    language(next){language=next;},
-    localize_export_presets: names => names.map((name,index)=>index<4?text(["Web","Print","Archive","Last"][index]):name),
-    profile_name_copy: name => name || text("Embedded profile"),
-    export_profile_caption_copy: caption => caption.type==="original"?`${text("Original:")} ${caption.name}`:caption.type==="embedded"?text("Embedded profile"):caption.name,
-    color_feature_error_copy: error => error?.color_feature_error?text(error.color_feature_error):String(error),
-    export_metadata_copy: metadataCopy,
-    export_preview_copy: (format,gainmap,clipped) => text(`${format}:prepared:${gainmap}:${clipped}`),
-    export_form: () => ({ dialog:{frame:{kind:"editor"},role:"editor",modal:true,primary:"action"}, profiles: [base.profile], metadata: photo, copy: exportCopy, numeric: { dimension: { min: 1, max: 32768 }, ppi: { min: 1, max: 65535 }, quality: { min: 1, max: 100 } } }),
-    export_copy: copy,
-    export_preset_name_valid:name=>!!name.trim(),
-    profile_copy: () => sharedCopy("ProfileCopy"),
-    export_presets: async action => { calls.reads++;if (action?.type !== "get") calls.preferences.push(action); return { dialog:{frame:{kind:"editor"},role:"editor",modal:true,primary:"action"}, names: ["Web", "Print", "Archive", "Last"], recipe: base, index: 0 }; },
-    document_color: () => ({ space: "Srgb", depth: "U8" }),
-    export_draft: draft,
-    export_validate: recipe => {
-      calls.validated.push(recipe.format);
-      if (recipe.format === "Webp" && extent.some(v => v > 16384) && recipe.size === "Original") throw WEBP_LIMIT;
-      return recipe;
-    },
-    export_image: async () => { calls.rendered++; return {}; },
-    capture_control: () => ({ cancel() {}, free() {}, cancelled: () => false }),
-  };
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+const profile={name:'Fixture profile',profile:{Icc:[1,2,3]},channels:'Rgb'};
+function exportView(overrides={}) {
+  const choice=(value,label=value)=>({value,label});
+  return {dialog:{frame:{kind:'editor'},role:'editor',modal:true,primary:'action'},copy:{...exportCopy,preset_dialog:{frame:{kind:'alert',prefer_wide:false},role:'editor',modal:true,primary:'action'}},numeric:{dimension:{min:1,max:32768},ppi:{min:1,max:65535},quality:{min:1,max:100}},page:'root',
+    fields:{format:'Png',profile:0n,depth:'U16',background:'Preserve',jpeg_quality:90,resolution:'Master',metadata:{keep:'All',remove_location:true},encoding:{conversion:{intent:'RelativeColorimetric'}}},
+    profile_revision:1,preview_revision:1,output:'sdr',preview_sdr:false,renditions:[choice(false,'HDR'),choice(true,'SDR')],outputs:[choice('sdr','Shared SDR')],formats:[choice('Png','Shared PNG'),choice('Webp','Shared WebP')],backgrounds:[choice('Preserve','Shared transparent')],depths:[choice('U16','Shared depth')],intents:[choice('RelativeColorimetric','Shared intent')],resolutions:[choice('Master','Shared resolution')],metadata:{label:'Shared metadata',choices:[choice('All','Shared all')],remove_location:'Shared location',note:null},
+    bounds:[321,123],enlarge:false,ppi:287,flatten:false,dither:false,clip:false,show_output:true,show_size:false,show_ppi:false,show_color:true,show_background:true,show_depth:true,depth_enabled:true,show_conversion:true,show_dither:true,show_quality:false,show_flatten:false,show_rendition:false,show_clip:false,show_metadata:false,show_location:false,show_metadata_note:false,show_print_profile:false,profile_ready:true,profile_import:true,jpeg_note:false,precision_note:null,compression_note:false,size_summary:'Shared size summary',size_subtitle:'Shared size',color_title:'Shared color',color_subtitle:'Shared profile',preset:0,destination:0,preset_names:['Shared preset'],preset_enabled:[true],preset_labels:['Shared save','Shared update','Shared remove','Shared reset'],preset_save:true,preset_update:false,preset_remove:false,preset_reset:true,preset_busy:false,preset_status:null,preset_error:false,name:'',name_valid:false,error:null,can_export:true,comparison_labels:['Shared master','Shared output'],...overrides};
+}
+async function openExport(t,initial={},options={}) {
+  colorDialogDom(t);const oldImageData=globalThis.ImageData;globalThis.ImageData=class {constructor(pixels,width,height){Object.assign(this,{pixels,width,height});}};t.after(()=>globalThis.ImageData=oldImageData);
+  let view=exportView(initial),form,controls,finish;const prompts=[],calls={actions:[],controls:[],previews:[],writes:[],profiles:[]};
+  const output={previews:[0,1].map(()=>({extent:[1,1],pixels:[10,20,30,255]})),transparent:false,range_exceeded:false,status:'Prepared fixture'};
+  const app={...dialogProjection,dialog_presentation:()=>({kind:options.presentation??'page'}),comparison_copy:()=>({width:160,height:120,gap:12}),load_export_dialog:async()=>new Uint8Array([1]),begin_export_dialog:(id,bytes)=>{assert.equal(id,7);assert.deepEqual([...bytes],[1]);return view;},export_dialog_view:()=>view,export_dialog_preview_copy:()=>'Localized fixture status',
+    export_dialog_action:(id,action)=>{assert.equal(id,7);calls.actions.push(action);view=options.action?.(action,view)??view;return view;},export_dialog_profile:(id,index)=>{assert.equal(typeof index,'number');calls.profiles.push([id,index]);return profile;},export_dialog_print_profile:()=>[{Builtin:'DisplayP3'},'Deskproof','Perceptual'],export_dialog_delivery:()=>({format:'Png',destination:4}),
+    capture_control:()=>{const control={wasCancelled:false,cancel(){this.wasCancelled=true;},cancelled(){return this.wasCancelled;},free(){this.freed=true;}};calls.controls.push(control);return control;},export_image:(...args)=>{calls.previews.push(args);return options.preview?options.preview(args):Promise.resolve(output);},
+    profile_copy:()=>({read_bytes:1024,current:'Current',standard:'Standard',choose:'Choose…',add_profile_dialog:'Import',manage:'Manage'}),profile_name_copy:name=>name,profile_picker_standard:()=>[profile],profile_picker_inventory:async()=>({document:false,current:true,saved:[],standard:false}),profile_library:async()=>[],validate_profile_picker:async value=>({...value,channels:value.channels??'Rgb'}),color_feature_error_copy:String,
+    begin_export_preset_write:(id,operation)=>{calls.writes.push([id,operation]);return {store:async()=>{if(options.storeError)throw options.storeError;},free(){calls.freedWrite=true;}};},finish_export_preset_write:(id,write,error)=>{calls.writeResult=error;calls.consumedWrite=true;view=options.finished??view;return view;}};
+  const result=chooseExport({app,element,button,icon:name=>element('svg',name),dropdown:dropdownFactory({element,button}),numberField,id:7,gpuOperation:run=>run(),dialog:(_title,build,intent)=>new Promise(resolve=>{
+    const body=element('form'),root=element('dialog'),header=element('header'),caption=element('h2');header.append(caption);root.append(header,body);const actions=build(body,resolve,{header,caption,layout(){},dismiss:()=>resolve(null)});
+    if(!form){form=body;controls=actions;finish=resolve;}else prompts.push({body,actions,intent,caption});
+  })});
+  await tick();const find=id=>form.parentNode.querySelectorAll('button,input,div').find(node=>node.id===id);
+  return {app,calls,result,form,prompts,find,get controls(){return controls;},publish(next){view={...view,...next};form.localize();},cancel(){controls.onCancel();},finish};
 }
 
-async function openDialog(app) {
-  let form,prompt,controls;
-  const result = chooseExport({ app, element, button, icon:name=>element('svg',name),dropdown:dropdownFactory({element,button}), numberField, id: 7, gpuOperation: run => run(),
-    dialog: (title, build, intent) => new Promise(resolve => { assert.deepEqual(intent,{frame:{kind:"editor"},role:"editor",modal:true,primary:"action"}); const body=element("form"); element("dialog").append(body); if(!form)form=body;else prompt=body; const actions=build(body, resolve,{header:element("header"),caption:element("h2"),layout(){},dismiss:()=>resolve(null)});if(body===form)controls=actions; }) });
-  while (!form) await new Promise(resolve => setImmediate(resolve));
-  const reveal=node=>{
-    const pane=node?.closest("section"),page=["main","size","color","presets"][form.children.indexOf(pane)];
-    if(page){controls.onBack();if(page!=="main")form.querySelectorAll("button").find(button=>button.dataset.exportPage===page).click();}
-    return node;
-  };
-  const labelled = name => reveal(form.querySelectorAll("button,input").find(n => n.getAttribute("aria-label") === name));
-  const pressed = name => reveal(form.querySelectorAll("button").find(n => n.textContent === name));
-  const error = form.querySelectorAll("p").find(n => n.className === "error-message");
-  return { form, result, labelled, pressed, error,
-    preset(){pressed(exportCopy.save_new_preset).click();return prompt;},
-    async savePreset(){const own=this.preset(),name=own.querySelectorAll("input")[0];name.value="Literal preset";name.oninput();own.querySelectorAll("button").find(node=>node.textContent==="Save").click();await Promise.resolve();},
-  };
-}
-
-test("WebP joins the SDR formats with its file type", () => {
-  assert.deepEqual(SDR_FORMATS, ["Png", "Tiff", "Jpeg", "Webp"]);
-  assert.deepEqual(sdrLabels.at(-1), ["Webp", "WebP · lossless"], "the shared format name");
-  assert.deepEqual(exportFormats.Webp, ["webp", "image/webp"]);
-  for (const id of SDR_FORMATS) assert.ok(exportFormats[id], `${id} has a file type`);
+test('Export projects shared choices, flags and refusal without deriving format policy',async t=>{
+  const d=await openExport(t,{can_export:false,error:'Shared refusal',depth_enabled:false,show_print_profile:true});
+  assert.deepEqual(dropdownChoices(d.find('export-format')).map(o=>[o.command,o.label]),[['Png','Shared PNG'],['Webp','Shared WebP']]);
+  assert.equal(d.find('export-preset-update').hidden,true);assert.equal(d.find('export-preset-remove').hidden,true);assert.equal(d.find('export-preset-save').hidden,false);
+  d.publish({preset_labels:['Shared save after edit','Shared update after edit','Shared remove after edit','Shared reset after edit']});assert.equal(d.find('export-preset-save').textContent,'Shared save after edit');
+  const primary=d.find('export-confirm');assert.equal(primary.parentNode.tagName,'HEADER');assert.equal(d.controls.primary(),primary);d.publish({page:'size'});assert.equal(d.controls.primary(),primary);assert.equal(primary.hidden,false);
+  assert.equal(d.find('export-depth').disabled,true);assert.equal(d.find('export-confirm').disabled,true);assert.ok(d.form.textContent.includes('Shared refusal'));
+  chooseDropdown(d.find('export-format'),'Webp');assert.deepEqual(d.calls.actions.at(-1),{type:'edit',action:{type:'format',value:'Webp'}});
+  assert.equal(d.find('export-depth').value,'U16','the host waits for the next shared view rather than enforcing WebP depth');
+  d.app.dialog_presentation=()=>({kind:'floating'});assert.equal(d.controls.primary(),null);const close=d.form.parentNode.querySelectorAll('button').find(node=>node.className==='export-window-close');assert.equal(close.hidden,false);d.publish({page:'root'});assert.equal(d.controls.primary(),primary);assert.equal(close.hidden,true);
+  d.cancel();assert.equal(await d.result,null);assert.ok(d.calls.controls.every(c=>c.freed));
 });
 
-test("choosing WebP drafts 8-bit output through the shared recipe", async () => {
-  const app = fakeApp({ extent: [800, 600] });
-  const dialog = await openDialog(app);
-  const format = dialog.labelled("Format"), depth = dialog.labelled("Bit depth");
-  assert.deepEqual(dropdownChoices(format).map(o => [o.command, o.label]), sdrLabels);
-  chooseDropdown(format,"Webp");
-  assert.deepEqual(app.calls.drafts.at(-1), { type: "format", value: "Webp" });
-  assert.equal(format.value, "Webp");
-  assert.equal(depth.value, "U8");
-  assert.deepEqual(dropdownChoices(depth).filter(o => o.enabled).map(o => o.command), ["U8"], "WebP is 8-bit only");
-  assert.equal(dialog.labelled("Quality").closest("label").hidden, true, "lossless WebP has no quality");
-  dialog.pressed("Choose File…").click();
-  const choice = await dialog.result;
-  assert.equal(choice.recipe.format, "Webp");
-  assert.equal(app.calls.rendered, 0);
+test('Export forwards numeric edits and blocks acceptance of unfinished native text',async t=>{
+  const d=await openExport(t,{show_size:true,page:'size'}),width=d.find('export-width').entry;
+  width.value='unfinished';d.find('export-confirm').click();assert.equal(d.calls.actions.some(a=>a.type==='bound'),false);
+  width.value='444';d.find('export-confirm').click();assert.deepEqual(await d.result,{format:'Png',destination:4});assert.ok(d.calls.actions.some(a=>a.type==='bound'&&a.axis===0&&a.value===444));
 });
 
-test("a WebP too large for its encoder is refused before any rendering", async () => {
-  const app = fakeApp();
-  const dialog = await openDialog(app);
-  const format = dialog.labelled("Format");
-  chooseDropdown(format,"Webp");
-  dialog.pressed("Preview Output").click();
-  assert.equal(dialog.error.textContent, WEBP_LIMIT);
-  dialog.pressed("Choose File…").click();
-  assert.equal(dialog.error.textContent, WEBP_LIMIT);
-  assert.equal(app.calls.rendered, 0, "the refusal comes from validation, not the renderer");
-  chooseDropdown(dialog.labelled("Pixel size"),"Fit");
-  dialog.pressed("Choose File…").click();
-  const choice = await dialog.result;
-  assert.deepEqual(choice.recipe.size, { Fit: { bounds: [2048, 2048], enlarge: false } });
-  assert.ok(app.calls.validated.filter(f => f === "Webp").length >= 3);
+test('Export publishes only the latest prepared comparison and retires cancelled work',async t=>{
+  const pending=[],d=await openExport(t,{}, {preview:()=>new Promise(resolve=>pending.push(resolve))});
+  d.publish({preview_revision:2});assert.equal(d.calls.controls[0].wasCancelled,true);
+  const output=status=>({previews:[0,1].map(()=>({extent:[1,1],pixels:[0,0,0,255]})),transparent:false,range_exceeded:false,status});
+  pending.shift()(output('stale'));await tick();assert.equal(d.form.textContent.includes('stale'),false);assert.equal(pending.length,1);
+  pending.shift()(output('latest'));await tick();assert.ok(d.form.textContent.includes('latest'));assert.equal(d.form.querySelectorAll('canvas').length,2);assert.deepEqual(d.calls.previews.map(args=>[args[0],args[1],args[3]]),[[7,null,true],[7,null,true]]);
+  const canvases=d.form.querySelectorAll('canvas');d.publish({comparison_labels:['Localized master','Localized output']});assert.deepEqual(d.form.querySelectorAll('canvas'),canvases);assert.ok(d.form.textContent.includes('Localized fixture status'));
+  d.cancel();assert.equal(await d.result,null);assert.ok(d.calls.controls.every(c=>c.freed));
 });
 
-test("a photo's Metadata row drafts the kept fields and location through the shared recipe", async () => {
-  const app = fakeApp({ extent: [800, 600], photo: true });
-  const dialog = await openDialog(app);
-  const metadata = dialog.labelled("Metadata"), location = dialog.labelled("Remove location");
-  const note = dialog.form.querySelectorAll("p").find(n => n.className === "export-metadata-note");
-  assert.deepEqual(dropdownChoices(metadata).map(o => [o.command, o.label]), METADATA_CHOICES, "labels come from the shared view");
-  assert.equal(metadata.value, "All");
-  assert.equal(location.checked, true, "location is removed by default");
-  assert.equal(metadata.closest("label").hidden, false);
-  assert.equal(location.closest("label").hidden, false);
-  assert.equal(note.hidden, true);
-  chooseDropdown(metadata,"CopyrightContact");
-  assert.deepEqual(app.calls.drafts.at(-1), { type: "metadata", value: { keep: "CopyrightContact", remove_location: true } });
-  assert.equal(location.closest("label").hidden, true, "Copyright & Contact never keeps a location");
-  chooseDropdown(metadata,"All");
-  location.checked = false; location.onchange();
-  assert.deepEqual(app.calls.drafts.at(-1), { type: "metadata", value: { keep: "All", remove_location: false } });
-  const format = dialog.labelled("Format");
-  chooseDropdown(format,"Jpeg");
-  assert.equal(location.checked, false, "a format change keeps the metadata choice");
-  dialog.pressed("Choose File…").click();
-  const choice = await dialog.result;
-  assert.deepEqual(choice.recipe.metadata, { keep: "All", remove_location: false });
+test('Export applies the shared print profile and intent through typed actions',async t=>{
+  const d=await openExport(t,{page:'color',show_print_profile:true,print_profile_name:'Deskproof'});
+  d.form.querySelectorAll('button').find(node=>node.textContent.includes(exportCopy.use_print_profile)).click();await tick();
+  assert.ok(d.calls.actions.some(a=>a.type==='intent'&&a.value==='Perceptual'));assert.ok(d.calls.actions.some(a=>a.type==='profile'&&a.result.Ok?.name==='Deskproof'&&a.result.Ok.channels==='Rgb'));
+  d.cancel();await d.result;
 });
 
-test("OpenEXR explains that it keeps no metadata, and drawings show no Metadata row", async () => {
-  const app = fakeApp({ extent: [800, 600], photo: true });
-  app.document_color = () => ({ space: "Srgb", depth: "F32" });
-  const dialog = await openDialog(app);
-  const range = dialog.labelled("Dynamic range");
-  chooseDropdown(range,"exr");
-  const note = dialog.form.querySelectorAll("p").find(n => n.className === "export-metadata-note");
-  assert.equal(dialog.labelled("Metadata").closest("label").hidden, true);
-  assert.equal(dialog.labelled("Remove location").closest("label").hidden, true);
-  assert.equal(note.hidden, false);
-  assert.match(note.textContent, /^OpenEXR keeps no camera or copyright details\./);
-  const drawing = await openDialog(fakeApp({ extent: [800, 600] }));
-  assert.equal(drawing.labelled("Metadata").closest("label").hidden, true, "a new drawing has no photo metadata");
-  assert.equal(drawing.labelled("Remove location").closest("label").hidden, true);
-  assert.equal(drawing.form.querySelectorAll("p").find(n => n.className === "export-metadata-note").hidden, true);
-});
-
-test("export refuses unfinished numeric text before validating or rendering", async () => {
-  const app = fakeApp({ extent: [800, 600] }), dialog = await openDialog(app);
-  const size = dialog.labelled("Pixel size"); chooseDropdown(size,"Fit");
-  const width = dialog.labelled(exportCopy.maximum_width);
-  const before = app.calls.validated.length;
-  for (const literal of ["bad", "Infinity", "２０４８"]) {
-    width.value = literal;
-    dialog.pressed("Choose File…").click(); dialog.pressed("Preview Output").click();
-    await dialog.savePreset(); dialog.pressed(exportCopy.update_preset).click();
-    assert.equal(app.calls.validated.length, before); assert.equal(app.calls.rendered, 0);
-    assert.equal(app.calls.preferences.length, 0);
+test('Export preset writes retain shared errors and consume the storage candidate',async t=>{
+  for(const presentation of ['page','floating']){
+  const d=await openExport(t,{page:'presets',preset_update:true},{presentation,storeError:'Storage refused',action:(action,view)=>action.type==='begin_preset'?{...view,preset_busy:true,page:'save_preset'}:action.type==='name'?{...view,name:action.value,name_valid:true}:view,finished:exportView({page:'presets',preset_status:'Shared write failure',preset_error:true})});
+  d.find('export-preset-save').click();await tick();const prompt=d.prompts[0];assert.equal(prompt.caption.autofocus,presentation==='page');assert.equal(prompt.caption.tabIndex,-1);const entry=prompt.body.querySelectorAll('input')[0];assert.equal(entry.autofocus,presentation==='floating');assert.equal(prompt.actions.primary.disabled,true);entry.value='Literal preset';entry.oninput();assert.equal(prompt.actions.primary.disabled,false);prompt.actions.primary.click();await tick();assert.deepEqual(d.calls.writes,[[7,'save']]);assert.equal(d.calls.writeResult,'Storage refused');assert.equal(d.calls.consumedWrite,true);assert.equal(d.calls.freedWrite,undefined);assert.ok(d.form.textContent.includes('Shared write failure'));
+  d.cancel();await d.result;
   }
-  width.value = "1024"; width.composing = true;
-  dialog.pressed("Choose File…").click();
-  await dialog.savePreset(); dialog.pressed(exportCopy.update_preset).click();
-  assert.equal(app.calls.validated.length, before);
-  assert.equal(app.calls.preferences.length, 0);
-  width.composing = false; dialog.pressed("Choose File…").click();
-  assert.deepEqual((await dialog.result).recipe.size.Fit.bounds, [1024, 2048]);
 });
 
-test("language publication retains export drafts and projects bounded labels without storage or validation work",async()=>{
-  const app=fakeApp({extent:[800,600],photo:true}),dialog=await openDialog(app);
-  const controls=dialog.form.querySelectorAll("input,button"),format=dialog.labelled("Format"),destination=dialog.labelled("Destination"),metadata=dialog.labelled("Metadata");
-  const captions=[format,destination,metadata].map(node=>node.children[0]);
-  const size=dialog.labelled("Pixel size");chooseDropdown(size,"Fit");
-  const width=dialog.labelled(exportCopy.maximum_width),prompt=dialog.preset(),name=prompt.querySelectorAll("input")[0];
-  width.value="２０４８ unfinished";width.selectionStart=2;width.selectionEnd=7;width.composing=true;name.value="İı ไทย Tiếng Việt { $name } 🎨";
-  const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads};
-  app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.deepEqual(dialog.form.querySelectorAll("input,button"),controls);assert.deepEqual([format,destination,metadata].map(node=>node.children[0]),captions);
-  assert.equal(width.value,"２０４８ unfinished");assert.equal(width.selectionStart,2);assert.equal(width.selectionEnd,7);assert.equal(width.composing,true);assert.equal(name.value,"İı ไทย Tiếng Việt { $name } 🎨");
-  assert.equal(format.ariaLabel,"tr:Format");assert.equal(dropdownChoices(format)[0].label,`tr:${exportCopy.format_png}`);assert.equal(dropdownChoices(destination)[0].label,"tr:Web");assert.equal(metadata.ariaLabel,"tr:Metadata");assert.equal(dropdownChoices(metadata)[1].label,"tr:Copyright & Contact");
-  assert.deepEqual({drafts:app.calls.drafts.length,validated:app.calls.validated.length,rendered:app.calls.rendered,reads:app.calls.reads},before);
-  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
+test('Export original profile selection keeps admitted ICC bytes and shared captions',async t=>{
+  const d=await openExport(t,{page:'color',original_profiles:[{value:0n,label:'Original: literal 雪'}]}),picker=d.form.querySelectorAll('button').find(node=>node.ariaLabel===exportCopy.profile);
+  assert.ok(dropdownChoices(picker).some(choice=>choice.command==='original:0'&&choice.label==='Original: literal 雪'));
+  chooseDropdown(picker,'original:0');await tick();
+  assert.ok(d.calls.actions.some(action=>action.type==='profile'&&action.result.Ok?.profile===profile.profile));
+  d.publish({original_profiles:[{value:0n,label:'Origine: literal 雪'}]});refreshBindings();assert.ok(dropdownChoices(picker).some(choice=>choice.command==='original:0'&&choice.label==='Origine: literal 雪'));
+  d.cancel();await d.result;
 });
-
-test("pending and prepared export captions follow publication without recapturing or replacing previews",async t=>{
-  const previous=globalThis.ImageData;globalThis.ImageData=class{constructor(data,width,height){Object.assign(this,{data,width,height});}};t.after(()=>{globalThis.ImageData=previous;});
-  const app=fakeApp({extent:[800,600]});let resolve;
-  app.export_image=()=>{app.calls.rendered++;return new Promise(done=>{resolve=done;});};
-  const dialog=await openDialog(app);dialog.pressed("Preview Output").click();
-  app.language("fr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.equal(app.calls.rendered,1);assert.equal(dialog.form.querySelectorAll("p").at(-1).textContent,`fr:${exportCopy.preparing_comparison}`);
-  const image={extent:[1,1],pixels:[255,0,0,255]};resolve({previews:[image,image],clipped_channels:0});await new Promise(done=>setImmediate(done));
-  const canvases=dialog.form.querySelectorAll("canvas"),figures=dialog.form.querySelectorAll("figure"),pixels=canvases.map(node=>node.image);
-  assert.equal(canvases.length,2);assert.equal(dialog.form.querySelectorAll("p").at(-1).textContent,"fr:Png:prepared:false:false");
-  const before={drafts:app.calls.drafts.length,validated:app.calls.validated.length,reads:app.calls.reads};
-  app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.deepEqual(dialog.form.querySelectorAll("canvas"),canvases);assert.deepEqual(dialog.form.querySelectorAll("figure"),figures);assert.deepEqual(canvases.map(node=>node.image),pixels);assert.equal(app.calls.rendered,1);
-  assert.equal(canvases[0].ariaLabel,`tr:${exportCopy.artwork_preview}`);assert.equal(figures[1].querySelectorAll("figcaption")[0].textContent,`tr:${exportCopy.output}`);assert.equal(dialog.form.querySelectorAll("p").at(-1).textContent,"tr:Png:prepared:false:false");
-  assert.deepEqual({drafts:app.calls.drafts.length,validated:app.calls.validated.length,reads:app.calls.reads},before);
-  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
-});
-
-test("retained export refusals project the raw shared reason without repeating validation",async()=>{
-  const app=fakeApp({extent:[800,600]}),dialog=await openDialog(app);let validations=0;
-  app.export_validate=()=>{validations++;throw {color_feature_error:"ExportDimensions"};};
-  dialog.pressed("Choose File…").click();assert.equal(dialog.error.textContent,"ExportDimensions");
-  app.language("vi");refreshCopy(app);dialog.form.localize();refreshBindings();assert.equal(dialog.error.textContent,"vi:ExportDimensions");assert.equal(validations,1);assert.equal(app.calls.rendered,0);
-  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
-});
-
-
-test("retained original-profile choice reprojects its descriptor while profile bytes and literal layer names remain unchanged",async()=>{
-  const app=fakeApp({extent:[800,600]}),literal="İı ไทย Tiếng Việt { $name } 🎨",profile={name:literal,channels:"Rgb",profile:{Icc:[0,1,2,3]}};
-  const originalForm=app.export_form;app.export_form=()=>({...originalForm(),profiles:[base.profile,profile],profile_captions:[{type:"literal",name:"sRGB"},{type:"original",name:literal}]});
-  const dialog=await openDialog(app),select=dialog.labelled("Output profile"),caption=select.children[0];chooseDropdown(select,"1");
-  assert.equal(dropdownChoices(select)[1].label,`Original: ${literal}`);const bytes=profile.profile.Icc,before=app.calls.drafts.length;
-  app.language("tr");refreshCopy(app);dialog.form.localize();refreshBindings();
-  assert.equal(select.children[0],caption);assert.equal(dropdownChoices(select)[1].label,`tr:Original: ${literal}`);assert.equal(select.value,"1");assert.equal(profile.name,literal);assert.equal(profile.profile.Icc,bytes);assert.equal(app.calls.drafts.length,before);assert.equal(app.calls.reads,1);assert.equal(app.calls.rendered,0);
-  dialog.form.querySelectorAll("button").find(node=>node.textContent==="Cancel").click();await dialog.result;
-});
-
-test('fit enlargement follows the visible option into the validated export recipe',async()=>{
-  const app=fakeApp(),dialog=await openDialog(app);
-  const size=dialog.labelled(exportCopy.pixel_size);chooseDropdown(size,'Fit');
-  const enlarge=dialog.labelled(exportCopy.enlarge);assert.equal(enlarge.closest('label').hidden,false);enlarge.checked=true;
-  dialog.pressed(exportCopy.choose_file).click();
-  const chosen=await dialog.result;assert.equal(chosen.recipe.size.Fit.enlarge,true);
-});
-
 
 test('profile-library search uses shared metadata matching and Escape waits for its active write',async t=>{
   const {doc}=colorDialogDom(t),body=element('body');doc.body=body;

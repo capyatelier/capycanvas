@@ -43,12 +43,7 @@ async function execute({id,request}) {
       case "profile-inventory": result=wasm.raster_worker_profile_inventory(request.metadata);break;
       case "profile-validate": result=wasm.raster_worker_validate_profile(request.metadata);break;
       case "paper-library": result=await navigator.locks.request("capy-paper-library",()=>paperLibrary(JSON.parse(request.metadata),request.buffers,request.file));break;
-      case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
-        const bytes=await colorPreferences("readonly",store=>store.get("export-presets"));
-        const prepared=wasm.raster_worker_export_presets(request.metadata,bytes instanceof Uint8Array?bytes:new Uint8Array());
-        if(prepared.bytes)await colorPreferences("readwrite",store=>store.put(prepared.bytes,"export-presets"));
-        return prepared.view;
-      });break;
+      case "export-presets": result=await navigator.locks.request("capy-export-presets",()=>exportPresets(request.metadata,request.buffers));break;
       case "palette-file": { const [metadata,bytes]=wasm.raster_worker_palette_file(request.metadata,request.buffers[0]); result={metadata,bytes}; break; }
       case "snapshot": result = await wasm.raster_worker_snapshot(request.metadata,request.buffers); break;
       case "properties": result = wasm.raster_worker_properties(request.metadata); break;
@@ -147,6 +142,24 @@ async function colorPreferences(mode,operation,storeName="values") {
     const transaction=database.transaction(storeName,mode,{durability:"strict"}),request=operation(transaction.objectStore(storeName));
     transaction.oncomplete=()=>resolve(request.result);transaction.onabort=()=>reject(transaction.error||request.error||new Error("Color preferences were not saved"));transaction.onerror=()=>{};
   });}finally{database.close();}
+}
+
+async function exportPresets(metadata,buffers) {
+  const writing=JSON.parse(metadata).operation==="write";let result,failure;
+  try {
+    await colorPreferences(writing?"readwrite":"readonly",store=>{
+      const request=store.get("export-presets");
+      request.onsuccess=()=>{
+        try {
+          const bytes=request.result instanceof Uint8Array?request.result:new Uint8Array();
+          result=wasm.raster_worker_export_presets(metadata,[bytes,...buffers]);
+          if(writing)store.put(result,"export-presets");
+        } catch(error) {failure=error;store.transaction.abort();}
+      };
+      return request;
+    });
+  } catch(error) {throw failure??error;}
+  return writing?true:result;
 }
 
 async function paperStore(mode,operation) {

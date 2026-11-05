@@ -227,6 +227,7 @@ Chrome tests can miss; it doesn't exercise pen pressure.
 | Journey | Setup |
 | --- | --- |
 | `--hdr`, `--proof` | Owned fixtures in `apps/layer-web/pkg/` that `build.sh` does not create: `hdr-pq.png`, `proof-cmyk.icc` and `proof-p3.icc`. |
+| `--export-hdr` | An owned `apps/layer-web/pkg/hdr-pq.png`. Runs the same HDR delivery helper for EXR/PQ/SDR/JPEG/AVIF, without the proof/histogram prelude. |
 | `--shared-workflows`, `--live-language-delivery` | An owned embedded-profile sample at `/pkg/prophoto16.png`: ProPhoto RGBA16, 513 × 257 pixels, with 31 fully transparent black columns and opaque color data elsewhere. |
 | `--live-language-proof` | `LAYER_TEST_NAMELESS_PROOF=1` and `LAYER_NAMELESS_PROFILE_FILE` select an owned nameless ICC fixture. |
 | `--workspace-store` | Write the fixture from current Rust first: `CAPY_STORE_CONTRACT_FIXTURE="$PWD/artifacts/store-contract.json" cargo test --locked -p layer-workspace --features native browser_transactions_match_sqlite_contract`, then run the journey with the same `CAPY_STORE_CONTRACT_FIXTURE`. |

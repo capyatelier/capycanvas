@@ -620,6 +620,19 @@ the complete row cannot fit.
 Document-color comparisons show preparation status inside their open editor.
 Color-history operations use the shared standalone progress intent.
 
+Initialize `ExportDialogContext` with the request's immutable `DocumentExport`,
+the host's encoder capabilities and admitted profiles. `begin_export_dialog`
+retains the draft in `UiSession` until the document request completes. Send
+`ExportDialogAction` edits and navigation, then render `ExportDialogView`;
+obtain the accepted recipe from the session instead of reading widgets.
+Profile indices in the view refer to the retained catalog, so ordinary updates
+do not serialize ICC bytes. Keep invalid numeric text and focus in native number
+controls. Persist preset writes with their expected library, and return the
+typed result before publishing the new library. Both hosts keep one preview in
+flight and replace its pending successor with the latest edit. Previews and final
+delivery read the same retained source and recipe; browser file selection passes
+only the format and destination, without round-tripping the recipe through JS.
+
 Report a drawer body's natural height independently of its preceding allocation.
 Update the SDR dial at its assigned width before measuring the Proof drawer.
 `ContentDrawer::body_fits_content` makes phone Proof bodies content-sized on

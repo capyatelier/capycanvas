@@ -116,7 +116,6 @@ impl WebApp {
         let info: layer_color::InspectedDocumentInfo = serde_wasm_bindgen::from_value(info).map_err(js)?;
         serialize(&layer_ui::document_properties(&info, self.session.localization()))
     }
-    pub fn export_preset_name_valid(&self, name: &str) -> bool { layer_ui::ExportPresets::validate_name(name).is_ok() }
     pub fn export_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::color_feature_copy::ExportCopy::new(self.session.localization()))
     }
@@ -149,20 +148,49 @@ impl WebApp {
     pub fn proof_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::color_feature_copy::ProofCopy::new(self.session.localization()))
     }
-    pub fn export_form(&self) -> Result<JsValue, JsValue> {
-        serialize(&layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization()))
+    pub fn begin_export_dialog(&mut self,id:u32,bytes:js_sys::Uint8Array)->Result<JsValue,JsValue> {
+        use layer_ui::{ExportDialogCapabilities,ExportDialogContext,ExportFormat as F};
+        let source=self.session.capture_project_export(id).map_err(js)?;
+        let profiles=layer_ui::ExportForm::new_localized(self.session.engine().document(),self.session.localization()).profiles;
+        let context=ExportDialogContext::new(source,ExportDialogCapabilities {
+            formats:vec![F::Png,F::Tiff,F::Jpeg,F::Webp,F::Exr,F::PngHdr,F::JpegHdr,F::AvifHdr],profile_import:true,
+        },profiles);
+        serialize(&self.session.begin_export_dialog(id,context,layer_ui::ExportPresets::restore(&bytes.to_vec())).map_err(js)?)
     }
-    pub fn export_draft(&self, recipe: JsValue, action: JsValue) -> Result<JsValue, JsValue> {
-        let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
-        let action: layer_ui::ExportDraftAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
-        serialize(&recipe.draft_localized(action, self.session.localization()))
+    pub fn export_dialog_action(&mut self,id:u32,action:JsValue)->Result<JsValue,JsValue> {
+        serialize(&self.session.export_dialog_action(id,serde_wasm_bindgen::from_value(action).map_err(js)?).map_err(js)?)
     }
-    pub fn export_validate(&self, recipe: JsValue) -> Result<JsValue, JsValue> {
-        let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
-        let document = self.session.engine().document();
-        recipe.validate().map_err(color_preferences::color_feature_rejection)?;
-        recipe.output_extent(document.composition().size).map_err(color_preferences::color_feature_rejection)?;
-        serialize(&recipe)
+    pub fn export_dialog_view(&self,id:u32)->Result<JsValue,JsValue> {
+        serialize(&self.session.export_dialog_view(id).map_err(js)?)
+    }
+    pub fn export_dialog_profile(&self,id:u32,index:usize)->Result<JsValue,JsValue> {
+        serialize(&self.session.export_dialog_profile(id,index).map_err(js)?)
+    }
+    pub fn export_dialog_profiles(&self,id:u32)->Result<JsValue,JsValue> {
+        serialize(&self.session.export_dialog_profiles(id).map_err(js)?)
+    }
+    pub fn export_dialog_print_profile(&self,id:u32)->Result<JsValue,JsValue> {
+        serialize(&self.session.export_dialog_print_profile(id).map_err(js)?)
+    }
+    pub fn export_dialog_source(&self,id:u32)->Result<JsValue,JsValue> {
+        let source=self.session.export_dialog_source(id).map_err(js)?;
+        let composition=source.composition();
+        serialize(&serde_json::json!({"extent":composition.size,"color":composition.color,"resolution":composition.resolution,
+            "metadata":!source.capture.artwork.metadata.is_empty()}))
+    }
+    pub fn export_dialog_delivery(&self,id:u32)->Result<JsValue,JsValue> {
+        let recipe=self.session.export_dialog_recipe(id).map_err(color_preferences::color_feature_rejection)?;
+        let view=self.session.export_dialog_view(id).map_err(js)?;
+        serialize(&serde_json::json!({"format":recipe.format,"destination":view.destination}))
+    }
+    pub fn export_dialog_preview_copy(&self,id:u32,clipped:bool)->Result<String,JsValue> {
+        let recipe=self.session.export_dialog_recipe(id).map_err(color_preferences::color_feature_rejection)?;
+        Ok(layer_ui::color_feature_copy::export_preview_status(self.session.localization(),recipe.format,clipped))
+    }
+    pub fn prepare_export_dialog(&mut self,id:u32,owner:u64,location:JsValue)->Result<JsValue,JsValue> {
+        let recipe=self.session.export_dialog_recipe(id).map_err(color_preferences::color_feature_rejection)?;
+        let location=serde_wasm_bindgen::from_value(location).map_err(js)?;
+        serialize(&self.session.dispatch(layer_ui::UiAction::PrepareExport {id,owner,recipe,location}).map_err(js)?)
     }
 
     pub fn finish_document(

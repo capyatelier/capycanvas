@@ -25,14 +25,18 @@ pub(super) fn page(nav: &adw::NavigationView, title: &str, tag: &str, body: &gtk
     (toolbar, header)
 }
 
-pub(super) fn link(group: &adw::PreferencesGroup, nav: &adw::NavigationView, title: &str, tag: &str) -> adw::ActionRow {
+pub(super) fn link(group: &adw::PreferencesGroup, title: &str, tag: &str) -> adw::ActionRow {
     let row = adw::ActionRow::builder().title(title).use_markup(false).activatable(true).build();
     row.set_widget_name(&format!("export-open-{tag}"));
     row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
-    let tag = tag.to_string();
-    row.connect_activated(glib::clone!(#[weak] nav, move |_| nav.push_by_tag(&tag)));
     group.add(&row);
     row
+}
+
+pub(super) fn project(nav: &adw::NavigationView, page: ExportDialogPage) {
+    let tag=page.tag();
+    if nav.visible_page_tag().as_deref()==Some(tag) {return;}
+    if page==ExportDialogPage::Root {nav.pop_to_tag(tag);} else {nav.push_by_tag(tag);}
 }
 
 // Cancellation of the file request must release the dialog and preview worker.

@@ -580,15 +580,10 @@ pub fn named(localizer: &Localizer, message: MessageId, name: &str) -> String {
     let mut args = FluentArgs::new(); args.set("name", name); localizer.format(message, &args)
 }
 
-pub fn export_preview_status(localizer: &Localizer, format: crate::ExportFormat, gainmap: bool, clipped: bool) -> String {
-    let preview = localizer.text(if gainmap {MessageId::COLOR_FEATURES_EXPORT_PREVIEW_GAINMAP}
-        else if format == crate::ExportFormat::Exr {MessageId::COLOR_FEATURES_EXPORT_PREVIEW_EXR}
-        else if matches!(format, crate::ExportFormat::PngHdr | crate::ExportFormat::PngHdrMapped) {MessageId::COLOR_FEATURES_EXPORT_PREVIEW_PQ}
-        else {MessageId::COLOR_FEATURES_EXPORT_PREVIEW_SDR});
-    let warning = if !clipped {Arc::from("")} else {localizer.text(if matches!(format, crate::ExportFormat::PngHdr | crate::ExportFormat::JpegHdr | crate::ExportFormat::AvifHdr) {
-        MessageId::COLOR_FEATURES_EXPORT_OUTSIDE_RANGE } else { MessageId::COLOR_FEATURES_EXPORT_OUTSIDE_GAMUT })};
-    let mut args = FluentArgs::new(); args.set("preview", preview.as_ref()); args.set("warning", warning.as_ref());
-    localizer.format(MessageId::COLOR_FEATURES_EXPORT_PREVIEW_SUMMARY, &args)
+pub fn export_preview_status(localizer: &Localizer, format: crate::ExportFormat, clipped: bool) -> String {
+    if !clipped {return String::new();}
+    let kind=if format.is_hdr()&&!format.maps_hdr_range() {0}else if format.is_hdr() {2}else{4};
+    ComparisonCopy::new(localizer).status_message(localizer,(kind,false,layer_core::color::RgbSpace::Srgb))
 }
 
 pub fn profile_unavailable(localizer: &Localizer, id: &str) -> String {
@@ -632,6 +627,19 @@ pub struct ComparisonCopy {
     pub hdr_view: Arc<str>,
 }
 impl ComparisonCopy {
+    pub fn output_labels(&self, hdr_document: bool, hdr_output: bool, hdr_view: bool, sdr: bool) -> [&Arc<str>; 2] {
+        [if hdr_document {if hdr_view {&self.hdr_master}else{&self.master_sdr}}else{&self.master},
+            if sdr {&self.sdr_fallback}else if hdr_output {if hdr_view {&self.hdr_output}else{&self.output_sdr}}
+            else if hdr_document {&self.sdr_output}else{&self.output}]
+    }
+    pub fn status_message(&self, localizer: &Localizer, (kind, display_hdr, space): (u8, bool, layer_core::color::RgbSpace)) -> String {
+        let description = [&self.outside_hdr, &self.hdr_checked, &self.hdr_clipped, &self.output_preview, &self.output_gamut, &self.complete_canvas][kind as usize];
+        let viewing = if display_hdr {self.hdr_view.to_string()}else{
+            let mut args=FluentArgs::new();args.set("space",space.name());localizer.format(MessageId::COLOR_FEATURES_COMPARISON_VIEW,&args)
+        };
+        let mut args=FluentArgs::new();args.set("description",description.as_ref());args.set("view",viewing.as_str());
+        localizer.format(MessageId::COLOR_FEATURES_COMPARISON_STATUS,&args)
+    }
     pub fn new(localizer: &Localizer) -> Self {
         Self {
             before: localizer.text(MessageId::COLOR_FEATURES_COMPARISON_BEFORE),

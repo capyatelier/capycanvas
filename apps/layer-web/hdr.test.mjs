@@ -1,4 +1,3 @@
-import {captureCheckboxes} from './control-style-fixture.mjs';
 import {chooseDropdown} from './dropdown-fixture.mjs';
 import {histogramJourney} from './histogram-journey.mjs';
 import {packageManifest,packageObjects,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
@@ -21,7 +20,7 @@ export async function assertSdrDialLayout(evaluate) {
 // Run in headed desktop Chrome or the attached tablet's ordinary Chrome tab.
 // Files go through real codecs/workers/storage; only native file-picker handles
 // are supplied by the harness. Input uses the browser's touch/pen dispatch path.
-export async function checkHdr({call,evaluate,settle}) {
+export async function checkHdr({call,evaluate,settle},{exportOnly=false}={}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/color-m4-web-android/browser';
   await mkdir(directory,{recursive:true});
   const capture=async name=>writeFile(`${directory}/${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
@@ -48,6 +47,12 @@ export async function checkHdr({call,evaluate,settle}) {
   };
   const showProof=async()=>{await evaluate(`[...document.querySelectorAll('.dock-tab[data-panel="proof"][aria-selected="false"]')].find(n=>n.getBoundingClientRect().width>0)?.click()`);await settle();};
   try {
+    if(exportOnly){
+      await open('hdr-pq.png');assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
+      results.deliveries=await exportHdrDeliveries({evaluate,invoke,wait,set,click,directory},false);
+      for(const delivery of results.deliveries){await open(delivery.name);assert.equal(await evaluate('layerApp.app.document_color().depth'),delivery.range==='exr'?'F32':delivery.range==='sdr'?'U8':'F16');}
+      assert.equal(await evaluate('layerApp.state().host_error??null'),null);await writeFile(`${directory}/export-delivery.json`,JSON.stringify(results,null,2)+'\n');console.log('EXR, PQ, SDR, JPEG gain-map and AVIF gain-map real Export delivery and reopen passed');return;
+    }
     // Preserve prior recovery records, but finish offering them before real
     // contacts target the header. A late modal can intercept the first tap.
     await evaluate('layerApp.documents.startRecovery()');
@@ -55,8 +60,8 @@ export async function checkHdr({call,evaluate,settle}) {
     await open('hdr-pq.png');
     assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');
     await wait('layerApp.app.tone_status().ready||layerApp.app.tone_status().error');assert.equal(await evaluate('layerApp.app.tone_status().error??null'),null);
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
-    await set('Dynamic range','hdr');await captureCheckboxes({call,evaluate,settle},directory,'clip-hdr-checkbox');
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Output"]')`);
+    await set('Output','native');const clip=await evaluate(`(()=>{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id,node=document.querySelector('#export-hdr-clip');return {visible:node.checkVisibility(),expected:layerApp.app.export_dialog_view(id).show_clip,role:node.getAttribute('role')};})()`);assert.equal(clip.visible,clip.expected,'HDR clipping follows the shared visibility predicate');assert.equal(clip.role,'switch');
     await click('Cancel');await wait('!layerApp.state().document_file.busy');
     await checkGpuTone({call,evaluate,settle});
     let original=await hist();assert.ok(original.channels.some(c=>c.above>0));
@@ -223,24 +228,7 @@ export async function checkHdr({call,evaluate,settle}) {
     }
     mark('Canvas and Navigator output agree through SDR/Print proofing and GPU recovery');
     if(hdrDisplay&&!results.displayChangeEmulated)mark('Browser cannot emulate dynamic-range display changes; physical display switching remains unqualified');
-    // Complete delivery through the visible controls and inspect resulting files.
-    for(const range of ['exr','hdr','sdr']){
-      await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);
-      await set('Dynamic range',range);if(range==='sdr')await set('Bit depth','U8');
-      if(range==='hdr'){
-        const failure=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;const base=(await layerApp.app.export_presets({type:'get',index:0})).recipe;const recipe=layerApp.app.export_draft(base,{type:'format',value:'PngHdr'}).recipe;await layerApp.app.export_image(id,recipe,c,false);return null}catch(e){return layerApp.app.color_feature_error_copy(e)}finally{c.free()}})()`);
-        assert.match(failure,/range|BT.2020/i,'Strict HDR rejects unrepresentable colors');
-        await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
-        assert.ok(await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Choose File…').disabled`));
-        assert.ok(await evaluate(`document.querySelector('dialog[open]').textContent.includes('or choose OpenEXR')`));
-        await evaluate(`(()=>{const c=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');c.checked=true;c.dispatchEvent(new Event('change'))})()`);
-      }
-      await click('Preview Output');await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
-      await click('Choose File…');await wait('!layerApp.state().document_file.busy');
-      const bytes=await evaluate('Array.from(hdrTest.last)');assert.ok(bytes.length>100);
-      await writeFile(`${directory}/${range}-delivery.${range==='exr'?'exr':'png'}`,new Uint8Array(bytes));
-      await evaluate(`hdrTest.files.set('${range}-delivery.${range==='exr'?'exr':'png'}',hdrTest.last.slice())`);
-    }
+    results.deliveries=await exportHdrDeliveries({evaluate,invoke,wait,set,click,directory},true);
     await open('exr-delivery.exr');assert.equal(await evaluate('layerApp.app.document_color().depth'),'F32');assert.ok((await hist()).channels.some(c=>c.below>0),'OpenEXR preserves extended negative channels');
     await open('sdr-delivery.png');assert.equal(await evaluate('layerApp.app.document_color().depth'),'U8');
     await open('hdr-delivery.png');assert.equal(await evaluate('layerApp.app.document_color().depth'),'F16');assert.ok((await hist()).channels.some(c=>c.above>0));
@@ -258,6 +246,32 @@ export async function checkHdr({call,evaluate,settle}) {
   } finally {
     await evaluate('clearInterval(hdrTest.dismiss);window.showOpenFilePicker=hdrTest.open;window.showSaveFilePicker=hdrTest.save');
   }
+}
+
+
+async function exportHdrDeliveries({evaluate,invoke,wait,set,click,directory},negative) {
+  const deliveries=[];
+  for(const range of negative?['exr','hdr','sdr']:['exr','hdr','sdr','jpeg','avif']){
+    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Output"]')`);
+    const offered=await evaluate(`layerApp.app.export_dialog_view(layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id).outputs.map(choice=>choice.value)`);assert.ok(offered.includes(range==='hdr'?'native':range),`Export offers ${range}: ${JSON.stringify(offered)}`);
+    await set('Output',range==='hdr'?'native':range);if(range==='sdr'){await evaluate(`document.querySelector('[data-export-page="color"]').click()`);await set('Bit depth','U8');await evaluate(`document.querySelector('.dialog-back').click()`);}
+    if(negative&&range==='hdr'){
+      const failure=await evaluate(`(async()=>{const c=layerApp.app.capture_control();try{const id=layerApp.state().requests.find(r=>r.kind.type==='document'&&r.kind.request.type==='export').id;layerApp.app.export_dialog_action(id,{type:'output',value:'native'});await layerApp.app.export_image(id,null,c,false);return null}catch(e){return layerApp.app.color_feature_error_copy(e)}finally{c.free()}})()`);
+      assert.match(failure,/range|BT.2020/i,'Strict HDR rejects unrepresentable colors');
+      await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
+      assert.ok(await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Choose File…').disabled`));
+      assert.ok(await evaluate(`document.querySelector('dialog[open]').textContent.includes('or choose OpenEXR')`));
+      await evaluate(`(()=>{const c=document.querySelector('[aria-label="Clip out-of-range HDR colors"]');c.checked=true;c.dispatchEvent(new Event('change'))})()`);
+    }
+    await wait(`document.querySelectorAll('dialog[open] .color-comparison canvas').length===2`);
+    await click('Choose File…');await wait('!layerApp.state().document_file.busy');
+    const bytes=await evaluate('Array.from(hdrTest.last)');assert.ok(bytes.length>100);
+    const extension=({exr:'exr',jpeg:'jpg',avif:'avif'})[range]??'png',name=`${range}-delivery.${extension}`;
+    if(range==='exr')assert.deepEqual(bytes.slice(0,4),[118,47,49,1]);else if(range==='jpeg')assert.deepEqual(bytes.slice(0,2),[255,216]);else if(range==='avif')assert.equal(Buffer.from(bytes.slice(4,8)).toString(),'ftyp');else assert.deepEqual(bytes.slice(0,8),[137,80,78,71,13,10,26,10]);
+    await writeFile(`${directory}/${name}`,new Uint8Array(bytes));await evaluate(`hdrTest.files.set(${JSON.stringify(name)},hdrTest.last.slice())`);
+    deliveries.push({range,name,bytes:bytes.length});
+  }
+  return deliveries;
 }
 
 // Black correctly stays black at any exposure, but the handle must remain visible.

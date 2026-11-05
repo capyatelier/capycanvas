@@ -75,6 +75,8 @@ pub use export::{ExportChoice, ExportChoices, ExportNumericControls, ExportDraft
 pub use layer_color::photo::{ExportMetadata, MetadataKeep};
 mod export_presets;
 pub use export_presets::{ExportPresets, ExportPresetAction, ExportPresetView};
+mod export_dialog;
+pub use export_dialog::*;
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
