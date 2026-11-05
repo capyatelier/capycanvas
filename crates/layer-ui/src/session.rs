@@ -809,7 +809,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let copy = crate::native_copy::ColorCopy::new(self.localization());
         let mut swap = ContextMenuItem::command(copy.swap.to_string(), UiAction::Color { action: ColorAction::Swap });
-        swap.icon = Some("color-swap".into());
+        swap.icon = Some("layer-color-swap-symbolic".into());
         Ok(ContextMenu { title: copy.controls.to_string(), sections: vec![vec![
             ContextMenuItem::command(copy.edit_menu.to_string(), UiAction::ColorSlotMenu { slot, library: false }),
             ContextMenuItem::command(copy.palettes.to_string(), UiAction::ColorSlotMenu { slot, library: true }),

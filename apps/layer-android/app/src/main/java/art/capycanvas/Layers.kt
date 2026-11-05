@@ -78,7 +78,6 @@ import kotlin.math.roundToInt
 internal fun CanvasHost.layer(action: JSONObject) = dispatch(obj("type" to "layer", "action" to action))
 private data class LayerThumbnail(val hit: Rect, val anchor: Rect)
 private data class LayerDrag(val id: Long, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f, val surface: String = "row", val hintTarget: Long? = null, val position: String? = null, val effectOwner: Long? = null)
-private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-symbolic")
 internal val LayerEdge = 6.dp
 
 /** Transient native gesture state, shared by retained layer panels in this window. */
@@ -221,7 +220,7 @@ internal class LayerSwipe {
                             action=active?.let { obj("type" to "layer","action" to obj("op" to op,"id" to it.getLong("id"),"value" to !it.getBoolean(property))) })
                     }
                     val attachment = view.getJSONObject("attachment")
-                    LayerButton(host,iconName(attachment.getString("icon")),attachment.getString("label"),Modifier.testTag("layer-attachment"),
+                    LayerButton(host,attachment.getString("icon"),attachment.getString("label"),Modifier.testTag("layer-attachment"),
                         enabled=!attachment.isNull("action"),selected=attachment.getBoolean("checked"),
                         action=attachment.objectOrNull("action")?.let { obj("type" to "layer","action" to it) })
                     LayerButton(host,"reference",view.getString("reference_action_label"),enabled=view.getBoolean("can_reference"),
@@ -256,7 +255,7 @@ internal class LayerSwipe {
                             .clickable(role=Role.Button) { host.dispatch(obj("type" to "effect", "action" to addPaper.getJSONObject("action"))) }
                             .padding(horizontal=6.dp,vertical=2.dp), verticalAlignment=Alignment.CenterVertically,
                             horizontalArrangement=Arrangement.spacedBy(panelMetrics().group,Alignment.CenterHorizontally)) {
-                            SharedIcon(iconName(addPaper.getString("icon")),null,Modifier.size(16.dp))
+                            SharedIcon(addPaper.getString("icon"),null,Modifier.size(16.dp))
                             Text(addPaper.getString("label"),Modifier.weight(1f,fill=false),maxLines=1,overflow=TextOverflow.Ellipsis)
                         }
                     }
@@ -471,7 +470,7 @@ internal class LayerSwipe {
             .padding(horizontal=LayerEdge,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
         LayerButton(host,if(layer.getBoolean("visible") && !layer.getBoolean("visibility_blocked")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("visible")) "hide_selection" else "show_selection") else if(layer.getBoolean("visible"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("hide") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("show"),
             Modifier.testTag("layer-eye-$id").alpha(if(layer.getBoolean("visibility_blocked")) .35f else 1f),action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
-        if(full) LayerButton(host,iconName(layer.getString("selection_icon")),host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("select_row_help"),
+        if(full) LayerButton(host,layer.getString("selection_icon"),host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("select_row_help"),
             Modifier.semantics { selected=layer.getBoolean("selected") },
             action=obj("type" to "layer","action" to obj("op" to "select_row","id" to id,"extend" to extendSelection,"toggle" to true)),onClick={select(true)})
         Spacer(Modifier.width((layer.getInt("depth")*8).coerceAtMost(24).dp))
@@ -520,7 +519,7 @@ internal class LayerSwipe {
                 }
                 else {
                 if(mask || layer.getBoolean("has_thumbnail")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).clip(TileShape).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
-                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,
+                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(layer.getString("content_icon"),null,
                     if(layer.getBoolean("has_thumbnail")) Modifier.align(Alignment.BottomEnd).padding(end=3.dp,bottom=3.dp).size(14.dp)
                         .background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-type-symbol-$id")
                     else Modifier.size(24.dp),tint=colors.text)

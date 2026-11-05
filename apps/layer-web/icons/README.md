@@ -11,7 +11,8 @@ extent; `currentColor` supplies light/dark tint without duplicate drawings.
 The GTK, Android and PWA build scripts derive app/launcher icons from Looking up.
 Web loads these files directly. GTK embeds the same files in its resource bank;
 there are no generated copies or toolkit-specific icon drawings to maintain.
-`layer-ui` supplies command/icon identities to the hosts. GTK 4.22 uses `GtkSvg`
+`layer-ui` supplies command/icon identities to the hosts. Context menus carry
+complete `layer-…-symbolic` SVG names, which hosts render directly. GTK 4.22 uses `GtkSvg`
 paintables with symbolic foreground paints, preserving SVG transforms, group
 opacity and fixed black/white fills. Its color toolbar explicitly binds the two
 swatches to the live foreground/background palette.

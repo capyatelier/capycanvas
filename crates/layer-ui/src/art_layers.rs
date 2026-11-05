@@ -1369,7 +1369,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let invoke = |command: CommandId| (UiAction::Invoke { command }, enabled(command));
         let add = enabled(CommandId::AddLayer);
         LayerFooterButton::ORDER.into_iter().map(|button| {
-            let item = |label: Arc<str>, icon: &str, (action, enabled): (UiAction, bool)| ContextMenuItem { icon: Some(icon.into()), enabled, ..ContextMenuItem::command(label.as_ref(), action) };
+            let item = |label: Arc<str>, icon: &str, (action, enabled): (UiAction, bool)| ContextMenuItem { icon: Some(format!("layer-{icon}-symbolic").into()), enabled, ..ContextMenuItem::command(label.as_ref(), action) };
             let item = match button {
                 LayerFooterButton::NewLayer => item(l.text(MessageId::COMMAND_ADD_LAYER), "add-layer", (UiAction::Layer { action: A::New { group: false, clipped: false } }, add)),
                 LayerFooterButton::NewVectorLayer => item(l.text(MessageId::COMMAND_NEW_VECTOR_LAYER), "add-vector-layer", invoke(CommandId::NewVectorLayer)),
@@ -1380,7 +1380,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     item(l.text(MessageId::RESOURCES_LAYER_MENU_ADD_MASK), "mask", (UiAction::Layer { action: A::AddMask { id, replace: false } }, tools.controls.mask && tools.editing_layer.is_some()))
                 }
                 LayerFooterButton::AddFilter => ContextMenuItem {
-                    icon: Some("add-filter".into()),
+                    icon: Some("layer-add-filter-symbolic".into()),
                     ..ContextMenuItem::submenu(l.text(MessageId::RESOURCES_LAYER_ADD_FILTER).as_ref(), tools.add_filter.clone().map(|menu| menu.sections).unwrap_or_default())
                 },
                 LayerFooterButton::ImportImage => item(l.text(MessageId::COMMAND_IMPORT_IMAGE), "image", invoke(CommandId::ImportImage)),
@@ -1680,7 +1680,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 [
                     Some(self.new_layer_submenu(Some(handle))),
                     (filters && !mask).then(|| self.layer_filter_menu(handle)).flatten()
-                        .map(|menu| ContextMenuItem { icon: Some("add-filter".into()), ..ContextMenuItem::submenu(&menu.title, menu.sections) }),
+                        .map(|menu| ContextMenuItem { icon: Some("layer-add-filter-symbolic".into()), ..ContextMenuItem::submenu(&menu.title, menu.sections) }),
                 ]
                 .into_iter()
                 .flatten()

@@ -1082,7 +1082,7 @@ fn color_slot_context_keeps_slot_identity_and_opens_shared_palettes() {
         let checkpoint = s.engine.checkpoint();
         for slot in [ColorSlot::Foreground, ColorSlot::Background] {
             let menu = s.context_menu(ContextTarget::ColorSlot { slot }).unwrap();
-            assert_eq!(menu.sections[0][2].icon.as_deref(), Some("color-swap"));
+            assert_eq!(menu.sections[0][2].icon.as_deref(), Some("layer-color-swap-symbolic"));
             let actions: Vec<_> = menu.sections.into_iter().flatten().map(|entry| entry.action.unwrap()).collect();
             assert_eq!(actions.len(), 3);
             assert_eq!(actions[0], UiAction::ColorSlotMenu { slot, library: false });

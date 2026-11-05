@@ -1470,7 +1470,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     c.label.to_string(),
                     UiAction::Bubble { action: BubbleAction::ToggleRingSetting { brush, setting: c.id.into() } },
                 );
-                item.icon = Some(tool_setting_icon(c.id).into());
+                item.icon = Some(format!("layer-{}-symbolic", tool_setting_icon(c.id)).into());
                 item.selected = Some(on);
                 item.enabled = on || count < MAX_RING_SETTINGS;
                 item

@@ -129,7 +129,7 @@ import kotlin.math.*
                 }.onKeyEvent(::key).onFocusChanged { if(it.isFocused){focusedPart=part;selectedPart=part}else{if(focusedPart==part)focusedPart=-1;cancel()} }
                 .focusRequester(focus[part]).focusable())
         }
-        dial.getJSONArray("readouts").objects().forEachIndexed{i,r->val box=r.getJSONArray("icon");SharedIcon(dial.getJSONArray("icons").getString(i).removePrefix("layer-").removeSuffix("-symbolic"),null,Modifier.offset(box.getDouble(0).dp,box.getDouble(1).dp).size(box.getDouble(2).dp,box.getDouble(3).dp).then(Modifier.graphicsLayer{alpha=.62f}))}
+        dial.getJSONArray("readouts").objects().forEachIndexed{i,r->val box=r.getJSONArray("icon");SharedIcon(dial.getJSONArray("icons").getString(i),null,Modifier.offset(box.getDouble(0).dp,box.getDouble(1).dp).size(box.getDouble(2).dp,box.getDouble(3).dp).then(Modifier.graphicsLayer{alpha=.62f}))}
         val reset=dial.getJSONArray("reset")
         SharedIcon("reset",copy.getString("reset_sdr"),Modifier.offset(reset.getDouble(0).dp,reset.getDouble(1).dp).size(reset.getDouble(2).dp,reset.getDouble(3).dp).testTag("sdr-appearance-reset").clickable(role=Role.Button){reset(3)})
     }

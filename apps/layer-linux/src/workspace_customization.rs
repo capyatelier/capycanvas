@@ -1877,7 +1877,7 @@ impl Workspace {
                     let id = format!("{prefix}-{s}-{i}");
                     let entry = gtk::gio::MenuItem::new(Some(&item.label), None);
                     if let Some(icon) = item.icon {
-                        entry.set_icon(&gtk::gio::ThemedIcon::new(&format!("layer-{icon}-symbolic")));
+                        entry.set_icon(&gtk::gio::ThemedIcon::new(&icon));
                     }
                     if item.action.is_none() && (item.enabled || (visibility_checks.is_some() && !item.sections.is_empty())) {
                         let submenu = model(w, popup, item.sections, &id, actions, checks, visibility_checks);

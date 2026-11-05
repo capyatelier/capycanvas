@@ -1967,6 +1967,7 @@ pub mod regions {
 
 #[cfg(test)]
 pub(crate) fn icon_ships(icon: &str) -> bool {
+    let icon = icon.strip_prefix("layer-").and_then(|name| name.strip_suffix("-symbolic")).unwrap_or(icon);
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join(format!("../../apps/layer-web/icons/layer-{icon}-symbolic.svg"))
         .is_file()

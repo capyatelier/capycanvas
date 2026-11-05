@@ -213,7 +213,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                     }
                 }
                 IconButton({host.effect(importAction.getJSONObject("action"))},enabled=enabled,modifier=Modifier.size(metrics.height).testTag("import-lookup")) {
-                    SharedIcon(importAction.getString("icon").removePrefix("layer-").removeSuffix("-symbolic"),importAction.getString("label"))
+                    SharedIcon(importAction.getString("icon"),importAction.getString("label"))
                 }
             }
         }
@@ -232,7 +232,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                 Box {
                     val click = { if (group != null) open = true else host.effect(action.getJSONObject("action")) }
                     if (!action.isNull("icon")) IconButton(click, enabled = enabled, modifier = Modifier.size(metrics.height).testTag(if (group == null) "property-action-$id" else "property-action-group-$id")) {
-                        SharedIcon(action.getString("icon").removePrefix("layer-").removeSuffix("-symbolic"), label)
+                        SharedIcon(action.getString("icon"), label)
                     } else TextButton(click, enabled = enabled, contentPadding = PaddingValues(horizontal = 6.dp), modifier = Modifier.height(metrics.height).testTag("property-action-$id")) { Text(label, maxLines = 1) }
                     DropdownMenu(open, { open = false }) {
                         choices.forEach { choice ->

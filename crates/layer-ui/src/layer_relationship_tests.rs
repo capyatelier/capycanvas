@@ -55,7 +55,7 @@ fn layer_settings_keep_labels_checks_and_packaged_icons_on_every_host() {
             let menu = s.layer_menu(group, false).unwrap();
             icons(&menu.sections);
             let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten())
-                .find(|item| item.icon.as_deref() == Some("group-pass-through")).unwrap();
+                .find(|item| item.icon.as_deref() == Some("layer-group-pass-through-symbolic")).unwrap();
             assert_eq!(mode.label, "Pass Through");
             assert_eq!(mode.selected, Some(checked));
             assert!(mode.enabled);
@@ -66,7 +66,7 @@ fn layer_settings_keep_labels_checks_and_packaged_icons_on_every_host() {
             let menu = s.layer_menu(group, false).unwrap();
             icons(&menu.sections);
             let clip = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten())
-                .find(|item| item.icon.as_deref() == Some("clip")).unwrap();
+                .find(|item| item.icon.as_deref() == Some("layer-clip-symbolic")).unwrap();
             assert_eq!(clip.label, "Clip to Layer Below");
             assert_eq!(clip.selected, Some(checked));
             assert!(clip.enabled);
@@ -320,7 +320,7 @@ fn layer_relationships_publish_owner_chains_and_clipping_from_the_top_effect() {
     let menu = s.layer_menu(effects[1], false).unwrap();
     let attached = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.label == "Apply to layers below").unwrap();
     assert_eq!(attached.selected, Some(true));
-    assert_eq!(attached.icon.as_deref(), Some("effect-link"));
+    assert_eq!(attached.icon.as_deref(), Some("layer-effect-link-symbolic"));
     assert!(crate::icon_ships(attached.icon.as_deref().unwrap()));
     assert!(!menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).any(|item| item.label == "Clip to Layer Below"));
     layer(&mut s, LayerAction::Visibility { id: effects[0], value: false });
@@ -397,7 +397,7 @@ fn layer_relationships_keep_collapsed_group_edges_and_offer_reversible_swipe_act
     s.refresh_layer_presentation();
     assert_eq!(s.engine.document(), &before);
     let menu = s.layer_menu(group, false).unwrap();
-    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.icon.as_deref() == Some("group-pass-through")).unwrap();
+    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.icon.as_deref() == Some("layer-group-pass-through-symbolic")).unwrap();
     assert_eq!(mode.label, "Pass Through");
     assert_eq!(mode.selected, Some(false));
     assert!(crate::icon_ships(mode.icon.as_deref().unwrap()));
@@ -407,7 +407,7 @@ fn layer_relationships_keep_collapsed_group_edges_and_offer_reversible_swipe_act
     assert!(relationship_row(&s, group).pass_through);
     assert_eq!(relationship_row(&s, group).description, "Pass Through");
     let menu = s.layer_menu(group, false).unwrap();
-    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.icon.as_deref() == Some("group-pass-through")).unwrap();
+    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.icon.as_deref() == Some("layer-group-pass-through-symbolic")).unwrap();
     assert_eq!(mode.label, "Pass Through");
     assert_eq!(mode.selected, Some(true));
     let isolate = relationship_row(&s, group).right_swipe.clone().unwrap();

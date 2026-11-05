@@ -41,11 +41,9 @@ impl Default for LayerAttachmentControl {
 
 impl LayerAttachmentControl {
     pub(super) fn menu_item(self) -> ContextMenuItem {
-        let icon = self.icon.strip_prefix("layer-").unwrap_or(self.icon);
-        let icon = icon.strip_suffix("-symbolic").unwrap_or(icon);
         ContextMenuItem {
             page: None,
-            icon: Some(icon.into()), label: self.label, selected: Some(self.checked),
+            icon: Some(self.icon.into()), label: self.label, selected: Some(self.checked),
             enabled: self.action.is_some(), action: self.action.map(|action| UiAction::Layer { action }),
             hint: self.description, bindings: Vec::new(), sections: Vec::new(),
         }
@@ -77,7 +75,7 @@ pub(super) fn group_mode_menu(doc: &Document, id: OccurrenceHandle, l: &Localize
     let action = right_swipe(doc, id);
     Some(ContextMenuItem {
         page: None,
-        icon: Some("group-pass-through".into()),
+        icon: Some("layer-group-pass-through-symbolic".into()),
         label: l.text(MessageId::RESOURCES_BLEND_PASS_THROUGH).to_string(),
         selected: Some(row.passes_through()), enabled: action.is_some(),
         action: action.map(|action| UiAction::Layer { action }),

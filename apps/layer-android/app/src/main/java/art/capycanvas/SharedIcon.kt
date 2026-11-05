@@ -41,13 +41,14 @@ private object IconPictures {
     private val assets = WeakHashMap<AssetManager, LruCache<IconPaint, Picture>>()
     fun get(manager: AssetManager, name: String, tint: Color, fill: Color?): Picture {
         val cache = assets.getOrPut(manager) { LruCache(192) }
-        val key = IconPaint(name, tint, fill)
+        val asset = name.removePrefix("layer-").removeSuffix("-symbolic")
+        val key = IconPaint(asset, tint, fill)
         cache.get(key)?.let { return it }
         fun paint(color: Color): String {
             val argb = color.toArgb()
             return "rgba(${argb shr 16 and 255},${argb shr 8 and 255},${argb and 255},${color.alpha})"
         }
-        val picture = manager.open("layer-$name-symbolic.svg").bufferedReader().use { source ->
+        val picture = manager.open("layer-$asset-symbolic.svg").bufferedReader().use { source ->
             val svg = SVG.getFromString(source.readText()
                 .replace("currentColor", paint(tint))
                 .replace("#33d17a", fill?.let(::paint) ?: "none"))
