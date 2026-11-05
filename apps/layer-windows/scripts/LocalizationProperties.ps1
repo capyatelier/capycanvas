@@ -332,7 +332,24 @@ function Preference-Numeric{
   if($control.Current.HelpText -ne (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')){throw 'Retained typed numeric error accessibility help stayed in an earlier language'}
   $away=(Control 'preferences-heading').Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($away.Left+$away.Width/2),[int]($away.Top+$away.Height/2))
   $bounds=$control.Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
-  Wait-Until {$tip=Numeric-Tooltip;$tip -and $tip.Current.Name -eq (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')} 'Retained native error tooltip did not use the current canonical copy' 10
+  try{
+   Wait-Until {$tip=Numeric-Tooltip;$tip -and $tip.Current.Name -eq (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')} 'Retained native error tooltip did not use the current canonical copy' 10
+  }catch{
+   if($_.Exception.Message -cne 'Retained native error tooltip did not use the current canonical copy'){throw}
+   $failure=$_
+   $context=[ordered]@{tag=$choice.tag;expected=$null;help_text=$null;tooltips=$null;cursor=$null;field_bounds=$null;hover_away_bounds=@{x=$away.X;y=$away.Y;width=$away.Width;height=$away.Height};hover_field_bounds=@{x=$bounds.X;y=$bounds.Y;width=$bounds.Width;height=$bounds.Height}}
+   try{$point=[CapyRowPointer+Point]::new();if(![CapyRowPointer]::GetCursorPos([ref]$point)){throw 'GetCursorPos returned no position'};$context.cursor=@{x=$point.x;y=$point.y}}catch{$context.cursor='Read failed: '+$_.Exception.Message}
+   try{
+    $rect=$control.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::BoundingRectangleProperty)
+    $context.field_bounds=if($null-eq$rect-or$rect.IsEmpty-or$rect.Width-le0-or$rect.Height-le0){'Unavailable: field rectangle missing or empty'}else{@{x=$rect.X;y=$rect.Y;width=$rect.Width;height=$rect.Height}}
+   }catch{$context.field_bounds='Read failed: '+$_.Exception.Message}
+   try{$context.expected=Catalog-Text $choice.tag 'numeric-invalid-expression' 'common'}catch{$context.expected='Read failed: '+$_.Exception.Message}
+   try{$context.help_text=$control.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::HelpTextProperty)}catch{$context.help_text='Read failed: '+$_.Exception.Message}
+   try{$context.tooltips=@(Capy-Tooltips $review.Id|ForEach-Object {[ordered]@{Name=$_.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::NameProperty);AutomationId=$_.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::AutomationIdProperty)}})}catch{$context.tooltips='Read failed: '+$_.Exception.Message}
+   $details=if($failure.ErrorDetails){$failure.ErrorDetails.Message}else{$failure.Exception.Message}
+   $failure.ErrorDetails=[Management.Automation.ErrorDetails]::new($details+"`n"+($context|ConvertTo-Json -Depth 4 -Compress))
+   throw $failure
+  }
  }
  Use-Window $first;$entry=Control 'setting-number-pan_speed';$entry.SetFocus();Key 27
  Invoke 'CloseButton';Wait-Until {$view=Model;$view -and !$view.preferences} 'Numeric Preferences did not close' 15

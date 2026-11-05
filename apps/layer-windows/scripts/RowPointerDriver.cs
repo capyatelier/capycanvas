@@ -33,7 +33,7 @@ public static class CapyRowPointer {
  [DllImport("user32.dll")] static extern void DestroySyntheticPointerDevice(IntPtr device);
  [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
  [DllImport("user32.dll")] static extern int GetSystemMetrics(int code);
- [DllImport("user32.dll")] static extern bool GetCursorPos(out Point point);
+ [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point point);
  [StructLayout(LayoutKind.Sequential)] public struct CursorInfo {public uint size,flags;public IntPtr cursor;public Point position;}
  [DllImport("user32.dll",SetLastError=true)] static extern bool GetCursorInfo(ref CursorInfo info);
  public static CursorInfo Cursor() {
