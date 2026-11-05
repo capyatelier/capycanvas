@@ -224,13 +224,17 @@ test('Rename Drawing Preset uses actual naming input and the offered context men
 });
 
 test('dialog allocations use only shared shell part attributes and require the header',()=>{
-  const root={querySelector:()=>({dataset:{dialogFrame:'editor'},querySelector:selector=>selector==='[data-dialog-part="end"]'||selector==='[data-dialog-part="panes"]'?{}:null})};
+  const root={querySelector:()=>({tagName:'DIALOG',dataset:{dialogFrame:'editor'},querySelector:selector=>selector==='[data-dialog-part="end"]'||selector==='[data-dialog-part="panes"]'?{}:null})};
   const specs=dialogAuditSpecifications('#actual-dialog[open]',root);
   assert.deepEqual(specs.map(spec=>spec.id),['page','page.header','page.end','page.panes']);
   assert.equal(specs[1].optional,undefined);
-  assert.deepEqual(dialogAuditSpecifications('#missing',{querySelector:()=>null}).map(spec=>spec.id),['page','page.header']);
-  const alert={dataset:{dialogFrame:'alert'},querySelector:()=>null};
+  assert.deepEqual(dialogAuditSpecifications('#missing',{querySelector:()=>null}).map(spec=>spec.id),['page']);
+  const alert={tagName:'DIALOG',dataset:{dialogFrame:'alert'},querySelector:()=>null};
   assert.deepEqual(dialogAuditSpecifications('#alert',{querySelector:()=>alert}).map(spec=>spec.id),['page']);
+  const menu={tagName:'DIV',dataset:{},querySelector:()=>null,getAttribute:name=>name==='role'?'menu':null};
+  assert.deepEqual(dialogAuditSpecifications('#menu',{querySelector:()=>menu}).map(spec=>spec.id),['page']);
+  const page={tagName:'DIV',dataset:{dialogFrame:'editor'},classList:{contains:name=>name==='dialog-page'},querySelector:()=>null};
+  assert.deepEqual(dialogAuditSpecifications('#editor-page',{querySelector:()=>page}).map(spec=>spec.id),['page','page.header']);
   assert.ok(specs.slice(1).every(spec=>spec.selector.includes('[data-dialog-part=')));
 });
 
@@ -259,4 +263,20 @@ test('picker comparison uses paired GTK allocations and rejects metadata, missin
   await writeFile(web,JSON.stringify(record('web',parts.filter(part=>part.id!=='picker.row.0.title'))));await assert.rejects(()=>verifyPickerAllocations(gtk,web),/picker.row.0.title/);
   await writeFile(web,JSON.stringify(record('web',parts.map(part=>part.id==='picker.search'?{...part,bounds:[14,20,80,30]}:part))));
   await assert.rejects(()=>verifyPickerAllocations(gtk,web),/picker.search/);
+});
+
+test('inline layer rename keeps u64 IDs inside the browser and requires its editor',async()=>{
+  const id=9007199254740993n,actions=[],state={layer_tools:{editing_layer:{id},rename_layer:null}};
+  const browser={layerApp:{state:()=>state,dispatch:action=>{
+    assert.equal(action.type,'layer');assert.equal(action.action.op,'begin_rename');assert.equal(action.action.id,id);
+    actions.push(action);state.layer_tools.rename_layer=action.action.id;
+  }},document:{querySelector:selector=>selector==='.content-drawer'||state.layer_tools.rename_layer===id&&selector==='.content-drawer .layer-name-entry'?{}:null}};
+  const guards=[];
+  await dialogAuditRows.find(row=>row.id==='layers-inline-rename').openaction({
+    send:async action=>assert.deepEqual(action,{type:'phone',action:{kind:'panel',panel:'layers'}}),
+    evaluate:async source=>{const value=runInNewContext(source,browser);return typeof value==='bigint'?undefined:value;},
+    wait:async source=>{guards.push(source);assert.ok(runInNewContext(source,browser));},
+  });
+  assert.equal(actions.length,1);assert.equal(state.layer_tools.rename_layer,id);
+  assert.ok(guards.some(source=>source.includes('.layer-name-entry')));
 });

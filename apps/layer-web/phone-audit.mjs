@@ -432,7 +432,7 @@ export const dialogAuditRows=[
     {batch:'m0',id:`layers-${kind}`,collector:'drawer',rootselector:'.content-drawer',openaction:c=>auditLayerKind(c,kind),closeaction:auditLayerClose},
     {batch:'m0',id:`properties-${kind}`,collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditLayerKind(c,kind);await c.click('.content-drawer .layer-properties-disclosure');await c.wait('getComputedStyle(document.querySelector(".content-drawer .layer-properties-pages > .layers-panel")).visibility==="hidden"');},closeaction:auditLayerClose},
   ]),
-  {batch:'m0',id:'layers-inline-rename',collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditPanel(c,'layers');const id=await c.evaluate('layerApp.state().layer_tools.editing_layer.id');await c.send({type:'layer',action:{op:'begin_rename',id}});},closeaction:async c=>{await c.send({type:'layer',action:{op:'cancel_rename'}});await auditSurfaceClose(c);}},
+  {batch:'m0',id:'layers-inline-rename',collector:'drawer',rootselector:'.content-drawer',openaction:async c=>{await auditPanel(c,'layers');await c.evaluate('layerApp.dispatch({type:"layer",action:{op:"begin_rename",id:layerApp.state().layer_tools.editing_layer.id}});null');await c.wait('layerApp.state().layer_tools.rename_layer===layerApp.state().layer_tools.editing_layer.id&&!!document.querySelector(".content-drawer .layer-name-entry")');},closeaction:async c=>{await c.send({type:'layer',action:{op:'cancel_rename'}});await auditSurfaceClose(c);}},
   {batch:'m0',id:'layers-opacity-popover',rootselector:'.layer-opacity-popup:popover-open',openaction:async c=>{await auditPanel(c,'layers');const point=await c.evaluate('(()=>{const r=document.querySelector(".layer-row[data-layer]:not(.layer-row-unit) .layer-name").getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()');await c.call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:701,...point,x:point.x-15},{id:702,x:point.x+15,y:point.y}]});await c.call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await c.settle();},closeaction:auditSurfaceClose},
 
   ...[
@@ -628,7 +628,7 @@ export const dialogAuditRows=[
 
 export function dialogAuditSpecifications(rootselector,root=document){
   const node=root.querySelector(rootselector),specs=[{id:'page',role:'page',selector:rootselector}];
-  if(node?.dataset?.dialogFrame!=='alert')specs.push({id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`});
+  if((node?.tagName==='DIALOG'||node?.classList?.contains('dialog-page'))&&node.dataset?.dialogFrame!=='alert')specs.push({id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`});
   for(const part of ['start','end','panes'])if(node?.querySelector(`[data-dialog-part="${part}"]`))specs.push({id:`page.${part}`,role:part==='panes'?'panes':'page-action',selector:`${rootselector} [data-dialog-part="${part}"]`});
   return specs;
 }
@@ -814,8 +814,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       const tap=async count=>{await touch('touchStart',Array.from({length:count},(_,i)=>({id:200+i,x:area.x+area.width*.5+(i-(count-1)/2)*25,y:start.y})));await touch('touchEnd');await settle();};
       const mode=value=>send({type:'preferences',action:{type:'edit',id:'finger_drawing',value}});
       await mouse('mouseMoved',start);assert.equal(await evaluate('layerApp.state().settings.pen_seen'),false,'Hover does not admit a pen');
-      const layer=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
-      await send({type:'layer',action:{op:'lock',id:layer,value:true}});
+      await evaluate('layerApp.dispatch({type:"layer",action:{op:"lock",id:layerApp.state().layer_tools.editing_layer.id,value:true}});null');
       await mouse('mousePressed',start,1);await mouse('mouseReleased',start);await settle();
       assert.equal(await evaluate('layerApp.state().settings.pen_seen'),false,'A refused locked-layer contact does not admit a pen');
       await undo();await clear();const blank=await pixels();
@@ -974,7 +973,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       await captureCustom('customize-offbar-cancelled');
       await hold(from);await escape();await release();assert.deepEqual(await history(),cancelled,'Escape cancels a held contact');
       const empty=await durable();empty.layout.phone=[];await send({type:'restore_workspace',workspace:empty});
-      const blank=await evaluate('(()=>{const b=layerApp.app.layout(innerWidth,innerHeight).phone.bars[0];return{x:b.x+b.width/2,y:b.y+b.height/2};})()');
+      const blank=await evaluate(`(()=>{const p=layerApp.app.layout(innerWidth,innerHeight).phone,occupied=[...p.tool_hits,...p.tools,...p.controls,p.capy_hit,p.settings_hit,p.size,p.strength];for(const bar of p.bars)for(let y=Math.ceil(bar.y);y<Math.floor(bar.y+bar.height);y++)for(let x=Math.ceil(bar.x);x<Math.floor(bar.x+bar.width);x++){const point={x:x+.5,y:y+.5};if(!occupied.some(b=>b.width>0&&b.height>0&&point.x>=b.x&&point.x<b.x+b.width&&point.y>=b.y&&point.y<b.y+b.height))return point;}throw Error('The shared phone bars have no free background contact');})()`);
       await hold(blank);await release();await wait('document.querySelector(".panel-context-menu")?.matches(":popover-open")');
       assert.deepEqual(await evaluate('[...document.querySelectorAll(".panel-context-menu:popover-open button")].map(n=>n.menuItem.label)'),['Add Tools…']);
       await captureCustom('customize-empty-toolbar');await menuAction('Add Tools…');await escape();
