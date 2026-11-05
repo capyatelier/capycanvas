@@ -438,3 +438,13 @@ tilt-use-pen = 여기에서 펜을 사용하세요
 common-stroke-input-limit = 획이 입력 한도에 도달하여 종료되었습니다. 그린 내용은 유지됩니다.
 
 native-color-stroke-recording-file-type = Capy 획 기록
+
+native-header-recovery-help = 제목 표시줄 복구: 메뉴 및 사용자 지정
+
+native-color-stroke-recording = 획 기록
+
+native-color-stroke-recording-save-first = 기존 획 기록을 먼저 저장하세요
+
+native-color-stroke-recording-compression-failed = 기록을 압축하지 못했습니다
+
+native-color-save-stroke-recording = 획 기록 저장

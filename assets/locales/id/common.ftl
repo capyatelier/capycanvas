@@ -697,3 +697,13 @@ tilt-use-pen = Gunakan pena di sini
 common-stroke-input-limit = Goresan mencapai batas input dan telah diselesaikan. Hasil lukisan tetap dipertahankan.
 
 native-color-stroke-recording-file-type = Rekaman goresan Capy
+
+native-header-recovery-help = Pemulihan bilah judul: menu dan penyesuaian
+
+native-color-stroke-recording = Rekaman goresan
+
+native-color-stroke-recording-save-first = Simpan rekaman goresan yang ada terlebih dahulu
+
+native-color-stroke-recording-compression-failed = Rekaman gagal dikompresi
+
+native-color-save-stroke-recording = Simpan rekaman goresan

@@ -621,3 +621,13 @@ tilt-use-pen = Stift hier verwenden
 common-stroke-input-limit = Der Strich hat die Eingabegrenze erreicht und wurde beendet. Deine Zeichnung bleibt erhalten.
 
 native-color-stroke-recording-file-type = Capy-Strichaufzeichnung
+
+native-header-recovery-help = Titelleiste wiederherstellen: Menüs und Anpassung
+
+native-color-stroke-recording = Strichaufzeichnung
+
+native-color-stroke-recording-save-first = Zuerst die vorhandene Strichaufzeichnung speichern
+
+native-color-stroke-recording-compression-failed = Die Aufzeichnung konnte nicht komprimiert werden
+
+native-color-save-stroke-recording = Strichaufzeichnung speichern

@@ -140,7 +140,7 @@ impl PalettePanel {
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("palette-list");
-        let empty = gtk::Label::new(Some("No matching palettes"));
+        let empty = gtk::Label::new(None);
         empty.add_css_class("dim-label");
         empty.set_visible(false);
         empty.set_can_target(false);

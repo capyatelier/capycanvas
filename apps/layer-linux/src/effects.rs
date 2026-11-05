@@ -987,14 +987,17 @@ impl EffectPanels {
         self.body.append(&row);
     }
     fn recording_error(w: &Rc<Workspace>, message: &str) {
+        let localization = w.localization();
+        let copy = layer_ui::bootstrap_view(&localization);
         let dialog = adw::AlertDialog::builder()
-            .heading("Stroke recording")
+            .heading(&*localization.text(layer_ui::MessageId::NATIVE_COLOR_STROKE_RECORDING))
             .body(message)
             .build();
-        dialog.add_response("ok", "OK");
+        dialog.add_response("ok", &copy.ok);
+        let intent = copy.recovery.dialog;
         let w = w.clone();
         glib::spawn_future_local(async move {
-            crate::alert::choose_intent(dialog, &w.window, layer_ui::bootstrap_view(&w.localization()).recovery.dialog, Some("ok"), &[]).await;
+            crate::alert::choose_intent(dialog, &w.window, intent, Some("ok"), &[]).await;
         });
     }
     fn recording_tick(self: &Rc<Self>, w: &Rc<Workspace>) {
@@ -1043,7 +1046,7 @@ impl EffectPanels {
                 self.save_recording(w);
             }
             Ok(false) => (),
-            Err(e) => Self::recording_error(w, e),
+            Err(_) => Self::recording_error(w, &w.localization().text(layer_ui::MessageId::NATIVE_COLOR_STROKE_RECORDING_SAVE_FIRST)),
         }
         self.recording_tick(w);
     }
@@ -1056,7 +1059,7 @@ impl EffectPanels {
         glib::spawn_future_local(async move {
             let result: Result<(), String> = async {
                 let dialog = gtk::FileDialog::builder()
-                    .title("Save stroke recording")
+                    .title(&*w.localization().text(layer_ui::MessageId::NATIVE_COLOR_SAVE_STROKE_RECORDING))
                     .initial_name("stroke-recording.capystrokes")
                     .modal(true)
                     .build();
@@ -1074,7 +1077,7 @@ impl EffectPanels {
                     .gpu
                     .borrow_mut()
                     .as_mut()
-                    .ok_or("Canvas unavailable")?
+                    .ok_or_else(|| w.localization().text(layer_ui::MessageId::NATIVE_COLOR_CANVAS_UNAVAILABLE).to_string())?
                     .session
                     .stroke_recording()
                     .snapshot()
@@ -1082,7 +1085,7 @@ impl EffectPanels {
                 let bytes =
                     gtk::gio::spawn_blocking(move || layer_engine::recording::compress(&data))
                         .await
-                        .map_err(|_| "Recording compression failed")?
+                        .map_err(|_| w.localization().text(layer_ui::MessageId::NATIVE_COLOR_STROKE_RECORDING_COMPRESSION_FAILED).to_string())?
                         .map_err(|e| e.to_string())?;
                 file.replace_contents_future(
                     bytes,

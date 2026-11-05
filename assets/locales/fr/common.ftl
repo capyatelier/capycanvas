@@ -623,3 +623,13 @@ tilt-use-pen = Utilisez votre stylet ici
 common-stroke-input-limit = Le trait a atteint la limite de saisie et a été terminé. La peinture a été conservée.
 
 native-color-stroke-recording-file-type = Enregistrement de traits Capy
+
+native-header-recovery-help = Récupération de la barre de titre : menus et personnalisation
+
+native-color-stroke-recording = Enregistrement des traits
+
+native-color-stroke-recording-save-first = Enregistrez d’abord l’enregistrement des traits existant
+
+native-color-stroke-recording-compression-failed = La compression de l’enregistrement a échoué
+
+native-color-save-stroke-recording = Enregistrer les traits

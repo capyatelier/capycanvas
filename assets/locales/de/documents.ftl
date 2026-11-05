@@ -342,7 +342,7 @@ documents-height-name = Höhe
 
 documents-drop-drawings = Zeichnung öffnen
 documents-drop-mixed = Zeichnungen öffnen oder Bilder platzieren, nicht beides zugleich
-documents-drop-images = Bilder auf der Leinwand platzieren
+documents-drop-images = Bilder als Ebenen hinzufügen
 documents-package-unsupported-body = Es enthält Ebenen oder Einstellungen, die diese Version von { common-app-name } nicht bearbeiten kann.
 documents-package-damaged-body = Ein Teil dieser Datei ist beschädigt.
 documents-flats-name = Grundfarben

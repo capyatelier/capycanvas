@@ -438,3 +438,13 @@ tilt-use-pen = 在這裡使用筆
 common-stroke-input-limit = 筆畫達到輸入上限，已結束。已繪製的內容已保留。
 
 native-color-stroke-recording-file-type = Capy 筆畫記錄
+
+native-header-recovery-help = 標題列復原：選單與自訂
+
+native-color-stroke-recording = 筆畫錄製
+
+native-color-stroke-recording-save-first = 請先儲存現有的筆畫錄製
+
+native-color-stroke-recording-compression-failed = 錄製壓縮失敗
+
+native-color-save-stroke-recording = 儲存筆畫錄製

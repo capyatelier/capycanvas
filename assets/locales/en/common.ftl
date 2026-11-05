@@ -620,3 +620,13 @@ tilt-reverse-vertical = Reverse vertical
 tilt-swap-axes = Swap axes
 tilt-use-pen = Use your pen here
 common-stroke-input-limit = That stroke reached the input limit and was finished. Your paint was kept.
+
+native-header-recovery-help = Title bar recovery: menus and customization
+
+native-color-stroke-recording = Stroke recording
+
+native-color-stroke-recording-save-first = Save the existing stroke recording first
+
+native-color-stroke-recording-compression-failed = Recording compression failed
+
+native-color-save-stroke-recording = Save stroke recording

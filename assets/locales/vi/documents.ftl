@@ -342,7 +342,7 @@ documents-height-name = Chiều cao
 
 documents-drop-drawings = Mở bản vẽ
 documents-drop-mixed = Mở bản vẽ hoặc đặt hình ảnh, không làm cả hai cùng lúc
-documents-drop-images = Đặt hình ảnh lên khung vẽ
+documents-drop-images = Thêm ảnh dưới dạng lớp
 documents-package-unsupported-body = Tệp có các lớp hoặc thiết lập mà phiên bản { common-app-name } này không thể chỉnh sửa.
 documents-package-damaged-body = Một phần của tệp này bị hỏng.
 documents-flats-name = Màu phẳng

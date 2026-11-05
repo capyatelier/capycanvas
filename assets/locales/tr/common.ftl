@@ -614,3 +614,13 @@ tilt-use-pen = Kaleminizi burada kullanın
 common-stroke-input-limit = Çizgi giriş sınırına ulaştı ve tamamlandı. Boyadığınız kısım korundu.
 
 native-color-stroke-recording-file-type = Capy fırça darbesi kaydı
+
+native-header-recovery-help = Başlık çubuğunu kurtarma: menüler ve özelleştirme
+
+native-color-stroke-recording = Fırça darbesi kaydı
+
+native-color-stroke-recording-save-first = Önce mevcut fırça darbesi kaydını kaydedin
+
+native-color-stroke-recording-compression-failed = Kayıt sıkıştırılamadı
+
+native-color-save-stroke-recording = Fırça darbesi kaydını kaydet

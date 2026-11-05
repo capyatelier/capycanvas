@@ -342,7 +342,7 @@ documents-height-name = Hauteur
 
 documents-drop-drawings = Ouvrir le dessin
 documents-drop-mixed = Ouvrez des dessins ou placez des images, pas les deux à la fois
-documents-drop-images = Placer les images sur la toile
+documents-drop-images = Ajouter les images comme calques
 documents-package-unsupported-body = Il contient des calques ou des réglages que cette version de { common-app-name } ne peut pas modifier.
 documents-package-damaged-body = Une partie de ce fichier est endommagée.
 documents-flats-name = Aplats

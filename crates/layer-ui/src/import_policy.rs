@@ -38,6 +38,12 @@ impl FileDropRefusal {
     }
 }
 impl ImportIntent {
+    pub fn drop_label(self, localization: &crate::Localizer) -> Arc<str> {
+        localization.text(match self {
+            Self::Open => crate::MessageId::DOCUMENTS_DROP_DRAWINGS,
+            Self::Place => crate::MessageId::DOCUMENTS_DROP_IMAGES,
+        })
+    }
     pub fn is_drawing_path(path: &std::path::Path) -> bool {
         path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("capy"))
     }
@@ -691,6 +697,16 @@ mod tests {
         assert_eq!(ImportIntent::for_drop(drawing(&[]), false), Err(FileDropRefusal::Empty));
         assert_eq!(ImportIntent::Open.command(), crate::CommandId::OpenDocument);
         assert_eq!(ImportIntent::Place.command(), crate::CommandId::ImportImage);
+        for (language, open, place) in [
+            (crate::UiLanguage::English, "Open drawing", "Add images as layers"),
+            (crate::UiLanguage::French, "Ouvrir le dessin", "Ajouter les images comme calques"),
+        ] {
+            let localization = crate::Localizer::shared(language);
+            for (intent, label) in [(ImportIntent::Open, open), (ImportIntent::Place, place)] {
+                assert_eq!(&*intent.drop_label(&localization), label);
+                assert!(Arc::ptr_eq(&intent.drop_label(&localization), &intent.drop_label(&localization)));
+            }
+        }
     }
     fn photo_source(document: &Document) -> &SourceImage {
         document.artwork.paint.iter().find_map(|(_, _, p)| p.base.as_ref().map(|base| base.image.as_ref())).expect("photo source")

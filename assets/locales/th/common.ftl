@@ -390,3 +390,13 @@ tilt-use-pen = ใช้ปากกาที่นี่
 common-stroke-input-limit = เส้นถึงขีดจำกัดการป้อนข้อมูลและสิ้นสุดแล้ว ส่วนที่วาดไว้ยังคงอยู่
 
 native-color-stroke-recording-file-type = การบันทึกเส้นของ Capy
+
+native-header-recovery-help = กู้คืนแถบชื่อเรื่อง: เมนูและการปรับแต่ง
+
+native-color-stroke-recording = การบันทึกเส้นวาด
+
+native-color-stroke-recording-save-first = บันทึกการบันทึกเส้นวาดที่มีอยู่ก่อน
+
+native-color-stroke-recording-compression-failed = บีบอัดการบันทึกไม่สำเร็จ
+
+native-color-save-stroke-recording = บันทึกเส้นวาดลงไฟล์

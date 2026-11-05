@@ -64,8 +64,7 @@ pub(crate) fn install(w: &Rc<Workspace>) {
             let intent = files(target).map_or(Ok(ImportIntent::Place), |files| intent(&files, false));
             let valid = intent.is_ok_and(|intent| available(&w, intent));
             let label: std::sync::Arc<str> = match intent {
-                Ok(ImportIntent::Open) => "Open drawing".into(),
-                Ok(ImportIntent::Place) => "Add images as layers".into(),
+                Ok(intent) => intent.drop_label(&w.localization()),
                 Err(refusal) => refusal.message(&w.localization()),
             };
             w.image_drop_label.set_label(&label);

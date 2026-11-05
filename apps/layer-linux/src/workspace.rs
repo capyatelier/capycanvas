@@ -1327,7 +1327,7 @@ impl Workspace {
         content.connect_get_child_position(glib::clone!(#[weak(rename_to = root)] notice.root, #[strong] notice, #[upgrade_or] None, move |_, child| {
             (child == root.upcast_ref::<gtk::Widget>()).then(|| notice.allocation())
         }));
-        let image_drop_label = gtk::Label::new(Some("Add image as layer"));
+        let image_drop_label = gtk::Label::new(None);
         image_drop_label.set_halign(gtk::Align::Center);
         image_drop_label.set_valign(gtk::Align::Center);
         image_drop_label.add_css_class("card");

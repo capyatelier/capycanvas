@@ -339,7 +339,7 @@ documents-height-name = Altezza
 
 documents-drop-drawings = Apri disegno
 documents-drop-mixed = Apri disegni o posiziona immagini, non entrambe le cose
-documents-drop-images = Posiziona immagini sulla tela
+documents-drop-images = Aggiungi immagini come livelli
 documents-package-unsupported-body = Contiene livelli o impostazioni che questa versione di { common-app-name } non può modificare.
 documents-package-damaged-body = Una parte di questo file è danneggiata.
 documents-flats-name = Tinte piatte

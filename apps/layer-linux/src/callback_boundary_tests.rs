@@ -43,6 +43,10 @@ fn native_localization_callback_registration() {
         let choice = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
         driver.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Language, value: layer_ui::PreferenceValue::Choice(choice) } });
         until(|| driver.w.localization().language() == language, "callback language publication");
+        let expected = if language == UiLanguage::French {
+            "Récupération de la barre de titre : menus et personnalisation"
+        } else { "Title bar recovery: menus and customization" };
+        assert_eq!(driver.named("header-recovery").tooltip_text().as_deref(), Some(expected));
     };
     for theme in [Theme::Light, Theme::Dark] {
         driver.w.dispatch(UiAction::SetTheme { theme: Some(theme) });

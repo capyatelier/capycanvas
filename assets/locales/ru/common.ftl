@@ -614,3 +614,13 @@ tilt-use-pen = Используйте перо здесь
 common-stroke-input-limit = Мазок достиг предела ввода и был завершён. Нарисованное сохранено.
 
 native-color-stroke-recording-file-type = Запись мазков Capy
+
+native-header-recovery-help = Восстановление заголовка окна: меню и настройка
+
+native-color-stroke-recording = Запись штрихов
+
+native-color-stroke-recording-save-first = Сначала сохраните существующую запись штрихов
+
+native-color-stroke-recording-compression-failed = Не удалось сжать запись
+
+native-color-save-stroke-recording = Сохранить запись штрихов

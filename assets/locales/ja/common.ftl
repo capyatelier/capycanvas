@@ -438,3 +438,13 @@ tilt-use-pen = ここでペンを使ってください
 common-stroke-input-limit = ストロークが入力上限に達したため終了しました。描いた部分は保持されています。
 
 native-color-stroke-recording-file-type = Capy ストローク記録
+
+native-header-recovery-help = タイトルバーの復元：メニューとカスタマイズ
+
+native-color-stroke-recording = ストローク記録
+
+native-color-stroke-recording-save-first = 先に現在のストローク記録を保存してください
+
+native-color-stroke-recording-compression-failed = 記録を圧縮できませんでした
+
+native-color-save-stroke-recording = ストローク記録を保存

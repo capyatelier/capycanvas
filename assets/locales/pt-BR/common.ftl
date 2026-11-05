@@ -626,3 +626,13 @@ tilt-use-pen = Use a caneta aqui
 common-stroke-input-limit = O traço atingiu o limite de entrada e foi concluído. A pintura foi preservada.
 
 native-color-stroke-recording-file-type = Gravação de traços do Capy
+
+native-header-recovery-help = Recuperação da barra de título: menus e personalização
+
+native-color-stroke-recording = Gravação de traços
+
+native-color-stroke-recording-save-first = Salve primeiro a gravação de traços existente
+
+native-color-stroke-recording-compression-failed = Não foi possível comprimir a gravação
+
+native-color-save-stroke-recording = Salvar gravação de traços

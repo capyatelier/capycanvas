@@ -342,7 +342,7 @@ documents-height-name = Yükseklik
 
 documents-drop-drawings = Çizimi aç
 documents-drop-mixed = Çizimleri açın veya görselleri yerleştirin; ikisini aynı anda yapmayın
-documents-drop-images = Görselleri tuvale yerleştir
+documents-drop-images = Görüntüleri katman olarak ekle
 documents-package-unsupported-body = Bu çizimde { common-app-name } uygulamasının bu sürümünün düzenleyemediği katmanlar veya ayarlar var.
 documents-package-damaged-body = Bu dosyanın bir bölümü hasarlı.
 documents-flats-name = Düz Renkler

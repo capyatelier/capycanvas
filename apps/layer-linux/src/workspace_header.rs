@@ -168,7 +168,6 @@ impl Header {
         });
         let recovery = gtk::MenuButton::builder()
             .child(&crate::icons::image("layer-menu-symbolic"))
-            .tooltip_text("Title bar recovery: menus and customization")
             .build();
         recovery.set_widget_name("header-recovery");
         recovery.add_css_class("flat");
@@ -206,6 +205,12 @@ impl Header {
             }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        w.on_localization(glib::clone!(#[weak(rename_to = recovery)] self.recovery, #[upgrade_or] false, move |localization| {
+            let caption = localization.text(layer_ui::MessageId::NATIVE_HEADER_RECOVERY_HELP);
+            recovery.set_tooltip_text(Some(&caption));
+            recovery.update_property(&[gtk::accessible::Property::Label(&caption)]);
+            true
+        }));
         for (i, button) in self.overflow.iter().enumerate() {
             button.set_tooltip_text(Some(&HeaderZone::ALL[i].overflow_label(&w.localization())));
         }
