@@ -619,6 +619,20 @@ mod localization_tests {
         assert!(!session.update_notice_text(id, "late result".into()));
     }
     #[test]
+    fn stale_notice_timeouts_preserve_notices_at_the_user_boundary() {
+        for platform in Platform::ALL {
+            for existing in [false, true] {
+                let mut s = session(platform);
+                if existing { s.raise_message_notice(MessageId::COMMON_ACTION_FAILED); }
+                let before = s.state.notice.clone();
+                let result = s.dispatch_user_action(UiAction::Notice { id: u64::MAX, accept: false, action: None });
+                assert_eq!(s.state.notice, before);
+                assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[test]
     fn refused_user_actions_raise_localized_notices_and_keep_the_session_usable() {
         for platform in Platform::ALL {
             let mut s=session(platform);s.renderer_mut().tiled_sources=true;s.set_localization(Localizer::shared(UiLanguage::Italian));

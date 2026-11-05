@@ -150,9 +150,7 @@ impl Action {
             }
             Self::Ordinary(action) => action,
         };
-        let timeout = matches!(action, UiAction::Notice { accept: false, .. });
         host.dispatch_user_action(action)
-            .or_else(|error| if timeout { Ok(()) } else { Err(error) })
     }
 }
 #[cfg(test)]
@@ -287,17 +285,29 @@ mod tests {
         assert_eq!(host.session.engine().document(), &document);
         assert!(serde_json::from_value::<Action>(serde_json::json!({"windows_failure":"other"})).is_err());
     }
+    fn notice_answer(accept: bool) -> Action {
+        serde_json::from_value(serde_json::json!({"type":"notice","id":u64::MAX,"accept":accept})).unwrap()
+    }
     #[test]
-    fn stale_notice_timeouts_are_quiet_but_stale_accepts_fail() {
+    fn stale_notice_timeouts_leave_an_empty_notice_unchanged() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        let answer = |accept: bool| {
-            serde_json::from_value::<Action>(
-                serde_json::json!({"type":"notice","id":u64::MAX,"accept":accept}),
-            )
-            .unwrap()
-        };
-        answer(false).dispatch(&mut host).unwrap();
-        assert!(answer(true).dispatch(&mut host).is_err());
+        notice_answer(false).dispatch(&mut host).unwrap();
+        assert!(host.session.state().notice.is_none());
+    }
+    #[test]
+    fn stale_notice_timeouts_preserve_the_current_notice() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.session.raise_message_notice(layer_ui::MessageId::COMMON_ACTION_FAILED);
+        let before = host.session.state().notice.clone();
+        notice_answer(false).dispatch(&mut host).unwrap();
+        assert_eq!(host.session.state().notice, before);
+    }
+    #[test]
+    fn stale_notice_accepts_raise_the_shared_refusal_notice() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let error = host.dispatch(UiAction::Notice { id: u64::MAX, accept: true, action: None }).unwrap_err();
+        notice_answer(true).dispatch(&mut host).unwrap();
+        assert_eq!(host.session.state().notice.as_ref().unwrap().text, error);
     }
     #[test]
     fn proof_panel_rejects_obsolete_controls_and_preserves_view_history() {

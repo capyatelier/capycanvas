@@ -3033,7 +3033,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn dispatch_user_action(&mut self,action:UiAction)->Result<UiChange,String> {
         let host_report=action.is_host_report();
+        let timeout=matches!(action,UiAction::Notice {accept:false,..});
         match self.dispatch(action) {
+            Err(_) if timeout=>Ok(UiChange::default()),
             Err(error) if !host_report=>{self.notify(error);Ok(self.changed(0,false))},
             result=>result,
         }
