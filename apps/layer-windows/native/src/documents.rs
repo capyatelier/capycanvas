@@ -1156,12 +1156,15 @@ mod tests {
             self.directory.path.join(name).to_str().unwrap().into()
         }
         fn hold_pressure(&mut self) -> HeldPressure {
-            let mut document=layer_ui::new_drawing(32,24,self.host.session.localization()).unwrap();
-            let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {panic!()};
-            let source=layer_core::color::source::rgba8_source([32,24],|_,_|[31,63,127,255]);
-            document.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::PaintBase::new(source.into()));
-            let session=Box::new(UiSession::from_project(Renderer(None),document,None,[32,24],Platform::Windows).unwrap());
+            use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
+            let mut document=layer_ui::new_drawing(TILE_SIZE,TILE_SIZE,self.host.session.localization()).unwrap();
+            let tile=Arc::new(TileBlob::encode(RasterPlane::Color.descriptor(Default::default()),&[31,63,127,255].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap());
+            *document.target_raster_mut(document.working.target.unwrap()).unwrap()=RasterRevision::backed(RasterData {
+                tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed_shared(tile.clone()))].into(),..Default::default()
+            });
+            let session=Box::new(UiSession::from_project(Renderer(None),document,None,[TILE_SIZE;2],Platform::Windows).unwrap());
             let tiles=session.retained_document_tiles();
+            assert!(tile.resident_bytes()>0);
             assert!(tiles.resident_bytes()>0);
             self.service.window.documents.append_parked(tabs::Parked {session},tiles,self.host.session.localization());
             self.service.window.documents.set_inactive_ram_budget(0);

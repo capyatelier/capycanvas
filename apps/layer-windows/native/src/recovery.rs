@@ -939,7 +939,7 @@ mod tests {
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"drawing".into()}],1,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let orphan=damaged_orphan(&storage);let directory=storage.directory.clone();drop(storage);
         let mut restored=Storage::open(&root.path).unwrap().0;assert_eq!(restored.directory,directory);
-        assert!(restored.warnings.iter().any(|error|error.contains("Invalid drawing retirement intent")));
+        assert!(restored.warnings.iter().any(|error|error.contains("Invalid drawing retirement marker")));
         let decoded=restored.decode(Default::default(),|_|Ok(()),&cancel).unwrap();
         assert_eq!(decoded.drawings.iter().map(|(id,..)|*id).collect::<Vec<_>>(),[1]);assert!(decoded.failed.is_empty());
         assert_eq!(fs::read(orphan.join(".retiring")).unwrap(),b"invalid");
@@ -955,7 +955,7 @@ mod tests {
             let previous=heads(&storage.directory.join("drawing"));
             storage.capture(storage.manifest.clone(),vec![(1,session.capture_session().unwrap(),session.session_stamp())],&cancel).unwrap();
             assert_ne!(heads(&storage.directory.join("drawing")),previous);
-            assert!(storage.warnings.pop().unwrap().contains("Invalid drawing retirement intent"));
+            assert!(storage.warnings.pop().unwrap().contains("Invalid drawing retirement marker"));
             let restored=pollster::block_on(storage.store(1,"drawing").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().unwrap();
             assert_eq!(restored.editor.checkpoint(),session.engine().checkpoint());assert!(restored.editor.can_undo());
             assert_eq!(fs::read(orphan.join(".retiring")).unwrap(),b"invalid");
@@ -968,7 +968,7 @@ mod tests {
         for (id,key) in [(1,"closed"),(2,"retained")] {pollster::block_on(storage.store(id,key).unwrap().with_store(async |store|captured.checkpoint(store,&cancel).await)).unwrap();}
         let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"closed".into()},SessionDrawing{id:2,key:"retained".into()}],2,false).unwrap();storage.publish(manifest,&cancel).unwrap();
         let orphan=damaged_orphan(&storage);storage.discard(1,&cancel).unwrap();
-        assert!(storage.warnings.iter().any(|error|error.contains("Invalid drawing retirement intent")));
+        assert!(storage.warnings.iter().any(|error|error.contains("Invalid drawing retirement marker")));
         assert_eq!(storage.manifest.drawings,[SessionDrawing{id:2,key:"retained".into()}]);
         assert!(pollster::block_on(storage.store(2,"retained").unwrap().with_store(async |store|store.load(Default::default(),&cancel).await)).unwrap().is_some());
         assert_eq!(fs::read(orphan.join(".retiring")).unwrap(),b"invalid");
