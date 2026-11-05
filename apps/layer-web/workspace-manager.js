@@ -39,6 +39,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const cancelButton=localizedButton(()=>common.cancel,cancel),sidebar=element('div','workspace-sidebar'),panes=element('div','workspace-panes');
   sidebar.append(listActions,list,rowActions);panes.append(sidebar,details);panes.dataset.dialogPart='panes';
   addScrollbar(list,sidebar);
+  addScrollbar(details,panes);
   footer.append(cancelButton,retry,primary);dialog.append(header,tabs,intro,panes,error,footer);
   const host=createDialogHost({app,dialog,header,cancel:close,primary:()=>view?.dialog?.primary==='close'?close:primary,icon,copy:common,onCancel:cancel,
     subpage:()=>layout?.subpage??false,onBack:()=>send({type:'page_list'}),search,clearSearch:()=>send({type:'search',query:''})});

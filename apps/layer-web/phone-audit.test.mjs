@@ -4,8 +4,19 @@ import {runInNewContext} from 'node:vm';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
+
+test('dialog scroll audit rejects browser bars, scrolling chrome and missing indicators',t=>{
+  const previous=globalThis.getComputedStyle;t.after(()=>{globalThis.getComputedStyle=previous;});globalThis.getComputedStyle=node=>node.style;
+  const node=className=>({className,style:{overflowY:'hidden',scrollbarWidth:'none'},scrollHeight:300,clientHeight:100,getClientRects:()=>[{}],contains:()=>false,classList:{contains:()=>true}});
+  const viewport=node('body'),header=node('header'),footer=node('footer'),owner=node('dialog');viewport.style.overflowY='auto';
+  owner.querySelectorAll=selector=>selector==='*'?[viewport,header,footer]:[header,footer];
+  const root={querySelectorAll:()=>[owner]};assert.deepEqual(dialogScrollerIssues(root),[]);
+  viewport.style.scrollbarWidth='auto';assert.deepEqual(dialogScrollerIssues(root),[{selector:'body',kind:'classic'}]);viewport.style.scrollbarWidth='none';
+  viewport.contains=part=>part===footer;assert.deepEqual(dialogScrollerIssues(root),[{selector:'body',kind:'scrolling-chrome'}]);viewport.contains=()=>false;
+  viewport.classList.contains=()=>false;assert.deepEqual(dialogScrollerIssues(root),[{selector:'body',kind:'missing-overlay'}]);
+});
 
 test('collecting a recording cannot leave its completion prompt over the next contact',t=>{
   const saved={document:globalThis.document,setInterval:globalThis.setInterval};

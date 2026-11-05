@@ -67,7 +67,7 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   const content = element('div', 'dialog-content'); content.append(page, footer);
   const menu = element('div', 'panel-context-menu'); menu.popover = 'auto'; menu.setAttribute('role', 'menu');
   menu.addEventListener('toggle', e => { if (e.newState === 'closed' && !grid.contains(document.activeElement)) reveal(); });
-  root.append(header,content, menu); document.body.append(root); addScrollbar(page, content);
+  root.append(header,content, menu); document.body.append(root); const scroll=addScrollbar(page,content);
   const shell=createDialogHost({app,dialog:root,header,cancel,primary:apply,icon,copy:bootstrap.common,onCancel:()=>shell.hide()});
   let shown = null, shownKey = '', pending = null, tiles = [];
   function rename(action) {
@@ -152,7 +152,7 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   });
   const refresh = () => { const current = String(state().document_file.epoch) === epoch && texturePicker(state, layer); if (current) update(current); };
   dialogs.add(refresh);
-  root.addEventListener('close', () => { dialogs.delete(refresh);shell.dispose(); root.remove(); });
+  root.addEventListener('close', () => { dialogs.delete(refresh);shell.dispose();scroll.disposeScrollbar(); root.remove(); });
   update(opened);
   shell.present(opened.paper.dialog);
   reveal();

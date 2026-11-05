@@ -1,8 +1,9 @@
 import {createDialogHost} from './dialog-host.js';
 import {createCurveEditor} from './curve-editor.js';
+import {addScrollbar} from './scrollbars.js';
 
 export function createPenResponse({app,state,workspace,element,button,icon,numberField,dispatch}) {
-  let panel,host,editor,heading,device,close,firmer,lighter,sensitivityTitle,reset,cancel,apply,direction,circle,arrows,axes,drag,mode,measured,measureFrame,initialized=false;
+  let panel,host,editor,scroll,heading,device,close,firmer,lighter,sensitivityTitle,reset,cancel,apply,direction,circle,arrows,axes,drag,mode,measured,measureFrame,initialized=false;
   const viewport=()=>[workspace.clientWidth,workspace.clientHeight];
   const position=e=>{const r=workspace.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];};
   const model=()=>state()[`${mode}_calibration`];
@@ -10,12 +11,12 @@ export function createPenResponse({app,state,workspace,element,button,icon,numbe
   function dispose(){
     if(measureFrame)cancelAnimationFrame(measureFrame);
     measureFrame=null;
+    scroll?.disposeScrollbar();scroll=null;
     const retired=editor;editor=null;retired?.dispose();host?.hide();host?.dispose();host=null;panel?.remove();panel=null;drag=null;measured=null;initialized=false;
   }
   function measure(){
     measureFrame=null;if(!panel)return;
     const body=panel.querySelector('.utility-body');
-    panel.style.setProperty('--utility-scrollbar',`${body.offsetWidth-body.clientWidth}px`);
     const reserve=panel.querySelector('.curve-frame > span');
     panel.style.setProperty('--curve-gutter',`${reserve.getBoundingClientRect().width}px`);
     const r=panel.getBoundingClientRect(),v=viewport(),view=model();
@@ -67,7 +68,7 @@ export function createPenResponse({app,state,workspace,element,button,icon,numbe
       });
       direction.append(bar);
       if(mode==='tilt'){editor.node.querySelector('.curve-plot').append(circle);controls.append(direction);body.append(editor.node,controls);}
-      else body.append(editor.node,sensitivity);panel.append(header,body,actions);workspace.append(panel);
+      else body.append(editor.node,sensitivity);panel.append(header,body,actions);scroll=addScrollbar(body,panel);workspace.append(panel);
       host=createDialogHost({app,dialog:panel,header,cancel,primary:apply,icon,copy:app.bootstrap_view().common,onCancel:()=>act({kind:'cancel'}),onDismiss:()=>dispatch({type:'curve_editor',target,action:{kind:'key',epoch:model().editor.controls.epoch,key_event:'Escape',pressed:true,repeat:false,modifiers:{command:false,shift:false,alt:false}}}),placement:()=>model().bounds});
       const contact=(phase,e)=>act({kind:'drag',phase,position:e?position(e):[0,0],viewport:viewport()});
       title.onpointerdown=e=>{if(e.button)return;e.preventDefault();e.stopPropagation();drag=e.pointerId;title.setPointerCapture(e.pointerId);contact('down',e);};

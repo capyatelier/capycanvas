@@ -11,18 +11,22 @@ function queueScrollbar(read) {
   });
 }
 export function addScrollbar(panel, frame, content = panel) {
+  panel.classList.add('overlay-scroll');frame.classList.add('overlay-scroll-frame');
   const thumb = document.createElement("div"); thumb.className = "scroll-thumb";
   thumb.setAttribute("aria-hidden", "true");
   frame.append(thumb);
   let origin;
   const read = () => {
     const visible = panel.clientHeight, total = panel.scrollHeight, top = panel.scrollTop;
+    const area=panel.getBoundingClientRect(),bounds=frame.getBoundingClientRect();
+    const scrolls=visible&&/auto|scroll/.test(getComputedStyle(panel).overflowY);
     const overflow = total - visible;
-    const height = total ? Math.max(28, visible ** 2 / total) : 0;
+    const height = total ? Math.min(visible,Math.max(28, visible ** 2 / total)) : 0;
     return () => {
-      thumb.hidden = !visible || overflow <= 1;
+      thumb.hidden = !scrolls || overflow <= 1;
       thumb.style.height = `${height}px`;
-      thumb.style.top = `${overflow > 0 ? (top / overflow) * (visible - height) : 0}px`;
+      thumb.style.top = `${area.top-bounds.top+frame.scrollTop+(overflow > 0 ? (top / overflow) * (visible - height) : 0)}px`;
+      thumb.style.right = `${bounds.right-area.right}px`;
     };
   };
   const update = () => queueScrollbar(read);
@@ -51,12 +55,12 @@ export function addScrollbar(panel, frame, content = panel) {
     e.preventDefault();
   });
   thumb.addEventListener("pointermove", (e) => {
-    if (e.pointerType === "mouse" && origin && thumb.hasPointerCapture(e.pointerId))
+    if (e.pointerType === "mouse" && origin && thumb.hasPointerCapture(e.pointerId) && panel.clientHeight>thumb.offsetHeight)
       panel.scrollTop =
         origin[1] +
         ((e.clientY - origin[0]) * (panel.scrollHeight - panel.clientHeight)) /
           (panel.clientHeight - thumb.offsetHeight);
   });
-  thumb.disposeScrollbar=()=>{resize.disconnect();mutation.disconnect();panel.removeEventListener('scroll',update);dirtyScrollbars.delete(read);};
+  thumb.disposeScrollbar=()=>{resize.disconnect();mutation.disconnect();panel.removeEventListener('scroll',update);dirtyScrollbars.delete(read);thumb.remove();};
   return thumb;
 }

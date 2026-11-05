@@ -1,6 +1,7 @@
 import {liveCopy,bindCopy} from './localization.js';
 import {createDialogHost,hasModalDialog} from './dialog-host.js';
 import {orderTabChildren} from './tab-order.js';
+import {addScrollbar} from './scrollbars.js';
 export function createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy,showMenu}) {
   const copy=liveCopy(app,'catalog').native_copy.header,common=liveCopy(app,'bootstrap_view').common;
   const root=element('div','drawing-title'),plain=document.querySelector('#document-title');
@@ -129,7 +130,7 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
     const dialog=element('dialog','drawing-list document-dialog');bindCopy(dialog,()=>copy.drawings,"ariaLabel");popup=dialog;
     const heading=element('header','dialog-header'),done=button(()=>common.done,dismiss);heading.append(element('h2','',()=>copy.drawings),done);dialog.append(heading);
     const host=createDialogHost({app,dialog,header:heading,cancel:done,primary:done,icon,copy:common,onCancel:dismiss});popupHost=host;
-    const list=element('div','drawing-list-rows');list.setAttribute('role','list');dialog.append(list);
+    const list=element('div','drawing-list-rows');list.setAttribute('role','list');dialog.append(list);const scroll=addScrollbar(list,dialog);
     for(const tab of model.tabs){
       const row=element('div','drawing-list-row');row.dataset.drawingId=tab.id;row.setAttribute('role','listitem');
       const grip=button('',()=>{});grip.className='drawing-grip';bindCopy(grip,()=>app.native_caption({type:'reorder',title:model.tabs.find(t=>same(t.id,tab.id))?.title??tab.title}),'ariaLabel');grip.append(icon('grip'));
@@ -139,7 +140,7 @@ export function createDrawingTabs({app,element,button,icon,applyChange,select,cl
     }
     const footer=element('footer');
     for(const [redo,label,enabled] of [[false,()=>copy.undo_order,model.can_undo],[true,()=>copy.redo_order,model.can_redo]]){const b=button(label,()=>{applyChange(app.document_order_history(redo));dismiss();showSelector(focusId);});b.disabled=!enabled;footer.append(b);}
-    dialog.append(footer);dialog.addEventListener('close',()=>{if(popup===dialog){popup=null;popupHost=null;}host.dispose();dialog.remove();dismissRowMenu();cancelDrag();});
+    dialog.append(footer);dialog.addEventListener('close',()=>{if(popup===dialog){popup=null;popupHost=null;}host.dispose();scroll.disposeScrollbar();dialog.remove();dismissRowMenu();cancelDrag();});
     document.body.append(dialog);host.present(model.dialog);
     [...list.children].find(n=>same(n.dataset.drawingId,focusId??model.selected))?.querySelector('.drawing-list-pick').focus();
   }

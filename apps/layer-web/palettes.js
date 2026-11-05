@@ -1,6 +1,7 @@
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
 import {liveCopy,bindCopy} from './localization.js';
+import {addScrollbar} from './scrollbars.js';
 const SLOP = 8;
 const plain = (_, value) => typeof value === "bigint" ? Number(value) : value;
 const css = rgba => `rgba(${rgba.slice(0, 3).map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(",")},${rgba[3] ?? 1})`;
@@ -92,7 +93,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     const divider = () => element("hr", "palette-divider");
     const history = element("div", "palette-grid palette-history"), scroll = element("div", "palette-scroll"), grid = element("div", "palette-grid palette-swatches");
     bindCopy(history,()=>copy.history_help,"title");
-    scroll.append(grid); normal.append(history, divider(), panelFrame(scroll));
+    const scrollFrame=panelFrame(scroll,false);scroll.append(grid);normal.append(history,divider(),scrollFrame);const swatchesScroll=addScrollbar(scroll,scrollFrame,grid);
     const expanded = element("div", "palette-grid palette-expanded palette-cover"), chooser = element("div", "palette-chooser palette-cover");
     expanded.hidden = chooser.hidden = true;
     const search = element("input", "palette-entry palette-search"); search.type = "search"; bindCopy(search,()=>copy.find,"placeholder");
@@ -106,7 +107,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     const searchRow = element("div", "palette-search-row"); searchRow.append(search, more);
     const list = element("div", "palette-list"), empty = element("p", "palette-no-results", () => copy.no_matches);
     list.setAttribute("role", "listbox"); bindCopy(list,()=>copy.title,"ariaLabel"); empty.hidden = true;
-    const results = panelFrame(list); results.append(empty); chooser.append(searchRow, results);
+    const results=panelFrame(list,false);results.append(empty);chooser.append(searchRow,results);const libraryScroll=addScrollbar(list,results);
     chooser.addEventListener("mousedown", e => { if (e.target.closest("button")) e.preventDefault(); });
     body.append(normal, expanded, chooser);
     const selector = button("", e => browse(chooser.hidden, !["touch", "pen"].includes(e.pointerType)), "palette-selector"), selectorLabel = element("span", "palette-selector-label");
@@ -439,6 +440,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       arrange:layoutGrids,
       refresh() { render(false); },
       dispose() {
+        swatchesScroll.disposeScrollbar();libraryScroll.disposeScrollbar();
         finish(true); instances.delete(instance); resize.disconnect(); cancelAnimationFrame(layoutFrame);
         window.removeEventListener("keydown", escape, true); window.removeEventListener("blur", blur);
       },

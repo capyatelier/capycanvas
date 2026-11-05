@@ -3,6 +3,7 @@ import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
+import {addScrollbar} from './scrollbars.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
 export function createPreferences({ onKey, app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
@@ -139,9 +140,10 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   const searchResults = element("div", "preferences-search-results");
   const empty = element("p", "preferences-empty");
   sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
+  addScrollbar(searchResults,sidebar);
   const pages = element("div", "preferences-pages");
   const error = element("span", "preferences-error"); error.setAttribute("role", "status");
-  content.append(header, error, panelFrame(pages));
+  const pagesFrame=panelFrame(pages,false);addScrollbar(pages,pagesFrame);content.append(header,error,pagesFrame);
   root.append(sidebar, content); dialog.append(root);
   let layout,minimumKey,minimum;
   function minWidth(node) {

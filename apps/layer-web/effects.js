@@ -7,6 +7,7 @@ import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
 import {gradientEditor} from './gradient.js';
 import {chooseTexture,paperThumbnail} from './paper-picker.js';
+import {addScrollbar} from './scrollbars.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
 export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dropdown,dispatch,numberField,contentChanged,splitPicker=false,message,asset}) {
   const copy=liveCopy(app,"catalog").native_copy.color,common=liveCopy(app,"bootstrap_view").common;
@@ -22,6 +23,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   const types=element("div","filter-types");types.dataset.control="filter_types";
   const typeList=element("div","filter-type-list"),cancel=button(()=>common.cancel,()=>send({op:"cancel_filter"}),"cancel-filter");
   types.append(typeList,cancel);panels.get("filter_types")?.append(types);
+  const pickerScroll=addScrollbar(list,adjustments),typeScroll=addScrollbar(typeList,types);
   pickerHeader.hidden=splitPicker;
   const rows=new Map();let visibleIds=null,catalogRevision=null,pickerLanguage;
   function refreshPicker(){
@@ -235,5 +237,5 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     body.classList.toggle("disabled",!view.enabled);
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled||!!c.disabled);field?.node.classList.toggle("disabled",view.enabled&&!!c.disabled);}
   }
-  return {refresh,refreshHistograms(){if(state().layer_properties.histogram)tonal.refresh();for(const field of fields.values())field.refreshHistogram?.();},dispose(){tonal.dispose();groupMenus.forEach(menu=>menu.remove());for(const field of fields.values())field.dispose?.();disposePreviews();clearInterval(statsTimer);disposeRecording();}};
+  return {refresh,refreshHistograms(){if(state().layer_properties.histogram)tonal.refresh();for(const field of fields.values())field.refreshHistogram?.();},dispose(){pickerScroll.disposeScrollbar();typeScroll.disposeScrollbar();tonal.dispose();groupMenus.forEach(menu=>menu.remove());for(const field of fields.values())field.dispose?.();disposePreviews();clearInterval(statsTimer);disposeRecording();}};
 }

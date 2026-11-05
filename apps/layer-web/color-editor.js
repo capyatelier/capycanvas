@@ -1,5 +1,6 @@
 import {createDialogHost,hasModalDialog} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
+import {addScrollbar} from './scrollbars.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {createRasterWorker} from './raster-worker-client.js';
 import {wheelPainter,wheelPicker,hueStopCache,wheelHit,rgba,json} from './color-wheel.js';
@@ -290,6 +291,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     const cancel = button(() => common.cancel, () => shell.hide(), 'color-cancel dialog-button');
     const footer=kit.footer({start:[footerStack,more],actions:[cancel,apply],separator:true});
     const page = element('div', 'color-editor-page'); page.append(form.body, sheet);
+    const formScroll=addScrollbar(form.body,page),sheetScroll=addScrollbar(sheetBody,sheet);
     const content = element('div', 'dialog-content'); content.append(page, footer);
     const header=element('header','dialog-header');header.append(form.title);root.append(header,content); document.body.append(root);
     const shell=createDialogHost({app,dialog:root,header,cancel,primary:apply,icon,copy:common,onCancel:()=>shell.hide()});
@@ -369,7 +371,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     bindCopy(root, () => app.language_tag(), 'language');
     root.addEventListener('close', () => {
       if (picking) return;
-      closed = true; editors.delete(refresh);shell.dispose(); form.dispose(); strip.remove(); root.remove();
+      closed = true; editors.delete(refresh);shell.dispose();formScroll.disposeScrollbar();sheetScroll.disposeScrollbar();form.dispose(); strip.remove(); root.remove();
       if (json(form.editor().picker.editor) !== memory) dispatch({type:'color', action:{op:'editor_memory', memory:form.editor().picker.editor}});
       resolve(result);
     });

@@ -1,4 +1,5 @@
 import {createDialogHost} from './dialog-host.js';
+import {addScrollbar} from './scrollbars.js';
 import { bindCopy } from "./localization.js";
 // DOM focus/IME and modal capture; Rust owns search, selection and execution.
 export function createCommandBar({app,element, button, icon, dispatch, style, canvas, layoutChanged, nativeCopy}) {
@@ -30,6 +31,7 @@ export function createCommandBar({app,element, button, icon, dispatch, style, ca
   detail.setAttribute("aria-live", "polite");
   input.setAttribute("aria-describedby", detail.id);
   dialog.append(header, list, empty, detail); document.body.append(dialog);
+  addScrollbar(list,dialog);
   const send = action => dispatch({type:"command_search", action});
   const shell=createDialogHost({app,dialog,header,cancel:close,primary:close,icon,copy:app.bootstrap_view().common,onCancel:()=>send({type:'close'}),
     onDismiss:()=>send({type:'dismiss',search_focused:document.activeElement===input,text:input.value}),

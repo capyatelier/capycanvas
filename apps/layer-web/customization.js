@@ -6,6 +6,7 @@ import {liveCopy} from './localization.js';
 import {middleEllipsis} from './text-layout.js';
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
+import {addScrollbar} from './scrollbars.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
@@ -423,7 +424,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const searchRow = element("div", "tool-search"); searchRow.append(icon("search"), search);
   const choices = element("div", "tool-choices"), error = element("p", "preferences-error"), count = element("span", "tool-count");
   const catalogRoot=element('div','tool-picker-catalog');catalogRoot.style.gap=`${catalog.command_search_style.gap}px`;
-  catalogRoot.append(searchRow,panelFrame(choices));
+  const choicesFrame=panelFrame(choices,false);addScrollbar(choices,choicesFrame);catalogRoot.append(searchRow,choicesFrame);
   pickerBody.append(nameGroup.section,catalogRoot,count,error); picker.append(pickerHeader, pickerBody); workspace.append(picker);
   const pickerHost=createDialogHost({app,dialog:picker,header:pickerHeader,cancel:pickerCancel,primary:confirm,icon,copy:common,onCancel:cancel,
     search,clearSearch:()=>send({type:'picker_search',query:''})});
@@ -468,6 +469,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   managerDelete.id = "delete-managed-toolbar";
   managerScroll.append(managerList, managerEmpty);
   managerBody.append(managerDescription, managerScroll, managerDelete);
+  addScrollbar(managerScroll,managerBody);
   manager.append(managerHeader, managerBody); workspace.append(manager);
   const managerHost=createDialogHost({app,dialog:manager,header:managerHeader,cancel:managerClose,primary:managerClose,icon,copy:common,onCancel:closeManager});
   function refreshManager() {

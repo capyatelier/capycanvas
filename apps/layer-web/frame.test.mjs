@@ -434,8 +434,10 @@ test('panel frames keep one scroll owner through body overflow, scroll movement 
     setPointerCapture(id){this.captured=id;}
     hasPointerCapture(id){return this.captured===id;}
     get offsetHeight(){return parseFloat(this.style.height)||0;}
+    getBoundingClientRect(){return{top:this.rectTop??0,right:this.rectRight??100};}
   }
   const context={document:{createElement:()=>new Node()},
+    getComputedStyle:node=>({overflowY:node.overflowY??'auto'}),
     element:(_,className)=>new Node(className),
     requestAnimationFrame(callback){callbacks.push(callback);return callbacks.length;},
     ResizeObserver:class{constructor(callback){this.callback=callback;this.nodes=[];resizes.push(this);}observe(node){this.nodes.push(node);}},
@@ -461,7 +463,27 @@ test('panel frames keep one scroll owner through body overflow, scroll movement 
   viewport.clientHeight=490;viewport.extent=490;viewport.scrollTop=viewport.scrollTop;panel.clientHeight=490;resizes[0].callback();flush();
   assert.equal(thumb.hidden,true,'after scrolling, fitted content cannot retain overflow from the scrollbar itself');
   assert.equal(viewport.scrollHeight,viewport.clientHeight,'chrome contributes no extent to the content viewport');
+  frame.rectTop=10;frame.rectRight=250;viewport.rectTop=57;viewport.rectRight=238;
+  viewport.clientHeight=100;viewport.extent=300;viewport.scrollTop=200;resizes[0].callback();flush();
+  assert.ok(Math.abs(parseFloat(thumb.style.top)+parseFloat(thumb.style.height)-147)<1e-8,'the overlay track ends at the body, above a sibling footer');
+  assert.equal(thumb.style.right,'12px','the indicator follows the body inset rather than the full dialog edge');
+  viewport.clientHeight=12;resizes[0].callback();flush();assert.equal(thumb.style.height,'12px','a tiny body cannot draw its indicator into the footer');
+  viewport.overflowY='visible';resizes[0].callback();flush();assert.equal(thumb.hidden,true,'shared drawer scrolling does not leave a second column indicator');
   const excluded=context.panelFrame(new Node(),false);assert.equal(excluded.children.length,1);assert.ok(!excluded.classes.has('scrollable'),'dedicated layer and toolbar scroll policies remain excluded');
+});
+
+test('dialog and drawer scrollers cannot expose classic browser scrollbars',()=>{
+  const css=readFileSync(new URL('style.css',import.meta.url),'utf8'),rules=[...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  const body=selector=>rules.filter(rule=>rule[1].trim()===selector).at(-1)?.[2]??'';
+  const scope=rules.find(rule=>rule[1].includes('dialog *')&&rule[1].includes('.content-drawer *'));
+  assert.ok(scope,'all dialog and drawer descendants are covered');assert.match(scope[2],/scrollbar-width:\s*none\b/);
+  assert.doesNotMatch(css,/scrollbar-width:\s*(auto|thin)\b/);
+  assert.doesNotMatch(body('.scroll-thumb'),/min-height:\s*[1-9]/,'CSS cannot enlarge a thumb past its measured body');
+  assert.match(body('dialog'),/overflow:\s*hidden\b/);
+  assert.match(body('dialog[open]'),/display:\s*flex\b/);
+  assert.match(body('.dialog-content'),/overflow:\s*hidden\b/);
+  assert.match(body('.dialog-page > .dialog-content'),/overflow:\s*hidden\b/);
+  assert.doesNotMatch(body('.dialog-page > form'),/overflow:\s*(auto|scroll)\b/);
 });
 
 test('drawer plans follow exact native tile facts and retire missing sources',()=>{

@@ -2,6 +2,7 @@ import {createMenu} from './menu.js';
 import {liveCopy} from "./localization.js";
 import {createLayerInspector} from "./layer-inspector.js";
 import {orderTabChildren} from './tab-order.js';
+import {addScrollbar} from './scrollbars.js';
 // Shared dock projections. The browser supplies widgets and measured body sizes.
 function squircleCorner([cx,cy],[sx,sy],[ex,ey]) {
   return Array.from({length:24},(_,i)=>{
@@ -206,7 +207,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     path.setAttribute("transform",`matrix(${c.transform.join(" ")})`);if(!path.parentNode)node.append(path);
     return node;
   }
-  function dispose(record) {record.menu?.dispose();releaseTabs(record.root);customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
+  function dispose(record) {record.menu?.dispose();for(const scroll of record.scrollbars??[])scroll.disposeScrollbar();releaseTabs(record.root);customization.discardFields(record.root);for(const body of record.bodies)for(const child of body.children)child.disposePanel?.();record.bridge?.remove();record.shadow.remove();record.root.remove();}
   function refresh() {
     if(!resolved)return;
     const live=new Set();
@@ -233,7 +234,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         // from the old body leaves the new anchor disconnected during the move.
         const switching=record&&JSON.stringify(record.drawer.anchor)!==JSON.stringify(drawer.anchor);
         const from=record?.placement;
-        if(record){for(const body of record.bodies){customization.discardFields(body);for(const child of body.children)child.disposePanel?.();}record.contents.remove();}
+        if(record){for(const scroll of record.scrollbars??[])scroll.disposeScrollbar();for(const body of record.bodies){customization.discardFields(body);for(const child of body.children)child.disposePanel?.();}record.contents.remove();}
         const shadow=record?.shadow??element("div","drawer-shadow");shadow.setAttribute("aria-hidden","true");
         const root=record?.root??element("section","content-drawer");
         if(!record){workspace.append(shadow,root);root.dataset.drawer=String(id);root.setAttribute("aria-label","Panel drawer");}
@@ -254,7 +255,8 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
           }
           contents.append(body);return body;
         });
-        record=Object.assign(record??{},{key,root,contents,shadow,bodies,column,drawer,inspector,from,started:null,switching:!!switching,placement:from});drawers.set(id,record);
+        const scrollbars=[addScrollbar(contents,root),...bodies.map(body=>addScrollbar(body,contents))];
+        record=Object.assign(record??{},{key,root,contents,shadow,bodies,scrollbars,column,drawer,inspector,from,started:null,switching:!!switching,placement:from});drawers.set(id,record);
       }
       record.drawer=drawer;refreshSource(record);record.measure=null;
       record.tabStyle=drawer.tabs?app.group_tab_style(drawer.tabs.group):null;

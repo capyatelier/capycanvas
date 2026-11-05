@@ -24,6 +24,22 @@ export const phoneAuditMatrix = [
 
 export const dialogAuditMatrix=[600,700,800,1024].flatMap(width=>['light','dark'].map(theme=>({viewport:[width,900],text_pt:11,text_scale:1,dpr:1,theme})));
 
+export function dialogScrollerIssues(root=document) {
+  const issues=[],owners=[...root.querySelectorAll('dialog[open],.content-drawer')];
+  for(const owner of owners){
+    const chrome=[...owner.querySelectorAll('[data-dialog-part="header"],footer')];
+    for(const node of [owner,...owner.querySelectorAll('*')]){
+      if(!node.getClientRects().length)continue;
+      const style=getComputedStyle(node);if(!/auto|scroll/.test(style.overflowY))continue;
+      const selector=node.id||node.className||node.tagName;
+      if(style.scrollbarWidth!=='none')issues.push({selector,kind:'classic'});
+      if(chrome.some(part=>node.contains(part)))issues.push({selector,kind:'scrolling-chrome'});
+      if(node.scrollHeight>node.clientHeight+1&&!node.classList.contains('overlay-scroll'))issues.push({selector,kind:'missing-overlay'});
+    }
+  }
+  return issues;
+}
+
 export const auditModes={
   audit:{matrix:phoneAuditMatrix},frame:{matrix:phoneAuditMatrix},drawers:{matrix:phoneAuditMatrix},
   menus:{matrix:phoneAuditMatrix},input:{matrix:phoneAuditMatrix,mobile:true},customize:{matrix:phoneAuditMatrix},
@@ -615,6 +631,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     if(mode==='drawers')metadata.drawer=await evaluate(`(()=>{const s=layerApp.state(),d=s.customization.drawer;if(!d)return null;return JSON.parse(JSON.stringify({model:d,measure:layerApp.app.drawer_measure({viewport:[innerWidth,innerHeight],column:null,tiles:[]}),tools:d.columns.flat().filter(p=>['brushes','brush_sets','sculpt_sets','tools'].includes(p)).map(panel=>({panel,view:layerApp.app.tool_panel(panel,d.anchor)}))},(_,value)=>typeof value==='bigint'?String(value):value));})()`);
     assert.ok(Math.abs(metadata.font_px-test.text_pt*4/3)<.05,`Measured ${metadata.font_px}px does not match ${test.text_pt}pt`);
     const issues=[];
+    assert.deepEqual(await evaluate(`(${dialogScrollerIssues.toString()})()`),[],`${state}: dialog/drawer scrolling keeps overlay indicators and fixed chrome`);
     if(requested_page){
       assert.ok(metadata.preferences,'Requested Settings page must have a live model');
       if(requested_page==='list'){

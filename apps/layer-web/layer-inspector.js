@@ -1,3 +1,4 @@
+import {addScrollbar} from './scrollbars.js';
 export function createLayerInspector({app, state, workspace, element, button, icon, contentPanel, column=null, toggle, invalidate}) {
   const root=element("div","layer-inspector"),stage=element("div","layer-properties-pages");
   const layers=contentPanel("layers"),properties=contentPanel("properties"),label=element("span","layer-properties-label"),summary=element("span","layer-properties-summary");
@@ -7,12 +8,13 @@ export function createLayerInspector({app, state, workspace, element, button, ic
   const chevron=slot("chevron-down");footer.append(slot("properties"),text,chevron);
   const footerRow=element("div","layer-inspector-footer"),layerFooter=layers.querySelector('.layer-footer'),add=layerFooter.querySelector('[data-footer-button="new_layer"]');
   footer.dataset.layerProperties="";stage.append(layers,properties);footerRow.append(footer);root.append(stage,footerRow);
+  const scroll=addScrollbar(properties,stage);
   let open=false,position=0,from=0,started=0,anchor,target,measurement,measurementDirty=true,layoutKey;
   const rows=layers.querySelector(".layer-rows");
   const observer=new ResizeObserver(()=>{measurementDirty=true;invalidate();});
   for(const child of [layers.querySelector(".layer-header"),layers.querySelector(".layer-footer"),properties.firstElementChild])if(child)observer.observe(child);
   root.refreshPanel=()=>{layers.refreshPanel();properties.refreshPanel();measurementDirty=true;layoutKey=null;};
-  root.disposePanel=()=>{observer.disconnect();layers.disposePanel?.();properties.disposePanel?.();};
+  root.disposePanel=()=>{observer.disconnect();scroll.disposeScrollbar();layers.disposePanel?.();properties.disposePanel?.();};
   return {root,refresh(next,full=true,disclosure) {
     root.classList.toggle('simple-layer-inspector',!full);
     if(!full&&add.parentNode!==footerRow){footerRow.prepend(add);add.style.display='';}

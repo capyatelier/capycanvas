@@ -347,10 +347,12 @@ dialog .dropdown { --dropdown-height:34px; --dropdown-fill:var(--widget-fill); c
 .panel-frame.body-scroll > .panel-viewport > .panel { min-height: var(--panel-min-body-height); }
 .panel { overflow: hidden auto; width: 100%; height: 100%; padding: var(--panel-inset); scrollbar-width: none; font-size: var(--ui-text-size); }
 .panel button, .renderer-stats > button { min-height: var(--panel-control-height); padding: 0 var(--panel-field-padding); line-height: 20px; }
-.scroll-thumb { position: absolute; right: 0; width: 8px; min-height: 28px; padding: 2px; cursor: default; touch-action: none; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 180ms; }
+.scroll-thumb { position: absolute; right: 0; width: 8px; padding: 2px; cursor: default; touch-action: none; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 180ms; }
+:where(.overlay-scroll-frame:not(dialog)) { position:relative; }
+:where(dialog, dialog *, .content-drawer, .content-drawer *), .overlay-scroll { scrollbar-width:none; }
 :root[data-mouse] .scroll-thumb { visibility: visible; pointer-events: auto; }
 .scroll-thumb::after { content: ""; display: block; height: 100%; border-radius: 8px; background: color-mix(in srgb, var(--text) 35%, transparent); }
-:root[data-mouse] :is(.panel-frame, .layer-list, .texture-dialog .dialog-content,.menu-scroll-frame):is(:hover, :focus-within) > .scroll-thumb { opacity: 1; }
+:root[data-mouse] .overlay-scroll-frame:is(:hover,:focus-within) > .scroll-thumb { opacity:1; }
 :root[data-mouse] .scroll-thumb:is(:hover,:active,[data-pressed]) { padding: 1px; }
 .panel.tile-panel { padding: 0; position: relative; overflow: clip; touch-action: none; }
 .toolbar-controls { position: relative; width: 100%; height: 100%; }
@@ -553,7 +555,8 @@ button.layer-row { justify-content: center; gap: var(--panel-group-spacing); fon
 .refine-actions .suggested-action { background: var(--accent); color: var(--accent-foreground); }
 :where(:root:not([data-touch])) .refine-actions button:not(.suggested-action):hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
 :where(:root:not([data-touch])) .refine-actions .suggested-action:hover { background: color-mix(in srgb, white 10%, var(--accent)); }
-dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: fit-content; max-width: none; max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
+dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: fit-content; max-width: none; max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; overflow:hidden; }
+dialog[open] { display:flex; flex-direction:column; }
 #settings { width: 1000px; height: 744px; }
 dialog::backdrop { background: #0008; }
 body[data-theme="light"] dialog::backdrop { background: #0002; }
@@ -771,7 +774,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .utility-device { color:var(--secondary); line-height:18px; overflow-wrap:anywhere; }
 .utility-close { flex:none; width:24px; height:24px; min-height:24px; padding:0; display:grid; place-items:center; border-radius:var(--control-radius); }
 .utility-close svg { width:16px; height:16px; }
-.utility-body { min-height:0; overflow:auto; padding:0 max(0px,calc(16px - var(--utility-scrollbar,0px))) 0 16px; display:flex; flex-direction:column; gap:12px; }
+.utility-body { min-height:0; overflow:auto; padding:0 16px; display:flex; flex-direction:column; gap:12px; }
 .utility-sensitivity { display:flex; gap:8px; }
 .utility-sensitivity > button { flex:1; }
 .utility-panel .utility-actions { display:flex; align-items:center; gap:8px; padding:16px; border:0; flex:none; }
@@ -1061,7 +1064,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 @media(prefers-reduced-motion:reduce) { .header-dragging .header-item { transition:none; } }
 
 .picker-dialog { width:720px; max-height:calc(100dvh - 24px); padding:0; border-radius:calc(20px * var(--squircle-scale)); box-sizing:border-box; overflow:hidden; }
-.dialog-content { display:flex; flex-direction:column; max-height:calc(100dvh - 24px); }
+.dialog-content { display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
 .dialog-page { padding:20px; overflow:auto; }
 .dialog-title { margin:0 0 2px; font-size:1.05em; line-height:1.3; text-align:center; outline:0; }
 .new-drawing-gap { flex:1; }
@@ -1083,7 +1086,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .property-texture { display:flex; align-items:center; gap:var(--panel-group-spacing); min-height:var(--panel-control-height); padding:0 var(--panel-field-padding); background:var(--input); text-align:start; }
 .property-texture-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 /* Tagged color forms use the same shared numeric editor as native hosts. */
-.color-editor-page { position:relative; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.color-editor-page { position:relative; display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden; }
 .color-editor-body { display:grid; grid-template-columns:232px minmax(0,1fr); grid-template-rows:auto 1fr; grid-template-areas:"left head" "left values"; align-content:start; gap:14px 24px; }
 .color-editor-body:has(> .color-editor-title) { grid-template-rows:auto auto 1fr; grid-template-areas:"title title" "left head" "left values"; }
 .color-editor-body > .color-editor-title { grid-area:title; }
@@ -1176,7 +1179,6 @@ body[data-theme="light"] #header { text-shadow:none; }
 .new-drawing-main { display:flex; flex-direction:column; height:100%; min-height:0; }
 .new-drawing-scroll { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
 .new-drawing-scroll > :first-child { flex:1; min-height:0; overflow:auto; scrollbar-width:none; }
-:root[data-mouse] .new-drawing-scroll:is(:hover,:focus-within) > .scroll-thumb { opacity:1; }
 .new-drawing-page { display:flex; flex-direction:column; gap:14px; padding:18px 20px 16px; }
 .new-drawing-body { display:flex; align-items:flex-start; gap:24px; }
 .new-drawing-left { flex:none; display:flex; flex-direction:column; align-items:center; gap:8px; }
@@ -1853,13 +1855,11 @@ dialog.dialog-page::backdrop { background:transparent; backdrop-filter:none; }
 .dialog-page .page-action-start { left:6px; padding:5px; }
 .dialog-page .page-action-end { right:6px; }
 .dialog-page .projected-actions { flex:none; min-height:0; margin:0; padding:0; border:0; }
-.dialog-page > .dialog-content { flex:1; min-width:0; min-height:0; overflow:auto; }
+.dialog-page > .dialog-content { flex:1; min-width:0; min-height:0; overflow:hidden; }
 .tool-choice[aria-disabled="true"] { opacity:.5; }
 .dialog-page > .tool-picker-body { flex:1; min-height:0; min-width:0; }
 #phone-frame[data-contact="held"] :is(.phone-target,.phone-tool,.phone-bar) { cursor:grab; }
 #phone-frame[data-contact="dragging"] :is(.phone-target,.phone-tool,.phone-bar) { cursor:grabbing; }
-
-.dialog-page > form { display:flex; flex:1; flex-direction:column; min-height:0; overflow:auto; }
 
 .workspace-manager.dialog-page[data-toolbar=false] .workspace-panes { margin-bottom:28px; }
 dialog[role=alertdialog] { width:max-content; min-width:300px; max-width:372px; padding:32px 24px 24px; }
@@ -1912,7 +1912,6 @@ body[data-theme="light"] .dialog-header[data-header-style="raised"] { box-shadow
 .profile-library .preference-body { min-height:120px; }
 .workspace-sidebar { position:relative; }
 .workspace-list { scrollbar-width:none; }
-:root[data-mouse] .workspace-sidebar:is(:hover,:focus-within) > .scroll-thumb { opacity:1; }
 .workspace-manager[data-page="history"] .workspace-panes { margin:0 18px 18px; }
 .workspace-manager[data-page="history"] .workspace-list { margin:0; background:var(--settings); }
 .workspace-manager[data-page="history"] .workspace-row { padding-inline:14px; }
@@ -1944,7 +1943,6 @@ body[data-theme="light"] .dialog-header[data-header-style="raised"] { box-shadow
 .preference-footer .suggested-action { background:var(--accent); color:var(--accent-foreground); }
 .preference-footer button:disabled { opacity:.5; }
 .preference-footer.projected-actions:not(:has(> :not([hidden]))) { display:none; }
-:root[data-mouse] .preference-body:is(:hover,:focus-within) > .scroll-thumb { opacity:1; }
 .preference-number { --panel-control-height:34px; }
 .preference-number .number-header { min-height:34px; }
 .preference-content .preference-number .number-spin { background:var(--widget-fill); border-radius:9px; }

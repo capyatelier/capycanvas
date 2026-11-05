@@ -79,7 +79,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     let result=null,shell,body;root.addEventListener("close",()=>{shell.dispose();body?.dispose();openDialogs.delete(form);root.remove();resolve(result);},{once:true});
     const finish=value=>{result=value;shell.hide();};
     const controls=build(form,finish,{header,caption,layout:()=>shell?.layout(),dismiss:()=>shell?.dismiss()});
-    if(controls.pageBody){body=kit.body(form);root.append(body.root);if(controls.footer)root.append(controls.footer);}
+    const footer=controls.footer??form.querySelector('footer');body=kit.body(form);root.append(body.root);if(footer)root.append(footer);
     shell=createDialogHost({app,dialog:root,header,icon,copy:common,onCancel:()=>finish(null),...controls});shell.present(intent);
   });
   const cancel=(footer,finish)=>{const control=button(()=>common.cancel,()=>finish(null));footer.append(control);return control;};
@@ -253,7 +253,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
             const row=kit.row({title:()=>view[section][index][0],description:()=>view[section][index][1]});row.text.classList.add('settings-info');group.list.append(row.line);
           }form.append(group.section);}
           form.localize=()=>{view=app.document_properties_copy(info);};
-          const done=button(()=>view.done,()=>finish(false)),proof=button(()=>view.proof,()=>finish(true),'document-proof'),footer=kit.footer({start:[proof],actions:[done]});form.append(footer);return {cancel:done,primary:done,pageBody:true,footer};
+          const done=button(()=>view.done,()=>finish(false)),proof=button(()=>view.proof,()=>finish(true),'document-proof'),footer=kit.footer({start:[proof],actions:[done]});form.append(footer);return {cancel:done,primary:done,footer};
         },view.dialog);
         applyChange(app.finish_document(id,true));
         if(appearance)proof.run(id);

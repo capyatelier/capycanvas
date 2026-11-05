@@ -86,7 +86,7 @@ export async function chooseExport({app,dialog,element,button,icon,dropdown,numb
         const footer=kit.footer({actions:[cancel,save]});form.append(group.section,footer);
         const validate=()=>{save.disabled=!app.export_preset_name_valid(presetName.value);};presetName.oninput=validate;validate();
         form.onsubmit=event=>{event.preventDefault();if(!save.disabled)save.click();};
-        return {cancel,primary:save,pageBody:true,footer};
+        return {cancel,primary:save,footer};
       },library.dialog);
       if(name!=null){presetName.value=name;presetAction('save');}
     });
@@ -177,7 +177,7 @@ export function chooseSourceProfile({app,dialog,element,button,icon,dropdown}) {
     let failure=null;const error=element("p","error-message"),fail=(value,profile)=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,profile));};form.append(error);
     form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;append(imported);fail(null);}catch(e){fail(e,true);}}));
     form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon});if(!imported)return;append(imported);}catch(e){fail(e,true);}}));
-    const cancel=button(()=>copy.common.cancel,()=>finish(null)),use=button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"),footer=kit.footer({actions:[cancel,use]});form.append(footer);return {cancel,primary:use,pageBody:true,footer};
+    const cancel=button(()=>copy.common.cancel,()=>finish(null)),use=button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"),footer=kit.footer({actions:[cancel,use]});form.append(footer);return {cancel,primary:use,footer};
   },copy.dialog);
 }
 
