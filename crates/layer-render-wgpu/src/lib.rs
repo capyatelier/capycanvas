@@ -5364,8 +5364,8 @@ impl WgpuRasterizer {
             let published=match result {
                 Err(GpuRasterError::DeferredObjectWork)=> {
                     self.object_deferred=true;
-                    self.document_damage.clear();
-                    self.document_damage.push(PixelRect::full(packet.document_extent));
+                    self.document_damage = self.scale_display.as_ref().and_then(scene::scale::Cache::unfinished)
+                        .map_or_else(|| vec![PixelRect::full(packet.document_extent)], <[_]>::to_vec);
                     self.uploads.finish(&encoder);
                     self.telemetry.phase_end(2,encoder.diagnostics());self.telemetry.end(encoder.diagnostics());
                     self.metrics.command_passes+=encoder.pass_count();

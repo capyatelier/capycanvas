@@ -547,3 +547,107 @@ fn ample_budget_keeps_the_parent_cache_ceilings_for_overlapping_photos() {
     assert_eq!(r.memory_limit(Kind::DecodedSamples), SOURCE_POOL_BYTES);
     assert_eq!(r.ram_limit(Kind::DecodedSamples), DECODED_SAMPLE_BYTES);
 }
+
+#[test]
+fn a_tablet_budget_below_the_photo_keeps_publishing_strokes_and_their_ink() {
+    use crate::test_support::pen;
+    use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase, SampleFlags, ViewTransform, input_queue};
+    const EXTENT: [u32; 2] = [6000, 4000];
+    const SIZE: [u32; 2] = [2560, 1600];
+    const FRAMES: u32 = 120;
+    let budget = MemoryBudget::with_facts(MemoryFacts { total_bytes: Some(5648 << 20), available_bytes: Some(2183 << 20), tablet: true, ..Default::default() });
+    let mut document = layer_core::Document::new(layer_core::PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Photo".into(), paper: "Paper".into() });
+    let layer_core::SourceTarget::Paint(photo) = document.working.target.unwrap() else { panic!() };
+    let source = crate::test_support::depth_source(EXTENT, layer_core::color::SampleDepth::U8, layer_core::color::RgbSpace::Srgb, 128 << 20,
+        |x, y| [x as f32 / EXTENT[0] as f32, y as f32 / EXTENT[1] as f32, ((x ^ y) & 63) as f32 / 255. + 0.5, 1.]);
+    document.artwork.paint.get_mut(photo).unwrap().base = Some(layer_core::authored::PaintBase::new(source.into()));
+    let (owner, target) = crate::test_support::add_paint(&mut document.artwork, "Ink", EXTENT);
+    let stack = document.artwork.compositions.get(document.artwork.root).unwrap().result;
+    let entries = &mut document.artwork.stacks.get_mut(stack).unwrap().entries;
+    entries.retain(|h| *h != owner);
+    entries.insert(0, owner);
+    let paper = *entries.last().unwrap();
+    document.artwork.occurrences.get_mut(paper).unwrap().visible = false;
+    let mut document = layer_core::Document::from_artwork(document.artwork).unwrap();
+    document.working.target = Some(target);
+    document.working.occurrence = Some(owner);
+    let mut brush = layer_core::default_brush(layer_core::CONTACT_BRUSH_PRESETS.into_iter().find(|p| *p as u32 == 2).unwrap());
+    brush.diameter = 16.;
+    let mut gpu = renderer_in_budget(document.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget).unwrap();
+    gpu.prepare_startup(&document, &brush, false).unwrap();
+    gpu.finish_startup_catalog();
+    crate::test_support::wait_startup(&mut gpu, std::time::Instant::now() + std::time::Duration::from_secs(60), |progress| progress.complete, format_args!("startup"));
+    let (mut input, consumer) = input_queue(128);
+    let scale = (SIZE[0] as f32 / EXTENT[0] as f32).min(SIZE[1] as f32 / EXTENT[1] as f32);
+    let [tx, ty] = [0, 1].map(|axis| (SIZE[axis] as f32 - EXTENT[axis] as f32 * scale) * 0.5);
+    let view = layer_render::ViewState { width_px: SIZE[0], height_px: SIZE[1], document_to_surface: [scale, 0., 0., scale, tx, ty] };
+    let mut engine = CanvasEngine::new(gpu, document, consumer, view,
+        ViewTransform { revision: 0, surface_to_document: [1. / scale, 0., 0., 1. / scale, -tx / scale, -ty / scale] }).unwrap();
+    engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, use_platform_prediction: false, prediction_horizon_micros: 16_000, ..Default::default() }).unwrap();
+    engine.render_frame_at(0).unwrap();
+    engine.set_brush(brush).unwrap();
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let texture = engine.backend().device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("test presentation"), size: wgpu::Extent3d { width: SIZE[0], height: SIZE[1], depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut presenter = ViewportPresenter::for_surface(engine.backend(), format, SdrSurfaceColor::Srgb).unwrap();
+    fn frame(engine: &mut CanvasEngine<WgpuRasterizer>, presenter: &mut ViewportPresenter, target: &wgpu::TextureView, clock: u64) -> bool {
+        let revision = engine.backend().canvas_preview_revision();
+        engine.render_frame_at(clock).unwrap();
+        presenter.present(engine.backend(), target, engine.view(), [0.12, 0.12, 0.12, 1.]).unwrap();
+        engine.backend_mut().wait_idle().unwrap();
+        engine.backend().canvas_preview_revision() != revision
+    }
+    fn settle(engine: &mut CanvasEngine<WgpuRasterizer>, presenter: &mut ViewportPresenter, target: &wgpu::TextureView, clock: &mut u64) {
+        for _ in 0..600 {
+            if engine.backend().raster_ready() && !engine.backend().object_deferred && !engine.has_pending_document_edits() && !engine.has_pending_input() { return; }
+            *clock += 4_166_667;
+            frame(engine, presenter, target, *clock);
+        }
+        panic!("the canvas never settled");
+    }
+    let mut clock = 1_000_000_000u64;
+    let mut revision = 0;
+    settle(&mut engine, &mut presenter, &view, &mut clock);
+    let mut published = Vec::new();
+    for contact in 0..2 {
+        let mut advanced = Vec::new();
+        for step in 0..FRAMES {
+            if contact == 0 && step == 4 {
+                revision = 1;
+                engine.set_view(layer_render::ViewState { width_px: SIZE[0], height_px: SIZE[1], document_to_surface: [scale, 0., 0., scale, tx + 48., ty] },
+                    ViewTransform { revision, surface_to_document: [1. / scale, 0., 0., 1. / scale, -(tx + 48.) / scale, -ty / scale] });
+            }
+            for sample in 0..2 {
+                clock += 4_166_667;
+                let angle = (contact * FRAMES + step) as f32 / FRAMES as f32 * 1.3 + sample as f32 * 0.005;
+                let phase = if step == 0 && sample == 0 { PenPhase::Down } else if step + 1 == FRAMES && sample == 1 { PenPhase::Up } else { PenPhase::Move };
+                input.push(PenEvent { timestamp_ns: clock, view_revision: revision,
+                    ..pen(clock, phase, [1280. + 900. * angle.cos(), 800. + 500. * angle.sin()], SampleFlags::PRIMARY) }).unwrap();
+            }
+            advanced.push(frame(&mut engine, &mut presenter, &view, clock));
+        }
+        settle(&mut engine, &mut presenter, &view, &mut clock);
+        published.push(advanced);
+    }
+    let pattern: Vec<String> = published.iter().map(|frames| frames.iter().map(|advanced| if *advanced { '+' } else { '.' }).collect()).collect();
+    assert!(pattern.iter().all(|frames| frames.contains('+') && !frames.trim_start_matches('.').contains("....")),
+        "every stroke must keep publishing once its photo tiles decode: {pattern:?}");
+    let revision_before_tap = engine.backend().canvas_preview_revision();
+    for (offset, phase) in [(0., PenPhase::Down), (6., PenPhase::Move), (12., PenPhase::Up)] {
+        clock += 1_388_889;
+        input.push(PenEvent { timestamp_ns: clock, view_revision: revision, ..pen(clock, phase, [260. + offset, 160. + offset / 2.], SampleFlags::PRIMARY) }).unwrap();
+    }
+    assert!(!frame(&mut engine, &mut presenter, &view, clock), "the tap waits for its photo tiles");
+    settle(&mut engine, &mut presenter, &view, &mut clock);
+    assert_ne!(engine.backend().canvas_preview_revision(), revision_before_tap, "a deferred tap reports its ink once it publishes");
+    let shown = crate::layer_tests::page_bytes(engine.backend(), &texture);
+    engine.backend_mut().document_damage.push(PixelRect::full(EXTENT));
+    settle(&mut engine, &mut presenter, &view, &mut clock);
+    clock += 4_166_667;
+    frame(&mut engine, &mut presenter, &view, clock);
+    assert!(shown == crate::layer_tests::page_bytes(engine.backend(), &texture), "a full redraw changed the settled canvas, so deferred frames lost damage");
+}

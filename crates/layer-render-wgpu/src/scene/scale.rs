@@ -1065,6 +1065,12 @@ impl Cache {
     fn output_complete(&self) -> bool {
         self.approximate.is_empty() && self.coverage_complete()
     }
+    pub(crate) fn unfinished(&self) -> Option<&[PixelRect]> {
+        match self.resume.as_deref()? {
+            [] => self.overview.as_ref()?.resume.as_deref().filter(|regions| !regions.is_empty()),
+            regions => Some(regions),
+        }
+    }
     pub(crate) fn deferred_presentation(&self) -> Option<&Self> {
         let current = (!self.approximate.is_empty()).then_some(self);
         [self.overview.as_deref(), self.spare.as_deref(), current].into_iter().flatten().find(|cache|
