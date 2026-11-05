@@ -25,7 +25,26 @@ function Write-FixturePlan([string]$Path,[string[]]$Runs){
     $plan=@{runs=@();timeout_minutes=$TimeoutMinutes;hardware_gpu=[bool]$HardwareGpu};if($Runs){$plan.runs=$Runs}
     $temporary=$Path+'.tmp'
     [IO.File]::WriteAllText($temporary,($plan|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
-    if([IO.File]::Exists($Path)){[IO.File]::Replace($temporary,$Path,[NullString]::Value)}else{[IO.File]::Move($temporary,$Path)}
+    if(!('CapyFixturePlanFile' -as [type])){Add-Type -TypeDefinition @'
+using System;using System.ComponentModel;using System.IO;using System.Runtime.InteropServices;using System.Text;using Microsoft.Win32.SafeHandles;
+public static class CapyFixturePlanFile {
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint creation,uint flags,IntPtr template);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(SafeFileHandle file,int kind,IntPtr info,uint size);
+ public static void Publish(string source,string target){
+  using(var file=CreateFileW(source,0x10000,7,IntPtr.Zero,3,0,IntPtr.Zero)){
+   if(file.IsInvalid)throw new Win32Exception(Marshal.GetLastWin32Error());
+   byte[] name=Encoding.Unicode.GetBytes(Path.GetFullPath(target));int offset=IntPtr.Size==8?20:12;
+   IntPtr info=Marshal.AllocHGlobal(offset+name.Length+2);
+   try{
+    Marshal.WriteInt32(info,0,3);Marshal.WriteInt32(info,4,0);Marshal.WriteIntPtr(info,IntPtr.Size,IntPtr.Zero);Marshal.WriteInt32(info,offset-4,name.Length);Marshal.Copy(name,0,IntPtr.Add(info,offset),name.Length);
+    Marshal.WriteInt16(info,offset+name.Length,0);
+    if(!SetFileInformationByHandle(file,22,info,(uint)(offset+name.Length+2)))throw new Win32Exception(Marshal.GetLastWin32Error());
+   }finally{Marshal.FreeHGlobal(info);}
+  }
+ }
+}
+'@}
+    [CapyFixturePlanFile]::Publish($temporary,$Path)
 }
 function Get-FixtureTextScale{
     $path='HKCU:\Software\Microsoft\Accessibility'

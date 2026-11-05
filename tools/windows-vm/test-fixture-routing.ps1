@@ -63,6 +63,33 @@ foreach($name in 'Get-FixtureProcessArguments','Write-FixturePlan','Get-NextFixt
     }finally{Remove-Item -LiteralPath $directory -Recurse -Force}
 }
 & {
+    $directory=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-source-'+[guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($directory)|Out-Null
+    $path=Join-Path $directory 'plan.json';$temporary=$path+'.tmp';$TimeoutMinutes=20;$HardwareGpu=$false
+    $old=$null;$source=$null;$oldReader=$null;$sourceReader=$null;$fresh=$null;$freshReader=$null
+    try{
+        Write-FixturePlan $path @('previous-'+('x'*200))
+        $before=[IO.File]::ReadAllBytes($path)
+        $share=[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $old=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
+        $oldReader=[IO.BinaryReader]::new($old);$prefix=$oldReader.ReadBytes([int]($before.Length/2))
+        [IO.File]::WriteAllText($temporary,'seed',[Text.UTF8Encoding]::new($false))
+        $source=[IO.File]::Open($temporary,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
+        Write-FixturePlan $path @('next')
+        $retained=[Text.Encoding]::UTF8.GetString([byte[]]($prefix+$oldReader.ReadBytes($before.Length)))|ConvertFrom-Json
+        if($retained.runs[0] -cne ('previous-'+('x'*200))){throw 'Publication changed a partially consumed old plan reader'}
+        $null=$source.Seek(0,[IO.SeekOrigin]::Begin);$sourceReader=[IO.StreamReader]::new($source);$published=$sourceReader.ReadToEnd()
+        $fresh=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share);$freshReader=[IO.StreamReader]::new($fresh);$current=$freshReader.ReadToEnd()
+        if($current -cne $published){throw 'Fresh and retained source readers did not receive the same complete plan'}
+        $plan=$current|ConvertFrom-Json
+        if(($plan.runs -join ',') -cne 'next' -or $plan.timeout_minutes -ne 20 -or $plan.hardware_gpu){throw 'Publication lost the complete next plan'}
+        if(Test-Path -LiteralPath $temporary){throw 'Publication retained the temporary plan pathname'}
+    }finally{
+        if($freshReader){$freshReader.Dispose()};if($fresh){$fresh.Dispose()};if($sourceReader){$sourceReader.Dispose()};if($source){$source.Dispose()};if($oldReader){$oldReader.Dispose()};if($old){$old.Dispose()}
+        Remove-Item -LiteralPath $directory -Recurse -Force
+    }
+}
+& {
     $directory=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-evidence-'+[guid]::NewGuid().ToString('N'))
     $HardwareGpu=$false
     function Reviews{[pscustomobject]@{Id=42}}
