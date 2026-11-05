@@ -1,20 +1,22 @@
 import {openSizeDialog,sizeCheck,sizeFields} from './size-dialog.js';
+import {createPageKit} from './page-kit.js';
 
 export function createImageSizeUi({app,state,element,button,dropdown,icon,numberField,resolve,dispatch,host=()=>document.body}) {
   const send=action=>dispatch({type:'image_size',action});
   const view=()=>state().layer_tools.image_size;
+  const kit=createPageKit({element,icon});
   let shell=null,fields,unit,constrain,resampleLabel,resample;
   const act=action=>{if(fields.commit()&&view())send(action);};
   function open(v) {
-    fields=sizeFields({element,numberField,resolve,key:'imageSize',names:['width','height','resolution'],send});
-    const size=element('div','size-dialog-fields');size.append(fields.nodes[0],fields.nodes[1]);
+    fields=sizeFields({element,numberField,resolve,key:'imageSize',names:['width','height','resolution'],send,present:kit.numberRow});
+    const size=kit.fields(fields.nodes[0],fields.nodes[1]);
     unit=dropdown('',value=>act({op:'unit',unit:value}));
     constrain=sizeCheck({element,key:'constrain',act});
-    const options=element('div','size-dialog-row');options.append(unit,constrain.row);
-    const resolution=element('div','size-dialog-fields');resolution.append(fields.nodes[2]);
+    const options=element('div','preference-control-row');options.append(unit,constrain.row);
+    const resolution=kit.fields(fields.nodes[2]);
     resampleLabel=element('span');
     resample=dropdown('',value=>act({op:'resample',resample:value}));
-    const resampleRow=element('div','size-dialog-row');resampleRow.append(resampleLabel,resample);
+    const resampleRow=element('div','preference-control-row');resampleRow.append(resampleLabel,resample);
     shell=openSizeDialog({app,element,button,icon,host,copy:v,name:'image-size',body:[size,options,resolution,resampleRow],
       apply:()=>{if(fields.commit()&&view()?.can_apply)send({op:'apply'});},cancel:()=>send({op:'cancel'})});
   }

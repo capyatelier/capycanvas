@@ -1,8 +1,11 @@
 import {bindCopy,liveCopy} from "./localization.js";
 import { createWorkspaceSwitcher } from "./workspace-switcher.js";
 import {createDialogHost} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
+import {addScrollbar} from './scrollbars.js';
 export function createWorkspaceManager({ app, store, applyChange, element, button, icon, dropdown, message }) {
   let view, inline;
+  const kit=createPageKit({element,icon});
   const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common;
   const localizedButton=(read,run,classes)=>bindCopy(button("",run,classes),read);
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
@@ -35,6 +38,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const retry = localizedButton(()=>copy.retry, () => send({type:"retry"})); retry.hidden = true;
   const cancelButton=localizedButton(()=>common.cancel,cancel),sidebar=element('div','workspace-sidebar'),panes=element('div','workspace-panes');
   sidebar.append(listActions,list,rowActions);panes.append(sidebar,details);panes.dataset.dialogPart='panes';
+  addScrollbar(list,sidebar);
   footer.append(cancelButton,retry,primary);dialog.append(header,tabs,intro,panes,error,footer);
   const host=createDialogHost({app,dialog,header,cancel:close,primary:()=>view?.dialog?.primary==='close'?close:primary,icon,copy:common,onCancel:cancel,
     subpage:()=>layout?.subpage??false,onBack:()=>send({type:'page_list'}),search,clearSearch:()=>send({type:'search',query:''})});
@@ -81,6 +85,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   function render() {
     const json = app.workspace_view(); if (json === lastView) return; lastView = json; view = JSON.parse(json);
     if (!view) return;
+    dialog.dataset.page=view.page??'';list.classList.toggle('preference-group',view.page==='history');
     status.hidden=!view.status;bindCopy(statusText,()=>view?.status?.text??'');
     status.classList.toggle('error',!!view.status?.error);statusRetry.hidden=!view.status?.retry;
     recoveryButton.hidden=!view.status?.action;bindCopy(recoveryButton,()=>view?.status?.action?.label??'');
@@ -159,25 +164,25 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     const key = form ? JSON.stringify([view.prompt_action, form.name!=null, form.description!=null, (form.choices??[]).map(choice=>choice.id)]) : null;
     if (key !== formKey) {
       formHost?.hide();formHost?.dispose();formHost=null;
+      formDialog.body?.dispose();
+      delete formDialog.body;
       formKey = key; formDialog.replaceChildren(); formName = null;formDescription=null;formChoice=null;
       if (form) {
         const heading = element("h2");bindCopy(heading,()=>JSON.parse(app.workspace_view()).prompt?.title??""); heading.id = "workspace-form-title";
-        const formHeader=element('header','workspace-form-heading'),body=element('div','dialog-content');formHeader.append(heading);
-        formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(formHeader,body);
-        if(form.message){const message=element("p");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");body.append(message);}
+        const formHeader=element('header','dialog-header'),content=kit.body(),body=kit.fields();body.classList.add('workspace-prompt-fields');content.content.append(body);formDialog.body=content;formHeader.append(heading);
+        formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(formHeader,content.root);
+        if(form.message){const message=element("p");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");content.content.prepend(message);}
         if (form.name != null) {
-          const label = element("label");bindCopy(label,()=>common.name); formName = element("input"); formName.value = form.name;formName.id="workspace-item-name"; formName.maxLength = 100;formName.addEventListener("input",validatePrompt);
-          bindCopy(formName,()=>common.name,"ariaLabel"); label.append(formName); body.append(label);
+          formName=kit.entry({label:()=>common.name,placeholder:()=>common.name,value:form.name,id:'workspace-item-name'});formName.maxLength=100;formName.addEventListener('input',validatePrompt);body.append(formName);
         }
         if(form.description!=null){
-          const label=element("label");bindCopy(label,()=>copy.description);formDescription=element("textarea");formDescription.id="workspace-item-description";formDescription.value=form.description;
-          bindCopy(formDescription,()=>copy.description,"ariaLabel");label.append(formDescription);body.append(label);
+          formDescription=kit.entry({label:()=>copy.description,placeholder:()=>copy.description,value:form.description,id:'workspace-item-description'});body.append(formDescription);
         }
         if(form.choices?.length){
-          const label=element("label");bindCopy(label,()=>view?.prompt?.choice_label??"");formChoice=dropdown(()=>view?.prompt?.choice_label??'');formChoice.id="workspace-item-choice";
-          formChoice.update({choices:form.choices.map(choice=>({value:choice.id,label:()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label})),value:form.selected??form.choices[0].id});label.append(formChoice);body.append(label);
+          const label=element('span');bindCopy(label,()=>view?.prompt?.choice_label??'');formChoice=dropdown(()=>view?.prompt?.choice_label??'');formChoice.id='workspace-item-choice';
+          formChoice.update({choices:form.choices.map(choice=>({value:choice.id,label:()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label})),value:form.selected??form.choices[0].id});body.append(label,formChoice);
         }
-        formError = element("p", "workspace-error"); const footer = element("footer");
+        formError = element("p", "preferences-error"); const footer = kit.footer();
         formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, "suggested-action");
         formName?.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();if(validatePrompt())formSubmit.click();}});
         if (form.destructive) formSubmit.classList.add("destructive-action");

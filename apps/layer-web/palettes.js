@@ -1,4 +1,5 @@
 import {createDialogHost} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
 import {liveCopy,bindCopy} from './localization.js';
 const SLOP = 8;
 const plain = (_, value) => typeof value === "bigint" ? Number(value) : value;
@@ -6,6 +7,7 @@ const css = rgba => `rgba(${rgba.slice(0, 3).map(v => Math.round(Math.min(1, Mat
 const paint = (node, rgba) => { node.style.background = `linear-gradient(${css(rgba)},${css(rgba)}),repeating-conic-gradient(var(--checker-light) 0 25%,var(--checker-dark) 0 50%) 0 0 / 10px 10px`; };
 
 export function createPalettes({ app, state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker, dismissContext, contentChanged }) {
+  const kit=createPageKit({element,icon});
   const copy=liveCopy(app,"catalog").native_copy.palettes,common=liveCopy(app,"bootstrap_view").common;
   const chevron = up => { const glyph = icon("chevron-down"); glyph.classList.toggle("palette-chevron-up", up); return glyph; };
   const instances = new Set();
@@ -64,13 +66,14 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     } catch (error) { report(String(error).replace(/^Error: /, "")); }
   }
   function form({ title, text, value, confirm, destructive, check, submit, intent }) {
-    const root = element("dialog", "workspace-form palette-form"), error = element("p", "workspace-error"), footer = element("footer");
+    const root = element("dialog", "workspace-form palette-form"), error = element("p", "preferences-error");
     const header=element("header","dialog-header");header.append(element("h2", "", title));root.append(header); if(typeof title==="function")bindCopy(root,title,"ariaLabel");else root.setAttribute("aria-label",title);
-    if (text) root.append(element("p", "", text));
+    const body=kit.body();root.append(body.root);
+    if (text) body.content.append(element("p", "", text));
     let input;
     if (value != null) {
-      const label = element("label", "", () => copy.palette_name); input = element("input"); input.value = value; input.maxLength = 64;
-      bindCopy(input,()=>copy.name,"ariaLabel"); input.dataset.paletteName = ""; label.append(input); root.append(label);
+      input=kit.entry({label:()=>copy.name,placeholder:()=>copy.palette_name,value});input.maxLength=64;
+      input.dataset.paletteName = ""; body.content.append(input);
     }
     const ok = button(confirm, () => {
       const message = submit(input?.value ?? "");
@@ -78,9 +81,9 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     }, destructive ? "destructive-action" : "suggested-action");
     const validate = () => { const message = check?.(input.value); ok.disabled = !!message; error.textContent = message || ""; };
     if (input) { input.oninput = validate; validate(); input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); if (!ok.disabled) ok.click(); } }; }
-    const cancel=button(() => common.cancel, () => shell.hide());footer.append(cancel,ok);root.append(error,footer);
+    const cancel=button(() => common.cancel, () => shell.hide()),footer=kit.footer({actions:[cancel,ok]});body.content.append(error);root.append(footer);
     const shell=createDialogHost({app,dialog:root,header,cancel,primary:ok,icon,copy:common,onCancel:()=>shell.hide()});
-    root.addEventListener("close", () => {shell.dispose();root.remove();});
+    root.addEventListener("close", () => {shell.dispose();body.dispose();root.remove();});
     document.body.append(root);shell.present(intent);input?.select();
   }
 

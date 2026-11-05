@@ -2,15 +2,18 @@ import {createDrawing} from './new-drawing-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
-export async function assertColorEditorCells(evaluate) {
+export async function assertColorEditorCells(evaluate,selector='.color-dialog[open]') {
   const {groups,...facts}=await evaluate(`(()=>{
-    const dialog=document.querySelector('.color-dialog[open]'),body=dialog.querySelector('.color-editor-body'),outer=dialog.getBoundingClientRect();
+    const dialog=document.querySelector(${JSON.stringify(selector)}),body=dialog.querySelector('.color-editor-body'),outer=dialog.getBoundingClientRect();
     const visible=node=>node.getClientRects().length&&getComputedStyle(node).visibility!=='hidden';
     const groups=[...dialog.querySelectorAll('.color-rows,.color-editor-head')].filter(visible).map(grid=>({
       name:grid.className,cells:[...grid.children].filter(visible).map(node=>{const r=node.getBoundingClientRect();return{name:node.className,text:node.textContent.trim().slice(0,80),bounds:[r.x,r.y,r.width,r.height]};}).filter(cell=>cell.bounds[2]>0&&cell.bounds[3]>0)
     }));
-    return{split:!body.classList.contains('single-pane'),outer_width:outer.width,outer_bounds:[outer.x,outer.y,outer.width,outer.height],groups};
+    const swatches=[...dialog.querySelectorAll('.color-editor-head .color-pair > *')].filter(visible).map(node=>{const r=node.getBoundingClientRect();return[r.width,r.height];});
+    return{split:!body.classList.contains('single-pane'),outer_width:outer.width,outer_bounds:[outer.x,outer.y,outer.width,outer.height],preview_width:body.querySelector('.color-pair').getBoundingClientRect().width,swatches,groups};
   })()`);
+  for(const size of facts.swatches)assert.deepEqual(size,[54,48],'Color previews retain their native minimum');
+  assert.ok(facts.preview_width>=54*facts.swatches.length-1,'The preview container does not clip its native-sized swatches');
   for(const group of groups)for(const cell of group.cells){
     const [x,,width]=cell.bounds,[left,,outerWidth]=facts.outer_bounds;
     assert.ok(x>=left-1&&x+width<=left+outerWidth+1,`Color Editor cell leaves the page: ${JSON.stringify({...facts,group:group.name,cell})}`);

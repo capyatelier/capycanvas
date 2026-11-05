@@ -67,7 +67,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     valueBox.append(measure);
     if (valueOnly) { root.classList.add('number-value-only'); entry.size = 1; }
   }
-  let value = control.min, display, presented, editing = false, disabled = false, errorReason = null;
+  let value = control.min, display, presented, editing = false, disabled = false, errorReason = null,showUnits=true;
   let scrub = null, suppressClick = false, disposed = false;
   let gesture = false, cancelled = false, heldKey, releaseTimer, releasePointer;
   const finishGesture = (phase = 'up') => {
@@ -118,7 +118,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
   function show(next) {
     value = next.value; display = next; valueButton.textContent = next.text;
     if (valueOnly) valueBox.querySelector('.number-measure').textContent = next.text;
-    if (!editing) entry.value = spin ? next.text : next.edit;
+    if (!editing) entry.value = spin&&showUnits ? next.text : next.edit;
     entry.setAttribute("aria-valuenow", value * control.scale);
     slider.value = next.fill; slider.style.setProperty("--fill", `${next.fill * 100}%`);
     slider.setAttribute("aria-valuetext", next.text);
@@ -151,7 +151,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if (!editing) return true;
     if (!cancel && (composingKey({target:entry}) || !apply({ type: "expression", text: entry.value }))) return false;
     editing = false;clearError();
-    entry.value = spin ? display.text : display.edit;
+    entry.value = spin&&showUnits ? display.text : display.edit;
     if (buttonValue && !(gesture && heldKey && !cancelled)) { entry.hidden = true; valueButton.hidden = false; }
     return true;
   }
@@ -248,6 +248,7 @@ export function createNumberField({ control, label, labels: captions, resolve, e
     if(!display || next!==value || text!==presented){presented=text;const result=resolve({control,value:next,operation:{type:'format'}});if(text!=null)result.text=result.edit=text;show(result);}
   };
   root.getValue = () => value;
+  root.setShowUnits = next => {showUnits=next;show(display);};
   root.setDisabled = next => { if (disabled === next) return; if(next){finishScrub(true);finishGesture('cancel');}disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; if (dial) { dial.tabIndex = next ? -1 : 0; dial.setAttribute("aria-disabled", String(next)); } show(display); };
   root.setDescription = text => {
     labels.querySelector('.number-description')?.remove();

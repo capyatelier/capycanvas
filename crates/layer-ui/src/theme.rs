@@ -301,6 +301,24 @@ impl Lines {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ControlPalette {
+    pub foreground: crate::GlassColor,
+    pub fill: crate::GlassColor,
+    pub hover: crate::GlassColor,
+    pub active: crate::GlassColor,
+    pub selection: crate::GlassColor,
+    pub selection_backdrop: crate::GlassColor,
+}
+impl ControlPalette {
+    fn new(dark: bool, accent: HexColor) -> Self {
+        let native=if dark { &ADWAITA_DARK } else { &ADWAITA_LIGHT };
+        let fill=|alpha| line(native.text,native.text_alpha*alpha);
+        Self { foreground:line(native.text,native.text_alpha),fill:fill(0.10),hover:fill(0.15),active:fill(0.30),
+            selection:line(accent.0.map(f64::from),0.30),selection_backdrop:fill(0.10) }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ThemePalette {
     pub bg: HexColor,
     pub panel: HexColor,
@@ -317,6 +335,7 @@ pub struct ThemePalette {
     pub error: HexColor,
     pub button: HexColor,
     pub control_fill: crate::GlassColor,
+    pub controls: ControlPalette,
     pub accent: HexColor,
     pub accent_foreground: HexColor,
     pub relationship: HexColor,
@@ -385,6 +404,7 @@ impl Settings {
             error: HexColor(if dark { [255, 123, 99] } else { [192, 28, 40] }),
             button: HexColor([if dark { 255 } else { 0 }; 3]),
             control_fill: line(text.0.map(f64::from), if dark { 0.06 } else { 0.16 }),
+            controls: ControlPalette::new(dark,accent),
             accent,
             accent_foreground: accent.contrasting(),
             relationship: accent.relationship(),
@@ -458,6 +478,24 @@ mod tests {
                     assert_eq!(a, alpha);
                     assert_eq!(serde_json::to_value(palette).unwrap()["control_fill"], serde_json::json!([r, g, b, a]));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn native_control_roles_retain_snapshot_rgba_and_focused_selection() {
+        let light=Settings::default().palette(Theme::Light,Platform::Gtk,None).controls;
+        let dark=Settings::default().palette(Theme::Dark,Platform::Gtk,None).controls;
+        assert_eq!(light.fill.0,[0.,0.,6./255.,0.08]);
+        assert_eq!(dark.fill.0,[1.,1.,1.,0.10]);
+        assert_eq!(light.foreground.0,[0.,0.,6./255.,0.8]);
+        assert_eq!(dark.foreground.0,[1.,1.,1.,1.]);
+        for theme in [Theme::Light,Theme::Dark] {
+            for platform in Platform::ALL {
+                let controls=Settings {accent:Some(HexColor([210,20,90])),..Settings::default()}.palette(theme,platform,None).controls;
+                assert_eq!(controls.selection.0,[210./255.,20./255.,90./255.,0.30]);
+                assert_eq!(controls.selection_backdrop,controls.fill);
+                assert!(controls.hover.0[3]>controls.fill.0[3]);assert!(controls.active.0[3]>controls.hover.0[3]);
             }
         }
     }

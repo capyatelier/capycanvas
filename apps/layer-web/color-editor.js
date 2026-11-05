@@ -1,4 +1,5 @@
 import {createDialogHost,hasModalDialog} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {createRasterWorker} from './raster-worker-client.js';
 import {wheelPainter,wheelPicker,hueStopCache,wheelHit,rgba,json} from './color-wheel.js';
@@ -257,6 +258,7 @@ export function colorForm({app, root, element, button, open, rendition, copyable
 
 export function chooseColor({app, color, slot, element, button, opaque = false}) {
   const {dispatch, icon} = services;
+  const kit=createPageKit({element,icon});
   const catalog = () => liveCopy(app,"catalog").native_copy, copy = liveCopy(app,"catalog").native_copy.color, common = liveCopy(app,"bootstrap_view").common;
   const epoch = app.state().document_file.epoch;
   const colors = app.state().layer_tools.mask_editing?.colors ?? app.state().colors;
@@ -286,7 +288,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     const footerStack=element('div','color-footer-stack');footerStack.append(recent,mini);
     const more = button('', () => form.act({op:'toggle_swatches'}), 'color-swatches'); more.append(icon('chevron-down'));
     const cancel = button(() => common.cancel, () => shell.hide(), 'color-cancel dialog-button');
-    const footer = element('footer', 'dialog-footer'); footer.append(footerStack, more, cancel, apply);
+    const footer=kit.footer({start:[footerStack,more],actions:[cancel,apply],separator:true});
     const page = element('div', 'color-editor-page'); page.append(form.body, sheet);
     const content = element('div', 'dialog-content'); content.append(page, footer);
     const header=element('header','dialog-header');header.append(form.title);root.append(header,content); document.body.append(root);

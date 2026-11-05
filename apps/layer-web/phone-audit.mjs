@@ -1260,6 +1260,14 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     if(dialogs)for(const row of rows){
       if(row.blocked){report.unreachable.push({state:row.id,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:'unavailable',missing:[],reason:row.blocked,png:null});continue;}
       await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
+      if(row.id==='choose-action'){
+        const before=await evaluate(`(()=>{const search=document.querySelector('#action-picker-search'),viewport=document.querySelector('#action-picker .preference-viewport');const y=search.getBoundingClientRect().y;viewport.scrollTop=viewport.scrollHeight;return{y,overflow:viewport.scrollHeight-viewport.clientHeight};})()`);
+        await settle();
+        const after=await evaluate(`(()=>{const search=document.querySelector('#action-picker-search'),viewport=document.querySelector('#action-picker .preference-viewport');const result={y:search.getBoundingClientRect().y,scroll:viewport.scrollTop};viewport.scrollTop=0;return result;})()`);
+        assert.ok(before.overflow>0&&after.scroll>0,'Choose Action has scrolling results');
+        assert.equal(after.y,before.y,'Scrolling actions keeps Search in its native top bar');
+        await settle();
+      }
       if(row.id==='preferences-shortcuts-direct'&&active){
         await click('#shortcuts-search');await call('Input.insertText',{text:'Escape'});await settle();
         assert.equal(await evaluate('layerApp.app.preferences().shortcut_query'),'Escape');
@@ -1269,7 +1277,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         await send(shortcuts);await settle();
       }
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');
-      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);const parts=await evaluate(row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
+      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);if(route.id==='new-drawing-footer-paper-color'){const {assertColorEditorCells}=await import('./color-editor.test.mjs');await assertColorEditorCells(evaluate,'#new-drawing-color-drawer');}const parts=await evaluate(row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
       if(row.id==='color'){
         const {assertColorEditorCells}=await import('./color-editor.test.mjs');
         await assertColorEditorCells(evaluate);

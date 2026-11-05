@@ -5,7 +5,7 @@ const presentedDialogs=new Map();
 export const hasOpenDialog=()=>presentedDialogs.size>0;
 export function hasModalDialog(){for(const intent of presentedDialogs.values())if(intent.modal)return true;return false;}
 
-export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
+export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,primary:sourcePrimary,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
   let primary=typeof sourcePrimary==='function'?sourcePrimary():sourcePrimary;
   let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,responseChanges;
   const slots=new Map([cancel,primary].filter(Boolean).map(node=>[node,{parent:node.parentNode,next:node.nextSibling}]));
@@ -31,7 +31,7 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
     if(primary&&!slots.has(primary)){slots.set(primary,{parent:primary.parentNode,next:primary.nextSibling});resize.observe(primary);}
     const row=typeof header==='function'?header():header;
     if(observedHeader!==row){
-      if(observedHeader){observedHeader.classList.remove('page-header');observedHeader.style.minHeight='';observedHeader.style.gridTemplateColumns='';delete observedHeader.dataset.dialogPart;resize.unobserve(observedHeader);}
+      if(observedHeader){observedHeader.classList.remove('page-header');observedHeader.style.minHeight='';observedHeader.style.gridTemplateColumns='';delete observedHeader.dataset.dialogPart;delete observedHeader.dataset.headerStyle;resize.unobserve(observedHeader);}
       observedHeader=row;resize.observe(row);
     }
     const v=window.visualViewport,visible={x:v?.offsetLeft??0,y:v?.offsetTop??0,width:v?.width??innerWidth,height:v?.height??innerHeight};
@@ -39,6 +39,7 @@ export function createDialogHost({app,dialog,header,cancel,primary:sourcePrimary
     let bounds=positioned??presentation.bounds;
     const actions=app.dialog_header(intent,subpage()),parts=page||intent.role!=='alert';
     if(parts)row.dataset.dialogPart='header';else delete row.dataset.dialogPart;
+    row.dataset.headerStyle=parts?headerStyle:'flat';
     if(page&&actions.start==='cancel'&&!close){close=document.createElement('button');close.type='button';close.append(icon('window-close'));bindCopy(close,cancelLabel,'ariaLabel');close.addEventListener('click',onCancel);resize.observe(close);}
     if(close&&close.parentNode!==row)row.append(close);
     if(actions.start==='back'&&!back){back=document.createElement('button');back.type='button';back.className='dialog-back';back.append(icon('go-previous'));bindCopy(back,()=>copy.back,'ariaLabel');back.addEventListener('click',onBack);resize.observe(back);}

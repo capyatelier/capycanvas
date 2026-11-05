@@ -17,7 +17,7 @@ class FakeElement extends SharedElement {
   }
   focus(){ownerDocument.activeElement=this;}
   contains(node){for(let n=node;n;n=n.parentNode)if(n===this)return true;return false;}
-  get classList(){return {toggle(){},remove(){}};}
+  get classList(){const read=()=>new Set(this.className.split(/\s+/).filter(Boolean)),write=values=>{this.className=[...values].join(' ');};return {add(...names){const values=read();for(const name of names)values.add(name);write(values);},remove(...names){const values=read();for(const name of names)values.delete(name);write(values);},toggle(name,on){const values=read();on??=!values.has(name);if(on)values.add(name);else values.delete(name);write(values);return on;},contains:name=>read().has(name)};}
   descendants(){return this.querySelectorAll("dialog,form,header,button,input,p,section,div,h2,h3");}
   get childNodes(){return this.children;}
   append(...nodes){for(const node of nodes){if(node.parentNode)node.parentNode.children.splice(node.parentNode.children.indexOf(node),1);node.parentNode=this;this.children.push(node);}}
@@ -133,7 +133,7 @@ function fakeApp({ extent = [20000, 400], photo = false } = {}) {
 
 async function openDialog(app) {
   let form,prompt,controls;
-  const result = chooseExport({ app, element, button, dropdown:dropdownFactory({element,button}), numberField, id: 7, gpuOperation: run => run(),
+  const result = chooseExport({ app, element, button, icon:name=>element('svg',name),dropdown:dropdownFactory({element,button}), numberField, id: 7, gpuOperation: run => run(),
     dialog: (title, build, intent) => new Promise(resolve => { assert.deepEqual(intent,{role:"editor",modal:true,primary:"action"}); const body=element("form"); element("dialog").append(body); if(!form)form=body;else prompt=body; const actions=build(body, resolve,{header:element("header"),caption:element("h2"),layout(){},dismiss:()=>resolve(null)});if(body===form)controls=actions; }) });
   while (!form) await new Promise(resolve => setImmediate(resolve));
   const reveal=node=>{
@@ -326,8 +326,8 @@ test('profile-library search uses shared metadata matching and Escape waits for 
     profile_library:async(type)=>{if(type==='list')return entries;if(type==='remove')await new Promise(done=>release=done);},color_feature_error_copy:String};
   const result=chooseProfileLibrary({app,element,button,icon:()=>element('svg'),manage:true});await new Promise(done=>setImmediate(done));
   const root=body.children.find(node=>node.tagName==='DIALOG'),search=root.querySelectorAll('input')[0];assert.equal(search.hidden,false);
-  search.value='3';search.dispatchEvent({type:'input'});assert.equal(root.querySelectorAll('h3').length,1);assert.equal(root.querySelectorAll('h3')[0].textContent,'en:profile-3');assert.ok(queries.some(([id,query])=>id==='3'&&query==='3'));
-  language='fr';localizeProfileLibraries();assert.equal(root.querySelectorAll('h3')[0].textContent,'fr:profile-3');assert.equal(search.value,'3');
+  search.value='3';search.dispatchEvent({type:'input'});assert.equal(root.querySelectorAll('label').length,1);assert.equal(root.querySelectorAll('label')[0].textContent,'en:profile-3');assert.ok(queries.some(([id,query])=>id==='3'&&query==='3'));
+  language='fr';localizeProfileLibraries();assert.equal(root.querySelectorAll('label')[0].textContent,'fr:profile-3');assert.equal(search.value,'3');
   root.querySelectorAll('button').find(node=>node.textContent==='Remove').click();
   const cancel={type:'cancel',defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};root.dispatchEvent(cancel);assert.equal(cancel.defaultPrevented,true);assert.equal(root.open,true);
   release();await new Promise(done=>setImmediate(done));assert.equal(root.querySelectorAll('button').find(node=>node.textContent==='Done').disabled,false);

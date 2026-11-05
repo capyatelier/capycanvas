@@ -1,17 +1,19 @@
 import {openSizeDialog,sizeCheck,sizeFields} from './size-dialog.js';
+import {createPageKit} from './page-kit.js';
 
 export function createCanvasSizeUi({app,state,element,button,dropdown,icon,numberField,resolve,dispatch,host=()=>document.body}) {
   const send=action=>dispatch({type:'canvas_size',action});
   const view=()=>state().layer_tools.canvas_size;
+  const kit=createPageKit({element,icon});
   let shell=null,fields,unit,relative,anchorLabel,anchors;
   // Typed text reaches the draft before any other choice, so no edit is lost.
   const act=action=>{if(fields.commit()&&view())send(action);};
   function open(v) {
-    fields=sizeFields({element,numberField,resolve,key:'canvasSize',names:['width','height'],send});
-    const values=element('div','size-dialog-fields');values.append(...fields.nodes);
+    fields=sizeFields({element,numberField,resolve,key:'canvasSize',names:['width','height'],send,present:kit.numberRow});
+    const values=kit.fields(...fields.nodes);
     unit=dropdown('',value=>act({op:'unit',unit:value}));
     relative=sizeCheck({element,key:'relative',act});
-    const options=element('div','size-dialog-row');options.append(unit,relative.row);
+    const options=element('div','preference-control-row');options.append(unit,relative.row);
     anchorLabel=element('span');
     const grid=element('div','canvas-anchor');grid.setAttribute('role','group');
     grid.addEventListener('mousedown',e=>e.preventDefault());
@@ -20,7 +22,7 @@ export function createCanvasSizeUi({app,state,element,button,dropdown,icon,numbe
       cell.tabIndex=-1;cell.dataset.anchor=choice.anchor;cell.title=choice.label;cell.setAttribute('aria-label',choice.label);
       cell.append(icon('rectangle-fill'));grid.append(cell);return cell;
     });
-    const anchorRow=element('div','size-dialog-row');anchorRow.append(anchorLabel,grid);
+    const anchorRow=element('div','preference-control-row');anchorRow.append(anchorLabel,grid);
     shell=openSizeDialog({app,element,button,icon,host,copy:v,name:'canvas-size',body:[values,options,anchorRow],
       apply:()=>{if(fields.commit()&&view()?.can_apply)send({op:'apply'});},cancel:()=>send({op:'cancel'})});
   }

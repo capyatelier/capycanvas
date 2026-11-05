@@ -6,6 +6,8 @@ const cleanups=[];
 afterEach(()=>{while(cleanups.length)cleanups.pop()();});
 import { createCanvasSizeUi } from "./canvas-size.js";
 import { createImageSizeUi } from "./image-size.js";
+import {createPageKit} from './page-kit.js';
+import {refreshBindings} from './localization.js';
 
 class FakeElement extends Element {
   constructor(tag, className = "") { super(tag,document); this.className=className; }
@@ -56,6 +58,7 @@ function harness({ create = createCanvasSizeUi, key = "canvas_size", data = "can
     Object.assign(root, { control, label, entry, value: null, pending: null });
     root.update = value => { root.value = value; };
     root.relabel = label => { root.label = label; };
+    root.setShowUnits = value => {root.showUnits=value;};
     root.commit = () => {
       if (root.pending == null) return true;
       const value = Number(root.pending);
@@ -309,4 +312,16 @@ for(const [name,create] of [["Canvas Size",harness],["Image Size",imageHarness]]
   const h=create();h.ui.refresh();const width=h.field("width");width.pending="１２+";
   h.set({title:"サイズ",labels:["幅","高さ"],apply_label:"適用",cancel_label:"キャンセル",units:[{unit:"pixels",label:"ピクセル"},{unit:"percent",label:"割合"}]});
   assert.equal(h.field("width"),width);assert.equal(width.pending,"１２+");assert.equal(width.label,"幅");assert.equal(h.title().textContent,"サイズ");assert.equal(dropdownChoices(h.unit())[0].label,"ピクセル");
+});
+
+test('page entries keep a focused draft and selection when their native captions change',t=>{
+  const {doc,element,icon}=colorDialogDom(t),kit=createPageKit({element,icon});
+  let name='Toolbar name';
+  const field=kit.entryRow({title:()=>name,value:'Tools',id:'name'}),group=kit.group();group.list.append(field.line);
+  const body=kit.body(group.section);doc.body.append(body.root);
+  field.input.value='作品 {draft}';field.input.focus();field.input.selectionStart=1;field.input.selectionEnd=4;
+  name='Nom de la barre';refreshBindings();
+  assert.equal(field.label.textContent,name);assert.equal(field.input.ariaLabel,name);assert.equal(field.input.value,'作品 {draft}');
+  assert.equal(doc.activeElement,field.input);assert.equal(field.input.selectionStart,1);assert.equal(field.input.selectionEnd,4);
+  body.dispose();body.root.remove();
 });

@@ -45,7 +45,7 @@ export function createPenResponse({app,state,workspace,element,button,icon,numbe
       close=button('',()=>act({kind:'cancel'}),'utility-close');close.id=`${prefix}-close`;close.append(icon('window-close'));header.append(title,close);
       const body=element('div','utility-body');
       editor=createCurveEditor({element,button,icon,numberField,dispatch,target,initial:view.editor,label:view.title});
-      const sensitivity=element('div',mode==='tilt'?'selection-modes utility-sensitivity utility-compact-sensitivity':'utility-sensitivity'),actions=element('div','dialog-footer utility-actions');
+      const sensitivity=element('div',mode==='tilt'?'selection-modes utility-sensitivity utility-compact-sensitivity':'utility-sensitivity'),actions=element('div','preference-footer separated utility-actions');
       firmer=button('',()=>act({kind:'sensitivity',lighter:false}));firmer.id=`${prefix}-firmer`;
       lighter=button('',()=>act({kind:'sensitivity',lighter:true}));lighter.id=`${prefix}-lighter`;sensitivity.append(firmer,lighter);
       if(mode==='tilt'){firmer.append(icon('minus'));lighter.append(icon('plus'));}

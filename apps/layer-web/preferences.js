@@ -2,6 +2,7 @@ import {chooseProfileLibrary} from './export-controls.js';
 import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
 import {createDialogHost} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
 export function createPreferences({ onKey, app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
@@ -9,6 +10,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   const bootstrap = liveCopy(app, "bootstrap_view");
   const profileCopy = liveCopy(app, "profile_copy");
   const send = (action) => dispatch({ type: "preferences", action });
+  const {group:settingsGroup,row:preferenceRow}=createPageKit({element,icon});
   const close = () => dispatch({ type: "close_settings" });
   const context = element("div", "panel-context-menu preference-context-menu");
   context.id = "preference-context-menu"; context.popover = "manual";
@@ -89,17 +91,6 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
       if (line) { const rect = line.getBoundingClientRect(); e.preventDefault(); e.stopImmediatePropagation(); showContext(line, rect.left, rect.bottom, e.target); }
     }
   }, { capture: true });
-  function settingsGroup(title, description) {
-    const section = element("section", "settings-group");
-    if (description) {
-      const heading = element("div", "settings-heading"), labels = element("div");
-      if (title) labels.append(element("h3", "", title));
-      labels.append(element("p", "settings-description", description));
-      heading.append(labels); section.append(heading);
-    } else if (title) section.append(element("h3", "", title));
-    const list = element("div", "preference-group"); section.append(list);
-    return { section, list };
-  }
   function dropdown(label, choose) {
     const widget = element("details", "preference-choice");
     const summary = element("summary"); summary.setAttribute("aria-label", label);
@@ -166,7 +157,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     return row;
   }
   const goBack=()=>{const action=view()?.navigation.back;if(action)send(action);};
-  const shell=createDialogHost({onKey,app,dialog,header:activeHeader,cancel:exit,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
+  const shell=createDialogHost({onKey,app,dialog,header:activeHeader,headerStyle:'flat',cancel:exit,primary:exit,icon,copy:bootstrap.common,onCancel:close,onBack:goBack,
     subpage:()=>!!layout?.subpage,search:()=>document.activeElement===shortcutPage.search?shortcutPage.search:search,
     clearSearch:node=>send({type:node===shortcutPage.search?'search_shortcuts':'search',query:''})});
   root.dataset.dialogPart='panes';
@@ -228,11 +219,8 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
         const { section, list } = settingsGroup(group.title); container.append(section);
         groups.push([group.rows.map((r) => r.id), section, page.id]);
         for (const row of group.rows) {
-          const line = element("div", "preference-row"), text = element("div", "preference-text");
+          const {line,text,label}=preferenceRow({title:row.title,description:row.description});
           if (row.reset) line.dataset.preference = row.id;
-          const label = element("label", "", row.title); text.append(label);
-          if (row.description) text.append(element("p", "", row.description));
-          line.append(text);
           const id = `setting-${row.id.replaceAll("_", "-")}`;
           label.htmlFor = id;
           let input, widget;

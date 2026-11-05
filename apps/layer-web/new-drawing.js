@@ -1,4 +1,5 @@
 import {createDialogHost} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
 import {createWorkflowStack} from './workflow-stack.js';
 import {colorForm} from './color-editor.js';
 import {paperThumbnail} from './paper-picker.js';
@@ -61,6 +62,8 @@ export function screenInfo() {
 // Presents the session's New drawing dialog: every input is a NewDrawingAction,
 // and every label, choice and state comes from `state().new_drawing`.
 export function createNewDrawing({app, state, applyChange, element, button, icon, dropdown, numberField, importPaper}) {
+  const kit=createPageKit({element,icon});
+  const footerActions=(...buttons)=>{const root=element('div','new-drawing-actions');root.append(...buttons);return root;};
   let ui = null, finish = null, creating = false;
   const view = () => state().new_drawing ?? null;
   function send(action) {
@@ -151,7 +154,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const turn = orientation => { const node = button('', () => send({op:'orientation', orientation})); node.id = `new-drawing-${orientation}`; node.append(icon(orientation)); return node; };
     const portrait = turn('portrait'), landscape = turn('landscape');
     const orientation = element('div', 'new-drawing-well new-drawing-icons'); orientation.id = 'new-drawing-orientation'; orientation.setAttribute('role', 'group'); orientation.append(portrait, landscape);
-    const dimensions = element('div', 'new-drawing-row'); dimensions.append(linked, unit, element('span', 'dialog-gap'), orientation);
+    const dimensions = element('div', 'new-drawing-row'); dimensions.append(linked, unit, element('span', 'new-drawing-gap'), orientation);
     const resolutionLabel = element('span', 'new-drawing-label'), resolutionUnit = element('span', 'new-drawing-affix');
     const resolutionField = field('new-drawing-resolution-field', numbers.nodes[2], resolutionUnit); resolutionField.classList.add('new-drawing-combo');
     const resolutions = button('', () => {
@@ -193,7 +196,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const presets = button('', () => send({op:'presets'}), 'dialog-button new-drawing-open-presets'); presets.id = 'new-drawing-presets-button'; presets.append(presetsLabel, presetsIcon);
     const cancel = button('', () => send({op:'cancel'}), 'dialog-button'); cancel.id = 'new-drawing-cancel';
     const createButton = button('', create, 'suggested-action'); createButton.id = 'new-drawing-create';
-    const footer = element('footer', 'dialog-footer'); footer.append(presets, element('span', 'dialog-gap'), cancel, createButton);
+    const footer=kit.footer({start:[presets],actions:[footerActions(cancel,createButton)],separator:true});
     const scrolled = scroller => { const frame = element('div', 'new-drawing-scroll'); frame.append(scroller); addScrollbar(scroller, frame); return frame; };
     const main = element('div', 'new-drawing-main'); main.append(scrolled(page), footer);
 
@@ -218,16 +221,18 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const browserCancel = button('', () => send({op:'close_drawer'}), 'dialog-button'); browserCancel.id = 'new-drawing-browser-cancel';
     const saveAs = button('', () => send({op:'save_as'}), 'dialog-button'); saveAs.id = 'new-drawing-save-as';
     const select = button('', () => send({op:'use_preset'}), 'suggested-action'); select.id = 'new-drawing-select';
-    const actions = element('div', 'new-drawing-actions'); actions.append(browserCancel, saveAs, select);
+    const actions=footerActions(browserCancel,saveAs,select);
     const saveName = element('input', 'new-drawing-entry'); saveName.id = 'new-drawing-save-name'; saveName.type = 'text'; saveName.autocomplete = 'off'; saveName.spellcheck = false;
     saveName.addEventListener('input', () => send({op:'preset_name', text:saveName.value}));
     saveName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (!saveConfirm.disabled) send({op:'save_preset'}); } });
     const saveGroup = choice('new-drawing-save-group', index => shown.drawer?.save?.groups[index] && {op:'preset_group', group:shown.drawer.save.groups[index].value});
     const saveCancel = button('', () => send({op:'cancel_save'}), 'dialog-button'); saveCancel.id = 'new-drawing-save-cancel';
     const saveConfirm = button('', () => send({op:'save_preset'}), 'suggested-action'); saveConfirm.id = 'new-drawing-save-confirm';
-    const saving = element('div', 'new-drawing-actions new-drawing-saving'); saving.append(saveName, saveGroup, saveCancel, saveConfirm);
+    const saveFields=kit.fields(saveName,saveGroup);saveFields.classList.add('new-drawing-save-fields');
+    const saveActions=footerActions(saveCancel,saveConfirm);
+    const saving=element('div','new-drawing-saving');saving.append(saveFields,saveActions);
     const actionStack=element('div');actionStack.append(actions,saving);const actionPages=createWorkflowStack(actionStack);
-    const browserFooter = element('footer', 'dialog-footer'); browserFooter.append(summary, actionStack);
+    const browserFooter=kit.footer({start:[summary],actions:[actionStack],separator:true});
     const browser = drawer('new-drawing-browser', searchHead, [tabs, presetGrid, empty], browserFooter);
     let presetTiles = [], presetKey = '', tabKey = '', naming = false;
     keyGrid(presetGrid, () => presetTiles, index => send({op:'pick_preset', index}), () => send({op:'use_preset'}));
@@ -253,7 +258,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const usePaperTexture = () => { if (relief.commit()) send({op:'use_paper'}); };
     const paperCancel = button('', () => send({op:'close_drawer'}), 'dialog-button'); paperCancel.id = 'new-drawing-paper-cancel';
     const usePaper = button('', usePaperTexture, 'suggested-action'); usePaper.id = 'new-drawing-paper-use';
-    const paperFooter = element('footer', 'dialog-footer'); paperFooter.append(reliefRow, element('span', 'dialog-gap'), paperCancel, usePaper);
+    const paperFooter=kit.footer({start:[reliefRow],actions:[footerActions(paperCancel,usePaper)],separator:true});
     const paperDrawer = drawer('new-drawing-paper-drawer', paperHead, [paperGrid], paperFooter);
     let paperTiles = [], paperKey = '';
     keyGrid(paperGrid, () => [...paperTiles, importTile], index => { if (paperTiles[index]) send({op:'pick_paper', id:shown.drawer.tiles[index].id}); },
@@ -274,7 +279,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const add = button('', () => send({op:'add_paper_color'}), 'palette-add'); add.id = 'new-drawing-add-paper-color'; add.append(icon('plus'));
     const colorCancel = button('', () => send({op:'close_drawer'}), 'dialog-button'); colorCancel.id = 'new-drawing-color-cancel';
     const useColor = button('', () => { if (!useColor.disabled) send({op:'use_paper_color'}); }, 'suggested-action'); useColor.id = 'new-drawing-color-use';
-    const colorFooter = element('footer', 'dialog-footer'); colorFooter.append(element('span', 'dialog-gap'), colorCancel, useColor);
+    const colorFooter=kit.footer({actions:[footerActions(colorCancel,useColor)],separator:true});
     const colorDrawer = drawer('new-drawing-color-drawer', null, [colorPage], colorFooter);
     let colorUi = null, paletteKey = '';
 

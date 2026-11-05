@@ -1,7 +1,9 @@
 import { bindCopy } from './localization.js';
 import { latinKey } from "./text-input.js";
 import {createDialogHost} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
 export function createShortcutPage({ onKey, app, element, button, icon, send, view, scroller, settingsGroup: group, dropdown, copy, common }) {
+  const kit=createPageKit({element,icon});
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
   let rootResults, categoryResults, modifierMain, modifierCategory, inputRoot;
@@ -67,11 +69,11 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
     const exit = button("", () => onDismiss(), "dialog-close"); exit.append(icon("window-close"));
     exit.id = `${id}-close`; bindCopy(exit,()=>common.close,"ariaLabel"); bindCopy(exit,()=>common.close,"title");
     header.append(title, exit);
-    const body = element("div", "sheet-body");
-    node.append(header, body); document.body.append(node);
+    const content=kit.body(),body=content.content;body.classList.add('preference-stack');
+    node.append(header, content.root); document.body.append(node);
     node.addEventListener("close", () => { node.signature = ""; });
     const host=createDialogHost({onKey,app,dialog:node,header,cancel:exit,icon,copy:common,onCancel:onDismiss,search,clearSearch,cancelLabel:()=>common.close});
-    return { node, header, title, body, host, signature: "" };
+    return { node, header, title, body, content, host, signature: "" };
   }
   const dismissRecording = close => () => (view()?.capture ? send({ type: "cancel_shortcut" }) : close());
   const editor = sheet("shortcut-editor", dismissRecording(() => send({ type: "close_shortcut_editor" })));
@@ -87,14 +89,16 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
   bindCopy(pickerSearch,()=>copy.search_actions,"placeholder"); bindCopy(pickerSearch,()=>copy.search_actions,"ariaLabel");
   pickerSearch.addEventListener("input", () => send({ type: "search_action_picker", query: pickerSearch.value }));
   const pickerList = element("div", "picker-list");
-  picker.body.append(pickerDescription, pickerSearch, pickerList);
+  const pickerTop=kit.fields(pickerDescription,kit.search(pickerSearch));pickerTop.classList.add('action-picker-search');
+  picker.node.insertBefore(pickerTop,picker.content.root);picker.body.append(pickerList);
   const details = sheet("keymap-details", () => send({ type: "keymap_details", open: false }));
   details.node.classList.add("picker");
+  const detailsIntro=kit.fields();detailsIntro.classList.add('keymap-details-intro');details.node.insertBefore(detailsIntro,details.content.root);
   const importDialog = element("dialog", "sheet"); importDialog.id = "keymap-import";
-  const importHeader=element('header','dialog-header'),importTitle=element('h2'),importBody=element('div','sheet-body'),importFooter=element('footer');
+  const importHeader=element('header','dialog-header'),importTitle=element('h2'),importContent=kit.body(),importBody=importContent.content,importFooter=kit.footer();importBody.classList.add('preference-stack');
   const importCancel=button(()=>common.cancel,()=>send({type:'cancel_keymap_import'}));
   const importConfirm=button(()=>common.import,()=>send({type:'confirm_keymap_import'}),'suggested-action');importConfirm.id='confirm-keymap-import';
-  importHeader.append(importTitle);importFooter.append(importCancel,importConfirm);importDialog.append(importHeader,importBody,importFooter);document.body.append(importDialog);
+  importHeader.append(importTitle);importFooter.append(importCancel,importConfirm);importDialog.append(importHeader,importContent.root,importFooter);document.body.append(importDialog);
   const importHost=createDialogHost({onKey,app,dialog:importDialog,header:importHeader,cancel:importCancel,primary:importConfirm,icon,copy:common,onCancel:()=>send({type:'cancel_keymap_import'})});
   let importSignature = '';
 
@@ -368,11 +372,9 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
     if (picker.signature !== signature) {
       picker.signature = signature;
       const choice = (id, label, detail, selected) => {
-        const row = button("", () => send({ type: "choose_action", id }), "preference-row picker-row"); row.id = `action-${id}`;
-        const text = element("span", "preference-text"); text.append(element("span", "", label));
-        if (detail) text.append(element("p", "", detail));
         const check = icon("check"); check.style.visibility = selected ? "visible" : "hidden";
-        row.append(text, check); return row;
+        const row=kit.row({line:button('',()=>send({type:'choose_action',id}),'picker-row'),title:label,description:detail,suffix:check}).line;
+        row.id=`action-${id}`;return row;
       };
       const sections = [];
       if (spec.nothing_visible) { const none = group(); none.list.append(choice("", spec.nothing_label, "", spec.nothing)); sections.push(none.section); }
@@ -402,10 +404,12 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
         const name = (link.replace(/\/$/, "").split("/").at(-1) || link).split(".")[0].replaceAll(/[_-]/g, " ");
         const anchor = element("a", "settings-link", name); anchor.href = link; anchor.target = "_blank"; anchor.rel = "noopener noreferrer"; links.append(anchor);
       }
+      links.hidden=!keymap.links.length;
       const list = group();
       const rowsOrEmpty = keymap.differences.length ? keymap.differences : [{ trigger: copy.no_differences, note: copy.defaults_help }];
-      list.list.append(...rowsOrEmpty.map(d => { const row = element("div", "preference-row"); const text = element("span", "preference-text"); text.append(element("span", "", d.trigger), element("p", "", d.note)); row.append(text); return row; }));
-      details.body.replaceChildren(element("p", "settings-description", keymap.source), links, list.section);
+      list.list.append(...rowsOrEmpty.map(d=>kit.row({title:d.trigger,description:d.note}).line));
+      detailsIntro.replaceChildren(element("p", "settings-description", keymap.source),links);
+      details.body.replaceChildren(list.section);
     }
     present(details, keymap.details?keymap.dialog:null);
     const preview = keymap.import, signatureImport = JSON.stringify(preview);

@@ -31,6 +31,16 @@ function harness(t){
   return {app,doc,options,operations,captions,changes,switch(tag){language=tag;},failure(next){failure=next;}};
 }
 function refuse(number,text='é雪{draft}'){number.entry.focus();number.entry.value=text;number.entry.dispatch('input');number.entry.setSelectionRange(1,4);assert.equal(number.commit(),false);return number.entry;}
+
+test('native page numbers can omit their displayed unit without changing expression input',t=>{
+  const h=harness(t),control={...h.options.control,kind:'number',unit:'ppi',max:10000};
+  const number=createNumberField({...h.options,control,resolve:request=>{const value=h.options.resolve(request);return {...value,text:value.text+' ppi'};}});
+  number.update(300);assert.equal(number.entry.value,'300 ppi');
+  const reads=h.operations.length;number.setShowUnits(false);assert.equal(h.operations.length,reads);assert.equal(number.entry.value,'300');
+  h.failure(null);number.entry.focus();number.entry.value='400 ppi';assert.equal(number.commit(),true);
+  assert.equal(h.operations.at(-1).control.unit,'ppi');assert.equal(h.operations.at(-1).operation.text,'400 ppi');
+  assert.equal(number.entry.value,'7');number.setShowUnits(true);assert.equal(number.entry.value,'7 ppi');
+});
 function publication(h,number,label='Largeur'){
   const entry=number.entry,value=entry.value,selection=[entry.selectionStart,entry.selectionEnd],operations=h.operations.length,changes=h.changes.length;
   h.switch('fr');number.relabel(label);

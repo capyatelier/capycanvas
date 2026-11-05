@@ -1,6 +1,7 @@
 import {createDialogHost} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {addScrollbar} from './scrollbars.js';
+import {createPageKit} from './page-kit.js';
 
 const previews = new Map(), dialogs = new Set();
 export function refreshTextureDialogs() { for (const refresh of [...dialogs]) refresh(); }
@@ -47,6 +48,7 @@ function texturePicker(state, layer) {
 }
 
 export function chooseTexture({app, layer, state, dispatch, element, button, icon, message}) {
+  const kit=createPageKit({element,icon});
   const opened = texturePicker(state, layer);
   if (!opened) return;
   const copy = liveCopy(app, 'catalog').native_copy.paper, bootstrap = liveCopy(app, 'bootstrap_view');
@@ -61,7 +63,7 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   const cancel = button(() => bootstrap.common.cancel, () => root.close(), 'dialog-button');
   const apply = button(() => copy.use_texture, () => { finish(); shell.hide(); }, 'suggested-action');
   importButton.id = 'texture-import'; cancel.id = 'texture-cancel'; apply.id = 'texture-apply';
-  const footer = element('footer', 'dialog-footer'); footer.append(importButton, element('span', 'dialog-gap'), cancel, apply);
+  const footer=kit.footer({start:[importButton],actions:[cancel,apply],separator:true});
   const content = element('div', 'dialog-content'); content.append(page, footer);
   const menu = element('div', 'panel-context-menu'); menu.popover = 'auto'; menu.setAttribute('role', 'menu');
   menu.addEventListener('toggle', e => { if (e.newState === 'closed' && !grid.contains(document.activeElement)) reveal(); });
@@ -71,16 +73,16 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   function rename(action) {
     const form = element('dialog', 'workspace-form'); form.id = 'paper-rename-dialog';
     bindCopy(form, () => copy.rename_title, 'ariaLabel');
-    const label = element('label', '', () => bootstrap.common.name), input = element('input'), error = element('p', 'workspace-error'), footer = element('footer');
-    input.id = 'paper-rename-name'; input.value = action.name; input.maxLength = 64; label.append(input);
+    const field=kit.entryRow({title:()=>bootstrap.common.name,value:action.name,id:'paper-rename-name'}),input=field.input,error=element('p','preferences-error');
+    input.maxLength=64;const group=kit.group();group.list.append(field.line);const body=kit.body(group.section,error);
     const save = button(() => copy.rename, () => { renameShell.hide(); dispatch({type: 'effect', action: {...action, name: input.value}}); }, 'suggested-action');
     const validate = () => { error.textContent = app.native_caption({type: 'paper_name_error', name: input.value}); save.disabled = !!error.textContent; };
     input.oninput = validate;
     input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); if (!save.disabled) save.click(); } };
     const cancel=button(() => bootstrap.common.cancel, () => renameShell.hide()),header=element('header','dialog-header');header.append(element('h2', '', () => copy.rename_title));
-    footer.append(cancel,save);form.append(header,label,error,footer);
+    const footer=kit.footer({actions:[cancel,save]});form.append(header,body.root,footer);
     const renameShell=createDialogHost({app,dialog:form,header,cancel,primary:save,icon,copy:bootstrap.common,onCancel:()=>renameShell.hide()});
-    form.addEventListener('close', () => { renameShell.dispose();form.remove(); reveal(); });
+    form.addEventListener('close', () => { renameShell.dispose();body.dispose();form.remove(); reveal(); });
     validate(); document.body.append(form); renameShell.present(copy.rename_dialog); input.select();
   }
   function openMenu(index, e) {

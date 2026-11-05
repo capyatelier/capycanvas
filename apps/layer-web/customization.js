@@ -5,6 +5,7 @@ import { colorButton, pickerButtonAction, updatePaintPairIcon } from './color-co
 import {liveCopy} from './localization.js';
 import {middleEllipsis} from './text-layout.js';
 import {createDialogHost} from './dialog-host.js';
+import {createPageKit} from './page-kit.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
@@ -12,6 +13,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   dispatch, draggable, grip, place, updateZen, editor, rasterWorker }) {
   const send = (action) => dispatch({ type: "customize", action });
   const common = liveCopy(app, 'bootstrap_view').common;
+  const kit=createPageKit({element,icon});
   const views = new Map(), fields = new Map(), panelViewKeys = new WeakMap();
   let textContext;
   function fitMenuLabel(label) {
@@ -412,24 +414,24 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const confirm = button("", () => send({ type: "confirm_tools" }), "suggested-action");
   const pickerCancel=button(()=>common.cancel,cancel);pickerCancel.id='cancel-tools';
   confirm.id = "confirm-tools"; pickerHeader.append(pickerCancel, pickerTitle, confirm);
-  const pickerBody = element("div", "tool-picker-body"), nameGroup = element("div", "tool-picker-name"), nameRow = element("label", "toolbar-name");
-  nameGroup.append(nameRow);
-  const nameLabel = element("span"), name = element("input"); name.id = "toolbar-name";
-  name.addEventListener("input", () => send({ type: "picker_name", name: name.value })); nameRow.append(nameLabel, name);
+  const pickerBody = element("div", "tool-picker-body"), nameGroup = kit.group();
+  const nameRow = kit.entryRow({title:'',id:'toolbar-name'}), name = nameRow.input;
+  nameGroup.list.append(nameRow.line);
+  name.addEventListener("input", () => send({ type: "picker_name", name: name.value }));
   const search = element("input", "preferences-search"); search.type = "search"; search.id = "tool-search";
   search.addEventListener("input", () => send({ type: "picker_search", query: search.value }));
   const searchRow = element("div", "tool-search"); searchRow.append(icon("search"), search);
   const choices = element("div", "tool-choices"), error = element("p", "preferences-error"), count = element("span", "tool-count");
   const catalogRoot=element('div','tool-picker-catalog');catalogRoot.style.gap=`${catalog.command_search_style.gap}px`;
   catalogRoot.append(searchRow,panelFrame(choices));
-  pickerBody.append(nameGroup,catalogRoot,count,error); picker.append(pickerHeader, pickerBody); workspace.append(picker);
+  pickerBody.append(nameGroup.section,catalogRoot,count,error); picker.append(pickerHeader, pickerBody); workspace.append(picker);
   const pickerHost=createDialogHost({app,dialog:picker,header:pickerHeader,cancel:pickerCancel,primary:confirm,icon,copy:common,onCancel:cancel,
     search,clearSearch:()=>send({type:'picker_search',query:''})});
   function refreshPicker() {
     const model = app.tool_picker();
     if (!model) { pickerHost.hide(); return; }
     pickerTitle.textContent = model.title; picker.setAttribute("aria-label", model.title);
-    nameRow.hidden = model.name == null; nameLabel.textContent = model.name_label;
+    nameGroup.section.hidden = model.name == null; nameRow.label.textContent = model.name_label;
     name.setAttribute("aria-label", model.name_label);
     if (model.name != null && name.value !== model.name) name.value = model.name;
     search.placeholder = model.search_hint; search.setAttribute("aria-label", model.search_hint);
@@ -493,16 +495,16 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
 
   const prompt = element("dialog", "toolbar-prompt"), promptTitle = element("h2"), promptMessage = element("p");
   prompt.id = "toolbar-prompt";
-  const promptNameRow = element("label", "toolbar-name"), promptNameLabel = element("span"), promptName = element("input");
-  promptName.id = "toolbar-prompt-name";
+  const promptEntry=kit.entryRow({title:'',id:'toolbar-prompt-name'}),promptNameRow=promptEntry.line,promptNameLabel=promptEntry.label,promptName=promptEntry.input;
   promptName.addEventListener("input", () => send({ type: "toolbar_name", name: promptName.value }));
-  promptNameRow.append(promptNameLabel, promptName);
-  const promptError = element("p", "preferences-error"), promptActions = element("div", "prompt-actions");
+  const promptGroup=kit.group();promptGroup.list.append(promptNameRow);
+  const promptError = element("p", "preferences-error");
   const cancelPrompt = () => send({ type: "cancel_toolbar" });
   const promptCancel = button("", cancelPrompt), promptConfirm = button("", () => send({ type: "confirm_toolbar" }));
-  promptConfirm.id = "confirm-toolbar"; promptActions.append(promptCancel, promptConfirm);
+  promptConfirm.id = "confirm-toolbar";const promptActions=kit.footer({actions:[promptCancel,promptConfirm]});
   const promptHeader=element('header','dialog-header');promptHeader.append(promptTitle);
-  prompt.append(promptHeader,promptMessage,promptNameRow,promptError,promptActions);workspace.append(prompt);
+  const promptBody=kit.body(promptMessage,promptGroup.section,promptError);
+  prompt.append(promptHeader,promptBody.root,promptActions);workspace.append(prompt);
   const promptHost=createDialogHost({app,dialog:prompt,header:promptHeader,cancel:promptCancel,primary:promptConfirm,icon,copy:common,onCancel:cancelPrompt});
   promptName.addEventListener("keydown", e => {
     if (e.key === "Enter" && !promptConfirm.disabled) { e.preventDefault(); promptConfirm.click(); }
@@ -512,7 +514,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     if (!model) { promptHost.hide(); return; }
     promptTitle.textContent = model.title; prompt.setAttribute("aria-label", model.title);
     promptMessage.textContent = model.message; promptMessage.hidden = !model.message;
-    promptNameRow.hidden = model.name == null;
+    promptGroup.section.hidden = model.name == null;
     promptNameLabel.textContent = model.name_label; promptName.setAttribute("aria-label", model.name_label);
     if (model.name != null && promptName.value !== model.name) promptName.value = model.name;
     promptError.textContent = model.error || ""; promptError.hidden = !model.error;
