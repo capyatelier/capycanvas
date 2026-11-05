@@ -94,6 +94,35 @@ fn window_close_waits_for_the_pending_canvas_operation() {
 }
 
 #[test]
+fn drawing_close_waits_for_the_pending_canvas_submission() {
+    let mut host = NativeHost::new(Platform::Windows).unwrap();
+    let mut service = DocumentService::open(|| {}).unwrap();
+    host.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 }).unwrap();
+    assert!(host.session.retained_document_tiles().try_blobs().unwrap().is_some());
+    assert!(service.window.adoption_ready(&host).unwrap());
+    assert!(!host.session.can_park_document());
+    assert!(!service.window.park_ready(&host).unwrap());
+    command(&mut host, CommandId::CloseDocument);
+    let id = host.session.state().requests.iter().find_map(|request|
+        matches!(request.kind, HostRequestKind::Document { request: DocumentRequest::ConfirmClose { .. } }).then_some(request.id)).unwrap();
+    let file = host.session.state().document_file.clone();
+    service.dispatch(&mut host, DocumentAction::RespondClose {
+        id, epoch: file.epoch, revision: file.revision, decision: CloseDecision::Discard,
+    }).unwrap();
+    assert!(host.session.state().document_file.close_ready);
+    assert!(host.session.engine().has_pending_document_edits());
+    service.poll(&mut host).unwrap();
+    assert!(service.prepared_close.is_none());
+    assert!(host.session.state().document_file.close_ready);
+    host.suspend_renderer().unwrap();
+    assert!(host.session.can_park_document());
+    service.poll(&mut host).unwrap();
+    assert!(service.prepared_close.is_some());
+    assert!(host.document_close_prepared());
+    service.stop_worker().unwrap();
+}
+
+#[test]
 fn window_close_cancels_unfinished_header_editing() {
     let mut host = NativeHost::new(Platform::Windows).unwrap();
     let mut service = DocumentService::open(|| {}).unwrap();

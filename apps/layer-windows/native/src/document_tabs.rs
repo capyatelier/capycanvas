@@ -321,7 +321,7 @@ impl DocumentService {
         }
         if self.prepared_close.is_some()&&!host.session.state().document_file.close_ready {let prepared=self.prepared_close.take().unwrap();self.window.cancel_close(host,prepared)?;}
         if !self.close_window && host.session.state().document_file.close_ready && self.prepared_close.is_none() {
-            if self.window.documents.trim_in_flight()||!self.idle()||!self.window.adoption_ready(host)? {return Ok(());}
+            if self.window.documents.trim_in_flight()||!self.idle()||!self.window.park_ready(host)?||!self.window.adoption_ready(host)? {return Ok(());}
             let options=host.renderer_options();self.prepared_close=Some(self.window.prepare_close(host,options)?);
         }
         if let Some(prepared)=&self.prepared_close {self.window.validate_close(host,prepared)?;}
