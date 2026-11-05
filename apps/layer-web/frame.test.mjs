@@ -17,11 +17,12 @@ test('glass CSS preserves the shared straight RGBA channels',()=>{
   for(const color of [[0.9426783323287964,0.9426783323287964,0.9426783323287964,0.9399999976158142],
     [0.2571895718574524,0.2571895718574524,0.2571895718574524,0.9599999785423279],
     [0.2,0.4,0.6,0.001]]){
-    context.applyTheme('light',{glass:{panel:color},control_fill:zero,controls:{fill:color},dialogs:{scrim:color,press_shade:zero,destructive_oklab:[.5,.1,.2]},lines:{settings,panel:{border:zero},sidebar_border:zero}});
+    context.applyTheme('light',{glass:{panel:color},control_fill:zero,controls:{fill:color},dialogs:{scrim:color,press_shade:zero,destructive_oklab:[.5,.1,.2]},lines:{settings,panel:{border:zero},sidebar_border:zero,popover_border:color}});
     const values=styles.get('--glass-panel').match(/[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi).map(Number);
     const actual=[...values.slice(0,3).map(value=>value/255),values[3]];
     actual.forEach((value,index)=>assert.ok(Math.abs(value-color[index])<1e-7,`${index}: ${value} retains ${color[index]}`));
     assert.equal(styles.get('--widget-fill'),styles.get('--glass-panel'));
+    assert.equal(styles.get('--popover-border'),styles.get('--glass-panel'));
     assert.equal(styles.get('--dialog-scrim'),styles.get('--glass-panel'));assert.equal(styles.get('--dialog-destructive'),'oklab(0.5 0.1 0.2)');
   }
 });

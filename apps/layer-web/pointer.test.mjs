@@ -572,3 +572,20 @@ test('physical browser device facts classify primary pointer and screen independ
     assert.equal(browserDeviceClass(false,{width:1920,height:1080,viewport}),'desktop');
   }
 });
+
+test('phone tile mouse hold arms dragging without opening the touch or pen menu',()=>{
+  const phone=readFileSync(new URL('phone.js',import.meta.url),'utf8');
+  for(const pointerType of ['mouse','touch','pen']){
+    const listeners=new Map(),physical=new Set(),inputs=[],menus=[],actions=[];let timer,freed=0;
+    const target={},bar={free(){freed++;}},root={dataset:{},contains:node=>node===target,addEventListener(){},hasPointerCapture:id=>physical.has(id),setPointerCapture:id=>physical.add(id),releasePointerCapture:id=>physical.delete(id)};
+    const context={active:true,contact:null,suppressClick:false,preview:undefined,lifted:undefined,geometry:null,root,workspace:{getBoundingClientRect:()=>({x:0,y:0})},capyTarget:{contains:()=>false},parts:{'bar-tools':target},tools:new Map([[3,{root:target}]]),browserDragThreshold,
+      window:{addEventListener:(type,listener)=>listeners.set(type,listener)},setTimeout:callback=>{timer=callback;return 1;},clearTimeout(){},placePreview(){},send:action=>actions.push(action),customization:{showContext:(...args)=>menus.push(args)},
+      app:{touch_hold_ms:()=>500,phone_bar_contact:()=>bar,phone_bar_input:(_bar,input)=>{inputs.push(input);return {outcome:input.kind==='arm'?{kind:'held'}:{kind:'menu',value:3}};}}};
+    runInNewContext(phone.slice(phone.indexOf('  function cancelContact()'),phone.indexOf('  function report()')),context);
+    const event={target,button:0,isPrimary:true,pointerId:7,pointerType,clientX:20,clientY:30};
+    listeners.get('pointerdown')(event);timer();
+    assert.equal(inputs.at(-1).kind,'arm',`${pointerType} retains shared hold arming`);assert.equal(root.dataset.contact,'held');assert.equal(physical.has(7),true);assert.equal(menus.length,0);
+    listeners.get('pointerup')(event);
+    assert.equal(menus.length,pointerType==='mouse'?0:1,`${pointerType} release menu admission`);assert.equal(freed,1);assert.equal(physical.size,0);assert.equal(root.dataset.contact,undefined);assert.deepEqual(actions,[]);
+  }
+});

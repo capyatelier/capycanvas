@@ -5,7 +5,7 @@ import {configureColorEditor} from './color-editor.js';
 export class Element extends FakeElement {
   constructor(tag, doc) {
     super();
-    Object.assign(this, {tagName:tag.toUpperCase(), ownerDocument:doc, children:[], attributes:new Map(), listeners:{}, value:'', style:{}, dataset:{}, hidden:false, selectionStart:0, selectionEnd:0, clientWidth:0, offsetHeight:0});
+    Object.assign(this, {tagName:tag.toUpperCase(), ownerDocument:doc, children:[], attributes:new Map(), listeners:{}, value:'', style:{setProperty(name,value){this[name]=String(value);},getPropertyValue(name){return this[name]??'';},removeProperty(name){const value=this[name]??'';delete this[name];return value;}}, dataset:{}, hidden:false, selectionStart:0, selectionEnd:0, clientWidth:0, offsetHeight:0});
     const classes = new Set();
     this.classList = {add:name => classes.add(name), remove:name => classes.delete(name), toggle:(name, on = !classes.has(name)) => (on ? classes.add(name) : classes.delete(name), on), contains:name => classes.has(name)};
   }

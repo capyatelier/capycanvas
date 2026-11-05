@@ -4,6 +4,8 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createCanvasBar } from "./canvas-bar.js";
+import {createContextPopover} from "./context-popover.js";
+import {colorDialogDom} from "./color-dialog-fixture.mjs";
 
 class FakeElement extends SharedElement {
   constructor(tag, className = "") {
@@ -308,20 +310,20 @@ test("a stale context leaves the bar unplaced", () => {
   assert.equal(h.bar.bounds(), null);
 });
 
-test("context menu triggers retain native ownership and toggle before querying", () => {
+test("context menu triggers retain native ownership and toggle before querying", t => {
   const source = readFileSync(new URL("customization.js", import.meta.url), "utf8");
-  const context = new FakeElement("div"), sources = [];
+  const {element}=colorDialogDom(t),contextPopover=createContextPopover({element}),context=contextPopover.root,sources=[];
   let pointerdown;
   let queries = 0;
   context.showPopover = ({ source } = {}) => { sources.push(source); context.open = true; };
-  context.querySelector = () => null;
+  context.querySelector = () => null;context.matches=selector=>selector===":popover-open"&&context.open;context.hidePopover=()=>{context.open=false;};
   context.contains = () => false;
   const trigger = () => Object.assign(new FakeElement("button"), {
     menuModel() { queries++; return { title: "Menu", sections: [] }; },
   });
   const first = trigger(), second = trigger();
   first.contains = target => target === first; second.contains = target => target === second;
-  const scope = { context, Event, window: { addEventListener(type, callback) { pointerdown = callback; } },
+  const scope = { context,contextPopover, Event, window: { addEventListener(type, callback) { pointerdown = callback; } },
     renderMenu() {}, positionPopup() {}, closeMenuHost() {}, closeDropdown() {},
     closeContext() { context.hidePopover(); context.menuOwner = null; } };
   runInNewContext(source.slice(source.indexOf("  function showContext("), source.indexOf("  function variationMarker(")), scope);

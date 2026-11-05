@@ -187,12 +187,15 @@ async function managerWorkspace(context){
   const id=await context.evaluate('JSON.parse(layerApp.app.workspace_view()).rows.find(row=>row.title==="Canvas study")?.id');assert.ok(id,'Authored workspace is offered');
   await managerInput(context,{type:'select',id});return id;
 }
-async function managerOffered(context,page,type,form=true){
+async function managerOffered(context,page,type){
   await managerPage(context,page,true);
-  const action=await context.evaluate(`(()=>{const view=JSON.parse(layerApp.app.workspace_view());return [...(view.details?.actions??[]),...view.rows.flatMap(row=>row.actions)].find(button=>button.enabled&&button.action.type===${JSON.stringify(type)})?.action;})()`);
-  assert.ok(action,`Manager offers ${type}`);
-  if(form)await managerInput(context,{type:'form',action});
-  else {await context.wait(`!!document.querySelector('.workspace-details [data-action="${type}"]')`);await context.click(`.workspace-details [data-action="${type}"]`);}
+  const offered=await context.evaluate(`(()=>{const view=JSON.parse(layerApp.app.workspace_view());return [...(view.details?.actions??[]),...view.rows.flatMap(row=>row.actions)].find(button=>button.enabled&&button.action.type===${JSON.stringify(type)});})()`);
+  assert.ok(offered,`Manager offers ${type}`);
+  if(offered.primary){await context.click(`.workspace-details [data-action="${type}"]`);return;}
+  await context.click('.workspace-details .workspace-more');
+  await context.wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(row=>row.menuItem?.command===${JSON.stringify(JSON.stringify(offered.action))})`);
+  await context.evaluate(`(()=>{const row=[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(row=>row.menuItem?.command===${JSON.stringify(JSON.stringify(offered.action))});row.dataset.workspaceAuditAction='';})()`);
+  await context.click('.panel-context-menu:popover-open [data-workspace-audit-action]');
 }
 
 async function photoAuditOpen({send,evaluate,wait}){
@@ -535,7 +538,7 @@ export const dialogAuditRows=[
     await managerPage(context,type==='new'?'workspaces':'this_workspace');await managerInput(context,{type:'form',action:type==='new'?{type}:{type,value:null}});
   },closeaction:managerClose})),
   ...[['save-toolbar','this_workspace','save_toolbar'],['replace-toolbar','this_workspace','replace_toolbar'],['rename-saved-toolbar','toolbar_library','rename'],['delete-saved-toolbar','toolbar_library','delete'],['update-saved-toolbar','toolbar_library','update_toolbar']].map(([id,page,type])=>({batch:'w6c',id,rootselector:'.workspace-form[open]',openaction:context=>managerOffered(context,page,type),closeaction:managerClose})),
-  ...[['rename-toolbar','rename_toolbar'],['duplicate-toolbar','duplicate_toolbar'],['delete-toolbar','delete_toolbar']].map(([id,type])=>({batch:'w6c',id,rootselector:'#toolbar-prompt[open]',openaction:context=>managerOffered(context,'this_workspace',type,false),closeaction:async context=>{await context.send({type:'customize',action:{type:'cancel_toolbar'}});await managerClose(context);}})),
+  ...[['rename-toolbar','rename_toolbar'],['duplicate-toolbar','duplicate_toolbar'],['delete-toolbar','delete_toolbar']].map(([id,type])=>({batch:'w6c',id,rootselector:'#toolbar-prompt[open]',openaction:context=>managerOffered(context,'this_workspace',type),closeaction:async context=>{await context.send({type:'customize',action:{type:'cancel_toolbar'}});await managerClose(context);}})),
   ...[['reset-workspace','reset_layout'],['reset-brushes','reset_brushes']].map(([id,type])=>({batch:'w6c',id,rootselector:'.workspace-form[open]',openaction:async context=>{await context.send({type:'workspace_manager',command:{type}});},closeaction:managerClose})),
   ...[['rename-workspace','rename'],['delete-workspace','delete']].map(([id,type])=>({batch:'w6c',id,...(type==='rename'?{aliasof:'workspaces'}:{}),rootselector:type==='rename'?'.workspace-manager[open]':'.workspace-form[open]',openaction:async context=>{
     const id=await managerWorkspace(context);const action=await context.evaluate(`JSON.parse(layerApp.app.workspace_view()).rows.find(row=>row.id===${JSON.stringify(id)}).actions.find(button=>button.enabled&&button.action.type===${JSON.stringify(type)})?.action`);
@@ -664,7 +667,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
   const close=async()=>{
     if(await evaluate('layerApp.state().phone.menu'))await send({type:'phone',action:{kind:'capy'}});
     if(await evaluate('!!document.querySelector("dialog[open]")')){
-      await evaluate('document.querySelector("dialog[open]").requestClose()');
+      await evaluate('document.querySelector("dialog[open]")?.requestClose()');
       await settle();
     }
     await wait('!document.querySelector("dialog[open]")');
@@ -885,9 +888,19 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         const position=await point(`#phone-tool-${tile}`);await hold(position);await release();
         await wait('document.querySelector(".panel-context-menu")?.matches(":popover-open")');
       };
+      const heldPointer=async(position,pointerType)=>{
+        const start=await evaluate('performance.now()');
+        await call('Input.dispatchMouseEvent',{type:'mousePressed',...position,button:'left',buttons:1,clickCount:1,pointerType});
+        await wait(`performance.now()-${start}>=900&&document.querySelector("#phone-frame").dataset.contact==="held"`);
+        assert.equal(await evaluate('!!document.querySelector(".panel-context-menu:popover-open")'),false,`${pointerType} hold arms before release`);
+        await call('Input.dispatchMouseEvent',{type:'mouseReleased',...position,button:'left',buttons:0,clickCount:1,pointerType});await settle();
+        if(pointerType==='pen')await wait('!!document.querySelector(".panel-context-menu:popover-open")');
+        assert.equal(await evaluate('!!document.querySelector(".panel-context-menu:popover-open")'),pointerType==='pen',`${pointerType} release menu`);
+      };
       const menuAction=async label=>{
-        const index=await evaluate(`[...document.querySelectorAll('.panel-context-menu > button')].findIndex(n=>n.menuItem?.label===${JSON.stringify(label)})`);
-        assert.ok(index>=0,label);await click(`.panel-context-menu > button:nth-of-type(${index+1})`);
+        await wait(`!![...document.querySelectorAll('.panel-context-menu:popover-open button')].find(n=>n.menuItem?.label===${JSON.stringify(label)})`);
+        await evaluate(`(()=>{const row=[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(n=>n.menuItem?.label===${JSON.stringify(label)});row.dataset.phoneAuditAction='';})()`);
+        await click('.panel-context-menu:popover-open [data-phone-audit-action]');
       };
       const captureCustom=async name=>{
         const specs=phoneAuditFrameSpecifications(await tiles());
@@ -902,6 +915,9 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       };
       const escape=async()=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await settle();};
       const first=(await tiles())[0].id;
+      const tilePoint=await point(`#phone-tool-${first}`);
+      await heldPointer(tilePoint,'mouse');
+      await heldPointer(tilePoint,'pen');await escape();
       await menu(first);await captureCustom('customize-tile-menu');await menuAction('Remove Tool');
       const removed=await durable();assert.equal(removed.layout.phone.some(t=>t.id===first),false);
       assert.equal((await history()).undo.length,oldHistory.undo.length+1);
@@ -933,7 +949,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       await send({type:'customize',action:{type:'picker_select',control:last,selected:true}});await click('#confirm-tools');
       const full=await durable();assert.equal(full.layout.phone.filter(t=>t.control.kind!=='divider').length,10);
       await menu(anchor);await menuAction('Insert Tools…');
-      assert.equal(await evaluate('[...document.querySelectorAll(".tool-choice")].every((row,i)=>{const c=layerApp.app.tool_picker().choices[i],n=row.querySelector("input");return c.control.kind==="divider"?!n.disabled:n.disabled&&row.getAttribute("aria-disabled")==="true"&&Number(getComputedStyle(row).opacity)<1;})'),true,'Capacity dims and disables every non-divider row');
+      assert.equal(await evaluate('[...document.querySelectorAll(".tool-choice")].every((row,i)=>{const c=layerApp.app.tool_picker().choices[i],n=row.querySelector("input"),children=[...row.children].filter(child=>child!==n);return c.control.kind==="divider"?!n.disabled:n.disabled&&row.getAttribute("aria-disabled")==="true"&&Number(getComputedStyle(row).opacity)===1&&children.every(child=>Number(getComputedStyle(child).opacity)<1)&&getComputedStyle(n).width==="20px";})'),true,'Capacity dims content and disables every non-divider row');
       await captureCustom('customize-capacity');
       const disabled=await evaluate('layerApp.app.tool_picker().choices.findIndex(c=>c.control.kind!=="divider")');
       await click(`.tool-choice:nth-child(${disabled+1})`);assert.equal(await evaluate('Number(layerApp.app.tool_picker().selected_count)'),0,'A disabled row cannot select a tool');
@@ -946,8 +962,8 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       to[await evaluate('layerApp.app.layout(innerWidth,innerHeight).phone.edge==="top"?"x":"y"')]+=1;
       const moveHistory=await history();await hold(from);await touch('touchMove',to);
       await wait('document.querySelector("#phone-frame").dataset.contact==="dragging"');
-      const paint=await evaluate(`(()=>{const n=document.querySelector('#phone-tool-${sequence[0].id}').parentElement,s=getComputedStyle(n);return{lifted:n.classList.contains('header-drag-preview'),outline:s.outline,background:s.backgroundColor};})()`);
-      assert.equal(paint.lifted,true,JSON.stringify(paint));assert.ok(paint.outline.startsWith('rgb')&&paint.outline.includes('solid 2px'),JSON.stringify(paint));assert.notEqual(paint.background,'rgba(0, 0, 0, 0)');
+      const paint=await evaluate(`(()=>{const n=document.querySelector('#phone-tool-${sequence[0].id}').parentElement,s=getComputedStyle(n);return{lifted:n.classList.contains('header-drag-preview'),shadow:s.boxShadow,background:s.backgroundColor};})()`);
+      assert.equal(paint.lifted,true,JSON.stringify(paint));assert.ok(paint.shadow.includes('inset')&&paint.shadow.includes('2px'),JSON.stringify(paint));assert.notEqual(paint.background,'rgba(0, 0, 0, 0)');
       assert.deepEqual(await history(),moveHistory,'Reorder preview never enters shared history');
       await captureCustom('customize-reorder-held');await release();
       const expected=[sequence[1],sequence[2],sequence[0],...sequence.slice(3)];
@@ -960,7 +976,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       const empty=await durable();empty.layout.phone=[];await send({type:'restore_workspace',workspace:empty});
       const blank=await evaluate('(()=>{const b=layerApp.app.layout(innerWidth,innerHeight).phone.bars[0];return{x:b.x+b.width/2,y:b.y+b.height/2};})()');
       await hold(blank);await release();await wait('document.querySelector(".panel-context-menu")?.matches(":popover-open")');
-      assert.deepEqual(await evaluate('[...document.querySelectorAll(".panel-context-menu > button")].map(n=>n.menuItem.label)'),['Add Tools…']);
+      assert.deepEqual(await evaluate('[...document.querySelectorAll(".panel-context-menu:popover-open button")].map(n=>n.menuItem.label)'),['Add Tools…']);
       await captureCustom('customize-empty-toolbar');await menuAction('Add Tools…');await escape();
       assert.deepEqual((await durable()).layout.phone,[],'Cancelling Add Tools preserves an explicit empty toolbar');
       await send({type:'invoke',command:'reset_layout'});

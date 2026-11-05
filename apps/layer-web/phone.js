@@ -93,6 +93,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     const visual=(preview??geometry.tools)[index],hit=index===lifted?visual:tile.control.kind==='divider'?geometry.tools[index]:geometry.tool_hits[index];
     position(record.root,hit);position(record.node,{...visual,x:visual.x-hit.x,y:visual.y-hit.y});
     record.root.style.zIndex=index===lifted?'1':'';record.root.classList.toggle('header-drag-preview',index===lifted);
+    record.root.style.setProperty('--header-radius',`calc(${Math.min(visual.width,visual.height)/2}px * var(--corner-fit))`);
   }
   function placePreview(reply) {
     preview=reply?.geometry;lifted=reply?.lifted==null?undefined:Number(reply.lifted);
@@ -119,7 +120,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     suppressClick=false;
     const start=point(event),capyPress=capyTarget.contains(event.target),bar=capyPress?null:app.phone_bar_contact(...start);
     if(!capyPress&&!bar)return;
-    contact={id:event.pointerId,start,bar,capy:capyPress,position:start,held:false};
+    contact={id:event.pointerId,pointerType:event.pointerType,start,bar,capy:capyPress,position:start,held:false};
     const current=contact;
     current.timer=setTimeout(()=>{
       if(contact!==current)return;
@@ -153,7 +154,7 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     if(outcome.kind==='move'){send({kind:'move_tool',...outcome.value});suppressClick=true;}
     else if(outcome.kind==='menu'){
       const source=outcome.value==null?parts['bar-tools']:tools.get(outcome.value)?.root;
-      if(source)customization.showContext(source,[event.clientX,event.clientY]);suppressClick=true;
+      if(source&&['touch','pen'].includes(current.pointerType))customization.showContext(source,[event.clientX,event.clientY]);suppressClick=true;
     } else if(outcome.kind==='cancel')suppressClick=true;
   },true);
   window.addEventListener('pointercancel',event=>{if(contact?.id===event.pointerId){suppressClick=true;cancelContact();}},true);

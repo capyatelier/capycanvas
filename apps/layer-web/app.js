@@ -158,7 +158,7 @@ function applyTheme(theme, palette) {
     document.body.style.setProperty('--dialog-destructive',`oklab(${palette.dialogs.destructive_oklab.join(' ')})`);
     document.body.style.setProperty("--control-fill", rgba(palette.control_fill));
     const { settings, panel, sidebar_border } = palette.lines;
-    for (const [name, color] of [["card-shade", settings.card_shade], ["sidebar-edge", sidebar_border], ["menu-divider", panel.border]]) {
+    for (const [name, color] of [["card-shade", settings.card_shade], ["sidebar-edge", sidebar_border], ["menu-divider", panel.border], ["popover-border", palette.lines.popover_border]]) {
       document.body.style.setProperty(`--${name}`, rgba(color));
     }
     document.body.style.setProperty("--card-shadow", `0 0 0 1px ${rgba(settings.card_ring)}, 0 1px 3px 1px ${rgba(settings.card_shadow)}, 0 2px 6px 2px ${rgba(settings.card_far_shadow)}`);
@@ -1971,7 +1971,7 @@ try {
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
   // run in later tasks, after this synchronous UI construction is complete.
-  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, dropdown, message });
+  workspaceManager = createWorkspaceManager({ app, store: workspaceStore, applyChange, element, button, icon, dropdown, message, openMenu: node => customization.openMenu(node) });
   selectionUi = createSelectionUi({app,state:()=>state,element,button,icon,dropdown,numberField,dispatch,workspace});
   const separate=action=>dispatch({type:'frequency_separation',action});
   frequencySeparationUi = createPreviewPanel({app,name:'frequency-separation',view:()=>state.layer_tools.frequency_separation,kind:v=>v.label,

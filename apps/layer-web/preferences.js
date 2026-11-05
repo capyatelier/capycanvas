@@ -1,3 +1,4 @@
+import {createContextPopover} from './context-popover.js';
 import {chooseProfileLibrary} from './export-controls.js';
 import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
@@ -13,9 +14,8 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   const send = (action) => dispatch({ type: "preferences", action });
   const {group:settingsGroup,row:preferenceRow}=createPageKit({element,icon});
   const close = () => dispatch({ type: "close_settings" });
-  const context = element("div", "panel-context-menu preference-context-menu");
-  context.id = "preference-context-menu"; context.popover = "manual";
-  context.setAttribute("role", "menu"); dialog.append(context);
+  const contextPopover=createContextPopover({element,classes:"preference-context-menu"}),context=contextPopover.root,contextBody=contextPopover.body;
+  context.id="preference-context-menu";dialog.append(context);
   let contextId = null, hold = null, heldPointer = null;
   const dismissContext = () => { context.hidePopover(); contextId = null; };
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
@@ -23,7 +23,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   function showContext(line, x, y, target) {
     const row = modelRow(line.dataset.preference);
     if (!row?.reset) return;
-    contextId = row.id; context.replaceChildren(); context.setAttribute("aria-label", row.title);
+    contextId = row.id; contextBody.replaceChildren(); context.setAttribute("aria-label", row.title);
     // Preserve text operations when opening over an editor. Clipboard access
     // remains a host operation; settings/reset policy stays in Rust.
     const input = target.closest('input[type="text"]');
@@ -45,9 +45,9 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
         item.setAttribute("role", "menuitem");
         item.append(element("span", "command-label", ()=>view()?.text_edit_menu.find(item=>item.action===operation)?.label??""), element("span", "shortcut-hint", shortcut));
         item.disabled = ["cut", "copy"].includes(operation) ? start === end : operation === "select_all" && !original;
-        context.append(item);
+        contextBody.append(item);
       }
-      context.append(element("hr"));
+      contextBody.append(element("hr"));
     }
     const reset = button("", () => {
       dismissContext(); send({ type: "reset", id: row.id });
@@ -57,10 +57,8 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     reset.dataset.reset = row.id; reset.setAttribute("role", "menuitem");
     reset.disabled = !row.reset.enabled;
     reset.append(element("span", "command-label", ()=>modelRow(row.id)?.reset?.label??""), element("span", "shortcut-hint", row.reset.hint));
-    context.append(reset); context.showPopover();
-    const rect = context.getBoundingClientRect();
-    context.style.left = `${Math.max(6, Math.min(x, innerWidth - rect.width - 6))}px`;
-    context.style.top = `${Math.max(6, Math.min(y, innerHeight - rect.height - 6))}px`;
+    contextBody.append(reset); context.showPopover();
+    contextPopover.place({x,y,width:1,height:1},true);
     if (!input) reset.focus();
   }
   // Keep the focused text editor's selection/draft while using its menu.

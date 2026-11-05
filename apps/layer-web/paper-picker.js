@@ -1,3 +1,4 @@
+import {createContextPopover} from './context-popover.js';
 import {createDialogHost} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {addScrollbar} from './scrollbars.js';
@@ -65,7 +66,7 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
   importButton.id = 'texture-import'; cancel.id = 'texture-cancel'; apply.id = 'texture-apply';
   const footer=kit.footer({start:[importButton],actions:[cancel,apply],separator:true});
   const content = element('div', 'dialog-content'); content.append(page, footer);
-  const menu = element('div', 'panel-context-menu'); menu.popover = 'auto'; menu.setAttribute('role', 'menu');
+  const contextPopover=createContextPopover({element,popover:'auto'}),menu=contextPopover.root;
   menu.addEventListener('toggle', e => { if (e.newState === 'closed' && !grid.contains(document.activeElement)) reveal(); });
   root.append(header,content, menu); document.body.append(root); const scroll=addScrollbar(page,content);
   const shell=createDialogHost({app,dialog:root,header,cancel,primary:apply,icon,copy:bootstrap.common,onCancel:()=>shell.hide()});
@@ -89,15 +90,13 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
     const items = shown.tiles[index].actions;
     if (!items.length) return;
     e.preventDefault(); e.stopPropagation();
-    menu.replaceChildren(...items.map(entry => {
+    contextPopover.body.replaceChildren(...items.map(entry => {
       const item = button(entry.label, () => { menu.hidePopover(); if (entry.action.op === 'rename_paper') rename(entry.action); else dispatch({type: 'effect', action: entry.action}); });
       item.setAttribute('role', 'menuitem'); return item;
     }));
     menu.showPopover();
-    const tile = tiles[index].getBoundingClientRect(), box = menu.getBoundingClientRect();
-    const [x, y] = e.clientX || e.clientY ? [e.clientX, e.clientY] : [tile.left, tile.bottom];
-    menu.style.left = `${Math.max(6, Math.min(x, innerWidth - box.width - 6))}px`;
-    menu.style.top = `${Math.max(6, Math.min(y, innerHeight - box.height - 6))}px`;
+    const tile=tiles[index].getBoundingClientRect();
+    contextPopover.place(e.clientX||e.clientY?{x:e.clientX,y:e.clientY,width:1,height:1}:tile,true);
     menu.querySelector('button')?.focus();
   }
   function reveal(node = grid.querySelector('[tabindex="0"]')) {

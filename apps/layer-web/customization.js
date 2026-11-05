@@ -7,6 +7,7 @@ import {middleEllipsis} from './text-layout.js';
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
 import {addScrollbar} from './scrollbars.js';
+import {createContextPopover} from './context-popover.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
@@ -34,8 +35,10 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
   let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, menuCommand = null, menuHost=null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
-  const context = element("div", "panel-context-menu");
-  context.popover = "manual"; context.setAttribute("role", "menu"); workspace.append(context);
+  const contextPopover=createContextPopover({element}),context=contextPopover.root;
+  const menuBody=container=>container===context?contextPopover.body:container;
+  let contextAnchor;
+  workspace.append(context);
   const popup = element("div", "tile-popover"); popup.popover = "auto"; workspace.append(popup);
   const closeMenuHost=event=>{if(event.type==='close'||event.newState==='closed')dismissContext();};
   function closeContext(restoreFocus=false) {
@@ -95,21 +98,23 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     container.menuModelKey=menuKey(parents[0]||model);
     container.classList.add("workspace-menu-items");
     container.setAttribute("aria-label", model.title);
-    container.replaceChildren();
+    const body=menuBody(container);
+    body.replaceChildren();
     if (parents.length) {
       const back = button(model.title, () => {
         const {close,parents,path}=container.menuView, previous=parents.at(-1);
         renderMenu(container, previous, close, parents.slice(0, -1), path.slice(0,-1));
       }, "submenu-back");
-      back.prepend(icon("go-previous")); container.append(back, element("hr"));
+      back.prepend(icon("go-previous")); body.append(back, element("hr"));
     }
+    const checks=model.sections.flat().some(item=>item.selected!=null);
     let separated = false;
     model.sections.forEach((section, index) => {
       if (!section.length) return;
-      if (separated) container.append(element("hr"));
+      if (separated) body.append(element("hr"));
       separated = true;
       for (const [itemIndex,item] of section.entries()) {
-        if (item.is_heading) { container.append(element("div", "menu-heading", item.label)); continue; }
+        if (item.is_heading) { body.append(element("div", "menu-heading", item.label)); continue; }
         const submenu = item.sections?.some(section => section.length);
         const row = menuRow(item, item => {
           const {model,close,parents,path}=container.menuView;
@@ -119,11 +124,11 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
             if (item.action) dispatch(item.action); else if (item.command != null) menuCommand?.(item.command, item);
             if (item.keep_open) refreshContextMenu();
           }
-        }, {submenu});
-        container.append(row);
+        }, {checks,submenu});
+        body.append(row);
       }
     });
-    if (container === context && context.matches(":popover-open")) positionPopup(context);
+    if (container === context && context.matches(":popover-open")) contextPopover.place(contextAnchor);
   }
   function refreshMenu(container,model,close) {
     const rootKey=menuKey(model);
@@ -135,16 +140,16 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       parents.push(model);model={title:item.label,sections:item.sections};
     }
     const path=container.menuPath?.slice(0,parents.length)??[];
-    const rows=[...container.querySelectorAll(':scope > button:not(.submenu-back)')], items=model.sections.flat().filter(item=>!item.is_heading);
+    const rows=[...menuBody(container).querySelectorAll(':scope > button:not(.submenu-back)')], items=model.sections.flat().filter(item=>!item.is_heading);
     if(container.menuStructureKey===menuStructure(model,parents.length) && rows.length===items.length) {
       container.menuView={model,close,parents,path};container.menuModelKey=rootKey;container.menuPath=path;
       for(const [index,item] of items.entries()) {
         rows[index].updateMenuRow(item);
       }
     } else {
-      const focused=[...container.querySelectorAll(':scope > button')].indexOf(document.activeElement);
+      const focused=[...menuBody(container).querySelectorAll(':scope > button')].indexOf(document.activeElement);
       renderMenu(container,model,close,parents,path);
-      if(focused>=0)container.querySelectorAll(':scope > button')[focused]?.focus({preventScroll:true});
+      if(focused>=0)menuBody(container).querySelectorAll(':scope > button')[focused]?.focus({preventScroll:true});
     }
   }
   function refreshContextMenu() {
@@ -164,9 +169,12 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     menuHost=node.closest('dialog[open],[popover]:popover-open');
     if(menuHost){menuHost.append(context);for(const type of ['close','beforetoggle'])menuHost.addEventListener(type,closeMenuHost);}
     context.style.minWidth=node.classList.contains('dropdown')&&point[2]!=null?`${node.getBoundingClientRect().width}px`:'';
-    anchor = point; context.menuOwner = node; context.menuFocus = focus;
+    const bounds=node.getBoundingClientRect();
+    contextAnchor=point[2]==null?{x:point[0],y:point[1],width:1,height:1}:
+      {x:bounds.left,y:point[2],width:bounds.width,height:point[1]-point[2]};
+    context.menuOwner = node; context.menuFocus = focus;
     renderMenu(context, model, closeDropdown);
-    context.showPopover({source: node}); positionPopup(context);
+    context.showPopover({source: node}); contextPopover.place(contextAnchor,true);
   }
   function openMenu(node, point, focus = node) {
     if (context.menuOwner === node && context.matches(':popover-open')) { closeContext(); return context; }
@@ -432,7 +440,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const model = app.tool_picker();
     if (!model) { pickerHost.hide(); return; }
     pickerTitle.textContent = model.title; picker.setAttribute("aria-label", model.title);
-    nameGroup.section.hidden = model.name == null; nameRow.label.textContent = model.name_label;
+    nameRow.line.hidden = model.name == null; nameRow.label.textContent = model.name_label;
     name.setAttribute("aria-label", model.name_label);
     if (model.name != null && name.value !== model.name) name.value = model.name;
     search.placeholder = model.search_hint; search.setAttribute("aria-label", model.search_hint);

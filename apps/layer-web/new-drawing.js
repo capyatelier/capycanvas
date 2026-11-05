@@ -1,3 +1,4 @@
+import {createContextPopover} from './context-popover.js';
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
 import {createWorkflowStack} from './workflow-stack.js';
@@ -91,9 +92,9 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
   function build() {
     const root = element('dialog', 'picker-dialog new-drawing-dialog'); root.id = 'new-drawing-dialog';
     const title = element('h2', 'dialog-title'); title.id = 'new-drawing-title'; title.tabIndex = -1; root.setAttribute('aria-labelledby', title.id);
-    const menu = element('div', 'panel-context-menu new-drawing-menu'); menu.popover = 'auto'; menu.setAttribute('role', 'menu');
+    const contextPopover=createContextPopover({element,classes:'new-drawing-menu',popover:'auto'}),menu=contextPopover.root;
     function popup(items, x, y) {
-      menu.replaceChildren(...items.map(item => {
+      contextPopover.body.replaceChildren(...items.map(item => {
         const node = button('', () => { menu.hidePopover(); send(item.action); }, item.selected ? 'selected' : '');
         node.setAttribute('role', 'menuitem'); node.disabled = item.disabled ?? false;
         node.append(element('span', '', item.label));
@@ -101,9 +102,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
         return node;
       }));
       menu.showPopover();
-      const box = menu.getBoundingClientRect();
-      menu.style.left = `${Math.max(6, Math.min(x, innerWidth - box.width - 6))}px`;
-      menu.style.top = `${Math.max(6, Math.min(y, innerHeight - box.height - 6))}px`;
+      contextPopover.place({x,y,width:1,height:1},true);
       (menu.querySelector('button.selected:not(:disabled)') ?? menu.querySelector('button:not(:disabled)'))?.focus();
     }
     const contextMenu = (node, items) => node.addEventListener('contextmenu', e => {

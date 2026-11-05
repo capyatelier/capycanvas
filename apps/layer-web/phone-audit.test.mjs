@@ -185,10 +185,17 @@ test('manager form routes use the selected row and the actual enabled offered ac
   const action={type:'save_toolbar',value:'authored-toolbar'},inputs=[],clicks=[],guards=[];
   const view={rows:[{id:'authored-row',actions:[]}],details:{actions:[{enabled:false,action:{type:'save_toolbar',value:'disabled'}},{enabled:true,action} ]}};
   const layerApp={app:{workspace_input:json=>inputs.push(JSON.parse(json)),workspace_view:()=>JSON.stringify(view)},wake(){}};
-  const context={evaluate:source=>runInNewContext(source,{layerApp}),wait:async condition=>guards.push(condition),settle:async()=>{},click:async selector=>{clicks.push(selector);inputs.push({type:'select',id:'authored-row'},{type:'open_details'});}};
+  const menuRow={menuItem:{command:JSON.stringify(action)},dataset:{}};
+  const document={querySelectorAll:()=>[menuRow]};
+  const context={evaluate:source=>runInNewContext(source,{layerApp,document}),wait:async condition=>guards.push(condition),settle:async()=>{},click:async selector=>{
+    clicks.push(selector);
+    if(selector.includes('.workspace-choice'))inputs.push({type:'select',id:'authored-row'},{type:'open_details'});
+    if(selector.includes('workspace-audit-action'))inputs.push({type:'form',action});
+  }};
   await dialogAuditRows.find(row=>row.id==='save-toolbar').openaction(context);
   assert.deepEqual(inputs,[{type:'open',page:'this_workspace'},{type:'select',id:'authored-row'},{type:'open_details'},{type:'form',action}]);
-  assert.deepEqual(clicks,['.workspace-manager[open] .workspace-choice[data-id="authored-row"]']);
+  assert.deepEqual(clicks,['.workspace-manager[open] .workspace-choice[data-id="authored-row"]','.workspace-details .workspace-more','.panel-context-menu:popover-open [data-workspace-audit-action]']);
+  assert.ok(Object.hasOwn(menuRow.dataset,'workspaceAuditAction'));
   assert.ok(guards.some(condition=>condition.includes('checkVisibility()')),'The chosen native row must be mapped before opening its details');
   view.details.actions=[];
   await assert.rejects(()=>dialogAuditRows.find(row=>row.id==='save-toolbar').openaction(context),/Manager offers save_toolbar/);

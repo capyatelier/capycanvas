@@ -39,7 +39,7 @@ class Element extends SharedElement {
   getBoundingClientRect(){return{x:0,y:0,left:0,top:0,right:100,bottom:34,width:100,height:34};}
   close(){this.open=false;for(const listener of this.listeners.close??[])listener();}
 }
-const headerFields=['search','description','this_workspace','saved_toolbars','new_toolbar','retry','workspaces','new_workspace','owned_elsewhere','save_as_new_workspace','drag_to_reorder','current_workspace','shown_top','show_top','move_up','move_down'];
+const headerFields=['search','description','this_workspace','saved_toolbars','new_toolbar','new_toolbar_action','retry','workspaces','new_workspace','owned_elsewhere','save_as_new_workspace','drag_to_reorder','current_workspace','shown_top','show_top','move_up','move_down'];
 function harness(t,{failure=false,phone=false}={}) {
   const doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),addEventListener:()=>{}};doc.createElement=tag=>new Element(tag,doc);doc.body=new Element('body',doc);doc.activeElement=doc.body;const title=new Element('span',doc);title.id='document-title';doc.body.append(title);doc.querySelector=selector=>doc.body.querySelector(selector);
   const saved=Object.fromEntries(['document','window','sessionStorage','BroadcastChannel','ResizeObserver','MutationObserver','requestAnimationFrame','getComputedStyle','innerWidth','innerHeight'].map(key=>[key,globalThis[key]]));Object.assign(globalThis,{document:doc,window:{addEventListener(){},removeEventListener(){}},innerWidth:phone?412:1200,innerHeight:900,ResizeObserver:class {observe(){}unobserve(){}disconnect(){}},MutationObserver:class {observe(){}disconnect(){}},requestAnimationFrame:()=>0,getComputedStyle:()=>({boxSizing:'border-box',fontSize:'14.666666666666666px'}),sessionStorage:{getItem:()=>null,setItem:()=>{}},BroadcastChannel:class {addEventListener(){}postMessage(){}}});t.after(()=>Object.assign(globalThis,saved));
@@ -48,10 +48,11 @@ function harness(t,{failure=false,phone=false}={}) {
   const row=()=>({id:'literal-id',title:`${tag}:row-title`,subtitle:`${tag}:row-subtitle`,current:true,actions:[],options:[],pin:{label:`${tag}:pin-label`,icon:'pin-outline',selected:false,enabled:false,edit:{type:'toggle',id:'literal-id'}}});
   let override={};const view=()=>({ready:true,busy:false,switcher_busy:false,dirty:false,id:'literal-id',name:'İı ไทย Tiếng Việt { $name } 🎨',page:failure?null:'workspaces',rows:failure?[]:[row()],switcher:[],switcher_display:[],switcher_options_label:`${tag}:workspace-options`,switcher_options:{title:`${tag}:workspace-options`,sections:[]},switcher_menu:{title:`${tag}:workspaces`,sections:[]},order:['literal-id'],switcher_revision:1,selected:'literal-id',title:`${tag}:title`,intro:`${tag}:intro`,primary:`${tag}:primary`,enabled:true,error:failure?`${tag}:write-failed`:null,switcher_error:null,focus_window:null,retry:failure,prompt:failure?null:{title:`${tag}:prompt-title`,message:`${tag}:prompt-message`,name:'Original literal name',confirm:`${tag}:confirm`,destructive:false},prompt_action:failure?null:{type:'new'},...override});
   const sharedView=()=>{const result={details_requested:false,status:failure?{text:`${tag}:write-failed`,error:true,retry:true,action:{label:`${tag}:save_as_new_workspace`,action:{type:'save_as_new'},enabled:true,primary:false}}:null,...view()};result.dialog=result.page?{frame:{kind:'editor'},role:'editor',modal:true,primary:['this_workspace','toolbar_library'].includes(result.page)?'close':'action'}:null;if(result.prompt)result.prompt.dialog={frame:{kind:'alert',prefer_wide:false},role:'editor',modal:true,primary:'action'};return result;};
-  const app={...dialogProjection,dialog_presentation:()=>phone?{kind:'page',bounds:{x:0,y:0,width:412,height:900}}:{kind:'floating'},floating_dialog_width:(_window,natural)=>natural,dialog_header:(intent,subpage)=>({start:subpage?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),dialog_escape:subpage=>subpage?'back':'cancel',workspace_dialog_layout:()=>{const v=sharedView(),toolbar=['this_workspace','toolbar_library'].includes(v.page);return{toolbar,single_pane:toolbar&&phone,subpage:toolbar&&phone&&v.details_requested};},catalog:()=>({native_copy:{header:Object.fromEntries(headerFields.map(name=>[name,`${tag}:${name}`]))}}),bootstrap_view:()=>({common:Object.fromEntries(['close','cancel','name','keep_open','delete','back','done'].map(name=>[name,`${tag}:${name}`]))}),workspace_name_validation:name=>name.trim()?null:`${tag}:invalid-name`,workspace_view:()=>JSON.stringify(sharedView()),workspace_start:()=>{},workspace_tick:()=>{ticks++;return {};},workspace_observe:()=>{observes++;},workspace_input:value=>{inputs.push(JSON.parse(value));return {};},native_caption:({type,title})=>`${tag}:${type}:${title}`};
+  const app={...dialogProjection,dialog_presentation:()=>phone?{kind:'page',bounds:{x:0,y:0,width:412,height:900}}:{kind:'floating'},floating_dialog_width:(_window,natural)=>natural,dialog_header:(intent,subpage)=>({start:subpage?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),dialog_escape:subpage=>subpage?'back':'cancel',workspace_dialog_layout:()=>{const v=sharedView(),toolbar=['this_workspace','toolbar_library'].includes(v.page);return{toolbar,single_pane:toolbar&&phone,subpage:toolbar&&phone&&v.details_requested};},catalog:()=>({native_copy:{header:Object.fromEntries(headerFields.map(name=>[name,`${tag}:${name}`]))}}),bootstrap_view:()=>({common:Object.fromEntries(['close','cancel','name','keep_open','delete','back','done','more'].map(name=>[name,`${tag}:${name}`]))}),workspace_name_validation:name=>name.trim()?null:`${tag}:invalid-name`,workspace_view:()=>JSON.stringify(sharedView()),workspace_start:()=>{},workspace_tick:()=>{ticks++;return {};},workspace_observe:()=>{observes++;},workspace_input:value=>{inputs.push(JSON.parse(value));return {};},native_caption:({type,title})=>`${tag}:${type}:${title}`};
   const element=(tag,cls,text)=>{const node=new Element(tag,doc);node.className=cls??'';if(text!=null)node.textContent=text;return node;};const button=(text,run,cls)=>{const node=element('button',cls,text);node.click=run;return node;};
-  const manager=createWorkspaceManager({dropdown:dropdownFactory({element,button}),app,store:{execute:()=>{},holdOwner:()=>{}},applyChange:()=>{},element,button,icon:()=>element('span','icon'),message:()=>{}});
-  return {manager,doc,inputs,setView(next){override=next;manager.localize();},switch(next){tag=next;refreshCopy(app);manager.localize();refreshBindings();},tick(){timers[0]();},stats:()=>({ticks,observes}),nodes:()=>({dialog:doc.body.querySelector('.workspace-manager'),form:doc.body.querySelectorAll('.workspace-form').find(node=>node.open)??doc.body.querySelector('.workspace-form'),row:doc.body.querySelector('.workspace-row'),input:doc.body.querySelector('#workspace-item-name')})};
+  const menus=[];
+  const manager=createWorkspaceManager({dropdown:dropdownFactory({element,button}),openMenu:node=>menus.push({owner:node,model:node.menuModel()}),app,store:{execute:()=>{},holdOwner:()=>{}},applyChange:()=>{},element,button,icon:name=>{const glyph=element('span','icon');glyph.dataset.icon=name;return glyph;},message:()=>{}});
+  return {manager,doc,inputs,menus,setView(next){override=next;manager.localize();},switch(next){tag=next;refreshCopy(app);manager.localize();refreshBindings();},tick(){timers[0]();},stats:()=>({ticks,observes}),nodes:()=>({dialog:doc.body.querySelector('.workspace-manager'),form:doc.body.querySelectorAll('.workspace-form').find(node=>node.open)??doc.body.querySelector('.workspace-form'),row:doc.body.querySelector('.workspace-row'),input:doc.body.querySelector('#workspace-item-name')})};
 }
 
 test('workspace prompt and rows publish copy without replacing dirty names, selection, focus or native controls',t=>{
@@ -102,12 +103,37 @@ test('workspace prompts gate invalid names and submit descriptions and stable ch
   confirm.click();assert.deepEqual(h.inputs.at(-1),{type:'submit',name:'Authored toolbar',description:'My description',choice:'two'});
 });
 
-test('advanced toolbar pages present shared details actions and workspace search forwards the native query',t=>{
-  const h=harness(t),action={type:'update_toolbar',value:'saved'};
-  h.setView({page:'toolbar_library',prompt:null,details:{title:'Saved toolbar',description:'Reusable tools',actions:[{label:'Update',action,enabled:true,primary:false}]}});
-  const details=h.doc.body.querySelector('.workspace-details');assert.equal(details.hidden,false);assert.equal(details.querySelector('p').textContent,'Reusable tools');details.querySelector('button').click();assert.deepEqual(h.inputs.at(-1),{type:'action',action});
-  const search=h.doc.body.querySelector('#workspace-manager-search');assert.equal(search.hidden,false);search.value='ink';search.dispatchEvent({type:'input'});assert.deepEqual(h.inputs.at(-1),{type:'search',query:'ink'});
+test('toolbar details keep primary actions inline and route secondary actions through the common More menu',t=>{
+  const h=harness(t),primary={type:'load_toolbar',value:'saved'},secondary={type:'update_toolbar',value:'saved'},disabled={type:'remove_toolbar',value:'saved'};
+  h.setView({page:'toolbar_library',prompt:null,details:{title:'Saved toolbar',description:'Reusable tools',actions:[
+    {label:'Load',action:primary,enabled:true,primary:true},
+    {label:'Update',action:secondary,enabled:true,primary:false},
+    {label:'Remove',action:disabled,enabled:false,primary:false},
+  ]}});
+  const details=h.doc.body.querySelector('.workspace-details'),more=details.querySelector('.workspace-more'),load=details.querySelector('.suggested-action');
+  assert.equal(details.hidden,false);assert.equal(details.querySelector('p').textContent,'Reusable tools');
+  assert.deepEqual(details.querySelectorAll('button').map(node=>node.textContent),['Load','en:more']);
+  load.click();assert.deepEqual(h.inputs.at(-1),{type:'action',action:primary});
+  more.click();assert.equal(h.menus.length,1);assert.equal(h.menus[0].owner,more);
+  const rows=h.menus[0].model.sections.flat();assert.deepEqual(rows.map(({label,enabled})=>({label,enabled})),[{label:'Update',enabled:true},{label:'Remove',enabled:false}]);
+  more.menuCommand(rows[1].command);assert.equal(h.inputs.length,1);
+  more.menuCommand(rows[0].command);assert.deepEqual(h.inputs.at(-1),{type:'action',action:secondary});
+  const search=h.doc.body.querySelector('#workspace-manager-search');assert.equal(search.hidden,false);assert.equal(search.parentElement.classList.contains('preference-search'),true);assert.equal(search.parentElement.querySelector('.icon').dataset.icon,'search');search.value='ink';search.dispatchEvent({type:'input'});assert.deepEqual(h.inputs.at(-1),{type:'search',query:'ink'});
   const tabs=h.doc.body.querySelector('.workspace-manager-tabs').querySelectorAll('button');tabs[0].click();assert.deepEqual(h.inputs.at(-1),{type:'open',page:'this_workspace'});
+});
+
+test('manager More and search retain their owners and focus while shared labels and busy actions change',t=>{
+  const h=harness(t),action={type:'update_toolbar',value:'saved'},details=label=>({title:label,description:'Reusable tools',actions:[{label,action,enabled:true,primary:false}]});
+  h.setView({page:'toolbar_library',prompt:null,query:'ink',details:details('Update')});
+  const more=h.doc.body.querySelector('.workspace-more'),search=h.doc.body.querySelector('#workspace-manager-search');
+  search.focus();search.selectionStart=1;search.selectionEnd=2;
+  h.switch('fr');h.setView({page:'toolbar_library',prompt:null,query:'ink',details:details('Mettre à jour')});
+  assert.equal(h.doc.body.querySelector('.workspace-more'),more);assert.equal(more.textContent,'fr:more');assert.equal(h.doc.activeElement,search);assert.equal(search.value,'ink');assert.equal(search.selectionStart,1);assert.equal(search.selectionEnd,2);
+  more.click();const command=h.menus.at(-1).model.sections[0][0].command;assert.equal(h.menus.at(-1).model.sections[0][0].label,'Mettre à jour');
+  h.setView({page:'toolbar_library',prompt:null,query:'ink',busy:true,details:details('Mettre à jour')});
+  assert.equal(more.disabled,true);assert.equal(search.disabled,true);assert.equal(more.menuModel().sections[0][0].enabled,false);
+  more.menuCommand(command);assert.deepEqual(h.inputs,[]);
+  h.setView({page:'toolbar_library',prompt:null,query:'ink',details:{title:'Toolbar',description:'',actions:[]}});assert.equal(more.hidden,true);
 });
 
 test('single-pane toolbar details forward shared PageList Back without replacing the list or search',t=>{
@@ -118,6 +144,24 @@ test('single-pane toolbar details forward shared PageList Back without replacing
   back.click();assert.deepEqual(h.inputs.at(-1),{type:'page_list'});
   h.setView({page:'toolbar_library',prompt:null,details,details_requested:false});
   assert.equal(sidebar.hidden,false);assert.equal(body.hidden,true);assert.equal(back.hidden,true);assert.equal(dialog.querySelector('.workspace-list'),list);assert.equal(dialog.querySelector('#workspace-manager-search'),search);
+});
+
+test('manager scrolling owns tabs and panes while its header and footer stay outside the scroll owner',t=>{
+  const h=harness(t,{phone:true}),details={title:'Saved toolbar',description:'Reusable tools',actions:[]};
+  h.setView({page:'this_workspace',prompt:null,details,details_requested:false});
+  const dialog=h.nodes().dialog,body=dialog.querySelector('.preference-body');
+  assert.ok(body,'The manager has the common outer body scroller');
+  const viewport=body.querySelector('.preference-viewport'),content=body.querySelector('.preference-content'),header=dialog.querySelector('header'),footer=dialog.querySelector('footer'),tabs=dialog.querySelector('.workspace-manager-tabs'),panes=dialog.querySelector('.workspace-panes');
+  assert.equal(body.parentElement,dialog);assert.equal(header.parentElement,dialog);assert.equal(footer.parentElement,dialog);
+  assert.equal(viewport.contains(header),false);assert.equal(viewport.contains(footer),false);
+  for(const node of [tabs,dialog.querySelector('.workspace-intro'),panes,dialog.querySelector('.workspace-error')])assert.equal(node.parentElement,content);
+  assert.equal(viewport.contains(dialog.querySelector('.workspace-list')),true);assert.equal(viewport.classList.contains('overlay-scroll'),true);
+  const create=dialog.querySelector('.workspace-list-actions').querySelector('.workspace-add');
+  assert.equal(create.textContent,'en:new_toolbar_action');assert.equal(create.ariaLabel,'en:new_toolbar_action');
+  viewport.scrollTop=42;
+  h.setView({page:'this_workspace',prompt:null,details,details_requested:true});
+  assert.equal(dialog.querySelector('.preference-viewport'),viewport);assert.equal(viewport.scrollTop,42);assert.equal(dialog.querySelector('.dialog-back').hidden,false);
+  h.switch('fr');assert.equal(dialog.querySelector('.preference-body'),body);assert.equal(dialog.querySelector('header'),header);assert.equal(dialog.querySelector('footer'),footer);
 });
 
 

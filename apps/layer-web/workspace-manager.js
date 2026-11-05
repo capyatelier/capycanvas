@@ -3,7 +3,7 @@ import { createWorkspaceSwitcher } from "./workspace-switcher.js";
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
 import {addScrollbar} from './scrollbars.js';
-export function createWorkspaceManager({ app, store, applyChange, element, button, icon, dropdown, message }) {
+export function createWorkspaceManager({ app, store, applyChange, element, button, icon, dropdown, openMenu, message }) {
   let view, inline;
   const kit=createPageKit({element,icon});
   const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common;
@@ -24,15 +24,24 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   header.append(heading, close);
   const intro = element("p", "workspace-intro");bindCopy(intro,()=>view?.intro??"");
   const list = element("div", "workspace-list"); list.setAttribute("role", "listbox");
-  const search=element("input","workspace-search");search.type="search";search.id="workspace-manager-search";
+  const search=element("input","workspace-search preference-input");search.type="search";search.id="workspace-manager-search";
   bindCopy(search,()=>copy.search,"placeholder");bindCopy(search,()=>copy.search,"ariaLabel");
   search.addEventListener("input",()=>send({type:"search",query:search.value}));
-  const listActions=element("div","workspace-list-actions");listActions.append(search,add);
+  const searchBox=kit.search(search),listActions=element("div","workspace-list-actions");listActions.append(searchBox,add);
   const tabs=element("div","workspace-manager-tabs");
   for(const [page,label]of [["this_workspace",()=>copy.this_workspace],["toolbar_library",()=>copy.saved_toolbars]]){
     const tab=localizedButton(label,()=>send({type:"open",page}));tab.dataset.page=page;tabs.append(tab);
   }
   const details=element("section","workspace-details");
+  const detailTitle=element("h3"),detailDescription=element("p"),detailPrimary=element("div","workspace-detail-primary");
+  bindCopy(detailTitle,()=>view?.details?.title??'');bindCopy(detailDescription,()=>view?.details?.description??'');
+  const secondary=()=>view?.details?.actions.filter(action=>!action.primary)??[];
+  const more=button('',()=>openMenu(more),'workspace-more'),moreLabel=element('span');
+  bindCopy(moreLabel,()=>common.more);bindCopy(more,()=>common.more,'ariaLabel');bindCopy(more,()=>common.more,'title');
+  more.append(moreLabel,icon('chevron-down'));more.setAttribute('aria-haspopup','menu');more.setAttribute('aria-expanded','false');
+  more.menuModel=()=>({title:common.more,sections:[secondary().map(offered=>({label:offered.label,enabled:offered.enabled&&!view.busy,command:JSON.stringify(offered.action)}))]});
+  more.menuCommand=command=>{const offered=secondary().find(offered=>JSON.stringify(offered.action)===command);if(offered?.enabled&&!view.busy)send({type:'action',action:offered.action});};
+  details.append(detailTitle,detailDescription,detailPrimary,more);
   const error = element("p", "workspace-error"), footer = element("footer");
   const primary = localizedButton(()=>view?.primary??"", () => send({ type: "confirm" }), "suggested-action");
   const retry = localizedButton(()=>copy.retry, () => send({type:"retry"})); retry.hidden = true;
@@ -40,7 +49,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   sidebar.append(listActions,list,rowActions);panes.append(sidebar,details);panes.dataset.dialogPart='panes';
   addScrollbar(list,sidebar);
   addScrollbar(details,panes);
-  footer.append(cancelButton,retry,primary);dialog.append(header,tabs,intro,panes,error,footer);
+  const body=kit.body(tabs,intro,panes,error);
+  footer.append(cancelButton,retry,primary);dialog.append(header,body.root,footer);
   const host=createDialogHost({app,dialog,header,cancel:close,primary:()=>view?.dialog?.primary==='close'?close:primary,icon,copy:common,onCancel:cancel,
     subpage:()=>layout?.subpage??false,onBack:()=>send({type:'page_list'}),search,clearSearch:()=>send({type:'search',query:''})});
   let layout;
@@ -101,15 +111,16 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     dialog.dataset.toolbar=String(toolbar);tabs.hidden=!toolbar;footer.hidden=toolbar;
     for(const tab of tabs.children){tab.disabled=view.busy;tab.setAttribute("aria-pressed",String(tab.dataset.page===view.page));}
     search.hidden=!toolbar;
+    searchBox.hidden=search.hidden;
     if(search.value!==(view.query??""))search.value=view.query??"";search.disabled=view.busy;
     add.hidden = view.page!=="this_workspace"; add.disabled = view.busy || view.switcher_busy;
-    bindCopy(add,()=>view?.page==="this_workspace"?copy.new_toolbar:copy.new_workspace);
+    bindCopy(add,()=>view?.page==="this_workspace"?copy.new_toolbar_action:copy.new_workspace);
     listActions.hidden=search.hidden&&add.hidden;
     rowActions.hidden=view.page!=="workspaces";
     workspaceAdd.disabled=(view.busy&&!renaming)||view.switcher_busy;
     const deleteAction=view.rows.find(row=>row.id===view.selected)?.options.find(item=>item.action.type==="delete");
     remove.disabled=(view.busy&&!renaming)||!deleteAction?.enabled;
-    bindCopy(add,()=>view?.page==="this_workspace"?copy.new_toolbar:copy.new_workspace,"ariaLabel");
+    bindCopy(add,()=>view?.page==="this_workspace"?copy.new_toolbar_action:copy.new_workspace,"ariaLabel");
     bindCopy(primary,()=>view?.primary??""); primary.disabled = (view.busy&&!renaming) || view.switcher_busy || !view.enabled;
     retry.hidden = !view.retry; retry.disabled = view.busy;
     bindCopy(error,()=>view?.switcher_error||view?.error||"");error.hidden = !error.textContent;
@@ -141,13 +152,21 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       list.scrollTop = scroll;
     }
     for (const row of list.querySelectorAll(".workspace-choice")) { const title=row.querySelector(".workspace-row-title");if(title)bindCopy(title,()=>view?.rows.find(item=>item.id===row.dataset.id)?.title??"");const subtitle=row.querySelector(".workspace-row-subtitle");if(subtitle)bindCopy(subtitle,()=>view?.rows.find(item=>item.id===row.dataset.id)?.subtitle??"");row.setAttribute("aria-selected", String(row.dataset.id === view.selected)); row.parentElement.dataset.selected = String(row.dataset.id === view.selected); row.disabled = view.busy&&!renaming;row.setAttribute("aria-disabled",String(view.busy&&!renaming)); }
-    if(toolbar){
-      const detail=view.details,key=JSON.stringify([detail,view.busy]);
-      if(details.dataset.key!==key){details.dataset.key=key;details.replaceChildren();if(detail){
-        details.append(element("h3","",detail.title),element("p","",detail.description));
-        for(const offered of detail.actions??[]){const run=button(offered.label,()=>send({type:"action",action:offered.action}),offered.primary?"suggested-action":"");run.dataset.action=offered.action.type;run.disabled=view.busy||!offered.enabled;details.append(run);}
-      }}
+    const actions=view.details?.actions.filter(action=>action.primary)??[],actionKey=JSON.stringify(actions.map(offered=>offered.action));
+    if(detailPrimary.dataset.key!==actionKey){
+      detailPrimary.dataset.key=actionKey;detailPrimary.replaceChildren();
+      for(const offered of actions){
+        const key=JSON.stringify(offered.action),current=()=>view?.details?.actions.find(item=>JSON.stringify(item.action)===key);
+        const run=localizedButton(()=>current()?.label??'',()=>{const item=current();if(item?.enabled&&!view.busy)send({type:'action',action:item.action});},'suggested-action');
+        run.dataset.action=offered.action.type;detailPrimary.append(run);
+      }
     }
+    for(const [index,run]of [...detailPrimary.children].entries()){
+      bindCopy(run,()=>view?.details?.actions.filter(action=>action.primary)[index]?.label??'');
+      run.disabled=view.busy||!actions[index].enabled;
+    }
+    bindCopy(detailTitle,()=>view?.details?.title??'');bindCopy(detailDescription,()=>view?.details?.description??'');
+    detailTitle.hidden=detailDescription.hidden=!view.details;detailPrimary.hidden=!actions.length;more.hidden=!secondary().length;more.disabled=view.busy;
     const renameId=view.page==="workspaces"&&view.prompt_action?.type==="rename"?view.prompt_action.id??view.prompt_action.value:null;
     if(inline&&inline.id!==renameId){inline.input.replaceWith(inline.title);inline=null;}
     if(renameId&&!inline){
@@ -193,7 +212,6 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
       }
     }
     if (form) { validatePrompt();bindCopy(formSubmit,()=>view?.retry&&view?.prompt_action?.type!=="save_as_new"?copy.retry:view?.prompt?.confirm??""); }
-    list.style.flex=view.page==="workspaces"?"0 1 auto":"";
     list.style.height=view.page==="workspaces"?`${Math.min(7,view.rows.length)*56}px`:"";
     if(view.dialog){host.present(view.dialog);arrange();}else host.hide();
     if(form){if(formHost.present(form.dialog))(formName??formDescription??formSubmit).focus({preventScroll:true});}

@@ -1,3 +1,4 @@
+import {createContextPopover} from './context-popover.js';
 import {bindCopy,liveCopy} from "./localization.js";
 // DOM gestures and chrome only. Rust owns visibility, order and publication.
 export function createWorkspaceSwitcher({app,dialog, list, element, button, icon, send, getView, redraw}) {
@@ -10,8 +11,8 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
   options.append(icon("more-small")); options.setAttribute("aria-haspopup", "menu");
   root.append(choices, options);
   const buttons = new Map();
-  const menu = element("div", "workspace-row-menu");
-  menu.popover = "manual"; menu.setAttribute("role", "menu"); dialog.append(menu);
+  const contextPopover=createContextPopover({element,classes:"workspace-row-menu"}),menu=contextPopover.root;
+  dialog.append(menu);
   let contact, suppressClick = false, menuOwner, menuAnchor, animation;
   const unavailable = () => !getView()?.ready || getView().busy || getView().switcher_busy;
   const edit = value => send({type:"edit_switcher", edit:value});
@@ -24,13 +25,13 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
   function showMenu(row, point, focus = false, reorder = true, anchor = row.querySelector(".workspace-grip")) {
     const view = getView(), item = view.rows.find(item => item.id === row.dataset.id);
     if (!item || view.page !== "workspaces" || unavailable()) return;
-    closeMenu(); menuOwner = row; menuAnchor = anchor; menu.replaceChildren(); menu.dataset.id = item.id;
+    closeMenu(); menuOwner = row; menuAnchor = anchor; contextPopover.body.replaceChildren(); menu.dataset.id = item.id;
     bindCopy(menu,()=>app.native_caption({type:"options_for",title:getView()?.rows.find(row=>row.id===menuOwner?.dataset.id)?.title??""}),"ariaLabel");
     const action = (label, kind, run, enabled = true) => {
       const node = button("", () => { closeMenu(true); run(); });
       node.dataset.action = kind; node.disabled = !enabled;
       node.setAttribute("role", "menuitem");
-      const caption=element("span");bindCopy(caption,label);node.append(caption);menu.append(node);
+      const caption=element("span");bindCopy(caption,label);node.append(caption);contextPopover.body.append(node);
     };
     if(!reorder) for (const offered of item.options) {
       action(()=>getView()?.rows.find(row=>row.id===item.id)?.options.find(value=>value.action.type===offered.action.type)?.label??"", offered.action.type,
@@ -43,9 +44,7 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
     }
     menuAnchor?.setAttribute("aria-expanded", "true");
     menu.showPopover();
-    const r = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(6, Math.min(point.x, innerWidth-r.width-6))}px`;
-    menu.style.top = `${Math.max(6, Math.min(point.y, innerHeight-r.height-6))}px`;
+    contextPopover.place({...point,width:1,height:1},true);
     if (focus) menu.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
   }
   function decorate(row, choice, item, view) {
