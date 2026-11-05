@@ -48,7 +48,7 @@ def holders(device):
 def resource_defaults(count):
     slots = count + 1
     memory = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // (1024 ** 3)
-    return min(32, max(2, (os.cpu_count() or 2) // slots)), f"{min(64, max(4, memory // slots))}G"
+    return min(32, max(2, (os.cpu_count() or 2) // slots)), f"{min(16, max(4, memory // slots))}G"
 
 
 def permission_rules(devices, uid):
@@ -148,7 +148,7 @@ def main():
     parser.add_argument("--state-dir", type=Path, required=True, help="existing Windows VM state directory")
     parser.add_argument("--artifacts", type=Path, help="large test-output directory, preferably on local SSD")
     parser.add_argument("--cpus", type=int, help="vCPUs per VM (default: host-sized, up to 32)")
-    parser.add_argument("--memory", help="RAM per VM, e.g. 32G (default: host-sized, up to 64G)")
+    parser.add_argument("--memory", help="RAM per VM, e.g. 32G (default: host-sized, up to 16G)")
     parser.add_argument("--guest-driver", type=Path, help="signed Windows INF bundle staged on the host SSD")
     parser.add_argument("--apply", action="store_true", help="bind idle devices and persist host configuration")
     args = parser.parse_args()
