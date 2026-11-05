@@ -1394,3 +1394,69 @@ public static class CapyImageDragPacingTest {
     Ready $window
     if($seen.reads-ne3-or$seen.polls-ne3){throw 'Ready accepted UI state before owned registry readiness'}
 }
+
+& {
+ Add-Type -TypeDefinition @'
+public static class CapyEdgeReleaseTest {
+ public static int Phase,Ups,Downs;
+ public static void Down(string device,int x,int y){Phase=1;Downs++;}
+ public static void Move(int x,int y){}
+ public static void Hover(int x,int y){}
+ public static void Up(){Phase=2;Ups++;}
+}
+'@
+ $tokens=$null;$errors=$null
+ $helpers=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $release=$helpers.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Wait-NativeGestureRelease'},$true)
+ if($release){. ([scriptblock]::Create($release.Extent.Text))}
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-edge-reach.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ foreach($name in 'Swipe','Settled'){
+  $fn=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq$name}.GetNewClosure(),$true)
+  if(!$fn){throw "Missing actual edge function $name"}
+  . ([scriptblock]::Create($fn.Extent.Text.Replace('[CapyRowPointer]','[CapyEdgeReleaseTest]')))
+ }
+ function Screen($X,$Y){@{x=$X;y=$Y}}
+ function Start-Sleep([int]$Milliseconds){}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt10;$poll++){if(& $Condition){return}};throw $Message}
+ function Model{
+  $script:edgeLayoutReads++
+  [pscustomobject]@{state=[pscustomobject]@{workspace=[pscustomobject]@{layout='constant'}}}
+ }
+ function Gesture{
+  $phase=[CapyEdgeReleaseTest]::Phase
+  $ended=$script:edgeEscaped
+  if($phase-eq2){$script:edgeReleasePolls++;$ended=$ended-or(!$script:edgeLost-and$script:edgeReleasePolls-gt3)}
+  if($ended){$script:edgeDelivered=$true}
+  $edge=if($script:edgeMode-ne'root'-and$phase-gt0-and!$ended){@{claimed=$true;serial=11}}else{$null}
+  $reply=if($ended){@{serial=11;phase=$(if($script:edgeEscaped){'cancel'}else{'up'});time=$(if($script:edgeEscaped){10}else{20})}}else{@{serial=11;phase='move';time=10}}
+  if($phase-eq2-and$script:edgeStale){$edge=$null;$reply=@{serial=10;phase='cancel';time=9}}
+  if($phase-eq2-and$script:edgeMode-eq'same-time-up'){$edge=$null;$reply=@{serial=11;phase='up';time=10};$script:edgeDelivered=$true}
+  if($phase-eq2-and$script:edgeMode-eq'stale-up'){$edge=$null;$reply=@{serial=10;phase='up';time=30}}
+  @{edge=$edge;pointer_id=$(if($phase-gt0-and!$ended){1}else{$null});edge_reply=$reply;edge_contact=@{time=$(if($phase-gt0-and$script:edgeMode-ne'root'){2}else{1})};generation=$(if($phase-gt0){6}else{5});last_down=@{left=$true;in_contact=($phase-eq1);position=@(10,20);pointer=1};last_release=@{generation=$(if($ended-and!$script:edgeEscaped){6}else{5})};last_cancel=@{generation=$(if($ended-and$script:edgeEscaped){7}else{0})}}
+ }
+ $Device='mouse'
+ foreach($mode in 'edge','root','same-time-up','escape','stale-up','stale-edge','lost-edge','lost-root'){
+  [CapyEdgeReleaseTest]::Phase=0;[CapyEdgeReleaseTest]::Ups=0;[CapyEdgeReleaseTest]::Downs=0
+  $script:edgeMode=if($mode-eq'lost-root'){'root'}else{$mode}
+  $script:edgeStale=$mode-eq'stale-edge';$script:edgeLost=$mode-like'lost-*'-or$script:edgeStale-or$mode-eq'stale-up';$script:edgeEscaped=$false;$script:edgeDelivered=$false;$script:edgeReleasePolls=0;$script:edgeLayoutReads=0
+  $during=if($mode-eq'escape'){{ $script:edgeEscaped=$true;$null=Gesture }}else{$null}
+  $failure=$null;try{Swipe @{x=10;y=20} @{x=30;y=40} -Steps 2 -During $during}catch{$failure=$_}
+  if([CapyEdgeReleaseTest]::Downs-ne1-or[CapyEdgeReleaseTest]::Ups-ne1){throw 'Swipe repeated an injected contact'}
+  if($script:edgeLost){
+   if(!$failure-or$failure.Exception.Message-cne'Native gesture release was not acknowledged'-or$script:edgeLayoutReads-ne0){throw 'Stable layout accepted a missing terminal release'}
+  }elseif($failure-or!$script:edgeDelivered-or$script:edgeLayoutReads-ne4){throw "Swipe returned before native release acknowledgement: $mode; $failure"}
+ }
+ 'Actual Swipe: stable layout cannot acknowledge delayed or missing release; native edge, root divider and acknowledged Escape settle once after their terminal trace.'
+ $script:noContactPolls=0
+ function Gesture{
+  $script:noContactPolls++
+  @{edge=$null;pointer_id=$(if($script:noContactPolls-lt3){1}else{$null});last_release=@{generation=$(if($script:noContactPolls-lt3){5}else{6})};last_cancel=@{generation=0}}
+ }
+ Wait-NativeGestureRelease @{edge=$null;pointer_id=$null;phase='finishing'} 5
+ if($script:noContactPolls-ne0){throw 'A contact already absent at release polled Gesture'}
+ Wait-NativeGestureRelease @{edge=$null;pointer_id=1;phase='idle'} 5
+ if($script:noContactPolls-ne3){throw 'A live root pointer did not await its terminal generation'}
+ 'Release acknowledgement: absent edge and pointer return without polling; a live root pointer still waits for terminal generation.'
+}

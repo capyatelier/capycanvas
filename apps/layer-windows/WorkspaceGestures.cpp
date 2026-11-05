@@ -128,7 +128,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(edge){
             auto edgeSource=edge->path.empty()?FrameworkElement{nullptr}:edge->path.front().get().try_as<FrameworkElement>();
-            value.Insert(L"edge",O({{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},
+            value.Insert(L"edge",O({{L"serial",N(double(edgeSerial))},{L"contact",S(edge->contactClass)},{L"device",S(edge->device)},{L"vertical",B(edge->vertical)},
             {L"source_loaded",B(edgeSource&&edgeSource.IsLoaded())},{L"retired",N(double(edge->retired.size()))},
             {L"position",point(edge->at)},{L"input_mapped",B(edge->inputOffset.has_value())},
             {L"hold",B(edge->hold)},{L"claimed",B(edge->claimed)},{L"captured",B(PointerGesture::Captured(root,edge->pointer))}}));
@@ -224,7 +224,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     void edgeSend(wchar_t const* phase){
         data->edges(edgeRequest(*edge,phase),[weak=weak_from_this(),serial=edgeSerial,phase=std::wstring(phase),time=edge->time](int32_t bits){
             if(auto self=weak.lock()){
-                if(self->trace)self->lastEdgeReply=O({{L"phase",S(phase.c_str())},{L"bits",N(bits)},{L"time",N(double(time))}});
+                if(self->trace)self->lastEdgeReply=O({{L"serial",N(double(serial))},{L"phase",S(phase.c_str())},{L"bits",N(bits)},{L"time",N(double(time))}});
                 self->edgeReply(serial,phase,bits);self->evidence();
             }
         });

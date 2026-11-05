@@ -38,11 +38,14 @@ function Screen([double]$X,[double]$Y){
 function Swipe($From,$To,[int]$Steps=10,[scriptblock]$During){
     $a=Screen $From.x $From.y;$b=Screen $To.x $To.y
     if($Device -eq 'mouse'){[CapyRowPointer]::Hover($a.x,$a.y)}
+    $previous=Gesture
+    $terminalGeneration=[Math]::Max([long]$previous.last_release.generation,[long]$previous.last_cancel.generation)
     [CapyRowPointer]::Down($Device,$a.x,$a.y)
     for($i=1;$i -le $Steps;$i++){[CapyRowPointer]::Move([int]($a.x+($b.x-$a.x)*$i/$Steps),[int]($a.y+($b.y-$a.y)*$i/$Steps));Start-Sleep -Milliseconds 16}
     Start-Sleep -Milliseconds 250
+    $release=Gesture
     if($During){& $During}
-    [CapyRowPointer]::Up();Settled
+    [CapyRowPointer]::Up();Wait-NativeGestureRelease $release $terminalGeneration;Settled
 }
 function Contact($Point){
     $at=Screen $Point.x $Point.y
@@ -409,7 +412,6 @@ function Check-ControlRoles([string]$Theme){
         $direction=if($divider.owner_side -eq 'left'){1}else{-1}
         $from=@{x=$divider.bounds.x+$divider.bounds.width/2;y=$group.bounds.y+$group.bounds.height/2}
         Swipe $from @{x=$from.x+64*$direction;y=$from.y}
-        Wait-Until {!(Gesture).edge} 'Role fixture setup swipe retained its workspace edge'
         $grown=Width $group.id
         if($grown -le $initial+20){throw 'Role fixture did not establish a nondefault column width'}
         $baseline=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress

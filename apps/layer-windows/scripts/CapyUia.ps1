@@ -675,6 +675,14 @@ function Exit-CapyEnvironment{
         else{[Environment]::SetEnvironmentVariable($entry.Key,$entry.Value,'Process')}
     }
 }
+function Wait-NativeGestureRelease($Before,[long]$TerminalGeneration){
+    if(!$Before.edge -and $null -eq $Before.pointer_id){return}
+    Wait-Until {
+        $terminal=Gesture
+        if($Before.edge){return !$terminal.edge -and $terminal.edge_reply.serial -eq $Before.edge.serial -and $terminal.edge_reply.phase -in 'up','cancel'}
+        [Math]::Max([long]$terminal.last_release.generation,[long]$terminal.last_cancel.generation) -gt $TerminalGeneration
+    } 'Native gesture release was not acknowledged'
+}
 function Invoke-Id([string]$Id){
     $hit=@{item=$null}
     Wait-Until {$hit.item=Find $Id;$hit.item -and $hit.item.Current.IsEnabled} "Missing enabled control: $Id"
