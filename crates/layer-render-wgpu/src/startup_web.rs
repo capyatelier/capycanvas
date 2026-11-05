@@ -12,6 +12,7 @@ struct Job {
     complete: Option<Box<dyn FnOnce()>>,
     batchable: bool,
     tracked: bool,
+    overlaps: bool,
 }
 #[derive(Default)]
 struct Queue {
@@ -19,7 +20,20 @@ struct Queue {
     admission: admission::Admission,
     started: bool,
     busy: Option<(u8, bool)>,
+    optional: Option<(u8, bool)>,
+    waiting: Option<futures_channel::oneshot::Sender<()>>,
     error: Option<String>,
+}
+impl Queue {
+    fn push(&mut self, job: Job) {
+        if job.priority < OTHER && let Some(waiting) = self.waiting.take() { let _ = waiting.send(()); }
+        self.jobs.push_back(job);
+    }
+    fn wait(&mut self) -> futures_channel::oneshot::Receiver<()> {
+        let (sender, receiver) = futures_channel::oneshot::channel();
+        self.waiting = Some(sender);
+        receiver
+    }
 }
 #[derive(Clone)]
 pub(crate) struct Compiler {
@@ -48,12 +62,13 @@ impl Compiler {
         self.enqueue_async(priority, move || Box::pin(std::future::ready(work())));
     }
     pub fn enqueue_async(&self, priority: u8, work: impl FnOnce() -> Completion + 'static) {
-        self.queue.borrow_mut().jobs.push_back(Job {
+        self.queue.borrow_mut().push(Job {
             priority,
             work: Box::new(work),
             complete: None,
             batchable: false,
             tracked: true,
+            overlaps: false,
         });
     }
     pub fn pipeline<T: 'static>(&self, pipeline: &Deferred<T>, priority: u8) {
@@ -61,7 +76,7 @@ impl Compiler {
             let work = pipeline.clone();
             let done = Rc::new(pipeline.validation());
             let validation = done.clone();
-            self.queue.borrow_mut().jobs.push_back(Job {
+            self.queue.borrow_mut().push(Job {
                 priority,
                 work: Box::new(move || {
                     validation.begin();
@@ -70,6 +85,7 @@ impl Compiler {
                 complete: Some(Box::new(move || { drop(done); drop(promotion); })),
                 batchable: pipeline.async_pipeline(),
                 tracked: true,
+                overlaps: priority >= OTHER && pipeline.async_pipeline(),
             });
         }
     }
@@ -80,7 +96,7 @@ impl Compiler {
             let work = pipeline.clone();
             let done = Rc::new(pipeline.validation());
             let validation = done.clone();
-            self.queue.borrow_mut().jobs.push_back(Job {
+            self.queue.borrow_mut().push(Job {
                 priority,
                 work: Box::new(move || {
                     if !current() { return Box::pin(std::future::ready(Ok(()))); }
@@ -90,6 +106,7 @@ impl Compiler {
                 complete: Some(Box::new(move || { drop(done); drop(promotion); })),
                 batchable: false,
                 tracked: false,
+                overlaps: priority >= OTHER && pipeline.async_pipeline(),
             });
         }
     }
@@ -101,15 +118,17 @@ impl Compiler {
     }
     pub fn pending(&self) -> usize {
         let queue = self.queue.borrow();
-        queue.jobs.iter().filter(|job| job.tracked).count() + usize::from(queue.busy.is_some_and(|(_, tracked)| tracked))
+        queue.jobs.iter().filter(|job| job.tracked).count()
+            + [queue.busy, queue.optional].iter().filter(|running| running.is_some_and(|(_, tracked)| tracked)).count()
     }
     pub fn has_work(&self, allow_optional: bool) -> bool {
         let queue = self.queue.borrow();
-        queue.jobs.iter().any(|job| (allow_optional || job.priority < OTHER) && queue.admission.allows(job.priority))
+        allow_optional && queue.optional.is_some()
+            || queue.jobs.iter().any(|job| (allow_optional || job.priority < OTHER) && queue.admission.allows(job.priority))
     }
     pub fn ready_through(&self, priority: u8) -> bool {
         let queue = self.queue.borrow();
-        !queue.busy.is_some_and(|(p, _)| p <= priority)
+        ![queue.busy, queue.optional].iter().any(|running| running.is_some_and(|(p, _)| p <= priority))
             && !queue.jobs.iter().any(|j| j.priority <= priority)
     }
     pub fn check(&self) -> Result<(), GpuRasterError> {
@@ -125,17 +144,32 @@ impl Compiler {
         Box::pin(async move {
             let jobs = {
                 let mut queue = shared.borrow_mut();
-                if queue.busy.is_some() || !queue.started || queue.jobs.is_empty() {
+                if queue.busy.is_some() || !queue.started {
                     return Ok(());
                 }
                 let Some(index) = queue
                     .jobs
                     .iter()
                     .enumerate()
-                    .filter(|(_, job)| (allow_optional || job.priority < OTHER) && queue.admission.allows(job.priority))
+                    .filter(|(_, job)| (allow_optional || job.priority < OTHER) && queue.admission.allows(job.priority)
+                        && (job.priority < OTHER || queue.optional.is_none()))
                     .min_by_key(|(_, j)| j.priority)
-                    .map(|(index, _)| index) else { return Ok(()); };
+                    .map(|(index, _)| index) else {
+                        if queue.optional.is_none() { return Ok(()); }
+                        let wait = queue.wait();
+                        drop(queue);
+                        let _ = wait.await;
+                        return Ok(());
+                    };
                 let job = queue.jobs.remove(index).unwrap();
+                if job.overlaps {
+                    queue.optional = Some((job.priority, job.tracked));
+                    let wait = queue.wait();
+                    drop(queue);
+                    wasm_bindgen_futures::spawn_local(async move { let _ = run(device, shared, vec![job]).await; });
+                    let _ = wait.await;
+                    return Ok(());
+                }
                 queue.busy = Some((job.priority, job.tracked));
                 let mut jobs = vec![job];
                 if jobs[0].batchable && jobs[0].priority < OTHER {
@@ -152,41 +186,46 @@ impl Compiler {
                 }
                 jobs
             };
-            let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-            let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let work: Vec<_> = jobs
-                .into_iter()
-                .map(|job| ((job.work)(), job.complete))
-                .collect();
-            // Pop in this task before yielding so unrelated rendering never
-            // lands inside the compiler's scopes. Await only owned futures.
-            let validation = validation.pop();
-            let memory = memory.pop();
-            let internal = internal.pop();
-            let mut result = Ok(());
-            let mut completed = Vec::new();
-            for (future, complete) in work {
-                // All promises have started. Drain every result even on failure,
-                // keeping handles private until this batch's scopes resolve.
-                result = result.and(future.await);
-                completed.push(complete);
-            }
-            let a = validation.await;
-            let b = memory.await;
-            let c = internal.await;
-            let result = result.and_then(|()| a.or(b).or(c).map_or(Ok(()), |e| Err(e.to_string())));
-            for done in completed.into_iter().flatten() {
-                done();
-            }
-            let mut queue = shared.borrow_mut();
-            let (priority, _) = queue.busy.unwrap();
-            queue.admission.finished(priority);
-            queue.busy = None;
-            if let Err(error) = &result {
-                queue.error.get_or_insert_with(|| error.clone());
-            }
-            result.map_err(GpuRasterError::Effect)
+            run(device, shared, jobs).await.map_err(GpuRasterError::Effect)
         })
     }
+}
+
+async fn run(device: PipelineDevice, shared: Rc<RefCell<Queue>>, jobs: Vec<Job>) -> Result<(), String> {
+    let overlapped = jobs[0].overlaps;
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let work: Vec<_> = jobs
+        .into_iter()
+        .map(|job| ((job.work)(), job.complete))
+        .collect();
+    // Pop in this task before yielding so unrelated rendering never
+    // lands inside the compiler's scopes. Await only owned futures.
+    let validation = validation.pop();
+    let memory = memory.pop();
+    let internal = internal.pop();
+    let mut result = Ok(());
+    let mut completed = Vec::new();
+    for (future, complete) in work {
+        // All promises have started. Drain every result even on failure,
+        // keeping handles private until this batch's scopes resolve.
+        result = result.and(future.await);
+        completed.push(complete);
+    }
+    let a = validation.await;
+    let b = memory.await;
+    let c = internal.await;
+    let result = result.and_then(|()| a.or(b).or(c).map_or(Ok(()), |e| Err(e.to_string())));
+    for done in completed.into_iter().flatten() {
+        done();
+    }
+    let mut queue = shared.borrow_mut();
+    let (priority, _) = if overlapped { queue.optional.take() } else { queue.busy.take() }.unwrap();
+    queue.admission.finished(priority);
+    if let Err(error) = &result {
+        queue.error.get_or_insert_with(|| error.clone());
+    }
+    if overlapped && let Some(waiting) = queue.waiting.take() { let _ = waiting.send(()); }
+    result
 }

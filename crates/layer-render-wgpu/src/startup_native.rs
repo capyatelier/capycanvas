@@ -20,8 +20,16 @@ struct Queue {
     running: usize,
     required_running: usize,
     ordered_running: bool,
+    optional_compiling: bool,
+    workers: usize,
     started: bool,
     stopped: bool,
+}
+impl Queue {
+    fn can_start(&self, job: &Job) -> bool {
+        if job.priority >= OTHER { self.running == 0 && !self.optional_compiling }
+        else { !self.ordered_running && self.required_running < self.workers && (job.independent || self.running == 0) }
+    }
 }
 struct Shared {
     queue: Mutex<Queue>,
@@ -71,13 +79,13 @@ impl Compiler {
     }
     fn with_workers(workers: usize) -> Result<Self, GpuRasterError> {
         let shared = Arc::new(Shared {
-            queue: Mutex::new(Queue::default()),
+            queue: Mutex::new(Queue { workers, ..Queue::default() }),
             wake: Condvar::new(),
             pending: AtomicUsize::new(0),
             error: Mutex::new(None),
         });
-        let mut compiler = Self(shared, Vec::with_capacity(workers));
-        for index in 0..workers {
+        let mut compiler = Self(shared, Vec::with_capacity(workers + 1));
+        for index in 0..=workers {
             let worker = compiler.0.clone();
             let thread = std::thread::Builder::new()
                 .name(format!("capy-shaders-{index}"))
@@ -95,7 +103,7 @@ impl Compiler {
         self.submit(Job { priority, tracked: true, independent: false, work: Box::new(work) });
     }
     pub fn enqueue_untracked(&self, priority: u8, independent: bool, work: impl FnOnce() -> Result<(), String> + Send + 'static) {
-        self.submit(Job { priority, tracked: false, independent: independent && priority < OTHER, work: Box::new(work) });
+        self.submit(Job { priority, tracked: false, independent, work: Box::new(work) });
     }
     fn submit(&self, job: Job) {
         self.0.pending.fetch_add(usize::from(job.tracked), Ordering::Relaxed);
@@ -114,7 +122,7 @@ impl Compiler {
     pub fn pipeline<T: Send + Sync + 'static>(&self, pipeline: &Deferred<T>, priority: u8) {
         if let Some(promotion) = pipeline.promote(priority) {
             let pipeline = pipeline.clone();
-            self.submit(Job { priority, tracked: true, independent: pipeline.async_pipeline() && priority < OTHER, work: Box::new(move || {
+            self.submit(Job { priority, tracked: true, independent: pipeline.async_pipeline(), work: Box::new(move || {
                 pipeline.compile();
                 drop(promotion);
                 Ok(())
@@ -149,11 +157,13 @@ fn compile(worker: &Shared) {
                 if queue.started && let Some(index) = queue.jobs.iter().enumerate()
                     .filter(|(_, job)| queue.admission.allows(job.priority) && (job.priority < OTHER || queue.required_running == 0))
                     .min_by_key(|(_, job)| job.priority).map(|(index, _)| index)
-                    && !queue.ordered_running && (queue.jobs[index].independent || queue.running == 0) {
+                    && queue.can_start(&queue.jobs[index]) {
                     let job = queue.jobs.remove(index).unwrap();
-                    queue.running += 1;
+                    if job.priority >= OTHER && job.independent { queue.optional_compiling = true; } else {
+                        queue.running += 1;
+                        queue.ordered_running = !job.independent;
+                    }
                     queue.required_running += usize::from(job.priority < OTHER);
-                    queue.ordered_running = !job.independent;
                     break job;
                 }
                 let delay = queue.admission.delay(queue.jobs.iter().map(|job| job.priority));
@@ -174,9 +184,11 @@ fn compile(worker: &Shared) {
         }
         let mut queue = worker.queue.lock().unwrap();
         queue.admission.finished(job.priority);
-        queue.running -= 1;
+        if job.priority >= OTHER && job.independent { queue.optional_compiling = false; } else {
+            queue.running -= 1;
+            queue.ordered_running &= job.independent;
+        }
         queue.required_running -= usize::from(job.priority < OTHER);
-        queue.ordered_running &= job.independent;
         drop(queue);
         worker.wake.notify_all();
         worker.pending.fetch_sub(usize::from(job.tracked), Ordering::Release);
@@ -439,6 +451,36 @@ mod tests {
         assert!(optional_pipeline.ready());
         assert_eq!(optional_rx.try_recv().unwrap(), "optional");
         assert_eq!(optional_rx.try_recv().unwrap(), "cache");
+    }
+
+    #[test]
+    fn required_preparation_never_waits_for_an_inflight_optional_compile() {
+        let compiler = Compiler::with_workers(1).unwrap();
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, wait_release) = mpsc::channel::<()>();
+        let optional = Deferred::pipeline(move |_| {
+            entered.send(()).unwrap();
+            wait_release.recv_timeout(Duration::from_secs(10)).unwrap();
+            Compilation::Ready(())
+        });
+        compiler.background(&optional, BACKGROUND, || true);
+        compiler.start();
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let required = Deferred::pipeline(|_| Compilation::Ready(()));
+        compiler.pipeline(&required, BRUSH);
+        let (document, document_rx) = mpsc::channel();
+        compiler.enqueue(DOCUMENT, move || { document.send(()).unwrap(); Ok(()) });
+        finish_jobs(&compiler);
+        assert!(required.ready() && document_rx.try_recv().is_ok(), "required preparation finishes while the optional compile is in flight");
+        assert!(!optional.ready());
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !optional.ready() {
+            assert!(std::time::Instant::now() < deadline, "the optional compile finishes after release");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(compiler);
+        finish_shader_compiler_shutdown();
     }
 
     #[test]
