@@ -1,7 +1,7 @@
 use super::*;
 use layer_core::{Edit, EffectInstance, EffectValue, paper};
 
-fn set_paper(document: &mut Document, values: &[(&str, EffectValue)]) {
+pub(crate) fn set_paper(document: &mut Document, values: &[(&str, EffectValue)]) {
     let sheet = document.bottom_paper().unwrap();
     let handle = document.scene().effect_handle(sheet).unwrap();
     let mut application = document.artwork.effects.get(handle).unwrap().clone();
@@ -13,7 +13,7 @@ fn set_paper(document: &mut Document, values: &[(&str, EffectValue)]) {
     document.apply(Edit::Effect(RecordChange::replace(&document.artwork.effects, handle, Some(application)).unwrap())).unwrap();
 }
 
-fn rough_gray_paper() -> Document {
+pub(crate) fn rough_gray_paper() -> Document {
     let mut document = Document::new(layer_core::authored::PortableId::random(), 128, 128,
         layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
     let rough = paper::built_in_paper("rough").unwrap().texture.clone();

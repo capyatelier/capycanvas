@@ -482,6 +482,14 @@ impl Pipelines {
         &kernels[slot * 2 + usize::from(coverage)]
     }
 
+    pub(super) fn dispatch_kernel(&self, style: &layer_render::DabStyle, operation: MaterialOperation, coverage: bool, extra: u32) -> &Deferred<wgpu::ComputePipeline> {
+        let preferred = self.selected_kernel(style, operation, coverage, extra);
+        if preferred.ready() { return preferred; }
+        let class = self.selected_kernel(style, operation, coverage, class_flags(style, extra));
+        if class.ready() { class }
+        else { self.selected_kernel(style, operation, coverage, superset_flags(style, extra)) }
+    }
+
     /// Changed cells are marked only for a tracked page; every other in-place
     /// destination binds the disabled set.
     pub fn output(&self, r: &WgpuRasterizer, color: &PageSurface, coverage: Option<&PageSurface>,
@@ -611,7 +619,7 @@ impl WgpuRasterizer {
             );
             pass.set_bind_group(2, job.inputs(), &[job.record_offset]);
             let cropped=!job.coverage && cropped;
-            let kernel=pipelines.selected_kernel(&batch.style,operation,job.coverage,extra);
+            let kernel = pipelines.dispatch_kernel(&batch.style, operation, job.coverage, extra);
             debug_assert!(kernel.ready() || !self.startup.as_ref().is_some_and(|s| s.strokes.covers(&batch.style)), "dry kernel {extra:#x} was not prepared for its brush");
             pass.set_pipeline(kernel);
             let dirty=job.dirty;
@@ -651,6 +659,17 @@ fn fine_tip_capable(style: &layer_render::DabStyle) -> bool {
     style.contact.is_some_and(|c| c.dry.is_some_and(|d| d.corner == 0.))
 }
 
+fn superset_flags(style: &layer_render::DabStyle, extra: u32) -> u32 {
+    if style.execution != BrushExecution::Dry || !style.contact.is_some_and(|c| c.dry.is_some()) { return extra; }
+    extra & !(FINE_TIP | COMPLETION)
+        | if fine_tip_capable(style) { FINE_TIP } else { 0 }
+        | if dry_flow(style) { COMPLETION } else { 0 }
+}
+
+fn class_flags(style: &layer_render::DabStyle, extra: u32) -> u32 {
+    superset_flags(style, extra) & if extra & FINE_TIP == 0 { !FINE_TIP } else { !0 }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Reach {
     coarse_tip: bool,
@@ -678,14 +697,25 @@ impl Reach {
     }
 
     pub fn batch_variants(self, style: &layer_render::DabStyle) -> impl Iterator<Item = u32> {
+        self.variants(style, false)
+    }
+
+    pub fn required_variants(self, style: &layer_render::DabStyle) -> impl Iterator<Item = u32> {
+        self.variants(style, true)
+    }
+
+    fn variants(self, style: &layer_render::DabStyle, required: bool) -> impl Iterator<Item = u32> {
         let aggregate = aggregate_kernel(style);
         let pigments = [aggregate.then_some(AGGREGATE),
             (!aggregate || (style.mode == DabMode::Paint && self.varying_color)).then_some(0)];
         let fine = fine_tip_capable(style);
-        let tips = [fine.then_some(FINE_TIP), (!fine || self.coarse_tip).then_some(0)];
-        let completion=[dry_flow(style).then_some(COMPLETION|FINE_TIP),
-            (dry_flow(style) && self.coarse_tip).then_some(COMPLETION)];
-        pigments.into_iter().flatten().flat_map(move |pigment| tips.into_iter().chain(completion).flatten().map(move |tip| pigment | tip))
+        let tips = if required && style.execution == BrushExecution::Dry && style.contact.is_some_and(|c| c.dry.is_some()) {
+            [fine.then(|| class_flags(style, FINE_TIP)), (!fine || self.coarse_tip).then(|| class_flags(style, 0)), None, None]
+        } else {
+            [fine.then_some(FINE_TIP), (!fine || self.coarse_tip).then_some(0),
+                dry_flow(style).then_some(COMPLETION | FINE_TIP), (dry_flow(style) && self.coarse_tip).then_some(COMPLETION)]
+        };
+        pigments.into_iter().flatten().flat_map(move |pigment| tips.into_iter().flatten().map(move |tip| pigment | tip))
     }
 }
 
@@ -713,6 +743,205 @@ pub(super) fn reduced_preview_eligible(style: &layer_render::DabStyle) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dry_superset_kernels_match_exact_body_and_preview_bytes() {
+        use crate::{layer_tests::{dab, page_bytes, preset_style}, test_support::{dab_batch, packet}};
+        use layer_core::{BrushAccumulation::{Flow, Uniform}, DefaultBrushPreset::{Pencil, PointyPencil, Charcoal, PastelBlock},
+            Document, DocumentNames, Point, PortableId, Rect};
+        use layer_render::DabPreview;
+
+        #[derive(Clone, Copy, Debug)]
+        struct Case {
+            name: &'static str,
+            preset: layer_core::DefaultBrushPreset,
+            accumulation: BrushAccumulation,
+            radius: f32,
+            moving: bool,
+            mixed: bool,
+            coverage: bool,
+            opacity: f32,
+            preview: bool,
+            ownership: bool,
+        }
+        let base = Case { name: "round-flow-small-moving", preset: Pencil, accumulation: Flow,
+            radius: 3., moving: true, mixed: false, coverage: false, opacity: 1., preview: false, ownership: false };
+        let cases = [
+            base,
+            Case { name: "round-flow-small-tap", moving: false, ..base },
+            Case { name: "round-flow-blend-moving", radius: 6., ..base },
+            Case { name: "round-flow-blend-tap", radius: 6., moving: false, ..base },
+            Case { name: "round-flow-coarse-moving", radius: 12., ..base },
+            Case { name: "round-flow-coarse-tap", radius: 12., moving: false, ..base },
+            Case { name: "round-flow-mixed-small", mixed: true, ..base },
+            Case { name: "round-flow-mixed-coarse", mixed: true, radius: 12., ..base },
+            Case { name: "pointy-flow-small", preset: PointyPencil, ..base },
+            Case { name: "pointy-flow-coarse", preset: PointyPencil, radius: 12., ..base },
+            Case { name: "pointy-flow-preview-owner", preset: PointyPencil, preview: true, ownership: true, radius: 6., ..base },
+            Case { name: "charcoal-flow-small", preset: Charcoal, ..base },
+            Case { name: "charcoal-flow-coarse", preset: Charcoal, radius: 12., ..base },
+            Case { name: "round-flow-grouped", opacity: 0.55, radius: 6., ..base },
+            Case { name: "round-flow-coverage", coverage: true, radius: 12., ..base },
+            Case { name: "round-flow-mixed-coverage", mixed: true, coverage: true, radius: 6., ..base },
+            Case { name: "rounded-flow-moving", preset: PastelBlock, ..base },
+            Case { name: "rounded-flow-tap", preset: PastelBlock, moving: false, radius: 12., ..base },
+            Case { name: "rounded-flow-mixed", preset: PastelBlock, mixed: true, radius: 6., ..base },
+            Case { name: "round-uniform-small", accumulation: Uniform, ..base },
+            Case { name: "round-uniform-blend-tap", accumulation: Uniform, radius: 6., moving: false, ..base },
+            Case { name: "round-uniform-coarse", accumulation: Uniform, radius: 12., ..base },
+            Case { name: "round-uniform-grouped", accumulation: Uniform, opacity: 0.55, ..base },
+            Case { name: "round-flow-preview-body", preview: true, radius: 6., ..base },
+            Case { name: "round-flow-preview-owner-small", preview: true, ownership: true, ..base },
+            Case { name: "round-flow-preview-owner-coarse", preview: true, ownership: true, radius: 12., ..base },
+            Case { name: "round-flow-preview-owner-mixed", preview: true, ownership: true, mixed: true, radius: 6., ..base },
+            Case { name: "rounded-flow-preview-owner", preset: PastelBlock, preview: true, ownership: true, radius: 6., ..base },
+            Case { name: "round-uniform-preview", accumulation: Uniform, preview: true, radius: 6., ..base },
+            Case { name: "round-flow-preview-coverage", preview: true, coverage: true, radius: 12., ..base },
+        ];
+        let extent = [768, 256];
+        let document = Document::new(PortableId::random(), extent[0], extent[1],
+            DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let target = document.working.target.unwrap();
+        for case in cases {
+            let mut style = preset_style(case.preset);
+            style.opacity = case.opacity;
+            style.rendering.accumulation = case.accumulation;
+            style.rendering.edge_after_stroke = case.coverage;
+            style.rendering.wet_edge = if case.coverage { 0.1 } else { 0. };
+            let dry = style.contact.unwrap().dry.unwrap();
+            let rounded = matches!(case.preset, PastelBlock);
+            assert_eq!(dry.corner > 0., rounded, "{}", case.name);
+            assert_eq!(contact_flags(style.contact) & 32768 != 0, case.preset == PointyPencil, "{case:?}");
+            let relief = dry.pose(0.5).relief;
+            let body = Dab {
+                center: Point { x: 128., y: 128. },
+                radii: [case.radius * 1.2, case.radius],
+                previous: [case.radius * 1.2, case.radius, 0.8, 0.6],
+                rotation: [0.8, 0.6],
+                motion: if case.moving { [11., 7.] } else { [0.; 2] },
+                contact: [0.7, relief[0], relief[1], relief[2]],
+                previous_contact: [0.45, relief[0], relief[1], relief[2]],
+                flow: 0.17,
+                material: [0., 0., 0., 0.65],
+                ..dab([0.12, 0.18, 0.24, 0.8])
+            };
+            let mut overlap = body;
+            overlap.center.x += 2.;
+            overlap.contact[0] = 0.9;
+            overlap.previous_contact[0] = 0.6;
+            if case.mixed { overlap.color_rgba_linear = [0.65, 0.08, 0.18, 0.8]; }
+            let mut dabs = vec![body, overlap];
+            let mut batch = dab_batch(target, style.clone(), Rect::from_extent(extent));
+            batch.kind = if case.preview { DabBatchKind::Preview } else { DabBatchKind::Persistent };
+            batch.stroke_end = false;
+            if case.ownership {
+                let mut main = overlap;
+                main.center.x = 600.;
+                main.motion = [510., 0.];
+                let end = main.completion([-1., 0.], [0.; 2], 1.);
+                dabs.extend([main.with_preview_tag(DabPreview::LiftOnly), end,
+                    main.with_preview_tag(DabPreview::MainOnly)]);
+                batch.preview_end = Some(3);
+            }
+            batch.dab_count = dabs.len() as u32;
+            let pigment = if aggregate_kernel(&style) && !case.mixed { AGGREGATE } else { 0 };
+            let frame = FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch),
+                ..packet(document.scene(), extent) };
+            let tiles = crate::brush_tiles::plan_packet(frame, |_| extent).unwrap().remove(0);
+            assert!(!tiles.is_empty(), "{case:?}");
+            let end = crate::brush_tiles::preview_end_bounds(&batch, &dabs);
+            let mut extras = std::collections::BTreeSet::new();
+            let mut plain = false;
+            let mut owned = false;
+            for tile in &tiles {
+                let indices = if tile.indices.is_empty() { tile.dabs.clone().collect::<Vec<_>>() }
+                    else { tile.indices.clone() };
+                let mut prepared = indices.iter().map(|&i| dabs[i as usize].into()).collect::<Vec<DabGpu>>();
+                prepare_geometry(&style, &mut prepared);
+                let owns = end.is_some_and(|end| !crate::brush_tiles::plain_preview_page(Some(end), tile.coordinate));
+                let extra = pigment | batch_contact_flags(&style, &prepared, owns);
+                extras.insert(extra);
+                if case.ownership && !owns {
+                    plain = true;
+                    assert!(indices.iter().all(|&i| dabs[i as usize].preview_tag() != DabPreview::LiftOnly), "{case:?}");
+                    assert_eq!(extra & COMPLETION, 0, "{case:?}: a plain page selects a body kernel");
+                }
+                if owns {
+                    owned = true;
+                    assert_ne!(extra & COMPLETION, 0, "{case:?}: the owner selects a completion kernel");
+                }
+            }
+            assert!(!case.ownership || (plain && owned), "{case:?}: both ownership routes must execute");
+            for write_only in [false, true] {
+                let render = |route: fn(&layer_render::DabStyle, u32) -> u32| {
+                    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+                    if write_only { crate::test_support::write_only_dry_material(&mut r); }
+                    let plan = BrushPassPlan::for_device(&style, &r.device);
+                    assert!(plan.direct.is_none(), "{case:?}");
+                    assert_eq!(plan.state.coverage, case.coverage || case.accumulation == Uniform && case.opacity == 1., "{case:?}");
+                    let slot = OPERATIONS.iter().position(|&operation| operation == plan.material).unwrap() * 2;
+                    let base_flags = contact_flags(style.contact) | if case.accumulation == Uniform { 128 } else { 0 };
+                    let mut identities = Vec::new();
+                    for &extra in &extras {
+                        for coverage in [false, true].into_iter().filter(|&coverage| !coverage || plan.state.coverage) {
+                            let p = &r.pipelines.dry_material;
+                            let selected_extra = route(&style, extra);
+                            let expected = p.selected_kernel(&style, plan.material, coverage, selected_extra).clone();
+                            if selected_extra != extra {
+                                Arc::make_mut(&mut r.pipelines).dry_material.variants.get_mut(&(base_flags | extra))
+                                    .expect("a specialized exact recipe")[slot + usize::from(coverage)] = expected.clone();
+                            }
+                            let selected = r.pipelines.dry_material.selected_kernel(&style, plan.material, coverage, extra);
+                            assert!(std::ptr::eq(selected.compile(), expected.compile()),
+                                "{case:?} write_only={write_only} extra={extra:#x} coverage={coverage}: selected recipe identity");
+                            identities.push((extra, coverage, expected));
+                        }
+                    }
+                    r.submit(FramePacket { dabs: &[], dab_batches: &[], ..frame }).unwrap();
+                    let blank = r.readback_srgb_rgba8().unwrap();
+                    r.submit(FramePacket { reset_layers: false, ..frame }).unwrap();
+                    let rgba = r.readback_srgb_rgba8().unwrap();
+                    assert!(rgba != blank, "{case:?} write_only={write_only}: composed paint must be visible");
+                    for (extra, coverage, expected) in identities {
+                        let selected = r.pipelines.dry_material.selected_kernel(&style, plan.material, coverage, extra);
+                        assert!(std::ptr::eq(selected.compile(), expected.compile()), "{case:?}: recipe identity after encoding");
+                    }
+                    let layer = r.paint_layers.iter().find(|layer| layer.id == target).unwrap();
+                    let mut color = layer.pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
+                    let mut coverage = layer.coverage_pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
+                    let mut preview = r.preview_pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
+                    let mut preview_coverage = r.preview_coverage_pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
+                    for pages in [&mut color, &mut coverage, &mut preview, &mut preview_coverage] { pages.sort_by_key(|(coordinate, _)| *coordinate); }
+                    let painted = if case.preview { &preview } else { &color };
+                    assert!(painted.iter().any(|(_, bytes)| bytes.chunks_exact(16)
+                        .any(|p| f32::from_le_bytes(p[12..16].try_into().unwrap()) > 0.)), "{case:?}: raw paint must be nonempty");
+                    if plan.state.coverage {
+                        assert_eq!(plan.material, MaterialOperation::Coverage, "{case:?}");
+                        if case.preview {
+                            assert!(coverage.is_empty() && preview_coverage.is_empty(),
+                                "{case:?}: a single preview reads persistent paint and writes color");
+                        } else {
+                            assert!(layer.coverage_pages.iter().any(|p| p.owner == Some(batch.stroke_id)),
+                                "{case:?}: the coverage entry must own a destination");
+                            assert!(coverage.iter().any(|(_, bytes)| bytes.chunks_exact(4)
+                                .any(|p| f32::from_le_bytes(p.try_into().unwrap()) > 0.)),
+                                "{case:?}: the coverage entry must write coverage");
+                        }
+                    }
+                    (color, coverage, preview, preview_coverage, rgba)
+                };
+                let exact = render(|_, extra| extra);
+                for (name, route) in [("full", superset_flags as fn(&layer_render::DabStyle, u32) -> u32), ("tip class", class_flags)] {
+                    let routed = render(route);
+                    assert!(exact.0 == routed.0, "{case:?} write_only={write_only} {name}: persistent color bytes differ");
+                    assert!(exact.1 == routed.1, "{case:?} write_only={write_only} {name}: persistent coverage bytes differ");
+                    assert!(exact.2 == routed.2, "{case:?} write_only={write_only} {name}: preview color bytes differ");
+                    assert!(exact.3 == routed.3, "{case:?} write_only={write_only} {name}: preview coverage bytes differ");
+                    assert!(exact.4 == routed.4, "{case:?} write_only={write_only} {name}: composed RGBA bytes differ");
+                }
+            }
+        }
+    }
 
     #[test]
     fn completion_preview_routes_select_the_committed_filter() {

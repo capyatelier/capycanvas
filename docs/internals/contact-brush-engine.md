@@ -146,8 +146,8 @@ Each Preview batch identifies its end contact. Completion kernels compute its
 geometric q≤1 ownership before the dab loop, including beveled rounded tips.
 Planning omits LiftOnly bodies whose bounds miss the end contact. Pages outside
 that contact omit LiftOnly and ignore preview tags when selecting their kernels.
-Their original dab lists and tags stay intact; only real completions select the
-completion kernel. The original end stays available across page
+Their original dab lists and tags stay intact; only real completions require the
+completion feature on these pages. The original end stays available across page
 compaction.
 Other specialized kernels compose constant preview helpers. Frozen preview
 adds no prediction. Every completion uses committed filtering code 2 and the normal
@@ -159,8 +159,9 @@ The normal engine rest tests bound slow-stroke travel and check continuous conta
 
 Completion uses the same relief, loading, and optical transfer as segments.
 Its contact window leaves weakly engaged grains softer than fully engaged paper.
-Each planned page selects its body, completion and fine-tip kernel from the
-contacts that page evaluates, within the existing pipeline set and paint pass.
+Each planned page prefers the kernel for its own body, completion and fine-tip
+features. While that exact variant warms, a ready variant of its tip class
+serves it, so pages without thin dabs never run fine-tip code.
 The completion helpers are absent from ordinary specialized shaders. Broad
 completion variants also omit fine-contact filtering. Centered elliptical
 contacts share their symmetric full-chord integral and reject the inner half of
@@ -285,9 +286,19 @@ stable original sources. Reduced display
 previews preserve block averages and partial document edges. Tracked previews
 compare final pixels, avoiding changes caused by intermediate restoration.
 Shader preparation uses the captured contact, accumulation and pass plan before
-a stroke. Destination, gather, reservoir, direct drawing and dry mask recipes
-share those contact flags. Compute recipes use the same eligibility rule in
-readiness and deposition.
+a stroke. Dry brushes require one variant per pigment, output entry and tip
+class the brush size can reach. Thin ellipse dabs use fine-tip plus completion in
+Flow and fine-tip otherwise; coarse and rounded dabs use completion in Flow and
+the plain variant otherwise. Frame admission uses the same variants.
+Exact variants warm at background priority during speculative idle after brush
+readiness; a ready exact variant wins at dispatch, and a cold exact variant never
+blocks painting.
+Destination, gather, reservoir, direct drawing and dry mask recipes retain their
+own dependencies.
+`dry_brushes_require_one_kernel_per_tip_class` checks the required set;
+`dry_frame_admission_and_dispatch_use_the_ready_tip_class` checks cold dispatch.
+`selected_dry_variants_warm_after_brush_readiness` checks visible paper lighting
+precedes speculative warming.
 
 Pointwise deposition and transported materials share their compositing helpers
 but compile separate dependency sets. Each module serves one material operation
