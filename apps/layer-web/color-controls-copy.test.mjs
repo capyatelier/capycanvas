@@ -166,7 +166,8 @@ test('document properties retain inspected metadata and native rows while close 
 
 test('opening exposes refusal, adoption failure and a preserved master as distinct outcomes',async t=>{
   for(const phase of ['prepare','adopt','preserved'])await t.test(phase,async t=>{
-    const h=documentsHarness(t),error=new Error(`Failed ${phase}`);let adoptions=0;
+    const h=documentsHarness(t),error=new Error(`Failed ${phase}`),diagnostics=[];let adoptions=0;
+    t.mock.method(console,'debug',value=>diagnostics.push(value));
     h.app.dispatch=()=>{h.requests.push({id:9,kind:{type:'document',request:{type:'open'}}});return{};};
     h.app.admit_document_input=()=>{};h.app.file_open_failure=()=>error.message;
     h.app.prepare_document=async()=>{if(phase==='prepare')throw error;return{free(){}};};
@@ -182,13 +183,40 @@ test('opening exposes refusal, adoption failure and a preserved master as distin
       assert.equal(h.doc.body.querySelectorAll('dialog').some(node=>node.id==='file-launch-error'),false);assert.equal(settled,false);assert.equal(adoptions,0);assert.equal(h.requests.length,1);
       view.querySelectorAll('button').at(-1).click();await completed;assert.deepEqual(h.completed,[{id:9,success:false,error:undefined}]);assert.equal(h.docs.busy(),false);return;
     }
-    const rejected=assert.rejects(opening,value=>value===error).then(()=>{settled=true;});
+    const completed=opening.then(()=>{settled=true;});
     for(let i=0;i<20&&!h.doc.body.querySelectorAll('dialog').some(node=>node.id==='file-launch-error');i++)await new Promise(resolve=>setImmediate(resolve));
     const failure=h.doc.body.querySelectorAll('dialog').find(node=>node.id==='file-launch-error');assert.ok(failure,'A failed open has an explicit terminal error outcome');
     assert.equal(settled,false);assert.equal(adoptions,Number(phase==='adopt'));assert.equal(h.requests.length,0);
-    if(phase==='prepare')assert.deepEqual(h.completed,[{id:9,success:false,error}]);
-    failure.querySelectorAll('button').at(-1).click();await rejected;assert.equal(h.docs.busy(),false);
+    if(phase==='prepare')assert.deepEqual(h.completed,[{id:9,success:false,error:undefined}]);
+    failure.querySelectorAll('button').at(-1).click();await completed;assert.equal(h.docs.busy(),false);assert.deepEqual(diagnostics,[error]);
   });
+});
+
+for(const entry of ['requested','external'])test(`${entry} broken-file opening has one friendly alert and no raw notice`,async t=>{
+  const h=documentsHarness(t),diagnostic=new Error('failed to fill whole buffer'),reported=[];
+  t.mock.method(console,'debug',(...args)=>reported.push(args));
+  const bootstrap=h.app.bootstrap_view;
+  h.app.bootstrap_view=()=>({...bootstrap(),opening_files:'Opening files',cannot_open_file:'Cannot open file',ok:'OK',progress_dialog:{role:'alert',modal:true,primary:null},file_error_dialog:{role:'alert',modal:true,primary:'action'}});
+  let showFailure;const shown=new Promise(resolve=>showFailure=resolve);
+  h.app.file_open_failure=name=>{showFailure();return `Could not open “${name}”.`;};
+  h.app.admit_document_input=()=>{};h.app.prepare_document=async()=>{throw diagnostic;};
+  h.app.photo_formats=()=>[{name:'Drawing',mime_types:['application/octet-stream'],extensions:['capy']}];
+  h.app.dispatch=()=>{h.requests.push({id:91,kind:{type:'document',request:{type:'open'}}});return{};};
+  refreshCopy(h.app);
+  const file=new File(['invalid'],'broken.capy'),handle={name:file.name,getFile:async()=>file};window.showOpenFilePicker=async()=>[handle];
+  const request={id:91,kind:{type:'document',request:{type:'open'}}};
+  if(entry==='requested')h.requests.push(request);
+  const task=(entry==='requested'?h.docs.handle(request):h.docs.openFiles([file])).then(()=>({resolved:true}),error=>({error}));
+  await Promise.race([shown,task.then(result=>{throw Error(`The workflow ended without its failure alert: ${JSON.stringify(result)}`);})]);
+  const alert=h.doc.body.querySelectorAll('dialog').find(node=>node.id==='file-launch-error');
+  try {
+    assert.ok(alert,'The shared file-failure alert owns the failed open');
+    assert.equal(alert.querySelector('p').textContent,'Could not open “broken.capy”.');
+    assert.deepEqual(h.completed,[{id:91,success:false,error:undefined}],'A handled decoder error is not published as a second host error');
+    assert.deepEqual(h.messages,[]);assert.equal(h.docs.busy(),true,'The terminal alert keeps the workflow active until acknowledgement');
+  } finally {alert?.querySelectorAll('button').at(-1).click();await task;}
+  assert.deepEqual(await task,{resolved:true});assert.deepEqual(h.messages,[]);assert.equal(h.docs.busy(),false);assert.deepEqual(h.requests,[]);
+  assert.ok(reported.some(args=>args.includes(diagnostic)),'The original decoder diagnostic remains available outside the UI');
 });
 
 test('document async completion retains nominal color failures, literal diagnostics, cancellation and stale ownership',async t=>{

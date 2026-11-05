@@ -443,7 +443,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       }
       return true;
     }catch(error){
-      if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,error?.name==='AbortError'?undefined:error));
+      if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,file||error?.name==='AbortError'?undefined:error));
       throw error;
     }finally{candidate?.free();progress.remove();if(request!==null)active.delete(request);}
   }
@@ -481,7 +481,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     batching=true;
     try{for(const [index,file] of files.entries()){
       try{await openDrawing({request:index===0?request:null,file});}
-      catch(error){if(error?.name==='AbortError')break;if(files.length>1)console.error(error);await openError(file.file.name);if(files.length===1)throw error;}
+      catch(error){if(error?.name==='AbortError')break;console.debug(error);await openError(file.file.name);}
     }}finally{batching=false;tabs.refresh(true);}
   }
   async function openFiles(files){

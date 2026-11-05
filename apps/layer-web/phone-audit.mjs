@@ -483,9 +483,12 @@ export const dialogAuditRows=[
   {batch:'w6c',id:'cannot-open-file',rootselector:'#file-launch-error[open]',openaction:async({evaluate,wait})=>{
     await evaluate(`window.phoneAuditOpenFailure=null;void layerApp.documents.openFiles([new File(['invalid'],'own-broken.capy')]).then(()=>phoneAuditOpenFailure={resolved:true},error=>phoneAuditOpenFailure={message:error?.message??String(error)});`);
     await wait('!!document.querySelector("#file-launch-error[open]")');
+    assert.deepEqual(await evaluate('({error:layerApp.state().host_error??null,notice:document.querySelector("#status").textContent.trim()})'),{error:null,notice:''},'The shared file-failure alert owns the failed open');
   },closeaction:async({evaluate,wait})=>{
     await evaluate(`[...document.querySelectorAll('#file-launch-error button')].find(button=>button.textContent===layerApp.app.bootstrap_view().ok).click()`);
     await wait('phoneAuditOpenFailure!==null&&!layerApp.documents.busy()');
+    assert.equal(await evaluate('phoneAuditOpenFailure.resolved'),true,'Acknowledgement completes the handled file-open workflow');
+    assert.deepEqual(await evaluate('({error:layerApp.state().host_error??null,notice:document.querySelector("#status").textContent.trim()})'),{error:null,notice:''},'The decoder diagnostic does not escape after acknowledgement');
     await evaluate('delete window.phoneAuditOpenFailure');
   }},
 
