@@ -241,7 +241,7 @@ for (const key of ['Enter', 'Escape']) for (const keyCode of [0, 229]) {
       return node;
     };
     let applied = 0, cancelled = 0;
-    const panel = createPreviewPanel({app, name:'candidate', view:() => ({title:'Refine', dialog:{role:'editor', modal:true, primary:'action'}, numeric:{kind:'number'}, label:'Radius', radius:1}),
+    const panel = createPreviewPanel({app, name:'candidate', view:() => ({title:'Refine', dialog:{frame:{kind:'editor'},role:'editor', modal:true, primary:'action'}, numeric:{kind:'number'}, label:'Radius', radius:1}),
       kind:() => 'grow', value() {}, apply:() => applied++, cancel:() => cancelled++, element, button:h.button, icon:h.icon,
       numberField:() => Object.assign(element('div'), {update() {}}), workspace:h.doc.body});
     panel.refresh();

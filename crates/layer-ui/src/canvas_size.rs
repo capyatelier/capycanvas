@@ -153,7 +153,7 @@ impl CanvasSizeDraft {
             relative: false,
             anchor: CanvasAnchor::Center,
             view: CanvasSizeView {
-                dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
+                dialog: crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), false),
                 title: localization.text(MessageId::RESOURCES_SIZE_CANVAS_TITLE),
                 apply_label: localization.text(MessageId::COMMON_APPLY),
                 cancel_label: localization.text(MessageId::COMMON_CANCEL),

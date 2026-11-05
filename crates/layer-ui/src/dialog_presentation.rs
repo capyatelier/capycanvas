@@ -30,16 +30,22 @@ pub struct DialogHeader {
     pub end: Option<DialogHeaderAction>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DialogFrame { Editor, Alert { prefer_wide: bool } }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DialogIntent {
+    pub frame: DialogFrame,
     pub role: DialogRole,
     pub modal: bool,
     pub primary: Option<DialogPrimary>,
 }
 impl DialogIntent {
-    pub const fn editor(primary: Option<DialogPrimary>) -> Self { Self { role: DialogRole::Editor, modal: true, primary } }
-    pub const fn canvas_panel(modal: bool) -> Self { Self { role: DialogRole::CanvasPanel, modal, primary: Some(DialogPrimary::Action) } }
-    pub const fn progress() -> Self { Self { role: DialogRole::Alert, modal: true, primary: None } }
-    pub const fn alert() -> Self { Self { role: DialogRole::Alert, modal: true, primary: Some(DialogPrimary::Action) } }
+    pub const fn editor(primary: Option<DialogPrimary>) -> Self { Self { frame: DialogFrame::Editor, role: DialogRole::Editor, modal: true, primary } }
+    pub const fn alert_editor(primary: Option<DialogPrimary>, prefer_wide: bool) -> Self { Self { frame: DialogFrame::Alert { prefer_wide }, ..Self::editor(primary) } }
+    pub const fn canvas_panel(modal: bool) -> Self { Self { frame: DialogFrame::Editor, role: DialogRole::CanvasPanel, modal, primary: Some(DialogPrimary::Action) } }
+    pub const fn progress() -> Self { Self { frame: DialogFrame::Alert { prefer_wide: false }, role: DialogRole::Alert, modal: true, primary: None } }
+    pub const fn alert() -> Self { Self { frame: DialogFrame::Alert { prefer_wide: false }, role: DialogRole::Alert, modal: true, primary: Some(DialogPrimary::Action) } }
     pub fn header(self, subpage: bool) -> DialogHeader {
         use DialogHeaderAction as A;
         DialogHeader {
@@ -219,7 +225,21 @@ mod tests {
         assert_eq!(calibration.role,DialogRole::CanvasPanel);
         assert!(!calibration.modal);
         assert!(DialogIntent::canvas_panel(true).modal);
-        assert_eq!(DialogIntent::progress(),DialogIntent {role:DialogRole::Alert,modal:true,primary:None});
+        assert_eq!(DialogIntent::progress(),DialogIntent {frame:DialogFrame::Alert {prefer_wide:false},role:DialogRole::Alert,modal:true,primary:None});
+    }
+    #[test]
+    fn editor_alert_frames_preserve_editor_routing_and_header_actions() {
+        for primary in [None,Some(DialogPrimary::Action),Some(DialogPrimary::Close)] {
+            let editor = DialogIntent::editor(primary);
+            for prefer_wide in [false,true] {
+                let alert = DialogIntent::alert_editor(primary,prefer_wide);
+                assert_eq!(alert.frame,DialogFrame::Alert {prefer_wide});
+                assert_eq!(alert.role,editor.role);
+                assert_eq!(alert.modal,editor.modal);
+                for subpage in [false,true] { assert_eq!(alert.header(subpage),editor.header(subpage)); }
+            }
+        }
+        assert_eq!(DialogIntent::alert().frame,DialogFrame::Alert {prefer_wide:false});
     }
     #[test]
     fn calibration_minimums_fit_the_measured_native_area() {

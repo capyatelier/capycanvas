@@ -33,7 +33,7 @@ impl PackagePresentation {
     }
     pub fn summary(&self, localization: &Localizer) -> PackageViewSummary {
         PackageViewSummary {
-            dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
+            dialog: crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Close), true),
             disposition: self.disposition,
             capabilities: self.capabilities(),
             extent: self.extent,

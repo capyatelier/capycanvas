@@ -186,7 +186,7 @@ pub(super) async fn preview_document(
     let color=document.composition().color;
     let rendition=document.output().sdr;
     let scene=document.snapshot_with_context(context);
-    let mut preview = layer_color::AreaPreview::new(extent, [512, 384]).map_err(js)?;
+    let mut preview = layer_color::AreaPreview::new(extent, layer_ui::color_comparison::RASTER_BOUNDS).map_err(js)?;
     let mut capture = gpu
         .capture_scene(scene, layer_core::SceneScope::All, control.clone())
         .map_err(js)?;
@@ -208,6 +208,7 @@ pub(super) async fn preview_document(
     drop(capture);
     let (size, mut pixels) = preview.finish().map_err(js)?;
     let space = layer_core::color::RgbSpace::Srgb;
+    let checker = layer_ui::TRANSPARENCY_CHECKER.map(|gray| gray.linear()[0]);
     if let Some(guide) = guide {
         let mapper = rendition.mapper(color.space, space);
         for (i, p) in pixels.iter_mut().enumerate() {
@@ -217,12 +218,17 @@ pub(super) async fn preview_document(
                 std::array::from_fn(|c| (pos[c] as f32 + 0.5) * extent[c] as f32 / size[c] as f32),
                 &guide,
             );
+            let rgb = layer_ui::color_comparison::over_checker(*p,pos,checker);
+            p[..3].copy_from_slice(&rgb.map(|v|v as f32));
+            p[3]=1.;
         }
     } else {
         let matrix = color.space.linear_transform(space);
-        for p in &mut pixels {
+        for (i,p) in pixels.iter_mut().enumerate() {
             let rgb = layer_core::color::rgb::apply(matrix, [p[0], p[1], p[2]].map(f64::from));
             p[..3].copy_from_slice(&rgb.map(|v| v as f32));
+            let rgb = layer_ui::color_comparison::over_checker(*p,[i as u32%size[0],i as u32/size[0]],checker);
+            p[..3].copy_from_slice(&rgb.map(|v|v as f32));p[3]=1.;
         }
     }
     output::cancelled(&control)?;

@@ -10,6 +10,20 @@ use layer_core::{
 use layer_render::CanvasRenderer;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct DocumentColorDither {
+    pub available: bool,
+    pub value: layer_core::color::OutputDither,
+}
+pub fn document_color_dither(depth: layer_core::color::SampleDepth, active: bool) -> DocumentColorDither {
+    use layer_core::color::{SampleDepth, OutputDither};
+    let available = depth == SampleDepth::U8;
+    DocumentColorDither { available, value: if available && active { OutputDither::Stochastic8 } else { OutputDither::None } }
+}
+pub fn color_comparison_needed(original: DocumentColor, change: DocumentColorChange, flattened: bool) -> bool {
+    flattened || change.target(original) != original
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorkflowFailure { InactiveOperation, StaleCandidate, NotColorRequest, ColorChoiceMismatch, MissingColorCandidate, CopyCancelled, PreviewCopy, CopyNotReady, SeparateCopy, PreviewColor, ConsumedHistory, NotSourceRequest, MissingSourceLayer, MissingSource, RasterizationProfile, ChooseProfile, SourceCancelled, SourceNotPrepared, PreviewSource, MissingSourceCandidate }
 impl WorkflowFailure {
@@ -304,6 +318,12 @@ impl SourceWorkflow {
     pub fn rasterize(&self) -> bool {
         self.rasterize
     }
+    pub fn resolve_profile(&self, profile: Option<ColorProfile>) -> Result<Option<ColorProfile>, String> {
+        let profile = profile.or_else(|| (!self.rasterize).then(||self.initial_profile()));
+        self.validate_choice(&profile)?;
+        Ok(profile)
+    }
+    pub fn initial_profile(&self) -> ColorProfile { self.original.interpretation.profile.clone() }
     pub fn adds_layer(&self) -> bool {
         self.adds_layer && self.converted.as_ref().is_none_or(|source| **source != *self.original)
     }
@@ -389,5 +409,31 @@ impl SourceWorkflow {
         self.converted = None;
         self.compared = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    use layer_core::color::{SampleDepth, OutputDither, RgbSpace};
+    #[test]
+    fn document_dither_is_available_only_for_eight_bit_and_keeps_its_disabled_value_empty() {
+        for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
+            for active in [false,true] {
+                let dither = document_color_dither(depth,active);
+                assert_eq!(dither.available,depth==SampleDepth::U8);
+                assert_eq!(dither.value,if depth==SampleDepth::U8&&active { OutputDither::Stochastic8 } else { OutputDither::None });
+            }
+        }
+    }
+    #[test]
+    fn unchanged_color_edits_wait_for_a_different_choice_but_flattened_copies_still_compare() {
+        let original = DocumentColor::default();
+        assert!(!color_comparison_needed(original,DocumentColorChange::Assign(original.space),false));
+        assert!(!color_comparison_needed(original,DocumentColorChange::Depth {depth:original.depth,dither:OutputDither::None},false));
+        let change = DocumentColorChange::Convert {space:original.space,options:Default::default()};
+        assert!(!color_comparison_needed(original,change,false));
+        assert!(color_comparison_needed(original,change,true));
+        assert!(color_comparison_needed(original,DocumentColorChange::Assign(RgbSpace::ProPhoto),false));
     }
 }

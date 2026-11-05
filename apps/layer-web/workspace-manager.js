@@ -172,7 +172,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
         const heading = element("h2");bindCopy(heading,()=>JSON.parse(app.workspace_view()).prompt?.title??""); heading.id = "workspace-form-title";
         const formHeader=element('header','dialog-header'),content=kit.body(),body=kit.fields();body.classList.add('workspace-prompt-fields');content.content.append(body);formDialog.body=content;formHeader.append(heading);
         formDialog.setAttribute("aria-labelledby", heading.id); formDialog.append(formHeader,content.root);
-        if(form.message){const message=element("p");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");content.content.prepend(message);}
+        if(form.message){const message=element("p","alert-description");bindCopy(message,()=>JSON.parse(app.workspace_view()).prompt?.message??"");content.content.prepend(message);}
         if (form.name != null) {
           formName=kit.entry({label:()=>common.name,placeholder:()=>common.name,value:form.name,id:'workspace-item-name'});formName.maxLength=100;formName.addEventListener('input',validatePrompt);body.append(formName);
         }

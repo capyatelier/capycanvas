@@ -114,7 +114,7 @@ impl ImageSizeDraft {
             constrain: true,
             resample: ImageResample::Automatic,
             view: ImageSizeView {
-                dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
+                dialog: crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), false),
                 title: localization.text(MessageId::RESOURCES_SIZE_IMAGE_TITLE),
                 apply_label: localization.text(MessageId::COMMON_APPLY),
                 cancel_label: localization.text(MessageId::COMMON_CANCEL),

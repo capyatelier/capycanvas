@@ -1,8 +1,54 @@
 //! Preferences live in the worker's atomic origin store, outside workspace/UI snapshots.
 use super::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum SourcePickerContext {
+    Request { id: u32 },
+    Interpretation { source: layer_core::color::source::SourceInterpretation },
+}
+#[derive(Serialize, Deserialize)]
+struct PickerProfile { profile: layer_core::color::ColorProfile, name: Option<String> }
 #[wasm_bindgen]
 impl WebApp {
+    pub fn validate_profile_picker(&self, profile: JsValue, purpose: JsValue, context: JsValue) -> Result<js_sys::Promise, JsValue> {
+        use layer_ui::profile_library::{ProfilePurpose,ProfilePickerPurpose};
+        let profile: PickerProfile = serde_wasm_bindgen::from_value(profile).map_err(js)?;
+        let purpose: ProfilePickerPurpose = serde_wasm_bindgen::from_value(purpose).map_err(js)?;
+        let purpose = match purpose {
+            ProfilePickerPurpose::Proof => ProfilePurpose::Proof,
+            ProfilePickerPurpose::Output => ProfilePurpose::Output,
+            ProfilePickerPurpose::Source(_) => ProfilePurpose::Source(match serde_wasm_bindgen::from_value(context).map_err(js)? {
+                SourcePickerContext::Request {id} => layer_ui::SourceWorkflow::begin(&self.session,id).map_err(js)?.original.interpretation.clone(),
+                SourcePickerContext::Interpretation {source} => source,
+            }),
+        };
+        let working = self.session.engine().document().composition().color.space;
+        let metadata = serde_json::to_string(&serde_json::json!({"profile":profile,"purpose":purpose,"working":working})).map_err(js)?;
+        Ok(future_to_promise(async move {
+            JsFuture::from(raster_worker::call("profile-validate",&metadata,&js_sys::Array::new())?).await
+                .map_err(|error|color_feature_rejection(color_feature_reason(error)))
+        }))
+    }
+    pub fn profile_picker_inventory(&self, current: JsValue, document: JsValue, purpose: JsValue, context: JsValue, saved: JsValue) -> Result<js_sys::Promise, JsValue> {
+        let current: Option<PickerProfile> = serde_wasm_bindgen::from_value(current).map_err(js)?;
+        let document: Option<PickerProfile> = serde_wasm_bindgen::from_value(document).map_err(js)?;
+        let context: Option<SourcePickerContext> = serde_wasm_bindgen::from_value(context).map_err(js)?;
+        let current = match (current,context) {
+            (None,Some(SourcePickerContext::Request {id}))=>Some(layer_ui::SourceWorkflow::begin(&self.session,id).map_err(js)?.initial_profile()),
+            (current,_)=>current.map(|profile|profile.profile),
+        };
+        let purpose: layer_ui::profile_library::ProfilePickerPurpose=serde_wasm_bindgen::from_value(purpose).map_err(js)?;
+        let saved: Vec<layer_ui::profile_library::ProfilePickerSaved>=serde_wasm_bindgen::from_value(saved).map_err(js)?;
+        let metadata=serde_json::to_string(&serde_json::json!({"current":current,"document":document.map(|profile|profile.profile),"purpose":purpose,"saved":saved})).map_err(js)?;
+        Ok(future_to_promise(async move {JsFuture::from(raster_worker::call("profile-inventory",&metadata,&js_sys::Array::new())?).await}))
+    }
+    pub fn profile_picker_standard(&self, purpose: JsValue) -> Result<JsValue, JsValue> {
+        let purpose: layer_ui::profile_library::ProfilePickerPurpose = serde_wasm_bindgen::from_value(purpose).map_err(js)?;
+        serialize(&layer_core::color::RgbSpace::ALL.into_iter().filter(|_|purpose.accepts(layer_core::color::ProfileChannels::Rgb))
+            .map(layer_ui::ExportProfile::builtin).collect::<Vec<_>>())
+    }
     pub fn localize_export_presets(&self, names: JsValue) -> Result<JsValue, JsValue> {
         let mut names: Vec<String> = serde_wasm_bindgen::from_value(names).map_err(js)?;
         layer_ui::ExportPresetView::localize_names_in(&mut names,self.session.engine().document().composition().color,self.session.localization());
@@ -21,6 +67,9 @@ impl WebApp {
     }
     pub fn profile_name_copy(&self, name: &str) -> String {
         layer_ui::ExportProfileCaption::for_name(name.to_owned()).message(self.session.localization())
+    }
+    pub fn profile_options_copy(&self, name: &str) -> String {
+        layer_ui::color_feature_copy::named(self.session.localization(),layer_ui::MessageId::COLOR_FEATURES_PROFILE_OPTIONS,name)
     }
     pub fn source_profile_name_copy(&self, name: JsValue) -> Result<String, JsValue> {
         let name = serde_wasm_bindgen::from_value(name).map_err(js)?;
@@ -110,6 +159,24 @@ impl WebApp {
             serialize(&view)
         }))
     }
+}
+#[wasm_bindgen]
+pub fn raster_worker_profile_inventory(metadata: &str) -> Result<JsValue, JsValue> {
+    #[derive(Deserialize)]
+    struct Request { current:Option<layer_core::color::ColorProfile>,document:Option<layer_core::color::ColorProfile>,purpose:layer_ui::profile_library::ProfilePickerPurpose,saved:Vec<layer_ui::profile_library::ProfilePickerSaved> }
+    let request: Request=serde_json::from_str(metadata).map_err(js)?;
+    serialize(&layer_ui::profile_library::picker_inventory(&request.purpose,request.document.as_ref(),request.current.as_ref(),&request.saved))
+}
+#[wasm_bindgen]
+pub fn raster_worker_validate_profile(metadata: &str) -> Result<JsValue, JsValue> {
+    #[derive(Deserialize)]
+    struct Request { profile: PickerProfile, purpose: layer_ui::profile_library::ProfilePurpose, working: layer_core::color::RgbSpace }
+    let request: Request = serde_json::from_str(metadata).map_err(js)?;
+    let channels = layer_color::profile_channels(&request.profile.profile).map_err(|error|color_feature_rejection(error.into()))?;
+    let name = match request.profile.name { Some(name)=>name, None=>layer_color::profile_description_optional(&request.profile.profile).map_err(|error|color_feature_rejection(error.into()))?.unwrap_or_default() };
+    let profile = layer_ui::ExportProfile { profile:request.profile.profile,name,channels };
+    request.purpose.validate(&profile,request.working).map_err(color_feature_rejection)?;
+    serialize(&profile)
 }
 #[wasm_bindgen]
 pub fn raster_worker_export_presets(

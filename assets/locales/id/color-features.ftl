@@ -408,8 +408,6 @@ color-features-color-rasterize = Rasterisasi
 
 color-features-color-apply-profile = Terapkan Profil
 
-color-features-color-preview-help = Pratinjau hasil lengkap sebelum menerapkan.
-
 color-features-color-preparing = Menyiapkan hasil warna lengkap…
 
 color-features-color-before = Sebelum
@@ -421,8 +419,6 @@ color-features-color-prepared-composition = Komposisi yang disiapkan
 color-features-color-original-composition = Komposisi asli
 
 color-features-color-outside-gamut = Sebagian warna melebihi gamut tujuan. Bandingkan hasil sebelum menerapkan.
-
-color-features-color-composition-preview = Komposisi lengkap · pratinjau layar sRGB
 
 color-features-color-adds-layer = Terapkan menambah gambar asli terkoreksi sebagai lapisan baru; lapisan yang ada mempertahankan pengeditan, mask, dan penyesuaiannya.
 
@@ -464,8 +460,6 @@ color-features-export-resolution-summary = { $ppi } ppi · { $width } × { $heig
 
 color-features-export-preview-summary = { $preview } { $warning }
 
-color-features-color-source-preview = Profil sumber saat ini: { $name }. { $preview } { $layer }
-
 color-features-profile-grayscale = Skala abu-abu
 
 color-features-profile-hidden = { $channels } · Tersembunyi
@@ -477,8 +471,6 @@ color-features-proof-mode = Mode simulasi cetak
 color-features-proof-balance-contrast = Keseimbangan dan kontras SDR
 
 color-features-proof-profile-choice = Profil simulasi cetak
-
-color-features-proof-key-help = Tombol panah menyesuaikan; Shift memperbesar langkah, Escape membatalkan.
 
 color-features-comparison-before = Sebelum
 

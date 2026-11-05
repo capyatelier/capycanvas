@@ -317,8 +317,19 @@ pub(super) fn dialog_frame(d: &Driver) -> (adw::Dialog, gtk::Widget) {
             && !d.w.pages.root.is_transition_running()
     }), "the editor dialog is mapped and settled");
     let dialog = d.w.visible_dialog().unwrap();
+    alert_editor_frame(&dialog);
     let frame = crate::page_dialog::parent(&dialog);
     (dialog, frame)
+}
+
+fn alert_editor_frame(dialog: &adw::Dialog) {
+    if let Some(alert) = dialog.downcast_ref::<adw::AlertDialog>() {
+        let intent = crate::page_dialog::declared_intent(dialog).expect("a native AlertDialog declares its shared intent");
+        if intent.role == layer_ui::DialogRole::Editor {
+            assert_eq!(intent.frame, layer_ui::DialogFrame::Alert { prefer_wide: alert.prefers_wide_layout() },
+                "{} preserves its native floating Alert frame", dialog.widget_name());
+        }
+    }
 }
 
 fn dialog_frame_named(d: &Driver, name: &str) -> (adw::Dialog, gtk::Widget) {
@@ -350,6 +361,7 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
 }
 
 pub(super) fn capture(d: &mut Driver, name: &str) {
+    if let Some(dialog) = d.w.visible_dialog() { alert_editor_frame(&dialog); }
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         super::phone_motion::settle_presentation(&d.w);
         let capture_name = format!("pages-{}x{}-{}-{name}",d.w.surface.width(),d.w.surface.height(),format!("{:?}",state(&d.w).theme).to_lowercase());
@@ -872,7 +884,10 @@ fn w6c_catchup(d: &mut Driver) {
     capture(d, "rename-drawing-preset");
     named::<gtk::Button>(&frame,"new-drawing-cancel").emit_clicked();
     until(|| d.w.visible_dialog().is_none(), "New Drawing closes");
+    w6c_named_forms(d);
+}
 
+fn w6c_named_forms(d: &mut Driver) {
     let directory = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
     std::fs::create_dir_all(&directory).unwrap();
     let scan = directory.join("Linen scan.png");
@@ -1131,6 +1146,26 @@ fn w7_file_failure(d: &mut Driver) {
     let (dialog,_)=dialog_frame_named(d,"file-launch-error");
     capture(d,"cannot-open-file");close(d,&dialog);
     until(|| !d.w.documents.loading.get(),"failed launch releases the current drawing");
+}
+
+#[test]
+#[ignore = "private compositor: --native-test=native_alert_editor_frames --native-storage; phone viewport/theme, LAYER_PHOTO_FIXTURE and LAYER_TEST_ARTIFACTS external"]
+fn native_alert_editor_frames() {
+    let mut d = super::phone_motion::setup("art.capycanvas.AlertEditorFrames");
+    for command in [CommandId::CanvasSize, CommandId::ImageSize, CommandId::DocumentProperties] {
+        d.w.dispatch(UiAction::Invoke { command });
+        let (dialog, _) = dialog_frame(&d);
+        close(&d, &dialog);
+    }
+    w6c_named_forms(&mut d);
+    manager_page(&d, layer_workspace::ManagerPage::Workspaces, false);
+    manager_input(&d, layer_workspace::WorkspaceInput::Form { action: layer_workspace::ManagerAction::New });
+    dialog_frame(&d);
+    manager_close(&d);
+    for kind in ["rename_toolbar", "duplicate_toolbar", "delete_toolbar"] { w7_toolbar(&mut d, kind); }
+    w7_photo(&mut d);
+    w7_untagged(&mut d);
+    d.finish();
 }
 
 #[test]

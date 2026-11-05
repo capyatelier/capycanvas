@@ -34,9 +34,6 @@ impl WebSourceCandidate {
     pub fn clipped_channels(&self) -> f64 {
         self.clipped as f64
     }
-    pub fn adds_layer(&self) -> bool {
-        self.workflow.adds_layer()
-    }
     pub fn source_profile(&self) -> Option<String> {
         self.profile.clone()
     }
@@ -49,6 +46,13 @@ impl WebApp {
 }
 #[wasm_bindgen]
 impl WebApp {
+    pub fn source_dialog_context(&self, id: u32) -> Result<JsValue, JsValue> {
+        let workflow = SourceWorkflow::begin(&self.session,id).map_err(js)?;
+        let source = &workflow.original.interpretation;
+        let name = match &source.profile { ColorProfile::Builtin(space) => Some(space.name()), _ => None };
+        serialize(&serde_json::json!({"baked":workflow.adds_layer(),"assumed":source.profile_assumed,"name":name,
+            "purpose":layer_ui::profile_library::ProfilePickerPurpose::Source(source.channels)}))
+    }
     pub fn prepare_source(
         &self,
         id: u32,
@@ -56,9 +60,9 @@ impl WebApp {
         control: &output::WebCaptureControl,
     ) -> Result<js_sys::Promise, JsValue> {
         let s = &self.session;
-        let profile: Option<ColorProfile> = serde_wasm_bindgen::from_value(profile).map_err(js)?;
         let workflow = SourceWorkflow::begin(s, id).map_err(js)?;
-        workflow.validate_choice(&profile).map_err(js)?;
+        let profile: Option<ColorProfile> = serde_wasm_bindgen::from_value(profile).map_err(js)?;
+        let profile = workflow.resolve_profile(profile).map_err(js)?;
         let project = workflow.project.clone();
         let original = workflow.original.clone();
         let gpu = s

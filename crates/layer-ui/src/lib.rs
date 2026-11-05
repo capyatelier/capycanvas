@@ -35,7 +35,7 @@ pub use zoom_tool::{ZoomDirection, ZoomDrag, ZoomToolAction, ZoomToolSettings};
 mod document_tabs;
 mod phone;
 mod dialog_presentation;
-pub use dialog_presentation::{DialogRole, DialogPresentation, DialogEscape, DialogPrimary, DialogIntent, DialogHeader, DialogHeaderAction, dialog_escape, alert_responses_stacked, AlertMetrics, AlertLayout, alert_dialog_short, alert_dialog_layout, dialog_panes_fit, calibration_extent, floating_dialog_width, color_editor_layout, ColorEditorLayout, preferences_content_width, NewDrawingLayout, new_drawing_layout};
+pub use dialog_presentation::{DialogFrame, DialogRole, DialogPresentation, DialogEscape, DialogPrimary, DialogIntent, DialogHeader, DialogHeaderAction, dialog_escape, alert_responses_stacked, AlertMetrics, AlertLayout, alert_dialog_short, alert_dialog_layout, dialog_panes_fit, calibration_extent, floating_dialog_width, color_editor_layout, ColorEditorLayout, preferences_content_width, NewDrawingLayout, new_drawing_layout};
 pub use phone::{PhoneAction, PhoneBarContact, PhoneBarOutcome, PhoneLayout, PhoneMenu, PhoneMenuGeometry, PhoneMenuNavigation, PhoneMenuContact, PhoneMenuSwipe, PhoneMenuHit, PhoneMenuSettle, PhoneMenuInput, PhoneMenuReply, PhoneMenuRoute, PhoneMenuRow, PhoneMenuEllipsis, PhoneMenuClose, PhoneMenuPageView, PhoneMenuView, PhoneState};
 pub use document_tabs::{DocumentTabDrag, DocumentTabHit, DocumentTabSlide, DocumentTabs};
 mod document_sessions;
@@ -45,7 +45,7 @@ mod new_drawing;
 pub use new_drawing::*;
 pub use document_creation::{BlendingChoice, DocumentBackground, MAX_NEW_DOCUMENT_RESOLUTION, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentSettings, NewDocumentError};
 mod document_workflow;
-pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow};
+pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow, DocumentColorDither, document_color_dither, color_comparison_needed};
 
 pub mod paper_library;
 pub mod profile_library;
@@ -2063,6 +2063,7 @@ mod icon_tests {
 pub fn normalize_search(text: &str) -> String { search::normalize(text) }
 
 pub mod color_feature_copy;
+pub mod color_comparison;
 pub mod common_copy;
 pub use common_copy::CommonCopy;
 pub use keymaps::{shortcut_default_caption, modifier_hold_help};

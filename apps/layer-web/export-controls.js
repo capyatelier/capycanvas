@@ -67,7 +67,7 @@ export async function chooseExport({app,dialog,element,button,icon,dropdown,numb
       try {const imported=await importProfile(app,element);if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});fail(null);}
       catch(e){fail(e,true);}
     }));
-    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon});if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});invalidate();}catch(e){fail(e,true);}}));
+    form.append(button(()=>profilesCopy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon,dropdown});if(!imported)return;model.profiles.push(imported);profile.update({choices:profileChoices(),value:model.profiles.length-1});updateDraft({type:"profile",value:imported});invalidate();}catch(e){fail(e,true);}}));
     const readRecipe=()=>({format:rangeFormat(),profile:model.profiles[Number(profile.value)],depth:depth.value,background:background.value,
       encoding:{conversion:{intent:intent.value,black_point_compensation:false},dither:dither.value},jpeg_quality:quality.numericValue,
       size:size.value==="Original"?"Original":{Fit:{bounds:[width.numericValue,height.numericValue],enlarge:enlarge.checked}},
@@ -166,44 +166,90 @@ export function importProfile(app,element) {
   });
 }
 
-export function chooseSourceProfile({app,dialog,element,button,icon,dropdown}) {
-  const kit=createPageKit({element,icon});
-  const copy=liveCopy(app,"profile_copy");
-  return dialog(()=>copy.interpret_title,(form,finish)=>{
-    form.append(element("p","",()=>copy.interpret_help));
-    const profiles=["Srgb","DisplayP3","AdobeRgb","ProPhoto"].map(space=>({Builtin:space}));
-    const select=dropdown(()=>copy.interpret_as),choices=["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"].map((label,value)=>({value,label}));select.update({choices,value:0});const group=kit.group();group.list.append(kit.comboRow({title:()=>copy.interpret_as,control:select}));form.append(group.section);
-    const append=imported=>{profiles.push(imported.profile);choices.push({value:profiles.length-1,label:()=>app.profile_name_copy(imported.name)});select.update({choices,value:profiles.length-1});};
-    let failure=null;const error=element("p","error-message"),fail=(value,profile)=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,profile));};form.append(error);
-    form.append(button(()=>copy.import,async()=>{try{const imported=await importProfile(app,element);if(!imported)return;append(imported);fail(null);}catch(e){fail(e,true);}}));
-    form.append(button(()=>copy.saved_dialog,async()=>{try{const imported=await chooseProfileLibrary({app,element,button,icon});if(!imported)return;append(imported);}catch(e){fail(e,true);}}));
-    const cancel=button(()=>copy.common.cancel,()=>finish(null)),use=button(()=>copy.use_profile,()=>finish(profiles[Number(select.value)]),"suggested-action"),footer=kit.footer({actions:[cancel,use]});form.append(footer);return {cancel,primary:use,footer};
-  },copy.dialog);
+export function createProfilePicker({app,element,button,icon,dropdown,label,purpose,initial,documentProfile:initialDocument,documentLabel,emptyLabel,context,change,onError}) {
+  const copy=liveCopy(app,'profile_copy'),standard=app.profile_picker_standard(purpose);
+  let saved=[],current=initial??null,documentProfile=initialDocument??null,inventory=null,menuFailure=null,disposed=false,busy=false,failure=null,selection=0,revision=0;
+  const node=dropdown(label,async value=>{
+    if(busy||disposed)return;
+    const ticket=++selection;busy=true;failure=null;sync();change?.({pending:true,error:null});
+    try {
+      let profile=value==='document'?documentProfile:value==='current'?current:value.startsWith('standard:')?standard[Number(value.slice(9))]:value==='add'?await importProfile(app,element):value==='manage'?await chooseProfileLibrary({app,element,button,icon,dropdown,manage:true}):await app.profile_library('get',value.slice(6));
+      if(disposed||ticket!==selection)return;
+      if(profile)profile=await app.validate_profile_picker(profile,purpose,context??null);
+      if(disposed||ticket!==selection)return;
+      if(profile||value==='document'||value==='current')current=profile;
+      await refresh();
+    }catch(error){if(ticket===selection){failure=error;if(!disposed)onError?.(error);}}
+    finally{busy=false;if(!disposed){sync();if(ticket===selection)change?.({pending:false,error:failure});}}
+  });
+  const name=profile=>profile?.entry_copy_source?app.profile_entry_copy(profile.entry_copy_source).name:profile?app.profile_name_copy(profile.name??standard.find(value=>value.profile.Builtin===profile.profile?.Builtin)?.name??''):documentLabel?.();
+  function sync() {
+    const sections=[];
+    if(!inventory)sections.push([{label:()=>copy.loading,enabled:false}]);
+    if(inventory?.document)sections.push([{is_heading:true,label:()=>copy.document},{value:'document',label:()=>name(documentProfile)}]);
+    if(inventory?.current)sections.push([{is_heading:true,label:()=>copy.current},{value:'current',label:()=>name(current)}]);
+    if(inventory?.saved.length)sections.push([{is_heading:true,label:()=>copy.saved},...inventory.saved.map(index=>saved[Number(index)]).map(entry=>({value:`saved:${entry.id}`,label:()=>app.profile_entry_copy(entry.entry_copy_source).name}))]);
+    if(menuFailure)sections.push([{label:()=>app.color_feature_error_copy(menuFailure,true),enabled:false}]);
+    if(inventory?.standard)sections.push([{is_heading:true,label:()=>copy.standard},...standard.map((profile,index)=>({value:`standard:${index}`,label:()=>name(profile)}))]);
+    sections.push([{value:'add',label:()=>copy.add_profile_dialog},{value:'manage',label:()=>copy.manage}]);
+    const index=current?.profile?.Builtin==null?-1:standard.findIndex(profile=>profile.profile.Builtin===current.profile.Builtin);
+    node.update({value:inventory?.document&&current===documentProfile?'document':inventory?.current?'current':index>=0?`standard:${index}`:'',text:()=>busy?copy.reading:name(current)??emptyLabel?.()??copy.choose,disabled:busy,
+      menu:()=>({sections:sections.map(section=>section.map(choice=>({...choice,label:choice.label(),command:choice.value,enabled:choice.enabled!==false})))})});
+  }
+  async function refresh(){
+    const ticket=++revision,profile=current,document=documentProfile;let entries=[],error=null;
+    try{entries=await app.profile_library('list');}catch(reason){error=reason;}
+    if(disposed||ticket!==revision)return;
+    const view=await app.profile_picker_inventory(profile,document,purpose,context??null,entries.map(entry=>({id:entry.id,visible:entry.visible!==false,channels:entry.channels??null,valid:!entry.issue})));
+    if(!disposed&&ticket===revision){saved=entries;inventory=view;menuFailure=error;sync();}
+  }
+  node.updateProfile=(profile,document=false)=>{selection++;current=profile;documentProfile=document?profile:null;failure=null;sync();node.refreshProfiles();};
+  node.profileValue=()=>busy||failure?null:current;
+  node.refreshProfileCaption=sync;
+  node.refreshProfiles=()=>refresh().catch(error=>{if(!disposed)onError?.(error);});
+  node.disposeProfilePicker=()=>{disposed=true;};
+  sync();node.refreshProfiles();return node;
 }
 
-export function chooseProfileLibrary({app,element,button,icon,manage=false}) {
+export async function chooseSourceProfile({app,dialog,element,button,icon,dropdown,interpretation}) {
+  const kit=createPageKit({element,icon}),copy=liveCopy(app,'profile_copy');let picker;
+  try{return await dialog(()=>copy.interpret_title,(form,finish)=>{
+    form.append(element('p','alert-description',()=>copy.interpret_help));
+    let failure=null;const error=element('p','preferences-error'),fail=value=>{failure=value;error.hidden=value==null;bindCopy(error,()=>failure==null?'':app.color_feature_error_copy(failure,true));};error.hidden=true;
+    picker=createProfilePicker({app,element,button,icon,dropdown,label:()=>copy.interpret_as,purpose:{kind:'source',channels:interpretation.channels},context:{kind:'interpretation',source:interpretation},initial:{profile:interpretation.profile,channels:null},change:state=>{use.disabled=state.pending||!!state.error;fail(state.error);},onError:fail});
+    const group=kit.group();group.list.append(kit.comboRow({title:()=>copy.interpret_as,control:picker}));form.append(group.section,error);
+    const cancel=button(()=>copy.common.cancel,()=>finish(null)),use=button(()=>copy.use_profile,()=>{const profile=picker.profileValue();if(profile)finish(profile.profile);},'suggested-action'),footer=kit.footer({actions:[cancel,use]});form.append(footer);return {cancel,primary:use,footer};
+  },copy.dialog);}finally{picker?.disposeProfilePicker();}
+}
+
+export function chooseProfileLibrary({app,element,button,icon,dropdown,manage=false}) {
   const kit=createPageKit({element,icon});
   const copy=liveCopy(app,"profile_copy");
   return new Promise(resolve=>{
     const root=element("dialog","document-dialog profile-library"),form=element("form"),group=kit.group(),list=group.list,error=element("p","error-message"),search=kit.entry({label:()=>copy.search});
     search.type="search";search.id="profile-library-search";bindCopy(search,()=>copy.search,"placeholder");bindCopy(search,()=>copy.search,"ariaLabel");
+    error.hidden=true;
+    root.style.setProperty("--profile-library-width",`${copy.library_size[0]}px`);root.style.setProperty("--profile-library-height",`${copy.library_size[1]}px`);
     form.method="dialog";let result=null,closed=false,failure=null,busy=false,entries=[];
-    const fail=value=>{failure=value;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,true));};
+    const fail=value=>{failure=value;error.hidden=value==null;bindCopy(error,()=>failure==null?"":app.color_feature_error_copy(failure,true));};
     const finish=value=>{if(busy&&value==null)return;result=value;shell.hide();};
     root.addEventListener("close",()=>{closed=true;shell.dispose();body.dispose();profileLibraries.delete(render);root.remove();resolve(result);},{once:true});
-    const header=element("header","dialog-header");header.append(element("h2","",()=>copy.library_title));
-    const searchRow=kit.search(search),body=kit.body(group.section);form.append(searchRow,body.root,error,element("p","settings-description",()=>copy.library_help));
+    const header=element("header","dialog-header");header.append(element("h2","",()=>copy.manage_title));
+    const searchRow=kit.search(search),body=kit.body(group.section);form.append(element("p","settings-description",()=>copy.menu_help),searchRow,body.root,error);
     const done=button(()=>copy.common.done,()=>finish(null));
     const render=()=>{
       searchRow.hidden=entries.length<=7&&!search.value;search.disabled=busy;
-      list.replaceChildren();if(!entries.length)list.append(element("p","",()=>copy.empty));
+      list.replaceChildren();
       for(const entry of entries.filter(entry=>app.profile_library_matches(entry.entry_copy_source,search.value))){
         const actions=element("div","preference-row-actions");
         let tag,copyView;const entryCopy=()=>{const current=app.language_tag();if(tag!==current){copyView=app.profile_entry_copy(entry.entry_copy_source);tag=current;}return copyView;};
         const row=kit.row({title:()=>entryCopy().name,description:()=>entryCopy().issue??entryCopy().details,suffix:actions});
-        if(!manage&&!entry.issue)actions.append(button(()=>copy.use_profile,()=>run(async()=>{const profile=await app.profile_library("get",entry.id);if(!closed)finish(profile);})));
-        actions.append(button(()=>entry.visible===false?copy.show:copy.hide,()=>run(async()=>{await app.profile_library(entry.visible===false?"show":"hide",entry.id);await refresh();})));
-        actions.append(button(()=>copy.remove,()=>run(async()=>{await app.profile_library("remove",entry.id);await refresh();})));list.append(row.line);
+        if(!manage&&!entry.issue)actions.append(button(()=>copy.use_profile,()=>run(async()=>{const profile=await app.profile_library('get',entry.id);if(!closed)finish(profile);})));
+        if(entry.visible!==false){const pin=icon('pin');pin.classList.add('profile-library-pin');bindCopy(pin,()=>copy.shown,'ariaLabel');actions.append(pin);}
+        const more=dropdown(()=>app.profile_options_copy(entryCopy().name),value=>run(async()=>{await app.profile_library(value==='remove'?'remove':entry.visible===false?'show':'hide',entry.id);await refresh();}));
+        more.classList.add('profile-library-more');more.replaceChildren(icon('more'));
+        more.update({value:entry.visible!==false?'show':'',menu:()=>({sections:[[{label:copy.show,command:'show',selected:entry.visible!==false,enabled:!busy}],[{label:copy.remove,command:'remove',enabled:!busy}]]})});
+        more.addEventListener('click',event=>event.stopPropagation());actions.append(more);list.append(row.line);
       }
       for(const node of form.querySelectorAll('button'))node.disabled=busy;
     };
@@ -215,8 +261,8 @@ export function chooseProfileLibrary({app,element,button,icon,manage=false}) {
     search.addEventListener("input",render);profileLibraries.add(render);
     const add=button('',()=>run(async()=>{const profile=await importProfile(app,element);if(profile&&!manage&&!closed)finish(profile);else await refresh();}));
     add.append(icon('plus'));add.className='profile-library-import';bindCopy(add,()=>copy.add_profile,'ariaLabel');bindCopy(add,()=>copy.add_profile,'title');
-    const slot=element('div','dialog-header-slot');slot.dataset.dialogSlot='end';slot.append(add);header.append(slot);form.append(done);
+    const slot=element('div','dialog-header-slot');slot.dataset.dialogSlot='end';slot.append(add);header.append(slot);form.append(kit.footer({actions:[done]}));
     form.onsubmit=e=>e.preventDefault();root.append(header,form);document.body.append(root);
-    const shell=createDialogHost({app,dialog:root,header,cancel:done,primary:done,endSlot:slot,icon,copy:copy.common,onCancel:()=>finish(null),search,clearSearch:()=>{search.value="";render();}});shell.present(copy.library_dialog);run(refresh);
+    const shell=createDialogHost({app,dialog:root,header,cancel:done,primary:done,retainPrimary:true,endSlot:slot,icon,copy:copy.common,onCancel:()=>finish(null),search,clearSearch:()=>{search.value="";render();}});shell.present(copy.library_dialog);run(refresh);
   });
 }

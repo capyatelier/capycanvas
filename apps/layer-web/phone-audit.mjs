@@ -203,6 +203,55 @@ async function photoAuditOpen({send,evaluate,wait}){
   await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()&&layerApp.app.document_color().space==="ProPhoto"&&layerApp.app.document_color().depth==="U16"');
   await evaluate('window.phoneAuditPhotoCount=layerApp.app.document_tabs(0).tabs.length');
 }
+function photoAuditDraft(app,state){
+  if(state==='rasterize-source')return null;
+  const color=app.document_color_copy(),output=app.export_copy();
+  if(state==='change-bit-depth')return{label:output.depth,value:'U8'};
+  if(state!=='repair-source-profile')return{label:output.profile,value:'Srgb'};
+  const request=app.state().requests.find(item=>item.kind.type==='document'&&item.kind.request.type==='repair_source_profile');
+  if(!request)throw Error('Missing source-profile request');
+  const choices=app.profile_picker_standard(app.source_dialog_context(request.id).purpose),index=choices.findIndex(profile=>profile.profile.Builtin==='Srgb');
+  if(index<0)throw Error('Source profile picker has no sRGB choice');
+  return{label:color.correct_profile,value:`standard:${index}`};
+}
+
+function colorPresentationAudit(state){
+  const app=layerApp.app,color=app.document_color_copy(),profile=app.profile_copy(),output=app.export_copy(),issues=[],bounds=node=>{const r=node.getBoundingClientRect();return[r.x,r.y,r.width,r.height];},check=(condition,message)=>{if(!condition)issues.push(message);};
+  if(state==='soft-proof'){
+    const root=document.querySelector('.content-drawer .proof-panel'),copy=app.proof_copy(),model=app.proof_form(),panel=app.proof_panel_copy(),picker=root.querySelector(`.dropdown[aria-label=${JSON.stringify(copy.profile_choice)}]`),gamut=root.querySelector(`input[aria-label=${JSON.stringify(copy.gamut_warning)}]`);
+    check(!!picker&&!!gamut,'Proof profile and gamut controls exist');
+    check(gamut?.disabled===!panel.gamut_available,'Gamut sensitivity follows the shared proof view');
+    if(!model.print_settings.profile)check(picker?.textContent.trim()===profile.choose_short,'An empty proof profile uses the native Choose caption');
+    return{issues,mode:model.mode,gamut_available:panel.gamut_available,gamut_disabled:gamut?.disabled,profile_caption:picker?.textContent.trim()};
+  }
+  if(state==='profile-library'){
+    const root=document.querySelector('.profile-library[open]'),title=root.querySelector('h2')?.textContent,help=root.querySelector('.settings-description')?.textContent;
+    check(title===profile.manage_title,'Profile library uses the native title');check(help===profile.menu_help,'Profile library uses the native explanation');
+    return{issues,title,help,rows:[...root.querySelectorAll('.preference-row')].map(node=>({text:node.textContent,bounds:bounds(node)}))};
+  }
+  if(state==='untagged-source-profile'){
+    const root=[...document.querySelectorAll('dialog[open]')].find(node=>node.querySelector(`.dropdown[aria-label=${JSON.stringify(profile.interpret_as)}]`)),row=root.querySelector('.preference-combo-row'),help=root.querySelector('form > p')?.textContent;
+    check(help===profile.interpret_help,'Untagged uses the native explanation');check(row?.querySelector('.preference-combo-title')?.textContent===profile.interpret_as,'Untagged has the shared interpretation card');
+    return{issues,help,row:row?{text:row.textContent,bounds:bounds(row)}:null};
+  }
+  const root=document.querySelector('dialog[open] .document-color-content'),comparison=app.comparison_copy(),help=root.querySelector('.document-color-help')?.textContent,detail=root.querySelector('.document-color-detail')?.textContent,figures=[...root.querySelectorAll('.color-comparison figure')],rows=[...root.querySelectorAll('.preference-combo-title')].map(node=>node.textContent);
+  const request=app.state().requests.find(item=>item.kind.type==='document'&&['repair_source_profile','rasterize_source'].includes(item.kind.request.type));
+  const context=request?app.source_dialog_context(request.id):null;
+  const expectedHelp=state==='assign-profile'?color.assign_native_help:state==='convert-color-space'?color.convert_native_help:state==='change-bit-depth'?color.depth_native_help:state==='rasterize-source'?app.rasterize_details():context?.baked?color.source_baked_help:color.source_native_help;
+  check(help===expectedHelp,'Color page uses the native help');
+  const expectedRows=state==='assign-profile'?[output.profile]:state==='convert-color-space'?[output.profile,color.result,output.intent]:state==='change-bit-depth'?[output.depth]:state==='repair-source-profile'?[color.correct_profile]:[];
+  check(JSON.stringify(rows)===JSON.stringify(expectedRows),'Color page has the native card labels');
+  check(figures.length===0||figures.length===2,'A color comparison has two previews or the shared unchanged state');
+  if(!figures.length)check([...root.querySelectorAll('p')].some(node=>!node.hidden&&node.textContent===color.choose_different)&&root.closest('dialog[open]').querySelector('.suggested-action')?.disabled,'An unchanged color choice shows its shared explanation without an applicable candidate');
+  const previews=figures.map((figure,index)=>{const caption=figure.querySelector('figcaption'),canvas=figure.querySelector('canvas'),label=caption?.textContent,captionBounds=caption?bounds(caption):null,canvasBounds=canvas?bounds(canvas):null;
+    check(label===(index?comparison.copy.after:comparison.copy.before),'Comparison captions use shared Before/After');
+    check(captionBounds&&canvasBounds&&captionBounds[1]+captionBounds[3]<=canvasBounds[1]+.5,'Comparison caption is above its preview');
+    check(canvasBounds&&Math.abs(canvasBounds[3]-Number(comparison.height))<=.5,'Comparison preview has the native height');
+    return{label,caption:captionBounds,canvas:canvasBounds};});
+  if(previews.length===2){check(Math.abs(previews[0].canvas[2]-previews[1].canvas[2])<=.5,'Comparison preview columns have equal widths');check(Math.abs(previews[1].canvas[0]-previews[0].canvas[0]-previews[0].canvas[2]-Number(comparison.gap))<=.5,'Comparison uses the native column gap');}
+  if(state!=='repair-source-profile')check([color.compare_before_apply,color.clipped_comparison,color.layered_open,color.rasterize_compare,color.source_clipped,color.rasterize_comparison,color.choose_destination].includes(detail),'Comparison sentence uses the shared native copy');
+  return{issues,help,rows,detail,previews};
+}
 async function photoAuditClose({evaluate,wait}){
   await evaluate('document.querySelector("dialog.document-dialog:not(.file-progress)[open]")?.requestClose()');
   await wait('!document.querySelector("dialog.document-dialog:not(.file-progress)[open]")&&!layerApp.documents.busy()');
@@ -354,8 +403,13 @@ export const dialogAuditRows=[
 
   ...[
     ['numeric-popover','The numeric popover belongs to vertical desktop toolbar components; phone sliders omit its axis fields and ToolSettings uses NumberPopover=false. No existing phone route; desktop-only chrome is outside M0.'],
-    ['profile-picker-menu','GTK profile picker More menu is presented as inline Import/Saved-profile buttons on Web document-color.js/export-controls.js; no corresponding menu opener.'],
   ].map(([id,blocked])=>({batch:'m0',id,blocked})),
+  {batch:'m0',id:'profile-picker-menu',collector:'menu',rootselector:'.panel-context-menu:popover-open',openaction:async c=>{
+    await dialogAuditRows.find(row=>row.id==='soft-proof').openaction(c);
+    const label=await c.evaluate('layerApp.app.proof_copy().profile_choice'),selector=`.proof-print .dropdown[aria-label=${JSON.stringify(label)}]`;
+    await c.wait(`document.querySelector(${JSON.stringify(selector)}).menuModel().sections.flat().some(row=>row.command?.startsWith('standard:'))`);
+    await auditPopup(c,selector);
+  },closeaction:auditSurfaceClose},
   {batch:'m0',id:'new-drawing-preset-menu',rootselector:'.new-drawing-menu:popover-open',openaction:async c=>{await dialogAuditRows.find(row=>row.id==='rename-drawing-preset').openaction(c);await c.click('#new-drawing-save-cancel');const index=await c.evaluate('layerApp.state().new_drawing.drawer.tiles.findIndex(tile=>tile.own&&tile.name==="Canvas study")');await auditPopup(c,`[data-new-drawing-preset="${index}"]`,true);},closeaction:async c=>{await c.evaluate('document.querySelector(".new-drawing-menu:popover-open").hidePopover()');await drawingPresetMenu(c,'delete');await c.click('#new-drawing-cancel');}},
   auditMenuRow('new-drawing-paper-color-menu',async c=>{await c.send({type:'invoke',command:'new_document'});await c.click('#new-drawing-paper-color');},'[data-new-drawing-paper-color="0"]',true),
   {batch:'m0',id:'paper-tile-menu',rootselector:'#texture-dialog .panel-context-menu:popover-open',openaction:async c=>{await dialogAuditRows.find(row=>row.id==='rename-paper').openaction(c);await c.evaluate('document.querySelector("#paper-rename-dialog").requestClose()');await c.wait('!document.querySelector("#paper-rename-dialog")');const index=await c.evaluate('[...document.querySelectorAll("#texture-dialog .texture-tile")].findIndex(tile=>tile.querySelector(".texture-caption").textContent==="Linen scan")');await auditPopup(c,`#texture-dialog .texture-tile[data-texture-tile="${index}"]`,true);},closeaction:async c=>{await c.evaluate('document.querySelector("#texture-dialog .panel-context-menu:popover-open").hidePopover();document.querySelector("#texture-dialog").requestClose()');const id=await c.evaluate('layerApp.state().layer_properties.controls.find(control=>control.paper).paper.tiles.find(tile=>tile.label==="Linen scan").id');await c.send({type:'effect',action:{op:'delete_paper',id}});await auditSurfaceClose(c);}},
@@ -365,7 +419,11 @@ export const dialogAuditRows=[
 
   ...[['curves-editor','curves'],['gradient-editor','gradient_fill']].map(([id,effect])=>({batch:'m0',id,collector:'drawer',rootselector:'.content-drawer',openaction:c=>auditEffect(c,effect),variants:id==='curves-editor'?[{id:'properties-filter',openaction:async()=>{}}]:[],closeaction:auditLayerClose})),
   ...[['properties-actions-menu','[data-property-action-group]','.toolbar-choice-menu:popover-open'],['properties-add-filter-menu','#properties-add-filter','.panel-context-menu:popover-open']].map(([id,selector,rootselector])=>({batch:'m0',id,rootselector,openaction:async c=>{await auditEffect(c,'levels');await c.click(selector);},variants:id==='properties-actions-menu'?[{id:'property-picker',openaction:async()=>{}}]:[],closeaction:auditLayerClose})),
-  {batch:'m0',id:'profile-library-row-menu',blocked:'Web profile library renders inline Use/Hide/Remove actions, with no row-menu opener (export-controls.js chooseProfileLibrary); GTK menu is a presentation gap, not a fixture alias.'},
+  {batch:'m0',id:'profile-library-row-menu',collector:'menu',rootselector:'.panel-context-menu:popover-open',openaction:async c=>{
+    await c.evaluate(`(async()=>{if((await layerApp.app.profile_library('list')).length)throw Error('The owned profile library starts empty');const response=await fetch('/pkg/proof-p3.icc');if(!response.ok)throw Error('Missing existing P3 ICC fixture');await layerApp.app.profile_library('import',undefined,new Uint8Array(await response.arrayBuffer()));const entries=await layerApp.app.profile_library('list');if(entries.length!==1)throw Error('The owned P3 profile is the only library row');window.phoneAuditProfileId=entries[0].id;})()`);
+    await dialogAuditRows.find(row=>row.id==='profile-library').openaction(c);
+    await c.wait('!!document.querySelector(".profile-library .profile-library-more:not(:disabled)")');await auditPopup(c,'.profile-library .profile-library-more');
+  },closeaction:async c=>{await auditSurfaceClose(c);await c.evaluate(`(async()=>{await layerApp.app.profile_library('remove',phoneAuditProfileId);delete window.phoneAuditProfileId;})()`);}},
 
   ...['vector','selection','fill','mask','image','group'].flatMap(kind=>[
     {batch:'m0',id:`layers-${kind}`,collector:'drawer',rootselector:'.content-drawer',openaction:c=>auditLayerKind(c,kind),closeaction:auditLayerClose},
@@ -464,8 +522,8 @@ export const dialogAuditRows=[
     await evaluate(`(()=>{const root=document.querySelector('.content-drawer .palettes-panel');root.querySelector('.palette-selector').click();const node=${JSON.stringify(command)}==='new_palette'?root.querySelector('.palette-library-add'):[...root.querySelectorAll('.palette-choice')].find(node=>node.dataset.name==='Canvas study');node.menuCommand({command:${JSON.stringify(command)},id:layerApp.state().color_library.palettes.find(palette=>palette.name==='Canvas study')?.id});})()`);
   },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector("dialog.palette-form[open]").requestClose()');await wait('!document.querySelector("dialog.palette-form[open]")');await send({type:'customize',action:{type:'close_expanded'}});}})),
   {batch:'w6c',id:'profile-library',rootselector:'.profile-library[open]',openaction:async({send,evaluate,wait})=>{
-    await send({type:'open_settings',page:'color'});await wait('[...document.querySelectorAll("#settings button")].some(button=>button.textContent==="Manage Profiles…")');
-    await evaluate('[...document.querySelectorAll("#settings button")].find(button=>button.textContent==="Manage Profiles…").click()');
+    await send({type:'open_settings',page:'color'});await wait('[...document.querySelectorAll("#settings button")].some(button=>button.textContent===layerApp.app.profile_copy().manage)');
+    await evaluate('[...document.querySelectorAll("#settings button")].find(button=>button.textContent===layerApp.app.profile_copy().manage).click()');
   },closeaction:async({evaluate,wait,send})=>{await evaluate('document.querySelector(".profile-library[open]").requestClose()');await wait('!document.querySelector(".profile-library[open]")');await send({type:'close_settings'});}},
   ...[['workspaces','workspaces'],['layout-history','history'],['this-workspace','this_workspace'],['saved-toolbars','toolbar_library']].map(([id,page])=>({batch:'w6c',id,rootselector:'.workspace-manager[open]',openaction:context=>managerPage(context,page),closeaction:managerClose})),
   ...[['this-workspace-details','this_workspace'],['saved-toolbar-details','toolbar_library']].map(([id,page])=>({batch:'w6c',id,rootselector:'.workspace-manager[open]',openaction:context=>managerPage(context,page,true),closeaction:managerClose})),
@@ -550,10 +608,11 @@ export const dialogAuditRows=[
     ['document-color-progress','The existing conversion journey needs an actual color candidate and in-flight preparation; that setup is not a short healthy-drawing opener.'],
     ['clipboard-progress','The existing clipboard cancellation journey needs browser clipboard permission, owned image payload and an in-flight capture/provider; no short stable progress opener exists.'],
   ].map(([id,blocked])=>({batch:'w6d',id,blocked})),
-  ...[['assign-profile','assign_profile','Color space','Srgb'],['convert-color-space','convert_color_space','Color space','Srgb'],['change-bit-depth','change_bit_depth','Bit depth','U8'],['repair-source-profile','repair_source_profile','Correct source profile','0'],['rasterize-source','rasterize_source']].map(([id,command,label,value])=>({
-    batch:'w7-photo',id,rootselector:'dialog.document-dialog:not(.file-progress)[open]',document:{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(label?{draft:{label,value}}:{})},
+  ...[['assign-profile','assign_profile'],['convert-color-space','convert_color_space'],['change-bit-depth','change_bit_depth'],['repair-source-profile','repair_source_profile'],['rasterize-source','rasterize_source']].map(([id,command])=>({
+    batch:'w7-photo',id,rootselector:'dialog.document-dialog:not(.file-progress)[open]',document:{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(id!=='rasterize-source'?{draft:{state:id}}:{})},
     openaction:async context=>{await photoAuditOpen(context);await context.send({type:'invoke',command});
-      if(label){const selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(label)}]`;await context.wait(`!!document.querySelector(${JSON.stringify(selector)})`);await context.evaluate(dropdownChoice(selector,value));}
+      const draft=await context.evaluate(`(${photoAuditDraft.toString()})(layerApp.app,${JSON.stringify(id)})`);
+      if(draft){const selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(draft.label)}]`;await context.wait(`!!document.querySelector(${JSON.stringify(selector)})`);await context.evaluate(dropdownChoice(selector,draft.value));}
       await context.wait('!!document.querySelector("dialog.document-dialog:not(.file-progress)[open] .color-comparison canvas")&&!document.querySelector("dialog.file-progress[open]")');},
     closeaction:photoAuditClose,
   })),
@@ -562,7 +621,7 @@ export const dialogAuditRows=[
 
 export function dialogAuditSpecifications(rootselector,root=document){
   const node=root.querySelector(rootselector),specs=[{id:'page',role:'page',selector:rootselector}];
-  if(node?.getAttribute?.('role')!=='alertdialog')specs.push({id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`});
+  if(node?.dataset?.dialogFrame!=='alert')specs.push({id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`});
   for(const part of ['start','end','panes'])if(node?.querySelector(`[data-dialog-part="${part}"]`))specs.push({id:`page.${part}`,role:part==='panes'?'panes':'page-action',selector:`${rootselector} [data-dialog-part="${part}"]`});
   return specs;
 }
@@ -616,7 +675,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     assert.deepEqual(metadata.viewport,test.viewport,'Capture logical viewport');assert.equal(metadata.dpr,1,'Capture DPR');
     assert.equal(metadata.theme,test.theme,'Capture theme');
     metadata.phone_tiles=await evaluate('layerApp.state().workspace.layout.phone??[]');
-    metadata.alert=await evaluate(`(()=>{const root=[...document.querySelectorAll('dialog[role="alertdialog"][open]')].at(-1);if(!root)return null;const style=getComputedStyle(root),footer=root.querySelector('footer'),bounds=node=>{const r=node.getBoundingClientRect();return[r.x,r.y,r.width,r.height];};return{bounds:bounds(root),short:root.classList.contains('short'),stacked:footer?.classList.contains('alert-responses-stacked')??false,font:style.font,padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft],backdrop:getComputedStyle(root,'::backdrop').backgroundColor,chips:[...document.querySelectorAll('#phone-frame .phone-chip')].map(node=>({id:node.id,bounds:bounds(node),fill:getComputedStyle(node).backgroundColor,role:getComputedStyle(node).getPropertyValue('--glass-chip')})),responses:[...(footer?.querySelectorAll('button')??[])].filter(node=>node.getClientRects().length&&!node.hidden).map(node=>{const s=getComputedStyle(node);return{text:node.textContent,bounds:bounds(node),font:s.font,color:s.color,fill:s.backgroundColor,image:s.backgroundImage};})};})()`);
+    metadata.alert=await evaluate(`(()=>{const root=[...document.querySelectorAll('dialog[data-dialog-frame="alert"][open]')].at(-1);if(!root)return null;const style=getComputedStyle(root),footer=root.querySelector('footer'),bounds=node=>{const r=node.getBoundingClientRect();return[r.x,r.y,r.width,r.height];};return{bounds:bounds(root),short:root.classList.contains('short'),stacked:footer?.classList.contains('alert-responses-stacked')??false,font:style.font,padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft],backdrop:getComputedStyle(root,'::backdrop').backgroundColor,chips:[...document.querySelectorAll('#phone-frame .phone-chip')].map(node=>({id:node.id,bounds:bounds(node),fill:getComputedStyle(node).backgroundColor,role:getComputedStyle(node).getPropertyValue('--glass-chip')})),responses:[...(footer?.querySelectorAll('button')??[])].filter(node=>node.getClientRects().length&&!node.hidden).map(node=>{const s=getComputedStyle(node);return{text:node.textContent,bounds:bounds(node),font:s.font,color:s.color,fill:s.backgroundColor,image:s.backgroundImage};})};})()`);
     if(state==='command-search')metadata.command_search=await evaluate('({query:layerApp.state().command_search?.query??"",result_ids:(layerApp.state().command_search?.results??[]).map(result=>result.id)})');
     if(state==='soft-proof'||state==='sdr-rendition')metadata.proof_body_rows=await evaluate(`(()=>{const body=document.querySelector('.content-drawer .proof-panel');return [...body.querySelectorAll('.proof-modes button,.proof-print .document-size,.proof-sdr .document-size,.proof-tone-pad')].filter(node=>node.getClientRects().length).map(node=>{const r=node.getBoundingClientRect();return{label:node.textContent.trim(),bounds:[r.x,r.y,r.width,r.height]};});})()`);
     if(mode==='frame')metadata.presented_tools=await evaluate('layerApp.app.phone_tools()');
@@ -627,7 +686,13 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     assert.deepEqual(document.extent,expected_extent,'Captured active drawing extent');
     assert.deepEqual(document.color,expected_color,'Captured active drawing color');
     metadata.document=document;
-    if(expected_draft){const selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(expected_draft.label)}]`;const value=await evaluate(`document.querySelector(${JSON.stringify(selector)})?.value??null`);assert.equal(value,expected_draft.value,'Captured photo draft choice');metadata.draft_choice={label:expected_draft.label,value};}
+    if(expected_draft){const draft=expected_draft.state?await evaluate(`(${photoAuditDraft.toString()})(layerApp.app,${JSON.stringify(expected_draft.state)})`):expected_draft;const selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(draft.label)}]`;const value=await evaluate(`document.querySelector(${JSON.stringify(selector)})?.value??null`);assert.equal(value,draft.value,'Captured photo draft choice');metadata.draft_choice={label:draft.label,value};}
+    if(['assign-profile','convert-color-space','change-bit-depth','repair-source-profile','rasterize-source','untagged-source-profile','profile-library','soft-proof'].includes(state)){metadata.color_presentation=await evaluate(`(${colorPresentationAudit.toString()})(${JSON.stringify(state)})`);assert.deepEqual(metadata.color_presentation.issues,[],`${state}: native Color/Profile presentation`);}
+    if(['profile-picker-menu','profile-library-row-menu'].includes(state)){
+      const selector=state==='profile-picker-menu'?'.proof-print .dropdown':'.profile-library-more';
+      metadata.profile_menu=await evaluate(`(()=>{const model=document.querySelector(${JSON.stringify(selector)}).menuModel(),root=document.querySelector('.panel-context-menu:popover-open');return{sections:model.sections,rows:[...root.querySelectorAll('button')].map(node=>{const r=node.getBoundingClientRect();return{label:node.textContent.trim(),disabled:node.disabled,bounds:[r.x,r.y,r.width,r.height]};})};})()`);
+      assert.ok(metadata.profile_menu.rows.length&&metadata.profile_menu.sections.every(section=>section.length),'The native profile menu has visible rows and no empty sections');
+    }
     metadata.camera=await evaluate(`JSON.parse(JSON.stringify(layerApp.state().camera,(_,value)=>typeof value==='bigint'?String(value):value))`);
     if(mode==='drawers')metadata.drawer=await evaluate(`(()=>{const s=layerApp.state(),d=s.customization.drawer;if(!d)return null;return JSON.parse(JSON.stringify({model:d,measure:layerApp.app.drawer_measure({viewport:[innerWidth,innerHeight],column:null,tiles:[]}),tools:d.columns.flat().filter(p=>['brushes','brush_sets','sculpt_sets','tools'].includes(p)).map(panel=>({panel,view:layerApp.app.tool_panel(panel,d.anchor)}))},(_,value)=>typeof value==='bigint'?String(value):value));})()`);
     assert.ok(Math.abs(metadata.font_px-test.text_pt*4/3)<.05,`Measured ${metadata.font_px}px does not match ${test.text_pt}pt`);
@@ -1295,7 +1360,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         await send(shortcuts);await settle();
       }
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');
-      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);if(route.id==='new-drawing-footer-paper-color'){const {assertColorEditorCells}=await import('./color-editor.test.mjs');await assertColorEditorCells(evaluate,'#new-drawing-color-drawer');}const parts=await evaluate(row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
+      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);if(route.id==='new-drawing-footer-paper-color'){const {assertColorEditorCells}=await import('./color-editor.test.mjs');await assertColorEditorCells(evaluate,'#new-drawing-color-drawer');}const parts=await evaluate(row.collector==='menu'?JSON.stringify([{id:'page',role:'page',selector:row.rootselector}]):row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
       if(row.id==='color'){
         const {assertColorEditorCells}=await import('./color-editor.test.mjs');
         await assertColorEditorCells(evaluate);

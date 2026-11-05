@@ -25,7 +25,7 @@ const numeric = (unit, max = 30000) => ({ kind: "number", min: unit === "%" ? 0.
 const units = [{ unit: "pixels", label: "Pixels" }, { unit: "percent", label: "Percent" }];
 function view(overrides = {}) {
   return {
-    dialog:{role:"editor",modal:true,primary:"action"}, title: "Canvas Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
+    dialog:{frame:{kind:"editor"},role:"editor",modal:true,primary:"action"}, title: "Canvas Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
     unit: "pixels", units,
     relative: false, relative_label: "Relative", anchor: "center", anchor_label: "Anchor",
     anchors: ["top_left", "top", "top_right", "left", "center", "right", "bottom_left", "bottom", "bottom_right"]
@@ -37,7 +37,7 @@ const resamples = [["automatic", "Automatic"], ["bicubic", "Bicubic"], ["lanczos
   .map(([resample, label]) => ({ resample, label }));
 function imageView(overrides = {}) {
   return {
-    dialog:{role:"editor",modal:true,primary:"action"}, title: "Image Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
+    dialog:{frame:{kind:"editor"},role:"editor",modal:true,primary:"action"}, title: "Image Size", apply_label: "Apply", cancel_label: "Cancel", labels: ["Width", "Height"], values: [800, 600], numeric: [numeric("px"), numeric("px")],
     unit: "pixels", units, resolution_label: "Resolution", resolution: 72, resolution_numeric: numeric("ppi", 10000),
     constrain: true, constrain_label: "Constrain proportions", resample: "automatic", resample_label: "Resample", resamples,
     message: "Current size: 800 × 600 px", can_apply: false, ...overrides,

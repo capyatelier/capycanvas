@@ -292,6 +292,7 @@ pub struct ProofCopyView {
     pub pad: serde_json::Value,
     pub pad_values: [f64; 2],
     pub recipe_valid: bool,
+    pub gamut_available: bool,
     pub document_profile_label: Option<String>,
     pub recipe_profile_label: String,
     pub print_controls: [serde_json::Value; 5],
@@ -314,6 +315,7 @@ pub fn proof_copy<R: CanvasRenderer>(s: &UiSession<R>) -> ProofCopyView {
         pad_values: crate::proof_panel::sdr_pad_values(rendition),
         recipe_valid: document.output().proof.as_ref().is_some_and(|recipe| recipe.validate().is_ok()
             && layer_color::profile_declared_channels(&recipe.profile).is_ok()),
+        gamut_available: s.gamut_warning_available(),
         recipe_profile_label: document_profile_label.clone().unwrap_or_else(|| document.composition().color.space.name().into()),
         document_profile_label,
         print_controls: crate::proof_panel::PrintProofControl::ALL.map(|control| serde_json::json!({"id":control,"label":control.localized_label(localizer)})),
@@ -338,6 +340,19 @@ pub fn proof_form<R: CanvasRenderer>(s: &UiSession<R>) -> serde_json::Value {
 mod copy_tests {
     use super::*;
     use crate::{Localizer, MessageId, Platform, UiLanguage, session::test_support::Recorder};
+
+    #[test]
+    fn gamut_warning_follows_the_published_recipe_even_with_pending_setup_or_proof_off() {
+        let mut session = UiSession::blank(Recorder::default(), [64,64], Platform::Gtk).unwrap();
+        session.select_proof_mode(crate::ProofMode::Print).unwrap();
+        assert!(!proof_copy(&session).gamut_available);
+        session.set_proof_recipe(Some(ProofRecipe::new("Print".into(),ColorProfile::Builtin(RgbSpace::Srgb)))).unwrap();
+        assert!(proof_copy(&session).gamut_available);
+        session.select_proof_mode(crate::ProofMode::Off).unwrap();
+        assert!(proof_copy(&session).gamut_available);
+        session.set_proof_recipe(None).unwrap();
+        assert!(!proof_copy(&session).gamut_available);
+    }
 
     #[test]
     fn proof_captions_reproject_without_serializing_or_decoding_profiles() {

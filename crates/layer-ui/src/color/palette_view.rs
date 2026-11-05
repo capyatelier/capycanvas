@@ -298,7 +298,7 @@ impl ColorLibrary {
 }
 
 impl PalettePanelView {
-    pub const EDIT_DIALOG: crate::DialogIntent = crate::DialogIntent::editor(Some(crate::DialogPrimary::Action));
+    pub const EDIT_DIALOG: crate::DialogIntent = crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), false);
     pub const DELETE_DIALOG: crate::DialogIntent = crate::DialogIntent::alert();
     pub fn new(
         colors: &ColorState,

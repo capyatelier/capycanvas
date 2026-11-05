@@ -1943,6 +1943,7 @@ fn inventory_drawer_ready(d: &Driver) {
 }
 
 fn inventory_monitor(d: &mut Driver, name: &str) {
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_none() { return; }
     let frames = sample_after_paint(&d.w.window, || ());
     d.w.window.queue_draw();
     until(|| !frames.samples.borrow().is_empty(), "the inventory overlay has been painted");

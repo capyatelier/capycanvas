@@ -77,21 +77,6 @@ impl State {
         self.busy.set(false);
         self.notify();
     }
-    fn compatible(&self, channels: ProfileChannels) -> bool {
-        use layer_core::color::source::SourceChannels;
-        match &self.purpose {
-            ProfilePurpose::Output => true,
-            ProfilePurpose::Proof => channels != ProfileChannels::Gray,
-            ProfilePurpose::Source(source) => {
-                channels
-                    == match source.channels {
-                        SourceChannels::Rgb | SourceChannels::Rgba => ProfileChannels::Rgb,
-                        SourceChannels::Gray | SourceChannels::GrayAlpha => ProfileChannels::Gray,
-                        SourceChannels::Cmyk => ProfileChannels::Cmyk,
-                    }
-            }
-        }
-    }
     fn close(&self) {
         if let Some(menu) = self.menu.upgrade() {
             menu.popdown();
@@ -463,49 +448,25 @@ impl ProfilePicker {
                     async move {
                         let current = state.value.borrow().clone();
                         let document = state.document.borrow().clone();
-                        let (entries, document, current) = gio::spawn_blocking(move || {
-                            let mut entries = library::directory().map_or(Ok(Vec::new()), |directory| library::list(&directory));
-                            if let Some(ExportProfile {
-                                profile: ColorProfile::Icc(bytes),
-                                ..
-                            }) = &document
-                            {
-                                let key = layer_ui::profile_library::profile_identity(bytes);
-                                if let Ok(entries) = &mut entries {
-                                    entries.retain(|entry| {
-                                        entry.path.file_stem().and_then(|s| s.to_str())
-                                            != Some(key.as_str())
-                                    });
-                                }
-                            }
-                            let current = current.filter(|p| {
-                                if document.as_ref().is_some_and(|d| d.profile == p.profile) {
-                                    return false;
-                                }
-                                let ColorProfile::Icc(bytes) = &p.profile else {
-                                    return false;
-                                };
-                                let key = layer_ui::profile_library::profile_identity(bytes);
-                                !entries.as_ref().is_ok_and(|entries| {
-                                    entries.iter().any(|entry| {
-                                        entry.issue.is_none()
-                                            && entry.path.file_stem().and_then(|s| s.to_str())
-                                                == Some(key.as_str())
-                                    })
-                                })
-                            });
-                            (entries, document, current)
+                        let purpose = state.purpose.picker_purpose();
+                        let (entries, document, current, inventory) = gio::spawn_blocking(move || {
+                            let entries = library::directory().map_or(Ok(Vec::new()), |directory| library::list(&directory));
+                            let saved = entries.as_ref().map(|entries| entries.iter().map(|entry| layer_ui::profile_library::ProfilePickerSaved {
+                                id:entry.path.file_stem().unwrap_or_default().to_string_lossy().into_owned(), visible:entry.visible,channels:entry.channels,valid:entry.issue.is_none(),
+                            }).collect::<Vec<_>>()).unwrap_or_default();
+                            let inventory=layer_ui::profile_library::picker_inventory(&purpose,document.as_ref().map(|profile|&profile.profile),current.as_ref().map(|profile|&profile.profile),&saved);
+                            (entries, document, current, inventory)
                         })
                         .await
                         .unwrap_or_else(|_| {
-                            (Err("Could not load saved profiles".into()), None, None)
+                            (Err("Could not load saved profiles".into()), None, None, layer_ui::profile_library::picker_inventory(&state.purpose.picker_purpose(),None,None,&[]))
                         });
                         state.listing.set(false);
                         choices.remove_all();
                         let copy = state.copy.borrow().clone();
                         for (profile, label, action) in [
-                            (document, copy.document.as_ref(), "document"),
-                            (current, copy.current.as_ref(), "current"),
+                            (document.filter(|_|inventory.document), copy.document.as_ref(), "document"),
+                            (current.filter(|_|inventory.current), copy.current.as_ref(), "current"),
                         ] {
                             let Some(profile) = profile else { continue };
                             let section = gio::Menu::new();
@@ -528,12 +489,9 @@ impl ProfilePicker {
                                 let saved = gio::Menu::new();
                                 for (index, entry) in entries
                                     .into_iter()
-                                    .filter(|e| {
-                                        e.visible
-                                            && e.issue.is_none()
-                                            && e.channels.is_some_and(|c| state.compatible(c))
-                                    })
                                     .enumerate()
+                                    .filter(|(index,_)| inventory.saved.contains(index))
+                                    .map(|(_,entry)|entry).enumerate()
                                 {
                                     item(
                                         &saved,
@@ -553,7 +511,7 @@ impl ProfilePicker {
                             }
                             Err(reason) => choices.append(Some(&reason.profile_message(&state.localization.borrow())), None),
                         }
-                        if state.compatible(ProfileChannels::Rgb) {
+                        if inventory.standard {
                             let standard = gio::Menu::new();
                             for (index, space) in RgbSpace::ALL.into_iter().enumerate() {
                                 let value = ExportProfile::builtin(space);
@@ -644,6 +602,7 @@ impl ProfilePicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layer_core::color::source::SourceInterpretation;
 
     #[test]
     fn profile_selection_preserves_metadata_and_reprojects_absent_names() {

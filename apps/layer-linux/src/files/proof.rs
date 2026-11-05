@@ -415,7 +415,7 @@ impl ProofPanel {
             (
                 s.engine().document().output().sdr,
                 s.state().gamut_warning,
-                s.engine().document().output().proof.is_some(),
+                s.gamut_warning_available(),
                 s.proof_panel_mode(),
             )
         }) else {

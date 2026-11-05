@@ -40,6 +40,8 @@ async function execute({id,request}) {
       case "nearest-coordinates": result = wasm.raster_worker_nearest_coordinates(request.metadata); break;
       case "lookup": result = wasm.raster_worker_lookup(request.metadata,request.buffers[0]); break;
       case "profile-library": result=await navigator.locks.request("capy-profile-library",()=>profileLibrary(JSON.parse(request.metadata),request.buffers[0]));break;
+      case "profile-inventory": result=wasm.raster_worker_profile_inventory(request.metadata);break;
+      case "profile-validate": result=wasm.raster_worker_validate_profile(request.metadata);break;
       case "paper-library": result=await navigator.locks.request("capy-paper-library",()=>paperLibrary(JSON.parse(request.metadata),request.buffers,request.file));break;
       case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
         const bytes=await colorPreferences("readonly",store=>store.get("export-presets"));

@@ -368,7 +368,7 @@ pub struct PaperCopy {
 }
 impl PaperCopy {
     pub fn new(l: &Localizer) -> Self {
-        Self { rename_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), import_accept:l.text(MessageId::DOCUMENTS_IMPORT_ACCEPT).to_string(),
+        Self { rename_dialog:crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), false), import_accept:l.text(MessageId::DOCUMENTS_IMPORT_ACCEPT).to_string(),
             rename_title:l.text(MessageId::RESOURCES_PAPER_RENAME_TITLE).to_string(),
             rename:l.text(MessageId::WORKSPACE_RENAME),
             choose:l.text(MessageId::RESOURCES_PAPER_CHOOSE),

@@ -82,7 +82,7 @@ export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
     await nativeClick(`.layer-row[data-layer="${id}"] > button:first-child`);await ready();
   };
   await layerEye(nativeLayer);assert.equal(await nativeVisible(),false);
-  for(const [command,label,value,field,original] of [['change_bit_depth','Bit depth','U16','depth','U8'],['convert_color_space','Color space','DisplayP3','space','Srgb']]) {
+  for(const [command,label,value,field,original] of [['change_bit_depth','Bit depth','U16','depth','U8'],['convert_color_space','Output profile','DisplayP3','space','Srgb']]) {
     await restart();assert.equal((await tabs()).selected,native);assert.equal(await nativeVisible(),false,'Restored hidden paint remains cold before working-color conversion');
     await invoke(command);await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label=${JSON.stringify(label)}]')`);
     await clickDropdownChoice({call,evaluate,settle},`dialog[open] .dropdown[aria-label="${label}"]`,value);

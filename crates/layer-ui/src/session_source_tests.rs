@@ -639,6 +639,8 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
     let id = s.state.requests.first().unwrap().id;
     let mut workflow = SourceWorkflow::begin(&s, id).unwrap();
     assert!(!workflow.adds_layer());
+    assert_eq!(workflow.resolve_profile(None).unwrap(),Some(source.interpretation.profile.clone()));
+    assert_eq!(workflow.initial_profile(),source.interpretation.profile);
     assert!(workflow.prepare(None, 1024 * 1024, || false).is_err());
     assert!(workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), 1024 * 1024, || true).is_err());
     let (corrected, _) = workflow.prepare(Some(ColorProfile::Builtin(RgbSpace::DisplayP3)), 1024 * 1024, || false).unwrap();
@@ -665,6 +667,8 @@ fn source_workflow_requires_current_complete_comparison_and_preserves_original_s
     let workflow = SourceWorkflow::begin(&s, id).unwrap();
     assert!(workflow.validate_choice(&Some(ColorProfile::Builtin(RgbSpace::Srgb))).is_err());
     assert!(workflow.validate_choice(&None).is_ok());
+    assert_eq!(workflow.resolve_profile(None).unwrap(),None);
+    assert!(workflow.resolve_profile(Some(ColorProfile::Builtin(RgbSpace::Srgb))).is_err());
     assert!(workflow.prepare(None, 0, || false).is_err(), "executor memory budget must be enforced");
     assert!(workflow.prepare(None, 1024 * 1024, || false).is_ok());
     s.complete_document_request(id, Ok(false)).unwrap();

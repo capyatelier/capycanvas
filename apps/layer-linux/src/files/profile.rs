@@ -1,60 +1,13 @@
 //! Native profile selection; parsing and CMM validation stay on a file worker.
 use super::*;
 use layer_core::color::{ColorProfile, ProfileChannels};
-use layer_core::color::{RgbSpace, source::SourceInterpretation};
+use layer_core::color::RgbSpace;
 use std::cell::{Cell, RefCell};
 use std::io::Read;
 mod library;
 pub(crate) use library::manage;
 
-#[derive(Clone)]
-pub(super) enum ProfilePurpose {
-    Proof,
-    Output,
-    Source(SourceInterpretation),
-}
-impl ProfilePurpose {
-    pub(super) fn validate(
-        &self,
-        profile: &ExportProfile,
-        working: RgbSpace,
-    ) -> Result<(), layer_ui::ColorFeatureError> {
-        match self {
-            Self::Proof => {
-                let recipe = layer_core::color::ProofRecipe::new(
-                    profile.name.clone(),
-                    profile.profile.clone(),
-                );
-                layer_color::ProofTransform::new(working, &recipe)?;
-            }
-            Self::Output => {
-                // An input profile need not be usable for delivery.
-                let recipe = ExportRecipe {
-                    format: ExportFormat::Tiff,
-                    profile: profile.clone(),
-                    background: ExportBackground::White,
-                    ..ExportRecipe::web_share()
-                };
-                let encoder = layer_color::WorkingEncoder::new(
-                    working,
-                    &recipe.interpretation(),
-                    Default::default(),
-                )?;
-                let mut output = vec![0; recipe.interpretation().pixel_bytes() * 3];
-                encoder.encode_straight(
-                    &[[0., 0., 0., 1.], [0.5, 0.5, 0.5, 1.], [1.; 4]],
-                    &mut output,
-                    None,
-                    [0, 0],
-                )?;
-            }
-            Self::Source(source) => {
-                layer_ui::profile_library::validate_source_profile(profile,source,working)?;
-            }
-        }
-        Ok(())
-    }
-}
+pub(super) use layer_ui::profile_library::ProfilePurpose;
 
 mod picker;
 pub(super) use picker::{ProfileChooser, ProfilePicker};
@@ -165,7 +118,7 @@ mod tests {
 #[cfg(test)]
 mod source_tests {
     use super::*;
-    use layer_core::color::{SampleDepth, source::SourceChannels};
+    use layer_core::color::{SampleDepth, source::{SourceChannels, SourceInterpretation}};
     #[test]
     fn source_roles_validate_actual_channels_without_requiring_delivery() {
         let path =

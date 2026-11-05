@@ -38,10 +38,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         .await
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization()))?.map_err(|reason| layer_ui::ColorFeatureError::Diagnostic(reason).profile_message(&w.localization()))?;
     let profile_description = description.clone();
-    let description = description.unwrap_or_else(|| localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string());
-    let mut args = layer_ui::FluentArgs::new(); args.set("name", description.as_str());
-    args.set("assumed", if original.interpretation.profile_assumed {"yes"} else {"no"});
-    let description = localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_NAME, &args);
+    let description = layer_ui::color_feature_copy::source_description(&localization, description, original.interpretation.profile_assumed);
     let group = adw::PreferencesGroup::new();
     let current = adw::ActionRow::builder()
         .title(copy.current_source.as_ref())
@@ -112,9 +109,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         if let Some(hint) = hint_weak.upgrade() && let Some(reason) = localized_hint.borrow().as_ref() { hint.set_label(&reason.message(localization)); }
         if let Some(current) = current.upgrade() {
             current.set_title(&copy.current_source);
-            let name = profile_description.clone().unwrap_or_else(|| localization.text(layer_ui::MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string());
-            let mut args = layer_ui::FluentArgs::new(); args.set("name", name.as_str()); args.set("assumed", if assumed { "yes" } else { "no" });
-            current.set_subtitle(&localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_NAME, &args));
+            current.set_subtitle(&layer_ui::color_feature_copy::source_description(localization, profile_description.clone(), assumed));
         }
         true
     });
@@ -158,7 +153,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
             }
         }
     ));
-    let embedded = original.interpretation.profile.clone();
+    let embedded = workflow.borrow().initial_profile();
     let profile = gio::spawn_blocking(move || super::profile::describe(embedded)).await
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile reader failed".into()).profile_message(&w.localization()))?.map_err(|reason| reason.profile_message(&w.localization()))?;
     (chooser.restore)(profile);

@@ -260,6 +260,9 @@ pub fn present_intent(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<g
 }
 
 #[cfg(test)]
+pub(crate) fn declared_intent(dialog: &impl IsA<adw::Dialog>) -> Option<layer_ui::DialogIntent> { specification::get(dialog.as_ref()).intent }
+
+#[cfg(test)]
 pub fn present_role(dialog: &impl IsA<adw::Dialog>, parent_widget: &impl IsA<gtk::Widget>, role: layer_ui::DialogRole) {
     present_with(dialog, parent_widget, role, specification::get(dialog.as_ref()));
 }

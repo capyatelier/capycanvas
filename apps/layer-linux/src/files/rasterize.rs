@@ -28,9 +28,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.append(&explanation);
     content.append(&comparison.widget);
-    let mut args = layer_ui::FluentArgs::new(); args.set("space", color.space.name());
-    let bits = color.depth.bits().to_string(); args.set("bits", bits.as_str());
-    let details = localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_RASTERIZE_DETAILS, &args);
+    let details = layer_ui::color_feature_copy::rasterize_details(&localization, color);
     let dialog = adw::AlertDialog::builder().heading(copy.rasterize_title.as_ref())
         .body(&details)
         .prefer_wide_layout(true).content_width(520).extra_child(&content).build();
@@ -56,9 +54,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
         let Some(dialog) = weak.upgrade() else { return false };
         let copy = layer_ui::color_feature_copy::DocumentColorCopy::new(localization);
         dialog.set_heading(Some(&copy.rasterize_title));
-        let mut args = layer_ui::FluentArgs::new(); args.set("space", color.space.name());
-        let bits = color.depth.bits().to_string(); args.set("bits", bits.as_str());
-        dialog.set_body(&localization.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_RASTERIZE_DETAILS, &args));
+        dialog.set_body(&layer_ui::color_feature_copy::rasterize_details(localization, color));
         crate::page_dialog::set_response_label(&dialog, "cancel", &copy.common.cancel); crate::page_dialog::set_response_label(&dialog, "apply", &copy.rasterize);
         if let Some(explanation) = explanation_weak.upgrade() { explanation.set_label(match clipped.get() { Some(true) => &copy.source_clipped, Some(false) => &copy.rasterize_compare, None => &copy.rasterize_comparison }); }
         true

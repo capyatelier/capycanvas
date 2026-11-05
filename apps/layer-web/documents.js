@@ -67,7 +67,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(request){nativeDeliveries.set(request.id,Promise.resolve(files));event.preventDefault();applyChange(change);}
   });
   const images=createImageImport({app,canvas,applyChange,wake,element,button,icon,message,gpuOperation,
-    openClipboard,openFiles,interpret:()=>chooseSourceProfile({app,dialog,element,button,icon,dropdown})});
+    openClipboard,openFiles,interpret:interpretation=>chooseSourceProfile({app,dialog,element,button,icon,dropdown,interpretation})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
@@ -238,7 +238,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         const current=()=>app.state().requests.find(request=>request.id===id)?.kind.request;
         const spec=()=>app.editor_models(innerWidth,innerHeight).document_options;
         const decision=await dialog(()=>current()?.title??r.title,(form,finish)=>{
-          form.append(element("p","",()=>spec().unsaved_description));const footer=element("footer"),cancelButton=cancel(footer,finish),save=button(()=>common.save,()=>finish("save"),"suggested-action");
+          form.append(element("p","alert-description",()=>spec().unsaved_description));const footer=element("footer"),cancelButton=cancel(footer,finish),save=button(()=>common.save,()=>finish("save"),"suggested-action");
           footer.append(button(()=>spec().discard_label,()=>finish("discard"),'destructive-action'),save);form.append(footer);return {cancel:cancelButton,primary:save};
         },spec().dialog);
         applyChange(app.respond_document(id,decision??"cancel"));return;
@@ -253,7 +253,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
             const row=kit.row({title:()=>view[section][index][0],description:()=>view[section][index][1]});row.text.classList.add('settings-info');group.list.append(row.line);
           }form.append(group.section);}
           form.localize=()=>{view=app.document_properties_copy(info);};
-          const done=button(()=>view.done,()=>finish(false)),proof=button(()=>view.proof,()=>finish(true),'document-proof'),footer=kit.footer({start:[proof],actions:[done]});form.append(footer);return {cancel:done,primary:done,footer};
+          const done=button(()=>view.done,()=>finish(false)),proof=button(()=>view.proof,()=>finish(true),'document-proof'),footer=kit.footer({actions:[done,proof]});form.append(footer);return {cancel:done,primary:done,footer};
         },view.dialog);
         applyChange(app.finish_document(id,true));
         if(appearance)proof.run(id);
@@ -432,7 +432,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     try{
       const original=file?.file??(bytes instanceof Blob?bytes:new Blob([bytes]));
       app.admit_document_input(BigInt(original.size),new Uint8Array(await original.slice(0,4).arrayBuffer()));
-      candidate=await gpuOperation(()=>app.prepare_document(id,bytes==null&&!file?undefined:original,fileState.epoch,fileState.revision,target?.name,()=>chooseSourceProfile({app,dialog,element,button,icon,dropdown}),()=>cancelled));
+      candidate=await gpuOperation(()=>app.prepare_document(id,bytes==null&&!file?undefined:original,fileState.epoch,fileState.revision,target?.name,interpretation=>chooseSourceProfile({app,dialog,element,button,icon,dropdown,interpretation}),()=>cancelled));
       if(cancelled)throw new DOMException('Opening cancelled','AbortError');
       if(app.package_view(candidate)){
         progress.remove();
@@ -455,7 +455,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   async function showPackage(candidate,original,name,originalHandle) {
     const model=app.package_view(candidate),preview=app.package_preview(candidate);
       await dialog(()=>model.status,(form,finish)=>{
-        if(model.body)form.append(element("p","",model.body));
+        if(model.body)form.append(element("p","alert-description",model.body));
         for(const output of model.outputs)form.append(element("p","",output.name));
         if(preview){const image=element("canvas");[image.width,image.height]=model.extent;image.setAttribute("aria-label",model.status);image.style.maxWidth="100%";image.style.maxHeight="60vh";
           image.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(preview.pixels.buffer,preview.pixels.byteOffset,preview.pixels.byteLength),...model.extent),0,0);form.append(image);}
@@ -477,7 +477,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   }
   async function openError(name){
     await dialog(()=>bootstrap.cannot_open_file,(form,finish)=>{
-      form.parentNode.id='file-launch-error';form.append(element('p','',()=>app.file_open_failure(name)));
+      form.parentNode.id='file-launch-error';form.append(element('p','alert-description',()=>app.file_open_failure(name)));
       const ok=button(()=>bootstrap.ok,()=>finish(null)),footer=element('footer');footer.append(ok);form.append(footer);return {cancel:ok,primary:ok};
     },bootstrap.file_error_dialog);
   }

@@ -4,6 +4,19 @@ use std::sync::Arc;
 
 use crate::CommonCopy;
 
+pub fn source_description(localizer: &Localizer, name: Option<String>, assumed: bool) -> String {
+    let mut args = FluentArgs::new();
+    args.set("name", name.unwrap_or_else(|| localizer.text(MessageId::COLOR_FEATURES_PROFILE_EMBEDDED).to_string()));
+    args.set("assumed", if assumed { "yes" } else { "no" });
+    localizer.format(MessageId::COLOR_FEATURES_COLOR_SOURCE_NAME, &args)
+}
+
+pub fn rasterize_details(localizer: &Localizer, color: layer_core::color::DocumentColor) -> String {
+    let mut args = FluentArgs::new();
+    args.set("space", color.space.name()); args.set("bits", color.depth.bits().to_string());
+    localizer.format(MessageId::COLOR_FEATURES_COLOR_RASTERIZE_DETAILS, &args)
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ProofCopy {
     pub common: CommonCopy,
@@ -45,7 +58,6 @@ pub struct ProofCopy {
     pub mode: Arc<str>,
     pub balance_contrast: Arc<str>,
     pub profile_choice: Arc<str>,
-    pub key_help: Arc<str>,
 }
 impl ProofCopy {
     pub fn new(localizer: &Localizer) -> Self {
@@ -54,7 +66,6 @@ impl ProofCopy {
             mode: localizer.text(MessageId::COLOR_FEATURES_PROOF_MODE),
             balance_contrast: localizer.text(MessageId::COLOR_FEATURES_PROOF_BALANCE_CONTRAST),
             profile_choice: localizer.text(MessageId::COLOR_FEATURES_PROOF_PROFILE_CHOICE),
-            key_help: localizer.text(MessageId::COLOR_FEATURES_PROOF_KEY_HELP),
 
             unavailable: localizer.text(MessageId::COLOR_FEATURES_PROOF_UNAVAILABLE),
             preparing: localizer.text(MessageId::COLOR_FEATURES_PROOF_PREPARING),
@@ -96,6 +107,7 @@ impl ProofCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ProfileCopy {
+    pub library_size: [i32; 2],
     pub dialog: crate::DialogIntent,
     pub library_dialog: crate::DialogIntent,
     pub read_bytes: usize,
@@ -135,7 +147,7 @@ pub struct ProfileCopy {
 }
 impl ProfileCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), library_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)), read_bytes: crate::profile_library::PROFILE_READ_LIMIT, read_limit: localizer.text(MessageId::COLOR_PROFILE_READ_LIMIT), common: CommonCopy::new(localizer),
+        Self { library_size:crate::profile_library::LIBRARY_SIZE, dialog:crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), true), library_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)), read_bytes: crate::profile_library::PROFILE_READ_LIMIT, read_limit: localizer.text(MessageId::COLOR_PROFILE_READ_LIMIT), common: CommonCopy::new(localizer),
             reading: localizer.text(MessageId::COLOR_FEATURES_PROFILE_READING),
             choose: localizer.text(MessageId::COLOR_FEATURES_PROFILE_CHOOSE),
             choose_short: localizer.text(MessageId::COLOR_FEATURES_PROFILE_CHOOSE_SHORT),
@@ -300,7 +312,7 @@ pub struct ExportCopy {
 impl ExportCopy {
     pub fn new(localizer: &Localizer) -> Self {
         Self { progress_dialog:crate::DialogIntent::progress(), dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)),
-            preset_dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
+            preset_dialog:crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), false), common: CommonCopy::new(localizer),
             title: localizer.text(MessageId::COLOR_FEATURES_EXPORT_TITLE),
             help: localizer.text(MessageId::COLOR_FEATURES_EXPORT_HELP),
             export: localizer.text(MessageId::COLOR_FEATURES_EXPORT_EXPORT),
@@ -455,14 +467,12 @@ pub struct DocumentColorCopy {
     pub flattened_copy: Arc<str>,
     pub rasterize: Arc<str>,
     pub apply_profile: Arc<str>,
-    pub preview_help: Arc<str>,
     pub preparing: Arc<str>,
     pub before: Arc<str>,
     pub after: Arc<str>,
     pub prepared_composition: Arc<str>,
     pub original_composition: Arc<str>,
     pub outside_gamut: Arc<str>,
-    pub composition_preview: Arc<str>,
     pub adds_layer: Arc<str>,
     pub add_source: Arc<str>,
     pub save_copy: Arc<str>,
@@ -495,7 +505,7 @@ pub struct DocumentColorCopy {
 }
 impl DocumentColorCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { progress_dialog:crate::DialogIntent::progress(), dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)), common: CommonCopy::new(localizer),
+        Self { progress_dialog:crate::DialogIntent::progress(), dialog:crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), true), common: CommonCopy::new(localizer),
             preparing_comparison: localizer.text(MessageId::COLOR_FEATURES_COLOR_PREPARING_COMPARISON),
             choose_different: localizer.text(MessageId::COLOR_FEATURES_COLOR_CHOOSE_DIFFERENT),
             clipped_comparison: localizer.text(MessageId::COLOR_FEATURES_COLOR_CLIPPED_COMPARISON),
@@ -548,14 +558,12 @@ impl DocumentColorCopy {
             flattened_copy: localizer.text(MessageId::COLOR_FEATURES_COLOR_FLATTENED_COPY),
             rasterize: localizer.text(MessageId::COLOR_FEATURES_COLOR_RASTERIZE),
             apply_profile: localizer.text(MessageId::COLOR_FEATURES_COLOR_APPLY_PROFILE),
-            preview_help: localizer.text(MessageId::COLOR_FEATURES_COLOR_PREVIEW_HELP),
             preparing: localizer.text(MessageId::COLOR_FEATURES_COLOR_PREPARING),
             before: localizer.text(MessageId::COLOR_FEATURES_COLOR_BEFORE),
             after: localizer.text(MessageId::COLOR_FEATURES_COLOR_AFTER),
             prepared_composition: localizer.text(MessageId::COLOR_FEATURES_COLOR_PREPARED_COMPOSITION),
             original_composition: localizer.text(MessageId::COLOR_FEATURES_COLOR_ORIGINAL_COMPOSITION),
             outside_gamut: localizer.text(MessageId::COLOR_FEATURES_COLOR_OUTSIDE_GAMUT),
-            composition_preview: localizer.text(MessageId::COLOR_FEATURES_COLOR_COMPOSITION_PREVIEW),
             adds_layer: localizer.text(MessageId::COLOR_FEATURES_COLOR_ADDS_LAYER),
             add_source: localizer.text(MessageId::COLOR_FEATURES_COLOR_ADD_SOURCE),
             save_copy: localizer.text(MessageId::COLOR_FEATURES_COLOR_SAVE_COPY),

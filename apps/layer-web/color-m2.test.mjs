@@ -154,16 +154,16 @@ export async function checkColorEdits({call,evaluate,settle}) {
     assert.ok(await evaluate(`[...document.querySelectorAll('.color-comparison canvas')].every(c=>c.width<=512&&c.height<=384)`));
     await click(apply?'Apply':'Cancel');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   }
-  await invoke('assign_profile');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Color space"]')`);
+  await invoke('assign_profile');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Output profile"]')`);
   await click('Cancel');await wait('!layerApp.state().document_file.busy');assert.deepEqual(backing(await save()),backing(original));
   const paintedHistogram={histogram:await histogramJourney({evaluate,settle}).exact()};
   assert.equal(paintedHistogram.histogram.pixels+paintedHistogram.histogram.transparent,513*257);
-  await change('assign_profile','Color space','ProPhoto',false);assert.deepEqual(backing(await save()),backing(original));
-  await change('assign_profile','Color space','ProPhoto');const assigned=await save();
+  await change('assign_profile','Output profile','ProPhoto',false);assert.deepEqual(backing(await save()),backing(original));
+  await change('assign_profile','Output profile','ProPhoto');const assigned=await save();
   assert.equal(compositionColor(assigned).space,'pro_photo');assert.deepEqual(packageResourceIdentity(assigned),packageResourceIdentity(original));assert.deepEqual(sourceIdentity(assigned),sourceIdentity(original));
   async function history(command,expected){await invoke(command);await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(expected));}
   await history('undo',original);await history('redo',assigned);
-  await change('convert_color_space','Color space','DisplayP3');const converted=await save();
+  await change('convert_color_space','Output profile','DisplayP3');const converted=await save();
   assert.equal(compositionColor(converted).space,'display_p3');assert.notDeepEqual(packageResourceIdentity(converted),packageResourceIdentity(assigned));assert.deepEqual(sourceIdentity(converted),sourceIdentity(original));
   await change('change_bit_depth','Bit depth','U8');const reduced=await save();
   assert.equal(compositionColor(reduced).depth,'u8');assert.ok(packageResources(reduced,'capy.raster-tile/1').some(b=>b.data.depth==='u8'));assert.deepEqual(sourceIdentity(reduced),sourceIdentity(original));
@@ -224,15 +224,15 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   const source=async m=>paintBaseImage(m,(await activeOccurrence(evaluate,m)).data.content.paint);
   async function change(command,profile,apply=true){
     await invoke(command);await wait('!!document.querySelector("dialog[open]")');
-    if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('.dropdown[aria-label="Correct source profile"]');(${chooseDropdown})(select,${JSON.stringify(profile)});})()`);
-    await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
+    if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('.dropdown[aria-label="Correct source profile"]'),request=layerApp.state().requests.find(item=>item.kind.type==='document'&&item.kind.request.type==='repair_source_profile'),choices=layerApp.app.profile_picker_standard(layerApp.app.source_dialog_context(request.id).purpose),index=choices.findIndex(choice=>choice.profile.Builtin===${JSON.stringify(profile)});if(index<0)throw Error('Missing source profile choice');(${chooseDropdown})(select,'standard:'+index);})()`);
+    await wait(`!!document.querySelector('canvas[aria-label="After"]')`);
     const adds=await evaluate('!![...document.querySelectorAll("dialog[open] button")].find(b=>b.textContent==="Add Corrected Source")');
     await click(!apply?'Cancel':command==='rasterize_source'?'Rasterize':adds?'Add Corrected Source':'Apply Profile');await idle();
     assert.equal(await evaluate('layerApp.state().host_error??null'),null);return adds;
   }
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
-  const before=await save();assert.ok(await source(before),'Open Image makes paint with a referenced base');await change('repair_source_profile','2',false);assert.deepEqual(backing(await save()),backing(before));
-  assert.equal(await change('repair_source_profile','2'),false);const repaired=await save();
+  const before=await save();assert.ok(await source(before),'Open Image makes paint with a referenced base');await change('repair_source_profile','AdobeRgb',false);assert.deepEqual(backing(await save()),backing(before));
+  assert.equal(await change('repair_source_profile','AdobeRgb'),false);const repaired=await save();
   assert.deepEqual(rasterResources(repaired),rasterResources(before));assert.deepEqual((await source(repaired)).interpretation.profile,{builtin:'adobe_rgb'});
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(before));
   await invoke('redo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
@@ -243,7 +243,7 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   for(const [type,dx,buttons]of[['mousePressed',0,1],['mouseMoved',40,1],['mouseReleased',40,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   const painted=await save(),old=await activeOccurrence(evaluate,painted),oldPaint=packageObject(painted,old.data.content.paint);
-  assert.equal(await change('repair_source_profile','3'),true);const added=await save();
+  assert.equal(await change('repair_source_profile','ProPhoto'),true);const added=await save();
   assert.equal(packageOccurrences(added).length,packageOccurrences(painted).length+1);assert.deepEqual(packageObject(added,old.id),old);assert.deepEqual(packageObject(added,old.data.content.paint),oldPaint);assert.deepEqual(rasterResources(added),rasterResources(painted));
   await evaluate(`window.sdrSourceMaster=sdrFiles.get(layerApp.state().document_file.location.name).slice();window.showOpenFilePicker=async()=>[{name:'source-edited.capy',async getFile(){return new File([sdrSourceMaster],'source-edited.capy')}}];`);
   await invoke('open_document');await idle();assert.deepEqual(backing(await save()),backing(added));
@@ -356,8 +356,8 @@ export async function checkFlattenedCopy({evaluate}) {
   const createLabel=await evaluate('layerApp.app.document_color_copy().create_copy');
   const prepare=async()=>{
     await invoke('convert_color_space');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Result"]')`);
-    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Color space','Srgb']]){const s=document.querySelector('dialog[open] .dropdown[aria-label="'+label+'"]');(${chooseDropdown})(s,value);}})()`);
-    await wait(`!!document.querySelector('canvas[aria-label="Prepared composition"]')`);
+    await evaluate(`(()=>{for(const [label,value]of [['Result','copy'],['Output profile','Srgb']]){const s=document.querySelector('dialog[open] .dropdown[aria-label="'+label+'"]');(${chooseDropdown})(s,value);}})()`);
+    await wait(`!!document.querySelector('canvas[aria-label="After"]')`);
     assert.ok(await evaluate(`!![...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(createLabel)}&&!b.disabled)`));
   };
   await prepare();await click('Cancel');await idle();assert.equal(await evaluate('sdrFiles.size'),saved.count);

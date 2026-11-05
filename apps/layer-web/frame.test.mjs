@@ -201,7 +201,7 @@ test('canvas panel measurement excludes intentional header overflow and previous
   const app={dialog_presentation:()=>({kind:'canvas_panel'}),dialog_header:()=>({start:'cancel',end:'primary'}),
     dialog_bounds:(_role,_viewport,_visible,measured)=>{assert.equal(dialog.style.width,'');assert.equal(dialog.style.height,'');measurements.push(measured);return{x:26,y:704,width:measured[0],height:measured[1]};}};
   const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel'},onCancel(){}});
-  host.present({role:'canvas_panel',modal:true,primary:'action'});host.layout();
+  host.present({frame:{kind:'editor'},role:'canvas_panel',modal:true,primary:'action'});host.layout();
   assert.deepEqual(measurements,[[360,123],[360,123]],'Decoration overflow and the previous fixed height never become natural content');
   assert.equal(dialog.style.width,'360px');assert.equal(dialog.style.height,'123px');
   host.hide();host.dispose();
@@ -215,7 +215,7 @@ test('dialog headers retain their supplied native skin when navigation changes t
     first.append(cancel);dialog.append(first,second);doc.body.append(dialog);let active=first;
     const app={dialog_presentation:()=>({kind:'page',bounds:{x:0,y:0,width:412,height:891}}),dialog_header:()=>({start:'cancel',end:null})};
     const host=createDialogHost({app,dialog,header:()=>active,headerStyle,cancel,icon,copy:{cancel:'Cancel'},onCancel(){}});
-    host.present({role:'editor',modal:true,primary:null});
+    host.present({frame:{kind:'editor'},role:'editor',modal:true,primary:null});
     assert.equal(first.dataset.headerStyle,headerStyle);
     active=second;host.layout();
     assert.equal(first.dataset.headerStyle,undefined);assert.equal(second.dataset.headerStyle,headerStyle);
@@ -235,7 +235,7 @@ test('floating editor measures its natural border box and releases a stale width
   const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null}),
     floating_dialog_width:(window,natural)=>{measurements.push([window,natural]);return Math.min(window-140,natural);}};
   const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){}});
-  host.present({role:'editor',modal:true,primary:null});
+  host.present({frame:{kind:'editor'},role:'editor',modal:true,primary:null});
   assert.deepEqual(measurements,[[500,420]]);assert.equal(dialog.style.width,'334px','CSS content width excludes border and padding');
   globalThis.innerWidth=900;host.layout();
   assert.deepEqual(measurements,[[500,420],[900,420]],'The previous fixed width is cleared before measuring');
@@ -251,10 +251,10 @@ test('common dialog host forwards owned keys once and registers actual modal sta
   const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){},onKey:event=>forwarded.push(event.key)});
   const key=()=>{let stopped=0;dialog.dispatchEvent({type:'keydown',key:'a',stopPropagation(){stopped++;},preventDefault(){}});return stopped;};
   assert.equal(hasOpenDialog(),false);assert.equal(hasModalDialog(),false);
-  host.present({role:'editor',modal:true,primary:null});
+  host.present({frame:{kind:'editor'},role:'editor',modal:true,primary:null});
   assert.equal(hasOpenDialog(),true);assert.equal(hasModalDialog(),true);assert.equal(key(),1);assert.deepEqual(forwarded,['a']);
   host.hide();assert.equal(hasOpenDialog(),false);assert.equal(hasModalDialog(),false);
-  host.present({role:'editor',modal:false,primary:null});
+  host.present({frame:{kind:'editor'},role:'editor',modal:false,primary:null});
   assert.equal(hasOpenDialog(),true);assert.equal(hasModalDialog(),false);assert.equal(key(),0);assert.deepEqual(forwarded,['a','a']);
   host.dispose();assert.equal(hasOpenDialog(),false);assert.equal(hasModalDialog(),false);
 });
@@ -266,7 +266,7 @@ test('a consumed child Escape leaves its dialog open until the terminal Escape',
   let cancels=0;
   const app={dialog_presentation:()=>({kind:'floating'}),floating_dialog_width:(_window,natural)=>natural,dialog_header:()=>({start:'cancel',end:null}),dialog_escape:()=> 'cancel'};
   const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){cancels++;host.hide();}});
-  host.present({role:'editor',modal:true,primary:null});
+  host.present({frame:{kind:'editor'},role:'editor',modal:true,primary:null});
   const key=defaultPrevented=>dialog.dispatchEvent({type:'keydown',key:'Escape',defaultPrevented,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
   key(true);assert.equal(dialog.open,true);assert.equal(cancels,0,'The child menu or swatch sheet already handled Escape');
   key(false);assert.equal(dialog.open,false);assert.equal(cancels,1);host.dispose();
@@ -282,7 +282,7 @@ test('a nonmodal canvas panel leaves keyboard and native pen delivery available 
   observePenInput({workspace:{addEventListener:(type,handler)=>listeners.set(type,handler)},canvas,position:()=>[10,20],dispatch:action=>actions.push(action)});
   const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:()=>({start:'cancel',end:null})};
   const host=createDialogHost({app,dialog,header,cancel,icon,copy:{cancel:'Cancel'},onCancel(){}});
-  host.present({role:'canvas_panel',modal:false,primary:'action'});
+  host.present({frame:{kind:'editor'},role:'canvas_panel',modal:false,primary:'action'});
   const opened=[],admission={active:new Set(),batching:false,changing:false,closing:false,hasModalDialog,openBatch:files=>opened.push(files),transportFailure:assert.fail};
   const documentSource=readFileSync(new URL('documents.js',import.meta.url),'utf8');
   runInNewContext(documentSource.slice(documentSource.indexOf('async function openFiles('),documentSource.indexOf('const handleStore=')),admission);
@@ -604,7 +604,7 @@ test('dialog presentation retains controls and ignores a retired native close',a
   const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary:()=>currentPrimary,search:()=>doc.activeElement===shortcutSearch?shortcutSearch:search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
     subpage:()=>subpage,onBack:()=>{backs++;subpage=false;currentHeader=header;host.layout();},
     onCancel:()=>{cancels++;host.hide();},clearSearch:node=>{clears++;clearedNode=node;node.value='';}});
-  const intent={role:'editor',modal:true,primary:'action'};
+  const intent={frame:{kind:'editor'},role:'editor',modal:true,primary:'action'};
   assert.equal(host.present(intent),true);search.value='retained draft';search.setSelectionRange(2,7);search.focus();search.scrollTop=24;
   window.visualViewport.height=480;viewportEvents.get('resize')();
   assert.equal(dialog.style.height,'480px');assert.equal(doc.activeElement,search);assert.equal(search.value,'retained draft');
@@ -657,7 +657,7 @@ test('dialog presentation retains controls and ignores a retired native close',a
   assert.equal(primary.parentNode,header);assert.equal(primary.hidden,false);primary.click();assert.equal(closedByOriginal,1,'The original Close node keeps its callback');
   page=true;currentPrimary=apply;host.present(intent);apply.click();assert.equal(applied,2,'Returning to Apply keeps its original node and callback');
   page=false;host.layout();assert.deepEqual(footer.children,[apply,after]);
-  page=false;subpage=false;currentPrimary=primary;host.present({role:'alert',modal:true,primary:'action'});
+  page=false;subpage=false;currentPrimary=primary;host.present({frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:'action'});
   assert.equal(currentHeader.dataset.dialogPart,undefined,'A floating alert has a heading and response buttons, without a page header');
   assert.equal(cancel.dataset.dialogPart,undefined);assert.equal(primary.dataset.dialogPart,undefined);
   host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
@@ -678,14 +678,14 @@ test('alert layout forwards intrinsic content and font measurements and applies 
   const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:intent=>({start:'cancel',end:intent.primary?'primary':null}),dialog_escape:()=> 'cancel',bootstrap_view:()=>({common:{cancel:'Cancel'}}),
     alert_dialog_short:()=>projection.short,alert_dialog_layout:(viewport,metrics,font,preferWide)=>{calls.push({viewport,metrics,font,preferWide});return projection;}};
   const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel',back:'Back',done:'Done'},onCancel:()=>host.hide()});
-  host.present({role:'alert',modal:true,primary:'action'});
+  host.present({frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:'action'});
   assert.equal(header.dataset.headerStyle,undefined,'Alert headings keep their native bold label style');
   assert.deepEqual(calls.at(-1),{viewport:[1200,900],metrics:{minimum:96,natural:420,heading:198,responses:[70,118]},font:44/3,preferWide:false});assert.equal(dialog.style.width,'300px');assert.equal(footer.classList.contains('alert-responses-stacked'),true);
   projection={width:352,short:false,stacked:false};host.layout();assert.equal(dialog.style.width,'352px');assert.equal(footer.classList.contains('alert-responses-stacked'),false);
   widths=[70,140];changes[0].callback();frames.shift()();assert.deepEqual(calls.at(-1).metrics.responses,[70,140]);assert.equal(changes[0].node,dialog,'heading and body copy changes also invalidate natural sizing');
   fontPixels=64/3;projection={width:300,short:true,stacked:false};host.layout();assert.equal(calls.at(-1).font,64/3);assert.equal(dialog.classList.contains('short'),true);
   host.hide();host.dispose();assert.equal(changes[0].disconnected,true);
-  const progress=createProgressDialog({app,element,button,icon,intent:{role:'alert',modal:true,primary:null},title:'Preparing',body:'Working',onCancel:()=>{}});
+  const progress=createProgressDialog({app,element,button,icon,intent:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null},title:'Preparing',body:'Working',onCancel:()=>{}});
   assert.deepEqual(calls.at(-1).metrics.responses,[0]);progress.remove();
 });
 
@@ -701,7 +701,7 @@ test('dialog Cancel keeps its bound text through page, floating and language cha
   let page=true;
   const app={dialog_presentation:()=>page?{kind:'page',bounds:{x:0,y:0,width:412,height:891}}:{kind:'floating'},floating_dialog_width:(_window,natural)=>natural,dialog_header:()=>({start:'cancel',end:'primary'})};
   const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy,onCancel(){}});
-  host.present({role:'editor',modal:true,primary:'action'});
+  host.present({frame:{kind:'editor'},role:'editor',modal:true,primary:'action'});
   const close=header.children.find(node=>node.dataset.dialogPart==='start');
   assert.notEqual(close,cancel);assert.deepEqual(header.children,[close,primary]);assert.deepEqual(footer.children,[cancel]);assert.equal(cancel.hidden,true);assert.equal(cancel.firstChild,bound);
   page=false;host.layout();
@@ -750,4 +750,33 @@ test('phone contacts preview locally, commit once and retire on cancellation',t=
   }
   assert.deepEqual(freed,[1,2,3,4]);assert.equal(root.dataset.contact,undefined);
   assert.equal(inputs.filter(([,kind])=>kind==='finish').length,1,'Only a live contact reaches shared Finish');
+});
+
+test('an Editor role uses its Alert frame only when floating and forwards prefer-wide',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js'),{doc,element,icon}=colorDialogDom(t);
+  const dialog=element('dialog'),header=element('header'),footer=element('footer'),cancel=element('button'),primary=element('button');
+  header.append(element('h2','','Assign Profile'));footer.append(cancel,primary);dialog.append(header,footer);doc.body.append(dialog);
+  let page=false;const roles=[],calls=[];
+  const app={dialog_presentation:role=>{roles.push(role);return page?{kind:'page',bounds:{x:0,y:0,width:412,height:891}}:{kind:'floating'};},
+    dialog_header:()=>({start:'cancel',end:'primary'}),alert_dialog_short:()=>false,
+    alert_dialog_layout:(_viewport,_metrics,_font,preferWide)=>{calls.push(preferWide);return{width:372,short:false,stacked:false};}};
+  const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel'},onCancel(){}});
+  host.present({frame:{kind:'alert',prefer_wide:true},role:'editor',modal:true,primary:'action'});
+  assert.equal(dialog.getAttribute('role'),'dialog');assert.equal(dialog.dataset.dialogFrame,'alert');assert.equal(dialog.style.width,'372px');
+  assert.equal(header.dataset.dialogPart,undefined);assert.deepEqual(calls,[true]);
+  page=true;host.layout();assert.equal(dialog.dataset.dialogFrame,'editor');assert.equal(header.dataset.dialogPart,'header');
+  assert.equal(primary.parentNode,header);assert.equal(dialog.style.width,'412px');assert.deepEqual(calls,[true]);assert.deepEqual(roles,['editor','editor']);
+  page=false;host.layout();assert.equal(primary.parentNode,footer);assert.equal(dialog.dataset.dialogFrame,'alert');assert.deepEqual(calls,[true,true]);
+  host.hide();host.dispose();
+});
+
+test('a declared body Done remains alongside its projected page Done',async t=>{
+  const {createDialogHost}=await import('./dialog-host.js'),{doc,element,icon}=colorDialogDom(t);
+  const dialog=element('dialog'),header=element('header'),body=element('form'),primary=element('button','','Done');
+  header.append(element('h2','','Manage Color Profiles'));body.append(primary);dialog.append(header,body);doc.body.append(dialog);
+  const app={dialog_presentation:()=>({kind:'page',bounds:{x:0,y:0,width:412,height:891}}),dialog_header:()=>({start:null,end:'close'})};
+  const host=createDialogHost({app,dialog,header,cancel:primary,primary,retainPrimary:true,icon,copy:{done:'Done'},onCancel(){}});
+  host.present({frame:{kind:'editor'},role:'editor',modal:true,primary:'close'});
+  assert.equal(primary.parentNode,body);assert.equal(primary.hidden,false);assert.equal(header.children.filter(node=>node.textContent==='Done'&&!node.hidden).length,1);
+  host.hide();host.dispose();
 });

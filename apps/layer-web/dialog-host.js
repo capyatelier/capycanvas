@@ -24,7 +24,7 @@ function measureAlert(dialog,header,responses,buttons) {
   }
 }
 
-export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,primary:sourcePrimary,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
+export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,primary:sourcePrimary,retainPrimary=false,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
   let primary=typeof sourcePrimary==='function'?sourcePrimary():sourcePrimary;
   let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,contentChanges;
   const slots=new Map([cancel,primary].filter(Boolean).map(node=>[node,{parent:node.parentNode,next:node.nextSibling}]));
@@ -56,8 +56,11 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     const v=window.visualViewport,visible={x:v?.offsetLeft??0,y:v?.offsetTop??0,width:v?.width??innerWidth,height:v?.height??innerHeight};
     const positioned=placement?.(visible),presentation=positioned?{kind:'floating'}:app.dialog_presentation(intent.role,innerWidth,innerHeight,visible),page=presentation.kind==='page'||presentation.kind==='canvas_panel';
     let bounds=positioned??presentation.bounds;
-    dialog.classList.toggle('short',intent.role==='alert'&&app.alert_dialog_short(visible.height));
-    const actions=app.dialog_header(intent,subpage()),parts=page||intent.role!=='alert';
+    const alert=!page&&intent.frame.kind==='alert';
+    dialog.dataset.dialogFrame=alert?'alert':'editor';
+    dialog.classList.toggle('short',alert&&app.alert_dialog_short(visible.height));
+    if(!alert)(primary??cancel).parentElement?.classList.remove('alert-responses-stacked');
+    const actions=app.dialog_header(intent,subpage()),parts=!alert;
     if(parts)row.dataset.dialogPart='header';else delete row.dataset.dialogPart;
     if(parts)row.dataset.headerStyle=headerStyle;else delete row.dataset.headerStyle;
     if(page&&actions.start==='cancel'&&!close){close=document.createElement('button');close.type='button';close.append(icon('window-close'));bindCopy(close,cancelLabel,'ariaLabel');close.addEventListener('click',onCancel);resize.observe(close);}
@@ -68,7 +71,7 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     if(done&&done.parentNode!==row)row.append(done);
     const start=actions.start==='back'?back:actions.start?(page?close:cancel):null,end=actions.end==='close'?(page?done:primary??cancel):actions.end?primary:null;
     for(const control of new Set([...slots.keys(),done,back,close].filter(Boolean))){
-      control.hidden=control!==start&&control!==end;delete control.dataset.dialogPart;
+      control.hidden=control!==start&&control!==end&&!(retainPrimary&&control===primary);delete control.dataset.dialogPart;
       control.classList.toggle('page-action-start',page&&control===start);control.classList.toggle('page-action-end',page&&control===end);control.style.height='';control.style.width='';control.style.right='';
     }
     const focus=document.activeElement;
@@ -89,17 +92,17 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
       dialog.style.width='';dialog.style.height='';
       const measured=dialog.getBoundingClientRect();
       bounds=app.dialog_bounds(intent.role,[innerWidth,innerHeight],visible,[measured.width,measured.height]);
-    }else if(!page&&!positioned&&intent.role==='editor'){
+    }else if(!page&&!alert&&!positioned&&intent.role==='editor'){
       dialog.style.width='';
       const style=getComputedStyle(dialog),inset=style.boxSizing==='border-box'?0:
         ['paddingLeft','paddingRight','borderLeftWidth','borderRightWidth'].reduce((sum,key)=>sum+(parseFloat(style[key])||0),0);
       bounds={width:Math.max(0,app.floating_dialog_width(visible.width,dialog.getBoundingClientRect().width)-inset)};
     }
-    if(intent.role==='alert'){
+    if(alert){
       const responses=(primary??cancel).parentElement;
       if(!contentChanges){contentChanges=new MutationObserver(queueLayout);contentChanges.observe(dialog,{childList:true,subtree:true,characterData:true});resize.observe(responses);}
       const buttons=[...responses.children].filter(node=>node.tagName==='BUTTON'&&!node.hidden);
-      const layout=app.alert_dialog_layout([visible.width,visible.height],measureAlert(dialog,row,responses,buttons),parseFloat(getComputedStyle(dialog).fontSize),false);
+      const layout=app.alert_dialog_layout([visible.width,visible.height],measureAlert(dialog,row,responses,buttons),parseFloat(getComputedStyle(dialog).fontSize),intent.frame.prefer_wide);
       bounds={width:layout.width};dialog.classList.toggle('short',layout.short);responses.classList.toggle('alert-responses-stacked',layout.stacked);
     }
     for(const [name,key]of Object.entries({left:'x',top:'y',width:'width',height:'height'}))dialog.style[name]=bounds?.[key]!=null?`${bounds[key]}px`:'';

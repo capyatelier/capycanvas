@@ -311,7 +311,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget, controls: [input, ...widget.querySelectorAll("button")] });
         }
       }
-      if(page.id==="color")node.append(button(() => profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,manage:true})));
+      if(page.id==="color")node.append(button(() => profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,dropdown,manage:true})));
     }
   }
   return function refresh(model) {

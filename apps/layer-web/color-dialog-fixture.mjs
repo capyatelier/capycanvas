@@ -77,7 +77,7 @@ export const dialogProjection = {
 
 export function fakeColorApp({language = () => 'en', selected = {space:'Srgb', rgba:[.25, .5, .75, 1]}, hdr = false} = {}) {
   const stats = {requests:0, actions:[]};
-  const view = editor => ({dialog:{role:'editor', modal:true, primary:'action'}, route:editor.route,
+  const view = editor => ({dialog:{frame:{kind:'editor'},role:'editor', modal:true, primary:'action'}, route:editor.route,
     panel:{hdr, intensity:0, rgb_space:'Srgb', shape:'circle', rendition:null}, shapes:['circle', 'square', 'triangle'].map(shape => ({shape, label:shape, name:shape, selected:shape === 'circle'})),
     current:{rgba:[1, 1, 1, 1]}, new:{rgba:editor.value.rgba}, hex:editor.hex, hex_note:null,
     rows:[row('RGB', ['64', '128', '191'], language()), row('HSB', ['210°', '67%', '75%'], language()), row('OKLCH', ['58.1%', '0.112', '247°'], language())],

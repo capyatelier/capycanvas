@@ -51,7 +51,7 @@ impl Conversion {
         self.running.set(true);
         glib::MainContext::default().spawn_local(glib::clone!(#[strong(rename_to = state)] self, async move {
             while let Some(choice) = state.pending.take().filter(|_| !state.closed.get()) {
-                if !choice.flattened && choice.change.target(state.original.composition().color) == state.original.composition().color {
+                if !layer_ui::color_comparison_needed(state.original.composition().color, choice.change, choice.flattened) {
                     state.comparison.invalidate(state.copy.borrow().choose_different.as_ref());
                     continue;
                 }
@@ -262,7 +262,8 @@ pub(super) async fn run(
                 RenderingIntent::Saturation,
                 RenderingIntent::AbsoluteColorimetric,
             ][intent.selected() as usize];
-            dither.set_sensitive(depth == SampleDepth::U8);
+            let dither_choice = layer_ui::document_color_dither(depth, dither.is_active());
+            dither.set_sensitive(dither_choice.available);
             let flattened = operation == DocumentColorOperation::Convert && result.selected() == 1;
             crate::page_dialog::set_response_label(&dialog, "apply", if flattened { copy.create_copy.as_ref() } else { copy.common.apply.as_ref() });
             let space = RgbSpace::ALL[space.selected() as usize];
@@ -279,11 +280,7 @@ pub(super) async fn run(
                     },
                     DocumentColorOperation::Depth => DocumentColorChange::Depth {
                         depth,
-                        dither: if depth == SampleDepth::U8 && dither.is_active() {
-                            OutputDither::Stochastic8
-                        } else {
-                            OutputDither::None
-                        },
+                        dither: dither_choice.value,
                     },
                 },
             });

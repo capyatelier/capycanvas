@@ -1940,7 +1940,7 @@ impl ToolbarPrompt {
             ToolbarOperation::Delete => (localization.text(MessageId::WORKSPACE_TOOLBAR_DELETE_TITLE), localization.text(MessageId::WORKSPACE_TOOLBAR_DELETE_CONFIRM), true),
         };
         ToolbarPromptView {
-            dialog: if destructive { crate::DialogIntent::alert() } else { crate::DialogIntent::editor(Some(crate::DialogPrimary::Action)) },
+            dialog: if destructive { crate::DialogIntent::alert() } else { crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Action), false) },
             title,
             confirm_label,
             destructive,

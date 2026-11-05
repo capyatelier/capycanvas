@@ -53,7 +53,7 @@ pub fn document_properties(info: &layer_color::InspectedDocumentInfo, localizer:
         args.set("assumed", if source.profile_assumed {"yes"} else {"no"}); args.set("retained", label(retained));
         (source.name.clone(), localizer.format(MessageId::COLOR_PROPERTIES_SOURCE, &args))
     }).collect();
-    DocumentPropertiesView { dialog:crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)), title: localizer.text(MessageId::COLOR_PROPERTIES_TITLE), source_images: localizer.text(MessageId::COLOR_PROPERTIES_SOURCE_IMAGES), done: localizer.text(MessageId::COMMON_DONE), proof: localizer.text(MessageId::COLOR_FEATURES_PROOF_TITLE), rows, sources }
+    DocumentPropertiesView { dialog:crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Close), false), title: localizer.text(MessageId::COLOR_PROPERTIES_TITLE), source_images: localizer.text(MessageId::COLOR_PROPERTIES_SOURCE_IMAGES), done: localizer.text(MessageId::COMMON_DONE), proof: localizer.text(MessageId::COLOR_FEATURES_PROOF_TITLE), rows, sources }
 }
 pub(crate) fn source_channels_label(channels: SourceChannels, localizer: &Localizer) -> Arc<str> {
     match channels {

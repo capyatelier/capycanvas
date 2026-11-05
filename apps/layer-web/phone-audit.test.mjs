@@ -157,7 +157,7 @@ test('W7 photo rows use the owned ProPhoto source and the existing source-profil
   const rows=selectDialogAuditRows({batch:'w7-photo'});
   assert.deepEqual(rows.map(row=>row.id),['assign-profile','convert-color-space','change-bit-depth','repair-source-profile','rasterize-source','untagged-source-profile']);
   for(const [index,row] of rows.slice(0,5).entries()){
-    assert.deepEqual(row.document,{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(index<4?{draft:[{label:'Color space',value:'Srgb'},{label:'Color space',value:'Srgb'},{label:'Bit depth',value:'U8'},{label:'Correct source profile',value:'0'}][index]}:{})});
+    assert.deepEqual(row.document,{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(index<4?{draft:{state:row.id}}:{})});
     assert.equal(typeof row.openaction,'function');assert.equal(typeof row.closeaction,'function');
   }
   assert.match(rows[5].rootselector,/Interpret as/);
@@ -217,12 +217,12 @@ test('Rename Drawing Preset uses actual naming input and the offered context men
 });
 
 test('dialog allocations use only shared shell part attributes and require the header',()=>{
-  const root={querySelector:()=>({querySelector:selector=>selector==='[data-dialog-part="end"]'||selector==='[data-dialog-part="panes"]'?{}:null})};
+  const root={querySelector:()=>({dataset:{dialogFrame:'editor'},querySelector:selector=>selector==='[data-dialog-part="end"]'||selector==='[data-dialog-part="panes"]'?{}:null})};
   const specs=dialogAuditSpecifications('#actual-dialog[open]',root);
   assert.deepEqual(specs.map(spec=>spec.id),['page','page.header','page.end','page.panes']);
   assert.equal(specs[1].optional,undefined);
   assert.deepEqual(dialogAuditSpecifications('#missing',{querySelector:()=>null}).map(spec=>spec.id),['page','page.header']);
-  const alert={getAttribute:()=> 'alertdialog',querySelector:()=>null};
+  const alert={dataset:{dialogFrame:'alert'},querySelector:()=>null};
   assert.deepEqual(dialogAuditSpecifications('#alert',{querySelector:()=>alert}).map(spec=>spec.id),['page']);
   assert.ok(specs.slice(1).every(spec=>spec.selector.includes('[data-dialog-part=')));
 });

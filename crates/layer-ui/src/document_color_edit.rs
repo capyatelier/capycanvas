@@ -26,6 +26,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn proof_panel_mode(&self) -> ProofMode {
         if self.proof_setup_pending { ProofMode::Print } else { self.proof_mode() }
     }
+    pub fn gamut_warning_available(&self) -> bool { self.engine.document().output().proof.is_some() }
     /// HDR output is shown only while no proof page (including a pending Print
     /// setup) or gamut warning asks for the SDR rendition.
     pub fn hdr_presentation_allowed(&self) -> bool {

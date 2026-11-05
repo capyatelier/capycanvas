@@ -468,9 +468,10 @@ Specialty controllers report Escape through their existing shared actions.
   632–744 depending on the host.
 - Supply content measurement to `DialogPresentation::bounds` as a callback;
   only canvas panels need it. Full-screen pages use their shared bounds directly.
-- `DialogIntent` supplies the role, modality and primary-action meaning for the
-  common header. Keep close-only Done distinct from a declared primary named
-  Done. Hosts project existing controls and preserve their draft and focus when
+- `DialogIntent` supplies the role, modality, floating frame and primary-action
+  meaning for the common header. `DialogFrame` is independent of the role: an
+  editor hosted by GTK in an AlertDialog still becomes a phone page. Keep
+  close-only Done distinct from a declared primary named Done. Hosts project existing controls and preserve their draft and focus when
   presentation changes. `dialog_escape` leaves a subpage first, then clears a
   focused nonempty search, and otherwise cancels.
 - **Pages live inside the window**, as Android's Settings overlay does, rather than
@@ -599,8 +600,11 @@ uses the shared content-width projection; GTK retains its native AdwClamp.
 The common Web dialog host retains each form and its bound labels across page
 and floating presentation. Shared header actions project Close as Done on a
 page, while the floating dialog keeps its own close control.
-Floating Web Editor dialogs pass their measured natural border-box width to
-shared `floating_dialog_width`; GTK keeps its native AdwDialog allocation.
+Floating Web dialogs use the shared intent's frame. Editor frames pass their
+measured natural border-box width to `floating_dialog_width`; Alert frames use
+`alert_dialog_layout` with their shared `prefer_wide` value. GTK keeps its native
+widgets. Declare AlertDialog-backed editor pages with `DialogIntent::alert_editor`
+so their floating frame matches without changing their phone routing.
 
 Declare a form's dialog intent in its shared view and pass it to both hosts.
 Keep the form's controller and action controls when presentation changes. The

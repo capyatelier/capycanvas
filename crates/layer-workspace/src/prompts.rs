@@ -24,7 +24,7 @@ pub struct ManagerPrompt {
 impl ManagerPrompt {
     pub fn dialog_intent(&self) -> layer_ui::DialogIntent {
         if self.name.is_some() || self.description.is_some() || !self.choices.is_empty() {
-            layer_ui::DialogIntent::editor(Some(layer_ui::DialogPrimary::Action))
+            layer_ui::DialogIntent::alert_editor(Some(layer_ui::DialogPrimary::Action), false)
         } else { layer_ui::DialogIntent::alert() }
     }
     pub fn confirm(

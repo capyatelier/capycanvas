@@ -8,6 +8,106 @@ use crate::ColorFeatureError;
 pub const PROFILE_LIBRARY_ENTRIES: usize = 128;
 pub const PROFILE_LIBRARY_BYTES: u64 = 64 * 1024 * 1024;
 pub const PROFILE_READ_LIMIT: usize = layer_color::MAX_ICC_BYTES;
+pub const LIBRARY_SIZE: [i32; 2] = [480, 500];
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "source", rename_all = "snake_case")]
+pub enum ProfilePurpose {
+    Proof,
+    Output,
+    Source(layer_core::color::source::SourceInterpretation),
+}
+impl ProfilePurpose {
+    pub fn picker_purpose(&self) -> ProfilePickerPurpose {
+        match self { Self::Proof=>ProfilePickerPurpose::Proof, Self::Output=>ProfilePickerPurpose::Output,
+            Self::Source(source)=>ProfilePickerPurpose::Source(source.channels) }
+    }
+
+    pub fn validate(
+        &self,
+        profile: &crate::ExportProfile,
+        working: layer_core::color::RgbSpace,
+    ) -> Result<(), ColorFeatureError> {
+        match self {
+            Self::Proof => {
+                let recipe = layer_core::color::ProofRecipe::new(
+                    profile.name.clone(),
+                    profile.profile.clone(),
+                );
+                layer_color::ProofTransform::new(working, &recipe)?;
+            }
+            Self::Output => {
+                let recipe = crate::ExportRecipe {
+                    format: crate::ExportFormat::Tiff,
+                    profile: profile.clone(),
+                    background: crate::ExportBackground::White,
+                    ..crate::ExportRecipe::web_share()
+                };
+                let encoder = layer_color::WorkingEncoder::new(
+                    working,
+                    &recipe.interpretation(),
+                    Default::default(),
+                )?;
+                let mut output = vec![0; recipe.interpretation().pixel_bytes() * 3];
+                encoder.encode_straight(
+                    &[[0., 0., 0., 1.], [0.5, 0.5, 0.5, 1.], [1.; 4]],
+                    &mut output,
+                    None,
+                    [0, 0],
+                )?;
+            }
+            Self::Source(source) => {
+                validate_source_profile(profile,source,working)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "channels", rename_all = "snake_case")]
+pub enum ProfilePickerPurpose { Output, Proof, Source(layer_core::color::source::SourceChannels) }
+impl ProfilePickerPurpose {
+    pub fn accepts(&self, channels: ProfileChannels) -> bool {
+        use layer_core::color::source::SourceChannels;
+        match self {
+            Self::Output => true,
+            Self::Proof => channels != ProfileChannels::Gray,
+            Self::Source(source) => channels == match source {
+                SourceChannels::Rgb | SourceChannels::Rgba => ProfileChannels::Rgb,
+                SourceChannels::Gray | SourceChannels::GrayAlpha => ProfileChannels::Gray,
+                SourceChannels::Cmyk => ProfileChannels::Cmyk,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProfilePickerSaved {
+    pub id: String,
+    pub visible: bool,
+    pub channels: Option<ProfileChannels>,
+    pub valid: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProfilePickerInventory {
+    pub document: bool,
+    pub current: bool,
+    pub saved: Vec<usize>,
+    pub standard: bool,
+}
+pub fn picker_inventory(purpose: &ProfilePickerPurpose, document: Option<&ColorProfile>, current: Option<&ColorProfile>, saved: &[ProfilePickerSaved]) -> ProfilePickerInventory {
+    let identity = |profile: Option<&ColorProfile>| match profile { Some(ColorProfile::Icc(bytes))=>Some(profile_identity(bytes)), _=>None };
+    let document = identity(document);
+    let current = identity(current);
+    ProfilePickerInventory {
+        current: current.as_ref().is_some_and(|id| Some(id)!=document.as_ref() && !saved.iter().any(|entry|entry.valid && &entry.id==id)),
+        saved: saved.iter().enumerate().filter(|(_,entry)|Some(&entry.id)!=document.as_ref() && entry.visible && entry.valid && entry.channels.is_some_and(|channels|purpose.accepts(channels))).map(|(index,_)|index).collect(),
+        document: document.is_some(),
+        standard: purpose.accepts(ProfileChannels::Rgb),
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProfileRecord {
@@ -417,6 +517,59 @@ mod localized_label_tests {
             assert_eq!(entry.display_name(&context), name);
             assert!(entry.details(&context).contains("256"));
             assert_eq!(entry.id, "literal-profile-id");
+        }
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    use layer_core::color::source::SourceChannels;
+    #[test]
+    fn picker_sections_match_document_current_saved_and_channel_ownership() {
+        let embedded = ColorProfile::Icc(vec![1,2,3].into());
+        let other = ColorProfile::Icc(vec![4,5,6].into());
+        let builtin = ColorProfile::Builtin(layer_core::color::RgbSpace::Srgb);
+        let key = profile_identity(&[1,2,3]);
+        let mut saved = vec![ProfilePickerSaved {id:key,visible:true,channels:Some(ProfileChannels::Rgb),valid:true}];
+        let purpose = ProfilePickerPurpose::Proof;
+        let view = picker_inventory(&purpose,Some(&embedded),Some(&embedded),&saved);
+        assert!(view.document && !view.current && view.saved.is_empty() && view.standard);
+        let view = picker_inventory(&purpose,Some(&builtin),Some(&other),&saved);
+        assert!(!view.document && view.current && view.saved==[0]);
+        saved[0].visible=false;
+        assert!(!picker_inventory(&purpose,None,Some(&embedded),&saved).current);
+        saved[0].valid=false;
+        assert!(picker_inventory(&purpose,None,Some(&embedded),&saved).current);
+        for channels in [SourceChannels::Gray,SourceChannels::Cmyk] {
+            let view=picker_inventory(&ProfilePickerPurpose::Source(channels),None,Some(&builtin),&saved);
+            assert!(!view.document && !view.current && view.saved.is_empty() && !view.standard);
+        }
+    }
+
+    #[test]
+    fn source_picker_validates_imported_profiles_against_actual_sample_channels() {
+        use layer_core::color::{RgbSpace,SampleDepth,source::SourceInterpretation};
+        let rgb = ColorProfile::Builtin(RgbSpace::DisplayP3);
+        let gray = layer_color::gray_profile(RgbSpace::Srgb).unwrap();
+        for (channels, profile, valid) in [(SourceChannels::Rgba,&rgb,true),(SourceChannels::Rgba,&gray,false),
+            (SourceChannels::GrayAlpha,&gray,true),(SourceChannels::GrayAlpha,&rgb,false),(SourceChannels::Cmyk,&rgb,false)] {
+            let purpose = ProfilePurpose::Source(SourceInterpretation {channels,depth:SampleDepth::U16,profile:rgb.clone(),profile_assumed:false});
+            let profile = crate::ExportProfile {profile:profile.clone(),name:"Imported".into(),channels:layer_color::profile_channels(profile).unwrap()};
+            assert_eq!(purpose.validate(&profile,RgbSpace::ProPhoto).is_ok(),valid);
+            assert_eq!(purpose.picker_purpose().accepts(profile.channels),valid);
+        }
+    }
+
+    #[test]
+    fn picker_channels_follow_source_samples_and_proof_requires_non_gray() {
+        for channels in [ProfileChannels::Rgb,ProfileChannels::Gray,ProfileChannels::Cmyk] {
+            assert!(ProfilePickerPurpose::Output.accepts(channels));
+            assert_eq!(ProfilePickerPurpose::Proof.accepts(channels),channels!=ProfileChannels::Gray);
+            for (source,expected) in [(SourceChannels::Rgb,ProfileChannels::Rgb),(SourceChannels::Rgba,ProfileChannels::Rgb),
+                (SourceChannels::Gray,ProfileChannels::Gray),(SourceChannels::GrayAlpha,ProfileChannels::Gray),(SourceChannels::Cmyk,ProfileChannels::Cmyk)] {
+                assert_eq!(ProfilePickerPurpose::Source(source).accepts(channels),channels==expected);
+            }
         }
     }
 }

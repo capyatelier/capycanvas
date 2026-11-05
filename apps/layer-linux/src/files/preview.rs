@@ -31,11 +31,11 @@ fn thumbnail(
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());
     let (preview, clipped, range_blocked, transparent, fallback) = if let Some(recipe) = output {
-        let output = layer_host::export::preview_recipe(&mut renderer, [220, 160], view.space(), headroom, &recipe)?;
+        let output = layer_host::export::preview_recipe(&mut renderer, layer_ui::color_comparison::RASTER_BOUNDS, view.space(), headroom, &recipe)?;
         let fallback = output.sdr_base.map(|base| Box::new(present(base, false, false, None, false, None, None)));
         (output.after, Some(output.clipped), output.range_blocked, output.transparent, fallback)
     } else {
-        let (preview, alpha) = renderer.preview_document_with_coverage([220, 160], view.space(), headroom)?;
+        let (preview, alpha) = renderer.preview_document_with_coverage(layer_ui::color_comparison::RASTER_BOUNDS, view.space(), headroom)?;
         (preview, None, false, Some(alpha), None)
     };
     Ok(present(preview,display_hdr,hdr,clipped,range_blocked,transparent,fallback))
@@ -47,13 +47,11 @@ fn present(preview:layer_render_wgpu::snapshot::SnapshotPreview,display_hdr:bool
     // half-float display transport, like the canvas, after Float32 processing.
     let to_srgb = preview.space.linear_transform(layer_core::color::RgbSpace::Srgb);
     let to_2020 = layer_core::color::hdr::srgb_to_bt2020();
-    let checker = crate::display_color::checker_linear().map(f64::from);
-    let cell = layer_ui::TRANSPARENCY_CHECKER_CELL as u32;
+    let checker = crate::display_color::checker_linear();
     for (i, pixel) in preview.pixels.iter().enumerate() {
         let x = i as u32 % preview.extent[0];
         let y = i as u32 / preview.extent[0];
-        let checker = checker[((x / cell + y / cell) % 2) as usize];
-        let rgb = std::array::from_fn(|c| f64::from(pixel[c]) + checker * (1. - f64::from(pixel[3])));
+        let rgb = layer_ui::color_comparison::over_checker(*pixel, [x,y], checker);
         if display_hdr {
             let rgb = layer_core::color::rgb::apply(to_2020, layer_core::color::rgb::apply(to_srgb, rgb));
             for v in rgb.into_iter().map(|v| v.clamp(0., 10000. / 203.) as f32).chain([1.]) {
@@ -136,7 +134,7 @@ impl Comparison {
         localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Rc<Self> {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let pictures = gtk::Box::new(gtk::Orientation::Horizontal, layer_ui::color_comparison::GAP);
         pictures.set_homogeneous(true);
         let labels = labels.map(|label| gtk::Label::builder().label(label.as_ref()).wrap(true).build());
         let make = |label: &gtk::Label, name: &str| {
@@ -150,7 +148,7 @@ impl Comparison {
             // Measure a bounded preview area, not the image's height-for-width
             // request at the entire dialog width. Contain retains all edges.
             let preview = gtk::Overlay::new();
-            preview.set_child(Some(&gtk::DrawingArea::builder().content_height(120).build()));
+            preview.set_child(Some(&gtk::DrawingArea::builder().content_height(layer_ui::color_comparison::HEIGHT).build()));
             preview.add_overlay(&picture);
             column.append(&preview);
             pictures.append(&column);
@@ -164,7 +162,7 @@ impl Comparison {
             .xalign(0.)
             .build();
         status.set_widget_name("color-preview-status");
-        widget.append(&adw::Clamp::builder().maximum_size(2 * 160 + 12).child(&pictures).build());
+        widget.append(&adw::Clamp::builder().maximum_size(2 * layer_ui::color_comparison::WIDTH + layer_ui::color_comparison::GAP).child(&pictures).build());
         widget.append(&status);
         Rc::new(Self {
             localization_bound: Cell::new(false), copy: RefCell::new(copy), localization: RefCell::new(localization), output_labels: Cell::new(None), failure: RefCell::new(None),

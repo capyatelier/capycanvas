@@ -1,6 +1,7 @@
 import {createWorkflowStack} from './workflow-stack.js';
+import {addScrollbar} from './scrollbars.js';
 import { liveCopy, bindCopy } from './localization.js';
-import {importProfile,chooseProfileLibrary} from './export-controls.js';
+import {createProfilePicker} from './export-controls.js';
 
 // A single package-rewritten URL for the illustration and print LUT workers.
 const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
@@ -8,7 +9,7 @@ const proofWorkerUrl=new URL("./proof-worker.js",import.meta.url);
 // One CPU worker per editor. Termination cancels synchronous Wasm immediately
 // and releases its high-water heap. A replacement never queues behind old work.
 export function createProof({app,element,button,icon,dropdown,applyChange,wake,contentChanged}) {
-  const copy=liveCopy(app,"proof_copy"),profilesCopy=liveCopy(app,"profile_copy"),choicesCopy=liveCopy(app,"proof_choices_copy");
+  const copy=liveCopy(app,"proof_copy"),choicesCopy=liveCopy(app,"proof_choices_copy");
   let paused=false;
   let work=null,setup=null,finishPending=async()=>{},hasPending=()=>false,refreshLibrary=()=>{};
   // The same immutable 512² Rust illustration as GTK, built off the UI thread.
@@ -125,16 +126,16 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
     const mode=element('div','proof-modes');bindCopy(mode,()=>copy.mode,"ariaLabel");mode.setAttribute('role','group');
     for(const[value,label]of[['off',()=>copy.mode_off],['sdr','SDR'],['print',()=>copy.mode_print]]){const o=button(label,()=>{mode.value=value;mode.onchange();});o.value=value;mode.append(o);}panel.append(mode);
     const sdrPage=element('div','proof-sdr'),printPage=element('div','proof-print'),issue=element('p','error-message'),status=element('p');status.setAttribute('role','status');
-    const modePages=element('div'),offPage=element('div');modePages.append(offPage,sdrPage,printPage);const pages=createWorkflowStack(modePages,'slide');finishPages=pages.finish;
+    const modePages=element('div','proof-pages'),offPage=element('div'),printFrame=element('div','proof-print-frame'),printScroll=element('div','proof-print-scroll');printScroll.append(printPage);printFrame.append(printScroll);const scrollbar=addScrollbar(printScroll,printFrame,printPage);modePages.append(offPage,sdrPage,printFrame);const pages=createWorkflowStack(modePages,'slide');finishPages=pages.finish;
     panel.append(modePages,issue,status);primary?.append(panel);
-    const model=app.proof_form();let recipe=structuredClone(model.recipe),appliedRecipe=JSON.stringify(model.document_profile),appliedGeneration=app.proof_status().generation,profiles=[],selected='';
+    const model=app.proof_form();let recipe=structuredClone(model.recipe),appliedRecipe=JSON.stringify(model.document_profile),appliedGeneration=app.proof_status().generation;
     const printSettings=model.print_settings;
     let valueBalance=null,valueContrast=null;
     let failure=null,failedPrepare=false,printPreparing=false;const fail=(error,preparation=false)=>{failure=error;failedPrepare=preparation;bindCopy(issue,()=>failure==null?"":`${failedPrepare?copy.unavailable+"\n":""}${app.color_feature_error_copy(failure,true)}`);};const printStatus=visible=>{printPreparing=visible;bindCopy(status,()=>printPreparing?copy.preparing_print:"");};
     const send=action=>{try{applyChange(app.proof_control(action));wake();refreshPanel();}catch(e){fail(e);}};
     const field=(root,label,node)=>{if(!node.classList.contains('dropdown')){if(typeof label==='function')bindCopy(node,label,'ariaLabel');else node.setAttribute('aria-label',label);}const row=element('label','document-size',label);row.append(node);root.append(row);return node;};
     const select=(root,label,options,value,change)=>{const node=dropdown(label,change);node.update({choices:options.map(([value,label])=>({value,label})),value});return field(root,label,node);};
-    const canvas=element('canvas','proof-tone-pad');canvas.width=canvas.height=256;canvas.tabIndex=0;canvas.setAttribute('role','slider');bindCopy(canvas,()=>copy.key_help,'ariaDescription');bindCopy(canvas,()=>copy.balance_contrast,"ariaLabel");sdrPage.append(canvas);
+    const canvas=element('canvas','proof-tone-pad');canvas.width=canvas.height=256;canvas.tabIndex=0;canvas.setAttribute('role','slider');bindCopy(canvas,()=>copy.tone_help,'ariaDescription');bindCopy(canvas,()=>copy.balance_contrast,"ariaLabel");sdrPage.append(canvas);
     canvas.addEventListener('contextrestored',()=>refreshPanel());
     let padContact=null,keyContact=false,activePart=0,dialSize=256,lastTouch=null,pointerStart=null,pointerMoved=false;
     const dial=(point=null,part=null)=>app.color_ui({type:'proof_dial',size:dialSize,recipe:app.proof_panel_copy().rendition,point,part});
@@ -175,13 +176,8 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
     });
     const reset=button(()=>copy.reset_sdr,()=>resetPart(3));reset.className='proof-dial-reset';bindCopy(reset,()=>copy.reset_sdr,"ariaLabel");reset.replaceChildren(icon('reset'));sdrPage.append(reset);
     const icons=['appearance','grain','brightness_contrast','hue_saturation'].map(name=>{const node=icon(name);node.classList.add('proof-dial-icon');sdrPage.append(node);return node;});
-    const profile=field(printPage,()=>copy.profile,dropdown(()=>copy.profile_choice,chooseProfile));
-    const documentGroup=[],saved=[],standard=[];let documentIndex=null;
-    const syncProfile=()=>profile.update({choices:[{is_heading:true,label:()=>profilesCopy.document},...documentGroup,{is_heading:true,label:()=>profilesCopy.saved},...saved,{is_heading:true,label:()=>profilesCopy.standard},...standard,{value:'add',label:()=>profilesCopy.add_profile_dialog},{value:'manage',label:()=>profilesCopy.manage}],value:selected,text:selected===''?()=>profilesCopy.choose:null,disabled:committing});
-    const option=(group,p)=>{let index=p.id?profiles.findIndex(item=>item.id===p.id):-1;if(index<0)index=profiles.push(p)-1;else profiles[index]=p;group.push({value:String(index),label:()=>p.entry_copy_source?app.profile_entry_copy(p.entry_copy_source).name:app.profile_name_copy(p.name)});return String(index);};
-    const documentProfile=p=>{documentGroup.length=0;if(!p)return null;if(documentIndex===null)documentIndex=profiles.length;profiles[documentIndex]=p;documentGroup.push({value:String(documentIndex),label:()=>p.entry_copy_source?app.profile_entry_copy(p.entry_copy_source).name:app.profile_name_copy(p.name)});return String(documentIndex);};
-    if(model.print_settings.profile)selected=documentProfile(model.print_settings.profile);
-    for(const p of model.profiles)option(standard,p);syncProfile();
+    const profile=field(printPage,()=>copy.profile,createProfilePicker({app,element,button,icon,dropdown,label:()=>copy.profile_choice,purpose:{kind:'proof'},initial:model.print_settings.profile,documentProfile:model.print_settings.profile,emptyLabel:()=>liveCopy(app,'profile_copy').choose_short,change:state=>{if(state.pending||state.error){serial++;clearTimeout(pendingTimer);pendingTimer=null;cancel();if(state.error)fail(state.error);}else if(mode.value==='print')schedule();},onError:fail}));
+    finishPages=()=>{pages.finish();scrollbar.disposeScrollbar();profile.disposeProfilePicker();};
     const simulation=select(printPage,()=>copy.simulation,model.simulations.map(c=>[c.value,()=>choicesCopy.simulations.find(value=>value.value===c.value).label]),printSettings.simulation,()=>schedule());
     const intent=select(printPage,()=>copy.intent,model.intents.map(c=>[c.value,()=>choicesCopy.intents.find(value=>value.value===c.value).label]),printSettings.intent,()=>schedule());
     const bpc=field(printPage,()=>copy.black_point_compensation,element('input'));bpc.type='checkbox';bpc.className='panel-check';bpc.checked=printSettings.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';
@@ -192,8 +188,7 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
     const preparePrint=async()=>{
       clearTimeout(pendingTimer);pendingTimer=null;const ticket=++serial;cancel();fail(null);printStatus(true);let candidate;
       try{
-        if(selected===''){printStatus(false);return;}
-        let p=profiles[Number(selected)];if(p.id)p=await app.profile_library('get',p.id);
+        const p=profile.profileValue();if(!p){printStatus(false);return;}
         if(panel!==owner||ticket!==serial||mode.value!=='print')return;
         // Color UI transports JSON integer bytes as BigInt; proof recipes use
         // the JSON/ICC byte representation used by proof_form and profile storage.
@@ -212,12 +207,11 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
     hasPending=()=>!!(pendingTimer||preparing);
     finishPending=async()=>{if(pendingTimer){clearTimeout(pendingTimer);pendingTimer=null;startPrepare();}if(preparing)await preparing;if(app.proof_panel_copy().mode==='print'&&failure)throw failure;};
     const schedule=()=>{if(committing)return;clearTimeout(pendingTimer);cancel();bpc.disabled=intent.value==='AbsoluteColorimetric';if(bpc.disabled)bpc.checked=false;pendingTimer=setTimeout(startPrepare,180);};
-    async function chooseProfile(value){if(!['add','manage'].includes(value)){selected=value;syncProfile();schedule();return;}syncProfile();try{const p=value==='add'?await importProfile(app,element):await chooseProfileLibrary({app,element,button,icon,manage:true});if(panel!==owner)return;if(p){selected=option(saved,p);syncProfile();schedule();}}catch(e){fail(e);}}
     bpc.onchange=schedule;
-    mode.onchange=()=>{if(committing)return;const next=mode.value;cancelContacts();serial++;clearTimeout(pendingTimer);pendingTimer=null;cancel();mode.value=next;send({type:'mode',mode:mode.value});if(mode.value==='print'&&selected!=='')schedule();};
+    mode.onchange=()=>{if(committing)return;const next=mode.value;cancelContacts();serial++;clearTimeout(pendingTimer);pendingTimer=null;cancel();mode.value=next;send({type:'mode',mode:mode.value});if(mode.value==='print'&&profile.profileValue())schedule();};
     function restorePrint(form){
       recipe=structuredClone(form.recipe);
-      const current=documentProfile(form.print_settings.profile);selected=current??'';syncProfile();
+      profile.updateProfile(form.print_settings.profile,true);
       const saved=form.print_settings;intent.update({value:saved.intent});bpc.checked=saved.bpc;bpc.disabled=intent.value==='AbsoluteColorimetric';simulation.update({value:saved.simulation});
     }
     refreshPanel=()=>{
@@ -231,7 +225,7 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
       const generation=app.proof_status().generation;
       if(generation!==appliedGeneration){appliedGeneration=generation;const current=app.proof_form(),savedRecipe=JSON.stringify(current.document_profile);if(savedRecipe!==appliedRecipe){appliedRecipe=savedRecipe;restorePrint(current);}}
       mode.value=form.mode;for(const b of mode.children){b.setAttribute('aria-pressed',String(b.value===form.mode));b.disabled=committing||(b.value==='sdr'&&!form.hdr);b.hidden=b.value==='sdr'&&!form.hdr;}
-      pages.show(form.mode==='sdr'?sdrPage:form.mode==='print'?printPage:offPage);if(shownMode!==form.mode){shownMode=form.mode;contentChanged('proof');}gamut.checked=app.state().gamut_warning;gamut.disabled=committing||!form.recipe_valid;
+      pages.show(form.mode==='sdr'?sdrPage:form.mode==='print'?printFrame:offPage);if(shownMode!==form.mode){shownMode=form.mode;contentChanged('proof');}gamut.checked=app.state().gamut_warning;gamut.disabled=committing||!form.gamut_available;
       for(const{input,spec}of arcControls)input.value=form.rendition[spec.key];
       if(form.mode!=='sdr'||!mapped){cancelDial();return;}
       ensurePattern();
@@ -249,11 +243,8 @@ export function createProof({app,element,button,icon,dropdown,applyChange,wake,c
 
     };
     if(sdr)send({type:'mode',mode:'sdr'});refreshPanel();
-    refreshLibrary=()=>app.profile_library('list').then(entries=>{
-      if(panel!==owner)return;
-      saved.length=0;for(const p of entries)if(!p.issue&&p.visible!==false)option(saved,p);syncProfile();
-    }).catch(e=>{if(panel===owner)fail(e);});
-    profile.addEventListener('focus',()=>refreshLibrary());refreshLibrary();
+    refreshLibrary=()=>profile.refreshProfiles();
+    profile.addEventListener('focus',()=>refreshLibrary());
   }
   return {run,mount,hasPending:()=>hasPending(),finishPending:()=>finishPending(),
     async pause(){paused=true;disposePanel();cancel();const pending=tone;pending?.cancel();await pending?.done;},

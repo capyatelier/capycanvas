@@ -126,17 +126,28 @@ impl WebApp {
     pub fn document_color_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::color_feature_copy::DocumentColorCopy::new(self.session.localization()))
     }
+    pub fn comparison_copy(&self) -> Result<JsValue, JsValue> {
+        serialize(&serde_json::json!({"copy":layer_ui::color_feature_copy::ComparisonCopy::new(self.session.localization()),
+            "gap":layer_ui::color_comparison::GAP,"height":layer_ui::color_comparison::HEIGHT,"width":layer_ui::color_comparison::WIDTH}))
+    }
+    pub fn document_color_dither(&self, depth: JsValue, active: bool) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::document_color_dither(serde_wasm_bindgen::from_value(depth).map_err(js)?,active))
+    }
+    pub fn color_comparison_needed(&self, change: JsValue, flattened: bool) -> Result<bool, JsValue> {
+        Ok(layer_ui::color_comparison_needed(self.session.engine().document().composition().color,
+            serde_wasm_bindgen::from_value(change).map_err(js)?,flattened))
+    }
+    pub fn rasterize_details(&self) -> String {
+        layer_ui::color_feature_copy::rasterize_details(self.session.localization(),self.session.engine().document().composition().color)
+    }
+    pub fn source_description(&self, name: Option<String>, assumed: bool) -> String {
+        layer_ui::color_feature_copy::source_description(self.session.localization(),name,assumed)
+    }
     pub fn proof_dial_value(&self) -> String {
         layer_ui::color_feature_copy::proof_dial_value(self.session.effective_sdr_rendition(), self.session.localization())
     }
     pub fn proof_copy(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::color_feature_copy::ProofCopy::new(self.session.localization()))
-    }
-    pub fn color_source_preview(&self, name: &str, preview: &str, adds_layer: bool) -> String {
-        let localizer = self.session.localization();
-        let mut args = layer_ui::FluentArgs::new(); args.set("name", name); args.set("preview", preview);
-        let layer = if adds_layer {localizer.text(layer_ui::MessageId::COLOR_FEATURES_COLOR_ADDS_LAYER)} else {std::sync::Arc::from("")};
-        args.set("layer", layer.as_ref()); localizer.format(layer_ui::MessageId::COLOR_FEATURES_COLOR_SOURCE_PREVIEW, &args)
     }
     pub fn export_form(&self) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization()))

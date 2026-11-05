@@ -273,8 +273,8 @@ pub(crate) async fn manage_for_window(
         .map_err(|_| ColorFeatureError::Diagnostic("Could not load saved profiles".into()).profile_message(&localization))?.map_err(|reason|reason.profile_message(&localization))?;
     let dialog = adw::Dialog::builder()
         .title(copy.manage_title.as_ref())
-        .content_width(480)
-        .content_height(500)
+        .content_width(copy.library_size[0])
+        .content_height(copy.library_size[1])
         .build();
     dialog.set_widget_name("profile-library-manager");
     let view = adw::ToolbarView::new();

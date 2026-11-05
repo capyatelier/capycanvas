@@ -35,8 +35,9 @@ export function createPageKit({element,icon}) {
     result.line.addEventListener('click',()=>input.focus());
     return {...result,input};
   }
-  function comboRow({title,control}) {
+  function comboRow({title,control,subtitle=true}) {
     control.classList.add('preference-row','preference-combo-row');
+    control.classList.toggle('preference-combo-inline',!subtitle);
     control.prepend(element('span','preference-combo-title',title));return control;
   }
   function body(...children) {
