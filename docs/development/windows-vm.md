@@ -291,7 +291,8 @@ Driver binaries and PCI addresses stay in local state, not the repository.
 The generated `gpu-pool.json` lives in the VM state directory. It records the
 cards, driver bundle, artifact path and host-sized resource defaults. Defaults
 reserve a host share and divide CPU/RAM among the pool's possible concurrent
-guests, capped at 32 vCPUs and 64 GiB per VM. Each guest uses one CPU socket.
+guests, capped at 8 vCPUs and 16 GiB per VM because every worktree primary, GPU
+VM and CPU runner shares the host. Each guest uses one CPU socket.
 `--cpus` and `--memory` on host setup, or the existing `CAPYCANVAS_VM_CPUS` and
 `CAPYCANVAS_VM_MEMORY` environment variables, override them. Keep successful VMs
 warm during iteration to reuse Cargo, NuGet and native build caches; stop them

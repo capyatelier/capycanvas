@@ -39,7 +39,7 @@ class ManagedFileTests(unittest.TestCase):
 
 class HostSizingTests(unittest.TestCase):
     def test_defaults_share_host_resources_and_cap_large_hosts(self):
-        for cpus, gib, cards, expected in ((192, 512, 3, (32, "16G")),
+        for cpus, gib, cards, expected in ((192, 512, 3, (8, "16G")),
                                             (16, 64, 3, (4, "16G")),
                                             (8, 16, 1, (4, "8G"))):
             def sysconf(name):
