@@ -86,8 +86,10 @@ fn localization_preserves_queries_literal_names_drafts_and_pending_tasks() {
     prompt.description = Some("literal description".into());
     prompt.selected = Some(String::new());
     controller.view.prompt = Some(prompt.clone());
-    controller.view.busy = true;
-    controller.view.dirty = true;
+    let mut capture = manager.current().unwrap().capture().unwrap();
+    capture.working.zen_mode = !capture.working.zen_mode;
+    manager.observe(capture, 2_000);
+    assert!(manager.dirty());
     controller.run(std::future::pending());
     controller.preferences = controller.spawn(std::future::pending());
     controller.preference_edits.push_back(SwitcherEdit::Show { id: source.id, visible: false });
