@@ -436,7 +436,8 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         ],
     );
     advanced.add_row(&intent);
-    let print_delivery=adw::ActionRow::builder().title(copy.use_print_profile.as_ref()).activatable(true).visible(snapshot.output().proof.is_some()).build();
+    let has_print_profile=snapshot.output().proof.is_some();
+    let print_delivery=adw::ActionRow::builder().title(copy.use_print_profile.as_ref()).activatable(true).visible(has_print_profile).build();
     print_delivery.set_widget_name("export-print-profile");
     print_delivery.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     color_group.add(&print_delivery);
@@ -504,7 +505,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
             let choice=range.selected();
             let hdr = choice != 0;
             let jpeg = read_format() == ExportFormat::Jpeg;
-            advanced_group.set_visible(!hdr); print_delivery.set_visible(!hdr && print_delivery.subtitle().is_some());
+            advanced_group.set_visible(!hdr); print_delivery.set_visible(!hdr && has_print_profile);
             for widget in [format.upcast_ref::<gtk::Widget>(), space.upcast_ref(), depth.upcast_ref(), background.upcast_ref(), intent.upcast_ref()] { widget.set_visible(!hdr); }
             rendition_view.set_visible(choice>=2 && choice != exr_index);
             flatten.set_visible(choice==2 && choice != exr_index);

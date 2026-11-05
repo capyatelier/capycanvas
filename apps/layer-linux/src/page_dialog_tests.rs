@@ -167,6 +167,46 @@ fn native_export_narrow_bounds() {
 }
 
 #[test]
+#[ignore = "private compositor: --native-test=native_export_print_profile_availability --native-storage; viewport/theme external"]
+fn native_export_print_profile_availability() {
+    let mut d = super::phone_motion::setup("art.capycanvas.ExportPrintProfileAvailability");
+    assert!(ui_session(&d.w).engine().document().output().proof.is_none());
+    for has_proof in [false, true] {
+        if has_proof {
+            let mut proof = layer_core::color::ProofRecipe::new("Deskproof".into(),
+                layer_core::color::ColorProfile::Builtin(layer_core::color::RgbSpace::DisplayP3));
+            proof.conversion.intent = layer_core::color::RenderingIntent::Perceptual;
+            let change = ui_session_mut(&d.w).set_proof_recipe(Some(proof)).unwrap();
+            d.w.changed(Ok(change));
+        }
+        d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
+        let (dialog, frame) = dialog_frame(&d);
+        let nav = named::<adw::NavigationView>(&frame, "export-navigation");
+        let color = named::<adw::ActionRow>(&frame, "export-open-color");
+        super::histogram::scroll_to(color.upcast_ref());
+        d.click(color.upcast_ref());
+        until(|| nav.visible_page_tag().as_deref() == Some("color"), "Export opens Color");
+        super::phone_motion::settle_presentation(&d.w);
+        let print = named::<adw::ActionRow>(&frame, "export-print-profile");
+        if has_proof {
+            assert!(print.is_visible() && print.is_mapped() && print.is_sensitive(), "a configured proof offers Use print profile");
+            super::histogram::scroll_to(print.upcast_ref());
+            d.click(print.upcast_ref());
+            until(|| named::<adw::ActionRow>(&frame, "export-space").subtitle().as_deref() == Some("Deskproof")
+                && named::<adw::ComboRow>(&frame, "export-intent").selected() == 1,
+                "Use print profile applies its profile and Perceptual intent");
+        } else {
+            assert!(!print.is_visible() && !print.is_mapped(), "Export without a proof hides Use print profile");
+            capture(&mut d, "export-color");
+        }
+        close(&d, &dialog);
+    }
+    let change = ui_session_mut(&d.w).set_proof_recipe(None).unwrap();
+    d.w.changed(Ok(change));
+    d.finish();
+}
+
+#[test]
 #[ignore = "private compositor: --native-test=native_phone_editor_close_measurement --native-storage; phone viewport/theme external"]
 fn native_phone_editor_close_measurement() {
     let mut d = super::phone_motion::setup("art.capycanvas.EditorCloseMeasurement");
