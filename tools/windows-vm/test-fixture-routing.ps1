@@ -2,7 +2,7 @@ $ErrorActionPreference='Stop'
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'run-fixtures.ps1'),[ref]$tokens,[ref]$errors)
 if(@($errors).Count){throw ($errors|Out-String)}
-foreach($name in 'Get-FixtureProcessArguments','Write-FixturePlan','Get-NextFixture','Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Assert-FixtureFiles','Build-ControlFixture'){
+foreach($name in 'Get-FixtureProcessArguments','Write-FixturePlan','Get-NextFixture','Select-Fixtures','Control-Fixture','Reviews','Get-FixtureTimeoutSeconds','Get-FixtureVariantArguments','Get-FixtureCompanionArguments','Write-FixtureResult','ConvertTo-FixtureCommandLine','Save-Evidence','Assert-FixtureFiles','Build-ControlFixture'){
     $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$false)
     . ([scriptblock]::Create($function.Extent.Text))
 }
@@ -60,6 +60,51 @@ foreach($name in 'Get-FixtureProcessArguments','Write-FixturePlan','Get-NextFixt
         }finally{$reader.Dispose();$stream.Dispose()}
         $current=[IO.File]::ReadAllText($path)|ConvertFrom-Json
         if(($current.runs -join ',') -ne 'next' -or $current.timeout_minutes -ne 20 -or $current.hardware_gpu){throw 'New plan readers did not receive the complete replacement'}
+    }finally{Remove-Item -LiteralPath $directory -Recurse -Force}
+}
+& {
+    $directory=Join-Path ([IO.Path]::GetTempPath()) ('capy-fixture-evidence-'+[guid]::NewGuid().ToString('N'))
+    $HardwareGpu=$false
+    function Reviews{[pscustomobject]@{Id=42}}
+    function Stop-Review{}
+    function Get-ChildItem($LiteralPath,[switch]$File){
+        $files=@(Microsoft.PowerShell.Management\Get-ChildItem -LiteralPath $LiteralPath -File:$File)
+        if(!$publication.done){
+            $publication.done=$true
+            if($publication.mode -eq 'rename'){Move-Item -LiteralPath ($final+'.pending') -Destination $final -Force}
+            if($publication.mode -eq 'missing-final'){Remove-Item -LiteralPath $final}
+        }
+        $files
+    }
+    try{
+        foreach($mode in 'rename','unpublished','missing-final'){
+            $trace=Join-Path $directory $mode
+            [IO.Directory]::CreateDirectory($trace)|Out-Null
+            $Executable=Join-Path $trace 'CapyCanvas.exe';$log=Join-Path $directory $mode
+            @{process_id=41;trace_directory=$trace}|ConvertTo-Json|Set-Content -LiteralPath ($log+'-context.json')
+            $expected=@{}
+            foreach($owner in 41,42){
+                foreach($prefix in 'ui-state','camera-state','presentation-state','search-state','windows','prediction','latency'){
+                    $name=if($prefix -eq 'latency'){"$prefix-$owner.csv"}else{"$prefix-$owner-7.json"}
+                    $expected[$name]=if($prefix -eq 'latency'){"frame,latency`n1,3"}else{@{complete=$true;name=$name}|ConvertTo-Json -Compress}
+                    [IO.File]::WriteAllText((Join-Path $trace $name),$expected[$name])
+                }
+            }
+            $final=Join-Path $trace 'presentation-state-41-7.json'
+            [IO.File]::WriteAllText(($final+'.pending'),$(if($mode -eq 'rename'){$expected['presentation-state-41-7.json']}else{'{'}))
+            if($mode -eq 'rename'){[IO.File]::WriteAllText($final,'{"complete":false}')}
+            foreach($name in 'ui-state-410-7.json','latency-43.csv'){[IO.File]::WriteAllText((Join-Path $trace $name),'foreign owner')}
+            $publication=@{mode=$mode;done=$false};$failure=$null
+            try{Save-Evidence $log}catch{$failure=$_}
+            if($mode -eq 'missing-final'){
+                if(!$failure -or $failure.CategoryInfo.Category -ne 'ObjectNotFound' -or $failure.Exception.Message -notlike '*presentation-state-41-7.json*'){throw 'A disappearing final trace must fail evidence collection'}
+                continue
+            }
+            if($failure){throw $failure}
+            $saved=@(Microsoft.PowerShell.Management\Get-ChildItem -LiteralPath ($log+'-evidence') -File)
+            if((($saved.Name|Sort-Object) -join ',') -cne (($expected.Keys|Sort-Object) -join ',')){throw 'Evidence must contain every committed trace for its recorded owners and no pending or foreign traces'}
+            foreach($file in $saved){if([IO.File]::ReadAllText($file.FullName) -cne $expected[$file.Name]){throw 'Evidence lost a complete published trace or latency CSV'}}
+        }
     }finally{Remove-Item -LiteralPath $directory -Recurse -Force}
 }
 & {

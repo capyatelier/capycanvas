@@ -237,7 +237,7 @@ function Save-Evidence([string]$Log) {
     foreach ($folder in $folders) {
         foreach ($owner in $owners | Where-Object { $_ } | Select-Object -Unique) {
             Get-ChildItem -LiteralPath $folder -File | Where-Object {
-                $_.Name -match "^(ui-state|camera-state|presentation-state|search-state|windows|prediction|latency)-$owner(-|\.)"
+                $_.Extension -ne '.pending' -and $_.Name -match "^(ui-state|camera-state|presentation-state|search-state|windows|prediction|latency)-$owner(-|\.)"
             } | Copy-Item -Destination $evidence
         }
     }
