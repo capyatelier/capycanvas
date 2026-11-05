@@ -19,9 +19,9 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
   const title = documents.title;
   const switcher = document.querySelector('.workspace-switcher');
-  const recovery = document.querySelector('.workspace-recovery');
+  const status = document.querySelector('.workspace-status');
   retained.append(title, switcher, systemStatus.root);
-  if (recovery) workspace.append(recovery);
+  if (status) workspace.append(status);
   root.replaceChildren(); root.tabIndex = -1;
   customization.target(root, {kind:'header', id:null});
   const bank = element('div', 'header-editor chrome'); bank.id = 'header-editor'; bank.hidden = true;

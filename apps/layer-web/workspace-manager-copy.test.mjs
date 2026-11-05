@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {FakeElement as SharedElement} from './fake-dom.mjs';
 import {createWorkspaceManager} from './workspace-manager.js';
+import {createHeader} from './header.js';
 import {refreshCopy,refreshBindings} from './localization.js';
 
 class Element extends SharedElement {
@@ -71,6 +72,24 @@ test('inline workspace failure retains localized Retry and Save As controls and 
   h.setView({status:null});assert.equal(status.hidden,true,'A cleared shared status retires the inline notice');
 });
 
+
+test('the title bar keeps a failed workspace status and Retry in the visible workspace',t=>{
+  const h=harness(t,{failure:true}),doc=h.doc,status=doc.body.querySelector('.workspace-status'),retry=status.querySelectorAll('button')[0];
+  const element=(tag,cls)=>{const node=doc.createElement(tag);node.className=cls??'';node.style.setProperty=(key,value)=>{node.style[key]=value;};return node;};
+  const workspace=element('main'),root=element('header');workspace.id='workspace';root.id='header';doc.body.append(workspace);workspace.append(root);
+  const title=doc.body.querySelector('#document-title'),switcher=doc.body.querySelector('.workspace-switcher');root.append(title,switcher,status);
+  const canvasStatus=element('div');canvasStatus.id='canvas-status';workspace.append(canvasStatus);
+  const saved=Object.fromEntries(['MutationObserver','requestAnimationFrame'].map(key=>[key,globalThis[key]]));
+  Object.assign(globalThis,{MutationObserver:class{observe(){}},requestAnimationFrame:()=>0});t.after(()=>Object.assign(globalThis,saved));
+  doc.fonts={addEventListener(){}};doc.documentElement=doc.body;
+  const app={catalog:()=>({native_copy:{header:{}}}),bootstrap_view:()=>({common:{}}),header_view:()=>({model:{size:'medium',zones:[[],[],[]]},sizes:[{id:'medium',tile:40,icon:24,capy_icon:24,gap:4,height:48}],capy:{icon:'zen',tooltip:'Capy',label:'Capy',enabled:true},items:[],editing:false}),application_menus:()=>[]};
+  const state=()=>({theme:'light',commands:[],workspace:{zen_mode:false,layout:{canvas_info:{visible:true}}}}),button=(text,run,cls)=>{const node=element('button',cls);node.textContent=typeof text==='function'?text():text??'';node.click=run;return node;};
+  const systemStatus={root:element('div'),clock:element('span'),battery:element('span')};systemStatus.root.append(systemStatus.clock,systemStatus.battery);
+  createHeader({app,state,workspace,element,button,icon:()=>element('span'),paintPair:()=>null,place(){},dispatch(){},customization:{target(){}},systemStatus,updateZen(){},documents:{title},capy:element('button')});
+  assert.ok(doc.body.contains(status),'The failed-save status remains connected after title-bar construction');
+  for(let node=status;node;node=node.parentNode)assert.notEqual(node.hidden,true,'The status has no hidden ancestor');
+  assert.equal(status.querySelector('span').textContent,'en:write-failed');assert.equal(retry.hidden,false);retry.click();assert.deepEqual(h.inputs,[{type:'retry'}]);
+});
 
 test('workspace prompts gate invalid names and submit descriptions and stable choices without discarding native drafts',t=>{
   const h=harness(t);
