@@ -19,7 +19,6 @@ body { --secondary:color-mix(in srgb,var(--text) 55%,transparent); --popover: va
 body[data-theme="light"] .workspace-manager { --workspace-shade:#000; --workspace-list-bg:var(--card); --workspace-button-bg:color-mix(in srgb,black 7%,transparent); --workspace-button-hover:color-mix(in srgb,black 11%,transparent); }
 .workspace-manager[open] { display:flex; flex-direction:column; }
 body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
-.workspace-form::backdrop { background:#0003; }
 .workspace-manager .workspace-intro { flex:none; margin:18px 18px 22px; line-height:normal; }
 .workspace-list-actions { display:flex; flex:none; align-items:center; gap:8px; margin:20px 20px 12px; }
 .workspace-row-actions { display:flex; flex:none; align-items:center; gap:4px; margin:6px 20px 0; }
@@ -88,10 +87,7 @@ body .workspace-manager::backdrop { background:rgb(0 0 0 / 12%); }
 :where(:root:not([data-touch])) :is(.workspace-manager,.workspace-form) .suggested-action:hover:not(:disabled) { background:color-mix(in srgb,white 10%,var(--accent)); }
 .workspace-manager footer button:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,var(--workspace-shade) 20%,transparent); }
 :is(.workspace-manager,.workspace-form) .suggested-action:is(:active,[data-pressed]):not(:disabled) { background:color-mix(in srgb,black 10%,var(--accent)); }
-:where(:root:not([data-touch])) .workspace-form .destructive-action:hover:not(:disabled) { background:#c44; }
-.workspace-form .destructive-action:is(:active,[data-pressed]):not(:disabled) { background:#a22; }
 .workspace-form { width:420px; padding:18px; box-sizing:border-box; }
-.workspace-form .destructive-action { background:#b33; }
 .workspace-switcher, .header-menu-labels { display:flex; align-items:center; gap:2px; height:36px; padding:5px; border:0; border-radius:999px; background:var(--tabbar); text-shadow:none; }
 .workspace-switcher { flex:0 1 auto; min-width:0; max-width:min(420px,40vw); overflow:hidden; }
 .workspace-switcher-choices { flex:1 1 auto; display:flex; align-items:center; gap:2px; min-width:0; overflow-x:auto; scrollbar-width:none; }
@@ -558,8 +554,7 @@ button.layer-row { justify-content: center; gap: var(--panel-group-spacing); fon
 dialog { border: 0; border-radius: calc(16px * var(--squircle-scale)); background: var(--settings); color: var(--text); padding: 0; width: 800px; height: fit-content; max-width: none; max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; overflow:hidden; }
 dialog[open] { display:flex; flex-direction:column; }
 #settings { width: 1000px; height: 744px; }
-dialog::backdrop { background: #0008; }
-body[data-theme="light"] dialog::backdrop { background: #0002; }
+dialog::backdrop { background:var(--dialog-scrim); }
 .dialog-header { position: relative; display: grid; place-items: center; height: 46px; flex: none; }
 dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
 .dialog-close { display: grid; place-items: center; position: absolute; right: 11px; top: 11px; min-height: 24px; width: 24px; height: 24px; padding: 0; line-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); font-size: 20px; }
@@ -1862,17 +1857,29 @@ dialog.dialog-page::backdrop { background:transparent; backdrop-filter:none; }
 #phone-frame[data-contact="dragging"] :is(.phone-target,.phone-tool,.phone-bar) { cursor:grabbing; }
 
 .workspace-manager.dialog-page[data-toolbar=false] .workspace-panes { margin-bottom:28px; }
-dialog[role=alertdialog] { width:max-content; min-width:300px; max-width:372px; padding:32px 24px 24px; }
+dialog[role=alertdialog] { padding:32px 24px 24px; border-radius:18px; corner-shape:round; color:var(--widget-foreground); }
 dialog[role=alertdialog] > header { display:contents; }
-dialog[role=alertdialog] h2 { margin:0; font-size:inherit; line-height:20px; text-align:center; }
-dialog[role=alertdialog] p:not(.workspace-error) { margin:10px 0 21px; line-height:19px; text-align:center; }
+dialog[role=alertdialog] h2 { margin:0; font-size:inherit; line-height:normal; text-align:center; overflow-wrap:anywhere; }
+dialog[role=alertdialog] p:not(.workspace-error) { margin:10px 0 21px; line-height:normal; text-align:center; overflow-wrap:anywhere; }
 dialog.workspace-form[role=alertdialog]:not(.palette-form) p:not(.workspace-error) { margin-bottom:39px; }
 dialog[role=alertdialog] .workspace-error:empty { display:none; }
-dialog[role=alertdialog] footer { display:flex; gap:12px; margin:0; }
-dialog[role=alertdialog] .alert-responses-stacked { flex-direction:column-reverse; align-items:stretch; }
-dialog[role=alertdialog] footer > button { flex:1; min-height:44px; margin:0; padding:10px 20px; line-height:24px; }
-dialog[role=alertdialog] .destructive-action { color:red; background:#ffbaba; }
-body[data-theme=dark] dialog[role=alertdialog] .destructive-action { color:#ff938f; background:#4c2426; }
+dialog[role=alertdialog] footer { display:grid; grid-auto-flow:column; grid-auto-columns:1fr; flex:none; gap:12px; margin:0; }
+dialog[role=alertdialog] .alert-responses-stacked { display:flex; flex-direction:column-reverse; align-items:stretch; }
+dialog[role=alertdialog] footer > button { min-width:100px; min-height:44px; margin:0; padding:10px 20px; border-radius:12px; corner-shape:round; line-height:normal; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+dialog[role=alertdialog] footer > button:not(.suggested-action):not(.destructive-action) { background:var(--widget-fill); color:var(--widget-foreground); }
+:root[data-mouse] dialog[role=alertdialog] footer > button:not(.suggested-action):not(.destructive-action):hover:not(:disabled) { background:var(--widget-hover); }
+dialog[role=alertdialog] footer > button:not(.suggested-action):not(.destructive-action):active:not(:disabled) { background:var(--widget-active); }
+dialog[role=alertdialog] footer > .suggested-action { background:var(--accent); color:var(--accent-foreground); }
+:root[data-mouse] dialog[role=alertdialog] footer > .suggested-action:hover:not(:disabled) { background-image:linear-gradient(color-mix(in srgb,currentColor 10%,transparent),color-mix(in srgb,currentColor 10%,transparent)); }
+dialog[role=alertdialog] footer > .suggested-action:active:not(:disabled) { background-image:linear-gradient(var(--dialog-press-shade),var(--dialog-press-shade)); }
+dialog[role=alertdialog] footer > button:disabled { opacity:.5; }
+dialog[role=alertdialog] .destructive-action { color:var(--dialog-destructive); background:color-mix(in srgb,var(--dialog-destructive) 15%,transparent); }
+:root[data-mouse] dialog[role=alertdialog] .destructive-action:hover:not(:disabled) { background:color-mix(in srgb,var(--dialog-destructive) 20%,transparent); }
+dialog[role=alertdialog] .destructive-action:active:not(:disabled) { background:color-mix(in srgb,var(--dialog-destructive) 35%,transparent); }
+dialog[role=alertdialog].short { padding:24px 18px 18px; }
+dialog[role=alertdialog].short p:not(.workspace-error) { margin:6px 0 18px; }
+dialog.workspace-form[role=alertdialog].short:not(.palette-form) p:not(.workspace-error) { margin-bottom:32px; }
+dialog[role=alertdialog].short footer > button { min-width:0; min-height:40px; padding:8px 16px; }
 
 .dialog-header-slot { position:absolute; top:6px; right:6px; display:flex; gap:6px; }
 .dialog-header[data-header-style] h2 { font-weight:400; }

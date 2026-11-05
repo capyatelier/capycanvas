@@ -319,6 +319,21 @@ impl ControlPalette {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct DialogPalette {
+    pub scrim: crate::GlassColor,
+    pub press_shade: crate::GlassColor,
+    pub destructive_oklab: [f64; 3],
+}
+impl DialogPalette {
+    fn new(dark: bool) -> Self {
+        let native = if dark { &ADWAITA_DARK } else { &ADWAITA_LIGHT };
+        let mut destructive = HexColor(if dark { [0xc0,0x1c,0x28] } else { [0xe0,0x1b,0x24] }).oklab();
+        destructive[0] = if dark { destructive[0].max(0.85) } else { destructive[0].min(0.5) };
+        Self { scrim:line(SHADE,native.shade * 2.), press_shade:line(SHADE,0.2), destructive_oklab:destructive }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ThemePalette {
     pub bg: HexColor,
     pub panel: HexColor,
@@ -336,6 +351,7 @@ pub struct ThemePalette {
     pub button: HexColor,
     pub control_fill: crate::GlassColor,
     pub controls: ControlPalette,
+    pub dialogs: DialogPalette,
     pub accent: HexColor,
     pub accent_foreground: HexColor,
     pub relationship: HexColor,
@@ -405,6 +421,7 @@ impl Settings {
             button: HexColor([if dark { 255 } else { 0 }; 3]),
             control_fill: line(text.0.map(f64::from), if dark { 0.06 } else { 0.16 }),
             controls: ControlPalette::new(dark,accent),
+            dialogs: DialogPalette::new(dark),
             accent,
             accent_foreground: accent.contrasting(),
             relationship: accent.relationship(),
@@ -497,6 +514,16 @@ mod tests {
                 assert_eq!(controls.selection_backdrop,controls.fill);
                 assert!(controls.hover.0[3]>controls.fill.0[3]);assert!(controls.active.0[3]>controls.hover.0[3]);
             }
+        }
+    }
+    #[test]
+    fn alert_colors_preserve_native_shade_and_destructive_oklab_chroma() {
+        for (theme, lightness, alpha, red) in [(Theme::Light,0.5,0.14,[0xe0,0x1b,0x24]),(Theme::Dark,0.85,0.5,[0xc0,0x1c,0x28])] {
+            let palette = Settings::default().palette(theme,Platform::Gtk,None).dialogs;
+            let [_,a,b] = HexColor(red).oklab();
+            assert_eq!(palette.destructive_oklab,[lightness,a,b]);
+            assert_eq!(palette.scrim,line(SHADE,alpha));
+            assert_eq!(palette.press_shade,line(SHADE,0.2));
         }
     }
 

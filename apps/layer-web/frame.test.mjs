@@ -17,11 +17,12 @@ test('glass CSS preserves the shared straight RGBA channels',()=>{
   for(const color of [[0.9426783323287964,0.9426783323287964,0.9426783323287964,0.9399999976158142],
     [0.2571895718574524,0.2571895718574524,0.2571895718574524,0.9599999785423279],
     [0.2,0.4,0.6,0.001]]){
-    context.applyTheme('light',{glass:{panel:color},control_fill:zero,controls:{fill:color},lines:{settings,panel:{border:zero},sidebar_border:zero}});
+    context.applyTheme('light',{glass:{panel:color},control_fill:zero,controls:{fill:color},dialogs:{scrim:color,press_shade:zero,destructive_oklab:[.5,.1,.2]},lines:{settings,panel:{border:zero},sidebar_border:zero}});
     const values=styles.get('--glass-panel').match(/[-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?/gi).map(Number);
     const actual=[...values.slice(0,3).map(value=>value/255),values[3]];
     actual.forEach((value,index)=>assert.ok(Math.abs(value-color[index])<1e-7,`${index}: ${value} retains ${color[index]}`));
     assert.equal(styles.get('--widget-fill'),styles.get('--glass-panel'));
+    assert.equal(styles.get('--dialog-scrim'),styles.get('--glass-panel'));assert.equal(styles.get('--dialog-destructive'),'oklab(0.5 0.1 0.2)');
   }
 });
 
@@ -597,7 +598,7 @@ test('dialog presentation retains controls and ignores a retired native close',a
   const focus=element('button');doc.body.append(focus);focus.isConnected=true;focus.focus();
   let page=true,clears=0,cancels=0,backs=0,sourceCancels=0,subpage=false,currentHeader=header,currentPrimary=primary,clearedNode=null;
   const app={dialog_presentation:(_role,_w,_h,visible)=>page?{kind:'page',bounds:visible}:{kind:'floating'},floating_dialog_width:(_window,natural)=>natural,
-    alert_responses_stacked:(widths,gap,available)=>Math.max(0,...widths)*widths.length+gap*Math.max(0,widths.length-1)>available,
+    alert_dialog_short:()=>false,alert_dialog_layout:()=>({width:300,short:false,stacked:false}),
     dialog_header:(intent,back)=>({start:back?'back':intent.primary==='close'?null:'cancel',end:intent.primary==='close'?'close':'primary'}),
     dialog_escape:(back,focused,text)=>focused&&text?'clear_search':back?'back':'cancel'};
   const host=createDialogHost({app,dialog,header:()=>currentHeader,cancel,primary:()=>currentPrimary,search:()=>doc.activeElement===shortcutSearch?shortcutSearch:search,icon,copy:{cancel:'Cancel',back:'Back',done:'Done',close:'Close'},
@@ -662,25 +663,30 @@ test('dialog presentation retains controls and ignores a retired native close',a
   host.dispose();assert.equal(events.size,0);assert.equal(viewportEvents.size,0);
 });
 
-test('alert response widths use shared homogeneous stacking through resize and relabel',async t=>{
+test('alert layout forwards intrinsic content and font measurements and applies the shared projection',async t=>{
   const {createDialogHost,createProgressDialog}=await import('./dialog-host.js');
   const {doc,element,button,icon}=colorDialogDom(t),calls=[],changes=[],frames=[];
   globalThis.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
   globalThis.MutationObserver=class{constructor(callback){this.callback=callback;changes.push(this);}observe(node){this.node=node;}disconnect(){this.disconnected=true;}};
   const dialog=element('dialog'),header=element('header'),footer=element('footer'),cancel=element('button'),primary=element('button');
-  dialog.append(header,footer);footer.append(cancel,primary);doc.body.append(dialog);footer.clientWidth=220;
+  const title=element('h2','','Confirm');title.getBoundingClientRect=()=>({width:150});header.append(title);
+  dialog.append(header,footer);footer.append(cancel,primary);doc.body.append(dialog);
+  dialog.getBoundingClientRect=()=>({width:dialog.style.width==='min-content'?96:420});
   let widths=[70,118];cancel.getBoundingClientRect=()=>({width:widths[0]});primary.getBoundingClientRect=()=>({width:widths[1]});
-  globalThis.getComputedStyle=node=>({boxSizing:'border-box',paddingLeft:node===footer?'8px':'0px',paddingRight:node===footer?'8px':'0px',columnGap:node===footer?'12px':'0px'});
+  let fontPixels=44/3,projection={width:300,short:false,stacked:true};
+  globalThis.getComputedStyle=node=>({boxSizing:'border-box',fontSize:`${fontPixels}px`,paddingLeft:node===dialog?'24px':'0px',paddingRight:node===dialog?'24px':'0px'});
   const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:intent=>({start:'cancel',end:intent.primary?'primary':null}),dialog_escape:()=> 'cancel',bootstrap_view:()=>({common:{cancel:'Cancel'}}),
-    alert_responses_stacked:(measured,gap,available)=>{calls.push({widths:measured,gap,available});return Math.max(0,...measured)*measured.length+gap*Math.max(0,measured.length-1)>available;}};
+    alert_dialog_short:()=>projection.short,alert_dialog_layout:(viewport,metrics,font,preferWide)=>{calls.push({viewport,metrics,font,preferWide});return projection;}};
   const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel',back:'Back',done:'Done'},onCancel:()=>host.hide()});
   host.present({role:'alert',modal:true,primary:'action'});
-  assert.deepEqual(calls.at(-1),{widths:[70,118],gap:12,available:204});assert.equal(footer.classList.contains('alert-responses-stacked'),true);
-  footer.clientWidth=280;host.layout();assert.deepEqual(calls.at(-1),{widths:[70,118],gap:12,available:264});assert.equal(footer.classList.contains('alert-responses-stacked'),false);
-  widths=[70,140];changes[0].callback();frames.shift()();assert.deepEqual(calls.at(-1),{widths:[70,140],gap:12,available:264});assert.equal(footer.classList.contains('alert-responses-stacked'),true);
+  assert.equal(header.dataset.headerStyle,undefined,'Alert headings keep their native bold label style');
+  assert.deepEqual(calls.at(-1),{viewport:[1200,900],metrics:{minimum:96,natural:420,heading:198,responses:[70,118]},font:44/3,preferWide:false});assert.equal(dialog.style.width,'300px');assert.equal(footer.classList.contains('alert-responses-stacked'),true);
+  projection={width:352,short:false,stacked:false};host.layout();assert.equal(dialog.style.width,'352px');assert.equal(footer.classList.contains('alert-responses-stacked'),false);
+  widths=[70,140];changes[0].callback();frames.shift()();assert.deepEqual(calls.at(-1).metrics.responses,[70,140]);assert.equal(changes[0].node,dialog,'heading and body copy changes also invalidate natural sizing');
+  fontPixels=64/3;projection={width:300,short:true,stacked:false};host.layout();assert.equal(calls.at(-1).font,64/3);assert.equal(dialog.classList.contains('short'),true);
   host.hide();host.dispose();assert.equal(changes[0].disconnected,true);
   const progress=createProgressDialog({app,element,button,icon,intent:{role:'alert',modal:true,primary:null},title:'Preparing',body:'Working',onCancel:()=>{}});
-  assert.deepEqual(calls.at(-1).widths,[0]);progress.remove();
+  assert.deepEqual(calls.at(-1).metrics.responses,[0]);progress.remove();
 });
 
 

@@ -184,9 +184,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
           formChoice.update({choices:form.choices.map(choice=>({value:choice.id,label:()=>view?.prompt?.choices.find(item=>item.id===choice.id)?.label??choice.label})),value:form.selected??form.choices[0].id});body.append(label,formChoice);
         }
         formError = element("p", "preferences-error"); const footer = kit.footer();
-        formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, "suggested-action");
+        formSubmit = button(form.confirm, () => {if(formKey!==key||!view?.prompt||!validatePrompt())return;send({ type: "submit", name: formName?.value || "",description:formDescription?.value??null,choice:formChoice?.value??null });}, form.destructive?'destructive-action':'suggested-action');
         formName?.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();if(validatePrompt())formSubmit.click();}});
-        if (form.destructive) formSubmit.classList.add("destructive-action");
         const formCancel=localizedButton(()=>view?.prompt?.cancel??common.cancel,()=>send({type:'cancel'}));
         footer.append(formCancel, formSubmit);body.append(formError);formDialog.append(footer);
         formHost=createDialogHost({app,dialog:formDialog,header:formHeader,cancel:formCancel,primary:formSubmit,icon,copy:common,

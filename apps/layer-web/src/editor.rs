@@ -77,8 +77,10 @@ impl WebApp {
     pub fn dialog_escape(&self, subpage: bool, search_focused: bool, search_has_text: bool) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::dialog_escape(subpage, search_focused, search_has_text))
     }
-    pub fn alert_responses_stacked(&self, widths: JsValue, gap: f32, available: f32) -> Result<bool, JsValue> {
-        Ok(layer_ui::alert_responses_stacked(&serde_wasm_bindgen::from_value::<Vec<f32>>(widths).map_err(js)?,gap,available))
+    pub fn alert_dialog_short(&self, height: f32) -> bool { layer_ui::alert_dialog_short(height) }
+    pub fn alert_dialog_layout(&self, viewport: JsValue, metrics: JsValue, font_pixels: f32, prefer_wide: bool) -> Result<JsValue, JsValue> {
+        let text_scale = font_pixels / (layer_ui::UI_TEXT_PT as f32 * 4. / 3.);
+        serialize(&layer_ui::alert_dialog_layout(serde_wasm_bindgen::from_value(viewport).map_err(js)?, &serde_wasm_bindgen::from_value(metrics).map_err(js)?, text_scale, prefer_wide))
     }
     pub fn dialog_presentation(&self, role: JsValue, width: f32, height: f32, visible: JsValue) -> Result<JsValue, JsValue> {
         let role = serde_wasm_bindgen::from_value(role).map_err(js)?;

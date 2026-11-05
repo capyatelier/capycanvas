@@ -5,9 +5,28 @@ const presentedDialogs=new Map();
 export const hasOpenDialog=()=>presentedDialogs.size>0;
 export function hasModalDialog(){for(const intent of presentedDialogs.values())if(intent.modal)return true;return false;}
 
+function measureAlert(dialog,header,responses,buttons) {
+  const title=header.querySelector('h2'),rootStyle=dialog.style.cssText,titleStyle=title?.style.cssText,stacked=responses.classList.contains('alert-responses-stacked'),buttonStyles=buttons.map(node=>node.style.cssText);
+  try{
+    dialog.style.cssText+=';width:max-content;min-width:0;max-width:none;height:auto;max-height:none;';
+    responses.classList.remove('alert-responses-stacked');
+    const widths=buttons.map((node,index)=>{node.style.cssText+=';flex:none;width:max-content;max-width:none;';const width=Math.ceil(node.getBoundingClientRect().width);node.style.cssText=buttonStyles[index];return width;});
+    const natural=Math.ceil(dialog.getBoundingClientRect().width),style=getComputedStyle(dialog);
+    if(title)title.style.cssText+=';width:max-content;max-width:none;';
+    const heading=title?.textContent?Math.ceil(title.getBoundingClientRect().width)+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0):0;
+    if(title)title.style.cssText=titleStyle;
+    responses.classList.add('alert-responses-stacked');
+    buttons.forEach(node=>{node.style.cssText+=';flex:none;width:0;max-width:none;';});dialog.style.width='min-content';
+    return{minimum:Math.ceil(dialog.getBoundingClientRect().width),natural,heading,responses:widths};
+  }finally{
+    buttons.forEach((node,index)=>{node.style.cssText=buttonStyles[index];});
+    responses.classList.toggle('alert-responses-stacked',stacked);if(title)title.style.cssText=titleStyle;dialog.style.cssText=rootStyle;
+  }
+}
+
 export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,primary:sourcePrimary,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
   let primary=typeof sourcePrimary==='function'?sourcePrimary():sourcePrimary;
-  let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,responseChanges;
+  let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,contentChanges;
   const slots=new Map([cancel,primary].filter(Boolean).map(node=>[node,{parent:node.parentNode,next:node.nextSibling}]));
   const footer=primary?.closest('footer');
   dialog.dataset.dialogPart='page';
@@ -37,9 +56,10 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     const v=window.visualViewport,visible={x:v?.offsetLeft??0,y:v?.offsetTop??0,width:v?.width??innerWidth,height:v?.height??innerHeight};
     const positioned=placement?.(visible),presentation=positioned?{kind:'floating'}:app.dialog_presentation(intent.role,innerWidth,innerHeight,visible),page=presentation.kind==='page'||presentation.kind==='canvas_panel';
     let bounds=positioned??presentation.bounds;
+    dialog.classList.toggle('short',intent.role==='alert'&&app.alert_dialog_short(visible.height));
     const actions=app.dialog_header(intent,subpage()),parts=page||intent.role!=='alert';
     if(parts)row.dataset.dialogPart='header';else delete row.dataset.dialogPart;
-    row.dataset.headerStyle=parts?headerStyle:'flat';
+    if(parts)row.dataset.headerStyle=headerStyle;else delete row.dataset.headerStyle;
     if(page&&actions.start==='cancel'&&!close){close=document.createElement('button');close.type='button';close.append(icon('window-close'));bindCopy(close,cancelLabel,'ariaLabel');close.addEventListener('click',onCancel);resize.observe(close);}
     if(close&&close.parentNode!==row)row.append(close);
     if(actions.start==='back'&&!back){back=document.createElement('button');back.type='button';back.className='dialog-back';back.append(icon('go-previous'));bindCopy(back,()=>copy.back,'ariaLabel');back.addEventListener('click',onBack);resize.observe(back);}
@@ -75,16 +95,15 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
         ['paddingLeft','paddingRight','borderLeftWidth','borderRightWidth'].reduce((sum,key)=>sum+(parseFloat(style[key])||0),0);
       bounds={width:Math.max(0,app.floating_dialog_width(visible.width,dialog.getBoundingClientRect().width)-inset)};
     }
+    if(intent.role==='alert'){
+      const responses=(primary??cancel).parentElement;
+      if(!contentChanges){contentChanges=new MutationObserver(queueLayout);contentChanges.observe(dialog,{childList:true,subtree:true,characterData:true});resize.observe(responses);}
+      const buttons=[...responses.children].filter(node=>node.tagName==='BUTTON'&&!node.hidden);
+      const layout=app.alert_dialog_layout([visible.width,visible.height],measureAlert(dialog,row,responses,buttons),parseFloat(getComputedStyle(dialog).fontSize),false);
+      bounds={width:layout.width};dialog.classList.toggle('short',layout.short);responses.classList.toggle('alert-responses-stacked',layout.stacked);
+    }
     for(const [name,key]of Object.entries({left:'x',top:'y',width:'width',height:'height'}))dialog.style[name]=bounds?.[key]!=null?`${bounds[key]}px`:'';
     if(positioned)dialog.style.maxHeight=positioned.maxHeight!=null?`${positioned.maxHeight}px`:'';
-    if(intent.role==='alert'){
-      const responses=(primary??cancel).parentElement,style=getComputedStyle(responses);
-      if(!responseChanges){responseChanges=new MutationObserver(queueLayout);responseChanges.observe(responses,{childList:true,subtree:true,characterData:true});resize.observe(responses);}
-      const buttons=[...responses.children].filter(node=>node.tagName==='BUTTON'&&!node.hidden);
-      const widths=buttons.map(node=>{const css=node.style.cssText;node.style.cssText+=';flex:none;width:max-content;max-width:none;';const width=node.getBoundingClientRect().width;node.style.cssText=css;return width;});
-      const available=responses.clientWidth-(parseFloat(style.paddingLeft)||0)-(parseFloat(style.paddingRight)||0);
-      responses.classList.toggle('alert-responses-stacked',app.alert_responses_stacked(widths,parseFloat(style.columnGap)||0,available));
-    }
   }
   function queueLayout(){if(!resizeFrame)resizeFrame=requestAnimationFrame(()=>{resizeFrame=0;layout();});}
   window.addEventListener('resize',layout);window.visualViewport?.addEventListener('resize',layout);window.visualViewport?.addEventListener('scroll',layout);
@@ -102,7 +121,7 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     },
     layout,
     dismiss(){if(intent){if(onDismiss){onDismiss();return;}if(app.dialog_header(intent,subpage()).start==='back')onBack();else onCancel();}},
-    dispose(){presentedDialogs.delete(dialog);if(resizeFrame)cancelAnimationFrame(resizeFrame);resize.disconnect();responseChanges?.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);dialog.removeEventListener('pointerdown',down);dialog.removeEventListener('pointercancel',cancelContact);done?.remove();back?.remove();close?.remove();},
+    dispose(){presentedDialogs.delete(dialog);if(resizeFrame)cancelAnimationFrame(resizeFrame);resize.disconnect();contentChanges?.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);dialog.removeEventListener('pointerdown',down);dialog.removeEventListener('pointercancel',cancelContact);done?.remove();back?.remove();close?.remove();},
   };
 }
 

@@ -153,6 +153,9 @@ function applyTheme(theme, palette) {
   }
   if (palette) {
     for(const [name,color]of Object.entries(palette.controls))document.body.style.setProperty(`--widget-${name.replaceAll('_','-')}`,rgba(color));
+    document.body.style.setProperty('--dialog-scrim',rgba(palette.dialogs.scrim));
+    document.body.style.setProperty('--dialog-press-shade',rgba(palette.dialogs.press_shade));
+    document.body.style.setProperty('--dialog-destructive',`oklab(${palette.dialogs.destructive_oklab.join(' ')})`);
     document.body.style.setProperty("--control-fill", rgba(palette.control_fill));
     const { settings, panel, sidebar_border } = palette.lines;
     for (const [name, color] of [["card-shade", settings.card_shade], ["sidebar-edge", sidebar_border], ["menu-divider", panel.border]]) {

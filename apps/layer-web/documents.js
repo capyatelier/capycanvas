@@ -239,7 +239,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         const spec=()=>app.editor_models(innerWidth,innerHeight).document_options;
         const decision=await dialog(()=>current()?.title??r.title,(form,finish)=>{
           form.append(element("p","",()=>spec().unsaved_description));const footer=element("footer"),cancelButton=cancel(footer,finish),save=button(()=>common.save,()=>finish("save"),"suggested-action");
-          footer.append(button(()=>spec().discard_label,()=>finish("discard")),save);form.append(footer);return {cancel:cancelButton,primary:save};
+          footer.append(button(()=>spec().discard_label,()=>finish("discard"),'destructive-action'),save);form.append(footer);return {cancel:cancelButton,primary:save};
         },spec().dialog);
         applyChange(app.respond_document(id,decision??"cancel"));return;
       }
@@ -478,7 +478,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   async function openError(name){
     await dialog(()=>bootstrap.cannot_open_file,(form,finish)=>{
       form.parentNode.id='file-launch-error';form.append(element('p','',()=>app.file_open_failure(name)));
-      const ok=button(()=>bootstrap.ok,()=>finish(null));form.append(ok);return {cancel:ok,primary:ok};
+      const ok=button(()=>bootstrap.ok,()=>finish(null)),footer=element('footer');footer.append(ok);form.append(footer);return {cancel:ok,primary:ok};
     },bootstrap.file_error_dialog);
   }
   async function openBatch(files,request=null){

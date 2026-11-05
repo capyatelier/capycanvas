@@ -81,6 +81,40 @@ pub fn floating_dialog_width(window: f32, natural: f32) -> f32 {
     natural.max(0.).min((window - 2. * padding).max(0.))
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub struct AlertMetrics {
+    pub minimum: f32,
+    pub natural: f32,
+    pub heading: f32,
+    pub responses: Vec<f32>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct AlertLayout { pub width: f32, pub short: bool, pub stacked: bool }
+pub fn alert_dialog_short(height: f32) -> bool { height <= 360. }
+
+pub fn alert_dialog_layout(viewport: [f32; 2], metrics: &AlertMetrics, text_scale: f32, prefer_wide: bool) -> AlertLayout {
+    let short = alert_dialog_short(viewport[1]);
+    let padding = if short { 36. } else { 48. };
+    let minimum = metrics.minimum.max(300.);
+    let preferred = (300. * text_scale).floor();
+    let regular_maximum = (372. * text_scale).floor();
+    let wide_maximum = (600. * text_scale).floor();
+    let button = metrics.responses.iter().copied().fold(0., f32::max);
+    let wide = button * metrics.responses.len() as f32 + 12. * metrics.responses.len().saturating_sub(1) as f32 + padding;
+    let maximum = if metrics.responses.len() > 1 && wide > minimum {
+        if prefer_wide || short {
+            if wide > wide_maximum { if short { wide } else { regular_maximum } } else { wide }
+        } else {
+            let narrow = (button + padding).max(preferred);
+            let heading = if metrics.heading > wide { wide } else { metrics.heading.max(narrow) };
+            heading.min(regular_maximum)
+        }
+    } else { regular_maximum }.max(minimum);
+    let natural = metrics.natural.clamp(minimum, maximum);
+    let width = floating_dialog_width(viewport[0], natural).max(minimum);
+    AlertLayout { width, short, stacked: !short && alert_responses_stacked(&metrics.responses, 12., width - padding) }
+}
+
 pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
     minimum.iter().all(|width| *width > 0.) && width >= minimum.iter().sum::<f32>() + gap
 }
@@ -144,6 +178,40 @@ mod tests {
         }
         assert_eq!(floating_dialog_width(801.,1000.),721.);
         assert_eq!(floating_dialog_width(20.,440.),0.);
+    }
+    #[test]
+    fn native_alert_sizing_preserves_response_caps_and_the_absolute_minimum() {
+        let mut metrics = AlertMetrics { minimum: 48., natural: 800., heading: 200., responses: vec![100.,144.,100.] };
+        assert_eq!(alert_dialog_layout([891.,412.], &metrics, 1., false), AlertLayout { width:300., short:false, stacked:true });
+        metrics.responses = vec![100.,100.];
+        for (viewport, width) in [([891.,412.],372.),([412.,891.],352.),([280.,560.],300.),([320.,320.],300.)] {
+            assert_eq!(alert_dialog_layout(viewport,&metrics,1.,false).width,width);
+        }
+        metrics.responses = vec![140.,140.];
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,1.,false).width,300.);
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,1.,true).width,340.);
+        assert_eq!(alert_dialog_layout([891.,360.],&metrics,1.,false),AlertLayout {width:328.,short:true,stacked:false});
+        assert!(!alert_dialog_layout([891.,361.],&metrics,1.,false).short);
+        metrics.responses = vec![320.,320.];
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,1.,true).width,372.);
+        assert_eq!(alert_dialog_layout([891.,360.],&metrics,1.,false).width,688.);
+        metrics.minimum = 400.;metrics.responses.clear();
+        assert_eq!(alert_dialog_layout([280.,560.],&metrics,1.,false).width,400.);
+        metrics.minimum = 48.;metrics.natural = 48.;
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,1.,false).width,300.);
+    }
+    #[test]
+    fn alert_sp_limits_scale_while_the_pixel_minimum_and_content_natural_remain_authoritative() {
+        let mut metrics = AlertMetrics { minimum:48., natural:800., heading:200., responses:vec![100.,100.] };
+        let scale = 16. / 11.;
+        assert_eq!(alert_dialog_layout([320.,320.],&metrics,scale,false),AlertLayout {width:300.,short:true,stacked:false});
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,scale,false).width,541.);
+        metrics.responses = vec![140.,140.];
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,scale,false).width,436.);
+        metrics.heading = 350.;
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,scale,false).width,340.);
+        metrics.heading = 200.;metrics.responses = vec![320.,320.];metrics.natural = 310.;
+        assert_eq!(alert_dialog_layout([891.,412.],&metrics,1.,false).width,310.);
     }
     #[test]
     fn canvas_intents_preserve_native_modality_and_progress_is_a_cancel_only_alert() {
