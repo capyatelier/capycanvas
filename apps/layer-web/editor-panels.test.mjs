@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import test from 'node:test';
+import {colorDialogDom} from './color-dialog-fixture.mjs';
+import {createPageKit} from './page-kit.js';
+import {bindCopy} from './localization.js';
 
 const source=readFileSync(new URL('editor-panels.js',import.meta.url),'utf8');
 
@@ -131,4 +134,76 @@ test('Unmeasured and retired Navigator controls cannot publish stale extents',()
   h.deliver([a,220,164],[b,140,100]);
   assert.deepEqual(h.sizes,[[2,140,100,2]]);
   assert.equal(a.hole.style.width,undefined);
+});
+
+function shortcutDom(t) {
+  const dom=colorDialogDom(t),kit=createPageKit(dom),actions=[];
+  const sheet=()=>{const content=kit.body();t.after(()=>content.dispose());return {title:dom.element('h2'),body:content.content,content};};
+  const context={...dom,bindCopy,kit,group:kit.group,editor:sheet(),modifierSheet:sheet(),details:sheet(),
+    common:{cancel:'Cancel'},copy:{add:'Add',reassign:'Reassign',open:'Open',press_hold_key:'Hold a key',no_differences:'No differences',defaults_help:'Defaults'},
+    app:{native_caption:()=>''},send:action=>actions.push(action),present(){},focusRecording(){},
+    keymapChoice:{update(){}},keymapOutdated:{}};
+  const detailsIntro=kit.fields();context.details.content.root.prepend(detailsIntro);context.detailsIntro=detailsIntro;
+  const code=readFileSync(new URL('shortcut-page.js',import.meta.url),'utf8');
+  for(const [start,end] of [['  const flatButton =','  const navRow ='],['  function recordingRow(', '  function sheet('],['  function refreshEditor(', '  function focusRecording('],['  function refreshModifierSheet(', '  function refreshPicker(']])
+    runInNewContext(code.slice(code.indexOf(start),code.indexOf(end)),context);
+  const start=code.indexOf('  function refreshKeymap('),end=code.indexOf('    const preview = keymap.import',start);
+  runInNewContext(code.slice(start,end)+'\n}',context);
+  return {...context,context,actions};
+}
+
+test('Preferences Color exposes a labelled library card and its real manage action',t=>{
+  const h=colorDialogDom(t),kit=createPageKit(h),container=h.element('div'),requests=[];
+  const code=readFileSync(new URL('preferences.js',import.meta.url),'utf8');
+  const start=code.indexOf('      if(page.id==="color"){'),end=code.indexOf('\n    }\n  }\n  return function refresh',start);
+  const profileCopy={manage:'Manage',library_title:'Color profiles',menu_help:'Installed profiles'};
+  const app={};
+  runInNewContext(code.slice(start,end),{...h,page:{id:'color'},container,profileCopy,app,dropdown(){},settingsGroup:kit.group,preferenceRow:kit.row,chooseProfileLibrary:request=>requests.push(request)});
+  const section=container.children[0],row=section.children[0].children[0],manage=row.children[1],label=row.children[0].children[0];
+  assert.equal(label.textContent,'Color profiles');assert.equal(label.htmlFor,manage.id);
+  assert.equal(row.children[0].children[1].textContent,'Installed profiles');
+  assert.equal(manage.textContent,'Manage');assert.equal(manage.id,'color-profile-library');
+  let forwarded=true;manage.click();row.dispatchEvent({type:'click',target:label,preventDefault(){forwarded=false;}});
+  assert.equal(forwarded,false,'The row consumes the label default instead of opening the library twice');
+  assert.equal(requests.length,2);assert.ok(requests.every(request=>request.manage&&request.app===app));
+});
+
+test('Shortcut capture warning and modifier heading consume their projected icon and label',t=>{
+  const h=shortcutDom(t),capture={id:'modifier',label:'Record Alt',shortcut:'Alt',notice:'Already assigned',conflict:true,chord:{},error:null};
+  h.context.refreshModifierSheet({capture,capture_icon:'warning',dialog:{}});
+  assert.equal(h.modifierSheet.title.textContent,'Record Alt');
+  const row=h.modifierSheet.body.children[1].children[0].children[0],glyph=row.children[0];
+  assert.equal(glyph.dataset.asset,'warning');assert.equal(glyph.classList.contains('warning'),true);
+  assert.equal(row.children[1].children[1].textContent,'Already assigned');
+  row.children[3].click();assert.deepEqual(JSON.parse(JSON.stringify(h.actions)),[{type:'confirm_shortcut',replace:true}]);
+  capture.label='Record Shift';capture.shortcut='Shift';
+  h.context.refreshModifierSheet({capture,capture_icon:'keyboard',dialog:{}});
+  assert.equal(h.modifierSheet.title.textContent,'Record Shift');
+  assert.equal(h.modifierSheet.body.children[1].children[0].children[0].children[0].dataset.asset,'keyboard');
+});
+
+test('Shortcut editor omits empty description and error without losing its binding card',t=>{
+  const h=shortcutDom(t),spec={id:'undo',label:'Undo',description:'',defaults:[],overlaps:[],bindings:['Ctrl+Z'],gestures:[],modified:false,can_add:false,dialog:{}};
+  h.context.refreshEditor({shortcut_editor:spec,capture:null,error:null});
+  assert.deepEqual(h.editor.body.children.slice(0,2).map(node=>node.hidden),[true,true]);
+  assert.equal(h.editor.body.children[2].children[0].children[0].children[0].textContent,'Ctrl+Z');
+  spec.description='Undo the last stroke';
+  h.context.refreshEditor({shortcut_editor:spec,capture:null,error:'Conflict'});
+  assert.deepEqual(h.editor.body.children.slice(0,2).map(node=>node.hidden),[false,false]);
+  assert.equal(h.editor.body.children[1].textContent,'Conflict');
+});
+
+test('Keymap details fixes its intro above the scrolling difference card in one outer body',t=>{
+  const h=shortcutDom(t),keymap={title:'Default keys',selected:'default',presets:[{id:'default',title:'Default'}],outdated:false,source:'Built in',links:['https://example.test/key_map.html'],differences:[{trigger:'Ctrl+Z',note:'Undo'}],details:true,dialog:{}};
+  h.context.refreshKeymap({keymap});
+  const [source,links]=h.detailsIntro.children,card=h.details.body.children[0],outer=h.details.content.root,viewport=h.details.body.parentNode;
+  assert.equal(outer.className,'preference-body');assert.equal(viewport.className,'preference-viewport');
+  assert.equal(h.detailsIntro.parentNode,outer);assert.equal(outer.children[0],h.detailsIntro);
+  assert.equal(viewport.parentNode,outer);assert.equal(viewport.contains(source),false);assert.equal(viewport.contains(links),false);
+  assert.equal(source.textContent,'Built in');assert.equal(source.parentNode,h.detailsIntro);
+  assert.equal(links.children[0].href,keymap.links[0]);assert.equal(links.parentNode,h.detailsIntro);
+  assert.equal(h.details.body.children.length,1);assert.equal(card.parentNode,h.details.body);assert.equal(card.children[0].children[0].textContent,'Ctrl+ZUndo');
+  assert.equal(outer.descendants().filter(node=>node.className==='preference-body').length,0);
+  keymap.source='';keymap.links=[];h.context.refreshKeymap({keymap});
+  assert.equal(h.detailsIntro.children[0].hidden,true);assert.equal(h.detailsIntro.children[1].hidden,true);
 });

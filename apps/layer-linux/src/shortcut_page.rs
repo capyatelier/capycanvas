@@ -445,12 +445,12 @@ fn refresh_recording(row: &adw::ActionRow, capture: &ShortcutCapture, localizati
             button.set_sensitive(capture.chord.is_some() && capture.error.is_none());
         },
         "shortcut-recording-icon" => if let Some(icon) = widget.downcast_ref::<gtk::Image>() {
-            icon.set_icon_name(Some(match (capture.existing, capture.notice.is_empty()) {
-                (true, _) => "dialog-information-symbolic",
-                (false, true) => "input-keyboard-symbolic",
-                (false, false) => "dialog-warning-symbolic",
+            icon.set_icon_name(Some(match capture.icon() {
+                ShortcutCaptureIcon::Information => "dialog-information-symbolic",
+                ShortcutCaptureIcon::Keyboard => "input-keyboard-symbolic",
+                ShortcutCaptureIcon::Warning => "dialog-warning-symbolic",
             }));
-            if !capture.existing && !capture.notice.is_empty() { icon.add_css_class("warning"); }
+            if capture.icon() == ShortcutCaptureIcon::Warning { icon.add_css_class("warning"); }
             else { icon.remove_css_class("warning"); }
         },
         _ => {},

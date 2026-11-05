@@ -723,6 +723,7 @@ pub struct PreferencesView {
     pub shortcuts: Vec<ShortcutRow>,
     pub keymap: crate::keymaps::KeymapView,
     pub capture: Option<ShortcutCapture>,
+    pub capture_icon: Option<crate::ShortcutCaptureIcon>,
     pub error: Option<String>,
     pub empty: bool,
 }
@@ -1801,6 +1802,20 @@ impl PreferencesState {
             SettingsPage::Input => if let Some(editor) = &pen_button_editor { navigation.title = Some(editor.label.clone()); navigation.back = Some(PreferenceAction::ClosePenButton); },
             _ => {}
         }
+        let capture = self.capture.clone().map(|mut c| {
+            if self.error.is_some() {
+                c.error = self.error.clone();
+            }
+            c.notice = c.error.clone().unwrap_or_else(|| {
+                if c.existing {
+                    return localizer.text(MessageId::SETTINGS_ALREADY_A_MODIFIER_KEY).to_string();
+                }
+                c.conflict.as_ref().map_or_else(String::new, |label| {
+                    { let mut args = crate::localization::FluentArgs::new(); args.set("action", label.as_str()); localizer.format(MessageId::SETTINGS_USED_BY, &args) }
+                })
+            });
+            c
+        });
         PreferencesView {
             dialog: crate::DialogIntent::editor(Some(crate::DialogPrimary::Close)),
             navigation,
@@ -1829,20 +1844,8 @@ impl PreferencesState {
             shortcut_page,
             keymap: crate::keymaps::view(settings, self.keymap_import.as_ref(), self.keymap_details),
             shortcuts,
-            capture: self.capture.clone().map(|mut c| {
-                if self.error.is_some() {
-                    c.error = self.error.clone();
-                }
-                c.notice = c.error.clone().unwrap_or_else(|| {
-                    if c.existing {
-                        return localizer.text(MessageId::SETTINGS_ALREADY_A_MODIFIER_KEY).to_string();
-                    }
-                    c.conflict.as_ref().map_or_else(String::new, |label| {
-                        { let mut args = crate::localization::FluentArgs::new(); args.set("action", label.as_str()); localizer.format(MessageId::SETTINGS_USED_BY, &args) }
-                    })
-                });
-                c
-            }),
+            capture_icon: capture.as_ref().map(ShortcutCapture::icon),
+            capture,
             error: self.error.clone(),
         }
     }
@@ -2965,6 +2968,7 @@ mod localization_tests {
                 assert_eq!(capture.label, CommandId::Redo.localized_label(&l).to_string());
                 assert_eq!(capture.conflict.as_ref().unwrap(), &CommandId::Undo.localized_label(&l).to_string());
                 let view = state.view(&settings, platform, true, None, &l);
+                assert_eq!(view.capture_icon, Some(crate::ShortcutCaptureIcon::Warning));
                 assert_eq!(view.capture.unwrap().notice, state.error.clone().unwrap());
                 assert_eq!(settings, before);
             }
@@ -3039,7 +3043,9 @@ mod localization_tests {
         assert!(capture.existing);
         assert_eq!(capture.chord.as_ref(), Some(&key));
         assert_eq!(capture.label, japanese.text(MessageId::SETTINGS_NEW_MODIFIER_KEY).to_string());
-        assert_eq!(state.view(&settings, Platform::Gtk, true, None, &japanese).capture.unwrap().notice, japanese.text(MessageId::SETTINGS_ALREADY_A_MODIFIER_KEY).to_string());
+        let view = state.view(&settings, Platform::Gtk, true, None, &japanese);
+        assert_eq!(view.capture_icon, Some(crate::ShortcutCaptureIcon::Information));
+        assert_eq!(view.capture.unwrap().notice, japanese.text(MessageId::SETTINGS_ALREADY_A_MODIFIER_KEY).to_string());
     }
 
     #[test]

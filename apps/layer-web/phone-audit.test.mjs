@@ -295,3 +295,13 @@ test('inline layer rename keeps u64 IDs inside the browser and requires its edit
   assert.equal(actions.length,1);assert.equal(state.layer_tools.rename_layer,id);
   assert.ok(guards.some(source=>source.includes('.layer-name-entry')));
 });
+
+test('Settings allocation records retain separate value and arrow bounds',()=>{
+  const row={querySelector:selector=>selector==='label[for]'?{htmlFor:'setting-language'}:['.preference-choice > summary > span','.preference-choice > summary > svg:last-child'].includes(selector)?{}:null};
+  const node={tagName:'DIALOG',dataset:{dialogFrame:'editor'},querySelector:()=>null,querySelectorAll:()=>[row]};
+  const specs=dialogAuditSpecifications('#settings[open]',{querySelector:()=>node});
+  assert.deepEqual(specs.slice(-2).map(({id,role})=>({id,role})),[
+    {id:'preference.language.value',role:'preference-value'},{id:'preference.language.arrow',role:'preference-arrow'},
+  ]);
+  assert.ok(specs.slice(-2).every(spec=>spec.selector.startsWith('#settings[open] .preference-row:has(label[for="setting-language"])')));
+});

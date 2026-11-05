@@ -111,6 +111,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
       }
       if (shown === String(selected)) return;
       shown = String(selected);
+      summary.classList.toggle("choice-icons",!!icons[selected]);
       summary.replaceChildren(...(icons[selected] ? [icon(icons[selected])] : []), element("span", "", options[selected] ?? ""), icon("chevron-down"));
       for (const choice of choices.children) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === selected));
     };
@@ -138,8 +139,9 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   search.addEventListener("input", () => send({ type: "search", query: search.value }));
   const searchResults = element("div", "preferences-search-results");
   const empty = element("p", "preferences-empty");
-  sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
-  addScrollbar(searchResults,sidebar);
+  const sidebarBody=element("div", "preferences-sidebar-body");
+  sidebarBody.append(navigation,searchResults,empty);sidebar.append(sidebarHeader,search,sidebarBody);
+  addScrollbar(sidebarBody,sidebar);
   const pages = element("div", "preferences-pages");
   const error = element("span", "preferences-error"); error.setAttribute("role", "status");
   const pagesFrame=panelFrame(pages,false);addScrollbar(pages,pagesFrame);content.append(header,error,pagesFrame);
@@ -165,11 +167,12 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   function arrange() {
     const model=view();if(!model||!dialog.open)return;
     const key=JSON.stringify([model.page,model.navigation.title,document.documentElement.lang,getComputedStyle(root).font]);
-    if(key!==minimumKey){minimum=[minWidth(sidebar),minWidth(content),Math.max(0,minWidth(pages)-24)];minimumKey=key;}
+    if(key!==minimumKey){minimum=[minWidth(sidebar),minWidth(content),Math.max(0,minWidth(pages)-24),Math.max(0,minWidth(navigation)-24)];minimumKey=key;}
     layout=app.preferences_layout([innerWidth,innerHeight],root.getBoundingClientRect().width,minimum.slice(0,2));
     root.classList.toggle('single-pane',layout.single_pane);
     sidebar.hidden=layout.single_pane&&model.page_requested;content.hidden=layout.single_pane&&!model.page_requested;
     pages.style.setProperty('--preference-width',`${app.preferences_content_width(pages.clientWidth,minimum[2])}px`);
+    navigation.style.setProperty('--preference-width',`${app.preferences_content_width(sidebarBody.clientWidth,minimum[3])}px`);
     shell.layout();
   }
   new ResizeObserver(arrange).observe(root);
@@ -211,7 +214,8 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     for (const page of model.pages) {
       const tab = button("", () => { send({ type: "page", page: page.id }); });
       tab.dataset.settingsPage = page.id;
-      tab.append(icon(page.icon), element("span", "", page.title));
+      tab.append(icon(page.icon), element("span", "preference-text", page.title), icon("go-next"));
+      tab.lastChild.classList.add("row-chevron");
       navigation.append(tab); tabs.set(page.id, tab);
       const node = element("section", "preferences-page"); node.dataset.page = page.id;
       node.setAttribute("aria-label", page.title); pages.append(node); pageNodes.set(page.id, node);
@@ -284,7 +288,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
               } else {
                 input = element("input"); input.type = "hidden";
                 widget = dropdown(row.title, index => { input.value = index; input.dispatchEvent(new Event("input")); });
-                widget.append(input);
+                widget.classList.add("preference-setting-choice");widget.append(input);
               }
               break;
             case "number":
@@ -296,7 +300,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
             case "info":
               input = element("span", "settings-info", row.kind.value); widget = input; break;
             case "action":
-              input = button(row.kind.label, () => dispatch(modelRow(row.id).kind.action)); widget = input; break;
+              input = button(row.kind.label, () => dispatch(modelRow(row.id).kind.action), "preference-action"); widget = input; break;
             case "link":
               input = element("a", "settings-link", row.kind.label);
               input.href = row.kind.url; input.target = "_blank"; input.rel = "noopener noreferrer";
@@ -310,7 +314,13 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget, controls: [input, ...widget.querySelectorAll("button")] });
         }
       }
-      if(page.id==="color")node.append(button(() => profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,dropdown,manage:true})));
+      if(page.id==="color"){
+        const library=settingsGroup(),manage=button(()=>profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,dropdown,manage:true}),"preference-action");
+        manage.id="color-profile-library";
+        const row=preferenceRow({title:()=>profileCopy.library_title,description:()=>profileCopy.menu_help,suffix:manage});
+        row.label.htmlFor=manage.id;row.line.addEventListener("click",event=>{if(!manage.contains(event.target)){event.preventDefault();manage.click();}});
+        library.list.append(row.line);container.append(library.section);
+      }
     }
   }
   return function refresh(model) {

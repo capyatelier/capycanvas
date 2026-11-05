@@ -353,6 +353,7 @@ pub struct ThemePalette {
     pub controls: ControlPalette,
     pub dialogs: DialogPalette,
     pub accent: HexColor,
+    pub link_oklab: [f64; 3],
     pub accent_foreground: HexColor,
     pub relationship: HexColor,
     pub selection: HexColor,
@@ -391,6 +392,8 @@ impl Settings {
         let surface = |d, l| bg.surface(anchor, if dark { d } else { l });
         let android = platform == Platform::Android;
         let accent = self.accent.or(system_accent).unwrap_or(DEFAULT_ACCENT);
+        let mut link_oklab = accent.oklab();
+        link_oklab[0] = if dark { link_oklab[0].max(0.85) } else { link_oklab[0].min(0.5) };
         let header = surface([82; 3], [196; 3]);
         let panel = surface([65; 3], [237; 3]);
         let input = surface([51; 3], [250; 3]);
@@ -423,6 +426,7 @@ impl Settings {
             controls: ControlPalette::new(dark,accent),
             dialogs: DialogPalette::new(dark),
             accent,
+            link_oklab,
             accent_foreground: accent.contrasting(),
             relationship: accent.relationship(),
             selection,
@@ -516,6 +520,21 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn links_use_native_standalone_accent_lightness_without_changing_chroma() {
+        for accent in [HexColor([1, 20, 70]), HexColor([250, 210, 40]), DEFAULT_ACCENT] {
+            let [l, a, b] = accent.oklab();
+            for platform in Platform::ALL {
+                let settings = Settings { accent: Some(accent), ..Settings::default() };
+                let light = settings.palette(Theme::Light, platform, None);
+                let dark = settings.palette(Theme::Dark, platform, None);
+                assert_eq!(light.link_oklab, [l.min(0.5), a, b]);
+                assert_eq!(dark.link_oklab, [l.max(0.85), a, b]);
+                assert_eq!(light.accent, accent);
+            }
+        }
+    }
+
     #[test]
     fn alert_colors_preserve_native_shade_and_destructive_oklab_chroma() {
         for (theme, lightness, alpha, red) in [(Theme::Light,0.5,0.14,[0xe0,0x1b,0x24]),(Theme::Dark,0.85,0.5,[0xc0,0x1c,0x28])] {

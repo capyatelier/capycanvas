@@ -48,11 +48,11 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
       next.animate([{ transform: `translateX(${forward ? 24 : -24}%)`, opacity: 0 }, { transform: "none", opacity: 1 }], { duration: 200, easing: "cubic-bezier(.2,.8,.2,1)" });
   }
 
-  function recordingRow(capture) {
+  function recordingRow(capture, captureIcon) {
     const row = element("div", "preference-row recording");
     row.id = "shortcut-recording"; row.tabIndex = -1;
-    const glyph = icon(capture.existing ? "info" : capture.notice ? "info" : "keyboard");
-    if (capture.notice && !capture.existing) glyph.classList.add("warning");
+    const glyph = icon({information:"info",keyboard:"keyboard",warning:"warning"}[captureIcon]);
+    if (captureIcon === "warning") glyph.classList.add("warning");
     const text = element("span", "preference-text"); text.append(element("span", "", capture.shortcut));
     if (capture.notice) text.append(element("p", "", capture.notice));
     const cancel = button(()=>common.cancel, () => send({ type: "cancel_shortcut" })); cancel.id = "cancel-shortcut";
@@ -93,7 +93,7 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
   picker.node.insertBefore(pickerTop,picker.content.root);picker.body.append(pickerList);
   const details = sheet("keymap-details", () => send({ type: "keymap_details", open: false }));
   details.node.classList.add("picker");
-  const detailsIntro=kit.fields();detailsIntro.classList.add('keymap-details-intro');details.node.insertBefore(detailsIntro,details.content.root);
+  const detailsIntro=kit.fields();detailsIntro.classList.add("keymap-details-intro");details.content.root.prepend(detailsIntro);
   const importDialog = element("dialog", "sheet"); importDialog.id = "keymap-import";
   const importHeader=element('header','dialog-header'),importTitle=element('h2'),importContent=kit.body(),importBody=importContent.content,importFooter=kit.footer();importBody.classList.add('preference-stack');
   const importCancel=button(()=>common.cancel,()=>send({type:'cancel_keymap_import'}));
@@ -324,12 +324,14 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
         row.append(element("span", "preference-text", binding), flatButton("delete", ()=>copy.remove_shortcut, () => send({ type: "remove_shortcut", id: spec.id, index }), `remove-shortcut-${index}`));
         section.list.append(row);
       });
-      if (capture) section.list.append(recordingRow(capture));
+      if (capture) section.list.append(recordingRow(capture, model.capture_icon));
       else if (spec.can_add) {
         const add = button("", () => send({ type: "begin_shortcut", id: spec.id }), "preference-row button-row"); add.id = "add-shortcut";
         add.append(icon("plus"), element("span", "", ()=>copy.add_shortcut)); section.list.append(add);
       }
-      const nodes = [description, element("p", "preferences-error", error || ""), section.section];
+      const errorText=element("p", "preferences-error", error || "");
+      description.hidden=!spec.description;errorText.hidden=!error;
+      const nodes = [description, errorText, section.section];
       if (spec.gestures.length) {
         const gestures = group(()=>copy.pen_touch, ()=>copy.pen_page_help);
         gestures.list.append(...spec.gestures.map(g => { const row = element("div", "preference-row"); row.append(element("span", "preference-text", g)); return row; }));
@@ -353,8 +355,8 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
     const signature = JSON.stringify(capture);
     if (modifierSheet.signature !== signature) {
       modifierSheet.signature = signature;
-      bindCopy(modifierSheet.title,()=>copy.new_modifier);
-      const section = group(); section.list.append(recordingRow(capture));
+      modifierSheet.title.textContent=capture.label;
+      const section = group(); section.list.append(recordingRow(capture, model.capture_icon));
       modifierSheet.body.replaceChildren(element("p", "settings-description sheet-summary", ()=>copy.press_hold_key), section.section);
     }
     present(modifierSheet, model.dialog);
@@ -408,8 +410,8 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
       const list = group();
       const rowsOrEmpty = keymap.differences.length ? keymap.differences : [{ trigger: copy.no_differences, note: copy.defaults_help }];
       list.list.append(...rowsOrEmpty.map(d=>kit.row({title:d.trigger,description:d.note}).line));
-      detailsIntro.replaceChildren(element("p", "settings-description", keymap.source),links);
-      details.body.replaceChildren(list.section);
+      const source=element("p", "settings-description", keymap.source);source.hidden=!keymap.source;
+      detailsIntro.replaceChildren(source,links);details.body.replaceChildren(list.section);
     }
     present(details, keymap.details?keymap.dialog:null);
     const preview = keymap.import, signatureImport = JSON.stringify(preview);

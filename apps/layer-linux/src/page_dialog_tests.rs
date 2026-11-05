@@ -570,7 +570,7 @@ fn restored_headers(headers: &[(adw::HeaderBar, gtk::Widget, bool, bool, Option<
     }
 }
 
-fn navigation_headers_settings(mut d: &mut Driver) {
+fn navigation_headers_settings(mut d: &mut Driver, capture_only: bool) {
     let warnings = bounds::size_warnings();
     let original = header_state(d.w.preferences.dialog.upcast_ref());
     super::phone::capture(&mut d, "rest");
@@ -601,7 +601,7 @@ fn navigation_headers_settings(mut d: &mut Driver) {
         d.click(&row);
         until(|| split.shows_content(), "Preferences opens its page from the root list");
         capture(&mut d, &format!("preferences-{}", settings.key()));
-        if settings==SettingsPage::Appearance {
+        if settings==SettingsPage::Appearance && !capture_only {
             let row=find_named(&frame,"setting-theme").unwrap();super::phone::inventory_popup(d,&row,"preferences-reset-menu",true);
         }
         if settings==SettingsPage::Shortcuts {
@@ -609,7 +609,8 @@ fn navigation_headers_settings(mut d: &mut Driver) {
             for (query,name) in [("Undo","shortcuts-query"),("zzznomatchzzz","shortcuts-empty")] {
                 search.set_text(query);until(||ui_session(&d.w).preferences().is_some_and(|view|view.shortcut_query==query),"Shortcuts displays its actual search query");capture(d,name);
             }
-            search.set_text("");let menu=find_named(&frame,"keymap-menu").unwrap();super::phone::inventory_popup(d,&menu,"keymap-menu",false);
+            search.set_text("");
+            if !capture_only {let menu=find_named(&frame,"keymap-menu").unwrap();super::phone::inventory_popup(d,&menu,"keymap-menu",false);}
         }
         assert!(split.is_collapsed(), "Preferences {} keeps one pane on a phone", settings.key());
         let preferences = ui_session(&d.w).preferences().unwrap();
@@ -676,7 +677,7 @@ fn navigation_headers_settings(mut d: &mut Driver) {
                 }
             }
             capture(&mut d, &format!("preferences-{}-{}", settings.key(), row.id.key()));
-            if matches!(row.id, PreferenceId::Language | PreferenceId::MissingProfile) {
+            if !capture_only && matches!(row.id, PreferenceId::Language | PreferenceId::MissingProfile) {
                 d.click(native.upcast_ref());
                 until(|| descendants::<gtk::Popover>(native.upcast_ref()).iter().any(|popup| popup.is_mapped()), "the native preference choice popup opens");
                 let popup = descendants::<gtk::Popover>(native.upcast_ref()).into_iter().find(|popup| popup.is_mapped()).unwrap();
@@ -701,7 +702,7 @@ fn navigation_headers_settings(mut d: &mut Driver) {
                 until(|| !popup.is_mapped(), "Escape closes the native preference choice popup");
             }
         }
-        if settings == SettingsPage::Color {
+        if settings == SettingsPage::Color && !capture_only {
             assert_eq!(popup_checks.len(), 2, "both selected preference options are checked");
             assert!(popup_checks.iter().all(|(_, checked)| *checked), "selected preference options retain their native checkmark: {popup_checks:?}");
         }
@@ -1233,7 +1234,7 @@ fn native_alert_editor_frames() {
 }
 
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6b/w6c/w6d/w7-photo, phone viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6a-capture/w6b/w6c/w6d/w7-photo, phone viewport/theme external"]
 fn native_phone_dialogs() {
     let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
@@ -1281,8 +1282,8 @@ fn native_phone_dialogs() {
         d.finish();
         return;
     }
-    assert_eq!(batch, "w6a");
-    navigation_headers_settings(&mut d);
+    assert!(matches!(batch.as_str(), "w6a" | "w6a-capture"));
+    navigation_headers_settings(&mut d, batch == "w6a-capture");
     d.w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
     let (dialog, _) = page(&d);
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::BeginShortcut { id: CommandId::Hand.shortcut_id() } });
@@ -1321,7 +1322,7 @@ fn native_phone_navigation_headers() {
     assert!(adw::ComboRow::new().factory().is_some(), "a fresh native ComboRow exposes its built-in factory");
     assert!(d.w.surface.width().min(d.w.surface.height()) < 480);
     let checkpoint = ui_session(&d.w).engine().checkpoint();
-    navigation_headers_settings(&mut d);
+    navigation_headers_settings(&mut d, false);
     d.w.dispatch(UiAction::Invoke { command: CommandId::ExportDocument });
     let (dialog, frame) = page(&d);
     let nav = named::<adw::NavigationView>(&frame, "export-navigation");

@@ -517,6 +517,17 @@ pub struct ShortcutCapture {
     pub notice: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortcutCaptureIcon { Information, Keyboard, Warning }
+impl ShortcutCapture {
+    pub fn icon(&self) -> ShortcutCaptureIcon {
+        if self.existing { ShortcutCaptureIcon::Information }
+        else if self.notice.is_empty() { ShortcutCaptureIcon::Keyboard }
+        else { ShortcutCaptureIcon::Warning }
+    }
+}
+
 /// Exact semantic aliases, shared by binding hints and command discovery.
 /// Tool variants with parameters only share hints; they are not aliases here.
 pub(crate) fn action_command(action: &UiAction) -> Option<CommandId> {
@@ -1262,6 +1273,20 @@ fn shortcut_scope_overlap(l: &Localizer, key: String, action: String, scope: &Bi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_capture_distinguishes_existing_keys_from_conflicts_and_errors() {
+        let mut capture = ShortcutCapture { id: String::new(), label: String::new(), chord: None,
+            shortcut: String::new(), keys: vec![], conflict: None, error: None, existing: false, notice: String::new() };
+        assert_eq!(capture.icon(), ShortcutCaptureIcon::Keyboard);
+        capture.notice = "Already assigned".into();
+        assert_eq!(capture.icon(), ShortcutCaptureIcon::Warning);
+        assert_eq!(serde_json::to_value(capture.icon()).unwrap(), "warning");
+        capture.existing = true;
+        assert_eq!(capture.icon(), ShortcutCaptureIcon::Information);
+        capture.notice.clear();
+        assert_eq!(capture.icon(), ShortcutCaptureIcon::Information);
+    }
 
     #[test]
     fn new_default_keys_do_not_break_saved_custom_bindings() {

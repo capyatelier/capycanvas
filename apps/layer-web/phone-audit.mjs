@@ -72,7 +72,8 @@ export function measurePhoneAuditElements(specifications, root = document) {
     const bounds=visible?[r.x,r.y,r.width,r.height]:null;
     if(bounds&&!bounds.every(Number.isFinite))throw Error(`Nonfinite phone audit bounds: ${id}`);
     const source={selector,dom_id:node.id||null,type:node.tagName.toLowerCase()};
-    if(role==='page-action'&&style.font)source.text_style={font:style.font,weight:style.fontWeight,size:style.fontSize,padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft]};
+    if((role==='page-action'||role==='preference-value')&&style.font)source.text_style={font:style.font,weight:style.fontWeight,size:style.fontSize,padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft]};
+    if(role==='preference-value'&&visible){source.text=node.textContent;const range=node.ownerDocument.createRange();range.selectNodeContents(node);const text=range.getBoundingClientRect();source.text_bounds=[text.x,text.y,text.width,text.height];}
     if(role==='drawer-panel')source.layout=[node,node.parentElement].filter(Boolean).map(node=>{
       const style=getComputedStyle(node),b=node.getBoundingClientRect();
       return{class:node.className,bounds:[b.x,b.y,b.width,b.height],requested_minimum:node.style.minHeight,
@@ -653,7 +654,45 @@ export function dialogAuditSpecifications(rootselector,root=document){
   const node=root.querySelector(rootselector),specs=[{id:'page',role:'page',selector:rootselector}];
   if((node?.tagName==='DIALOG'||node?.classList?.contains('dialog-page'))&&node.dataset?.dialogFrame!=='alert')specs.push({id:'page.header',role:'page-header',selector:`${rootselector} [data-dialog-part="header"]`});
   for(const part of ['start','end','panes'])if(node?.querySelector(`[data-dialog-part="${part}"]`))specs.push({id:`page.${part}`,role:part==='panes'?'panes':'page-action',selector:`${rootselector} [data-dialog-part="${part}"]`});
+  for(const row of node?.querySelectorAll?.('.preference-row')??[]){
+    const input=row.querySelector('label[for]')?.htmlFor;if(!input?.startsWith('setting-'))continue;
+    const selector=`${rootselector} .preference-row:has(label[for=${JSON.stringify(input)}])`;
+    for(const [part,suffix]of [['value','.preference-choice > summary > span'],['arrow','.preference-choice > summary > svg:last-child']])if(row.querySelector(suffix))specs.push({id:`preference.${input.slice(8)}.${part}`,role:`preference-${part}`,selector:`${selector} ${suffix}`});
+  }
   return specs;
+}
+
+async function assertSettingsPresentation(evaluate,state){
+  if(!state.startsWith('preferences-')&&!['shortcut-editor','shortcut-recording','shortcut-conflict','modifier-key','keymap-details'].includes(state))return;
+  const actual=await evaluate(`(()=>{
+    const shown=node=>!!node?.getClientRects().length&&getComputedStyle(node).visibility!=='hidden';
+    const visibleText=node=>{const range=document.createRange();range.selectNodeContents(node);return [...range.getClientRects()].map(rect=>{let box={left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom};for(let parent=node;parent;parent=parent.parentElement){const style=getComputedStyle(parent);if(/hidden|clip|auto|scroll/.test(style.overflowX+' '+style.overflowY)){const clip=parent.getBoundingClientRect();box={left:Math.max(box.left,clip.left),right:Math.min(box.right,clip.right),top:Math.max(box.top,clip.top),bottom:Math.min(box.bottom,clip.bottom)};}}return box;}).filter(box=>box.right>box.left&&box.bottom>box.top);};
+    const overlaps=[];for(const row of document.querySelectorAll('dialog[open] .preference-row')){const text=row.querySelector(':scope > .preference-text');if(!shown(text))continue;for(const suffix of row.querySelectorAll(':scope > .preference-choice > summary > span,:scope > .settings-info,:scope > .settings-link,:scope.recording > button')){if(!shown(suffix))continue;for(const a of visibleText(text))for(const b of visibleText(suffix))if(Math.min(a.right,b.right)-Math.max(a.left,b.left)>1&&Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1)overlaps.push({title:text.textContent,value:suffix.textContent});}}
+    const lineOverlaps=[];for(const node of [...document.querySelectorAll('#settings[open] .preference-text label,#settings[open] .preference-text p,dialog[open] .recording .preference-text')].filter(shown)){const walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT),rects=[];while(walker.nextNode()){const range=document.createRange();range.selectNodeContents(walker.currentNode);rects.push(...[...range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0));}const lines=[];for(const rect of rects.sort((a,b)=>a.top-b.top)){const previous=lines.at(-1);if(previous&&Math.abs(previous.top-rect.top)<.5)previous.bottom=Math.max(previous.bottom,rect.bottom);else lines.push({top:rect.top,bottom:rect.bottom});}for(let index=1;index<lines.length;index++)if(lines[index].top<lines[index-1].bottom-.5)lineOverlaps.push({text:node.textContent,lines});}
+    const active=[...document.querySelectorAll('dialog[open]')].at(-1),navigation=document.querySelector('.preferences-navigation');
+    const swatches=[...document.querySelectorAll('.swatch-circles .swatch')].filter(shown);
+    return {overlaps,lineOverlaps,single:!!document.querySelector('.preferences-layout.single-pane'),navigation:shown(navigation),
+      chevrons:[...(navigation?.querySelectorAll('button')??[])].map(node=>shown(node.querySelector('.row-chevron'))),
+      card:navigation?getComputedStyle(navigation).backgroundColor:null,
+      library:!!document.querySelector('#color-profile-library')?.closest('.preference-group'),
+      swatches:swatches.map(node=>({corner:getComputedStyle(node).cornerShape,radius:getComputedStyle(node).borderRadius})),
+      actions:[...document.querySelectorAll('.preference-action')].filter(shown).map(node=>getComputedStyle(node).backgroundColor),
+      choices:[...document.querySelectorAll('#settings[open] .preference-row > .preference-choice > summary:has(> span):has(> svg:last-child)')].filter(shown).map(node=>{const row=node.closest('.preference-row').getBoundingClientRect(),value=node.querySelector('span').getBoundingClientRect(),arrow=node.querySelector('svg:last-child').getBoundingClientRect();return{row:[row.left,row.right],value:[value.left,value.right],arrow:[arrow.left,arrow.right]};}),
+      empty:[...(active?.querySelectorAll('.preference-stack > p')??[])].filter(node=>!node.textContent.trim()&&shown(node)).length,
+      warning:document.querySelector('#shortcut-recording svg')?.dataset.asset,
+      title:document.querySelector('#modifier-key h2')?.textContent,capture:layerApp.app.preferences().capture?.label,
+      keymap:[...document.querySelectorAll('#keymap-details .preference-content > .settings-group')].map(node=>{const card=node.getBoundingClientRect(),body=node.closest('.preference-viewport').getBoundingClientRect();return{x:card.x,width:card.width,bottom:card.bottom,bodyBottom:body.bottom};})};})()`);
+  assert.equal(actual.empty,0,`${state}: empty shortcut paragraphs stay hidden`);
+  assert.deepEqual(actual.overlaps,[],`${state}: visible title, value, link and recording actions do not overlap`);
+  assert.deepEqual(actual.lineOverlaps,[],`${state}: wrapped text lines do not overlap`);
+  for(const choice of actual.choices)assert.ok(choice.value[0]>=choice.row[0]-.5&&choice.value[1]<=choice.row[1]+.5&&choice.arrow[0]>=choice.row[0]-.5&&choice.arrow[1]<=choice.row[1]+.5,`Settings choice value/arrow stay inside their row: ${JSON.stringify(choice)}`);
+  if(state==='preferences-root'&&actual.single){assert.ok(actual.navigation&&actual.chevrons.length&&actual.chevrons.every(Boolean),'Settings root card has visible chevrons');assert.notEqual(actual.card,'rgba(0, 0, 0, 0)');}
+  if(state==='preferences-color')assert.ok(actual.library,'Color Profile Library uses a card row');
+  assert.ok(actual.actions.every(fill=>fill!=='rgba(0, 0, 0, 0)'&&fill!=='transparent'),'Settings action buttons retain their native fill');
+  for(const shape of actual.swatches)assert.match(shape.corner??'',/squircle|superellipse/,`Settings swatch uses native square contour: ${JSON.stringify(shape)}`);
+  if(state==='shortcut-conflict')assert.match(actual.warning??'',/warning/,'Shortcut conflict uses a warning triangle');
+  if(state==='modifier-key')assert.equal(actual.title,actual.capture,'Modifier title follows shared recording label');
+  if(state==='keymap-details')assert.ok(actual.keymap.length&&actual.keymap.every(bounds=>bounds.width>0&&Math.abs(bounds.bottom-bounds.bodyBottom)<=1),'Keymap card fills the remaining body height');
 }
 
 export function selectDialogAuditRows(dialogs,requested){
@@ -1406,6 +1445,19 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
     if(dialogs)for(const row of rows){
       if(row.blocked){report.unreachable.push({state:row.id,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:'unavailable',missing:[],reason:row.blocked,png:null});continue;}
       await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
+      if(row.id==='preferences-root'&&test.viewport[0]===320&&test.viewport[1]===320){
+        const about=await evaluate(`(()=>{const node=document.querySelector('[data-settings-page="about"]'),body=node.closest('.preferences-sidebar-body');node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect(),b=body.getBoundingClientRect();return{top:r.top,bottom:r.bottom,bodyTop:b.top,bodyBottom:b.bottom,scroll:body.scrollTop};})()`);
+        assert.ok(about.scroll>0&&about.top>=about.bodyTop-.5&&about.bottom<=about.bodyBottom+.5,'320-square Settings root scrolls About into its body');
+        await click('[data-settings-page="about"]');await wait('layerApp.app.preferences().page==="about"&&layerApp.app.preferences().page_requested');
+        await evaluate('layerApp.dispatch({type:"preferences",action:layerApp.app.preferences().navigation.back});null');await wait('!layerApp.app.preferences().page_requested');
+        await evaluate('document.querySelector(".preferences-sidebar-body").scrollTop=0');await settle();
+      }
+      if(row.id==='preferences-color'&&test.viewport[0]===412&&test.theme==='light'){
+        await click('label[for="color-profile-library"]');await wait('!!document.querySelector(".profile-library[open]")');
+        await wait(`!!document.querySelector('.profile-library[open] footer button:not(:disabled)')`);
+        await click('.profile-library[open] [data-dialog-part="end"]:not(:disabled)');
+        await wait('!document.querySelector(".profile-library[open]")&&layerApp.app.preferences().page==="color"');
+      }
       if(row.id==='choose-action'){
         const before=await evaluate(`(()=>{const search=document.querySelector('#action-picker-search'),viewport=document.querySelector('#action-picker .preference-viewport');const y=search.getBoundingClientRect().y;viewport.scrollTop=viewport.scrollHeight;return{y,overflow:viewport.scrollHeight-viewport.clientHeight};})()`);
         await settle();
@@ -1423,7 +1475,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
         await send(shortcuts);await settle();
       }
       if(row.requestedpage)assert.equal(await evaluate('layerApp.app.preferences().page'),row.requestedpage,'Requested Settings page');
-      const shot=async route=>{if(route.drawingstate)await drawingState(evaluate,route.drawingstate);if(route.id==='new-drawing-footer-paper-color'){const {assertColorEditorCells}=await import('./color-editor.test.mjs');await assertColorEditorCells(evaluate,'#new-drawing-color-drawer');}const parts=await evaluate(row.collector==='menu'?JSON.stringify([{id:'page',role:'page',selector:row.rootselector}]):row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
+      const shot=async route=>{await assertSettingsPresentation(evaluate,route.id);if(route.drawingstate)await drawingState(evaluate,route.drawingstate);if(route.id==='new-drawing-footer-paper-color'){const {assertColorEditorCells}=await import('./color-editor.test.mjs');await assertColorEditorCells(evaluate,'#new-drawing-color-drawer');}const parts=await evaluate(row.collector==='menu'?JSON.stringify([{id:'page',role:'page',selector:row.rootselector}]):row.collector==='drawer'?`(${phoneAuditDrawerSpecifications.toString()})()`:`(${dialogAuditSpecifications.toString()})(${JSON.stringify(row.rootselector)})`);const specifications=dialogPhoneSpecifications(frame,parts,active);return capture(test,route.id,specifications,dialogs?'existing dialog presentation':'existing Web editor; phone page/header parity not established',null,route.document?.count==='photo'?await evaluate('phoneAuditPhotoCount'):route.document?.count??1,route.document?.color??{space:'Srgb',depth:'U8'},route.document?.extent,route.document?.draft);};
       if(row.id==='color'){
         const {assertColorEditorCells}=await import('./color-editor.test.mjs');
         await assertColorEditorCells(evaluate);
