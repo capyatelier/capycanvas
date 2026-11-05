@@ -2154,6 +2154,30 @@ fn inventory_canvas_bars(d: &mut Driver) {
 #[ignore = "private compositor: --native-test=native_phone_inventory --native-storage; phone viewport/theme external"]
 fn native_phone_inventory() {
     let mut d = setup("art.capycanvas.PhoneInventory");
+    if std::env::var("LAYER_PHONE_INVENTORY_CONTEXTS").as_deref() == Ok("transform") {
+        inventory_workspace(&d, WorkspacePreset::Painter);
+        inventory_place_checker(&d);
+        d.w.dispatch(UiAction::Invoke {command:CommandId::ApplyTransform});
+        new_photo::ready(&d.w);
+        let control = ToolbarControl::Command {command:CommandId::ScaleRotate};
+        let tile = state(&d.w).workspace.layout.phone.as_ref().unwrap().iter().find(|tile| tile.control == control).unwrap().id;
+        let name = tool(&d, control);
+        click(&mut d, &name);
+        new_photo::ready(&d.w);
+        assert_eq!(state(&d.w).layer_tools.tool, layer_ui::LayerCanvasTool::Transform);
+        assert!(ui_session(&d.w).command(CommandId::ScaleRotate).selected);
+        assert!(state(&d.w).customization.drawer.is_none());
+        click(&mut d, &name);
+        inventory_drawer_ready(&d);
+        assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor,
+            DrawerAnchor::Phone {anchor:PhoneDrawerAnchor::Tool(tile)});
+        capture(&mut d, "inventory-sketch-scalerotate");
+        click(&mut d, &name);
+        until(|| state(&d.w).customization.drawer.is_none() && d.w.drawer.is_closed(),
+            "the Transform tile closes its drawer");
+        d.finish();
+        return;
+    }
     if std::env::var("LAYER_PHONE_INVENTORY_CONTEXTS").as_deref() == Ok("1") {
         inventory_workspace(&d, WorkspacePreset::Painter);
         for panel in [Panel::Layers, Panel::Color] {

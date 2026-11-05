@@ -4,8 +4,49 @@ use layer_core::{Document, DocumentNames, ImageObject, PortableId, SceneScope, c
 
 fn translate(x: f64, y: f64) -> Affine64 { Affine64([1., 0., 0., 1., x, y]) }
 fn session() -> UiSession<Recorder> {
+    session_for(Platform::Gtk)
+}
+fn session_for(platform: Platform) -> UiSession<Recorder> {
     UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
-        Document::new(PortableId::random(), 1000, 1000, DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [1000, 1000], Platform::Gtk).unwrap()
+        Document::new(PortableId::random(), 1000, 1000, DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [1000, 1000], platform).unwrap()
+}
+
+#[test]
+fn image_transform_tools_stay_active_and_toggle_their_drawer() {
+    let control=ToolbarControl::Command {command:CommandId::ScaleRotate};
+    for platform in [Platform::Gtk,Platform::Web] {
+        for viewport in [[412,891],[891,412],[1024,900]] {
+            let mut s=session_for(platform);
+            let (layer,_)=add(&mut s,"Photo",None,translate(100.,100.),0);
+            activate(&mut s,layer);
+            let mut layout=WorkspacePreset::Painter.layout(platform);
+            let (action,anchor)=if viewport[0].min(viewport[1])<480 {
+                let tile=layout.phone.as_ref().unwrap().iter().find(|tile|tile.control==control).unwrap().id;
+                (UiAction::Phone {action:PhoneAction::Tool {tile}},DrawerAnchor::Phone {anchor:PhoneDrawerAnchor::Tool(tile)})
+            } else {
+                let panel=layout.add_toolbar(None,"Transform",&[control]).unwrap();
+                let tile=layout.panel(panel).unwrap().tiles()[0].id;
+                (UiAction::ActivateTile {panel,tile},DrawerAnchor::Tile {panel,tile})
+            };
+            let mut workspace=s.state.workspace.clone();workspace.layout=layout;
+            s.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(workspace)}).unwrap();
+            s.set_viewport(viewport.map(|v|v as f32),viewport).unwrap();
+            s.dispatch(action.clone()).unwrap();
+            assert_eq!(s.state.layer_tools.tool,LayerCanvasTool::Transform);
+            assert!(s.command(CommandId::ScaleRotate).selected);
+            let tile=match anchor {
+                DrawerAnchor::Phone {anchor:PhoneDrawerAnchor::Tool(tile)}=>s.state.phone_tools().into_iter().find(|view|view.id==Some(tile)).unwrap(),
+                DrawerAnchor::Tile {panel,tile}=>s.panel_view(panel).unwrap().tiles.into_iter().find(|view|view.id==Some(tile)).unwrap(),
+                _=>unreachable!(),
+            };
+            assert!(tile.choice.selected);
+            assert!(s.state.customization.drawer.is_none());
+            s.dispatch(action.clone()).unwrap();
+            assert_eq!(s.state.customization.drawer.as_ref().unwrap().anchor,anchor);
+            s.dispatch(action).unwrap();
+            assert!(s.state.customization.drawer.is_none());
+        }
+    }
 }
 
 #[test]

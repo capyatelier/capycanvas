@@ -2647,14 +2647,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let scene = document.scene();
         let editable = active.and_then(|handle| scene.occurrence(handle)).is_some_and(|occurrence| occurrence.kind() == LayerKind::Paint);
         let idle = self.canvas_idle();
-        if let Some(enabled) = self.object_command_enabled(id) {
-            return (enabled, self.object_command_selected(id).unwrap_or(false));
-        }
-        if let Some(enabled) = self.vector_command_enabled(id) {
+        let object_enabled = self.object_command_enabled(id);
+        if object_enabled.is_none() && let Some(enabled) = self.vector_command_enabled(id) {
             return (enabled, self.vector_command_selected(id));
         }
 
-        let enabled = match id {
+        let enabled = object_enabled.unwrap_or_else(|| match id {
             CommandId::SearchCommands => idle && !self.state.settings_open && !self.state.customization.blocks_shortcuts() && !self.state.customization.header_editing,
             CommandId::LiquifyReset | CommandId::LiquifyAdjust => idle && (self.operation.liquify.is_some() || self.engine.liquify_context().is_some()),
             CommandId::QuickMask | CommandId::NewSelectionLayer => idle,
@@ -2922,7 +2920,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::EraseTouchedPart | CommandId::EraseWholePaths | CommandId::EraseToIntersection => self.vector_erasing_layer(false).is_some(),
             CommandId::ScaleOutlineWidths => self.selected_vector_items().is_some(),
             _ => true,
-        };
+        });
         let selection = self.layer_interaction.tool.selection_tool();
         let selection_mode = self.effective_selection_mode();
         let selected = (id == CommandId::LiquifyAdjust && self.operation.liquify.is_some())
@@ -3022,7 +3020,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
                 && self.state.settings.theme.unwrap_or(self.system_theme) == Theme::Dark);
-        (enabled, selected)
+        (enabled, object_enabled.and_then(|_| self.object_command_selected(id)).unwrap_or(selected))
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
