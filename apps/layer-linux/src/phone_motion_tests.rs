@@ -406,6 +406,34 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         Some(serde_json::json!({"panel":panel,"rows":rows(&body)}))
     }).collect::<Vec<_>>());
     let dialog_rows=presented.as_ref().map(|dialog| rows(&crate::page_dialog::parent(dialog)));
+    let bounds = |widget: &gtk::Widget| widget.compute_bounds(&w.window)
+        .map(|rect| [rect.x(),rect.y(),rect.width(),rect.height()]);
+    let popovers=all.iter().filter(|widget| widget.is_mapped() && widget.is::<gtk::Popover>()).map(|popup| {
+        let content=popup.downcast_ref::<gtk::Popover>().unwrap().child();
+        let menu_rows=widgets(popup).filter(|widget| widget.is_mapped() && widget.css_name()=="modelbutton")
+            .map(|row| {
+                let label=widgets(&row).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                    .find(|label| label.is_mapped() && !label.text().is_empty());
+                let ancestors=label.as_ref().map(|label| {
+                    let mut ancestors=Vec::new();
+                    let mut current=label.parent();
+                    while let Some(widget)=current {
+                        let at_row=widget==row;
+                        ancestors.push(serde_json::json!({"css_name":widget.css_name().to_string(),"bounds":bounds(&widget),
+                            "relative":widget.compute_bounds(&row).map(|rect| [rect.x(),rect.y(),rect.width(),rect.height()])}));
+                        if at_row { break; }
+                        current=widget.parent();
+                    }
+                    ancestors
+                });
+                serde_json::json!({"row":bounds(&row),"label":label.as_ref().map(|label| label.text().to_string()),
+                    "label_bounds":label.as_ref().and_then(|label| bounds(label.upcast_ref())),
+                    "label_in_row":label.as_ref().and_then(|label| label.compute_bounds(&row)
+                        .map(|rect| [rect.x(),rect.y(),rect.width(),rect.height()])),"ancestors":ancestors})
+            }).collect::<Vec<_>>();
+        serde_json::json!({"bounds":bounds(popup),"content":content.as_ref().and_then(&bounds),
+            "menu_rows":menu_rows})
+    }).collect::<Vec<_>>();
     let report = serde_json::json!({"schema_version":1,"host":"gtk","state":state_name,"viewport":viewport,"dpr":dpr,
         "theme":format!("{:?}",state.theme).to_lowercase(),"text_scale":text_pt as f64/layer_ui::UI_TEXT_PT as f64,
         "preset":w.workspaces.view().id,"phone_active":phone.is_some(),
@@ -416,7 +444,8 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
             "document":document,"camera":camera,
             "swapped":state.phone.swapped,"hidden":state.phone.hidden,"menu_route":state.phone.menu_navigation.current(),"widgets":widget_sources,
             "tiles":state.workspace.layout.phone,"dialog_measure":dialog_measure,"drawer_rows":drawer_rows,"dialog_rows":dialog_rows,
-            "command_search":state.command_search.as_ref().map(|search| serde_json::json!({"query":search.query,"result_ids":search.results.iter().map(|result| &result.id).collect::<Vec<_>>() }))}});
+            "command_search":state.command_search.as_ref().map(|search| serde_json::json!({"query":search.query,"result_ids":search.results.iter().map(|result| &result.id).collect::<Vec<_>>() })),
+            "popovers":popovers}});
     let path = std::path::PathBuf::from(directory).join(format!("{capture_name}.allocations.json"));
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || std::fs::write(path,bytes))).unwrap().unwrap();

@@ -35,7 +35,7 @@ export function createCanvasBar({ app, workspace, element, button, icon, marker,
   }
   function showMenu(node, query) {
     if (!view) return;
-    node.menuModel = query;
+    node.menuTarget={kind:'canvas_bar'};node.menuModel = query;
     const opened = openMenu(node);
     if (menu !== opened) {
       menu = opened;

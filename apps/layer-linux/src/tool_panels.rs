@@ -314,6 +314,7 @@ impl ToolSettings {
         modes.update_property(&[gtk::accessible::Property::Label(&ToolActionGroup::SelectionMode.localized_label(localization))]);
         mode_container.append(&modes);
         let selection_menu = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+        crate::menu_presentation::configure(&selection_menu,layer_ui::MenuTarget::Button,None);
         let selection_actions = gtk::MenuButton::builder()
             .label(localization.text(layer_ui::MessageId::MENU_SELECT).as_ref())
             .popover(&selection_menu)

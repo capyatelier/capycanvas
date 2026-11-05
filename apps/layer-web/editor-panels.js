@@ -376,7 +376,7 @@ export function createEditorPanels({ selectionUi, app, wasmModule, state, elemen
     const release=e=>{if(e.pointerId!==pressed)return;pressed=null;contact(e.type==='pointerup'?'up':'cancel');};
     for(const type of ['pointerdown','pointermove','pointerup','pointercancel'])stage.addEventListener(type,history,true);
     for(const type of ['pointerup','pointercancel','lostpointercapture'])stage.addEventListener(type,release);
-    wheel.menuModel=()=>app.context_menu({kind:'color_wheel'});
+    wheel.menuTarget={kind:'customization',target:{kind:'color_wheel'}};wheel.menuModel=()=>app.context_menu({kind:'color_wheel'});
     stage.addEventListener('contextmenu',e=>{if(!inside(e))return;e.preventDefault();e.stopPropagation();showContext(wheel,[e.clientX,e.clientY]);});
     // Preserve native button activation instead of treating Space as canvas pan.
     for(const name of ["keydown","keyup"])root.addEventListener(name,e=>{if(e.target.closest("button")&&(e.key===" "||e.key==="Enter"))e.stopPropagation();});

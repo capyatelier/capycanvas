@@ -44,7 +44,7 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
     }
     menuAnchor?.setAttribute("aria-expanded", "true");
     menu.showPopover();
-    contextPopover.place({...point,width:1,height:1},true);
+    contextPopover.place({...point,width:1,height:1},app.menu_presentation({kind:'workspace_row'}),true);
     if (focus) menu.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
   }
   function decorate(row, choice, item, view) {

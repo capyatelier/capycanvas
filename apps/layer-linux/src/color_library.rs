@@ -133,7 +133,7 @@ impl PalettePanel {
         add.set_valign(gtk::Align::Center);
         add.set_widget_name("palette-library-add");
         let popover = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
-        popover.set_has_arrow(false);
+        crate::menu_presentation::configure(&popover,layer_ui::MenuTarget::Palette {target:PaletteMenuTarget::Library},None);
         add.set_popover(Some(&popover));
         search_row.append(&add);
         chooser.append(&search_row);
@@ -359,7 +359,6 @@ impl PalettePanel {
             }
         ));
         panel.root.add_controller(keys);
-        panel.context_menu.set_has_arrow(false);
         panel.context_menu.set_widget_name("palette-context-menu");
         panel
     }
@@ -663,7 +662,7 @@ impl PalettePanel {
         };
         self.populate_menu(&self.context_menu, sections);
         self.context_menu.set_autohide(!held);
-        w.popup_at(self.context_menu.upcast_ref(), widget, point);
+        w.popup_at(self.context_menu.upcast_ref(),widget,point,layer_ui::MenuTarget::Palette {target});
     }
     fn install_menu(self: &Rc<Self>, widget: &gtk::Widget, target: PaletteMenuTarget) {
         widget.add_css_class("customizable-target");

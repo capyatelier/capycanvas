@@ -215,7 +215,8 @@ impl TextureDialog {
         dialog.set_child(Some(&content));
         dialog.set_default_widget(Some(&apply));
         crate::page_dialog::configure(&dialog, crate::page_dialog::Metadata::new().title(&title, "label").primary(&apply).cancel(&cancel));
-        let menu = gtk::Popover::builder().has_arrow(false).build();
+        let menu = gtk::Popover::new();
+        crate::menu_presentation::configure(&menu,layer_ui::MenuTarget::PaperTile,None);
         menu.set_widget_name("paper-tile-menu");
         let texture = Rc::new_cyclic(|this| Self {
             this: this.clone(), workspace: Rc::downgrade(workspace), layer, epoch, dialog, title, viewport, grid, menu, import, cancel, apply,

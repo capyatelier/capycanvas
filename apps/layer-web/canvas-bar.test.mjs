@@ -321,22 +321,26 @@ test("context menu triggers retain native ownership and toggle before querying",
   const trigger = () => Object.assign(new FakeElement("button"), {
     menuModel() { queries++; return { title: "Menu", sections: [] }; },
   });
-  const first = trigger(), second = trigger();
+  const first = trigger(), second = trigger(),presentations=[];
+  const bounds={x:30,y:40,left:30,top:40,right:110,bottom:76,width:80,height:36};first.getBoundingClientRect=()=>bounds;second.getBoundingClientRect=()=>bounds;
+  first.menuTarget=()=>({kind:'layer_row'});
   first.contains = target => target === first; second.contains = target => target === second;
-  const scope = { context,contextPopover, Event, window: { addEventListener(type, callback) { pointerdown = callback; } },
+  const scope = { context,contextPopover,contextPresentation:null,Event,app:{menu_presentation:target=>{presentations.push(target);return target.kind==='button'?{has_arrow:true,anchor:'widget'}:{has_arrow:target.kind==='customization',anchor:'contact'};},context_menu:target=>{assert.deepEqual(JSON.parse(JSON.stringify(target)),{kind:'phone_toolbar'});return {title:'Customization',sections:[]};}}, window: { addEventListener(type, callback) { pointerdown = callback; } },
     renderMenu() {}, positionPopup() {}, closeMenuHost() {}, closeDropdown() {},
     closeContext() { context.hidePopover(); context.menuOwner = null; } };
   runInNewContext(source.slice(source.indexOf("  function showContext("), source.indexOf("  function variationMarker(")), scope);
   runInNewContext(source.slice(source.indexOf('  window.addEventListener("pointerdown"'), source.indexOf('  window.addEventListener("keydown"')), scope);
   scope.openMenu(first);
-  assert.equal(sources.at(-1), first);
+  assert.equal(sources.at(-1), first);assert.deepEqual(presentations.at(-1),{kind:'layer_row'});assert.equal(context.dataset.arrow,'false');assert.equal(scope.contextAnchor.x,30);assert.equal(scope.contextAnchor.y,76);assert.equal(scope.contextAnchor.width,1);
   pointerdown({ target: first }); assert.equal(context.open, true);
   scope.openMenu(first);
   assert.equal(context.open, false); assert.equal(queries, 1);
   scope.openMenu(second);
-  assert.equal(sources.at(-1), second); assert.equal(queries, 2);
+  assert.equal(sources.at(-1), second); assert.equal(queries, 2);assert.equal(presentations.at(-1).kind,'button');assert.equal(scope.contextAnchor,bounds);assert.equal(context.dataset.arrow,'true');
   scope.openMenu(first);
   assert.equal(context.menuOwner, first); assert.equal(context.open, true); assert.equal(queries, 3);
+  const customization=new FakeElement('button');customization.dataset.context=JSON.stringify({kind:'phone_toolbar'});customization.getBoundingClientRect=()=>bounds;
+  scope.showContext(customization,[125,175]);assert.equal(presentations.at(-1).kind,'customization');assert.deepEqual(JSON.parse(JSON.stringify(presentations.at(-1).target)),{kind:'phone_toolbar'});assert.equal(scope.contextAnchor.x,125);assert.equal(scope.contextAnchor.y,175);assert.equal(scope.contextAnchor.width,1);assert.equal(context.dataset.arrow,'true');
 });
 
 test("More opens the shared menu for the shown count, toggles closed, and closes when the bar hides", () => {

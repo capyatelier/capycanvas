@@ -1714,7 +1714,7 @@ impl Workspace {
         *self.customization.context_focus.borrow_mut() = gtk::prelude::GtkWindowExt::focus(&self.window)
             .filter(|focused| focused == widget || focused.is_ancestor(widget))
             .map(|focused| focused.downgrade());
-        popover.set_pointing_to(Some(&gdk::Rectangle::new(
+        crate::menu_presentation::configure(popover,layer_ui::MenuTarget::Customization {target},Some(gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,
             1,

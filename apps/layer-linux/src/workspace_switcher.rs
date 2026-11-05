@@ -98,6 +98,7 @@ pub(super) fn build() -> (gtk::Box, gtk::Box, gtk::MenuButton) {
 impl NativeWorkspaces {
     pub fn switcher_popup(&self, w: &Rc<Workspace>) -> gtk::PopoverMenu {
         let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
+        crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
         popup.set_widget_name("workspace-switcher-popup");
         self.populate_switcher_menu(w, &popup, true, true);
         self.track_popup(&popup, true);
@@ -107,6 +108,7 @@ impl NativeWorkspaces {
 
     fn options_popup(&self, w: &Rc<Workspace>) -> gtk::PopoverMenu {
         let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
+        crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
         popup.set_widget_name("workspace-switcher-options-popup");
         popup.add_css_class("workspace-visibility-menu");
         self.populate_switcher_menu(w, &popup, false, true);
@@ -207,7 +209,7 @@ impl NativeWorkspaces {
             .filter(|focus| focus == widget || focus.is_ancestor(widget))
             .or_else(|| widget.is_focusable().then(|| widget.clone())))
             .map(|focus| focus.downgrade());
-        w.popup_at(popup.upcast_ref(), widget, [x as f32, y as f32]);
+        w.popup_at(popup.upcast_ref(),widget,[x as f32,y as f32],layer_ui::MenuTarget::WorkspaceOptions);
     }
 
     pub(crate) fn finish_options_hold(&self, cancelled: bool) {
@@ -266,7 +268,7 @@ impl NativeWorkspaces {
         *self.switch_owner.borrow_mut() = Rc::downgrade(w);
         self.switch_context.set_widget_name("workspace-switcher-options-context");
         self.switch_context.add_css_class("workspace-visibility-menu");
-        self.switch_context.set_has_arrow(false);
+        crate::menu_presentation::configure(&self.switch_context,layer_ui::MenuTarget::WorkspaceOptions,None);
         self.switch_context.connect_closed(glib::clone!(#[weak] w, move |_| {
             if let Some(source) = w.workspaces.switch_context_focus.take().and_then(|source| source.upgrade())
                 .filter(|source| source.is_mapped())

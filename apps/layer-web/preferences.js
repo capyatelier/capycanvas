@@ -58,7 +58,8 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     reset.disabled = !row.reset.enabled;
     reset.append(element("span", "command-label", ()=>modelRow(row.id)?.reset?.label??""), element("span", "shortcut-hint", row.reset.hint));
     contextBody.append(reset); context.showPopover();
-    contextPopover.place({x,y,width:1,height:1},true);
+    const presentation=app.menu_presentation({kind:input?'text_edit':'preference_reset'});
+    contextPopover.place({x,y,width:1,height:1},presentation,true);
     if (!input) reset.focus();
   }
   // Keep the focused text editor's selection/draft while using its menu.

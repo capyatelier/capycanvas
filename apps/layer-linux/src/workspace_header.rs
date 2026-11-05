@@ -309,6 +309,7 @@ impl Header {
                     return;
                 };
                 let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
+                crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
                 w.populate_workspace_menu(&popup, model);
                 w.watch_popover(popup.upcast_ref());
                 button.set_popover(Some(&popup));
@@ -1274,6 +1275,7 @@ impl Header {
                         // A transient nested menu is anchored to the visible overflow
                         // control, never to the unallocated hidden component.
                         let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
+                        crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
                         w.populate_workspace_menu(&popup, model);
                         w.watch_popover(popup.upcast_ref());
                         popup.set_parent(&self.overflow[zone]);

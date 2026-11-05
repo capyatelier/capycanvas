@@ -64,7 +64,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   const workspaceChoices = () => workspaceView().switcher_menu;
   function workspaceOptions(node) {
     if (!node.dataset.context) customization.target(node, {kind:'header', id:null});
-    node.menuModel = () => workspaceView().switcher_options;
+    node.menuTarget={kind:'workspace_options'};node.menuModel = () => workspaceView().switcher_options;
     node.dataset.workspaceOptions = 'true';
     node.addEventListener('contextmenu', e => {
       e.preventDefault(); e.stopPropagation();
@@ -77,7 +77,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     });
   }
   workspaceOptions(switcher);
-  switcher.openOptions = node => customization.openMenu(switcher, null, node);
+  switcher.openOptions = node => customization.openMenu(switcher, null, node, {kind:'button'});
   switcher.addEventListener('workspace-view-changed', () => {
     customization.refreshContextMenu();
     for(const node of root.querySelectorAll('details[open]'))node.refreshMenu?.();

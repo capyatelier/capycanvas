@@ -478,7 +478,7 @@ impl LayerPanel {
         root.add_css_class("layers-panel");
         let context = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
         context.set_parent(&root);
-        context.set_has_arrow(false);
+        crate::menu_presentation::configure(&context,layer_ui::MenuTarget::LayerRow,None);
         let opacity_editor = NumberControl::panel(NumericControl::layer_opacity(), copy.borrow().layer.opacity.as_ref(), localization.clone());
         opacity_editor.set_widget_name("layer-gesture-opacity");
         opacity_editor.set_size_request(220, -1);
@@ -531,6 +531,7 @@ impl LayerPanel {
         blend.set_widget_name("layer-blend");
         caption(&blend, copy.borrow().layer.blend.as_ref());
         let blend_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        crate::menu_presentation::configure(&blend_menu,layer_ui::MenuTarget::Button,None);
         blend.set_popover(Some(&blend_menu));
         options.append(&blend);
         let opacity = NumberControl::inline(NumericControl::layer_opacity(), copy.borrow().layer.opacity.as_ref(), localization.clone());
@@ -1304,6 +1305,7 @@ impl LayerPanel {
         self.footer.append(mask);
         self.add_filter.set_widget_name("layer-add-filter");
         let filter_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        crate::menu_presentation::configure(&filter_menu,layer_ui::MenuTarget::Button,None);
         w.watch_popover(filter_menu.upcast_ref());
         self.add_filter.set_popover(Some(&filter_menu));
         filter_menu.connect_show(glib::clone!(#[weak] w, move |popover| {
@@ -1677,7 +1679,7 @@ fn show_menu(w: &Rc<Workspace>, context: &gtk::PopoverMenu, anchor: &gtk::Widget
     if let Some(p) = context.parent().and_then(|root| {
         anchor.compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32))
     }) {
-        context.set_pointing_to(Some(&gdk::Rectangle::new(p.x() as i32, p.y() as i32, 1, 1)));
+        crate::menu_presentation::configure(context,layer_ui::MenuTarget::LayerRow,Some(gdk::Rectangle::new(p.x() as i32,p.y() as i32,1,1)));
     }
     context.popup();
 }

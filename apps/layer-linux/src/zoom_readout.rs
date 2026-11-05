@@ -132,7 +132,7 @@ impl ZoomReadout {
         self.menu.add_child(&self.controls.root, BUTTONS);
         self.field.set_value(f64::from(camera.zoom));
         self.rotation.set_value(f64::from(camera.rotation));
-        workspace.popup_at(self.menu.upcast_ref(), &self.root, [self.root.width() as f32 / 2., 0.]);
+        workspace.popup_at(self.menu.upcast_ref(),&self.root,[self.root.width() as f32/2.,0.],layer_ui::MenuTarget::ZoomReadout);
     }
 
     pub fn refresh(&self, camera: &Camera, commands: &[layer_ui::CommandState]) {

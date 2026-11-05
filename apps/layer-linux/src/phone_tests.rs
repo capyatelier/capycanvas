@@ -1943,6 +1943,9 @@ fn inventory_drawer_ready(d: &Driver) {
 }
 
 fn inventory_monitor(d: &mut Driver, name: &str) {
+    for menu in widgets(d.w.window.upcast_ref()).filter_map(|widget|widget.downcast::<gtk::Popover>().ok()).filter(|menu|menu.is_mapped()) {
+        if crate::menu_presentation::declared(&menu).is_some() {crate::menu_presentation::assert_declared(&menu);}
+    }
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_none() { return; }
     let frames = sample_after_paint(&d.w.window, || ());
     d.w.window.queue_draw();
@@ -1974,13 +1977,14 @@ pub(super) fn inventory_popup(d: &mut Driver, opener: &gtk::Widget, name: &str, 
     until(||!widgets(d.w.window.upcast_ref()).any(|widget|widget.is::<gtk::Popover>() && widget.is_mapped()),"the popup closes");
 }
 
-fn inventory_panel_menus(d: &mut Driver, panel: Panel) {
+fn inventory_panel_menus(d: &mut Driver, panel: Panel, focused: bool) {
     d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
     d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
     if panel==Panel::Layers {
         let id=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
         let row=d.named(&format!("art-layer-{id}"));
         inventory_popup(d,&row,"layers-row-menu",true);
+        if focused { return; }
         let blend=d.named("layer-blend");inventory_popup(d,&blend,"layers-blend-menu",false);
         let filter=d.named("layer-add-filter");inventory_popup(d,&filter,"layers-add-filter-menu",false);
         let p=d.point(&row);
@@ -2003,10 +2007,13 @@ fn inventory_panel_menus(d: &mut Driver, panel: Panel) {
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
     }
     if panel==Panel::Color {
-        let slot=d.named("color-Foreground");inventory_popup(d,&slot,"color-slot-menu",true);
-        let wheel=d.named("color-wheel");inventory_popup(d,&wheel,"color-wheel-menu",true);
+        if !focused {
+            let slot=d.named("color-Foreground");inventory_popup(d,&slot,"color-slot-menu",true);
+            let wheel=d.named("color-wheel");inventory_popup(d,&wheel,"color-wheel-menu",true);
+        }
         let swatch=widgets(d.w.window.upcast_ref()).find(|widget|widget.is_mapped() && widget.widget_name().starts_with("palette-swatch-")).unwrap();
         inventory_popup(d,&swatch,"palette-swatch-menu",true);
+        if focused { return; }
         let from=d.point(&swatch);let to=[from[0]+40.,from[1]+20.];
         d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to)]));
         capture_current(d,"swatch-drag");d.input.key(0xff1b);d.input.perform(serde_json::json!([contact("mouse","up",to)]));
@@ -2147,6 +2154,30 @@ fn inventory_canvas_bars(d: &mut Driver) {
 #[ignore = "private compositor: --native-test=native_phone_inventory --native-storage; phone viewport/theme external"]
 fn native_phone_inventory() {
     let mut d = setup("art.capycanvas.PhoneInventory");
+    if std::env::var("LAYER_PHONE_INVENTORY_CONTEXTS").as_deref() == Ok("1") {
+        inventory_workspace(&d, WorkspacePreset::Painter);
+        for panel in [Panel::Layers, Panel::Color] {
+            d.w.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel } });
+            until(|| {
+                if panel == Panel::Color && !find_named(d.w.window.upcast_ref(), "color-wheel")
+                    .is_some_and(|wheel| wheel.is_mapped() && wheel.width() > 0 && wheel.height() > 0) { return false; }
+                let target = match panel {
+                    Panel::Layers => state(&d.w).layer_tools.editing_layer.as_ref().and_then(|layer|
+                        find_named(d.w.window.upcast_ref(), &format!("art-layer-{}", layer.id))),
+                    Panel::Color => widgets(d.w.window.upcast_ref()).find(|widget|
+                        widget.widget_name().starts_with("palette-swatch-")),
+                    _ => None,
+                };
+                d.w.drawer.placement().is_some() && target.filter(|widget| widget.is_mapped())
+                    .and_then(|widget| widget.compute_bounds(&d.w.window))
+                    .is_some_and(|bounds| bounds.width() > 0. && bounds.height() > 0.)
+            }, "the selected inventory menu target is allocated");
+            inventory_panel_menus(&mut d, panel, true);
+            inventory_close(&mut d);
+        }
+        d.finish();
+        return;
+    }
     for preset in WorkspacePreset::ALL {
         let tag = preset.name().to_lowercase();
         inventory_workspace(&d,preset);
@@ -2205,8 +2236,8 @@ fn native_phone_inventory() {
             }.to_lowercase();
             capture(&mut d, &format!("inventory-{tag}-{label}"));
             if preset==WorkspacePreset::Painter {
-                if let ToolbarControl::Panel {panel:Panel::Layers}=tile.control { inventory_panel_menus(&mut d,Panel::Layers); }
-                if tile.control==ToolbarControl::Color { inventory_panel_menus(&mut d,Panel::Color); }
+                if let ToolbarControl::Panel {panel:Panel::Layers}=tile.control { inventory_panel_menus(&mut d,Panel::Layers,false); }
+                if tile.control==ToolbarControl::Color { inventory_panel_menus(&mut d,Panel::Color,false); }
             }
             inventory_close(&mut d);
             if owns_image {d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});new_photo::ready(&d.w);}

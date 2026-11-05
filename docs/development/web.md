@@ -84,8 +84,9 @@ Where to look in [`apps/layer-web`](../../apps/layer-web):
   while the Wasm app is being created. They retain held contacts but call
   compiler timing methods only after the app is published.
 - **Context menus.** `context-popover.js` presents every context-menu surface
-  with one anchor/flip/clamp rule, an anchor arrow and an initial row highlight.
-  Callers supply native contact or invoker bounds and shared menu rows. Numeric
+  with one flip/clamp rule and an initial row highlight. Callers declare shared
+  `MenuTarget` metadata; Rust supplies arrow visibility and contact or widget
+  anchoring. Hosts supply measured bounds and shared menu rows. Numeric
   editor popups and the Capy drawer keep their own presentations.
 - **Text follows language changes.** Publication updates retained catalog objects
   and semantic DOM bindings together, so numeric entries, selection, dialogs, the

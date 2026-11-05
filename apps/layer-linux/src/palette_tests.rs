@@ -688,6 +688,7 @@ fn native_palette_panel_input() {
         .downcast::<gtk::PopoverMenu>()
         .unwrap();
     assert!(!menu.has_arrow());
+    crate::menu_presentation::assert_declared(menu.upcast_ref());
     capture_palette(&mut d, "palette-color-menu.png");
     d.click(&d.label("Rename Color…"));
     assert!(entry.is_mapped(), "native menu begins inline naming");
@@ -1070,6 +1071,7 @@ fn check_palette_context(devices: &[&str]) {
                 .unwrap();
             assert!(menu.is_visible(), "{device}: row context menu");
             assert!(!menu.has_arrow());
+            crate::menu_presentation::assert_declared(menu.upcast_ref());
             assert_eq!(
                 state(&d.w).color_library.active,
                 library.active,

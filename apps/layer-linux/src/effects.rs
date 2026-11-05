@@ -316,6 +316,7 @@ impl EffectPanels {
             return;
         }
         let filter_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        crate::menu_presentation::configure(&filter_menu,layer_ui::MenuTarget::Button,None);
         self.add_filter.set_popover(Some(&filter_menu));
         w.watch_popover(filter_menu.upcast_ref());
         filter_menu.connect_show(glib::clone!(#[weak] w, move |popover| {

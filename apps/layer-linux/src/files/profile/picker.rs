@@ -415,6 +415,7 @@ impl ProfilePicker {
             ),
         );
         let popover = gtk::PopoverMenu::from_model(Some(&model));
+        crate::menu_presentation::configure(&popover,layer_ui::MenuTarget::Button,None);
         if let Some(w) = workspace {
             w.watch_popover(popover.upcast_ref());
         }

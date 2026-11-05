@@ -24,7 +24,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
   const thumbnails=createLayerThumbnails(app,wake);
   let dirty=true,active=false,stamp,stampBusy=false,stampPending=false,stampWanted=null,stampGeneration=0,stroke=false,restoreAt=null;
   const send=(action,plain=false)=>{dispatch(plain?action:{type:'bubble',action});active=true;wake();};
-  const menu=(r,p)=>{r.root.menuModel=()=>app.context_menu({kind:'bubble',id:r.view.id});customization.openMenu(r.root,p);};
+  const menu=(r,p)=>{r.root.menuTarget={kind:'customization',target:{kind:'bubble',id:r.view.id}};r.root.menuModel=()=>app.context_menu({kind:'bubble',id:r.view.id});customization.openMenu(r.root,p);};
   const input=createBubbleInput({app,workspace,records,send,wake,menu,dismiss:()=>customization.dismissContext(),cancelWorkspace,viewport,leaveCanvas,colorTouch:colorTouchInput({app,applyChange,wake})});
   function surface(r,node,center,size,radius=size[1]/2,shape=0) {
     place(node,center,size);const box={node,center,size,radius,shape};node.bubbleSurface=box;r.boxes.push(box);return node;
@@ -178,7 +178,7 @@ export function createBubbles({app,workspace,element,button,icon,state,dispatch,
     r.hints?.remove();r.hints=element('div','bubble-hints');r.body.append(r.hints);
     for(const[center,alpha]of v.hints){const hint=element('i');place(hint,center,[5,5]);hint.style.opacity=alpha*.35;r.hints.append(hint);}
     if(v.pill) {
-      if(!r.pill){r.pill=element('div','bubble-pill bubble-surface');r.pill.append(button('',()=>send({type:'palette',id:v.id,step:-1})),button('',()=>{r.pill.menuModel=()=>app.context_menu({kind:'bubble_palettes',id:v.id});customization.openMenu(r.pill);}),button('',()=>send({type:'palette',id:v.id,step:1})));r.pill.firstChild.append(icon('go-previous'));r.pill.lastChild.append(icon('go-next'));r.body.append(r.pill);}
+      if(!r.pill){r.pill=element('div','bubble-pill bubble-surface');r.pill.append(button('',()=>send({type:'palette',id:v.id,step:-1})),button('',()=>{r.pill.menuTarget={kind:'customization',target:{kind:'bubble_palettes',id:v.id}};r.pill.menuModel=()=>app.context_menu({kind:'bubble_palettes',id:v.id});customization.openMenu(r.pill);}),button('',()=>send({type:'palette',id:v.id,step:1})));r.pill.firstChild.append(icon('go-previous'));r.pill.lastChild.append(icon('go-next'));r.body.append(r.pill);}
       r.pill.hidden=false;r.pill.children[1].textContent=v.pill;const b=packet.pill;surface(r,r.pill,[b.x+b.width/2,b.y+b.height/2],[b.width,b.height]);
     } else if(r.pill)r.pill.hidden=true;
     if(v.card) {

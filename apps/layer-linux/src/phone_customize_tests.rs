@@ -39,6 +39,9 @@ fn hold(d: &mut Driver, tile: Option<u32>) {
     assert!(popup(d).is_none(), "holding lifts the tile without opening its release menu");
     d.input.perform(serde_json::json!([contact("touch", "up", point)]));
     until(|| popup(d).is_some(), "hold release opens the native editing menu");
+    let menu=popup(d).unwrap();
+    assert!(menu.has_arrow());
+    crate::menu_presentation::assert_declared(&menu);
 }
 
 fn menu_action(d: &mut Driver, label: &str) {

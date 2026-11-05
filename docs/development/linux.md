@@ -238,6 +238,7 @@ After changing the tablet proxy, run its tests with
 | `native_phone_page_bounds` | `--native-storage`, `GTK_A11Y=test` and captures; `280x280`, `280x560` and `320x568`, light/dark. Opens every editor inventory page and checks actual body minimums, window/header bounds and GTK size warnings. |
 | `native_phone_motion` | `--native-storage`, `LAYER_NATIVE_EVENT_MS=4`, a phone `LAYER_MOTION_VIEWPORT`, and `LAYER_PHONE_MOTION_REPORT` under the test artifacts directory. |
 | `native_phone_frame`, `native_phone_drawers` | `--native-storage`, `LAYER_MOTION_VIEWPORT=412x891` (also `891x412`, `320x568` and `280x560`); both `CAPY_NATIVE_TEST_THEME=light` and `dark`. Set `LAYER_NATIVE_CAPTURE_DIR` for composed captures; it is required by `native_phone_drawers` to compare selected tile and drawer-row pixels in light/dark and opaque/glass states. `LAYER_PHONE_DECORATION_LAYOUT` selects a GTK button layout for native-control checks; `LAYER_PHONE_TEXT_PT=18` checks larger UI text. |
+| `native_phone_inventory`, focused context menus | Set `LAYER_PHONE_INVENTORY_CONTEXTS=1` to capture the Painter layer-row and palette-swatch menus through the existing inventory journey. |
 | `native_workspace_switcher_press_feedback` | `--native-storage`, then again with `--tablet` |
 | `native_three_finger_scrub`, `native_pressure_calibration` | `--tablet` |
 | `native_layer_relationship_review`, pen branch | `LAYER_RELATIONSHIP_PEN=1` and `--tablet` |

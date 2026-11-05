@@ -103,7 +103,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.left, clientY: r.bottom + 2 }));
     }, "palette-icon palette-library-add");
     more.append(icon("plus")); bindCopy(more,()=>copy.new_import,"title"); bindCopy(more,()=>copy.new_import,"ariaLabel");
-    more.dataset.context = "{}"; more.menuModel = () => ({ title: copy.title, sections: app.palette_menu({ kind: "library" }) }); more.menuCommand = run;
+    more.dataset.context = "{}"; more.menuTarget={kind:"palette",target:{kind:"library"}}; more.menuModel = () => ({ title: copy.title, sections: app.palette_menu({ kind: "library" }) }); more.menuCommand = run;
     const searchRow = element("div", "palette-search-row"); searchRow.append(search, more);
     const list = element("div", "palette-list"), empty = element("p", "palette-no-results", () => copy.no_matches);
     list.setAttribute("role", "listbox"); bindCopy(list,()=>copy.title,"ariaLabel"); empty.hidden = true;
@@ -203,6 +203,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     function swatchTile(id) {
       const record = tile(), { node } = record;
       node.dataset.id = String(id); node.dataset.context = "{}";
+      node.menuTarget={kind:"palette",target:{kind:"color",id}};
       node.menuModel = () => ({ title: record.swatch?.name ?? "", sections: app.palette_menu({ kind: "color", id }) });
       node.menuCommand = run;
       node.addEventListener("click", e => {
@@ -265,7 +266,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         }, "palette-choice");
         row.dataset.paletteId = String(palette.id); row.dataset.name = palette.name; row.title = palette.name;
         row.setAttribute("role", "option"); row.setAttribute("aria-selected", String(palette.active));
-        row.dataset.context = "{}"; row.menuModel = () => ({ title: palette.name, sections: app.palette_menu({ kind: "palette", id: palette.id }) }); row.menuCommand = run;
+        row.dataset.context = "{}"; row.menuTarget={kind:"palette",target:{kind:"palette",id:palette.id}}; row.menuModel = () => ({ title: palette.name, sections: app.palette_menu({ kind: "palette", id: palette.id }) }); row.menuCommand = run;
         const strip = element("span", "palette-strip");
         for (const rgba of palette.preview) { const cell = element("span"); paint(cell, rgba); strip.append(cell); }
         row.append(element("span", "palette-choice-name", palette.name), strip);

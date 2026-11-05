@@ -85,6 +85,7 @@ impl Manager {
             removal.append(Some(self.copy.borrow().remove.as_ref()), Some("saved.remove"));
             menu.append_section(None, &removal);
             let popup = gtk::PopoverMenu::from_model(Some(&menu));
+            crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
             let actions = gio::SimpleActionGroup::new();
             let show = gio::SimpleAction::new_stateful("show", None, &entry.visible.to_variant());
             let remove = gio::SimpleAction::new("remove", None);

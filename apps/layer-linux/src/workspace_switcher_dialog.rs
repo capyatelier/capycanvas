@@ -74,7 +74,7 @@ impl ManagerUi {
         context: &gtk::Popover,
     ) {
         let popup = menu.popover().unwrap();
-        popup.connect_closed(|p| p.set_pointing_to(None));
+        popup.connect_closed(|p| crate::menu_presentation::configure(p,layer_ui::MenuTarget::Button,None));
         context.connect_closed(|p| p.set_pointing_to(None));
         let popovers = [popup.clone(), context.clone()];
         // While a hold owns the contact, leave the popup ungrabbed so the
@@ -431,7 +431,7 @@ impl ManagerUi {
 
 fn row_menu(row: &gtk::ListBoxRow, popup: &gtk::Popover, x: f64, y: f64, autohide: bool) {
     if let Some(p) = popup.parent().and_then(|parent| row.compute_point(&parent, &gtk::graphene::Point::new(x as f32, y as f32))) {
-        popup.set_pointing_to(Some(&gdk::Rectangle::new(p.x() as i32, p.y() as i32, 1, 1)));
+        crate::menu_presentation::configure(popup,layer_ui::MenuTarget::WorkspaceRow,Some(gdk::Rectangle::new(p.x() as i32,p.y() as i32,1,1)));
     }
     popup.set_autohide(autohide);
     popup.popup();

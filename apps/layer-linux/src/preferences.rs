@@ -362,7 +362,7 @@ pub(crate) fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: Prefe
         &w.preferences.content_view,
         &gtk::graphene::Point::new(x as f32, y as f32),
     ) {
-        popup.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        crate::menu_presentation::configure(popup,layer_ui::MenuTarget::PreferenceReset,Some(gtk::gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,
             1,

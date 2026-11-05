@@ -831,6 +831,7 @@ fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
 }
 fn actions_popover(w: &Rc<Workspace>, actions: Vec<ManagerButton>) -> gtk::Popover {
     let popup = gtk::Popover::new();
+    crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
     margins(&content, 6);
     popup.set_child(Some(&content));

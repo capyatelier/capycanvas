@@ -7,7 +7,7 @@ import {middleEllipsis} from './text-layout.js';
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
 import {addScrollbar} from './scrollbars.js';
-import {createContextPopover} from './context-popover.js';
+import {createContextPopover,menuIndicatorGutter} from './context-popover.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
@@ -37,7 +37,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const contextPopover=createContextPopover({element}),context=contextPopover.root;
   const menuBody=container=>container===context?contextPopover.body:container;
-  let contextAnchor;
+  let contextAnchor,contextPresentation;
   workspace.append(context);
   const popup = element("div", "tile-popover"); popup.popover = "auto"; workspace.append(popup);
   const closeMenuHost=event=>{if(event.type==='close'||event.newState==='closed')dismissContext();};
@@ -107,7 +107,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       }, "submenu-back");
       back.prepend(icon("go-previous")); body.append(back, element("hr"));
     }
-    const checks=model.sections.flat().some(item=>item.selected!=null);
+    const checks=menuIndicatorGutter(model.sections);
     let separated = false;
     model.sections.forEach((section, index) => {
       if (!section.length) return;
@@ -128,7 +128,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
         body.append(row);
       }
     });
-    if (container === context && context.matches(":popover-open")) contextPopover.place(contextAnchor);
+    if (container === context && context.matches(":popover-open")) contextPopover.place(contextAnchor,contextPresentation);
   }
   function refreshMenu(container,model,close) {
     const rootKey=menuKey(model);
@@ -158,7 +158,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const model=owner.menuModel?owner.menuModel():app.context_menu(JSON.parse(owner.dataset.context));
     refreshMenu(context,model,closeDropdown);
   }
-  function showContext(node, point, focus = node) {
+  function showContext(node, point, focus = node, presentationTarget) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
     if (!node.dispatchEvent(claimed)) return;
     node.prepareMenu?.();
@@ -169,17 +169,17 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     menuHost=node.closest('dialog[open],[popover]:popover-open');
     if(menuHost){menuHost.append(context);for(const type of ['close','beforetoggle'])menuHost.addEventListener(type,closeMenuHost);}
     context.style.minWidth=node.classList.contains('dropdown')&&point[2]!=null?`${node.getBoundingClientRect().width}px`:'';
-    const bounds=node.getBoundingClientRect();
-    contextAnchor=point[2]==null?{x:point[0],y:point[1],width:1,height:1}:
-      {x:bounds.left,y:point[2],width:bounds.width,height:point[1]-point[2]};
+    const bounds=focus.getBoundingClientRect(),target=presentationTarget??(typeof node.menuTarget==='function'?node.menuTarget():node.menuTarget);
+    contextPresentation=app.menu_presentation(target??(node.menuModel?{kind:'button'}:{kind:'customization',target:JSON.parse(node.dataset.context)}));
+    contextAnchor=contextPresentation.anchor==='widget'?bounds:{x:point[0],y:point[1],width:1,height:1};
     context.menuOwner = node; context.menuFocus = focus;
     renderMenu(context, model, closeDropdown);
-    context.showPopover({source: node}); contextPopover.place(contextAnchor,true);
+    context.showPopover({source: node}); contextPopover.place(contextAnchor,contextPresentation,true);
   }
-  function openMenu(node, point, focus = node) {
+  function openMenu(node, point, focus = node, presentationTarget) {
     if (context.menuOwner === node && context.matches(':popover-open')) { closeContext(); return context; }
     const r = node.getBoundingClientRect();
-    showContext(node, point || [r.left, r.bottom, r.top], focus);
+    showContext(node, point || [r.left, r.bottom, r.top], focus, presentationTarget);
     context.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
     return context;
   }

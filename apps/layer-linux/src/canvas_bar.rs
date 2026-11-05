@@ -69,6 +69,7 @@ impl CanvasBar {
         root.append(&more);
         root.append(&completion);
         let menu = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+        crate::menu_presentation::configure(&menu,layer_ui::MenuTarget::CanvasBar,None);
         more.set_popover(Some(&menu));
         Self {
             root,
@@ -394,6 +395,7 @@ fn menu_button(
         button.set_child(Some(&content));
     }
     let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+    crate::menu_presentation::configure(&popover,layer_ui::MenuTarget::CanvasBar,None);
     button.set_popover(Some(&popover));
     workspace.watch_popover(popover.upcast_ref());
     popover.connect_show(glib::clone!(

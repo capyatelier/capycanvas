@@ -901,6 +901,10 @@ impl WebApp {
                 .panel_handle_target(item),
         )
     }
+    pub fn menu_presentation(&self, target: JsValue) -> Result<JsValue, JsValue> {
+        let target: layer_ui::MenuTarget = serde_wasm_bindgen::from_value(target).map_err(js)?;
+        serialize(&target.presentation())
+    }
     pub fn context_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
         let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
         serialize(&self.session.context_menu(target).map_err(js)?)

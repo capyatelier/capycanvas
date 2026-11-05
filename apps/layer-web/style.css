@@ -254,6 +254,7 @@ dialog .dropdown { --dropdown-height:34px; --dropdown-fill:var(--widget-fill); c
 .panel-check:disabled { opacity: .5; }
 .panel-context-menu { position:fixed; inset:auto; margin:0; padding:0; min-width:122px; width:max-content; overflow:visible; border:0; background:transparent; color:var(--text); user-select:none; -webkit-user-select:none; }
 .context-menu-body { box-sizing:border-box; padding:6px; min-width:inherit; max-width:inherit; overflow:auto; scrollbar-width:none; border:1px solid var(--popover-border); border-radius:15px; corner-shape:round; background:var(--popover); box-shadow:0 1px 5px 1px rgb(0 0 0 / 9%),0 2px 14px 3px rgb(0 0 0 / 5%); }
+.panel-context-menu[data-arrow="false"]::before,.panel-context-menu[data-arrow="false"]::after { display:none; }
 .panel-context-menu::before,.panel-context-menu::after { content:""; position:absolute; left:0; width:100%; height:12px; pointer-events:none; }
 .panel-context-menu[data-side="bottom"]::before,.panel-context-menu[data-side="bottom"]::after { bottom:calc(100% - 1px); clip-path:polygon(calc(var(--menu-arrow-base) - 12px) 100%,var(--menu-arrow-tip) 0,calc(var(--menu-arrow-base) + 12px) 100%); }
 .panel-context-menu[data-side="top"]::before,.panel-context-menu[data-side="top"]::after { top:calc(100% - 1px); clip-path:polygon(calc(var(--menu-arrow-base) - 12px) 0,var(--menu-arrow-tip) 100%,calc(var(--menu-arrow-base) + 12px) 0); }

@@ -2,16 +2,21 @@ import {addScrollbar} from './scrollbars.js';
 
 const MARGIN=0, ARROW=12, RADIUS=15;
 
-export function contextPopoverLayout({anchor,size,viewport}) {
-  const x=viewport.x??0,y=viewport.y??0;
-  const below=Math.max(0,y+viewport.height-MARGIN-anchor.y-anchor.height-ARROW);
-  const above=Math.max(0,anchor.y-y-MARGIN-ARROW);
+export function menuIndicatorGutter(sections) {
+  return sections.some(section=>section.some(item=>!item.is_heading && item.selected!=null
+    && !(item.enabled && item.action==null && item.sections?.some(section=>section.length))));
+}
+
+export function contextPopoverLayout({anchor,size,viewport,has_arrow}) {
+  const x=viewport.x??0,y=viewport.y??0,arrow=has_arrow?ARROW:0;
+  const below=Math.max(0,y+viewport.height-MARGIN-anchor.y-anchor.height-arrow);
+  const above=Math.max(0,anchor.y-y-MARGIN-arrow);
   const side=size.height<=below||below>=above?'bottom':'top';
   const maxHeight=side==='bottom'?below:above,height=Math.min(size.height,maxHeight);
   const width=Math.min(size.width,Math.max(0,viewport.width-2*MARGIN));
   const tip=anchor.x+anchor.width/2;
   const left=Math.max(x+MARGIN,Math.min(tip-width/2,x+viewport.width-width-MARGIN));
-  const top=side==='bottom'?anchor.y+anchor.height+ARROW:anchor.y-ARROW-height;
+  const top=side==='bottom'?anchor.y+anchor.height+arrow:anchor.y-arrow-height;
   const arrowTip=Math.max(0,Math.min(tip-left,width));
   const corner=Math.min(RADIUS+ARROW,width/2);
   return {left,top:Math.max(y+MARGIN,Math.min(top,y+viewport.height-height-MARGIN)),maxHeight,side,
@@ -30,16 +35,16 @@ export function createContextPopover({element,classes='',popover='manual'}) {
   body.addEventListener('pointermove',clearHighlight);
   body.addEventListener('focusin',clearHighlight);
   body.addEventListener('scroll',clearHighlight);
-  function place(anchor,initial=false) {
+  function place(anchor,presentation,initial=false) {
     const view=globalThis.visualViewport;
     const viewport={x:view?.offsetLeft??0,y:view?.offsetTop??0,width:view?.width??innerWidth,height:view?.height??innerHeight};
     root.style.maxWidth=`${Math.max(0,viewport.width-2*MARGIN)}px`;
     body.style.maxHeight='';
     const size=root.getBoundingClientRect();
-    const layout=contextPopoverLayout({anchor,size,viewport});
+    const layout=contextPopoverLayout({anchor,size,viewport,has_arrow:presentation.has_arrow});
     body.style.maxHeight=`${layout.maxHeight}px`;
     root.style.left=`${layout.left}px`;root.style.top=`${layout.top}px`;
-    root.dataset.side=layout.side;
+    root.dataset.side=layout.side;root.dataset.arrow=String(presentation.has_arrow);
     root.style.setProperty('--menu-arrow-tip',`${layout.arrowTip}px`);
     root.style.setProperty('--menu-arrow-base',`${layout.arrowBase}px`);
     if(initial){clearHighlight();body.querySelector('button:not(:disabled)')?.setAttribute('data-menu-initial','');}

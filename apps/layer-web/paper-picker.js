@@ -96,7 +96,7 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
     }));
     menu.showPopover();
     const tile=tiles[index].getBoundingClientRect();
-    contextPopover.place(e.clientX||e.clientY?{x:e.clientX,y:e.clientY,width:1,height:1}:tile,true);
+    contextPopover.place(tile,app.menu_presentation({kind:'paper_tile'}),true);
     menu.querySelector('button')?.focus();
   }
   function reveal(node = grid.querySelector('[tabindex="0"]')) {

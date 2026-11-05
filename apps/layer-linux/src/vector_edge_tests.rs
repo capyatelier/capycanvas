@@ -651,7 +651,10 @@ fn context_menu(d: &mut Driver, id: u64) -> gtk::PopoverMenu {
     d.input.perform(serde_json::json!([{"point":p},{"button":273,"down":true},{"button":273,"down":false}]));
     wait_for("the row's context menu", || widgets(d.w.window.upcast_ref()).any(|w| w.is::<gtk::PopoverMenu>() && w.is_mapped()));
     pump(250);
-    widgets(d.w.window.upcast_ref()).find_map(|w| w.downcast::<gtk::PopoverMenu>().ok().filter(|p| p.is_mapped())).unwrap()
+    let menu=widgets(d.w.window.upcast_ref()).find_map(|w| w.downcast::<gtk::PopoverMenu>().ok().filter(|p| p.is_mapped())).unwrap();
+    assert!(!menu.has_arrow());
+    crate::menu_presentation::assert_declared(menu.upcast_ref());
+    menu
 }
 
 #[test]

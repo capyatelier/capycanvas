@@ -1925,6 +1925,7 @@ impl Workspace {
         menu.set_direction(gtk::ArrowType::None);
         let root = gtk::gio::Menu::new();
         let popover = gtk::PopoverMenu::from_model(Some(&root));
+        crate::menu_presentation::configure(&popover,layer_ui::MenuTarget::Button,None);
         if id == ApplicationMenu::Window {
             popover.set_widget_name("workspace-menu");
         }
@@ -2018,6 +2019,7 @@ impl Workspace {
         popover: &gtk::Popover,
         widget: &impl IsA<gtk::Widget>,
         point: [f32; 2],
+        target: layer_ui::MenuTarget,
     ) {
         let Some(point) = widget.compute_point(
             &self.surface,
@@ -2029,7 +2031,7 @@ impl Workspace {
             popover.set_parent(&self.surface);
             self.watch_popover(popover);
         }
-        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(
+        crate::menu_presentation::configure(popover,target,Some(gtk::gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,
             1,

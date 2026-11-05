@@ -417,7 +417,8 @@ impl NewDrawing {
         let resolution_unit = gtk::Label::new(None);
         resolution_unit.add_css_class("new-drawing-affix");
         let resolution_choices = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        let resolution_menu = gtk::Popover::builder().has_arrow(false).position(gtk::PositionType::Bottom).halign(gtk::Align::Start).child(&resolution_choices).build();
+        let resolution_menu = gtk::Popover::builder().position(gtk::PositionType::Bottom).halign(gtk::Align::Start).child(&resolution_choices).build();
+        crate::menu_presentation::configure(&resolution_menu,layer_ui::MenuTarget::NewDrawingResolution,None);
         resolution_menu.set_offset(0, 4);
         resolution_menu.set_widget_name("new-drawing-resolution-menu");
         let resolutions = gtk::MenuButton::builder().popover(&resolution_menu).child(&crate::icons::image("layer-chevron-down-symbolic")).build();
@@ -433,7 +434,7 @@ impl NewDrawing {
         resolution_field.append(&resolutions);
         resolution_menu.connect_show(glib::clone!(#[weak] resolution_field, #[weak] resolutions, move |menu| {
             if let Some(field) = resolution_field.compute_bounds(&resolutions) {
-                menu.set_pointing_to(Some(&gdk::Rectangle::new(field.x() as i32, field.y() as i32, field.width() as i32, field.height() as i32)));
+                crate::menu_presentation::configure(menu,layer_ui::MenuTarget::NewDrawingResolution,Some(gdk::Rectangle::new(field.x() as i32,field.y() as i32,field.width() as i32,field.height() as i32)));
             }
         }));
         let size = dim("new-drawing-small");
@@ -614,7 +615,8 @@ impl NewDrawing {
             bottom.append(&summary);
             bottom.append(&actions);
             let sheet = drawer("new-drawing-browser", &search, &list, &bottom);
-            let menu = gtk::Popover::builder().has_arrow(false).build();
+            let menu = gtk::Popover::new();
+            crate::menu_presentation::configure(&menu,layer_ui::MenuTarget::NewDrawingPreset,None);
             menu.set_widget_name("new-drawing-preset-menu");
             Browser {
                 slide: SlideSheet::new(&overlay, &sheet), search, tabs, grid, empty, summary_art, summary_name, summary_size, summary_details, summary_top: top, actions,
@@ -692,7 +694,8 @@ impl NewDrawing {
             bottom.append(&spacer);
             bottom.append(&footer_actions(&[&cancel, &apply]));
             let sheet = drawer("new-drawing-color-drawer", &title, &content, &bottom);
-            let menu = gtk::Popover::builder().has_arrow(false).build();
+            let menu = gtk::Popover::new();
+            crate::menu_presentation::configure(&menu,layer_ui::MenuTarget::NewDrawingColor,None);
             ColorDrawer {
                 slide: SlideSheet::new(&overlay, &sheet), title, content, color_mode, transparent_mode, color_label, transparent_label, palette_count, well, palette, palette_title, add: RefCell::default(), palette_colors: RefCell::default(), menu,
                 footer: bottom, gap: spacer, cancel, apply, form: RefCell::default(),

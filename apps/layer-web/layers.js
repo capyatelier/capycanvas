@@ -72,6 +72,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     node.dataset.context = "{}";
     const targetMask = () => typeof mask === "function" ? mask() : mask;
     node.prepareMenu = () => send({ op: "context", id: getLayer().id, mask: targetMask() });
+    node.menuTarget={kind:'layer_row'};
     node.menuModel = () => app.layer_menu(getLayer().id, targetMask());
   };
   const footerButtons = new Map();
@@ -99,6 +100,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const layer = active();
     if (layer) send({ op: "context", id: layer.id, mask: layer.mask_selected });
   };
+  more.menuTarget={kind:'layer_row'};
   more.menuModel = () => {
     const layer = active(), mask = layer?.mask_selected ?? false;
     const model = layer ? app.layer_menu(layer.id, mask) : { title: copy.actions, sections: [] };
