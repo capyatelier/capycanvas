@@ -1082,7 +1082,7 @@ fn moving_nearest_objects_publish_level_zero_poses_with_and_without_effects() {
 }
 
 #[test]
-fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
+fn overlapping_canonical_windows_reuse_fixed_pending_and_ready_blocks() {
     let (doc, owner, _, _) = tablet_scene(false, 4, false);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.document_extent = [4248, 2832];
@@ -1099,7 +1099,9 @@ fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
             r.drain_image_decodes(&mut encoder).unwrap();
             if let Some(pieces) = scene.canonical_cover(r, frame, &content, &request).unwrap() {
                 r.uploads.finish(&encoder); encoder.submit(&r.queue);
-                return (taps, pieces.into_iter().map(|(_, bounds)| bounds).collect::<Vec<_>>());
+                let mut pieces = pieces.into_iter().map(|(_, bounds)| bounds).collect::<Vec<_>>();
+                pieces.sort_by_key(|bounds| bounds.min);
+                return (taps, pieces);
             }
             let mut cache = std::mem::take(&mut scene.object_results);
             taps += cache.advance(r, scene, &mut encoder, false).unwrap();
@@ -1109,13 +1111,29 @@ fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
         }
         panic!("canonical window completes");
     };
-    let (first, pieces) = evaluate(&mut r, &mut scene, [600., 400.]);
-    assert_eq!(pieces.len(), 1);
-    let (shifted, pieces) = evaluate(&mut r, &mut scene, [1112., 400.]);
-    assert!(pieces.len() == 2 && pieces.iter().all(|bounds| !bounds.intersect(DocRect { min: [1112, 400], max: [2136, 1424] }).is_empty()));
+    let frame = packet(doc.scene(), [4248, 2832]);
+    let mut request = scene.collection_job(&r, frame, owner, content.clone(), ObjectWindow { origin: [600., 400.], side: 4., size: [256; 2] });
+    request.live = true; request.display = true;
+    assert!(scene.canonical_cover(&r, frame, &content, &request).unwrap().is_none());
+    assert_eq!(scene.object_results.work_progress().0, 1);
+    request.window.origin = [856., 400.];
+    assert!(scene.canonical_cover(&r, frame, &content, &request).unwrap().is_none());
+    assert_eq!(scene.object_results.work_progress().0, 1, "a pending block covers different request shapes");
+    request.window.origin = [1112., 400.];
+    assert!(scene.canonical_cover(&r, frame, &content, &request).unwrap().is_none());
+    assert_eq!(scene.object_results.work_progress().0, 2);
+    let (_, pieces) = evaluate(&mut r, &mut scene, [600., 400.]);
+    let support = content.bounds_at(2).aligned(4);
+    let blocks = [DocRect {min: [0, 0], max: [2048, 2048]}.intersect(support), DocRect {min: [2048, 0], max: [4096, 2048]}.intersect(support)];
+    assert_eq!(pieces, [blocks[0]]);
+    let (_, pieces) = evaluate(&mut r, &mut scene, [1112., 400.]);
+    assert_eq!(pieces, blocks);
+    assert_eq!(evaluate(&mut r, &mut scene, [1112., 400.]).0, 0, "ready blocks sample nothing");
     let mut empty = Scene::new(&r).unwrap();
-    let (fresh, _) = evaluate(&mut r, &mut empty, [1112., 400.]);
-    assert!(shifted * 3 < fresh * 2, "half of the shifted window is reused: {shifted} of {fresh} taps (first {first})");
+    let (_, reversed) = evaluate(&mut r, &mut empty, [1112., 400.]);
+    assert_eq!(reversed, pieces, "request order does not change canonical geometry");
+    let (covered, reversed) = evaluate(&mut r, &mut empty, [600., 400.]);
+    assert_eq!(covered, 0); assert_eq!(reversed, [pieces[0]]);
     let (covered, _) = evaluate(&mut r, &mut scene, [856., 400.]);
     assert_eq!(covered, 0, "a window inside completed results samples nothing");
 }
@@ -1240,3 +1258,6 @@ fn a_placed_visible_object_settles_before_thumbnail_preparation() {
         clock += 8_000_000;
     }
 }
+
+#[path="canonical_grid_tests.rs"]
+mod canonical_grid;
