@@ -729,7 +729,7 @@ fn concurrent_writer_clones_keep_one_target_and_forks_keep_independent_targets()
 fn concurrent_resolution_and_session_installation_choose_one_storage_identity() {
     let fixture=Fixture::new();let root=fixture.stores.asset_writer(1).unwrap();
     let document=layer_core::Document::new(PortableId::random(),32,32,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
-    let session=layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap();
+    let session=Box::new(layer_ui::UiSession::new(Photos(document.composition().color),document,[32,32],layer_ui::Platform::Android).unwrap());
     session.bind_asset_writer(root.fork().unwrap()).unwrap();let captured=session.asset_writer();
     assert!(captured.binding().is_none());assert!(session.engine().document().memory().storage().is_none());
     let barrier=Arc::new(std::sync::Barrier::new(9));
