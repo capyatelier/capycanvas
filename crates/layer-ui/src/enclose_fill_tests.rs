@@ -22,7 +22,7 @@ mod enclose_fill_checks {
 
     fn reply(s: &mut UiSession<Recorder>, request: &RegionRequest) -> Arc<SelectionPixels> {
         let pixels = Arc::new(SelectionPixels::bytes([8, 1], [0, 0, 8, 1], vec![0xffffffff; 2]).unwrap());
-        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None,
             request_id: request.request_id, pixels: pixels.clone(),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
         });
@@ -31,6 +31,34 @@ mod enclose_fill_checks {
 
     fn fill_edges(operation:&layer_core::RasterOperationKind)->&layer_core::FillEdges {
         let layer_core::RasterOperationKind::Fill {edges:Some(edges),..}=operation else {panic!("Fill edge metadata")};edges
+    }
+
+    #[test]
+    fn fill_seed_matches_the_offset_target_preview_and_commit() {
+        for platform in Platform::ALL {
+            for translucent_seed in [false,true] {
+                let mut s=session(platform);
+                let owner=s.engine.document().working.occurrence.unwrap();
+                let mut occurrence=s.engine.document().scene().occurrence(owner).unwrap().clone();occurrence.offset=[25,-15];
+                let edit=layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&s.engine.document().artwork.occurrences,owner,Some(occurrence)).unwrap());
+                s.engine.apply_edit(edit).unwrap();
+                let target=s.engine.document().drawing_content().unwrap();
+                invoke(&mut s,CommandId::Fill);invoke(&mut s,CommandId::EdgesLineMiddle);
+                contact(&mut s,PenPhase::Down,[40.,60.]);s.frame(20_000_000,20_000_000).unwrap();
+                let request=s.renderer_mut().region_requests.last().unwrap().clone();
+                let local=Point{x:request.position[0] as f32-25.,y:request.position[1] as f32+15.};
+                assert_eq!(s.renderer_mut().region_fill_seed,Some((target,local)));
+                reply(&mut s,&request);
+                let result=s.renderer_mut().region_reply.as_mut().unwrap();result.translucent_seed=translucent_seed;
+                result.pixels=Arc::new(SelectionPixels::bytes([64;2],[0,0,64,64],vec![u32::MAX;1024]).unwrap());
+                s.frame(30_000_000,30_000_000).unwrap();
+                let preview=s.renderer_mut().fill_preview.as_ref().unwrap().operation.clone();
+                assert_eq!(fill_edges(&preview.kind).position,local);assert_eq!(fill_edges(&preview.kind).translucent_seed,translucent_seed);
+                contact(&mut s,PenPhase::Up,[40.,60.]);s.frame(40_000_000,40_000_000).unwrap();
+                let (committed_target,committed)=s.engine.backend().pending_operations.last().unwrap();assert_eq!(*committed_target,target);
+                assert_eq!(fill_edges(&committed.kind).position,local);assert_eq!(fill_edges(&committed.kind).translucent_seed,translucent_seed);
+            }
+        }
     }
 
     #[test]
@@ -702,7 +730,7 @@ mod enclose_fill_checks {
         enclose(&mut s);
         s.frame(2, 2).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None,
             request_id: request.request_id,
             pixels: Arc::new(SelectionPixels::bytes([8, 1], [0; 4], vec![0; 2]).unwrap()),
             placement: layer_core::Affine::IDENTITY, tonal_sample: None,
@@ -878,7 +906,7 @@ mod enclose_fill_checks {
             assert!(s.renderer_mut().selection_updates.last().unwrap().finish);
         }
         fn region_reply(s:&mut UiSession<Recorder>,request:&layer_render::RegionRequest) {
-            s.renderer_mut().region_reply=Some(layer_render::RegionResult {request_id:request.request_id,
+            s.renderer_mut().region_reply=Some(layer_render::RegionResult { translucent_seed: false,request_id:request.request_id,
                 pixels:Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![0xffffffff]).unwrap()),
                 colour_on_solid:false,gaps:None,underfill:None,placement:layer_core::Affine::IDENTITY,tonal_sample:None});
         }

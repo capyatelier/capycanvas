@@ -22,6 +22,7 @@ pub(super) struct RegionRequests {
     preparation:Option<Preparation>,
     refiner: Option<selection_refine::SelectionRefiner>,
     readback: Option<wgpu::Buffer>,
+    fill_seed:Option<(SourceTarget,layer_core::Point,Option<wgpu::Buffer>)>,
     pending: Option<Region>,
     waiting: Option<RegionRequest>,
     areas: Option<areas::AreasJob>,
@@ -63,6 +64,7 @@ impl RegionRequests {
             + self.cache.as_ref().and_then(|cache|cache.mask.as_ref()).filter(|mask|self.raw.mask().as_ref()!=Some(mask)).map_or(0,wgpu::Buffer::size)
             + self.stop_mask.as_ref().map_or(0,wgpu::Buffer::size)
             + self.readback.as_ref().map_or(0,wgpu::Buffer::size)
+            + self.fill_seed.as_ref().and_then(|(_,_,buffer)|buffer.as_ref()).map_or(0,wgpu::Buffer::size)
             + self.pending.as_ref().map_or(0, Region::storage_bytes)
             + self.running.as_ref().map_or(0, |r| r.job.storage_bytes())
             + self.modify_source.as_ref().map_or(0, |s| s.document.size() + s.levels.iter().map(wgpu::Buffer::size).sum::<u64>())
@@ -74,7 +76,7 @@ impl RegionRequests {
             raw: region_sources::RawRegions::new(device),
             cache:None,sampling:region_sources::Sampling::Pixels,cache_request:None,stop_mask:None,chunk_timing:None,preparation:None,
             refiner: None,
-            readback: None,
+            readback: None,fill_seed:None,
             pending: None,
             waiting: None,
             areas: None,
@@ -87,7 +89,7 @@ impl RegionRequests {
     /// Drop the request in progress; a readback already in flight is ignored.
     pub(super) fn cancel(&mut self) {
         self.raw.cancel();
-        self.cache_request=None;self.stop_mask=None;
+        self.cache_request=None;self.stop_mask=None;self.fill_seed=None;
         self.waiting = None;
         self.areas = None;
         self.running = None;
@@ -219,6 +221,20 @@ impl RegionRequests {
             }
             cache.ready=true;cache.dirty.clear();
         }
+        Ok(())
+    }
+    fn sample_fill_seed(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
+        let Some((target,position,buffer))=&mut self.fill_seed else {return Ok(());};
+        let rect=scene::fill_edges::seed_rect(*position,r.target_extent(*target));
+        let tile=if rect.is_empty() {None}else{r.raw_layer_tile(*target,[rect.min_x()/PAGE_SIZE,rect.min_y()/PAGE_SIZE],encoder)?};
+        let buffer=buffer.get_or_insert_with(||r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("fill seed texel"),size:16,
+            usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
+        if let Some(tile)=tile {
+            encoder.copy_texture_to_buffer(wgpu::TexelCopyTextureInfo {texture:&tile.texture,mip_level:0,
+                origin:wgpu::Origin3d {x:rect.min_x()%PAGE_SIZE,y:rect.min_y()%PAGE_SIZE,z:0},aspect:wgpu::TextureAspect::All},
+                wgpu::TexelCopyBufferInfo {buffer,layout:wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:None,rows_per_image:None}},
+                wgpu::Extent3d {width:1,height:1,depth_or_array_layers:1});
+        }else {encoder.clear_buffer(buffer,0,None);}
         Ok(())
     }
     fn classify_target(&mut self,r:&mut WgpuRasterizer,request:&RegionRequest,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
@@ -457,7 +473,7 @@ impl RegionRequests {
             }
             r.drain_image_decodes(&mut encoder)?;
             if lines {self.cache_request=Some(request.clone());}
-            let classified = match if lines {self.classify_lines(r,&request,&mut encoder)} else {self.raw.encode(r,&request,&mut encoder)} {
+            let classified = match self.sample_fill_seed(r,&mut encoder).and_then(|()|if lines {self.classify_lines(r,&request,&mut encoder)} else {self.raw.encode(r,&request,&mut encoder)}) {
                 Err(GpuRasterError::DeferredObjectWork) => {
                     r.uploads.finish(&encoder);
                     encoder.submit(&r.queue);
@@ -724,14 +740,16 @@ impl RegionRequests {
         let band_size=if region.underfill.is_some() {band_bytes+32}else{0};
         let extra_size=if probe.is_some() {self.raw.tonal_statistics.size()}else{0};
         let metadata_bytes=seal_metadata.map_or(0,wgpu::Buffer::size);
-        let size=mask_size+band_size+metadata_bytes+extra_size;
+        let seed_offset=self.fill_seed.as_ref().and_then(|(_,_,buffer)|buffer.as_ref()).map(|_|mask_size+band_size+metadata_bytes+extra_size);
+        let size=mask_size+band_size+metadata_bytes+extra_size+if seed_offset.is_some(){16}else{0};
         let readback=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("region history snapshot"),size,
             usage:wgpu::BufferUsages::MAP_READ|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
         encoder.copy_buffer_to_buffer(&region.coverage,0,&readback,0,mask_size);
         if let Some((buffer,offset))=&region.underfill {encoder.copy_buffer_to_buffer(buffer,offset-32,&readback,mask_size,band_size);}
         if let Some(metadata)=seal_metadata {encoder.copy_buffer_to_buffer(metadata,0,&readback,mask_size+band_size,metadata_bytes);}
         if extra_size>0 {encoder.copy_buffer_to_buffer(&self.raw.tonal_statistics,0,&readback,mask_size+band_size+metadata_bytes,extra_size);}
-        let capture=selection_readback::Capture {buffer:readback.clone(),size,coverage_size:region.bounds_offset,
+        if let (Some(offset),Some((_,_,Some(seed))))=(seed_offset,&self.fill_seed) {encoder.copy_buffer_to_buffer(seed,0,&readback,offset,16);}
+        let capture=selection_readback::Capture {buffer:readback.clone(),size,seed_offset,coverage_size:region.bounds_offset,
             underfill_offset:(band_size>0).then_some(mask_size+32),seal_records:(metadata_bytes/20) as usize};
         self.readback=Some(readback);
         if gaps {encoder.clear_buffer(&region.coverage,24,Some(8));}
@@ -822,7 +840,7 @@ impl WgpuRasterizer {
         if regions.pending.is_some() || regions.waiting.is_some() || regions.running.is_some() || regions.areas.is_some() {self.regions=Some(regions);return Ok(false);}
         regions.sampling=region_sources::Sampling::Transparent;
         regions.cache_request=None;
-        if let RegionTask::Fill(request)=&task && let Some(startup)=&self.startup {
+        if let RegionTask::Fill {request,..}=&task && let Some(startup)=&self.startup {
             let refinement=RegionRequests::refinement(request);
             let prepare_ends=refinement.close_gaps && request.fill.as_ref().is_none_or(|fill|fill.reach!=Some(0));
             startup.compiler.require(regions.raw.pipelines().chain(regions.flood.request_pipelines(refinement,request.enclosure.is_some(),request.contiguous,prepare_ends)),startup::DOCUMENT);
@@ -833,7 +851,15 @@ impl WgpuRasterizer {
             required.compute.push(self.selection_clip.resample.clone());
             required.require(&startup.compiler,startup::DOCUMENT);
         }
-        let result = match task {RegionTask::Mask(request)|RegionTask::Fill(request)=>regions.start(self,request),RegionTask::FlatAreas(request)=>{regions.areas=Some(areas::AreasJob::new(request));Ok(true)}};
+        regions.fill_seed=None;
+        let result = match task {
+            RegionTask::Fill {request,target,position}=>{
+                regions.fill_seed=Some((target,position,None));
+                regions.start(self,request)
+            },
+            RegionTask::Mask(request)=>regions.start(self,request),
+            RegionTask::FlatAreas(request)=>{regions.areas=Some(areas::AreasJob::new(request));Ok(true)},
+        };
         if result.is_err() { regions.cancel(); }
         self.regions = Some(regions);
         self.refresh_storage_metrics();

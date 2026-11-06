@@ -15,7 +15,7 @@ mod tonal_checks {
     fn reply(s: &mut UiSession<Recorder>, sample: Option<TonalSample>, word: u32) {
         s.frame(1, 1).unwrap();
         let id = s.renderer_mut().region_requests.last().unwrap().request_id;
-        s.renderer_mut().region_reply = Some(RegionResult { colour_on_solid: false, gaps: None, underfill: None,
+        s.renderer_mut().region_reply = Some(RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None,
             request_id: id,
             tonal_sample: sample,
             placement: layer_core::Affine::IDENTITY,

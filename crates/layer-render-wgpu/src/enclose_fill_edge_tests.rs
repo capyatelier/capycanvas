@@ -39,7 +39,7 @@ fn stored_fill_prepares_cold_reference_tiles_beside_its_seed() {
     coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([232,16,264,48]));
     engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:layer_core::RasterOperationKind::Fill {color:F,texture:Default::default(),alpha_locked:false,
-            edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:32.},tolerance:0.,colour_on_solid:false,
+            edges:Some(Box::new(layer_core::FillEdges { translucent_seed: false,snapshot:snapshot.clone(),position:Point {x:240.,y:32.},tolerance:0.,colour_on_solid:false,
                 lines:references.iter().map(|(reference,_)|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:false}).collect()})),
             underfill:Some(rectangle([252,16,264,48]))}}).unwrap();
     flush_engine(&mut engine);
@@ -66,7 +66,7 @@ fn reference_fill_pixels(extent:[u32;2],cold:bool,preview:bool)->Vec<u8> {
     coverage.source.default_coverage=0.;coverage.selection=Some(rectangle([0,232,extent[0],264]));
     let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
         color:F,texture:Default::default(),alpha_locked:false,
-        edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:240.,y:240.},tolerance:0.,colour_on_solid:false,
+        edges:Some(Box::new(layer_core::FillEdges { translucent_seed: false,snapshot:snapshot.clone(),position:Point {x:240.,y:240.},tolerance:0.,colour_on_solid:false,
             lines:references.iter().enumerate().map(|(index,reference)|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:index==1}).collect()})),
         underfill:Some(rectangle([0,252,extent[0],264]))}};
     if preview {engine.set_fill_preview(Some(layer_render::FillPreview {transaction:42,revision:0,target,operation}));}
@@ -330,7 +330,7 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
             else {layer_render::RegionColourMode::AlphaBorder};
         query.enclosure=None;query.position=[center[0] as u32-32,center[1] as u32+30];query.fill=Some(Default::default());
         let snapshot=engine.document().snapshot();let position=Point {x:query.position[0] as f32,y:query.position[1] as f32};let tolerance=query.tolerance;
-        let result=receive_request(engine.backend_mut(),query);
+        let result=receive_request(engine.backend_mut(),layer_render::RegionTask::Fill {request:query,target,position});
         let colour_on_solid=result.colour_on_solid;
         let primary=result.pixels.clone();
         if matches!(case.border,Border::WideAboveWhite) {
@@ -343,7 +343,7 @@ fn fill_recolours_antialiased_edges_like_direct_geometry() {
         }
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
-        let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position,tolerance,colour_on_solid,
+        let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges { translucent_seed: result.translucent_seed,snapshot:snapshot.clone(),position,tolerance,colour_on_solid,
             lines:if matches!(case.border,Border::Below|Border::Above|Border::AboveWhite|Border::WideAboveWhite){references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:matches!(case.border,Border::Above|Border::AboveWhite|Border::WideAboveWhite)}).collect()}else{Vec::new()}}));
         let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
             color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges,underfill:result.underfill.map(Selection::pixels)}};
@@ -601,13 +601,13 @@ fn fill_imported_u8_edge_keeps_precision_after_an_unrelated_page_edit() {
             RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},1./32.);
         query.colour_mode=layer_render::RegionColourMode::ColourOnSolid;
         query.enclosure=None;query.position=[64,70];query.fill=Some(Default::default());
-        let result=receive_request(engine.backend_mut(),query);
+        let result=receive_request(engine.backend_mut(),layer_render::RegionTask::Fill {request:query,target,position:Point{x:64.,y:70.}});
         let colour_on_solid=result.colour_on_solid;
         let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);
         coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
         engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
             kind:layer_core::RasterOperationKind::Fill {color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,
-                edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:64.,y:70.},tolerance:1./32.,colour_on_solid,lines:Vec::new()})),
+                edges:Some(Box::new(layer_core::FillEdges { translucent_seed: result.translucent_seed,snapshot,position:Point {x:64.,y:70.},tolerance:1./32.,colour_on_solid,lines:Vec::new()})),
                 underfill:result.underfill.map(Selection::pixels)}}).unwrap();flush_engine(&mut engine);
         let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
         for y in 0..extent[1] {for x in 0..extent[0] {
@@ -639,7 +639,7 @@ fn fill_support_without_a_valid_line_profile_preserves_the_source() {
     let snapshot=engine.document().snapshot();
     engine.append_raster_operation(target,layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,
         kind:layer_core::RasterOperationKind::Fill {color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,
-            edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point {x:8.,y:8.},tolerance:1./32.,colour_on_solid:false,lines:Vec::new()})),
+            edges:Some(Box::new(layer_core::FillEdges { translucent_seed: false,snapshot,position:Point {x:8.,y:8.},tolerance:1./32.,colour_on_solid:false,lines:Vec::new()})),
             underfill:Some(Selection::pixels(Arc::new(SelectionPixels::new(extent,[32,32,33,33],band).unwrap())))}}).unwrap();
     flush_engine(&mut engine);let actual=engine.backend_mut().readback_srgb_rgba8().unwrap();
     let support=(32*64+32)*4;let selected=(32*64+34)*4;
@@ -681,10 +681,10 @@ fn recolouring_a_shape_never_paints_outside_it() {
                 rectangle([0,0,1,1]),RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},1./32.);
             query.colour_mode=mode;query.enclosure=None;query.position=[64,48];query.fill=Some(Default::default());
             let tolerance=query.tolerance;
-            let result=receive_request(engine.backend_mut(),query);
+            let result=receive_request(engine.backend_mut(),layer_render::RegionTask::Fill {request:query,target,position:Point{x:64.,y:48.}});
             let mut selection=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
             selection.source.default_coverage=0.;selection.selection=Some(Selection::pixels(result.pixels));
-            let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:64.,y:48.},tolerance,colour_on_solid:result.colour_on_solid,lines:Vec::new()}));
+            let edges=result.underfill.as_ref().map(|_|Box::new(layer_core::FillEdges { translucent_seed: result.translucent_seed,snapshot:snapshot.clone(),position:Point {x:64.,y:48.},tolerance,colour_on_solid:result.colour_on_solid,lines:Vec::new()}));
             let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage:selection,kind:layer_core::RasterOperationKind::Fill {
                 color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges,underfill:result.underfill.map(Selection::pixels)}};
             engine.append_raster_operation(target,operation).unwrap();flush_engine(&mut engine);
@@ -715,12 +715,12 @@ fn alpha_below_zero_tolerance_keeps_the_transparent_band_pixel() {
         rectangle([0,0,1,1]),RegionRefinement {close_gaps:false,edges:RegionEdges::LineMiddle,smooth_edges:true},0.);
     query.colour_mode=layer_render::RegionColourMode::AlphaBorder;
     query.enclosure=None;query.position=[16,70];query.fill=Some(Default::default());
-    let result=receive_request(engine.backend_mut(),query);
+    let result=receive_request(engine.backend_mut(),layer_render::RegionTask::Fill {request:query,target,position:Point{x:16.,y:70.}});
     assert_eq!(value(&result.pixels,43,40),255,"transparent pixel belongs to the primary mask");
     assert_eq!(value(result.underfill.as_ref().unwrap(),43,40),255,"transparent pixel belongs to the under-fill band");
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.document().artwork.coverage.next_handle(),extent,[0;2]);
     coverage.source.default_coverage=0.;coverage.selection=Some(Selection::pixels(result.pixels));
-    let edges=Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:Point {x:16.,y:70.},tolerance:0.,colour_on_solid:result.colour_on_solid,
+    let edges=Box::new(layer_core::FillEdges { translucent_seed: result.translucent_seed,snapshot:snapshot.clone(),position:Point {x:16.,y:70.},tolerance:0.,colour_on_solid:result.colour_on_solid,
         lines:references.iter().map(|reference|layer_core::FillLine {snapshot:snapshot.clone(),scope:layer_core::SceneScope::Raw(*reference),fill_above:false}).collect()});
     let operation=layer_core::RasterOperation {placement:Affine::IDENTITY,coverage,kind:layer_core::RasterOperationKind::Fill {
         color:F,texture:layer_core::FillTexture {strength:1.,paper:None},alpha_locked:false,edges:Some(edges),underfill:result.underfill.map(Selection::pixels)}};

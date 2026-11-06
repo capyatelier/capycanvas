@@ -650,7 +650,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some(layer_render::RegionSource::Scene {snapshot,scope})=>Some(layer_core::FillLine {snapshot,scope,
                     fill_above:order.iter().position(|id|*id==leaf).unwrap()>index}),_=>None,
             }).collect();
-        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges { colour_on_solid: false,
+        if let layer_core::RasterOperationKind::Fill {edges,..}=&mut operation {*edges=Some(Box::new(layer_core::FillEdges { translucent_seed: false, colour_on_solid: false,
             snapshot,position:Point{x:request.position[0] as f32,y:request.position[1] as f32},tolerance:request.tolerance,lines,
         }));}
         operation
@@ -658,17 +658,21 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(in crate::session) fn apply_region_result(result:&layer_render::RegionResult,operation:Option<&mut layer_core::RasterOperationKind>,basis:layer_core::Affine)->Result<Selection,String> {
         let selection=Selection::pixels(result.pixels.clone()).transformed(basis).map_err(error)?;
         if let Some(layer_core::RasterOperationKind::Fill {underfill,edges,..})=operation {
-            if let Some(edges)=edges {edges.colour_on_solid=result.colour_on_solid;}
+            if let Some(edges)=edges {edges.colour_on_solid=result.colour_on_solid;edges.translucent_seed=result.translucent_seed;}
             *underfill=result.underfill.clone().map(Selection::pixels).map(|selection|selection.transformed(basis)).transpose().map_err(error)?;
         }
         Ok(selection)
     }
     fn queue_region(&mut self,request:RegionRequest,purpose:Purpose) {
-        let task=if matches!(&purpose,Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {..}),..}) {RegionTask::Fill(request)}else{RegionTask::Mask(request)};
+        let task=if matches!(&purpose,Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {..}),..})
+            && let Some(target)=self.engine.document().drawing_content() {
+            let position=self.fill_seed_point(target,Point {x:request.position[0] as f32,y:request.position[1] as f32});
+            RegionTask::Fill {request,target,position}
+        }else{RegionTask::Mask(request)};
         self.queue_region_task(task,purpose);
     }
     fn queue_region_task(&mut self,mut task:RegionTask,mut purpose:Purpose) {
-        let request=match &mut task {RegionTask::Mask(request)|RegionTask::Fill(request)|RegionTask::FlatAreas(request)=>request};
+        let request=match &mut task {RegionTask::Mask(request)|RegionTask::Fill {request,..}|RegionTask::FlatAreas(request)=>request};
         if let Purpose::Region {operation:Some(layer_core::RasterOperationKind::Fill {edges:Some(edges),..}),..}=&mut purpose {
             edges.position=Point{x:request.position[0] as f32,y:request.position[1] as f32};
             edges.tolerance=request.tolerance;

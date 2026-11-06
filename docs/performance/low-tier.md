@@ -346,6 +346,20 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 ## Reference Fill completion
 
+The 2026-11-06 opaque-fragment split uses the same 12 MP cold protocol,
+with `009e858f8` as control. Each row is a separate matched four-run block;
+values are mean visible-fill brackets, not motion measurements.
+
+| Cold tap | Control | Split | Result at bracket midpoints |
+| --- | ---: | ---: | --- |
+| Transparent seed, original split B | 9.046–9.215 s | 7.673–7.825 s | −15.13% |
+| Opaque native flat, reordered split R | 8.869–9.014 s | 8.831–8.972 s | −40 ms; passes no-regression gate |
+| Transparent reorder check, B → R | 7.505–7.673 s | 7.366–7.535 s | −138 ms; within ±200 ms prediction |
+
+All reorder legs passed the fixed gates and capture qualifiers. Brackets,
+spreads and build hashes are in `artifacts/fill-tools/opaque-split/cp3b/results.json`;
+the initial pair is in `artifacts/fill-tools/opaque-split/cp3/cold-transparent/summary.json`.
+
 The 2026-11-03 worker-only cold ABBA compares frozen main `db832dbc6` with
 one native compiler worker per four CPUs, giving TCL two workers. Request
 start keeps main's document-priority bundle; background preparation retains

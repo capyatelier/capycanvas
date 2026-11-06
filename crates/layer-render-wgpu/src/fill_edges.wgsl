@@ -107,21 +107,29 @@ fn fill_line_middle(world:vec2<f32>,at:vec2<i32>,support:bool)->f32 {
     let alternate=fill_line_plane(at,gradient,!horizontal);return select(fallback,alternate.x,alternate.y!=0.);
 }
 
-fn fill_edge_value(world:vec2<f32>,pixel:vec4<f32>,paint:vec4<f32>,support:bool)->vec4<f32> {
+struct FillEdgeInput {local:vec2<i32>,seed:vec4<f32>,amount:f32}
+fn fill_edge_input(world:vec2<f32>,paint:vec4<f32>)->FillEdgeInput {
     let local=vec2<i32>(floor(world-settings.backdrop.xy));
     let seed=textureLoad(fill_source,vec2(0,i32(textureDimensions(fill_source).y)-1),0);
-    var amount=paint.a*(1.-textureLoad(fill_cover,local,0).r);
-    if seed.a<.99999 || pixel.a<.99999 {
-        if (support || (seed.a>0. && !fill_near_seed(vec4(0.),seed))) && fill_line_alpha(local)==0. {return pixel;}
-        amount*=fill_line_middle(world,local,support)/max(fill_selection_at(world),.000001);
-        return pixel+vec4(settings.color.rgb,1.)*amount*select(1.-pixel.a,0.,settings.options.w>.5);
-    }
-    let delta=fill_sample(pixel).value-fill_sample(seed).value;
+    return FillEdgeInput(local,seed,paint.a*(1.-textureLoad(fill_cover,local,0).r));
+}
+fn fill_alpha_edge_value(world:vec2<f32>,pixel:vec4<f32>,support:bool,input:FillEdgeInput)->vec4<f32> {
+    if (support || (input.seed.a>0. && !fill_near_seed(vec4(0.),input.seed))) && fill_line_alpha(input.local)==0. {return pixel;}
+    let amount=input.amount*(fill_line_middle(world,input.local,support)/max(fill_selection_at(world),.000001));
+    return pixel+vec4(settings.color.rgb,1.)*amount*select(1.-pixel.a,0.,settings.options.w>.5);
+}
+fn fill_edge_value(world:vec2<f32>,pixel:vec4<f32>,paint:vec4<f32>,support:bool)->vec4<f32> {
+    return fill_alpha_edge_value(world,pixel,support,fill_edge_input(world,paint));
+}
+fn fill_opaque_edge_value(world:vec2<f32>,pixel:vec4<f32>,paint:vec4<f32>,support:bool)->vec4<f32> {
+    let input=fill_edge_input(world,paint);
+    if input.seed.a<.99999 || pixel.a<.99999 {return fill_alpha_edge_value(world,pixel,support,input);}
+    let delta=fill_sample(pixel).value-fill_sample(input.seed).value;
     if dot(delta,delta)<settings.operation_linear.x*settings.operation_linear.x {
-        return vec4(settings.color.rgb,1.)*amount+pixel*(1.-amount);
+        return vec4(settings.color.rgb,1.)*input.amount+pixel*(1.-input.amount);
     }
-    let neighbour=fill_plateau(local,seed);
+    let neighbour=fill_plateau(input.local,input.seed);
     if neighbour.a<0. {return pixel;}
     if fill_equal(pixel,neighbour) {return pixel;}
-    return fill_reconstruct(pixel,seed,neighbour,vec4(settings.color.rgb,1.),amount);
+    return fill_reconstruct(pixel,input.seed,neighbour,vec4(settings.color.rgb,1.),input.amount);
 }

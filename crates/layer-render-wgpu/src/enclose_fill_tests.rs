@@ -72,6 +72,36 @@ fn exact() -> RegionRefinement {
 }
 
 #[test]
+fn fill_region_seed_opacity_matches_the_raw_target_texel() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let boundary=0.99999f32;
+    for alpha in [Some(1.),Some(0.5),Some(0.),Some(f32::from_bits(boundary.to_bits()-1)),
+        Some(boundary),Some(f32::from_bits(boundary.to_bits()+1)),None] {
+        let mut doc=paint_document([16;2],"Fill target");
+        if let Some(alpha)=alpha {
+            placement::set_source(&mut doc,depth_source([16;2],SampleDepth::F32,RgbSpace::Srgb,8192,
+                |x,y|[0.25,0.5,0.75,if [x,y]==[1,1]{alpha}else if [x,y]==[0,0]{1.}else{0.}]));
+        }
+        placement::occurrence_mut(&mut doc).offset=[5,7];
+        frame(&mut r,&doc,[16;2]);
+        let target=placement::target(&doc);
+        let query=RegionRequest {fill_areas:None,colour_mode:Default::default(),fill:None,reference_count:None,paper:None,
+            request_id:1,source:RegionSource::Composite,contiguous:true,position:[6,8],tolerance:0.,
+            refinement:exact(),limit:None,enclosure:None,selection:None};
+        for (position,expected) in [(Point{x:1.,y:1.},alpha.is_none_or(|alpha|alpha<boundary)),
+            (Point{x:16.,y:1.},true),(Point{x:-1.,y:-1.},alpha.is_none())] {
+            let result=receive_request(&mut r,layer_render::RegionTask::Fill {request:query.clone(),target,position});
+            assert_eq!(result.translucent_seed,expected,"alpha={alpha:?}, local={position:?}");
+        }
+        assert!(!receive_request(&mut r,query.clone()).translucent_seed);
+        let query=RegionRequest {source:RegionSource::Selection(Arc::new(rectangle([0,0,16,16]))),
+            selection:Some(SelectionRefinement {resize:0,mode:SelectionMode::New,antialias:false,feather:0.,previous:None,
+                source_to_document:Affine::IDENTITY,keep_canvas_edges:false}),..query};
+        assert!(!receive_request(&mut r,layer_render::RegionTask::Fill {request:query,target,position:Point{x:1.,y:1.}}).translucent_seed);
+    }
+}
+
+#[test]
 fn line_middle_thick_shapes_keep_primary_and_underfill_inside_their_soft_rim() {
     let extent=[128,96];
     let coverage=|x:u32,y:u32|((32.-(x as f32+0.5-64.).abs()).min(24.-(y as f32+0.5-48.).abs())+0.25).clamp(0.,1.);
@@ -1035,12 +1065,13 @@ fn painted_area_ring(white:bool,areas:Option<FillAreas>)->(RegionResult,Vec<u8>,
     query.colour_mode=layer_render::RegionColourMode::ColourOnSolid;
     query.tolerance=0.1;query.refinement=RegionRefinement {smooth_edges:true,..Default::default()};
     if areas.is_none() {query.reference_count=None;}
-    let result=receive_request(engine.backend_mut(),query);
+    let position=Point{x:query.position[0] as f32,y:query.position[1] as f32};
+    let result=receive_request(engine.backend_mut(),layer_render::RegionTask::Fill {request:query,target,position});
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);coverage.selection=Some(Selection::pixels(result.pixels.clone()));
     let operation=RasterOperation {placement:result.placement,coverage,kind:RasterOperationKind::Fill {
         color:[0.1,0.7,0.2,1.],texture:Default::default(),alpha_locked:false,
         underfill:result.underfill.clone().map(Selection::pixels),
-        edges:Some(Box::new(layer_core::FillEdges {snapshot,position:Point{x:0.,y:0.},tolerance:0.1,
+        edges:Some(Box::new(layer_core::FillEdges { translucent_seed: result.translucent_seed,snapshot,position,tolerance:0.1,
             colour_on_solid:result.colour_on_solid,lines:Vec::new()})),
     }};
     engine.append_raster_operation(target,operation).unwrap();
@@ -1119,7 +1150,8 @@ fn reference_red_flat(edges:RegionEdges,smooth:bool,stop:bool)->(RegionResult,Ve
     query.reference_count=Some(1);query.fill_areas=if stop {None}else{Some(FillAreas::Transparent)};
     if stop {query.enclosure=None;query.position=[64,64];query.fill=Some(Default::default());}
     query.colour_mode=layer_render::RegionColourMode::AlphaBorder;
-    let result=receive_request(engine.backend_mut(),query);
+    let position=Point{x:query.position[0] as f32,y:query.position[1] as f32};
+    let result=receive_request(engine.backend_mut(),layer_render::RegionTask::Fill {request:query,target:destination,position});
     let metadata=if edges==RegionEdges::LineMiddle {
         let band=result.underfill.as_ref().unwrap();
         assert!(value(&result.pixels,28,60)>0);assert!(value(band,28,60)>0,"red pixel has assigned band coverage");
@@ -1127,7 +1159,7 @@ fn reference_red_flat(edges:RegionEdges,smooth:bool,stop:bool)->(RegionResult,Ve
         let order=engine.document().scene().order();
         let fill_above=order.iter().position(|id|*id==reference).unwrap()>order.iter().position(|id|*id==destination_layer).unwrap();
         assert!(!fill_above,"target is below the reference");
-        Some(Box::new(layer_core::FillEdges {snapshot,position:Point{x:0.,y:0.},tolerance:0.1,
+        Some(Box::new(layer_core::FillEdges { translucent_seed: result.translucent_seed,snapshot,position,tolerance:0.1,
             colour_on_solid:result.colour_on_solid,lines:vec![layer_core::FillLine {snapshot:line_snapshot,scope,fill_above}]}))
     }else{None};
     let mut coverage=layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(),extent,[0;2]);coverage.selection=Some(Selection::pixels(result.pixels.clone()));

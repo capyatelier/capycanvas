@@ -353,7 +353,7 @@ pub(crate) fn document_texture(r: &WgpuRasterizer) -> &wgpu::Texture {
     cache.texture()
 }
 
-pub(crate) fn receive_request(r: &mut WgpuRasterizer, request: layer_render::RegionRequest) -> layer_render::RegionResult {
+pub(crate) fn receive_request(r: &mut WgpuRasterizer, request: impl Into<layer_render::RegionTask>) -> layer_render::RegionResult {
     assert!(r.request_region(request.into()).unwrap());
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
     loop {

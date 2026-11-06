@@ -2824,7 +2824,7 @@ fn raster_reference_vector_target(platform: Platform) -> (UiSession<Recorder>, O
 fn vector_trace_reply(s: &mut UiSession<Recorder>, size: u32) {
     let request = s.renderer_mut().region_requests.last().unwrap().clone();
     let pixels = Arc::new(layer_core::SelectionPixels::bytes([size, size], [0, 0, size, size], vec![u32::MAX; size.div_ceil(4) as usize * size as usize]).unwrap());
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { colour_on_solid: false, gaps: None, underfill: None, tonal_sample: None,
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None, tonal_sample: None,
         placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
     s.frame(2_000_000_000, 2_000_000_000).unwrap();
 }
@@ -2957,7 +2957,7 @@ fn a_traced_region_fits_two_hundred_holes_within_one_shared_point_budget() {
             break;
         }
     }
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { colour_on_solid: false, gaps: None, underfill: None, tonal_sample: None,
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None, tonal_sample: None,
         placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
     s.frame(2_000_000_000, 2_000_000_000).unwrap();
     assert!(s.region_tools.busy());
@@ -2988,7 +2988,7 @@ fn a_large_antialiased_disc_trace_finishes_within_the_existing_frame_quota() {
         words[y as usize * stride + (x / 4) as usize] |= coverage << (x % 4 * 8);
     }}
     let pixels = Arc::new(layer_core::SelectionPixels::bytes(extent, [0, 0, extent[0], extent[1]], words).unwrap());
-    s.renderer_mut().region_reply = Some(layer_render::RegionResult { colour_on_solid: false, gaps: None, underfill: None, tonal_sample: None,
+    s.renderer_mut().region_reply = Some(layer_render::RegionResult { translucent_seed: false, colour_on_solid: false, gaps: None, underfill: None, tonal_sample: None,
         placement: layer_core::Affine::IDENTITY, request_id: request.request_id, pixels });
     s.frame(2_000_000_000, 2_000_000_000).unwrap();
     finish_vector_trace(&mut s);

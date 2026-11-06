@@ -1975,6 +1975,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.paint_operation(doc.working.selection.clone(),kind,&colors)
     }
 
+    pub(super) fn fill_seed_point(&self,target:SourceTarget,point:Point)->Point {
+        let offset=layer_core::offsets::point(self.engine.document().target_offset(target).map(|value|-value));
+        Point {x:point.x+offset.x,y:point.y+offset.y}
+    }
     pub(super) fn paint_operation_data(&self,selection:Option<Selection>,mut kind:layer_core::RasterOperationKind)
         ->Result<(SourceTarget,layer_core::RasterOperation),String> {
         let id = self.engine.document().drawing_content().ok_or("Select a drawing layer")?;
@@ -1988,7 +1992,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             *selection = selection.translated(to_local);
         }
         if let layer_core::RasterOperationKind::Fill {edges:Some(edges),..}=&mut kind {
-            edges.position=Point{x:edges.position.x+to_local.x,y:edges.position.y+to_local.y};
+            edges.position=self.fill_seed_point(id,edges.position);
         }
         let placement = if matches!(kind,layer_core::RasterOperationKind::Gradient {..}) { layer_core::Affine::translation(to_local) } else { layer_core::Affine::IDENTITY };
         let domain = self.engine.document().target_extent(id);

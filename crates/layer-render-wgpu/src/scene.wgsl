@@ -165,17 +165,28 @@ fn scene_operation_over(src:vec4<f32>,dst:vec4<f32>)->vec4<f32> {
     if settings.options.w>.5 {return vec4<f32>(src.rgb*dst.a+dst.rgb*(1.-src.a),dst.a);}
     return src+dst*(1.-src.a);
 }
-@fragment fn fragment_fill(v:Vertex)->@location(0) vec4<f32> {
+struct FillInput {src:vec4<f32>,dst:vec4<f32>,band:f32}
+fn scene_fill_input(v:Vertex)->FillInput {
     scene_clip(v);
     let raw=scene_read(front,v);
     let src=scene_operation_paper(vec4<f32>(settings.color.rgb*settings.color.a,settings.color.a)*raw.r,scene_operation_local(v));
     let dst=scene_read(back,v);
-    if settings.options.z>.5 {
-        let band=scene_read(scene_extra,v).r;
-        if settings.operation_linear.z==1. && band>0. {return fill_edge_value(scene_operation_local(v),dst,src,band<.5);}
-        if band>.5 {return dst+src*select(1.-dst.a,0.,settings.options.w>.5);}
-    }
-    return scene_operation_over(src,dst);
+    var band=0.;if settings.options.z>.5 {band=scene_read(scene_extra,v).r;}
+    return FillInput(src,dst,band);
+}
+fn scene_fill_over(input:FillInput)->vec4<f32> {
+    if input.band>.5 {return input.dst+input.src*select(1.-input.dst.a,0.,settings.options.w>.5);}
+    return scene_operation_over(input.src,input.dst);
+}
+@fragment fn fragment_fill(v:Vertex)->@location(0) vec4<f32> {
+    let input=scene_fill_input(v);
+    if settings.operation_linear.z==1. && input.band>0. {return fill_edge_value(scene_operation_local(v),input.dst,input.src,input.band<.5);}
+    return scene_fill_over(input);
+}
+@fragment fn fragment_fill_opaque(v:Vertex)->@location(0) vec4<f32> {
+    let input=scene_fill_input(v);
+    if settings.operation_linear.z==1. && input.band>0. {return fill_opaque_edge_value(scene_operation_local(v),input.dst,input.src,input.band<.5);}
+    return scene_fill_over(input);
 }
 @fragment fn fragment_gradient(v:Vertex)->@location(0) vec4<f32> {
     scene_clip(v);

@@ -1563,18 +1563,18 @@ fn vector_reference_line_middle_tracks_pressure_stroke_centrelines() {
         let source = RegionSource::reference(snapshot.clone(), reference).unwrap();
         let RegionSource::Scene { snapshot: line_snapshot, scope } = source.clone() else { unreachable!() };
         let position = [center[0] as u32, center[1] as u32];
-        let result = crate::test_support::receive_request(engine.backend_mut(), RegionRequest {
+        let result = crate::test_support::receive_request(engine.backend_mut(), layer_render::RegionTask::Fill {request:RegionRequest {
             request_id: width as u64, source, position, contiguous: true, tolerance: 0.1,
             refinement: RegionRefinement { close_gaps: false, edges: RegionEdges::LineMiddle, smooth_edges: true },
             limit: None, enclosure: None, selection: None, fill: Some(layer_render::RegionFillQuery { reach: Some(0), ..Default::default() }), reference_count: Some(1),
             paper: None, fill_areas: None, colour_mode: Default::default(),
-        });
+        },target:destination,position:Point{x:position[0] as f32,y:position[1] as f32}});
         let mut coverage = CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(), extent, [0; 2]);
         coverage.selection = Some(Selection::pixels(result.pixels.clone()));
         engine.append_raster_operation(destination, RasterOperation {
             placement: result.placement, coverage, kind: RasterOperationKind::Fill {
                 color: [0.1, 0.7, 0.2, 1.], texture: Default::default(), alpha_locked: false,
-                edges: Some(Box::new(FillEdges { snapshot, position: Point { x: center[0] as f32, y: center[1] as f32 }, tolerance: 0.1,
+                edges: Some(Box::new(FillEdges { translucent_seed: result.translucent_seed, snapshot, position: Point { x: center[0] as f32, y: center[1] as f32 }, tolerance: 0.1,
                     colour_on_solid: result.colour_on_solid, lines: vec![FillLine { snapshot: line_snapshot, scope, fill_above: false }] })),
                 underfill: result.underfill.map(Selection::pixels),
             },

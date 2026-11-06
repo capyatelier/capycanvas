@@ -760,6 +760,7 @@ impl RegionRefinement {
 }
 #[derive(Clone, Debug)]
 pub struct RegionResult {
+    pub translucent_seed: bool,
     pub colour_on_solid: bool,
     pub gaps: Option<RegionGapMasks>,
     pub request_id: u64,
@@ -772,7 +773,7 @@ pub struct RegionResult {
     pub placement: layer_core::Affine,
 }
 #[derive(Clone,Debug)]
-pub enum RegionTask {Mask(RegionRequest),Fill(RegionRequest),FlatAreas(RegionRequest)}
+pub enum RegionTask {Mask(RegionRequest),Fill {request:RegionRequest,target:SourceTarget,position:layer_core::Point},FlatAreas(RegionRequest)}
 impl From<RegionRequest> for RegionTask {fn from(request:RegionRequest)->Self {Self::Mask(request)}}
 #[derive(Clone,Debug)]
 pub enum RegionOutput {Mask(RegionResult),FlatAreas {request_id:u64,raster:layer_core::raster::RasterRevision}}

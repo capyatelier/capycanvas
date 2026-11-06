@@ -405,6 +405,15 @@ optimized APK SHA-256 `e74cd6b9b8f0dc15e1beb2f5e6ff6348bae20025ebc6e1f6adbd9dca7
 
 ## Reference Fill completion
 
+The 2026-11-06 opaque-fragment split compares `009e858f8` with the split
+on the same 24 MP, three-reference second-fill protocol. Two complete ABBAs
+retain all eight samples: mean visible-fill brackets are 2.025–2.183 s →
+2.055–2.207 s, +27.17 ms (+1.29%) at midpoints, within the pooled control
+spread of 36.66 ms. This measures split B; selected R changes only cold
+compile order. It does not qualify motion or close the older M5 latency miss.
+Individual samples and qualifiers are in
+`artifacts/fill-tools/opaque-split/cp3/warm/pooled-report.json`.
+
 The final 2026-11-03 native ABBA compares M5 `c668c28ba` with frozen main
 `6e22fc3e7` on MovinkPad 11: 6000 × 4000, three references, enclosed cell,
 two fills per launch, timing the second fill. Each arm has two samples, at

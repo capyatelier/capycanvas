@@ -809,15 +809,16 @@ mod tests {
         crate::test_support::submit_ready(&mut reference,crate::test_support::packet(document.scene(),[64;2])).unwrap();
         let mut renderer=crate::test_support::staged_renderer(&reference,Default::default());
         renderer.artwork_frame=reference.artwork_frame.clone();renderer.document_extent=[64;2];
+        assert!(std::ptr::eq(renderer.scene_pipelines.fill_pipelines()[0],&renderer.scene_pipelines.pipeline[10]));
         let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
         let compiler=&renderer.startup.as_ref().unwrap().compiler;
         compiler.enqueue(DOCUMENT,move||{let _=entered.send(());let _=held.recv();Ok(())});compiler.start();
         entry.recv_timeout(Duration::from_secs(5)).unwrap();
         let request=RegionRequest {fill_areas:None,colour_mode:Default::default(),fill:Some(Default::default()),reference_count:None,paper:None,
             enclosure:None,contiguous:true,selection:None,request_id:1,source:RegionSource::Composite,position:[0;2],tolerance:0.,refinement:Default::default(),limit:None};
-        let accepted=renderer.request_region(RegionTask::Fill(request));
-        let [fill,scalar]=renderer.scene_pipelines.fill_pipelines();
-        let pipelines=[fill,scalar,&renderer.pipelines.watercolor_composite,&renderer.layer_masks.initialize];
+        let accepted=renderer.request_region(RegionTask::Fill {request,target:document.drawing_content().unwrap(),position:layer_core::Point{x:0.,y:0.}});
+        let [opaque,fill,scalar]=renderer.scene_pipelines.fill_pipelines();
+        let pipelines=[opaque,fill,scalar,&renderer.pipelines.watercolor_composite,&renderer.layer_masks.initialize];
         let render_required=pipelines.into_iter().all(|pipeline|!pipeline.ready() && pipeline.promote(DOCUMENT).is_none());
         let compute_required=renderer.selection_clip.pipelines().into_iter().chain([&renderer.selection_clip.resample,&renderer.pipelines.watercolor_compute.1])
             .all(|pipeline|!pipeline.ready() && pipeline.promote(DOCUMENT).is_none());

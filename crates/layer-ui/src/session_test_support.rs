@@ -40,6 +40,7 @@ pub(crate) struct Recorder {
     pub(crate) selection_reply: Option<layer_render::SelectionPaintResult>,
     pub(crate) selection_wait: bool,
     pub(crate) region_requests: Vec<layer_render::RegionRequest>,
+    pub(crate) region_fill_seed:Option<(SourceTarget,Point)>,
     pub(crate) flat_requests: Vec<layer_render::RegionRequest>,
     pub(crate) region_output: Option<layer_render::RegionOutput>,
     pub(crate) region_preparation: Option<layer_render::RegionPreparation>,
@@ -162,7 +163,11 @@ impl CanvasRenderer for Recorder {
         &mut self,
         request: layer_render::RegionTask,
     ) -> Result<bool, Self::Error> {
-        match request {layer_render::RegionTask::Mask(request)|layer_render::RegionTask::Fill(request)=>self.region_requests.push(request),layer_render::RegionTask::FlatAreas(request)=>self.flat_requests.push(request)}
+        match request {
+            layer_render::RegionTask::Fill {request,target,position}=>{self.region_fill_seed=Some((target,position));self.region_requests.push(request);},
+            layer_render::RegionTask::Mask(request)=>self.region_requests.push(request),
+            layer_render::RegionTask::FlatAreas(request)=>self.flat_requests.push(request),
+        }
         Ok(true)
     }
     fn take_region(&mut self) -> Option<Result<layer_render::RegionOutput, Self::Error>> {

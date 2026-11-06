@@ -45,7 +45,7 @@ pub(crate) mod resample;
 pub(crate) mod scale;
 
 const SCALAR_PIPELINE:usize=9;
-const FRAGMENTS: [(&str, &str); 10] = [
+const FRAGMENTS: [(&str, &str); 11] = [
     ("fragment_main", "tile layer composition"),
     ("fragment_main", "tile layer over"),
     ("fragment_coverage", "tile mask coverage"),
@@ -56,6 +56,7 @@ const FRAGMENTS: [(&str, &str); 10] = [
     ("fragment_image", "tile image placement"),
     ("fragment_tone", "tile tone mapping"),
     ("fragment_main", "scalar scene over"),
+    ("fragment_fill_opaque", "raster opaque fill operation"),
 ];
 
 fn fragment_pipeline(operation: u32, over: bool, scalar:bool) -> Option<usize> {
@@ -122,6 +123,7 @@ enum Job {
         clip: Option<PixelRect>,
         source_target: Option<SourceTarget>,
         edges: Option<wgpu::BindGroup>,
+        pipeline: Option<usize>,
     },
     Clear(wgpu::TextureView, wgpu::Color),
     Watercolor {
@@ -434,7 +436,7 @@ impl Scene {
             let Some(view) = self.source_tile(r, scene, target, coordinate)? else { continue; };
             let mut data = [0.; 32];
             data[..10].copy_from_slice(&[0., 0., 256., 256., 256., 256., 0., 0., 1., 1.]);
-            self.jobs.push(Job::Draw { target: output, sources: [view, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()], data, over: false, clip: None, source_target:None, edges:None });
+            self.jobs.push(Job::Draw { target: output, sources: [view, r.empty_view.clone(), r.empty_view.clone(), r.empty_paper_view.clone()], data, over: false, clip: None, source_target:None, edges:None,pipeline:None });
         }
         Ok(())
     }
@@ -1022,7 +1024,7 @@ impl Scene {
             sources,
             data,
             over,
-            clip: None, source_target:None, edges:None,
+            clip: None, source_target:None, edges:None,pipeline:None,
         });
     }
     #[allow(clippy::too_many_arguments)] // Explicit composite operands.
@@ -1568,7 +1570,8 @@ impl Scene {
                         false,
                         Convert::None,
                     );
-                    if let Some(Job::Draw { data, sources, edges, .. }) = self.jobs.last_mut() {
+                    if let Some(Job::Draw { data, sources, edges, pipeline, .. }) = self.jobs.last_mut() {
+                        *pipeline=operation_pipeline(&op.kind);
                         if let Some(gradient)=&gradient {sources[2]=gradient.clone();}
                         if let Some(underfill)=&underfill {sources[2]=underfill.view.clone();}
                         data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
@@ -2145,8 +2148,8 @@ impl Scene {
         let mut effects_ready = self.effects.preparation_ready();
         for job in &self.jobs {
             match job {
-                Job::Draw {target,data,over,..} => {
-                    if let Some(index) = fragment_pipeline(data[8] as u32,*over,target.texture().format()==r.device.scalar_format())
+                Job::Draw {target,data,over,pipeline,..} => {
+                    if let Some(index) = pipeline.or_else(||fragment_pipeline(data[8] as u32,*over,target.texture().format()==r.device.scalar_format()))
                         && !self.pipeline[index].ready() && !is_compute(job) {self.pending_pipelines |= 1 << index;}
                 }
                 Job::Effect {prepared,..} => effects_ready &= prepared.pipeline.ready(),
@@ -2542,9 +2545,9 @@ impl Scene {
                                     })
                                 });
                                 pass.set_bind_group(3, masks, &[]);
-                            } else if let Job::Draw { over, data, edges, .. } = job {
+                            } else if let Job::Draw { over, data, edges, pipeline, .. } = job {
                                 pass.set_bind_group(2,edges.as_ref().unwrap_or(&self.edge_binding),&[]);
-                                pass.set_pipeline(&self.pipeline[fragment_pipeline(data[8] as u32,*over,source.as_ref().unwrap_or(target).texture().format()==r.device.scalar_format()).expect("fragment draw operation")]);
+                                pass.set_pipeline(&self.pipeline[pipeline.or_else(||fragment_pipeline(data[8] as u32,*over,source.as_ref().unwrap_or(target).texture().format()==r.device.scalar_format())).expect("fragment draw operation")]);
                             }
                             pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                             pass.set_bind_group(1, binding, &[]);
@@ -2594,6 +2597,7 @@ pub(super) fn fill_texture(kind: &RasterOperationKind) -> Option<&layer_core::Fi
 
 pub(super) fn operation_pipeline(kind: &RasterOperationKind) -> Option<usize> {
     match kind {
+        RasterOperationKind::Fill {edges:Some(edges),..} => Some(if edges.translucent_seed {3}else{10}),
         RasterOperationKind::Fill { .. } => Some(3),
         RasterOperationKind::Gradient { .. } => Some(4),
         RasterOperationKind::Figure(_) => Some(5),
@@ -2620,7 +2624,7 @@ impl Pipelines {
         }
         self.pipeline.iter().zip(used).filter_map(|(pipeline,used)| used.then_some(pipeline))
     }
-    pub fn fill_pipelines(&self)->[&Deferred<wgpu::RenderPipeline>;2] { [&self.pipeline[3],&self.pipeline[SCALAR_PIPELINE]] }
+    pub fn fill_pipelines(&self)->[&Deferred<wgpu::RenderPipeline>;3] { [&self.pipeline[10],&self.pipeline[3],&self.pipeline[SCALAR_PIPELINE]] }
     pub fn scale_pipelines(&self) -> [&Deferred<wgpu::ComputePipeline>; 6] {
         [&self.scale.reduce, &self.scale.reduce_phased, &self.scale.reduce_pair, &self.scale.compose, &self.scale.half, &self.resample.area]
     }
@@ -2668,7 +2672,7 @@ impl Pipelines {
             Deferred::pipeline(move |mode| {
                 fullscreen_pipeline_recipe(mode, &device, &pipeline_layout, &shader, entry,
                     (i == 1 || i == SCALAR_PIPELINE).then_some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    if i == 2 || i>=SCALAR_PIPELINE { device.scalar_format() } else { device.working_format() }, label)
+                    if i == 2 || i==SCALAR_PIPELINE { device.scalar_format() } else { device.working_format() }, label)
             })
         }).collect::<Vec<_>>().try_into().ok().unwrap();
         let constant = {
@@ -2895,8 +2899,8 @@ mod shader_tests {
 
     #[test]
     fn fragment_operations_select_only_their_assigned_pipeline() {
-        assert_eq!(FRAGMENTS.map(|(entry,_)| entry), ["fragment_main","fragment_main","fragment_coverage",
-            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone","fragment_main"]);
+        assert_eq!(FRAGMENTS.map(|(entry,_)| entry).as_slice(), ["fragment_main","fragment_main","fragment_coverage",
+            "fragment_fill","fragment_gradient","fragment_figure","fragment_blend","fragment_image","fragment_tone","fragment_main","fragment_fill_opaque"]);
         let expected = [
             [Some(0),Some(1)],
             [Some(0),Some(1)],
@@ -2935,6 +2939,17 @@ mod shader_tests {
             }
         }
         assert_eq!(fragment_pipeline(23,true,true),Some(SCALAR_PIPELINE));
+        let document=layer_core::Document::new(layer_core::PortableId::random(),16,16,
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let mut fill=RasterOperationKind::Fill {color:[1.;4],texture:layer_core::FillTexture {strength:1.,paper:None},
+            alpha_locked:false,edges:None,underfill:None};
+        assert_eq!(operation_pipeline(&fill),Some(3));
+        for translucent_seed in [false,true] {
+            if let RasterOperationKind::Fill {edges,..}=&mut fill {*edges=Some(Box::new(layer_core::FillEdges {
+                translucent_seed,colour_on_solid:false,snapshot:document.snapshot(),position:layer_core::Point{x:0.,y:0.},tolerance:0.,lines:Vec::new(),
+            }));}
+            assert_eq!(operation_pipeline(&fill),Some(if translucent_seed {3}else{10}));
+        }
         for operation in [u32::MAX] {
             for over in [false,true] {
                 assert!(std::panic::catch_unwind(|| fragment_pipeline(operation,over,false)).is_err(),
@@ -2945,7 +2960,8 @@ mod shader_tests {
 
     #[test]
     fn fragment_families_omit_unrelated_operations() {
-        let families = ["gradient_shape", "ellipse_distance", "scene_image", "hdr_map_sdr", "blend_composite", "paper_sample"];
+        let families = ["gradient_shape", "ellipse_distance", "scene_image", "hdr_map_sdr", "blend_composite", "paper_sample",
+            "fill_plateau", "fill_anchor", "fill_feasible_neighbour", "fill_reconstruct"];
         for space in layer_core::color::RgbSpace::ALL {
             let source = shader_source(space);
             let module = crate::shader_limits::ValidatedModule::parse(&source).unwrap().into_parts().0;
@@ -2953,6 +2969,7 @@ mod shader_tests {
                 ("fragment_main", &[][..]),
                 ("fragment_coverage", &[][..]),
                 ("fragment_fill", &["paper_sample"][..]),
+                ("fragment_fill_opaque", &["paper_sample", "fill_plateau", "fill_anchor", "fill_feasible_neighbour", "fill_reconstruct"][..]),
                 ("fragment_gradient", &["gradient_shape", "paper_sample"][..]),
                 ("fragment_figure", &["ellipse_distance"][..]),
                 ("fragment_blend", &["blend_composite"][..]),

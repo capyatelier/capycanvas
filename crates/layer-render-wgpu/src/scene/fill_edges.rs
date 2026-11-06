@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) const RADIUS:u32=crate::flood::UNDERFILL_HALF_PIXELS.div_ceil(2);
+pub(crate) fn seed_rect(position:layer_core::Point,extent:[u32;2])->PixelRect {
+    let [x,y]=[position.x,position.y].map(|value|value.max(0.) as u32);
+    PixelRect::new(x,y,x+1,y+1).intersect(PixelRect::full(extent))
+}
 const HALO:u32=RADIUS;
 const SIDE:u32=PAGE_SIZE+2*HALO;
 pub(super) struct Capture {
@@ -148,7 +152,7 @@ fn external(edges:&layer_core::FillEdges,packet:FramePacket<'_>,preview:Option<&
         .any(|target|edited.contains(target))).collect()
 }
 fn same_edges(a:&layer_core::FillEdges,b:&layer_core::FillEdges)->bool {
-    Arc::ptr_eq(&a.snapshot,&b.snapshot) && a.colour_on_solid==b.colour_on_solid && a.position==b.position && a.tolerance==b.tolerance
+    Arc::ptr_eq(&a.snapshot,&b.snapshot) && a.colour_on_solid==b.colour_on_solid && a.translucent_seed==b.translucent_seed && a.position==b.position && a.tolerance==b.tolerance
         && a.lines.len()==b.lines.len() && a.lines.iter().zip(&b.lines).all(|(a,b)|
             Arc::ptr_eq(&a.snapshot,&b.snapshot) && a.scope==b.scope && a.fill_above==b.fill_above)
 }
@@ -171,7 +175,7 @@ impl LineCapture<'_> {
         let mut data=[0.;32];data[..8].copy_from_slice(&[0.,0.,w,h,SIDE as f32,SIDE as f32,0.,0.]);
         data[8..12].copy_from_slice(&[23.,1.,1.,0.]);
         scene.jobs.push(Job::Draw {target:target.clone(),sources:[next.1.clone(),r.empty_view.clone(),r.empty_view.clone(),r.empty_paper_view.clone()],
-            data,over:true,clip:None,source_target:None,edges:None});
+            data,over:true,clip:None,source_target:None,edges:None,pipeline:None});
     }
 }
 
@@ -198,8 +202,7 @@ impl Scene {
         let mut capture=self.fill_capture.take().unwrap_or_else(||Box::new(Capture::new(r,extent,edges.lines.len())));
         capture.external=external(edges,packet,r.fill_preview.as_ref());
         let prepared=r.fill_edges_preflight.as_ref().and_then(|state|state.input(target,edges,&capture.external,extent,offset).map(|input|state.line_seeds[input].clone()));
-        let [x,y]=[edges.position.x,edges.position.y].map(|v|v.max(0.) as u32);
-        let region=PixelRect::new(x,y,x+1,y+1).intersect(PixelRect::full(extent));
+        let region=seed_rect(edges.position,extent);
         let result=(|| {
             for (index,line) in edges.lines.iter().enumerate() {
                 if capture.external[index] && let Some(prepared)=&prepared {
@@ -281,8 +284,7 @@ impl FillEdgesPreflight {
             let scene=self.scene.as_mut().unwrap();
             match *step {
                 Step::Seed(id)=> {
-                    let [x,y]=[edges.position.x,edges.position.y].map(|value|value.max(0.) as u32);
-                    let region=PixelRect::new(x,y,x+1,y+1).intersect(PixelRect::full(extent));
+                    let region=seed_rect(edges.position,extent);
                     for (index,line) in edges.lines.iter().enumerate().filter(|(index,_)|input.external[*index]) {
                         self.capture.region_into(r,Capture::packet(&line.snapshot,&line.scope,offset,extent,packet),region,&self.seed.0,encoder)?;
                         copy(encoder,&self.seed.0,&self.line_seeds[id],[0;2],[0,index as u32],[1;2]);
@@ -381,7 +383,7 @@ mod tests {
         let snapshot=document.snapshot();
         let operation=layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage,kind:RasterOperationKind::Fill {
             color:[0.1,0.4,0.7,1.],texture:Default::default(),alpha_locked:false,underfill:Some(rectangle(252.,256.)),
-            edges:Some(Box::new(layer_core::FillEdges {snapshot:snapshot.clone(),position:layer_core::Point{x:240.,y:192.},tolerance:0.,colour_on_solid:false,
+            edges:Some(Box::new(layer_core::FillEdges { translucent_seed: false,snapshot:snapshot.clone(),position:layer_core::Point{x:240.,y:192.},tolerance:0.,colour_on_solid:false,
                 lines:vec![layer_core::FillLine {snapshot,scope:SceneScope::Raw(reference),fill_above:false}]}))}};
         (document,target,operation)
     }

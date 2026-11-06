@@ -7,8 +7,10 @@ pub(super) struct Capture {
     pub coverage_size: u64,
     pub underfill_offset: Option<u64>,
     pub seal_records: usize,
+    pub seed_offset:Option<u64>,
 }
 struct Captured {
+    translucent_seed:bool,
     colour_on_solid: bool,
     pixels: std::sync::Arc<layer_core::SelectionPixels>,
     underfill: Option<std::sync::Arc<layer_core::SelectionPixels>>,
@@ -19,7 +21,7 @@ struct Captured {
     seals: Vec<layer_render::RegionSeal>,
     next:Option<[u32;2]>,
 }
-fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64,underfill_offset:Option<u64>,seal_records:usize)->Result<Captured,GpuRasterError> {
+fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64,underfill_offset:Option<u64>,seal_records:usize,seed_offset:Option<u64>)->Result<Captured,GpuRasterError> {
     let read=|offset:usize|u32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap());
     let count=extent[0].div_ceil(if byte_coverage {4}else{8}) as usize*extent[1] as usize;
     let copy_words=|offset:usize,count:usize| {
@@ -50,8 +52,8 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
             bend:(read(at+12)!=u32::MAX).then(||coord(read(at+12)))})
     }).collect();
     let next=read(coverage_size as usize+24);
-    Ok(Captured {colour_on_solid:read(coverage_size as usize+28)&1!=0,next:(next!=u32::MAX).then(||coord(next)),pixels:std::sync::Arc::new(pixels),underfill,active:read(24) as usize,line_bounded:read(28)!=0,
-        stale:read(coverage_size as usize+20)!=0,extra:bytes[extra_start+seal_records*20..].to_vec(),seals})
+    Ok(Captured {translucent_seed:seed_offset.is_some_and(|offset|f32::from_le_bytes(bytes[offset as usize+12..offset as usize+16].try_into().unwrap())<0.99999),colour_on_solid:read(coverage_size as usize+28)&1!=0,next:(next!=u32::MAX).then(||coord(next)),pixels:std::sync::Arc::new(pixels),underfill,active:read(24) as usize,line_bounded:read(28)!=0,
+        stale:read(coverage_size as usize+20)!=0,extra:bytes[extra_start+seal_records*20..seed_offset.map_or(bytes.len(),|offset|offset as usize)].to_vec(),seals})
 }
 
 pub(super) fn capture_selection<T:Send+'static>(
@@ -63,12 +65,12 @@ pub(super) fn capture_selection<T:Send+'static>(
     tx:mpsc::Sender<Result<T,GpuRasterError>>,
     convert:impl FnOnce(RegionResult,bool,&[u8])->T+Send+'static,
 ) {
-    let Capture {buffer,size,coverage_size,underfill_offset,seal_records}=capture;
-    crate::raster::map_then(None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records),move|part| {
+    let Capture {buffer,size,coverage_size,underfill_offset,seal_records,seed_offset}=capture;
+    crate::raster::map_then(None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records,seed_offset),move|part| {
         let result=part.and_then(|primary| {
             if gaps && primary.active>=5 {return Err(GpuRasterError::MapFailed("Invalid fill reach".into()));}
             let masks=gaps.then(||layer_render::RegionGapMasks {next:primary.next,active:primary.active,line_bounded:primary.line_bounded,seals:primary.seals.into()});
-            Ok(convert(RegionResult {colour_on_solid:primary.colour_on_solid,request_id,tonal_sample:None,pixels:primary.pixels,underfill:primary.underfill,
+            Ok(convert(RegionResult {translucent_seed:primary.translucent_seed,colour_on_solid:primary.colour_on_solid,request_id,tonal_sample:None,pixels:primary.pixels,underfill:primary.underfill,
                 placement:layer_core::Affine::IDENTITY,gaps:masks},primary.stale,&primary.extra))
         });
         let _=tx.send(result);

@@ -378,6 +378,7 @@ pub struct FillLine {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct FillEdges {
+    pub translucent_seed: bool,
     pub colour_on_solid: bool,
     pub snapshot: Arc<SceneSnapshot>,
     pub position: Point,
