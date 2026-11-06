@@ -4,8 +4,20 @@ import {runInNewContext} from 'node:vm';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,selectPhoneDrawerStates,installPhoneAuditWorkerBoundary,installPhoneAuditColorHistoryProvider,openPhoneDrawerTile,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues,failedSavePlacementIssues} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,selectPhoneDrawerStates,installPhoneAuditWorkerBoundary,installPhoneAuditColorHistoryProvider,openPhoneDrawerTile,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues,failedSavePlacementIssues,auditBarMenu} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
+
+test('collapsed canvas fields open their menu title rather than the current value',async()=>{
+  const calls=[],context={kind:'transform'};let hidden=true;
+  const grid={querySelector:()=>({textContent:'Grid'}),click:()=>calls.push('Grid')};
+  const document={querySelector:()=>({closest:()=>({hidden}),getAttribute:()=> '3×3'}),querySelectorAll:()=>[grid]};
+  const layerApp={state:()=>({canvas_bar:{context}}),app:{canvas_bar_choice_menu(actual,menu){assert.equal(actual,context);assert.equal(menu,'warp_grid');return{title:'Grid'};}}};
+  const driver={click:async selector=>calls.push(selector),evaluate:async code=>runInNewContext(code,{document,layerApp})};
+  await auditBarMenu(driver,'warp_grid');
+  assert.deepEqual(calls,['.canvas-action-bar-more','Grid']);
+  hidden=false;calls.length=0;await auditBarMenu(driver,'warp_grid');
+  assert.deepEqual(calls,['[data-canvas-bar-menu="warp_grid"]']);
+});
 
 test('failed-save capture rejects overlap and departures from the shared notice rectangle',()=>{
   const placement={status:{x:12,width:388,bottom:800},controls:[{id:'zen-capy',overlap:false}],notice:{x:206,y:800,max_width:388}};

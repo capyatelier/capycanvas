@@ -399,11 +399,11 @@ async function auditCanvasBar(c,kind){
   await c.send({type:'customize',action:{type:'close_expanded'}});
   await c.wait('!!layerApp.state().canvas_bar&&!document.querySelector(".canvas-action-bar").classList.contains("suppressed")');
 }
-async function auditBarMenu(c,menu){
+export async function auditBarMenu(c,menu){
   if(menu==='more')return c.click('.canvas-action-bar-more');
   const selector=`[data-canvas-bar-menu="${menu}"]`;
   if(await c.evaluate(`document.querySelector(${JSON.stringify(selector)}).closest('.canvas-action-bar-item').hidden`)){
-    await c.click('.canvas-action-bar-more');const label=await c.evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-label')`);
+    await c.click('.canvas-action-bar-more');const label=await c.evaluate(`layerApp.app.canvas_bar_choice_menu(layerApp.state().canvas_bar.context,${JSON.stringify(menu)}).title`);
     await c.evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(node=>node.querySelector('.menu-label')?.textContent===${JSON.stringify(label)}).click()`);
   }else await c.click(selector);
 }
