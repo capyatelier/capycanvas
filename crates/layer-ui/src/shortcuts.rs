@@ -253,13 +253,17 @@ impl KeyChord {
     pub fn label_parts(&self, platform: Platform) -> Vec<String> { self.localized_label_parts(platform, &Localizer::shared(UiLanguage::English)) }
     pub fn localized_label_parts(&self, platform: Platform, l: &Localizer) -> Vec<String> {
         let mut parts = Vec::new();
+        let shift_first = matches!(platform, Platform::Gtk | Platform::Web);
+        if self.shift && shift_first {
+            parts.push(l.text(MessageId::SHORTCUT_SHIFT).to_string());
+        }
         if self.command {
             parts.push(if self.apple_control(platform) { "⌃".to_string() } else if platform.apple() { "⌘".to_string() } else { l.text(MessageId::SHORTCUT_CTRL).to_string() });
         }
         if self.alt {
             parts.push(l.text(MessageId::SHORTCUT_ALT).to_string());
         }
-        if self.shift {
+        if self.shift && !shift_first {
             parts.push(l.text(MessageId::SHORTCUT_SHIFT).to_string());
         }
         parts.push(match self.key.as_str() {
@@ -1289,6 +1293,17 @@ mod tests {
     }
 
     #[test]
+    fn accelerator_labels_share_modifier_order_and_canonical_key_names() {
+        for platform in [Platform::Gtk, Platform::Web] {
+            let chord = KeyChord { key: "z".into(), command: true, shift: true, alt: true };
+            assert_eq!(chord.label(platform), "Shift+Ctrl+Alt+Z");
+            assert_eq!(chord.label_parts(platform), ["Shift", "Ctrl", "Alt", "Z"]);
+            let backspace = KeyChord { key: "backspace".into(), ..chord };
+            assert_eq!(backspace.label(platform), "Shift+Ctrl+Alt+Backspace");
+        }
+    }
+
+    #[test]
     fn new_default_keys_do_not_break_saved_custom_bindings() {
         let mut settings = Settings::default();
         let brush = CommandId::Brush.shortcut_id();
@@ -1366,7 +1381,7 @@ mod tests {
         );
         assert_eq!(
             settings.action_tooltip_english("Translated label", &zen, Platform::Web),
-            "Translated label (Ctrl+J / Ctrl+Shift+K)"
+            "Translated label (Ctrl+J / Shift+Ctrl+K)"
         );
         assert_eq!(
             settings.action_shortcut(&zen, Platform::Mac),
@@ -1391,7 +1406,7 @@ mod tests {
         );
         assert_eq!(
             settings.action_shortcut(&new, Platform::Gtk),
-            "Ctrl+Shift+N"
+            "Shift+Ctrl+N"
         );
     }
 

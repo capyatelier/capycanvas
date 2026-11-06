@@ -229,8 +229,7 @@ impl Menu {
                     if let Some(value) = item.selected { row.button.update_state(&[gtk::accessible::State::Checked(if value { gtk::AccessibleTristate::True } else { gtk::AccessibleTristate::False })]); }
                 }
                 crate::icons::set(&row.icon, item.icon.as_deref()); row.icon.set_visible(item.icon.is_some());
-                let shortcut = item.bindings.first().map(|key| native_accelerator(&key.chord));
-                let detail = if item.count.is_empty() { shortcut.as_deref().and_then(gtk::accelerator_parse).map(|(key, mods)| gtk::accelerator_get_label(key, mods).to_string()).unwrap_or_default() } else { item.count.clone() };
+                let detail = if item.count.is_empty() { item.bindings.first().map(|key| key.chord.localized_label(Platform::Gtk, &w.localization())).unwrap_or_default() } else { item.count.clone() };
                 row.detail.set_text(&detail); row.detail.set_visible(!detail.is_empty());
                 if let (Some(close), Some(copy)) = (&row.close, &item.close) {
                     close.set_width_request(model.close_width as i32); close.set_tooltip_text(Some(&copy.label));

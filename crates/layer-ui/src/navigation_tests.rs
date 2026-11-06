@@ -1240,9 +1240,10 @@ mod navigation_controls {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Windows] {
             let s = session(platform);
             let menu = s.application_menu(ApplicationMenu::Window);
+            let previous = if platform == Platform::Gtk { "Shift+Ctrl+Tab / Ctrl+Page Up / Alt+Page Up" } else { "Ctrl+Shift+Tab / Ctrl+Page Up / Alt+Page Up" };
             for (command, shift, page, shortcut) in [
                 (CommandId::NextDrawing, false, "pagedown", "Ctrl+Tab / Ctrl+Page Down / Alt+Page Down"),
-                (CommandId::PreviousDrawing, true, "pageup", "Ctrl+Shift+Tab / Ctrl+Page Up / Alt+Page Up"),
+                (CommandId::PreviousDrawing, true, "pageup", previous),
             ] {
                 let bindings = serde_json::json!([
                     {"key":"tab","command":true,"shift":shift,"alt":false},

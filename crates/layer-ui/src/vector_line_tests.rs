@@ -928,7 +928,7 @@ fn new_vector_layers_switch_to_a_pen_and_paint_layers_switch_back() {
     let paint = s.engine.document().working.occurrence.unwrap();
     let command = s.command(CommandId::NewVectorLayer);
     assert!(command.enabled);
-    assert_eq!((command.icon, command.shortcut.as_str()), (Some("add-vector-layer"), "Ctrl+Alt+Shift+N"));
+    assert_eq!((command.icon, command.shortcut.as_str()), (Some("add-vector-layer"), "Shift+Ctrl+Alt+N"));
     invoke(&mut s, CommandId::NewVectorLayer);
     let vector = s.engine.document().working.occurrence.unwrap();
     assert!(s.engine.document().scene().vector_layer(vector).is_some());

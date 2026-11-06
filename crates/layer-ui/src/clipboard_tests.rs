@@ -1555,11 +1555,11 @@ mod clipboard_checks {
         for (command, chord) in [
             (CommandId::Copy, "Ctrl+C / Ctrl+Insert"),
             (CommandId::Cut, "Ctrl+X / Shift+Delete"),
-            (CommandId::CopyMerged, "Ctrl+Shift+C"),
+            (CommandId::CopyMerged, "Shift+Ctrl+C"),
             (CommandId::PasteImage, "Ctrl+V / Shift+Insert"),
-            (CommandId::PasteAtView, "Ctrl+Shift+V"),
+            (CommandId::PasteAtView, "Shift+Ctrl+V"),
             (CommandId::PasteAtCursor, "Ctrl+Alt+V"),
-            (CommandId::PasteInto, "Ctrl+Alt+Shift+V"),
+            (CommandId::PasteInto, "Shift+Ctrl+Alt+V"),
         ] {
             assert_eq!(s.command(command).shortcut, chord, "{command:?}");
         }

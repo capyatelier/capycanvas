@@ -1619,9 +1619,10 @@ button.new-drawing-preset.disabled { opacity:.4; }
 #command-bar .command-result[data-selected="true"] { background: color-mix(in srgb, var(--text) 10%, transparent); }
 .command-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .command-result[aria-disabled="true"] .command-name { opacity: .5; }
-.command-shortcut, .command-detail, .command-unit { opacity: .65; }
-.command-shortcut { font-size: .85em; white-space: nowrap; }
-.command-detail { min-height: 20px; padding: 0 var(--command-inset); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: .85em; flex: none; }
+.command-shortcut, .command-detail { opacity:.55; font-size:1em; font-weight:400; line-height:1.4; }
+.command-unit { opacity:.65; }
+.command-shortcut { white-space:nowrap; }
+.command-detail { min-height: 20px; padding: 0 var(--command-inset); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
 .command-empty { text-align: center; padding: var(--command-inset); opacity: .65; }
 #command-bar [hidden] { display: none; }
 
