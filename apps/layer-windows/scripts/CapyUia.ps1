@@ -2,6 +2,21 @@
 if(!('CapyWindowApi' -as [type])){Add-Type -TypeDefinition @"
 using System;using System.Runtime.InteropServices;using System.Text;
 public static class CapyWindowApi {
+ [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
+ [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string name,string title);
+ public static Rect ContentRect(IntPtr window){
+   const string name="Microsoft.UI.Content.DesktopChildSiteBridge";
+   var child=FindWindowEx(window,IntPtr.Zero,name,null);var bounds=new Rect();
+   if(child==IntPtr.Zero||FindWindowEx(window,child,name,null)!=IntPtr.Zero||!GetWindowRect(child,out bounds))
+     throw new Exception("The drawing window has no unique native XAML content bounds.");
+   return bounds;
+ }
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+
  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint owner);
  [DllImport("user32.dll")]public static extern bool PostMessage(IntPtr h,uint m,UIntPtr w,IntPtr l);
  [DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);
@@ -599,6 +614,25 @@ function Search-State{
  if($base.process_id -ne $review.Id -or $search.process_id -ne $review.Id -or $search.window_id -ne $base.window_id -or 'search' -notin $search.PSObject.Properties.Name){throw 'The search acknowledgement is not from the owned drawing'}
  $search.search
 }
+function Camera-Receipt{
+    $path=State-File
+    if(!$path){return}
+    $state=Read-Snapshot $path
+    $registration=Read-Snapshot (Join-Path (Split-Path -Parent $path) "windows-$($review.Id).json")
+    $registered=@($registration.windows|Where-Object hwnd -eq $drawingWindow.ToInt64())
+    if($state.process_id -ne $review.Id -or !$state.model.windows_isolated_settings -or $registration.process_id -ne $review.Id -or $registered.Count -ne 1 -or $state.window_id -ne $registered[0].id){throw 'Camera receipt has no unique owned drawing trace'}
+    $cameraPath=Join-Path (Split-Path -Parent $path) ((Split-Path -Leaf $path) -replace '^ui-state-','camera-state-')
+    $receipt=Read-Snapshot $cameraPath
+    if($cameraPath -eq $path -or $receipt.process_id -ne $review.Id -or $receipt.window_id -ne $state.window_id){throw 'Camera receipt is not from the owned drawing'}
+    if(!$receipt.camera -or !$receipt.navigation){return}
+    foreach($field in 'revision','zoom','viewport','work_area'){
+        if($null -eq $receipt.camera.$field){return}
+    }
+    foreach($field in 'drawing_id','artwork','epoch','revision'){
+        if($null -eq $receipt.navigation.$field){return}
+    }
+    $receipt
+}
 function Model{
     $model=$null
     try{
@@ -784,6 +818,34 @@ function Zoom-Item([string]$Id){
         if($item){return $item}
     }
 }
+function Wait-CanvasViewport($Drawing,$Process,[string]$StatePath,[int[]]$OuterSize){
+    $handle=$Drawing.Handle;$ProcessId=$Process.Id
+    $registration=Read-Snapshot (Join-Path (Split-Path -Parent $StatePath) "windows-$ProcessId.json")
+    $registered=@($registration.windows|Where-Object hwnd -eq $handle.ToInt64())
+    if($registration.process_id -ne $ProcessId -or $registered.Count -ne 1){throw 'Viewport has no unique owned drawing trace.'}
+    Wait-Until {
+        $outer=New-Object CapyWindowApi+Rect;$client=New-Object CapyWindowApi+Rect
+        if(![CapyWindowApi]::GetWindowRect($handle,[ref]$outer) -or ![CapyWindowApi]::GetClientRect($handle,[ref]$client)){throw 'Resize bounds are unavailable.'}
+        $origin=New-Object CapyWindowApi+Point
+        if(![CapyWindowApi]::ClientToScreen($handle,[ref]$origin)){throw 'Resize client origin is unavailable.'}
+        $content=[CapyWindowApi]::ContentRect($handle)
+        $canvas=$drawing.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
+        if(!$canvas -or $canvas.Current.ProcessId -ne $ProcessId){return $false}
+        $bounds=$canvas.Current.BoundingRectangle
+        $snapshot=Read-Snapshot $statePath;$model=$snapshot.model;$scale=[CapyWindowApi]::GetDpiForWindow($handle)/96.
+        if($snapshot.process_id -ne $ProcessId -or $snapshot.window_id -ne $registered[0].id -or !$model.windows_isolated_settings -or
+            ($OuterSize -and ($outer.right-$outer.left -ne $OuterSize[0] -or $outer.bottom-$outer.top -ne $OuterSize[1]))){return $false}
+        if($content.left -ne $origin.x -or $content.top -lt $origin.y -or $content.right -ne $origin.x+$client.right -or $content.bottom -ne $origin.y+$client.bottom){return $false}
+        foreach($edge in 'Left','Top','Right','Bottom'){
+            if([Math]::Round($bounds.$edge,0,[MidpointRounding]::AwayFromZero) -ne $content.$edge){return $false}
+        }
+        $pixels=@(($content.right-$content.left),($content.bottom-$content.top))
+        foreach($axis in 0,1){
+            if($pixels[$axis] -le 0 -or [single]$model.layout.viewport[$axis] -ne [single]($pixels[$axis]/[single]$scale) -or $model.state.camera.viewport[$axis] -ne $pixels[$axis]){return $false}
+        }
+        $true
+    } 'The requested native resize did not receive its model viewport acknowledgement.'
+}
 function Fit-Canvas{
     $focus={
         $canvas=Find 'drawing-canvas'
@@ -794,20 +856,53 @@ function Fit-Canvas{
         try{$canvas.SetFocus();$canvas.Current.HasKeyboardFocus}catch [System.InvalidOperationException]{$false}
     }
     Wait-Until $focus 'The canvas did not take focus before Fit'
+    $drawing=Owned-DrawingWindow $review
+    $drawingWindow=$drawing.Handle
+    $statePath=State-File
+    Wait-CanvasViewport $drawing $review $statePath
+    $hit=@{receipt=$null};$fitted=$null
+    $identity=Camera-Receipt
+    if(!$identity){throw 'Fit has no owned camera navigation receipt'}
+    $acknowledge={
+        $receipt=Camera-Receipt
+        if(!$receipt){return $false}
+        foreach($field in 'process_id','window_id'){
+            if($receipt.$field -ne $identity.$field){throw 'Fit camera acknowledgement changed its owned drawing'}
+        }
+        foreach($field in 'drawing_id','artwork','epoch'){
+            if($receipt.navigation.$field -cne $identity.navigation.$field){throw 'Fit camera acknowledgement changed its document'}
+        }
+        if($receipt.navigation.revision -gt $before.navigation.revision+1){throw 'Fit camera acknowledgement skipped the requested navigation'}
+        if($fitted){
+            foreach($field in 'viewport','work_area'){
+                if(($receipt.camera.$field|ConvertTo-Json -Compress) -cne ($fitted.camera.$field|ConvertTo-Json -Compress)){throw 'Fit requires an unchanged canvas viewport and work area'}
+            }
+        }
+        if($receipt.navigation.revision -ne $before.navigation.revision+1){return $false}
+        if($id -eq 'zoom_in' -and $receipt.camera.zoom -eq $fitted.camera.zoom){return $false}
+        if($id -eq 'shortcut' -and $receipt.camera.zoom -ne $fitted.camera.zoom){return $false}
+        $hit.receipt=$receipt
+        $true
+    }
     foreach($id in @('fit_canvas','zoom_in')){
-        $before=(Model).state.camera
+        $before=Camera-Receipt
+        if(!$before){throw 'Fit has no owned camera navigation receipt'}
+        if($hit.receipt -and $before.navigation.revision -ne $hit.receipt.navigation.revision){throw 'Fit camera changed before the requested navigation'}
         $caption=@((Model).application_menus|Where-Object id -eq 'view')[0].label
         & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'View' -Caption $caption
         $item=@{node=$null}
         Wait-Until {$item.node=Zoom-Item $id;$item.node -and !$item.node.Current.IsOffscreen -and $item.node.Current.IsEnabled} "Missing enabled View command: $id"
         $item.node.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        Wait-Until {$camera=(Model).state.camera;$camera.revision -gt $before.revision -and ($id -eq 'fit_canvas' -or $camera.zoom -ne $fitted)} "View command did not acknowledge its camera: $id"
-        if($id -eq 'fit_canvas'){$fitted=(Model).state.camera.zoom}
+        Wait-Until $acknowledge "View command did not acknowledge its camera: $id"
+        if($id -eq 'fit_canvas'){$fitted=$hit.receipt}
     }
     Wait-Until $focus 'The canvas did not take focus before Fit'
-    $revision=(Model).state.camera.revision
+    $before=Camera-Receipt
+    if(!$before){throw 'Fit has no owned camera navigation receipt'}
+    if($before.navigation.revision -ne $hit.receipt.navigation.revision){throw 'Fit camera changed before the requested navigation'}
+    $id='shortcut'
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x30)
-    Wait-Until {$camera=(Model).state.camera;$camera.revision -gt $revision -and $camera.zoom -eq $fitted} 'Fit did not restore the shared camera zoom'
+    Wait-Until $acknowledge 'Fit did not restore the shared camera zoom'
 }
 function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'

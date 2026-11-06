@@ -9,7 +9,7 @@ $object=Join-Path $OutputDirectory 'work-buffer.obj'
 $executable=Join-Path $OutputDirectory 'work-buffer-test.exe'
 $optimization = if ($Configuration -eq 'Debug') { '/Od' } else { '/O2' }
 $manifest = '/MANIFEST:EMBED',"/MANIFESTUAC:level='asInvoker' uiAccess='false'"
-& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" /link @manifest
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" windowsapp.lib /link @manifest
 if($LASTEXITCODE -ne 0){throw 'Canvas queue test build failed. Run from a Visual Studio developer shell.'}
 & $executable
 if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}

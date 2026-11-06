@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "CanvasWindow.h"
+#include "NativeJson.h"
 #include "TraceFile.h"
 #include "WindowRegistry.h"
 #include "CanvasPointerSample.h"
@@ -1579,8 +1580,8 @@ void CanvasWindow::Publish(std::string snapshot,CapySnapshotInfo const& info) {
             auto search=full?CapyUi::object(model,L"state").GetNamedValue(L"command_search",Windows::Data::Json::JsonValue::CreateNullValue()):model.GetNamedValue(L"command_search");
             TraceState("search-state",identity+",\"search\":"+to_string(search.Stringify())+"}");
         }
-        auto view=full?CapyUi::object(CapyUi::object(model,L"state"),L"camera"):CapyUi::object(model,L"camera");
-        if(view.Size())TraceState("camera-state",identity+",\"camera\":"+to_string(view.Stringify())+"}");
+        auto view=CapyUi::CameraTracePayload(model,full,identity);
+        if(!view.empty())TraceState("camera-state",view);
     }
     if(full){
         auto cursorModel=info.navigation_cursor.length?Windows::Data::Json::JsonObject::Parse(to_hstring("{\"navigation_cursor\":"+value(info.navigation_cursor)+"}")):Windows::Data::Json::JsonObject{};

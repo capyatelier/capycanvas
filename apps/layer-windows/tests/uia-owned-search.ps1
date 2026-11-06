@@ -1084,7 +1084,7 @@ namespace CapyHeaderPlacementTest {
 foreach($placementDpi in 96,144,192){foreach($placementCase in 'fits','delayed','does-not-fit','unarranged','frame-inset'){
     & {
         param($Text,$Dpi,$Case)
-        $Text=$Text.Replace('[CapyWindowExercise+Rect]::new()','[CapyHeaderPlacementTest.Rect]::new(0,0,0,0)').Replace('[CapyWindowExercise]','[CapyHeaderPlacementTest.Driver]').Replace('[Windows.Forms.Screen]','[CapyHeaderPlacementTest.Screen]')
+        $Text=$Text.Replace('[CapyWindowApi+Rect]::new()','[CapyHeaderPlacementTest.Rect]::new(0,0,0,0)').Replace('[CapyWindowExercise]','[CapyHeaderPlacementTest.Driver]').Replace('[CapyWindowApi]','[CapyHeaderPlacementTest.Driver]').Replace('[Windows.Forms.Screen]','[CapyHeaderPlacementTest.Screen]')
         $Text=$Text.Replace('Add-Type -AssemblyName System.Windows.Forms','$null')
         [CapyHeaderPlacementTest.Driver]::Moves=0
         [CapyHeaderPlacementTest.Driver]::Delayed=$Case -eq 'delayed';[CapyHeaderPlacementTest.Driver]::Inset=$Case -eq 'frame-inset'
@@ -1554,4 +1554,100 @@ namespace CapyTooltipContextTest {
   }
  }
  'Actual retained numeric tooltip assertion preserves original failure and both hover rectangles, samples current cursor/bounds only on its exact timeout, and retains missing/provider errors without success-path diagnostic reads.'
+}
+
+& {
+ $fit=$ast.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Fit-Canvas'},$true)
+ if(!$fit){throw 'Missing actual Fit-Canvas'}
+ Add-Type -TypeDefinition @'
+using System;using System.Collections.Generic;
+namespace CapyFitReceiptTest {
+ public static class InvokePattern {public static object Pattern="invoke";}
+ public class Node {
+  public string Id;public int ProcessId=33;public bool IsEnabled=true,IsKeyboardFocusable=true,HasKeyboardFocus=true,IsOffscreen=false;
+  public Node Current{get{return this;}}public void SetFocus(){Driver.Focus++;}
+  public Node GetCurrentPattern(object pattern){if(!Object.Equals(pattern,InvokePattern.Pattern)||ProcessId!=33)throw new Exception("Foreign Fit command owner");return this;}
+  public void Invoke(){if(ProcessId!=33)throw new Exception("Foreign Fit invocation");Driver.Commands.Add(Id);Driver.Stage=Id=="fit_canvas"?1:2;Driver.Reads=0;}
+ }
+ public static class Driver {
+  public static int Stage,Reads,Focus,Chords;public static IntPtr Foreground;public static List<string> Commands=new List<string>();
+  public static bool SetForegroundWindow(IntPtr window){if(window!=new IntPtr(333))throw new Exception("Foreign Fit foreground owner");Foreground=window;return true;}
+  public static void Chord(uint process,ushort[] modifiers,ushort key){if(process!=33||Foreground!=new IntPtr(333)||modifiers.Length!=1||modifiers[0]!=17||key!=48)throw new Exception("Foreign Fit shortcut owner");Chords++;Stage=3;Reads=0;}
+ }
+}
+'@
+ $body=$fit.Extent.Text.Replace('System.Windows.Automation.','CapyFitReceiptTest.').Replace('[CapyWindowApi]','[CapyFitReceiptTest.Driver]').Replace('[CapyRowPointer]','[CapyFitReceiptTest.Driver]').Replace("(Join-Path `$script:CapyScripts 'open-application-menu.ps1')",'Native-OpenMenu')
+ . ([scriptblock]::Create($body))
+ $review=[pscustomobject]@{Id=33};$root=[CapyFitReceiptTest.Node]::new();$drawingWindow=[IntPtr]333;$StateFile='owned-state'
+ function State-File{'owned-state'}
+ function Find($Id){if($Id-cne'drawing-canvas'){throw 'Fit focused another control'};$root}
+ function Owned-DrawingWindow($Process){if($Process.Id-ne33){throw 'Fit queried another process'};[pscustomobject]@{Handle=[IntPtr]333;Root=$root;Id=11}}
+ function Wait-CanvasViewport($Drawing,$Process,$StatePath,$OuterSize){if($Process.Id-ne33){throw 'Fit viewport queried another owner'};$seen.viewport++}
+ function Native-OpenMenu($Root,$Name,$Caption){if(![object]::ReferenceEquals($Root,$seen.root)-or$Name-cne'View'-or$Caption-cne'View'){throw 'Fit opened another menu'};$seen.menus++}
+ function Zoom-Item($Id){if($Id-notin@('fit_canvas','zoom_in')){throw 'Fit queried another command'};$node=[CapyFitReceiptTest.Node]::new();$node.Id=$Id;$node}
+ function Next-FitReceipt{
+  $stage=[CapyFitReceiptTest.Driver]::Stage;$read=[CapyFitReceiptTest.Driver]::Reads++
+  $raw=if($stage-eq0){3}elseif($stage-eq1){if($read-lt3){4}else{5}}elseif($stage-eq2){if($read-eq0){5}else{6}}else{7}
+  $nav=@{3=1;4=1;5=2;6=3;7=4}[$raw]
+  $zoom=if($raw-le4){.5}elseif($raw-eq6){.9296812415122986}else{.657383918762207}
+  if($case-eq'same-value'-and$raw-le4){$zoom=.657383918762207}
+  if(($case-eq'missing-fit'-and$stage-eq1)-or($case-eq'missing-zoom'-and$stage-eq2)-or($case-eq'missing-shortcut'-and$stage-eq3)){$nav=$stage;$raw=3+$stage}
+  if($case-eq'automatic-only'){$nav=1}
+  if($case-eq'skipped-navigation'-and$stage-eq1-and$raw-eq5){$nav=3}
+  if($case-eq'stale-receipt'-and$stage-gt0){$nav=1;$raw=3}
+  $receipt=[pscustomobject]@{process_id=33;window_id=11;camera=[pscustomobject]@{revision=$raw;zoom=$zoom;viewport=@(2560,1528);work_area=@(501,135,1558,1384)};navigation=[pscustomobject]@{drawing_id=22;artwork='artwork';epoch=0;revision=$nav}}
+  if($stage-ge2){switch($case){'changed-viewport'{$receipt.camera.viewport[0]--};'changed-work-area'{$receipt.camera.work_area[2]--}}}
+  if($stage-gt0){switch($case){'foreign-process'{$receipt.process_id=34};'foreign-window'{$receipt.window_id=12};'foreign-drawing'{$receipt.navigation.drawing_id=23};'foreign-artwork'{$receipt.navigation.artwork='other'};'foreign-epoch'{$receipt.navigation.epoch=1}}}
+  $receipt
+ }
+ function Camera-Receipt{$receipt=Next-FitReceipt;$seen.receipts.Add($receipt);$receipt}
+ function Model{$receipt=Next-FitReceipt;[pscustomobject]@{state=[pscustomobject]@{camera=$receipt.camera};application_menus=@([pscustomobject]@{id='view';label='View'})}}
+ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){for($poll=0;$poll-lt12;$poll++){if(& $Condition){return}};throw $Message}
+ foreach($case in 'scheduled','same-value','missing-fit','missing-zoom','missing-shortcut','automatic-only','stale-receipt','skipped-navigation','changed-viewport','changed-work-area','foreign-process','foreign-window','foreign-drawing','foreign-artwork','foreign-epoch'){
+  [CapyFitReceiptTest.Driver]::Foreground=[IntPtr]::Zero;[CapyFitReceiptTest.Driver]::Stage=0;[CapyFitReceiptTest.Driver]::Reads=0;[CapyFitReceiptTest.Driver]::Focus=0;[CapyFitReceiptTest.Driver]::Chords=0;[CapyFitReceiptTest.Driver]::Commands.Clear()
+  $seen=@{root=$root;viewport=0;menus=0;receipts=[Collections.Generic.List[object]]::new()};$failure=$null
+  try{Fit-Canvas}catch{$failure=$_}
+  if($case-in@('scheduled','same-value')){
+   if(([CapyFitReceiptTest.Driver]::Commands-join',')-cne'fit_canvas,zoom_in'-or[CapyFitReceiptTest.Driver]::Chords-ne1-or$seen.menus-ne2){throw 'Fit changed its native command deliveries'}
+   if($failure){throw $failure}
+   if(([CapyFitReceiptTest.Driver]::Commands-join',')-cne'fit_canvas,zoom_in'-or[CapyFitReceiptTest.Driver]::Chords-ne1-or$seen.menus-ne2-or$seen.viewport-ne1-or[CapyFitReceiptTest.Driver]::Focus-ne2){throw 'Fit did not preserve one delivery per menu command and shortcut, viewport acknowledgement and both focus checks'}
+  }elseif(!$failure){throw "Fit accepted $case without its owned navigation acknowledgement"}
+ }
+ 'Actual Fit retains command-owned same-packet camera receipts through resize, same-value Fit and both command paths, and rejects missing acknowledgements and foreign identities.'
+}
+
+& {
+ $reader=$ast.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Camera-Receipt'},$true)
+ if(!$reader){throw 'Missing actual camera receipt reader'}
+ . ([scriptblock]::Create($reader.Extent.Text))
+ $review=[pscustomobject]@{Id=33};$drawingWindow=[IntPtr]333
+ $statePath=Join-Path $PSScriptRoot 'ui-state-33-11.json'
+ function State-File{$statePath}
+ function Read-Snapshot($Path){
+  $reads.Add((Split-Path -Leaf $Path))
+  switch(Split-Path -Leaf $Path){
+   'ui-state-33-11.json'{$state}
+   'windows-33.json'{$registry}
+   'camera-state-33-11.json'{$packet}
+   default{throw 'Camera receipt read an unrelated file'}
+  }
+ }
+ foreach($case in 'owned','state-process','state-window','registry-process','registry-hwnd','registry-duplicate','not-isolated','packet-process','packet-window','missing-navigation','missing-camera'){
+  $reads=[Collections.Generic.List[string]]::new()
+  $state=[pscustomobject]@{process_id=33;window_id=11;model=[pscustomobject]@{windows_isolated_settings=$true;state=[pscustomobject]@{camera=[pscustomobject]@{revision=2;zoom=.25}}}}
+  $registry=[pscustomobject]@{process_id=33;windows=@([pscustomobject]@{hwnd=333;id=11})}
+  $packet=[pscustomobject]@{process_id=33;window_id=11;camera=[pscustomobject]@{revision=7;zoom=.657383918762207;viewport=@(2560,1528);work_area=@(501,135,1558,1384)};navigation=[pscustomobject]@{drawing_id=22;artwork='artwork';epoch=0;revision=4}}
+  switch($case){
+   'state-process'{$state.process_id=34};'state-window'{$state.window_id=12};'registry-process'{$registry.process_id=34};'registry-hwnd'{$registry.windows[0].hwnd=334}
+   'registry-duplicate'{$registry.windows+=@($registry.windows[0])};'not-isolated'{$state.model.windows_isolated_settings=$false}
+   'packet-process'{$packet.process_id=34};'packet-window'{$packet.window_id=12};'missing-navigation'{$packet.navigation=$null};'missing-camera'{$packet.camera=$null}
+  }
+  $failure=$null;$receipt=$null;try{$receipt=Camera-Receipt}catch{$failure=$_}
+  if($case-eq'owned'){
+   if($failure-or![object]::ReferenceEquals($receipt,$packet)-or$receipt.camera.revision-ne7-or$receipt.navigation.revision-ne4-or($reads-join',')-cne'ui-state-33-11.json,windows-33.json,camera-state-33-11.json'){throw 'Camera receipt combined stale model camera with another navigation packet or repeated its reads'}
+  }elseif($case-in@('missing-navigation','missing-camera')){
+   if($failure-or$receipt){throw 'Camera receipt accepted incomplete same-packet metadata'}
+  }elseif(!$failure-or$receipt){throw "Camera receipt accepted $case ownership"}
+ }
+ 'Actual camera receipt reader retains one packet camera/navigation and validates isolated PID, registered HWND and window identity.'
 }

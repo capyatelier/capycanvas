@@ -136,8 +136,8 @@ try{
         Add-Type -AssemblyName System.Windows.Forms
         $menuId='application-menu-'+@((Model).application_menus)[0].id
         $menuEntry=@(Entries|Where-Object {$_.item.kind-eq'menu_labels'})[0]
-        $beforeMenus=$root.Current.BoundingRectangle;$outer=[CapyWindowExercise+Rect]::new()
-        Check ([CapyWindowExercise]::GetWindowRect($drawingWindow,[ref]$outer)) 'Owned menu window bounds are unavailable' $null
+        $beforeMenus=$root.Current.BoundingRectangle;$outer=[CapyWindowApi+Rect]::new()
+        Check ([CapyWindowApi]::GetWindowRect($drawingWindow,[ref]$outer)) 'Owned menu window bounds are unavailable' $null
         $wide=[Windows.Forms.Screen]::FromHandle($drawingWindow).WorkingArea;$expanded=@{file=$null}
         $expandedMenu={
             $p=Presentation;$metric=@($p.metrics|Where-Object id -eq $menuEntry.id)[0];$placed=@($p.geometry.items|Where-Object id -eq $menuEntry.id)[0]

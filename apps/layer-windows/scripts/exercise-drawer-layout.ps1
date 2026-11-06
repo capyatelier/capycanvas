@@ -109,7 +109,7 @@ function Navigator-Contacts{
  $group=@((Model).layout.groups|Where-Object active -eq 'navigator')[0];$before=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll
  $points=Navigator-Points;$revision=(Model).state.camera.revision
  try{[CapyRowPointer]::Down('touch',$points[0],$points[2]);Wait-Until {(Model).state.camera.revision-gt$revision} 'Navigator touch Down not acknowledged'
-  $rect=[CapyWindowExercise+Rect]::new();[CapyWindowExercise]::GetWindowRect($window,[ref]$rect)|Out-Null
+  $rect=[CapyWindowApi+Rect]::new();[CapyWindowApi]::GetWindowRect($window,[ref]$rect)|Out-Null
   [CapyWindowExercise]::MoveWindow($window,$rect.left,$rect.top,$rect.right-$rect.left+80,$rect.bottom-$rect.top,$true)|Out-Null
   Start-Sleep -Milliseconds 700;Wait-OverviewProjection;$after=@((Presentation).groups|Where-Object id -eq $group.id)[0].body_scroll
   Check ([math]::Abs($after.bounds.x-$before.bounds.x)-gt1-and[math]::Abs($after.bounds.width-$before.bounds.width)-le.6-and[math]::Abs($after.viewport_height-$before.viewport_height)-le.6) 'Navigator global position changes with local allocation retained' @{before=$before;after=$after}

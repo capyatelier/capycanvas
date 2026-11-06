@@ -16,22 +16,23 @@ public static class CapyResizeNative {
 }
 '@
 $tokens=$null;$errors=$null
-$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-window.ps1'),[ref]$tokens,[ref]$errors)
-if($errors.Count){throw 'Window fixture does not parse'}
-$native=$ast.Find({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Add-Type' -and $node.Extent.Text -like '*public static class CapyWindowExercise*'},$true)
-Add-Type -TypeDefinition $native.CommandElements[-1].Value
-$wait=$ast.Find({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Wait-Until' -and $node.Extent.Text -like '*The requested native resize did not receive its model viewport acknowledgement.*'},$true)
-if(!$wait){throw 'Native resize acknowledgement is missing'}
-$predicate=& ([scriptblock]::Create($wait.CommandElements[1].Extent.Text.Replace('CapyWindowExercise','CapyResizeNative')))
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'UIA fixture does not parse'}
+$viewport=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Wait-CanvasViewport'},$true)
+if(!$viewport){throw 'Native viewport acknowledgement helper is missing'}
+$wait=$viewport.Body.Find({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Wait-Until'},$true)
+if(!$wait){throw 'Native viewport acknowledgement predicate is missing'}
+$predicateText=$wait.CommandElements[1].Extent.Text.Replace('CapyWindowApi','CapyResizeNative')
+$predicate=& ([scriptblock]::Create('{ $OuterSize=@($Width,$Height);'+$predicateText.Substring(1)))
 function Read-Snapshot([string]$Path){if($Path -cne 'owned-state'){throw 'Resize read another window snapshot'};$script:resizeSnapshot|ConvertTo-Json -Depth 8 -Compress|ConvertFrom-Json}
-$drawing=[pscustomobject]@{Root=[pscustomobject]@{}}
+$drawing=[pscustomobject]@{Handle=[IntPtr]1;Id=11;Root=[pscustomobject]@{}}
 $drawing.Root|Add-Member -MemberType ScriptMethod -Name FindFirst -Value {
  param($Scope,$Condition)
  if($Condition.Property -ne [System.Windows.Automation.AutomationElement]::AutomationIdProperty -or $Condition.Value -cne 'drawing-canvas'){throw 'Resize must use the owned canvas automation ID'}
  $r=[CapyResizeNative]::Canvas
  [pscustomobject]@{Current=[pscustomobject]@{ProcessId=[CapyResizeNative]::Owner;BoundingRectangle=[pscustomobject]@{Left=$r.left;Top=$r.top;Right=$r.right;Bottom=$r.bottom;Width=$r.right-$r.left;Height=$r.bottom-$r.top}}}
 }
-$handle=[IntPtr]1;$ProcessId=7;$registered=@([pscustomobject]@{id=11});$statePath='owned-state';$Width=1550;$Height=1400
+$handle=[IntPtr]1;$ProcessId=7;$Process=[pscustomobject]@{Id=7};$registered=@([pscustomobject]@{id=11});$statePath='owned-state';$Width=1550;$Height=1400
 function Set-ResizeSnapshot([uint32]$Dpi,[int]$CanvasWidth=1528,[int]$CanvasHeight=1388){
  [CapyResizeNative]::Dpi=$Dpi
  $scale=$Dpi/96.

@@ -11,20 +11,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class CapyWindowExercise {
- [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
- [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
- [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window,out Rect rect);
- [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window,ref Point point);
- [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string name,string title);
- public static Rect ContentRect(IntPtr window){
-   const string name="Microsoft.UI.Content.DesktopChildSiteBridge";
-   var child=FindWindowEx(window,IntPtr.Zero,name,null);var bounds=new Rect();
-   if(child==IntPtr.Zero||FindWindowEx(window,child,name,null)!=IntPtr.Zero||!GetWindowRect(child,out bounds))
-     throw new Exception("The drawing window has no unique native XAML content bounds.");
-   return bounds;
- }
- [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
  [StructLayout(LayoutKind.Sequential)] public struct Mouse {public int dx,dy;public uint data,flags,time;public UIntPtr extra;}
@@ -58,8 +45,8 @@ $windowOwner=[uint32]0
 [CapyWindowExercise]::GetWindowThreadProcessId($handle,[ref]$windowOwner)|Out-Null
 if($windowOwner -ne $ProcessId){throw 'The drawing window does not belong to the owned process.'}
 [CapyWindowExercise]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
-$rect=New-Object CapyWindowExercise+Rect
-[CapyWindowExercise]::GetWindowRect($handle,[ref]$rect)|Out-Null
+$rect=New-Object CapyWindowApi+Rect
+[CapyWindowApi]::GetWindowRect($handle,[ref]$rect)|Out-Null
 if($Action -eq 'Close') {
     Assert-RendererHealthy $ProcessId $drawing
     $dirty=$false
@@ -119,28 +106,7 @@ if($Action -eq 'Close') {
     $registered=@($registration.windows|Where-Object hwnd -eq $handle.ToInt64())
     if($registration.process_id -ne $ProcessId -or $registered.Count -ne 1){throw 'Resize has no unique owned drawing trace.'}
     $statePath=Join-Path $traceDirectory "ui-state-$ProcessId-$($registered[0].id).json"
-    Wait-Until {
-        $outer=New-Object CapyWindowExercise+Rect;$client=New-Object CapyWindowExercise+Rect
-        if(![CapyWindowExercise]::GetWindowRect($handle,[ref]$outer) -or ![CapyWindowExercise]::GetClientRect($handle,[ref]$client)){throw 'Resize bounds are unavailable.'}
-        $origin=New-Object CapyWindowExercise+Point
-        if(![CapyWindowExercise]::ClientToScreen($handle,[ref]$origin)){throw 'Resize client origin is unavailable.'}
-        $content=[CapyWindowExercise]::ContentRect($handle)
-        $canvas=$drawing.Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
-        if(!$canvas -or $canvas.Current.ProcessId -ne $ProcessId){return $false}
-        $bounds=$canvas.Current.BoundingRectangle
-        $snapshot=Read-Snapshot $statePath;$model=$snapshot.model;$scale=[CapyWindowExercise]::GetDpiForWindow($handle)/96.
-        if($snapshot.process_id -ne $ProcessId -or $snapshot.window_id -ne $registered[0].id -or !$model.windows_isolated_settings -or
-            $outer.right-$outer.left -ne $Width -or $outer.bottom-$outer.top -ne $Height){return $false}
-        if($content.left -ne $origin.x -or $content.top -lt $origin.y -or $content.right -ne $origin.x+$client.right -or $content.bottom -ne $origin.y+$client.bottom){return $false}
-        foreach($edge in 'Left','Top','Right','Bottom'){
-            if([Math]::Round($bounds.$edge,0,[MidpointRounding]::AwayFromZero) -ne $content.$edge){return $false}
-        }
-        $pixels=@(($content.right-$content.left),($content.bottom-$content.top))
-        foreach($axis in 0,1){
-            if($pixels[$axis] -le 0 -or [single]$model.layout.viewport[$axis] -ne [single]($pixels[$axis]/[single]$scale) -or $model.state.camera.viewport[$axis] -ne $pixels[$axis]){return $false}
-        }
-        $true
-    } 'The requested native resize did not receive its model viewport acknowledgement.'
+    Wait-CanvasViewport $drawing $p $statePath @($Width,$Height)
 } elseif($Action -in @('Undo','Redo','Test stroke','Test pan','Test backlog')) {
     $root=$drawing.Root
     $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Action)

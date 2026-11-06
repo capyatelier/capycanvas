@@ -31,6 +31,37 @@
 #endif
 
 int main() {
+#ifdef _WIN32
+    winrt::init_apartment();
+    {
+        using J=winrt::Windows::Data::Json::JsonObject;
+        auto packet=J::Parse(LR"({"camera":{"revision":5,"zoom":0.657383918762207},"windows_tabs":{"selected":2,"session_stamps":[{"id":1,"stamp":{"artwork":"other","epoch":8,"camera_navigation":90}},{"id":2,"stamp":{"artwork":"drawing","epoch":0,"camera_navigation":2}}]}})");
+        std::string identity="{\"process_id\":17,\"window_id\":23";
+        auto bytes=CapyUi::CameraTracePayload(packet,false,identity);
+        auto receipt=J::Parse(winrt::to_hstring(bytes));
+        auto navigation=receipt.GetNamedObject(L"navigation",J{});
+        assert(navigation.GetNamedNumber(L"revision",-1)==2);
+        assert(navigation.GetNamedNumber(L"drawing_id",-1)==2);
+        assert(navigation.GetNamedString(L"artwork",L"")==L"drawing");
+        assert(navigation.GetNamedNumber(L"epoch",-1)==0);
+        assert(receipt.GetNamedNumber(L"process_id")==17&&receipt.GetNamedNumber(L"window_id")==23);
+        assert(receipt.GetNamedObject(L"camera").GetNamedNumber(L"revision")==5);
+        packet.GetNamedObject(L"camera").Insert(L"revision",winrt::Windows::Data::Json::JsonValue::CreateNumberValue(6));
+        packet.GetNamedObject(L"windows_tabs").GetNamedArray(L"session_stamps").GetObjectAt(1).GetNamedObject(L"stamp").Insert(L"camera_navigation",winrt::Windows::Data::Json::JsonValue::CreateNumberValue(3));
+        receipt=J::Parse(winrt::to_hstring(CapyUi::CameraTracePayload(packet,false,identity)));
+        assert(receipt.GetNamedObject(L"camera").GetNamedNumber(L"revision")==6);
+        assert(receipt.GetNamedObject(L"navigation").GetNamedNumber(L"revision")==3);
+        auto full=J::Parse(LR"({"state":{"camera":{"revision":7,"zoom":0.657383918762207}},"windows_tabs":{"selected":2,"session_stamps":[{"id":2,"stamp":{"artwork":"drawing","epoch":0,"camera_navigation":4}}]}})");
+        receipt=J::Parse(winrt::to_hstring(CapyUi::CameraTracePayload(full,true,identity)));
+        assert(receipt.GetNamedObject(L"camera").GetNamedNumber(L"revision")==7);
+        assert(receipt.GetNamedObject(L"navigation").GetNamedNumber(L"revision")==4);
+        assert(CapyUi::CameraTracePayload(J{},false,identity).empty());
+        auto startup=J::Parse(LR"({"camera":{"revision":1},"windows_tabs":null})");
+        receipt=J::Parse(winrt::to_hstring(CapyUi::CameraTracePayload(startup,false,identity)));
+        assert(receipt.GetNamedObject(L"camera").GetNamedNumber(L"revision")==1&&!receipt.HasKey(L"navigation"));
+    }
+    std::cout<<"Camera traces retain the active navigation receipt with the same camera packet\n";
+#endif
     CapyUi::PointerModality modality;
     assert(!modality.Mouse());
     assert(modality.Observe(true,100)&&modality.Mouse());
