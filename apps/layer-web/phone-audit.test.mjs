@@ -4,8 +4,15 @@ import {runInNewContext} from 'node:vm';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,selectPhoneDrawerStates,openPhoneDrawerTile,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues} from './phone-audit.mjs';
+import {measurePhoneAuditElements,phoneAuditMatrix,dialogAuditMatrix,auditModes,dialogAuditRows,selectDialogAuditRows,selectPhoneDrawerStates,installPhoneAuditWorkerBoundary,installPhoneAuditColorHistoryProvider,openPhoneDrawerTile,dialogAuditSpecifications,dialogPhoneSpecifications,phoneAuditFrameSpecifications,phoneAuditDrawerSpecifications,takeStrokeRecording,verifyPickerAllocations,dialogScrollerIssues,failedSavePlacementIssues} from './phone-audit.mjs';
 import {strokeRecordingControl} from './stroke-recording.js';
+
+test('failed-save capture rejects overlap and departures from the shared notice rectangle',()=>{
+  const placement={status:{x:12,width:388,bottom:800},controls:[{id:'zen-capy',overlap:false}],notice:{x:206,y:800,max_width:388}};
+  assert.deepEqual(failedSavePlacementIssues(placement),[]);
+  assert.deepEqual(failedSavePlacementIssues({...placement,controls:[{id:'zen-capy',overlap:true}]}),['overlap:zen-capy']);
+  for(const status of [{...placement.status,x:15},{...placement.status,width:384},{...placement.status,bottom:803}])assert.ok(failedSavePlacementIssues({...placement,status}).length);
+});
 
 test('dialog scroll audit rejects browser bars, scrolling chrome and missing indicators',t=>{
   const previous=globalThis.getComputedStyle;t.after(()=>{globalThis.getComputedStyle=previous;});globalThis.getComputedStyle=node=>node.style;
@@ -161,11 +168,10 @@ test('dialog row selection validates the chosen batch and retains its existing v
 
 test('W6d uses real panels, the existing Proof drawer collector and an explicit float drawing fixture',()=>{
   const rows=selectDialogAuditRows({batch:'w6d'}),active=rows.filter(row=>!row.blocked);
-  assert.deepEqual(active.map(row=>row.id),['selection-refine','frequency-separation','pressure-calibration','tilt-calibration','soft-proof','sdr-rendition','command-search']);
-  assert.deepEqual(rows.filter(row=>row.blocked).map(row=>row.id),['document-opening-progress','image-import-progress','export-progress','document-color-progress','clipboard-progress']);
+  assert.deepEqual(active.map(row=>row.id),['selection-refine','frequency-separation','pressure-calibration','tilt-calibration','soft-proof','sdr-rendition','command-search','document-opening-progress','image-import-progress','export-progress','document-color-progress','clipboard-progress']);
+  assert.deepEqual(rows.filter(row=>row.blocked),[]);
   for(const id of ['soft-proof','sdr-rendition']){const row=rows.find(row=>row.id===id);assert.equal(row.collector,'drawer');assert.equal(row.rootselector,'.content-drawer .proof-panel');}
   assert.deepEqual(rows.find(row=>row.id==='sdr-rendition').document,{color:{space:'Srgb',depth:'F32'},count:2});
-  assert.ok(rows.filter(row=>row.blocked).every(row=>!row.openaction&&!row.rootselector&&row.blocked.length));
 });
 
 test('W7 photo rows use the owned ProPhoto source and the existing source-profile chooser',()=>{
@@ -304,4 +310,28 @@ test('Settings allocation records retain separate value and arrow bounds',()=>{
     {id:'preference.language.value',role:'preference-value'},{id:'preference.language.arrow',role:'preference-arrow'},
   ]);
   assert.ok(specs.slice(-2).every(spec=>spec.selector.startsWith('#settings[open] .preference-row:has(label[for="setting-language"])')));
+});
+
+test('audit worker holds real requests until explicit release and restores its transport',async()=>{
+  class Worker extends EventTarget{postMessage(data,transfer){this.sent??=[];this.sent.push({data,transfer});}}
+  const post=Worker.prototype.postMessage,worker=new Worker(),buffers=[new ArrayBuffer(4)];
+  const gate=runInNewContext(`(${installPhoneAuditWorkerBoundary})({channel:'raster',operation:'output-band'})`,{Worker,MessageEvent,queueMicrotask});
+  worker.postMessage({id:1,request:{operation:'fingerprint'}},[]);worker.postMessage({id:2,request:{operation:'output-band'}},buffers);
+  await gate.started;assert.equal(worker.sent.length,1);gate.release();assert.equal(worker.sent.length,2);assert.equal(worker.sent[1].transfer,buffers);gate.release();assert.equal(worker.sent.length,2);gate.restore();assert.equal(Worker.prototype.postMessage,post);
+});
+test('audit workspace failure crosses the actual typed response boundary without changing unrelated reads',async()=>{
+  class Worker extends EventTarget{postMessage(data){this.sent??=[];this.sent.push(data);}}
+  const worker=new Worker(),replies=[];worker.addEventListener('message',event=>replies.push(event.data));
+  const gate=runInNewContext(`(${installPhoneAuditWorkerBoundary})({channel:'workspace',operation:'commit',createKind:'workspace',failure:{kind:'failed_write',message:'Owned write failed'}})`,{Worker,MessageEvent,queueMicrotask});
+  const request='{"type":"commit","batch":{"writes":[{"create":true,"metadata":{"kind":"workspace"}}]}}';
+  worker.postMessage({id:1,request:'{"type":"list"}'});worker.postMessage({id:2,request:'{"type":"commit","batch":{"writes":[]}}'});worker.postMessage({id:3,request});await gate.started;
+  assert.equal(gate.request,request);assert.equal(worker.sent.length,2);assert.equal(replies[0].id,3);assert.equal(JSON.parse(replies[0].error).kind,'failed_write');gate.restore();worker.postMessage({id:4,request:'{"type":"commit"}'});assert.equal(worker.sent.length,3);
+});
+test('audit color-history provider retains the real candidate and returns its ownership once',async()=>{
+  let frees=0,calls=0;const candidate={free(){frees++;}},control={},choice=null;
+  const app={state:()=>({requests:[{id:7,kind:{type:'document',request:{type:'color_history'}}}]}),async prepare_color(...args){assert.equal(this,app);assert.deepEqual(args,[7,choice,control,false]);calls++;return candidate;}};
+  const original=app.prepare_color,fixture=installPhoneAuditColorHistoryProvider(app);let completed=false;
+  const waiting=app.prepare_color(7,choice,control,false).then(value=>{completed=true;return value;});
+  await fixture.started;assert.equal(completed,false);assert.equal(frees,0);fixture.restore();
+  const returned=await waiting;assert.equal(returned,candidate);returned.free();assert.equal(frees,1);assert.equal(calls,1);assert.equal(app.prepare_color,original);
 });

@@ -30,7 +30,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
       const intent=operation==='convert'?select(()=>exportCopy.intent,[['RelativeColorimetric',()=>exportCopy.relative],['Perceptual',()=>exportCopy.perceptual],['Saturation',()=>exportCopy.saturation],['AbsoluteColorimetric',()=>exportCopy.absolute]],'RelativeColorimetric',true):null;
       if(!history&&!rasterize)form.append(group.section);
       let phase="empty",failure=null,presentation=null;
-      const detail=element("p","document-color-detail"),status=element("p"),comparison=element("div","color-comparison native-comparison"),footer=kit.footer();
+      const detail=element("p","document-color-detail"),status=element("p",history?"alert-description":""),comparison=element("div","color-comparison native-comparison"),footer=kit.footer();
       comparison.style.setProperty("--comparison-width",`${comparisonCopy.width}px`);comparison.style.setProperty("--comparison-gap",`${comparisonCopy.gap}px`);comparison.style.setProperty("--comparison-height",`${comparisonCopy.height}px`);
       const applyLabel=()=>source?(rasterize?copy.rasterize:sourceContext.baked?copy.add_source:copy.apply_profile):result?.value==='copy'?copy.create_copy:copy.common.apply;
       const apply=button(applyLabel,()=>{if(closed||!candidate||running||pending)return;accepted=true;closed=true;finish(true);},"suggested-action");apply.disabled=true;
@@ -71,7 +71,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
         })();
       };
       footer.append(cancel);if(!history)footer.append(apply);
-      form.localize=present;form.append(detail,comparison,status,footer);form.onsubmit=e=>e.preventDefault();
+      form.localize=present;if(!history)form.append(detail,comparison);form.append(status,footer);form.onsubmit=e=>e.preventDefault();
       if(dither)dither.disabled=!app.document_color_dither(depth.value,dither.checked).available;pending=true;queueMicrotask(prepare);return {cancel,primary:history?null:apply};
     },history?copy.progress_dialog:copy.dialog);
     closed=true;pending=false;profile?.disposeProfilePicker();if(!accepted)control?.cancel();await running;

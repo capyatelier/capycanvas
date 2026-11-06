@@ -61,7 +61,11 @@ pub(super) async fn copy(w: &Rc<Workspace>, id: u32, request: &layer_ui::Documen
     let progress = progress(w, request, task.capture_details().large, &control);
     let nonce = glib::uuid_string_random().to_string();
     let worker = control.clone();
-    let result = gio::spawn_blocking(move || task.run(nonce, worker)).await.map_err(|_| "The copy failed".to_string());
+    let result = gio::spawn_blocking(move || {
+        #[cfg(test)]
+        crate::workspace::tests::providers::enter(crate::workspace::tests::providers::Provider::Clipboard);
+        task.run(nonce, worker)
+    }).await.map_err(|_| "The copy failed".to_string());
     close_progress(progress, &control);
     if control.is_cancelled() {
         return Ok(false);

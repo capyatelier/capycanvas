@@ -410,6 +410,214 @@ async function auditCanvasClose(c){
   if(await c.evaluate('typeof phoneAuditLayerIds!=="undefined"'))await auditLayerClose(c);
   else{await c.send({type:'invoke',command:'deselect'});await c.send({type:'select_brush',id:2});await auditSurfaceClose(c);}
 }
+export function installPhoneAuditWorkerBoundary({channel,operation,failure=null,createKind=null}){
+  const prototype=Worker.prototype,post=prototype.postMessage;
+  let active=true,resolveStarted,captured;
+  const held=[],started=new Promise(resolve=>resolveStarted=resolve);
+  function intercepted(data,transfer){
+    let request=data?.request;
+    if(channel==='workspace'&&typeof request==='string')request=JSON.parse(request);
+    else if(channel!=='raster'||!request||typeof request!=='object')return post.call(this,data,transfer);
+    if(!active||(channel==='workspace'?request.type:request.operation)!==operation||createKind&&!request.batch?.writes.some(write=>write.create&&write.metadata?.kind===createKind))return post.call(this,data,transfer);
+    captured??=data.request;resolveStarted();
+    if(failure)queueMicrotask(()=>this.dispatchEvent(new MessageEvent('message',{data:{id:data.id,error:JSON.stringify(failure)}})));
+    else held.push(()=>post.call(this,data,transfer));
+  }
+  prototype.postMessage=intercepted;
+  const release=()=>{active=false;for(const send of held.splice(0))send();};
+  return{started,get request(){return captured;},release,restore(){release();if(prototype.postMessage===intercepted)prototype.postMessage=post;}};
+}
+async function auditBoundary(context,options){
+  await context.evaluate(`window.phoneAuditBoundary=(${installPhoneAuditWorkerBoundary.toString()})(${JSON.stringify(options)});null`);
+}
+async function auditBoundaryRestore({evaluate,wait}){
+  const opening=await evaluate(`(()=>{const opening='phoneAuditOpeningTabs'in window;if(opening)document.querySelector('.file-progress[open] button')?.click();window.phoneAuditBoundary?.restore();delete window.phoneAuditBoundary;if('phoneAuditPicker'in window){window.showOpenFilePicker=phoneAuditPicker;delete window.phoneAuditPicker;}if('phoneAuditBrushSize'in window){layerApp.dispatch({type:'set_brush_size',value:phoneAuditBrushSize});delete window.phoneAuditBrushSize;if(JSON.parse(layerApp.app.workspace_view()).status?.retry)layerApp.app.workspace_input(JSON.stringify({type:'retry'}));}return opening;})()`);
+  if(opening){await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');await evaluate('delete window.phoneAuditOpeningTabs');}
+}
+export function failedSavePlacementIssues({status,controls,notice}){
+  const issues=controls.filter(control=>control.overlap).map(control=>`overlap:${control.id||'slider'}`);
+  for(const [name,actual,expected] of [['center',status.x+status.width/2,notice.x],['width',status.width,notice.max_width],['bottom',status.bottom,notice.y]])if(Math.abs(actual-expected)>1)issues.push(`${name}:${actual}!=${expected}`);
+  return issues;
+}
+async function auditSaveFailureOpen(context){
+  const {evaluate,send}=context;
+  await evaluate('window.phoneAuditBrushSize=layerApp.state().brush.diameter');
+  await auditBoundary(context,{channel:'workspace',operation:'commit',failure:{kind:'failed_write',message:'Owned audit writer failed'}});
+  await send({type:'set_brush_size',value:await evaluate('phoneAuditBrushSize+1')});
+  await evaluate('phoneAuditBoundary.started.then(()=>true)');
+  await context.wait('JSON.parse(layerApp.app.workspace_view()).status?.retry&&!JSON.parse(layerApp.app.workspace_view()).saving');
+  const bounds=await evaluate(`(()=>{const status=document.querySelector('.workspace-status').getBoundingClientRect(),controls=[...document.querySelectorAll('#zen-capy,.toolbar-slider')].filter(node=>node.checkVisibility()).map(node=>{const b=node.getBoundingClientRect();return{id:node.id,bounds:b.toJSON(),overlap:Math.min(status.right,b.right)>Math.max(status.left,b.left)&&Math.min(status.bottom,b.bottom)>Math.max(status.top,b.top)};});return{status:status.toJSON(),controls,notice:layerApp.app.layout(innerWidth,innerHeight).notice};})()`);
+  const presentation=await evaluate(`(()=>{const status=document.querySelector('.workspace-status'),label=status.querySelector(':scope > span'),actions=status.querySelector('.workspace-status-actions'),range=document.createRange();range.selectNodeContents(label);const lines=[...new Set([...range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0).map(rect=>Math.round(rect.top*2)/2))];const probe=document.createElement('span');probe.hidden=true;status.append(probe);const role=name=>{probe.style.backgroundColor='var('+name+')';return getComputedStyle(probe).backgroundColor;},background=role('--bg'),fill=role('--widget-fill'),error=role('--error');probe.remove();return{viewport:[innerWidth,innerHeight],label:{bounds:label.getBoundingClientRect().toJSON(),lines:lines.length,font:parseFloat(getComputedStyle(label).fontSize)},actions:actions.getBoundingClientRect().toJSON(),buttons:[...actions.querySelectorAll('button')].filter(node=>!node.hidden).map(node=>({bounds:node.getBoundingClientRect().toJSON(),font:parseFloat(getComputedStyle(node).fontSize),fill:getComputedStyle(node).backgroundColor})),background:getComputedStyle(status).backgroundColor,backgroundRole:background,fillRole:fill,errorRole:error,foreground:getComputedStyle(label).color,font:parseFloat(getComputedStyle(status).fontSize)};})()`);
+  bounds.presentation=presentation;
+  const issues=failedSavePlacementIssues(bounds),directory=process.env.LAYER_TEST_ARTIFACTS,name=await evaluate('`${innerWidth}x${innerHeight}-${layerApp.state().settings.theme}`');
+  if(presentation.viewport[0]===412&&(presentation.label.lines!==1||presentation.actions.top<presentation.label.bounds.bottom))issues.push('portrait:text-above-actions');
+  if(presentation.viewport[0]===891&&Math.min(presentation.label.bounds.bottom,presentation.actions.bottom)<=Math.max(presentation.label.bounds.top,presentation.actions.top))issues.push('landscape:inline');
+  if(Math.abs(presentation.actions.right-bounds.status.right)>1)issues.push('actions:end-alignment');
+  if(presentation.background!==presentation.backgroundRole)issues.push('background:palette-role');
+  if(presentation.foreground!==presentation.errorRole)issues.push('foreground:error-role');
+  if(presentation.buttons.some(button=>button.fill!==presentation.fillRole||button.font!==presentation.font)||presentation.label.font!==presentation.font)issues.push('buttons:fill-and-inherited-font');
+  await writeFile(`${directory}/workspace-save-status-placement-${name}.json`,JSON.stringify(bounds,null,2));
+  if(issues.length){
+    const {data}=await context.call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/workspace-save-status-placement-${name}.png`,Buffer.from(data,'base64'));
+  }
+  assert.deepEqual(issues,[],'Failed-save status consumes the resolved notice rectangle without covering Capy or sliders');
+}
+async function auditSaveFailureClose(context){
+  await context.evaluate('phoneAuditBoundary.release()');await context.click('.workspace-status button:not([hidden])');
+  await context.wait('!JSON.parse(layerApp.app.workspace_view()).status?.retry&&!JSON.parse(layerApp.app.workspace_view()).dirty&&!JSON.parse(layerApp.app.workspace_view()).saving');
+  await context.evaluate("layerApp.dispatch({type:'set_brush_size',value:phoneAuditBrushSize});delete window.phoneAuditBrushSize");
+}
+async function auditOpeningProgressOpen(context,command='open_document'){
+  const {evaluate,send}=context;
+  await evaluate(`(async()=>{window.phoneAuditPicker=window.showOpenFilePicker;window.phoneAuditOpeningTabs=layerApp.app.document_tabs(0).tabs.length;const file=new File([await(await fetch('/pkg/prophoto16.png')).arrayBuffer()],'prophoto16.png');window.showOpenFilePicker=async()=>[{async getFile(){return file;}}];})()`);
+  await auditBoundary(context,{channel:'raster',operation:'read'});
+  await send({type:'invoke',command});await evaluate('phoneAuditBoundary.started.then(()=>true)');
+}
+async function auditOpeningProgressClose(context){
+  await context.click('.file-progress[open] button');await context.evaluate('phoneAuditBoundary.release()');
+  await context.wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&!document.querySelector(".file-progress[open]")');
+  assert.equal(await context.evaluate('layerApp.app.document_tabs(0).tabs.length===phoneAuditOpeningTabs'),true,'Cancelling held opening preserves the original drawing tabs');
+  await context.evaluate('window.showOpenFilePicker=phoneAuditPicker;delete window.phoneAuditPicker;delete window.phoneAuditOpeningTabs');
+}
+async function auditRecordingFailureOpen(context){
+  await auditPanel(context,'stats');
+  await context.evaluate(`window.phoneAuditRecordingPicker=window.showSaveFilePicker;window.phoneAuditRecordingStroke=false;window.showSaveFilePicker=async()=>({async createWritable(){throw Error('Owned recording provider failed');}})`);
+  await context.click('.content-drawer [data-control="stroke-recording"]');
+  await auditSurfaceClose(context);
+  await auditCanvasDrag(context,[300,300],[310,305]);
+  await context.evaluate('window.phoneAuditRecordingStroke=true');
+  await auditPanel(context,'stats');
+  await context.click('.content-drawer [data-control="stroke-recording"]');
+  await context.wait('!!document.querySelector("dialog.document-dialog[open]")&&layerApp.app.stroke_recording_status().ready');
+}
+async function auditRecordingFailureClose({evaluate,wait}){
+  assert.equal(await evaluate('layerApp.app.stroke_recording_status().ready'),true,'Provider failure retains the recording');
+  await evaluate(`[...document.querySelectorAll('dialog.document-dialog[open] button')].find(node=>node.textContent===layerApp.app.bootstrap_view().ok).click()`);
+  await wait('!document.querySelector("dialog.document-dialog[open]")');
+  await evaluate(`window.showSaveFilePicker=async()=>({async createWritable(){return{async write(bytes){window.phoneAuditRecordingBytes=bytes.length;},async close(){},async abort(){}}}});document.querySelector('.content-drawer [data-control="stroke-recording"]').click()`);
+  await wait('window.phoneAuditRecordingBytes>0&&!layerApp.app.stroke_recording_status().ready');
+  await evaluate('window.showSaveFilePicker=phoneAuditRecordingPicker;delete window.phoneAuditRecordingPicker;delete window.phoneAuditRecordingBytes');
+}
+async function auditRecordingFailureRestore(context){
+  await context.evaluate(`if('phoneAuditRecordingPicker'in window){window.showSaveFilePicker=phoneAuditRecordingPicker;delete window.phoneAuditRecordingPicker;}`);
+  if(await context.evaluate('window.phoneAuditRecordingStroke&&layerApp.state().commands.some(command=>command.id==="undo"&&command.enabled)'))await context.send({type:'invoke',command:'undo'});
+  await context.evaluate('delete window.phoneAuditRecordingStroke');
+  await auditSurfaceClose(context);
+}
+async function auditExportProgressOpen(context){
+  await context.send({type:'invoke',command:'export_document'});
+  await context.wait('document.querySelectorAll("#export-options .native-comparison canvas").length===2&&!document.querySelector("#export-options [data-dialog-part=end]").disabled');
+  await context.evaluate(`window.phoneAuditExportPicker=window.showSaveFilePicker;window.phoneAuditExportWrites=0;window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){return{async write(){phoneAuditExportWrites++;},async close(){},async abort(){}}}})`);
+  await auditBoundary(context,{channel:'raster',operation:'output-band'});
+  await context.click('#export-options [data-dialog-part=end]');
+  await context.evaluate('phoneAuditBoundary.started.then(()=>true)');
+}
+async function auditExportProgressClose(context){
+  await context.click('.file-progress[open] button');await context.evaluate('phoneAuditBoundary.release()');
+  await context.wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');
+  assert.equal(await context.evaluate('phoneAuditExportWrites'),0,'Cancelling export preparation never writes to the owned destination');
+}
+async function auditExportProgressRestore({evaluate,wait}){
+  await evaluate('document.querySelector("#export-options[open]")?.requestClose();document.querySelector(".file-progress[open] button")?.click();window.phoneAuditBoundary?.restore();delete window.phoneAuditBoundary');
+  await wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');
+  await evaluate("if('phoneAuditExportPicker'in window)window.showSaveFilePicker=phoneAuditExportPicker;delete window.phoneAuditExportPicker;delete window.phoneAuditExportWrites");
+}
+export function installPhoneAuditColorHistoryProvider(app){
+  const original=app.prepare_color;let start,releaseResult,active=true;
+  const started=new Promise(resolve=>start=resolve),released=new Promise(resolve=>releaseResult=resolve);
+  async function prepare(...args){
+    const history=app.state().requests.some(request=>request.id===args[0]&&request.kind.type==='document'&&request.kind.request.type==='color_history');
+    const candidate=await original.apply(this,args);
+    if(history&&active){start();await released;}
+    return candidate;
+  }
+  app.prepare_color=prepare;
+  return{started,release:()=>releaseResult(),restore(){active=false;releaseResult();if(app.prepare_color===prepare)app.prepare_color=original;}};
+}
+async function auditColorProgressOpen(context){
+  await context.send({type:'invoke',command:'change_bit_depth'});
+  const label=await context.evaluate('layerApp.app.export_copy().depth'),selector=`dialog.document-dialog[open] .dropdown[aria-label=${JSON.stringify(label)}]`;
+  await context.wait(`!!document.querySelector(${JSON.stringify(selector)})`);await context.evaluate(dropdownChoice(selector,'U16'));
+  await context.wait('document.querySelectorAll(".document-color-content .color-comparison canvas").length===2&&!document.querySelector("dialog.document-dialog[open] .suggested-action").disabled');
+  await context.click('dialog.document-dialog[open] .suggested-action');
+  await context.wait('!layerApp.documents.busy()&&layerApp.app.document_color().depth==="U16"&&!document.querySelector("dialog.document-dialog[open]")');
+  await context.send({type:'invoke',command:'undo'});
+  await context.wait('!layerApp.documents.busy()&&layerApp.app.document_color().depth==="U8"&&!document.querySelector("dialog.document-dialog[open]")');
+  await context.evaluate(`window.phoneAuditColorHistoryStamp=String(layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected).revision);window.phoneAuditColorProvider=(${installPhoneAuditColorHistoryProvider.toString()})(layerApp.app)`);
+  await context.send({type:'invoke',command:'redo'});await context.evaluate('phoneAuditColorProvider.started.then(()=>true)');
+  assert.equal(await context.evaluate(`document.querySelector('.document-color-content').textContent.includes(layerApp.app.document_color_copy().preparing_help)`),true,'Actual color-history progress is shown while its real candidate is held');
+}
+async function auditColorProgressClose(context){
+  await context.click('dialog.document-dialog[open] footer button');await context.evaluate('phoneAuditColorProvider.release()');
+  await context.wait('!layerApp.documents.busy()&&!document.querySelector("dialog.document-dialog[open]")');
+  assert.deepEqual(await context.evaluate('({color:layerApp.app.document_color(),revision:String(layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected).revision)})'),{color:{space:'Srgb',depth:'U8'},revision:await context.evaluate('phoneAuditColorHistoryStamp')},'Cancelling color history preserves the authored drawing');
+}
+async function auditColorProgressRestore(context){
+  await context.evaluate('document.querySelector("dialog.document-dialog[open] footer button")?.click();document.querySelector("dialog.document-dialog[open]")?.requestClose();window.phoneAuditColorProvider?.restore();delete window.phoneAuditColorProvider;delete window.phoneAuditColorHistoryStamp');
+  await context.wait('!layerApp.documents.busy()&&!document.querySelector("dialog.document-dialog[open]")');
+  if(await context.evaluate('layerApp.app.document_color().depth==="U16"')){await context.send({type:'invoke',command:'undo'});await context.wait('!layerApp.documents.busy()&&layerApp.app.document_color().depth==="U8"');}
+}
+async function auditInterruptedWorkspaceOpen(context){
+  await managerPage(context,'workspaces');await context.click('.workspace-row-actions .workspace-add');
+  await context.wait('!!document.querySelector("#workspace-item-name")');
+  await auditBoundary(context,{channel:'workspace',operation:'commit',createKind:'workspace',failure:{kind:'failed_write',message:'Owned delivery interrupted before publication'}});
+  await context.evaluate(`(()=>{const input=document.querySelector('#workspace-item-name');input.value='M9 interrupted changes';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.workspace-form .suggested-action').click();})()`);
+  await context.evaluate('phoneAuditBoundary.started.then(()=>true)');
+  await context.wait('!JSON.parse(layerApp.app.workspace_view()).saving&&!JSON.parse(layerApp.app.workspace_view()).busy');
+  await context.evaluate(`(async()=>{
+    const request=phoneAuditBoundary.request,batch=JSON.parse(request).batch;
+    if(!batch.writes.some(write=>write.create&&write.claim&&write.metadata?.kind==='workspace'))throw Error('Interrupted fixture requires the actual claimed workspace creation');
+    const resources=performance.getEntriesByType('resource').map(row=>row.name),glue=await import(resources.find(name=>/layer_web\\.[a-f0-9]+\\.js$/.test(name))||'./pkg/layer_web.js');
+    const database=await new Promise((resolve,reject)=>{const open=indexedDB.open('capycanvas.workspaces',1);open.onsuccess=()=>resolve(open.result);open.onerror=()=>reject(open.error);});
+    try{await new Promise((resolve,reject)=>{const transaction=database.transaction('workspace','readwrite',{durability:'strict'}),store=transaction.objectStore('workspace'),read=store.get('database');let failure;
+      read.onsuccess=()=>{try{const next=glue.workspace_database(read.result.snapshot,request,true,Date.now(),undefined,0,undefined);
+        const receipt=JSON.parse(glue.workspace_database(next.snapshot,JSON.stringify({type:'receipt',operation_id:batch.operation_id}),false,Date.now(),undefined,0,undefined).response);
+        const pending=JSON.parse(glue.workspace_database(next.snapshot,'{"type":"pending"}',false,Date.now(),undefined,0,undefined).response);
+        if(receipt.value!=null||!pending.value.some(value=>value.operation_id===batch.operation_id))throw Error('Prepared delivery boundary not preserved');
+        store.put({id:'database',snapshot:next.snapshot});sessionStorage.setItem('phoneAuditInterrupted',batch.operation_id);
+      }catch(error){failure=error;transaction.abort();}};transaction.oncomplete=resolve;transaction.onabort=()=>reject(failure??transaction.error);
+    });}finally{database.close();}
+    await layerApp.documents.autosave(true);
+  })()`);
+  await context.reload();
+  await context.wait('!!window.layerApp&&JSON.parse(layerApp.app.workspace_view()).interrupted>0&&!!JSON.parse(layerApp.app.workspace_view()).status?.action');
+  await context.evaluate('layerApp.documents.startRecovery().then(()=>true)');
+  await context.click('.workspace-status .workspace-recovery');
+  await context.wait('!!document.querySelector("#workspace-item-choice")');
+  await context.evaluate(dropdownChoice('#workspace-item-choice',await context.evaluate('sessionStorage.getItem("phoneAuditInterrupted")')));
+  assert.deepEqual(await context.evaluate(`({weight:getComputedStyle(document.querySelector('#workspace-item-choice .dropdown-label')).fontWeight,bottom:getComputedStyle(document.querySelector('.workspace-form[open] .alert-description')).marginBottom})`),{weight:'700',bottom:'12px'},'Recover uses native standalone value weight and body margins');
+}
+async function auditInterruptedWorkspaceClose(context){
+  await context.click('.workspace-form[open] .suggested-action');
+  await context.wait('JSON.parse(layerApp.app.workspace_view()).interrupted===0&&!JSON.parse(layerApp.app.workspace_view()).busy&&!JSON.parse(layerApp.app.workspace_view()).saving');
+  await context.evaluate('sessionStorage.removeItem("phoneAuditInterrupted")');await managerClose(context);
+}
+async function auditClipboardProgressOpen(context){
+  await context.evaluate('window.phoneAuditClipOriginal=String(layerApp.app.document_tabs(0).selected)');
+  await context.send({type:'invoke',command:'new_document'});
+  const {createDrawing}=await import('./new-drawing-fixture.mjs');await context.evaluate(createDrawing({width:2048,height:1025,space:'Srgb',depth:'U8',paper:'white',relief:0}));
+  await context.wait('!layerApp.documents.busy()&&layerApp.app.brush_ready()');
+  await auditBoundary(context,{channel:'raster',operation:'output-band'});
+  await context.evaluate('layerApp.canvas.focus()');
+  for(const type of ['keyDown','keyUp'])await context.call('Input.dispatchKeyEvent',{type,modifiers:10,key:'C',code:'KeyC',windowsVirtualKeyCode:67});
+  await context.evaluate('phoneAuditBoundary.started.then(()=>true)');
+}
+async function auditClipboardProgressClose(context){
+  await context.click('.file-progress[open] button');await context.evaluate('phoneAuditBoundary.release()');
+  await context.wait('!layerApp.documents.busy()&&!layerApp.state().document_file.busy');
+}
+async function auditClipboardProgressRestore(context){
+  await auditBoundaryRestore(context);
+  if(!await context.evaluate("'phoneAuditClipOriginal'in window"))return;
+  if(await context.evaluate('String(layerApp.app.document_tabs(0).selected)!==phoneAuditClipOriginal')){
+    await context.evaluate('layerApp.documents.close(layerApp.app.document_tabs(0).selected);null');
+    await context.wait('String(layerApp.app.document_tabs(0).selected)===phoneAuditClipOriginal||!!document.querySelector("dialog.document-dialog[open]")');
+    if(await context.evaluate('!!document.querySelector("dialog.document-dialog[open]")'))await context.evaluate(`(()=>{const label=layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label,button=[...document.querySelectorAll('dialog[open] button')].find(node=>node.textContent===label);if(!button)throw Error('Owned clipboard drawing has no Discard response');button.click();})()`);
+    await context.wait('String(layerApp.app.document_tabs(0).selected)===phoneAuditClipOriginal&&!layerApp.documents.busy()');
+  }
+  await context.evaluate('delete window.phoneAuditClipOriginal');
+}
+
 const auditMenuRow=(id,prepare,selector,context=false,rootselector='.panel-context-menu:popover-open',closeaction=auditSurfaceClose)=>({batch:'m0',id,rootselector,openaction:async c=>{await prepare(c);await auditPopup(c,selector,context);},closeaction});
 
 export const dialogAuditRows=[
@@ -597,14 +805,14 @@ export const dialogAuditRows=[
     await evaluate('delete window.phoneAuditOpenFailure');
   }},
 
+  {batch:'w6c',id:'workspace-save-status',rootselector:'.workspace-status:not([hidden])',openaction:auditSaveFailureOpen,closeaction:auditSaveFailureClose,finalize:auditBoundaryRestore},
+  {batch:'w6c',id:'failed-drawing-recovery',blocked:'Source-derived capture gap: prior-window OPFS ownership prevents live checkpoint mutation; the valid copied-manifest fixture reaches the real error but healthy/startup background depends on manifest restoration order. Both Web cases exhausted their bounded attempts; no qualified capture.'},
+  {batch:'w6c',id:'stroke-recording-failure',rootselector:'dialog.document-dialog[open]',openaction:auditRecordingFailureOpen,closeaction:auditRecordingFailureClose,finalize:auditRecordingFailureRestore},
+  {batch:'w6c',id:'recover-interrupted-workspaces',rootselector:'.workspace-form[open]',openaction:auditInterruptedWorkspaceOpen,closeaction:auditInterruptedWorkspaceClose,finalize:auditBoundaryRestore},
   ...[
-    ['recover-interrupted-workspaces','Requires the existing interrupted-store setup; no short opener from a healthy manager.'],
     ['restore-workspaces','Requires the existing released-storage/restart setup in saved-data-ux.'],
-    ['failed-drawing-recovery','Requires the existing session-store failure setup and restart.'],
-    ['workspace-not-saved','Requires an actual failed workspace write; no short healthy-store opener.'],
+    ['workspace-not-saved','Web uses the browser-owned beforeunload prompt; no application close-recovery consumer exists. W7 storage-alert is this same native state, not another Web route.'],
     ['preserved-package-preview','Requires the existing package fixture preparation in package-view.'],
-    ['stroke-recording-failure','Existing desktop recording journey asserts the actual failure alert; paired phone capture needs the native failure setup extracted.'],
-    ['workspace-save-status','Requires a real pending/failed store operation; healthy idle storage has no notice.'],
   ].map(([id,blocked])=>({batch:'w6c',id,blocked})),
   {batch:'w6d',id:'selection-refine',rootselector:'#selection-refine-panel',openaction:async({send,evaluate,settle,wait})=>{
     await send({type:'invoke',command:'select_all'});await wait('layerApp.state().layer_tools.has_selection');
@@ -632,13 +840,11 @@ export const dialogAuditRows=[
   {batch:'w6d',id:'command-search',rootselector:'#command-bar[open]',openaction:async({send,evaluate})=>{
     await send({type:'invoke',command:'add_layer'});if(await evaluate('layerApp.state().commands.some(command=>command.id==="deselect"&&command.enabled)'))await send({type:'invoke',command:'deselect'});await send({type:'invoke',command:'search_commands'});
   },closeaction:async({evaluate})=>{await evaluate('document.querySelector("#command-bar").requestClose()');}},
-  ...[
-    ['document-opening-progress','The existing opening/cancellation journey needs owned package preparation and an active read; stable progress capture exceeds the short opener without an operation gate.'],
-    ['image-import-progress','The existing image-import journey needs its owned image and in-flight decoder/provider setup; no stable progress stage is reachable from the healthy audit drawing in a short opener.'],
-    ['export-progress','The existing export journey needs destination/provider setup and a retained in-flight preparation or write; a healthy small export may finish before a still capture.'],
-    ['document-color-progress','The existing conversion journey needs an actual color candidate and in-flight preparation; that setup is not a short healthy-drawing opener.'],
-    ['clipboard-progress','The existing clipboard cancellation journey needs browser clipboard permission, owned image payload and an in-flight capture/provider; no short stable progress opener exists.'],
-  ].map(([id,blocked])=>({batch:'w6d',id,blocked})),
+  {batch:'w6d',id:'document-opening-progress',rootselector:'.file-progress[open]',openaction:auditOpeningProgressOpen,closeaction:auditOpeningProgressClose,finalize:auditBoundaryRestore},
+  {batch:'w6d',id:'image-import-progress',rootselector:'.file-progress[open]',openaction:context=>auditOpeningProgressOpen(context,'import_image'),closeaction:auditOpeningProgressClose,finalize:auditBoundaryRestore},
+  {batch:'w6d',id:'export-progress',rootselector:'.file-progress[open]',openaction:auditExportProgressOpen,closeaction:auditExportProgressClose,finalize:auditExportProgressRestore},
+  {batch:'w6d',id:'document-color-progress',rootselector:'dialog.document-dialog[open]',openaction:auditColorProgressOpen,closeaction:auditColorProgressClose,finalize:auditColorProgressRestore},
+  {batch:'w6d',id:'clipboard-progress',rootselector:'.file-progress[open]',document:{extent:[2048,1025],color:{space:'Srgb',depth:'U8'},count:2},openaction:auditClipboardProgressOpen,closeaction:auditClipboardProgressClose,finalize:auditClipboardProgressRestore},
   ...[['assign-profile','assign_profile'],['convert-color-space','convert_color_space'],['change-bit-depth','change_bit_depth'],['repair-source-profile','repair_source_profile'],['rasterize-source','rasterize_source']].map(([id,command])=>({
     batch:'w7-photo',id,rootselector:'dialog.document-dialog:not(.file-progress)[open]',document:{extent:[513,257],color:{space:'ProPhoto',depth:'U16'},count:'photo',...(id!=='rasterize-source'?{draft:{state:id}}:{})},
     openaction:async context=>{await photoAuditOpen(context);await context.send({type:'invoke',command});
@@ -705,7 +911,7 @@ export function selectDialogAuditRows(dialogs,requested){
   return rows.filter(row=>ids.includes(row.id));
 }
 
-export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='audit',batch=null}) {
+export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,mode='audit',batch=null}) {
   const audit=auditModes[mode];assert.ok(audit,`Unknown phone audit mode: ${mode}`);
   const gtkAllocations=process.env.LAYER_PHONE_GTK_ALLOCATIONS;
   if(mode==='customize')assert.ok(gtkAllocations,'LAYER_PHONE_GTK_ALLOCATIONS must point to the matching GTK phone customization captures');
@@ -1441,10 +1647,13 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       }
       continue;
     }
-    const open=async action=>{if(typeof action==='function')await action({send,evaluate,wait,call,settle,click});else for(const step of Array.isArray(action)?action:[action])await send(step);};
+    const open=async action=>{if(typeof action==='function')await action({send,evaluate,wait,call,reload,settle,click});else for(const step of Array.isArray(action)?action:[action])await send(step);};
     if(dialogs)for(const row of rows){
       if(row.blocked){report.unreachable.push({state:row.id,viewport:test.viewport,theme:test.theme,dpr:1,text_scale:test.text_scale,preset:'builtin:workspace:painter',phone_active:active,status:'unavailable',missing:[],reason:row.blocked,png:null});continue;}
-      await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);await settle();
+      try{
+      await open(row.openaction);await wait(`!!document.querySelector(${JSON.stringify(row.rootselector)})`);
+      if(await evaluate(`document.querySelector(${JSON.stringify(row.rootselector)})?.tagName==='DIALOG'&&!document.querySelector(':popover-open')`))await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:0,y:0,button:'none',buttons:0});
+      await settle();
       if(row.id==='preferences-root'&&test.viewport[0]===320&&test.viewport[1]===320){
         const about=await evaluate(`(()=>{const node=document.querySelector('[data-settings-page="about"]'),body=node.closest('.preferences-sidebar-body');node.scrollIntoView({block:'nearest'});const r=node.getBoundingClientRect(),b=body.getBoundingClientRect();return{top:r.top,bottom:r.bottom,bodyTop:b.top,bodyBottom:b.bottom,scroll:body.scrollTop};})()`);
         assert.ok(about.scroll>0&&about.top>=about.bodyTop-.5&&about.bottom<=about.bodyBottom+.5,'320-square Settings root scrolls About into its body');
@@ -1486,6 +1695,7 @@ export async function checkPhoneAudit({call,evaluate,settle,canvasPixels,mode='a
       if(row.closeaction)await open(row.closeaction);
       if(row.batch==='w6a')await send({type:'close_settings'});
       await close();
+      }finally{if(row.finalize)await open(row.finalize);}
     }
     await writeFile(`${directory}/index.json`,JSON.stringify(report,null,2)+'\n');
   }

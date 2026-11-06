@@ -1,6 +1,9 @@
 use super::*;
 use super::workspace_header::Driver;
 
+#[path = "page_dialog_tests/progress.rs"]
+mod progress;
+
 #[test]
 #[ignore = "private compositor: --native-test=native_new_drawing_preview_spacing --native-storage; viewport/theme external"]
 fn native_new_drawing_preview_spacing() {
@@ -1245,14 +1248,150 @@ fn native_alert_editor_frames() {
     d.finish();
 }
 
+fn w9_storage(d: &mut Driver) {
+    wait_workspaces(&d.w);
+    let w = d.w.clone();
+    workspace_unavailable_close_recovery(&w, |name| capture(d, name));
+}
+
+fn w9_interrupted_seed() -> (layer_workspace::StoreWorker, layer_workspace::CommitBatch, String) {
+    use layer_workspace::{CommitBatch, Entity, Mutation, NamePolicy, Owner, StoreRequest, StoreResponse, StoreWorker};
+    let directory = crate::storage::workspaces().expect("run with --native-storage");
+    glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+        let worker = StoreWorker::shared(&directory).unwrap();
+        assert!(matches!(pollster::block_on(worker.request(StoreRequest::List)).unwrap(), StoreResponse::List(_)));
+        let layout = DockLayout::default();
+        let entity = Entity::workspace("M9 interrupted changes", layer_ui::WorkspaceCapture::from_template(&layout).unwrap(), layout, 1_000_000);
+        let id = entity.id.clone();
+        let batch = CommitBatch::prepare(Owner::fresh(), vec![Mutation::Create { entity, claim: false, name_policy: NamePolicy::Exact }]).unwrap();
+        let sql = rusqlite::Connection::open(directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute_batch(&format!("CREATE TRIGGER m9_interrupt_publication BEFORE INSERT ON receipts WHEN NEW.id='{}' BEGIN SELECT RAISE(ABORT,'interrupted publication'); END;", batch.operation_id.replace('\'', "''"))).unwrap();
+        let committed = pollster::block_on(worker.request(StoreRequest::Commit { batch: batch.clone() }));
+        let cleanup = sql.execute_batch("DROP TRIGGER m9_interrupt_publication");
+        assert!(committed.is_err(), "the owned delivery stops before its receipt");
+        cleanup.unwrap();
+        let StoreResponse::Pending(pending) = pollster::block_on(worker.request(StoreRequest::Pending)).unwrap() else { panic!("pending delivery reply"); };
+        assert!(pending.iter().any(|candidate| serde_json::to_value(candidate).unwrap() == serde_json::to_value(&batch).unwrap()), "the complete owned delivery is durable");
+        assert!(matches!(pollster::block_on(worker.request(StoreRequest::Receipt { operation_id: batch.operation_id.clone() })).unwrap(), StoreResponse::Receipt(None)));
+        let StoreResponse::List(items) = pollster::block_on(worker.request(StoreRequest::List)).unwrap() else { panic!("workspace list reply"); };
+        assert!(!items.iter().any(|item| item.id == id), "the interrupted workspace was not published");
+        (worker, batch, id)
+    })).unwrap()
+}
+
+fn w9_interrupted_workspaces(d: &mut Driver, worker: layer_workspace::StoreWorker, batch: layer_workspace::CommitBatch, original: String) {
+    use layer_workspace::{ManagerAction, StoreRequest, StoreResponse};
+    until(|| {
+        let view = d.w.workspaces.view();
+        view.ready && !view.busy && view.interrupted == 1
+            && view.status.and_then(|status| status.action).is_some_and(|action| action.action == ManagerAction::RecoverInterrupted)
+    }, "the durable unpublished delivery offers recovery");
+    let action = d.w.workspaces.view().status.unwrap().action.unwrap();
+    let button = find_button(d.w.workspaces.root.upcast_ref(), &action.label).unwrap();
+    d.click(button.upcast_ref());
+    until(|| d.w.workspaces.view().prompt_action == Some(ManagerAction::RecoverInterrupted), "the offered status action opens its recovery prompt");
+    let prompt = d.w.workspaces.view().prompt.unwrap();
+    assert_eq!(prompt.choices.len(), 1);
+    assert_eq!(prompt.choices[0].id, batch.operation_id);
+    let (_, frame) = dialog_frame(d);
+    capture(d, "recover-interrupted-workspaces");
+    let confirm = find_button(&frame, &prompt.confirm).unwrap();
+    d.click(confirm.upcast_ref());
+    until(|| {
+        let view = d.w.workspaces.view();
+        view.ready && !view.busy && !view.saving && view.interrupted == 0 && view.prompt.is_none()
+    }, "recovering the offered delivery completes");
+    glib::MainContext::default().block_on(async move {
+        let StoreResponse::Pending(pending) = worker.request(StoreRequest::Pending).await.unwrap() else { panic!("pending delivery reply"); };
+        assert!(!pending.iter().any(|candidate| candidate.operation_id == batch.operation_id), "recovery abandons the original delivery atomically");
+        let StoreResponse::List(items) = worker.request(StoreRequest::List).await.unwrap() else { panic!("workspace list reply"); };
+        assert!(!items.iter().any(|item| item.id == original));
+        assert!(items.iter().any(|item| !item.metadata.builtin && item.metadata.name.contains("M9 interrupted changes")), "recovery publishes a nonbuiltin copy");
+    });
+}
+
+fn w9_failed_drawing_recovery() {
+    use layer_ui::session_recovery::SessionManifest;
+    assert!(crate::storage::sessions().is_some(), "run with --native-recovery");
+    let (app, windows) = crate::application("art.capycanvas.PhoneRecovery");
+    let app = NativeTestApp(app);
+    app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    super::phone_motion::configure_display();
+    crate::open_workspace(&app, &windows, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
+    until(|| windows.borrow().first().is_some_and(|w| w.window.is_mapped()), "the checkpoint owner opens");
+    let w = windows.borrow()[0].clone();
+    apply_fixture_theme(&w);
+    w.window.maximize();
+    super::new_photo::ready(&w);
+    super::new_photo::invoke(&w, CommandId::AddLayer);
+    assert!(state(&w).document_file.modified, "the prior window checkpoints authored changes");
+    w.recovery().capture(&w);
+    glib::MainContext::default().block_on(w.recovery().flush()).unwrap();
+    let binding = w.recovery().writer_store();
+    let key = binding.key().to_owned();
+    let path = w.recovery().published_path();
+    drop(binding);
+    w.window.close();
+    until(|| !w.window.is_visible() && windows.borrow().is_empty(), "the prior window closes after checkpoint publication");
+    let old = Rc::downgrade(&w);
+    drop(w);
+    until(|| old.upgrade().is_none(), "the prior window releases its saved drawing owner");
+    let manifest_path = glib::MainContext::default().block_on(gtk::gio::spawn_blocking({
+        let key = key.clone();
+        move || {
+            let root = path.parent().unwrap();
+            let mut manifests = std::fs::read_dir(root).unwrap().map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+                .filter_map(|path| SessionManifest::read(&path).unwrap().filter(|manifest| manifest.drawings.iter().any(|drawing| drawing.key == key)).map(|manifest| (path, manifest)))
+                .collect::<Vec<_>>();
+            assert_eq!(manifests.len(), 1, "the owned checkpoint belongs to one prior-window manifest");
+            let (manifest_path, _) = manifests.pop().unwrap();
+            let generations = std::fs::read_dir(path.join("generations")).unwrap().map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "json")).collect::<Vec<_>>();
+            assert!(!generations.is_empty(), "the fixture corrupts a published checkpoint");
+            for generation in generations { std::fs::remove_file(generation).unwrap(); }
+            manifest_path
+        }
+    })).unwrap();
+    crate::open_workspace(&app, &windows, None);
+    until(|| windows.borrow().first().is_some_and(|w| w.window.is_mapped()), "the actual empty-registry startup opens");
+    let w = windows.borrow()[0].clone();
+    apply_fixture_theme(&w);
+    w.window.maximize();
+    let copy = layer_ui::bootstrap_view(&w.localization()).recovery;
+    until(|| w.window.visible_dialog().and_then(|dialog| dialog.downcast::<adw::AlertDialog>().ok())
+        .is_some_and(|dialog| dialog.heading().as_deref() == Some(copy.title.as_ref())), "the unreadable checkpoint offers Later, Discard and Retry");
+    let mut d = Driver::start(w.clone(), app);
+    let (_, frame) = dialog_frame(&d);
+    capture(&mut d, "failed-drawing-recovery");
+    let later = find_button(&frame, &copy.later).unwrap();
+    d.click(later.upcast_ref());
+    until(|| !w.restart.is_restoring() && w.window.visible_dialog().is_none(), "Later completes restoration without discarding the failed drawing");
+    super::new_photo::ready(&w);
+    assert!(w.window.is_visible() && w.documents.len() > 0, "the live placeholder remains available");
+    glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+        let manifest = SessionManifest::read(&manifest_path).unwrap().unwrap();
+        let retained = manifest.drawings.iter().find(|drawing| drawing.key == key).expect("Later retains the failed checkpoint identity");
+        assert!(manifest.blocked.contains(&retained.id), "Later keeps the failed checkpoint blocked for an explicit retry");
+    })).unwrap();
+    d.finish();
+}
+
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6a-capture/w6b/w6c/w6d/w7-photo, phone viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_dialogs --native-storage; LAYER_DIALOG_BATCH=w6a/w6a-capture/w6b/w6c/w6d/w7-photo/w9-storage/w9-workspace-recovery/w9-drawing-recovery/w9-open; drawing recovery also needs --native-recovery, phone viewport/theme external"]
 fn native_phone_dialogs() {
     let batch = std::env::var("LAYER_DIALOG_BATCH").unwrap();
+    if batch=="w9-drawing-recovery" { w9_failed_drawing_recovery();return; }
+    let interrupted = (batch=="w9-workspace-recovery").then(w9_interrupted_seed);
     let mut d = super::phone_motion::setup("art.capycanvas.PhoneDialogs");
+    if let Some((worker,batch,original))=interrupted { w9_interrupted_workspaces(&mut d,worker,batch,original);d.finish();return; }
+    if batch=="w9-recording" { progress::recording(&mut d);d.finish();return; }
+    if batch=="w9-workers" { progress::workers(&mut d);d.finish();return; }
+    if batch=="w9-open" { progress::opening(&mut d);d.finish();return; }
     if batch=="w6a-popups" {preferences_popups(&mut d);d.finish();return;}
     if let Some(kind)=batch.strip_prefix("w7-toolbar-") { w7_toolbar(&mut d,&format!("{kind}_toolbar"));d.finish();return; }
     if batch=="w7-file-failure" { w7_file_failure(&mut d);d.finish();return; }
+    if batch=="w9-storage" { w9_storage(&mut d);d.finish();return; }
     if matches!(batch.as_str(),"w7-pressure"|"w7-tilt") { w7_calibration(&mut d,batch=="w7-tilt");d.finish();return; }
     if batch == "w7-untagged" { w7_untagged(&mut d);d.finish();return; }
     if batch == "w7-photo" { w7_photo(&mut d);d.finish();return; }

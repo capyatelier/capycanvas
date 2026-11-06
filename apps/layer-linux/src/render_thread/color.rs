@@ -138,6 +138,8 @@ impl RenderWorker {
 
 impl Worker {
     pub(super) fn prepare_color(&mut self, request: Request, startup_busy: bool) {
+        #[cfg(test)]
+        crate::workspace::tests::providers::enter(crate::workspace::tests::providers::Provider::Color);
         let result = if startup_busy || self.prepared_color.is_some() {
             Err("The canvas renderer is still preparing another operation".into())
         } else {

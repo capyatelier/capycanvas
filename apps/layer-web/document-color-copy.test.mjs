@@ -107,6 +107,8 @@ test('color history uses one cancel-only progress surface without an underlying 
   assert.deepEqual(h.intent(),{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null});
   assert.equal(h.title(),'en:preparing_title');
   assert.equal(h.form.querySelectorAll('p').at(-1).textContent,'en:preparing_help');
+  assert.equal(h.form.querySelectorAll('p').at(-1).className,'alert-description');
+  assert.deepEqual(h.form.children.filter(node=>node.tagName!=='FOOTER').map(node=>node.tagName),['P']);
   assert.equal(h.doc.body.querySelectorAll('dialog').length,0,'The operation owns one surface');
   assert.equal(h.buttons().length,1);h.resolve();assert.equal(await h.result,h.candidate);h.candidate.free();
 });

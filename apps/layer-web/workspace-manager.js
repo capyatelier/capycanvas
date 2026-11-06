@@ -69,7 +69,8 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const status=element('div','workspace-status'),statusText=element('span'),statusRetry=localizedButton(()=>copy.retry,()=>send({type:'retry'}));
   const recoveryButton=localizedButton(()=>view?.status?.action?.label??'',
     ()=>{if(view?.status?.action)send({type:'form',action:view.status.action.action});},'workspace-recovery');
-  status.append(statusText,statusRetry,recoveryButton);switcher.root.after(status);
+  const statusActions=element('div','preference-row-actions workspace-status-actions');
+  statusActions.append(statusRetry,recoveryButton);status.append(statusText,statusActions);switcher.root.after(status);
   let switcherRevision;
   let lastView, pageKey, rowsKey, formKey, timer, formName, formDescription, formChoice, formError, formSubmit, formHost, observePending = false;
   const channel = new BroadcastChannel("capycanvas.workspace.windows");

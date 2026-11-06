@@ -96,6 +96,8 @@ mod workspace_layout_drop;
 mod drag_pickup;
 #[path = "gpu_recovery_tests.rs"]
 mod gpu_recovery;
+#[path = "provider_tests.rs"]
+pub(crate) mod providers;
 #[path = "icon_tests.rs"]
 mod icons;
 #[path = "layer_hold_tests.rs"]
@@ -13825,6 +13827,14 @@ fn native_workspace_unavailable_close_recovery() {
     w.window.maximize();
     w.window.present();
     wait_workspaces(&w);
+    workspace_unavailable_close_recovery(&w, |name| {
+        if name == "workspace-save-status" && let Some(dir) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
+            capture_reference(&w, std::path::Path::new(&dir).join("workspace-storage-notice.png").to_str().unwrap(), 1.);
+        }
+    });
+}
+
+fn workspace_unavailable_close_recovery(w: &Rc<Workspace>, mut visit: impl FnMut(&str)) {
     if let Ok(viewport) = std::env::var("LAYER_MOTION_VIEWPORT") {
         let (width, height) = viewport.split_once('x').unwrap();
         let expected = [width.parse::<i32>().unwrap(), height.parse::<i32>().unwrap()];
@@ -13857,6 +13867,7 @@ fn native_workspace_unavailable_close_recovery() {
     let alert = dialog.clone().downcast::<adw::AlertDialog>().unwrap();
     assert_eq!(alert.heading().as_deref(), Some(copy.recovery.workspace_not_saved.as_ref()));
     assert_eq!(alert.body().as_str(), copy.recovery.close_save_failed.as_ref());
+    visit("workspace-not-saved");
     find_button(&dialog, &copy.common.keep_open).unwrap().emit_clicked();
     until(|| !dialog.is_mapped(), "Keep Open dismisses the close-save recovery prompt");
     assert!(w.window.is_visible());
@@ -13888,9 +13899,7 @@ fn native_workspace_unavailable_close_recovery() {
         assert!(message.y() < actions.y() + actions.height() && actions.y() < message.y() + message.height(),
             "inline storage message and actions share one line: {message:?} {actions:?}");
     }
-    if let Some(dir) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
-        capture_reference(&w, std::path::Path::new(&dir).join("workspace-storage-notice.png").to_str().unwrap(), 1.);
-    }
+    visit("workspace-save-status");
     let resolved = w.resolved();
     if let Some(phone) = resolved.phone {
         let notice = root.compute_bounds(&w.window).unwrap();

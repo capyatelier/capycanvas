@@ -444,9 +444,7 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || std::fs::write(path,bytes))).unwrap().unwrap();
 }
 
-pub(super) fn setup(name: &str) -> Driver {
-    assert!(crate::storage::workspaces().is_some());
-    let app = native_test_app(name);
+pub(super) fn configure_display() {
     let settings = gtk::Settings::default().unwrap();
     if let Ok(layout) = std::env::var("LAYER_PHONE_DECORATION_LAYOUT") {
         settings.set_gtk_decoration_layout(Some(&layout));
@@ -459,6 +457,12 @@ pub(super) fn setup(name: &str) -> Driver {
         gtk::style_context_add_provider_for_display(&gdk::Display::default().unwrap(), &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
     }
+}
+
+pub(super) fn setup(name: &str) -> Driver {
+    assert!(crate::storage::workspaces().is_some());
+    let app = native_test_app(name);
+    configure_display();
     let w = Workspace::with_project(&app, Some((new_drawing_at(1200, 1600, layer_core::color::SampleDepth::U8), None)));
     apply_fixture_theme(&w);
     w.window.maximize();

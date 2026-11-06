@@ -241,6 +241,7 @@ After changing the tablet proxy, run its tests with
 | `native_phone_inventory`, focused context menus | Set `LAYER_PHONE_INVENTORY_CONTEXTS=1` to capture the Painter layer-row and palette-swatch menus through the existing inventory journey. |
 | `native_phone_inventory`, Transform drawer | Set `LAYER_PHONE_INVENTORY_CONTEXTS=transform` to check the Painter Transform tile and its drawer with an owned image. |
 | `native_phone_dialogs`, focused Settings captures | Set `LAYER_DIALOG_BATCH=w6a-capture` to visit Preferences and shortcut sheets without optional choice and context popovers. |
+| `native_phone_dialogs`, interrupted saves and drawing recovery | `LAYER_DIALOG_BATCH=w9-workspace-recovery` seeds an unpublished SQLite delivery; `w9-drawing-recovery` also needs `--native-recovery` and restarts an owned drawing with unreadable checkpoint generations. |
 | `native_workspace_switcher_press_feedback` | `--native-storage`, then again with `--tablet` |
 | `native_three_finger_scrub`, `native_pressure_calibration` | `--tablet` |
 | `native_layer_relationship_review`, pen branch | `LAYER_RELATIONSHIP_PEN=1` and `--tablet` |

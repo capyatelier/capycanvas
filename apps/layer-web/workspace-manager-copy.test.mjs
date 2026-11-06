@@ -68,6 +68,7 @@ test('workspace prompt and rows publish copy without replacing dirty names, sele
 test('inline workspace failure retains localized Retry and Save As controls and forwards their shared actions',t=>{
   const h=harness(t,{failure:true}),status=h.doc.body.querySelector('.workspace-status'),controls=status.querySelectorAll('button');
   assert.deepEqual(controls.map(node=>node.textContent),['en:retry','en:save_as_new_workspace']);
+  const actions=status.querySelector('.workspace-status-actions');assert.equal(actions.classList.contains('preference-row-actions'),true);assert.deepEqual(actions.children,controls);assert.equal(status.children[0].tagName,'SPAN');assert.equal(status.children[1],actions);
   assert.equal(status.hidden,false);assert.equal(status.querySelector('span').textContent,'en:write-failed');assert.equal(h.nodes().form.open,false);assert.equal(h.nodes().dialog.open,false);
   h.switch('tr');assert.equal(h.doc.body.querySelector('.workspace-status'),status);assert.deepEqual(status.querySelectorAll('button'),controls);assert.equal(status.querySelector('span').textContent,'tr:write-failed');assert.deepEqual(controls.map(node=>node.textContent),['tr:retry','tr:save_as_new_workspace']);assert.deepEqual(h.inputs,[]);
   controls[0].click();controls[1].click();assert.deepEqual(h.inputs,[{type:'retry'},{type:'form',action:{type:'save_as_new'}}]);

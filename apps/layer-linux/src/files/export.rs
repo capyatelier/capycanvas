@@ -71,6 +71,8 @@ pub(crate) fn write_snapshot(
     path: &std::path::Path,
     job: &ExportJob,
 ) -> Result<u64, layer_ui::ColorFeatureError> {
+    #[cfg(test)]
+    crate::workspace::tests::providers::enter(crate::workspace::tests::providers::Provider::Export);
     let result = (|| {
         recipe.validate_for_composition(snapshot.composition())?;
         let extent = recipe.output_extent([

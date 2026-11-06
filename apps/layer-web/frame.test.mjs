@@ -689,6 +689,10 @@ test('alert layout forwards intrinsic content and font measurements and applies 
   host.hide();host.dispose();assert.equal(changes[0].disconnected,true);
   const progress=createProgressDialog({app,element,button,icon,intent:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null},title:'Preparing',body:'Working',onCancel:()=>{}});
   assert.deepEqual(calls.at(-1).metrics.responses,[0]);progress.remove();
+  const copying=createProgressDialog({app,element,button,icon,intent:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null},title:'Copy Merged',onCancel:()=>{}});
+  assert.deepEqual(copying.title.parentNode.parentNode.children.map(node=>node.tagName),['HEADER','FOOTER']);copying.remove();
+  const exporting=createProgressDialog({app,element,button,icon,intent:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null},title:'Exporting',body:'Preparing export',progressBar:true,onCancel:()=>{}});
+  const track=exporting.label.parentNode.children[1];assert.equal(track.getAttribute('role'),'progressbar');assert.equal(track.getAttribute('aria-labelledby'),exporting.label.id);assert.equal(track.getAttribute('aria-valuenow'),null);exporting.complete();assert.equal(track.getAttribute('aria-valuenow'),'100');exporting.remove();
 });
 
 

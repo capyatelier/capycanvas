@@ -1058,56 +1058,64 @@ impl EffectPanels {
         let this = self.clone();
         let w = w.clone();
         glib::spawn_future_local(async move {
-            let result: Result<(), String> = async {
-                let dialog = gtk::FileDialog::builder()
-                    .title(&*w.localization().text(layer_ui::MessageId::NATIVE_COLOR_SAVE_STROKE_RECORDING))
-                    .initial_name("stroke-recording.capystrokes")
-                    .modal(true)
-                    .build();
-                let file = match dialog.save_future(Some(&w.window)).await {
-                    Ok(file) => file,
-                    Err(e)
-                        if e.matches(gtk::DialogError::Dismissed)
-                            || e.matches(gtk::DialogError::Cancelled) =>
-                    {
-                        return Ok(());
-                    }
-                    Err(e) => return Err(e.to_string()),
-                };
-                let data = w
-                    .gpu
-                    .borrow_mut()
-                    .as_mut()
-                    .ok_or_else(|| w.localization().text(layer_ui::MessageId::NATIVE_COLOR_CANVAS_UNAVAILABLE).to_string())?
-                    .session
-                    .stroke_recording()
-                    .snapshot()
-                    .map_err(|e| e.to_string())?;
-                let bytes =
-                    gtk::gio::spawn_blocking(move || layer_engine::recording::compress(&data))
-                        .await
-                        .map_err(|_| w.localization().text(layer_ui::MessageId::NATIVE_COLOR_STROKE_RECORDING_COMPRESSION_FAILED).to_string())?
-                        .map_err(|e| e.to_string())?;
-                file.replace_contents_future(
-                    bytes,
-                    None,
-                    false,
-                    gtk::gio::FileCreateFlags::REPLACE_DESTINATION,
-                )
-                .await
-                .map_err(|(_, e)| e.to_string())?;
-                if let Some(g) = w.gpu.borrow_mut().as_mut() {
-                    g.session.stroke_recording().saved();
+            let dialog = gtk::FileDialog::builder()
+                .title(&*w.localization().text(layer_ui::MessageId::NATIVE_COLOR_SAVE_STROKE_RECORDING))
+                .initial_name("stroke-recording.capystrokes")
+                .modal(true)
+                .build();
+            let file = match dialog.save_future(Some(&w.window)).await {
+                Ok(file) => file,
+                Err(e)
+                    if e.matches(gtk::DialogError::Dismissed)
+                        || e.matches(gtk::DialogError::Cancelled) =>
+                {
+                    this.recording_save_open.set(false);
+                    this.recording_tick(&w);
+                    return;
                 }
-                Ok(())
-            }
-            .await;
-            this.recording_save_open.set(false);
-            if let Err(e) = result {
-                Self::recording_error(&w, &e);
-            }
-            this.recording_tick(&w);
+                Err(e) => {
+                    this.recording_save_open.set(false);
+                    Self::recording_error(&w, &e.to_string());
+                    this.recording_tick(&w);
+                    return;
+                },
+            };
+            this.save_recording_file(&w, file).await;
         });
+    }
+    pub(crate) async fn save_recording_file(self: &Rc<Self>, w: &Rc<Workspace>, file: gtk::gio::File) {
+        let result: Result<(), String> = async {
+            let data = w
+                .gpu
+                .borrow_mut()
+                .as_mut()
+                .ok_or_else(|| w.localization().text(layer_ui::MessageId::NATIVE_COLOR_CANVAS_UNAVAILABLE).to_string())?
+                .session
+                .stroke_recording()
+                .snapshot()
+                .map_err(|e| e.to_string())?;
+            let bytes =
+                gtk::gio::spawn_blocking(move || layer_engine::recording::compress(&data))
+                    .await
+                    .map_err(|_| w.localization().text(layer_ui::MessageId::NATIVE_COLOR_STROKE_RECORDING_COMPRESSION_FAILED).to_string())?
+                    .map_err(|e| e.to_string())?;
+            file.replace_contents_future(
+                bytes,
+                None,
+                false,
+                gtk::gio::FileCreateFlags::REPLACE_DESTINATION,
+            )
+            .await
+            .map_err(|(_, e)| e.to_string())?;
+            if let Some(g) = w.gpu.borrow_mut().as_mut() {
+                g.session.stroke_recording().saved();
+            }
+            Ok(())
+        }
+        .await;
+        self.recording_save_open.set(false);
+        if let Err(e) = result { Self::recording_error(w, &e); }
+        self.recording_tick(w);
     }
     fn refresh_stats(&self, w: &Workspace) {
         let Some(view) = w.gpu.borrow().as_ref().map(|g| g.session.renderer_stats()) else {

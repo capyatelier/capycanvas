@@ -128,10 +128,14 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
   };
 }
 
-export function createProgressDialog({app,element,button,icon,intent,title,body,onCancel}) {
+export function createProgressDialog({app,element,button,icon,intent,title,body,progressBar=false,onCancel}) {
   const dialog=element('dialog','document-dialog file-progress'),header=element('header','dialog-header'),heading=element('h2','',title),label=element('p','',body),footer=element('footer');
-  const cancel=button(()=>app.bootstrap_view().common.cancel,onCancel);header.append(heading);footer.append(cancel);dialog.append(header,label,footer);document.body.append(dialog);
+  let track;
+  const cancel=button(()=>app.bootstrap_view().common.cancel,onCancel);header.append(heading);footer.append(cancel);dialog.append(header);
+  if(progressBar){
+    const extra=element('div','alert-extra');track=element('div','alert-progress-track');label.className='alert-progress-caption';label.id=crypto.randomUUID();track.setAttribute('role','progressbar');track.setAttribute('aria-labelledby',label.id);track.append(element('span'));extra.append(label,track);dialog.append(extra);
+  }else if(body)dialog.append(label);
+  dialog.append(footer);document.body.append(dialog);
   const host=createDialogHost({app,dialog,header,cancel,icon,copy:app.bootstrap_view().common,onCancel:()=>cancel.click()});host.present(intent);
-  label.hidden=!body;
-  return {title:heading,label,cancel,remove(){host.hide();host.dispose();dialog.remove();}};
+  return {title:heading,label,cancel,complete(){track?.setAttribute('aria-valuenow','100');},remove(){host.hide();host.dispose();dialog.remove();}};
 }

@@ -326,13 +326,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
         const progressCaption=()=>progressPhase==="cancelling"?delivery.cancelling:exportCopy[progressPhase];
         try {
           if(format){
-            control=app.capture_control();progress=createProgressDialog({app,element,button,icon,intent:exportCopy.progress_dialog,title:()=>exportCopy.exporting,body:progressCaption,
+            control=app.capture_control();progress=createProgressDialog({app,element,button,icon,intent:exportCopy.progress_dialog,title:()=>exportCopy.exporting,body:progressCaption,progressBar:true,
               onCancel:()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}});progressLabel=progress.label;
           }
           if(recipe)applyChange(app.dispatch({type:"prepare_export",id,owner:r.owner,recipe,location:target.location}));
           else if(format)applyChange(app.prepare_export_dialog(id,r.owner,target.location));
           const bytes=(output=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
-          if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.cancel.disabled=true;}
+          if(progress){progressPhase="finishing_file";bindCopy(progressLabel,progressCaption);progress.complete();progress.cancel.disabled=true;}
 
           let success;
           if(target.handle) {
