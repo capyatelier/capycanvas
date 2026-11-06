@@ -75,12 +75,14 @@ function Assert-ControlCaptionInk([string]$Image,[double[]]$ControlBounds,[doubl
         $record
     }finally{$bitmap.Dispose()}
 }
-function Save-ControlCaptionInk($Control,[IntPtr]$Window,[string]$Image,[string]$Foreground,[string]$Output){
+function Save-ControlCaptionInk($Control,[IntPtr]$Window,[string]$Image,[string]$Foreground,[string]$Output,[Windows.Rect]$NativeBounds=[Windows.Rect]::Empty){
     $caption=@($Control.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Text))|Where-Object {$_.Current.Name -ceq $Control.Current.Name -and !$_.Current.IsOffscreen -and !$_.Current.BoundingRectangle.IsEmpty})
     if($caption.Count -ne 1){throw "Control has no unique arranged caption: $($Control.Current.Name)"}
     $origin=[CapyRowPointer+Point]::new()
     if(![CapyRowPointer]::ClientToScreen($Window,[ref]$origin)){throw 'Caption capture client origin is unavailable'}
-    $button=$Control.Current.BoundingRectangle;$label=$caption[0].Current.BoundingRectangle
+    if($Control.Current.AutomationId.StartsWith('canvas-bar-') -and $NativeBounds.IsEmpty){throw 'Canvas caption requires native arranged bounds'}
+    if(!$NativeBounds.IsEmpty -and $Control.Current.ProcessId -ne $review.Id){throw 'Native caption control belongs to another process'}
+    $button=if($NativeBounds.IsEmpty){$Control.Current.BoundingRectangle}else{$NativeBounds};$label=$caption[0].Current.BoundingRectangle
     Assert-ControlCaptionInk $Image @(($button.X-$origin.x),($button.Y-$origin.y),$button.Width,$button.Height) @(($label.X-$origin.x),($label.Y-$origin.y),$label.Width,$label.Height) $Foreground $Output ([CapyRowPointer]::GetDpiForWindow($Window)/96.)
 }
 [CapyNumberCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null

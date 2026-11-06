@@ -1876,3 +1876,105 @@ namespace CapyInertiaFixtureTest {
  }
  'Actual edge history: successive Undo and Redo await exact results once each; unrelated revisions and absent or wrong targets cannot acknowledge them.'
 }
+
+& {
+ Add-Type -AssemblyName WindowsBase,System.Drawing,UIAutomationClient,UIAutomationTypes
+ Add-Type -TypeDefinition @'
+using System;
+public static class CapyCaptionOriginTest {
+ public struct Point {public int x,y;}
+ public struct Rect {public int left,top,right,bottom;}
+ public static uint Dpi=144,Owner=7;public static int Inset;public static bool MissingBridge;
+ public static uint GetDpiForWindow(IntPtr window){return Dpi;}
+ public static uint GetWindowThreadProcessId(IntPtr window,ref uint owner){owner=Owner;return 1;}
+ public static bool ClientToScreen(IntPtr window,ref Point point){point.x=51;point.y=85;return true;}
+ public static Rect ContentRect(IntPtr window){if(MissingBridge)throw new Exception("The drawing window has no unique native XAML content bounds.");return new Rect{left=51,top=85+Inset,right=1600,bottom=1200};}
+}
+'@
+ $scripts=Join-Path $PSScriptRoot '../scripts'
+ foreach($file in 'CapyUia.ps1','capture-number-controls.ps1'){
+  $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts $file),[ref]$tokens,[ref]$errors)
+  if($errors.Count){throw($errors|Out-String)}
+  foreach($name in $(if($file -eq 'CapyUia.ps1'){@('Native-Bounds','Capture','Read-Snapshot')}else{@('Measure-RenderedInk','Assert-ControlCaptionInk','Save-ControlCaptionInk')})){
+   $definition=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name},$true)
+   if(!$definition){throw "Missing actual caption helper: $name"}
+   . ([scriptblock]::Create($definition.Extent.Text.Replace('[CapyRowPointer+Point]','[CapyCaptionOriginTest+Point]').Replace('[CapyRowPointer]','[CapyCaptionOriginTest]').Replace('[CapyWindowApi]','[CapyCaptionOriginTest]').Replace("'CapyRowPointer' -as [type]","'CapyCaptionOriginTest' -as [type]")))
+  }
+ }
+ function Wait-Until([scriptblock]$Condition,[string]$Message){if(!(& $Condition)){throw $Message}}
+ function Workspace-Root {$workspace}
+ function Expect-CaptionFailure([scriptblock]$Action,[string]$Message){$caught=$null;try{& $Action|Out-Null}catch{$caught=$_.Exception.Message};if(!$caught -or !$caught.Contains($Message)){throw "Caption negative did not reach '$Message': $caught"}}
+ $review=[pscustomobject]@{Id=7};$root=[pscustomobject]@{Current=[pscustomobject]@{NativeWindowHandle=19;ProcessId=7}}
+ $workspace=[pscustomobject]@{Current=[pscustomobject]@{ProcessId=7;ItemStatus=''}}
+ $label=[pscustomobject]@{Current=[pscustomobject]@{Name='Scale';IsOffscreen=$false;BoundingRectangle=[Windows.Rect]::new(81,865,53,30)}}
+ $control=[pscustomobject]@{Current=[pscustomobject]@{Name='Scale';AutomationId='canvas-bar-scale';ProcessId=7;BoundingRectangle=[Windows.Rect]::Empty}}
+ $control|Add-Member ScriptMethod FindAll {param($Scope,$Condition) @($label)}
+ $folder=Join-Path ([IO.Path]::GetTempPath()) ('capy-caption-origin-'+[guid]::NewGuid().ToString('N'));$null=New-Item -ItemType Directory -Path $folder
+ $nativeParameters=(Get-Command Native-Bounds).Parameters;$saveParameters=(Get-Command Save-ControlCaptionInk).Parameters
+ try{
+  foreach($scale in 1,1.5,2){foreach($inset in 0,1){foreach($sample in 0,1){
+   [CapyCaptionOriginTest]::Dpi=[uint32](96*$scale);[CapyCaptionOriginTest]::Inset=$inset
+   $physicalTop=@(792.1139831542969,777.6513977050781)[$sample];$inkTop=@(803,789)[$sample]
+   $bounds=[ordered]@{x=20/$scale;y=($physicalTop-$inset)/$scale;width=110/$scale;height=39/$scale}
+   $presentation=[pscustomobject]@{revision=21;model_revision=18;elements=@([pscustomobject]@{id='canvas-bar-scale';coordinate_space='window_content';actual_bounds=[pscustomobject]$bounds})}
+   $snapshot=[pscustomobject]@{process_id=7;window_handle=19;dpi=96*$scale;presentation=$presentation}
+   $workspace.Current.ItemStatus=$presentation|ConvertTo-Json -Depth 8 -Compress;$snapshot.presentation=$workspace.Current.ItemStatus|ConvertFrom-Json
+   $control.Current.BoundingRectangle=[Windows.Rect]::new(71,85+[Math]::Floor($physicalTop),110,39)
+   $label.Current.BoundingRectangle=[Windows.Rect]::new(81,85+[Math]::Floor($physicalTop)+3,53,30)
+   $image=Join-Path $folder 'source.png';$bitmap=[Drawing.Bitmap]::new(180,860)
+   try{$g=[Drawing.Graphics]::FromImage($bitmap);try{$g.Clear([Drawing.Color]::Black);$g.FillRectangle([Drawing.Brushes]::White,31,$inkTop,20,17)}finally{$g.Dispose()};$bitmap.Save($image,[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
+   $nativeCall=@{Id='canvas-bar-scale';Scale=$scale};if($nativeParameters.ContainsKey('Snapshot')){$nativeCall.Snapshot=$snapshot}
+   $native=Native-Bounds @nativeCall
+   $save=@{Control=$control;Window=[IntPtr]19;Image=$image;Foreground='#ffffff';Output=(Join-Path $folder 'caption')};if($saveParameters.ContainsKey('NativeBounds')){$save.NativeBounds=$native}
+   $record=Save-ControlCaptionInk @save
+   if($nativeParameters.ContainsKey('Snapshot')){
+    if([Math]::Abs($record.control_bounds[1]-$physicalTop) -gt 1e-9){throw 'Caption native origin lost physical fractional geometry'}
+    foreach($delta in -1,1){
+     $bitmap=[Drawing.Bitmap]::new(180,860);try{$g=[Drawing.Graphics]::FromImage($bitmap);try{$g.Clear([Drawing.Color]::Black);$g.FillRectangle([Drawing.Brushes]::White,31,($inkTop+$delta),20,17)}finally{$g.Dispose()};$bitmap.Save($image,[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
+     Expect-CaptionFailure {Save-ControlCaptionInk @save} 'Control caption ink gaps exceed the nearest raster center by'
+    }
+   }
+  }}}
+  if(!$nativeParameters.ContainsKey('Snapshot')){throw 'Legacy caption unexpectedly passed both measured fractional cases'}
+  $oldScripts=$script:CapyScripts;$oldDelay=$script:CapyCaptureDelay;$oldStatus=$workspace.Current.ItemStatus
+  try{
+   $script:CapyScripts=$folder;$script:CapyCaptureDelay=0;$run=$folder
+   [IO.File]::WriteAllText((Join-Path $folder 'inspect-window.ps1'),"param(`$TraceDirectory,`$ProcessId,`$WindowHandle,`$Output,[switch]`$ClientOnly,[switch]`$Composed,[switch]`$CaptureOnly)`n'capture-provider'")
+   $workspace.Current.ItemStatus='{"revision":21,"model_revision":18,"elements":[{"id":"canvas-bar-scale","coordinate_space":"window_content","actual_bounds":{"x":20.123456789012345,"y":518.43426513671875,"width":110,"height":26}}]}'
+   $live=$workspace.Current.ItemStatus|ConvertFrom-Json
+   Capture 'precision'
+   $precision=Read-Snapshot (Join-Path $run 'precision-layout.json')
+   if($precision.presentation.elements[0].actual_bounds.y -ne $live.elements[0].actual_bounds.y -or $precision.presentation.elements[0].actual_bounds.x -ne $live.elements[0].actual_bounds.x){throw 'Actual Capture and Read-Snapshot lost native floating geometry precision'}
+   if($precision.process_id -ne 7 -or $precision.window_handle -ne 19 -or $precision.dpi -ne [CapyCaptionOriginTest]::Dpi){throw 'Actual Capture lost native snapshot identity'}
+   $precisionBounds=Native-Bounds 'canvas-bar-scale' ([CapyCaptionOriginTest]::Dpi/96.) -Snapshot $precision
+   $expectedY=[double](85+[CapyCaptionOriginTest]::Inset+$live.elements[0].actual_bounds.y*([CapyCaptionOriginTest]::Dpi/96.))
+   if($precisionBounds.Y -ne $expectedY){throw 'Actual captured native bounds lost content origin or precision'}
+  }finally{$script:CapyScripts=$oldScripts;$script:CapyCaptureDelay=$oldDelay;$workspace.Current.ItemStatus=$oldStatus}
+  foreach($case in @(@{scale=1;top=98.75;ink=103},@{scale=1.5;top=147.625;ink=159},@{scale=2;top=196.5;ink=214})){
+   $scale=$case.scale;[CapyCaptionOriginTest]::Dpi=[uint32](96*$scale);[CapyCaptionOriginTest]::Inset=1
+   $local=[pscustomobject]@{x=16.75;y=100.25;width=110;height=26};$ancestor=[pscustomobject]@{x=3.25;y=-2.5}
+   $arranged=[pscustomobject]@{x=$local.x+$ancestor.x;y=$local.y+$ancestor.y;width=$local.width;height=$local.height}
+   $presentation=[pscustomobject]@{revision=21;model_revision=18;elements=@([pscustomobject]@{id='canvas-bar-scale';coordinate_space='window_content';actual_bounds=$arranged})}
+   $snapshot=[pscustomobject]@{process_id=7;window_handle=19;dpi=96*$scale;presentation=$presentation};$workspace.Current.ItemStatus=$presentation|ConvertTo-Json -Depth 8 -Compress;$snapshot.presentation=$workspace.Current.ItemStatus|ConvertFrom-Json
+   $control.Current.BoundingRectangle=[Windows.Rect]::new(51+20*$scale,85+[Math]::Floor($case.top),110*$scale,26*$scale)
+   $label.Current.BoundingRectangle=[Windows.Rect]::new(51+30*$scale,85+$case.top,53*$scale,26*$scale)
+   $bitmap=[Drawing.Bitmap]::new(300,860);try{$g=[Drawing.Graphics]::FromImage($bitmap);try{$g.Clear([Drawing.Color]::Black);$g.FillRectangle([Drawing.Brushes]::White,[int](31*$scale),$case.ink,20,17)}finally{$g.Dispose()};$bitmap.Save($image,[Drawing.Imaging.ImageFormat]::Png)}finally{$bitmap.Dispose()}
+   $nativeCall=@{Id='canvas-bar-scale';Scale=$scale;Snapshot=$snapshot};$native=Native-Bounds @nativeCall
+   $save=@{Control=$control;Window=[IntPtr]19;Image=$image;Foreground='#ffffff';Output=(Join-Path $folder 'translated-caption');NativeBounds=$native}
+   $record=Save-ControlCaptionInk @save
+   if([Math]::Abs($record.control_bounds[0]-20*$scale) -gt 1e-9 -or [Math]::Abs($record.control_bounds[1]-$case.top) -gt 1e-9){throw 'Caption ancestor translation was lost or applied twice'}
+  }
+  $nativeCall.Snapshot=$snapshot
+  $snapshot.presentation.revision--;Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption bounds are stale';$snapshot.presentation.revision++
+  $snapshot.process_id=8;Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption snapshot belongs';$snapshot.process_id=7
+  $snapshot.window_handle=20;Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption snapshot belongs';$snapshot.window_handle=19
+  $snapshot.dpi=96;Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption snapshot belongs';$snapshot.dpi=192
+  $nativeCall.Scale=1;Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption snapshot belongs';$nativeCall.Scale=2
+  $savedElements=$snapshot.presentation.elements;$snapshot.presentation.elements=@();Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption arranged bounds are missing';$snapshot.presentation.elements=$savedElements
+  [CapyCaptionOriginTest]::Owner=8;Expect-CaptionFailure {Native-Bounds @nativeCall} 'Native caption bounds belong';[CapyCaptionOriginTest]::Owner=7
+  [CapyCaptionOriginTest]::MissingBridge=$true;Expect-CaptionFailure {Native-Bounds @nativeCall} 'unique native XAML content bounds';[CapyCaptionOriginTest]::MissingBridge=$false
+  $control.Current.ProcessId=8;Expect-CaptionFailure {Save-ControlCaptionInk @save} 'Native caption control belongs';$control.Current.ProcessId=7
+  $save.Remove('NativeBounds');Expect-CaptionFailure {Save-ControlCaptionInk @save} 'Canvas caption requires native arranged bounds'
+  'Actual Caption helpers: floating reference, 100/150/200% content origins, displaced ink and identity negatives passed.'
+ }finally{Remove-Item -LiteralPath $folder -Recurse -Force}
+}

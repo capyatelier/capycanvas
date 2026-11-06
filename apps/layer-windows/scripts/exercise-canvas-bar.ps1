@@ -208,7 +208,9 @@ function Capture-CanvasParity([string]$Context){
   Capture ("$Context-$Theme-glass-$captureGlass") -WithModel -Composed
   if($Context -eq 'transform-segments'){
    $caption=Control 'canvas-bar-choice-transform-mode-0' -Arranged
-   $null=Save-ControlCaptionInk $caption $drawingWindow (Join-Path $run "$Context-$Theme-glass-$captureGlass.png") (Model).state.palette.text (Join-Path $run "scale-caption-$Theme-glass-$captureGlass")
+   $snapshot=Read-Snapshot (Join-Path $run "$Context-$Theme-glass-$captureGlass-layout.json")
+   $native=Native-Bounds 'canvas-bar-choice-transform-mode-0' $scale -Snapshot $snapshot
+   $null=Save-ControlCaptionInk $caption $drawingWindow (Join-Path $run "$Context-$Theme-glass-$captureGlass.png") (Model).state.palette.text (Join-Path $run "scale-caption-$Theme-glass-$captureGlass") -NativeBounds $native
   }
  }
  Set-CapyTransparency $captureTransparency

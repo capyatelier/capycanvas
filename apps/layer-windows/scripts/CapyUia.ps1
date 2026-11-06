@@ -683,8 +683,8 @@ function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){
     & (Join-Path $script:CapyScripts 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Output (Join-Path $run ($Name+'.png')) -ClientOnly -Composed:$Composed -CaptureOnly:($Name -ne 'failure') *> (Join-Path $run ($Name+'.json'))
     $workspace=Workspace-Root
     if($workspace -and ('CapyRowPointer' -as [type])){
-        $layout=@{presentation=($workspace.Current.ItemStatus|ConvertFrom-Json);dpi=[CapyRowPointer]::GetDpiForWindow($handle)}
-        [IO.File]::WriteAllText((Join-Path $run ($Name+'-layout.json')),($layout|ConvertTo-Json -Depth 15))
+        $layout='{"presentation":'+$workspace.Current.ItemStatus+',"dpi":'+[CapyRowPointer]::GetDpiForWindow($handle)+',"process_id":'+$owner+',"window_handle":'+$handle.ToInt64()+'}'
+        [IO.File]::WriteAllText((Join-Path $run ($Name+'-layout.json')),$layout)
     }
     if($WithModel){
         $model=Model
@@ -1046,7 +1046,28 @@ function Compact-Choice([string]$Id,[double]$Scale,[double]$Height=26){
     }
     $record
 }
-function Native-Bounds([string]$Id,[double]$Scale,[switch]$Group){
+function Native-Bounds([string]$Id,[double]$Scale,[switch]$Group,$Snapshot=$null){
+    if($Id.StartsWith('canvas-bar-')){
+        if($Group -or !$Snapshot){throw 'Canvas caption bounds require the captured element presentation'}
+        $workspace=Workspace-Root
+        $owner=[uint32]0;$handle=[IntPtr]$root.Current.NativeWindowHandle
+        [CapyWindowApi]::GetWindowThreadProcessId($handle,[ref]$owner)|Out-Null
+        if(!$workspace -or $owner -ne $review.Id -or $root.Current.ProcessId -ne $review.Id -or $workspace.Current.ProcessId -ne $review.Id){throw 'Native caption bounds belong to another window or process'}
+        if($Snapshot.process_id -ne $review.Id -or $Snapshot.window_handle -ne $handle.ToInt64() -or $Snapshot.dpi -ne [CapyRowPointer]::GetDpiForWindow($handle) -or $Scale -ne $Snapshot.dpi/96.){throw 'Native caption snapshot belongs to another window or scale'}
+        $presentation=$Snapshot.presentation
+        $current=$workspace.Current.ItemStatus|ConvertFrom-Json
+        if($null -eq $presentation.revision -or $null -eq $presentation.model_revision -or $presentation.revision -ne $current.revision -or $presentation.model_revision -ne $current.model_revision){throw 'Native caption bounds are stale'}
+        $records=@($presentation.elements|Where-Object id -CEQ $Id);$latest=@($current.elements|Where-Object id -CEQ $Id)
+        if($records.Count -ne 1 -or $latest.Count -ne 1 -or $records[0].coordinate_space -cne 'window_content' -or $latest[0].coordinate_space -cne 'window_content'){throw 'Native caption arranged bounds are missing or ambiguous'}
+        $bounds=$records[0].actual_bounds
+        foreach($field in @('x','y','width','height')){
+            $value=$bounds.$field
+            if($null -eq $value -or [double]::IsNaN([double]$value) -or [double]::IsInfinity([double]$value) -or $value -ne $latest[0].actual_bounds.$field){throw 'Native caption arranged bounds are stale or invalid'}
+        }
+        if($bounds.width -le 0 -or $bounds.height -le 0){throw 'Native caption arranged bounds are empty'}
+        $origin=[CapyWindowApi]::ContentRect($handle)
+        return [Windows.Rect]::new($origin.left+$bounds.x*$Scale,$origin.top+$bounds.y*$Scale,$bounds.width*$Scale,$bounds.height*$Scale)
+    }
     $hit=@{record=$null}
     Wait-Until {
         $workspace=Workspace-Root

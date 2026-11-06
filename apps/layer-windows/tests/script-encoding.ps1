@@ -18,6 +18,9 @@ $run=Join-Path $repo ('artifacts/windows/script-encoding/'+[Guid]::NewGuid().ToS
 $records=@([pscustomobject]@{tag='ja';title=([string][char]0x65e5+[char]0x672c+[char]0x8a9e);hint=([char]::ConvertFromUtf32(0x1f3a8)+[char]0x2026)})
 $Name='captions';$layout=$records[0];$model=$records[0];$result=$records[0]|ConvertTo-Json -Depth 8
 $OutputDirectory=$run;$layoutEvidence=$records[0];$elements=$records[0];$manifest=$records[0]
+Add-Type -TypeDefinition 'public static class CapyEncodingCaptureNative {public static uint GetDpiForWindow(System.IntPtr window){return 144;}}'
+$workspace=[pscustomobject]@{Current=[pscustomobject]@{ItemStatus=($records[0]|ConvertTo-Json -Depth 8 -Compress)}}
+$owner=7;$handle=[IntPtr]19
 $sources=@(
     @{file='exercise-localization.ps1';needles=@('configuration-captions.json',"'-layout.json'","'-model.json'","Join-Path `$run 'results.json'");outputs=@('configuration-captions.json','captions-layout.json','captions-model.json','results.json')},
     @{file='CapyUia.ps1';needles=@("'-layout.json'","'-model.json'");outputs=@('captions-layout.json','captions-model.json')},
@@ -29,15 +32,26 @@ $writers=@(foreach($source in $sources){
         $needle=$source.needles[$i]
         $writer=$ast.Find({param($node)$node -is [Management.Automation.Language.PipelineAst] -and $node.Extent.Text.Contains($needle)}.GetNewClosure(),$true)
         if(!$writer){throw "Missing evidence writer in $($source.file): $needle"}
-        @{node=$writer;file=$source.outputs[$i]}
+        $producer=$null
+        if($source.file -ceq 'CapyUia.ps1' -and $source.outputs[$i] -ceq 'captions-layout.json'){
+            $capture=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Capture'},$true)
+            $producer=$capture.Body.Find({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$layout'},$true)
+            if(!$producer){throw 'Missing actual Capture layout producer'}
+        }
+        @{node=$writer;file=$source.outputs[$i];producer=$producer}
     }
 })
 try{
     foreach($case in $writers){
+        if($case.producer){. ([scriptblock]::Create($case.producer.Extent.Text.Replace('[CapyRowPointer]','[CapyEncodingCaptureNative]')))}
         & ([scriptblock]::Create($case.node.Extent.Text))
         $bytes=[IO.File]::ReadAllBytes((Join-Path $run $case.file))
         if($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191){throw "Evidence JSON must omit the UTF-8 BOM: $($case.file)"}
         $actual=[Text.UTF8Encoding]::new($false,$true).GetString($bytes)|ConvertFrom-Json
+        if($case.producer){
+            if($actual.process_id -ne 7 -or $actual.window_handle -ne 19 -or $actual.dpi -ne 144){throw 'Capture evidence lost native identity metadata'}
+            $actual=$actual.presentation
+        }
         if($actual.title -cne $records[0].title -or $actual.hint -cne $records[0].hint){throw "Localization evidence lost Unicode text: $($case.file)"}
     }
 }finally{foreach($case in $writers){[IO.File]::Delete((Join-Path $run $case.file))};[IO.Directory]::Delete($run)}
