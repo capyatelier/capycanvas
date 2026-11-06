@@ -579,8 +579,9 @@ mod tests {
         let first_inline=receive.recv().unwrap();let third=if first_inline==64 {128}else{64};
         let (running,queued)=loop {
             let state=cache.0.state.lock().unwrap();
-            if state.entries.len()==3 && state.running>=ACTIVE_READS {
-                break (state.running,matches!(state.entries[&Key(source.0.id,third,64)].phase,Phase::Queued));
+            let phase=state.entries.get(&Key(source.0.id,third,64)).map(|entry|&entry.phase);
+            if state.entries.len()==3 && state.running>=ACTIVE_READS && phase.is_some_and(|phase|!matches!(phase,Phase::Cold)) {
+                break (state.running,matches!(phase,Some(Phase::Queued)));
             }
             drop(state);std::thread::yield_now();
         };
