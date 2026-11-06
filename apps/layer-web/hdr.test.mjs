@@ -9,9 +9,9 @@ import {mkdir,writeFile} from 'node:fs/promises';
 
 export async function assertSdrDialLayout(evaluate) {
   await checkProofPattern({evaluate});
-  const facts=await evaluate(`(()=>{const dial=document.querySelector('.proof-tone-pad'),page=dial.parentElement,r=dial.getBoundingClientRect(),drawer=dial.closest('.content-drawer')?.getBoundingClientRect();return{available:page.clientWidth,bounds:[r.x,r.y,r.width,r.height],drawer:drawer?[drawer.x,drawer.y,drawer.width,drawer.height]:null};})()`);
+  const facts=await evaluate(`(()=>{const dial=document.querySelector('.proof-tone-pad'),page=dial.parentElement,r=dial.getBoundingClientRect(),drawer=dial.closest('.content-drawer')?.getBoundingClientRect();return{available:[page.clientWidth,page.clientHeight],bounds:[r.x,r.y,r.width,r.height],drawer:drawer?[drawer.x,drawer.y,drawer.width,drawer.height]:null};})()`);
   const [x,y,width,height]=facts.bounds;
-  assert.ok(Math.abs(width-Math.max(128,Math.floor(facts.available)))<=1,`SDR dial keeps its natural square size: ${JSON.stringify(facts)}`);
+  assert.ok(Math.abs(width-Math.max(1,Math.floor(Math.min(...facts.available))))<=1,`SDR dial fits its allocated axes: ${JSON.stringify(facts)}`);
   assert.ok(Math.abs(width-height)<=1,`SDR dial stays square: ${JSON.stringify(facts)}`);
   if(facts.drawer){const [left,top,w,h]=facts.drawer;assert.ok(x>=left-1&&y>=top-1&&x+width<=left+w+1&&y+height<=top+h+1,`SDR dial stays inside the drawer: ${JSON.stringify(facts)}`);}
   return facts;

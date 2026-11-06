@@ -294,6 +294,7 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
               const minimum=r.measure.minimums[index][i],style=getComputedStyle(child);
               const height=Math.max(0,minimum-parseFloat(style.marginTop)-parseFloat(style.marginBottom));
               child.style.minHeight=`${height}px`;child.style.height=minimum?`${height}px`:r.measure.content_sized[index][i]?'max-content':'';
+              child.style.maxHeight=r.measure.content_sized[index][i]?`${Math.max(0,r.measure.measure.available.height-parseFloat(style.marginTop)-parseFloat(style.marginBottom))}px`:'';
             }
             child.arrangePanel?.();
           }
