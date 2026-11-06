@@ -283,3 +283,65 @@ fn cold_object_thumbnails_and_retouch_reads_retry_until_exact_pixels_are_ready()
     }
     crate::startup::finish_shader_compiler_shutdown();
 }
+
+fn exact_preview_after_mask_upload(execution: BrushExecution) {
+    use crate::layer_tests::{dab, placement, preset_style};
+    let extent = [256; 2];
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut doc = placement::paint_document(extent, "exact preview after mask upload");
+    placement::set_source(&mut doc, layer_core::color::source::rgba8_source(extent,
+        |x, y| [(x % 256) as u8, (y % 256) as u8, 80, 255]));
+    r.submit(FramePacket { reset_layers: true, ..packet(doc.scene(), extent) }).unwrap();
+    let view = layer_render::ViewState { width_px: 32, height_px: 32,
+        document_to_surface: [0.125, 0., 0., 0.125, 0., 0.] };
+    r.submit(FramePacket { view, ..packet(doc.scene(), extent) }).unwrap();
+    let style = if execution == BrushExecution::Liquify {
+        let mut style = preset_style(layer_core::DefaultBrushPreset::LiquifyPush);
+        style.liquify = Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc), false)));
+        style
+    } else { crate::tests::test_style(execution) };
+    placement::paint_mut(&mut doc).raster = RasterRevision::pending();
+    let mut real = dab([0.8, 0.2, 0.1, 1.]);
+    real.center = Point { x: 128., y: 128. };
+    real.radii = [60.; 2];
+    real.material[3] = 1.;
+    real.motion = [20., 0.];
+    let mut predicted = real;
+    predicted.center.x += 8.;
+    let mut persistent = crate::test_support::dab_batch(placement::target(&doc), style, real.bounds());
+    persistent.stroke_id = StrokeId(320);
+    persistent.stroke_end = false;
+    let mut preview = persistent.clone();
+    preview.kind = DabBatchKind::Preview;
+    preview.first_dab = 1;
+    preview.damage = predicted.bounds();
+    r.submit(FramePacket { view, dabs: &[real, predicted], dab_batches: &[persistent, preview],
+        ..packet(doc.scene(), extent) }).unwrap();
+    assert_eq!(r.preview_level, 2);
+    assert_eq!(r.artwork_frame.as_ref().unwrap().previews.len(), 1);
+    assert!(!r.texture_sets.is_empty());
+    r.prepare_asset(&AssetId(Arc::from("exact-preview-new-mask")), HostImage {
+        width: 1, height: 1, stride: 1, format: PixelFormat::R8Unorm, bytes: &[255],
+    }).unwrap();
+    assert!(r.texture_sets.is_empty());
+    let (destination, _) = create_color_target(&r.device, extent, "exact preview capture");
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    Capture::default().region_into(&mut r, packet(doc.scene(), extent), PixelRect::full(extent),
+        &destination, &mut encoder).unwrap();
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    r.wait_idle().unwrap();
+    assert_eq!(r.preview_level, 0);
+    assert!(!r.texture_sets.is_empty());
+    assert!(crate::layer_tests::page_bytes(&r, &destination).iter().any(|&byte| byte != 0));
+}
+
+#[test]
+fn liquify_exact_preview_reprepares_resources_after_mask_upload() {
+    exact_preview_after_mask_upload(BrushExecution::Liquify);
+}
+
+#[test]
+fn dry_exact_preview_reprepares_resources_after_mask_upload() {
+    exact_preview_after_mask_upload(BrushExecution::Dry);
+}

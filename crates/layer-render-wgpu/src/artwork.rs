@@ -298,6 +298,7 @@ impl WgpuRasterizer {
         if self.preview_level == 0 { return Ok(()); }
         let frame = self.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         let packet = frame.packet(self.document_extent);
+        self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let mut tiles = packet.dab_batches.iter().map(|batch| {
             let dabs = &packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
             brush_tiles::plan(batch, dabs, self.target_extent(batch.target))
