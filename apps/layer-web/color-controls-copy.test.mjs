@@ -105,7 +105,6 @@ test('Edit Color projects Swatches, Back and Escape from the shared route withou
   h.apply().click();assert.deepEqual(await h.result,{color:{space:'Srgb',rgba:[.25,.5,.75,1]},intensity:null});
 });
 
-test('effect publication retains page options, color controls and semantic actions while refreshing captions',t=>{
 test('Color formats escape the clipped form in a retained top-layer popover',async t=>{
   const h=dialogHarness(t,false),format=h.nodes().find(node=>node.dataset.colorFormat===0),menu=h.nodes().find(node=>node.className?.includes('color-format-menu'));
   format.click();assert.equal(menu.popoverOpen,true);assert.equal(menu.popover,'auto');assert.equal(menu.getAttribute('role'),'menu');
@@ -116,6 +115,7 @@ test('Color formats escape the clipped form in a retained top-layer popover',asy
   h.apply().click();await h.result;
 });
 
+test('effect publication retains page options, color controls and semantic actions while refreshing captions',t=>{
   const previous={document:globalThis.document,setInterval:globalThis.setInterval,clearInterval:globalThis.clearInterval,requestAnimationFrame:globalThis.requestAnimationFrame,cancelAnimationFrame:globalThis.cancelAnimationFrame,ResizeObserver:globalThis.ResizeObserver,MutationObserver:globalThis.MutationObserver,devicePixelRatio:globalThis.devicePixelRatio};
   const doc={hidden:true,createElement:tag=>new Element(tag,doc),createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)}),createElementNS:(_,tag)=>new Element(tag,doc),addEventListener(){},removeEventListener(){}};doc.body=new Element('body',doc);let effects;Object.assign(globalThis,{document:doc,setInterval:()=>0,clearInterval(){},requestAnimationFrame:()=>0,cancelAnimationFrame(){},ResizeObserver:class {observe(){}disconnect(){}},MutationObserver:class {observe(){}disconnect(){}},devicePixelRatio:1});t.after(()=>{try{effects?.dispose();}finally{Object.assign(globalThis,previous);}});
   let language='en',previews=0;const actions=[],color={space:'Srgb',rgba:[.2,.4,.6,1]},bucketAction={type:'effect',action:{op:'use_color',layer:7,key:'filter_color'}},state={document_file:{epoch:2},filter_catalog_revision:0,localization:{generation:0},filter_categories:[],filter_picker:{search:null,category:null,selected:null,search_label:'Search',empty_label:'Empty'},adjustments:[],layer_properties:{actions:[],histogram:false,layer:7,enabled:true,title:'Properties',description:'Effect',pages:[{id:'rgb',label:'en:RGB'},{id:'reds',label:'en:Reds'}],page:'reds',controls:[{key:'filter_color',label:'en:Color',section_id:null,kind:{kind:'color'},value:{value:color},color_action:bucketAction},{key:'mode',label:'en:Mode',section_id:null,kind:{kind:'choice',options:['en:First','en:Second']},value:{value:1}}]}};
