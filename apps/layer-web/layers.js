@@ -1,4 +1,5 @@
 import {liveCopy,bindCopy} from './localization.js';
+import {createContextPopover} from './context-popover.js';
 import { chooseColor } from "./color-editor.js";
 import { chooseTexture, paperThumbnail } from "./paper-picker.js";
 import { addScrollbar } from "./scrollbars.js";
@@ -117,12 +118,11 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   };
   const footerResize = new ResizeObserver(fitFooter); footerResize.observe(footer);
   panel.append(header, list, footer);
-  const opacityPopup=element('div','panel layer-opacity-popup');opacityPopup.popover='auto';
-  opacityPopup.style.cssText='position:fixed;inset:auto;margin:0;width:220px;padding:12px;';
+  const opacityPopover=createContextPopover({element,classes:'layer-opacity-popup',popover:'auto',role:'group'}),opacityPopup=opacityPopover.root;
   const opacityEditor=numberField(catalog.layer_opacity,()=>copy.opacity,value=>{
     const id=state().layer_tools.opacity_popup;if(id!=null)dispatch({type:'set_layer_opacity',id,opacity:value});
   });
-  opacityEditor.id='layer-gesture-opacity';opacityPopup.append(opacityEditor);panel.append(opacityPopup);
+  opacityEditor.id='layer-gesture-opacity';opacityPopover.body.append(opacityEditor);panel.append(opacityPopup);
   opacityPopup.addEventListener('toggle',event=>{
     if(event.newState==='closed'&&state().layer_tools.opacity_popup!=null&&Number(state().layer_tools.opacity_surface)===touchInput.surface)send({op:'close_opacity'});
   });
@@ -405,10 +405,8 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     if(view.opacity_popup!=null&&Number(view.opacity_surface)===touchInput.surface&&current){
       opacityEditor.update(current.opacity);opacityEditor.setDisabled(!controls.opacity);
       if(!opacityPopup.matches(':popover-open')){
-        const rect=records.get(String(view.opacity_popup))?.row.getBoundingClientRect()??list.getBoundingClientRect();
-        opacityPopup.style.left=`${Math.max(8,Math.min(rect.x,innerWidth-236))}px`;
-        opacityPopup.style.top=`${Math.max(8,Math.min(rect.bottom,innerHeight-110))}px`;
         opacityPopup.showPopover();
+        opacityPopover.place(panel.getBoundingClientRect(),{has_arrow:true});
       }
     }else if(opacityPopup.matches(':popover-open'))opacityPopup.hidePopover();
     if (current) opacity.update(current.opacity);

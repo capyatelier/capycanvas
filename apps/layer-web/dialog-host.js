@@ -26,10 +26,11 @@ function measureAlert(dialog,header,responses,buttons) {
 
 export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,primary:sourcePrimary,retainPrimary=false,endSlot,icon,copy,onCancel,onBack=onCancel,subpage=()=>false,search,clearSearch,cancelLabel=()=>copy.cancel,placement,onKey,onDismiss}) {
   let primary=typeof sourcePrimary==='function'?sourcePrimary():sourcePrimary;
-  let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,contentChanges;
+  let intent,previousFocus,expectedCloses=0,outsideDown=false,resizeFrame=0,observedHeader,done,back,close,contentChanges,headerSlot;
   const slots=new Map([cancel,primary].filter(Boolean).map(node=>[node,{parent:node.parentNode,next:node.nextSibling}]));
   const footer=primary?.closest('footer');
   dialog.dataset.dialogPart='page';
+  function restoreHeader(){if(headerSlot){const {node,parent,next}=headerSlot;parent.insertBefore(node,next?.parentNode===parent?next:null);headerSlot=null;}}
   function escape() {
     if(!intent)return;
     if(onDismiss){onDismiss();return;}
@@ -49,6 +50,7 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     primary=typeof sourcePrimary==='function'?sourcePrimary():sourcePrimary;
     if(primary&&!slots.has(primary)){slots.set(primary,{parent:primary.parentNode,next:primary.nextSibling});resize.observe(primary);}
     const row=typeof header==='function'?header():header;
+    const focus=document.activeElement;
     if(observedHeader!==row){
       if(observedHeader){observedHeader.classList.remove('page-header');observedHeader.style.minHeight='';observedHeader.style.gridTemplateColumns='';delete observedHeader.dataset.dialogPart;delete observedHeader.dataset.headerStyle;resize.unobserve(observedHeader);}
       observedHeader=row;resize.observe(row);
@@ -57,6 +59,9 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     const positioned=placement?.(visible),presentation=positioned?{kind:'floating'}:app.dialog_presentation(intent.role,innerWidth,innerHeight,visible),page=presentation.kind==='page'||presentation.kind==='canvas_panel';
     let bounds=positioned??presentation.bounds;
     const alert=!page&&intent.frame.kind==='alert';
+    if(headerSlot&&(!alert||headerSlot.node!==row))restoreHeader();
+    const message=alert?dialog.querySelector('.preference-content'):null;
+    if(message&&!message.contains(row)){headerSlot={node:row,parent:row.parentNode,next:row.nextSibling};message.prepend(row);}
     dialog.dataset.dialogFrame=alert?'alert':'editor';
     dialog.classList.toggle('short',alert&&app.alert_dialog_short(visible.height));
     if(!alert)(primary??cancel).parentElement?.classList.remove('alert-responses-stacked');
@@ -74,7 +79,6 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
       control.hidden=control!==start&&control!==end&&!(retainPrimary&&control===primary);delete control.dataset.dialogPart;
       control.classList.toggle('page-action-start',page&&control===start);control.classList.toggle('page-action-end',page&&control===end);control.style.height='';control.style.width='';control.style.right='';
     }
-    const focus=document.activeElement;
     for(const [control,slot]of slots){
       if(page&&(control===start||control===end)){if(control.parentNode!==row)row.append(control);}
       else if(!page&&control.parentNode!==slot.parent)slot.parent.insertBefore(control,slot.next?.parentNode===slot.parent?slot.next:null);
@@ -124,7 +128,7 @@ export function createDialogHost({app,dialog,header,headerStyle='raised',cancel,
     },
     layout,
     dismiss(){if(intent){if(onDismiss){onDismiss();return;}if(app.dialog_header(intent,subpage()).start==='back')onBack();else onCancel();}},
-    dispose(){presentedDialogs.delete(dialog);if(resizeFrame)cancelAnimationFrame(resizeFrame);resize.disconnect();contentChanges?.disconnect();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);dialog.removeEventListener('pointerdown',down);dialog.removeEventListener('pointercancel',cancelContact);done?.remove();back?.remove();close?.remove();},
+    dispose(){presentedDialogs.delete(dialog);if(resizeFrame)cancelAnimationFrame(resizeFrame);resize.disconnect();contentChanges?.disconnect();restoreHeader();window.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('resize',layout);window.visualViewport?.removeEventListener('scroll',layout);dialog.removeEventListener('cancel',cancelled);dialog.removeEventListener('keydown',key);dialog.removeEventListener('close',closed);dialog.removeEventListener('click',outside);dialog.removeEventListener('pointerdown',down);dialog.removeEventListener('pointercancel',cancelContact);done?.remove();back?.remove();close?.remove();},
   };
 }
 

@@ -95,7 +95,8 @@ test('Edit Color publishes the draft, its intensity and remembered formats only 
 });
 
 test('Edit Color projects Swatches, Back and Escape from the shared route without losing the draft',async t=>{
-  const h=dialogHarness(t,false),sheet=h.nodes().find(node=>node.className==='color-sheet'),search=h.nodes().find(node=>node.tagName==='INPUT'&&node.parentNode?.className==='color-sheet-head');
+  const h=dialogHarness(t,false),sheet=h.nodes().find(node=>node.className==='color-sheet'),search=h.nodes().find(node=>node.tagName==='INPUT'&&node.parentNode?.className==='preference-search');
+  assert.equal(search.parentNode.firstChild.tagName,'SVG','Swatches reuses the search field with its magnifier and focus skin');
   const more=h.nodes().find(node=>node.className==='color-swatches'),back=h.nodes().find(node=>node.className==='color-sheet-close');
   more.click();assert.deepEqual(h.stats.actions.at(-1),{op:'toggle_swatches'});assert.equal(sheet.hidden,false);assert.equal(sheet.classList.contains('open'),true);assert.equal(h.doc.activeElement,search);
   search.value='blue';search.dispatchEvent({type:'input'});assert.deepEqual(h.stats.actions.at(-1),{op:'search',text:'blue'});

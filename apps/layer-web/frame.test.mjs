@@ -688,26 +688,34 @@ test('dialog presentation retains controls and ignores a retired native close',a
 
 test('alert layout forwards intrinsic content and font measurements and applies the shared projection',async t=>{
   const {createDialogHost,createProgressDialog}=await import('./dialog-host.js');
+  const {createPageKit}=await import('./page-kit.js');
   const {doc,element,button,icon}=colorDialogDom(t),calls=[],changes=[],frames=[];
   globalThis.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
   globalThis.MutationObserver=class{constructor(callback){this.callback=callback;changes.push(this);}observe(node){this.node=node;}disconnect(){this.disconnected=true;}};
   const dialog=element('dialog'),header=element('header'),footer=element('footer'),cancel=element('button'),primary=element('button');
   const title=element('h2','','Confirm');title.getBoundingClientRect=()=>({width:150});header.append(title);
-  dialog.append(header,footer);footer.append(cancel,primary);doc.body.append(dialog);
+  const body=createPageKit({element,icon}).body(element('p','','Long message'));
+  const query=dialog.querySelector.bind(dialog);dialog.querySelector=selector=>selector==='.preference-content'?body.content:query(selector);
+  const prepend=body.content.prepend.bind(body.content);body.content.prepend=(...nodes)=>{if(nodes.some(node=>node.contains(doc.activeElement)))doc.activeElement=doc.body;prepend(...nodes);};
+  dialog.append(header,body.root,footer);footer.append(cancel,primary);doc.body.append(dialog);
   dialog.getBoundingClientRect=()=>({width:dialog.style.width==='min-content'?96:420});
   let widths=[70,118];cancel.getBoundingClientRect=()=>({width:widths[0]});primary.getBoundingClientRect=()=>({width:widths[1]});
-  let fontPixels=44/3,projection={width:300,short:false,stacked:true};
+  let fontPixels=44/3,projection={width:300,short:false,stacked:true},page=false;
   globalThis.getComputedStyle=node=>({boxSizing:'border-box',fontSize:`${fontPixels}px`,paddingLeft:node===dialog?'24px':'0px',paddingRight:node===dialog?'24px':'0px'});
-  const app={dialog_presentation:()=>({kind:'floating'}),dialog_header:intent=>({start:'cancel',end:intent.primary?'primary':null}),dialog_escape:()=> 'cancel',bootstrap_view:()=>({common:{cancel:'Cancel'}}),
+  const app={dialog_presentation:()=>page?{kind:'page',bounds:{x:0,y:0,width:320,height:320}}:{kind:'floating'},dialog_header:intent=>({start:'cancel',end:intent.primary?'primary':null}),dialog_escape:()=> 'cancel',bootstrap_view:()=>({common:{cancel:'Cancel'}}),
     alert_dialog_short:()=>projection.short,alert_dialog_layout:(viewport,metrics,font,preferWide)=>{calls.push({viewport,metrics,font,preferWide});return projection;}};
   const host=createDialogHost({app,dialog,header,cancel,primary,icon,copy:{cancel:'Cancel',back:'Back',done:'Done'},onCancel:()=>host.hide()});
   host.present({frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:'action'});
+  const contentChange=changes.find(observer=>observer.node===dialog);
+  assert.ok(header.parentNode===body.content,'The alert heading shares the existing message scroller');
+  assert.equal(footer.parentNode,dialog,'Responses remain outside the shrinking message area');
   assert.equal(header.dataset.headerStyle,undefined,'Alert headings keep their native bold label style');
   assert.deepEqual(calls.at(-1),{viewport:[1200,900],metrics:{minimum:96,natural:420,heading:198,responses:[70,118]},font:44/3,preferWide:false});assert.equal(dialog.style.width,'300px');assert.equal(footer.classList.contains('alert-responses-stacked'),true);
   projection={width:352,short:false,stacked:false};host.layout();assert.equal(dialog.style.width,'352px');assert.equal(footer.classList.contains('alert-responses-stacked'),false);
-  widths=[70,140];changes[0].callback();frames.shift()();assert.deepEqual(calls.at(-1).metrics.responses,[70,140]);assert.equal(changes[0].node,dialog,'heading and body copy changes also invalidate natural sizing');
+  widths=[70,140];contentChange.callback();frames.shift()();assert.deepEqual(calls.at(-1).metrics.responses,[70,140]);assert.equal(contentChange.node,dialog,'heading and body copy changes also invalidate natural sizing');
   fontPixels=64/3;projection={width:300,short:true,stacked:false};host.layout();assert.equal(calls.at(-1).font,64/3);assert.equal(dialog.classList.contains('short'),true);
-  host.hide();host.dispose();assert.equal(changes[0].disconnected,true);
+  page=true;host.layout();primary.focus();page=false;host.layout();assert.ok(doc.activeElement===primary,'A focused header action survives moving the heading into the alert message');
+  host.hide();host.dispose();body.dispose();assert.equal(contentChange.disconnected,true);assert.equal(header.parentNode,dialog);
   const progress=createProgressDialog({app,element,button,icon,intent:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null},title:'Preparing',body:'Working',onCancel:()=>{}});
   assert.deepEqual(calls.at(-1).metrics.responses,[0]);progress.remove();
   const copying=createProgressDialog({app,element,button,icon,intent:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null},title:'Copy Merged',onCancel:()=>{}});

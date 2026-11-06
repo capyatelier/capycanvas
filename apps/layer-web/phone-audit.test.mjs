@@ -247,13 +247,14 @@ test('New Drawing capture variants use the retained form controls and declare th
 test('Rename Drawing Preset uses actual naming input and the offered context menu',async()=>{
   const row=dialogAuditRows.find(row=>row.id==='rename-drawing-preset'),clicks=[],events=[];
   const state={new_drawing:{drawer:{kind:'presets',save:null,tiles:[{own:true,name:'Canvas study'}]},copy:{rename:'Rename'}}};
-  const node={select(){},scrollIntoView(){},getBoundingClientRect:()=>({x:0,y:0,width:100,height:30})};
+  const node={select(){},scrollIntoView(){},getBoundingClientRect:()=>({x:0,y:0,width:100,height:30,left:0,top:0,right:100,bottom:30}),closest:()=>({getBoundingClientRect:()=>({left:0,top:0,right:100,bottom:10})})};
   const browser={layerApp:{state:()=>state},document:{querySelector:()=>node,querySelectorAll:()=>[{firstChild:{textContent:'Rename'}}]}};
   await row.openaction({send:async action=>assert.deepEqual(action,{type:'invoke',command:'new_document'}),
     evaluate:async source=>JSON.parse(JSON.stringify(runInNewContext(source,browser))??'null'),settle:async()=>{},
     call:async(type,event)=>events.push([type,event]),click:async selector=>{clicks.push(selector);if(selector==='#new-drawing-save-as')state.new_drawing.drawer.save={name:'Canvas study'};if(selector==='#new-drawing-save-confirm')state.new_drawing.drawer.save=null;if(selector.includes('nth-child'))state.new_drawing.drawer.save={name:'Canvas study'};}});
   assert.deepEqual(clicks,['#new-drawing-presets-button','#new-drawing-save-as','#new-drawing-save-confirm','#new-drawing-dialog .new-drawing-menu:popover-open button:nth-child(1)']);
   assert.equal(events[0][0],'Input.insertText');assert.equal(events[0][1].text,'Canvas study');assert.deepEqual(events.slice(1).map(([,event])=>event.button),['right','right']);
+  assert.ok(events.slice(1).every(([,event])=>event.x===50&&event.y===5),'The context contact stays in the visible part of a clipped preset');
 });
 
 test('dialog allocations use only shared shell part attributes and require the header',()=>{

@@ -28,9 +28,9 @@ export function contextPopoverLayout({anchor,size,viewport,has_arrow}) {
     arrowTip,arrowBase:Math.max(corner,Math.min(arrowTip,width-corner))};
 }
 
-export function createContextPopover({element,classes='',popover='manual'}) {
+export function createContextPopover({element,classes='',popover='manual',role='menu'}) {
   const root=element('div',`panel-context-menu ${classes}`.trim()),body=element('div','context-menu-body');
-  root.popover=popover;root.tabIndex=-1;root.setAttribute('role','menu');root.append(body);
+  root.popover=popover;root.tabIndex=-1;root.setAttribute('role',role);root.append(body);
   let scroll;
   root.addEventListener('toggle',event=>{
     if(event.newState==='open')scroll??=addScrollbar(body,root);

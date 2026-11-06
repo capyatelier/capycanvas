@@ -287,7 +287,7 @@ export function chooseColor({app, color, slot, element, button, opaque = false})
     const sheet = element('div', 'color-sheet'), search = element('input'), sheetClose = button('', () => form.act({op:'back'}), 'color-sheet-close'), sheetBody = element('div', 'color-sheet-body');
     search.type = 'search'; search.autocomplete = 'off'; search.spellcheck = false; bindCopy(search, () => copy.swatch_search, 'placeholder'); bindCopy(search, () => copy.swatch_search, 'ariaLabel');
     sheetClose.append(icon('chevron-down')); bindCopy(sheetClose, () => copy.close_swatches, 'title'); bindCopy(sheetClose, () => copy.close_swatches, 'ariaLabel');
-    const sheetHead = element('div', 'color-sheet-head'); sheetHead.append(search, sheetClose); sheet.append(sheetHead, sheetBody); sheet.hidden = true;
+    const sheetHead = element('div', 'color-sheet-head'); sheetHead.append(kit.search(search), sheetClose); sheet.append(sheetHead, sheetBody); sheet.hidden = true;
     const recent = element('div', 'color-recent'), mini = element('div', 'color-mini'), miniPair = element('div', 'color-pair');
     miniPair.append(miniCurrent, miniNew); mini.append(miniPair, miniHex); mini.inert = true;
     const footerStack=element('div','color-footer-stack');footerStack.append(recent,mini);
