@@ -12,6 +12,8 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
@@ -59,8 +61,9 @@ class AndroidPhoneAuditTest {
 
     @Test fun admission() = visit(true)
     @Test fun frame() = visit(false)
+    @Test fun menu() = visit(false, "menu")
 
-    private fun visit(admissionOnly: Boolean) {
+    private fun visit(admissionOnly: Boolean, family: String = "frame") {
         val args = InstrumentationRegistry.getArguments()
         val case = requireNotNull(args.getString("case"))
         require(case.matches(Regex("[a-zA-Z0-9_.-]+")))
@@ -75,7 +78,7 @@ class AndroidPhoneAuditTest {
             File(directory, "$name.png").delete()
         }
         val started = SystemClock.elapsedRealtime()
-        val report = obj("schema_version" to 1, "host" to "android", "family" to "frame", "state" to "rest", "case" to case,
+        val report = obj("schema_version" to 1, "host" to "android", "family" to family, "state" to "rest", "case" to case,
             "fixture" to "builtin:workspace:painter", "theme" to expectedTheme, "text_size" to args.getString("textSize", "11").toDouble(), "requested_pixels" to JSONArray(size),
             "requested_density" to expectedDensity, "requested_font_scale" to expectedFont, "status" to "failed", "passed" to false)
         var captureName = if (admissionOnly) "admission" else "startup"
@@ -111,7 +114,7 @@ class AndroidPhoneAuditTest {
             assertTrue("Completed first canvas frame", frameReady)
             fun capture(name: String) {
                 captureName = name
-                report.put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
+                report.put("family",if (name == "hidden") "frame" else family).put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
                 host.drain()
                 compose.waitForIdle()
                 if (!admissionOnly) {
@@ -183,7 +186,7 @@ class AndroidPhoneAuditTest {
                     val root = checkNotNull(findTag("workspace"))
                     collect(root.second, allocations)
                     report.put("phone_active", host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null)
-                    report.put("revision", host.snapshot?.optLong("revision"))
+                    report.put("revision", host.snapshot?.getJSONObject("state")?.getLong("revision"))
                     assertEquals("System theme", expectedTheme, host.snapshot?.getJSONObject("state")?.getString("theme"))
                     assertEquals("Configured density", expectedDensity, metrics.densityDpi)
                     assertEquals("Configured font scale", expectedFont, activity.resources.configuration.fontScale, .001f)
@@ -216,7 +219,7 @@ class AndroidPhoneAuditTest {
                 File(directory, "$captureName.json").writeText(report.toString(2) + "\n")
             }
             if (admissionOnly) capture("admission")
-            else visitFrame(host, args.getString("states"), ::capture) { name, error ->
+            else visitFrame(activity, host, family, args.getString("states"), ::capture) { name, error ->
                 val failed = JSONObject(report.toString()).put("state", name).put("passed", false).put("status", "failed").put("error", error.toString())
                 File(directory, "$name.png").delete()
                 File(directory, "$name.json").writeText(failed.toString(2) + "\n")
@@ -232,7 +235,25 @@ class AndroidPhoneAuditTest {
             scenario?.close()
         }
     }
-    private fun visitFrame(host: CanvasHost, states: String?, capture: (String) -> Unit, failed: (String, Throwable) -> Unit) {
+    private fun createDrawing(host: CanvasHost, width: Int, height: Int, name: String) {
+        val epoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+        host.drain(obj("type" to "invoke", "command" to "new_document"))
+        host.awaitFrame("New Drawing controller is open") { host.snapshot!!.getJSONObject("state").objectOrNull("new_drawing") != null }
+        compose.waitForIdle()
+        runBlocking { host.withNative {
+            orderDrawing(it, width, height, create = false)
+            Native.dispatch(it,obj("type" to "new_drawing", "action" to obj("op" to "name", "text" to name)).toString())
+        } }
+        instrumentation.runOnMainSync { host.documents.createNewDrawing() }
+        host.awaitFrame("New Drawing controller adopts the fixture", 60_000) {
+            val state = host.snapshot!!.getJSONObject("state")
+            state.getJSONObject("document_file").getLong("epoch") != epoch &&
+                state.array("tabs").objects().any { it.getBoolean("active") && it.getInt("width") == width && it.getInt("height") == height } &&
+                !host.documents.working && !host.drawingTabs.switching && state.objectOrNull("new_drawing") == null
+        }
+    }
+
+    private fun visitFrame(activity: MainActivity, host: CanvasHost, family: String, states: String?, capture: (String) -> Unit, failed: (String, Throwable) -> Unit) {
         host.awaitReady(180_000, compose)
         val requested = states?.split(",")?.toSet()
         val failures = mutableListOf<String>()
@@ -269,18 +290,7 @@ class AndroidPhoneAuditTest {
             finally { event.recycle(); if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) pressedPoint = null }
         }
         fun tap(tag: String) { val p = point(tag); event(MotionEvent.ACTION_DOWN, p); event(MotionEvent.ACTION_UP, p); host.drain() }
-        val epoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
-        host.drain(obj("type" to "invoke", "command" to "new_document"))
-        host.awaitFrame("New Drawing controller is open") { host.snapshot!!.getJSONObject("state").objectOrNull("new_drawing") != null }
-        compose.waitForIdle()
-        runBlocking { host.withNative { orderDrawing(it, 1200, 1600, create = false) } }
-        instrumentation.runOnMainSync { host.documents.createNewDrawing() }
-        host.awaitFrame("New Drawing controller adopts the fixture", 60_000) {
-            val state = host.snapshot!!.getJSONObject("state")
-            state.getJSONObject("document_file").getLong("epoch") != epoch &&
-                state.array("tabs").objects().any { it.getBoolean("active") && it.getInt("width") == 1200 && it.getInt("height") == 1600 } &&
-                !host.documents.working && !host.drawingTabs.switching && state.objectOrNull("new_drawing") == null
-        }
+        createDrawing(host,1200,1600,"Phone drawing")
         host.drain(obj("type" to "invoke", "command" to "sculpt"))
         host.drain(obj("type" to "select_tool_group", "group" to "blend"))
         host.drain(obj("type" to "select_brush", "id" to 2))
@@ -291,6 +301,11 @@ class AndroidPhoneAuditTest {
         compose.waitForIdle()
         host.drain()
         compose.waitForIdle()
+        if (family == "menu") {
+            visitMenu(activity,host, ::event, ::tap, ::state) { pressedPoint?.let { event(MotionEvent.ACTION_CANCEL,it) } }
+            assertTrue(failures.joinToString("\n"), failures.isEmpty())
+            return
+        }
         if (android.os.Build.VERSION.SDK_INT >= 31) {
             var content: CanvasContent? = null
             var nativeInsets: WindowInsets? = null
@@ -347,7 +362,9 @@ class AndroidPhoneAuditTest {
         }
         if (phone().getBoolean("swapped")) host.drain(obj("type" to "phone", "action" to obj("kind" to "swap_sides")))
         state("hidden") {
-            pressKey(KeyEvent.KEYCODE_TAB)
+            tap("phone-capy")
+            host.awaitFrame("Capy menu") { findTag("phone-zen") != null }
+            tap("phone-zen")
             host.awaitFrame("Hidden bars") { phone().getBoolean("hidden") }
         }
         if (phone().getBoolean("hidden")) {
@@ -502,6 +519,286 @@ class AndroidPhoneAuditTest {
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
 
+    }
+
+    private fun predictiveBack(activity: MainActivity, cancel: Boolean) {
+        val dispatcher = activity.onBackPressedDispatcher
+        instrumentation.runOnMainSync { dispatcher.dispatchOnBackStarted(androidx.activity.BackEventCompat(0f,100f,0f,androidx.activity.BackEventCompat.EDGE_LEFT)) }
+        compose.waitForIdle()
+        instrumentation.runOnMainSync { dispatcher.dispatchOnBackProgressed(androidx.activity.BackEventCompat(80f,100f,.6f,androidx.activity.BackEventCompat.EDGE_LEFT)) }
+        compose.waitForIdle()
+        instrumentation.runOnMainSync { if (cancel) dispatcher.dispatchOnBackCancelled() else dispatcher.onBackPressed() }
+        compose.waitForIdle()
+    }
+
+    private fun visitMenu(activity: MainActivity, host: CanvasHost, event: (Int, Offset) -> Unit, tap: (String) -> Unit,
+        state: (String, () -> Unit) -> Unit, cancel: () -> Unit) {
+        fun phone() = host.snapshot!!.getJSONObject("state").getJSONObject("phone")
+        fun route() = phone().getJSONObject("menu_route").toString()
+        fun bounds() = checkNotNull(findTag("phone-menu")).second.boundsInRoot
+        fun open() {
+            if (!phone().getBoolean("menu")) tap("phone-capy")
+            host.awaitFrame("Phone menu allocated") { phone().getBoolean("menu") && findTag("phone-menu-scroll")?.second?.boundsInRoot?.width?.let { it > 0 } == true }
+            compose.waitForIdle()
+        }
+        fun name(route: JSONObject): String {
+            val page = route.objectOrNull("page")
+            val root = when (page?.optString("kind")) { null -> "main"; "application" -> "application-${page.getString("menu")}"; else -> page.getString("kind") }
+            return root + route.array("path").values().flatMap { (it as JSONArray).values() }.joinToString("") { "-$it" }
+        }
+        fun model() = JSONObject(runBlocking { host.drawingTabs.query(obj("op" to "phone_menu")) })
+        open(); tap("phone-drawing")
+        host.awaitFrame("Drawings for native selection") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }
+        fun drawingRows() = model().array("pages").objects().first { it.getJSONObject("id").objectOrNull("page")?.optString("kind") == "drawings" }
+            .array("sections").getJSONArray(0).objects()
+        val original = host.drawingTabs.selected
+        val selectedRows = drawingRows()
+        val other = selectedRows.indexOfFirst { it.objectOrNull("close") != null && !it.optBoolean("selected") }
+        assertTrue("Fixture has an inactive drawing",other >= 0)
+        val selectedId = selectedRows[other].getJSONObject("action").getJSONObject("action").getLong("id")
+        tap("phone-menu-row-0-$other")
+        host.awaitFrame("select_drawing request selects the native tab",60_000) { host.drawingTabs.selected == selectedId && !host.drawingTabs.switching && !phone().getBoolean("menu") }
+        open(); tap("phone-drawing")
+        host.awaitFrame("Drawings for native close") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }
+        val closeRows = drawingRows()
+        val closing = closeRows.indexOfFirst { it.objectOrNull("close") != null && it.optBoolean("selected") }
+        val count = host.drawingTabs.rows.size
+        tap("phone-menu-close-0-$closing")
+        host.awaitFrame("select_drawing close resolves exactly once",60_000) { host.drawingTabs.rows.size == count-1 && host.drawingTabs.selected == original && !host.drawingTabs.switching }
+        for (swapped in listOf(false, true)) {
+            if (phone().getBoolean("swapped") != swapped) host.drain(obj("type" to "phone", "action" to obj("kind" to "swap_sides")))
+            open()
+            val initial = bounds()
+            instrumentation.runOnMainSync {
+                val b = checkNotNull(host.workspaceInteraction).facts().getJSONObject("content_drawer").rect()
+                val density = checkNotNull(host.workspaceInteraction).density
+                assertEquals("Menu contact bounds track the visible surface",initial.center.x/density,b.center.x,1f)
+                assertEquals("Menu contact bounds track the visible surface",initial.center.y/density,b.center.y,1f)
+            }
+            state("menu-open-$swapped", {})
+            val pages = model().array("pages").objects()
+            fun visit(page: JSONObject) {
+                val expected = page.getJSONObject("id").toString()
+                host.awaitFrame("Typed menu route $expected") { route() == expected }
+                compose.waitForIdle()
+                assertEquals("Every page retains the root's outer bounds", initial, bounds())
+                state("menu-${name(page.getJSONObject("id"))}${if (swapped) "-swapped" else ""}", {})
+                page.array("sections").values().forEachIndexed { section, rows ->
+                    (rows as JSONArray).objects().forEachIndexed { index, item ->
+                        val target = item.objectOrNull("target") ?: return@forEachIndexed
+                        val tag = if (target.objectOrNull("page")?.optString("kind") == "drawings") "phone-drawing" else "phone-menu-row-$section-$index"
+                        compose.onNodeWithTag(tag, useUnmergedTree = true).performScrollTo()
+                        tap(tag)
+                        val next = pages.first { it.getJSONObject("id").toString() == target.toString() }
+                        visit(next)
+                        compose.onNodeWithTag("phone-menu-back", useUnmergedTree = true).performScrollTo()
+                        tap("phone-menu-back")
+                        host.awaitFrame("Back returns to $expected") { route() == expected }
+                    }
+                }
+            }
+            visit(pages.first { it.isNull("parent") })
+            if (!swapped) {
+                fun application(menu: String) {
+                    val root = pages.first { it.isNull("parent") }
+                    val position = root.array("sections").values().withIndex().firstNotNullOf { (section, rows) ->
+                        (rows as JSONArray).objects().withIndex().firstOrNull { (_,item) -> item.objectOrNull("target")?.objectOrNull("page")?.optString("menu") == menu }?.let { section to it.index }
+                    }
+                    val tag = "phone-menu-row-${position.first}-${position.second}"
+                    compose.onNodeWithTag(tag,useUnmergedTree=true).performScrollTo()
+                    tap(tag)
+                    host.awaitFrame("Application menu $menu") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("menu") == menu }
+                    compose.waitForIdle()
+                }
+                application("view")
+                fun scrollValue() = checkNotNull(findTag("phone-menu-scroll")).second.find { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) != null }
+                    ?.config?.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.value?.invoke() ?: error("Menu has no native scroller")
+                val scrollBefore = scrollValue()
+                val scrollBounds = checkNotNull(findTag("phone-menu-scroll")).second.boundsInRoot
+                val scrollFrom = Offset(scrollBounds.center.x,scrollBounds.top+scrollBounds.height*.75f)
+                val distance = (scrollBounds.height*.4f).coerceAtMost(100f)
+                event(MotionEvent.ACTION_DOWN,scrollFrom)
+                event(MotionEvent.ACTION_MOVE,scrollFrom-Offset(0f,distance*.4f))
+                event(MotionEvent.ACTION_MOVE,scrollFrom-Offset(0f,distance))
+                state("menu-touch-scrolling") {
+                    host.awaitFrame("One finger scrolls the native menu") { scrollValue() > scrollBefore+1 }
+                    assertNull("A scrolling contact releases the row highlight",host.workspaceInteraction?.phone?.menu?.pressed)
+                }
+                state("menu-touch-scrolled") {
+                    event(MotionEvent.ACTION_UP,scrollFrom-Offset(0f,distance))
+                    host.awaitFrame("The released menu keeps its scroll") { scrollValue() > scrollBefore+1 }
+                    host.awaitFrame("Scrolling preserves the menu route") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("menu") == "view" }
+                }
+                cancel()
+                compose.onNodeWithTag("phone-menu-back",useUnmergedTree=true).performScrollTo();tap("phone-menu-back")
+                host.awaitFrame("Back returns from scrolling") { phone().getJSONObject("menu_route").isNull("page") }
+                compose.waitForIdle()
+                application("file")
+                compose.waitForIdle()
+                val childRoute = route()
+                instrumentation.runOnMainSync {
+                    val input = checkNotNull(host.workspaceInteraction?.phone?.menu)
+                    assertEquals("The displayed menu tracker has applied the route",childRoute,input.route.toString())
+                    assertTrue("File exposes its Back contact",input.canBack)
+                }
+                val scroll = checkNotNull(findTag("phone-menu-scroll")).second.boundsInRoot
+                val from = Offset(scroll.left+scroll.width*.15f,scroll.top+scroll.height*.5f)
+                state("menu-swipe-cancelled") {
+                    event(MotionEvent.ACTION_DOWN,from)
+                    event(MotionEvent.ACTION_MOVE,from+Offset(scroll.width*.1f,0f))
+                    host.awaitFrame("Shared swipe previews Back") { host.workspaceInteraction?.phone?.menu?.swiping == true }
+                    cancel()
+                    host.awaitFrame("Cancelled swipe retires") { host.workspaceInteraction?.phone?.menu?.swiping == false }
+                    assertEquals("Cancel does not navigate",childRoute,route())
+                }
+                cancel()
+                state("menu-swipe-halfway") {
+                    event(MotionEvent.ACTION_DOWN,from)
+                    event(MotionEvent.ACTION_MOVE,from+Offset(scroll.width*.5f,0f))
+                    host.awaitFrame("Shared halfway Back preview") { host.workspaceInteraction?.phone?.menu?.progress?.let { it >= .49f } == true }
+                }
+                cancel()
+                state("menu-swipe-completed") {
+                    event(MotionEvent.ACTION_DOWN,from)
+                    event(MotionEvent.ACTION_MOVE,from+Offset(scroll.width*.5f,0f))
+                    host.awaitFrame("Shared Back owns its completion") { host.workspaceInteraction?.phone?.menu?.swiping == true }
+                    event(MotionEvent.ACTION_UP,from+Offset(scroll.width*.5f,0f))
+                    host.awaitFrame("Shared completed swipe returns to root") { phone().getJSONObject("menu_route").isNull("page") }
+                }
+                cancel()
+                if (!phone().getJSONObject("menu_route").isNull("page")) tap("phone-menu-back")
+            }
+            tap("phone-capy")
+            host.awaitFrame("Menu closed") { !phone().getBoolean("menu") && findTag("phone-menu") == null }
+        }
+        if (phone().getBoolean("swapped")) host.drain(obj("type" to "phone", "action" to obj("kind" to "swap_sides")))
+        host.drain(obj("type" to "invoke", "command" to "add_layer"))
+        val first = host.drawingTabs.selected
+        createDrawing(host,128,96,"Menu drawing")
+        open()
+        val feedbackBounds = bounds()
+        state("feedback-root-two", {})
+        for (tag in listOf("phone-finger","phone-swap")) {
+            fun checked() = checkNotNull(findTag(tag)).second.config.getOrNull(SemanticsProperties.Selected)
+            val before = checked()
+            for (value in listOf(before != true,before == true)) {
+                tap(tag)
+                host.awaitFrame("Strip toggle $tag remains in the menu") { phone().getBoolean("menu") && checked() == value }
+            }
+        }
+        tap("phone-drawing")
+        host.awaitFrame("Two drawings page") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }
+        compose.waitForIdle()
+        assertEquals("Drawings retains root bounds",feedbackBounds,bounds())
+        state("feedback-drawings-two", {})
+        val retiredBack = checkNotNull(findTag("phone-menu-back")).second
+        val firstRow = drawingRows().indexOfFirst { it.getJSONObject("action").getJSONObject("action").getLong("id") == first }
+        tap("phone-menu-row-0-$firstRow")
+        host.awaitFrame("The modified drawing becomes current",60_000) { host.drawingTabs.selected == first && !host.drawingTabs.switching && !phone().getBoolean("menu") }
+        host.drain(obj("type" to "invoke", "command" to "drawings"))
+        host.awaitFrame("Drawings command opens the shared page") { phone().getBoolean("menu") && phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }
+        compose.waitForIdle()
+        assertEquals("The external opener retains root bounds",feedbackBounds,bounds())
+        assertFalse("The retired page detaches its semantics",retiredBack.layoutInfo.isAttached)
+        assertNotEquals("A reopened page owns a new Back control",retiredBack.id,checkNotNull(findTag("phone-menu-back")).second.id)
+        assertEquals("Reopened Drawings owns navigation","drawings",phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind"))
+        state("feedback-drawings-current", {})
+        open(); tap("phone-zen")
+        host.awaitFrame("Zen hides the bars") { phone().getBoolean("hidden") && !phone().getBoolean("menu") }
+        state("hidden", {})
+        tap("phone-capy")
+        host.awaitFrame("Capy restores hidden bars") { !phone().getBoolean("hidden") }
+        open()
+        fun focusedRows() = checkNotNull(host.workspaceInteraction?.phone?.menu).let { input -> input.rows.filter { it in input.hits } }
+        fun focused() = host.workspaceInteraction?.phone?.menu?.focused
+        pressKey(KeyEvent.KEYCODE_MOVE_END);compose.waitForIdle()
+        assertEquals("End focuses the last page row",focusedRows().last(),focused())
+        pressKey(KeyEvent.KEYCODE_MOVE_HOME);compose.waitForIdle()
+        assertEquals("Home focuses the first page row",focusedRows().first(),focused())
+        pressKey(KeyEvent.KEYCODE_DPAD_DOWN);compose.waitForIdle()
+        assertEquals("Down stays inside page rows",focusedRows()[1],focused())
+        pressKey(KeyEvent.KEYCODE_DPAD_UP);compose.waitForIdle()
+        assertEquals("Up returns to the first page row",focusedRows().first(),focused())
+        pressKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+        host.awaitFrame("Forward opens the focused submenu") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }
+        compose.waitForIdle()
+        val child = route()
+        predictiveBack(activity,cancel = true)
+        assertEquals("Cancelled Back keeps the menu subpage",child,route())
+        predictiveBack(activity,cancel = false)
+        host.awaitFrame("Predictive Back returns to the root") { phone().getJSONObject("menu_route").isNull("page") }
+        predictiveBack(activity,cancel = false)
+        host.awaitFrame("Predictive Back closes the root menu") { !phone().getBoolean("menu") }
+        open();tap("phone-zen")
+        host.awaitFrame("Zen ready for predictive Back") { phone().getBoolean("hidden") }
+        predictiveBack(activity,cancel = true)
+        assertTrue("Cancelled Back keeps hidden bars",phone().getBoolean("hidden"))
+        predictiveBack(activity,cancel = false)
+        host.awaitFrame("Predictive Back restores the bars") { !phone().getBoolean("hidden") }
+        open()
+        val scroll = checkNotNull(findTag("phone-menu-scroll")).second.find { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) != null }!!
+        val axis = scroll.config[SemanticsProperties.VerticalScrollAxisRange]
+        if (axis.maxValue() > 1f) {
+            val root = model().array("pages").objects().first { it.isNull("parent") }
+            val position = root.array("sections").values().withIndex().firstNotNullOf { (section,rows) ->
+                (rows as JSONArray).objects().withIndex().firstOrNull { (_,item) -> item.objectOrNull("target")?.objectOrNull("page")?.optString("menu") == "file" }?.let { section to it.index }
+            }
+            val (view,row) = checkNotNull(findTag("phone-menu-row-${position.first}-${position.second}"))
+            val screen = IntArray(2);instrumentation.runOnMainSync { view.view.getLocationOnScreen(screen) }
+            val point = row.boundsInRoot.center+Offset(screen[0].toFloat(),screen[1].toFloat())
+            val start = SystemClock.uptimeMillis()
+            fun mouse(action: Int, at: Offset) {
+                val event = motion(MotionEvent.TOOL_TYPE_MOUSE,action,at,start)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event,true)) } finally { event.recycle() }
+            }
+            mouse(MotionEvent.ACTION_DOWN,point)
+            mouse(MotionEvent.ACTION_MOVE,point+Offset(1f,0f))
+            fun canRelease(): Boolean {
+                var accepted = false
+                instrumentation.runOnMainSync {
+                    val input = checkNotNull(host.workspaceInteraction?.phone?.menu)
+                    val hit = obj("kind" to "row","position" to JSONArray(listOf(position.first,position.second)))
+                    val reply = phoneUi(obj("kind" to "menu_input","contact" to input.contact,"route" to input.route,"can_back" to input.canBack,
+                        "input" to obj("kind" to "release","hit" to hit,"inside" to true))) as JSONObject
+                    accepted = reply.getJSONObject("reply").getBoolean("accepted")
+                }
+                return accepted
+            }
+            assertTrue("The below-slop root contact is still armed before scrolling",canRelease())
+            val before = axis.value()
+            val wheel = MotionEvent.obtain(start,SystemClock.uptimeMillis(),MotionEvent.ACTION_SCROLL,1,
+                arrayOf(MotionEvent.PointerProperties().apply { id=0;toolType=MotionEvent.TOOL_TYPE_MOUSE }),
+                arrayOf(MotionEvent.PointerCoords().apply { x=point.x+1f;y=point.y;setAxisValue(MotionEvent.AXIS_VSCROLL,-.05f) }),
+                0,MotionEvent.BUTTON_PRIMARY,1f,1f,0,0,android.view.InputDevice.SOURCE_MOUSE,0)
+            try { assertTrue(instrumentation.uiAutomation.injectInputEvent(wheel,true)) } finally { wheel.recycle() }
+            host.awaitFrame("A small wheel step moves the menu") { axis.value() > before }
+            compose.waitForIdle()
+            assertFalse("Every scroll-position change cancels the shared press",canRelease())
+            mouse(MotionEvent.ACTION_UP,point+Offset(1f,0f))
+            host.drain();compose.waitForIdle()
+            assertTrue("Wheel scrolling cancels even a visually unpressed row",phone().getBoolean("menu") && phone().getJSONObject("menu_route").isNull("page"))
+        }
+        pressKey(KeyEvent.KEYCODE_ESCAPE)
+        host.awaitFrame("Escape closes after keyboard and wheel checks") { !phone().getBoolean("menu") }
+        val nativeView = checkNotNull(findTag("workspace")).first.view
+        val direction = nativeView.layoutDirection
+        try {
+            instrumentation.runOnMainSync { nativeView.layoutDirection = android.view.View.LAYOUT_DIRECTION_RTL }
+            compose.waitForIdle()
+            open()
+            pressKey(KeyEvent.KEYCODE_MOVE_HOME);compose.waitForIdle()
+            pressKey(KeyEvent.KEYCODE_DPAD_LEFT)
+            host.awaitFrame("RTL forward opens the focused submenu") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }
+            compose.waitForIdle()
+            pressKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+            host.awaitFrame("RTL back returns to the root") { phone().getJSONObject("menu_route").isNull("page") }
+            compose.waitForIdle()
+            pressKey(KeyEvent.KEYCODE_ESCAPE)
+            host.awaitFrame("RTL Escape closes the root menu") { !phone().getBoolean("menu") }
+        } finally {
+            instrumentation.runOnMainSync { nativeView.layoutDirection = direction }
+            compose.waitForIdle()
+        }
     }
 
 }

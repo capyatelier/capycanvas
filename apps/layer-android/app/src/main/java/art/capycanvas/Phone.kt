@@ -1,5 +1,8 @@
 package art.capycanvas
 
+import androidx.activity.compose.PredictiveBackHandler
+import android.view.KeyEvent
+import kotlinx.coroutines.CancellationException
 import android.os.Build
 import android.view.RoundedCorner
 import androidx.compose.foundation.systemGestureExclusion
@@ -28,6 +31,28 @@ import kotlinx.coroutines.currentCoroutineContext
 internal fun phoneUi(request: JSONObject): Any? = JSONTokener(Native.phoneUi(request.toString())).nextValue().takeUnless { it == JSONObject.NULL }
 internal fun CanvasHost.phone(action: JSONObject) = dispatch(obj("type" to "phone", "action" to action))
 
+@Composable internal fun PhoneBack(host: CanvasHost, dock: DockInteraction, enabled: Boolean) {
+    PredictiveBackHandler(enabled) { progress ->
+        host.retirePhoneContacts()
+        try {
+            progress.collect { }
+            val down = KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ESCAPE)
+            when {
+                dock.contextMenu != null -> dock.closeContext()
+                host.numberKeyHandler?.invoke(down) == true -> Unit
+                host.palettes.escape() -> Unit
+                host.dialogKeyHandler?.invoke(down) == true -> Unit
+                else -> {
+                    val key = obj("type" to "key","key" to "escape","pressed" to true,"repeat" to false,"editing" to host.editingText,
+                        "modifiers" to obj("command" to false,"shift" to false,"alt" to false))
+                    host.input(key) { if (!it.optBoolean("handled")) host.drawingTabs.closeSelected() }
+                    host.input(key.copy().put("pressed",false))
+                }
+            }
+        } catch (_: CancellationException) { }
+    }
+}
+
 internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction, private val view: android.view.View) {
     var layout = JSONObject()
     var tiles = JSONArray()
@@ -40,6 +65,7 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
     val active get() = capy || contact != null || jobs.isNotEmpty()
     var generation = 0
     val jobs = mutableSetOf<Job>()
+    var menu: PhoneMenuInteraction? = null
     var preview by mutableStateOf<JSONObject?>(null)
     fun step(input: JSONObject): JSONObject {
         val value = phoneUi(obj("kind" to "bar_step", "layout" to layout, "tiles" to tiles, "contact" to contact, "input" to input)) as JSONObject
@@ -59,7 +85,7 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
         val retired = generation
         view.postOnAnimation { view.post { if (generation == retired && !pointerDown) suppressed = false } }
     }
-    fun retire() { cancel(); jobs.toList().forEach { it.cancel() }; jobs.clear(); releaseClick() }
+    fun retire() { cancel(); menu?.cancel(); jobs.toList().forEach { it.cancel() }; jobs.clear(); releaseClick() }
     fun click(action: JSONObject) { if (!suppressed) host.phone(action) }
 }
 
@@ -199,11 +225,12 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
         PhoneTile(host, dock, input, snapshot.getJSONObject("phone_settings"), layout.getJSONObject("settings"), layout.getJSONObject("settings_hit"),
             "phone-tool-settings", obj("kind" to "tool_settings"), null, obj("kind" to "tool_settings"), layout.number("icon"))
         val capy = snapshot.getJSONObject("header").getJSONObject("capy")
+        val source = (dock.drawerSources["menu"] ?: dock.drawerSources["tool"])?.takeIf { it.anchor?.optString("kind") == "phone" && it.anchor.objectOrNull("anchor")?.optString("kind") == "capy" }
         val rect = layout.getJSONObject("capy"); val hit = layout.getJSONObject("capy_target")
         Box(Modifier.placedAbsolute(hit, density).chromeRegion(dock).testTag("phone-capy-target"), contentAlignment = androidx.compose.ui.AbsoluteAlignment.TopLeft) {
             key(host.phoneContactEpoch) {
-            HeaderButton(snapshot.getString("capy_caption"), false, true, false,
-                Modifier.fillMaxSize().testTag("phone-capy"), inBar = true,
+            HeaderButton(snapshot.getString("capy_caption"), false, true, source != null,
+                Modifier.fillMaxSize().testTag("phone-capy"), inBar = true, shape = drawerButtonShape(source?.direction),
                 face = Modifier.placedAbsolute(rect.copy().put("x", rect.number("x") - hit.number("x")).put("y", rect.number("y") - hit.number("y")), density),
                 onClick = { input.click(obj("kind" to "capy")) }) {
                 SharedIcon(capy.getString("icon"), null, Modifier.size(layout.number("capy_icon").dp))

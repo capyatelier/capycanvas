@@ -10,7 +10,7 @@ pub fn phone_ui(source: &str) -> Result<serde_json::Value, String> {
         BarBegin { layout: PhoneLayout, tiles: Vec<crate::ToolbarTile>, point: [f32; 2] },
         BarValid { layout: PhoneLayout, tiles: Vec<crate::ToolbarTile>, contact: PhoneBarContact },
         BarStep { layout: PhoneLayout, tiles: Vec<crate::ToolbarTile>, contact: PhoneBarContact, input: PhoneBarInput },
-        MenuInput { contact: PhoneMenuContact, route: PhoneMenuRoute, can_back: bool, input: PhoneMenuInput },
+        MenuInput { #[serde(default)] contact: PhoneMenuContact, route: PhoneMenuRoute, can_back: bool, input: PhoneMenuInput },
         MenuWidth { layout: PhoneLayout, minimum: f32, natural: f32, row_height: f32 },
         MenuGeometry { layout: PhoneLayout, placement: DrawerPlacement, row_height: f32 },
         MenuPlacement { layout: PhoneLayout, viewport: [f32; 2], width: f32, height: f32, row_height: f32 },
@@ -716,6 +716,7 @@ impl serde::Serialize for PhoneMenuNavigation {
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PhoneMenuContact {
     swipe_axis: Option<crate::Axis>,
     swipe_progress: f32,
@@ -1062,6 +1063,24 @@ mod menu_tests {
                     assert_eq!(geometry.separator.width.min(geometry.separator.height), PhoneLayout::MENU_GAP);
                 }
             }
+        }
+    }
+    #[test]
+    fn menu_input_starts_a_default_contact_without_host_private_fields() {
+        use serde_json::json;
+        let route = PhoneMenuRoute::default();
+        let hit = PhoneMenuHit::Strip(0);
+        let mut contact = PhoneMenuContact::default();
+        let reply = contact.input(&route, false, PhoneMenuInput::Press { hit: hit.clone() });
+        let expected = json!({"contact":contact,"reply":reply});
+        for initial in [None, Some(json!({}))] {
+            let mut request = json!({"kind":"menu_input","route":route,"can_back":false,"input":{"kind":"press","hit":hit}});
+            if let Some(initial) = initial { request["contact"] = initial; }
+            let pressed = phone_ui(&request.to_string()).unwrap();
+            assert_eq!(pressed, expected);
+            let released = phone_ui(&json!({"kind":"menu_input","contact":pressed["contact"],"route":route,
+                "can_back":false,"input":{"kind":"release","hit":hit,"inside":true}}).to_string()).unwrap();
+            assert_eq!(released["reply"]["accepted"],true);
         }
     }
     #[test]

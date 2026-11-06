@@ -321,6 +321,7 @@ private val HiddenChromeShape=object:Shape {
     val panels = remember(panelModels) { panelModels?.objects()?.associateBy { it.getString("id") } ?: emptyMap() }
     val state = snapshot?.getJSONObject("state")
     val phone = snapshot?.getJSONObject("layout")?.objectOrNull("phone")
+    PhoneBack(host,dock,phone != null)
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
     var shownPanel by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(expanded) {
@@ -392,6 +393,7 @@ private val HiddenChromeShape=object:Shape {
             }
             val layout = snapshot.getJSONObject("layout")
             ContentDrawers(host, snapshot, panels, dock)
+            if (phone != null) PhoneMenu(host, snapshot, dock)
             CanvasBar(host, dock, IntSize(constraints.maxWidth, constraints.maxHeight))
             NoticeBubble(host, dock, layout.getJSONObject("notice"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)

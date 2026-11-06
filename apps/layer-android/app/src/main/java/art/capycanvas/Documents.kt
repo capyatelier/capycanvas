@@ -525,10 +525,16 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         host.dispatch(obj("type" to "complete_request","id" to adjacentRequest.getInt("id")))
         host.drawingTabs.adjacent(adjacentRequest.getJSONObject("kind").getBoolean("forward"))
     } }
+    val selectRequest = state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "select_drawing" }
+    LaunchedEffect(selectRequest?.getInt("id")) { if (selectRequest != null) {
+        host.dispatch(obj("type" to "complete_request", "id" to selectRequest.getInt("id")))
+        val kind = selectRequest.getJSONObject("kind")
+        host.drawingTabs.select(kind.getLong("id"), kind.getBoolean("close"))
+    } }
     val drawingsRequest=state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type")=="drawings" }
     LaunchedEffect(drawingsRequest?.getInt("id")) { if(drawingsRequest!=null) { host.drawingTabs.selector=true; host.dispatch(obj("type" to "complete_request","id" to drawingsRequest.getInt("id"))) } }
     // Registered before workspace/popup handlers, which get first refusal.
-    BackHandler { host.drawingTabs.closeSelected() }
+    BackHandler(host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") == null) { host.drawingTabs.closeSelected() }
     ImportAndTransformControls(host)
     ClipboardProgress(host.documents.clipboard)
     host.hostError?.let { message ->

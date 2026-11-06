@@ -156,7 +156,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     LaunchedEffect(models.mapValues { it.value.toString() }) { models.forEach { (id, model) -> retained[id] = model } }
     val activeTool = models["tool"] != null
     val openColumns = snapshot.getJSONObject("layout").array("collapsed").objects().filter { it.objectOrNull("open") != null }
-    BackHandler(models.isNotEmpty() || openColumns.isNotEmpty()) {
+    BackHandler(snapshot.getJSONObject("layout").objectOrNull("phone") == null && (models.isNotEmpty() || openColumns.isNotEmpty())) {
         if (models.isEmpty()) host.customize(obj("type" to "close_column", "column" to openColumns.last().getInt("id")))
         else if (activeTool) host.customize(obj("type" to if(models["tool"]?.optBoolean("layer_properties")==true) "toggle_layer_drawer_properties" else "close_expanded")) else models.values.lastOrNull()?.getJSONObject("anchor")?.let {
             host.customize(obj("type" to "toggle_column_drawer", "group" to it.getInt("group"), "panel" to it.getString("origin")))
@@ -456,10 +456,12 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     }
 }
 
-@Composable private fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float, modifier: Modifier = Modifier) {
+@Composable internal fun DrawerBridge(connection: JSONObject, dock: DockInteraction, z: Float, modifier: Modifier = Modifier) {
     val color = LocalPalette.current.onGlass.panelFill
     BridgeGlass(connection, dock)
-    Canvas(Modifier.placed(connection.getJSONObject("bounds"), dock.density).then(modifier).zIndex(z).chromeRegion(dock)) {
+    val bounds = connection.getJSONObject("bounds")
+    val position = if (dock.phone != null) Modifier.placedAbsolute(bounds,dock.density) else Modifier.placed(bounds,dock.density)
+    Canvas(position.then(modifier).zIndex(z).chromeRegion(dock)) {
         val t = connection.array("transform")
         fun point(x: Float, y: Float) = Offset((t.getDouble(0).toFloat() * x + t.getDouble(2).toFloat() * y + t.getDouble(4).toFloat()) * dock.density,
             (t.getDouble(1).toFloat() * x + t.getDouble(3).toFloat() * y + t.getDouble(5).toFloat()) * dock.density)

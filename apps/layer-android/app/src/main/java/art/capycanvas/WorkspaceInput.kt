@@ -300,9 +300,12 @@ internal class DockInteraction(val host: CanvasHost) {
 
     // Shared workspace gestures have their own Zen state in Rust. Only tile
     // reordering uses the host's generic dragging fact.
-    fun facts() = obj("held" to headerHeld, "dragging" to (active?.optString("type") == "tile_drag"),
-        "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to drawer?.optJSONObject("placement")?.optJSONObject("bounds"),
-        "drawer_connection" to drawer?.optJSONObject("connection")?.optJSONObject("bounds"))
+    fun facts(): JSONObject {
+        val content = phone?.menu?.frame ?: drawer
+        return obj("held" to headerHeld, "dragging" to (active?.optString("type") == "tile_drag"),
+            "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to content?.optJSONObject("placement")?.optJSONObject("bounds"),
+            "drawer_connection" to content?.optJSONObject("connection")?.optJSONObject("bounds"))
+    }
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())
     fun anchorKey(item: JSONObject) = "${item.optString("kind")}:${item.optString("column")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
     fun removeAnchor(owner: Any) {
