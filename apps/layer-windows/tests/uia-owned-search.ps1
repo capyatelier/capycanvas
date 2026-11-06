@@ -1818,3 +1818,61 @@ namespace CapyInertiaFixtureTest {
  }
  'Actual chooser: stage-aware selection, halo and chooser receipts acknowledge once; missing transitions never retry.'
 }
+
+& {
+ $tokens=$null;$errors=$null
+ $edge=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-edge-reach.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ foreach($name in 'WindowCommand','Settled'){
+  $fn=$edge.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq$name}.GetNewClosure(),$true)
+  if(!$fn){throw "Missing actual edge function $name"}
+  $body=$fn.Extent.Text.Replace("& (Join-Path `$PSScriptRoot 'open-application-menu.ps1') -Root `$root -Name 'Window'",'Open-HistoryMenu')
+  . ([scriptblock]::Create($body))
+ }
+ function History-Assertion([string]$Message){
+  $edge.FindAll({param($n)$n-is[Management.Automation.Language.IfStatementAst]-and$n.Extent.Text.Contains("throw '$Message'")}.GetNewClosure(),$true)|Sort-Object {$_.Extent.Text.Length}|Select-Object -First 1
+ }
+ $firstUndo=History-Assertion 'ToolSet handoff Undo did not restore exact post-setup workspace'
+ $secondUndo=History-Assertion 'ToolSet setup Undo did not restore exact original workspace'
+ $redo=History-Assertion 'Canvas reset Redo did not restore the exact preferred layout'
+ if(!$firstUndo-or!$secondUndo-or!$redo){throw 'Missing actual edge history assertions'}
+ $statements=@($firstUndo.Parent.Statements);$first=[array]::IndexOf($statements,$firstUndo)-1
+ if($statements[$first].Extent.Text-eq'Settled'){$first--}
+ $last=[array]::IndexOf($statements,$secondUndo)
+ if($first-lt0-or$last-lt$first){throw 'Missing actual successive Undo sequence'}
+ $undoSequence=($statements[$first..$last]|ForEach-Object {$_.Extent.Text})-join"`n"
+ $statements=@($redo.Parent.Statements);$last=[array]::IndexOf($statements,$redo);$first=$last-1
+ if($statements[$first].Extent.Text-eq'Settled'){$first--}
+ if($first-lt0){throw 'Missing actual Redo sequence'}
+ $redoSequence=($statements[$first..$last]|ForEach-Object {$_.Extent.Text})-join"`n"
+ function Open-HistoryMenu{$script:historyOpens++}
+ function Invoke($Id){
+  $commands=@('undo_workspace','undo_workspace','redo_workspace')
+  if($script:historyInvokes-ge$commands.Count-or$Id-cne$commands[$script:historyInvokes]){throw 'Unexpected or repeated history action'}
+  $script:historyInvokes++;$script:historyActionReads=0
+ }
+ function Find($Id){$null}
+ function Width($Id){280}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt12;$poll++){if(& $Condition){return}};throw $Message}
+ function Model{
+  $script:historyReads++;$script:historyActionReads++
+  if($script:historyActionReads-gt6){
+   if($script:historyMode-eq'delayed'){$script:historyCurrent=@('setup','original','setup')[$script:historyInvokes-1]}
+   elseif($script:historyMode-eq'wrong'){$script:historyCurrent='another'}
+  }
+  @{workspace_update=@{revision=$script:historyReads};state=@{workspace=@{layout=$script:historyCurrent}}}
+ }
+ $postSetup='"setup"';$workspace='"original"';$resetLayout='"setup"';$preferred=280;$groups=@(@{id=1})
+ foreach($mode in 'delayed','missing','wrong'){
+  $script:historyMode=$mode;$script:historyCurrent='handoff';$script:historyReads=0;$script:historyActionReads=0;$script:historyInvokes=0;$script:historyOpens=0
+  $failure=$null;try{. ([scriptblock]::Create($undoSequence));. ([scriptblock]::Create($redoSequence))}catch{$failure=$_}
+  if($mode-eq'delayed'){
+   if($failure-or$script:historyInvokes-ne3-or$script:historyOpens-ne3-or$script:historyCurrent-cne'setup'){
+    throw "Stable pre-command layouts acknowledged successive Undo or Redo: $failure"
+   }
+  }elseif(!$failure-or$failure.Exception.Message-cne'Workspace history command did not acknowledge its exact layout'-or$script:historyInvokes-ne1-or$script:historyOpens-ne1){
+   throw 'Menu closure or unrelated revisions acknowledged a missing or wrong exact history result'
+  }
+ }
+ 'Actual edge history: successive Undo and Redo await exact results once each; unrelated revisions and absent or wrong targets cannot acknowledge them.'
+}

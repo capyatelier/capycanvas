@@ -66,7 +66,14 @@ function Reach-Point([object[]]$Candidates,[scriptblock]$Accept){
     throw 'No candidate contact lies within the edge reach'
 }
 function Width([int]$Group){((Layout).groups|Where-Object id -eq $Group|Select-Object -First 1).bounds.width}
-function WindowCommand([string]$Id){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window';Invoke $Id;Wait-Until {$null -eq (Find $Id)} 'Workspace menu did not close'}
+function WindowCommand([string]$Id,[string]$ExpectedLayout){
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
+    Invoke $Id
+    Wait-Until {$null -eq (Find $Id)} 'Workspace menu did not close'
+    if($PSBoundParameters.ContainsKey('ExpectedLayout')){
+        Wait-Until {$m=Model;$m -and ($m.state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -ceq $ExpectedLayout} 'Workspace history command did not acknowledge its exact layout'
+    }
+}
 function Escape-Edge {
     $claimed=[bool](Gesture).edge.claimed
     [CapyRowPointer]::Key(0x1b)
@@ -285,9 +292,9 @@ function Check-ToolSetPickup([string]$Theme,$Edge){
         if(!$terminal.last_edge.claimed -or !$terminal.last_edge.vertical -or $terminal.last_edge.contact -ne 'pickup' -or (Divider $gapId).bounds.y -le $gapY+20){throw 'ToolSet Pickup did not finish a claimed vertical resize'}
         $bubbleNow=(@((Model).bubbles|ForEach-Object {$_.view.id})|Sort-Object) -join ','
         if((Width $group.id) -ne $width -or $bubbleNow -cne $bubbleKey -or (& $selection) -cne $selectedBefore){throw 'Vertical ToolSet handoff changed width, bubbles or selection'}
-        WindowCommand 'undo_workspace';Settled
+        WindowCommand 'undo_workspace' -ExpectedLayout $postSetup
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $postSetup){throw 'ToolSet handoff Undo did not restore exact post-setup workspace'}
-        WindowCommand 'undo_workspace';Settled
+        WindowCommand 'undo_workspace' -ExpectedLayout $workspace
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $workspace){throw 'ToolSet setup Undo did not restore exact original workspace'}
         $bounds=(Control $sourceId -Arranged).Current.BoundingRectangle
         $center=@{x=($bounds.X+$bounds.Width*.5-$origin.x)/$density;y=($bounds.Y+$bounds.Height*.5-$origin.y)/$density}
@@ -320,7 +327,7 @@ function Check-ToolSetPickup([string]$Theme,$Edge){
         Capture ('toolset-packet-'+$Theme) -Composed
         $face=if($added[0].view.card){'bubble-card-'+$id}else{'tool-bubble-'+$id};$null=Control $face -Arranged
         if((& $selection) -cne $selectedBefore){throw 'Fresh ToolSet tear-out changed brush selection'}
-        WindowCommand 'undo_workspace';Settled
+        WindowCommand 'undo_workspace' -ExpectedLayout $workspace
         Wait-Until {((@((Model).bubbles|ForEach-Object {$_.view.id})|Sort-Object) -join ',') -ceq $bubbleKey} 'ToolSet tear-out Undo retained an extra bubble'
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $workspace){throw 'ToolSet tear-out Undo did not restore the exact original workspace'}
         $record.passed=$true
@@ -441,7 +448,7 @@ function Check-ControlRoles([string]$Theme){
             [void][CapyRowPointer]::DoubleClick($Device,$at.x,$at.y);Settled
             $record.after=Gesture;$record.width=Width $group.id
             if((Width $group.id) -ne $grown -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $baseline){throw "$($case.id) double press reset a workspace column"}
-            WindowCommand 'undo_workspace';Settled
+            WindowCommand 'undo_workspace' -ExpectedLayout $before
             if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'Role fixture workspace Undo did not restore exact setup'}
             $record.passed=$true
         }finally{
@@ -507,9 +514,9 @@ function Check-ColumnHandleReset([string]$Theme){
         Settled
         foreach($width in $other.widths){if((Width $width.id) -ne $width.width){throw 'Resetting a divider changed the other column owner'}}
         $resetLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
-        WindowCommand 'undo_workspace';Settled
+        WindowCommand 'undo_workspace' -ExpectedLayout $grownLayout
         if((Width $owner.groups[0]) -ne $grown -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $grownLayout){throw 'One workspace Undo did not restore the exact grown column'}
-        WindowCommand 'redo_workspace';Settled
+        WindowCommand 'redo_workspace' -ExpectedLayout $resetLayout
         if((Width $owner.groups[0]) -ne $original -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $resetLayout){throw 'One workspace Redo did not restore the exact preferred column width'}
     }finally{
         $record.after_reset=(Model).state.workspace.layout;$record.reset_width=Width $owner.groups[0]
@@ -544,7 +551,7 @@ function Check-CanvasReset([string]$Theme){
             if($distance -eq 40){
                 [void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y);Settled
                 if((Width $groups[0].id) -ne $grown){throw 'A touch double tap beyond 36 units reset the column'}
-                WindowCommand 'undo_workspace';Settled
+                WindowCommand 'undo_workspace' -ExpectedLayout $resetLayout
             }else{
                 if($distance -eq 20){
                     try{
@@ -556,9 +563,9 @@ function Check-CanvasReset([string]$Theme){
                 }else{[void][CapyRowPointer]::DoubleClick('touch',$at.x,$at.y)}
                 Wait-Until {(Width $groups[0].id) -eq $preferred} "Canvas-side touch double tap at $distance units did not restore exact preferred width ($preferred)"
                 Settled;$resetLayout=(Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress
-                WindowCommand 'undo_workspace';Settled
+                WindowCommand 'undo_workspace' -ExpectedLayout $grownLayout
                 if((Width $groups[0].id) -ne $grown -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $grownLayout){throw 'Canvas reset Undo did not restore the exact grown layout'}
-                WindowCommand 'redo_workspace';Settled
+                WindowCommand 'redo_workspace' -ExpectedLayout $resetLayout
                 if((Width $groups[0].id) -ne $preferred -or ((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $resetLayout){throw 'Canvas reset Redo did not restore the exact preferred layout'}
             }
         }finally{
@@ -578,7 +585,7 @@ function Check-CanvasReset([string]$Theme){
         $receipts.Add(@{theme=$Theme;cancel_first_then_single_tap='unchanged';width=Width $groups[0].id;layout=(Model).state.workspace.layout})
         $receipts|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('canvas-reset-'+$Theme+'.json'))
     }finally{if([CapyRowPointer]::Active){[CapyRowPointer]::Cancel()}}
-    WindowCommand 'undo_workspace';Settled
+    WindowCommand 'undo_workspace' -ExpectedLayout $resetLayout
     if((Width $groups[0].id) -ne $preferred){throw 'Canceled-tap setup did not Undo to exact preferred width'}
     if((& $drawingHistory) -cne $drawingBefore){throw 'Canceled canvas contact changed drawing history or layer count'}
 }
@@ -649,7 +656,7 @@ function Check-LayerRowEdge([string]$Theme){
     Swipe $point @{x=$point.x;y=$point.y-50}
     if(!(Gesture).last_edge.claimed -or !(Gesture).last_edge.vertical -or [Math]::Abs((Divider $gap.id).bounds.y-$gap.bounds.y) -lt 20){throw 'A vertical LayerRow contact did not hand off to row resizing'}
     @{row=$row.Current.AutomationId;point=$point;contact=$contact;terminal=(Gesture).last_edge;before=$before;after=(Model).state.workspace.layout}|ConvertTo-Json -Depth 95|Set-Content (Join-Path $run ('layer-row-edge-'+$Theme+'.json'))
-    WindowCommand 'undo_workspace';Settled
+    WindowCommand 'undo_workspace' -ExpectedLayout $before
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw 'LayerRow resize Undo did not restore the exact workspace'}
 }
 function Check-NativeEdgeCancel([string]$Theme){
