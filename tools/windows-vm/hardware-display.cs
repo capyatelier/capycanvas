@@ -44,6 +44,54 @@ public static class CapyHardwareDisplay {
   if(source.name==null)throw new Exception("No active NVIDIA display source");
   return source;
  }
+ [StructLayout(LayoutKind.Sequential,Pack=4)] public struct Luid { public uint low;public int high; }
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode,Pack=4)] public struct OpenAdapter {
+  [MarshalAs(UnmanagedType.ByValTStr,SizeConst=32)] public string name;
+  public uint handle;public Luid adapter;public uint source;
+ }
+ [StructLayout(LayoutKind.Sequential,Pack=4)] public struct CloseAdapter { public uint handle; }
+ [StructLayout(LayoutKind.Sequential,Pack=4)] public struct DpiHeader { public uint type,size;public Luid adapter;public uint source; }
+ [StructLayout(LayoutKind.Sequential,Pack=4)] public struct DpiGet { public DpiHeader header;public int minimum,current,maximum; }
+ [StructLayout(LayoutKind.Sequential,Pack=4)] public struct DpiSet { public DpiHeader header;public int relative; }
+ [DllImport("gdi32.dll",ExactSpelling=true)] static extern int D3DKMTOpenAdapterFromGdiDisplayName(ref OpenAdapter value);
+ [DllImport("gdi32.dll",ExactSpelling=true)] static extern int D3DKMTCloseAdapter(ref CloseAdapter value);
+ [DllImport("user32.dll",ExactSpelling=true,EntryPoint="DisplayConfigGetDeviceInfo")] static extern int GetSourceDpi(ref DpiGet value);
+ [DllImport("user32.dll",ExactSpelling=true,EntryPoint="DisplayConfigSetDeviceInfo")] static extern int SetSourceDpi(ref DpiSet value);
+ public static int RelativeScale(int current,int desired,int relative,int minimum,int maximum){
+  int[] steps={100,125,150,175,200,225,250,300,350,400,450,500};
+  int from=Array.IndexOf(steps,current),to=Array.IndexOf(steps,desired);
+  if(from<0||to<0)throw new Exception("Unknown monitor scale index");
+  if(minimum>relative||relative>maximum)throw new Exception("Current NVIDIA source DPI is outside its range");
+  int target=checked(relative+to-from);
+  if(target<minimum||target>maximum)throw new Exception("Requested NVIDIA source DPI is outside its range");
+  return target;
+ }
+ static void RequireStatus(int status,string operation){
+  if(status!=0)throw new Exception(operation+" failed: 0x"+unchecked((uint)status).ToString("X8"));
+ }
+ public static object SetFixtureScale(string device,int current,int desired){
+  var source=SelectSource(Devices());
+  if((source.flags&5)!=5||!String.Equals(source.name,device,StringComparison.Ordinal))throw new Exception("Fixture DPI source is not the assigned primary NVIDIA display");
+  var opened=new OpenAdapter{name=source.name};
+  RequireStatus(D3DKMTOpenAdapterFromGdiDisplayName(ref opened),"Open NVIDIA source");
+  int closed=0;object receipt;
+  try{
+   var query=new DpiGet{header=new DpiHeader{type=unchecked((uint)-3),size=(uint)Marshal.SizeOf(typeof(DpiGet)),adapter=opened.adapter,source=opened.source}};
+   RequireStatus(GetSourceDpi(ref query),"Read NVIDIA source DPI");
+   int target=RelativeScale(current,desired,query.current,query.minimum,query.maximum);
+   bool changed=current!=desired;
+   if(changed){
+    var request=new DpiSet{header=new DpiHeader{type=unchecked((uint)-4),size=(uint)Marshal.SizeOf(typeof(DpiSet)),adapter=opened.adapter,source=opened.source},relative=target};
+    RequireStatus(SetSourceDpi(ref request),"Set NVIDIA source DPI");
+   }
+   receipt=new{source=source.name,adapter_luid_low=opened.adapter.low,adapter_luid_high=opened.adapter.high,source_id=opened.source,
+    current_relative=query.current,target_relative=target,minimum_relative=query.minimum,maximum_relative=query.maximum,
+    current_scale=current,target_scale=desired,restart_required=changed};
+  }finally{
+   var close=new CloseAdapter{handle=opened.handle};closed=D3DKMTCloseAdapter(ref close);
+  }
+  RequireStatus(closed,"Close NVIDIA source");return receipt;
+ }
  public static object Set(uint width, uint height){
   if(IsReady(width,height))return Verify(width,height);
   var devices=Devices();Device gpu=SelectSource(devices);

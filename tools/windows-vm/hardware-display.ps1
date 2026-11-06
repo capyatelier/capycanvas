@@ -1,5 +1,5 @@
 param([Parameter(Mandatory)][int]$Width,[Parameter(Mandatory)][int]$Height,
- [Parameter(Mandatory)][string]$Receipt)
+ [Parameter(Mandatory)][string]$Receipt,[ValidateSet(0,150)][int]$FixtureScale=0)
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 function New-HardwareEdid([int]$Width,[int]$Height) {
@@ -22,6 +22,10 @@ function Write-DisplayReceipt($Result) {
  $Result|ConvertTo-Json -Depth 5|Set-Content -LiteralPath $pending
  Move-Item -LiteralPath $pending -Destination $Receipt -Force
 }
+function Set-FixtureMonitorScale($Display,[int]$Desired){
+ return [CapyHardwareDisplay]::SetFixtureScale($Display.device,$Display.scalePercent,$Desired)
+}
+
 try {
  $drivers=@(Get-CimInstance Win32_PnPSignedDriver | Where-Object {$_.DeviceClass -eq 'DISPLAY' -and $_.DriverProviderName -match 'NVIDIA' -and $_.IsSigned})
  $healthy=@(Get-PnpDevice -PresentOnly -Class Display | Where-Object {$_.Status -eq 'OK' -and $_.InstanceId -in $drivers.DeviceID})
@@ -38,7 +42,8 @@ try {
  while($true){
   try{$display=[CapyHardwareDisplay]::Set($Width,$Height);break}catch{if((Get-Date) -ge $deadline){throw};Start-Sleep -Seconds 2}
  }
- Write-DisplayReceipt @{success=$true;boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o');time=[DateTime]::UtcNow.ToString('o');display=$display;edid=$attached;driver=$drivers[0].DriverVersion}
+ $scaleChange=if($FixtureScale){Set-FixtureMonitorScale $display $FixtureScale}else{$null}
+ Write-DisplayReceipt @{success=$true;restart_required=[bool]$scaleChange.restart_required;scale_change=$scaleChange;boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o');time=[DateTime]::UtcNow.ToString('o');display=$display;edid=$attached;driver=$drivers[0].DriverVersion}
 } catch {
  Write-DisplayReceipt @{success=$false;time=[DateTime]::UtcNow.ToString('o');error=($_|Out-String)}
  throw
