@@ -278,6 +278,20 @@ test('Copy Cut and Copy Merged progress reads shared title after the capture han
 });
 
 
+test('cancelled clipboard capture observes formats the browser never consumes',async t=>{
+  const h=documentsHarness(t,{clipboardItem:class {static supports(){return true;}constructor(items){assert.deepEqual(Object.keys(items),['image/png','web application/x-capycanvas-clip']);}}});
+  navigator.clipboard={async write(){throw new DOMException('Denied','NotAllowedError');}};
+  let cancelled=false,rejectCapture;
+  h.app.capture_control=()=>({cancel(){cancelled=true;},cancelled:()=>cancelled,free(){}});
+  h.app.capture_clip=()=>({large:()=>true,run:()=>new Promise((resolve,reject)=>{rejectCapture=reject;})});
+  const request={id:89,kind:{type:'document',request:{type:'copy',cut:false,merged:true}}};h.requests.push(request);
+  const task=h.docs.handle(request);await new Promise(resolve=>setImmediate(resolve));
+  h.doc.body.querySelectorAll('dialog')[0].querySelector('button').click();
+  rejectCapture(new DOMException('Image operation cancelled','AbortError'));
+  await task;await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(h.completed,[{id:89,success:false,error:undefined}]);
+});
+
 test('Cut is acknowledged only after a successful system write and uncancelled capture',async t=>{
   const h=documentsHarness(t);let adopted=0,freed=0,cancelled=false,control;
   globalThis.ClipboardItem=class {constructor(items){this.items=items;}};

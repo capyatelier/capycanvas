@@ -95,9 +95,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     const task=app.capture_clip(id),nonce=crypto.randomUUID();
     let deliver,fail;
     const png=new Promise((resolve,reject)=>{deliver=resolve;fail=reject;});
-    png.catch(()=>{});
     const items={"image/png":png};
     if(customClip)items[clipMime]=png.then(()=>new Blob([nonce],{type:clipMime.slice(4)}));
+    for(const pending of Object.values(items))pending.catch(()=>{});
     let written=null;
     try{written=navigator.clipboard?.write&&globalThis.ClipboardItem?navigator.clipboard.write([new ClipboardItem(items)]):null;}
     catch(error){written=Promise.reject(error);}
