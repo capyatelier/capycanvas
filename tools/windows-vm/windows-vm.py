@@ -1016,23 +1016,58 @@ def fixture_selection(names):
     return f" -Name {','.join(names)}" if names else ""
 
 
+@contextmanager
+def fixture_local_dumps(machine, output, cleanup):
+    definitions = f"""$ErrorActionPreference='Stop'
+$Output='{output}'
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('{GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1',[ref]$tokens,[ref]$errors)
+if($errors.Count){{throw ($errors|Out-String)}}
+foreach($name in @('Get-FixtureLocalDumps','Enable-FixtureLocalDumps','Restore-FixtureLocalDumps')){{
+ $definition=$ast.Find({{param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}},$false)
+ if(!$definition){{throw "Missing actual WER helper: $name"}}
+ . ([scriptblock]::Create($definition.Extent.Text))
+}}
+"""
+    try:
+        guest_script(machine, definitions + "Enable-FixtureLocalDumps (Get-FixtureLocalDumps)")
+        yield
+    finally:
+        try:
+            guest_script(machine, definitions + """$backup=Join-Path $Output 'wer/registry-before.clixml'
+if(Test-Path -LiteralPath $backup){Restore-FixtureLocalDumps (Import-Clixml -LiteralPath $backup)}
+""")
+        except (Exception, SystemExit) as error:
+            cleanup.append(str(error))
+
+
 def execute_fixtures(machine, args, directory, provenance, names, queue=None):
     name = time.strftime("%Y%m%d-%H%M%S")
     output = f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures\\{name}"
     selection = fixture_selection(names)
     mode = " -HardwareGpu" if provenance["hardware_gpu"] else ""
     mode += f" -QueueConfig {queue}" if queue else ""
-    desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
-                     f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
-                     f"-TimeoutMinutes {args.timeout_minutes} -RustProfile {args.profile} "
-                     f"-BuildRecord {directory}\\fixture-build.json{selection}{mode}")
-    results, plan, failure = wait_for_fixtures(machine, output)
+    cleanup = []
+    results, plan, failure = [], None, None
+    try:
+        with fixture_local_dumps(machine, output, cleanup):
+            desktop(machine, f"-File {GUEST_REPO}\\tools\\windows-vm\\run-fixtures.ps1 "
+                             f"-Executable {directory}\\CapyCanvas.exe -Output {output} "
+                             f"-TimeoutMinutes {args.timeout_minutes} -RustProfile {args.profile} "
+                             f"-BuildRecord {directory}\\fixture-build.json{selection}{mode}")
+            results, plan, failure = wait_for_fixtures(machine, output)
+    except (Exception, SystemExit) as error:
+        failure = str(error)
     local = retrieve(machine, f"{GUEST_REPO}\\artifacts\\windows\\vm-fixtures", name)
     (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    if cleanup:
+        (local / "wer").mkdir(exist_ok=True)
+        (local / "wer" / "restore-error.txt").write_text("\n".join(cleanup))
+        failure = "; ".join(filter(None, (failure, "WER restoration failed: " + "; ".join(cleanup))))
     failed = [result["name"] for result in results if result["exit"] != 0]
     print(f"{len(results) - len(failed)} passed, {len(failed)} failed. Logs: {local}")
     return {"vm": machine.name, "results": results, "plan": plan, "failure": failure,
-            "complete": (local / "complete").exists(), "evidence": str(local)}
+            "complete": (local / "complete").exists() and not cleanup and failure is None, "evidence": str(local)}
 
 
 def fixtures(args):

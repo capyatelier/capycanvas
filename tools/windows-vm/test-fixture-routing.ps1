@@ -557,3 +557,79 @@ try{
     }
 }
 'Fixture selection and control entry-point routing passed'
+
+& {
+    Add-Type -TypeDefinition @'
+using System;using System.Collections.Generic;using Microsoft.Win32;
+namespace CapyLocalDumpsTest {
+ public class Key:IDisposable {
+  public Dictionary<string,object> Values=new Dictionary<string,object>();public Dictionary<string,RegistryValueKind> Kinds=new Dictionary<string,RegistryValueKind>();public bool FailSet;public int FailAfter;public int Children;
+  public int ValueCount{get{return Values.Count;}}public int SubKeyCount{get{return Children;}}
+  public string[] GetValueNames(){var a=new string[Values.Count];Values.Keys.CopyTo(a,0);return a;}
+  public RegistryValueKind GetValueKind(string n){return Kinds[n];}
+  public object GetValue(string n,object d,RegistryValueOptions o){return Values.ContainsKey(n)?Values[n]:d;}
+  public void SetValue(string n,object v,RegistryValueKind k){if(FailSet||(FailAfter>0&&--FailAfter==0))throw new InvalidOperationException("Registry write failed");Values[n]=v;Kinds[n]=k;}
+  public void DeleteValue(string n,bool fail){Values.Remove(n);Kinds.Remove(n);}
+  public void Dispose(){}
+ }
+ public class Registry {
+  public Dictionary<string,Key> Keys=new Dictionary<string,Key>();public string Root="SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps";public bool PartialArm;
+  public Key OpenSubKey(string p){return Keys.ContainsKey(p)?Keys[p]:null;}public Key OpenSubKey(string p,bool w){return OpenSubKey(p);}
+  public Key CreateSubKey(string p){if(!Keys.ContainsKey(Root))Keys[Root]=new Key();if(!Keys.ContainsKey(p)){Keys[p]=new Key();if(p!=Root)Keys[Root].Children++;}if(PartialArm)Keys[p].FailAfter=2;return Keys[p];}
+  public void DeleteSubKey(string p,bool fail){if(Keys.ContainsKey(p)){if(Keys[p].ValueCount!=0||Keys[p].SubKeyCount!=0)throw new InvalidOperationException("Nonempty key deletion");Keys.Remove(p);if(p!=Root)Keys[Root].Children--;}}
+ }
+}
+'@
+    foreach($name in 'Get-FixtureLocalDumps','Enable-FixtureLocalDumps','Restore-FixtureLocalDumps'){
+        $node=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$false)
+        if(!$node){throw "Missing LocalDumps helper: $name"}
+        . ([scriptblock]::Create($node.Extent.Text.Replace('[Microsoft.Win32.Registry]::LocalMachine','$script:registry')))
+    }
+    $loop=$ast.Find({param($node)$node -is [Management.Automation.Language.WhileStatementAst] -and $node.Condition.Extent.Text.Contains('Get-NextFixture')},$false)
+    if(!$loop -or $loop.Parent -isnot [Management.Automation.Language.NamedBlockAst]){throw 'Private fixture loop unexpectedly owns privileged WER lifecycle'}
+    $temporary=Join-Path ([IO.Path]::GetTempPath()) ('capy-local-dumps-'+[Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory $temporary|Out-Null
+    try{
+        $cases=0
+        foreach($kind in @('absent','parent-only','empty','String','ExpandString','DWord','QWord','Binary','MultiString','None')){
+            foreach($mode in @('success','imported-snapshot','partial-arm','restore-fault','concurrent-value','concurrent-child')){
+                $script:registry=[CapyLocalDumpsTest.Registry]::new();$path=$script:registry.Root+'\CapyCanvas.exe'
+                if($kind -eq 'parent-only'){$null=$script:registry.CreateSubKey($script:registry.Root)}
+                if($kind -notin @('absent','parent-only')){
+                    $key=$script:registry.CreateSubKey($path)
+                    if($kind -ne 'empty'){
+                        $key.SetValue('Unrelated','keep',[Microsoft.Win32.RegistryValueKind]::String)
+                        $value=switch($kind){'DWord'{[int]-7};'QWord'{[long]9876543210};'Binary'{[byte[]]@(0,255,13)};'None'{[byte[]]@(11,12)};'MultiString'{[string[]]@('one','two')};default{'%UNEXPANDED%\original'}}
+                        if($kind -in @('Binary','None')){$value=[byte[]]$value}elseif($kind -eq 'MultiString'){$value=[string[]]$value}
+                        foreach($name in @('DumpFolder','DumpCount','DumpType')){$key.SetValue($name,$value,[Enum]::Parse([Microsoft.Win32.RegistryValueKind],$kind))}
+                    }
+                }
+                $dumpState=Get-FixtureLocalDumps;$before=$dumpState|ConvertTo-Json -Depth 12 -Compress
+                $Output=Join-Path $temporary ($kind+'-'+$mode);New-Item -ItemType Directory $Output|Out-Null
+                if($mode -eq 'partial-arm'){$script:registry.PartialArm=$true}
+                $armError=$null;try{Enable-FixtureLocalDumps $dumpState}catch{$armError=$_}
+                if($mode -eq 'partial-arm'){if(!$armError){throw 'Partial write did not exercise helper failure'}}elseif($armError){throw $armError}
+                $armed=$script:registry.OpenSubKey($path)
+                if(!$armError){
+                    if($armed.GetValue('DumpFolder',$null,0) -ne (Join-Path $Output 'wer/dumps') -or $armed.GetValue('DumpCount',$null,0) -ne 3 -or $armed.GetValue('DumpType',$null,0) -ne 2){throw 'Wrong WER arming'}
+                    if($armed.GetValueKind('DumpFolder') -ne [Microsoft.Win32.RegistryValueKind]::ExpandString){throw 'Wrong dump folder registry type'}
+                }
+                if($mode -eq 'imported-snapshot'){$dumpState=Import-Clixml -LiteralPath (Join-Path $Output 'wer/registry-before.clixml')}
+                if($mode -eq 'concurrent-child'){$armed.Children++}
+                if($mode -in @('concurrent-value','concurrent-child')){$armed.SetValue('Concurrent','keep',[Microsoft.Win32.RegistryValueKind]::String)}
+                $fault=$mode -eq 'restore-fault' -and $kind -notin @('absent','parent-only','empty')
+                if($fault){$armed.FailSet=$true}
+                $restoreError=$null;try{Restore-FixtureLocalDumps $dumpState}catch{$restoreError=$_}
+                if($fault){if(!$restoreError){throw 'Typed helper hid restoration failure'}}
+                elseif($mode -in @('concurrent-value','concurrent-child')){
+                    $key=$script:registry.OpenSubKey($path)
+                    if(!$key -or $key.Values['Concurrent'] -ne 'keep' -or ($mode -eq 'concurrent-child' -and $key.SubKeyCount -ne 1)){throw 'Cleanup removed an unowned value or child'}
+                    if(((Get-FixtureLocalDumps).values|ConvertTo-Json -Depth 12 -Compress) -cne ($dumpState.values|ConvertTo-Json -Depth 12 -Compress)){throw 'Owned typed values did not restore beside concurrent data'}
+                }elseif($restoreError -or ((Get-FixtureLocalDumps)|ConvertTo-Json -Depth 12 -Compress) -cne $before){throw "Typed registry snapshot did not restore: $kind $mode"}
+                if(!(Test-Path (Join-Path $Output 'wer/registry-before.clixml'))){throw 'Original typed registry evidence was not exported'}
+                $cases++
+            }
+        }
+        "Per-app LocalDumps actual typed helpers passed $cases cases"
+    }finally{Remove-Item -LiteralPath $temporary -Recurse -Force}
+}

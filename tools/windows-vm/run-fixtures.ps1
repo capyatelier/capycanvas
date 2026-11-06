@@ -92,6 +92,48 @@ function Restore-FixtureTextScale($Saved){
     }
     Wait-FixtureTextScale $Saved 'restoration'
 }
+function Get-FixtureLocalDumps{
+    $path='SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+    $parent=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($path)
+    $parentExists=$null -ne $parent;if($parent){$parent.Dispose()}
+    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($path+'\CapyCanvas.exe')
+    $saved=[ordered]@{parent_exists=$parentExists;exists=($null -ne $key);values=@{}}
+    if($key){try{
+        foreach($name in @('DumpFolder','DumpCount','DumpType')){
+            if($name -in $key.GetValueNames()){$saved.values[$name]=@{kind=$key.GetValueKind($name);value=$key.GetValue($name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}}
+        }
+    }finally{$key.Dispose()}}
+    $saved
+}
+function Enable-FixtureLocalDumps($Saved){
+    $folder=Join-Path $Output 'wer';New-Item -ItemType Directory -Force $folder|Out-Null
+    $Saved|Export-Clixml -LiteralPath (Join-Path $folder 'registry-before.clixml')
+    $dumps=Join-Path $folder 'dumps';New-Item -ItemType Directory -Force $dumps|Out-Null
+    $key=[Microsoft.Win32.Registry]::LocalMachine.CreateSubKey('SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\CapyCanvas.exe')
+    try{
+        $key.SetValue('DumpFolder',$dumps,[Microsoft.Win32.RegistryValueKind]::ExpandString)
+        $key.SetValue('DumpCount',3,[Microsoft.Win32.RegistryValueKind]::DWord)
+        $key.SetValue('DumpType',2,[Microsoft.Win32.RegistryValueKind]::DWord)
+    }finally{$key.Dispose()}
+}
+function Restore-FixtureLocalDumps($Saved){
+    $path='SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+    $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($path+'\CapyCanvas.exe',$true)
+    if($key){try{
+        foreach($name in @('DumpFolder','DumpCount','DumpType')){
+            if($Saved.values.ContainsKey($name)){$entry=$Saved.values[$name];$key.SetValue($name,$entry.value,$entry.kind)}else{$key.DeleteValue($name,$false)}
+        }
+        $empty=$key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0
+    }finally{$key.Dispose()}
+        if(!$Saved.exists -and $empty){[Microsoft.Win32.Registry]::LocalMachine.DeleteSubKey($path+'\CapyCanvas.exe',$false)}
+    }elseif($Saved.values.Count){throw 'The saved per-app LocalDumps key disappeared'}
+    if(!$Saved.parent_exists){
+        $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($path)
+        if($key){try{$empty=$key.ValueCount -eq 0 -and $key.SubKeyCount -eq 0}finally{$key.Dispose()}
+            if($empty){[Microsoft.Win32.Registry]::LocalMachine.DeleteSubKey($path,$false)}
+        }
+    }
+}
 $runnerStarted = Get-Date
 $Executable = if($List){[IO.Path]::GetFullPath($Executable)}else{(Resolve-Path -LiteralPath $Executable).Path}
 $editorExecutable=$Executable

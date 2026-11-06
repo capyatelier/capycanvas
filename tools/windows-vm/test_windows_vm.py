@@ -923,5 +923,84 @@ class FixtureRunnerTests(unittest.TestCase):
         self.assertFalse(any("Stop-ScheduledTask" in command for command in calls))
 
 
+class FixtureDumpsBoundaryTests(unittest.TestCase):
+    def exercise(self, mode, restore_fails=False):
+        with TemporaryDirectory() as directory:
+            local = Path(directory)
+            (local / 'complete').write_text('raw guest marker')
+            raw = '{"name":"notice","exit":7,"seconds":1,"message":"Original assertion"}\n'
+            (local / 'results.jsonl').write_text(raw)
+            events = []
+            scripts = []
+            machine = SimpleNamespace(name='owned-runner')
+            def admin(machine, script):
+                scripts.append(script)
+                self.assertIn('Language.Parser]::ParseFile', script)
+                self.assertIn('run-fixtures.ps1', script)
+                if 'Enable-FixtureLocalDumps (Get-FixtureLocalDumps)' in script:
+                    events.append('admin-arm')
+                    if mode == 'partial-arm':
+                        raise SystemExit('Original partial arm failure')
+                else:
+                    events.append('admin-restore')
+                    self.assertIn('Import-Clixml -LiteralPath $backup', script)
+                    self.assertIn('wer/registry-before.clixml', script)
+                    if restore_fails:
+                        raise RuntimeError('Exact restoration failed')
+            def desktop(*args):
+                events.append('limited-desktop')
+                if mode == 'desktop-error':
+                    raise RuntimeError('Original desktop error')
+            def wait(*args):
+                events.append('wait')
+                if mode == 'wait-error':
+                    raise RuntimeError('Original wait error')
+                return ([{'name':'notice','exit':7}], {'runs':['notice']}, 'Original fixture error' if mode == 'fixture-error' else None)
+            def retrieve(*args):
+                events.append('retrieve')
+                self.assertEqual(events[-2], 'admin-restore')
+                return local
+            with patch.object(vm, 'guest_script', side_effect=admin), patch.object(vm, 'desktop', side_effect=desktop), \
+                    patch.object(vm, 'wait_for_fixtures', side_effect=wait), patch.object(vm, 'retrieve', side_effect=retrieve), patch('builtins.print'):
+                result = vm.execute_fixtures(machine, SimpleNamespace(timeout_minutes=20, profile='release'),
+                                             r'C:\owned\runtime', {'hardware_gpu':False}, ['notice'])
+            expected = ['admin-arm']
+            if mode != 'partial-arm':
+                expected.append('limited-desktop')
+                if mode != 'desktop-error':
+                    expected.append('wait')
+            expected += ['admin-restore', 'retrieve']
+            self.assertEqual(events, expected)
+            self.assertEqual((local / 'complete').read_text(), 'raw guest marker')
+            self.assertEqual((local / 'results.jsonl').read_text(), raw)
+            if mode in ('partial-arm', 'desktop-error', 'wait-error', 'fixture-error'):
+                self.assertIn('Original', result['failure'])
+            if restore_fails:
+                self.assertFalse(result['complete'])
+                self.assertIn('WER restoration failed', result['failure'])
+                self.assertIn('Exact restoration failed', (local / 'wer/restore-error.txt').read_text())
+            else:
+                self.assertEqual(result['complete'], mode == 'normal')
+            if mode in ('normal', 'fixture-error'):
+                self.assertEqual(result['results'], [{'name':'notice','exit':7}])
+            self.assertEqual(len(scripts), 2)
+    def test_admin_restores_before_retrieval(self):
+        self.exercise('normal')
+    def test_original_fixture_error_and_results_survive(self):
+        self.exercise('fixture-error')
+    def test_desktop_exception_restores(self):
+        self.exercise('desktop-error')
+    def test_wait_exception_restores(self):
+        self.exercise('wait-error')
+    def test_partial_arm_never_starts_limited_task(self):
+        self.exercise('partial-arm')
+    def test_restore_fault_cannot_report_complete(self):
+        self.exercise('normal', restore_fails=True)
+    def test_simultaneous_fault_preserves_original(self):
+        self.exercise('fixture-error', restore_fails=True)
+    def test_partial_arm_and_restore_fault_preserve_original(self):
+        self.exercise('partial-arm', restore_fails=True)
+
+
 if __name__ == "__main__":
     unittest.main()

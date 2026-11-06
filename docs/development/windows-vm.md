@@ -133,6 +133,8 @@ failure; `--keep-runners` retains their reservations for another round. Their
 prepared disks persist. Stop retained runners with `--vm <runner> stop`, and use
 `runners --reset` to delete this primary VM's stopped runner disks.
 
+Crash dumps land in each fixture run's `wer/dumps` evidence directory; the runner restores the per-app LocalDumps key's original values and registry types before retrieval.
+
 Marked registry rows run on one pool GPU VM at 150% scale.
 It holds two CPU slots (8 vCPU / 16 GiB), leaving at most 22 CPU runners
 in a 96-vCPU pool. Admission requires `MemAvailable` of at least the total
