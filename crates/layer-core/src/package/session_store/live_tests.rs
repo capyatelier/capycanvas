@@ -286,33 +286,25 @@ fn blocking_store_reads_complete_without_import_headroom() {
 struct CountedReads {
     cache:crate::tile_io::ReadCache,
     calls:Arc<std::sync::atomic::AtomicUsize>,
-    stop:mpsc::Sender<Option<crate::tile_io::ReadCache>>,
-    worker:Option<std::thread::JoinHandle<()>>,
 }
 impl CountedReads {
     fn new()->Self {
         let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
         let cache=crate::tile_io::ReadCache::new(budget);
-        let calls=Arc::new(std::sync::atomic::AtomicUsize::new(0));let count=calls.clone();
-        let (stop,receive)=mpsc::channel::<Option<crate::tile_io::ReadCache>>();
-        let worker=std::thread::spawn(move ||while let Ok(Some(cache))=receive.recv() {
-            if cache.has_pending_reads() {count.fetch_add(1,Ordering::Relaxed);}
-            cache.drive();
-        });
-        let schedule=stop.clone();cache.set_scheduler(Arc::new(move |cache|{let _=schedule.send(Some(cache));}));
-        Self {cache,calls,stop,worker:Some(worker)}
+        Self {cache,calls:Default::default()}
     }
     fn calls(&self)->usize {self.calls.load(Ordering::Acquire)}
-}
-impl Drop for CountedReads {
-    fn drop(&mut self) {let _=self.stop.send(None);if let Some(worker)=self.worker.take() {worker.join().unwrap();}}
+    fn open(&self,path:&Path)->SessionStore {
+        let calls=self.calls.clone();
+        crate::package::store_io::test_support::open_observed(path,self.cache.clone(),Arc::new(move ||{calls.fetch_add(1,Ordering::Relaxed);})).wait().unwrap()
+    }
 }
 #[test]
 fn clean_checkpoints_reuse_the_index_without_reading_cold_tiles_or_recomputing_their_crc() {
     let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
     let tile=blob(97);let editor=document_editor(tile.clone());
     let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-    let mut store=SessionStore::open_with_cache(&directory.0,reads.cache.clone()).wait().unwrap();
+    let mut store=reads.open(&directory.0);
     store.checkpoint(&capture,serde_json::json!({"camera":0}).into(),&cancel).wait().unwrap();
     let physical=pack_lengths(&store);let location=tile.compressed.location().unwrap().unwrap();
     assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),0);
@@ -383,7 +375,7 @@ fn stored_tile_identity_checks_worker_payload_without_reading_the_cold_owner() {
     let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
     let source=blob(83);let bytes=source.memory_compressed().unwrap().unwrap();
     let editor=document_editor(source);let capture=captured_editor(&editor);
-    let mut store=SessionStore::open_with_cache(&directory.0,reads.cache.clone()).wait().unwrap();
+    let mut store=reads.open(&directory.0);
     store.checkpoint(&capture,serde_json::json!({}).into(),&cancel).wait().unwrap();
     let cold=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
     let identity=cold.content_identity();assert!(identity.is_some());assert!(cold.encoded_fingerprint().is_none());
@@ -401,7 +393,7 @@ fn restore_binds_cold_tiles_and_defers_checksum_verification_until_the_first_rea
     let directory=Directory::new();let reads=CountedReads::new();let cancel=AtomicBool::new(false);
     let editor=document_editor(blob(113));
     let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
-    let mut store=SessionStore::open_with_cache(&directory.0,reads.cache.clone()).wait().unwrap();
+    let mut store=reads.open(&directory.0);
     store.checkpoint(&capture,serde_json::json!({}).into(),&cancel).wait().unwrap();
     let tile=store.load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor.retained_tiles().blobs().unwrap().pop().unwrap();
     assert_eq!(tile.resident_bytes(),0);assert_eq!(reads.calls(),0);

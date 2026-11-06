@@ -2208,31 +2208,25 @@ mod tests {
     #[test]
     fn pending_store_decode_releases_frame_demand_and_completion_wakes_the_host() {
         use std::sync::{Arc,Mutex,Condvar,mpsc,atomic::AtomicBool};
-        struct HeldReads {
-            open:Arc<(Mutex<bool>,Condvar)>,send:mpsc::Sender<Option<layer_core::tile_io::ReadCache>>,worker:Option<std::thread::JoinHandle<()>>,
-        }
+        struct HeldReads(Arc<(Mutex<bool>,Condvar)>);
         impl Drop for HeldReads {
             fn drop(&mut self) {
-                *self.open.0.lock().unwrap()=true;self.open.1.notify_all();let _=self.send.send(None);
-                if let Some(worker)=self.worker.take() {worker.join().unwrap();}
+                *self.0.0.lock().unwrap()=true;self.0.1.notify_all();
             }
         }
         let cache=layer_core::tile_io::ReadCache::new(layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes:Some(1<<30),override_bytes:Some(1<<30),..Default::default()}));
-        let (send,receive)=mpsc::channel::<Option<layer_core::tile_io::ReadCache>>();
         let (entered,waiting)=mpsc::channel();
         let open=Arc::new((Mutex::new(false),Condvar::new()));let gate=open.clone();
-        let worker=std::thread::spawn(move ||while let Ok(Some(cache))=receive.recv() {
+        let observe=Arc::new(move || {
             let _=entered.send(());
             let mut released=gate.0.lock().unwrap();while !*released {released=gate.1.wait(released).unwrap();}drop(released);
-            cache.drive();
         });
-        let held=HeldReads {open,send:send.clone(),worker:Some(worker)};
-        cache.set_scheduler(Arc::new(move |cache|{let _=send.send(Some(cache));}));
+        let held=HeldReads(open);
         let mut document=layer_ui::new_drawing(32,32,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let image=layer_core::color::source::rgba8_source([32;2],|_,_|[0,0,255,255]);
         let (layer,edit)=document.create_object_layer_edit("Stored photo",layer_core::ImageObject::new(image.into()),None,0).unwrap();document.apply(edit).unwrap();
         let path=std::env::temp_dir().join(format!("capy-host-wake-{}",layer_core::PortableId::random()));
-        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open_with_cache(&path,cache)).unwrap();
+        let mut store=pollster::block_on(layer_core::package::store_io::test_support::open_observed(&path,cache,observe)).unwrap();
         pollster::block_on(store.make_durable(&layer_core::Editor::new(document.clone()).retained_tiles(),&AtomicBool::new(false))).unwrap();
         let (_reference,mut host)=gpu_document_host(layer_ui::Platform::Android,document);
         let (notify,woken)=mpsc::channel();host.set_wake(Arc::new(move ||{let _=notify.send(());}));
@@ -2240,7 +2234,7 @@ mod tests {
         while !host.startup.brush_ready || host.session.engine().wants_continuous_frames() {frame_step(&mut host,&clock,deadline);}
         waiting.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
         host.dirty=false;assert!(!host.poll_preparation());assert!(woken.try_recv().is_err());
-        *held.open.0.lock().unwrap()=true;held.open.1.notify_all();
+        *held.0.0.lock().unwrap()=true;held.0.1.notify_all();
         woken.recv_timeout(std::time::Duration::from_secs(10)).unwrap();assert!(host.poll_preparation());
         let pixels=thumbnail(&mut host,&clock,1,layer_ui::occurrence_token(layer));
         assert_eq!(&pixels[(16*32+16)*4..(16*32+16)*4+4],&[0,0,255,255]);

@@ -51,10 +51,16 @@ pub(crate) struct StoredTiles {
 }
 impl StoredTiles {
     pub fn new(tiles:&layer_core::raster_storage::RetainedTiles,cache:layer_core::tile_io::ReadCache)->Self {
+        Self::with_reads(tiles,cache,None)
+    }
+    fn with_reads(tiles:&layer_core::raster_storage::RetainedTiles,cache:layer_core::tile_io::ReadCache,observe:Option<Arc<dyn Fn()+Send+Sync>>)->Self {
         use std::sync::atomic::{AtomicU64,Ordering};
         static NEXT:AtomicU64=AtomicU64::new(0);
         let path=std::env::temp_dir().join(format!("capy-render-store-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));
-        let mut store=pollster::block_on(layer_core::package::session_store::SessionStore::open_with_cache(&path,cache)).unwrap();
+        let mut store=pollster::block_on(async {match observe {
+            Some(observe)=>layer_core::package::store_io::test_support::open_observed(&path,cache,observe).await,
+            None=>layer_core::package::session_store::SessionStore::open_with_cache(&path,cache).await,
+        }}).unwrap();
         assert!(pollster::block_on(store.make_durable(tiles,&std::sync::atomic::AtomicBool::new(false))).unwrap()>0);
         Self {store:Some(store),path}
     }
@@ -83,6 +89,11 @@ pub(crate) struct ReadGate {
 }
 impl ReadGate {
     pub fn release(&self) {*self.open.lock().unwrap()=true;self.wake.notify_all();}
+    fn wait(&self) {
+        self.reads.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
+        self.readers.lock().unwrap().push(std::thread::current().id());
+        let mut open=self.open.lock().unwrap();while !*open {open=self.wake.wait(open).unwrap();}
+    }
     pub fn entered(&self) {
         use std::sync::atomic::Ordering;
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
@@ -95,37 +106,19 @@ impl ReadGate {
 pub(crate) struct GatedStore {
     _store:StoredTiles,
     pub gate:Arc<ReadGate>,
-    stop:std::sync::mpsc::Sender<Option<layer_core::tile_io::ReadCache>>,
-    worker:Option<std::thread::JoinHandle<()>>,
 }
 impl GatedStore {
     pub fn new(tiles:&layer_core::raster_storage::RetainedTiles,corrupt:bool)->Self {
-        use std::sync::atomic::Ordering;
         let cache=tile_read_cache();
         let gate=Arc::new(ReadGate::default());
-        let (send,receive)=std::sync::mpsc::channel::<Option<layer_core::tile_io::ReadCache>>();
         let waiting=gate.clone();
-        let worker=std::thread::spawn(move ||while let Ok(Some(cache))=receive.recv() {
-            if cache.has_pending_reads() {
-                if waiting.reads.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire).is_ok() {
-                    waiting.readers.lock().unwrap().push(std::thread::current().id());
-                }
-                let mut open=waiting.open.lock().unwrap();
-                while !*open {open=waiting.wake.wait(open).unwrap();}
-            }
-            cache.drive();
-        });
-        let schedule=send.clone();
-        cache.set_scheduler(Arc::new(move |cache| {
-            let _=schedule.send(Some(cache));
-        }));
-        let store=StoredTiles::new(tiles,cache);
+        let store=StoredTiles::with_reads(tiles,cache,Some(Arc::new(move ||waiting.wait())));
         if corrupt {store.corrupt();}
-        Self {_store:store,gate,stop:send,worker:Some(worker)}
+        Self {_store:store,gate}
     }
 }
 impl Drop for GatedStore {
-    fn drop(&mut self) {self.gate.release();let _=self.stop.send(None);if let Some(worker)=self.worker.take() {let _=worker.join();}}
+    fn drop(&mut self) {self.gate.release();}
 }
 
 pub(crate) fn corrupt_tile(blob: layer_core::raster::TileBlob) -> layer_core::raster::RasterTile {

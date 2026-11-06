@@ -2,6 +2,9 @@ use super::MAX_RANGE_BYTES;
 use crate::tile_io::RangeReader;
 use std::{future::Future, pin::Pin, sync::Arc};
 
+#[cfg(all(not(target_arch="wasm32"),any(test,feature="test-support")))]
+pub mod test_support;
+
 pub type FileFuture<'a,T> = Pin<Box<dyn Future<Output=Result<T,String>>+'a>>;
 
 #[derive(Clone,Copy,PartialEq,Eq)]
