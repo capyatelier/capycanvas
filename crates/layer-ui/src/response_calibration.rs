@@ -106,7 +106,7 @@ impl<R: EditableResponse> Calibration<R> {
         if extent.iter().chain(&[area.width,area.height]).any(|v| !v.is_finite() || *v <= 0.) { return; }
         let mut b = self.placement.unwrap_or_default();
         b.width = extent[0].min(area.width); b.height = extent[1].min(area.height);
-        b.x = b.x.clamp(area.x, area.x + area.width - b.width); b.y = b.y.clamp(area.y, area.y + area.height - b.height);
+        b.x = b.x.clamp(area.x, area.x + (area.width - b.width)); b.y = b.y.clamp(area.y, area.y + (area.height - b.height));
         self.placement = Some(b);
     }
     pub fn action(&mut self, action: CurveEditorAction) -> bool {
@@ -220,6 +220,21 @@ fn place_response_calibration(area:Bounds,obstacles:&[Bounds],extent:[f32;2],vie
 #[cfg(test)]
 mod placement_tests {
     use super::*;
+    #[test]
+    fn measured_response_panels_fill_fractional_work_areas_without_inverting_clamp_bounds() {
+        fn fills<R:EditableResponse>(area:Bounds) {
+            let mut calibration=Calibration::<R>::default();
+            calibration.fit([384.,360.],area);
+            assert_eq!(calibration.placement,Some(area));
+            calibration.drag(ContactPhase::Down,[0.,0.],area);
+            calibration.drag(ContactPhase::Up,[100.,100.],area);
+            assert_eq!(calibration.placement,Some(area));
+        }
+        for area in [Bounds{x:0.,y:47.333336,width:320.,height:225.33333},Bounds{x:47.333336,y:0.,width:225.33333,height:320.}] {
+            fills::<PressureResponse>(area);
+            fills::<TiltResponse>(area);
+        }
+    }
     #[test]
     fn response_placement_avoids_floating_panels_and_drawers_with_a_common_margin() {
         let area=Bounds{x:300.,y:100.,width:1000.,height:800.};let viewport=[1600.,1000.];let extent=[384.,600.];
