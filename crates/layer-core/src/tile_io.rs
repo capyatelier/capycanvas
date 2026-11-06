@@ -430,7 +430,7 @@ mod tests {
         let mut encoder=flate2::write::DeflateEncoder::new(Vec::new(),flate2::Compression::fast());
         std::io::Write::write_all(&mut encoder,&vec![0;(TILE_SIZE*TILE_SIZE*4) as usize]).unwrap();let encoded=encoder.finish().unwrap();
         let backing=ImmutableBacking::new(Arc::new(cache.source(encoded.len() as u64*100,held.clone()))).unwrap();
-        let lease=PackageLease::new(backing);
+        let lease=PackageLease::new(backing);let source_id=lease.read_source().0.id;
         let tiles=(0..100).map(|index| {
             let range=lease.range(index*encoded.len() as u64,encoded.len() as u64,crc32fast::hash(&encoded),descriptor,true).unwrap();
             ([index as u32%10,index as u32/10],Arc::new(TileBlob::from_package_range(crate::PortableId::random(),descriptor,range).unwrap()))
@@ -440,10 +440,12 @@ mod tests {
         document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(Arc::new(SourceImage {extent:[10*TILE_SIZE;2],resolution:None,tiles,interpretation}))));
         let editor=Editor::new(document);let capture=editor.capture(0,Default::default()).unwrap();
         let before=cache.0.state.lock().unwrap().entries.keys().copied().collect::<std::collections::HashSet<_>>();
+        let foreign=cache.source(1,held.clone());
+        assert!(matches!(foreign.poll(0,1).unwrap(),RangeState::Pending));
         let cancelled=AtomicBool::new(false);let selection=None;
         let budget=MemoryBudget::process();let mut preparing=Box::pin(PreparedTransfer::capture_async(&capture,&selection,&cancelled,&budget));
         let pending=std::future::Future::poll(preparing.as_mut(),&mut Context::from_waker(Waker::noop())).is_pending();
-        let registered=cache.0.state.lock().unwrap().entries.keys().filter(|key|!before.contains(key)).count();
+        let registered=cache.0.state.lock().unwrap().entries.keys().filter(|key|key.0==source_id && !before.contains(key)).count();
         drop(preparing);drop(capture);drop(editor);drop(lease);held.close();
         assert!(pending);assert!(registered>0 && registered<=QUEUED_READS,"registered {registered} tile ranges");
     }

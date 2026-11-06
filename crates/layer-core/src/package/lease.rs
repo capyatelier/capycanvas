@@ -40,6 +40,8 @@ impl WeakPackageLease {pub(crate) fn upgrade(&self)->Option<PackageLease> {self.
 struct Lease {generation:crate::PortableId,backing:ImmutableBacking,reads:ReadSource,ranges:Arc<Mutex<BTreeMap<(u64,usize),Arc<PackageIdentity>>>>}
 impl PackageLease {
     pub fn new(backing:ImmutableBacking)->Self {backing.package_lease()}
+    #[cfg(test)]
+    pub(crate) fn read_source(&self)->&ReadSource {&self.0.reads}
     pub(crate) fn downgrade(&self)->WeakPackageLease {WeakPackageLease(Arc::downgrade(&self.0))}
     pub(crate) fn create(backing:ImmutableBacking,generation:crate::PortableId)->Self {
         let ranges=Arc::new(Mutex::new(BTreeMap::new()));
