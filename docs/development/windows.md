@@ -371,8 +371,9 @@ afterwards.
 `scripts/test-input.ps1` compiles the C++ input queue and composition-key tests
 with `cl` and needs a Visual Studio developer shell. Windows PowerShell 5.1 reads
 scripts without an encoding marker in the system code page, so scripts with
-Unicode text use a UTF-8 BOM; `tests/script-encoding.ps1` checks this. Sort
-arrays of hashtables with an explicit key, such as `Sort-Object { $_.difference }`,
+Unicode text use a UTF-8 BOM; `tests/script-encoding.ps1` checks this.
+The same check resolves fixture custom type references against their actual Add-Type C# declarations and requires PowerShell 7, installed by `prepare.ps1` on runners.
+Sort arrays of hashtables with an explicit key, such as `Sort-Object { $_.difference }`,
 so Windows PowerShell 5.1 and PowerShell 7 agree.
 
 The `d3d12_` tests that write app storage need `CAPY_STORAGE_DIR` set to a fresh
