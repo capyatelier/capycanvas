@@ -18,6 +18,7 @@ mod effects;
 mod refinement;
 mod hierarchy;
 pub(crate) use hierarchy::eligible as hierarchy_eligible;
+pub(crate) use sources::SOURCE_WORKING_BYTES;
 mod navigator;
 pub(crate) use navigator::Navigator;
 pub(crate) use sources::Sources;
@@ -150,7 +151,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(&records_layout), Some(&half_inputs)],
             immediate_size: 0,
         });
-        let half_shader = Deferred::wgsl(device, "half-float display level", include_str!("scale/half.wgsl"));
+        let half_shader = Deferred::wgsl(device, "half-float display level", [include_str!("../display_mips/half.wgsl"), include_str!("scale/half.wgsl")].concat());
         Self {
             half: Deferred::compute(device, "half-float display level", &half_layout, &half_shader, "convert"),
             half_inputs,
@@ -1256,7 +1257,7 @@ impl Cache {
     fn render_coarse_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<bool, GpuRasterError> {
-        if self.ready { return Ok(false); }
+        if self.coverage_complete() { return Ok(false); }
         let result = self.render_graph(scene, r, packet, dirty, encoding, Destination::Preview, tiles);
         match result { Ok(_) | Err(GpuRasterError::DeferredObjectWork) => Ok(self.coverage_complete() && !self.approximate.is_empty()), Err(error) => Err(error) }
     }

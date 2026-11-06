@@ -92,16 +92,10 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
         let mut tiles: Vec<_> = page_coordinates(PixelRect::full(extent)).collect();
         tiles.reverse();
         for coordinate in tiles {
-            image
-                .write_tile(
-                    &r.device,
-                    &pipelines,
-                    &mut encoder,
-                    &source,
-                    coordinate.map(|v| v * PAGE_SIZE),
-                    coordinate,
-                )
-                .unwrap();
+            let origin=coordinate.map(|v|v*PAGE_SIZE);
+            let valid=image.tile_extent(coordinate).unwrap();
+            image.copy_to_scratch(&mut encoder,&source,PixelRect::new(origin[0],origin[1],origin[0]+valid[0],origin[1]+valid[1]),[0;2]).unwrap();
+            image.reduce_scratch(&r.device,&pipelines,&mut encoder,coordinate).unwrap();
         }
         image.generate_mips(&r.device, &pipelines, &mut encoder);
         encoder.submit(&r.queue);
@@ -148,9 +142,8 @@ fn queued_tile_mips_match_float64_area_reference_through_partial_edges_and_updat
             &vec![changed; PAGE_SIZE.pow(2) as usize],
         );
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        image
-            .write_tile(&r.device, &pipelines, &mut encoder, &tile, [0; 2], [0; 2])
-            .unwrap();
+        image.copy_to_scratch(&mut encoder,&tile,PixelRect::full(image.tile_extent([0;2]).unwrap()),[0;2]).unwrap();
+        image.reduce_scratch(&r.device,&pipelines,&mut encoder,[0;2]).unwrap();
         image.generate_mips(&r.device, &pipelines, &mut encoder);
         encoder.submit(&r.queue);
         for (level, actual) in &levels {

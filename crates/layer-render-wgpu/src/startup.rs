@@ -424,7 +424,7 @@ impl WgpuRasterizer {
             }
             if shader.key.objects {
                 required.compute.extend(self.scene_pipelines.objects.pipelines().map(Clone::clone));
-                required.compute.extend(self.moving_images.pipelines(&self.device).map(Clone::clone));
+                required.compute.extend(self.moving_images.pipelines(&self.device).into_iter().cloned());
             }
             if shader.key.vectors {
                 required.compute.extend(self.scene_pipelines.vector.pipelines().map(Clone::clone));
@@ -1110,7 +1110,7 @@ mod gpu_tests {
             assert!(renderer.moving_images.pipelines(&renderer.device).into_iter().all(|p| p.ready()));
             let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
             let source=document.artwork.objects.iter().next().unwrap().2.image.clone();
-            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1,nearest:false};
+            let request=crate::object_image_mips::MovingRequest {id:source.id(),source:source.storage().clone(),level:1,nearest:false,bounds:crate::PixelRect::full(source.extent),format:crate::object_image_mips::MovingImages::format(document.scene()),rank:0};
             let mut images=std::mem::take(&mut renderer.moving_images);
             let plan=images.plan(&renderer,std::slice::from_ref(&request),u64::MAX,&mut encoder);
             assert!(plan.is_ok());

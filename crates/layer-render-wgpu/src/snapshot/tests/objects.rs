@@ -91,6 +91,24 @@ fn photo_objects(extent: [u32; 2], objects: &[([u32; 2], [f64; 6])]) -> Document
 }
 
 #[test]
+fn export_sources_fit_one_aligned_capture_window_instead_of_the_whole_document() {
+    let extent=[1024;2];
+    let doc=photo_objects(extent,&vec![(extent,[1.,0.,0.,1.,0.,0.]);28]);
+    let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes:Some(1<<40),override_bytes:Some(1<<40),..Default::default()});
+    let hardware=crate::memory::memory_tests::renderer_in_budget(doc.composition().color,
+        layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<40),..Default::default()},budget).unwrap();
+    let mut reader=hardware.snapshot_gpu().capture_scene(doc.snapshot(),SceneScope::All,Default::default()).unwrap();
+    for region in [[256,256,512,256],[0,0,1024,1024]] {
+        let (renderer,_,_,encoder)=reader.prepare_region_gpu(region,0).unwrap();
+        let slots=renderer.source_tiles.borrow().free_slots();
+        assert!(slots>=28*4*3,"the actual window's source footprint must fit: {slots} slots");
+        assert!(slots<28*4*4,"the capture does not reserve the whole document: {slots} slots");
+        renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);
+        crate::test_support::complete(renderer);
+    }
+}
+
+#[test]
 fn whole_document_object_previews_drain_each_band_in_a_few_submissions() {
     let doc = photo_objects([2048, 1536], &[([2048, 1536], [1., 0., 0., 1., 0., 0.]), ([512, 384], [1., 0., 0., 1., 700., 500.])]);
     let mut reader = capture(doc).unwrap();

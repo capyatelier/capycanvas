@@ -3,6 +3,8 @@
 use super::*;
 use std::collections::BTreeMap;
 use wgpu::util::DeviceExt;
+mod window;
+pub(crate) use window::{Window, WindowPipelines};
 
 pub(super) const MAX_LEVEL: u32 = PAGE_SIZE.ilog2();
 const MIP_COUNT: u32 = MAX_LEVEL + 1;
@@ -171,12 +173,6 @@ pub(super) struct CompleteUpdates {
 }
 impl CompleteUpdates {
     pub(super) const BATCH: usize = 128;
-    pub(crate) fn cpu_bytes(&self) -> u64 {
-        (self.bindings.capacity() + self.fused_bindings.capacity()) as u64 * std::mem::size_of::<wgpu::BindGroup>() as u64
-            + self.pending.capacity() as u64 * std::mem::size_of::<[u32; 2]>() as u64
-    }
-
-
     pub(crate) fn from_level(device: &PipelineDevice, pipelines: &Pipelines, plan: Plan, first: u32,
         views: &[&wgpu::TextureView]) -> Self {
         assert_eq!(views.len(), (plan.level-first) as usize + 1);
@@ -341,10 +337,6 @@ impl Image {
             records: BTreeMap::new(),
         }
     }
-    pub fn storage_from(&self, level: u32) -> u64 {
-        if level == self.plan.level { return self.storage_bytes(); }
-        Plan::at(self.plan.extent, level).pixel_bytes_through(level)
-    }
     pub fn storage_bytes(&self) -> u64 {
         texture_bytes(&self.texture) + texture_bytes(&self.scratch)
             + self
@@ -371,30 +363,6 @@ impl Image {
     }
 
 
-    /// Consume one completed full-resolution composition tile. `source_origin`
-    /// supports both a temporary tile and the current full composite during its
-    /// replacement. Every output pixel averages all valid document pixels in its
-    /// power-of-two footprint, including partial right/bottom edge footprints.
-    pub fn write_tile(
-        &mut self,
-        device: &PipelineDevice,
-        pipelines: &Pipelines,
-        encoder: &mut crate::submission::CommandEncoder,
-        source: &wgpu::Texture,
-        source_origin: [u32; 2],
-        coordinate: [u32; 2],
-    ) -> Result<(), GpuRasterError> {
-        let valid = self.tile_extent(coordinate)?;
-        if source == &self.scratch {
-            if source_origin != [0; 2] { return Err(GpuRasterError::InvalidExtent); }
-        } else {
-            let region = PixelRect::new(source_origin[0], source_origin[1],
-                source_origin[0].checked_add(valid[0]).ok_or(GpuRasterError::InvalidExtent)?,
-                source_origin[1].checked_add(valid[1]).ok_or(GpuRasterError::InvalidExtent)?);
-            self.copy_to_scratch(encoder, source, region, [0; 2])?;
-        }
-        self.reduce_scratch(device, pipelines, encoder, coordinate)
-    }
     fn tile_extent(&self, coordinate: [u32; 2]) -> Result<[u32; 2], GpuRasterError> {
         if coordinate.into_iter().zip(self.plan.extent).any(|(c, n)| c >= n.div_ceil(PAGE_SIZE)) {
             return Err(GpuRasterError::InvalidExtent);
@@ -449,40 +417,7 @@ impl Image {
     ) -> Result<(), GpuRasterError> {
         let valid = self.tile_extent(coordinate)?;
         let origin = coordinate.map(|v| v * PAGE_SIZE);
-        let last = self.plan.level;
-        let records = self.records.entry(valid).or_insert_with(|| {
-            (1..=last)
-                .map(|level| {
-                    let data = [valid[0], valid[1], 1 << (level - 1), 0]
-                        .into_iter()
-                        .flat_map(u32::to_le_bytes)
-                        .collect::<Vec<_>>();
-                    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("display mip footprint"),
-                        contents: &data,
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                    let binding = crate::bindings::group(device, "display mip source", &pipelines.layout, [
-                        wgpu::BindingResource::TextureView( &self.views[level as usize - 1], ),
-                        uniform.as_entire_binding(),
-                        wgpu::BindingResource::TextureView(&self.views[level as usize]),
-                    ]);
-                    Record { uniform, binding }
-                })
-                .collect()
-        });
-        if !records.is_empty() {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("reduce display tile"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&pipelines.reduce);
-            for (index, record) in records.iter().enumerate() {
-                pass.set_bind_group(0, &record.binding, &[0]);
-                let side = PAGE_SIZE >> (index + 1);
-                pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), 1);
-            }
-        }
+        Self::reduce_to_level(device, pipelines, encoder, &self.views, &mut self.records, valid, self.plan.level);
         let scale = 1 << self.plan.level;
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -505,6 +440,45 @@ impl Image {
         );
         Ok(())
     }
+    fn reduce_to_level(device: &PipelineDevice, pipelines: &Pipelines,
+        encoder: &mut crate::submission::CommandEncoder, views: &[wgpu::TextureView],
+        records: &mut BTreeMap<[u32; 2], Vec<Record>>, valid: [u32; 2], level: u32,
+    ) {
+        let records = records.entry(valid).or_insert_with(|| {
+            (1..views.len() as u32)
+                .map(|level| {
+                    let data = [valid[0], valid[1], 1 << (level - 1), 0]
+                        .into_iter()
+                        .flat_map(u32::to_le_bytes)
+                        .collect::<Vec<_>>();
+                    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("display mip footprint"),
+                        contents: &data,
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                    let binding = crate::bindings::group(device, "display mip source", &pipelines.layout, [
+                        wgpu::BindingResource::TextureView( &views[level as usize - 1], ),
+                        uniform.as_entire_binding(),
+                        wgpu::BindingResource::TextureView(&views[level as usize]),
+                    ]);
+                    Record { uniform, binding }
+                })
+                .collect()
+        });
+        if level != 0 {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("reduce display tile"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipelines.reduce);
+            for (index, record) in records.iter().take(level as usize).enumerate() {
+                pass.set_bind_group(0, &record.binding, &[0]);
+                let side = PAGE_SIZE >> (index + 1);
+                pass.dispatch_workgroups(side.div_ceil(8), side.div_ceil(8), 1);
+            }
+        }
+    }
+
 }
 
 #[cfg(test)]

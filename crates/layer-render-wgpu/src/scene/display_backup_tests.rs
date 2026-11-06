@@ -44,17 +44,31 @@ fn cold_late_object_window_preserves_accepted_pixels_and_pose_until_complete() {
     assert_eq!(r.evaluated_object_revision(),accepted);
     assert!(max_error(&expected,&float_pixels(&r,r.display_views().unwrap()[0].texture()))<3e-5);
     assert!(r.metrics.composite_storage_bytes>=r.display_backup.as_ref().unwrap().bytes);
+    let mut preview:Option<Vec<[f32;4]>>=None;
     for _ in 0..2000 {
         if !r.object_deferred {break;}
         std::thread::sleep(std::time::Duration::from_millis(1));
         r.submit(FramePacket {composite_all:false,reset_layers:false,..packet(doc.scene(),extent)}).unwrap();r.wait_idle().unwrap();
         if r.object_deferred {
             assert_eq!(r.evaluated_object_revision(),accepted);
-            assert!(max_error(&expected,&float_pixels(&r,r.display_views().unwrap()[0].texture()))<3e-5);
+            let pixels=float_pixels(&r,r.display_views().unwrap()[0].texture());
+            if max_error(&expected,&pixels)>=3e-5 {
+                assert!(r.display_backup.is_none());
+                assert!(r.scale_display.as_ref().unwrap().deferred_presentation().is_some());
+                if let Some(previous)=&preview {
+                    assert_eq!(pixels.len(),previous.len());
+                    assert!(max_error(previous,&pixels)<3e-5,"later complete previews match the first");
+                } else {preview=Some(pixels);}
+            }
         }
     }
     assert!(!r.object_deferred,"bounded worker preparation and private sampling complete");
     assert!(r.display_backup.is_none());
     assert_eq!(r.evaluated_object_revision(),Some(doc.scene().revision()));
     assert!(max_error(&expected,&float_pixels(&r,r.display_views().unwrap()[0].texture()))>0.5);
+    let completed=float_pixels(&r,r.display_views().unwrap()[0].texture());
+    if let Some(preview)=preview {
+        assert_eq!(preview.len(),completed.len());
+        assert!(max_error(&preview,&completed)<3e-5,"deferred pixels must match the complete new preview");
+    }
 }

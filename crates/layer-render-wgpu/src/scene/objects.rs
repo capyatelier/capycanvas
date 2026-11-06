@@ -169,6 +169,7 @@ pub(super) struct CollectionJob {
     pub live: bool,
     pub context: layer_core::color::RgbSpace,
     pub display: bool,
+    pub format: wgpu::TextureFormat,
 }
 impl CollectionJob {
     pub fn same(&self, other: &Self) -> bool {
@@ -207,16 +208,51 @@ impl Scene {
         self.object_spatial.prepare(scene);
         let mapping = Affine64([side, 0., 0., side, bounds.min[0] as f64, bounds.min[1] as f64]);
         let level = side.max(1.).log2().ceil() as u32;
+        let format=crate::MovingProjection::format_for(r.moving_projection.as_ref(),scene);
         for &owner in scene.order() {
             if !scene.visible(owner) || scene.object_layer(owner).is_none() { continue; }
             let Some(content) = self.object_spatial.content(scene, owner) else { continue; };
             for key in content.query_at(bounds, level) {
                 let object = scene.object(key.handle).ok_or(GpuRasterError::InvalidExtent)?;
                 let inverse = key.placement().inverse().ok_or(GpuRasterError::InvalidTransform("Invalid image object affine"))?.compose(mapping).0;
-                if Self::preview_source(r, key.image, object.image.storage(), key.nearest, inverse).is_none() { return Ok(true); }
+                if Self::preview_source(r, key.image, object.image.storage(), key.nearest, format, inverse, bounds.size()?.map(|size|(f64::from(size)/side).ceil().max(1.) as u32)).is_none() { return Ok(true); }
             }
         }
         Ok(false)
+    }
+    pub(crate) fn capture_source_bytes(&mut self,scene:SceneView<'_>,region:PixelRect)->Result<u64,GpuRasterError> {
+        if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_))) {return Ok(0);}
+        self.object_spatial.prepare(scene);
+        let mut bytes=0;let mut y=region.min_y();
+        while y<region.max_y() {
+            let rows=(PAGE_SIZE-y%PAGE_SIZE).min(region.max_y()-y);let mut x=region.min_x();
+            while x<region.max_x() {
+                let columns=(2*PAGE_SIZE-x%PAGE_SIZE).min(region.max_x()-x);
+                bytes=bytes.max(self.capture_window_source_bytes(scene,PixelRect::new(x,y,x+columns,y+rows))?);
+                x+=columns;
+            }
+            y+=rows;
+        }
+        Ok(bytes)
+    }
+    fn capture_window_source_bytes(&mut self,scene:SceneView<'_>,region:PixelRect)->Result<u64,GpuRasterError> {
+        let raw=match scene.scope() {Some(layer_core::SceneScope::RawObjects(owner))=>Some(*owner),_=>None};
+        let window=DocRect::from(region).aligned(PAGE_SIZE);
+        let stages=images::stage_regions(scene,window,0,Some(&self.object_spatial));
+        let mut tiles=std::collections::BTreeSet::new();
+        for &owner in scene.order() {
+            if raw.map_or_else(||!scene.visible(owner),|raw|raw!=owner) {continue;}
+            let Some(content)=self.object_spatial.content(scene,owner) else {continue;};
+            let window=stages.get(&owner).map_or(window,|regions|regions[0]).aligned(PAGE_SIZE);
+            for key in content.query_at(window,0) {
+                let source=key.source().ok_or(GpuRasterError::InvalidImage)?;
+                let inverse=key.placement().inverse().ok_or(GpuRasterError::InvalidTransform("Invalid image object affine"))?
+                    .compose(Affine64([1.,0.,0.,1.,window.min[0] as f64,window.min[1] as f64])).0;
+                let bounds=crate::object_sampling::ObjectSampler::source_bounds(inverse,window.size()?,key.nearest,source.extent)?;
+                tiles.extend(page_coordinates(bounds).filter(|coordinate|source.tiles.contains_key(coordinate)).map(|coordinate|(key.source.clone(),coordinate)));
+            }
+        }
+        Ok((tiles.len() as u64).saturating_mul(sources::FLOAT_TILE_BYTES))
     }
     pub(crate) fn invalidate_object_previews(&mut self, extent: [u32; 2]) { self.object_source_damage = PixelRect::full(extent).into(); }
     pub(crate) fn decode_prepared(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
@@ -239,7 +275,7 @@ impl Scene {
         let offset=packet.scene.evaluation_offset64();
         let global=ObjectWindow {origin:std::array::from_fn(|i|window.origin[i]-offset[i]),..window};
         CollectionJob {owner,authored:content.keys(),keys,window:global,blend:packet.blend_space,live:self.object_display||self.object_query,
-            context:r.device.working_space(),display:self.object_display}
+            context:r.device.working_space(),display:self.object_display,format:crate::MovingProjection::format_for(r.moving_projection.as_ref(),packet.scene)}
     }
     pub(super) fn prepare_object_pages(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, raw: Option<OccurrenceHandle>,
         pages: impl IntoIterator<Item = [u32; 2]> + Clone,
@@ -279,20 +315,27 @@ impl Scene {
         }
         Ok(ready.then_some(pieces))
     }
-    fn preview_source(r: &WgpuRasterizer, id: PortableId, source: &Arc<SourceImage>, nearest: bool, inverse: [f64; 6]) -> Option<crate::object_image_mips::MovingSource> {
+    fn preview_source(r: &WgpuRasterizer, id: PortableId, source: &Arc<SourceImage>, nearest: bool, format:wgpu::TextureFormat, inverse: [f64; 6], size: [u32;2]) -> Option<crate::object_image_mips::MovingSource> {
         let level = if nearest { 0 } else { crate::object_image_mips::MovingImages::level(inverse) };
-        r.moving_images.lookup(id, source, level).filter(|mip| !nearest || mip.level == 0)
+        let format=if nearest {wgpu::TextureFormat::Rgba32Float}else{format};
+        let bounds=crate::object_sampling::ObjectSampler::source_bounds(inverse,size,nearest,source.extent).ok()?;
+        r.moving_images.lookup(id,source,level,bounds,format,r.device.working_space())
+            .filter(|mip|!nearest || mip.level==0)
     }
     pub(super) fn collection_preview(r: &WgpuRasterizer, job: &CollectionJob) -> Result<Option<CollectionPreview>, GpuRasterError> {
-        let mut identities: Vec<(PortableId, SourceIdentity, u32)> = Vec::new();
+        let mut identities: Vec<(PortableId, SourceIdentity, u32, [u32;2], [u32;2])> = Vec::new();
         let mut sources = Vec::new();
         let mut objects = Vec::with_capacity(job.keys.len());
         for index in 0..job.keys.len() {
             let child = job.child(index, job.window, r.empty_view.clone())?;
-            let Some(mip) = Self::preview_source(r, child.key.image, &child.source, child.nearest, child.inverse) else { return Ok(None); };
-            let inverse = child.inverse.map(|value| value / f64::from(1u32 << mip.level));
+            let Some(mip) = Self::preview_source(r, child.key.image, &child.source, child.nearest, job.format, child.inverse, job.window.size) else {
+                return Ok(None);
+            };
+            let mut inverse = child.inverse.map(|value| value / f64::from(1u32 << mip.level));
+            inverse[4]-=f64::from(mip.origin[0])/f64::from(1u32<<mip.level);
+            inverse[5]-=f64::from(mip.origin[1])/f64::from(1u32<<mip.level);
             if crate::object_sampling::mapping(inverse, job.window.size).is_err() { return Ok(None); }
-            let identity = (child.key.image, child.key.source.clone(), mip.level);
+            let identity = (child.key.image, child.key.source.clone(), mip.level, mip.origin, mip.extent);
             let source = identities.iter().position(|known| *known == identity).unwrap_or_else(|| { identities.push(identity); sources.push(mip.view.clone()); sources.len() - 1 });
             objects.push(crate::object_sampling::PreviewSource { source, inverse, extent: mip.extent, nearest: child.nearest });
         }

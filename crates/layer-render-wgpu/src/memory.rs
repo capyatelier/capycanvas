@@ -7,7 +7,6 @@ const SOURCE_WORKING_BYTES: u64 = SOURCE_SLOTS as u64 * scene::sources::FLOAT_TI
 const WORKING_BYTES: u64 = (SOURCE_SLOTS as u64 + 4) * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 pub(crate) const CACHE_BYTES: u64 = 608 * MIB;
 pub(crate) const OBJECT_CACHE_BYTES: u64 = 128 * MIB;
-const SOURCE_POOL_BYTES: u64 = 1024 * MIB;
 const DECODED_SAMPLE_BYTES: u64 = 512 * MIB;
 pub fn new_drawing_working_bytes(viewport:[u32;2],unified:bool)->u64 {
     let extent=viewport.map(|side|side.max(1).saturating_add(2*PAGE_SIZE));
@@ -73,6 +72,7 @@ pub(super) struct Memory {
     pinned: std::cell::Cell<[u64; PARTS]>,
     color_pinned: std::cell::Cell<u64>,
     sample_demand: std::cell::Cell<u64>,
+    source_inputs: std::cell::Cell<[u64;2]>,
     preparation: std::cell::Cell<u64>,
     floors: std::cell::Cell<[u64; PARTS]>,
     resources: Arc<std::sync::atomic::AtomicU64>,
@@ -80,6 +80,10 @@ pub(super) struct Memory {
     pub idle: std::sync::atomic::AtomicBool,
 }
 pub(super) fn retained_limit(grant: u64, occupied: u64) -> u64 { grant.saturating_sub(occupied) }
+fn source_demand(viewport: [u32;2]) -> u64 {
+    viewport.map(|side| u64::from(side.saturating_add(2*PAGE_SIZE))).into_iter()
+        .fold(16u64,u64::saturating_mul).max(SOURCE_WORKING_BYTES)
+}
 fn total(parts: [u64; PARTS]) -> u64 { parts.into_iter().fold(0, u64::saturating_add) }
 fn partition(grant: u64, demand: [u64; PARTS], pinned: [u64; PARTS], index: usize) -> u64 {
     let remaining = grant.saturating_sub(total(pinned));
@@ -91,7 +95,7 @@ fn partition(grant: u64, demand: [u64; PARTS], pinned: [u64; PARTS], index: usiz
 impl Memory {
     pub fn new(factory: &RendererFactory, samples: Option<MemoryOwner>) -> Self {
         let working = WORKING_BYTES;
-        let demand = [CACHE_BYTES, OBJECT_CACHE_BYTES, 0, SOURCE_POOL_BYTES, working];
+        let demand = [CACHE_BYTES, OBJECT_CACHE_BYTES, 0, scene::scale::SOURCE_WORKING_BYTES+working, working];
         let floors = [working, 0, 0, working, working];
         let display = Owner::new(factory, Kind::Scene, MemoryReport { pinned_gpu_bytes: total(floors), demand_gpu_bytes: total(demand), ..Default::default() });
         let resources = Arc::new(std::sync::atomic::AtomicU64::new(partition(display.handle.grant().gpu_bytes, demand, floors, 4)));
@@ -101,7 +105,7 @@ impl Memory {
                 |handle| { let report = handle.reported(); Owner { handle, published: std::cell::Cell::new(report) } }),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
-            demand: std::cell::Cell::new(demand), scene_retention: std::cell::Cell::new(CACHE_BYTES), demand_key: std::cell::Cell::new(None), active_owner: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), pinned: std::cell::Cell::new([0; PARTS]), sample_demand: std::cell::Cell::new(DECODED_SAMPLE_BYTES), preparation: std::cell::Cell::new(0), floors: std::cell::Cell::new(floors), resources, published_at: std::cell::Cell::new(web_time::Instant::now()),
+            demand: std::cell::Cell::new(demand), scene_retention: std::cell::Cell::new(CACHE_BYTES), demand_key: std::cell::Cell::new(None), active_owner: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), pinned: std::cell::Cell::new([0; PARTS]), sample_demand: std::cell::Cell::new(DECODED_SAMPLE_BYTES), source_inputs:std::cell::Cell::new([SOURCE_WORKING_BYTES,scene::scale::SOURCE_WORKING_BYTES+working]), preparation: std::cell::Cell::new(0), floors: std::cell::Cell::new(floors), resources, published_at: std::cell::Cell::new(web_time::Instant::now()),
             color_pinned: std::cell::Cell::new(0),
             idle: std::sync::atomic::AtomicBool::new(true),
         };
@@ -147,8 +151,11 @@ impl Memory {
         let floors = [floor, 0, 0, working, working];
         self.floors.set(floors);
         let mut resources = 0u64;
+        let mut native_sources=false;
         let mut luts = std::collections::HashSet::new();
         for &handle in scene.order() {
+            native_sources |= scene.paint_source(handle).is_some_and(|paint|paint.base.is_some() || !paint.raster.is_empty() || !paint.operations.is_empty())
+                || scene.mask(handle).is_some_and(|(_,mask)|!mask.raster.is_empty() || !mask.operations.is_empty());
             let Some(effect) = scene.effect(handle) else { continue; };
             if let Some(resource) = effect.lut3d() && luts.insert(resource.digest()) {
                 resources = resources.saturating_add((96 + u64::from(resource.size()).pow(3) * 16).next_multiple_of(16));
@@ -165,7 +172,11 @@ impl Memory {
         let retention = CACHE_BYTES.saturating_add(hierarchy);
         self.scene_retention.set(retention);
         let windows = scene::Scene::capture_image_bound(scene, PixelRect::full(extent));
-        self.demand.set([retention.saturating_add(windows), OBJECT_CACHE_BYTES, mips, SOURCE_POOL_BYTES.saturating_sub(mips), resources.max(working)]);
+        let transform_sources=display.transforms.into_iter().flatten().map(|(plan,_)|DocRect::from(plan.bounds).aligned(PAGE_SIZE).area().saturating_mul(16).saturating_add(working))
+            .max().unwrap_or(0).min(1024*MIB);
+        let mut sources=self.source_inputs.get();sources[1]=transform_sources.max(if native_sources {scene::scale::SOURCE_WORKING_BYTES+working}else{0});
+        self.source_inputs.set(sources);
+        self.demand.set([retention.saturating_add(windows), OBJECT_CACHE_BYTES, mips, sources[0].max(sources[1]), resources.max(working)]);
         self.sample_demand.set(DECODED_SAMPLE_BYTES);
         Some(activated)
     }
@@ -179,12 +190,13 @@ impl Memory {
         let floors = self.floors.get();
         std::array::from_fn(|part| if part == 0 || part == 3 { actual[part].saturating_add(floors[part]) } else { actual[part].max(floors[part]) })
     }
-    pub fn mip_demand(&self, bytes: u64) -> bool {
+    pub fn mip_demand(&self, bytes: u64, viewport: [u32;2]) -> bool {
         let mut demand = self.demand.get();
-        let bytes = bytes.min(SOURCE_POOL_BYTES.saturating_sub(WORKING_BYTES));
-        if demand[2] == bytes { return false; }
+        let mut inputs=self.source_inputs.get();inputs[0]=source_demand(viewport);self.source_inputs.set(inputs);
+        let sources=inputs[0].max(inputs[1]);
+        if demand[2] == bytes && demand[3] == sources { return false; }
         demand[2] = bytes;
-        demand[3] = SOURCE_POOL_BYTES.saturating_sub(bytes);
+        demand[3] = sources;
         self.demand.set(demand);
         self.limits_dirty.set(true);
         true
@@ -238,9 +250,19 @@ impl WgpuRasterizer {
     }
     pub(super) fn prepare_capture_memory(&mut self, scene: SceneView<'_>, extent: [u32; 2]) {
         self.memory.demand_region(scene, extent, PixelRect::full(extent), DisplayDemand::default());
+        let mut sources=self.memory.source_inputs.get();sources[1]=scene::scale::SOURCE_WORKING_BYTES+WORKING_BYTES;self.memory.source_inputs.set(sources);
+        let mut demand=self.memory.demand.get();demand[3]=sources[0].max(sources[1]);self.memory.demand.set(demand);
         self.publish_memory(true);
         self.factory.memory_budget().flush_reports();
         self.refresh_memory_limits();
+    }
+    pub(super) fn prepare_capture_sources(&mut self,bytes:u64) {
+        let mut sources=self.memory.source_inputs.get();
+        let required=bytes.saturating_add(WORKING_BYTES);
+        if required<=sources[1] {return;}
+        sources[1]=required;self.memory.source_inputs.set(sources);
+        let mut demand=self.memory.demand.get();demand[3]=sources[0].max(sources[1]);self.memory.demand.set(demand);
+        self.publish_memory(true);self.factory.memory_budget().flush_reports();self.refresh_memory_limits();
     }
     pub(crate) fn reserve_effect_analysis(&mut self, bytes: u64) -> Result<crate::effect_analysis::Lease, String> {
         let required = (*self.device.analysis_memory.lock().unwrap()).saturating_add(bytes);
@@ -290,7 +312,7 @@ impl WgpuRasterizer {
             self.scale_display.as_ref().map_or(0, |cache| cache.presentation_bytes())
                 .saturating_add(self.navigator.storage_bytes()).saturating_add(self.display_backup.as_ref().map_or(0, |backup| backup.bytes)).saturating_add(retired).saturating_add(pinned_transforms),
             self.scene.as_ref().map_or(0, |scene| scene.pinned_bytes()),
-            self.moving_images.pinned_bytes(self.moving_projection.as_ref().map_or(&[], |projection| &projection.requests)), source.pinned_bytes().saturating_add(source.non_slot_bytes()), resources,
+            self.moving_images.pinned_bytes(), source.pinned_bytes().saturating_add(source.non_slot_bytes()), resources,
         ];
         self.memory.pinned.set(pinned);
         let pinned = self.memory.part_pins();
@@ -354,7 +376,7 @@ impl WgpuRasterizer {
                 #[cfg(not(target_arch = "wasm32"))] _scratch: (pages, Vec::new()) };
             encoder.on_submitted_work_done(move || drop(charge));
         }
-        let retired = paint_retired + self.moving_images.trim_unused(&self.device, self.memory_limit(Kind::Mips),
+        let retired = paint_retired + self.moving_images.trim_unused(self.memory_limit(Kind::Mips),
             self.moving_projection.as_ref().map_or(&[], |projection| &projection.requests), &mut encoder)
             + self.scene.as_mut().map_or(0, |scene| scene.trim_memory(ram, gpu, &mut encoder))
             + self.source_tiles.borrow_mut().trim_unused(&encoder);

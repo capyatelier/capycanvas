@@ -140,7 +140,7 @@ fn leased_source_pins_do_not_reduce_an_ample_scene_grant() {
     let mut frame = packet(doc.scene(), [512; 2]);
     frame.composite_all = false;
     submit_settled(&mut r, frame);
-    declare_source_budget(&mut r, frame, SOURCE_SLOTS + 4, WORKING_BYTES, SOURCE_POOL_BYTES - WORKING_BYTES);
+    declare_source_budget(&mut r, frame, SOURCE_SLOTS + 4, WORKING_BYTES, 1024 * MIB - WORKING_BYTES);
     let source = layer_core::color::source::rgba8_source([PAGE_SIZE * 2, PAGE_SIZE],
         |x, y| [x as u8, y as u8, 93, 255]);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -503,7 +503,7 @@ fn a_restore_is_refused_or_admitted_after_one_budget_rebalance() {
 }
 
 #[test]
-fn ample_budget_keeps_the_parent_cache_ceilings_for_overlapping_photos() {
+fn ample_budget_keeps_scene_retention_and_returns_unused_source_allowance() {
     use layer_core::{authored::{Image, ImageObject, Occurrence, OccurrenceContent, PortableId}, color::source::SourceImage};
     let extent = [4096, 3072];
     let mut artwork = layer_core::Document::new(PortableId::random(), extent[0], extent[1],
@@ -528,8 +528,8 @@ fn ample_budget_keeps_the_parent_cache_ceilings_for_overlapping_photos() {
         let frame = packet(document.scene(), extent);
         r.begin_frame_memory(frame);
         r.prepare_moving_projection(frame).unwrap();
-        let requested = crate::object_image_mips::MovingImages::demand(&r.device, &r.moving_projection.as_ref().unwrap().requests).unwrap();
-        let mips = requested.min(SOURCE_POOL_BYTES - WORKING_BYTES);
+        let requested = crate::object_image_mips::MovingImages::demand(&r.moving_projection.as_ref().unwrap().requests, [frame.view.width_px,frame.view.height_px]).unwrap();
+        let mips = requested;
         let windows = scene::Scene::capture_image_bound(document.scene(), PixelRect::full(extent));
         assert_eq!(r.memory_limit(Kind::Scene), CACHE_BYTES + windows);
         assert_eq!(scene::scale::cache_bytes(&r), CACHE_BYTES);
@@ -537,7 +537,7 @@ fn ample_budget_keeps_the_parent_cache_ceilings_for_overlapping_photos() {
             r.device.limits().max_texture_dimension_2d, None).unwrap().is_none());
         assert_eq!(r.memory_limit(Kind::Objects), OBJECT_CACHE_BYTES);
         assert_eq!(r.memory_limit(Kind::Mips), mips);
-        assert_eq!(r.memory_limit(Kind::DecodedSamples), (SOURCE_POOL_BYTES - mips).max(r.memory.part_pins()[3]));
+        assert_eq!(r.memory_limit(Kind::DecodedSamples), source_demand([frame.view.width_px,frame.view.height_px]).max(r.memory.part_pins()[3]));
         assert_eq!(r.ram_limit(Kind::DecodedSamples), DECODED_SAMPLE_BYTES);
         assert_eq!(r.source_tiles.borrow().mip_budget(), mips);
         assert_eq!(r.memory.demand.get()[2], mips);
@@ -553,7 +553,7 @@ fn ample_budget_keeps_the_parent_cache_ceilings_for_overlapping_photos() {
     assert_eq!(r.memory.scene_limit().saturating_sub(CACHE_BYTES), pyramid);
     assert_eq!(r.memory_limit(Kind::Objects), OBJECT_CACHE_BYTES);
     assert_eq!(r.memory_limit(Kind::Mips), 0);
-    assert_eq!(r.memory_limit(Kind::DecodedSamples), SOURCE_POOL_BYTES);
+    assert_eq!(r.memory_limit(Kind::DecodedSamples), source_demand([frame.view.width_px,frame.view.height_px]).max(r.memory.part_pins()[3]));
     assert_eq!(r.ram_limit(Kind::DecodedSamples), DECODED_SAMPLE_BYTES);
 }
 

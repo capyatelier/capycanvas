@@ -511,9 +511,10 @@ impl SnapshotRenderer {
             return Err(GpuRasterError::CaptureBudget { required: band_bytes, limit: self.planned_pixel_bytes });
         }
         let mut band = vec![[0.; 4]; width as usize * rows as usize];
-        for x in (0..width).step_by(512) {
+        let mut x=0;
+        while x<width {
             self.check_cancelled()?;
-            let columns = 512.min(width - x);
+            let columns=(2*PAGE_SIZE-(left+x)%PAGE_SIZE).min(width-x);
             // The assembled CPU band stays alive beside each bounded GPU job.
             self.planned_pixel_bytes -= band_bytes;
             let result = self.read_region([left + x, y, columns, rows]);
@@ -523,6 +524,7 @@ impl SnapshotRenderer {
                 let start = row * width as usize + x as usize;
                 band[start..start + columns as usize].copy_from_slice(source);
             }
+            x+=columns;
         }
         Ok(band)
     }
@@ -681,6 +683,10 @@ impl SnapshotRenderer {
             });
         }
         let r = &mut self.renderer;
+        let mut scene=r.scene.take().map(Ok).unwrap_or_else(||scene::Scene::new(r))?;
+        let source_bytes=scene.capture_source_bytes(view,region);
+        r.scene=Some(scene);
+        r.prepare_capture_sources(source_bytes?);
         if let Some(scene) = &mut r.scene {
             scene.release_capture_window(window);
         }
@@ -882,7 +888,7 @@ impl SnapshotRenderer {
         let maximum = if self.color().depth.is_float() {
             (4 * 1024 * 1024 / (width * 16)).clamp(16, 64)
         } else { (32 * 1024 * 1024 / (width * 16)).clamp(16, PAGE_SIZE) };
-        let mut rows = maximum.min(bottom - y);
+        let mut rows = maximum.min(PAGE_SIZE-y%PAGE_SIZE).min(bottom-y);
         loop {
             #[cfg(not(target_arch = "wasm32"))]
             let result = if width > 512 {

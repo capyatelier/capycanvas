@@ -323,3 +323,22 @@ fn fill_preview_becomes_ready_after_deferred_object_composition() {
     crate::test_support::submit_settled(&mut r,idle);
     assert_eq!(r.fill_preview_ready(),None);
 }
+
+#[test]
+fn incomplete_coarse_preview_rebuilds_even_when_ready_is_set() {
+    let doc=deferred_object_document();let extent=doc.composition().size;
+    let view=ViewState {width_px:256,height_px:128,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
+    let frame=FramePacket {view,..packet(doc.scene(),extent)};
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    crate::test_support::submit_settled(&mut r,frame);
+    let mut cache=r.scale_display.take().unwrap();
+    assert_eq!(cache.plan.bounds,PixelRect::full(extent));
+    cache.ready=true;cache.valid.clear();cache.placed=None;cache.reuse_output=false;
+    let mut scene=r.scene.take().unwrap();let mut commands=scene.scale_commands.take().unwrap();
+    scene.begin_frame();commands.begin();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    cache.render_coarse_preview(&mut scene,&mut r,frame,PixelRect::full(extent),
+        &mut Encoding {encoder:&mut encoder,commands:&mut commands},None).unwrap();
+    commands.flush(&mut r,&mut encoder).unwrap();r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
+    assert!(cache.coverage_complete(),"ready without valid coverage must rebuild the coarse preview");
+}

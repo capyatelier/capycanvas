@@ -3731,10 +3731,10 @@ impl WgpuRasterizer {
         let available = !self.snapshot_worker;
         #[cfg(target_arch = "wasm32")]
         let available = available && self.browser_image_decoder.is_some();
-        if MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view.document_to_surface,
-            self.device.working_space(), available, &mut self.failed_image_tiles)? {
-            let bytes = object_image_mips::MovingImages::demand(&self.device, &self.moving_projection.as_ref().unwrap().requests)?;
-            if self.memory.mip_demand(bytes) {
+        if MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view,
+            self.device.working_space(), available, &mut self.failed_image_tiles,self.moving_layer)? {
+            let bytes = object_image_mips::MovingImages::demand(&self.moving_projection.as_ref().unwrap().requests, [packet.view.width_px,packet.view.height_px])?;
+            if self.memory.mip_demand(bytes, [packet.view.width_px,packet.view.height_px]) {
                 self.publish_memory(true);
                 self.factory.memory_budget().flush_reports();
                 self.refresh_memory_limits();
@@ -3743,11 +3743,10 @@ impl WgpuRasterizer {
         Ok(())
     }
     fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
-        self.prepare_moving_projection(packet)?;
+        if self.moving_projection.is_none() {self.prepare_moving_projection(packet)?;}
         let required = self.scene.as_ref().map(|scene| scene.required_object_sources()).transpose()?.unwrap_or_default();
         self.source_tiles.borrow_mut().require_images(required);
         let mut images = std::mem::take(&mut self.moving_images);
-        let completed = images.completed_images;
         let budget = if packet.dab_batches.is_empty() && self.moving_layer.is_none() { MOVING_IMAGE_IDLE_STEPS } else { MOVING_IMAGE_INPUT_STEPS };
         let result = (|| {
             let budget_bytes = self.source_tiles.borrow().mip_budget();
@@ -3757,7 +3756,7 @@ impl WgpuRasterizer {
                 self.moving_images_waiting = true;
                 return Ok(false);
             }
-            images.allocate(self, plan);
+            let mut changed=images.allocate(self, plan, encoder);
             if self.moving_decode.as_ref().is_some_and(|(space,_)| *space != self.device.working_space()) {
                 self.moving_decode = None;self.source_results.clear();
                 #[cfg(target_arch = "wasm32")]
@@ -3779,11 +3778,11 @@ impl WgpuRasterizer {
                         }
                         break;
                     };
-                    images.write_tile(self, encoder, id, &source, coordinate, &texture)?;
-                } else if !images.advance_coarse(self, encoder) { break; }
+                    changed|=images.write_tile(self, encoder, id, &source, coordinate, &texture)?;
+                } else { break; }
                 steps += 1;
             }
-            Ok(images.completed_images != completed)
+            Ok(changed)
         })();
         self.moving_images = images;
         result
@@ -4251,6 +4250,7 @@ impl WgpuRasterizer {
     }
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
         self.activate_presentation(packet.scene);
+        self.prepare_moving_projection(packet)?;
         let revision = self.composite_revision;
         self.begin_frame_memory(packet);
         let submitted = self.metrics.submissions;

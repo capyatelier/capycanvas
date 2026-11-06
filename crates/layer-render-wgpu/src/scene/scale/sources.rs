@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use layer_core::raster::{RasterData, RasterPlane};
 
 const REDUCTION_BATCH:usize=32;
+pub(crate) const SOURCE_WORKING_BYTES:u64=REDUCTION_BATCH as u64*4*super::super::sources::FLOAT_TILE_BYTES;
 
 fn missing_pages(required: &Damage, bounds: PixelRect, valid: &BTreeSet<[u32; 2]>, covered: PixelRect) -> Vec<[u32; 2]> {
     required.regions.iter().flat_map(|region| page_coordinates(region.intersect(bounds)))

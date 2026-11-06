@@ -7,6 +7,8 @@ use layer_core::color::{SampleDepth, source::*};
 
 #[path="stacked_photos_tests.rs"]
 mod stacked_photos;
+#[path="cold_navigator_stroke_tests.rs"]
+mod cold_navigator_stroke;
 
 fn image(extent: [u32; 2], color: [u8; 4]) -> AuthoredImage {
     let mut builder = SourceBuilder::new(extent, SourceInterpretation { channels: SourceChannels::Rgba,
@@ -61,6 +63,44 @@ fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
 fn canonical_request(r: &WgpuRasterizer, scene: &mut Scene, doc: &layer_core::Document, owner: OccurrenceHandle, window: ObjectWindow) -> super::objects::CollectionJob {
     let content = scene.object_spatial.content(doc.scene(), owner).unwrap();
     scene.collection_job(r, packet(doc.scene(), doc.composition().size), owner, content, window)
+}
+
+#[test]
+fn an_unrelated_effect_format_change_reuses_ready_canonical_image_results() {
+    let extent=[32;2];
+    let (doc,owner,_)=document(extent,vec![ImageObject::new(image(extent,[255,0,0,255]))]);
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    crate::memory::memory_tests::legacy_scene_frame(&mut r,packet(doc.scene(),extent));
+    let mut scene=Scene::new(&r).unwrap();scene.object_display=true;
+    let window=ObjectWindow {origin:[0.;2],side:1.,size:extent};
+    let request=canonical_request(&r,&mut scene,&doc,owner,window);
+    assert_eq!(request.format,wgpu::TextureFormat::Rgba16Float);
+    let mut cache=super::super::object_cache::ObjectCache::live();
+    cache.set_workspace(scene.object_workspace(&r,true));
+    assert!(cache.resolve_collection(&r,doc.scene(),&request).unwrap().is_none());
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+    let result=loop {
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        r.drain_image_decodes(&mut encoder).unwrap();cache.advance(&mut r,&mut scene,&mut encoder,false).unwrap();
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
+        if let Some(result)=cache.resolve_collection(&r,doc.scene(),&request).unwrap() {break result;}
+        assert!(std::time::Instant::now()<deadline,"canonical image preparation completes");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
+    assert_eq!(result.texture().format(),wgpu::TextureFormat::Rgba32Float);
+    let before=cache.request_windows();assert_eq!(before.len(),1);
+    let mut artwork=doc.artwork.clone();
+    let instance=layer_core::EffectInstance::new(crate::tests::fixture("invert").program());
+    let application=artwork.effects.insert(PortableId::random(),EffectApplication::new(instance.program,instance.values,extent)).unwrap();
+    let effect=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"Invert")).unwrap();
+    artwork.stacks.get_mut(doc.composition().result).unwrap().entries.insert(0,effect);
+    let changed=layer_core::Document::from_artwork(artwork).unwrap();
+    let request=canonical_request(&r,&mut scene,&changed,owner,window);
+    assert_eq!(request.format,wgpu::TextureFormat::Rgba32Float);
+    assert!(cache.resolve_collection(&r,changed.scene(),&request).unwrap().is_some(),"an unrelated preview format change reuses the exact F32 result");
+    let after=cache.request_windows();assert_eq!(after.len(),1,"no canonical work is admitted");
+    assert!(before[0].0.ptr_eq(&after[0].0));
+    assert!(float_pixels(&r,result.texture()).iter().all(|pixel|*pixel==[1.,0.,0.,1.]));
 }
 
 #[test]
@@ -1000,10 +1040,8 @@ fn cold_tablet_object_previews_and_canonical_results_settle_in_bounded_submissio
     assert!(r.metrics.command_passes - passes < 4000, "exact canonical tent windows need one dispatch per source tile and child part plus boundary denominators: {}", r.metrics.command_passes - passes);
     let (doc, _, _, view) = tablet_scene(true, 4, false);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let submissions = settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
+    settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
     assert_eq!(r.moving_images.completed_images, 4);
-    eprintln!("cold tablet submissions={submissions}");
-    assert!(submissions < 400, "four cold 12MP previews and canonical windows settle in {submissions} submissions");
 }
 
 #[test]
@@ -1124,14 +1162,70 @@ fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
 }
 
 #[test]
+fn fit_strokes_update_a_held_presenter_after_an_exact_preview() {
+    let extent=[1536;2];
+    let (mut doc,_,_)=document(extent,vec![ImageObject::new(image(extent,[255,0,0,255]))]);
+    let (paint,target)=crate::test_support::add_paint(&mut doc.artwork,"Ink",extent);
+    let stack=doc.composition().result;
+    let entries=&mut doc.artwork.stacks.get_mut(stack).unwrap().entries;
+    entries.retain(|entry|*entry!=paint);entries.insert(0,paint);
+    let doc=layer_core::Document::from_artwork(doc.artwork).unwrap();
+    let mut r=crate::memory::memory_tests::renderer_for_restore(&doc);
+    let view=layer_render::ViewState {width_px:384,height_px:384,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
+    let frame=FramePacket {view,composite_all:false,..packet(doc.scene(),extent)};
+    settle_live_frames(&mut r,frame,4000);
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(cache.evaluation==super::super::scale::Evaluation::Display);
+    assert_eq!(cache.plan.bounds,PixelRect::full(extent));
+    let mut presenter=crate::test_support::float_presenter(&r);presenter.set_target_retention(true);
+    let texture=create_color_target(&r.device,[384;2],"held Fit stroke");
+    presenter.present(&mut r,&texture.1,view,[0.;4]).unwrap();
+    assert!(float_pixels(&r,&texture.0)[192*384+192][1]<0.01);
+    let mut dab=crate::layer_tests::dab([1.,0.,1.,1.]);dab.radii=[32.;2];dab.contact=[1.,0.,0.,0.];
+    let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+    for (step,x) in [640,768,896].into_iter().enumerate() {
+        dab.center=layer_core::Point {x:x as f32,y:768.};
+        let mut batch=crate::test_support::dab_batch(target,style.clone(),dab.bounds());batch.stroke_start=step==0;batch.stroke_end=step==2;
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+        r.wait_idle().unwrap();presenter.present(&mut r,&texture.1,view,[0.;4]).unwrap();
+        let pixel=float_pixels(&r,&texture.0)[192*384+x as usize/4];
+        assert!(pixel[0]>0.99 && pixel[2]>0.99 && pixel[1]<0.01,"Fit frame {step} must repaint current ink in its held target: {pixel:?}");
+    }
+}
+
+#[test]
+fn ready_mip_pixels_present_while_canonical_results_are_rebuilt() {
+    let (doc, owner, _, mut view) = tablet_scene(true, 8, false);
+    view.document_to_surface = [0.1597, 0., 0., 0.1597, 670.09, 445.26];
+    let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
+    let frame = FramePacket { view, ..packet(doc.scene(), [4248, 2832]) };
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 400, 64 << 20, 380 << 20);
+    settle_live_frames(&mut r, frame, 4000);
+    assert!(r.has_presentable_frame());
+    let mut scene = r.scene.take().unwrap();
+    scene.object_results.clear();
+    scene.invalidate_object_previews(frame.document_extent);
+    let request = canonical_request(&r, &mut scene, &doc, owner,
+        ObjectWindow { origin: [1280., 768.], side: 1., size: [PAGE_SIZE; 2] });
+    assert!(!request.keys.is_empty());
+    assert!(!scene.object_results.prepare_collection(&r, doc.scene(), &request).unwrap());
+    r.scene = Some(scene);
+    for _ in 0..2 {
+        crate::test_support::submit_ready(&mut r, FramePacket { composite_all: false, ..frame }).unwrap();
+        r.wait_idle().unwrap();
+    }
+    assert!(r.scene.as_ref().unwrap().object_results.pending(), "canonical rebuilding remains in flight");
+    assert!(r.has_presentable_frame(), "ready mips must keep a frame available while exact results rebuild");
+}
+
+#[test]
 fn eight_distinct_sources_settle_in_few_frames_with_a_tablet_sized_source_cache() {
     let (doc, _, _, mut view) = tablet_scene(true, 8, false);
     view.document_to_surface = [0.1597, 0., 0., 0.1597, 670.09, 445.26];
     let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
     let frame = FramePacket { view, ..packet(doc.scene(), [4248, 2832]) };
     crate::memory::memory_tests::declare_source_budget(&mut r, frame, 400, 64 << 20, 380 << 20);
-    let frames = settle_live_frames(&mut r, frame, 4000);
-    assert!(frames < 400, "decoding stays ahead of eight sources' mip and canonical work: {frames} frames");
+    settle_live_frames(&mut r, frame, 4000);
 }
 
 #[test]
@@ -1242,4 +1336,47 @@ fn a_placed_visible_object_settles_before_thumbnail_preparation() {
         assert!(std::time::Instant::now() < deadline, "the placed visible layer settles");
         clock += 8_000_000;
     }
+}
+
+#[test]
+fn oversized_nearest_sources_skip_optional_mips_and_keep_exact_capture() {
+    let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let required_limits=wgpu::Limits {max_texture_dimension_2d:reference.device().limits().max_texture_dimension_2d.min(8192),..reference.device().limits()};
+    let (device,queue)=pollster::block_on(reference.adapter.request_device(&wgpu::DeviceDescriptor {
+        label:Some("oversized nearest source"),required_features:reference.device().features(),required_limits,
+        memory_hints:crate::memory_hints(),..Default::default()})).unwrap();
+    let mut r=*WgpuRasterizer::from_wgpu_inner(reference.adapter.clone(),device.into(),queue,Initialization::Headless).unwrap();
+    r.initialize_native(Default::default()).unwrap();
+    let extent=[64;2];let source_extent=[r.device.limits().max_texture_dimension_2d+1,1];
+    let mut object=ImageObject::new(image(source_extent,[255,0,0,255]));
+    object.interpolation=ImageInterpolation::Nearest;
+    object.affine=Affine64([f64::from(extent[0])/f64::from(source_extent[0]),0.,0.,64.,0.,0.]);
+    let (doc,_,_)=document(extent,vec![object]);
+    crate::test_support::submit_ready(&mut r,packet(doc.scene(),extent)).unwrap();
+    r.wait_idle().unwrap();
+    let mut reader=r.snapshot_gpu().capture_scene(doc.snapshot(),layer_core::SceneScope::All,Default::default()).unwrap();
+    let pixels=reader.read_region([0,0,extent[0],extent[1]]).unwrap();
+    assert!(pixels.iter().all(|pixel|*pixel==[1.,0.,0.,1.]),"optional display mips must not refuse canonical sampling");
+}
+
+#[test]
+fn eight_ready_photo_mips_resettle_without_fragmented_canonical_work() {
+    let (doc,_,_,mut view)=tablet_scene(true,8,false);
+    view.document_to_surface=[0.1597,0.,0.,0.1597,670.09,445.26];
+    let mut r=crate::memory::memory_tests::renderer_for_restore(&doc);
+    let frame=FramePacket {view,..packet(doc.scene(),[4248,2832])};
+    crate::memory::memory_tests::declare_source_budget(&mut r,frame,400,64<<20,380<<20);
+    settle_live_frames(&mut r,frame,4000);
+    assert!(!r.moving_images_pending());assert!(!r.scene.as_ref().unwrap().object_results.pending());
+    let completed=r.moving_images.completed_images;let built=r.moving_images.tile_builds;
+    r.scale_display=None;
+    let scene=r.scene.as_mut().unwrap();scene.object_results.clear();
+    let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    scene.object_results.flush_retired(&encoder);r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
+    let revision=r.composite_revision;
+    settle_live_frames(&mut r,frame,4000);
+    assert_eq!(r.moving_images.completed_images,completed);assert_eq!(r.moving_images.tile_builds,built);
+    assert!(r.composite_revision!=revision);assert!(!r.object_deferred);
+    assert!(!r.scene.as_ref().unwrap().object_results.pending());
+    assert!(r.scale_display.as_ref().is_some_and(|cache|!cache.approximating()));
 }

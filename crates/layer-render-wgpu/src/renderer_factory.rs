@@ -98,7 +98,10 @@ impl RendererFactory {
         }
     }
     pub(super) fn memory_owner(&self, kind: layer_core::MemoryOwnerKind) -> layer_core::MemoryOwner {
-        self.0.budget.register_owner(kind, layer_core::MemoryClass::Visible, Some(self.0.memory_device))
+        self.memory_owner_in(kind,layer_core::MemoryClass::Visible)
+    }
+    pub(super) fn memory_owner_in(&self,kind:layer_core::MemoryOwnerKind,class:layer_core::MemoryClass)->layer_core::MemoryOwner {
+        self.0.budget.register_owner(kind,class,Some(self.0.memory_device))
     }
     pub(super) fn budget_snapshot(&self) -> Option<Arc<layer_render::MemoryBudgetSummary>> {
         #[cfg(not(target_arch = "wasm32"))]
