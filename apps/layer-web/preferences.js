@@ -1,4 +1,4 @@
-import {createContextPopover} from './context-popover.js';
+import {createContextPopover,contextMenuInitialHighlight} from './context-popover.js';
 import {chooseProfileLibrary} from './export-controls.js';
 import { liveCopy } from './localization.js';
 import {createShortcutPage} from './shortcut-page.js';
@@ -20,7 +20,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
   const dismissContext = () => { context.hidePopover(); contextId = null; };
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
   const modelRow = id => view()?.pages.flatMap(p => p.groups.flatMap(g => g.rows)).find(r => r.id === id);
-  function showContext(line, x, y, target) {
+  function showContext(line, x, y, target, opening) {
     const row = modelRow(line.dataset.preference);
     if (!row?.reset) return;
     contextId = row.id; contextBody.replaceChildren(); context.setAttribute("aria-label", row.title);
@@ -59,15 +59,15 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     reset.append(element("span", "command-label", ()=>modelRow(row.id)?.reset?.label??""), element("span", "shortcut-hint", row.reset.hint));
     contextBody.append(reset); context.showPopover();
     const presentation=app.menu_presentation({kind:input?'text_edit':'preference_reset'});
-    contextPopover.place({x,y,width:1,height:1},presentation,true);
-    if (!input) reset.focus();
+    contextPopover.place({x,y,width:1,height:1},presentation,opening);
+    if (!input&&contextMenuInitialHighlight(opening)) reset.focus();
   }
   // Keep the focused text editor's selection/draft while using its menu.
   context.addEventListener("pointerdown", e => e.preventDefault());
   dialog.addEventListener("contextmenu", e => {
     const line = e.target.closest("[data-preference]");
     if (!line) return;
-    e.preventDefault(); cancelHold(); showContext(line, e.clientX, e.clientY, e.target);
+    e.preventDefault(); cancelHold(); showContext(line, e.clientX, e.clientY, e.target, e);
   });
   dialog.addEventListener("pointerdown", e => {
     cancelHold(); heldPointer = null;
@@ -76,7 +76,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     // Native text selection owns long press while an input is being edited.
     if (!["touch","pen"].includes(e.pointerType) || !line || e.target.closest("input,select,textarea")) return;
     hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
-      heldPointer = e.pointerId; cancelHold(); showContext(line, e.clientX, e.clientY, e.target);
+      heldPointer = e.pointerId; cancelHold(); showContext(line, e.clientX, e.clientY, e.target, e);
     }, 500) };
   });
   dialog.addEventListener("pointermove", e => { if (hold && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) cancelHold(); });
@@ -88,7 +88,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
     if (e.key === "Escape" && context.matches(":popover-open")) { dismissContext(); e.preventDefault(); e.stopImmediatePropagation(); }
     else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
       const line = e.target.closest("[data-preference]");
-      if (line) { const rect = line.getBoundingClientRect(); e.preventDefault(); e.stopImmediatePropagation(); showContext(line, rect.left, rect.bottom, e.target); }
+      if (line) { const rect = line.getBoundingClientRect(); e.preventDefault(); e.stopImmediatePropagation(); showContext(line, rect.left, rect.bottom, e.target, e); }
     }
   }, { capture: true });
   function dropdown(label, choose) {

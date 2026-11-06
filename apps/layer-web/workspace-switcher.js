@@ -1,4 +1,4 @@
-import {createContextPopover} from './context-popover.js';
+import {createContextPopover,contextMenuInitialHighlight} from './context-popover.js';
 import {bindCopy,liveCopy} from "./localization.js";
 // DOM gestures and chrome only. Rust owns visibility, order and publication.
 export function createWorkspaceSwitcher({app,dialog, list, element, button, icon, send, getView, redraw}) {
@@ -22,7 +22,7 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
     menuAnchor?.setAttribute("aria-expanded", "false");
     if (focus && menuAnchor?.isConnected) menuAnchor.focus({preventScroll:true});
   }
-  function showMenu(row, point, focus = false, reorder = true, anchor = row.querySelector(".workspace-grip")) {
+  function showMenu(row, point, focus = false, reorder = true, anchor = row.querySelector(".workspace-grip"), opening = true) {
     const view = getView(), item = view.rows.find(item => item.id === row.dataset.id);
     if (!item || view.page !== "workspaces" || unavailable()) return;
     closeMenu(); menuOwner = row; menuAnchor = anchor; contextPopover.body.replaceChildren(); menu.dataset.id = item.id;
@@ -44,8 +44,8 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
     }
     menuAnchor?.setAttribute("aria-expanded", "true");
     menu.showPopover();
-    contextPopover.place({...point,width:1,height:1},app.menu_presentation({kind:'workspace_row'}),true);
-    if (focus) menu.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
+    contextPopover.place({...point,width:1,height:1},app.menu_presentation({kind:'workspace_row'}),opening);
+    if (focus&&contextMenuInitialHighlight(opening)) menu.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
   }
   function decorate(row, choice, item, view) {
     row.dataset.id = item.id;
@@ -146,7 +146,7 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
     const current = contact;
     current.timer = setTimeout(() => {
       if (contact !== current || !row.isConnected) return;
-      current.held = true; row.setPointerCapture(current.id); showMenu(row, current.point,false,handle,handle?row.querySelector(".workspace-grip"):row.querySelector(".workspace-choice"));
+      current.held = true; row.setPointerCapture(current.id); showMenu(row, current.point,false,handle,handle?row.querySelector(".workspace-grip"):row.querySelector(".workspace-choice"),e);
     }, 500);
   });
   list.addEventListener("pointermove", e => {
@@ -172,7 +172,7 @@ export function createWorkspaceSwitcher({app,dialog, list, element, button, icon
   list.addEventListener("click", e => { if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopImmediatePropagation(); } }, true);
   list.addEventListener("contextmenu", e => {
     const row = e.target.closest(".workspace-row"); if (!row || getView().page !== "workspaces") return;
-    if(e.target.closest("input"))return; e.preventDefault(); if (!contact?.ghost) showMenu(row, {x:e.clientX,y:e.clientY}, !contact,false,row.querySelector(".workspace-choice"));
+    if(e.target.closest("input"))return; e.preventDefault(); if (!contact?.ghost) showMenu(row, {x:e.clientX,y:e.clientY}, !contact,false,row.querySelector(".workspace-choice"),e);
   });
   list.addEventListener("scroll", () => { if (!contact?.ghost && !contact?.held) { finish(); closeMenu(); } });
   window.addEventListener("pointerdown", e => { if(!list.contains(e.target))closeSwipes(); if (menuOpen() && !menu.contains(e.target) && !menuAnchor?.contains(e.target)) closeMenu(); }, true);

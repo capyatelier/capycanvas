@@ -1,4 +1,4 @@
-import {createContextPopover} from './context-popover.js';
+import {createContextPopover,contextMenuInitialHighlight} from './context-popover.js';
 import {createDialogHost} from './dialog-host.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {addScrollbar} from './scrollbars.js';
@@ -96,8 +96,8 @@ export function chooseTexture({app, layer, state, dispatch, element, button, ico
     }));
     menu.showPopover();
     const tile=tiles[index].getBoundingClientRect();
-    contextPopover.place(tile,app.menu_presentation({kind:'paper_tile'}),true);
-    menu.querySelector('button')?.focus();
+    contextPopover.place(tile,app.menu_presentation({kind:'paper_tile'}),e);
+    if(contextMenuInitialHighlight(e))menu.querySelector('button')?.focus();
   }
   function reveal(node = grid.querySelector('[tabindex="0"]')) {
     if (!node) return;

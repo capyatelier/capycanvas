@@ -63,7 +63,7 @@ var WindowCapture = class {
     capture(request) {
         const name = typeof request === 'object' && request ? request.name : request;
         const maximized = typeof request === 'object' && request ? request.maximized : false;
-        if (!this.directory || typeof name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
+        if (!this.directory || typeof name !== 'string' || !/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(name))
             throw Error('Invalid native window capture request');
         if (typeof maximized !== 'boolean') throw Error('Invalid native window capture mode');
         try {

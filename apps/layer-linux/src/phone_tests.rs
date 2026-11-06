@@ -1752,6 +1752,8 @@ fn native_phone_bar_flicker() {
 }
 
 fn open_menu_page(d: &mut Driver, label: &str) -> gtk::Stack {
+    let row=widgets(&d.named("phone-menu-list")).find(|widget|widget.is_mapped() && widget.css_name()=="modelbutton" && menu_text(widget)==label).unwrap();
+    super::histogram::scroll_to(&row);
     d.click_label(label);
     let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     let name = menu_page_name(d, label);
@@ -1978,8 +1980,6 @@ pub(super) fn inventory_popup(d: &mut Driver, opener: &gtk::Widget, name: &str, 
 }
 
 fn inventory_panel_menus(d: &mut Driver, panel: Panel, focused: bool) {
-    d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
-    d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
     if panel==Panel::Layers {
         let id=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
         let row=d.named(&format!("art-layer-{id}"));
@@ -2001,7 +2001,7 @@ fn inventory_panel_menus(d: &mut Driver, panel: Panel, focused: bool) {
         d.w.dispatch(UiAction::Invoke {command:CommandId::AddLayer});
         let added=state(&d.w).layer_tools.editing_layer.as_ref().unwrap().id;
         let top=d.named(&format!("art-layer-{added}"));
-        let from=d.point(&top);let to=d.point(&row);
+        let from=d.point(&top);let to=d.point(&d.named(&format!("art-layer-{id}")));
         d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",[to[0],to[1]+8.])]));
         capture_current(d,"layers-drag-pickup");d.input.key(0xff1b);d.input.perform(serde_json::json!([contact("mouse","up",[to[0],to[1]+8.])]));
         d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
@@ -2017,8 +2017,8 @@ fn inventory_panel_menus(d: &mut Driver, panel: Panel, focused: bool) {
         let from=d.point(&swatch);let to=[from[0]+40.,from[1]+20.];
         d.input.perform(serde_json::json!([contact("mouse","down",from),contact("mouse","move",to)]));
         capture_current(d,"swatch-drag");d.input.key(0xff1b);d.input.perform(serde_json::json!([contact("mouse","up",to)]));
-        d.click(&d.named("palette-chooser"));
-        until(||d.named("palette-browser").is_mapped(),"the palette chooser opens");
+        let chooser=d.named("palette-chooser");super::histogram::scroll_to(&chooser);d.click(&chooser);
+        until(||find_named(d.w.window.upcast_ref(),"palette-browser").is_some_and(|widget|widget.is_mapped()),"the palette chooser opens");
         let add=d.named("palette-library-add");inventory_popup(d,&add,"palette-library-menu",false);
         let row=widgets(&d.named("palette-browser")).find(|widget|widget.is_mapped() && widget.widget_name().starts_with("palette-choice-")).unwrap();
         inventory_popup(d,&row,"palette-row-menu",true);
@@ -2058,7 +2058,6 @@ fn inventory_layer_kinds(d: &mut Driver) {
         d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel:Panel::Properties}});inventory_drawer_ready(d);
         if effect=="levels" {
             let group=d.named("property-picker-menu");inventory_popup(d,&group,name,false);inventory_popup(d,&group,"property-picker",false);
-            let filter=d.named("properties-add-filter");inventory_popup(d,&filter,"properties-add-filter-menu",false);
             let action=state(&d.w).layer_properties.actions.iter().find(|action|matches!(action.action,EffectAction::Calibrate {role:layer_core::levels::CalibrationRole::Black,..})).unwrap().action.clone();
             d.w.dispatch(UiAction::Effect {action});
             until(||state(&d.w).canvas_bar.as_ref().is_some_and(|bar|bar.context.kind==layer_ui::CanvasBarKind::Picker),"the offered black-point action exposes its Picker bar");
@@ -2072,6 +2071,9 @@ fn inventory_layer_kinds(d: &mut Driver) {
         inventory_close(d);d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});
     }
     d.w.dispatch(UiAction::SelectLayer {id:paint});
+    d.w.dispatch(UiAction::Phone {action:PhoneAction::Panel {panel:Panel::Properties}});inventory_drawer_ready(d);
+    let filter=d.named("properties-add-filter");inventory_popup(d,&filter,"properties-add-filter-menu",false);
+    inventory_close(d);
 }
 
 fn inventory_bar_menu(d: &mut Driver, menu: layer_ui::CanvasBarMenu, name: &str) {
@@ -2181,6 +2183,8 @@ fn native_phone_inventory() {
     if std::env::var("LAYER_PHONE_INVENTORY_CONTEXTS").as_deref() == Ok("1") {
         inventory_workspace(&d, WorkspacePreset::Painter);
         for panel in [Panel::Layers, Panel::Color] {
+            d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
+            d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
             d.w.dispatch(UiAction::Phone { action: PhoneAction::Panel { panel } });
             until(|| {
                 if panel == Panel::Color && !find_named(d.w.window.upcast_ref(), "color-wheel")
@@ -2248,6 +2252,10 @@ fn native_phone_inventory() {
                 }
             }
             let name = format!("phone-tool-{}", tile.id);
+            if preset==WorkspacePreset::Painter && matches!(tile.control,ToolbarControl::Panel {panel:Panel::Layers}|ToolbarControl::Color) {
+                d.w.dispatch(UiAction::Invoke {command:CommandId::DrawingBrush});
+                d.w.dispatch(UiAction::SelectBrush {id:DefaultBrushPreset::Pencil as u32});
+            }
             click(&mut d, &name);
             new_photo::ready(&d.w);
             if state(&d.w).customization.drawer.is_none() { click(&mut d, &name); }

@@ -142,13 +142,13 @@ function shortcutDom(t) {
   const context={...dom,bindCopy,kit,group:kit.group,editor:sheet(),modifierSheet:sheet(),details:sheet(),
     common:{cancel:'Cancel'},copy:{add:'Add',reassign:'Reassign',open:'Open',press_hold_key:'Hold a key',no_differences:'No differences',defaults_help:'Defaults'},
     app:{native_caption:()=>''},send:action=>actions.push(action),present(){},focusRecording(){},
-    keymapChoice:{update(){}},keymapOutdated:{}};
+    keymapChoice:{update(){}},keymapOutdated:{},importTitle:dom.element('h2'),importBody:dom.element('div'),importSignature:'',importHost:{present(){},hide(){}}};
   const detailsIntro=kit.fields();context.details.content.root.prepend(detailsIntro);context.detailsIntro=detailsIntro;
   const code=readFileSync(new URL('shortcut-page.js',import.meta.url),'utf8');
   for(const [start,end] of [['  const flatButton =','  const navRow ='],['  function recordingRow(', '  function sheet('],['  function refreshEditor(', '  function focusRecording('],['  function refreshModifierSheet(', '  function refreshPicker(']])
     runInNewContext(code.slice(code.indexOf(start),code.indexOf(end)),context);
-  const start=code.indexOf('  function refreshKeymap('),end=code.indexOf('    const preview = keymap.import',start);
-  runInNewContext(code.slice(start,end)+'\n}',context);
+  const start=code.indexOf('  function refreshKeymap('),end=code.indexOf('  function refreshFilters(',start);
+  runInNewContext(code.slice(start,end),context);
   return {...context,context,actions};
 }
 
@@ -206,4 +206,15 @@ test('Keymap details fixes its intro above the scrolling difference card in one 
   assert.equal(outer.descendants().filter(node=>node.className==='preference-body').length,0);
   keymap.source='';keymap.links=[];h.context.refreshKeymap({keymap});
   assert.equal(h.detailsIntro.children[0].hidden,true);assert.equal(h.detailsIntro.children[1].hidden,true);
+});
+
+test('Keymap import presents the shared preview text without rebuilding its entries',t=>{
+  const h=shortcutDom(t),preview={heading:'Import keys',body:'Added: 8\n• First\n• Last shown',added:Array.from({length:8},(_,i)=>`Entry ${i}`),changed:[],removed:[],unavailable:[]};
+  h.copy.added='Added';
+  const keymap={title:'Keys',selected:'default',presets:[],outdated:false,source:'',links:[],differences:[],import:preview,import_dialog:{}};
+  h.context.refreshKeymap({keymap});
+  assert.equal(h.importTitle.textContent,preview.heading);
+  assert.equal(h.importBody.textContent,preview.body);
+  assert.equal(h.importBody.children.length,1);
+  preview.body='No changes';h.context.refreshKeymap({keymap});assert.equal(h.importBody.textContent,preview.body);
 });

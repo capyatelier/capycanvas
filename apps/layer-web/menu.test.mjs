@@ -105,6 +105,23 @@ test('context popover highlight follows its initial row and clears on native int
   menu.root.dispatchEvent({type:'toggle',newState:'open'});assert.notEqual(menu.root.children.at(-1),thumb);menu.root.dispatchEvent({type:'toggle',newState:'closed'});assert.equal(menu.root.children.length,1);
 });
 
+test('secondary pointer menus start unselected while held and keyboard menus select the first row',t=>{
+  const {element,button,doc}=colorDialogDom(t),menu=createContextPopover({element}),first=button('First',()=>{});
+  menu.body.append(first);doc.body.append(menu.root);
+  menu.body.querySelector=selector=>selector==='button:not(:disabled)'||first.hasAttribute('data-menu-initial')?first:null;
+  menu.root.getBoundingClientRect=()=>({width:150,height:50});
+  const anchor={x:40,y:40,width:1,height:1},presentation={has_arrow:false};
+  for(const opening of [{type:'keydown',key:'ContextMenu'},{type:'contextmenu',button:0},{type:'pointerdown',pointerType:'touch'},{type:'pointerdown',pointerType:'pen'}]){
+    menu.place(anchor,presentation,opening);assert.equal(first.hasAttribute('data-menu-initial'),true);
+    menu.place(anchor,presentation,{type:'contextmenu',pointerType:'mouse'});assert.equal(first.hasAttribute('data-menu-initial'),false);
+    assert.equal(doc.activeElement,menu.root,'The menu owns keyboard navigation without highlighting a row');
+  }
+  menu.place(anchor,presentation,{type:'contextmenu',button:2});assert.equal(first.hasAttribute('data-menu-initial'),false);
+  const input=element('input');doc.body.append(input);input.focus();
+  menu.place(anchor,presentation,{type:'contextmenu',pointerType:'mouse',target:{closest:()=>input}});
+  assert.equal(doc.activeElement,input,'A text editor retains its draft and selection focus');
+});
+
 
 test('a no-arrow menu places its body directly against the anchor and suppresses the pseudo arrow',t=>{
   const {element}=colorDialogDom(t),presentation={has_arrow:false,anchor:'widget'},anchor={x:180,y:80,width:40,height:30},size={width:240,height:100},viewport={x:0,y:0,width:400,height:300};

@@ -4,6 +4,11 @@ import {mkdir,writeFile} from 'node:fs/promises';
 export async function checkPressureCalibration({call,evaluate,settle}) {
   const read=()=>evaluate("JSON.parse(JSON.stringify(layerApp.state().pressure_calibration??null,(_,v)=>typeof v==='bigint'?Number(v):v))");
   const points=async()=> (await read())?.editor.points;
+  const sensitivityButtons=async()=>{
+    const actual=await evaluate(`(()=>{const view=layerApp.state().pressure_calibration;return [...document.querySelectorAll('#pen-pressure-dialog .utility-sensitivity > button')].map((node,index)=>({icon:node.querySelector('svg')?.dataset.asset,label:node.textContent,expected:index?view.lighter:view.firmer}));})()`);
+    assert.deepEqual(actual.map(node=>node.icon),['minus','plus'],'Pressure sensitivity retains its native action icons');
+    assert.ok(actual.every(node=>node.label===node.expected),'Pressure sensitivity retains its shared labels');
+  };
   const saved=()=>evaluate('layerApp.state().settings.pressure_curve');
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await settle();};
@@ -12,7 +17,7 @@ export async function checkPressureCalibration({call,evaluate,settle}) {
   const graphPoint=async(x,y)=>evaluate(`(()=>{const g=document.querySelector('#pen-pressure-dialog .curve-editor'),v=layerApp.state().pressure_calibration.editor.controls,r=g.getBoundingClientRect(),w=r.width-2*v.inset,h=r.height-2*v.inset;return{x:r.left+v.inset+${x}*w,y:r.top+v.inset+(1-${y})*h}})()`);
   const stroke=async(start,end,pointerType='mouse')=>{await pointer('mousePressed',start,pointerType);await pointer('mouseMoved',end,pointerType);await pointer('mouseReleased',end,pointerType);await settle();};
   const assertNoNotice=async action=>assert.equal(await evaluate("document.querySelector('#status').textContent"),'',`${action} leaves no error notice`);
-  const capture=async name=>{const dir='artifacts/pressure-calibration/rollout/web';await mkdir(dir,{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${name}.png`,Buffer.from(shot.data,'base64'));};
+  const capture=async name=>{const dir=process.env.LAYER_TEST_ARTIFACTS??'artifacts/pressure-calibration/rollout/web';await mkdir(dir,{recursive:true});const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${dir}/${name}.png`,Buffer.from(shot.data,'base64'));};
   const open=async()=>{await evaluate('layerApp.app.wait_for_canvas()');await wait("!layerApp.documents.busy()&&!document.querySelector('#pen-pressure-dialog')&&!layerApp.state().settings_open&&!!document.querySelector('#header [data-command=settings]:not(:disabled)')?.getClientRects().length");await click('#header [data-command="settings"]');await wait("layerApp.state().settings_open&&document.querySelector('#settings').open");await click('[data-settings-page="input"]');const status=await evaluate("({state:layerApp.state().settings_open,dialog:document.querySelector('#settings').open,rows:layerApp.app.preferences()?.pages?.flatMap(p=>p.groups.flatMap(g=>g.rows)).map(r=>r.id)??[]})");assert.ok(status.rows.includes('pen_pressure'),`Preferences exposes Pen pressure action: ${JSON.stringify(status)}`);await wait('!layerApp.documents.busy()');const closes=await evaluate('window.pressureSettingsCloseCount');await click('#setting-pen-pressure');await wait(`window.pressureSettingsCloseCount>${closes}&&!!layerApp.state().pressure_calibration&&!!document.querySelector('#pen-pressure-dialog')&&!document.querySelector('#settings').open`);};
   await evaluate('layerApp.documents.startRecovery()');
   await evaluate("window.pressureSettingsCloseCount=0;document.querySelector('#settings').addEventListener('close',()=>window.pressureSettingsCloseCount++)");
@@ -29,6 +34,7 @@ export async function checkPressureCalibration({call,evaluate,settle}) {
     await send({type:'set_theme',theme});
     const baseline=await saved();
     await open();
+    await sensitivityButtons();
     await capture(`${theme}-default`);
     assert.equal(await evaluate("document.querySelector('#pen-pressure-dialog').getAttribute('aria-modal')"),'false');
     assert.equal(await evaluate("document.querySelectorAll('#pen-pressure-dialog .curve-coordinates, #pen-pressure-dialog .number-control').length"),0);
@@ -81,6 +87,7 @@ export async function checkPressureCalibration({call,evaluate,settle}) {
     assert.deepEqual((await points()).at(-1),[1,1],'output end stays fixed');
     const initial=await points();
     await click('#pen-pressure-dialog .utility-sensitivity button:first-child');
+    await sensitivityButtons();
     assert.ok((await points())[0][1]<initial[0][1],'Firmer lowers the start');
     await click('#pen-pressure-dialog .utility-sensitivity button:last-child');
     assert.deepEqual(await points(),initial,'Lighter restores the start');

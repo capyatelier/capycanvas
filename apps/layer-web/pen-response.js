@@ -49,7 +49,7 @@ export function createPenResponse({app,state,workspace,element,button,icon,numbe
       const sensitivity=element('div',mode==='tilt'?'selection-modes utility-sensitivity utility-compact-sensitivity':'utility-sensitivity'),actions=element('div','preference-footer separated utility-actions');
       firmer=button('',()=>act({kind:'sensitivity',lighter:false}));firmer.id=`${prefix}-firmer`;
       lighter=button('',()=>act({kind:'sensitivity',lighter:true}));lighter.id=`${prefix}-lighter`;sensitivity.append(firmer,lighter);
-      if(mode==='tilt'){firmer.append(icon('minus'));lighter.append(icon('plus'));}
+      for(const [node,glyph] of [[firmer,'minus'],[lighter,'plus']]){node.append(icon(glyph));if(mode!=='tilt')node.append(element('span'));}
       reset=button('',()=>dispatch({type:'curve_editor',target,action:{kind:'reset'}}),'dialog-button');reset.id=`${prefix}-reset`;
       cancel=button('',()=>act({kind:'cancel'}),'dialog-button');cancel.id=`${prefix}-cancel`;
       apply=button('',()=>act({kind:'apply'}),'suggested-action');apply.id=`${prefix}-apply`;actions.append(reset,element('span'),cancel,apply);
@@ -78,7 +78,11 @@ export function createPenResponse({app,state,workspace,element,button,icon,numbe
       panel.addEventListener('pointerdown',e=>e.stopPropagation());
     }
     heading.textContent=view.title;close.title=view.close;close.setAttribute('aria-label',view.close);
-    for(const [node,text] of [[firmer,view.firmer],[lighter,view.lighter],[reset,view.reset],[cancel,view.cancel],[apply,view.apply]]){if(mode!=='tilt'||(node!==firmer&&node!==lighter))node.textContent=text;if(node===firmer||node===lighter){node.title=text;node.setAttribute('aria-label',text);}}
+    for(const [node,text] of [[firmer,view.firmer],[lighter,view.lighter],[reset,view.reset],[cancel,view.cancel],[apply,view.apply]]){
+      const sensitivity=node===firmer||node===lighter,label=sensitivity?(mode==='tilt'?null:node.lastChild):node;
+      if(label&&label.textContent!==text)label.textContent=text;
+      if(sensitivity){node.title=text;node.setAttribute('aria-label',text);}
+    }
     firmer.disabled=!view.firmer_enabled;lighter.disabled=!view.lighter_enabled;apply.disabled=mode==='tilt'&&!view.ready;
     device.hidden=direction.hidden=mode!=='tilt';
     if(mode==='tilt'){

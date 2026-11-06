@@ -283,6 +283,9 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     assert.equal(colors.kind,'paper_color');
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('#new-drawing-color-drawer .color-copy, #new-drawing-color-drawer .color-pick:not([hidden]), #new-drawing-color-drawer .color-current:not([hidden])')].length`),0,'Paper color hides copy, the eyedropper and the current patch');
     assert.equal(await text('#new-drawing-color-drawer .color-editor-title'),(await view()).copy.paper_color);
+    const paperColorLayout=await evaluate(`(()=>{const drawer=document.querySelector('#new-drawing-color-drawer'),title=drawer.querySelector('.color-editor-title');return{titleInHeader:title.parentElement.classList.contains('new-drawing-drawer-head'),tiles:[...drawer.querySelectorAll('.new-drawing-palette-tiles > button')].map(button=>{const r=button.getBoundingClientRect(),patch=button.querySelector('.palette-paint')?.getBoundingClientRect();return{swatch:button.classList.contains('palette-tile'),width:r.width,height:r.height,patch:patch?[patch.width,patch.height]:null};})};})()`);
+    assert.equal(paperColorLayout.titleInHeader,true,'The Paper Color title remains outside the scrolling form');
+    for(const tile of paperColorLayout.tiles){assert.deepEqual([tile.width,tile.height],[40,40],'Paper Color retains its native-sized tile target');if(tile.swatch)assert.deepEqual(tile.patch,[34,34],'Paper Color retains its authored swatch size');}
     assert.equal(await text('#new-drawing-color-drawer .new-drawing-palette-head span:last-child'),colors.count,'Paper colors shows its count');
     const kraftColor=colors.palette.findIndex(c=>c.name==='Kraft');
     await click(`#new-drawing-paper-color-tiles [data-new-drawing-paper-color="${kraftColor}"]`);
@@ -368,7 +371,7 @@ export async function checkNewDrawing({call,evaluate,settle}) {
     await capture('narrow');
     await click('#new-drawing-texture');await slid('new-drawing-paper-drawer');
     const footer=()=>evaluate(`(()=>{const f=document.querySelector('#new-drawing-paper-drawer footer'),label=f.querySelector('.new-drawing-relief-label'),caption=label.getBoundingClientRect(),row=document.querySelector('#new-drawing-paper-relief').getBoundingClientRect(),cancel=document.querySelector('#new-drawing-paper-cancel').getBoundingClientRect();
-      return{fits:f.scrollWidth<=f.clientWidth,clear:row.right<=cancel.left||row.left>=cancel.right||row.bottom<=cancel.top||row.top>=cancel.bottom,labelShown:caption.width>0&&caption.height>0&&label.textContent===layerApp.state().new_drawing.copy.relief,ellipsized:label.scrollWidth>label.clientWidth,buttons:[...f.querySelectorAll(':scope > button')].map(n=>Math.round(n.getBoundingClientRect().height))}})()`);
+      return{fits:f.scrollWidth<=f.clientWidth,clear:row.right<=cancel.left||row.left>=cancel.right||row.bottom<=cancel.top||row.top>=cancel.bottom,labelShown:caption.width>0&&caption.height>0&&label.textContent===layerApp.state().new_drawing.copy.relief,ellipsized:label.scrollWidth>label.clientWidth,buttons:[...f.querySelectorAll('#new-drawing-paper-cancel,#new-drawing-paper-use')].map(n=>Math.round(n.getBoundingClientRect().height))}})()`);
     assert.deepEqual(await footer(),{fits:true,clear:true,labelShown:true,ellipsized:false,buttons:[34,34]},'The narrow paper footer keeps Texture visibility clear of the buttons');
     await capture('narrow-paper');
     await call('Emulation.setDeviceMetricsOverride',{width:320,height:860,deviceScaleFactor:1,mobile:false});await settle();

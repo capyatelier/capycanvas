@@ -69,9 +69,10 @@ export function colorForm({app, root, element, button, open, rendition, copyable
     const format = button('', () => toggleMenu(row), 'color-format'), label = element('span', 'color-format-names'), menu = element('div', 'color-format-menu'), space = element('span', 'color-badge');
     format.dataset.colorFormat = row; format.setAttribute('aria-haspopup','menu'); format.append(label, icon('chevron-down')); bindCopy(format, () => copy.format, 'title');
     menu.setAttribute('role','menu'); menu.hidden = true;
-    const name = element('span', 'color-row-name'), spaceCell = element('span', 'color-row-space'); name.append(format, menu); spaceCell.append(space); grid.append(name, spaceCell);
-    const values = [0, 1, 2].map(index => { const entry = field({kind:'value', row, index}, `${row}-${index}`); grid.append(entry.cell); return entry; });
-    if (copyable) grid.append(copyButton(row));
+    const name = element('span', 'color-row-name'), spaceCell = element('span', 'color-row-space'), heading = element('div', 'color-row-heading'), cells = element('div', 'color-row-values');
+    name.append(format, menu); spaceCell.append(space); heading.append(name, spaceCell); grid.append(heading, cells);
+    const values = [0, 1, 2].map(index => { const entry = field({kind:'value', row, index}, `${row}-${index}`); cells.append(entry.cell); return entry; });
+    if (copyable) cells.append(copyButton(row));
     return {format, label, menu, space, values};
   });
   const intensityName = element('span', 'color-row-name', () => copy.intensity_ev), intensity = field({kind:'intensity'}, 'ev');

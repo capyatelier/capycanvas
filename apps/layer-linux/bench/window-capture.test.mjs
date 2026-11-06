@@ -104,9 +104,17 @@ test('crop rejects empty, opaque and clipped-shadow captures at every edge', () 
 
 test('unsafe stems fail before creating any compositor resources', () => {
     const {state, capture} = harness();
-    for (const stem of [null, 123, '', '../escape', 'upperCase', '-leading', 'trailing-', 'two--dashes'])
+    for (const stem of [null, 123, '', '../escape', 'upperCase', '-leading', 'trailing-', 'two--dashes', '_leading', 'trailing_', 'two__underscores'])
         assert.throws(() => capture.capture(stem), /Invalid native window capture/);
     assert.equal(state.calls.length, 0);
+});
+
+test('serialized command IDs retain underscores in capture names', () => {
+    const {state, capture} = harness();
+    state.sample = state.frame;
+    assert.equal(capture.capture('inventory-settings-selection_brush'), true);
+    assert.equal(state.writes[0].path, '/captures/inventory-settings-selection_brush.png');
+    assertClosed(state, capture);
 });
 
 test('success writes matching PNG and metadata and cleans each independent session', () => {

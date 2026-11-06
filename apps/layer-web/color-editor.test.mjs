@@ -7,7 +7,7 @@ export async function assertColorEditorCells(evaluate,selector='.color-dialog[op
     const dialog=document.querySelector(${JSON.stringify(selector)}),body=dialog.querySelector('.color-editor-body'),outer=dialog.getBoundingClientRect();
     const visible=node=>node.getClientRects().length&&getComputedStyle(node).visibility!=='hidden';
     const groups=[...dialog.querySelectorAll('.color-rows,.color-editor-head')].filter(visible).map(grid=>({
-      name:grid.className,cells:[...grid.children].filter(visible).map(node=>{const r=node.getBoundingClientRect();return{name:node.className,text:node.textContent.trim().slice(0,80),bounds:[r.x,r.y,r.width,r.height]};}).filter(cell=>cell.bounds[2]>0&&cell.bounds[3]>0)
+      name:grid.className,cells:[...(grid.matches('.color-rows')?grid.querySelectorAll('.color-row-name,.color-row-space,.color-value-cell,.color-copy'):grid.children)].filter(visible).map(node=>{const r=node.getBoundingClientRect();return{name:node.className,text:node.textContent.trim().slice(0,80),bounds:[r.x,r.y,r.width,r.height]};}).filter(cell=>cell.bounds[2]>0&&cell.bounds[3]>0)
     }));
     const swatches=[...dialog.querySelectorAll('.color-editor-head .color-pair > *')].filter(visible).map(node=>{const r=node.getBoundingClientRect();return[r.width,r.height];});
     return{split:!body.classList.contains('single-pane'),outer_width:outer.width,outer_bounds:[outer.x,outer.y,outer.width,outer.height],preview_width:body.querySelector('.color-pair').getBoundingClientRect().width,swatches,groups};
@@ -123,7 +123,7 @@ export async function checkColorEditor({call,evaluate,settle}) {
     assert.deepEqual(pairs.style,pairs.mainStyle,'the footer pair keeps the main pair border and radius');
     assert.notEqual(pairs.style[1],'none','the pair border paints above both halves');
     assert.ok(pairs.hex>0,'the hex label follows the footer pair');
-    const reach=await evaluate(`[document.querySelector('${dialog} .color-sheet-body').getBoundingClientRect().bottom,document.querySelector('${dialog} .color-sheet').getBoundingClientRect().bottom,document.querySelector('${dialog} .color-editor-page').getBoundingClientRect().bottom,document.querySelector('${dialog} .dialog-footer').getBoundingClientRect().top]`);
+    const reach=await evaluate(`[document.querySelector('${dialog} .color-sheet-body').getBoundingClientRect().bottom,document.querySelector('${dialog} .color-sheet').getBoundingClientRect().bottom,document.querySelector('${dialog} .color-editor-page').getBoundingClientRect().bottom,document.querySelector('${dialog} footer').getBoundingClientRect().top]`);
     assert.ok(Math.abs(reach[0]-reach[3])<=1,`the swatch list reaches the divider ${JSON.stringify(reach)}`);
     await call('Input.insertText',{text:'zzzz-no-color'});await settle();
     assert.ok(await evaluate(`!!document.querySelector('${dialog} .color-sheet-empty')`));

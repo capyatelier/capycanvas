@@ -2,6 +2,11 @@ import {addScrollbar} from './scrollbars.js';
 
 const MARGIN=0, ARROW=12, RADIUS=15;
 
+export function contextMenuInitialHighlight(opening) {
+  return opening?.type!=='contextmenu'||opening.pointerType==='touch'||opening.pointerType==='pen'
+    ||(!opening.pointerType&&opening.button!==2);
+}
+
 export function menuIndicatorGutter(sections) {
   return sections.some(section=>section.some(item=>!item.is_heading && item.selected!=null
     && !(item.enabled && item.action==null && item.sections?.some(section=>section.length))));
@@ -25,7 +30,7 @@ export function contextPopoverLayout({anchor,size,viewport,has_arrow}) {
 
 export function createContextPopover({element,classes='',popover='manual'}) {
   const root=element('div',`panel-context-menu ${classes}`.trim()),body=element('div','context-menu-body');
-  root.popover=popover;root.setAttribute('role','menu');root.append(body);
+  root.popover=popover;root.tabIndex=-1;root.setAttribute('role','menu');root.append(body);
   let scroll;
   root.addEventListener('toggle',event=>{
     if(event.newState==='open')scroll??=addScrollbar(body,root);
@@ -35,7 +40,7 @@ export function createContextPopover({element,classes='',popover='manual'}) {
   body.addEventListener('pointermove',clearHighlight);
   body.addEventListener('focusin',clearHighlight);
   body.addEventListener('scroll',clearHighlight);
-  function place(anchor,presentation,initial=false) {
+  function place(anchor,presentation,opening) {
     const view=globalThis.visualViewport;
     const viewport={x:view?.offsetLeft??0,y:view?.offsetTop??0,width:view?.width??innerWidth,height:view?.height??innerHeight};
     root.style.maxWidth=`${Math.max(0,viewport.width-2*MARGIN)}px`;
@@ -47,7 +52,11 @@ export function createContextPopover({element,classes='',popover='manual'}) {
     root.dataset.side=layout.side;root.dataset.arrow=String(presentation.has_arrow);
     root.style.setProperty('--menu-arrow-tip',`${layout.arrowTip}px`);
     root.style.setProperty('--menu-arrow-base',`${layout.arrowBase}px`);
-    if(initial){clearHighlight();body.querySelector('button:not(:disabled)')?.setAttribute('data-menu-initial','');}
+    if(opening!==undefined){
+      clearHighlight();
+      if(contextMenuInitialHighlight(opening))body.querySelector('button:not(:disabled)')?.setAttribute('data-menu-initial','');
+      else if(!opening.target?.closest('input,textarea,[contenteditable=true]'))root.focus({preventScroll:true});
+    }
     return layout;
   }
   return {root,body,place};

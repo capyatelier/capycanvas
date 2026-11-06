@@ -416,14 +416,8 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
     present(details, keymap.details?keymap.dialog:null);
     const preview = keymap.import, signatureImport = JSON.stringify(preview);
     if (preview && signatureImport !== importSignature) {
-      importTitle.textContent=preview.heading;const body=importBody;body.replaceChildren();
-      for (const [title, items] of [[copy.added, preview.added], [copy.changed, preview.changed], [copy.removed, preview.removed], [copy.not_available, preview.unavailable]]) {
-        if (!items.length) continue;
-        body.append(element("h3", "", `${title} (${items.length})`));
-        const list = element("ul", "keymap-preview"); list.append(...items.map(item => element("li", "", item))); body.append(list);
-      }
-      if (!body.children.length) body.append(element("p", "", ()=>copy.no_changes));
-
+      importTitle.textContent=preview.heading;
+      importBody.replaceChildren(element('p','alert-description',preview.body));
     }
     importSignature = preview ? signatureImport : "";
     if(preview)importHost.present(keymap.import_dialog);else importHost.hide();

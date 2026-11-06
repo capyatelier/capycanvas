@@ -158,7 +158,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const model=owner.menuModel?owner.menuModel():app.context_menu(JSON.parse(owner.dataset.context));
     refreshMenu(context,model,closeDropdown);
   }
-  function showContext(node, point, focus = node, presentationTarget) {
+  function showContext(node, point, focus = node, presentationTarget, opening = true) {
     const claimed = new Event("workspace-context-claimed", { bubbles: true, cancelable: true });
     if (!node.dispatchEvent(claimed)) return;
     node.prepareMenu?.();
@@ -174,7 +174,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     contextAnchor=contextPresentation.anchor==='widget'?bounds:{x:point[0],y:point[1],width:1,height:1};
     context.menuOwner = node; context.menuFocus = focus;
     renderMenu(context, model, closeDropdown);
-    context.showPopover({source: node}); contextPopover.place(contextAnchor,contextPresentation,true);
+    context.showPopover({source: node}); contextPopover.place(contextAnchor,contextPresentation,opening);
   }
   function openMenu(node, point, focus = node, presentationTarget) {
     if (context.menuOwner === node && context.matches(':popover-open')) { closeContext(); return context; }
@@ -209,7 +209,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
   workspace.addEventListener("contextmenu", (e) => {
     const node = contextTarget(e.target);
     if (!node) return;
-    e.preventDefault(); showContext(node, [e.clientX, e.clientY]);
+    e.preventDefault(); showContext(node, [e.clientX, e.clientY], node, undefined, e);
   });
   workspace.addEventListener("keydown", e => {
     if (e.defaultPrevented || !(e.key === "ContextMenu" || e.key === "F10" && e.shiftKey)) return;
@@ -235,7 +235,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       cancelHold();
       if (!node.isConnected || node.parentNode !== parent) return;
       heldPointer = e.pointerId;
-      if (menuHold) showContext(node, [e.clientX, e.clientY], e.target.closest("button,summary") || node);
+      if (menuHold) showContext(node, [e.clientX, e.clientY], e.target.closest("button,summary") || node, undefined, e);
       else node.dispatchEvent(new Event("workspace-drag-held", { bubbles: true }));
     }, 500) };
   });
@@ -503,7 +503,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     if (managerHost.present(model.dialog)) managerList.querySelector('[aria-pressed="true"]')?.focus();
   }
 
-  const prompt = element("dialog", "toolbar-prompt"), promptTitle = element("h2"), promptMessage = element("p");
+  const prompt = element("dialog", "toolbar-prompt"), promptTitle = element("h2"), promptMessage = element("p","alert-description");
   prompt.id = "toolbar-prompt";
   const promptEntry=kit.entryRow({title:'',id:'toolbar-prompt-name'}),promptNameRow=promptEntry.line,promptNameLabel=promptEntry.label,promptName=promptEntry.input;
   promptName.addEventListener("input", () => send({ type: "toolbar_name", name: promptName.value }));

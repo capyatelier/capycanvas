@@ -1,4 +1,4 @@
-import {createContextPopover} from './context-popover.js';
+import {createContextPopover,contextMenuInitialHighlight} from './context-popover.js';
 import {createDialogHost} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
 import {createWorkflowStack} from './workflow-stack.js';
@@ -93,7 +93,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const root = element('dialog', 'picker-dialog new-drawing-dialog'); root.id = 'new-drawing-dialog';
     const title = element('h2', 'dialog-title'); title.id = 'new-drawing-title'; title.tabIndex = -1; root.setAttribute('aria-labelledby', title.id);
     const contextPopover=createContextPopover({element,classes:'new-drawing-menu',popover:'auto'}),menu=contextPopover.root;
-    function popup(items, anchor, target) {
+    function popup(items, anchor, target, opening = true) {
       contextPopover.body.replaceChildren(...items.map(item => {
         const node = button('', () => { menu.hidePopover(); send(item.action); }, item.selected ? 'selected' : '');
         node.setAttribute('role', 'menuitem'); node.disabled = item.disabled ?? false;
@@ -102,13 +102,13 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
         return node;
       }));
       menu.showPopover();
-      contextPopover.place(anchor,app.menu_presentation(target),true);
-      (menu.querySelector('button.selected:not(:disabled)') ?? menu.querySelector('button:not(:disabled)'))?.focus();
+      contextPopover.place(anchor,app.menu_presentation(target),opening);
+      if(contextMenuInitialHighlight(opening))(menu.querySelector('button.selected:not(:disabled)') ?? menu.querySelector('button:not(:disabled)'))?.focus();
     }
     const contextMenu = (node, items, kind) => node.addEventListener('contextmenu', e => {
       e.preventDefault(); e.stopPropagation();
       const r = node.getBoundingClientRect();
-      popup(items(), r, {kind});
+      popup(items(), r, {kind}, e);
     });
     const choice=(id,action)=>{const node=dropdown('',value=>{const next=action(Number(value));if(next)send(next);});node.id=id;return node;};
     const fill=(node,choices,index,label)=>node.update({choices:choices.map((entry,value)=>({value,label:entry.label})),value:Math.max(0,index),label});
@@ -279,7 +279,8 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
     const colorCancel = button('', () => send({op:'close_drawer'}), 'dialog-button'); colorCancel.id = 'new-drawing-color-cancel';
     const useColor = button('', () => { if (!useColor.disabled) send({op:'use_paper_color'}); }, 'suggested-action'); useColor.id = 'new-drawing-color-use';
     const colorFooter=kit.footer({actions:[footerActions(colorCancel,useColor)],separator:true});
-    const colorDrawer = drawer('new-drawing-color-drawer', null, [colorPage], colorFooter);
+    const colorHead = element('div', 'new-drawing-drawer-head');
+    const colorDrawer = drawer('new-drawing-color-drawer', colorHead, [colorPage], colorFooter);
     let colorUi = null, paletteKey = '';
 
     const report = element('p', 'new-drawing-error'); report.setAttribute('role', 'status'); report.hidden = true;
@@ -408,6 +409,7 @@ export function createNewDrawing({app, state, applyChange, element, button, icon
         colorUi = {form, sent:json(form.view().value)};
         form.title.tabIndex = -1;
         form.title.textContent = view()?.copy.paper_color ?? '';
+        colorHead.replaceChildren(form.title);
         form.current.hidden = form.captions.hidden = true;
         form.head.classList.add('new-drawing-color-head'); form.head.append(modes);
         form.values.append(palette);
