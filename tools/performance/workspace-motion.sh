@@ -37,7 +37,7 @@ unset LAYER_NATIVE_CAPTURE_ENCODING
 if [[ "$motion_platform" == gtk ]]; then
     if [[ ${LAYER_NATIVE_CAPTURE_SDR:-0} == 1 ]]; then
         [[ -n ${LAYER_NATIVE_CAPTURE_DIR:-} ]] || { echo 'SDR capture requires LAYER_NATIVE_CAPTURE_DIR' >&2; exit 2; }
-        export GDK_DEBUG=no-portals LAYER_NATIVE_CAPTURE_ENCODING=srgb
+        export GDK_DEBUG=no-portals LAYER_NATIVE_CAPTURE_ENCODING=gamma22-on-srgb
     else
         export GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG:}no-portals:color-mgmt"
     fi

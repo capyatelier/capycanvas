@@ -138,6 +138,16 @@ test('SDR capture declares pixel encoding and retains negotiated stream colorime
     assert.deepEqual(metadata.colorimetry, state.colorimetry);
 });
 
+test('visual runner passes the capture producer supported encoding', () => {
+    const runner = readFileSync(new URL('../../../tools/performance/workspace-motion.sh', import.meta.url), 'utf8');
+    const encoding = runner.match(/export GDK_DEBUG=no-portals LAYER_NATIVE_CAPTURE_ENCODING=([^\s]+)/)?.[1];
+    assert.ok(encoding, 'the visual capture branch declares its pixel interpretation');
+    const {capture, state} = harness(encoding);
+    state.sample = state.frame;
+    assert.equal(capture.capture('runner-window'), true);
+    assert.equal(JSON.parse(state.writes.find(write => write.path.endsWith('.json')).value).pixel_encoding, 'gamma22-on-srgb');
+});
+
 test('unknown capture pixel encoding is refused', () => {
     assert.throws(() => harness('pq'), /Unsupported capture pixel encoding/);
 });
