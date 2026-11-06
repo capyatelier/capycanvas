@@ -309,13 +309,6 @@ pub(super) fn export_allocations(w: &Workspace, state_name: &str, capture_name: 
         add("page","page",Some(page.clone()));
         let shell = |name: &str| widgets(&page).find(|widget| widget.is_mapped() && role(widget,name));
         let headers = widgets(&page).filter(|widget| widget.is_mapped() && widget.widget_name() == "dialog-header").collect::<Vec<_>>();
-        if let Some(directory) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
-            for widget in widgets(&page).filter(|widget| widget.is_mapped() && (widget.is::<gtk::Entry>() || widget.is::<gtk::SpinButton>() || widget.is::<gtk::DropDown>() || widget.is::<adw::EntryRow>())) {
-                let snapshot=gtk::Snapshot::new();
-                gtk::WidgetPaintable::new(Some(&widget)).snapshot(&snapshot,widget.width() as f64,widget.height() as f64);
-                if let Some(node)=snapshot.to_node() { node.write_to_file(std::path::PathBuf::from(&directory).join(format!("{capture_name}-{}-{}.node",widget.type_().name(),widget.widget_name()))).unwrap(); }
-            }
-        }
         if phone_page { assert!(headers.len() <= 1,"allocation export has duplicate mapped page headers"); }
         if phone_page || !headers.is_empty() { add("page.header","page-header",headers.first().cloned()); }
         let start = shell("start").or_else(|| headers.first().and_then(|header| widgets(header).filter(|widget| widget.is_mapped())

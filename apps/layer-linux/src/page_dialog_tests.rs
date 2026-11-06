@@ -423,6 +423,18 @@ fn page(d: &Driver) -> (adw::Dialog, gtk::Widget) {
 pub(super) fn capture(d: &mut Driver, name: &str) {
     if let Some(dialog) = d.w.visible_dialog() { alert_editor_frame(&dialog); }
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        if !widgets(d.w.window.upcast_ref()).any(|widget| widget.is::<gtk::Popover>() && widget.is_mapped()) {
+            let page = d.w.window.visible_dialog().or_else(|| d.w.pages.visible()).or_else(|| d.w.visible_dialog())
+                .map(|dialog| crate::page_dialog::parent(&dialog)).unwrap_or_else(|| d.w.window.clone().upcast());
+            let title = widgets(&page).find(|widget| widget.is_mapped() && widget.is::<gtk::Label>()
+                && (widget.ancestor(adw::HeaderBar::static_type()).is_some()
+                    || std::iter::successors(widget.parent(), |parent| parent.parent()).any(|parent| parent.widget_name() == "dialog-header"))
+                && widget.ancestor(gtk::Button::static_type()).is_none()
+                && widget.width() > 0 && widget.height() > 0);
+            let point = title.map_or_else(|| screen_point(d.w.window.upcast_ref(), &d.w.window, [0., 0.]),
+                |title| screen_point(&title, &d.w.window, [0.5, 0.5]));
+            d.input.perform(serde_json::json!([{"point":point}]));
+        }
         super::phone_motion::settle_presentation(&d.w);
         let capture_name = format!("pages-{}x{}-{}-{name}",d.w.surface.width(),d.w.surface.height(),format!("{:?}",state(&d.w).theme).to_lowercase());
         if widgets(d.w.window.upcast_ref()).any(|widget|widget.is::<gtk::Popover>() && widget.is_mapped()) {

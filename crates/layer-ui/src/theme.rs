@@ -306,14 +306,17 @@ pub struct ControlPalette {
     pub fill: crate::GlassColor,
     pub hover: crate::GlassColor,
     pub active: crate::GlassColor,
+    pub switch_track: crate::GlassColor,
+    pub preference_trough: crate::GlassColor,
     pub selection: crate::GlassColor,
     pub selection_backdrop: crate::GlassColor,
 }
 impl ControlPalette {
-    fn new(dark: bool, accent: HexColor) -> Self {
+    fn new(dark: bool, accent: HexColor, text: HexColor) -> Self {
         let native=if dark { &ADWAITA_DARK } else { &ADWAITA_LIGHT };
         let fill=|alpha| line(native.text,native.text_alpha*alpha);
         Self { foreground:line(native.text,native.text_alpha),fill:fill(0.10),hover:fill(0.15),active:fill(0.30),
+            switch_track:fill(0.15),preference_trough:line(text.0.map(f64::from),0.12),
             selection:line(accent.0.map(f64::from),0.30),selection_backdrop:fill(0.10) }
     }
 }
@@ -423,7 +426,7 @@ impl Settings {
             error: HexColor(if dark { [255, 123, 99] } else { [192, 28, 40] }),
             button: HexColor([if dark { 255 } else { 0 }; 3]),
             control_fill: line(text.0.map(f64::from), if dark { 0.06 } else { 0.16 }),
-            controls: ControlPalette::new(dark,accent),
+            controls: ControlPalette::new(dark,accent,text),
             dialogs: DialogPalette::new(dark),
             accent,
             link_oklab,
@@ -511,9 +514,15 @@ mod tests {
         assert_eq!(dark.fill.0,[1.,1.,1.,0.10]);
         assert_eq!(light.foreground.0,[0.,0.,6./255.,0.8]);
         assert_eq!(dark.foreground.0,[1.,1.,1.,1.]);
+        assert_eq!(light.switch_track.0,[0.,0.,6./255.,0.12]);
+        assert_eq!(dark.switch_track.0,[1.,1.,1.,0.15]);
+        assert_eq!(light.preference_trough.0,[46./255.,46./255.,50./255.,0.12]);
+        assert_eq!(dark.preference_trough.0,[250./255.,250./255.,251./255.,0.12]);
         for theme in [Theme::Light,Theme::Dark] {
             for platform in Platform::ALL {
                 let controls=Settings {accent:Some(HexColor([210,20,90])),..Settings::default()}.palette(theme,platform,None).controls;
+                let expected=if theme==Theme::Light {light} else {dark};
+                assert_eq!((controls.switch_track,controls.preference_trough),(expected.switch_track,expected.preference_trough));
                 assert_eq!(controls.selection.0,[210./255.,20./255.,90./255.,0.30]);
                 assert_eq!(controls.selection_backdrop,controls.fill);
                 assert!(controls.hover.0[3]>controls.fill.0[3]);assert!(controls.active.0[3]>controls.hover.0[3]);

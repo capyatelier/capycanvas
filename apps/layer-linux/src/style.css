@@ -263,7 +263,7 @@ window.capy-workspace dialog .number-panel.number-control scale trough, .phone-d
 .texture-grid flowboxchild:selected .texture-tile { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .number-preference button.number-value, .number-preference entry.number-entry { min-height: 34px; padding: 0 9px; }
 .number-preference .number-track { margin-top: 3px; }
-.number-preference scale trough { background: alpha(var(--window-fg-color), .12); }
+.number-preference scale trough { background: var(--capy-preference-trough); }
 .number-control spinbutton button { border: 0; box-shadow: none; }
 .dock-panel checkbutton check { min-width: 16px; min-height: 16px; -gtk-icon-size: 16px; padding: 0; border-radius: 4px; }
 .dock-panel checkbutton check:checked { -gtk-icon-source: -gtk-icontheme("layer-check-symbolic"); -gtk-icon-transform: none; }

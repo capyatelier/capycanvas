@@ -33,8 +33,14 @@ glib-compile-schemas "$motion_schema_dir"
 export GSETTINGS_SCHEMA_DIR="$motion_schema_dir" GSETTINGS_BACKEND=memory
 export WAYLAND_DISPLAY=layer-bench-motion
 export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=${GTK_A11Y:-none}
+unset LAYER_NATIVE_CAPTURE_ENCODING
 if [[ "$motion_platform" == gtk ]]; then
-    export GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG:}no-portals:color-mgmt"
+    if [[ ${LAYER_NATIVE_CAPTURE_SDR:-0} == 1 ]]; then
+        [[ -n ${LAYER_NATIVE_CAPTURE_DIR:-} ]] || { echo 'SDR capture requires LAYER_NATIVE_CAPTURE_DIR' >&2; exit 2; }
+        export GDK_DEBUG=no-portals LAYER_NATIVE_CAPTURE_ENCODING=srgb
+    else
+        export GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG:}no-portals:color-mgmt"
+    fi
     export XDG_CONFIG_DIRS="$PWD/tools/performance/gtk-config:${XDG_CONFIG_DIRS:-/etc/xdg}"
     export XDG_DATA_HOME="$motion_run_dir/data"
     mkdir "$XDG_DATA_HOME"

@@ -42,6 +42,35 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(report["exact_different_pixels"], 0)
         self.assertIn("declared BT.709 gamma 2.2", report["input_profiles"][0])
 
+    def test_sdr_opaque_samples_round_trip_to_app_values(self):
+        self.reference = Image.new("RGB", (3, 1))
+        self.reference.putdata([(51, 51, 51), (53, 132, 228), (250, 250, 251)])
+        self.reference.save(self.root / "reference.png")
+        self.declare_native_encoding()
+        metadata = self.root / "reference.json"
+        metadata.write_text(json.dumps({**json.loads(metadata.read_text()), "pixel_encoding": "gamma22-on-srgb"}))
+        candidate = Image.new("RGB", (3, 1))
+        candidate.putdata([(54, 54, 54), (56, 131, 227), (250, 250, 251)])
+        result = self.run_compare(candidate, arguments=("--channel-tolerance", "1"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertLessEqual(report["maximum_channel_error"], 1)
+        self.assertIn("inverse SDR output mapping", report["input_profiles"][0])
+
+    def test_unknown_pixel_encoding_is_refused(self):
+        (self.root / "reference.json").write_text(json.dumps({"pixel_encoding": "pq"}))
+        result = self.run_compare(self.reference)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown pixel encoding", result.stderr)
+
+    def test_sdr_declaration_does_not_hide_unsupported_stream_colorimetry(self):
+        self.declare_native_encoding(transfer=14)
+        metadata = self.root / "reference.json"
+        metadata.write_text(json.dumps({**json.loads(metadata.read_text()), "pixel_encoding": "gamma22-on-srgb"}))
+        result = self.run_compare(self.reference)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid capture colorimetry", result.stderr)
+
     def profile_tag(self, name):
         for index in range(struct.unpack_from(">I", GAMMA22_PROFILE, 128)[0]):
             tag, offset, size = struct.unpack_from(">4sII", GAMMA22_PROFILE, 132 + index * 12)

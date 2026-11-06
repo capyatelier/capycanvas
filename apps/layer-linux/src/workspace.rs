@@ -3192,6 +3192,10 @@ impl Workspace {
             use std::fmt::Write;
             write!(css, "--capy-{name}: {color};").unwrap();
         }
+        {
+            use std::fmt::Write;
+            write!(css, "--capy-preference-trough: {};", palette.controls.preference_trough).unwrap();
+        }
         let glass = palette.glass;
         for (name, color) in [
             ("panel", glass.panel),

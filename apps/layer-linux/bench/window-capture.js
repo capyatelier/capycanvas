@@ -52,8 +52,10 @@ function cropWindowPixels(pixels, width, height, stride, maximized = false) {
 }
 
 var WindowCapture = class {
-    constructor(directory) {
+    constructor(directory, encoding = null) {
+        if (encoding !== null && encoding !== 'gamma22-on-srgb') throw Error('Unsupported capture pixel encoding');
         this.directory = directory;
+        this.encoding = encoding;
         this.error = null;
         this.active = null;
     }
@@ -130,6 +132,7 @@ var WindowCapture = class {
         result.metadata.maximized = this.active.maximized;
         const {primaries, transfer, matrix, range} = info.colorimetry;
         result.metadata.colorimetry = {primaries, transfer, matrix, range};
+        if (this.encoding) result.metadata.pixel_encoding = this.encoding;
         const [width, height] = result.metadata.dimensions;
         GLib.mkdir_with_parents(this.directory, 0o700);
         GdkPixbuf.Pixbuf.new_from_bytes(new GLib.Bytes(result.pixels), GdkPixbuf.Colorspace.RGB,

@@ -18,7 +18,7 @@ function framePixels() {
     return {pixels, width, height, stride};
 }
 
-function harness() {
+function harness(encoding = null) {
     const frame = framePixels();
     const state = {now: 0, sample: null, format: 'RGBA', signals: new Map(), calls: [], writes: [],
         pipelines: [], sessions: 0, mapped: 0, unmapped: 0,
@@ -69,7 +69,7 @@ function harness() {
     state.frame = {get_caps: () => ({get_structure: () => ({get_string: () => state.format})}),
         get_buffer: () => ({map() { state.mapped++; return [true, {data: frame.pixels}]; },
             unmap() { state.unmapped++; }})};
-    return {context, state, frame, capture: new context.WindowCapture('/captures')};
+    return {context, state, frame, capture: new context.WindowCapture('/captures', encoding)};
 }
 
 function assertClosed(state, capture) {
@@ -127,6 +127,19 @@ test('success writes matching PNG and metadata and cleans each independent sessi
     assert.deepEqual(metadata.raw_size, [12, 10]);
     assert.deepEqual(metadata.colorimetry, state.colorimetry);
     assert.match(state.pipelines[0].command, /pipewiresrc path=42 ! video\/x-raw,format=BGRA ! videoconvert ! video\/x-raw,format=RGBA/);
+});
+
+test('SDR capture declares pixel encoding and retains negotiated stream colorimetry', () => {
+    const {state, capture} = harness('gamma22-on-srgb');
+    state.sample = state.frame;
+    assert.equal(capture.capture('sdr-window'), true);
+    const metadata = JSON.parse(state.writes.find(write => write.path.endsWith('.json')).value);
+    assert.equal(metadata.pixel_encoding, 'gamma22-on-srgb');
+    assert.deepEqual(metadata.colorimetry, state.colorimetry);
+});
+
+test('unknown capture pixel encoding is refused', () => {
+    assert.throws(() => harness('pq'), /Unsupported capture pixel encoding/);
 });
 
 test('pending capture times out and releases pipeline, bus watch, signal and session', () => {

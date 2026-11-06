@@ -17,7 +17,7 @@ if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary d
 // incremental window damage. WidgetPaintable.render_texture cannot test that.
 const captureDir = GLib.getenv('LAYER_NATIVE_CAPTURE_DIR');
 imports.searchPath.unshift(GLib.path_get_dirname(imports.system.programPath));
-const windowCapture = new imports['window-capture'].WindowCapture(captureDir);
+const windowCapture = new imports['window-capture'].WindowCapture(captureDir, GLib.getenv('LAYER_NATIVE_CAPTURE_ENCODING'));
 let captureFailure;
 let capturePipeline, captureSink;
 const captureFrame = name => {
@@ -37,6 +37,7 @@ const captureFrame = name => {
     GLib.file_set_contents(`${captureDir}/${name}.json`, `${JSON.stringify({
         raw_size: [info.width, info.height], dimensions: [info.width, info.height],
         colorimetry: {primaries, transfer, matrix, range},
+        ...(windowCapture.encoding ? {pixel_encoding: windowCapture.encoding} : {}),
     }, null, 2)}\n`);
     return true;
 };

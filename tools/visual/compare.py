@@ -72,23 +72,39 @@ def read(path, paired_profile):
         raise ValueError(f"Expected an opaque editor screenshot: {path.name}")
     profile = image.info.get("icc_profile")
     declared = None
+    encoding = None
     metadata = path.with_suffix(".json")
     if metadata.exists():
         try:
             values = json.loads(metadata.read_text())
         except (ValueError, OSError) as error:
             raise SystemExit(f"unsupported encoding: {path.name}: invalid capture metadata: {error}")
+        if isinstance(values, dict):
+            encoding = values.get("pixel_encoding")
+            if encoding is not None and encoding != "gamma22-on-srgb":
+                raise SystemExit(f"unsupported encoding: {path.name}: unknown pixel encoding")
+            if encoding == "gamma22-on-srgb" and profile is not None:
+                raise SystemExit(f"unsupported encoding: {path.name}: explicit pixel encoding conflicts with embedded profile")
         if isinstance(values, dict) and "colorimetry" in values:
             declared = values["colorimetry"]
             if (not isinstance(declared, dict)
                     or any(type(declared.get(key)) is not int for key in ("primaries", "transfer", "matrix", "range"))
-                    or declared["primaries"] != 1 or declared["transfer"] != 4
-                    or declared["matrix"] != 1 or declared["range"] not in (0, 1)
-                    or not bt709_gamma22(paired_profile)
+                    or declared["primaries"] != 1 or declared["matrix"] != 1
+                    or declared["range"] not in (0, 1)
+                    or declared["transfer"] not in ((4, 7) if encoding == "gamma22-on-srgb" else (4,))):
+                raise SystemExit(f"unsupported encoding: {path.name}: invalid capture colorimetry")
+            if encoding is None and (not bt709_gamma22(paired_profile)
                     or profile is not None and profile != paired_profile):
                 raise SystemExit(f"unsupported encoding: {path.name}: capture declaration and paired ICC profile do not match")
-            profile = paired_profile
-    if profile:
+            if encoding is None:
+                profile = paired_profile
+    if encoding == "gamma22-on-srgb":
+        inverse = [round(((value / 255 / 12.92 if value / 255 <= 0.04045
+            else ((value / 255 + 0.055) / 1.055) ** 2.4) ** (1 / 2.2)) * 255)
+            for value in range(256)]
+        rgb = image.convert("RGB").point(inverse * 3)
+        description = "declared gamma22-on-srgb; inverse SDR output mapping"
+    elif profile:
         source = ImageCms.ImageCmsProfile(io.BytesIO(profile))
         description = ImageCms.getProfileDescription(source).strip()
         if declared is not None:

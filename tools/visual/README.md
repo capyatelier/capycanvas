@@ -97,6 +97,7 @@ failure. It never rescales, crops or masks.
 
 GTK window captures record negotiated `colorimetry` (primaries, transfer,
 matrix and range as GStreamer enum values) in their existing same-stem JSON.
+Set `LAYER_NATIVE_CAPTURE_SDR=1` for GTK comparisons through `workspace-motion.sh`: it disables GTK color management and declares `pixel_encoding: gamma22-on-srgb`, whose SDR output mapping the comparator inverts, while retaining negotiated stream colorimetry and leaving performance runs unchanged.
 For BT.709/gamma2.2 RGB
 captures with full or unspecified range, the comparator verifies the paired
 ICC profile's three single-gamma TRCs and D50-adapted sRGB colorants before
