@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {createStoreWorker} from './store-worker-client.js';
+import {createSourceRegistry} from './store-sources.js';
+import {createStoreWorker,createPortTransport} from './store-worker-client.js';
 import {createLegacyRestartReader} from './legacy-restart-store.js';
 import {createFileHandleStore} from './file-handles.js';
 
@@ -39,6 +40,16 @@ async function withFixture(body){const f=fixture();try{await body(f);}finally{f.
 function channels(tasks) {
   return class {constructor(){this.port1={};this.port2={postMessage:()=>tasks.push(()=>this.port1.onmessage({data:null}))};}};
 }
+
+test('a full origin can register an incoming File without allocating or sampling disk',async()=>{
+  const tasks=[],replies=[],file=new Blob(['unread drawing']);
+  const scope={navigator:{storage:{async estimate(){return {quota:0,usage:0};},getDirectory(){assert.fail('Open must not write OPFS');}}},Blob,Uint8Array,Number,
+    createSourceRegistry,createLegacyRestartReader,createFileHandleStore,MessageChannel:channels(tasks),self:{postMessage:reply=>replies.push(reply)}};
+  runInNewContext(readFileSync(new URL('./store-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),scope);
+  scope.self.onmessage({data:{id:1,request:{operation:'register_blob',metadata:{lease:'full-origin'},file}}});await tasks.shift()();
+  assert.equal(replies[0].error,undefined);assert.equal(replies[0].result.file,file);assert.equal(replies[0].result.length,file.size);
+  assert.equal('snapshot_bytes' in replies[0].result,false);assert.equal(tasks.length,0);
+});
 
 test('store RPC replies bind to their request and transfer payload buffers without a Wasm module',()=>withFixture(async f=>{
   const bytes=Uint8Array.of(1,2,3),first=f.run(request('write_at',{name:'drawing/pack'},[bytes]));
@@ -135,7 +146,7 @@ test('worker legacy RPCs use the real read-only reader without opening OPFS file
     }};opening.onsuccess();});return opening;
   }};
   const timers=[],replies=[],scope={navigator:{storage:{getDirectory(){assert.fail('Legacy reads must not open OPFS');}}},
-    createLegacyRestartReader:options=>createLegacyRestartReader({...options,indexedDB}),createFileHandleStore,
+    createSourceRegistry,createLegacyRestartReader:options=>createLegacyRestartReader({...options,indexedDB}),createFileHandleStore,
     MessageChannel:channels(timers),self:{postMessage:(message,transfers)=>replies.push({message,transfers})},Uint8Array,Number};
   runInNewContext(readFileSync(new URL('./store-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),scope);
   async function run(operation,metadata={}){scope.self.onmessage({data:{id:replies.length+1,request:request(operation,metadata)}});await timers.shift()();const reply=replies.at(-1);assert.equal(reply.message.error,undefined);return reply;}
@@ -150,11 +161,11 @@ test('worker legacy RPCs use the real read-only reader without opening OPFS file
 test('worker close_tree closes only the released drawing handles before its acknowledgement',async()=>{
   const source=readFileSync(new URL('./store-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
   const timers=[],replies=[],closed=[];
-  const directory={async getDirectoryHandle(){return this;},async getFileHandle(name){
+  const directory={async *entries(){},async getDirectoryHandle(){return this;},async getFileHandle(name){
     return {async createSyncAccessHandle(){let released=false;return {close(){released=true;closed.push(name);},getSize(){assert.equal(released,false);return 12;}};}};
   }};
   const scope={navigator:{storage:{async getDirectory(){return directory;}}},MessageChannel:channels(timers),
-    self:{postMessage(message){replies.push({message,closed:[...closed]});}},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore};
+    self:{postMessage(message){replies.push({message,closed:[...closed]});}},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore,createSourceRegistry};
   runInNewContext(source,scope);
   async function run(id,operation,name) {scope.self.onmessage({data:{id,request:request(operation,{name,access:'read'})}});await timers.shift()();return replies.at(-1);}
   await run(1,'open','drawing/head.0');await run(2,'open','drawing/pack');await run(3,'open','drawing-other/head.1');
@@ -169,9 +180,9 @@ test('queued source reads precede writes and each channel task completes one bou
     read(target,{at}){target.set(pixels.subarray(at,at+target.length));return target.length;},
     write(source,{at}){pixels.set(source,at);return source.length;},close(){},
   };
-  const directory={async getDirectoryHandle(){return this;},async getFileHandle(){return {async createSyncAccessHandle(){return handle;}};}};
+  const directory={async *entries(){},async getDirectoryHandle(){return this;},async getFileHandle(){return {async createSyncAccessHandle(){return handle;}};}};
   const scope={navigator:{storage:{async getDirectory(){return directory;}}},MessageChannel:channels(tasks),
-    self:{postMessage:message=>replies.push(message)},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore};
+    self:{postMessage:message=>replies.push(message)},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore,createSourceRegistry};
   runInNewContext(readFileSync(new URL('./store-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),scope);
   const enqueue=(id,operation,metadata,buffers=[])=>scope.self.onmessage({data:{id,request:request(operation,metadata,buffers)}});
   enqueue(0,'open',{name:'drawing/page',access:'read'});await tasks.shift()();replies.length=0;
@@ -234,12 +245,26 @@ test('quota refusal remains an error even when the browser supplies no message',
 test('worker quota estimates carry their sampling epoch and never override a failed write',async()=>{
   const tasks=[],replies=[],estimates=[{quota:1000,usage:100},{quota:400,usage:300}];
   const handle={write(){const error=Error('');error.name='QuotaExceededError';throw error;},close(){}};
-  const directory={async getDirectoryHandle(){return this;},async getFileHandle(){return {async createSyncAccessHandle(){return handle;}};}};
+  const directory={async *entries(){},async getDirectoryHandle(){return this;},async getFileHandle(){return {async createSyncAccessHandle(){return handle;}};}};
   const scope={navigator:{storage:{async estimate(){return estimates.shift();},async getDirectory(){return directory;}}},MessageChannel:channels(tasks),
-    self:{location:{origin:'https://private.example'},postMessage:reply=>replies.push(reply)},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore};
+    self:{location:{origin:'https://private.example'},postMessage:reply=>replies.push(reply)},Uint8Array,Number,createLegacyRestartReader,createFileHandleStore,createSourceRegistry};
   runInNewContext(readFileSync(new URL('./store-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),scope);
   async function run(operation,metadata,buffers=[]){scope.self.onmessage({data:{id:replies.length+1,request:request(operation,metadata,buffers)}});await tasks.shift()();return replies.at(-1);}
   const first=await run('estimate',{epoch:7});assert.equal(first.result.epoch,7);assert.equal(first.result.scope,'https://private.example');assert.equal(first.result.available_bytes,900);
   const write=await run('write_at',{name:'drawing/page',offset:0},[Uint8Array.of(1)]);assert.equal(write.errorName,'QuotaExceededError');assert.equal(write.error,'');
   const next=await run('estimate',{epoch:8});assert.equal(next.result.epoch,8);assert.equal(next.result.available_bytes,100);
+});
+
+
+test('a worker port binds replies, wakes failed reads and rejects everything on disconnect',async()=>{
+  const messages=[],events=[],port={start(){},close(){events.push('close');},postMessage(message,transfer){messages.push({message,transfer});}};
+  const run=createPortTransport(port,()=>events.push('wake'));
+  const first=run(request('read_source',{lease:'tile',offset:0,length:2})),second=run(request('len'));
+  const failure=assert.rejects(first,{message:'Read failed'});
+  port.onmessage({data:{id:messages[0].message.id,error:'Read failed'}});await failure;
+  assert.deepEqual(events,['wake']);
+  const disconnected=assert.rejects(second,{message:'Connection stopped'});
+  port.onmessage({data:{fatal:'Connection stopped'}});await disconnected;
+  await assert.rejects(run(request('read_source')),{message:'Connection stopped'});
+  assert.deepEqual(events,['wake','close','wake']);assert.equal(messages.length,2);
 });

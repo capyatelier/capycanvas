@@ -1914,13 +1914,14 @@ try {
   performance.mark("capy.startup.wasm");
   // Let the browser start the worker while the main thread builds controls.
   await new Promise(resolve => setTimeout(resolve, 0));
-  const fileWorker = createRasterWorker(wasmModule,event=>gpuDiagnostics.record(event));
+  const storageWorker=createStoreWorker(wake);
+  const fileWorker = createRasterWorker(wasmModule,event=>gpuDiagnostics.record(event),storageWorker);
   const rasterWorker = async request=>{
     try{return await fileWorker(request);}
-    finally{if(request.operation==='image-decode'||request.operation==='nearest-coordinates')wake();}
+    finally{if(request.operation==='image-decode'||request.operation==='package-normalize'||request.operation==='nearest-coordinates')wake();}
   };
   configure_raster_worker(rasterWorker);
-  configure_store_transport(createStoreWorker(wake),wake);
+  configure_store_transport(storageWorker,wake,(metadata,bytes)=>rasterWorker({operation:'package-normalize',metadata,buffers:[bytes]}));
   canvas.width = 800;
   canvas.height = 600;
   let savedPreferences, restoreError;

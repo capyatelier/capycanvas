@@ -18,6 +18,7 @@ impl ByteRange {
     pub(crate) fn into_arc(self)->Arc<[u8]> {if self.lease.is_none() && self.range==(0..self.owner.len()) {self.owner.clone()}else{Arc::from(&*self)}}
     pub fn retained_bytes(&self) -> usize { self.owner.len() }
 }
+impl AsRef<[u8]> for ByteRange {fn as_ref(&self)->&[u8] {self}}
 impl Deref for ByteRange {
     type Target = [u8];
     fn deref(&self) -> &[u8] { &self.owner[self.range.clone()] }
@@ -28,6 +29,7 @@ pub enum RangeState { Pending, Ready(ByteRange) }
 
 pub trait ByteSource: Send + Sync {
     fn byte_len(&self) -> u64;
+    fn transfer_key(&self)->Option<String> {None}
     fn resident_bytes(&self) -> usize { self.byte_len().min(usize::MAX as u64) as usize }
     fn read_source(&self)->Option<crate::tile_io::ReadSource> {None}
     fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String>;
@@ -60,10 +62,16 @@ impl std::fmt::Debug for ImmutableBacking {
 struct Owner { generation:crate::PortableId,package:Mutex<super::lease::WeakPackageLease>,identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>>, integrity_failure: Mutex<Option<String>> }
 impl ImmutableBacking {
     pub fn new(source: Arc<dyn ByteSource>) -> Result<Self, &'static str> {
+        Self::with_generation(source,crate::PortableId::random())
+    }
+    pub(crate) fn with_generation(source:Arc<dyn ByteSource>,generation:crate::PortableId)->Result<Self,&'static str> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let identity = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| "Package owner identity exhausted")?;
-        Ok(Self { owner: Arc::new(Owner { generation:crate::PortableId::random(),package:Default::default(),identity, length: source.byte_len(), source, failure: Mutex::new(None), integrity_failure: Mutex::new(None) }) })
+        Ok(Self { owner: Arc::new(Owner { generation,package:Default::default(),identity, length: source.byte_len(), source, failure: Mutex::new(None), integrity_failure: Mutex::new(None) }) })
+    }
+    pub(crate) fn transfer_reference(&self)->Option<super::transfer::BackingReference> {
+        Some(super::transfer::BackingReference {key:self.owner.source.transfer_key()?,generation:self.owner.generation,length:self.byte_len()})
     }
     pub fn fail(&self, error: String) -> String {
         match self.owner.integrity_failure.lock() {

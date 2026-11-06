@@ -12,6 +12,16 @@ pub struct Member { pub name: String, pub offset: u64, pub length: u64, pub comp
 pub struct Directory { pub members: Vec<Member>, pub length: u64 }
 
 pub struct InputMember<'a> { pub name: &'a str, pub length: u64, pub crc32: u32, pub input: &'a mut dyn Read }
+pub trait ReadCursor {
+    fn read_exact<'a>(&'a mut self,output:&'a mut [u8])->super::store_io::FileFuture<'a,()>;
+}
+pub struct ReadyReader<'a>(pub &'a mut dyn Read);
+impl ReadCursor for ReadyReader<'_> {
+    fn read_exact<'a>(&'a mut self,output:&'a mut [u8])->super::store_io::FileFuture<'a,()> {
+        Box::pin(async move {self.0.read_exact(output).map_err(io)})
+    }
+}
+pub struct CursorMember<'a> {pub name:&'a str,pub length:u64,pub crc32:u32,pub input:&'a mut dyn ReadCursor}
 
 fn io(error: std::io::Error) -> String { format!("Package I/O failed: {error}") }
 fn u16_at(bytes: &[u8], offset: usize) -> u16 { u16::from_le_bytes(bytes[offset..offset+2].try_into().unwrap()) }
@@ -40,10 +50,10 @@ impl Input for BackingInput<'_> {
         }Ok(bytes)
     }
 }
-fn ready<T>(future:impl std::future::Future<Output=DecodeResult<T>>)->DecodeResult<T> {
+pub fn ready<T,E>(future:impl std::future::Future<Output=Result<T,E>>)->Result<T,E> {
     let mut future=std::pin::pin!(future);
     match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
-        std::task::Poll::Ready(result)=>result,std::task::Poll::Pending=>unreachable!("Seek input is synchronous"),
+        std::task::Poll::Ready(result)=>result,std::task::Poll::Pending=>unreachable!("Synchronous package input is pending"),
     }
 }
 async fn at<const N:usize>(input:&mut impl Input,offset:u64)->DecodeResult<[u8;N]> {Ok(input.bytes(offset,N).await?.try_into().unwrap())}
@@ -254,6 +264,12 @@ fn tail(count: u64, size: u64, offset: u64, large_member: bool) -> Result<Vec<u8
 }
 
 pub fn write_archive(output: &mut impl Write, members: &mut [InputMember<'_>], max_metadata: usize) -> Result<(), String> {
+    let metadata=members.iter().map(|member|(member.name,member.length,member.crc32)).collect::<Vec<_>>();
+    let mut readers=members.iter_mut().map(|member|ReadyReader(&mut *member.input)).collect::<Vec<_>>();
+    let mut cursors=readers.iter_mut().zip(metadata).map(|(input,(name,length,crc32))|CursorMember {name,length,crc32,input:input as &mut dyn ReadCursor}).collect::<Vec<_>>();
+    ready(write_archive_async(output,&mut cursors,max_metadata))
+}
+pub async fn write_archive_async(output:&mut impl Write,members:&mut [CursorMember<'_>],max_metadata:usize)->Result<(),String> {
     let mut names = BTreeSet::new();
     let mut directory = Vec::new();
     let mut offset = 0;
@@ -268,7 +284,7 @@ pub fn write_archive(output: &mut impl Write, members: &mut [InputMember<'_>], m
             let mut remaining = member.length;
             while remaining != 0 {
                 let count = remaining.min(buffer.len() as u64) as usize;
-                member.input.read_exact(&mut buffer[..count]).map_err(io)?;
+                member.input.read_exact(&mut buffer[..count]).await?;
                 raw.extend_from_slice(&buffer[..count]);
                 encoder.write_all(&buffer[..count]).map_err(io)?;
                 remaining -= count as u64;
@@ -280,7 +296,8 @@ pub fn write_archive(output: &mut impl Write, members: &mut [InputMember<'_>], m
         let compressed_length = manifest.as_ref().and_then(|(bytes, compressed)| compressed.then_some(bytes.len() as u64));
         let encoded_length = compressed_length.unwrap_or(member.length);
         let mut encoded = std::io::Cursor::new(manifest.as_ref().map(|(bytes, _)| bytes.as_slice()).unwrap_or_default());
-        let input: &mut dyn Read = if manifest.is_some() { &mut encoded } else { member.input };
+        let mut encoded=ReadyReader(&mut encoded);
+        let input:&mut dyn ReadCursor=if manifest.is_some() {&mut encoded}else {member.input};
         let (local, central) = headers(member.name, member.length, compressed_length, member.crc32, offset);
         if central.len() > max_metadata.saturating_sub(directory.len()) { return Err("ZIP directory exceeds memory bound".into()); }
         directory.extend(central);
@@ -291,7 +308,7 @@ pub fn write_archive(output: &mut impl Write, members: &mut [InputMember<'_>], m
         let mut crc = crc32fast::Hasher::new();
         while remaining != 0 {
             let count = remaining.min(buffer.len() as u64) as usize;
-            input.read_exact(&mut buffer[..count]).map_err(io)?;
+            input.read_exact(&mut buffer[..count]).await?;
             crc.update(&buffer[..count]); output.write_all(&buffer[..count]).map_err(io)?;
             remaining -= count as u64;
         }

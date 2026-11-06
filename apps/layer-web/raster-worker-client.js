@@ -1,3 +1,7 @@
+export function backingOffer(metadata) {
+  if(typeof metadata!=='string')return null;
+  try {const value=JSON.parse(metadata);return value.offer??backingOffer(Array.isArray(value)?value[0]:value.project??value.original);}catch{return null;}
+}
 function takeTransferAdmission(buffers) {
   const admission=buffers?.admission;
   if(admission)delete buffers.admission;
@@ -8,7 +12,7 @@ export function postTransferred(buffers,post) {
   const admission=takeTransferAdmission(buffers);
   try{return post();}finally{admission?.release();}
 }
-export function createRasterWorker(module,reportGpu=()=>{}) {
+export function createRasterWorker(module,reportGpu=()=>{},storage) {
   const owners = new Map();
   let next = 0, idleAnalysis;
   const outputs=new Map(),reads=new Set();
@@ -23,10 +27,13 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       closed=true;
       if(idleAnalysis===state)idleAnalysis=null;
       for (const job of pending.values()) { clearTimeout(job.timer); job.reject(error); }
-      clearTimeout(idleTimer); pending.clear(); worker.terminate(); owners.delete(kind);
+      clearTimeout(idleTimer); pending.clear(); connection?.close(); worker.terminate(); owners.delete(kind);
     };
-    worker.onmessage = ({data}) => {
+    let connection;
+    try {connection=storage?.connect(fail);}catch(error){worker.terminate();throw error;}
+    worker.onmessage = async ({data}) => {
       if(closed)return;
+      if(data.storage_error){fail(Error(data.storage_error));return;}
       if(data.gpu_event){
         const event={...data.gpu_event,worker:kind,operations:[...pending.values()].map(job=>job.operation)};
         try{reportGpu(event);}catch{}
@@ -35,6 +42,10 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       }
       const job = pending.get(data.id);
       if (!job) return;
+      const ticket=backingOffer(data.result?.metadata);
+      try {if(ticket)await storage({operation:'claim_sources',metadata:{ticket}});}
+      catch(error){fail(error);return;}
+      if(closed){if(ticket)storage({operation:'cancel_sources',metadata:{ticket}}).catch(()=>{});return;}
       pending.delete(data.id); clearTimeout(job.timer);state.retire=!!data.retire;
       if (data.color_feature_error) job.reject({color_feature_error:data.color_feature_error});
       else if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
@@ -44,7 +55,7 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
     };
     worker.onerror = event => { event.preventDefault(); fail(new Error(event.message || "Raster worker stopped")); };
     worker.onmessageerror = () => fail(new Error("Invalid raster worker response"));
-    const state = {worker,pending,fail,module,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Raster worker idle","AbortError")),5000);}}; owners.set(kind,state); return state;
+    const state = {worker,pending,fail,module,port:connection?.port,retire:false,get closed(){return closed;},active(){clearTimeout(idleTimer);},park(){idleTimer=setTimeout(()=>fail(new DOMException("Raster worker idle","AbortError")),5000);}}; owners.set(kind,state); return state;
   }
   function send(state,request,cancelled) {
     return new Promise((resolve,reject)=>{
@@ -55,7 +66,8 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       const poll=cancelled?setInterval(()=>{if(cancelled())state.fail(new DOMException("Image operation cancelled","AbortError"));},50):null;
       const finish=callback=>value=>{clearInterval(poll);callback(value);};
       state.pending.set(id,{resolve:finish(resolve),reject:finish(reject),timer,operation:request.operation});
-      try{postTransferred(request.buffers,()=>state.worker.postMessage({id,request,module:state.module},(request.buffers||[]).map(bytes=>bytes.buffer)));state.module=undefined;}
+      const port=state.port;
+      try{postTransferred(request.buffers,()=>state.worker.postMessage({id,request:{...request,parent_offer:backingOffer(request.metadata)},module:state.module,storagePort:port},[...(request.buffers||[]).map(bytes=>bytes.buffer),...(port?[port]:[])]));state.module=undefined;if(port)state.port=undefined;}
       catch(error){clearInterval(poll);clearTimeout(timer);state.pending.delete(id);reject(error);}
     });
   }
@@ -74,6 +86,7 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
       try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Reading finished','AbortError'));}
     }
     if(op==='read'){
+      if(storage&&!request.source_key)throw Error('Missing accepted file generation');
       const state=owner(`read:${++next}`);reads.add(state);
       try{return await send(state,request,cancelled);}finally{reads.delete(state);state.fail(new DOMException('Reading finished','AbortError'));}
     }
@@ -101,6 +114,6 @@ export function createRasterWorker(module,reportGpu=()=>{}) {
         return result;
       } catch(error){state.fail(error);throw error;}
     }
-    return send(owner(op==='panel-vectors'?'panel-vectors':op==='color-field'?'color-preview':op==='encode'?'codec':(op==='image-decode'||op==='nearest-coordinates'||op==='alpha-image')?'image-preparation':'files'),request,cancelled);
+    return send(owner(op==='panel-vectors'?'panel-vectors':op==='color-field'?'color-preview':op==='encode'?'codec':(op==='image-decode'||op==='package-normalize'||op==='nearest-coordinates'||op==='alpha-image')?'image-preparation':'files'),request,cancelled);
   };
 }

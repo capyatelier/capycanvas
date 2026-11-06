@@ -32,6 +32,14 @@ impl From<Arc<[u8]>> for Bytes {
     }
 }
 impl Bytes {
+    pub(crate) fn transfer_range(&self)->Result<Option<crate::package::lease::TransferRange>,String> {
+        self.healthy()?;
+        Ok(match self.snapshot()? {
+            Value::Memory(_)=>None,
+            Value::Package(range)=>Some(range.transfer_range()).filter(|range|range.backing.transfer_reference().is_some()),
+            Value::Store(location)=>location.transfer_range()?.map(|(backing,offset,integrity)|crate::package::lease::TransferRange {backing,offset,original:integrity,filtered:false,canonical:Some(integrity)}),
+        })
+    }
     pub(crate) fn stored(location:Arc<crate::package::session_store::StoreLocation>)->Self {
         let integrity=crate::authored::IntegrityCache::default();
         integrity.seed(crate::authored::EncodedIntegrity {bytes:location.length,crc32:location.crc}).unwrap();
@@ -76,6 +84,9 @@ impl Bytes {
             #[cfg(target_arch="wasm32")]
             {self.memory()?.ok_or_else(||"Tile bytes must be prepared before hashing".into())}
         })
+    }
+    pub(crate) async fn digest_async(&self,cancelled:&std::sync::atomic::AtomicBool)->Result<[u8;32],String> {
+        let bytes=self.read().await?;self.integrity.digest(cancelled,||Ok(bytes))
     }
     fn snapshot(&self) -> Result<Value, String> {
         Ok(self.value.lock().map_err(|_| "Tile storage lock failed")?.clone())

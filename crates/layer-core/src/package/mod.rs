@@ -4,6 +4,7 @@ pub(crate) const SELECTION_CHUNK_BYTES: usize = 65536;
 mod backing;
 pub(crate) mod lease;
 pub use lease::PackageLease;
+pub use lease::normalize_filtered_tile;
 mod json;
 pub use backing::{ByteRange, ByteSource, ImmutableBacking, RangeState, MAX_RANGE_BYTES};
 pub use json::{parse_json, references, remap_references};

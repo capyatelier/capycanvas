@@ -9,11 +9,11 @@ type CopyAdmission=std::rc::Rc<std::cell::RefCell<Option<layer_core::MemoryReser
 pub struct WebTransferLease {admission:CopyAdmission}
 #[wasm_bindgen]
 impl WebTransferLease {pub fn release(&self) {self.admission.borrow_mut().take();}}
-pub(super) struct PackedArtwork {value:JsValue,admission:Option<CopyAdmission>}
+pub(super) struct PackedArtwork {value:JsValue,admission:Option<CopyAdmission>,offer:Option<String>}
 impl std::ops::Deref for PackedArtwork {type Target=JsValue;fn deref(&self)->&JsValue {&self.value}}
-impl Drop for PackedArtwork {fn drop(&mut self) {if let Some(admission)=&self.admission {admission.borrow_mut().take();}}}
+impl Drop for PackedArtwork {fn drop(&mut self) {if let Some(admission)=&self.admission {admission.borrow_mut().take();}if let Some(ticket)=&self.offer {crate::store_transport::cancel_sources(ticket);}}}
 impl PackedArtwork {
-    pub(super) fn empty()->Self {Self {value:js_sys::Object::new().into(),admission:None}}
+    pub(super) fn empty()->Self {Self {value:js_sys::Object::new().into(),admission:None,offer:None}}
     pub(super) fn push_buffer(&mut self,bytes:&[u8])->Result<u32,JsValue> {
         let buffers=js_sys::Reflect::get(&self.value,&js("buffers"))?.dyn_into::<js_sys::Array>()?;
         if let Some(admission)=&self.admission {
@@ -27,12 +27,17 @@ impl PackedArtwork {
         }
         let index=buffers.length();buffers.push(&js_sys::Uint8Array::from(bytes));Ok(index)
     }
-    pub(super) fn into_js(mut self)->JsValue {self.admission=None;self.value.clone()}
+    pub(super) fn into_js(mut self)->JsValue {self.admission=None;self.offer=None;self.value.clone()}
 }
 pub(super) fn limits(dimension:u32)->ProjectLimits {seed_memory_budget();ProjectLimits {dimension,tiles:8192,..ProjectLimits::for_import()}}
 
 #[derive(Serialize,Deserialize)]
-struct Envelope {transfer:TransferDescriptor,chunks:Vec<usize>}
+struct Envelope {transfer:TransferDescriptor,chunks:Vec<usize>,#[serde(default,skip_serializing_if="Option::is_none")]offer:Option<String>}
+pub(super) struct SourceOffer(pub(super) Option<String>);
+impl Drop for SourceOffer {fn drop(&mut self) {if let Some(ticket)=&self.0 {crate::store_transport::cancel_sources(ticket);}}}
+pub(super) fn received_offer(value:&JsValue)->SourceOffer {
+    SourceOffer(js_sys::Reflect::get(value,&js("metadata")).ok().and_then(|metadata|metadata.as_string()).and_then(|metadata|serde_json::from_str::<serde_json::Value>(&metadata).ok()).and_then(|metadata|metadata["offer"].as_str().map(str::to_owned)))
+}
 
 pub(super) async fn wait_backing(artwork:&Artwork)->Result<(),JsValue>{wait_backing_cancellable(artwork,None).await}
 pub(super) async fn wait_backing_cancellable(artwork:&Artwork,control:Option<&layer_render_wgpu::snapshot::CaptureControl>)->Result<(),JsValue>{
@@ -47,22 +52,27 @@ pub(super) async fn wait_backing_cancellable(artwork:&Artwork,control:Option<&la
 }
 
 pub(super) async fn pack(artwork:Artwork)->Result<PackedArtwork,JsValue>{pack_scene(artwork,None).await}
-pub(super) async fn pack_scene(artwork:Artwork,selection:Option<layer_core::Selection>)->Result<PackedArtwork,JsValue>{
+fn scene_capture(artwork:Artwork)->Result<ArtworkCapture,JsValue> {
     let checkpoint=CaptureCheckpoint {document:artwork.id,owner:0,session_generation:0,artwork_generation:0,working_generation:0,edit_checkpoint:0};
-    pack_with_selection(artwork.capture(checkpoint).map_err(js)?,selection).await
+    artwork.capture(checkpoint).map_err(js)
+}
+pub(super) async fn pack_scene(artwork:Artwork,selection:Option<layer_core::Selection>)->Result<PackedArtwork,JsValue>{
+    pack_with_selection(scene_capture(artwork)?,selection).await
 }
 async fn pack_capture(capture:ArtworkCapture)->Result<PackedArtwork,JsValue>{pack_with_selection(capture,None).await}
 async fn pack_with_selection(capture:ArtworkCapture,selection:Option<layer_core::Selection>)->Result<PackedArtwork,JsValue>{
     seed_memory_budget();
     wait_backing(&capture.artwork).await?;
     crate::store_transport::configure_reads();
-    let transfer=PreparedTransfer::capture_async(&capture,&selection,&AtomicBool::new(false),&layer_core::MemoryBudget::process()).await.map_err(js)?;
+    let transfer=PreparedTransfer::capture_referenced(&capture,&selection,&AtomicBool::new(false),&layer_core::MemoryBudget::process()).await.map_err(js)?;
     let chunks=(0..transfer.payload_count()).map(|index|usize::try_from(transfer.payload_len(index).map_err(js)?).map(|length|length.div_ceil(BLOCK)).map_err(js)).collect::<Result<Vec<_>,JsValue>>()?;
-    let metadata=serde_json::to_string(&Envelope{transfer:transfer.descriptor().clone(),chunks}).map_err(js)?;
+    let offer=crate::store_transport::offer_sources(transfer.descriptor().backings()).await.map_err(js)?;
+    let mut packed=PackedArtwork {value:js_sys::Object::new().into(),admission:None,offer:offer.clone()};
+    let metadata=serde_json::to_string(&Envelope{transfer:transfer.descriptor().clone(),chunks,offer}).map_err(js)?;
     let overhead=(metadata.len() as u64).checked_mul(3).and_then(|bytes|bytes.checked_add(BLOCK as u64)).ok_or_else(||js(layer_core::MEMORY_BUDGET_EXCEEDED))?;
     let reservation=transfer.reserve_copy(&layer_core::MemoryBudget::process(),overhead).map_err(js)?;
     let admission=std::rc::Rc::new(std::cell::RefCell::new(Some(reservation)));
-    let packed=PackedArtwork {value:js_sys::Object::new().into(),admission:Some(admission.clone())};
+    packed.admission=Some(admission.clone());
     let buffers=js_sys::Array::new();
     for index in 0..transfer.payload_count(){
         let len=usize::try_from(transfer.payload_len(index).map_err(js)?).map_err(js)?;
@@ -81,10 +91,14 @@ async fn unpack_capture(metadata:&str,buffers:js_sys::Array)->Result<ArtworkCapt
 async fn unpack_with_selection(metadata:&str,buffers:js_sys::Array)->Result<(ArtworkCapture,Option<layer_core::Selection>),JsValue>{
     if metadata.len()>64*1024*1024{return Err(js("Oversized artwork metadata"));}
     let envelope:Envelope=serde_json::from_str(metadata).map_err(js)?;
+    let mut offer=SourceOffer(envelope.offer.clone());
     let count=envelope.chunks.iter().try_fold(0usize,|sum,n|sum.checked_add(*n)).ok_or_else(||js("Transfer chunk count overflow"))?;
     if count!=buffers.length() as usize{return Err(js("Incomplete artwork transfer"));}
     let admitted_limits=ProjectLimits {tiles:8192,..Default::default()};
-    let mut receiver=TransferReceiver::new(envelope.transfer,admitted_limits).map_err(js)?;let mut index=0;let mut total=0usize;
+    let sources=crate::store_transport::adopt_sources(envelope.offer.as_deref(),envelope.transfer.backings()).await.map_err(js)?;
+    offer.0=None;
+    let mut sources=sources.into_iter();
+    let mut receiver=TransferReceiver::with_sources(envelope.transfer,admitted_limits,|_|sources.next().ok_or_else(||"Missing backing owner".into())).map_err(js)?;let mut index=0;let mut total=0usize;
     for (payload,count) in envelope.chunks.into_iter().enumerate() {
         for _ in 0..count {
             let buffer=buffers.get(index).dyn_into::<js_sys::Uint8Array>().map_err(|_|js("Missing artwork transfer chunk"))?;
@@ -103,6 +117,7 @@ pub(super) async fn convert_color(original: &layer_core::Document, change: layer
     let (metadata, buffers) = parts(&wire)?;
     let request = serde_json::to_string(&serde_json::json!({"project":metadata,"change":change})).map_err(js)?;
     let result = JsFuture::from(raster_worker::call("color-convert", &request, &buffers)?).await?;
+    let _offer=received_offer(&result);
     output::cancelled(control)?;
     let (metadata, buffers) = parts(&result)?;
     let clipped = js_sys::Reflect::get(&result, &js("clipped"))?.as_f64().unwrap_or(0.) as u64;
@@ -116,13 +131,16 @@ pub(super) struct OpenOptions {pub dimension:u32,pub photo_policy:layer_ui::Phot
 pub(super) type Preserved = (layer_ui::PackagePresentation,Option<js_sys::Object>);
 pub(super) enum Opened {Editable {document:layer_ui::ImportedDocument,fallback:Option<Preserved>},Package {presentation:layer_ui::PackagePresentation,preview:Option<js_sys::Object>}}
 pub(super) async fn open(file:web_sys::Blob,options:OpenOptions,cancelled:Option<js_sys::Function>)->Result<Opened,JsValue>{
+    let source=crate::store_transport::register_blob(&file).await.map_err(js)?;
     let request=js_sys::Object::new();
     js_sys::Reflect::set(&request,&js("operation"),&js("read"))?;
     js_sys::Reflect::set(&request,&js("metadata"),&js(serde_json::to_string(&options).map_err(js)?))?;
     js_sys::Reflect::set(&request,&js("buffers"),&js_sys::Array::new())?;
-    js_sys::Reflect::set(&request,&js("file"),&file)?;
+    js_sys::Reflect::set(&request,&js("file"),source.file())?;
+    js_sys::Reflect::set(&request,&js("source_key"),&js(source.key()))?;
     if let Some(cancelled)=cancelled {js_sys::Reflect::set(&request,&js("cancelled"),&cancelled)?;}
     let wire=JsFuture::from(raster_worker::request(&request)?).await?;
+    let _offer=received_offer(&wire);
     let presentation=js_sys::Reflect::get(&wire,&js("package"))?;
     if !presentation.is_undefined(){
         let presentation=serde_wasm_bindgen::from_value(presentation).map_err(js)?;
@@ -141,10 +159,10 @@ pub(super) async fn open(file:web_sys::Blob,options:OpenOptions,cancelled:Option
     Ok(Opened::Editable {document:layer_ui::ImportedDocument::new(document,source),fallback})
 }
 #[wasm_bindgen]
-pub async fn raster_worker_read(options:&str,file:web_sys::Blob)->Result<JsValue,JsValue>{
+pub async fn raster_worker_read(options:&str,file:web_sys::Blob,source_key:Option<String>)->Result<JsValue,JsValue>{
     if options.len()>64*1024 {return Err(js("Oversized file read options"));}
     let options:OpenOptions=serde_json::from_str(options).map_err(js)?;
-    let backing=blob::Backing::new(file)?;
+    let backing=blob::Backing::with_key(file,source_key)?;
     let mut photo_limits=layer_color::photo::DecodeLimits::from_memory_budget(photo_memory_budget());
     if let Some(remaining)=options.source_bytes{photo_limits.source_bytes=photo_limits.source_bytes.min(remaining);}
     let imported=layer_ui::read_import_backing(backing.source.clone(),options.intent,options.photo_policy,options.names,limits(options.dimension),photo_limits,&Default::default()).map_err(js)?;
@@ -199,7 +217,7 @@ pub async fn raster_worker_write(metadata:String,buffers:js_sys::Array,write:js_
         }
     } else {None};
     let mut output=layer_ui::FingerprintWriter::new(Output{write,offset:0});
-    layer_core::package::codec::PreparedPackage::prepare(&capture,preview,&cancelled).map_err(js)?.write(&mut output,&cancelled).map_err(js)?;
+    layer_core::package::codec::PreparedPackage::prepare_async(&capture,preview,&cancelled).await.map_err(js)?.write_async(&mut output,&cancelled).await.map_err(js)?;
     serialize(&output.finish())
 }
 

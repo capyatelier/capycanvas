@@ -3,9 +3,10 @@ use std::{cell::RefCell,collections::BTreeMap,marker::PhantomData,rc::Rc,sync::{
 
 struct Local {file:web_sys::Blob,reader:web_sys::FileReaderSync}
 thread_local! {static SOURCES:RefCell<BTreeMap<u64,Local>>=Default::default();}
-struct Source {id:u64,length:u64,thread:ThreadId}
+struct Source {id:u64,length:u64,thread:ThreadId,key:Option<String>}
 impl ByteSource for Source {
     fn byte_len(&self)->u64 {self.length}
+    fn transfer_key(&self)->Option<String> {self.key.clone()}
     fn resident_bytes(&self)->usize {0}
     fn poll(&self,offset:u64,length:usize)->Result<RangeState,String> {
         if self.thread!=thread::current().id() {return Err("File reader belongs to another worker".into());}
@@ -25,7 +26,8 @@ impl ByteSource for Source {
 }
 pub(super) struct Backing {pub source:ImmutableBacking,id:u64,_local:PhantomData<Rc<()>>}
 impl Backing {
-    pub fn new(file:web_sys::Blob)->Result<Self,wasm_bindgen::JsValue> {
+    pub fn new(file:web_sys::Blob)->Result<Self,wasm_bindgen::JsValue> {Self::with_key(file,None)}
+    pub fn with_key(file:web_sys::Blob,key:Option<String>)->Result<Self,wasm_bindgen::JsValue> {
         if web_sys::window().is_some() {return Err(super::js("File reading requires its worker"));}
         let length=file.size();
         if !length.is_finite() || length<0. || length.fract()!=0. || length>9_007_199_254_740_991. {
@@ -34,7 +36,7 @@ impl Backing {
         static NEXT:AtomicU64=AtomicU64::new(1);
         let id=NEXT.try_update(Ordering::Relaxed,Ordering::Relaxed,|id|id.checked_add(1)).map_err(|_|super::js("File reader identities exhausted"))?;
         let reader=web_sys::FileReaderSync::new()?;
-        let source=ImmutableBacking::new(Arc::new(Source {id,length:length as u64,thread:thread::current().id()})).map_err(super::js)?;
+        let source=ImmutableBacking::new(Arc::new(Source {id,length:length as u64,thread:thread::current().id(),key})).map_err(super::js)?;
         SOURCES.with(|sources|sources.borrow_mut().insert(id,Local {file,reader}));
         Ok(Self {source,id,_local:PhantomData})
     }

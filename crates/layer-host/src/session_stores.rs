@@ -92,7 +92,7 @@ impl Pending {
 }
 use layer_core::package::storage_budget::StorageRefusal;
 struct Drawing {
-    memory:Option<layer_core::DocumentMemory>,package:Option<(Arc<RetainedTiles>,Option<layer_core::package::session_store::PackageCopy>)>,binding:DrawingStore,observed:Option<SessionStamp>,committed:Option<SessionStamp>,committed_at:Option<u64>,due:Option<u64>,deferred_since:Option<u64>,
+    memory:Option<layer_core::DocumentMemory>,package:Option<(Arc<RetainedTiles>,Result<Option<layer_core::package::session_store::PackageCopy>,String>)>,package_replies:Vec<StoreReply>,binding:DrawingStore,observed:Option<SessionStamp>,committed:Option<SessionStamp>,committed_at:Option<u64>,due:Option<u64>,deferred_since:Option<u64>,
     storage_error:Option<StorageRefusal>,next_storage_sample:u64,next_compaction:u64,sequence:u64,running:bool,inflight:Option<SessionStamp>,retiring:bool,pending:Pending,
 }
 struct State {drawings:BTreeMap<String,Drawing>,aliases:BTreeMap<u64,String>,next_compaction:u64}
@@ -202,12 +202,12 @@ impl SessionStores {
     fn copy_package(&self,key:&str)->bool {
         let mut state=self.0.state.lock().unwrap();let Some(drawing)=state.drawings.get_mut(key) else {return false;};
         if drawing.running || drawing.retiring || drawing.storage_error.is_some() {return false;}
-        let checkpoint=drawing.deferred_since.is_some_and(|since|(self.0.clock)().saturating_sub(since)>=5*Self::checkpoint_interval_ms());
+        let checkpoint=!drawing.package_replies.is_empty() || drawing.deferred_since.is_some_and(|since|(self.0.clock)().saturating_sub(since)>=5*Self::checkpoint_interval_ms());
         if !layer_core::package::session_store::CompactionActivity::ready(checkpoint) {return false;}
         let Some(inventory)=drawing.memory.as_ref().and_then(layer_core::DocumentMemory::package_inventory) else {return false;};
         let copy=match drawing.package.take() {
             Some((current,copy)) if Arc::ptr_eq(&current,&inventory)=>match copy {
-                Some(copy)=>Some(copy),None=>{drawing.package=Some((current,None));return false;},
+                Ok(Some(copy))=>Some(copy),finished=>{drawing.package=Some((current,finished));return false;},
             },_=>None,
         };
         let task=self.start(drawing,Request {work:Work::Package {inventory,copy,checkpoint},replies:Vec::new()});
@@ -226,6 +226,16 @@ impl SessionStores {
         state.next_compaction=now.saturating_add(Self::checkpoint_interval_ms());
         state.drawings.get_mut(&key).unwrap().next_compaction=state.next_compaction;
         drop(state);self.request_key(&key,Work::Compact)?;Ok(())
+    }
+    pub fn finish_package(&self,id:u64)->Result<StoreReply,String> {
+        let binding=self.bind(id,None)?;let reply=StoreReply::default();
+        let mut state=self.0.state.lock().unwrap();let drawing=state.drawings.get_mut(binding.key()).unwrap();
+        if let Some((_,Err(error)))=&drawing.package {return Err(error.clone());}
+        if drawing.storage_error.is_some() {return Err(layer_core::package::storage_budget::STORAGE_UNAVAILABLE.into());}
+        let memory=drawing.memory.as_ref().ok_or("Drawing storage is not attached")?;
+        if let Some(error)=memory.package_failure() {return Err(error);}
+        if !memory.package_pending() {drop(state);reply.finish(Ok(StoreResult::Durable(0)));return Ok(reply);}
+        drawing.package_replies.push(reply.clone());drop(state);self.copy_package(binding.key());Ok(reply)
     }
     pub const fn checkpoint_interval_ms()->u64 {layer_ui::session_recovery::CHECKPOINT_INTERVAL_MS}
     pub fn checkpoint_due(&self,id:u64,stamp:SessionStamp,force:bool)->Result<bool,String> {
@@ -372,13 +382,19 @@ fn same_checkpoint(a:&SessionStamp,b:&SessionStamp)->bool {
     current==*b
 }
 impl Drawing {
-    fn new(binding:DrawingStore)->Self {Self {memory:None,package:None,binding,observed:None,committed:None,committed_at:None,due:None,deferred_since:None,storage_error:None,next_storage_sample:0,next_compaction:0,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()}}
-    fn release_package_wait(&mut self) {self.deferred_since=None;if let Some(memory)=&self.memory {memory.release_package_wait();}}
+    fn new(binding:DrawingStore)->Self {Self {memory:None,package:None,package_replies:Vec::new(),binding,observed:None,committed:None,committed_at:None,due:None,deferred_since:None,storage_error:None,next_storage_sample:0,next_compaction:0,sequence:0,running:false,inflight:None,retiring:false,pending:Pending::default()}}
+    fn finish_package(&mut self,result:Result<(),String>) {for reply in self.package_replies.drain(..) {reply.finish(result.clone().map(|_|StoreResult::Durable(0)));}}
+    fn fail_package(&mut self,inventory:&Arc<RetainedTiles>,error:&str) {
+        self.finish_package(Err(error.into()));
+        self.package=if error==layer_core::package::storage_budget::STORAGE_UNAVAILABLE {None}else {self.release_package_wait();Some((inventory.clone(),Err(error.into())))};
+    }
+    fn release_package_wait(&mut self) {self.deferred_since=None;if let Some(memory)=&self.memory {memory.release_package_wait();}self.finish_package(Ok(()));}
     fn current(&self,stamp:&SessionStamp)->bool {
         self.committed.as_ref().is_some_and(|current|same_checkpoint(current,stamp)) && self.inflight.as_ref().is_none_or(|current|same_checkpoint(current,stamp))
             && self.pending.checkpoint.as_ref().is_none_or(|request|matches!(&request.work,Work::Checkpoint {stamp:current,..} if same_checkpoint(current,stamp)))
     }
 }
+impl Drop for Drawing {fn drop(&mut self) {self.finish_package(Err("Drawing storage owner closed".into()));}}
 pub struct StoreWork(Option<StoreTask>);
 enum StoreTask {Drawing(DrawingWork),Trim(PressureTrim)}
 impl StoreWork {
@@ -464,15 +480,13 @@ impl DrawingWork {
         }else {None};
         if let Err(error)=&result && let Work::Package {inventory,..}=&request.work {
             if let Some(drawing)=self.stores.0.state.lock().unwrap().drawings.get_mut(&self.key) {
-                drawing.package=if error==layer_core::package::storage_budget::STORAGE_UNAVAILABLE {None}else {
-                    drawing.release_package_wait();Some((inventory.clone(),None))
-                };
+                drawing.fail_package(inventory,error);
             }
         }
         let continue_package=match &mut result {Ok(StoreResult::PackageCopy {inventory,copy,progress})=>{
             if let Some(drawing)=self.stores.0.state.lock().unwrap().drawings.get_mut(&self.key) {
                 if copy.is_none() {drawing.release_package_wait();}
-                drawing.package=Some((inventory.clone(),copy.take()));
+                drawing.package=Some((inventory.clone(),Ok(copy.take())));
             }
             *progress
         },_=>false};
@@ -521,6 +535,7 @@ impl DrawingWork {
 impl Drop for DrawingWork {
     fn drop(&mut self) {
         if let Some(request)=self.request.take() {
+            if let Work::Package {inventory,..}=&request.work && let Some(drawing)=self.stores.0.state.lock().unwrap().drawings.get_mut(&self.key) {drawing.fail_package(inventory,"Drawing storage worker stopped");}
             self.complete(None,false);request.finish(Err("Drawing storage worker stopped".into()));self.stores.wake();
         }
     }

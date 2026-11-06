@@ -859,6 +859,7 @@ impl Pack {
     }
 }
 impl RangeReader for Pack {
+    fn transfer_key(&self)->Option<String> {self.file.transfer_key()}
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {self.file.read(offset,length,crc,completion);}
 }
 struct StoreRange {pack:Arc<Pack>,source:ReadSource,offset:u64}
@@ -875,6 +876,12 @@ pub(crate) struct StoreLocation {
     descriptor:[u8;32],
 }
 impl StoreLocation {
+    pub(crate) fn transfer_range(&self)->Result<Option<(ImmutableBacking,u64,crate::authored::EncodedIntegrity)>,String> {
+        let range=self.range();
+        if range.pack.file.transfer_key().is_none() {return Ok(None);}
+        let backing=ImmutableBacking::with_generation(Arc::new(range.source.clone()),range.pack.id)?;
+        Ok(Some((backing,range.offset,crate::authored::EncodedIntegrity {bytes:self.length,crc32:self.crc})))
+    }
     pub(crate) fn content_identity(&self)->crate::raster::TileContentIdentity {
         crate::raster::TileContentIdentity::Stored {bytes:self.length,crc32:self.crc,descriptor:self.descriptor}
     }

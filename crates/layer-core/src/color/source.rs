@@ -181,8 +181,11 @@ pub struct SourceRows<'a> {
     band: u32,
     tiles: Vec<Vec<u8>>,
 }
+pub type TileRead=for<'a> fn(&'a TileBlob)->crate::package::store_io::FileFuture<'a,Vec<u8>>;
 impl SourceRows<'_> {
-    pub fn read(&mut self, y: u32, output: &mut [u8]) -> Result<(), String> {
+    pub fn read(&mut self,y:u32,output:&mut [u8])->Result<(),String> {crate::package::archive::ready(self.read_using(y,output,TileBlob::decode_ready_on_worker))}
+    pub async fn read_async(&mut self,y:u32,output:&mut [u8])->Result<(),String> {self.read_using(y,output,TileBlob::decode_async_on_worker).await}
+    pub async fn read_using(&mut self, y: u32, output: &mut [u8],decode:TileRead) -> Result<(), String> {
         if y >= self.source.extent[1] || output.len() != self.source.row_bytes() {
             return Err("Invalid source row".into());
         }
@@ -200,10 +203,7 @@ impl SourceRows<'_> {
                 if tile.descriptor != self.source.interpretation.descriptor() {
                     return Err("Invalid source tile format".into());
                 }
-                #[cfg(not(target_arch="wasm32"))]
-                let decoded=tile.decode_on_worker()?;
-                #[cfg(target_arch="wasm32")]
-                let decoded=tile.decode_bytes_on_worker(&tile.memory_compressed()?.ok_or("Image input bytes were not supplied to the worker")?)?;
+                let decoded=decode(tile).await?;
                 self.tiles.push(decoded);
             }
             self.band = band;

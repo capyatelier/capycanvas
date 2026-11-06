@@ -2,6 +2,12 @@ use super::{ByteRange,ImmutableBacking,RangeState};
 use crate::{authored::EncodedIntegrity,color::PixelDescriptor,tile_io::{RangeReader,ReadCache,ReadCompletion,ReadSource}};
 use std::{collections::BTreeMap,sync::{Arc,Mutex,OnceLock,Weak}};
 
+pub fn normalize_filtered_tile(descriptor:PixelDescriptor,bytes:&[u8],crc:u32)->Result<Arc<[u8]>,String> {
+    crate::tile_io::verify_crc(bytes,Some(crc))?;
+    let scratch=descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid package tile descriptor")? as u64*4;
+    let _admission=crate::MemoryBudget::process().admit_import(scratch).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
+    crate::raster::TileBlob::from_filtered_deflate(crate::PortableId::random(),descriptor,bytes)?.memory_compressed()?.ok_or_else(||"Missing normalized package tile".into())
+}
 struct Reader {backing:ImmutableBacking,ranges:Arc<Mutex<BTreeMap<(u64,usize),Arc<PackageIdentity>>>>}
 impl RangeReader for Reader {
     fn result_bounds(&self,offset:u64,length:usize)->std::ops::RangeInclusive<usize> {
@@ -12,19 +18,19 @@ impl RangeReader for Reader {
     }
     fn read(&self,offset:u64,length:usize,_crc:Option<u32>,completion:ReadCompletion) {
         let range=self.ranges.lock().unwrap().get(&(offset,length)).cloned();let backing=self.backing.clone();
+        let filtered=range.as_ref().filter(|range|range.filtered).map(|range|(range.original.crc32,range.descriptor));
+        let source=self.backing.read_source();let prepared=source.is_some()&&filtered.is_some();
         let completion=completion.map(Box::new(move |bytes|bytes.and_then(|bytes| {
             let range=range.ok_or("Missing package tile descriptor")?;
-            crate::tile_io::verify_crc(&bytes,Some(range.original.crc32))?;
-            let bytes=if range.filtered {
-                let scratch=range.descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid package tile descriptor")? as u64*4;
-                let _admission=crate::MemoryBudget::process().admit_import(scratch).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
-                crate::raster::TileBlob::from_filtered_deflate(crate::PortableId::random(),range.descriptor,&bytes)?.memory_compressed()?.unwrap()
-            }else {bytes};
+            let bytes=if prepared {bytes}else if range.filtered {normalize_filtered_tile(range.descriptor,&bytes,range.original.crc32)?}
+                else {crate::tile_io::verify_crc(&bytes,Some(range.original.crc32))?;bytes};
             let integrity=EncodedIntegrity {bytes:bytes.len() as u64,crc32:crc32fast::hash(&bytes)};
             if range.canonical.get_or_init(||integrity)!=&integrity {return Err("Package normalization changed immutable bytes".into());}
             Ok(bytes)
         }).map_err(|error|backing.fail(error))));
-        if let Some(source)=self.backing.read_source() {source.read_direct(offset,length,None,completion);return;}
+        if let Some(source)=source {
+            match filtered {Some((crc,descriptor))=>source.read_filtered(offset,length,crc,descriptor,completion),None=>source.read_direct(offset,length,None,completion)}return;
+        }
         #[cfg(not(target_arch="wasm32"))]
         let bytes=pollster::block_on(self.backing.wait(offset,length)).map(ByteRange::into_arc);
         #[cfg(target_arch="wasm32")]
@@ -71,8 +77,15 @@ impl PackageIdentity {
         Ok(*self.identity.get_or_init(||crate::raster::TileContentIdentity::Package {generation:self.generation,offset:self.offset,bytes:integrity.bytes,crc32:integrity.crc32,descriptor}))
     }
 }
+pub(crate) struct TransferRange {pub backing:ImmutableBacking,pub offset:u64,pub original:EncodedIntegrity,pub filtered:bool,pub canonical:Option<EncodedIntegrity>}
 pub(crate) struct PackageRange {lease:PackageLease,pub(crate) identity:Arc<PackageIdentity>}
 impl PackageRange {
+    pub(crate) fn transfer_range(&self)->TransferRange {
+        TransferRange {backing:self.lease.0.backing.clone(),offset:self.identity.offset,original:self.identity.original,filtered:self.identity.filtered,canonical:self.identity.integrity()}
+    }
+    pub(crate) fn seed_integrity(&self,integrity:EncodedIntegrity)->Result<(),String> {
+        if self.identity.canonical.get_or_init(||integrity)!=&integrity {return Err("Conflicting package normalization integrity".into());}Ok(())
+    }
     pub(crate) fn backing_owner(&self)->(u64,usize) {self.identity.backing_owner()}
     pub(crate) fn healthy(&self)->Result<(),String> {self.lease.0.backing.healthy()}
     pub(crate) fn fail(&self,error:String)->String {self.lease.0.backing.fail(error)}

@@ -7,7 +7,8 @@ use std::{fmt, hash::{Hash, Hasher}, ops::Deref, sync::{Arc, Mutex, OnceLock, at
 pub enum ResourceEncoding { Raw, Lz4 }
 #[derive(Clone, Debug)]
 pub struct EncodedBytes { pub encoding: ResourceEncoding, pub bytes: Arc<[u8]> }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct EncodedIntegrity { pub bytes: u64, pub crc32: u32 }
 impl EncodedIntegrity {
     pub(crate) fn calculate(bytes:&[u8],cancelled:&AtomicBool)->Result<Self,String> {
@@ -42,9 +43,9 @@ impl IntegrityCache {
     pub(crate) fn get_or_compute(&self,cancelled:&AtomicBool,bytes:impl FnOnce()->Result<Arc<[u8]>,String>)->Result<EncodedIntegrity,String> {
         self.initialized(&self.value,cancelled,||EncodedIntegrity::calculate(&bytes()?,cancelled))
     }
-    pub(crate) fn digest(&self,cancelled:&AtomicBool,bytes:impl FnOnce()->Result<Arc<[u8]>,String>)->Result<[u8;32],String> {
+    pub(crate) fn digest<B:AsRef<[u8]>>(&self,cancelled:&AtomicBool,bytes:impl FnOnce()->Result<B,String>)->Result<[u8;32],String> {
         self.initialized(&self.digest,cancelled,|| {
-            let bytes=bytes()?;let mut hash=Sha256::new();
+            let bytes=bytes()?;let bytes=bytes.as_ref();let mut hash=Sha256::new();
             for chunk in bytes.chunks(crate::package::MAX_RANGE_BYTES) {
                 if cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
                 hash.update(chunk);
@@ -199,10 +200,10 @@ mod tests {
         assert_eq!(digest,<[u8;32]>::from(Sha256::digest(&bytes)));
         cancelled.store(true,Ordering::Relaxed);
         assert!(cache.get_or_compute(&cancelled,||panic!("cancelled read")).is_err());
-        assert!(cache.digest(&cancelled,||panic!("cancelled read")).is_err());
+        assert!(cache.digest(&cancelled,||->Result<Arc<[u8]>,String>{panic!("cancelled read")}).is_err());
         cancelled.store(false,Ordering::Relaxed);
         assert_eq!(cache.get_or_compute(&cancelled,||panic!("repeated integrity read")).unwrap(),expected);
-        assert_eq!(cache.digest(&cancelled,||panic!("repeated digest read")).unwrap(),digest);
+        assert_eq!(cache.digest(&cancelled,||->Result<Arc<[u8]>,String>{panic!("repeated digest read")}).unwrap(),digest);
     }
     #[test]
     fn resource_ids_are_explicit_and_legacy_serde_remains_value_only() {

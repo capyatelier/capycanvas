@@ -30,3 +30,13 @@ export function createFileHandleStore({indexedDB=globalThis.indexedDB,name='capy
     read:uri=>transaction('readonly',(store,done)=>{store.get(uri).onsuccess=event=>done(event.target.result);}),
   };
 }
+
+export async function writeDocumentFile(handle,bytes,sources,copy) {
+  const stream=await handle.createWritable();
+  try {
+    await stream.write(bytes);
+    for(const source of sources)if(await handle.isSameEntry(source.handle))await copy(source.id);
+    await stream.close();
+  }
+  catch(error){try{await stream.abort();}catch{}throw error;}
+}

@@ -1,6 +1,6 @@
 import {createDialogHost,createProgressDialog,hasModalDialog} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
-import {createFileHandleStore} from './file-handles.js';
+import {createFileHandleStore,writeDocumentFile} from './file-handles.js';
 import { liveCopy, bindCopy } from './localization.js';
 import {createDrawingTabs} from './drawing-tabs.js';
 import {createDocumentRecovery} from './document-recovery.js';
@@ -29,7 +29,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   const deliveryMessage=(type,values)=>app.document_delivery_message({type,...values});
   const deliveryFailure=(type,values)=>({document_host_error:{type:"delivery",reason:{type,...values}}});
   const transportFailure=reason=>({document_host_error:{type:"transport",reason}});
-  const active=new Set(),handles=new Map();
+  const active=new Set(),handles=new Map(),sources=new Map();
   let closing=false,changing=false,batching=false;
   let nativeKey=null,nativePending=null,keyboardPaste=false;
   const nativeDeliveries=new Map();
@@ -68,7 +68,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
   });
   const images=createImageImport({app,canvas,applyChange,wake,element,button,icon,message,gpuOperation,
     openClipboard,openFiles,interpret:interpretation=>chooseSourceProfile({app,dialog,element,button,icon,dropdown,interpretation})});
-  const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
+  const pruneHandles=()=>{const tabs=app.document_tabs(0).tabs,live=new Set(tabs.flatMap(t=>[t.uri,t.export_uri])),ids=new Set(tabs.map(t=>String(t.id)));for(const key of handles.keys())if(!live.has(key))handles.delete(key);for(const id of sources.keys())if(!ids.has(id))sources.delete(id);};
   const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
   const kit=createPageKit({element,icon});
@@ -340,9 +340,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
               const observed=target.handle.getFile?await rasterWorker({operation:'fingerprint',file:await target.handle.getFile(),buffers:[]}):null;
               if(!app.session_destination_matches(observed))throw deliveryFailure('destination_changed');
             }
-            const stream=await target.handle.createWritable();
-            try {await stream.write(bytes);await stream.close();success=true;}
-            catch(error){try{await stream.abort();}catch{}throw error;}
+            await writeDocumentFile(target.handle,bytes,sources.values(),id=>app.finish_session_package(BigInt(id)));success=true;
           } else success=!!await download(bytes,target.location.name,format?exportFormats[format][1]:"application/octet-stream");
           if(success&&format&&!r.repeat)try{await app.remember_export_dialog(id);}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:'export_preferences',reason:error.color_feature_error}}:deliveryFailure('export_preferences',{detail:String(error)}));}
           applyChange(app.finish_document(id,success));
@@ -442,6 +440,8 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
       }
       if(request!==null)applyChange(app.finish_document(request,true));
       await transition(()=>{const prepared=candidate;candidate=null;applyChange(app.adopt_document(prepared,target));});
+      const selected=String(app.document_tabs(0).selected);
+      sources.delete(selected);if(file?.handle)sources.set(selected,{id:selected,handle:file.handle});
       if(target&&app.state().document_file.location?.uri===target.uri) {
         const fingerprint=await rasterWorker({operation:'fingerprint',file:original,buffers:[]});
         if(app.state().document_file.location?.uri===target.uri)app.session_record_destination(target,fingerprint);

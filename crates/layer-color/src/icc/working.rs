@@ -221,6 +221,15 @@ impl WorkingDecoder {
         output: &mut [[f32; 4]],
         cache: &layer_core::raster::DecodedTileCache,
     ) -> Result<(), String> {
+        self.decode_tile_with(source,coordinate,output,|tile| {
+            #[cfg(not(target_arch="wasm32"))]
+            {cache.decode_on_worker(tile)}
+            #[cfg(target_arch="wasm32")]
+            {cache.decode_bytes_on_worker(tile,&tile.memory_compressed()?.ok_or("ICC input bytes were not supplied to the worker")?)}
+        })
+    }
+    pub fn decode_tile_with(&self,source:&SourceImage,coordinate:[u32;2],output:&mut [[f32;4]],
+        decode:impl FnOnce(&std::sync::Arc<layer_core::raster::TileBlob>)->Result<std::sync::Arc<Vec<u8>>,String>)->Result<(),String> {
         if source.interpretation != self.source || output.len() != (TILE_SIZE * TILE_SIZE) as usize
         {
             return Err("Source interpretation changed during working conversion".into());
@@ -229,10 +238,7 @@ impl WorkingDecoder {
         if tile.descriptor != self.source.descriptor() {
             return Err("Source tile has the wrong sample representation".into());
         }
-        #[cfg(not(target_arch="wasm32"))]
-        let pixels=cache.decode_on_worker(tile)?;
-        #[cfg(target_arch="wasm32")]
-        let pixels=cache.decode_bytes_on_worker(tile,&tile.memory_compressed()?.ok_or("ICC input bytes were not supplied to the worker")?)?;
+        let pixels=decode(tile)?;
         self.decode_pixels(&pixels, output)?;
         let origin =
             coordinate.map(|v| v.checked_mul(TILE_SIZE).ok_or("Invalid source coordinate"));

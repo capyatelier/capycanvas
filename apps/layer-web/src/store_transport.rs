@@ -27,12 +27,14 @@ impl Drop for BufferUse {fn drop(&mut self) {self.buffers.update(|current|curren
 thread_local! {
     static TRANSPORT:RefCell<Option<js_sys::Function>>=const {RefCell::new(None)};
     static WAKE:RefCell<Option<js_sys::Function>>=const {RefCell::new(None)};
+    static NORMALIZE:RefCell<Option<js_sys::Function>>=const {RefCell::new(None)};
     static LEASES:RefCell<BTreeMap<String,Weak<Lease>>>=const {RefCell::new(BTreeMap::new())};
 }
 
 #[wasm_bindgen]
-pub fn configure_store_transport(transport:js_sys::Function,wake:js_sys::Function) {
+pub fn configure_store_transport(transport:js_sys::Function,wake:js_sys::Function,normalize:Option<js_sys::Function>) {
     WAKE.with_borrow_mut(|slot|*slot=Some(wake));
+    NORMALIZE.with_borrow_mut(|slot|*slot=normalize);
     TRANSPORT.with_borrow_mut(|slot|*slot=Some(transport));
     configure_reads();
 }
@@ -52,9 +54,88 @@ fn begin_call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Re
     transport.call1(&JsValue::NULL,&request).map_err(error)?.dyn_into::<js_sys::Promise>().map_err(error)
 }
 pub(super) async fn call(operation:&str,metadata:serde_json::Value,bytes:Option<&[u8]>)->Result<JsValue,String> {
-    let transfer_bytes=bytes.map_or_else(||if matches!(operation,"read_at"|"copy_read_at"|"legacy-range") {metadata["length"].as_u64().unwrap_or(0)}else {0},|bytes|bytes.len() as u64);
+    let transfer_bytes=bytes.map_or_else(||if matches!(operation,"read_source"|"read_at"|"copy_read_at"|"legacy-range") {metadata["length"].as_u64().unwrap_or(0)}else {0},|bytes|bytes.len() as u64);
     let _transfer=BufferUse::new(transfer_bytes);
     JsFuture::from(begin_call(operation,metadata,bytes)?).await.map_err(error)
+}
+
+pub(super) async fn offer_sources(references:&[layer_core::package::transfer::BackingReference])->Result<Option<String>,String> {
+    if references.is_empty() {return Ok(None);}
+    let ticket=layer_core::PortableId::random().to_string();let mut guard=artwork_transfer::SourceOffer(Some(ticket.clone()));
+    let response=call("offer_sources",serde_json::json!({"references":references,"ticket":ticket}),None).await?;
+    if response.as_string().as_deref()!=Some(&ticket) {return Err("Invalid backing offer".into());}Ok(guard.0.take())
+}
+pub(super) fn cancel_sources(ticket:&str) {
+    if let Ok(promise)=begin_call("cancel_sources",serde_json::json!({"ticket":ticket}),None) {spawn_local(async move {let _=JsFuture::from(promise).await;});}
+}
+struct SourceLease {id:String,key:String}
+pub(super) struct RegisteredBlob {lease:SourceLease,file:web_sys::Blob}
+impl RegisteredBlob {pub fn key(&self)->&str {&self.lease.key} pub fn file(&self)->&web_sys::Blob {&self.file}}
+pub(super) async fn register_blob(file:&web_sys::Blob)->Result<RegisteredBlob,String> {
+    artwork_transfer::seed_memory_budget();
+    let id=layer_core::PortableId::random().to_string();let registered=RegisteredBlob {lease:SourceLease {key:format!("blob:{id}"),id:id.clone()},file:file.clone()};
+    let request=js_sys::Object::new();let metadata=js_sys::Object::new();
+    js_sys::Reflect::set(&metadata,&js("lease"),&js(&id)).map_err(error)?;
+    js_sys::Reflect::set(&request,&js("metadata"),&metadata).map_err(error)?;
+    js_sys::Reflect::set(&request,&js("operation"),&js("register_blob")).map_err(error)?;
+    js_sys::Reflect::set(&request,&js("file"),file).map_err(error)?;
+    let transport=TRANSPORT.with_borrow(Clone::clone).ok_or("Drawing storage unavailable")?;
+    let promise=transport.call1(&JsValue::NULL,&request).map_err(error)?.dyn_into::<js_sys::Promise>().map_err(error)?;
+    let value=JsFuture::from(promise).await.map_err(error)?;
+    #[derive(Deserialize)]struct Registered {key:String,lease:String}
+    let identity:Registered=serde_wasm_bindgen::from_value(value.clone()).map_err(|error|error.to_string())?;
+    if identity.lease!=id || identity.key!=registered.key() {return Err("Invalid file generation reply".into());}
+    let file=js_sys::Reflect::get(&value,&js("file")).map_err(error)?.dyn_into::<web_sys::Blob>().map_err(error)?;
+    Ok(RegisteredBlob {lease:registered.lease,file})
+}
+impl Drop for SourceLease {
+    fn drop(&mut self) {
+        if let Ok(promise)=begin_call("release_source",serde_json::json!({"lease":self.id}),None) {spawn_local(async move {let _=JsFuture::from(promise).await;});}
+    }
+}
+impl SourceLease {
+    fn range(&self,offset:u64,length:usize)->FileFuture<'static,Arc<[u8]>> {
+        let result=begin_call("read_source",serde_json::json!({"lease":self.id,"offset":offset,"length":length}),None);
+        let buffers=BufferUse::new(length as u64);
+        Box::pin(async move {
+            let _buffers=buffers;
+            let response=JsFuture::from(result?).await.map_err(error)?;
+            let buffers=js_sys::Reflect::get(&response,&js("buffers")).map_err(error)?.dyn_into::<js_sys::Array>().map_err(error)?;
+            let bytes=buffers.get(0).dyn_into::<js_sys::Uint8Array>().map_err(error)?;
+            if buffers.length()!=1 || bytes.length() as usize!=length {return Err("Incomplete backing range".into());}Ok(bytes.to_vec().into())
+        })
+    }
+}
+impl RangeReader for SourceLease {
+    fn transfer_key(&self)->Option<String> {Some(self.key.clone())}
+    fn read(&self,offset:u64,length:usize,_crc:Option<u32>,completion:ReadCompletion) {
+        let read=self.range(offset,length);spawn_local(async move {completion.complete(read.await);});
+    }
+    fn read_filtered(&self,offset:u64,length:usize,crc:u32,descriptor:layer_core::color::PixelDescriptor,completion:ReadCompletion) {
+        let read=self.range(offset,length);let normalize=NORMALIZE.with_borrow(Clone::clone);
+        spawn_local(async move {
+            let result=async {
+                let bytes=read.await?;
+                let metadata=serde_json::to_string(&(descriptor,crc)).map_err(|error|error.to_string())?;
+                let normalize=normalize.ok_or("Package preparation worker unavailable")?;
+                let promise=normalize.call2(&JsValue::NULL,&js(metadata),&js_sys::Uint8Array::from(bytes.as_ref())).map_err(error)?.dyn_into::<js_sys::Promise>().map_err(error)?;
+                let prepared=JsFuture::from(promise).await.map_err(error)?.dyn_into::<js_sys::Uint8Array>().map_err(error)?;
+                if prepared.length() as usize>layer_core::package::MAX_RANGE_BYTES {return Err("Oversized normalized package tile".into());}Ok(prepared.to_vec().into())
+            }.await;
+            completion.complete(result);
+        });
+    }
+}
+pub(super) async fn adopt_sources(ticket:Option<&str>,references:&[layer_core::package::transfer::BackingReference])->Result<Vec<Arc<dyn layer_core::package::ByteSource>>,String> {
+    if references.is_empty() {if ticket.is_some() {return Err("Unreferenced backing offer".into());}return Ok(Vec::new());}
+    let ticket=ticket.ok_or("Missing backing offer")?;
+    let leases=references.iter().map(|reference|Arc::new(SourceLease {id:layer_core::PortableId::random().to_string(),key:reference.key.clone()})).collect::<Vec<_>>();
+    let requested=leases.iter().map(|lease|lease.id.as_str()).collect::<Vec<_>>();
+    let ids:Vec<String>=serde_wasm_bindgen::from_value(call("adopt_sources",serde_json::json!({"ticket":ticket,"references":references,"leases":requested}),None).await?).map_err(|error|error.to_string())?;
+    if ids.iter().map(String::as_str).ne(requested) {return Err("Backing adoption identity mismatch".into());}
+    Ok(leases.into_iter().zip(references).map(|(lease,reference)| {
+        Arc::new(ReadCache::process().source(reference.length,lease)) as Arc<dyn layer_core::package::ByteSource>
+    }).collect())
 }
 pub(super) async fn remember_handles(handles:JsValue)->Result<(),String> {
     if handles.is_undefined() || handles.is_null() {return Ok(());}
@@ -167,6 +248,7 @@ impl BrowserFile {
     }
 }
 impl RangeReader for BrowserFile {
+    fn transfer_key(&self)->Option<String> {Some(format!("store:{}",self.name))}
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
         let file=self.clone();spawn_local(async move {completion.complete(file.range(offset,length,crc).await);});
     }

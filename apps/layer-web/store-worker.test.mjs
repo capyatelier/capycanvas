@@ -3,7 +3,7 @@ import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {launchChrome} from '../../tools/cdp.mjs';
 
-const modules=new Map(await Promise.all(['store-worker-client.js','store-worker.js','legacy-restart-store.js','file-handles.js']
+const modules=new Map(await Promise.all(['store-worker-client.js','store-worker.js','store-sources.js','legacy-restart-store.js','file-handles.js']
   .map(async path=>['/'+path,await readFile(new URL(path,import.meta.url))])));
 const requests=[];
 const server=createServer((request,response)=>{

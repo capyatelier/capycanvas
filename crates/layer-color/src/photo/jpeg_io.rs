@@ -86,12 +86,22 @@ pub fn write_jpeg(output: impl Write, source: &SourceImage, options: JpegEncodeO
 /// Baseline coding uses full chroma resolution. The Rust backend buffers pixels
 /// within the available-memory budget. Provider errors stop requesting rows.
 pub fn write_jpeg_rows(
+    output: impl Write,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    metadata: &DeliveryMetadata,
+    options: JpegEncodeOptions,
+    read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    crate::ready(write_jpeg_rows_async(output,extent,interpretation,metadata,options,&mut ReadyRows(read_row)))
+}
+pub async fn write_jpeg_rows_async(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
     metadata: &DeliveryMetadata,
     options: JpegEncodeOptions,
-    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+    read_row: &mut impl RowCursor,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
     if interpretation.depth != SampleDepth::U8 {
@@ -127,7 +137,7 @@ pub fn write_jpeg_rows(
         .map_err(|_| jpeg_codec::MEMORY_ERROR)?;
     pixels.resize(len, 0);
     for (y, row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
-        read_row(y as u32, row)?;
+        read_row.read_row(y as u32, row).await?;
         if interpretation.channels == SourceChannels::Cmyk {
             for v in row {
                 *v = 255 - *v;

@@ -1,11 +1,14 @@
 import init, * as wasm from "./pkg/layer_web.js";
+import {createPortTransport} from './store-worker-client.js';
 import {panelVectorPaths} from './panel-vector-paths.js';
-import {postTransferred,releaseTransferred} from './raster-worker-client.js';
-let ready,module,panelVectors;
+import {postTransferred,releaseTransferred,backingOffer} from './raster-worker-client.js';
+let ready,module,panelVectors,storage,parentOffer,storagePort;
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { if(data.module)module=data.module;pending = pending.then(() => execute(data)); };
-async function execute({id,request}) {
-  let instance,result;
+async function execute({id,request,storagePort:receivedPort}) {
+  if(receivedPort)storagePort=receivedPort;
+  parentOffer=request.parent_offer;
+  let instance,result,posted=false;
   const retire=()=>outputs.size===0 && (instance?.memory.buffer.byteLength || 0)>256*1024*1024;
   try {
     if (request.operation === 'alpha-image') {
@@ -22,6 +25,7 @@ async function execute({id,request}) {
         wasm.configure_gpu_diagnostics(event=>self.postMessage({gpu_event:{...event,wasm_bytes:instance.memory.buffer.byteLength}}));
         return instance;
       }));
+    if(storagePort){storage=createPortTransport(storagePort,()=>{},error=>self.postMessage({storage_error:String(error.message??error)}),()=>parentOffer);storagePort=undefined;wasm.configure_store_transport(storage,()=>{},(metadata,bytes)=>Promise.resolve().then(()=>wasm.raster_worker_package_normalize(metadata,bytes)));}
     switch(request.operation) {
       case 'panel-vectors': {
         panelVectors??=new wasm.WebPanelVectors();
@@ -36,6 +40,7 @@ async function execute({id,request}) {
       }
       case "color-field": result = wasm.raster_worker_color_field(request.metadata); break;
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
+      case "package-normalize": result=wasm.raster_worker_package_normalize(request.metadata,request.buffers[0]);break;
       case "image-decode": result = wasm.raster_worker_image_decode(request.metadata,request.buffers); break;
       case "nearest-coordinates": result = wasm.raster_worker_nearest_coordinates(request.metadata); break;
       case "lookup": result = wasm.raster_worker_lookup(request.metadata,request.buffers[0]); break;
@@ -50,7 +55,7 @@ async function execute({id,request}) {
       case "source-profile": result = wasm.raster_worker_source_profile(request.metadata); break;
       case "source-rasterize": result = await wasm.raster_worker_source_rasterize(request.metadata,request.buffers); break;
       case "color-convert": result = await wasm.raster_worker_color(request.metadata,request.buffers); break;
-      case "read": result = await wasm.raster_worker_read(request.metadata,request.file); break;
+      case "read": result = await wasm.raster_worker_read(request.metadata,request.file,request.source_key); break;
       case "output-begin": result = await beginOutput(); break;
       case "output-band": {
         const job=outputJob(request.metadata),bytes=request.buffers[0];
@@ -87,8 +92,9 @@ async function execute({id,request}) {
       default: throw new Error("Unknown raster worker operation");
     }
     postTransferred(result?.buffers,()=>self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : [...(result?.bytes instanceof Uint8Array ? [result.bytes] : result?.waveform_counts ? [result.waveform_counts] : result?.buffers || []),...(result?.preview instanceof Uint8Array ? [result.preview] : [])].map(bytes=>bytes.buffer)));
+    posted=true;
   } catch(error) { self.postMessage({id,error:String(error),color_feature_error:error?.color_feature_error,retire:retire()}); }
-  finally {releaseTransferred(result?.buffers);}
+  finally {releaseTransferred(result?.buffers);const ticket=backingOffer(result?.metadata);if(!posted&&ticket)storage?.({operation:'cancel_sources',metadata:{ticket}}).catch(()=>{});}
 }
 
 const outputs=new Map();

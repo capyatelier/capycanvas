@@ -118,7 +118,7 @@ Pure unit tests need no browser or GPU:
 
 ```bash
 node --test apps/layer-web/{run,package,frame,phone-audit,bubbles,glass,pointer,color-touch,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,text-layout,menu,localization,dropdown}.test.mjs
-node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
+node --test apps/layer-web/{numeric,histogram,gpu-diagnostics,raster-worker-client,store-worker-client,store-sources,file-handles,pipeline-wait,panel-vector-paths,panel-vector-queue,editor-panels,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,document-recovery,image-import,workflow-stack,color-button-lifecycle}.test.mjs
 ```
 
 Run both Node batches for every Web gate. Dialog fakes must include the shared
@@ -145,14 +145,16 @@ The launcher fixture uses Bash; `LAYER_TEST_BASH` selects its executable
 export LAYER_TEST_BASH='C:/Program Files/Git/bin/bash.exe'
 ```
 
-Three more checks launch their own temporary Chrome profile; `CHROME` may name
-its executable. They cover the released IndexedDB reader, OPFS worker scheduling
-and checksums, and module-worker preparation with CDP teardown, without the app,
-Wasm or WebGPU:
+These checks launch their own temporary Chrome profile; `CHROME` may name its
+executable. They cover the released IndexedDB reader, OPFS worker scheduling and
+checksums, leased package reads, source loss, and CDP teardown. Package leases
+use the built Wasm module; none requires WebGPU:
 
 ```bash
 node apps/layer-web/restart-store.test.mjs
 node apps/layer-web/store-worker.test.mjs
+node apps/layer-web/package-leases.test.mjs
+node apps/layer-web/source-generation.test.mjs
 node --test tools/cdp.test.mjs
 ```
 

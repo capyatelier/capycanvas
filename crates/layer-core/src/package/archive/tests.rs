@@ -359,3 +359,37 @@ fn member_name_budget_is_unsupported() {
     bytes.extend(directory);bytes.extend(end);
     assert!(matches!(read(&bytes),Err(DecodeError::Unsupported(_))));
 }
+
+#[test]
+fn a_delayed_cursor_stops_mid_member_until_its_read_is_ready() {
+    use std::{future::Future,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}},task::{Context,Poll,Waker}};
+    struct Gate {open:AtomicBool,wake:Mutex<Option<Waker>>}
+    struct Delayed {bytes:Vec<u8>,position:usize,gate:Arc<Gate>}
+    impl ReadCursor for Delayed {
+        fn read_exact<'a>(&'a mut self,output:&'a mut [u8])->super::super::store_io::FileFuture<'a,()> {
+            Box::pin(async move {
+                if self.position>=64*1024 {std::future::poll_fn(|cx| {
+                    if self.gate.open.load(Ordering::Acquire) {Poll::Ready(())}else {*self.gate.wake.lock().unwrap()=Some(cx.waker().clone());Poll::Pending}
+                }).await;}
+                output.copy_from_slice(&self.bytes[self.position..self.position+output.len()]);self.position+=output.len();Ok(())
+            })
+        }
+    }
+    struct Output(Arc<Mutex<Vec<u8>>>);
+    impl Write for Output {
+        fn write(&mut self,bytes:&[u8])->std::io::Result<usize> {self.0.lock().unwrap().extend_from_slice(bytes);Ok(bytes.len())}
+        fn flush(&mut self)->std::io::Result<()> {Ok(())}
+    }
+    let bytes=(0..3*64*1024).map(|n|(n%251) as u8).collect::<Vec<_>>();let crc=crc32fast::hash(&bytes);
+    let gate=Arc::new(Gate {open:AtomicBool::new(false),wake:Default::default()});
+    let mut input=Delayed {bytes:bytes.clone(),position:0,gate:gate.clone()};let output=Arc::new(Mutex::new(Vec::new()));let mut sink=Output(output.clone());
+    let mut members=[CursorMember {name:"data/tiles-1.bin",length:bytes.len() as u64,crc32:crc,input:&mut input}];
+    let mut writing=std::pin::pin!(write_archive_async(&mut sink,&mut members,1024));
+    assert!(writing.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    let (header,_)=headers("data/tiles-1.bin",bytes.len() as u64,None,crc,0);
+    let prefix=output.lock().unwrap().clone();assert_eq!(prefix.len(),header.len()+64*1024);assert_eq!(&prefix[header.len()..],&bytes[..64*1024]);
+    gate.open.store(true,Ordering::Release);gate.wake.lock().unwrap().take().unwrap().wake();pollster::block_on(writing).unwrap();
+    let complete=output.lock().unwrap();assert_eq!(&complete[header.len()..header.len()+bytes.len()],&bytes);assert_eq!(crc32fast::hash(&complete[header.len()..header.len()+bytes.len()]),crc);
+    let mut ready=Cursor::new(&bytes);let mut expected=Vec::new();write_archive(&mut expected,&mut [InputMember {name:"data/tiles-1.bin",length:bytes.len() as u64,crc32:crc,input:&mut ready}],1024).unwrap();
+    assert_eq!(*complete,expected);
+}

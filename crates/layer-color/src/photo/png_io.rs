@@ -245,11 +245,20 @@ pub fn write_png(output: impl Write, source: &SourceImage) -> Result<(), String>
 /// The provider fills the entire row and may fail/cancel. Publish the temporary
 /// file only after success; an error can leave incomplete output.
 pub fn write_png_rows(
+    output: impl Write,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    metadata: &DeliveryMetadata,
+    read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    crate::ready(write_png_rows_async(output,extent,interpretation,metadata,&mut ReadyRows(read_row)))
+}
+pub async fn write_png_rows_async(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
     metadata: &DeliveryMetadata,
-    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+    read_row: &mut impl RowCursor,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
     let mut info = info(extent, metadata)?;
@@ -279,7 +288,7 @@ pub fn write_png_rows(
         let mut stream = writer.stream_writer().map_err(err)?;
         let mut row = vec![0; row_bytes];
         for y in 0..extent[1] {
-            read_row(y, &mut row)?;
+            read_row.read_row(y, &mut row).await?;
             if interpretation.depth == SampleDepth::U16 {
                 swap_u16(&mut row);
             }

@@ -1,4 +1,6 @@
-use super::{archive::{self, Directory, InputMember}, manifest::{Manifest, ManifestLimits, ManifestRead},
+#[cfg(test)]
+use super::archive::InputMember;
+use super::{archive::{self, Directory}, manifest::{Manifest, ManifestLimits, ManifestRead},
     resources::{self, ResourceInventory, PreparedResources}, preview::{Preview, MAX_PREVIEW_BYTES, MAX_PREVIEW_DIMENSION}, ImmutableBacking};
 use crate::authored::{Artwork, ArtworkCapture, CaptureCheckpoint, EvaluationContext, PortableId, Support};
 use serde_json::{Value, json};
@@ -88,7 +90,9 @@ pub(crate) fn admit_metadata(artwork:&Artwork,limits:crate::ProjectLimits)->Resu
     Ok(())
 }
 impl PreparedPackage {
-    pub fn prepare(capture:&ArtworkCapture, preview:Option<CapturedPreview>, cancelled:&AtomicBool) -> Result<Self,String> {
+    pub fn prepare(capture:&ArtworkCapture,preview:Option<CapturedPreview>,cancelled:&AtomicBool)->Result<Self,String> {archive::ready(Self::prepare_using::<resources::ReadyResources>(capture,preview,cancelled))}
+    pub async fn prepare_async(capture:&ArtworkCapture,preview:Option<CapturedPreview>,cancelled:&AtomicBool)->Result<Self,String> {Self::prepare_using::<resources::LeasedResources>(capture,preview,cancelled).await}
+    async fn prepare_using<I:resources::ResourceInput>(capture:&ArtworkCapture, preview:Option<CapturedPreview>, cancelled:&AtomicBool) -> Result<Self,String> {
         active(cancelled)?;
         if capture.checkpoint.document!=capture.artwork.id {return Err("Capture belongs to a different drawing".into());}
         let artwork=&capture.artwork;
@@ -120,8 +124,8 @@ impl PreparedPackage {
         objects.sort_by(|a,b|a["id"].as_str().cmp(&b["id"].as_str()));
         if inventory.entries.keys().any(|id|*id==artwork.id || shape.objects.contains_key(id)) {return Err("Object and resource identities overlap".into());}
         let opaque=inventory.with_opaque(opaque)?;
-        let mut resources=inventory.prepare(cancelled)?;
-        resources.append_opaque(opaque,cancelled)?;
+        let mut resources=inventory.prepare_using::<I>(cancelled).await?;
+        resources.append_opaque_using::<I>(opaque,cancelled).await?;
         let manifest=serde_json::to_vec(&ManifestWire {
             default_output:resources::reference(default),document:artwork.id,format:"capy.canvas",metadata:metadata.as_ref(),
             objects:&objects,outputs:&outputs,resources:ResourceRecords(&resources.entries),root:resources::reference(root),version:1,
@@ -132,18 +136,24 @@ impl PreparedPackage {
     }
     pub fn manifest(&self) -> &[u8] {&self.manifest}
     pub fn resources(&self) -> &PreparedResources {&self.resources}
-    pub fn write(&self, output:&mut impl Write, cancelled:&AtomicBool) -> Result<(),String> {
+    pub fn write(&self,output:&mut impl Write,cancelled:&AtomicBool)->Result<(),String> {
+        let mut pack=self.resources.reader(cancelled);let mut pack=archive::ReadyReader(&mut pack);
+        archive::ready(self.write_using(output,cancelled,&mut pack))
+    }
+    pub async fn write_async(&self,output:&mut impl Write,cancelled:&AtomicBool)->Result<(),String> {
+        let mut pack=self.resources.reader(cancelled);self.write_using(output,cancelled,&mut pack).await
+    }
+    async fn write_using(&self,output:&mut impl Write,cancelled:&AtomicBool,pack:&mut dyn archive::ReadCursor)->Result<(),String> {
         active(cancelled)?;
-        let mut mime=Cursor::new(archive::MIMETYPE);
-        let mut manifest=crate::Cancellable {inner:Cursor::new(&*self.manifest),cancelled:||cancelled.load(Ordering::Relaxed)};
-        let mut pack=self.resources.reader(cancelled);
-        let mut preview=Cursor::new(self.preview.as_ref().map(|p|p.encoded().as_ref()).unwrap_or(&[]));
-        let mut members=vec![InputMember {name:"mimetype",length:archive::MIMETYPE.len() as u64,crc32:crc32fast::hash(archive::MIMETYPE),input:&mut mime},
-            InputMember {name:"manifest.json",length:self.manifest.len() as u64,crc32:crc32fast::hash(&self.manifest),input:&mut manifest}];
-        if !self.resources.entries.is_empty() {members.push(InputMember {name:"data/tiles-1.bin",length:self.resources.length,crc32:self.resources.crc,input:&mut pack});}
-        if let Some(p)=&self.preview {members.push(InputMember {name:"preview.png",length:p.encoded().len() as u64,crc32:crc32fast::hash(p.encoded()),input:&mut preview});}
+        let mut mime=Cursor::new(archive::MIMETYPE);let mut mime=archive::ReadyReader(&mut mime);
+        let mut manifest=crate::Cancellable {inner:Cursor::new(&*self.manifest),cancelled:||cancelled.load(Ordering::Relaxed)};let mut manifest=archive::ReadyReader(&mut manifest);
+        let mut preview=Cursor::new(self.preview.as_ref().map(|p|p.encoded().as_ref()).unwrap_or(&[]));let mut preview=archive::ReadyReader(&mut preview);
+        let mut members=vec![archive::CursorMember {name:"mimetype",length:archive::MIMETYPE.len() as u64,crc32:crc32fast::hash(archive::MIMETYPE),input:&mut mime},
+            archive::CursorMember {name:"manifest.json",length:self.manifest.len() as u64,crc32:crc32fast::hash(&self.manifest),input:&mut manifest}];
+        if !self.resources.entries.is_empty() {members.push(archive::CursorMember {name:"data/tiles-1.bin",length:self.resources.length,crc32:self.resources.crc,input:pack});}
+        if let Some(p)=&self.preview {members.push(archive::CursorMember {name:"preview.png",length:p.encoded().len() as u64,crc32:crc32fast::hash(p.encoded()),input:&mut preview});}
         let mut writer=crate::Cancellable {inner:output,cancelled:||cancelled.load(Ordering::Relaxed)};
-        archive::write_archive(&mut writer,&mut members,usize::try_from(crate::ProjectLimits::default().metadata_bytes).map_err(|_|"Package metadata limit exceeds address space")?)
+        archive::write_archive_async(&mut writer,&mut members,usize::try_from(crate::ProjectLimits::default().metadata_bytes).map_err(|_|"Package metadata limit exceeds address space")?).await
     }
 }
 

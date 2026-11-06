@@ -5,6 +5,17 @@ use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, Sour
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth};
 use std::io::{BufRead, Read, Seek, Write};
 
+pub trait RowCursor {
+    fn read_row<'a>(&'a mut self,y:u32,output:&'a mut [u8])->layer_core::package::store_io::FileFuture<'a,()>;
+}
+pub struct ReadyRows<F>(pub F);
+impl<F:FnMut(u32,&mut [u8])->Result<(),String>> RowCursor for ReadyRows<F> {
+    fn read_row<'a>(&'a mut self,y:u32,output:&'a mut [u8])->layer_core::package::store_io::FileFuture<'a,()> {Box::pin(async move {(self.0)(y,output)})}
+}
+impl RowCursor for layer_core::color::source::SourceRows<'_> {
+    fn read_row<'a>(&'a mut self,y:u32,output:&'a mut [u8])->layer_core::package::store_io::FileFuture<'a,()> {Box::pin(self.read_async(y,output))}
+}
+
 mod jpeg_codec;
 mod jpeg_io;
 mod jpeg_markers;
@@ -36,10 +47,10 @@ mod tiff_io;
 #[cfg(test)]
 mod tiff_policy_tests;
 mod webp_io;
-pub use jpeg_io::{JpegEncodeOptions, write_jpeg, write_jpeg_rows};
-pub use png_io::{write_png, write_png_rows};
-pub use tiff_io::{write_tiff, write_tiff_rows};
-pub use webp_io::{WEBP_MAX_DIMENSION, WEBP_SIZE_LIMIT, decode_rgba8_webp, webp_extent, write_webp_rows};
+pub use jpeg_io::{JpegEncodeOptions, write_jpeg, write_jpeg_rows, write_jpeg_rows_async};
+pub use png_io::{write_png, write_png_rows, write_png_rows_async};
+pub use tiff_io::{write_tiff, write_tiff_rows, write_tiff_rows_async};
+pub use webp_io::{WEBP_MAX_DIMENSION, WEBP_SIZE_LIMIT, decode_rgba8_webp, webp_extent, write_webp_rows, write_webp_rows_async};
 
 /// Decoder capabilities, also used by file pickers, clipboard and file drops.
 /// These describe implemented readers, not formats merely known to a host OS.

@@ -30,6 +30,7 @@
     struct Transport {inner:Arc<dyn FileTransport>,control:Arc<Mutex<Control>>,lease:Arc<dyn Send+Sync>}
     struct TransportFile {inner:Arc<dyn StoreFile>,name:String,control:Arc<Mutex<Control>>}
     impl RangeReader for TransportFile {
+        fn transfer_key(&self)->Option<String> {Some(format!("test-store:{}",self.name))}
         fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
             let mut state=self.control.lock().unwrap();
             if state.hold_reads {state.reads.push_back((self.inner.clone(),offset,length,crc,completion));return;}

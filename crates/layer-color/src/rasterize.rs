@@ -6,12 +6,13 @@ use layer_core::color::{ColorProfile, DocumentColor, source::*};
 /// Worker-only bounded conversion. A rasterized image uses document RGBA codes;
 /// retaining the tiled base avoids allocating/quantizing unchanged paint pages.
 /// Cancellation never mutates the supplied original or returns partial content.
-pub fn rasterize_source(
-    source: &SourceImage,
-    color: DocumentColor,
-    max_bytes: usize,
-    mut cancelled: impl FnMut() -> bool,
-) -> Result<(SourceImage, OutputStatistics), String> {
+pub fn rasterize_source(source:&SourceImage,color:DocumentColor,max_bytes:usize,cancelled:impl FnMut()->bool)->Result<(SourceImage,OutputStatistics),String> {
+    crate::ready(rasterize_using(source,color,max_bytes,cancelled,layer_core::raster::TileBlob::decode_ready_on_worker))
+}
+pub async fn rasterize_source_async(source:&SourceImage,color:DocumentColor,max_bytes:usize,cancelled:impl FnMut()->bool)->Result<(SourceImage,OutputStatistics),String> {
+    rasterize_using(source,color,max_bytes,cancelled,layer_core::raster::TileBlob::decode_async_on_worker).await
+}
+async fn rasterize_using(source:&SourceImage,color:DocumentColor,max_bytes:usize,mut cancelled:impl FnMut()->bool,decode:TileRead)->Result<(SourceImage,OutputStatistics),String> {
     let check = |cancelled: &mut dyn FnMut() -> bool| {
         if cancelled() {
             Err("Rasterization cancelled".to_string())
@@ -50,7 +51,7 @@ pub fn rasterize_source(
     let mut statistics = OutputStatistics::default();
     for y in 0..source.extent[1] {
         check(&mut cancelled)?;
-        rows.read(y, &mut original)?;
+        rows.read_using(y, &mut original,decode).await?;
         decoder.decode_pixels(&original, &mut linear)?;
         statistics.clipped_channels += encoder
             .encode_straight(&linear, &mut encoded, None, [0, y])?

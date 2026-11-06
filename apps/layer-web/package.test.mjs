@@ -186,7 +186,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
 });
 
 test("the store worker fingerprints its read-only legacy reader and destination handle dependencies", t => {
-  const sources=Object.fromEntries(["store-worker-client.js","store-worker.js","legacy-restart-store.js","file-handles.js"]
+  const sources=Object.fromEntries(["store-worker-client.js","store-worker.js","store-sources.js","legacy-restart-store.js","file-handles.js"]
     .map(path=>[path,readFileSync(new URL(path,import.meta.url),"utf8")]));
   const dir=runtimeFixture(t,{...sources,"app.js":'import {createStoreWorker} from "./store-worker-client.js"; const assetPaths = {};'});
   const names=fingerprintAssets(dir);assertResolved(dir,names);

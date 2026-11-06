@@ -13,9 +13,9 @@ mod output_rows;
 pub use output_rows::{build_local_tone_guide, encode_working_rows_with_guide, preview_encoded_rows, WorkingRowsOptions};
 
 mod rasterize;
-pub use rasterize::rasterize_source;
+pub use rasterize::{rasterize_source,rasterize_source_async};
 mod document;
-pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_color, validate_document_color, color_job_artwork, adopt_color_job_artwork};
+pub use document::{DocumentColorChange, PreparedDocumentColor, prepare_document_color, prepare_document_color_async, validate_document_color, color_job_artwork, adopt_color_job_artwork};
 
 mod document_info;
 pub use document_info::{DocumentInfo, InspectedDocumentInfo, InspectedSourceInfo};
@@ -37,3 +37,5 @@ pub fn repair_source_interpretation(
     WorkingDecoder::new(&interpretation, working, Default::default())?;
     Ok(interpretation)
 }
+
+use layer_core::package::archive::ready;

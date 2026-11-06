@@ -74,7 +74,7 @@ mod object_image_mips;
 mod moving_projection;
 use moving_projection::MovingProjection;
 pub use scene::sources::PreparedSourcePixels as PreparedImagePixels;
-pub use object_image_mips::{prepare_image_tile, prepare_raster_tile};
+pub use object_image_mips::{prepare_image_tile, prepare_raster_tile,prepare_image_tile_from_bytes,prepare_raster_tile_from_bytes};
 pub use object_sampling::prepare_nearest_coordinates;
 #[cfg(target_arch = "wasm32")]
 pub type BrowserImageDecoder = std::rc::Rc<dyn Fn(Arc<layer_core::color::source::SourceImage>, [u32; 2], layer_core::color::RgbSpace)

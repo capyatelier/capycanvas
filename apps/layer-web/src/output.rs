@@ -309,6 +309,42 @@ impl Seek for WorkerFile {
     }
 }
 
+async fn write_sdr_rows(output:impl Write+Seek,extent:[u32;2],target:&layer_core::color::source::SourceInterpretation,recipe:&ExportRecipe,delivery:&layer_color::photo::DeliveryMetadata,rows:&mut impl layer_color::photo::RowCursor)->Result<(),String> {
+        match recipe.format {
+            ExportFormat::Exr | ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => Err("HDR delivery is not enabled on this host".into()),
+            ExportFormat::Png => layer_color::photo::write_png_rows_async(
+                output,
+                extent,
+                target,
+                delivery,
+                rows,
+            ).await,
+            ExportFormat::Tiff => layer_color::photo::write_tiff_rows_async(
+                output,
+                extent,
+                target,
+                delivery,
+                rows,
+            ).await,
+            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows_async(
+                output,
+                extent,
+                target,
+                delivery,
+                layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, artwork_transfer::photo_memory_budget()),
+                rows,
+            ).await,
+            ExportFormat::Webp => layer_color::photo::write_webp_rows_async(
+                output,
+                extent,
+                target,
+                delivery,
+                artwork_transfer::photo_memory_budget().encode_bytes,
+                rows,
+            ).await,
+        }
+}
+
 #[wasm_bindgen]
 pub async fn raster_worker_output(
     metadata: &str,
@@ -498,6 +534,21 @@ pub async fn raster_worker_output(
     }
     let mut preview = None;
     let mut flattened = None;
+    let clipped = if let Some(original) = metadata.original {
+        let project = artwork_transfer::unpack(&original, buffers).await?;
+        let source = project.paint.iter().find_map(|(_,_,paint)| paint.base.as_ref().map(|base| base.image.storage()))
+            .ok_or_else(|| js("Missing original source"))?;
+        if source.extent != extent
+            || source.interpretation.channels != target.channels
+            || source.interpretation.depth != target.depth
+            || source.interpretation.profile != target.profile
+        {
+            return Err(js("Original source does not match this output"));
+        }
+        let mut rows = source.rows();
+        write_sdr_rows(output,extent,&target,recipe,&delivery,&mut rows).await.map_err(js)?;
+        0
+    } else {
     let write = |extent, target: &_, rows: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), String>| {
         if let Some(color) = metadata.flatten {
             flattened = Some(layer_color::flattened_document(
@@ -525,55 +576,8 @@ pub async fn raster_worker_output(
             });
             return Ok(());
         }
-        match recipe.format {
-            ExportFormat::Exr | ExportFormat::PngHdr | ExportFormat::PngHdrMapped | ExportFormat::JpegHdr | ExportFormat::JpegHdrMapped | ExportFormat::AvifHdr | ExportFormat::AvifHdrMapped => Err("HDR delivery is not enabled on this host".into()),
-            ExportFormat::Png => layer_color::photo::write_png_rows(
-                output,
-                extent,
-                target,
-                &delivery,
-                rows,
-            ),
-            ExportFormat::Tiff => layer_color::photo::write_tiff_rows(
-                output,
-                extent,
-                target,
-                &delivery,
-                rows,
-            ),
-            ExportFormat::Jpeg => layer_color::photo::write_jpeg_rows(
-                output,
-                extent,
-                target,
-                &delivery,
-                layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, artwork_transfer::photo_memory_budget()),
-                rows,
-            ),
-            ExportFormat::Webp => layer_color::photo::write_webp_rows(
-                output,
-                extent,
-                target,
-                &delivery,
-                artwork_transfer::photo_memory_budget().encode_bytes,
-                rows,
-            ),
-        }
+        layer_core::package::archive::ready(write_sdr_rows(output,extent,target,recipe,&delivery,&mut layer_color::photo::ReadyRows(rows)))
     };
-    let clipped = if let Some(original) = metadata.original {
-        let project = artwork_transfer::unpack(&original, buffers).await?;
-        let source = project.paint.iter().find_map(|(_,_,paint)| paint.base.as_ref().map(|base| base.image.storage()))
-            .ok_or_else(|| js("Missing original source"))?;
-        if source.extent != extent
-            || source.interpretation.channels != target.channels
-            || source.interpretation.depth != target.depth
-            || source.interpretation.profile != target.profile
-        {
-            return Err(js("Original source does not match this output"));
-        }
-        let mut rows = source.rows();
-        write(extent, &target, &mut |y, row| rows.read(y, row)).map_err(js)?;
-        0
-    } else {
         layer_color::encode_working_rows_with_guide(
             metadata.color.space,
             metadata.extent,

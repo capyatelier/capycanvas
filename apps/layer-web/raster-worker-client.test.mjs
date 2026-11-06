@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {createRasterWorker,postTransferred,releaseTransferred} from './raster-worker-client.js';
+import {createRasterWorker,postTransferred,releaseTransferred,backingOffer} from './raster-worker-client.js';
 import {observeColorWorkers,waitForColorCapture} from '../../tools/visual/color-panel.mjs';
 
 function fixture(module) {
@@ -40,7 +40,7 @@ for(const failure of ['cleanup','transfer-list','post',null])test(`worker packed
   let released=0,closed=0,unlocked=0;const replies=[],buffers=[new Uint8Array(4)];
   buffers.admission={release(){released++;}};
   const result={buffers};if(failure==='transfer-list')Object.defineProperty(result,'preview',{get(){throw Error('transfer-list failed');}});
-  const scope={Uint8Array,postTransferred,releaseTransferred,init:async()=>({memory:{buffer:new ArrayBuffer(8)}}),wasm:{configure_gpu_diagnostics(){},async raster_worker_output(){return result;}},
+  const scope={Uint8Array,postTransferred,releaseTransferred,backingOffer,init:async()=>({memory:{buffer:new ArrayBuffer(8)}}),wasm:{configure_gpu_diagnostics(){},async raster_worker_output(){return result;}},
     self:{postMessage(message){if(failure==='post'&&message.result)throw Error('post failed');replies.push(message);}},
     job:{offset:16,raw:{close(){closed++;}},root:{async removeEntry(){if(failure==='cleanup')throw Error('cleanup failed');}},release(){unlocked++;}}};
   const source=readFileSync(new URL('./raster-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
@@ -240,12 +240,25 @@ for(const operation of ['image-decode','nearest-coordinates','alpha-image'])test
 }));
 
 test('brush alpha transfers to image preparation and returns caller-owned bitmap',()=>withFixture(async f=>{
-  const alpha=new Uint8Array([0,127,255,31]);
-  const pending=f.run(request('alpha-image',{metadata:{size:2},buffers:[alpha]})),worker=f.workers[0];
-  assert.equal(worker.messages[0].request.buffers[0],alpha);assert.deepEqual(worker.transfers[0],[alpha.buffer]);
+  const alpha=new Uint8Array([0,127,255,31]),port={};
+  const storage=()=>Promise.resolve();storage.connect=()=>({port,close(){}});
+  const run=createRasterWorker(undefined,()=>{},storage),pending=run(request('alpha-image',{metadata:{size:2},buffers:[alpha]})),worker=f.workers[0];
+  assert.equal(worker.messages[0].request.buffers[0],alpha);assert.equal(worker.messages[0].storagePort,port);assert.deepEqual(worker.transfers[0],[alpha.buffer,port]);
   const bitmap={closed:0,close(){this.closed++;}};worker.reply(bitmap);assert.equal(await pending,bitmap);assert.equal(bitmap.closed,0);
-  const next=f.run(request('image-decode'));assert.equal(f.workers.length,1);worker.reply('image');assert.equal(await next,'image');
+  const next=run(request('image-decode'));assert.equal(f.workers.length,1);assert.equal(worker.messages[1].storagePort,undefined);worker.reply('image');assert.equal(await next,'image');
   bitmap.close();assert.equal(bitmap.closed,1);
+  let transport,initialized=0,connected=0;const replies=[];
+  const scope={Uint8Array,postTransferred,releaseTransferred,backingOffer,
+    ImageData:class {constructor(size){this.data=new Uint8Array(size*size*4);}},createImageBitmap:async()=>bitmap,
+    createPortTransport(received){assert.equal(received,port);connected++;return async()=>Uint8Array.of(11,23);},
+    init:async()=>{initialized++;return {memory:{buffer:new ArrayBuffer(8)}};},
+    wasm:{configure_gpu_diagnostics(){},configure_store_transport(value){transport=value;},async raster_worker_read(){return {buffers:[await transport({operation:'read_source'})]};}},
+    self:{postMessage(message){replies.push(message);}}};
+  const source=readFileSync(new URL('./raster-worker.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
+  runInNewContext(source+'\nglobalThis.executeRequest=execute;',scope);
+  await scope.executeRequest(worker.messages[0]);assert.equal(initialized,0);assert.equal(connected,0);
+  await scope.executeRequest({id:2,request:request('read')});
+  assert.equal(initialized,1);assert.equal(connected,1);assert.equal(replies[1].error,undefined);assert.deepEqual(replies[1].result.buffers[0],Uint8Array.of(11,23));
 }));
 
 test('Color capture keeps duplicate metadata bound to each production worker module',()=>withFixture(async f=>{
@@ -290,4 +303,29 @@ test('panel projections retain their warm worker independently of file and analy
   assert.equal(await file,'file');assert.equal(await analysis,'analysis');assert.equal(await second,'second');
   await f.advance(5000);assert.equal(f.workers[1].terminated,true);assert.equal(f.workers[2].terminated,true);assert.equal(vector.terminated,false);
   const third=f.run(request('panel-vectors'));vector.reply('third');assert.equal(await third,'third');assert.equal(f.workers.length,3);
+}));
+
+test('a parser offer is claimed before its port closes',()=>withFixture(async f=>{
+  const events=[],claim=Promise.withResolvers(),port={};
+  const storage=async request=>{
+    events.push(request.operation);
+    if(request.operation==='register_blob')return {key:'blob:generation',lease:'initial'};
+    if(request.operation==='claim_sources')await claim.promise;
+  };
+  storage.connect=()=>({port,close(){events.push('disconnect');}});
+  const run=createRasterWorker(undefined,()=>{},storage),pending=run(request('read',{source_key:'blob:generation'}));
+  await f.flush();const worker=f.workers[0];
+  assert.equal(worker.messages[0].storagePort,port);assert.equal(worker.messages[0].request.source_key,'blob:generation');
+  worker.reply({metadata:JSON.stringify({offer:'offered'}),buffers:[]});await f.flush();
+  assert.equal(worker.terminated,false);assert.deepEqual(events,['claim_sources']);
+  claim.resolve();await pending;
+  assert.equal(worker.terminated,true);assert.deepEqual(events,['claim_sources','disconnect']);
+}));
+
+test('storage death rejects raster jobs and closes their single-owner connection',()=>withFixture(async f=>{
+  let storageFailure,closed=0;
+  const storage=()=>Promise.resolve();storage.connect=fail=>{storageFailure=fail;return {port:{},close(){closed++;}};};
+  const run=createRasterWorker(undefined,()=>{},storage),pending=run(request());
+  const failure=assert.rejects(pending,{message:'Storage stopped'});storageFailure(Error('Storage stopped'));await failure;
+  assert.equal(f.workers[0].terminated,true);assert.equal(closed,1);
 }));

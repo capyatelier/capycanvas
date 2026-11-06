@@ -161,6 +161,7 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
         let (metadata, buffers) = packed_parts(&packed).map_err(|e| format!("{e:?}"))?;
         let metadata = serde_json::to_string(&(metadata, frozen, &task)).map_err(|e| e.to_string())?;
         let result = call_cancellable("snapshot", &metadata, &buffers, control.clone()).await.map_err(|e| format!("{e:?}"))?;
+        let _offer=artwork_transfer::received_offer(&result);
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         match task {
             SnapshotTask::LevelsStatistics(..)=>serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::LevelsStatistics).map_err(|e|e.to_string()),
@@ -262,6 +263,13 @@ pub fn raster_worker_nearest_coordinates(metadata:&str)->Result<Vec<u8>,JsValue>
     let request:NearestCoordinates=serde_json::from_str(metadata).map_err(js)?;
     layer_render_wgpu::prepare_nearest_coordinates(request.inverse,request.size,request.first,request.count)
         .map(|bytes|bytes.as_ref().clone()).map_err(js)
+}
+#[wasm_bindgen]
+pub fn raster_worker_package_normalize(metadata:&str,bytes:js_sys::Uint8Array)->Result<Vec<u8>,JsValue> {
+    artwork_transfer::seed_memory_budget();
+    if metadata.len()>4096 || bytes.length() as usize>layer_core::package::MAX_RANGE_BYTES {return Err(js("Oversized package preparation input"));}
+    let (descriptor,crc)=serde_json::from_str(metadata).map_err(js)?;
+    layer_core::package::normalize_filtered_tile(descriptor,&bytes.to_vec(),crc).map(|bytes|bytes.to_vec()).map_err(js)
 }
 #[wasm_bindgen]
 pub fn raster_worker_image_decode(metadata:&str,buffers:js_sys::Array)->Result<Vec<u8>,JsValue> {
@@ -449,13 +457,17 @@ pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Resu
     let image_samples=samples.clone();
     renderer.set_browser_image_decoder(Rc::new(move |source,coordinate,destination| {
         let samples=image_samples.clone();
-        Box::pin(async move {layer_render_wgpu::prepare_image_tile(&source,coordinate,destination,&samples,None)})
+        Box::pin(async move {
+            let bytes=source.tiles.get(&coordinate).ok_or("Missing immutable image tile")?.read_compressed().await?;
+            layer_render_wgpu::prepare_image_tile_from_bytes(&source,coordinate,destination,&samples,None,&bytes)
+        })
     }));
     renderer.set_browser_raster_decoder(Rc::new(move |blob,space,_destination,native_channels| {
         let samples=samples.clone();
         Box::pin(async move {
-            if native_channels {Ok(layer_render_wgpu::PreparedImagePixels::NativeSamples(samples.decode_bytes_on_worker(&blob,&blob.memory_compressed()?.ok_or("Missing paper input")?)?))}
-            else {layer_render_wgpu::prepare_raster_tile(&blob,space,&samples)}
+            let bytes=blob.read_compressed().await?;
+            if native_channels {Ok(layer_render_wgpu::PreparedImagePixels::NativeSamples(samples.decode_bytes_on_worker(&blob,&bytes)?))}
+            else {layer_render_wgpu::prepare_raster_tile_from_bytes(&blob,space,&samples,&bytes)}
         })
     }));
     renderer.set_browser_nearest_coordinate_decoder(Rc::new(|inverse,size,first,count| Box::pin(async move {

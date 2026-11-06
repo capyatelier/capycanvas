@@ -1135,6 +1135,54 @@ fn package_open_does_not_queue_a_copy_or_checkpoint_before_the_first_picture() {
 }
 
 #[test]
+fn save_over_waits_for_existing_package_copy_without_publishing_a_head() {
+    let fixture=Fixture::new();let session=package_session(&fixture);let memory=session.engine().document().memory();memory.presented();
+    let binding=fixture.stores.bind(1,None).unwrap();let before=heads(binding.path());
+    let reply=fixture.stores.finish_package(1).unwrap();
+    assert!(reply.try_take().is_none());assert!(memory.package_pending());assert_eq!(heads(binding.path()),before);
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+    while memory.package_pending() && std::time::Instant::now()<deadline {
+        fixture.stores.maintain().unwrap();
+        if !fixture.queue.lock().unwrap().is_empty() {fixture.run();}else{std::thread::yield_now();}
+    }
+    assert!(!memory.package_pending());assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Durable(_)))));
+    assert_eq!(heads(binding.path()),before);
+    let inventory=session.retained_document_tiles();
+    for tile in pollster::block_on(inventory.await_blobs()).unwrap() {assert!(tile.memory_compressed().unwrap().is_none());assert!(!pollster::block_on(tile.read_compressed()).unwrap().is_empty());}
+}
+
+#[test]
+fn save_over_copy_failure_keeps_package_owners_and_the_head_and_does_not_retry() {
+    use layer_core::package::{session_store::{SessionStore,StoreOpener,NativeStoreOpener},store_io::FileFuture,storage_budget::STORAGE_UNAVAILABLE};
+    struct Opening(&'static str);
+    impl StoreOpener for Opening {
+        fn storage_facts<'a>(&'a self,path:&'a std::path::Path)->FileFuture<'a,layer_core::package::storage_budget::StorageFacts> {NativeStoreOpener.storage_facts(path)}
+        fn open<'a>(&'a self,_:&'a std::path::Path,_:bool)->FileFuture<'a,Option<SessionStore>> {Box::pin(async {Err(self.0.into())})}
+    }
+    for error in [STORAGE_UNAVAILABLE,"Storage IO failed"] {
+        let mut fixture=Fixture::new();let queue=fixture.queue.clone();
+        fixture.stores=SessionStores::with_opener(fixture.root.clone(),Arc::new(Opening(error)),Arc::new(move |work|queue.lock().unwrap().push_back(work)),Arc::new(||{}),||0);
+        let session=package_session(&fixture);let memory=session.engine().document().memory();memory.presented();
+        let binding=fixture.stores.bind(1,None).unwrap();let before=heads(binding.path());let reply=fixture.stores.finish_package(1).unwrap();
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+        while fixture.queue.lock().unwrap().is_empty() && std::time::Instant::now()<deadline {fixture.stores.maintain().unwrap();std::thread::yield_now();}
+        fixture.run();assert!(matches!(reply.try_take(),Some(Err(reason)) if reason==error));
+        assert_eq!(heads(binding.path()),before);assert!(fixture.queue.lock().unwrap().is_empty());
+        assert!(matches!(fixture.stores.finish_package(1),Err(reason) if reason==error));
+        for tile in pollster::block_on(session.retained_document_tiles().await_blobs()).unwrap() {assert!(!pollster::block_on(tile.read_compressed()).unwrap().is_empty());}
+    }
+}
+
+#[test]
+fn save_over_waiter_fails_when_the_existing_copy_worker_is_dropped() {
+    let fixture=Fixture::new();let session=package_session(&fixture);session.engine().document().memory().presented();
+    let reply=fixture.stores.finish_package(1).unwrap();
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+    while fixture.queue.lock().unwrap().is_empty() && std::time::Instant::now()<deadline {fixture.stores.maintain().unwrap();std::thread::yield_now();}
+    drop(fixture.pop());assert!(matches!(reply.try_take(),Some(Err(error)) if error=="Drawing storage worker stopped"));
+}
+
+#[test]
 fn continuous_input_cannot_starve_package_durability_before_a_host_captures() {
     use layer_core::package::session_store::CompactionActivity;
     use std::sync::atomic::AtomicU64;

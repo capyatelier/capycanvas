@@ -292,6 +292,17 @@ impl TileBlob {
         let compressed=self.compressed_on_worker()?;
         self.decode_bytes_on_worker(&compressed)
     }
+    pub fn decode_ready_on_worker(&self)->crate::package::store_io::FileFuture<'_,Vec<u8>> {
+        Box::pin(async move {
+            #[cfg(not(target_arch="wasm32"))]
+            {self.decode_on_worker()}
+            #[cfg(target_arch="wasm32")]
+            {self.decode_bytes_on_worker(&self.memory_compressed()?.ok_or("Image input bytes were not supplied to the worker")?)}
+        })
+    }
+    pub fn decode_async_on_worker(&self)->crate::package::store_io::FileFuture<'_,Vec<u8>> {
+        Box::pin(async move {let bytes=self.read_compressed().await?;self.decode_bytes_on_worker(&bytes)})
+    }
     pub fn decode_bytes_on_worker(&self,compressed:&[u8])->Result<Vec<u8>,String> {
         let bytes=Self::decode_samples(self.descriptor,compressed).map_err(|error|self.compressed.fail(error))?;
         if let Some(expected) = self.expected_digest {
@@ -326,6 +337,13 @@ impl TileBlob {
         let content_identity=range.identity.identity(resource_id).ok();
         Ok(Self {resource_id,owner_identity:next_tile_owner(),descriptor,content_identity,digest:OnceLock::new(),expected_digest:None,
             compressed:Arc::new(crate::raster_storage::Bytes::package(range))})
+    }
+    pub(crate) fn from_transferred_range(resource_id:crate::PortableId,descriptor:PixelDescriptor,range:Arc<crate::package::lease::PackageRange>,identity:Option<TileContentIdentity>)->Result<Self,String> {
+        if let Some(TileContentIdentity::Stored {bytes,crc32,descriptor:digest}|TileContentIdentity::Package {bytes,crc32,descriptor:digest,..})=identity {
+            if range.identity.integrity()!=Some(crate::authored::EncodedIntegrity {bytes,crc32}) || crate::package::session_store::tile_fingerprint(resource_id,descriptor,bytes,crc32)?!=digest {return Err("Conflicting immutable stored tile identity".into());}
+        }
+        let mut tile=Self::from_package_range(resource_id,descriptor,range)?;
+        if identity.is_some() {tile.content_identity=identity;}Ok(tile)
     }
     pub fn from_package(
         resource_id: crate::authored::PortableId,

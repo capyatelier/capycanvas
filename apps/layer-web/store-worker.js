@@ -1,8 +1,10 @@
+import {createSourceRegistry} from './store-sources.js';
 import {createLegacyRestartReader} from './legacy-restart-store.js';
 import {createFileHandleStore} from './file-handles.js';
 
 const MAX_RANGE_BYTES=8*1024*1024;
-const reads=[],writes=[],files=new Map();
+const reads=[],writes=[],files=new Map(),ports=new Map();
+const sources=createSourceRegistry({file,parts,connected:owner=>owner==='page'||ports.has(owner)});
 const legacy=createLegacyRestartReader();
 const destinations=createFileHandleStore();
 let root,scheduled=false,active=false;
@@ -42,7 +44,10 @@ function close(name) {const handle=files.get(name);if(handle){files.delete(name)
 function range(offset,length) {
   if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(length)||length<0||length>MAX_RANGE_BYTES||!Number.isSafeInteger(offset+length))throw Error('Drawing store range exceeds limit');
 }
-async function execute({operation,metadata:meta={},buffers=[],handles=[]}) {
+async function execute(request,owner,accepted) {
+  const {operation,metadata:meta={},buffers=[],handles=[]}=request;
+  if(operation==='read_source')return sources.read(accepted);
+  if(['register_blob','release_source','offer_sources','claim_sources','cancel_sources','adopt_sources'].includes(operation))return sources.execute(request,owner);
   switch(operation) {
     case 'estimate': {
       const {quota,usage}=await navigator.storage.estimate();
@@ -65,11 +70,10 @@ async function execute({operation,metadata:meta={},buffers=[],handles=[]}) {
       const entry=await dir.getFileHandle(leaf,{create:access==='create'}),handle=await entry.createSyncAccessHandle();
       files.set(name,handle);return name;
     }
-    case 'close': close(meta.name);return;
+    case 'close': {const waiting=sources.after(meta.name);return {deferred:waiting.deferred.then(()=>close(meta.name))};}
     case 'close_tree': {
       parts(meta.name);
-      for(const name of files.keys())if(name.startsWith(`${meta.name}/`))close(name);
-      return;
+      return {deferred:sources.after(meta.name,true).deferred.then(()=>{for(const name of files.keys())if(name.startsWith(`${meta.name}/`))close(name);})};
     }
     case 'len': return (await file(meta.name)).getSize();
     case 'copy_read_at':
@@ -90,6 +94,7 @@ async function execute({operation,metadata:meta={},buffers=[],handles=[]}) {
       return entries.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
     }
     case 'remove': {
+      if(sources.held(meta.name))return {deferred:sources.after(meta.name).deferred.then(()=>execute(request,owner))};
       const opened=files.get(meta.name);let bytes=opened?.getSize()??0;close(meta.name);
       try {
         const [dir,leaf]=await parent(meta.name);
@@ -105,17 +110,40 @@ function schedule() {
   if(scheduled||active||(!reads.length&&!writes.length))return;
   scheduled=true;channel.port2.postMessage(null);
 }
+function disconnect(id) {
+  const port=ports.get(id);sources.disconnect(id);
+  try {port?.postMessage({fatal:'Drawing storage connection closed'});}catch{}
+  port?.close();ports.delete(id);
+}
+function reply(item,result,error) {
+  const message=error?{id:item.id,error:String(error.message??error),errorName:error.name}:{id:item.id,result};
+  try {item.port.postMessage(message,(result?.buffers??[]).map(bytes=>bytes.buffer));}catch{if(item.owner!=='page')disconnect(item.owner);}
+}
 async function drain() {
   scheduled=false;if(active)return;
   const item=reads.shift()??writes.shift();if(!item)return;active=true;
   try {
-    const result=await execute(item.request),transfers=(result?.buffers??[]).map(bytes=>bytes.buffer);
-    self.postMessage({id:item.id,result},transfers);
-  }catch(error){self.postMessage({id:item.id,error:String(error.message??error),errorName:error.name});}
-  finally {active=false;schedule();}
+    if(item.owner!=='page'&&!ports.has(item.owner)&&!item.accepted)throw Error('Drawing storage connection closed');
+    const result=await execute(item.request,item.owner,item.accepted);
+    if(result?.deferred)result.deferred.then(value=>reply(item,value),error=>reply(item,undefined,error));
+    else reply(item,result);
+  }catch(error){reply(item,undefined,error);}
+  finally {item.accepted?.release();active=false;schedule();}
+}
+function enqueue(data,port,owner) {
+  try {
+    const operation=data.request?.operation,accepted=sources.accept(data.request,owner);
+    const priority=operation==='read_source'||operation==='read_at'||operation==='len'||operation?.startsWith('legacy-')||(operation==='open'&&data.request.metadata?.access==='read');
+    (priority?reads:writes).push({...data,port,owner,accepted});schedule();
+  }catch(error){reply({...data,port},undefined,error);}
 }
 self.onmessage=({data})=> {
-  const operation=data.request?.operation;
-  const priority=operation==='read_at'||operation==='len'||operation?.startsWith('legacy-')||(operation==='open'&&data.request.metadata?.access==='read');
-  (priority?reads:writes).push(data);schedule();
+  if(data.connect) {
+    const {id,port}=data.connect;if(ports.has(id))throw Error('Duplicate storage connection');
+    ports.set(id,port);port.onmessage=({data})=>enqueue(data,port,id);port.onmessageerror=()=>disconnect(id);port.start();return;
+  }
+  if(data.disconnect) {
+    disconnect(data.disconnect);return;
+  }
+  enqueue(data,self,'page');
 };

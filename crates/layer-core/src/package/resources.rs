@@ -97,6 +97,33 @@ impl Payload {
         Self::Vector(chunk) => encode_vector(chunk).clone(),
     }) }
 }
+pub(crate) trait ResourceInput {
+    async fn prepared(payload:&Payload,cancelled:&AtomicBool)->Result<(ResourceEncoding,EncodedIntegrity),String>;
+    async fn encoded(payload:&Payload)->Result<super::ByteRange,String>;
+    async fn digest(payload:&Payload,cancelled:&AtomicBool)->Result<[u8;32],String>;
+    async fn opaque(resource:&OpaqueResource,offset:u64,length:usize,cancelled:&AtomicBool)->Result<super::ByteRange,String>;
+}
+pub(crate) struct ReadyResources;
+pub(crate) struct LeasedResources;
+impl ResourceInput for ReadyResources {
+    async fn prepared(payload:&Payload,cancelled:&AtomicBool)->Result<(ResourceEncoding,EncodedIntegrity),String> {payload.prepared(cancelled)}
+    async fn encoded(payload:&Payload)->Result<super::ByteRange,String> {let bytes=payload.encoded()?.bytes;let length=bytes.len();super::ByteRange::new(bytes,0..length).map_err(str::to_string)}
+    async fn digest(payload:&Payload,cancelled:&AtomicBool)->Result<[u8;32],String> {payload.digest(cancelled)}
+    async fn opaque(resource:&OpaqueResource,offset:u64,length:usize,cancelled:&AtomicBool)->Result<super::ByteRange,String> {resource.read_chunk(offset,length,cancelled).map_err(|error|error.to_string())}
+}
+impl ResourceInput for LeasedResources {
+    async fn prepared(payload:&Payload,cancelled:&AtomicBool)->Result<(ResourceEncoding,EncodedIntegrity),String> {
+        if let Payload::Tile(tile)=payload && tile.compressed.needs_preparation() {tile.read_compressed().await?;}
+        payload.prepared(cancelled)
+    }
+    async fn encoded(payload:&Payload)->Result<super::ByteRange,String> {
+        match payload {Payload::Tile(tile)=>tile.read_compressed().await,_=>ReadyResources::encoded(payload).await}
+    }
+    async fn digest(payload:&Payload,cancelled:&AtomicBool)->Result<[u8;32],String> {
+        match payload {Payload::Tile(tile)=>tile.compressed.digest_async(cancelled).await,_=>payload.digest(cancelled)}
+    }
+    async fn opaque(resource:&OpaqueResource,offset:u64,length:usize,cancelled:&AtomicBool)->Result<super::ByteRange,String> {resource.read_chunk_async(offset,length,cancelled).await.map_err(|error|error.to_string())}
+}
 #[derive(Clone, Debug)]
 pub struct ResourceEntry { pub kind: &'static str, pub data: Value, pub raw_encoding: &'static str, pub payload: Payload }
 impl ResourceEntry {
@@ -198,7 +225,9 @@ impl ResourceInventory {
             || (resource.encoding.as_ref()!=entry.raw_encoding && !wrapped) {return Err("Opaque resource conflicts with authored resource".into());}
         Ok(true)
     }
-    pub fn prepare(&self, cancelled: &AtomicBool) -> Result<PreparedResources, String> {
+    pub fn prepare(&self,cancelled:&AtomicBool)->Result<PreparedResources,String> {super::archive::ready(self.prepare_using::<ReadyResources>(cancelled))}
+    pub async fn prepare_async(&self,cancelled:&AtomicBool)->Result<PreparedResources,String> {self.prepare_using::<LeasedResources>(cancelled).await}
+    pub(crate) async fn prepare_using<I:ResourceInput>(&self, cancelled: &AtomicBool) -> Result<PreparedResources, String> {
         if self.transfer { return Err("Worker transfer inventory cannot be written as a package".into()); }
         let mut entries: Vec<PreparedResource> = Vec::with_capacity(self.entries.len());
         enum Candidates { Single(usize), Hashed(BTreeMap<[u8;32],Vec<usize>>) }
@@ -207,7 +236,7 @@ impl ResourceInventory {
         let mut combined = crc32fast::Hasher::new();
         for (id, entry) in &self.entries {
             if cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
-            let (encoded,integrity) = entry.payload.prepared(cancelled)?;
+            let (encoded,integrity) = I::prepared(&entry.payload,cancelled).await?;
             let mut data = entry.data.clone();
             let encoding = if encoded == ResourceEncoding::Lz4 {
                 let decoded = match &entry.payload { Payload::Bytes(bytes) => bytes.len(), Payload::Code(code) => code.len(),
@@ -221,16 +250,16 @@ impl ResourceInventory {
                 std::collections::btree_map::Entry::Vacant(bucket)=>{bucket.insert(Candidates::Single(entries.len()));},
                 std::collections::btree_map::Entry::Occupied(mut bucket)=>{
                     if let Candidates::Single(index)=*bucket.get() {
-                        let digest=entries[index].payload.digest(cancelled)?;
+                        let digest=I::digest(&entries[index].payload,cancelled).await?;
                         *bucket.get_mut()=Candidates::Hashed([(digest,vec![index])].into());
                     }
-                    let digest=entry.payload.digest(cancelled)?;
+                    let digest=I::digest(&entry.payload,cancelled).await?;
                     let Candidates::Hashed(hashes)=bucket.get_mut() else {unreachable!()};
                     let indices=hashes.entry(digest).or_default();
                     for &index in indices.iter() {
                         let previous=&entries[index];
                         if previous.record["type"]==entry.kind && previous.record["data"]==data && previous.record["encoding"]==encoding
-                            && (previous.payload.same_owner(&entry.payload) || previous.payload.encoded()?.bytes==entry.payload.encoded()?.bytes) {
+                            && (previous.payload.same_owner(&entry.payload) || *I::encoded(&previous.payload).await?==*I::encoded(&entry.payload).await?) {
                             alias=Some(index);break;
                         }
                     }
@@ -253,12 +282,26 @@ impl ResourceInventory {
 pub struct PreparedResource { pub record: Value, pub payload: Payload, pub bytes: u64, pub crc: u32, physical: bool }
 #[derive(Clone, Debug)]
 pub struct PreparedResources { pub entries: Vec<PreparedResource>, pub length: u64, pub crc: u32 }
-pub struct PackReader<'a> { entries: &'a [PreparedResource], index: usize, current: Option<Arc<[u8]>>, position: u64, hasher: crc32fast::Hasher, cancelled: &'a AtomicBool }
+pub struct PackReader<'a> { entries: &'a [PreparedResource], index: usize, current: Option<super::ByteRange>, position: u64, hasher: crc32fast::Hasher, cancelled: &'a AtomicBool }
 impl PreparedResources {
     pub fn reader<'a>(&'a self, cancelled: &'a AtomicBool) -> PackReader<'a> { PackReader { entries:&self.entries,index:0,current:None,position:0,hasher:crc32fast::Hasher::new(),cancelled } }
 }
 impl std::io::Read for PackReader<'_> {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self,output:&mut [u8])->std::io::Result<usize> {super::archive::ready(self.read_using::<ReadyResources>(output))}
+}
+impl super::archive::ReadCursor for PackReader<'_> {
+    fn read_exact<'a>(&'a mut self,output:&'a mut [u8])->super::store_io::FileFuture<'a,()> {
+        Box::pin(async move {
+            let mut position=0;
+            while position<output.len() {
+                let count=self.read_using::<LeasedResources>(&mut output[position..]).await.map_err(|error|format!("Package I/O failed: {error}"))?;
+                if count==0 {return Err("Package I/O failed: failed to fill whole buffer".into());}position+=count;
+            }Ok(())
+        })
+    }
+}
+impl PackReader<'_> {
+    async fn read_using<I:ResourceInput>(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
         if self.cancelled.load(Ordering::Relaxed) { return Err(std::io::Error::other("Package operation cancelled")); }
         if output.is_empty() { return Ok(0); }
         loop {
@@ -270,13 +313,13 @@ impl std::io::Read for PackReader<'_> {
                     if crc!=resource.crc32 {return Err(std::io::Error::other(resource.backing.fail("Opaque resource checksum failed".into())));}
                     self.index+=1;self.position=0;continue;
                 }
-                let bytes=resource.read_chunk(self.position,count,self.cancelled).map_err(std::io::Error::other)?;
+                let bytes=I::opaque(resource,self.position,count,self.cancelled).await.map_err(std::io::Error::other)?;
                 self.hasher.update(&bytes);output[..count].copy_from_slice(&bytes);self.position+=count as u64;return Ok(count);
             }
             if self.current.is_none() {
                 let Some(entry) = self.entries.get(self.index) else { return Ok(0) };
-                let bytes = entry.payload.encoded().map_err(std::io::Error::other)?.bytes;
-                let (_,integrity)=entry.payload.prepared(self.cancelled).map_err(std::io::Error::other)?;
+                let bytes = I::encoded(&entry.payload).await.map_err(std::io::Error::other)?;
+                let (_,integrity)=I::prepared(&entry.payload,self.cancelled).await.map_err(std::io::Error::other)?;
                 if bytes.len() as u64 != entry.bytes || integrity.bytes != entry.bytes || integrity.crc32 != entry.crc { return Err(std::io::Error::other("Immutable resource changed during save")); }
                 self.current = Some(bytes); self.position = 0;
             }
@@ -714,7 +757,8 @@ impl super::selection_records::SelectionResourceReader for ResourceReader<'_> {
 }
 
 impl PreparedResources {
-    pub fn append_opaque(&mut self, resources:Vec<Arc<crate::authored::OpaqueResource>>, cancelled:&AtomicBool) -> Result<(),String> {
+    pub fn append_opaque(&mut self,resources:Vec<Arc<OpaqueResource>>,cancelled:&AtomicBool)->Result<(),String> {super::archive::ready(self.append_opaque_using::<ReadyResources>(resources,cancelled))}
+    pub(crate) async fn append_opaque_using<I:ResourceInput>(&mut self, resources:Vec<Arc<crate::authored::OpaqueResource>>, cancelled:&AtomicBool) -> Result<(),String> {
         let mut combined=crc32fast::Hasher::new_with_initial_len(self.crc,self.length);
         let ids:BTreeMap<_,_>=self.entries.iter().enumerate().map(|(index,entry)|(entry.payload.id(),index)).collect();
         for resource in resources {
@@ -723,11 +767,11 @@ impl PreparedResources {
                 let existing=&self.entries[*index];
                 let candidate=resource.record(existing.record["location"].clone());
                 if candidate!=existing.record {return Err("Opaque resource conflicts with authored resource".into());}
-                let bytes=existing.payload.encoded()?.bytes;
+                let bytes=I::encoded(&existing.payload).await?;
                 let mut offset=0;
                 while offset<bytes.len() {
                     let count=(bytes.len()-offset).min(MAX_RANGE_BYTES);
-                    if *resource.read_chunk(offset as u64,count,cancelled)?!=bytes[offset..offset+count] {return Err("Conflicting resource bytes".into());}
+                    if *I::opaque(&resource,offset as u64,count,cancelled).await?!=bytes[offset..offset+count] {return Err("Conflicting resource bytes".into());}
                     offset+=count;
                 }
                 continue;

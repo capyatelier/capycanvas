@@ -70,6 +70,24 @@ fn copy_steps_are_bounded_and_remap_live_ranges_without_copying_aliases_twice() 
     assert_eq!(&*location.read_all().wait().unwrap(),&*resource);assert!(!store.pack_path(old).exists());
 }
 #[test]
+fn reference_transfers_hold_the_pack_range_accepted_before_compaction() {
+    use super::super::transfer::{PreparedTransfer,TransferReceiver};
+    let directory=Directory::new();let mut store=open_store(&directory.0).wait().unwrap();let capture=capture(37);
+    checkpoint(&mut store,&capture,37);let cancel=AtomicBool::new(false);
+    let transfer=PreparedTransfer::capture_referenced(&capture.artwork,&None,&cancel,&crate::MemoryBudget::process()).wait().unwrap();
+    assert_eq!(transfer.payload_count(),0);assert_eq!(transfer.descriptor().backings().len(),1);
+    let old=sparse_dead_tail(&mut store);
+    let received=TransferReceiver::with_sources(transfer.descriptor().clone(),ProjectLimits::default(),|reference| {
+        let backing=transfer.backings().iter().find(|backing|backing.transfer_reference().as_ref()==Some(reference)).unwrap();
+        Ok(Arc::new(backing.read_source().unwrap()) as Arc<dyn ByteSource>)
+    }).unwrap().finish().unwrap();
+    let adopted=received.adopt_verified(ProjectLimits::default(),&cancel).unwrap();drop(received);drop(transfer);
+    assert!(!finish(&mut store).is_empty());assert!(store.pack_path(old).exists());
+    let editor=crate::Editor::new(adopted.into_document().unwrap());
+    let tiles=editor.retained_tiles().blobs().unwrap();assert_eq!(tiles.len(),1);assert_eq!(tiles[0].decode_on_worker().unwrap(),vec![37;256*256*4]);
+    drop(tiles);drop(editor);assert_eq!(step(&mut store).unwrap(),CompactionStep::Idle);assert!(!store.pack_path(old).exists());
+}
+#[test]
 fn publication_preserves_current_previous_capture_and_a_physical_read_lease() {
     let directory=Directory::new();let mut store=open_store(&directory.0).wait().unwrap();
     let previous=capture(13);checkpoint(&mut store,&previous,13);

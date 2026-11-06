@@ -54,6 +54,10 @@ impl WebApp {
     pub fn session_current(&self,id:u64)->Result<bool,JsValue> {
         Ok(self.stores.is_current(id,&self.document_session(id)?.session_stamp()))
     }
+    pub fn finish_session_package(&self,id:u64)->Result<js_sys::Promise,JsValue> {
+        let reply=self.stores.finish_package(id).map_err(js)?;
+        Ok(future_to_promise(async move {reply.await.map_err(js)?;Ok(JsValue::UNDEFINED)}))
+    }
     pub fn checkpoint_session(&self,id:u64,forced:bool)->Result<js_sys::Promise,JsValue> {
         let session=self.document_session(id)?;let stamp=session.session_stamp();
         if !self.stores.checkpoint_due(id,stamp.clone(),forced).map_err(js)? {return Ok(js_sys::Promise::resolve(&JsValue::FALSE));}

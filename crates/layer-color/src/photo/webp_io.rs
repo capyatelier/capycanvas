@@ -16,12 +16,22 @@ const MEMORY_ERROR: &str = "WebP exceeds the codec memory budget; use a smaller 
 /// first, so provider errors (a cancelled capture) stop before encoding, but
 /// the encode itself runs to completion once started.
 pub fn write_webp_rows(
+    output: impl Write,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    metadata: &DeliveryMetadata,
+    codec_bytes: usize,
+    read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    crate::ready(write_webp_rows_async(output,extent,interpretation,metadata,codec_bytes,&mut ReadyRows(read_row)))
+}
+pub async fn write_webp_rows_async(
     mut output: impl Write,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
     metadata: &DeliveryMetadata,
     codec_bytes: usize,
-    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+    read_row: &mut impl RowCursor,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
     if interpretation.depth != SampleDepth::U8 {
@@ -49,7 +59,7 @@ pub fn write_webp_rows(
     pixels.try_reserve_exact(len).map_err(|_| MEMORY_ERROR)?;
     pixels.resize(len, 0);
     for (y, row) in pixels.chunks_exact_mut(row_bytes).enumerate() {
-        read_row(y as u32, row)?;
+        read_row.read_row(y as u32, row).await?;
     }
     let mut encoder = image_webp::WebPEncoder::new(&mut output);
     encoder.set_icc_profile(icc);

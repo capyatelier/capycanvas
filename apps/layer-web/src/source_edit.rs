@@ -195,7 +195,7 @@ pub async fn raster_worker_source_rasterize(
     let source=artwork.paint.get(paint).unwrap().base.as_ref().unwrap().image.storage();
     let name=layer_color::profile_description_optional(&source.interpretation.profile).map_err(js)?;
     let color=artwork.compositions.get(artwork.root).unwrap().color;
-    let (converted,statistics)=layer_color::rasterize_source(source,color,layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(),||false).map_err(js)?;
+    let (converted,statistics)=layer_color::rasterize_source_async(source,color,layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(),||false).await.map_err(js)?;
     artwork.paint.get_mut(paint).unwrap().base.as_mut().unwrap().image=Arc::new(converted).into();
     let wire=artwork_transfer::pack(artwork).await?;
     js_sys::Reflect::set(

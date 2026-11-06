@@ -389,12 +389,20 @@ pub(crate) struct PreparedRasterTile {
     pub pixels:Result<crate::scene::sources::PreparedSourcePixels,String>,
 }
 pub fn prepare_raster_tile(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpace,cache:&layer_core::raster::DecodedTileCache)->Result<crate::scene::sources::PreparedSourcePixels,String> {
+    prepare_raster_tile_with(blob,space,|| {
+        #[cfg(not(target_arch="wasm32"))]
+        {cache.decode_on_worker(blob)}
+        #[cfg(target_arch="wasm32")]
+        {cache.decode_bytes_on_worker(blob,&blob.memory_compressed()?.ok_or("Raster worker input is not prepared")?)}
+    })
+}
+pub fn prepare_raster_tile_from_bytes(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpace,cache:&layer_core::raster::DecodedTileCache,bytes:&[u8])->Result<crate::scene::sources::PreparedSourcePixels,String> {
+    prepare_raster_tile_with(blob,space,||cache.decode_bytes_on_worker(blob,bytes))
+}
+fn prepare_raster_tile_with(blob:&Arc<layer_core::raster::TileBlob>,space:RgbSpace,decode:impl FnOnce()->Result<Arc<Vec<u8>>,String>)->Result<crate::scene::sources::PreparedSourcePixels,String> {
     use layer_core::color::source::SourceChannels;
     crate::scene::sources::validate_raster(blob,space).map_err(|error|error.to_string())?;
-    #[cfg(not(target_arch="wasm32"))]
-    let native=cache.decode_on_worker(blob)?;
-    #[cfg(target_arch="wasm32")]
-    let native=cache.decode_bytes_on_worker(blob,&blob.memory_compressed()?.ok_or("Raster worker input is not prepared")?)?;
+    let native=decode()?;
     if blob.descriptor.channels==4 {return Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(native));}
     let channels=if blob.descriptor.channels==1 {SourceChannels::Gray} else {SourceChannels::GrayAlpha};
     let depth=blob.descriptor.depth();
@@ -427,13 +435,21 @@ pub(crate) enum PreparedImageWork {
     Coordinates {destination:CoordinateDestination,pixels:CoordinateResult},
 }
 pub fn prepare_image_tile(source:&SourceImage,coordinate:[u32;2],destination:RgbSpace,cache:&layer_core::raster::DecodedTileCache,decoder:Option<&layer_color::WorkingDecoder>)->Result<crate::scene::sources::PreparedSourcePixels,String> {
+    prepare_image_tile_with(source,coordinate,destination,decoder,|tile| {
+        #[cfg(not(target_arch="wasm32"))]
+        {cache.decode_on_worker(tile)}
+        #[cfg(target_arch="wasm32")]
+        {cache.decode_bytes_on_worker(tile,&tile.memory_compressed()?.ok_or("Image worker input is not prepared")?)}
+    })
+}
+pub fn prepare_image_tile_from_bytes(source:&SourceImage,coordinate:[u32;2],destination:RgbSpace,cache:&layer_core::raster::DecodedTileCache,decoder:Option<&layer_color::WorkingDecoder>,bytes:&[u8])->Result<crate::scene::sources::PreparedSourcePixels,String> {
+    prepare_image_tile_with(source,coordinate,destination,decoder,|tile|cache.decode_bytes_on_worker(tile,bytes))
+}
+fn prepare_image_tile_with(source:&SourceImage,coordinate:[u32;2],destination:RgbSpace,decoder:Option<&layer_color::WorkingDecoder>,decode:impl FnOnce(&Arc<layer_core::raster::TileBlob>)->Result<Arc<Vec<u8>>,String>)->Result<crate::scene::sources::PreparedSourcePixels,String> {
     use crate::scene::sources::PreparedSourcePixels;
     if matches!(source.interpretation.profile,layer_core::color::ColorProfile::Builtin(_)) && source.interpretation.channels!=layer_core::color::source::SourceChannels::Cmyk {
         let tile=source.tiles.get(&coordinate).ok_or("Missing immutable image tile")?;
-        #[cfg(not(target_arch="wasm32"))]
-        let native=cache.decode_on_worker(tile)?;
-        #[cfg(target_arch="wasm32")]
-        let native=cache.decode_bytes_on_worker(tile,&tile.memory_compressed()?.ok_or("Image worker input is not prepared")?)?;
+        let native=decode(tile)?;
         if source.interpretation.channels==layer_core::color::source::SourceChannels::Rgba {return Ok(PreparedSourcePixels::NativeSamples(native));}
         let row=PAGE_SIZE as usize*4*source.interpretation.depth.bytes();
         let mut expanded=vec![0;row*PAGE_SIZE as usize];
@@ -448,7 +464,7 @@ pub fn prepare_image_tile(source:&SourceImage,coordinate:[u32;2],destination:Rgb
         &owned
     };
     let mut pixels=vec![[0.;4];(PAGE_SIZE*PAGE_SIZE) as usize];
-    decoder.decode_tile_cached(source,coordinate,&mut pixels,cache)?;
+    decoder.decode_tile_with(source,coordinate,&mut pixels,decode)?;
     let bytes=pixels.into_iter().flat_map(|[r,g,b,a]|[r*a,g*a,b*a,a]).flat_map(f32::to_ne_bytes).collect();
     Ok(PreparedSourcePixels::PremultipliedWorkingPixels(Arc::new(bytes)))
 }

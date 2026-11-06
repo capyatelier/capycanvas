@@ -74,6 +74,7 @@ pub fn adopt_color_job_artwork(original:&Document,mut artwork:layer_core::Artwor
 }
 
 struct Converter<'a> {
+    decode:TileRead,
     old: DocumentColor,
     target: DocumentColor,
     change: DocumentColorChange,
@@ -131,7 +132,7 @@ impl Converter<'_> {
             }
         }
     }
-    fn blob(
+    async fn blob(
         &mut self,
         original: &Arc<TileBlob>,
         coordinate: [u32; 2],
@@ -154,10 +155,7 @@ impl Converter<'_> {
         if let Some(blob) = self.blobs.get(&key) {
             return Ok(blob.clone());
         }
-        #[cfg(not(target_arch="wasm32"))]
-        let decoded=original.decode_on_worker()?;
-        #[cfg(target_arch="wasm32")]
-        let decoded=original.decode_bytes_on_worker(&original.memory_compressed()?.ok_or("Color input bytes were not supplied to the worker")?)?;
+        let decoded=(self.decode)(original).await?;
         let descriptor = if scalar {
             self.target.coverage_descriptor()
         } else {
@@ -225,7 +223,7 @@ impl Converter<'_> {
         self.blobs.insert(key, blob.clone());
         Ok(blob)
     }
-    fn root(
+    async fn root(
         &mut self,
         original: &RasterRevision,
         extent: [u32; 2],
@@ -242,7 +240,7 @@ impl Converter<'_> {
         let mut changed = false;
         for (key, tile) in &data.tiles {
             let blob = self.wait(|| tile.try_backing())?;
-            let converted = self.blob(&blob, key.coordinate.map(|v|v*TILE_SIZE))?;
+            let converted = self.blob(&blob, key.coordinate.map(|v|v*TILE_SIZE)).await?;
             let replacement = if Arc::ptr_eq(&blob, &converted) {
                 tile.clone()
             } else {
@@ -264,7 +262,7 @@ impl Converter<'_> {
         self.roots.insert(original.identity(), result.clone());
         Ok(result)
     }
-    fn image(&mut self, base: &layer_core::authored::PaintBase) -> Result<layer_core::authored::Image, String> {
+    async fn image(&mut self, base: &layer_core::authored::PaintBase) -> Result<layer_core::authored::Image, String> {
         if base.is_original() { return Ok(base.image.clone()); }
         self.check()?;
         let phase=if self.change.encoding().dither==OutputDither::None {[0;2]} else {base.offset};
@@ -275,7 +273,7 @@ impl Converter<'_> {
         converted.interpretation.profile=ColorProfile::Builtin(self.target.space);
         for (coordinate,tile) in &mut converted.tiles {
             let origin=std::array::from_fn(|axis| coordinate[axis]*TILE_SIZE+base.offset[axis]);
-            *tile=self.blob(tile,origin)?;
+            *tile=self.blob(tile,origin).await?;
         }
         self.charge(converted.tiles.len().saturating_mul(128).saturating_add(256))?;
         let converted=layer_core::authored::Image::new(Arc::new(converted));
@@ -286,12 +284,13 @@ impl Converter<'_> {
 }
 
 /// Prepare immutable source records without changing the live artwork or originals.
-pub fn prepare_document_color(
-    document: &Document,
-    change: DocumentColorChange,
-    max_bytes: usize,
-    mut cancelled: impl FnMut() -> bool,
-) -> Result<PreparedDocumentColor, String> {
+pub fn prepare_document_color(document:&Document,change:DocumentColorChange,max_bytes:usize,cancelled:impl FnMut()->bool)->Result<PreparedDocumentColor,String> {
+    crate::ready(prepare_using(document,change,max_bytes,cancelled,TileBlob::decode_ready_on_worker))
+}
+pub async fn prepare_document_color_async(document:&Document,change:DocumentColorChange,max_bytes:usize,cancelled:impl FnMut()->bool)->Result<PreparedDocumentColor,String> {
+    prepare_using(document,change,max_bytes,cancelled,TileBlob::decode_async_on_worker).await
+}
+async fn prepare_using(document:&Document,change:DocumentColorChange,max_bytes:usize,mut cancelled:impl FnMut()->bool,decode:TileRead)->Result<PreparedDocumentColor,String> {
     if cancelled() {
         return Err("Document color change cancelled".into());
     }
@@ -328,6 +327,7 @@ pub fn prepare_document_color(
         ..source.clone()
     };
     let mut converter = Converter {
+        decode,
         old,
         target,
         change,
@@ -344,14 +344,14 @@ pub fn prepare_document_color(
     let mut paint = Vec::with_capacity(candidate.artwork.paint.len());
     for (handle, _, original) in candidate.artwork.paint.iter() {
         let mut source = original.clone();
-        source.raster = converter.root(&source.raster, source.domain, false, source.color_mode)?;
-        if let Some(base) = &mut source.base { base.image = converter.image(base)?; }
+        source.raster = converter.root(&source.raster, source.domain, false, source.color_mode).await?;
+        if let Some(base) = &mut source.base { base.image = converter.image(base).await?; }
         paint.push(RecordChange::replace(&candidate.artwork.paint, handle, Some(source)).map_err(str::to_string)?);
     }
     let mut coverage = Vec::with_capacity(candidate.artwork.coverage.len());
     for (handle, _, original) in candidate.artwork.coverage.iter() {
         let mut source = original.clone();
-        source.raster = converter.root(&source.raster, source.domain, true, Default::default())?;
+        source.raster = converter.root(&source.raster, source.domain, true, Default::default()).await?;
         coverage.push(RecordChange::replace(&candidate.artwork.coverage, handle, Some(source)).map_err(str::to_string)?);
     }
     converter.check()?;

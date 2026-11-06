@@ -692,3 +692,41 @@ fn package_io_failures_are_not_reported_as_damaged_content() {
         assert!(matches!(outcome,OpenOutcome::Failure {cause:None,..} | OpenOutcome::RecoveredView {cause:None,..}),"offset {offset}: {outcome:?}");
     }
 }
+
+#[test]
+fn leased_save_keeps_only_its_current_resource_pinned() {
+    const CHILD:&str="CAPY_LEASED_SAVE_ACCOUNTING_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output=std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact","package::codec::tests::leased_save_keeps_only_its_current_resource_pinned","--test-threads=1"]).env(CHILD,"1").output().unwrap();
+        assert!(output.status.success(),"{}{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));return;
+    }
+    use std::io::Write;
+    struct Remove(std::path::PathBuf);
+    impl Drop for Remove {fn drop(&mut self) {let _=std::fs::remove_file(&self.0);}}
+    let path=Remove(std::env::temp_dir().join(format!("capy-leased-save-{}",PortableId::random())));
+    let mut document=crate::Document::new(PortableId::random(),2048,256,crate::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let source=crate::color::source::rgba8_source([2048,256],|x,y| {
+        let mut bits=x.wrapping_mul(0x9e37_79b9)^y.wrapping_mul(0x85eb_ca6b);bits^=bits>>16;bits=bits.wrapping_mul(0x7feb_352d);[bits as u8,(bits>>8) as u8,(bits>>16) as u8,255]
+    });
+    let maximum=source.tiles.values().map(|tile|tile.compressed_len() as u64).max().unwrap();
+    let crate::SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+    document.artwork.paint.get_mut(paint).unwrap().base=Some(PaintBase::new(Image::new(source)));
+    let original=capture(&document.artwork);let cancel=AtomicBool::new(false);
+    {let mut file=std::fs::File::create(&path.0).unwrap();PreparedPackage::prepare(&original,None,&cancel).unwrap().write(&mut file,&cancel).unwrap();}
+    drop(original);drop(document);
+    let file=Arc::new(std::fs::File::open(&path.0).unwrap());let length=file.metadata().unwrap().len();
+    let source=ImmutableBacking::new(Arc::new(crate::tile_io::ReadSource::file(file,length))).unwrap();
+    let OpenOutcome::Candidate {artwork,..}=open(source,Default::default(),&cancel).unwrap() else {panic!("editable fixture")};
+    let capture=capture(&artwork);drop(artwork);
+    let budget=crate::MemoryBudget::process();budget.flush_reports();
+    let prepared=pollster::block_on(PreparedPackage::prepare_async(&capture,None,&cancel)).unwrap();
+    struct Sink {budget:crate::MemoryBudget,maximum:u64,saw_pin:bool}
+    impl Write for Sink {
+        fn write(&mut self,bytes:&[u8])->std::io::Result<usize> {
+            self.budget.flush_reports();let pins=self.budget.snapshot().rows[crate::MemoryOwnerKind::Other as usize].iter().map(|row|row.pinned_ram_bytes).sum::<u64>();
+            assert!(pins<=2*self.maximum,"leased resource pins {pins} exceed two tiles {}",2*self.maximum);self.saw_pin|=pins>0;Ok(bytes.len())
+        }
+        fn flush(&mut self)->std::io::Result<()> {Ok(())}
+    }
+    let mut output=Sink {budget,maximum,saw_pin:false};pollster::block_on(prepared.write_async(&mut output,&cancel)).unwrap();assert!(output.saw_pin);
+}

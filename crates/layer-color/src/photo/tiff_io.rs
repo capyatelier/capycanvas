@@ -249,11 +249,20 @@ pub fn write_tiff(output: impl Write + Seek, source: &SourceImage) -> Result<(),
 /// Stream top-to-bottom encoded rows, with little-endian integer16 samples.
 /// See `write_png_rows` for cancellation and temporary-file publication rules.
 pub fn write_tiff_rows(
+    output: impl Write + Seek,
+    extent: [u32; 2],
+    interpretation: &SourceInterpretation,
+    metadata: &DeliveryMetadata,
+    read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+) -> Result<(), String> {
+    crate::ready(write_tiff_rows_async(output,extent,interpretation,metadata,&mut ReadyRows(read_row)))
+}
+pub async fn write_tiff_rows_async(
     mut output: impl Write + Seek,
     extent: [u32; 2],
     interpretation: &SourceInterpretation,
     metadata: &DeliveryMetadata,
-    mut read_row: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
+    read_row: &mut impl RowCursor,
 ) -> Result<(), String> {
     let row_bytes = output_row_bytes(extent, interpretation)?;
     let icc = delivery_icc(interpretation)?;
@@ -333,7 +342,7 @@ pub fn write_tiff_rows(
             image.rows_per_strip(1).map_err(err)?;
             let mut row = vec![0; row_bytes];
             for y in 0..extent[1] {
-                read_row(y, &mut row)?;
+                read_row.read_row(y, &mut row).await?;
                 write_tiff_row!(&mut image, &row, $u16);
             }
             image.finish().map_err(err)

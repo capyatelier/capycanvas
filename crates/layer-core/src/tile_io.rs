@@ -41,6 +41,10 @@ pub fn verify_crc(bytes:&[u8],expected:Option<u32>)->Result<(),String> {
 }
 
 pub trait RangeReader: Send + Sync {
+    fn transfer_key(&self)->Option<String> {None}
+    fn read_filtered(&self,offset:u64,length:usize,crc:u32,descriptor:crate::color::PixelDescriptor,completion:ReadCompletion) {
+        self.read(offset,length,None,completion.map(Box::new(move |bytes|crate::package::normalize_filtered_tile(descriptor,&bytes?,crc))));
+    }
     fn result_bounds(&self,_offset:u64,length:usize)->std::ops::RangeInclusive<usize> {length..=length}
     fn read(&self, offset: u64, length: usize, crc:Option<u32>, completion: ReadCompletion);
 }
@@ -258,6 +262,9 @@ impl ReadCache {
 }
 
 impl ReadSource {
+    pub(crate) fn read_filtered(&self,offset:u64,length:usize,crc:u32,descriptor:crate::color::PixelDescriptor,completion:ReadCompletion) {
+        match self.key(offset,length) {Ok(_)=>self.0.reader.read_filtered(offset,length,crc,descriptor,completion),Err(error)=>completion.complete(Err(error))}
+    }
     pub(crate) fn read_direct(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
         match self.key(offset,length) {Ok(_)=>self.0.reader.read(offset,length,crc,completion),Err(error)=>completion.complete(Err(error))}
     }
@@ -339,6 +346,7 @@ impl ReadSource {
 }
 
 impl crate::package::ByteSource for ReadSource {
+    fn transfer_key(&self)->Option<String> {self.0.reader.transfer_key()}
     fn byte_len(&self)->u64 {self.byte_len()}
     fn resident_bytes(&self)->usize {0}
     fn read_source(&self)->Option<ReadSource> {Some(self.clone())}

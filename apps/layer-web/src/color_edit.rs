@@ -182,7 +182,7 @@ pub async fn raster_worker_color(
     let request: Request = serde_json::from_str(metadata).map_err(js)?;
     let project = layer_core::Document::from_artwork(artwork_transfer::unpack(&request.project, buffers).await?).map_err(js)?;
     let converted =
-        layer_color::prepare_document_color(&project, request.change, layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(), || false)
+        layer_color::prepare_document_color_async(&project, request.change, layer_color::photo::PhotoMemoryBudget::conversion_encode_limit(), || false).await
             .map_err(js)?;
     let wire = artwork_transfer::pack(converted.document.artwork).await?;
     js_sys::Reflect::set(

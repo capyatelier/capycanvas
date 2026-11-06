@@ -52,10 +52,11 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
     console.log(`Object capture comparison passed: ${command}`);
   };
   const save=async()=>{await invoke('save_document_as');await evaluate('(async()=>{objectJourney.saved=new Uint8Array(await(await objectJourney.handle.getFile()).arrayBuffer())})()');return readPackage(evaluate,'objectJourney.saved');};
-  const install=()=>evaluate(`window.objectJourney={open:window.showOpenFilePicker,save:window.showSaveFilePicker,post:Worker.prototype.postMessage,jobs:0,coordinates:0};
+  const install=()=>evaluate(`window.objectJourney={open:window.showOpenFilePicker,save:window.showSaveFilePicker,post:Worker.prototype.postMessage,jobs:0,coordinates:0,overwrite:true,copies:0,copy:layerApp.app.finish_session_package.bind(layerApp.app)};
+    layerApp.app.finish_session_package=async id=>{objectJourney.copies++;return objectJourney.copy(id)};
     Worker.prototype.postMessage=function(message,...rest){if(message.request?.operation==='image-decode')objectJourney.jobs++;if(message.request?.operation==='nearest-coordinates')objectJourney.coordinates++;return objectJourney.post.call(this,message,...rest)};
-    window.showOpenFilePicker=async()=>[{name:'objects.capy',getFile:async()=>new File([objectJourney.input],'objects.capy')}];
-    window.showSaveFilePicker=async o=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-object-fixture-originals',{create:true});return objectJourney.handle=await directory.getFileHandle(crypto.randomUUID()+'.'+o.suggestedName.split('.').at(-1),{create:true});};`);
+    window.showOpenFilePicker=async()=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-object-fixture-originals',{create:true}),input=await directory.getDirectoryHandle(crypto.randomUUID(),{create:true});objectJourney.opened=await input.getFileHandle('objects.capy',{create:true});const stream=await objectJourney.opened.createWritable();await stream.write(objectJourney.input);await stream.close();return[objectJourney.opened];};
+    window.showSaveFilePicker=async o=>{if(objectJourney.overwrite&&objectJourney.opened){objectJourney.overwrite=false;return objectJourney.handle=objectJourney.opened;}const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-object-fixture-originals',{create:true});return objectJourney.handle=await directory.getFileHandle(crypto.randomUUID()+'.'+o.suggestedName.split('.').at(-1),{create:true});};`);
   await install();
   try {
     for(const url of urls) {
@@ -76,6 +77,7 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
       await evaluate(`layerApp.dispatch({type:'set_zoom',zoom:.125})`);await settle();
       await evaluate('layerApp.app.wait_for_canvas()');
       const before=await save(),objects=packageObjects(before,'capy.image-object/1');
+      assert.ok(await evaluate('objectJourney.copies>0'),'Saving over the opened input crosses the shared source-copy barrier');
       if(onlyObjects){assert.equal(packageObjects(before,'capy.paint-source/2').length,0);assert.equal(packageOccurrences(before).length,1);}
       assert.equal(objects.length,3);assert.equal(packageObjects(before,'capy.image/1').length,1);
       assert.ok(objects.every(object=>object.data.image.ref===objects[0].data.image.ref));
@@ -154,6 +156,6 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
       console.log(`Object clipboard ${theme}: real Copy Merged PNG, full-depth in-place paste, immutable originals and undo/redo passed`);
     }
   } finally {
-    await evaluate('if(window.objectJourney){Worker.prototype.postMessage=objectJourney.post;window.showOpenFilePicker=objectJourney.open;window.showSaveFilePicker=objectJourney.save;delete window.objectJourney}');
+    await evaluate('if(window.objectJourney){Worker.prototype.postMessage=objectJourney.post;window.showOpenFilePicker=objectJourney.open;window.showSaveFilePicker=objectJourney.save;layerApp.app.finish_session_package=objectJourney.copy;delete window.objectJourney}');
   }
 }
