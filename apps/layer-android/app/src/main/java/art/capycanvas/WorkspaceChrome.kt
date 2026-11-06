@@ -174,11 +174,15 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     val columns = model.array("columns").values().map { it as JSONArray }
     val tabs = model.objectOrNull("tabs")
     val heights = remember(model.array("columns").toString(), tabs?.toString()) { mutableStateListOf<Pair<Int, Float>?>().apply { repeat(columns.size) { add(null) } } }
-    var measure by remember { mutableStateOf<JSONObject?>(null) }
+    var measurement by remember { mutableStateOf<JSONObject?>(null) }
+    val measure = measurement?.objectOrNull("measure")
     val plan = measure?.objectOrNull("placement")
     var planContext by remember { mutableStateOf<String?>(null) }
     var toolbars by remember { mutableStateOf<Map<String, JSONObject>>(emptyMap()) }
     var geometry by remember { mutableStateOf<JSONObject?>(null) }
+    var colorFit by remember { mutableStateOf<JSONObject?>(null) }
+    var wheelHeight by remember { mutableFloatStateOf(0f) }
+    val toolPanels = remember { mutableStateMapOf<String, JSONObject>() }
     val placementKey = listOf("anchor", "columns", "dismissal", "tabs", "compact").map { model.opt(it) }.toString().takeIf { current != null }
     val tabHeight = if (tabs == null) 0f else 36f
     val inspector = model.has("layer_properties")
@@ -195,7 +199,17 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         }
     val layout = snapshot.getJSONObject("layout")
     val anchor = model.getJSONObject("anchor")
+    val phone = layout.objectOrNull("phone")
     val source = when (anchor.getString("kind")) {
+        "phone" -> phone?.let { p ->
+            val target = anchor.getJSONObject("anchor")
+            when (target.getString("kind")) {
+                "capy" -> p.getJSONObject("capy")
+                "tool_settings" -> p.getJSONObject("settings")
+                else -> snapshot.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").array("phone").objects()
+                    .indexOfFirst { it.getInt("id") == target.getInt("id") }.takeIf { it >= 0 }?.let { p.array("tools").getJSONObject(it) }
+            }
+        }
         "header" -> snapshot.objectOrNull("header_presentation")?.array("items")?.objects()
             ?.firstOrNull { it.getInt("id") == anchor.getInt("id") }?.getJSONObject("bounds")
         "column" -> layout.array("collapsed").objects().firstOrNull { it.getInt("id") == anchor.getInt("column") }?.let { column ->
@@ -206,24 +220,35 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         else -> layout.array("groups").objects().firstOrNull { it.getString("active") == anchor.optString("panel") }
             ?.let { listOf(it.getJSONObject("bounds"), it.opt("tiles")) }
     }
+    val toolSet = model.objectOrNull("tool_set")
+    val fallback = snapshot.getJSONObject("state").getJSONObject("tool_set")
+    val toolSetInputs = listOf(toolSet?.array("groups"),toolSet?.array("subtools"),model.opt("sets_column"),fallback.array("groups"),fallback.array("subtools"),
+        columns.flatMap { it.values() }.map { panel -> snapshot.getJSONObject("state").getJSONObject("tool_panels").objectOrNull(panel.toString())
+            ?.let { listOf(it.array("groups"),it.array("subtools")) } }).toString()
+    LaunchedEffect(phone != null,anchor.toString(),toolSetInputs) {
+        if (phone != null) for (panel in columns.flatMap { it.values() }.map { it.toString() }.filter { it in listOf("tools","brushes","brush_sets","sculpt_sets") }) {
+            host.awaitQuery(obj("type" to "tool_panel", "panel" to panel, "anchor" to anchor))?.let { toolPanels[panel] = it }
+        }
+    }
     val sizingContext = listOf(anchor, source, model.array("columns"), tabs, layout.getJSONArray("viewport"),
         snapshot.opt("header_presentation_height"), snapshot.opt("workspace_bottom_inset"), tileOrigins, toolbarInputs).toString()
     var lastAnchor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(placementKey, sizingContext) {
         if (current == null) return@LaunchedEffect
         val reply=host.awaitQuery(obj("type" to "drawer_measure", "column" to columnId, "tiles" to dock.drawerTileMeasurements())) ?: return@LaunchedEffect
-        val prepared=reply.objectOrNull("measure") ?: return@LaunchedEffect
+        reply.objectOrNull("measure") ?: return@LaunchedEffect
         toolbars=reply.array("toolbars").objects().associate { it.getString("panel") to it.getJSONObject("layout") }
-        measure=prepared
+        measurement=reply
         planContext = sizingContext
     }
     val scope=rememberCoroutineScope()
     val animation=remember { arrayOfNulls<kotlinx.coroutines.Job>(1) }
     val lastTarget=remember { arrayOfNulls<String>(1) }
+    val colorHdr = snapshot.objectOrNull("color_panel")?.optBoolean("hdr") == true
     fun placeMeasured() {
         val layerPlacement=layerSizes?.array("placements")?.optJSONObject(if(propertiesOpen)1 else 0)
         val key=if(current==null)"closing" else listOf(placementKey,sizingContext,planContext,
-            if(inspector)layerPlacement?.toString() else heights.toList(),layerSizesContext,propertiesOpen).toString()
+            if(inspector)layerPlacement?.toString() else heights.toList(),layerSizesContext,propertiesOpen,wheelHeight,colorHdr).toString()
         if(lastTarget[0]==key)return
         val target=when {
             current==null -> geometry?.objectOrNull("placement")
@@ -234,8 +259,15 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
             planContext!=sizingContext || plan==null || heights.indices.any { index ->
                 heights[index]?.first!=(plan.array("columns").getJSONObject(index).number("width")*dock.density).roundToInt()
             } -> return
-            else -> JSONObject(Native.drawerFrame(obj("measure" to measure,"heights" to JSONArray(heights.map { it!!.second }),
-                "progress" to 1f).toString())).objectOrNull("placement")
+            else -> {
+                val colorColumn = columns.indexOfFirst { "color" in it.values() }
+                val color = if (phone != null && colorColumn >= 0 && wheelHeight > 0f) obj("column" to colorColumn,
+                    "fixed_height" to (heights[colorColumn]!!.second-wheelHeight).coerceAtLeast(0f), "hdr" to colorHdr) else null
+                val frame = JSONObject(Native.drawerFrame(obj("measure" to measure,"heights" to JSONArray(heights.map { it!!.second }),
+                    "color" to color,"progress" to 1f).toString()))
+                colorFit = frame.objectOrNull("color_fit")
+                frame.objectOrNull("placement")
+            }
         }
         if(target==null) {if(current==null)closed();return}
         lastTarget[0]=key
@@ -279,6 +311,8 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
     val shape = dock.drawerContainerShape(placement.getJSONObject("bounds"), joined = corners)
     val z = if (id == "tool") 220 else 200
     val tabbed = tabs != null && columnId != null
+    val together = phone != null && measurement?.optBoolean("scrolls_together") == true
+    fun position(bounds: JSONObject) = if (phone != null) Modifier.placedAbsolute(bounds,dock.density) else Modifier.placed(bounds,dock.density)
     CompositionLocalProvider(LocalWorkspaceZ provides z, LocalPalette provides LocalPalette.current.onGlass) {
         // Shadow below source chrome; a nested toolbar's source lives in a column drawer.
         val nested = id == "tool" && model.getJSONObject("anchor").optString("panel").let { panel ->
@@ -287,23 +321,28 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         }
         val cut = connection?.getJSONObject("bounds")?.rect()?.translate(-placement.getJSONObject("bounds").rect().topLeft)
         if (visible) {
-            Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(if (nested) 199f else 99f)
+            Box(position(placement.getJSONObject("bounds")).zIndex(if (nested) 199f else 99f)
                 .panelSurface(12.dp, shape, cut = cut?.let { Rect(it.topLeft * dock.density, it.bottomRight * dock.density) }))
             connection?.let { DrawerBridge(it, dock, z.toFloat()) }
         }
         val opening = remember { PanelOpening() }
         Layout(modifier = Modifier.fillMaxSize().zIndex(z.toFloat()), content = {
-            Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(z.toFloat())
+            Box(position(placement.getJSONObject("bounds")).zIndex(z.toFloat())
                 .testTag(if (id == "tool") "tool-drawer" else "column-drawer-$id").chromeRegion(dock)
                 .then(if (columnId != null) Modifier.columnDrawerBounds(dock, columnId, if (current != null) tabs?.getInt("group") else null) else Modifier)
                 .panelSurface(0.dp, shape, opening = opening)
-                .glass(shape, if (tabbed) Color.Transparent else LocalPalette.current.panelFill)) {
+                .glass(shape, if (tabbed) Color.Transparent else LocalPalette.current.panelFill)
+                .then(if (together) Modifier.panelScroll(rememberScrollState()) else Modifier)) {
+                Box(if (together) Modifier.fillMaxWidth().height(placement.array("columns").objects().maxOf { it.number("y")+it.number("height") }.dp) else Modifier.fillMaxSize(),contentAlignment = if (phone != null) androidx.compose.ui.AbsoluteAlignment.TopLeft else Alignment.TopStart) {
                 // Placement can lag the model by a frame when switching to a drawer with fewer columns.
                 placement.array("columns").objects().take(columns.size).forEachIndexed { index, bounds ->
                     val contentBounds = JSONObject(bounds.toString()).apply {
                         plan?.array("columns")?.optJSONObject(index)?.let { put("x", it.get("x")); put("width", it.get("width")) }
                     }
-                    Column(Modifier.wrapContentSize(Alignment.TopStart, unbounded = true).placed(contentBounds, dock.density)) {
+                    val columnPosition = if (together) Modifier.absoluteOffset {
+                        IntOffset((contentBounds.number("x")*dock.density).roundToInt(),(contentBounds.number("y")*dock.density).roundToInt())
+                    }.width(contentBounds.number("width").dp).wrapContentHeight(unbounded = true) else Modifier.wrapContentSize(Alignment.TopStart, unbounded = true).then(position(contentBounds))
+                    Column(columnPosition) {
                         if (tabs != null && columnId != null) {
                             val group = tabs.getInt("group")
                             val item = obj("kind" to "group", "group" to group)
@@ -338,28 +377,39 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                             }
                         }
                         var clip by remember { mutableStateOf(Rect.Zero) }
-                        Box(Modifier.fillMaxWidth().weight(1f).then(if (tabbed) Modifier.background(LocalPalette.current.panelFill) else Modifier)
+                        Box(Modifier.fillMaxWidth().then(if (together) Modifier else Modifier.weight(1f)).then(if (tabbed) Modifier.background(LocalPalette.current.panelFill) else Modifier)
                             .clipToBounds().onGloballyPositioned { clip = it.boundsInRoot().translate(-dock.origin) }) {
                             CompositionLocalProvider(LocalDrawerColumn provides columnId, LocalDrawerClip provides clip,
                                 LocalWorkspaceZ provides (200 + (columnId ?: 100)), LocalPanelOpening provides opening) {
                                 if(inspector) LayerInspector(host, host.snapshot?.getJSONObject("state") ?: snapshot.getJSONObject("state"), propertiesOpen,
                                     pagePosition, bounds.number("height"), layerSizes?.number("footer_height",49.0) ?: 49f,
                                     sizingContext, drawerMeasure=measure) { layerSizesContext=sizingContext; layerSizes = it; placeMeasured() }
-                                else Column(Modifier.fillMaxWidth().panelScroll(rememberScrollState())
+                                else Column(Modifier.fillMaxWidth().then(if (!together) Modifier.panelScroll(rememberScrollState()) else Modifier)
                                     .onSizeChanged { heights[index] = it.width to (it.height / dock.density + tabHeight); placeMeasured() }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    columns[index].values().forEach { panelId ->
+                                    columns[index].values().forEachIndexed { panelIndex, panelId ->
                                         bodies[panelId.toString()]?.let { panel ->
                                             if (panel.array("tiles").length() > 0) toolbars[panel.getString("id")]?.let { DrawerToolbar(host, panel, dock, it) }
                                             else PanelControls(host, host.snapshot?.getJSONObject("state") ?: snapshot.getJSONObject("state"), panel,
-                                                if (panelId in listOf("layers", "adjustments", "filter_types")) Modifier.height(480.dp).then(if(panelId=="layers") Modifier.padding(vertical=panelMetrics().inset) else Modifier) else Modifier.fillMaxWidth().then(if(model.optBoolean("compact"))Modifier.padding(12.dp) else Modifier), scrollable = false,
+                                                if (phone != null) {
+                                                    val minimum = measurement?.array("minimums")?.optJSONArray(index)?.optDouble(panelIndex,0.0)?.toFloat() ?: 0f
+                                                    val sized = measurement?.array("content_sized")?.optJSONArray(index)?.optBoolean(panelIndex) == true
+                                                    Modifier.fillMaxWidth().testTag("drawer-panel-$panelId").then(when {
+                                                        minimum > 0f -> Modifier.height(minimum.dp)
+                                                        sized -> Modifier.heightIn(max = (measure?.getJSONObject("available")?.number("height") ?: bounds.number("height")).dp)
+                                                        else -> Modifier
+                                                    }).then(if(model.optBoolean("compact"))Modifier.padding(12.dp) else Modifier)
+                                                } else if (panelId in listOf("layers", "adjustments", "filter_types")) Modifier.height(480.dp).then(if(panelId=="layers") Modifier.padding(vertical=panelMetrics().inset) else Modifier) else Modifier.fillMaxWidth().then(if(model.optBoolean("compact"))Modifier.padding(12.dp) else Modifier), scrollable = false,
                                                 splitFilters = columns.any { it.values().contains("filter_types") },
-                                                toolSet = model.objectOrNull("tool_set"))
+                                                toolSet = if (phone != null) toolPanels[panelId.toString()] else toolSet,
+                                                colorFit = if (panelId == "color") colorFit else null,
+                                                onColorHeight = { wheelHeight = it })
                                         }
                                     }
                                 }
                             }
                         }
                     }
+                }
                 }
             }
         }) { measurables, constraints ->

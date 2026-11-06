@@ -25,6 +25,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
+import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -44,23 +48,45 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun ToolSetControls(host: CanvasHost, state: JSONObject, panel: String = "brushes", projection: JSONObject? = null) {
     val view = projection ?: state.getJSONObject("tool_panels").optJSONObject(panel) ?: state.getJSONObject("tool_set")
+    val shared = view.has("groups_are_rows")
+    val rows = if (shared) view.getBoolean("groups_are_rows") else panel == "brush_sets" || panel == "sculpt_sets"
     val compact = state.array("tool_extra").objects().any { it.optJSONObject("Choice")?.optString("id") == "tonal-tones" }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        if (panel == "brush_sets" || panel == "sculpt_sets") Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            view.array("groups").objects().forEach { item ->
-                ToolChoice(host, item, "set", Modifier.fillMaxWidth().testTag("$panel-${item.getString("label")}"), compact)
+    val groups = view.array("groups").objects()
+    Column(verticalArrangement = Arrangement.spacedBy(if (shared) view.number("gap").dp else 6.dp)) {
+        if (shared && groups.isNotEmpty()) {
+            val density = LocalDensity.current.density
+            Layout({
+                groups.forEach { item -> ToolChoice(host,item,if (rows) "set" else "group",
+                    Modifier.testTag(if (rows) "$panel-${item.getString("label")}" else "tool-group-${item.getString("label")}"),
+                    height = view.number("group_height")) }
+            }) { measurables, constraints ->
+                val natural = JSONArray(measurables.map { it.maxIntrinsicWidth(Int.MAX_VALUE)/density })
+                val columns = (org.json.JSONTokener(Native.toolbarUi(obj("type" to "tool_set_columns","width" to constraints.maxWidth/density,
+                    "natural" to natural,"rows" to rows).toString(),host.languageTag)).nextValue() as JSONArray).values().map { (it as Number).toFloat() }
+                if (columns.isEmpty()) return@Layout layout(constraints.maxWidth,0) {}
+                val gap = (view.number("spacing")*density).roundToInt()
+                val children = measurables.mapIndexed { index, child -> child.measure(Constraints.fixedWidth((columns[index%columns.size]*density).roundToInt())) }
+                val heights = children.chunked(columns.size).map { row -> row.maxOf { it.height } }
+                layout(constraints.maxWidth,heights.sum()+gap*(heights.size-1)) {
+                    var y = 0
+                    children.chunked(columns.size).forEachIndexed { row, items ->
+                        var x = 0
+                        items.forEach { child -> child.placeRelative(x,y);x+=child.width+gap }
+                        y+=heights[row]+gap
+                    }
+                }
             }
-        } else FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            view.array("groups").objects().forEach { item ->
-                ToolChoice(host, item, "group", (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"), compact)
-            }
+        } else if (rows) Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            groups.forEach { item -> ToolChoice(host,item,"set",Modifier.fillMaxWidth().testTag("$panel-${item.getString("label")}"),compact) }
+        } else FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp),verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            groups.forEach { item -> ToolChoice(host,item,"group",(if (groups.size == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp))
+                .testTag("tool-group-${item.getString("label")}"),compact) }
         }
-        if (view.array("groups").length() > 0 && view.array("subtools").length() > 0)
-            ToolbarDivider(Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 4.dp).testTag("tool-set-divider"), horizontal = true, length = null)
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            view.array("subtools").objects().forEach { item ->
-                ToolChoice(host, item, "subtool", Modifier.fillMaxWidth().testTag("subtool-${item.getString("label")}"), compact)
-            }
+        if (groups.isNotEmpty() && view.array("subtools").length() > 0 && (!shared || view.getBoolean("subtools_visible")))
+            ToolbarDivider(Modifier.fillMaxWidth().height(1.dp).padding(horizontal = 4.dp).testTag("tool-set-divider"),horizontal = true,length = null)
+        if (!shared || view.getBoolean("subtools_visible")) Column(verticalArrangement = Arrangement.spacedBy(if (shared) view.number("spacing").dp else 2.dp)) {
+            view.array("subtools").objects().forEach { item -> ToolChoice(host,item,"subtool",Modifier.fillMaxWidth().testTag("subtool-${item.getString("label")}"),compact,
+                height = if (shared) view.number("plain_height") else null,previewGap = if (shared) view.number("gap") else null) }
         }
     }
 }
@@ -80,7 +106,7 @@ import kotlinx.coroutines.withContext
     Box(modifier) { image?.let { Image(it, null, Modifier.fillMaxSize().testTag(tag), contentScale = scale) } }
 }
 
-@Composable private fun ToolChoice(host: CanvasHost, item: JSONObject, kind: String, modifier: Modifier, compact: Boolean = false) {
+@Composable private fun ToolChoice(host: CanvasHost, item: JSONObject, kind: String, modifier: Modifier, compact: Boolean = false, height: Float? = null, previewGap: Float? = null) {
     val colors = LocalPalette.current
     val label = item.getString("label")
     val action = item.getJSONObject("action")
@@ -93,14 +119,33 @@ import kotlinx.coroutines.withContext
             .background(if (item.optBoolean("selected")) colors.active else Color.Transparent)
             .clickable(enabled = enabled || reason != null) { if (enabled) host.dispatch(action) else reveal++ }
             .semantics { if (!enabled) disabled() }
-            .alpha(if (enabled && reason != null) .4f else 1f).padding(horizontal = 6.dp, vertical = 3.dp)) {
-            if (preview != null) {
+            .alpha(if (enabled && reason != null) .4f else 1f).then(if (previewGap != null && preview != null) Modifier else Modifier.padding(horizontal = 6.dp, vertical = 3.dp))) {
+            if (previewGap != null && preview != null) {
+                val density = LocalDensity.current.density
+                Layout({
+                    BrushPreview(host,preview.toInt(),Modifier)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp),verticalAlignment = Alignment.CenterVertically) {
+                        SharedIcon(item.getString("icon"),null,Modifier.testTag("tool-$kind-icon-$label"))
+                        Text(label,Modifier.weight(1f),textAlign = TextAlign.End,fontWeight = FontWeight.Bold)
+                    }
+                },Modifier.fillMaxWidth()) { measurables,constraints ->
+                    val inset = (previewGap*density).roundToInt()
+                    val width = (constraints.maxWidth-2*inset).coerceAtLeast(0)
+                    val caption = measurables[1].maxIntrinsicHeight(width)/density
+                    val geometry = toolbarUi(host.languageTag,obj("type" to "tool_preview","width" to width/density,"caption" to caption)) as JSONObject
+                    val bounds = geometry.array("bounds").objects()
+                    val children = measurables.mapIndexed { index,child -> child.measure(Constraints.fixed(width,(bounds[index].number("height")*density).roundToInt())) }
+                    layout(constraints.maxWidth,(geometry.array("heights").getDouble(1)*density).roundToInt()) {
+                        children.forEachIndexed { index,child -> child.place(inset,(bounds[index].number("y")*density).roundToInt()) }
+                    }
+                }
+            } else if (preview != null) {
                 BrushPreview(host, preview.toInt(), Modifier.fillMaxWidth().height(40.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                     Text(label, Modifier.weight(1f), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
                 }
-            } else Row(Modifier.heightIn(min = if (compact) 30.dp else 42.dp), verticalAlignment = Alignment.CenterVertically,
+            } else Row(Modifier.heightIn(min = height?.let { (it-6f).coerceAtLeast(0f).dp } ?: if (compact) 30.dp else 42.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SharedIcon(item.getString("icon"), null, Modifier.testTag("tool-$kind-icon-$label"))
                 Text(label, fontWeight = FontWeight.Bold, maxLines = if (kind == "set") 1 else 2, overflow = TextOverflow.Ellipsis)

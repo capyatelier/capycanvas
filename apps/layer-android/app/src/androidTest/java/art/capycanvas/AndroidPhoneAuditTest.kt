@@ -62,6 +62,7 @@ class AndroidPhoneAuditTest {
     @Test fun admission() = visit(true)
     @Test fun frame() = visit(false)
     @Test fun menu() = visit(false, "menu")
+    @Test fun drawers() = visit(false, "drawers")
 
     private fun visit(admissionOnly: Boolean, family: String = "frame") {
         val args = InstrumentationRegistry.getArguments()
@@ -114,7 +115,8 @@ class AndroidPhoneAuditTest {
             assertTrue("Completed first canvas frame", frameReady)
             fun capture(name: String) {
                 captureName = name
-                report.put("family",if (name == "hidden") "frame" else family).put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
+                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else family)
+                    .put("fixture",host.workspaceManager?.optString("id") ?: "builtin:workspace:painter").put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
                 host.drain()
                 compose.waitForIdle()
                 if (!admissionOnly) {
@@ -301,6 +303,11 @@ class AndroidPhoneAuditTest {
         compose.waitForIdle()
         host.drain()
         compose.waitForIdle()
+        if (family == "drawers") {
+            visitDrawers(activity,host,::event,::tap,::state)
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
         if (family == "menu") {
             visitMenu(activity,host, ::event, ::tap, ::state) { pressedPoint?.let { event(MotionEvent.ACTION_CANCEL,it) } }
             assertTrue(failures.joinToString("\n"), failures.isEmpty())
@@ -507,14 +514,7 @@ class AndroidPhoneAuditTest {
         host.drain()
         instrumentation.runOnMainSync { assertNull("Retired context query cannot open a menu", host.workspaceInteraction?.contextMenu) }
         state("paint-default") {
-            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:illustrator")) }
-            host.awaitFrame("Paint workspace") { host.workspaceManager?.optString("id") == "builtin:workspace:illustrator" && host.workspaceManager?.optBoolean("busy") == false }
-            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "form", "action" to obj("type" to "reset", "value" to "builtin:workspace:illustrator"))) }
-            host.awaitFrame("Paint starting layout confirmation") { host.workspaceManager?.objectOrNull("prompt") != null }
-            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "submit", "name" to "")) }
-            host.awaitFrame("Paint starting layout restored") { host.workspaceManager?.objectOrNull("prompt") == null && host.workspaceManager?.optBoolean("busy") == false }
-            compose.waitForIdle()
-            assertNull("Starting layout confirmation is no longer presented", findTag("workspace-form"))
+            workspace(host,"illustrator")
             host.drain(obj("type" to "invoke", "command" to "actual_pixels"))
         }
         assertTrue(failures.joinToString("\n"), failures.isEmpty())
@@ -529,6 +529,188 @@ class AndroidPhoneAuditTest {
         compose.waitForIdle()
         instrumentation.runOnMainSync { if (cancel) dispatcher.dispatchOnBackCancelled() else dispatcher.onBackPressed() }
         compose.waitForIdle()
+    }
+
+    private fun workspace(host: CanvasHost, preset: String) {
+        val id = "builtin:workspace:$preset"
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to id)) }
+        host.awaitFrame("Workspace $id") { host.workspaceManager?.optString("id") == id && host.workspaceManager?.optBoolean("busy") == false }
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "form", "action" to obj("type" to "reset", "value" to id))) }
+        host.awaitFrame("Starting layout confirmation") { host.workspaceManager?.objectOrNull("prompt") != null }
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "submit", "name" to "")) }
+        host.awaitFrame("Starting layout restored") { host.workspaceManager?.objectOrNull("prompt") == null && host.workspaceManager?.optBoolean("busy") == false }
+        compose.waitForIdle()
+        assertNull("Starting layout confirmation is no longer presented",findTag("workspace-form"))
+    }
+
+    private fun visitDrawers(activity: MainActivity, host: CanvasHost, event: (Int,Offset) -> Unit, tap: (String) -> Unit, state: (String,() -> Unit) -> Unit) {
+        fun shared() = host.snapshot!!.getJSONObject("state")
+        fun drawer() = shared().getJSONObject("customization").objectOrNull("drawer")
+        fun close(nativeKey: Boolean = false) {
+            if (nativeKey) { pressKey(KeyEvent.KEYCODE_ESCAPE); host.drain() }
+            else host.drain(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+            host.awaitFrame("Drawer closed") { drawer() == null && findTag("tool-drawer") == null }
+        }
+        fun ready() {
+            host.awaitFrame("Phone drawer allocated") { drawer() != null && findTag("tool-drawer")?.second?.boundsInRoot?.height?.let { it > 0f } == true &&
+                host.workspaceInteraction?.drawer?.getJSONObject("placement")?.getJSONObject("bounds")?.number("height")?.let { it > 0f } == true }
+            compose.waitForIdle()
+            val root = checkNotNull(findTag("workspace")).second.boundsInRoot
+            val body = checkNotNull(findTag("tool-drawer")).second.boundsInRoot
+            assertTrue("Phone drawer remains inside the workspace: $body within $root",body.left >= root.left-1 && body.top >= root.top-1 && body.right <= root.right+1 && body.bottom <= root.bottom+1)
+            assertNotNull("Phone drawer has a bridge",host.workspaceInteraction?.drawer?.objectOrNull("connection"))
+        }
+        fun tool(control: JSONObject): String {
+            val tiles = shared().getJSONObject("workspace").getJSONObject("layout").array("phone").objects()
+            return "phone-tool-${tiles.first { it.getJSONObject("control").toString() == control.toString() }.getInt("id")}"
+        }
+        fun open(control: JSONObject) {
+            val tag = tool(control)
+            tap(tag)
+            if (drawer() == null) tap(tag)
+            ready()
+            val panels = drawer()!!.array("columns").values().flatMap { (it as JSONArray).values() }
+            if (panels.size > 1) assertFalse("Mixed tool drawers omit their settings column",panels.contains("tool_settings"))
+        }
+        workspace(host,"painter")
+        host.drain(obj("type" to "invoke","command" to "fit_canvas"))
+        for (swapped in listOf(false,true)) {
+            if (shared().getJSONObject("phone").getBoolean("swapped") != swapped) host.drain(obj("type" to "phone","action" to obj("kind" to "swap_sides")))
+            for ((name,control) in listOf("brush" to obj("kind" to "command","command" to "drawing_brush"),"color" to obj("kind" to "color"),"layers" to obj("kind" to "panel","panel" to "layers"))) {
+                open(control)
+                state("$name-${if(swapped) "swapped" else "normal"}") {
+                    if (name == "color") {
+                        val wheel = checkNotNull(findTag("color-panel")).second.boundsInRoot
+                        assertTrue("Shared wheel floor is retained",wheel.width >= 127f)
+                        val root = checkNotNull(findTag("tool-drawer")).second
+                        assertNotNull("Phone Color owns the shared scroller",root.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange))
+                        assertTrue("Palette follows the wheel with a real allocation",checkNotNull(findTag("palette-swatches")).second.size.height > 1)
+                        assertTrue("Palette footer has a natural allocation",checkNotNull(findTag("palette-footer")).second.size.height > 1)
+                        compose.onNodeWithTag("palette-footer",useUnmergedTree=true).performScrollTo()
+                        assertTrue("Color shares enough scroll extent to reach the palette footer",checkNotNull(findTag("palette-footer")).second.boundsInRoot.height > 1f)
+                        compose.onNodeWithTag("color-panel",useUnmergedTree=true).performScrollTo()
+                    }
+                }
+                close(nativeKey = true)
+            }
+        }
+        if (shared().getJSONObject("phone").getBoolean("swapped")) host.drain(obj("type" to "phone","action" to obj("kind" to "swap_sides")))
+        for ((preset,name,control) in listOf(
+            Triple("painter","sketch-brush",obj("kind" to "command","command" to "drawing_brush")),
+            Triple("painter","sketch-sculpt",obj("kind" to "command","command" to "sculpt")),
+            Triple("illustrator","paint-brush",obj("kind" to "command","command" to "drawing_brush")),
+            Triple("illustrator","paint-sculpt",obj("kind" to "command","command" to "sculpt")),
+            Triple("illustrator","paint-fill",obj("kind" to "tool_slot","slot" to "fill")),
+            Triple("illustrator","paint-gradient",obj("kind" to "tool_slot","slot" to "gradient")),
+            Triple("photographer","photo-healing",obj("kind" to "tool_slot","slot" to "healing")),
+            Triple("photographer","photo-eraser",obj("kind" to "command","command" to "eraser")))) {
+            workspace(host,preset)
+            open(control)
+            state(name) {
+                val view = drawer()!!.objectOrNull("tool_set")
+                val preview = view?.array("subtools")?.objects()?.firstOrNull { !it.isNull("preview") }
+                preview?.let {
+                    val row = checkNotNull(findTag("subtool-${it.getString("label")}")).second
+                    assertTrue("Preview rows honor the shared natural height",row.size.height >= 66*instrumentation.targetContext.resources.displayMetrics.density-1)
+                }
+                if (name.endsWith("brush") && host.snapshot!!.getJSONObject("layout").getJSONObject("phone").getString("edge") == "top" &&
+                    host.snapshot!!.getJSONObject("layout").getJSONArray("viewport").getDouble(0) <= 320) {
+                    val pen = checkNotNull(findTag("tool-group-Pen")).second.boundsInRoot
+                    val pencil = checkNotNull(findTag("tool-group-Pencil")).second.boundsInRoot
+                    val pastel = checkNotNull(findTag("tool-group-Pastel")).second.boundsInRoot
+                    assertEquals("First grid row shares one top",pen.top,pencil.top,1f)
+                    assertTrue("Shared columns wrap Pastel under Pen",pastel.top > pen.top)
+                    assertEquals("Wrapped chips retain their column edge",pen.left,pastel.left,1f)
+                }
+            }
+            val view = drawer()?.objectOrNull("tool_set")
+            if (name.endsWith("brush") || name.endsWith("sculpt")) {
+                val alternative = view?.array("groups")?.objects()?.firstOrNull { !it.getBoolean("selected") && it.getBoolean("enabled") }
+                state("$name-other-set") {
+                    val row = checkNotNull(alternative)
+                    val firstPanel = drawer()!!.array("columns").getJSONArray(0).getString(0)
+                    val projection = runBlocking { host.awaitQuery(obj("type" to "tool_panel","panel" to firstPanel,"anchor" to drawer()!!.getJSONObject("anchor"))) }!!
+                    val tag = if (projection.getBoolean("groups_are_rows")) "$firstPanel-${row.getString("label")}" else "tool-group-${row.getString("label")}"
+                    compose.onNodeWithTag(tag,useUnmergedTree=true).performScrollTo();tap(tag)
+                    host.awaitFrame("Choosing another set replaces the drawer list") { drawer()?.objectOrNull("tool_set")?.array("subtools")?.toString() != view.array("subtools").toString() }
+                    ready()
+                }
+            }
+            close()
+        }
+        workspace(host,"painter")
+        open(obj("kind" to "panel","panel" to "layers"))
+        val initialRows = shared().array("layers").length()
+        val initialHeight = checkNotNull(findTag("layer-inspector")).second.size.height
+        var previousHeight = initialHeight
+        for (count in listOf(5,12,24)) {
+            while (shared().array("layers").length() < count) host.drain(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
+            ready()
+            val height = checkNotNull(findTag("layer-inspector")).second.size.height
+            assertTrue("Open Layers follows its live row count",height >= previousHeight)
+            previousHeight = height
+        }
+        val layer = shared().array("layers").objects().first { it.getBoolean("selected") }.getLong("id")
+        val row = checkNotNull(findTag("layer-row-$layer")).second.boundsInRoot
+        val from = row.center
+        event(MotionEvent.ACTION_DOWN,from)
+        event(MotionEvent.ACTION_MOVE,from+Offset(row.width*.45f,0f))
+        event(MotionEvent.ACTION_CANCEL,from+Offset(row.width*.45f,0f))
+        assertEquals("Cancelled layer swipe preserves its rows",24,shared().array("layers").length())
+        tap("layer-properties-disclosure")
+        host.awaitFrame("Layers properties page") { drawer()?.optBoolean("layer_properties") == true }
+        ready()
+        predictiveBack(activity,cancel = true)
+        assertTrue("Cancelled predictive Back preserves Properties",drawer()?.optBoolean("layer_properties") == true)
+        predictiveBack(activity,cancel = false)
+        host.awaitFrame("Predictive Back returns Layers to its list") { drawer()?.optBoolean("layer_properties") == false }
+        repeat(24-initialRows) { host.drain(obj("type" to "invoke","command" to "undo")) }
+        ready()
+        host.awaitFrame("Removing layers restores the live drawer height") { kotlin.math.abs(checkNotNull(findTag("layer-inspector")).second.size.height-initialHeight) <= 1 }
+        predictiveBack(activity,cancel = false)
+        host.awaitFrame("Predictive Back closes Layers after its list") { drawer() == null && findTag("tool-drawer") == null }
+        for (command in listOf("drawing_brush","sculpt","fill","gradient","select","crop","eyedropper","eraser","hand")) {
+            host.drain(obj("type" to "invoke","command" to command));tap("phone-tool-settings");ready()
+            state("inventory-settings-$command") {
+                assertEquals("Settings tile opens settings only",listOf("tool_settings"),drawer()!!.array("columns").values().flatMap { (it as JSONArray).values() })
+            }
+            close()
+        }
+        for (panel in listOf("navigator","histogram","waveform","stats","sizes","brushes","adjustments","filter_types","proof")) {
+            host.drain(obj("type" to "phone","action" to obj("kind" to "panel","panel" to panel)));ready()
+            state("inventory-window-$panel") {}
+            close()
+        }
+        host.drain(obj("type" to "phone","action" to obj("kind" to "panel","panel" to "brushes")));ready()
+        for (command in listOf("drawing_brush","sculpt")) {
+            host.drain(obj("type" to "invoke","command" to command))
+            val label = shared().getJSONObject("tool_set").array("subtools").getJSONObject(0).getString("label")
+            host.awaitFrame("Window Brushes observes the shared fallback tool set") { findTag("subtool-$label") != null }
+        }
+        close()
+        val nativeView = checkNotNull(findTag("workspace")).first.view
+        val direction = nativeView.layoutDirection
+        try {
+            instrumentation.runOnMainSync { nativeView.layoutDirection = android.view.View.LAYOUT_DIRECTION_RTL }
+            compose.waitForIdle()
+            workspace(host,"painter")
+            open(obj("kind" to "command","command" to "drawing_brush"))
+            assertEquals(androidx.compose.ui.unit.LayoutDirection.Rtl,checkNotNull(findTag("tool-drawer")).second.layoutInfo.layoutDirection)
+            val frame = host.workspaceInteraction!!.drawer!!.getJSONObject("placement")
+            val density = activity.resources.displayMetrics.density
+            val origin = checkNotNull(findTag("tool-drawer")).second.boundsInRoot.left
+            drawer()!!.array("columns").values().forEachIndexed { index,column ->
+                val x = origin+frame.array("columns").getJSONObject(index).number("x")*density
+                (column as JSONArray).values().forEach { panel ->
+                    assertEquals("RTL drawer columns keep physical x coordinates",x,checkNotNull(findTag("drawer-panel-$panel")).second.boundsInRoot.left,1f)
+                }
+            }
+            state("inventory-rtl-columns") {}
+            close()
+        } finally {
+            instrumentation.runOnMainSync { nativeView.layoutDirection = direction }
+            compose.waitForIdle()
+        }
     }
 
     private fun visitMenu(activity: MainActivity, host: CanvasHost, event: (Int, Offset) -> Unit, tap: (String) -> Unit,

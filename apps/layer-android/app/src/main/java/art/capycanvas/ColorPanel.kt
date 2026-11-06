@@ -80,7 +80,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
 }
 
 /** Shared wheel and footer geometry; Rust owns layout and color math. */
-@Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, fixedHeight: Dp = 0.dp, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
+@Composable internal fun ColorPanelControls(host: CanvasHost, availableHeight: Dp = Dp.Infinity, fixedHeight: Dp = 0.dp, fit: JSONObject? = null, onHeight: (natural: Float, displayed: Float) -> Unit = { _, _ -> }) {
     val view = host.colorPreview?.objectOrNull("view") ?: host.snapshot?.objectOrNull("color_panel") ?: return
     val colors = LocalPalette.current
     val config = LocalViewConfiguration.current
@@ -94,7 +94,7 @@ private fun Modifier.place(rect: JSONArray) = offset(rect.getDouble(0).toFloat()
     Column {
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         val hdr=view.optBoolean("hdr")
-        val layout=remember(maxWidth,availableHeight,fixedHeight,hdr) {
+        val layout=fit ?: remember(maxWidth,availableHeight,fixedHeight,hdr) {
             JSONObject(Native.colorUi(obj("type" to "fit_layout", "width" to maxWidth.value,
                 "height" to availableHeight.value.takeIf { it.isFinite() }, "fixed_height" to fixedHeight.value,
                 "hdr" to hdr).toString(), host.languageTag))

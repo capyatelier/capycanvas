@@ -110,13 +110,13 @@ internal val DividerLength = 18.dp
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, splitFilters: Boolean = false, toolSet: JSONObject? = null, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
+@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, splitFilters: Boolean = false, toolSet: JSONObject? = null, colorFit: JSONObject? = null, onColorHeight: (Float) -> Unit = {}, onContent: (PanelContentSize) -> Unit = {}, onHeight: (Float) -> Unit = {}) {
     CompositionLocalProvider(LocalCompactPanel provides true, LocalMinimumInteractiveComponentSize provides 0.dp) {
-        PanelControlsBody(host, state, panel, modifier, scrollable, splitFilters, toolSet, onContent, onHeight)
+        PanelControlsBody(host, state, panel, modifier, scrollable, splitFilters, toolSet, colorFit, onColorHeight, onContent, onHeight)
     }
 }
 
-@Composable private fun PanelControlsBody(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier, scrollable: Boolean, splitFilters: Boolean, toolSet: JSONObject?, onContent: (PanelContentSize) -> Unit, onHeight: (Float) -> Unit) {
+@Composable private fun PanelControlsBody(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier, scrollable: Boolean, splitFilters: Boolean, toolSet: JSONObject?, colorFit: JSONObject?, onColorHeight: (Float) -> Unit, onContent: (PanelContentSize) -> Unit, onHeight: (Float) -> Unit) {
     if(panel.getString("id")=="proof") {
         ProofPanel(host,modifier.controlSource(),scrollable){height->onContent(PanelContentSize(height,fixedHeight=0f));onHeight(height)}
         return
@@ -166,7 +166,7 @@ internal val DividerLength = 18.dp
                 when (item.getString("control")) {
                     "brushes", "brush_sets", "sculpt_sets", "tools" -> ToolSetControls(host, state, item.getString("control"), toolSet)
                     "tool_settings" -> ToolSettingsControls(host, state)
-                    "color_wheel" -> ColorPanelControls(host, availableHeight, (2 * (panelMetrics().inset.value * density).roundToInt() / density).dp) { natural, displayed -> deficits[0] = natural - displayed }
+                    "color_wheel" -> ColorPanelControls(host, availableHeight, (2 * (panelMetrics().inset.value * density).roundToInt() / density).dp, colorFit) { natural, displayed -> deficits[0] = natural - displayed; onColorHeight(displayed) }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> deficits[1] = natural - displayed }
                     "histogram", "waveform" -> ScopeControl(host, state, item.getString("control"))
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size"),
