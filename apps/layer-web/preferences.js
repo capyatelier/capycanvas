@@ -7,7 +7,7 @@ import {createPageKit} from './page-kit.js';
 import {addScrollbar} from './scrollbars.js';
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
-export function createPreferences({ onKey, app, element, button, icon, numberField, panelFrame, dispatch, view, nativeCopy }) {
+export function createPreferences({ onKey, app, element, button, icon, dropdown:menuDropdown, numberField, panelFrame, dispatch, view, nativeCopy }) {
   const dialog = document.getElementById("settings");
   const bootstrap = liveCopy(app, "bootstrap_view");
   const profileCopy = liveCopy(app, "profile_copy");
@@ -315,7 +315,7 @@ export function createPreferences({ onKey, app, element, button, icon, numberFie
         }
       }
       if(page.id==="color"){
-        const library=settingsGroup(),manage=button(()=>profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,dropdown,manage:true}),"preference-action");
+        const library=settingsGroup(),manage=button(()=>profileCopy.manage,()=>chooseProfileLibrary({app,element,button,icon,dropdown:menuDropdown,manage:true}),"preference-action");
         manage.id="color-profile-library";
         const row=preferenceRow({title:()=>profileCopy.library_title,description:()=>profileCopy.menu_help,suffix:manage});
         row.label.htmlFor=manage.id;row.line.addEventListener("click",event=>{if(!manage.contains(event.target)){event.preventDefault();manage.click();}});

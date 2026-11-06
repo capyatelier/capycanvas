@@ -157,8 +157,8 @@ test('Preferences Color exposes a labelled library card and its real manage acti
   const code=readFileSync(new URL('preferences.js',import.meta.url),'utf8');
   const start=code.indexOf('      if(page.id==="color"){'),end=code.indexOf('\n    }\n  }\n  return function refresh',start);
   const profileCopy={manage:'Manage',library_title:'Color profiles',menu_help:'Installed profiles'};
-  const app={};
-  runInNewContext(code.slice(start,end),{...h,page:{id:'color'},container,profileCopy,app,dropdown(){},settingsGroup:kit.group,preferenceRow:kit.row,chooseProfileLibrary:request=>requests.push(request)});
+  const app={},menuDropdown=()=>{};
+  runInNewContext(code.slice(start,end),{...h,page:{id:'color'},container,profileCopy,app,menuDropdown,dropdown(){},settingsGroup:kit.group,preferenceRow:kit.row,chooseProfileLibrary:request=>requests.push(request)});
   const section=container.children[0],row=section.children[0].children[0],manage=row.children[1],label=row.children[0].children[0];
   assert.equal(label.textContent,'Color profiles');assert.equal(label.htmlFor,manage.id);
   assert.equal(row.children[0].children[1].textContent,'Installed profiles');
@@ -166,6 +166,7 @@ test('Preferences Color exposes a labelled library card and its real manage acti
   let forwarded=true;manage.click();row.dispatchEvent({type:'click',target:label,preventDefault(){forwarded=false;}});
   assert.equal(forwarded,false,'The row consumes the label default instead of opening the library twice');
   assert.equal(requests.length,2);assert.ok(requests.every(request=>request.manage&&request.app===app));
+  assert.ok(requests.every(request=>request.dropdown===menuDropdown),'The library receives the shared menu factory instead of the Settings choice factory');
 });
 
 test('Shortcut capture warning and modifier heading consume their projected icon and label',t=>{

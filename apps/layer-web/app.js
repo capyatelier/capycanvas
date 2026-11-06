@@ -1970,7 +1970,7 @@ try {
   systemMotion.addEventListener('change',motionChanged);motionChanged();
   penResponse=createPenResponse({app,state:()=>state,workspace,element,button,icon,numberField,dispatch});
   observePenInput({workspace,canvas,dispatch,position,owner:()=>state.document_file.epoch});
-  refreshPreferences = createPreferences({ onKey:event=>keyInput(event,true,null,true), app, element, button, icon, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
+  refreshPreferences = createPreferences({ onKey:event=>keyInput(event,true,null,true), app, element, button, icon, dropdown, numberField, panelFrame, dispatch, nativeCopy: catalog.native_copy, view: () => app.preferences_cached() });
   commandBar = createCommandBar({app,element, button, icon, dispatch, style:catalog.command_search_style, nativeCopy:catalog.native_copy, canvas, layoutChanged:() => glass?.queue()});
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   // Issue the first storage request before constructing panel controls. Replies
