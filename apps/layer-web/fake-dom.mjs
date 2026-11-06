@@ -1,4 +1,6 @@
 export class FakeElement {
+  showPopover() { if(this.popoverOpen)return;this.popoverOpen=true;this.dispatchEvent({type:'toggle',oldState:'closed',newState:'open'}); }
+  hidePopover() { if(!this.popoverOpen)return;this.popoverOpen=false;this.dispatchEvent({type:'toggle',oldState:'open',newState:'closed'}); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   addEventListener(type, listener) { (this.listeners[type] ??= []).push(listener); }

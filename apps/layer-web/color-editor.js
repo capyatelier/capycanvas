@@ -1,5 +1,6 @@
 import {createDialogHost,hasModalDialog} from './dialog-host.js';
 import {createPageKit} from './page-kit.js';
+import {createContextPopover} from './context-popover.js';
 import {addScrollbar} from './scrollbars.js';
 import {liveCopy,bindCopy} from './localization.js';
 import {createRasterWorker} from './raster-worker-client.js';
@@ -66,14 +67,15 @@ export function colorForm({app, root, element, button, open, rendition, copyable
   const head = element('div', 'color-editor-head'); head.append(pair, pickButton, hexBlock, captions);
   const grid = element('div', copyable ? 'color-rows' : 'color-rows color-rows-plain');
   const rows = [0, 1, 2].map(row => {
-    const format = button('', () => toggleMenu(row), 'color-format'), label = element('span', 'color-format-names'), menu = element('div', 'color-format-menu'), space = element('span', 'color-badge');
+    const format = button('', () => toggleMenu(row), 'color-format'), label = element('span', 'color-format-names'), popup=createContextPopover({element,classes:'color-format-menu',popover:'auto'}),menu=popup.root,choices=popup.body,space = element('span', 'color-badge');
     format.dataset.colorFormat = row; format.setAttribute('aria-haspopup','menu'); format.append(label, icon('chevron-down')); bindCopy(format, () => copy.format, 'title');
-    menu.setAttribute('role','menu'); menu.hidden = true;
+    menu.hidden = true;
+    menu.addEventListener('toggle',event=>{if(event.newState==='closed'){menu.hidden=true;format.setAttribute('aria-expanded','false');}});
     const name = element('span', 'color-row-name'), spaceCell = element('span', 'color-row-space'), heading = element('div', 'color-row-heading'), cells = element('div', 'color-row-values');
     name.append(format, menu); spaceCell.append(space); heading.append(name, spaceCell); grid.append(heading, cells);
     const values = [0, 1, 2].map(index => { const entry = field({kind:'value', row, index}, `${row}-${index}`); cells.append(entry.cell); return entry; });
     if (copyable) cells.append(copyButton(row));
-    return {format, label, menu, space, values};
+    return {format,label,menu,popup,choices,space,values};
   });
   const intensityName = element('span', 'color-row-name', () => copy.intensity_ev), intensity = field({kind:'intensity'}, 'ev');
   intensity.cell.classList.add('color-intensity-cell'); grid.append(intensityName, intensity.cell);
@@ -147,12 +149,12 @@ export function colorForm({app, root, element, button, open, rendition, copyable
       while (r.label.children.length < shown.forms.length) r.label.append(element('span'));
       shown.forms.forEach((choice, i) => { const name = r.label.children[i]; if (name.textContent !== choice.label) name.textContent = choice.label; name.classList.toggle('current', choice.form === shown.form); });
       r.space.hidden = !shown.space; r.space.textContent = shown.space ?? '';
-      while (r.menu.children.length < shown.forms.length) {
-        const item = button('', () => { r.menu.hidden = true; act({op:'form', row, form:item.dataset.form}); r.format.focus(); }, 'color-format-item');
-        item.setAttribute('role','menuitemradio'); r.menu.append(item);
+      while (r.choices.children.length < shown.forms.length) {
+        const item = button('', () => { hideMenu(r); act({op:'form', row, form:item.dataset.form}); r.format.focus(); }, 'color-format-item');
+        item.setAttribute('role','menuitemradio'); r.choices.append(item);
       }
       shown.forms.forEach((choice, i) => {
-        const item = r.menu.children[i];
+        const item = r.choices.children[i];
         item.dataset.form = choice.form; if (item.textContent !== choice.label) item.textContent = choice.label; item.setAttribute('aria-checked', String(choice.form === shown.form));
       });
       shown.values.forEach((value, index) => setField(r.values[index], value.text, value.edit, value.name));
@@ -207,13 +209,14 @@ export function colorForm({app, root, element, button, open, rendition, copyable
       scrub = null;
     });
   }
+  function hideMenu(row){if(!row.menu.hidden)row.menu.hidePopover();row.menu.hidden=true;row.format.setAttribute('aria-expanded','false');}
   function toggleMenu(row) {
     const menu = rows[row].menu, open = menu.hidden;
-    rows.forEach(r => { r.menu.hidden = true; r.format.setAttribute('aria-expanded','false'); });
+    rows.forEach(hideMenu);
     menu.hidden = !open; rows[row].format.setAttribute('aria-expanded', String(open));
-    if (open) ([...menu.children].find(item => item.getAttribute('aria-checked') === 'true') ?? menu.firstChild)?.focus();
+    if(open){menu.showPopover();rows[row].popup.place(rows[row].format.getBoundingClientRect(),{has_arrow:true});([...rows[row].choices.children].find(item=>item.getAttribute('aria-checked')==='true')??rows[row].choices.firstChild)?.focus();}
   }
-  root.addEventListener('pointerdown', e => { if (!e.target.closest('.color-row-name')) rows.forEach(r => { r.menu.hidden = true; }); });
+  root.addEventListener('pointerdown', e => { if (!e.target.closest('.color-row-name')) rows.forEach(hideMenu); });
   const editable = target => target?.matches?.('input');
   root.addEventListener('paste', e => {
     if (editable(e.target)) return;
@@ -251,11 +254,11 @@ export function colorForm({app, root, element, button, open, rendition, copyable
     view:() => view, editor:() => editor,
     closeMenus() {
       if (!rows.some(r => !r.menu.hidden)) return false;
-      rows.forEach(r => { if (!r.menu.hidden) { r.menu.hidden = true; r.format.focus(); } });
+      rows.forEach(r => { if (!r.menu.hidden) { hideMenu(r);r.format.focus(); } });
       return true;
     },
     relocalize() { minimum=null;request(null); if (refused) error = request(refused); render(); },
-    dispose() { resize.disconnect(); painter.dispose(); cancelAnimationFrame(frame); }};
+    dispose() { rows.forEach(hideMenu);resize.disconnect(); painter.dispose(); cancelAnimationFrame(frame); }};
 }
 
 export function chooseColor({app, color, slot, element, button, opaque = false}) {

@@ -1163,7 +1163,7 @@ body[data-theme="light"] #header { text-shadow:none; }
 .color-format-names > span { grid-area:1 / 1; }
 .color-format-names > span:not(.current) { visibility:hidden; }
 .color-format svg { width:12px; height:12px; }
-.color-format-menu { position:absolute; z-index:2; top:100%; left:0; display:flex; flex-direction:column; min-width:max-content; padding:4px; border-radius:var(--control-radius); background:var(--panel); box-shadow:var(--card-shadow); }
+.color-format-menu > .context-menu-body { display:flex; flex-direction:column; gap:2px; padding:8px; }
 .color-format-menu[hidden] { display:none; }
 .color-format-menu button { min-height:30px; padding:0 10px; border:0; border-radius:calc(var(--control-radius) - 2px); background:transparent; color:inherit; font:inherit; text-align:left; }
 .color-format-menu button[aria-checked=true] { background:var(--header-selection); }
