@@ -2632,8 +2632,9 @@ class AndroidTitleBarTest {
         action(obj("type" to "invoke","command" to "undo"))
         assertEquals(2,state().array("layers").length())
         // Constrain the native viewport so this small catalog actually overflows.
-        instrumentation.runOnMainSync { host.resize((1200*density).toInt(),(450*density).toInt(),density) }
+        instrumentation.runOnMainSync { host.resize((1200*density).toInt(),(480*density).toInt(),density) }
         idle()
+        assertTrue("Tablet scrolling fixture keeps desktop chrome", snapshot().getJSONObject("layout").isNull("phone"))
         val brush="header-control-"+entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("command")=="drawing_brush" }.getInt("id")
         tap(brush)
         if(drawer()==null)tap(brush)

@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -116,6 +118,59 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
 }
 
 /** One host view for docked/floating toolbars and retained drawers. */
+
+@Composable internal fun ToolbarComponent(host: CanvasHost, control: JSONObject, model: JSONObject, bounds: JSONObject,
+    presentation: JSONObject, dock: DockInteraction, vertical: Boolean, modifier: Modifier, sliderStyle: JSONObject,
+    id: String, item: JSONObject? = null, phone: JSONObject? = null, fallbackLabel: String = model.getString("value_label")) {
+    val context = model.getJSONObject("context")
+    val style = presentation.getString("tile_style")
+    val dimensions = remember(style) { toolbarUi(host.languageTag, obj("type" to "style", "style" to style)) }
+    val density = LocalDensity.current.density
+    val width = bounds.number("width"); val height = bounds.number("height")
+    fun edit(action: JSONObject) { host.dispatch(obj("type" to "toolbar_edit", "context" to context, "action" to action)) }
+    val field = model.objectOrNull("numeric")
+    val opacity = control.getString("kind") != "brush_size_slider"
+    val spec = field?.getJSONObject("numeric") ?: remember(control.toString()) { toolbarUi(host.languageTag, obj("type" to "slider_spec", "control" to control)) }
+    val value = field?.number("value") ?: spec.number("min")
+    val label = field?.getString("label") ?: fallbackLabel
+    val setting = field?.getString("id") ?: if (opacity) "strength" else "size"
+    val shown = formatted(host.languageTag, spec, value)
+    val marks = model.array("bookmarks").objects()
+    val geometry = remember(width, height, vertical, style, sliderStyle.toString()) { JSONObject(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
+        "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "style" to style, "slider_style" to sliderStyle, "grip" to (item != null)).toString(), host.languageTag)) }
+    var preview by remember { mutableStateOf(false) }
+    val sample = rememberToolbarStamp(host, obj("type" to "toolbar_stamp", "context" to context), preview)
+    val stamp = sample?.first
+    val stampImage = sample?.second
+    Box(modifier.then(if (item != null) Modifier.pointerInput(item.toString()) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(item) }
+        }
+    } else Modifier)) {
+        if (item != null) Box(Modifier.placed(geometry.getJSONObject("cap"), density).dragSource(dock, item, holdToDrag = true)
+            .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"), contentAlignment = Alignment.Center) {
+            if (geometry.getBoolean("show_value")) {
+                val readout = toolbarUi(host.languageTag, obj("type" to "slider_readout", "style" to style,
+                    "axis" to if (vertical) "vertical" else "horizontal", "control" to spec, "value" to value))
+                SliderReadout(readout, if (dimensions.getBoolean("labeled")) model.getString("value_label") else null, field != null, item.getInt("tile"))
+            }
+        }
+        ToolbarSlider(shown.number("fill"), marks, opacity, vertical, field != null, label,
+            Modifier.placed(geometry.getJSONObject("track"), density).testTag("component-slider-$id"),
+            contact = { down, moved -> preview = down || !moved }, phone = phone, host = host, control = control, band = bounds, dock = dock, context = context.toString()) { fill, snap, travel ->
+            val next = if (snap) org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_bookmark_value", "control" to control,
+                "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "travel" to travel).toString(), host.languageTag)).nextValue() as Number
+            else JSONObject(Native.number(obj("control" to spec, "value" to value, "operation" to obj("type" to "position", "position" to fill)).toString(), host.languageTag)).number("value")
+            edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
+        }
+        if (preview && field != null) stamp?.let { brush ->
+            BrushSliderPreview(brush, stampImage ?: return@let, control, style, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
+                dismiss = { preview = false }, bookmark = { edit(obj("type" to "toggle_slider_bookmark", "control" to control)) })
+        }
+    }
+}
+
 @Composable internal fun ToolbarComponent(host: CanvasHost, panel: JSONObject, tile: JSONObject,
     bounds: JSONObject, presentation: JSONObject, dock: DockInteraction, vertical: Boolean, modifier: Modifier) {
     val model = tile.getJSONObject("component")
@@ -134,48 +189,8 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
     fun edit(action: JSONObject) { host.dispatch(obj("type" to "toolbar_edit", "context" to context, "action" to action)) }
     key(context.toString()) {
         if (control.getString("kind") != "tool_options") {
-            val field = model.objectOrNull("numeric")
-            val opacity = control.getString("kind") != "brush_size_slider"
-            val spec = field?.getJSONObject("numeric") ?: remember(control.toString()) { toolbarUi(host.languageTag, obj("type" to "slider_spec", "control" to control)) }
-            val value = field?.number("value") ?: spec.number("min")
-            val label = field?.getString("label") ?: tile.getString("label")
-            val setting = field?.getString("id") ?: if (opacity) "strength" else "size"
-            val shown = formatted(host.languageTag, spec, value)
-            val marks = model.array("bookmarks").objects()
-            val sliderStyle = tile.getJSONObject("slider_style")
-            val geometry = remember(width, height, vertical, style, sliderStyle.toString()) { JSONObject(Native.toolbarUi(obj("type" to "slider_layout", "width" to width,
-                "height" to height, "axis" to if (vertical) "vertical" else "horizontal", "style" to style, "slider_style" to sliderStyle).toString(), host.languageTag)) }
-            var preview by remember { mutableStateOf(false) }
-            val sample = rememberToolbarStamp(host, obj("type" to "toolbar_stamp", "context" to context), preview)
-            val stamp = sample?.first
-            val stampImage = sample?.second
-            Box(modifier.pointerInput(item.toString()) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(item) }
-                }
-            }) {
-                Box(Modifier.placed(geometry.getJSONObject("cap"), density).dragSource(dock, item, holdToDrag = true)
-                    .clickable(enabled = field != null) { preview = true }.testTag("slider-cap-$id"), contentAlignment = Alignment.Center) {
-                    if (geometry.getBoolean("show_value")) {
-                        val readout = toolbarUi(host.languageTag, obj("type" to "slider_readout", "style" to style,
-                            "axis" to if (vertical) "vertical" else "horizontal", "control" to spec, "value" to value))
-                        SliderReadout(readout, if (dimensions.getBoolean("labeled")) model.getString("value_label") else null, field != null, id)
-                    }
-                }
-                ToolbarSlider(shown.number("fill"), marks, opacity, vertical, field != null, label,
-                    Modifier.placed(geometry.getJSONObject("track"), density).testTag("component-slider-$id"),
-                    contact = { down, moved -> preview = down || !moved }) { fill, snap, travel ->
-                    val next = if (snap) org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_bookmark_value", "control" to control,
-                        "values" to JSONArray(marks.map { it.number("value") }), "position" to fill, "travel" to travel).toString(), host.languageTag)).nextValue() as Number
-                    else JSONObject(Native.number(obj("control" to spec, "value" to value, "operation" to obj("type" to "position", "position" to fill)).toString(), host.languageTag)).number("value")
-                    edit(obj("type" to "set_tool_setting", "id" to setting, "value" to next.toFloat()))
-                }
-                if (preview && field != null) stamp?.let { brush ->
-                    BrushSliderPreview(brush, stampImage ?: return@let, control, style, value, maxOf(width, height), vertical, marks.any { it.getBoolean("selected") },
-                        dismiss = { preview = false }, bookmark = { edit(obj("type" to "toggle_slider_bookmark", "control" to control)) })
-                }
-            }
+            ToolbarComponent(host, control, model, bounds, presentation, dock, vertical, modifier,
+                tile.getJSONObject("slider_style"), id.toString(), item, fallbackLabel = tile.getString("label"))
         } else {
             val options = model.array("options").objects()
             val preferences = control.getJSONObject("style")
@@ -598,32 +613,60 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float, dens
 }
 
 @Composable private fun ToolbarSlider(fill: Float, marks: List<JSONObject>, opacity: Boolean, vertical: Boolean, enabled: Boolean,
-    label: String, modifier: Modifier, contact: (Boolean, Boolean) -> Unit, change: (Float, Boolean, Float) -> Unit) {
+    label: String, modifier: Modifier, contact: (Boolean, Boolean) -> Unit, phone: JSONObject?, host: CanvasHost,
+    control: JSONObject, band: JSONObject, dock: DockInteraction, context: String, change: (Float, Boolean, Float) -> Unit) {
     val onChange by rememberUpdatedState(change)
     val onContact by rememberUpdatedState(contact)
     val colors = LocalPalette.current
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    val currentPhone by rememberUpdatedState(phone)
+    val currentBand by rememberUpdatedState(band)
+    val phase: (String) -> Unit = { if (currentPhone != null) host.phone(obj("kind" to "slider", "control" to control, "phase" to it)) }
+    val onPhase by rememberUpdatedState(phase)
     Canvas(modifier.padding(if (vertical) PaddingValues(horizontal = 5.dp, vertical = 2.dp) else PaddingValues(horizontal = 2.dp, vertical = 5.dp))
+        .onGloballyPositioned { origin = (it.positionInRoot() - dock.origin) / dock.density }
         .alpha(if (enabled) 1f else .4f).semantics {
             contentDescription = label; progressBarRangeInfo = ProgressBarRangeInfo(fill, 0f..1f)
             if (enabled) setProgress { onChange(it, false, 0f); onContact(false, false); true } else disabled()
-        }.edgeControl().pointerInput(vertical, enabled) {
+        }.edgeControl().pointerInput(vertical, enabled, context, phone?.toString(), if (phone != null) host.phoneContactEpoch else 0) {
             if (!enabled) return@pointerInput
+            val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!
             awaitEachGesture {
                 val down = awaitFirstDown(); down.consume()
                 var moved = false; var finished = false
                 fun pick(p: Offset, snap: Boolean) {
                     val half = 6.dp.toPx(); val length = (if (vertical) size.height else size.width) - 2 * half
-                    if (length > 0) onChange((if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f), snap, length / density)
+                    if (length <= 0) return
+                    val layout = currentPhone
+                    val position = if (layout == null) (if (vertical) 1f - (p.y-half)/length else (p.x-half)/length).coerceIn(0f, 1f)
+                    else {
+                        val point = origin + p / density
+                        val cross = currentBand
+                        val track = if (vertical) listOf(origin.y + (size.height-half)/density, origin.y + half/density)
+                            else listOf(origin.x + half/density, origin.x + (size.width-half)/density)
+                        val band = if (vertical) listOf(cross.number("x"), cross.number("x") + cross.number("width"))
+                            else listOf(cross.number("y"), cross.number("y") + cross.number("height"))
+                        (org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_stretch", "geometry" to obj("track" to JSONArray(track),
+                            "band" to JSONArray(band), "extent" to dock.viewport.getDouble(if (vertical) 1 else 0),
+                            "transition" to phoneUi(obj("kind" to "slider_stretch_distance", "layout" to layout))),
+                            "point" to JSONArray(if (vertical) listOf(point.y, point.x) else listOf(point.x, point.y))).toString(), host.languageTag)).nextValue() as Number).toFloat()
+                    }
+                    onChange(position, snap, length / density)
                 }
-                onContact(true, false); pick(down.position, true)
+                val input = if (currentPhone != null) dock.phone else null
+                input?.jobs?.add(job)
+                onPhase("down"); onContact(true, false); pick(down.position, true)
                 try {
                     while (true) {
                         val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!c.pressed) { finished = true; c.consume(); break }
-                        if (!moved && (c.position - down.position).getDistance() < 3.dp.toPx()) continue
-                        moved = true; c.consume(); pick(c.position, false)
+                        if (!c.pressed) { finished = !c.isConsumed; c.consume(); break }
+                        if (c.isConsumed || currentPhone != null && currentPhone?.getString("edge") != phone?.getString("edge")) break
+                        val delta = (c.position - down.position) / density
+                        if (org.json.JSONTokener(Native.toolbarUi(obj("type" to "slider_dragging", "moved" to moved,
+                                "delta" to JSONArray(listOf(delta.x, delta.y))).toString(), host.languageTag)).nextValue() != true) continue
+                        moved = true; c.consume(); onPhase("move"); pick(c.position, false)
                     }
-                } finally { onContact(false, moved || !finished) }
+                } finally { onPhase(if (finished) "up" else "cancel"); onContact(false, moved || !finished); input?.jobs?.remove(job) }
 
             }
         }) {

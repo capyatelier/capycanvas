@@ -356,6 +356,7 @@ impl NativeHost {
         if layout.phone.is_some() {
             map.serialize_entry("phone_tools", &state.phone_tools())?;
             map.serialize_entry("phone_settings", &state.phone_settings())?;
+            map.serialize_entry("phone_sliders", &layer_ui::PhoneLayout::SLIDERS.map(|control| state.toolbar_component(control)))?;
             map.serialize_entry("capy_caption", &self.session.capy_caption(self.logical))?;
         }
         map.serialize_entry("panels", &panels)?;
@@ -461,15 +462,24 @@ mod tests {
                 let full: Value = serde_json::from_slice(&host.snapshot_bytes().unwrap()).unwrap();
                 let incremental = decoded(host.take_layout_update_bytes().unwrap()).unwrap();
                 let phone = full["layout"]["phone"].is_object();
-                assert_eq!(phone,platform != Platform::Android && viewport[0].min(viewport[1]) < 480);
-                for field in ["phone_tools","phone_settings","capy_caption"] {
+                assert_eq!(phone,viewport[0].min(viewport[1]) < 480);
+                for field in ["phone_tools","phone_settings","phone_sliders","capy_caption"] {
                     assert_eq!(full.get(field).is_some(),phone,"{platform:?} {viewport:?} {field}");
                     assert_eq!(incremental.get(field).is_some(),phone,"{platform:?} {viewport:?} {field}");
                 }
                 if phone {
                     assert_eq!(full["phone_tools"],json!(host.session.state().phone_tools()));
                     assert_eq!(full["phone_settings"],json!(host.session.state().phone_settings()));
+                    assert_eq!(full["phone_sliders"],json!(layer_ui::PhoneLayout::SLIDERS.map(|control| host.session.state().toolbar_component(control))));
                     assert_eq!(full["capy_caption"],json!(host.session.capy_caption(host.logical)));
+                    for (pressed, hidden) in [(true,true),(false,true),(true,false),(false,false)] {
+                        let input = serde_json::from_value(json!({"type":"key","key":"tab","pressed":pressed,"repeat":false,
+                            "editing":false,"divider":null,"modifiers":{"command":false,"shift":false,"alt":false}})).unwrap();
+                        host.input(input).unwrap();
+                        assert_eq!(host.session.state().phone.hidden,hidden,"{platform:?} {viewport:?} pressed={pressed}");
+                        let value: Value = serde_json::from_slice(&host.snapshot_bytes().unwrap()).unwrap();
+                        assert_eq!(value["state"]["phone"]["hidden"],hidden);
+                    }
                 }
                 assert!(full["state"]["phone"].is_object());
             }

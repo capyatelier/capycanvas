@@ -388,7 +388,8 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
 /** Active tools stay blue through hover/press; actions use neutral feedback. */
 @Composable internal fun HeaderButton(label: String, selected: Boolean, enabled: Boolean, open: Boolean,
     modifier: Modifier, fillWidth: Boolean = true, surface: Boolean = true, shape: Shape = drawerButtonShape(if (open) "bottom" else null),
-    inBar: Boolean = false, active: Boolean = true, reason: String? = null, onDoubleClick: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null, onClick: () -> Unit, content: @Composable () -> Unit) {
+    inBar: Boolean = false, active: Boolean = true, reason: String? = null, onDoubleClick: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null,
+    face: Modifier? = null, onClick: () -> Unit, content: @Composable () -> Unit) {
     val colors = LocalPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -399,14 +400,18 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
         enabled = enabled || explained, role = Role.Button, onClickLabel = label, onDoubleClick = onDoubleClick.takeIf { enabled },
         onLongClick = if (explained) {{ reveal += 1 }} else onLongClick, onClick = if (enabled) onClick else {{ reveal += 1 }}).semantics { if (!enabled) disabled() }
     HoverTip(reason.takeIf { explained } ?: label, modifier, reveal = reveal) {
-    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).clip(shape)
+    val paint = Modifier.clip(shape)
         .then(if (surface && !inBar) Modifier.glass(shape, colors.headerSurface, active = active) else Modifier).background(when {
         selected -> colors.headerActive
         open -> colors.onGlass.panelFill
         enabled && pressed -> colors.text.copy(alpha = .16f)
         enabled && hovered -> colors.text.copy(alpha = .10f)
         else -> Color.Transparent
-    }).then(click), contentAlignment = Alignment.Center) { content() }
+    })
+    Box((if (fillWidth) Modifier.fillMaxSize() else Modifier.fillMaxHeight()).then(if (face == null) paint else Modifier).then(click),
+        contentAlignment = if (face == null) Alignment.Center else androidx.compose.ui.AbsoluteAlignment.TopLeft) {
+        if (face == null) content() else Box(face.then(paint), contentAlignment = Alignment.Center) { content() }
+    }
     }
 }
 

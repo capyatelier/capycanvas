@@ -24,6 +24,16 @@ import kotlinx.coroutines.flow.drop
 internal data class TextCursorRegion(val bounds: Rect, val z: Int, val root: View, val bubble: Int?)
 
 internal class CanvasContent(context: Context, private val host: CanvasHost) : AbstractComposeView(context) {
+    override fun dispatchApplyWindowInsets(insets: android.view.WindowInsets): android.view.WindowInsets {
+        host.windowInsets = insets
+        val applied = super.dispatchApplyWindowInsets(insets)
+        host.windowMetricsChanged?.invoke()
+        return applied
+    }
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        host.windowMetricsChanged?.invoke()
+    }
     @Composable override fun Content() {
         LaunchedEffect(host) {
             val motion = kotlinx.coroutines.currentCoroutineContext()[MotionDurationScale] ?: return@LaunchedEffect

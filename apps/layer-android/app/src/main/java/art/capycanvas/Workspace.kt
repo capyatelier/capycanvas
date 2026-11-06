@@ -86,6 +86,10 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     IntOffset((rect.number("x") * density).roundToInt(), (rect.number("y") * density).roundToInt())
 }.size(rect.number("width").coerceAtLeast(0f).dp, rect.number("height").coerceAtLeast(0f).dp)
 
+internal fun Modifier.placedAbsolute(rect: JSONObject, density: Float): Modifier = absoluteOffset {
+    IntOffset((rect.number("x") * density).roundToInt(), (rect.number("y") * density).roundToInt())
+}.size(rect.number("width").coerceAtLeast(0f).dp, rect.number("height").coerceAtLeast(0f).dp)
+
 internal suspend fun workspaceFrames(durationMs: Long, animate: Boolean = true, place: suspend (Float) -> Unit) {
     val duration=durationMs*1_000_000f*(kotlinx.coroutines.currentCoroutineContext()[MotionDurationScale]?.scaleFactor ?: 1f)
     if(!animate || duration<=0f) { place(1f); return }
@@ -215,11 +219,9 @@ private val HiddenChromeShape=object:Shape {
                 PaletteFiles(host)
                 DocumentRequests(host)
                 WorkspaceManager(host)
-                // Status/navigation bars overlay this immersive workspace. Their
-                // visibility (including startup animations) must never resize the
-                // SurfaceView or the shared canvas layout. Protect physical screen
-                // obstructions and desktop window captions independently of bars.
-                val workspaceInsets = WindowInsets.displayCutout
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                val phoneWindow = org.json.JSONTokener(Native.dialogUi(obj("kind" to "phone_window", "viewport" to JSONArray(listOf(maxWidth.value, maxHeight.value))).toString())).nextValue() == true
+                val workspaceInsets = if (phoneWindow) WindowInsets.captionBar else WindowInsets.displayCutout
                     .union(WindowInsets.waterfall).union(WindowInsets.captionBar)
                 Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(workspaceInsets).pointerInput(host) {
                     awaitEachGesture {
@@ -268,6 +270,7 @@ private val HiddenChromeShape=object:Shape {
                             } }, confirmButton = { TextButton({ host.customize(obj("type" to "close_control")) }) { Text(host.bootstrap!!.getJSONObject("common").getString("done")) } })
                     }
                 }
+                }
             }
         }
     }
@@ -292,7 +295,7 @@ private val HiddenChromeShape=object:Shape {
     dock.bubbles = bubbles
     SideEffect {
         header.editing = snapshot?.objectOrNull("header")?.optBoolean("editing") == true
-        header.enabled = snapshot != null && !snapshot.optBoolean("chrome_hidden") && snapshot.objectOrNull("preferences") == null && snapshot.objectOrNull("picker") == null && snapshot.objectOrNull("toolbar_prompt") == null && snapshot.objectOrNull("toolbar_manager") == null
+        header.enabled = snapshot != null && snapshot.getJSONObject("layout").objectOrNull("phone") == null && !snapshot.optBoolean("chrome_hidden") && snapshot.objectOrNull("preferences") == null && snapshot.objectOrNull("picker") == null && snapshot.objectOrNull("toolbar_prompt") == null && snapshot.objectOrNull("toolbar_manager") == null
     }
     DisposableEffect(host, header) {
         host.headerKeyHandler = { bubbles.key(it) || header.key(it) }
@@ -312,10 +315,12 @@ private val HiddenChromeShape=object:Shape {
     dock.density = density
     val fontWeightAdjustment = if (Build.VERSION.SDK_INT >= 31) LocalConfiguration.current.fontWeightAdjustment else 0
     dock.panelMetrics(density, LocalDensity.current.fontScale, "compose:${host.languageTag}:${snapshot?.objectOrNull("state")?.optString("theme")}:$fontWeightAdjustment")
-    dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
+    val interactionEnabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
+    SideEffect { dock.enabled = interactionEnabled }
     val panelModels = host.snapshot?.optJSONArray("panels")
     val panels = remember(panelModels) { panelModels?.objects()?.associateBy { it.getString("id") } ?: emptyMap() }
     val state = snapshot?.getJSONObject("state")
+    val phone = snapshot?.getJSONObject("layout")?.objectOrNull("phone")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
     var shownPanel by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(expanded) {
@@ -332,8 +337,9 @@ private val HiddenChromeShape=object:Shape {
         if (expanded == null) { dock.expansion = null; shownPanel = null; dock.refresh() }
         else snapshotFlow { host.snapshot?.optJSONObject("layout")?.copy()?.toString() to dock.configurationHeight }.collect { place(1f) }
     }
-    BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
-    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace").bubbleGestures(bubbles).headerGestures(header).workspaceGestures(dock)
+    BackHandler(phone == null && expanded != null) { host.customize(obj("type" to "close_expanded")) }
+    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace")
+        .then(if (phone == null) Modifier.bubbleGestures(bubbles).headerGestures(header) else Modifier.phoneGestures(host, dock)).workspaceGestures(dock)
         .imageCanvasDropTarget(host) { point ->
             dock.chromeRegions.values.any { it.bounds.contains(point) } || dock.regions.values.any { it.bounds.contains(point) }
         }
@@ -369,6 +375,8 @@ private val HiddenChromeShape=object:Shape {
         if (snapshot != null && state != null && state.optBoolean("workspace_ready")) {
             val hidden = snapshot.optBoolean("chrome_hidden")
             val shown = snapshot.objectOrNull("preferences") == null && (!hidden || snapshot.optBoolean("keep_zen_button"))
+            if (phone != null) PhoneFrame(host, snapshot, dock)
+            else {
             Layout(content = { WorkspaceHeader(host, snapshot, header) },
                 modifier = Modifier.fillMaxSize().zIndex(if (hidden) 1000f else 300f)
                     .then(if (shown) Modifier else Modifier.clearAndSetSemantics {})) { children, constraints ->
@@ -380,8 +388,10 @@ private val HiddenChromeShape=object:Shape {
             ToolBubbles(bubbles)
             val layout = snapshot.getJSONObject("layout")
             WorkspaceColumns(host,layout,state,panels,dock,hidden)
-            ContentDrawers(host, snapshot, panels, dock)
             PanelWindows(host,layout,panels,dock,state,hidden)
+            }
+            val layout = snapshot.getJSONObject("layout")
+            ContentDrawers(host, snapshot, panels, dock)
             CanvasBar(host, dock, IntSize(constraints.maxWidth, constraints.maxHeight))
             NoticeBubble(host, dock, layout.getJSONObject("notice"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)
@@ -391,8 +401,8 @@ private val HiddenChromeShape=object:Shape {
                 PreviewOps("selection", "resize_radius", "apply_resize", "cancel_resize"))
             PreviewPanel(host, dock, layout.getJSONObject("status"), tools.objectOrNull("frequency_separation"), "frequency-separation",
                 PreviewOps("frequency_separation", "radius", "apply", "cancel"))
-            WorkspaceDividers(host,layout,dock,hidden)
-            if (state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) ZenChrome(!hidden,Modifier.placed(layout.getJSONObject("status"),density)) {
+            if (phone == null) WorkspaceDividers(host,layout,dock,hidden)
+            if (phone == null && state.getJSONObject("workspace").getJSONObject("layout").getJSONObject("canvas_info").optBoolean("visible")) ZenChrome(!hidden,Modifier.placed(layout.getJSONObject("status"),density)) {
             Row(Modifier.fillMaxSize().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Row(Modifier.weight(1f),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Bottom) {
                     if(host.proof.status.isNotEmpty()) Surface(Modifier.glass(TileShape),color=colors.headerSurface,shape=TileShape) {

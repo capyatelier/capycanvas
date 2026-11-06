@@ -64,6 +64,7 @@ internal class DockInteraction(val host: CanvasHost) {
         val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean, val depth: Int = 0)
     val regions = mutableMapOf<Any, Region>()
     var bubbles: BubbleInteraction? = null
+    var phone: PhoneInteraction? = null
     var bubbleCaptured = false
     data class ChromeRegion(val bounds: Rect, val z: Int, val header: Boolean)
     val chromeRegions = mutableMapOf<Any, ChromeRegion>()
@@ -92,6 +93,11 @@ internal class DockInteraction(val host: CanvasHost) {
     var density = 1f
     var viewport = JSONArray(listOf(1, 1))
     var enabled = true
+        set(value) {
+            val retired = field && !value
+            field = value
+            if (retired && phone?.active == true) host.retirePhoneContacts()
+        }
     var focused = true
     var hint by mutableStateOf<JSONObject?>(null)
     private var active by mutableStateOf<JSONObject?>(null)
@@ -187,6 +193,7 @@ internal class DockInteraction(val host: CanvasHost) {
     val popupOpen get() = popupOwners > 0
     fun popup(open: Boolean) {
         popupOwners = (popupOwners + if (open) 1 else -1).coerceAtLeast(0)
+        if (open && phone?.active == true) host.retirePhoneContacts()
         refresh()
     }
     /** The canvas bar's place, kept while a canvas contact hides the bar. */
@@ -336,7 +343,11 @@ internal class DockInteraction(val host: CanvasHost) {
     fun holdContext(target: JSONObject) {
         if (contactType != PointerType.Mouse) context(target)
     }
-    fun closeContext() { contextGeneration++; contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; refresh() }
+    fun retireContextRequest() {
+        contextGeneration++
+        if (contextMenu == null) { contextTarget = null; contextOwner = null }
+    }
+    fun closeContext() { retireContextRequest(); contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
         host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))

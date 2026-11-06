@@ -20,7 +20,7 @@ pub enum Platform {
 }
 impl Platform {
     pub const ALL: [Self; 6] = [Self::Gtk, Self::Web, Self::Windows, Self::Mac, Self::Ios, Self::Android];
-    pub const fn presents_phone_layout(self) -> bool { matches!(self, Self::Gtk | Self::Web) }
+    pub const fn presents_phone_layout(self) -> bool { matches!(self, Self::Gtk | Self::Web | Self::Android) }
     pub fn apple(self) -> bool {
         matches!(self, Self::Mac | Self::Ios)
     }

@@ -15,7 +15,7 @@ pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
         NewDrawingLayout { width: f32 },
         ColorEditorLayout { width: f32, minimum: [f32; 2] },
         NoticeAbove { notice: crate::NoticePlacement, bar: Option<Bounds> },
-        FingerLoupeOffset { scale: f32 },
+        FingerLoupeOffset { #[serde(default)] display: Option<[f32; 2]>, scale: f32 },
         PhoneWindow { viewport: [f32; 2] },
         MenuPresentation { target: crate::MenuTarget },
     }
@@ -32,7 +32,7 @@ pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
         Request::NewDrawingLayout { width } => json!(new_drawing_layout(width)),
         Request::ColorEditorLayout { width, minimum } => json!(color_editor_layout(width, minimum)),
         Request::NoticeAbove { notice, bar } => json!(notice.above(bar)),
-        Request::FingerLoupeOffset { scale } => json!(crate::finger_loupe_offset(None, scale)),
+        Request::FingerLoupeOffset { display, scale } => json!(crate::finger_loupe_offset(display, scale)),
         Request::PhoneWindow { viewport } => json!(crate::phone_window(viewport)),
         Request::MenuPresentation { target } => json!(target.presentation()),
     })
@@ -225,6 +225,10 @@ mod tests {
             (json!({"kind":"color_editor_layout","width":244.,"minimum":[232.,320.]}),json!({"split":false,"compact_fields":true})),
             (json!({"kind":"notice_above","notice":notice,"bar":{"x":0.,"y":450.,"width":300.,"height":40.}}),json!(crate::NoticePlacement { y:438.,..notice })),
             (json!({"kind":"finger_loupe_offset","scale":2.}),json!(88.)),
+            (json!({"kind":"finger_loupe_offset","display":[800.,127.],"scale":1.}),json!(crate::finger_loupe_offset(Some([800.,127.]),1.))),
+            (json!({"kind":"finger_loupe_offset","display":[800.,127.],"scale":2.}),json!(crate::finger_loupe_offset(Some([800.,127.]),2.))),
+            (json!({"kind":"finger_loupe_offset","display":[800.,50.],"scale":1.}),json!(64.)),
+            (json!({"kind":"finger_loupe_offset","display":[800.,500.],"scale":1.}),json!(36.)),
             (json!({"kind":"phone_window","viewport":[479.,800.]}),json!(true)),
             (json!({"kind":"menu_presentation","target":{"kind":"layer_row"}}),json!({"has_arrow":false,"anchor":"contact"})),
         ] {

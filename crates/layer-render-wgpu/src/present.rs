@@ -899,6 +899,9 @@ impl ViewportPresenter {
     }
 
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
+    pub fn canvas_revision(&self) -> Option<u64> {
+        self.presented_drawing.filter(|drawing| drawing.showing).and_then(|_| self.history.valid.then_some(self.history.artwork_revision))
+    }
     /// Whether the last presentation drew the paper lighting; its pipelines
     /// compile when lighting is first shown.
     pub fn paper_lighting_drawn(&self) -> bool { self.presented_paper == Some(true) }

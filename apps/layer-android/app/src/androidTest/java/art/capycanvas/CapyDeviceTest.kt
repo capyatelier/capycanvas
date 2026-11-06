@@ -176,7 +176,7 @@ fun documentRequest(handle: Long, command: String): Pair<Int, JSONObject> {
 }
 
 /** Chooses a [width] × [height] px sheet of white paper in the pending New request's dialog, then creates it. */
-fun orderDrawing(handle: Long, width: Int, height: Int, space: String = "Srgb", depth: String = "U8") {
+fun orderDrawing(handle: Long, width: Int, height: Int, space: String = "Srgb", depth: String = "U8", create: Boolean = true) {
     fun act(op: String, vararg fields: Pair<String, Any?>) = Native.dispatch(handle, obj("type" to "new_drawing", "action" to obj("op" to op, *fields)).toString())
     act("open", "screen" to null, "untitled" to 1)
     act("unit", "unit" to "px")
@@ -192,7 +192,7 @@ fun orderDrawing(handle: Long, width: Int, height: Int, space: String = "Srgb", 
     act("paper_color")
     act("paper_color_value", "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(1, 1, 1, 1))))
     act("use_paper_color")
-    act("create")
+    if (create) act("create")
 }
 
 /** Creates a [width] × [height] px drawing through the project worker while the host's own document jobs stand aside. */

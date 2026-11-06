@@ -212,7 +212,7 @@ These tests need other arguments:
 | Test | Arguments |
 | --- | --- |
 | `AndroidFirstUiTest#unsupportedGpuExplainsTheDeviceInTheCanvasArea` | `-e unsupportedGpu true`, on an emulator started with `-gpu host -feature -Vulkan` |
-| `AndroidPhoneAuditTest#admission` | `-e case NAME -e size WxH -e density DPI -e theme light\|dark`, optionally `-e fontScale -e cutout corner -e textSize`, on an emulator started and configured by `tools/devices/android-emulators.py` |
+| `AndroidPhoneAuditTest#admission` / `#frame` | `-e case NAME -e size WxH -e density DPI -e theme light\|dark`, optionally `-e fontScale -e cutout corner -e textSize`; frame accepts `-e states LIST`; use an emulator recorded by `tools/devices/android-emulators.py` |
 | `AndroidToolBubblesTest#sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices` | `-e bubbleTheme light\|dark -e bubbleInput mouse\|touch\|pen` for one variant |
 | `AndroidInteractionTest`, `AndroidColorPanelTest` | `-e systemInput true` uses OS input injection where the device allows it |
 | `AndroidFeatureParityTest#paperLibraryImportsRenamesAndDeletesWithoutChangingTheDrawing` | `-e theme light` or `dark` |

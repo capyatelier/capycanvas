@@ -180,6 +180,8 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "pending_composition": layer_render::CanvasRenderer::has_pending_work(gpu.as_ref()),
                 "pending_edits": a.host.session.engine().has_pending_document_edits(),
                 "pending_presentation": surface.pending_target.is_some(),
+                "canvas_revision": gpu.canvas_preview_revision(),
+                "presented_canvas_revision": surface.presenter.canvas_revision(),
                 "overview_count": a.navigators.count(),
                 "glass_regions": a.glass.len(),
                 "backdrop_frames": surface.presenter.backdrop_frames(),

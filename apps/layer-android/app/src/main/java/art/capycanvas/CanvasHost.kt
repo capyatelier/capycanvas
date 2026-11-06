@@ -43,6 +43,15 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     internal val layerSwipe=LayerSwipe()
     internal val palettes=PaletteController(this)
     internal var workspaceInteraction: DockInteraction? = null
+    internal var phoneContactEpoch by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+    internal fun retirePhoneContacts() {
+        workspaceInteraction?.takeIf { it.phone != null }?.let { it.retireContextRequest(); it.phone?.retire() }
+        phoneContactEpoch++
+    }
+    internal var windowInsets: android.view.WindowInsets? = null
+    internal var windowMetricsChanged: (() -> Unit)? = null
+    internal fun deviceClass(phone: Boolean) = post { Native.deviceClass(handle, phone); publish(true); wake() }
     internal val textCursorRegions = mutableMapOf<Any, TextCursorRegion>()
     internal val proof=ProofController(this)
     internal val hdr=HdrController(this)
@@ -170,6 +179,14 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     private var workspaceManagerKey: String? = null
     private var pendingCanvasAttach: (() -> Unit)? = null
     private var startupHeaderMeasured = false
+    private fun attachMeasuredCanvas() {
+        if (startupHeaderMeasured || publishedWorkspaceLayout?.objectOrNull("phone") != null) {
+            pendingCanvasAttach?.let { attach ->
+                pendingCanvasAttach = null
+                worker.post { if (!disposed) attempt(canvas = true, block = attach) }
+            }
+        }
+    }
     private val workspaceTick = object : Runnable {
         override fun run() {
             if (disposed || handle == 0L) return
@@ -567,27 +584,34 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         val focus = if (action.optString("type") == "invoke" && action.optString("command") == "search_commands") commandFocus() else null
         post {
             val type=action.optString("type")
-            if(documentInputBlocked && !type.startsWith("measure_") && type !in listOf("reveal_canvas_bar", "complete_request", "system_theme_changed", "system_motion_changed", "window_fullscreen", "pen_input")) return@post
-            val tracing = android.os.Trace.isEnabled()
-            if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
-            try {
-                if (focus != null) Native.dispatch(handle, obj("type" to "command_search", "action" to obj("type" to "focus", "focus" to focus)).toString())
-                Native.dispatch(handle, action.toString())
-            }
-            finally { if (tracing) android.os.Trace.endSection() }
-            refreshLanguage()
-            refreshChrome()
-            if (type == "pen_input") {
-                if (!penPublicationQueued) { penPublicationQueued = true; choreographer?.postFrameCallback(penPublication) }
-            } else if (moving) presentMotion() else { publish(true); wake() }
-            if (published != null) main.post { published() }
-            if (type == "measure_header" && workspaceManagerKey?.let(::JSONObject)?.optBoolean("ready") == true) {
-                startupHeaderMeasured = true
-                pendingCanvasAttach?.let { attach ->
-                    pendingCanvasAttach = null
-                    worker.post { if (!disposed) attempt(canvas = true, block = attach) }
-                }
-            }
+            val phone = action.objectOrNull("action")?.takeIf { type == "phone" }
+            val retirement = phone?.optString("kind") == "capy_drop" || phone?.let { it.optString("kind") == "slider" && it.optString("phase") == "cancel" } == true
+            if(documentInputBlocked && !retirement && !type.startsWith("measure_") && type !in listOf("reveal_canvas_bar", "complete_request", "system_theme_changed", "system_motion_changed", "window_fullscreen", "pen_input")) return@post
+            dispatchOwned(action, moving, published, focus)
+        }
+    }
+    internal fun reportPhoneMetrics(insets: JSONArray, corners: JSONArray) = post {
+        dispatchOwned(obj("type" to "phone", "action" to obj("kind" to "metrics", "insets" to insets, "corners" to corners,
+            "native" to JSONArray(listOf(0, 0)), "native_counts" to JSONArray(listOf(0, 0)), "movable" to false)))
+    }
+    private fun dispatchOwned(action: JSONObject, moving: Boolean = false, published: (() -> Unit)? = null, focus: String? = null) {
+        val type = action.optString("type")
+        val tracing = android.os.Trace.isEnabled()
+        if (tracing) android.os.Trace.beginSection("capy.action." + type + "." + action.optString("command"))
+        try {
+            if (focus != null) Native.dispatch(handle, obj("type" to "command_search", "action" to obj("type" to "focus", "focus" to focus)).toString())
+            Native.dispatch(handle, action.toString())
+        }
+        finally { if (tracing) android.os.Trace.endSection() }
+        refreshLanguage()
+        refreshChrome()
+        if (type == "pen_input") {
+            if (!penPublicationQueued) { penPublicationQueued = true; choreographer?.postFrameCallback(penPublication) }
+        } else if (moving) presentMotion() else { publish(true); wake() }
+        if (published != null) main.post { published() }
+        if (type == "measure_header" && workspaceManagerKey?.let(::JSONObject)?.optBoolean("ready") == true) {
+            startupHeaderMeasured = true
+            attachMeasuredCanvas()
         }
     }
     private var motionAt = 0L
@@ -768,7 +792,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                     wake()
                 }
             }
-            if (workspaceManagerKey != null && !startupHeaderMeasured) pendingCanvasAttach = attach
+            if (workspaceManagerKey != null) { pendingCanvasAttach = attach; attachMeasuredCanvas() }
             else attach()
         }
     }
@@ -997,6 +1021,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             val retained = shareModel(publishedWorkspaceLayout, layout) as JSONObject
             publishedWorkspaceLayout = retained
             next.put("layout", retained)
+            attachMeasuredCanvas()
         }
         fun recordPublication() {
             if (measuredPublications != null && publicationCount < 8192) {

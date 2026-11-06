@@ -47,7 +47,10 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
             cancelPickerHold();pickerContact=event.getPointerId(0);pickerX=event.x;pickerY=event.y
             val id=(event.deviceId.toLong().and(0xffffffffL) shl 16) or pickerContact.toLong()
             val metrics=resources.displayMetrics
-            val offset=(metrics.ydpi*10f/25.4f).coerceIn(36f*metrics.density,64f*metrics.density)
+            val physical = metrics.ydpi.takeIf { it.isFinite() && it > 0f }?.let {
+                JSONArray(listOf(metrics.heightPixels / metrics.density, metrics.heightPixels * 25.4f / it))
+            }
+            val offset=(org.json.JSONTokener(Native.dialogUi(obj("kind" to "finger_loupe_offset", "display" to physical, "scale" to metrics.density).toString())).nextValue() as Number).toFloat()
             pickerHold=Runnable {
                 pickerHold=null
                 host.input(obj("type" to "color_picker_hold","id" to id,"position" to JSONArray(listOf(pickerX,pickerY)),"offset" to offset))
@@ -136,6 +139,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
         } else host.resize(width, height, density)
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        host.retirePhoneContacts()
         cancelPickerHold()
         cancelContacts()
         host.hdr.unbindSurface(this)

@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         host.attachWindow(this)
         if(isFinishing)return
+        updateDeviceClass()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { host.drawingTabs.closeWindow() }
         })
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateTheme(newConfig)
+        updateDeviceClass()
         host.systemLocalesChanged(newConfig.locales)
     }
     private val devices = object : android.hardware.input.InputManager.InputDeviceListener {
@@ -73,22 +75,32 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private val displays = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) = Unit
+        override fun onDisplayRemoved(id: Int) = Unit
+        override fun onDisplayChanged(id: Int) {
+            if (window.decorView.display?.displayId == id) updateDeviceClass()
+        }
+    }
     override fun onStart() {
         super.onStart()
         host.recovery.foreground()
         getSystemService(android.hardware.input.InputManager::class.java).registerInputDeviceListener(devices, null)
+        getSystemService(android.hardware.display.DisplayManager::class.java).registerDisplayListener(displays, null)
         host.systemLocalesChanged(resources.configuration.locales)
         host.filterPreviewCache.resume()
         if (!host.restartingWindow) host.workspaceInput(obj("type" to "resume"))
         host.restartingWindow = false
     }
     override fun onPause() {
+        host.retirePhoneContacts()
         host.endCalibrationMotion()
         host.input(obj("type" to "blur"))
         super.onPause()
     }
     override fun onStop() {
         getSystemService(android.hardware.input.InputManager::class.java).unregisterInputDeviceListener(devices)
+        getSystemService(android.hardware.display.DisplayManager::class.java).unregisterDisplayListener(displays)
         host.filterPreviewCache.pause()
         host.recovery.background()
         host.restartingWindow = isChangingConfigurations
@@ -112,6 +124,7 @@ class MainActivity : ComponentActivity() {
         if (host.dividerFocus != null && event.keyCode in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN)) { host.key(event); return true }
         if (host.drawingTabs.key(event)) return true
         if (host.palettes.key(event)) return true
+        if (event.action == KeyEvent.ACTION_DOWN && host.workspaceInteraction?.phone?.active == true) host.retirePhoneContacts()
         if (event.action == KeyEvent.ACTION_DOWN && (event.isCtrlPressed || event.isMetaPressed))
             host.dispatch(obj("type" to "command_search", "action" to obj("type" to "focus",
                 "focus" to host.commandFocus())))
@@ -127,7 +140,10 @@ class MainActivity : ComponentActivity() {
         host.shaderInput()
         host.observePen(event, window.decorView.display?.rotation ?: 0)
         PointerScrollbars.input(event)
-        return super.dispatchTouchEvent(event)
+        return try { super.dispatchTouchEvent(event) } finally {
+            if(event.actionMasked == android.view.MotionEvent.ACTION_UP || event.actionMasked == android.view.MotionEvent.ACTION_CANCEL)
+                host.workspaceInteraction?.phone?.endGesture()
+        }
     }
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean {
         host.shaderInput()
@@ -149,7 +165,17 @@ class MainActivity : ComponentActivity() {
         if (hasFocus) {
             window.enterCanvasFullscreen()
             host.workspaceInput(obj("type" to "focus"))
-        } else if (!host.pickerPopupOpen) host.input(obj("type" to "blur"))
+        } else {
+            host.retirePhoneContacts()
+            if (!host.pickerPopupOpen) host.input(obj("type" to "blur"))
+        }
+    }
+
+    private fun updateDeviceClass() {
+        val density = resources.displayMetrics.density
+        val size = if (android.os.Build.VERSION.SDK_INT >= 30) windowManager.maximumWindowMetrics.bounds.let { it.width() to it.height() }
+        else android.util.DisplayMetrics().also { @Suppress("DEPRECATION") windowManager.defaultDisplay.getRealMetrics(it) }.let { it.widthPixels to it.heightPixels }
+        host.deviceClass(minOf(size.first, size.second) / density < 600f)
     }
 }
 
