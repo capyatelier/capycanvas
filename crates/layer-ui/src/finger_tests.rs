@@ -191,6 +191,26 @@ fn finger_pen_wins_and_rejected_fingers_wait_for_lift() {
 }
 
 #[test]
+fn finger_strokes_use_full_pressure_at_shared_admission() {
+    let contacts = |tool, pressure| {
+        let mut s = finger_session();
+        for (sequence, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
+            s.pen(PenEvent { tool, ..event(&s, sequence, phase, pressure) });
+        }
+        finger_frames(&mut s, 40);
+        assert!(s.renderer_mut().dabs > 0);
+        s.renderer_mut().recorded_dabs.iter().map(|dab| dab.contact[0]).collect::<Vec<_>>()
+    };
+    assert_eq!(contacts(ToolKind::Finger, 0.3), contacts(ToolKind::Finger, 1.));
+    assert_ne!(contacts(ToolKind::Pen, 0.3), contacts(ToolKind::Pen, 1.));
+    let mut s = finger_session();
+    assert!(s.filter_pen(PenEvent { tool: ToolKind::Finger, ..event(&s, 1, PenPhase::Down, f32::NAN) }).is_none());
+    let down = PenEvent { tool: ToolKind::Finger, ..event(&s, 2, PenPhase::Down, 0.3) };
+    assert_eq!(s.filter_pen(down).unwrap().pressure, 1.);
+    assert_eq!(s.take_pen_cancel(down.device_id, down.tool).unwrap().pressure, 1.);
+}
+
+#[test]
 fn unclassified_pen_paints_without_disabling_finger_auto() {
     for command in [None, Some(CommandId::RectangleSelect)] {
         for unclassified in [false, true] {
