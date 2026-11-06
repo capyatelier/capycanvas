@@ -267,33 +267,8 @@ impl Scene {
     ) -> Result<Option<Vec<(wgpu::TextureView, DocRect)>>, GpuRasterError> {
         let (pieces, mut ready, missing) = self.object_results.cover(request);
         let offset = packet.scene.evaluation_offset64();
-        let side = request.window.side as u32;
-        let support = content.bounds_at(side.ilog2());
-        let support = DocRect {
-            min: std::array::from_fn(|i| (support.min[i] as f64 - offset[i]).floor() as i64),
-            max: std::array::from_fn(|i| (support.max[i] as f64 - offset[i]).ceil() as i64),
-        }.aligned(side);
-        let span = i64::from(COLLECTION_PART) * i64::from(side);
-        let mut blocks = Vec::new();
         for rect in missing {
-            let rect = rect.intersect(support);
-            if rect.is_empty() { continue; }
-            let low = rect.min.map(|v| v.div_euclid(span));
-            let high = rect.max.map(|v| (v - 1).div_euclid(span) + 1);
-            for y in low[1]..high[1] { for x in low[0]..high[0] { blocks.push([x, y]); } }
-        }
-        blocks.sort_unstable(); blocks.dedup();
-        let center = Affine64(packet.view.document_to_surface.map(f64::from)).inverse()
-            .map(|inverse| inverse.map([f64::from(packet.view.width_px) * 0.5, f64::from(packet.view.height_px) * 0.5]))
-            .unwrap_or([0.; 2]);
-        let distance = |block: &[i64; 2]| {
-            std::array::from_fn::<_, 2, _>(|i| (block[i] as f64 + 0.5) * span as f64 - (center[i] - offset[i]))
-                .into_iter().map(|v| v * v).sum::<f64>()
-        };
-        blocks.sort_by(|a, b| distance(a).total_cmp(&distance(b)).then_with(|| a.cmp(b)));
-        for block in blocks {
-            let rect = DocRect { min: block.map(|v| v * span), max: block.map(|v| (v + 1) * span) }.intersect(support);
-            let size = rect.size()?.map(|v| v / side);
+            let size = rect.size()?.map(|v| (f64::from(v) / request.window.side) as u32);
             let window = ObjectWindow { origin: std::array::from_fn(|i| rect.min[i] as f64 + offset[i]), side: request.window.side, size };
             let mut part = self.collection_job(r, packet, content.owner(), content.clone(), window);
             part.live = request.live; part.display = request.display;

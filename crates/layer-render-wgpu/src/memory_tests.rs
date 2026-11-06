@@ -60,14 +60,23 @@ pub(crate) fn legacy_scene_frame(r: &mut WgpuRasterizer, frame: FramePacket<'_>)
 }
 
 pub(crate) fn scene_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, bytes: u64) {
+    cache_frame_with_budget(r, frame, 0, bytes);
+    assert_eq!(r.memory_limit(Kind::Scene),bytes);
+}
+
+pub(crate) fn object_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, bytes: u64) {
+    cache_frame_with_budget(r, frame, 1, bytes);
+    assert_eq!(r.memory_limit(Kind::Objects),bytes);
+}
+
+fn cache_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, part: usize, bytes: u64) {
     r.begin_frame_memory(frame);
     let mut demand=r.memory.demand.get();
-    demand[0]=bytes;
+    demand[part]=bytes;
     r.memory.demand.set(demand);
     r.publish_memory(true);
     r.factory.memory_budget().flush_reports();
     r.refresh_memory_limits();
-    assert_eq!(r.memory_limit(Kind::Scene),bytes);
 }
 
 pub(crate) fn renderer_for_restore(document: &layer_core::Document) -> WgpuRasterizer {

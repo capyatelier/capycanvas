@@ -107,6 +107,11 @@ impl ObjectCache {
         Ok(())
     }
     #[cfg(test)]
+    pub fn request_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
+        self.tasks.iter().filter_map(|task| task.collection.as_ref().map(|collection|
+            (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
+    }
+    #[cfg(test)]
     pub fn work_progress(&self) -> (usize, usize, u64) {
         (self.tasks.len(), self.tasks.iter().filter(|task|task.complete).count(), self.tasks.iter().map(|task|task.step + task.tile as u64 * 1000000 + task.phase as u64 * 1000000000 + task.collection.as_ref().map_or(0,|c|c.part as u64 * 1000000000000)).sum())
     }
