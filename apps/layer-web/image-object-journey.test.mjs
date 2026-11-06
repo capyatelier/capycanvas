@@ -107,8 +107,8 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
         await begin('change_bit_depth');
         await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Bit depth"]','F32'));
         await wait("document.querySelectorAll('dialog[open] .color-comparison canvas').length===2");assert.ok(await opaque('dialog[open] .color-comparison canvas'));await click('Cancel');await idle();
-        await begin('export_document');await click('Preview Output');
-        await wait(`!!document.querySelector('dialog[open] canvas[aria-label="Output preview"]')`);assert.ok(await opaque('dialog[open] canvas[aria-label="Output preview"]'));await click('Cancel');await idle();
+        await begin('export_document');
+        await wait(`document.querySelectorAll('dialog[open] .native-comparison canvas').length===2`);assert.ok(await opaque('dialog[open] .native-comparison canvas'));await click('Cancel');await idle();
         assert.equal(await evaluate('layerApp.state().host_error??null'),null);
         console.log(`${url} ${theme}: cold worker preparation, shared image/F64 placement, object GPU pixels, visibility undo/redo, save/reopen and renderer replacement passed`);
       }

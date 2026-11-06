@@ -34,9 +34,8 @@ export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
   const nativePoint=(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
   const nativePixel=async()=>{
     const click=label=>evaluate(`(()=>{const button=[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent===${JSON.stringify(label)});if(!button)throw Error(${JSON.stringify(label)});button.click()})()`);
-    await invoke('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Dynamic range"]')`);await click('Preview Output');
-    await wait(`!!document.querySelector('canvas[aria-label="Output preview"]')&&![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Preview Output').disabled`);
-    const pixel=await evaluate(`(()=>{const c=document.querySelector('canvas[aria-label="Output preview"]'),tab=layerApp.state().tabs.find(tab=>tab.active);return Array.from(c.getContext('2d').getImageData(Math.floor(48*c.width/tab.width)-4,Math.floor(48*c.height/tab.height)-4,9,9).data)})()`);
+    await invoke('export_document');await wait(`document.querySelectorAll('dialog[open] .native-comparison canvas').length===2`);
+    const pixel=await evaluate(`(()=>{const c=document.querySelectorAll('dialog[open] .native-comparison canvas')[1],tab=layerApp.state().tabs.find(tab=>tab.active);return Array.from(c.getContext('2d').getImageData(Math.floor(48*c.width/tab.width)-4,Math.floor(48*c.height/tab.height)-4,9,9).data)})()`);
     await click('Cancel');await settle();return pixel;
   };
   const nativePixelsMatch=async(predicate,message)=>{
