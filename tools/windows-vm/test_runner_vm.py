@@ -57,7 +57,7 @@ class RunnerVmTests(unittest.TestCase):
         machine = vm.runner_machine(self.primary, 1)
         machine.directory.mkdir()
         with open(self.root / "reservation", "w+") as reservation, patch.object(vm, "terminate"), \
-                patch.object(vm, "free_port", return_value=2200), \
+                patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
                 patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             vm.launch(machine, reservation=reservation, cpus=4, memory="8G")
             call = next(call for call in run.call_args_list if call.args[0] == "qemu-system-x86_64")

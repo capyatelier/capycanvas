@@ -281,12 +281,16 @@ def qmp(machine, command, **arguments):
                 reply = json.loads(line)
             if "error" in reply:
                 sys.exit(f"QEMU {command} failed: {reply['error']['desc']}")
+        return reply["return"]
 
 
-def free_port():
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+def forwarded_ssh_port(machine):
+    output = qmp(machine, "human-monitor-command", **{"command-line": "info usernet"})
+    ports = re.findall(r"^\s*TCP\[HOST_FORWARD\]\s+\d+\s+127\.0\.0\.1\s+(\d+)\s+10\.0\.2\.15\s+22(?:\s|$)",
+                       output or "", re.MULTILINE)
+    if len(ports) != 1 or not 0 < int(ports[0]) <= 65535:
+        sys.exit(f"QEMU did not report one bound SSH forwarding port for {machine.name}.")
+    return int(ports[0])
 
 
 def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None, memory=None):
@@ -294,8 +298,7 @@ def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None,
         directory.mkdir(mode=0o700, exist_ok=True)
     terminate(machine.tpm_pid, "swtpm")
     selected_firmware = json.loads(FIRMWARE.read_text())
-    port = free_port()
-    machine.ssh_port.write_text(f"{port}\n")
+    machine.ssh_port.unlink(missing_ok=True)
     run("swtpm", "socket", "--tpm2", "--tpmstate", f"dir={machine.directory / 'tpm'}",
         "--ctrl", f"type=unixio,path={machine.tpm_socket}", "--pid", f"file={machine.tpm_pid}",
         "--terminate", "--daemon")
@@ -311,7 +314,7 @@ def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None,
         "-device", "tpm-crb,tpmdev=tpm",
         "-drive", f"if=none,id=disk,format=qcow2,discard=unmap,file={machine.directory / 'disk.qcow2'}",
         "-device", "nvme,drive=disk,serial=capycanvas,bootindex=0",
-        "-netdev", f"user,id=net,hostfwd=tcp:127.0.0.1:{port}-:22", "-device", "e1000e,netdev=net",
+        "-netdev", "user,id=net,hostfwd=tcp:127.0.0.1:0-:22", "-device", "e1000e,netdev=net",
         "-device", "qemu-xhci", "-device", "usb-tablet", "-device", VGA,
         "-qmp", f"unix:{machine.qmp_socket},server=on,wait=off", "-display", "gtk" if gui else "none",
         "-daemonize", "-pidfile", machine.qemu_pid,
@@ -337,6 +340,9 @@ def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None,
     except subprocess.CalledProcessError:
         terminate(machine.tpm_pid, "swtpm")
         raise
+    if machine.qemu_pid.exists():
+        machine.launched_pid = int(machine.qemu_pid.read_text())
+    machine.ssh_port.write_text(f"{forwarded_ssh_port(machine)}\n")
 
 
 def ssh_command(machine, *remote):
@@ -490,7 +496,6 @@ def boot_locked(machine, gui, gpu):
         if runner:
             machine.runner.write_text(json.dumps(runner, indent=2))
             launch(machine, gui=gui, reservation=reservation, cpus=device.cpus, memory=device.memory)
-            machine.launched_pid = int(machine.qemu_pid.read_text())
         else:
             launch(machine, gui=gui, gpu=device, reservation=reservation)
     wait_for_ssh(machine, 10 * 60)

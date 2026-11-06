@@ -147,10 +147,72 @@ class GpuLifecycleTests(unittest.TestCase):
                 vm.main()
             self.assertEqual(start.call_args.args[0].gpu, expected)
 
+    def test_qmp_returns_command_result_after_events(self):
+        stream = Mock()
+        stream.readline.side_effect = [
+            '{"QMP": {}}\n', '{"return": {}}\n',
+            '{"event": "RESUME"}\n', '{"return": "bound forward"}\n']
+        with patch.object(vm.socket, "socket") as socket:
+            socket.return_value.__enter__.return_value.makefile.return_value = stream
+            result = vm.qmp(self.machine, "human-monitor-command", **{"command-line": "info usernet"})
+        self.assertEqual(result, "bound forward")
+        commands = [json.loads(call.args[0]) for call in stream.write.call_args_list]
+        self.assertEqual(commands, [{"execute": "qmp_capabilities"},
+                                   {"execute": "human-monitor-command", "arguments": {"command-line": "info usernet"}}])
+
+    def test_launch_publishes_kernel_bound_ssh_port_after_qemu_starts(self):
+        order = []
+        self.machine.ssh_port.write_text("2200\n")
+
+        def run(*args, **kwargs):
+            self.assertFalse(self.machine.ssh_port.exists())
+            if args[0] == "qemu-system-x86_64":
+                self.assertIn("user,id=net,hostfwd=tcp:127.0.0.1:0-:22", args)
+                self.machine.qemu_pid.write_text("43210\n")
+                order.append("qemu")
+            return subprocess.CompletedProcess(args, 0)
+
+        def qmp(machine, command, **arguments):
+            self.assertEqual(order, ["qemu"])
+            self.assertEqual(machine.launched_pid, 43210)
+            self.assertFalse(machine.ssh_port.exists())
+            self.assertEqual(command, "human-monitor-command")
+            self.assertEqual(arguments, {"command-line": "info usernet"})
+            order.append("bound")
+            return ("Hub -1 (net):\n"
+                    "  Protocol[State] FD Source Address Port Dest. Address Port RecvQ SendQ\n"
+                    "  UDP[HOST_FORWARD] 11 127.0.0.1 44000 10.0.2.15 22 0 0\n"
+                    "  TCP[HOST_FORWARD] 12 127.0.0.1 45015 10.0.2.15 22 0 0\n"
+                    "  TCP[ESTABLISHED] 13 127.0.0.1 45016 10.0.2.15 22 0 0\n"
+                    "  TCP[HOST_FORWARD] 14 127.0.0.1 45017 10.0.2.15 80 0 0\n")
+
+        with patch.object(vm.socket, "socket", side_effect=AssertionError("launch must let QEMU allocate the SSH port")), patch.object(vm, "terminate"), \
+                patch.object(vm, "run", side_effect=run), patch.object(vm, "qmp", side_effect=qmp):
+            vm.launch(self.machine)
+        self.assertEqual(order, ["qemu", "bound"])
+        self.assertEqual(self.machine.ssh_port.read_text(), "45015\n")
+
+    def test_launch_rejects_unverified_ssh_forward_without_publishing_a_port(self):
+        valid = "TCP[HOST_FORWARD] 12 127.0.0.1 45015 10.0.2.15 22 0 0"
+        reports = (None, valid.replace("127.0.0.1", "0.0.0.0"),
+                   valid.replace("45015", "0"), valid.replace("45015", "65536"),
+                   valid.replace(" 22 ", " 80 "),
+                   valid + "\n" + valid.replace("45015", "45016"))
+        for report in reports:
+            with self.subTest(report=report):
+                self.machine.ssh_port.write_text("2200\n")
+                self.machine.qemu_pid.write_text("43210\n")
+                with patch.object(vm.socket, "socket", side_effect=AssertionError("launch must let QEMU allocate the SSH port")), patch.object(vm, "terminate"), \
+                        patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                        patch.object(vm, "qmp", return_value=report), self.assertRaises(SystemExit):
+                    vm.launch(self.machine)
+                self.assertFalse(self.machine.ssh_port.exists())
+                self.assertEqual(self.machine.launched_pid, 43210)
+
     def test_launch_passes_exact_gpu_functions_and_keeps_reservation_fd_in_qemu(self):
         gpu = SimpleNamespace(address="0000:03:00.0", functions=["0000:03:00.0", "0000:03:00.1"])
         with open(self.root / "reservation", "w+") as reservation, \
-                patch.object(vm, "terminate"), patch.object(vm, "free_port", return_value=2200), \
+                patch.object(vm, "terminate"), patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
                 patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             vm.launch(self.machine, gpu=gpu, reservation=reservation)
             command = next(call for call in run.call_args_list if call.args[0] == "qemu-system-x86_64")
@@ -168,7 +230,7 @@ class GpuLifecycleTests(unittest.TestCase):
 
     def test_plain_launch_clears_old_gpu_metadata_and_inherits_no_reservation(self):
         self.machine.gpu.write_text("0000:03:00.0\n")
-        with patch.object(vm, "terminate"), patch.object(vm, "free_port", return_value=2200), \
+        with patch.object(vm, "terminate"), patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
                 patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             vm.launch(self.machine)
         command = next(call for call in run.call_args_list if call.args[0] == "qemu-system-x86_64")
@@ -181,7 +243,7 @@ class GpuLifecycleTests(unittest.TestCase):
             if args[0] == "qemu-system-x86_64":
                 raise subprocess.CalledProcessError(1, args)
             return subprocess.CompletedProcess(args, 0)
-        with patch.object(vm, "terminate") as terminate, patch.object(vm, "free_port", return_value=2200), \
+        with patch.object(vm, "terminate") as terminate, patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
                 patch.object(vm, "run", side_effect=run), self.assertRaises(subprocess.CalledProcessError):
             vm.launch(self.machine)
         self.assertEqual(terminate.call_count, 2)
