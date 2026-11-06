@@ -19,14 +19,17 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.AbstractComposeView
 import androidx.compose.ui.platform.LocalView
+import kotlinx.coroutines.flow.drop
 
 internal data class TextCursorRegion(val bounds: Rect, val z: Int, val root: View, val bubble: Int?)
 
 internal class CanvasContent(context: Context, private val host: CanvasHost) : AbstractComposeView(context) {
     @Composable override fun Content() {
         LaunchedEffect(host) {
-            val motion = kotlinx.coroutines.currentCoroutineContext()[MotionDurationScale]
-            snapshotFlow { motion?.scaleFactor == 0f }.collect {
+            val motion = kotlinx.coroutines.currentCoroutineContext()[MotionDurationScale] ?: return@LaunchedEffect
+            fun reduced() = motion.scaleFactor == 0f
+            host.dispatch(obj("type" to "system_motion_changed", "reduced" to reduced()))
+            snapshotFlow { reduced() }.drop(1).collect {
                 host.dispatch(obj("type" to "system_motion_changed", "reduced" to it))
             }
         }

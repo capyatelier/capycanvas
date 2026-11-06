@@ -2,9 +2,12 @@ package art.capycanvas
 
 import android.graphics.Bitmap
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.platform.WindowRecomposerFactory
+import androidx.compose.ui.platform.WindowRecomposerPolicy
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -21,6 +24,28 @@ import java.util.concurrent.TimeUnit
 class AndroidFirstUiTest {
     @get:Rule(order = 0) val device = CapyDeviceRule()
     @get:Rule(order = 1) val compose = createEmptyComposeRule()
+
+    @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
+    @Test fun removedSystemAnimationsStillReachTheFirstCanvas() {
+        val key = Settings.Global.ANIMATOR_DURATION_SCALE
+        val previous = Settings.Global.getString(instrumentation.targetContext.contentResolver, key)
+        check(previous == null || previous.toFloatOrNull() != null)
+        try {
+            shell("settings put global $key 0")
+            WindowRecomposerPolicy.withFactory(WindowRecomposerFactory.LifecycleAware) {
+                ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                    val host = scenario.activity().host
+                    host.awaitMain("first canvas with system animations removed", 60_000) { host.surfaceReady }
+                    instrumentation.runOnMainSync {
+                        assertNull(host.failure)
+                        assertTrue(host.surfaceReady)
+                    }
+                }
+            }
+        } finally {
+            shell(if (previous == null) "settings delete global $key" else "settings put global $key $previous")
+        }
+    }
 
     @Test fun grayCanvasAndControlsDrawWithoutAnyCanvasShaders() {
         val entered = CountDownLatch(1)
