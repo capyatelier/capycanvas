@@ -176,7 +176,7 @@ foreach($case in @(@{option='CanvasResetOnly';journey='Check-CanvasReset'},@{opt
     $journey=$edgeAst.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $case.journey},$false)
     $defaults=$edgeAst.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.Contains("PSBoundParameters.ContainsKey('Device')")}
     $probe=[scriptblock]::Create($edgeAst.ParamBlock.Extent.Text+"`n"+$defaults.Extent.Text+"`n"+$journey.Body.EndBlock.Statements[0].Extent.Text+"`n"+'$Device')
-    $arguments=@($edgeRuns[('edge-reach:'+$case.option)])
+    $arguments=@($edgeRuns[('edge-reach:'+$case.option)].arguments)
     if(($arguments -join ',') -ne ('-'+$case.option)){throw 'Generated native edge variants must leave the script device default intact'}
     $bound=@{Executable='C:\owned\CapyCanvas.exe'}
     for($i=0;$i -lt $arguments.Count;$i++){
@@ -203,7 +203,7 @@ foreach($case in @(@{option='CanvasResetOnly';journey='Check-CanvasReset'},@{opt
         @{selectors=@('journey-light-large','journey-2-light-large','journey-3-light-large','journey-4-light-large');theme='light';large=$true}
     )){
         $parts=@(foreach($selector in $case.selectors){
-            $arguments=@($edgeRuns[('localization:'+$selector)])
+            $arguments=@($edgeRuns[('localization:'+$selector)].arguments)
             if(!$arguments.Count){throw "Missing generated Journey selector: $selector"}
             $bound=@{Executable='C:\owned\CapyCanvas.exe'}
             for($i=0;$i -lt $arguments.Count;$i++){
@@ -221,7 +221,7 @@ foreach($case in @(@{option='CanvasResetOnly';journey='Check-CanvasReset'},@{opt
         if(($tags -join ',') -cne ((1..15) -join ',') -or @($tags|Select-Object -Unique).Count -ne 15){throw 'Generated Journey selectors did not cover every tag exactly once'}
     }
 }
-if(($edgeRuns['edge-reach:pen'] -join ',') -ne '-Device,pen' -or ($edgeRuns['edge-reach:ColumnResetOnly'] -join ',') -ne '-ColumnResetOnly'){throw 'Native edge routing changed unrelated variants'}
+if(($edgeRuns['edge-reach:pen'].arguments -join ',') -ne '-Device,pen' -or ($edgeRuns['edge-reach:ColumnResetOnly'].arguments -join ',') -ne '-ColumnResetOnly'){throw 'Native edge routing changed unrelated variants'}
 $smoke=@(
     'activation','canvas-editing:smoke','canvas-editing:smoke-light','clipboard',
     'color-editor:light','column-stacks:touch','documents:new-drawing','documents:native-writeback-light',
@@ -358,14 +358,23 @@ try{
         . ([scriptblock]::Create($discovery.Extent.Text))
         $runs.Keys
     })
-    foreach($case in @(@{names=$null;controls='Feedback,LayerDrop,Popup'},@{names='navigator:default';controls=''},@{names='button-feedback:default,popup:default';controls='Feedback,Popup'},@{names='layer-pickup:default';controls='LayerDrop'},@{names='smoke';controls='LayerDrop,Popup';runs=$smoke},@{names='smoke,popup:default';controls='LayerDrop,Popup';runs=$smoke},@{names='smoke,navigator:PixelsOnly';controls='LayerDrop,Popup';runs=$smokeExtended})){
+    foreach($case in @(@{names=$null;controls='Feedback,LayerDrop,Popup'},@{names='navigator:default';controls='';runs=@('navigator')},@{names='button-feedback:default,popup:default';controls='Feedback,Popup'},@{names='layer-pickup:default';controls='LayerDrop'},@{names='smoke';controls='LayerDrop,Popup';runs=$smoke},@{names='smoke,popup:default';controls='LayerDrop,Popup';runs=$smoke},@{names='smoke,navigator:PixelsOnly';controls='LayerDrop,Popup';runs=$smokeExtended})){
         $selection=@{};if($case.names){$selection.Name=$case.names}
         $json=& (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'run-fixtures.ps1') -Executable 'C:\not-built\CapyCanvas.exe' -Output $cacheRun @selection -List
         if($LASTEXITCODE){throw 'Listing fixture controls required a build or desktop'}
         $plan=$json|ConvertFrom-Json
-        if(($plan.controls -join ',') -ne $case.controls -or !$plan.runs.Count){throw 'Fixture plan selected unnecessary controls or lost its selectors'}
+        if(($plan.controls -join ',') -ne $case.controls -or !$plan.runs.Count){throw "Fixture plan selected unnecessary controls or lost its selectors: requested=$($case.names); controls=$($plan.controls -join ','); expected=$($case.controls); runs=$($plan.runs.Count)"}
         if($case.runs -and ($plan.runs.Count -ne $case.runs.Count -or ($plan.runs -join ',') -ne ($case.runs -join ','))){throw 'Listed smoke selectors differ from the exact requested inventory'}
         if(!$case.names -and ($plan.runs -join ',') -ne ($all -join ',')){throw 'Listing without names must return every available selector'}
+        if(@($plan.requirements.PSObject.Properties).Count -ne $plan.runs.Count){throw 'Fixture requirements lost selected rows'}
+        foreach($name in $plan.runs){
+            $requirement=$plan.requirements.$name
+            if($requirement.hardware_gpu -isnot [bool] -or $null -eq $requirement.controls){throw 'A fixture did not default to a CPU requirement with its control inventory'}
+        }
+        if(!$case.names){
+            if(@($plan.requirements.PSObject.Properties|Where-Object {$_.Value.hardware_gpu}).Count -ne 19){throw 'Hardware registry membership differs from the approved inventory'}
+            if(!$plan.requirements.'tool-variations:sketch'.hardware_gpu -or !$plan.requirements.'tool-variations:sketch-light'.hardware_gpu -or $plan.requirements.'localization:journey-dark-large'.hardware_gpu -or $plan.requirements.navigator.hardware_gpu){throw 'Hardware requirements did not preserve exact row membership and CPU defaults'}
+        }
     }
     $process=[Diagnostics.Process]::GetCurrentProcess();$previous=$process.PriorityClass
     try{
@@ -378,7 +387,8 @@ try{
         if($definition){. ([scriptblock]::Create($definition.Extent.Text))}
     }
     Add-Type -TypeDefinition 'namespace CapyVm { public static class Native { public static int Notifications; public static void NotifyTextSize(){Notifications++;} } }'
-    $loop=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.WhileStatementAst] -and $_.Extent.Text.Contains('Get-NextFixture')}
+    $loop=$ast.Find({param($node)$node -is [Management.Automation.Language.WhileStatementAst] -and $node.Condition.Extent.Text.Contains('Get-NextFixture')},$false)
+    if(!$loop){throw 'The actual fixture queue loop is missing'}
     $baseline=$ast.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -eq '$textScale'}
     $startup=@($baseline)+@($ast.EndBlock.Statements|Where-Object {$_.Extent.Text -eq 'Restore-FixtureTextScale $textScale'})
     $execute=[scriptblock]::Create(($startup.Extent.Text -join "`n")+"`n"+$loop.Extent.Text)
@@ -435,7 +445,7 @@ try{
     function Get-Content{if($script:mode -eq 'failure'){'Fixture failed'}}
     function Write-FixtureResult($Path,$Json){$script:events.Add('result');$script:result=$Json|ConvertFrom-Json}
     $Output='C:\owned';$scripts='C:\owned';$editorExecutable='C:\owned\CapyCanvas.exe'
-    $runs=@{fixture=@()};$queue=$null;$DebuggerPath=$null;$TimeoutMinutes=20
+    $runs=@{fixture=@{arguments=@();hardware_gpu=$false}};$queue=$null;$DebuggerPath=$null;$TimeoutMinutes=20
     foreach($leaked in 150,130){
         $script:scale=[pscustomobject]@{exists=$true;kind='DWord';value=$leaked};$script:runtimeScale=$leaked/100.0
         $script:mode='unchanged';$script:restoreFails=$false;$script:readFails=$false;$script:pendingReads=0
@@ -473,6 +483,42 @@ try{
             if($mode -in @('timeout','screen-error') -and ($script:events.IndexOf('kill') -lt 0 -or $script:events.IndexOf('kill') -ge $restore)){throw 'Text scale restored before forced child termination'}
             if($script:claims -ne 2 -or $script:events[-1] -ne 'claim'){throw 'The next fixture was claimed before its predecessor completed cleanup'}
         }
+    }
+    & {
+        $script:scale=[pscustomobject]@{exists=$false;kind=$null;value=$null};$script:runtimeScale=1.0
+        $script:mode='unchanged';$script:restoreFails=$false;$script:readFails=$false;$script:pendingReads=0
+        $script:events=[Collections.Generic.List[string]]::new();$script:claims=0;$script:reads=0
+        $script:rowResults=[Collections.Generic.List[object]]::new();$script:scaleEvidence=[Collections.Generic.List[object]]::new()
+        $runs=@{first=@{arguments=@();hardware_gpu=$true};second=@{arguments=@();hardware_gpu=$true}}
+        $HardwareGpu=$true;$buildManifest=@{fixture_scale=1.5};$Executable=$editorExecutable
+        $definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Save-Evidence'},$false)
+        . ([scriptblock]::Create($definition.Extent.Text))
+        function Control-Fixture{'Popup'}
+        function Build-ControlFixture{$editorExecutable}
+        function Get-NextFixture($Planned,$Queue,$Claimed){
+            $script:claims++
+            if($script:claims -le 2){@('first','second')[$script:claims-1]}
+        }
+        function Reviews{}
+        function Get-ChildItem($LiteralPath,$Filter,[switch]$File){
+            if($Filter){[pscustomobject]@{Name='ui-state-123.json';FullName='ui-state-123.json'}}
+        }
+        function Get-Content($LiteralPath,[switch]$Raw){
+            if($LiteralPath -like '*-context.json'){'{"process_id":123}'}
+            elseif($LiteralPath -eq 'ui-state-123.json'){
+                @{process_id=123;window_id=1;model=@{layout_input=@{cache=@{context=@{scale=$(if(!$script:scaleEvidence.Count){1.25}else{1.5})}}}}}|ConvertTo-Json -Depth 8 -Compress
+            }
+        }
+        function Set-Content($LiteralPath,[Parameter(ValueFromPipeline)]$Value){
+            process{$script:scaleEvidence.Add(@{path=$LiteralPath;receipt=($Value|ConvertFrom-Json)})}
+        }
+        function Write-FixtureResult($Path,$Json){$script:rowResults.Add(($Json|ConvertFrom-Json))}
+        & $execute
+        if($script:rowResults.Count -ne 2 -or $script:rowResults[0].name -ne 'first' -or $script:rowResults[0].exit -ne 'evidence' -or $script:rowResults[0].message.Trim() -ne 'Hardware fixture runtime scale differs from the round display'){
+            throw 'A hardware scale mismatch lost its failing fixture result'
+        }
+        if($script:rowResults[1].name -ne 'second' -or $script:rowResults[1].exit -ne 0 -or $script:claims -ne 3 -or $script:scaleEvidence.Count -ne 2){throw 'A hardware scale mismatch stopped the fixture queue or skipped scale evidence'}
+        if($script:scaleEvidence[0].path -notlike '*first-display.json' -or $script:scaleEvidence[0].receipt.context_scales[0].scale -ne 1.25 -or $script:scaleEvidence[1].receipt.context_scales[0].scale -ne 1.5){throw 'Hardware scale evidence did not retain each row actual scale'}
     }
     if(@($baseline).Count -ne 1 -or $startup.Count -ne 2){throw 'Runner default text-scale setup was not performed once outside the child loop'}
     foreach($phase in 'startup','setup','restoration'){

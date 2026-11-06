@@ -47,6 +47,14 @@ outside the edited feature. Run every affected variant, with both themes and
 each affected input device. A single passing variant does not cover its family.
 Brush, blender and frame-path shader changes must complete a fine default Pencil stroke on a WARP CPU runner before pushing; use `layers:default` and its painted-thumbnail check.
 
+The fixture registry marks rows whose WARP first-dispatch or first-stroke submission
+stall exceeds the fixture bound; production refuses software adapters. The runner
+routes those rows to one pool GPU VM at the CPU runners' 150% scale. New rows
+run on CPU runners. A hardware annotation requires recorded WARP-only stall
+evidence and hardware clearance of that stage, and hardware must reach at least
+as far as the row's furthest recorded WARP stage. Keep later failures as failures;
+never move a row to hardware to avoid a check that passes on WARP.
+
 | Change | Windows fixtures before pushing |
 | --- | --- |
 | Shared UI state, layout, Windows host Rust or shared native controls, input and presentation | `smoke` plus every affected selector family and dependent journey. |

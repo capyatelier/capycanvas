@@ -39,10 +39,58 @@ class CpuPoolTests(unittest.TestCase):
             self.assertEqual((first.cpus, first.memory), (4, "8G"))
             self.assertEqual(contender(pool.LOCKS / f"slot-{first.index}"), 23)
             before = (pool.LOCKS / f"slot-{first.index}").read_text()
-            with self.assertRaisesRegex(RuntimeError, "No CPU runner slot is free"):
+            with self.assertRaisesRegex(RuntimeError, "Need 1 free CPU runner slots"):
                 with pool.reserve(self.state, "third-r1", self.root / "third"):
                     self.fail("A full pool admitted another runner")
             self.assertEqual((pool.LOCKS / f"slot-{first.index}").read_text(), before)
+        self.assertTrue(all(row["status"] == "free" for row in pool.describe(self.state)[1]))
+
+    def test_two_slots_are_atomic_identical_and_both_count_toward_owner_limit(self):
+        path = self.state / "cpu-pool.json"
+        path.write_text(json.dumps({**self.settings, "vcpu_budget": 12, "memory_budget_gib": 24,
+                                    "per_owner_limit": 2}))
+        with pool.reserve(self.state, "gpu", self.root / "first", slot_count=2) as (slot, locks):
+            self.assertEqual((slot.cpus, slot.memory), (8, "16G"))
+            self.assertEqual(len(locks), 2)
+            rows = [row for row in pool.describe(self.state)[1] if row["owner"]]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[0]["owner"], rows[1]["owner"])
+            with self.assertRaisesRegex(pool.Unavailable, "limit reached"):
+                with pool.reserve(self.state, "extra", self.root / "first"):
+                    self.fail("Two-slot GPU escaped the owner limit")
+            with self.assertRaisesRegex(pool.Unavailable, "slot"):
+                with pool.reserve(self.state, "other-gpu", self.root / "second", slot_count=2):
+                    self.fail("Partial two-slot reservation was admitted")
+            self.assertEqual(sum(row["status"] == "reserved" for row in pool.describe(self.state)[1]), 2)
+        self.assertTrue(all(row["status"] == "free" for row in pool.describe(self.state)[1]))
+
+    def test_two_slot_descriptors_remain_held_by_child_until_exit(self):
+        (self.state / "cpu-pool.json").write_text(json.dumps({**self.settings, "per_owner_limit": 2}))
+        child = None
+        try:
+            with pool.reserve(self.state, "gpu", self.root / "first", slot_count=2) as (_, locks):
+                child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                                         stdin=subprocess.PIPE, pass_fds=tuple(lock.fileno() for lock in locks))
+            self.assertEqual(sum(row["status"] == "reserved" for row in pool.describe(self.state)[1]), 2)
+            child.stdin.close()
+            child.wait(timeout=5)
+            self.assertTrue(all(row["status"] == "free" for row in pool.describe(self.state)[1]))
+        finally:
+            if child is not None and child.poll() is None:
+                child.terminate()
+                child.wait(timeout=5)
+
+    def test_round_gpu_leaves_twenty_two_cpu_runners_within_ninety_six_vcpus(self):
+        from contextlib import ExitStack
+        (self.state / "cpu-pool.json").write_text(json.dumps({**self.settings,
+            "vcpu_budget": 96, "memory_budget_gib": 192, "per_owner_limit": 24}))
+        with ExitStack() as leases:
+            gpu, _ = leases.enter_context(pool.reserve(self.state, "gpu", self.root, slot_count=2))
+            runners = [leases.enter_context(pool.reserve(self.state, f"r{i}", self.root))[0] for i in range(22)]
+            self.assertEqual(gpu.cpus + sum(slot.cpus for slot in runners), 96)
+            self.assertEqual(sum(row["status"] == "reserved" for row in pool.describe(self.state)[1]), 24)
+            with self.assertRaises(pool.Unavailable):
+                leases.enter_context(pool.reserve(self.state, "overflow", self.root / "another"))
         self.assertTrue(all(row["status"] == "free" for row in pool.describe(self.state)[1]))
 
     def test_owner_cap_counts_across_state_directories(self):
@@ -65,9 +113,9 @@ class CpuPoolTests(unittest.TestCase):
     def test_qemu_inherited_descriptor_holds_slot_after_launcher_closes(self):
         child = None
         try:
-            with pool.reserve(self.state, "first-r1", self.root / "first") as (slot, lock):
+            with pool.reserve(self.state, "first-r1", self.root / "first") as (slot, locks):
                 child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
-                                         stdin=subprocess.PIPE, pass_fds=(lock.fileno(),))
+                                         stdin=subprocess.PIPE, pass_fds=tuple(lock.fileno() for lock in locks))
             self.assertEqual(contender(pool.LOCKS / f"slot-{slot.index}"), 23)
             child.stdin.close()
             child.wait(timeout=5)
@@ -153,7 +201,7 @@ class CpuPoolTests(unittest.TestCase):
 sys.path.insert(0,sys.argv[1])
 import cpu_pool
 cpu_pool.LOCKS=pathlib.Path(sys.argv[2])
-with cpu_pool.reserve(pathlib.Path(sys.argv[3]),sys.argv[4],sys.argv[4]) as (slot,lock):
+with cpu_pool.reserve(pathlib.Path(sys.argv[3]),sys.argv[4],sys.argv[4]) as (slot,locks):
     print(json.dumps({'slot':slot.index}),flush=True)
     sys.stdin.buffer.read()
 """
@@ -168,7 +216,7 @@ with cpu_pool.reserve(pathlib.Path(sys.argv[3]),sys.argv[4],sys.argv[4]) as (slo
                 self.assertTrue(select.select([child.stdout], [], [], 5)[0], "Runner reservation stalled")
                 slots.append(json.loads(child.stdout.readline())["slot"])
             self.assertEqual(set(slots), {0, 1})
-            with self.assertRaisesRegex(RuntimeError, "No CPU runner slot is free"):
+            with self.assertRaisesRegex(RuntimeError, "Need 1 free CPU runner slots"):
                 with pool.reserve(self.state, "third-r1", "third"):
                     self.fail("A third launcher stole a held slot")
         finally:

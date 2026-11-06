@@ -80,19 +80,22 @@ def slot_paths(settings):
 
 
 @contextmanager
-def reserve(state, name, worktree):
-    lock = None
+def reserve(state, name, worktree, slot_count=1):
+    if type(slot_count) is not int or slot_count < 1:
+        raise ValueError("CPU slot count must be a positive integer")
+    locks = []
     try:
         with guard():
             settings = configuration(state)
             held = []
-            chosen = None
+            chosen = []
             for index, path in slot_paths(settings):
                 candidate = lock_file(path)
                 if candidate is None:
                     held.append(owner(path))
-                elif chosen is None and index < capacity(settings):
-                    chosen, lock = index, candidate
+                elif len(chosen) < slot_count and index < capacity(settings):
+                    chosen.append(index)
+                    locks.append(candidate)
                 else:
                     candidate.close()
             if any(not isinstance(row, dict) or not isinstance(row.get("pool"), dict)
@@ -103,10 +106,10 @@ def reserve(state, name, worktree):
             if any(row.get("vm") == name and row.get("state") == str(state.resolve()) for row in held):
                 raise RuntimeError(f"The {name} VM already holds a CPU runner reservation")
             worktree = str(Path(worktree).resolve())
-            if sum(row["worktree"] == worktree for row in held) >= settings["per_owner_limit"]:
+            if sum(row["worktree"] == worktree for row in held) + slot_count > settings["per_owner_limit"]:
                 raise Unavailable(f"CPU runner limit reached for {worktree}: {settings['per_owner_limit']}")
-            if lock is None:
-                raise Unavailable("No CPU runner slot is free; use `runners` to inspect reservations")
+            if len(locks) != slot_count:
+                raise Unavailable(f"Need {slot_count} free CPU runner slots; use `runners` to inspect reservations")
             state.mkdir(mode=0o700, parents=True, exist_ok=True)
             if not (state / "cpu-pool.json").exists():
                 with tempfile.NamedTemporaryFile(mode="w", dir=state, delete=False) as output:
@@ -116,15 +119,18 @@ def reserve(state, name, worktree):
                     temporary.replace(state / "cpu-pool.json")
                 finally:
                     temporary.unlink(missing_ok=True)
-            lock.seek(0)
-            lock.truncate()
-            json.dump({"vm": name, "state": str(state.resolve()), "worktree": worktree,
-                       "started": datetime.now(timezone.utc).isoformat(), "pool": settings}, lock)
-            lock.flush()
-            slot = Slot(chosen, settings["runner_cpus"], f"{settings['runner_memory_gib']}G")
-        yield slot, lock
+            metadata = {"vm": name, "state": str(state.resolve()), "worktree": worktree,
+                        "started": datetime.now(timezone.utc).isoformat(), "pool": settings}
+            for lock in locks:
+                lock.seek(0)
+                lock.truncate()
+                json.dump(metadata, lock)
+                lock.flush()
+            slot = Slot(chosen[0], settings["runner_cpus"] * slot_count,
+                        f"{settings['runner_memory_gib'] * slot_count}G")
+        yield slot, tuple(locks)
     finally:
-        if lock is not None:
+        for lock in locks:
             lock.close()
 
 

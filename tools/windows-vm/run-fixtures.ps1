@@ -106,20 +106,24 @@ function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$C
 function ConvertTo-FixtureCommandLine([string[]]$Arguments){
     (@($Arguments|ForEach-Object {'"'+($_ -replace '(\\*)"','$1$1\"' -replace '(\\+)$','$1$1')+'"'}) -join ' ')
 }
-$runs = [ordered]@{ shortcuts = $null }
+$runs = [ordered]@{ shortcuts = @{arguments=$null;hardware_gpu=$false} }
 $debuggable = @()
 foreach ($script in Get-ChildItem (Join-Path $scripts 'exercise-*.ps1')) {
     $fixture = $script.BaseName -replace '^exercise-'
     $parameters = [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$null).ParamBlock.Parameters
     if ('Executable' -notin $parameters.Name.VariablePath.UserPath) { continue }
     if ('DebuggerPath' -in $parameters.Name.VariablePath.UserPath) { $debuggable += $fixture }
-    $runs[$fixture] = @()
+    $runs[$fixture] = @{arguments=@();hardware_gpu=$false}
     foreach ($parameter in $parameters) {
         $option = $parameter.Name.VariablePath.UserPath
-        if ($parameter.StaticType -eq [switch]) { $runs["${fixture}:$option"] = @(Get-FixtureVariantArguments $fixture $option $null) }
+        if ($parameter.StaticType -eq [switch]) { $runs["${fixture}:$option"] = @{arguments=@(Get-FixtureVariantArguments $fixture $option $null);hardware_gpu=$false} }
         $choices = ($parameter.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' }).PositionalArguments.Value
-        foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @(Get-FixtureVariantArguments $fixture $option $choice) }
+        foreach ($choice in $choices | Where-Object { $null -ne $_ -and $_ -ne $parameter.DefaultValue.Value }) { $runs["${fixture}:$choice"] = @{arguments=@(Get-FixtureVariantArguments $fixture $option $choice);hardware_gpu=$false} }
     }
+}
+foreach($hardwareSelector in @('idle-brush','idle-brush:light','touch-gestures','touch-gestures:Simple','touch-gestures:SimpleLight','touch-gestures:ThreeFinger','touch-gestures:layers','localization:ColorOnly','tool-variations:sketch','tool-variations:sketch-light','color-picker:light','tool-bubbles:EraserOnly','tool-bubbles:EraserLightOnly','tool-bubbles:blenders-dark','tool-bubbles:blenders-light','tool-bubbles:BlendersOnly','tool-bubbles:sliders-dark','tool-bubbles:sliders-light','tool-bubbles:SlidersOnly')){
+    if(!$runs.Contains($hardwareSelector)){throw "Unknown hardware fixture: $hardwareSelector"}
+    $runs[$hardwareSelector].hardware_gpu=$true
 }
 function Get-FixtureProcessArguments([string]$Fixture,[string[]]$Arguments){
     if($Fixture -cne 'snap'){return $Arguments}
@@ -181,12 +185,14 @@ $selected = if ($Name) { $Name -split ',' } else { @() }
 $planned = @(Select-Fixtures $runs.Keys $selected)
 if (!$planned.Count) { throw 'No fixtures selected.' }
 if($List){
-    $controls=@(@(foreach($name in $planned){
-        $fixture=($name -split ':')[0]
-        Control-Fixture $fixture $runs[$name]
-        Get-FixtureCompanionArguments $fixture $runs[$name] {param($kind)$kind}|Where-Object {$_ -notlike '-*'}
-    })|Where-Object {$_}|Sort-Object -Unique)
-    @{runs=$planned;controls=$controls}|ConvertTo-Json -Compress;exit
+    $requirements=[ordered]@{}
+    foreach($name in $planned){
+        $fixture=($name -split ':')[0];$arguments=$runs[$name].arguments
+        $controls=@(@(Control-Fixture $fixture $arguments;Get-FixtureCompanionArguments $fixture $arguments {param($kind)$kind}|Where-Object {$_ -notlike '-*'})|Where-Object {$_}|Sort-Object -Unique)
+        $requirements[$name]=@{hardware_gpu=$runs[$name].hardware_gpu;controls=$controls}
+    }
+    $controls=@($requirements.Values|ForEach-Object {$_.controls}|Sort-Object -Unique)
+    @{runs=$planned;controls=$controls;requirements=$requirements}|ConvertTo-Json -Depth 5 -Compress;exit
 }
 function Get-FixtureTimeoutSeconds([int]$Count,[int]$Minutes){
     [int][Math]::Min(86400,[long]$Count*($Minutes*60+120))
@@ -265,6 +271,14 @@ function Save-Evidence([string]$Log) {
         & robocopy.exe $context.run $evidence /E /R:0 /W:0 /NFL /NDL /NJH /NJS | Out-Null
         if ($LASTEXITCODE -ge 8) { throw "Could not preserve fixture evidence: $($context.run)" }
     }
+    if($HardwareGpu){
+        $scales=@(Get-ChildItem -LiteralPath $evidence -Filter 'ui-state-*.json'|ForEach-Object {
+            $snapshot=Get-Content -LiteralPath $_.FullName -Raw|ConvertFrom-Json
+            @{file=$_.Name;process_id=$snapshot.process_id;window_id=$snapshot.window_id;scale=$snapshot.model.layout_input.cache.context.scale}
+        })
+        @{context_scales=$scales;expected_scale=$buildManifest.fixture_scale}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath "$Log-display.json"
+        if($buildManifest.fixture_scale -and (!$scales.Count -or @($scales|Where-Object {$_.scale -ne $buildManifest.fixture_scale}).Count)){throw 'Hardware fixture runtime scale differs from the round display'}
+    }
     if ($HardwareGpu -and $controlFixture -ne 'Popup') {
         . (Join-Path $PSScriptRoot 'test-hardware-traces.ps1')
         Assert-HardwareTraces -Directory $evidence -Output "$Log-adapters.json"
@@ -334,7 +348,7 @@ Restore-FixtureTextScale $textScale
 $claimed=[Collections.Generic.List[string]]::new()
 $results = Join-Path $Output 'results.jsonl'
 while($null -ne ($name=Get-NextFixture $planned $queue $claimed)){
-    $run=[pscustomobject]@{Key=$name;Value=$runs[$name]}
+    $run=[pscustomobject]@{Key=$name;Value=$runs[$name].arguments}
     if($queue){Write-FixturePlan (Join-Path $Output 'plan.json') $claimed.ToArray()}
     $fixture = ($run.Key -split ':')[0]
     Stop-Review

@@ -10,7 +10,7 @@ The table below describes the default WARP configuration:
 | Runs in a VM | Needs a hardware GPU |
 | --- | --- |
 | `check`: the build, native input tests and Rust unit tests, including the GPU-backed `layer-host` tests and the D3D12 document, tab and filter-package tests | `layer-render-wgpu` unit tests, which time out and exceed pixel tolerances on WARP |
-| `fixtures`: the native UI fixtures | ignored `layer-windows` tests that remove devices, the HDR document test and the color import/export round trip |
+| `fixtures`: native UI fixtures except marked registry rows | ignored `layer-windows` tests that remove devices, the HDR document test and the color import/export round trip |
 | | `tools/performance` scripts, PresentMon, physical pens and touch screens, HDR output, multiple displays and visual parity captures |
 
 Requirements: x86_64 Linux with KVM, Python 3, about 150 GB of free disk space for
@@ -72,8 +72,8 @@ tools/windows-vm/windows-vm.py ssh 'cd C:\capycanvas; cargo clippy --locked -p l
 | `list` | Show the VMs and which are running. |
 | `ssh [command]` | Open PowerShell, or run a command, as the `capy` administrator. |
 | `sync` | Copy the working tree without building. |
-| `fixtures [name ...]` | Run UI fixtures on WARP; see below. |
-| `fixtures --runners N [name ...]`, `runners [--reset]` | Shard WARP fixtures over reserved CPU runners; list reservations or delete stopped runners owned by this worktree. |
+| `fixtures [name ...]` | Run UI fixtures, routing marked rows to one owned GPU VM; see below. |
+| `fixtures --runners N [name ...]`, `runners [--reset]` | Shard CPU fixtures over reserved runners, with marked rows on one owned GPU VM; list reservations or delete stopped runners owned by this worktree. |
 | `screenshot <file.png>` | Save the VM display. |
 | `reset` | Delete the VM; the next `start` makes a fresh one. |
 | `destroy` | Delete the base image and every VM; the ISO stays. Stop the VMs first. |
@@ -106,8 +106,8 @@ tools/windows-vm/windows-vm.py fixtures --runners 3 button-feedback:default navi
 tools/windows-vm/windows-vm.py fixtures --runners 6 --no-build layers palettes proof header selection editor
 ```
 
-The primary VM builds the app and only the Feedback, Popup or LayerDrop controls
-needed by the planned selectors. The helper ships their runtime files, assets and build record to owned
+The primary VM builds each required software or hardware app once, with only the
+Feedback, Popup or LayerDrop controls needed by that mode's planned selectors. The helper ships their runtime files, assets and build record to owned
 `<primary>-r1` … runner VMs, validates every recorded hash, and runs fixtures in parallel.
 Idle VMs claim remaining selectors once, longest recorded duration first. Bare
 names and `:default` keep the same selection rules as ordinary `fixtures`.
@@ -132,6 +132,13 @@ time. A missing selector or shard fails the run. Runners stop on success or
 failure; `--keep-runners` retains their reservations for another round. Their
 prepared disks persist. Stop retained runners with `--vm <runner> stop`, and use
 `runners --reset` to delete this primary VM's stopped runner disks.
+
+Marked registry rows run on one pool GPU VM at 150% scale.
+It holds two CPU slots (8 vCPU / 16 GiB), leaving at most 22 CPU runners
+in a 96-vCPU pool. Admission requires `MemAvailable` of at least the total
+memory of VMs being started plus 40 GiB. The card and both slots are always
+released, even with `--keep-runners`.
+If no card is free, the run stops before any fixture starts; check `gpus`.
 
 CPU runners use WARP and cannot claim GPUs. They check UI structure, shared state
 and injected input; hardware rendering and performance still need the checks
@@ -306,7 +313,7 @@ not a RAM-backed `/tmp`.
 
 ## UI fixtures on the software adapter
 
-`fixtures` syncs, builds Release with `build.ps1 -SoftwareAdapterTests` into
+For CPU rows, `fixtures` syncs and builds Release with `build.ps1 -SoftwareAdapterTests` into
 `artifacts\windows\SoftwareAdapter`, and runs
 [`run-fixtures.ps1`](../../tools/windows-vm/run-fixtures.ps1) in the VM's desktop
 session through a scheduled task, because SSH sessions cannot use UI Automation
@@ -340,7 +347,7 @@ full dark/light pair. A bare `canvas-editing` includes the focused variants too.
 Name fixtures (`layers`) or single variants (`header:pen`). A bare name includes all its variants;
 `localization:default` selects only the default dark, normal-text run. Split long
 matrices with `fixtures --runners N` within the [CPU pool](#cpu-runner-pool) budget.
-With no names it runs `shortcuts`
+The registry marks hardware rows under the [validation rule](testing.md#windows-validation-scope); new rows default to CPU. With no names it runs `shortcuts`
 and every fixture that launches its own app, once with its defaults and once for
 each switch and each other `ValidateSet` choice, including document GPU recovery
 and exhausted recovery. The isolated removal hook drains rendering and

@@ -21,10 +21,17 @@ configured state/artifact directories and prefer `/mnt/localssd` when available.
 ## Choose and reserve
 
 Builds and model/input checks use ordinary `check`; software UI journeys use
-`fixtures`. WARP results do not establish hardware rendering or performance.
+`fixtures`. Marked registry rows run on the owned primary with one pool GPU;
+other rows use WARP CPU runners. WARP results do not establish hardware rendering
+or performance.
 For fixture lists with more than a few selectors, use `fixtures --runners N`
 within the CPU pool budget shown by `runners`; reserve only what the list needs.
-The run releases its runners on completion. Stop retained `--keep-runners` VMs
+The round GPU holds two ordinary CPU slots (8 vCPU / 16 GiB), runs at the CPU
+runners' 150% scale and always releases its card and slots. The coordinator
+records memory admission and per-row scale evidence; wrong scale or mode fails.
+The full plan and merged results cover both partitions. New rows default to
+CPU; hardware rows need a proved WARP-only first-dispatch/stroke stall, must clear
+that stage on hardware and reach the furthest recorded WARP stage. The run releases its runners on completion. Stop retained `--keep-runners` VMs
 when finished; keep the GPU pool for checks that require hardware.
 
 For hardware rendering:

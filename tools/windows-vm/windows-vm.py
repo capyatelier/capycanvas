@@ -294,7 +294,7 @@ def forwarded_ssh_port(machine):
     return int(ports[0])
 
 
-def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None, memory=None):
+def launch(machine, cdroms=(), gui=False, gpu=None, reservations=(), cpus=None, memory=None):
     for directory in (RUNTIME, machine.runtime):
         directory.mkdir(mode=0o700, exist_ok=True)
     terminate(machine.tpm_pid, "swtpm")
@@ -333,11 +333,11 @@ def launch(machine, cdroms=(), gui=False, gpu=None, reservation=None, cpus=None,
         machine.gpu.write_text(gpu.address + "\n")
     else:
         machine.gpu.unlink(missing_ok=True)
-    if reservation is not None:
-        kind = "gpu" if gpu else "runner"
-        command += ["-add-fd", f"fd={reservation.fileno()},set=99,opaque=capycanvas-{kind}-{machine.name}"]
+    kind = "gpu" if gpu else "runner"
+    for index, reservation in enumerate(reservations):
+        command += ["-add-fd", f"fd={reservation.fileno()},set={99 + index},opaque=capycanvas-{kind}-{machine.name}"]
     try:
-        run(*command, **({"pass_fds": (reservation.fileno(),)} if reservation is not None else {}))
+        run(*command, **({"pass_fds": tuple(lock.fileno() for lock in reservations)} if reservations else {}))
     except subprocess.CalledProcessError:
         terminate(machine.tpm_pid, "swtpm")
         raise
@@ -482,9 +482,19 @@ def boot_locked(machine, gui, gpu):
         sys.exit(f"The base image does not exist; run `{PROGRAM} create`.")
     if gpu and resource.getrlimit(resource.RLIMIT_MEMLOCK)[0] != resource.RLIM_INFINITY:
         sys.exit("GPU VMs require unlimited locked memory; use start --gpu after the host GPU setup.")
-    reservation_context = (cpu_pool.reserve(STATE, machine.name, ROOT) if runner else
-                           gpu_pool.reserve(STATE, machine.name, gpu) if gpu else nullcontext((None, None)))
-    with reservation_context as (device, reservation):
+    with ExitStack() as reservations:
+        device = None
+        descriptors = ()
+        cpus, memory = None, None
+        if runner or gpu and os.environ.get("CAPYCANVAS_VM_ROUND_GPU") == "1":
+            slot, descriptors = reservations.enter_context(cpu_pool.reserve(
+                STATE, machine.name, ROOT, slot_count=1 if runner else 2))
+            cpus, memory = slot.cpus, slot.memory
+            if gpu and (cpus, memory) != (8, "16G"):
+                raise ValueError("Round GPU requires two 4-vCPU / 8-GiB CPU slots")
+        if gpu:
+            device, card = reservations.enter_context(gpu_pool.reserve(STATE, machine.name, gpu))
+            descriptors = (card, *descriptors)
         if not machine.directory.exists():
             fresh = machine.directory.with_name(f"{machine.name}.partial")
             if runner and fresh.exists():
@@ -496,14 +506,19 @@ def boot_locked(machine, gui, gpu):
             fresh.rename(machine.directory)
         if runner:
             machine.runner.write_text(json.dumps(runner, indent=2))
-            launch(machine, gui=gui, reservation=reservation, cpus=device.cpus, memory=device.memory)
-        else:
-            launch(machine, gui=gui, gpu=device, reservation=reservation)
+        launch(machine, gui=gui, gpu=device, reservations=descriptors, cpus=cpus, memory=memory)
     wait_for_ssh(machine, 10 * 60)
     prepare(machine)
     if gpu:
         prepare_gpu_driver(machine)
-        prepare_gpu_display(machine)
+        record = prepare_gpu_display(machine)
+        if os.environ.get("CAPYCANVAS_VM_ROUND_GPU") == "1":
+            record = prepare_gpu_display(machine, fixture_scale=150)
+            (machine.directory / "fixture-scale-change.json").write_text(json.dumps(record, indent=2))
+            if record.get("restart_required"):
+                restart(machine)
+            record = prepare_gpu_display(machine)
+            validate_round_display(record)
 
 
 def prepare_gpu_driver(machine):
@@ -540,14 +555,17 @@ def prepare_gpu_driver(machine):
     stamp.write_text(version + "\n")
 
 
-def prepare_gpu_display(machine):
+def prepare_gpu_display(machine, fixture_scale=None):
     width, height = map(int, DISPLAY.split("x"))
     directory = r"C:\capycanvas-vm-display"
     receipt = directory + r"\receipt.json"
+    scale = f" -FixtureScale {fixture_scale}" if fixture_scale else ""
+    task = "capycanvas-hardware-display" + ("-fixture" if fixture_scale else "")
+    trigger = "" if fixture_scale else " -Trigger $trigger"
     with claim(machine):
         guest_script(machine, f"""$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-$task='capycanvas-hardware-display'
+$task='{task}'
 $receipt='{receipt}'
 $deadline=(Get-Date).AddSeconds(120)
 while (!(Get-Process explorer -IncludeUserName -ErrorAction SilentlyContinue | Where-Object UserName -Like '*\\{USER}')) {{
@@ -566,15 +584,15 @@ while ((Get-ScheduledTask $task -ErrorAction SilentlyContinue).State -eq 'Runnin
                          f"[Convert]::FromBase64String('{content}'))")
         guest_script(machine, f"""$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
-$task='capycanvas-hardware-display'
+$task='{task}'
 $receipt='{receipt}'
 $deadline=(Get-Date).AddSeconds(120)
 Remove-Item -LiteralPath $receipt -Force -ErrorAction SilentlyContinue
-$action=New-ScheduledTaskAction -Execute '{GUEST_PWSH}' -Argument '-NoProfile -WindowStyle Hidden -File {directory}\\hardware-display.ps1 -Width {width} -Height {height} -Receipt {receipt}'
+$action=New-ScheduledTaskAction -Execute '{GUEST_PWSH}' -Argument '-NoProfile -WindowStyle Hidden -File {directory}\\hardware-display.ps1 -Width {width} -Height {height} -Receipt {receipt}{scale}'
 $principal=New-ScheduledTaskPrincipal -UserId {USER} -LogonType Interactive -RunLevel Highest
 $trigger=New-ScheduledTaskTrigger -AtLogOn -User {USER}
 $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-Register-ScheduledTask $task -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
+Register-ScheduledTask $task -Action $action -Principal $principal{trigger} -Settings $settings -Force | Out-Null
 Start-ScheduledTask $task
 while (!(Test-Path -LiteralPath $receipt)) {{
     if ((Get-Date) -ge $deadline) {{ throw 'Hardware display receipt timed out' }}
@@ -591,6 +609,7 @@ $result|ConvertTo-Json -Depth 5
                 display.get("width"), display.get("height"), display.get("refreshHz")) != (width, height, 120):
             sys.exit("Hardware desktop receipt does not match the requested NVIDIA primary mode.")
         (machine.directory / "display.json").write_text(json.dumps(record, indent=2))
+        return record
 
 
 def start(args):
@@ -643,6 +662,8 @@ def start_gpu_service_locked(machine, args):
     environment = {"CAPYCANVAS_VM_GPU_SERVICE": "1", "CAPYCANVAS_VM_DIR": str(STATE),
                    "CAPYCANVAS_VM_RUNTIME": str(RUNTIME), "CAPYCANVAS_VM_CPUS": CPUS,
                    "CAPYCANVAS_VM_MEMORY": MEMORY, "CAPYCANVAS_VM_DISPLAY": DISPLAY}
+    if getattr(args, "round_gpu", False):
+        environment["CAPYCANVAS_VM_ROUND_GPU"] = "1"
     command += [f"--setenv={key}={value}" for key, value in environment.items()]
     command += [*[item.replace("$", "$$") for item in program], "start", "--gpu", args.gpu]
     if args.gui:
@@ -1015,24 +1036,22 @@ def execute_fixtures(machine, args, directory, provenance, names, queue=None):
 
 
 def fixtures(args):
-    if getattr(args, "runners", None) is not None:
-        return sharded_fixtures(args)
-    if getattr(args, "keep_runners", False):
+    if getattr(args, "keep_runners", False) and getattr(args, "runners", None) is None:
         raise ValueError("--keep-runners requires --runners")
+    if not getattr(args, "hardware_gpu", False):
+        return sharded_fixtures(args)
+    if getattr(args, "runners", None) is not None:
+        raise ValueError("CPU runners cannot be used with --hardware-gpu")
     fixture_selection(args.names)
     machine = selected(args)
-    hardware = getattr(args, "hardware_gpu", False)
-    if hardware:
-        start(argparse.Namespace(vm=args.vm, gui=False, gpu="auto"))
-    else:
-        boot(machine, gui=False)
+    start(argparse.Namespace(vm=args.vm, gui=False, gpu="auto"))
     with claim(machine):
         revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip()
         hashes = sync_machine(machine)
-        plan = planned_fixtures(machine, args, fixture_directory(hardware, args.profile))
-        directory, record = fixture_build(machine, hashes, args.no_build, hardware, args.profile, controls=plan["controls"])
+        plan = planned_fixtures(machine, args, fixture_directory(True, args.profile))
+        directory, record = fixture_build(machine, hashes, args.no_build, True, args.profile, controls=plan["controls"])
         result = execute_fixtures(machine, args, directory,
-                                  {"revision": revision, "source": hashes, "build": record, "hardware_gpu": hardware}, args.names)
+                                  {"revision": revision, "source": hashes, "build": record, "hardware_gpu": True}, args.names)
     if result["failure"] or not result["complete"]:
         sys.exit(result["failure"] or "The fixture runner stopped before finishing.")
     validate_results(result["plan"], result["results"])
@@ -1049,6 +1068,12 @@ def planned_fixtures(machine, args, directory):
     if not isinstance(selectors, list) or not selectors or len(set(selectors)) != len(selectors):
         raise ValueError("The guest returned an empty or duplicate fixture plan")
     fixture_selection(selectors)
+    requirements = plan.get("requirements")
+    if not isinstance(requirements, dict) or set(requirements) != set(selectors):
+        raise ValueError("Fixture requirements do not cover the exact plan")
+    for row in requirements.values():
+        if not isinstance(row, dict) or type(row.get("hardware_gpu")) is not bool or not isinstance(row.get("controls"), list) or any(kind not in ("Feedback", "Popup", "LayerDrop") for kind in row["controls"]):
+            raise ValueError("Invalid fixture adapter or control requirements")
     return plan
 
 
@@ -1107,6 +1132,33 @@ def fixture_queue_config(machine, queue):
         guest(machine, f"if(Test-Path -LiteralPath '{path}'){{Remove-Item -LiteralPath '{path}' -Force -ErrorAction Stop}}")
 
 
+def validate_round_display(record):
+    display = record.get("display", {})
+    if record.get("restart_required") or not record.get("success") or not display.get("primary") or "NVIDIA" not in display.get("adapter", "") or display.get("refreshHz") != 120 or (
+            display.get("width"), display.get("height"), display.get("scalePercent")) != (2560, 1600, 150):
+        raise ValueError("Round GPU requires a verified 2560x1600 desktop at 150% scale")
+
+
+def fixture_memory_gib(memory):
+    size = re.fullmatch(r"([1-9][0-9]*)([KMGT]?)", str(memory), re.IGNORECASE)
+    if not size:
+        raise ValueError("Fixture VM memory must be a positive integer with an optional K, M, G or T suffix")
+    power = {"K": 10, "M": 20, "": 20, "G": 30, "T": 40}[size[2].upper()]
+    return ((int(size[1]) << power) + (1 << 30) - 1) // (1 << 30)
+
+
+def fixture_memory_admission(local, phase, sizes):
+    available = next(int(line.split()[1]) * 1024 for line in Path("/proc/meminfo").read_text().splitlines()
+                     if line.startswith("MemAvailable:"))
+    required = (sum(sizes) + 40) * 1024 ** 3
+    receipt = {"phase": phase, "available_bytes": available, "required_bytes": required,
+               "vm_sizes_gib": sizes, "admitted": available >= required}
+    with (local / "memory-admission.jsonl").open("a") as output:
+        output.write(json.dumps(receipt) + "\n")
+    if not receipt["admitted"]:
+        raise RuntimeError(f"{phase}: MemAvailable {available} bytes is below required {required}")
+
+
 def sharded_fixtures(args):
     if args.hardware_gpu:
         raise ValueError("CPU runners cannot be used with --hardware-gpu")
@@ -1114,98 +1166,186 @@ def sharded_fixtures(args):
     primary = selected(args)
     if primary.runner.exists():
         raise ValueError("Build and shard from the worktree's primary VM")
-    boot(primary, gui=False)
     local = ARTIFACTS / primary.name / ("shards-" + time.strftime("%Y%m%d-%H%M%S"))
     local.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
-    with claim(primary):
-        hashes = sync_machine(primary)
-        plan = planned_fixtures(primary, args, fixture_directory(False, args.profile))
-        selectors = plan["runs"]
-        directory, record = fixture_build(primary, hashes, args.no_build, False, args.profile, controls=plan["controls"])
-        provenance = {"revision": run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip(),
-                      "source": hashes, "build": record, "hardware_gpu": False}
-        archive = export_fixture_build(primary, directory, record, local)
-    settings = cpu_pool.configuration(STATE)
-    candidates = [runner_machine(primary, index + 1) for index in range(min(args.runners, len(selectors), settings["per_owner_limit"]))]
-    used = []
-    locks = {}
+    used, locks, shards = [], {}, []
+    selectors, cpu_selectors, gpu_selectors = [], [], []
+    provenance = {}
+    primary_owned = False
+    warm_cpu = False
+    def exact_names(names):
+        return [name if ":" in name else name + ":default" for name in names]
     def start_runner(machine):
         lock = claim(machine)
         try:
             boot(machine, gui=False)
             return machine, lock, None
-        except cpu_pool.Unavailable as error:
-            lock.close()
-            return None, None, str(error)
-        except (Exception, SystemExit):
+        except (Exception, SystemExit) as error:
             try:
                 if getattr(machine, "launched_pid", None) is not None and machine.qemu_pid.exists() and int(machine.qemu_pid.read_text()) == machine.launched_pid:
                     stop_machine(machine)
             finally:
                 lock.close()
+            if isinstance(error, cpu_pool.Unavailable):
+                return None, None, str(error)
             raise
-    def run_shard(machine):
+    def run_cpu(machine):
         result = {"vm": machine.name, "results": [], "complete": False, "failure": None}
         try:
-            synced = sync_machine(machine)
-            if synced != hashes:
-                raise ValueError("The source tree changed while preparing fixture runners")
-            import_fixture_build(machine, directory, record, archive, synced, args.profile)
-            names = [name if ":" in name else name + ":default" for name in selectors]
-            with fixture_queue_config(machine, queue) as configuration:
-                result = execute_fixtures(machine, args, directory, provenance, names, queue=configuration)
+            directory, record = builds[False]
+            if machine is not primary:
+                synced = sync_machine(machine)
+                if synced != hashes:
+                    raise ValueError("The source tree changed while preparing fixture runners")
+                import_fixture_build(machine, directory, record, archive, synced, args.profile)
+            with (fixture_queue_config(machine, queue) if queue else nullcontext(None)) as configuration:
+                result = execute_fixtures(machine, args, directory, mode_provenance(False),
+                                          exact_names(cpu_selectors), queue=configuration)
         except (Exception, SystemExit) as error:
             result["failure"] = "; ".join(filter(None, (result.get("failure"), str(error))))
-        return dict(result, selectors=queue.assignments[machine.name])
-    try:
-        with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
-            futures = [executor.submit(start_runner, machine) for machine in candidates]
-            failures = []
-            for future in futures:
+        return dict(result, selectors=queue.assignments[machine.name] if queue else cpu_selectors)
+
+    def mode_provenance(hardware):
+        return {"revision": provenance["revision"], "source": hashes,
+                "build": builds[hardware][1], "hardware_gpu": hardware}
+    def run_gpu():
+        nonlocal primary_owned
+        result = {"vm": primary.name, "results": [], "complete": False, "failure": None}
+        try:
+            with claim(primary):
                 try:
-                    machine, lock, error = future.result()
-                except (Exception, SystemExit) as error:
-                    failures.append(str(error))
-                    continue
-                if machine:
-                    used.append(machine)
-                    locks[machine.name] = lock
-                else:
-                    print(error, flush=True)
-            if failures:
-                raise RuntimeError("; ".join(failures))
-        if not used:
-            raise RuntimeError("No CPU runner slot was available; see `runners`")
-        with fixture_shards.Queue(selectors, [machine.name for machine in used], fixture_durations(), local / "plan.json") as queue:
-            with ThreadPoolExecutor(max_workers=len(used)) as executor:
-                shards = list(executor.map(run_shard, used))
-        results, errors = fixture_shards.merge(selectors, shards)
-        (local / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in results))
-        (local / "shards.json").write_text(json.dumps(shards, indent=2))
-        (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
-        (local / "summary.json").write_text(json.dumps({"wall_seconds": time.monotonic() - started, "errors": errors}, indent=2))
-        print(f"{sum(row['exit'] == 0 for row in results)}/{len(selectors)} passed on {len(used)} CPU runners. Logs: {local}")
-        if errors:
-            raise RuntimeError("; ".join(errors))
+                    if sync_machine(primary) != hashes:
+                        raise ValueError("The source tree changed while preparing GPU fixtures")
+                    directory, expected = builds[True]
+                    directory, record = fixture_build(primary, hashes, True, True, args.profile,
+                                                       controls=list(expected["controls"]))
+                    if record != expected:
+                        raise ValueError("The retained hardware build changed before GPU execution")
+                    publish_build_record(primary, directory, dict(record, fixture_scale=1.5))
+                    result = execute_fixtures(primary, args, directory, mode_provenance(True), exact_names(gpu_selectors))
+                finally:
+                    try:
+                        stop_machine(primary)
+                        primary_owned = False
+                    except (Exception, SystemExit) as error:
+                        result["failure"] = "; ".join(filter(None, (result.get("failure"), f"GPU shutdown: {error}")))
+        except (Exception, SystemExit) as error:
+            result["failure"] = "; ".join(filter(None, (result.get("failure"), str(error))))
+        return dict(result, selectors=gpu_selectors)
+    try:
+        with claim(primary):
+            if primary.gpu.exists() and running(primary):
+                raise ValueError("Stop the primary GPU VM before preparing a fixture round")
+            if not running(primary):
+                fixture_memory_admission(local, "build-primary", [fixture_memory_gib(MEMORY)])
+            primary_owned = True
+            boot(primary, gui=False)
+            hashes = sync_machine(primary)
+            plan = dict(planned_fixtures(primary, args, fixture_directory(False, args.profile)))
+            selectors = plan["runs"]
+            requirements = plan["requirements"]
+            cpu_selectors = [name for name in selectors if not requirements[name]["hardware_gpu"]]
+            gpu_selectors = [name for name in selectors if requirements[name]["hardware_gpu"]]
+            warm_cpu = args.runners is None and bool(args.names) and not gpu_selectors
+            primary_owned = not warm_cpu
+            (local / "plan.json").write_text(json.dumps(plan, indent=2))
+            if gpu_selectors and (str(CPUS), MEMORY, DISPLAY) != ("8", "16G", "2560x1600"):
+                raise ValueError("Round GPU requires existing 8-vCPU / 16-GiB, 2560x1600 settings")
+            builds = {}
+            for hardware, names in ((False, cpu_selectors), (True, gpu_selectors)):
+                if names:
+                    controls = sorted({kind for name in names for kind in requirements[name]["controls"]})
+                    builds[hardware] = fixture_build(primary, hashes, args.no_build, hardware, args.profile, controls=controls)
+            provenance = {"revision": run("git", "rev-parse", "HEAD", cwd=ROOT, capture_output=True, text=True).stdout.strip(),
+                          "source": hashes, "build": builds[False if cpu_selectors else True][1], "hardware_gpu": not bool(cpu_selectors),
+                          "builds": {"hardware" if mode else "software": record for mode, (_, record) in builds.items()}}
+            (local / "provenance.json").write_text(json.dumps(provenance, indent=2))
+            if warm_cpu:
+                queue = None
+                shards = [run_cpu(primary)]
+            else:
+                archive = export_fixture_build(primary, *builds[False], local) if cpu_selectors else None
+                stop_machine(primary)
+                primary_owned = False
+        if gpu_selectors:
+            fixture_memory_admission(local, "gpu-primary", [16])
+            primary_owned = True
+            start(argparse.Namespace(vm=primary.name, gui=False, gpu="auto", round_gpu=True))
+            display = json.loads((primary.directory / "display.json").read_text())
+            (local / "gpu-display.json").write_text(json.dumps(display, indent=2))
+            shutil.copyfile(primary.directory / "fixture-scale-change.json", local / "gpu-scale-change.json")
+            validate_round_display(display)
+        if cpu_selectors and not warm_cpu:
+            settings, slots = cpu_pool.describe(STATE)
+            free = sum(row["status"] == "free" for row in slots)
+            owned = sum(bool(row["owner"]) and row["owner"].get("worktree") == str(ROOT.resolve()) for row in slots)
+            limit = min(args.runners or 1, len(cpu_selectors), settings["per_owner_limit"] - (2 if gpu_selectors else 0))
+            candidates = [runner_machine(primary, index + 1) for index in range(limit)]
+            retained = [machine for machine in candidates if running(machine)]
+            new = [machine for machine in candidates if machine not in retained]
+            count = min(free, max(0, settings["per_owner_limit"] - owned))
+            candidates = retained + new[:count]
+            if not candidates:
+                raise RuntimeError("No CPU runner slot was available; see `runners`")
+            fixture_memory_admission(local, "cpu-batch", [settings["runner_memory_gib"]] * min(count, len(new)))
+            count = len(candidates)
+            with ThreadPoolExecutor(max_workers=count) as executor:
+                futures = [executor.submit(start_runner, machine) for machine in candidates]
+                failures = []
+                for future in futures:
+                    try:
+                        machine, lock, error = future.result()
+                        if machine:
+                            used.append(machine)
+                            locks[machine.name] = lock
+                        else:
+                            print(error, flush=True)
+                    except (Exception, SystemExit) as error:
+                        failures.append(str(error))
+                if failures:
+                    raise RuntimeError("; ".join(failures))
+            if not used:
+                raise RuntimeError("No CPU runner slot was available; see `runners`")
+        if not warm_cpu:
+            with (fixture_shards.Queue(cpu_selectors, [machine.name for machine in used], fixture_durations(), local / "cpu-plan.json")
+                  if used else nullcontext(None)) as queue:
+                with ThreadPoolExecutor(max_workers=len(used) + bool(gpu_selectors)) as executor:
+                    futures = [executor.submit(run_cpu, machine) for machine in used]
+                    if gpu_selectors:
+                        futures.append(executor.submit(run_gpu))
+                    shards = [future.result() for future in futures]
+    except (Exception, SystemExit) as error:
+        shards.append({"vm": primary.name + "-setup", "selectors": [], "results": [],
+                       "complete": False, "failure": str(error)})
     finally:
         cleanup_errors = []
-        for machine in used:
+        for machine in [*used, *([primary] if primary_owned else [])]:
             try:
-                if not args.keep_runners:
+                if machine is primary or not args.keep_runners:
                     stop_machine(machine)
             except (Exception, SystemExit) as error:
                 cleanup_errors.append(f"{machine.name}: {error}")
             finally:
-                locks[machine.name].close()
-        summary_path = local / "summary.json"
-        if summary_path.exists():
-            summary = json.loads(summary_path.read_text())
-            summary["wall_seconds"] = time.monotonic() - started
-            summary_path.write_text(json.dumps(summary, indent=2))
+                if machine.name in locks:
+                    locks[machine.name].close()
+        if selectors:
+            results, errors = fixture_shards.merge(selectors, shards)
+        else:
+            results, errors = [], ["No fixture plan was prepared", *[row["failure"] for row in shards if row.get("failure")]]
+        errors.extend(cleanup_errors)
+        if selectors:
+            plan["shards"] = {row["vm"]: row["selectors"] for row in shards}
+            (local / "plan.json").write_text(json.dumps(plan, indent=2))
+        (local / "results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in results))
+        (local / "shards.json").write_text(json.dumps(shards, indent=2))
+        (local / "summary.json").write_text(json.dumps({"wall_seconds": time.monotonic() - started, "errors": errors}, indent=2))
         if cleanup_errors:
             (local / "shutdown-errors.json").write_text(json.dumps(cleanup_errors, indent=2))
-            raise RuntimeError("Could not stop CPU runners: " + "; ".join(cleanup_errors))
+    destination = "the primary VM" if warm_cpu else f"{len(used)} CPU runners and {int(bool(gpu_selectors))} GPU VM"
+    print(f"{sum(row['exit'] == 0 for row in results)}/{len(selectors)} passed on {destination}. Logs: {local}")
+    if errors:
+        raise RuntimeError("; ".join(errors))
     (local / "complete").touch()
 
 
@@ -1287,7 +1427,7 @@ def main():
     command("sync", sync, f"copy the working tree to {GUEST_REPO}, keeping build outputs")
     command("check", check, "sync, build and run the tests that need no GPU").add_argument(
         "--debug", action="store_true", help="use unoptimized Debug builds and tests (default: Release)")
-    fixture = command("fixtures", fixtures, "sync, build and run the UI fixtures")
+    fixture = command("fixtures", fixtures, "sync, build and run UI fixtures (no names: one CPU runner plus one GPU VM)")
     fixture.add_argument("names", nargs="*", help="fixtures to run, e.g. layers or header:pen (default: all)")
     fixture.add_argument("--no-build", action="store_true", help="reuse a validated build for the selected adapter mode")
     fixture.add_argument("--profile", choices=("release", "dev-perf"), default="release",

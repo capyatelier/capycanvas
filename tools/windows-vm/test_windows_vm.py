@@ -160,6 +160,25 @@ class GpuLifecycleTests(unittest.TestCase):
         self.assertEqual(commands, [{"execute": "qmp_capabilities"},
                                    {"execute": "human-monitor-command", "arguments": {"command-line": "info usernet"}}])
 
+    def test_launch_passes_exact_gpu_functions_and_keeps_reservation_fd_in_qemu(self):
+        gpu = SimpleNamespace(address="0000:03:00.0", functions=["0000:03:00.0", "0000:03:00.1"])
+        with open(self.root / "reservation", "w+") as reservation, \
+                patch.object(vm, "terminate"), patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
+                patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            vm.launch(self.machine, gpu=gpu, reservations=(reservation,))
+            command = next(call for call in run.call_args_list if call.args[0] == "qemu-system-x86_64")
+            self.assertEqual(command.kwargs["pass_fds"], (reservation.fileno(),))
+            args = command.args
+            self.assertEqual(args[args.index("-smp") + 1], "cpus=12,sockets=1,cores=12,threads=1")
+            self.assertIn("q35-pcihost.pci-hole64-size=256G", args)
+            self.assertIn("name=opt/ovmf/X-PciMmio64Mb,string=262144", args)
+            self.assertIn(f"fd={reservation.fileno()},set=99,opaque=capycanvas-gpu-review", args)
+            functions = [arg for arg in args if isinstance(arg, str) and arg.startswith("vfio-pci,")]
+            self.assertEqual(functions, [
+                "vfio-pci,host=0000:03:00.0,bus=gpuroot,addr=0x0.0,multifunction=on",
+                "vfio-pci,host=0000:03:00.1,bus=gpuroot,addr=0x0.1,multifunction=on"])
+        self.assertEqual(self.machine.gpu.read_text(), "0000:03:00.0\n")
+
     def test_launch_publishes_kernel_bound_ssh_port_after_qemu_starts(self):
         order = []
         self.machine.ssh_port.write_text("2200\n")
@@ -209,25 +228,6 @@ class GpuLifecycleTests(unittest.TestCase):
                 self.assertFalse(self.machine.ssh_port.exists())
                 self.assertEqual(self.machine.launched_pid, 43210)
 
-    def test_launch_passes_exact_gpu_functions_and_keeps_reservation_fd_in_qemu(self):
-        gpu = SimpleNamespace(address="0000:03:00.0", functions=["0000:03:00.0", "0000:03:00.1"])
-        with open(self.root / "reservation", "w+") as reservation, \
-                patch.object(vm, "terminate"), patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
-                patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
-            vm.launch(self.machine, gpu=gpu, reservation=reservation)
-            command = next(call for call in run.call_args_list if call.args[0] == "qemu-system-x86_64")
-            self.assertEqual(command.kwargs["pass_fds"], (reservation.fileno(),))
-            args = command.args
-            self.assertEqual(args[args.index("-smp") + 1], "cpus=12,sockets=1,cores=12,threads=1")
-            self.assertIn("q35-pcihost.pci-hole64-size=256G", args)
-            self.assertIn("name=opt/ovmf/X-PciMmio64Mb,string=262144", args)
-            self.assertIn(f"fd={reservation.fileno()},set=99,opaque=capycanvas-gpu-review", args)
-            functions = [arg for arg in args if isinstance(arg, str) and arg.startswith("vfio-pci,")]
-            self.assertEqual(functions, [
-                "vfio-pci,host=0000:03:00.0,bus=gpuroot,addr=0x0.0,multifunction=on",
-                "vfio-pci,host=0000:03:00.1,bus=gpuroot,addr=0x0.1,multifunction=on"])
-        self.assertEqual(self.machine.gpu.read_text(), "0000:03:00.0\n")
-
     def test_plain_launch_clears_old_gpu_metadata_and_inherits_no_reservation(self):
         self.machine.gpu.write_text("0000:03:00.0\n")
         with patch.object(vm, "terminate"), patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
@@ -237,6 +237,85 @@ class GpuLifecycleTests(unittest.TestCase):
         self.assertNotIn("pass_fds", command.kwargs)
         self.assertFalse(any(isinstance(arg, str) and arg.startswith("vfio-pci,") for arg in command.args))
         self.assertFalse(self.machine.gpu.exists())
+
+    def test_launch_inherits_card_and_two_slot_descriptors(self):
+        gpu = SimpleNamespace(address="0000:03:00.0", functions=["0000:03:00.0"])
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            reservations = tuple(stack.enter_context(open(self.root / str(index), "w+")) for index in range(3))
+            with patch.object(vm, "terminate"), patch.object(vm, "qmp", return_value="TCP[HOST_FORWARD] 12 127.0.0.1 2200 10.0.2.15 22 0 0"), \
+                    patch.object(vm, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                vm.launch(self.machine, gpu=gpu, reservations=reservations)
+            command = next(call for call in run.call_args_list if call.args[0] == "qemu-system-x86_64")
+            self.assertEqual(command.kwargs["pass_fds"], tuple(lock.fileno() for lock in reservations))
+            self.assertEqual(command.args.count("-add-fd"), 3)
+
+    def test_only_round_gpu_boot_reserves_two_cpu_slots_and_applies_display_scale(self):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            descriptors = tuple(stack.enter_context(open(self.root / f"gpu-{i}", "w+")) for i in range(3))
+            for round_gpu in (False, True):
+                display = {"success": True, "display": {"adapter": "NVIDIA", "primary": True,
+                           "width": 2560, "height": 1600, "refreshHz": 120, "scalePercent": 150}}
+                with self.subTest(round_gpu=round_gpu), \
+                        patch.dict(os.environ, {"CAPYCANVAS_VM_ROUND_GPU": "1"} if round_gpu else {}, clear=True), \
+                        patch.object(vm, "running", return_value=False), \
+                        patch.object(vm.resource, "getrlimit", return_value=(vm.resource.RLIM_INFINITY,) * 2), \
+                        patch.object(vm.cpu_pool, "reserve", return_value=nullcontext((vm.cpu_pool.Slot(0, 8, "16G"), descriptors[1:]))) as reserve, \
+                        patch.object(vm.gpu_pool, "reserve", return_value=nullcontext(("card", descriptors[0]))), \
+                        patch.object(vm, "launch") as launch, patch.object(vm, "wait_for_ssh"), patch.object(vm, "prepare"), \
+                        patch.object(vm, "prepare_gpu_driver"), patch.object(vm, "prepare_gpu_display", return_value=display):
+                    vm.boot_locked(self.machine, False, "auto")
+                self.assertEqual(launch.call_args.kwargs["reservations"], descriptors if round_gpu else descriptors[:1])
+                if round_gpu:
+                    reserve.assert_called_once_with(vm.STATE, self.machine.name, vm.ROOT, slot_count=2)
+                else:
+                    reserve.assert_not_called()
+
+    def test_round_pool_refusal_precedes_card_claim_and_gpu_launch(self):
+        with patch.dict(os.environ, {"CAPYCANVAS_VM_ROUND_GPU": "1"}), \
+                patch.object(vm, "running", return_value=False), \
+                patch.object(vm.resource, "getrlimit", return_value=(vm.resource.RLIM_INFINITY,) * 2), \
+                patch.object(vm.cpu_pool, "reserve", side_effect=vm.cpu_pool.Unavailable("Need 2 free slots")), \
+                patch.object(vm.gpu_pool, "reserve") as gpu, patch.object(vm, "launch") as launch, \
+                self.assertRaisesRegex(vm.cpu_pool.Unavailable, "Need 2"):
+            vm.boot_locked(self.machine, False, "auto")
+        gpu.assert_not_called()
+        launch.assert_not_called()
+
+    def test_round_rejects_pool_geometry_that_does_not_aggregate_to_eight_sixteen(self):
+        for cpus, memory in ((4, "8G"), (16, "32G")):
+            with self.subTest(cpus=cpus, memory=memory), \
+                    patch.dict(os.environ, {"CAPYCANVAS_VM_ROUND_GPU": "1"}), \
+                    patch.object(vm, "running", return_value=False), \
+                    patch.object(vm.resource, "getrlimit", return_value=(vm.resource.RLIM_INFINITY,) * 2), \
+                    patch.object(vm.cpu_pool, "reserve", return_value=nullcontext((vm.cpu_pool.Slot(0, cpus, memory), ()))), \
+                    patch.object(vm.gpu_pool, "reserve") as gpu, patch.object(vm, "launch") as launch, \
+                    self.assertRaisesRegex(ValueError, "two 4-vCPU / 8-GiB"):
+                vm.boot_locked(self.machine, False, "auto")
+            gpu.assert_not_called()
+            launch.assert_not_called()
+
+    def test_round_scale_is_applied_once_after_prepare_then_verified_after_restart(self):
+        order = []
+        normal = {"success": True, "display": {"adapter": "NVIDIA", "primary": True,
+                  "width": 2560, "height": 1600, "refreshHz": 120, "scalePercent": 150}}
+        def display(machine, fixture_scale=None):
+            order.append("scale" if fixture_scale else "display")
+            return {**normal, "restart_required": True} if fixture_scale else normal
+        with patch.dict(os.environ, {"CAPYCANVAS_VM_ROUND_GPU": "1"}), \
+                patch.object(vm, "running", return_value=False), \
+                patch.object(vm.resource, "getrlimit", return_value=(vm.resource.RLIM_INFINITY,) * 2), \
+                patch.object(vm.cpu_pool, "reserve", return_value=nullcontext((vm.cpu_pool.Slot(0, 8, "16G"), ()))), \
+                patch.object(vm.gpu_pool, "reserve", return_value=nullcontext(("card", None))), \
+                patch.object(vm, "launch"), patch.object(vm, "wait_for_ssh"), \
+                patch.object(vm, "prepare", side_effect=lambda machine: order.append("prepare")), \
+                patch.object(vm, "prepare_gpu_driver", side_effect=lambda machine: order.append("driver")), \
+                patch.object(vm, "prepare_gpu_display", side_effect=display), \
+                patch.object(vm, "restart", side_effect=lambda machine: order.append("restart")):
+            vm.boot_locked(self.machine, False, "auto")
+        self.assertEqual(order, ["prepare", "driver", "display", "scale", "restart", "display"])
+        self.assertTrue((self.machine.directory / "fixture-scale-change.json").exists())
 
     def test_failed_qemu_launch_cleans_up_its_tpm(self):
         def run(*args, **kwargs):

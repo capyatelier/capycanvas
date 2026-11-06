@@ -282,6 +282,31 @@ with gpu_pool.reserve(root / 'state', sys.argv[3]) as (device, lock):
                 child.terminate()
                 child.wait(timeout=5)
 
+    def test_child_inherits_card_and_two_cpu_slots_until_actual_exit(self):
+        import cpu_pool
+        address = self.fixture.addresses[0]
+        child = None
+        with patch.object(cpu_pool, "LOCKS", self.fixture.root / "cpu-locks"):
+            (self.fixture.state / "cpu-pool.json").write_text(json.dumps({
+                "vcpu_budget": 8, "memory_budget_gib": 16, "runner_cpus": 4,
+                "runner_memory_gib": 8, "per_owner_limit": 2}))
+            try:
+                with cpu_pool.reserve(self.fixture.state, "round", self.fixture.root, slot_count=2) as (_, slots), \
+                        pool.reserve(self.fixture.state, "round", address) as (_, card):
+                    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                                             stdin=subprocess.PIPE,
+                                             pass_fds=tuple(lock.fileno() for lock in (card, *slots)))
+                self.assertEqual(contender(self.fixture.locks / address), 23)
+                self.assertEqual(sum(row["status"] == "reserved" for row in cpu_pool.describe(self.fixture.state)[1]), 2)
+                child.stdin.close()
+                child.wait(timeout=5)
+                self.assertEqual(contender(self.fixture.locks / address), 0)
+                self.assertTrue(all(row["status"] == "free" for row in cpu_pool.describe(self.fixture.state)[1]))
+            finally:
+                if child is not None and child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=5)
+
     def test_status_reports_owner_only_while_the_lock_is_live(self):
         with pool.reserve(self.fixture.state, "paint", self.fixture.addresses[0]):
             row = pool.describe(self.fixture.state)[0]
