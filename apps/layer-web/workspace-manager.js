@@ -262,6 +262,12 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   window.addEventListener("beforeunload", e => { if (view?.dirty || view?.busy || view?.switcher_busy) { e.preventDefault(); e.returnValue = ""; } });
   return {
     ready,
+    layout(resolved, viewport) {
+      const notice=resolved.phone?resolved.notice:null;
+      status.style.left=`${notice?notice.x-notice.max_width/2:12}px`;
+      status.style.right=`${notice?viewport[0]-notice.x-notice.max_width/2:12}px`;
+      status.style.bottom=`${notice?viewport[1]-notice.y:0}px`;
+    },
     localize(){lastView=null;render();},
     wake,
     observe() { observePending = true; },

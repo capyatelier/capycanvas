@@ -13816,7 +13816,6 @@ fn native_named_workspace_manager_library_and_history() {
 #[test]
 #[ignore = "requires native workspace storage and a native GTK/Vulkan display"]
 fn native_workspace_unavailable_close_recovery() {
-    let database = crate::storage::workspaces().expect("run with --native-storage").join("workspaces.sqlite3");
     let app = native_test_app("art.capycanvas.WorkspaceUnavailable");
     gtk::Settings::default()
         .unwrap()
@@ -13834,9 +13833,21 @@ fn native_workspace_unavailable_close_recovery() {
             expected[0].min(expected[1]) < 480, "the storage notice uses the requested phone or desktop presentation");
     }
     let copy = layer_ui::bootstrap_view(&w.localization());
+    let database = crate::storage::workspaces().expect("run with --native-storage").join("workspaces.sqlite3");
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (release, released) = std::sync::mpsc::channel();
+    let worker = gtk::gio::spawn_blocking({
+        let armed = armed.clone();
+        move || {
+            let connection = rusqlite::Connection::open(database).unwrap();
+            connection.execute_batch("CREATE TRIGGER m9_fail_editing BEFORE INSERT ON editing WHEN NEW.id=1 BEGIN SELECT RAISE(ABORT,'owned workspace write failure'); END;").unwrap();
+            armed.store(true, std::sync::atomic::Ordering::Release);
+            let _ = released.recv();
+            connection.execute_batch("DROP TRIGGER IF EXISTS m9_fail_editing").unwrap();
+        }
+    });
+    until(|| armed.load(std::sync::atomic::Ordering::Acquire), "the owned workspace write failure is armed");
     w.dispatch(UiAction::SetBrushSize { value: 83. });
-    let other = rusqlite::Connection::open(&database).unwrap();
-    other.execute_batch("BEGIN EXCLUSIVE").unwrap();
     let prompt = || canvas_bar_tests::until_some(
         || find_named(w.window.upcast_ref(), "workspace-close-recovery").filter(|d| d.is_mapped()),
         "a failed close save offers recovery",
@@ -13847,7 +13858,7 @@ fn native_workspace_unavailable_close_recovery() {
     assert_eq!(alert.heading().as_deref(), Some(copy.recovery.workspace_not_saved.as_ref()));
     assert_eq!(alert.body().as_str(), copy.recovery.close_save_failed.as_ref());
     find_button(&dialog, &copy.common.keep_open).unwrap().emit_clicked();
-    pump(100);
+    until(|| !dialog.is_mapped(), "Keep Open dismisses the close-save recovery prompt");
     assert!(w.window.is_visible());
     assert_eq!(state(&w).brush.diameter, 83.);
     assert!(!state(&w).document_file.close_ready);
@@ -13868,18 +13879,30 @@ fn native_workspace_unavailable_close_recovery() {
     let actions = buttons[0].parent().unwrap();
     assert_eq!(buttons[1].parent().as_ref(), Some(&actions), "storage actions share one horizontal row");
     let actions = actions.compute_bounds(root).unwrap();
-    if w.surface.width().min(w.surface.height()) < 480 {
-        assert!(actions.y() >= message.y() + message.height() - 1., "phone storage actions wrap below the message");
+    if actions.y() >= message.y() + message.height() - 1. {
         assert!((actions.x() + actions.width() - message.x() - message.width()).abs() <= 1.,
             "wrapped storage actions align with the message end: {message:?} {actions:?}");
     } else {
         assert!(message.x() < actions.x() && message.x() + message.width() <= actions.x() + 1.,
-            "desktop storage message stays left of its actions: {message:?} {actions:?}");
+            "inline storage message stays left of its actions: {message:?} {actions:?}");
         assert!(message.y() < actions.y() + actions.height() && actions.y() < message.y() + message.height(),
-            "desktop storage message and actions share one line: {message:?} {actions:?}");
+            "inline storage message and actions share one line: {message:?} {actions:?}");
     }
     if let Some(dir) = std::env::var_os("LAYER_NATIVE_CAPTURE_DIR") {
         capture_reference(&w, std::path::Path::new(&dir).join("workspace-storage-notice.png").to_str().unwrap(), 1.);
+    }
+    let resolved = w.resolved();
+    if let Some(phone) = resolved.phone {
+        let notice = root.compute_bounds(&w.window).unwrap();
+        let anchor = resolved.notice;
+        assert!((notice.x() + notice.width() * 0.5 - anchor.x).abs() <= 1.
+            && (notice.y() + notice.height() - anchor.y).abs() <= 1.
+            && (notice.width() - anchor.max_width).abs() <= 1., "storage notice consumes the shared anchor: {notice:?} {anchor:?}");
+        for bounds in [phone.capy, phone.size, phone.strength] {
+            assert!(notice.x() + notice.width() <= bounds.x || bounds.x + bounds.width <= notice.x()
+                || notice.y() + notice.height() <= bounds.y || bounds.y + bounds.height <= notice.y(),
+                "storage notice {notice:?} covers phone control {bounds:?}");
+        }
     }
     w.window.close();
     let dialog = prompt();
@@ -13887,7 +13910,8 @@ fn native_workspace_unavailable_close_recovery() {
         .unwrap()
         .emit_clicked();
     until(|| !w.window.is_visible(), "Close Without Saving closes the window");
-    other.execute_batch("ROLLBACK").unwrap();
+    release.send(()).unwrap();
+    glib::MainContext::default().block_on(worker).unwrap();
 }
 
 #[test]

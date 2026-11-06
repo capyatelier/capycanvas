@@ -175,3 +175,20 @@ test('inline workspace Rename keeps the editor draft and composition across loca
   h.setView({busy:true,prompt:{title:'Rename workspace',name:'Original literal name',confirm:'Rename'},prompt_action:{type:'rename',value:'literal-id'}});
   assert.equal(h.doc.body.querySelector('.workspace-name-entry'),editor);assert.equal(editor.value,'İı ไทย Tiếng Việt { $name } 🎨 draft');
 });
+
+test('failed workspace notices consume the shared notice anchor and restore desktop placement',t=>{
+  const h=harness(t,{failure:true,phone:true}),status=h.doc.body.querySelector('.workspace-status');
+  for(const [viewport,notice]of [
+    [[412,891],{x:206,y:807,max_width:388}],
+    [[891,412],{x:445.5,y:400,max_width:723}],
+    [[280,560],{x:140,y:492,max_width:256}],
+  ]){
+    h.manager.layout({phone:{},notice},viewport);
+    const left=parseFloat(status.style.left),right=viewport[0]-parseFloat(status.style.right);
+    assert.equal((left+right)/2,notice.x);
+    assert.equal(right-left,notice.max_width);
+    assert.equal(viewport[1]-parseFloat(status.style.bottom),notice.y);
+  }
+  h.manager.layout({phone:null},[1200,900]);
+  assert.deepEqual([status.style.left,status.style.right,status.style.bottom],['12px','12px','0px']);
+});

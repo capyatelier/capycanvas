@@ -1469,7 +1469,19 @@ impl Workspace {
         });
         this.screen.bind(&this);
         this.pages.bind(&this);
-        content.connect_get_child_position(glib::clone!(#[weak] this, #[upgrade_or] None, move |_, child| {
+        content.connect_get_child_position(glib::clone!(#[weak] this, #[weak] notices, #[upgrade_or] None, move |_, child| {
+            if child == notices.upcast_ref::<gtk::Widget>() {
+                let resolved = this.resolved();
+                if resolved.phone.is_some() {
+                    let notice = resolved.notice;
+                    let start = this.workspaces.root.margin_start();
+                    let end = this.workspaces.root.margin_end();
+                    let width = notice.max_width.round() as i32 + start + end;
+                    let height = child.measure(gtk::Orientation::Vertical, width).1;
+                    return Some(gtk::gdk::Rectangle::new((notice.x - notice.max_width * 0.5).round() as i32 - start,
+                        notice.y.round() as i32 - height, width, height));
+                }
+            }
             (child == this.pages.root.upcast_ref::<gtk::Widget>()).then(|| this.pages.allocation(&this))
         }));
         let (theme, accent) = system_appearance();

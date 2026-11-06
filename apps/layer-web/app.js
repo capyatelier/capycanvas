@@ -720,6 +720,7 @@ function presentWorkspaceLayout(resolved,layoutOnly) {
     customization.arrange(layout);
   }
   workspaceChrome?.arrange(layout,layoutOnly);
+  workspaceManager?.layout(layout,workspaceViewport);
   editor.queuePositions();
   place($("canvas-status"), layout.status);
   // The help occupies the same unobstructed area used for fitting the document.

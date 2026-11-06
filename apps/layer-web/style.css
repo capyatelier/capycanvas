@@ -1789,7 +1789,7 @@ button.new-drawing-preset.disabled { opacity:.4; }
 .workspace-manager[data-toolbar=true] .workspace-sidebar { flex:0 0 280px; }
 .workspace-manager[data-toolbar=true] .workspace-details { flex:1; overflow:auto; min-width:0; margin:0; padding-left:18px; }
 .workspace-manager.single-pane .workspace-details h3 { display:none; }
-.workspace-status { position:absolute; left:12px; right:12px; bottom:0; z-index:2000; display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px 0; border-radius:var(--surface-radius); background:var(--settings); font-size:12px; }
+.workspace-status { position:absolute; z-index:2000; display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px 0; border-radius:var(--surface-radius); background:var(--settings); font-size:12px; }
 .workspace-status > span { flex:1; }
 .workspace-status.error { color:#e66; }
 .workspace-status button { font-size:inherit; }
