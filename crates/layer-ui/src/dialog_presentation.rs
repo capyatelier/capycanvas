@@ -1,5 +1,43 @@
 use crate::{Bounds, UiState};
 
+pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum Request {
+        Header { intent: DialogIntent, subpage: bool },
+        Escape { subpage: bool, search_focused: bool, search_has_text: bool },
+        AlertShort { height: f32 },
+        AlertLayout { viewport: [f32; 2], metrics: AlertMetrics, font_pixels: f32, prefer_wide: bool },
+        FloatingWidth { window: f32, natural: f32 },
+        CalibrationExtent { area: [f32; 2], natural: [f32; 2] },
+        PanesFit { width: f32, minimum: [f32; 2], gap: f32 },
+        PreferencesContentWidth { width: f32, minimum: f32 },
+        NewDrawingLayout { width: f32 },
+        ColorEditorLayout { width: f32, minimum: [f32; 2] },
+        NoticeAbove { notice: crate::NoticePlacement, bar: Option<Bounds> },
+        FingerLoupeOffset { scale: f32 },
+        PhoneWindow { viewport: [f32; 2] },
+        MenuPresentation { target: crate::MenuTarget },
+    }
+    use serde_json::json;
+    Ok(match serde_json::from_str(source).map_err(|error| error.to_string())? {
+        Request::Header { intent, subpage } => json!(intent.header(subpage)),
+        Request::Escape { subpage, search_focused, search_has_text } => json!(dialog_escape(subpage, search_focused, search_has_text)),
+        Request::AlertShort { height } => json!(alert_dialog_short(height)),
+        Request::AlertLayout { viewport, metrics, font_pixels, prefer_wide } => json!(alert_dialog_layout(viewport, &metrics, font_pixels / (crate::UI_TEXT_PT as f32 * 4. / 3.), prefer_wide)),
+        Request::FloatingWidth { window, natural } => json!(floating_dialog_width(window, natural)),
+        Request::CalibrationExtent { area, natural } => json!(calibration_extent(area, natural)),
+        Request::PanesFit { width, minimum, gap } => json!(dialog_panes_fit(width, minimum, gap)),
+        Request::PreferencesContentWidth { width, minimum } => json!(preferences_content_width(width, minimum)),
+        Request::NewDrawingLayout { width } => json!(new_drawing_layout(width)),
+        Request::ColorEditorLayout { width, minimum } => json!(color_editor_layout(width, minimum)),
+        Request::NoticeAbove { notice, bar } => json!(notice.above(bar)),
+        Request::FingerLoupeOffset { scale } => json!(crate::finger_loupe_offset(None, scale)),
+        Request::PhoneWindow { viewport } => json!(crate::phone_window(viewport)),
+        Request::MenuPresentation { target } => json!(target.presentation()),
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DialogEscape { Back, ClearSearch, Cancel }
@@ -170,6 +208,31 @@ impl UiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dialog_ui_projects_every_stateless_request() {
+        use serde_json::json;
+        let notice = crate::NoticePlacement::within(Bounds { x:0.,y:0.,width:300.,height:500. });
+        for (request, expected) in [
+            (json!({"kind":"header","intent":DialogIntent::editor(Some(DialogPrimary::Close)),"subpage":false}),json!({"start":null,"end":"close"})),
+            (json!({"kind":"escape","subpage":true,"search_focused":true,"search_has_text":true}),json!("clear_search")),
+            (json!({"kind":"alert_short","height":320.}),json!(true)),
+            (json!({"kind":"alert_layout","viewport":[412.,891.],"metrics":{"minimum":48.,"natural":800.,"heading":200.,"responses":[100.,100.]},"font_pixels":crate::UI_TEXT_PT as f32*4./3.,"prefer_wide":false}),json!({"width":352.,"short":false,"stacked":false})),
+            (json!({"kind":"floating_width","window":1024.,"natural":1000.}),json!(888.)),
+            (json!({"kind":"calibration_extent","area":[280.,280.],"natural":[100.,100.]}),json!([280.,280.])),
+            (json!({"kind":"panes_fit","width":500.,"minimum":[200.,320.],"gap":8.}),json!(false)),
+            (json!({"kind":"preferences_content_width","width":280.,"minimum":200.}),json!(256.)),
+            (json!({"kind":"new_drawing_layout","width":280.}),json!({"single_pane":true,"preview":[232,140],"fit":[196,104]})),
+            (json!({"kind":"color_editor_layout","width":244.,"minimum":[232.,320.]}),json!({"split":false,"compact_fields":true})),
+            (json!({"kind":"notice_above","notice":notice,"bar":{"x":0.,"y":450.,"width":300.,"height":40.}}),json!(crate::NoticePlacement { y:438.,..notice })),
+            (json!({"kind":"finger_loupe_offset","scale":2.}),json!(88.)),
+            (json!({"kind":"phone_window","viewport":[479.,800.]}),json!(true)),
+            (json!({"kind":"menu_presentation","target":{"kind":"layer_row"}}),json!({"has_arrow":false,"anchor":"contact"})),
+        ] {
+            assert_eq!(dialog_ui(&request.to_string()).unwrap(),expected,"{request}");
+        }
+        for viewport in [[480.,800.],[800.,480.],[0.,300.],[-1.,300.],[f32::NAN,300.],[f32::INFINITY,300.]] { assert!(!crate::phone_window(viewport)); }
+        assert!(dialog_ui("{\"kind\":\"unknown\"}").is_err());
+    }
     #[test]
     fn color_fields_wrap_only_after_the_stacked_form_cannot_fit_them() {
         for (width, split, compact_fields) in [(600.,true,false),(500.,false,false),(320.,false,false),(244.,false,true)] {

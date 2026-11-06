@@ -899,10 +899,9 @@ impl Drawer {
             })
             .collect();
         if let Some(panel) = view.bodies.iter().find_map(|body| if let Body::Color(panel) = body { Some(panel) } else { None }) {
-            if let Some(fit) = measure.color_fit(&heights, 2. * PANEL_CONTENT_INSET, panel.hdr()) {
+            let column = state.columns.iter().position(|panels| panels.contains(&Panel::Color))?;
+            if let Some(fit) = measure.fit_color(&mut heights, column, 2. * PANEL_CONTENT_INSET, panel.hdr()) {
                 panel.set_fit(fit);
-                let column = state.columns.iter().position(|panels| panels.contains(&Panel::Color))?;
-                heights[column] = fit.height.ceil() + 2. * PANEL_CONTENT_INSET;
             }
         }
         place(&heights)

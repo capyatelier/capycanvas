@@ -1566,6 +1566,31 @@ pub extern "system" fn Java_art_capycanvas_Native_bubbleUi(mut env: JNIEnv, _: J
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_phoneUi(mut env: JNIEnv, _: JClass, request: JString) -> jstring {
+    crate::jni_entry!(env, {
+        let result = read(&mut env, &request).and_then(|source| layer_ui::phone_ui(&source))
+            .and_then(|value| serde_json::to_string(&value).map_err(error));
+        string(&mut env, result)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_dialogUi(mut env: JNIEnv, _: JClass, request: JString) -> jstring {
+    crate::jni_entry!(env, {
+        let result = read(&mut env, &request).and_then(|source| layer_ui::dialog_ui(&source))
+            .and_then(|value| serde_json::to_string(&value).map_err(error));
+        string(&mut env, result)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_deviceClass(mut env: JNIEnv, _: JClass, handle: jlong, phone: jboolean) {
+    crate::jni_entry!(env, handle, capy_app, {
+        capy_app.host.set_device_class(if phone != 0 { layer_ui::DeviceClass::Phone } else { layer_ui::DeviceClass::Tablet });
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_colorWheelHit(
     mut env: JNIEnv,
     _: JClass,

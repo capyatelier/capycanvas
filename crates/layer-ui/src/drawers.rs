@@ -105,6 +105,77 @@ pub struct DrawerPlacement {
     pub tab_presentations: Vec<TabPresentation>,
 }
 
+#[derive(Deserialize)]
+pub struct DrawerFrameQuery {
+    pub viewport: Option<[f32; 2]>,
+    pub column: Option<u32>,
+    pub heights: Vec<f32>,
+    pub progress: f32,
+    pub from: Option<DrawerPlacement>,
+    #[serde(default)]
+    pub closing: bool,
+    pub color: Option<DrawerColorMeasure>,
+    pub menu: Option<DrawerMenuMeasurement>,
+}
+#[derive(Deserialize)]
+pub struct DrawerColorMeasure { pub fixed_height: f32, pub hdr: bool }
+#[derive(Deserialize)]
+pub struct DrawerMenuMeasurement { pub width: f32, pub height: f32, pub row_height: f32 }
+#[derive(Serialize)]
+pub struct DrawerFrame { pub connection: Option<DrawerConnection>, pub placement: DrawerPlacement, pub color_fit: Option<crate::ColorPanelFit> }
+
+impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
+    fn drawer_for_column(&self, column: Option<u32>) -> Option<&ContentDrawer> {
+        match column {
+            None => self.state().customization.drawer.as_ref(),
+            Some(id) => self.state().customization.column_drawers.iter().find(|drawer|
+                matches!(drawer.anchor, DrawerAnchor::Column { column, .. } if column == id)),
+        }
+    }
+    pub fn drawer_frame_for(&self, query: DrawerFrameQuery) -> Option<DrawerFrame> {
+        let viewport = query.viewport?;
+        let drawer = self.drawer_for_column(query.column);
+        let mut heights = query.heights;
+        let color_fit = drawer.and_then(|drawer| {
+            let color = query.color.as_ref()?;
+            let column = drawer.columns.iter().position(|panels| panels.contains(&Panel::Color))?;
+            self.state().customization.drawer_measure(drawer, &self.layout_resolve_input(), viewport)?
+                .fit_color(&mut heights, column, color.fixed_height, color.hdr)
+        });
+        let end = if query.closing { query.from.as_ref().map(DrawerPlacement::closed) }
+        else if query.column.is_none() && self.state().phone.menu {
+            query.menu.as_ref().and_then(|menu| self.phone_layout()?.menu(viewport, menu.width, menu.height, menu.row_height))
+        } else {
+            drawer.and_then(|drawer| self.state().customization.drawer_placement(drawer, &self.layout_resolve_input(), viewport, &heights))
+        }?;
+        let from = query.from.unwrap_or_else(|| end.closed());
+        let placement = end.interpolate_from(&from, query.progress);
+        Some(DrawerFrame { connection: placement.connection(), placement, color_fit })
+    }
+    pub fn drawer_measurement(&self, viewport: [f32; 2], column: Option<u32>, tiles: Vec<DrawerTileMeasurement>) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        let state = self.state();
+        let drawer = self.drawer_for_column(column);
+        let mut value = match drawer {
+            Some(drawer) => self.layout_resolve_input().drawer_geometry(viewport, &json!({
+                "model":drawer,"column_drawers":state.customization.column_drawers,"tiles":tiles,"toolbars":true,
+            }).to_string())?,
+            None => json!({"measure":null,"toolbars":[],"minimums":[]}),
+        };
+        value["scrolls_together"] = json!(drawer.is_some_and(ContentDrawer::scrolls_together));
+        value["minimums"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
+            .map(|panel| drawer.body_minimum_height(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
+        value["content_sized"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
+            .map(|panel| drawer.body_fits_content(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
+        Ok(value)
+    }
+    pub fn layer_drawer_sizing(&self, viewport: [f32; 2], column: Option<u32>, measurement: crate::PanelScrollMeasurement, properties_height: f32) -> Result<serde_json::Value, String> {
+        let state = self.state();
+        state.customization.layer_drawer_sizing(self.drawer_for_column(column), &self.layout_resolve_input(), viewport,
+            measurement, state.layer_tools.presented_rows(&state.layers), properties_height)
+    }
+}
+
 #[derive(Serialize)]
 pub struct DrawerToolbar {
     #[serde(flatten)]
@@ -138,14 +209,19 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
         #[serde(default)]
         clip_contents: bool,
         pixel_scale: Option<f32>,
+        color: Option<Color>,
     }
     #[derive(Deserialize)]
+    struct Color { column: usize, fixed_height: f32, hdr: bool }
+    #[derive(Deserialize)]
     struct Layer {measurement:crate::PanelScrollMeasurement,rows:usize,viewport_height:f32,properties_height:f32}
-    let request: Request = serde_json::from_str(source).map_err(|error| error.to_string())?;
+    let mut request: Request = serde_json::from_str(source).map_err(|error| error.to_string())?;
     if let Some(layer)=request.layer {
         return Ok(serde_json::json!({"sizes":crate::drawer_geometry::layer_sizes(request.measure.as_ref(),
             layer.measurement,layer.rows,layer.viewport_height,layer.properties_height)?}));
     }
+    let color_fit = request.measure.as_ref().and_then(|measure| request.color.as_ref()
+        .and_then(|color| measure.fit_color(&mut request.heights, color.column, color.fixed_height, color.hdr)));
     let to=request.to.or_else(||request.measure.as_ref().and_then(|measure|measure.placement(&request.heights)))
         .ok_or("Missing drawer geometry")?;
     let from = request.from.unwrap_or_else(|| to.closed());
@@ -160,7 +236,7 @@ pub fn drawer_frame(source: &str) -> Result<serde_json::Value, String> {
         if !scale.is_finite() || scale<=0. {return Err("Invalid drawer pixel scale".into());}
         placement=placement.snapped(scale);
     }
-    Ok(serde_json::json!({"connection": placement.connection(), "placement": placement}))
+    Ok(serde_json::json!({"connection": placement.connection(), "placement": placement, "color_fit": color_fit}))
 }
 
 /// A tab-like bridge between the tile and drawer. The affine transform maps
@@ -759,6 +835,12 @@ pub struct DrawerMeasure {
     phone: Option<(crate::PhoneLayout, [f32; 2], Vec<f32>)>,
 }
 impl DrawerMeasure {
+    pub fn fit_color(&self, heights: &mut [f32], column: usize, fixed_height: f32, hdr: bool) -> Option<crate::ColorPanelFit> {
+        if self.color != Some(column) { return None; }
+        let fit = self.color_fit(heights, fixed_height, hdr)?;
+        heights[column] = fit.height.ceil() + fixed_height;
+        Some(fit)
+    }
     pub(crate) fn phone_layout(&self) -> Option<&crate::PhoneLayout> { self.phone.as_ref().map(|(phone, _, _)| phone) }
     pub fn color_fit(&self, heights: &[f32], fixed_height: f32, hdr: bool) -> Option<crate::ColorPanelFit> {
         let color = self.color?;

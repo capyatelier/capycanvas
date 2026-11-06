@@ -18,24 +18,6 @@ pub(super) struct NavigatorSurface {
 }
 
 #[derive(Deserialize)]
-struct DrawerQuery {
-    viewport: [f32; 2],
-    column: Option<u32>,
-    heights: Vec<f32>,
-    progress: f32,
-    from: Option<layer_ui::DrawerPlacement>,
-    #[serde(default)]
-    closing: bool,
-    color: Option<DrawerColorMeasure>,
-    menu: Option<MenuMeasurement>,
-}
-#[derive(Deserialize)]
-struct MenuMeasurement { width: f32, height: f32, row_height: f32 }
-#[derive(Deserialize)]
-struct DrawerColorMeasure { fixed_height: f32, hdr: bool }
-
-
-#[derive(Deserialize)]
 struct LayerDrawerQuery {
     measurement: layer_ui::PanelScrollMeasurement,
     properties_height: f32,
@@ -47,20 +29,6 @@ struct LayerDrawerQuery {
 pub struct WebMenuContact { contact: layer_ui::PhoneMenuContact }
 #[wasm_bindgen]
 pub struct WebBarContact { contact: layer_ui::PhoneBarContact }
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum BarInput {
-    Arm,
-    Motion { position: [f32; 2], past_slop: bool },
-    Finish { position: [f32; 2] },
-}
-#[derive(Serialize)]
-struct BarReply<'a> {
-    outcome: layer_ui::PhoneBarOutcome,
-    geometry: &'a [layer_ui::Bounds],
-    lifted: Option<usize>,
-}
-
 #[wasm_bindgen]
 impl WebApp {
     pub fn preferences_layout(&self, viewport: JsValue, width: f32, minimum: JsValue) -> Result<JsValue, JsValue> {
@@ -110,35 +78,17 @@ impl WebApp {
     pub fn touch_hold_ms(&self) -> u32 { self.session.touch_policy().tap_ms }
     pub fn finger_loupe_offset(&self, scale: f32) -> f32 { layer_ui::finger_loupe_offset(None, scale) }
     pub fn phone_bar_contact(&self, x: f32, y: f32) -> Option<WebBarContact> {
-        let mut contact = layer_ui::PhoneBarContact::begin(&self.session.phone_layout()?, [x, y], false)?;
-        contact.set_tools(self.session.state().workspace.layout.phone.as_deref().unwrap_or_default());
-        Some(WebBarContact { contact })
+        layer_ui::phone_bar_begin(&self.session.phone_layout()?, self.session.state().workspace.layout.phone.as_deref().unwrap_or_default(), [x,y]).map(|contact| WebBarContact { contact })
     }
     pub fn phone_bar_valid(&self, contact: &WebBarContact) -> bool {
-        self.session.phone_layout().is_some_and(|layout| contact.contact.valid(&layout,
-            self.session.state().workspace.layout.phone.iter().flatten()))
+        self.session.phone_layout().is_some_and(|layout| layer_ui::phone_bar_valid(&layout, self.session.state().workspace.layout.phone.as_deref().unwrap_or_default(), &contact.contact))
     }
     pub fn phone_bar_input(&self, contact: &mut WebBarContact, input: JsValue) -> Result<JsValue, JsValue> {
-        let input: BarInput = serde_wasm_bindgen::from_value(input).map_err(js)?;
-        let tiles = self.session.state().workspace.layout.phone.as_deref().unwrap_or_default();
-        let Some(layout) = self.session.phone_layout().filter(|layout| contact.contact.valid(layout, tiles)) else {
-            return serialize(&BarReply { outcome: contact.contact.cancel(), geometry: &[], lifted: None });
-        };
-        let outcome = match input {
-            BarInput::Arm => contact.contact.arm(),
-            BarInput::Motion { position, past_slop } => contact.contact.motion(&layout, tiles, position, past_slop),
-            BarInput::Finish { position } => contact.contact.finish(&layout, tiles, position),
-        };
-        let geometry = contact.contact.geometry(&layout);
-        serialize(&BarReply { outcome, geometry: &geometry[..tiles.len().min(geometry.len())], lifted: contact.contact.lifted() })
+        let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
+        serialize(&self.session.phone_layout().map(|layout| layer_ui::phone_bar_step(&layout, self.session.state().workspace.layout.phone.as_deref().unwrap_or_default(), &mut contact.contact, input))
+            .unwrap_or_else(|| layer_ui::PhoneBarReply { outcome: contact.contact.cancel(), geometry: Vec::new(), lifted: None }))
     }
-    pub fn command_search_placement(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
-        let viewport = [width, height];
-        let visible = layer_ui::Bounds { x: 0., y: 0., width, height };
-        let phone = self.session.phone_layout();
-        let area = phone.as_ref().and_then(|phone| phone.work_area.intersection(visible)).unwrap_or(visible);
-        serialize(&layer_ui::COMMAND_SEARCH_STYLE.placement(viewport, area, phone.is_some()))
-    }
+    pub fn command_search_placement(&self, width: f32, height: f32) -> Result<JsValue, JsValue> { serialize(&self.session.command_search_placement([width,height])) }
     pub fn phone_menu(&self) -> Result<JsValue, JsValue> { serialize(&self.phone_menu_view()) }
     pub fn phone_menu_contact(&self) -> WebMenuContact { WebMenuContact { contact: Default::default() } }
     pub fn phone_menu_input(&self, contact: &mut WebMenuContact, input: JsValue) -> Result<JsValue, JsValue> {
@@ -317,84 +267,16 @@ impl WebApp {
             .find(|drawer| drawer.anchor == anchor));
         serialize(&state.tool_panel_presentation(panel, drawer))
     }
-    pub fn drawer(&self, query: JsValue) -> Result<JsValue, JsValue> {
-        let q: DrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
-        let state = self.session.state();
-        let drawer = match q.column {
-            None => state.customization.drawer.as_ref(),
-            Some(id) => state.customization.column_drawers.iter().find(|d|
-                matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
-        };
-        let mut heights = q.heights;
-        let color_fit = drawer.and_then(|drawer| q.color.as_ref().and_then(|color|
-            state.customization.drawer_measure(drawer, &self.session.layout_resolve_input(), q.viewport)
-                .and_then(|measure| measure.color_fit(&heights, color.fixed_height, color.hdr))));
-        if let (Some(drawer), Some(fit), Some(color)) = (drawer, color_fit, &q.color) {
-            if let Some(column) = drawer.columns.iter().position(|panels| panels.contains(&layer_ui::Panel::Color)) {
-                heights[column] = fit.height.ceil() + color.fixed_height;
-            }
-        }
-        let end = if q.closing {
-            q.from.as_ref().map(|p| p.closed())
-        } else if q.column.is_none() && state.phone.menu {
-            q.menu.as_ref().and_then(|menu| self.session.phone_layout()?.menu(q.viewport, menu.width, menu.height, menu.row_height))
-        } else {
-            drawer.and_then(|d| {
-                state.customization.drawer_placement(
-                    d,
-                    &self.session.layout_resolve_input(),
-                    q.viewport,
-                    &heights,
-                )
-            })
-        };
-        #[derive(Serialize)]
-        struct Frame {connection:Option<layer_ui::DrawerConnection>,placement:layer_ui::DrawerPlacement,color_fit:Option<layer_ui::ColorPanelFit>}
-        serialize(&end.map(|end| {
-            let from = q.from.unwrap_or_else(|| end.closed());
-            let placement = end.interpolate_from(&from, q.progress);
-            Frame {connection:placement.connection(),placement,color_fit}
-        }))
-    }
+    pub fn drawer(&self, query: JsValue) -> Result<JsValue, JsValue> { serialize(&self.session.drawer_frame_for(serde_wasm_bindgen::from_value(query).map_err(js)?)) }
     pub fn layer_drawer_sizing(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: LayerDrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
-        let state = self.session.state();
-        let drawer = match q.column {
-            None => state.customization.drawer.as_ref(),
-            Some(id) => state.customization.column_drawers.iter().find(|drawer|
-                matches!(drawer.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
-        };
-        serialize(&state.customization.layer_drawer_sizing(drawer, &self.session.layout_resolve_input(),
-            q.viewport, q.measurement, state.layer_tools.presented_rows(&state.layers), q.properties_height).map_err(js)?)
+        serialize(&self.session.layer_drawer_sizing(q.viewport, q.column, q.measurement, q.properties_height).map_err(js)?)
     }
     pub fn drawer_measure(&self, query: JsValue) -> Result<JsValue, JsValue> {
         #[derive(Deserialize)]
-        struct Query {
-            viewport: [f32; 2],
-            column: Option<u32>,
-            tiles: Vec<layer_ui::DrawerTileMeasurement>,
-        }
+        struct Query { viewport: [f32; 2], column: Option<u32>, tiles: Vec<layer_ui::DrawerTileMeasurement> }
         let q: Query = serde_wasm_bindgen::from_value(query).map_err(js)?;
-        let state = self.session.state();
-        let drawer = match q.column {
-            None => state.customization.drawer.as_ref(),
-            Some(id) => state.customization.column_drawers.iter().find(|d|
-                matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
-        };
-        let value = match drawer {
-            Some(drawer) => self.session.layout_resolve_input().drawer_geometry(q.viewport, &json!({
-                "model":drawer,"column_drawers":state.customization.column_drawers,
-                "tiles":q.tiles,"toolbars":true,
-            }).to_string()).map_err(js)?,
-            None => json!({"measure":null,"toolbars":[],"minimums":[]}),
-        };
-        let mut value = value;
-        value["scrolls_together"] = json!(drawer.is_some_and(layer_ui::ContentDrawer::scrolls_together));
-        value["minimums"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
-            .map(|panel| drawer.body_minimum_height(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
-        value["content_sized"] = drawer.map(|drawer| json!(drawer.columns.iter().map(|panels| panels.iter()
-            .map(|panel| drawer.body_fits_content(*panel)).collect::<Vec<_>>()).collect::<Vec<_>>())).unwrap_or_else(|| json!([]));
-        serialize(&value)
+        serialize(&self.session.drawer_measurement(q.viewport, q.column, q.tiles).map_err(js)?)
     }
     pub fn application_link(&self, link: JsValue) -> Result<String, JsValue> {
         let link: layer_ui::ApplicationLink = serde_wasm_bindgen::from_value(link).map_err(js)?;

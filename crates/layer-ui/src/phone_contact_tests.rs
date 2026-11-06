@@ -1,5 +1,60 @@
 use super::*;
 use crate::{Platform, ToolbarTile, WorkspacePreset};
+use serde_json::{Value, json};
+
+fn transported(request: Value) -> Value { phone_ui(&request.to_string()).unwrap() }
+
+#[test]
+fn phone_ui_roundtrips_bar_contacts_and_projects_menu_geometry() {
+    let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    let tiles = layout.phone.as_ref().unwrap();
+    let phone = resolve(&layout, [412.,891.], false);
+    let point = center(phone.tools[0]);
+    let initial = transported(json!({"kind":"bar_begin","layout":phone,"tiles":tiles,"point":point}));
+    assert!(!initial.is_null());
+    assert!(transported(json!({"kind":"bar_begin","layout":phone,"tiles":tiles,"point":center(phone.work_area)})).is_null());
+    assert_eq!(transported(json!({"kind":"bar_valid","layout":phone,"tiles":tiles,"contact":initial})), true);
+    for (drag, hold, kind) in [(false,false,"tap"),(false,true,"menu"),(true,true,"move")] {
+        let mut contact = initial.clone();
+        let mut direct: PhoneBarContact = serde_json::from_value(contact.clone()).unwrap();
+        let mut inputs = Vec::new();
+        if hold { inputs.push(json!({"kind":"arm"})); }
+        let end = if drag { center(phone.tools[2]) } else { point };
+        if drag { inputs.push(json!({"kind":"motion","position":end,"past_slop":true})); }
+        inputs.push(json!({"kind":"finish","position":end}));
+        for input in inputs {
+            let expected = phone_bar_step(&phone, tiles, &mut direct, serde_json::from_value(input.clone()).unwrap());
+            let step = transported(json!({"kind":"bar_step","layout":phone,"tiles":tiles,"contact":contact,"input":input}));
+            assert_eq!(step["reply"], json!(expected));
+            contact = step["contact"].clone();
+        }
+        assert_eq!(json!(direct.finish(&phone, tiles, end))["kind"], kind);
+    }
+    let placement = transported(json!({"kind":"menu_placement","layout":phone,"viewport":[412.,891.],"width":280.,"height":400.,"row_height":40.}));
+    assert!(!placement.is_null());
+    assert!(transported(json!({"kind":"menu_width","layout":phone,"minimum":200.,"natural":280.,"row_height":40.})).as_f64().unwrap() > 200.);
+    let geometry = transported(json!({"kind":"menu_geometry","layout":phone,"placement":placement,"row_height":40.}));
+    assert_eq!(geometry["buttons"].as_array().unwrap().len(), 5);
+    assert_eq!(transported(json!({"kind":"slider_stretch_distance","layout":phone})), json!(2. * phone.tile));
+}
+
+#[test]
+fn phone_ui_roundtrips_menu_press_and_back_swipe() {
+    let route = PhoneMenuRoute { page: Some(crate::MenuPageId::Drawings), path: Vec::new() };
+    let mut contact = json!(PhoneMenuContact::default());
+    let mut step = |input| {
+        let value = transported(json!({"kind":"menu_input","contact":contact,"route":route,"can_back":true,"input":input}));
+        contact = value["contact"].clone(); value["reply"].clone()
+    };
+    let hit = json!({"kind":"row","position":[0,0]});
+    step(json!({"kind":"press","hit":hit}));
+    assert_eq!(step(json!({"kind":"release","hit":hit,"inside":true}))["accepted"], true);
+    step(json!({"kind":"begin_swipe","time_ms":0}));
+    step(json!({"kind":"swipe","delta":[40.,0.],"width":100.,"past_slop":true,"rtl":false,"time_ms":100}));
+    let end = step(json!({"kind":"end_swipe","width":100.,"rtl":false,"time_ms":300}));
+    assert_eq!(end["settle"]["action"]["kind"], "menu_back");
+    assert_eq!(end["settle"]["action"]["route"], json!(route));
+}
 
 const VIEWPORTS: [[f32; 2]; 4] = [[412., 891.], [891., 412.], [280., 560.], [560., 280.]];
 

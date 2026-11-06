@@ -27,6 +27,7 @@ impl Parked for Box<UiSession<Renderer>> {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum TabRequest {
+    PhoneMenu,
     View {
         #[serde(default)]
         width: f32,
@@ -264,10 +265,17 @@ impl<P: Parked> DocumentWindow<P> {
     }
 
     pub fn request(&mut self, host: &mut NativeHost, request: TabRequest) -> Result<Value, String> {
-        if !matches!(&request, TabRequest::View { .. } | TabRequest::Ready | TabRequest::Recovery { .. } | TabRequest::Storage { .. }) {
+        if !matches!(&request, TabRequest::View { .. } | TabRequest::PhoneMenu | TabRequest::Ready | TabRequest::Recovery { .. } | TabRequest::Storage { .. }) {
             host.require_document_owner()?;
         }
         Ok(match request {
+            TabRequest::PhoneMenu => {
+                if !host.session.state().phone.menu { return Ok(Value::Null); }
+                let localization = host.session.localization();
+                let labels = self.documents.labels(&host.session.state().document_file, |p| &p.session().state().document_file, localization);
+                let selector = layer_ui::DrawingSelector::new(&labels, self.documents.selected(), &host.session.command(CommandId::NewDocument), localization);
+                json!(host.session.phone_menu().map(|menu| menu.view(&selector, host.session.state().platform, localization)))
+            }
             TabRequest::View { width } => self.view(host, width),
             TabRequest::Prepare => { host.session.prepare_document_switch()?; Value::Null },
             TabRequest::Ready => json!({
@@ -826,10 +834,13 @@ mod tests {
     type Window = DocumentWindow<Box<UiSession<Renderer>>>;
 
     fn host() -> crate::test_storage::StoredHost {
+        host_on(layer_ui::Platform::Mac)
+    }
+    fn host_on(platform: layer_ui::Platform) -> crate::test_storage::StoredHost {
         let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
-        *host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Mac).unwrap();
+        let mut host = NativeHost::new(platform).unwrap();
+        *host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], platform).unwrap();
         let mut host=crate::test_storage::StoredHost::new(host);
         host.session.set_document_replacement(false);
         settle(&mut host);
@@ -1080,6 +1091,44 @@ mod tests {
         assert_eq!(window.documents.selected(), 2);
         drop((stale, current));
         finish(host, window);
+    }
+
+    #[test]
+    fn phone_menu_lists_two_drawings_and_device_class_survives_activation() {
+        for device in [layer_ui::DeviceClass::Phone,layer_ui::DeviceClass::Tablet] {
+            let mut host = host_on(layer_ui::Platform::Gtk);
+            let mut window = Window::default();
+            host.dispatch(UiAction::RestoreWorkspace { workspace:Box::new(layer_ui::WorkspaceState {
+                layout:layer_ui::WorkspacePreset::Painter.layout(layer_ui::Platform::Gtk),..Default::default()
+            }) }).unwrap();
+            host.set_device_class(device);
+            assert!(host.session.finger_drawing());
+            fill(&mut host);
+            open(&mut window,&mut host);
+            assert!(host.session.finger_drawing());
+            fill(&mut host);
+            host.resize(412,891,1.).unwrap();
+            assert!(window.request(&mut host,TabRequest::PhoneMenu).unwrap().is_null());
+            host.dispatch(UiAction::Phone { action:layer_ui::PhoneAction::Capy }).unwrap();
+            let menu = window.request(&mut host,TabRequest::PhoneMenu).unwrap();
+            let drawings = menu["pages"].as_array().unwrap().iter().find(|page|page["id"]["page"]["kind"]=="drawings").unwrap();
+            let rows = drawings["sections"][0].as_array().unwrap();
+            assert_eq!(rows.len(),2);
+            for (row,id) in rows.iter().zip(window.documents.order()) {
+                assert_eq!(row["action"]["action"]["kind"],"drawing");
+                assert_eq!(row["action"]["action"]["id"],json!(id));
+                assert_eq!(row["selected"],json!(*id==window.documents.selected()));
+                assert!(row["label"].as_str().unwrap().starts_with('•'));
+                assert_eq!(row["close"]["action"]["action"]["id"],json!(id));
+                assert_eq!(row["close"]["action"]["action"]["close"],true);
+            }
+            host.dispatch(UiAction::Phone { action:layer_ui::PhoneAction::Capy }).unwrap();
+            let mut activation = switch(&mut window,&mut host,1);
+            activation.work().unwrap();
+            resume(&mut window,&mut host,&mut activation);
+            assert!(host.session.finger_drawing());
+            finish(host,window);
+        }
     }
 
     #[test]

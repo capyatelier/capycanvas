@@ -6,6 +6,45 @@ fn phone_session(viewport: [u32; 2]) -> UiSession<Recorder> {
 }
 
 #[test]
+fn transported_bar_contact_is_invalidated_by_a_phone_toolbar_move() {
+    let mut s = phone_session([412,891]);
+    let layout = s.phone_layout().unwrap();
+    let tiles = s.state.workspace.layout.phone.as_ref().unwrap();
+    let tile = tiles[0].id;
+    let mut contact = phone_bar_begin(&layout, tiles, [layout.tools[0].x + 1.,layout.tools[0].y + 1.]).unwrap();
+    s.dispatch(UiAction::Phone { action: PhoneAction::MoveTool { tile, before: None } }).unwrap();
+    let layout = s.phone_layout().unwrap();
+    let tiles = s.state.workspace.layout.phone.as_ref().unwrap();
+    assert!(!phone_bar_valid(&layout, tiles, &contact));
+    assert_eq!(phone_bar_step(&layout, tiles, &mut contact, PhoneBarInput::Arm).outcome, PhoneBarOutcome::Cancel);
+}
+
+#[test]
+fn rounded_screen_corners_raise_bar_end_insets_and_scale_with_the_layout() {
+    let layout = WorkspacePreset::Painter.layout(Platform::Gtk);
+    for viewport in [[320_f32,640.],[640.,320.],[280.,560.],[560.,280.]] {
+        let scale = viewport[0].min(viewport[1]) / 320.;
+        for radius in [4.,40.] {
+            let state = PhoneState { platform:Some(Platform::Gtk), corners:[radius * scale;4], ..Default::default() };
+            let phone = state.resolve(&layout, viewport).unwrap();
+            let inset = if radius < 8. { 8. } else { 16. } * scale;
+            if viewport[0] < viewport[1] { assert_eq!(phone.tools[0].x, inset); }
+            else { assert_eq!(phone.tools[0].y, inset); }
+        }
+        let state = PhoneState { platform:Some(Platform::Gtk), ..Default::default() };
+        let original = PhoneLayout::resolve(&layout,viewport,[0.;4],[0.;2],[0;2],false,false).unwrap();
+        assert_eq!(serde_json::to_value(state.resolve(&layout,viewport).unwrap()).unwrap(),serde_json::to_value(original).unwrap());
+    }
+    let mut s = phone_session([412,891]);
+    let metrics = |corners| UiAction::Phone { action:PhoneAction::Metrics { native:[0.;2],native_counts:[0;2],insets:[0.;4],corners,movable:false } };
+    s.dispatch(metrics([40.;4])).unwrap();
+    assert_eq!(s.state.phone.corners,[40.;4]);
+    assert_eq!(s.dispatch(metrics([40.;4])).unwrap().regions,0);
+    assert!(s.dispatch(metrics([-1.;4])).is_err());
+    assert!(s.dispatch(metrics([f32::NAN;4])).is_err());
+}
+
+#[test]
 fn proof_reveal_opens_the_phone_drawer_without_changing_desktop_layout() {
     for platform in [Platform::Gtk, Platform::Web] {
         for viewport in [[412, 891], [891, 412]] {
@@ -274,7 +313,7 @@ fn phone_metrics_are_host_reports_while_rendering_is_suspended() {
         s.set_viewport([412., 891.], [412, 891]).unwrap();
         s.suspend_renderer().unwrap();
         assert!(s.dispatch(UiAction::Phone { action: PhoneAction::SwapSides }).is_err());
-        let action = UiAction::Phone { action: PhoneAction::Metrics {
+        let action = UiAction::Phone { action: PhoneAction::Metrics { corners: [0.; 4],
             native: [32., 16.], native_counts: [1, 1], insets: [19., 7., 13., 5.], movable: true,
         } };
         assert!(action.is_host_report());
@@ -305,7 +344,7 @@ fn document_interaction_admits_only_existing_reports_and_phone_metrics() {
         UiAction::MeasureColumnDrawers { measurements: Vec::new() },
         UiAction::MeasureDrawerTiles { measurements: Vec::new() },
         UiAction::MeasureColumnScroll { column: 1, offset: 0. },
-        UiAction::Phone { action: PhoneAction::Metrics { native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable: false } },
+        UiAction::Phone { action: PhoneAction::Metrics { corners: [0.; 4], native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable: false } },
     ];
     for action in allowed { assert!(action.allowed_during_document_interaction(), "{action:?}"); }
     for action in [
@@ -341,7 +380,7 @@ fn phone_movable_metrics_update_the_title_without_changing_saved_state() {
     assert!(matches!(legacy, PhoneAction::Metrics { movable: false, .. }));
     assert_eq!(s.dispatch(UiAction::Phone { action: legacy }).unwrap().regions, 0);
     for movable in [true, false] {
-        let action = PhoneAction::Metrics { native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable };
+        let action = PhoneAction::Metrics { corners: [0.; 4], native: [0.; 2], native_counts: [0; 2], insets: [0.; 4], movable };
         let change = s.dispatch(UiAction::Phone { action: action.clone() }).unwrap();
         assert_ne!(change.regions & regions::LAYOUT, 0);
         assert_eq!(s.state.phone.movable, movable);
@@ -886,7 +925,7 @@ fn phone_runtime_controls_preserve_raw_layout_and_retained_resolution() {
         UiAction::Phone { action: PhoneAction::Slider {
             control: ToolbarControl::BrushSizeSlider, phase: ContactPhase::Up,
         } },
-        UiAction::Phone { action: PhoneAction::Metrics {
+        UiAction::Phone { action: PhoneAction::Metrics { corners: [0.; 4],
             native: [0., 48.], native_counts: [0, 1], insets: [0., 24., 0., 16.], movable: false,
         } },
     ].into_iter().enumerate() {

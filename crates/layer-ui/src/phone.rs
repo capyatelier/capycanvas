@@ -1,6 +1,48 @@
 use crate::{Bounds, DockLayout, DrawerPlacement, Edge, ToolbarControl};
 use serde::{Deserialize, Serialize};
 
+pub fn phone_window(viewport: [f32; 2]) -> bool { viewport.iter().all(|v| v.is_finite() && *v > 0.) && viewport[0].min(viewport[1]) < 480. }
+
+pub fn phone_ui(source: &str) -> Result<serde_json::Value, String> {
+    #[derive(Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum Request {
+        BarBegin { layout: PhoneLayout, tiles: Vec<crate::ToolbarTile>, point: [f32; 2] },
+        BarValid { layout: PhoneLayout, tiles: Vec<crate::ToolbarTile>, contact: PhoneBarContact },
+        BarStep { layout: PhoneLayout, tiles: Vec<crate::ToolbarTile>, contact: PhoneBarContact, input: PhoneBarInput },
+        MenuInput { contact: PhoneMenuContact, route: PhoneMenuRoute, can_back: bool, input: PhoneMenuInput },
+        MenuWidth { layout: PhoneLayout, minimum: f32, natural: f32, row_height: f32 },
+        MenuGeometry { layout: PhoneLayout, placement: DrawerPlacement, row_height: f32 },
+        MenuPlacement { layout: PhoneLayout, viewport: [f32; 2], width: f32, height: f32, row_height: f32 },
+        SliderStretchDistance { layout: PhoneLayout },
+    }
+    use serde_json::json;
+    Ok(match serde_json::from_str(source).map_err(|error| error.to_string())? {
+        Request::BarBegin { layout, tiles, point } => json!(phone_bar_begin(&layout, &tiles, point)),
+        Request::BarValid { layout, tiles, contact } => json!(phone_bar_valid(&layout, &tiles, &contact)),
+        Request::BarStep { layout, tiles, mut contact, input } => {
+            let reply = phone_bar_step(&layout, &tiles, &mut contact, input); json!({"contact":contact, "reply":reply})
+        }
+        Request::MenuInput { mut contact, route, can_back, input } => {
+            let reply = contact.input(&route, can_back, input); json!({"contact":contact, "reply":reply})
+        }
+        Request::MenuWidth { layout, minimum, natural, row_height } => json!(layout.menu_width(minimum, natural, row_height)),
+        Request::MenuGeometry { layout, placement, row_height } => json!(layout.menu_geometry(&placement, row_height)),
+        Request::MenuPlacement { layout, viewport, width, height, row_height } => json!(layout.menu(viewport, width, height, row_height)),
+        Request::SliderStretchDistance { layout } => json!(layout.slider_stretch_distance()),
+    })
+}
+
+pub type CommandSearchPlacement = Bounds;
+impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
+    pub fn command_search_placement(&self, viewport: [f32; 2]) -> CommandSearchPlacement {
+        let visible = Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] };
+        let phone = self.phone_layout();
+        let area = phone.as_ref().and_then(|phone| phone.work_area.intersection(visible)).unwrap_or(visible);
+        crate::COMMAND_SEARCH_STYLE.placement(viewport, area, phone.is_some())
+    }
+}
+
 pub(crate) fn tool_allowed(control: ToolbarControl) -> bool {
     !control.is_component() && control != PhoneLayout::SETTINGS
 }
@@ -10,6 +52,7 @@ pub(crate) fn tool_allowed(control: ToolbarControl) -> bool {
 pub struct PhoneState {
     pub(crate) platform: Option<crate::Platform>,
     pub insets: [f32; 4],
+    pub corners: [f32; 4],
     pub native: [f32; 2],
     pub native_counts: [u32; 2],
     pub movable: bool,
@@ -40,7 +83,7 @@ pub enum PhoneAction {
     Drawing { id: u64, close: bool },
     SwapSides,
     Slider { control: ToolbarControl, phase: crate::ContactPhase },
-    Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4], #[serde(default)] movable: bool },
+    Metrics { native: [f32; 2], native_counts: [u32; 2], insets: [f32; 4], #[serde(default)] corners: [f32; 4], #[serde(default)] movable: bool },
 }
 impl crate::UiState {
     pub fn phone_settings(&self) -> crate::TileView {
@@ -60,7 +103,18 @@ impl PhoneState {
     pub fn resolve(&self, layout: &DockLayout, viewport: [f32; 2]) -> Option<PhoneLayout> {
         if !self.platform.is_some_and(crate::Platform::presents_phone_layout) { return None; }
         layout.phone.as_ref()?;
-        let mut phone = PhoneLayout::resolve(layout, viewport, self.insets, self.native, self.native_counts, self.swapped, self.movable)?;
+        let scale = (viewport[0].min(viewport[1]) / 320.).min(1.);
+        let [left, top, right, bottom] = self.insets.map(|inset| inset.max(8. * scale));
+        let end = |r: f32, e: f32| if e >= r { 0. } else { r - (r * r - (r - e).powi(2)).sqrt() };
+        let [nw, ne, se, sw] = self.corners;
+        let insets = if viewport[0] <= viewport[1] {
+            [left.max(end(nw, top)).max(end(sw, bottom)), top,
+                right.max(end(ne, top)).max(end(se, bottom)), bottom]
+        } else {
+            [left, top.max(end(nw, left)).max(end(ne, right)), right,
+                bottom.max(end(sw, left)).max(end(se, right))]
+        };
+        let mut phone = PhoneLayout::resolve(layout, viewport, insets, self.native, self.native_counts, self.swapped, self.movable)?;
         if self.hidden {
             phone.capy_hit = Bounds::default();
             phone.size = Bounds::default();
@@ -106,7 +160,28 @@ pub struct PhoneLayout {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PhoneBarOutcome { Pending, Held, Dragging, WindowMove, Cancel, Tap(u32), Menu(Option<u32>), Move { tile: u32, before: Option<u32> } }
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PhoneBarInput { Arm, Motion { position: [f32; 2], past_slop: bool }, Finish { position: [f32; 2] } }
+#[derive(Serialize)]
+pub struct PhoneBarReply { pub outcome: PhoneBarOutcome, pub geometry: Vec<Bounds>, pub lifted: Option<usize> }
+pub fn phone_bar_begin(layout: &PhoneLayout, tiles: &[crate::ToolbarTile], point: [f32; 2]) -> Option<PhoneBarContact> {
+    let mut contact = PhoneBarContact::begin(layout, point, false)?;
+    contact.set_tools(tiles);
+    Some(contact)
+}
+pub fn phone_bar_valid(layout: &PhoneLayout, tiles: &[crate::ToolbarTile], contact: &PhoneBarContact) -> bool { contact.valid(layout, tiles) }
+pub fn phone_bar_step(layout: &PhoneLayout, tiles: &[crate::ToolbarTile], contact: &mut PhoneBarContact, input: PhoneBarInput) -> PhoneBarReply {
+    if !phone_bar_valid(layout, tiles, contact) { return PhoneBarReply { outcome: contact.cancel(), geometry: Vec::new(), lifted: None }; }
+    let outcome = match input {
+        PhoneBarInput::Arm => contact.arm(),
+        PhoneBarInput::Motion { position, past_slop } => contact.motion(layout, tiles, position, past_slop),
+        PhoneBarInput::Finish { position } => contact.finish(layout, tiles, position),
+    };
+    let geometry = contact.geometry(layout);
+    PhoneBarReply { outcome, geometry: geometry[..tiles.len().min(geometry.len())].to_vec(), lifted: contact.lifted() }
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct PhoneBarContact {
     held: bool, dragged: bool, editable: bool, index: Option<usize>,
     origin: [f32; 2], point: [f32; 2], key: Option<(Edge, Bounds, Bounds, Bounds)>, ids: [u32; PhoneLayout::MAX_TILES], dividers: [bool; PhoneLayout::MAX_TILES], count: usize,
@@ -310,7 +385,7 @@ impl PhoneLayout {
     }
     pub fn resolve(layout: &DockLayout, viewport: [f32; 2], insets: [f32; 4], native: [f32; 2],
         native_counts: [u32; 2], swapped: bool, movable: bool) -> Option<Self> {
-        if viewport.iter().any(|v| !v.is_finite() || *v <= 0.) || viewport[0].min(viewport[1]) >= 480. {
+        if !phone_window(viewport) {
             return None;
         }
         let scale = (viewport[0].min(viewport[1]) / 320.).min(1.);
@@ -640,7 +715,7 @@ impl serde::Serialize for PhoneMenuNavigation {
         state.end()
     }
 }
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PhoneMenuContact {
     swipe_axis: Option<crate::Axis>,
     swipe_progress: f32,

@@ -353,6 +353,11 @@ impl NativeHost {
         map.serialize_entry("state", state)?;
         map.serialize_entry("presented_layer_rows", &state.layer_tools.presented_rows(&state.layers))?;
         map.serialize_entry("layout", &layout)?;
+        if layout.phone.is_some() {
+            map.serialize_entry("phone_tools", &state.phone_tools())?;
+            map.serialize_entry("phone_settings", &state.phone_settings())?;
+            map.serialize_entry("capy_caption", &self.session.capy_caption(self.logical))?;
+        }
         map.serialize_entry("panels", &panels)?;
         map.serialize_entry("bubbles", &bubbles)?;
         map.serialize_entry(
@@ -442,6 +447,33 @@ mod tests {
         assert_eq!(&read(host)["state"]["workspace"], saved);
         host.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace }).unwrap();
         assert_eq!(read(host)["state"]["workspace"], committed["state"]["workspace"]);
+    }
+
+    #[test]
+    fn phone_snapshot_fields_follow_full_and_incremental_layout_transitions() {
+        for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+            let mut host = host(platform);
+            host.dispatch(UiAction::RestoreWorkspace { workspace:Box::new(WorkspaceState {
+                layout:layer_ui::WorkspacePreset::Painter.layout(platform),..Default::default()
+            }) }).unwrap();
+            for viewport in [[412,891],[891,412],[1200,900],[280,560],[1200,900]] {
+                host.resize(viewport[0],viewport[1],1.).unwrap();
+                let full: Value = serde_json::from_slice(&host.snapshot_bytes().unwrap()).unwrap();
+                let incremental = decoded(host.take_layout_update_bytes().unwrap()).unwrap();
+                let phone = full["layout"]["phone"].is_object();
+                assert_eq!(phone,platform != Platform::Android && viewport[0].min(viewport[1]) < 480);
+                for field in ["phone_tools","phone_settings","capy_caption"] {
+                    assert_eq!(full.get(field).is_some(),phone,"{platform:?} {viewport:?} {field}");
+                    assert_eq!(incremental.get(field).is_some(),phone,"{platform:?} {viewport:?} {field}");
+                }
+                if phone {
+                    assert_eq!(full["phone_tools"],json!(host.session.state().phone_tools()));
+                    assert_eq!(full["phone_settings"],json!(host.session.state().phone_settings()));
+                    assert_eq!(full["capy_caption"],json!(host.session.capy_caption(host.logical)));
+                }
+                assert!(full["state"]["phone"].is_object());
+            }
+        }
     }
 
     #[test]

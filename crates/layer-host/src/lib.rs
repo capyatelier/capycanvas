@@ -294,6 +294,10 @@ impl NativeHost {
     pub fn bootstrap_view(&self) -> layer_ui::BootstrapView {
         layer_ui::bootstrap_view(self.session.localization())
     }
+    pub fn set_device_class(&mut self, device: layer_ui::DeviceClass) {
+        self.session.set_device_class(device);
+        self.invalidate_snapshot();
+    }
     pub fn localization_generation(&self) -> u64 {
         self.localization_generation
     }
@@ -890,19 +894,14 @@ impl NativeHost {
                 #[serde(default)]
                 expansion: Option<layer_ui::PanelExpansion>,
             },
-            Drawer {
-                column: Option<u32>,
-                heights: Vec<f32>,
-                progress: f32,
-                from: Option<layer_ui::DrawerPlacement>,
-                #[serde(default)]
-                closing: bool,
-            },
-            DrawerMeasure {column:Option<u32>,#[serde(default)] tiles:Vec<layer_ui::DrawerTileMeasurement>},
-            LayerDrawerSizing {
-                measurement: layer_ui::PanelScrollMeasurement,
-                properties_height: f32,
-            },
+            Drawer { #[serde(flatten)] query: layer_ui::DrawerFrameQuery },
+            DrawerMeasure { column: Option<u32>, #[serde(default)] tiles: Vec<layer_ui::DrawerTileMeasurement> },
+            LayerDrawerSizing { measurement: layer_ui::PanelScrollMeasurement, properties_height: f32, column: Option<u32> },
+            CommandSearchPlacement,
+            DialogPresentation { role: layer_ui::DialogRole, visible: layer_ui::Bounds },
+            DialogBounds { role: layer_ui::DialogRole, visible: layer_ui::Bounds, measured: [f32; 2] },
+            PreferencesLayout { width: f32, minimum: [f32; 2] },
+            ToolPanel { panel: layer_ui::Panel, anchor: Option<layer_ui::DrawerAnchor> },
             DrawerToolbar {
                 panel: layer_ui::Panel,
                 width: f32,
@@ -1099,54 +1098,20 @@ impl NativeHost {
                 item,
                 expansion,
             } => self.workspace_drop(position, &tabs, item, expansion),
-            Query::Drawer {
-                column,
-                heights,
-                progress,
-                from,
-                closing,
-            } => {
-                let state = self.session.state();
-                let drawer = match column {
-                    None => state.customization.drawer.as_ref(),
-                    Some(id) => state.customization.column_drawers.iter().find(|d|
-                        matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
-                };
-                let end = if closing {
-                    from.as_ref().map(|p| p.closed())
-                } else {
-                    drawer.and_then(|d| {
-                        state.customization.drawer_placement(
-                            d,
-                            &self.session.layout_resolve_input(),
-                            self.logical,
-                            &heights,
-                        )
-                    })
-                };
-                json!(end.map(|end| {
-                    let from = from.unwrap_or_else(|| end.closed());
-                    let placement = end.interpolate_from(&from, progress);
-                    json!({"connection": placement.connection(), "placement": placement})
-                }))
+            Query::Drawer { mut query } => {
+                query.viewport.get_or_insert(self.logical);
+                json!(self.session.drawer_frame_for(query))
             }
-            Query::DrawerMeasure {column,tiles} => {
-                let state=self.session.state();
-                let drawer=match column {
-                    None=>state.customization.drawer.as_ref(),
-                    Some(id)=>state.customization.column_drawers.iter().find(|d|
-                        matches!(d.anchor,layer_ui::DrawerAnchor::Column {column,..} if column==id)),
-                };
-                match drawer {
-                    Some(drawer)=>self.session.layout_resolve_input().drawer_geometry(self.logical,&json!({"model":drawer,
-                        "column_drawers":state.customization.column_drawers,"tiles":tiles,"toolbars":true}).to_string())?,
-                    None=>json!({"measure":null,"toolbars":[]}),
-                }
-            }
-            Query::LayerDrawerSizing {measurement, properties_height} => {
+            Query::DrawerMeasure { column, tiles } => self.session.drawer_measurement(self.logical, column, tiles)?,
+            Query::LayerDrawerSizing { measurement, properties_height, column } => self.session.layer_drawer_sizing(self.logical, column, measurement, properties_height)?,
+            Query::CommandSearchPlacement => json!(self.session.command_search_placement(self.logical)),
+            Query::DialogPresentation { role, visible } => json!(self.session.state().dialog_presentation_in(role, self.logical, visible)),
+            Query::DialogBounds { role, visible, measured } => json!(self.session.state().dialog_presentation_in(role, self.logical, visible).bounds(|| measured)),
+            Query::PreferencesLayout { width, minimum } => json!(self.session.state().preferences_layout(self.logical, width, minimum)),
+            Query::ToolPanel { panel, anchor } => {
                 let state = self.session.state();
-                state.customization.layer_drawer_sizing(state.customization.drawer.as_ref(),&self.session.layout_resolve_input(),
-                    self.logical,measurement,state.layers.len(),properties_height)?
+                let drawer = anchor.and_then(|anchor| state.customization.drawer.iter().chain(&state.customization.column_drawers).find(|drawer| drawer.anchor == anchor));
+                json!(state.tool_panel_presentation(panel, drawer))
             }
             Query::DrawerToolbar {
                 panel,
@@ -2731,6 +2696,45 @@ mod tests {
         assert!(app.take_filter_preview_image().is_none());
         assert!(app.session.renderer_mut().0.is_none());
     }
+    #[test]
+    fn native_phone_queries_share_drawer_frames_and_dialog_geometry() {
+        let mut host = NativeHost::new(layer_ui::Platform::Gtk).unwrap();
+        host.dispatch(UiAction::RestoreWorkspace { workspace:Box::new(layer_ui::WorkspaceState {
+            layout:layer_ui::WorkspacePreset::Painter.layout(layer_ui::Platform::Gtk),..Default::default()
+        }) }).unwrap();
+        for viewport in [[412,891],[891,412]] {
+            host.resize(viewport[0],viewport[1],1.).unwrap();
+            assert_eq!(host.query(json!({"type":"drawer_measure"})).unwrap(),json!({"measure":null,"toolbars":[],"minimums":[],"scrolls_together":false,"content_sized":[]}));
+            host.dispatch(UiAction::Phone { action:layer_ui::PhoneAction::Panel { panel:layer_ui::Panel::Color } }).unwrap();
+            let value = host.query(json!({"type":"drawer_measure"})).unwrap();
+            assert_eq!(value["scrolls_together"],true);
+            assert!(value["minimums"].as_array().unwrap().len() > 0);
+            assert!(value["content_sized"].is_array());
+            let heights = vec![2000.;value["measure"]["placement"]["columns"].as_array().unwrap().len()];
+            let column = host.session.state().customization.drawer.as_ref().unwrap().columns.iter().position(|panels| panels.contains(&layer_ui::Panel::Color)).unwrap();
+            let frame = host.query(json!({"type":"drawer","heights":heights,"progress":1.,"color":{"fixed_height":80.,"hdr":false}})).unwrap();
+            let stateless = layer_ui::drawer_frame(&json!({"measure":value["measure"],"heights":heights,"progress":1.,"color":{"column":column,"fixed_height":80.,"hdr":false}}).to_string()).unwrap();
+            assert!(!frame.is_null()); assert!(!frame["color_fit"].is_null());
+            assert_eq!(frame,stateless);
+            let drawer = host.session.state().customization.drawer.as_ref().unwrap();
+            let anchor = drawer.anchor;
+            let expected = json!(host.session.state().tool_panel_presentation(layer_ui::Panel::Color,Some(drawer)));
+            assert_eq!(host.query(json!({"type":"tool_panel","panel":"color","anchor":anchor})).unwrap(),expected);
+            let visible = layer_ui::Bounds { x:0.,y:0.,width:host.logical[0],height:host.logical[1]-100. };
+            for role in [layer_ui::DialogRole::Editor,layer_ui::DialogRole::Alert,layer_ui::DialogRole::CanvasPanel] {
+                let presentation = host.session.state().dialog_presentation_in(role,host.logical,visible);
+                assert_eq!(host.query(json!({"type":"dialog_presentation","role":role,"visible":visible})).unwrap(),json!(presentation));
+                assert_eq!(host.query(json!({"type":"dialog_bounds","role":role,"visible":visible,"measured":[600.,200.]})).unwrap(),json!(presentation.bounds(|| [600.,200.])));
+            }
+            assert_eq!(host.query(json!({"type":"command_search_placement"})).unwrap(),json!(host.session.command_search_placement(host.logical)));
+            assert_eq!(host.query(json!({"type":"preferences_layout","width":300.,"minimum":[126.,265.]})).unwrap(),json!(host.session.state().preferences_layout(host.logical,300.,[126.,265.])));
+            host.dispatch(UiAction::Phone { action:layer_ui::PhoneAction::Capy }).unwrap();
+            let menu = host.query(json!({"type":"drawer","heights":[],"progress":1.,"menu":{"width":280.,"height":400.,"row_height":40.}})).unwrap();
+            assert_eq!(menu["placement"],json!(host.session.phone_layout().unwrap().menu(host.logical,280.,400.,40.).unwrap()));
+            host.dispatch(UiAction::Phone { action:layer_ui::PhoneAction::Capy }).unwrap();
+        }
+    }
+
     #[test]
     fn workspace_views_expose_shared_actions_and_transient_measurements() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
