@@ -1,6 +1,7 @@
 import importlib.util
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -151,6 +152,20 @@ class RunnerVmTests(unittest.TestCase):
                 patch.object(vm, "build_files", return_value={}), self.assertRaises(SystemExit):
             vm.import_fixture_build(machine, vm.SOFTWARE_BUILD + "-dev-perf", record, archive, record["inputs"], "dev-perf")
         self.assertFalse(path.exists())
+
+    def test_missing_result_retains_prior_positive_duration(self):
+        artifacts = self.root / "evidence"
+        for index, rows in enumerate(([
+                {"name": "long", "exit": 0, "seconds": 100},
+                {"name": "short", "exit": 0, "seconds": 5},
+        ], [{"name": "long", "exit": "missing", "seconds": 0}])):
+            results = artifacts / "runner" / str(index) / "results.jsonl"
+            results.parent.mkdir(parents=True)
+            results.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            os.utime(results, (100 + index, 100 + index))
+        with patch.object(vm, "ARTIFACTS", artifacts), patch.object(vm, "SETTINGS", {"artifacts": str(artifacts)}):
+            durations = vm.fixture_durations()
+        self.assertEqual(durations, {"long": 100, "short": 5})
 
     def test_latest_failed_and_timed_out_durations_start_before_short_fixtures(self):
         artifacts = self.root / "evidence"

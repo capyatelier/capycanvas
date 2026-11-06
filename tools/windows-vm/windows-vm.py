@@ -12,6 +12,7 @@ import fcntl
 import getpass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -1060,7 +1061,8 @@ def fixture_durations():
         for line in path.read_text(encoding="utf-8-sig").splitlines():
             try:
                 row = json.loads(line)
-                durations[row["name"]] = row["seconds"]
+                if type(row["seconds"]) in (int, float) and math.isfinite(row["seconds"]) and row["seconds"] > 0:
+                    durations[row["name"]] = row["seconds"]
             except (ValueError, KeyError):
                 continue
     return durations
