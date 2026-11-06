@@ -32,8 +32,9 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
   const comparison=async(command,reference)=>{
     console.log(`Object capture comparison: ${command}`);
     await begin(command);
-    const selector=command==='rasterize_source'?'dialog[open] canvas[aria-label="Prepared composition"]':'dialog[open] .color-comparison canvas';
-    await wait(`document.querySelectorAll(${JSON.stringify(selector)}).length===${command==='rasterize_source'?1:2}`);
+    if(command==='assign_profile')await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Output profile"]',await evaluate('layerApp.app.document_color().space==="DisplayP3"?"Srgb":"DisplayP3"')));
+    const selector='dialog[open] .color-comparison canvas';
+    await wait(`document.querySelectorAll(${JSON.stringify(selector)}).length===2`);
     assert.ok(await opaque(selector),'Comparison captures include object samples');
     if(command==='rasterize_source') {
       const paint=packageObjects(reference,'capy.paint-source/2').find(paint=>paint.data.base);
@@ -105,7 +106,7 @@ export async function checkImageObjectFixture({call,evaluate,settle,canvasPixels
         await comparison('rasterize_source',before);
         }
         await begin('change_bit_depth');
-        await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Bit depth"]','F32'));
+        await evaluate(dropdownChoice('dialog[open] .dropdown[aria-label="Bit depth"]',await evaluate('layerApp.app.document_color().depth==="F32"?"F16":"F32"')));
         await wait("document.querySelectorAll('dialog[open] .color-comparison canvas').length===2");assert.ok(await opaque('dialog[open] .color-comparison canvas'));await click('Cancel');await idle();
         await begin('export_document');
         await wait(`document.querySelectorAll('dialog[open] .native-comparison canvas').length===2`);assert.ok(await opaque('dialog[open] .native-comparison canvas'));await click('Cancel');await idle();
