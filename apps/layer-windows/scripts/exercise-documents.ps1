@@ -971,14 +971,6 @@ if($Journey -in @('new-drawing','new-drawing-problem','paper-color')){
     @{journey=$Journey;themes=@('dark','light');evidence=$run;scope=$(if($Journey -eq 'paper-color'){'Retained native paper color controls, transparent/color apply, cancelled draft and owned close'}else{'New drawing presets, paper and color drawers, texture visibility, sheet creation and owned close'})}|ConvertTo-Json
     return
 }
-function Combo-Value($Combo){$selection=$Combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection();if($selection.Count){$selection[0].Current.Name}}
-function Combo-Item($Combo,[scriptblock]$Pick){
-    $Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    $hit=@{item=$null};Wait-Until {$hit.item=@($Combo.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem))|Where-Object $Pick)[0];$hit.item} 'Missing drop-down choice'
-    $hit.item
-}
-function Combo-Select($Combo,[scriptblock]$Pick){(Combo-Item $Combo $Pick).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}
 
 
 function Color-Command([string]$Id){

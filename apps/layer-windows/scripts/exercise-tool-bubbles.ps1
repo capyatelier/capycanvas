@@ -33,6 +33,7 @@ if($HdrOnly -and !$PSBoundParameters.ContainsKey('Variant')){
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 . (Join-Path $PSScriptRoot 'BubbleVisualChecks.ps1')
 . (Join-Path $PSScriptRoot 'ComposedFrames.ps1')
+. (Join-Path $PSScriptRoot 'BlenderDocumentPixels.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 if(!('CapyCanvasTouch' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')}
 if(!('CapyBubbleFixtureNative' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'BubbleFixtureNative.cs')}
@@ -716,6 +717,9 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $clear=Clear-CanvasPoint ('tool-bubble-'+$id) 128 0;$sample=@{x=$clear[0]+64;y=$clear[1]}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4);$blank=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
     $blankCheckpoint=Drawing-Checkpoint
+    $document=@((Model).state.tabs|Where-Object active)[0]
+    $pixelExport=[pscustomobject]@{path=(Join-Path $run ($Tag+'-pixels.png'));extent=@([int]$document.width,[int]$document.height);recipe=$null;project='';saved_file_sha256='';saved_state=$null;restored_state=$null}
+    $blankDocument=Export-BlenderPixels ($Tag+'-blank') $pixelExport
     [CapyRowPointer]::Down('pen',$sample.x,($sample.y-16));[CapyRowPointer]::Move($sample.x,($sample.y+16));[CapyRowPointer]::Up()
     Wait-Until {(Revision) -gt $before} 'Blender seed stroke did not commit'
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
@@ -723,6 +727,8 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $seed=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
     $seedCheckpoint=Drawing-Checkpoint
     if($seed -ceq $blank){throw 'Blender fixture seed did not create effective artwork'}
+    $seedDocument=Export-BlenderPixels ($Tag+'-seed') $pixelExport
+    if($seedDocument.pixels -ceq $blankDocument.pixels){throw 'Blender fixture seed did not change the document pixels'}
     Blender-Select $Preset;Blender-Value 'size' '64';$seedRevision=Revision
     [CapyRowPointer]::Down('pen',$clear[0],$clear[1]);for($step=1;$step -le 16;$step++){[CapyRowPointer]::Move(($clear[0]+8*$step),$clear[1]);Start-Sleep -Milliseconds 15};[CapyRowPointer]::Up()
     Wait-Until {(Revision) -gt $seedRevision} 'Blender stroke did not commit'
@@ -731,19 +737,23 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $painted=Wait-StablePixels {Screen-Pixels $sample.x $sample.y}
     $paintedCheckpoint=Drawing-Checkpoint
     if($painted -ceq $seed){throw 'Blender stroke did not change its seeded artwork'}
+    $paintedDocument=Export-BlenderPixels ($Tag+'-painted') $pixelExport
+    if($paintedDocument.pixels -ceq $seedDocument.pixels){throw 'Blender stroke did not change its seeded document pixels'}
     Blender-Value $CellId '12'
     $file=Join-Path $run ($Tag+' editing-state.capy');Save-ProjectAs $file
     Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving -and !(Model).state.document_file.busy} 'Blender editing state did not finish its native autosave'
     $savedState=Blender-SavedState;$savedFile=(Get-FileHash -LiteralPath $file).Hash
     $saved=$savedState|ConvertFrom-Json
+    $pixelExport.project=$file;$pixelExport.saved_file_sha256=$savedFile;$pixelExport.saved_state=$saved
     $documentSample=Blender-DocumentPosition $saved.camera @((($sample.x-$saved.native_canvas[0])*$saved.camera.viewport[0]/$saved.native_canvas[2]),(($sample.y-$saved.native_canvas[1])*$saved.camera.viewport[1]/$saved.native_canvas[3]))
-    if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted){throw 'Saving Blender editing state changed authored pixels'}
+    Assert-BlenderDocumentPixels $paintedDocument (Export-BlenderPixels ($Tag+'-after-save') $pixelExport $file) ($Tag+'-after-save') $pixelExport
     Capture ($Tag+'-session-before-restart') -WithModel -Composed
     $projection=Restart-BubbleReview ($Tag+'-restart-stderr.log') $saved
     Wait-Until {(Model).state.document_file.location.uri -eq $file -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Native Blender session did not reopen its saved drawing'
     $script:w=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
     $restoredState=Blender-SavedState
     $restored=$restoredState|ConvertFrom-Json
+    $pixelExport.restored_state=$restored
     $surface=Blender-SurfacePosition $restored.camera $documentSample
     $sample=@{x=[int][Math]::Round($restored.native_canvas[0]+$surface[0]*$restored.native_canvas[2]/$restored.camera.viewport[0]);y=[int][Math]::Round($restored.native_canvas[1]+$surface[1]*$restored.native_canvas[3]/$restored.camera.viewport[1])}
     @{before=$saved;initial=$projection.initial;after=$restored;document_sample=$documentSample;restored_screen_sample=$sample}|ConvertTo-Json -Depth 30|Set-Content -LiteralPath (Join-Path $run ($Tag+'-session-projection.json'))
@@ -756,11 +766,16 @@ function Invoke-BlenderCellChecks([int]$Preset,[string]$CellId,[double]$DefaultC
     $nativeCell=(Blender-Field $CellId).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
     if((View $id).source.control.id -ne $Preset -or !(View $id).selected -or [double]$nativeCell -ne 12){throw 'Restored Blender source and native Cell Size did not show the saved12'}
     [CapyRowPointer]::Hover($w.X+4,$w.Y+4)
-    if((Wait-StablePixels {Screen-Pixels $sample.x $sample.y}) -cne $painted -or (Get-FileHash -LiteralPath $file).Hash -cne $savedFile){throw 'Native Blender session restart changed authored pixels or its saved file'}
+    Assert-BlenderDocumentPixels $paintedDocument (Export-BlenderPixels ($Tag+'-session-restart') $pixelExport $file) ($Tag+'-session-restart') $pixelExport
+    Assert-BlenderSavedFile $file $savedFile
     Capture ($Tag+'-session-restored') -WithModel -Composed
-    foreach($history in @(@{action='Undo';pixels=$seed;checkpoint=$seedCheckpoint},@{action='Redo';pixels=$painted;checkpoint=$paintedCheckpoint},@{action='Undo';pixels=$seed;checkpoint=$seedCheckpoint},@{action='Undo';pixels=$blank;checkpoint=$blankCheckpoint})){
+    $historyIndex=0
+    foreach($history in @(@{action='Undo';pixels=$seedDocument;checkpoint=$seedCheckpoint},@{action='Redo';pixels=$paintedDocument;checkpoint=$paintedCheckpoint},@{action='Undo';pixels=$seedDocument;checkpoint=$seedCheckpoint},@{action='Undo';pixels=$blankDocument;checkpoint=$blankCheckpoint})){
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action $history.action
-        Wait-Until {(Screen-Pixels $sample.x $sample.y) -ceq $history.pixels} 'Blender native history did not restore the exact composed pixels'
+        Wait-Until {(Drawing-Checkpoint) -ceq $history.checkpoint} 'Blender native history did not restore the exact authored checkpoint'
+        Wait-PresentedFrame -Idle
+        Assert-BlenderDocumentPixels $history.pixels (Export-BlenderPixels ($Tag+'-history-'+$historyIndex) $pixelExport $file) ($Tag+'-history-'+$historyIndex) $pixelExport
+        $historyIndex++
         if((Drawing-Checkpoint) -cne $history.checkpoint){throw 'Blender Undo or Redo did not restore the exact authored checkpoint and layer order'}
     }
     [IO.File]::WriteAllText((Join-Path $run ($Tag+'-controls.json')),(@{preset=$Preset;primary=$Primary;defaults=@{spread=$DefaultSpread;cell=$DefaultCell};controls=$controlState;overrides=$overrides;cancelled=$cancelled;retained=$retained;schema=(Model).state.tool_settings;rings=$observations;blank=$blank;seed=$seed;painted=$painted;persistence='native saved open drawing and serialized editing-state session restart';saved_state=$savedState;file=$file;file_sha256=$savedFile;physical_input_and_performance='unverified'}|ConvertTo-Json -Depth 30),[Text.UTF8Encoding]::new($false))
@@ -1030,36 +1045,29 @@ function Native-InertiaInterruption([long]$Id,$List,$Scroll){
     Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,50);Settle-LayerScroll $Scroll
     $origin=Settled-LayerState;$order=@($origin.state.layers.id)-join ',';$checkpoint=@($origin.windows_tabs.session_stamps|Where-Object id -eq $origin.windows_tabs.selected)[0].stamp.checkpoint
     $box=$List.Current.BoundingRectangle;$point=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
-    $timeline=[Collections.Generic.List[object]]::new();$clock=[Diagnostics.Stopwatch]::StartNew()
-    $observe={param([string]$Stage) $percent=$Scroll.Current.VerticalScrollPercent;$native=$List.Current.ItemStatus|ConvertFrom-Json;$timeline.Add(@{stage=$Stage;elapsed_ms=$clock.Elapsed.TotalMilliseconds;percent=$percent;native=$native})}
-    $interruptStart=$null;$interrupted=$null;$flingMilliseconds=$null;$admission=@{before=$null;native=$null}
+    $interruptStart=$null;$interrupted=$null;$admission=@{before=($List.Current.ItemStatus|ConvertFrom-Json).generation;native=$null}
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{
         [CapyCanvasTouch]::Down(1,$point.x,$point.y)
-        Wait-Until {$admission.native=$List.Current.ItemStatus|ConvertFrom-Json;$admission.native.device -eq 'touch' -and $admission.native.phase -eq 'pressed' -and $admission.native.touch_contacts -eq 1 -and $null -ne $admission.native.pointer_id} 'Native layer list did not process the initial touch'
-        $admission.before=$admission.native.generation
-        $flingMilliseconds=[CapyCanvasTouch]::MoveTimed(1,0,-25,100,$true)
-        $moving=@{prior=$Scroll.Current.VerticalScrollPercent;before=$null;after=$null}
-        Wait-Until {$value=$Scroll.Current.VerticalScrollPercent;if($value -gt $moving.prior+.05){$moving.before=$moving.prior;$moving.after=$value;return $true};$moving.prior=$value;return $false} 'Interrupt fixture did not observe live native inertia'
-        $timeline.Add(@{stage='second-down-before';elapsed_ms=$clock.Elapsed.TotalMilliseconds;percent=$moving.after;native=$null})
-        [CapyCanvasTouch]::Down(1,$point.x,$point.y)
-        & $observe 'second-down-returned'
+        $null=[CapyCanvasTouch]::MoveTimed(1,0,-25,100,$true)
         Wait-Until {
             $admission.native=$List.Current.ItemStatus|ConvertFrom-Json
-            $pressed=$admission.native.phase -eq 'pressed' -and $admission.native.touch_contacts -eq 1 -and $null -ne $admission.native.pointer_id
-            $scrolling=$admission.native.phase -eq 'idle' -and $admission.native.last_cancel.reason -eq 'native_scroll' -and $admission.native.last_cancel.generation -gt $admission.before
-            $admission.native.device -eq 'touch' -and $admission.native.generation -gt $admission.before -and ($pressed -or $scrolling)
-        } 'Native layer list did not process the interrupting touch'
-        & $observe 'second-down-native'
+            $admission.native.device -eq 'touch' -and $admission.native.phase -eq 'idle' -and $admission.native.last_cancel.reason -eq 'native_scroll' -and $admission.native.last_cancel.generation -eq ($admission.before+1) -and $admission.native.generation -eq ($admission.before+2)
+        } 'Native layer list did not hand the initial contact to scrolling'
+        $moving=@{prior=$Scroll.Current.VerticalScrollPercent;before=$null;after=$null}
+        Wait-Until {$value=$Scroll.Current.VerticalScrollPercent;if($value -gt $moving.prior+.05){$moving.before=$moving.prior;$moving.after=$value;return $true};$moving.prior=$value;return $false} 'Interrupt fixture did not observe live native inertia'
+        $admission.before=$admission.native.generation
         $interruptStart=$Scroll.Current.VerticalScrollPercent
         if($interruptStart -le 1 -or $interruptStart -ge 99){throw 'Native inertia reached a boundary before the interrupting contact'}
-        foreach($dy in @(25,55,90)){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$point.x,($point.y+$dy));& $observe ('opposite-'+$dy)}
+        [CapyCanvasTouch]::Down(1,$point.x,$point.y)
+        $null=[CapyCanvasTouch]::MoveTimed(1,0,90,105,$false)
+        Wait-Until {
+            $admission.native=$List.Current.ItemStatus|ConvertFrom-Json
+            $admission.native.device -eq 'touch' -and $admission.native.phase -eq 'idle' -and $admission.native.last_cancel.reason -eq 'native_scroll' -and $admission.native.last_cancel.generation -eq ($admission.before+1) -and $admission.native.generation -eq ($admission.before+2)
+        } 'Native layer list did not hand the interrupting contact to scrolling'
         Wait-Until {$Scroll.Current.VerticalScrollPercent -lt $interruptStart-.5} 'Fresh opposite native pan did not interrupt live inertia'
         $interrupted=$Scroll.Current.VerticalScrollPercent;[CapyCanvasTouch]::Up(1)
-    }finally{
-        [CapyCanvasTouch]::Dispose()
-        @{inertia_before=$moving.before;inertia_after=$moving.after;fling_ms=$flingMilliseconds;interrupt_start=$interruptStart;opposite_pan=$Scroll.Current.VerticalScrollPercent;native_admission=$admission;timeline=$timeline.ToArray()}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'layer-scroll-interruption-attempt.json')
-    }
+    }finally{[CapyCanvasTouch]::Dispose()}
     Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,0);Settle-LayerScroll $Scroll
     $box=$List.Current.BoundingRectangle;$point=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)

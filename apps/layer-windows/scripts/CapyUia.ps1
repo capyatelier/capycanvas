@@ -786,6 +786,14 @@ function Tool-Choice([string]$Command){
     } "No $Command tool choice"
     $target
 }
+function Combo-Value($Combo){$selection=$Combo.GetCurrentPattern([System.Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection();if($selection.Count){$selection[0].Current.Name}}
+function Combo-Item($Combo,[scriptblock]$Pick){
+    $Combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $hit=@{item=$null};Wait-Until {$hit.item=@($Combo.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::ListItem))|Where-Object $Pick)[0];$hit.item} 'Missing drop-down choice'
+    $hit.item
+}
+function Combo-Select($Combo,[scriptblock]$Pick){(Combo-Item $Combo $Pick).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()}
 function Invoke-PickerButton($Picker,[string]$Id='1'){
     if($Picker.Current.ClassName -ne '#32770' -or $Picker.Current.ProcessId -ne $review.Id){throw 'Picker does not belong to the isolated review'}
     $window=[IntPtr]$Picker.Current.NativeWindowHandle;$hit=@{item=$null}
@@ -904,9 +912,7 @@ function Fit-Canvas{
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x30)
     Wait-Until $acknowledge 'Fit did not restore the shared camera zoom'
 }
-function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
-    & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
-    Invoke-Id 'save_document_as'
+function Submit-SavePath([string]$Path){
     $hit=@{entry=$null;picker=$null}
     Wait-Until {
         $hit.picker=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ClassNameProperty,'#32770'))
@@ -921,6 +927,11 @@ function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
     if($hit.picker.Current.ProcessId -ne $review.Id -or $hit.entry.Current.ProcessId -ne $review.Id){throw 'Wrong picker filename owner'}
     [CapyWindowApi]::Path([IntPtr]$hit.entry.Current.NativeWindowHandle,$Path)
     Invoke-PickerButton $hit.picker
+}
+function Save-ProjectAs([string]$Path,[scriptblock]$NativeSaved){
+    & (Join-Path $script:CapyScripts 'open-application-menu.ps1') -Root $root -Name 'File'
+    Invoke-Id 'save_document_as'
+    Submit-SavePath $Path
     Wait-Until {
         if($NativeSaved){return (Test-Path -LiteralPath $Path) -and $root.Current.Name -eq ([IO.Path]::GetFileName($Path)+' · Capy Canvas') -and (& $NativeSaved $Path)}
         (Test-Path -LiteralPath $Path) -and (Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified

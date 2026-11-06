@@ -1695,3 +1695,126 @@ namespace CapyFitReceiptTest {
  }
  'Actual drawer header path waits for native direct-item readiness and preserves genuine overflow with one input per target.'
 }
+
+& {
+ Add-Type -TypeDefinition @'
+namespace CapyInertiaFixtureTest {
+ public static class Input {
+  public static string Mode="normal",Phase="idle",Device="touch";
+  public static int Downs,Generation,LastCancel,Reads,BeforeOpposite,LastX,LastY;
+  public static bool Active,Held,Moved;
+  public static double Offset;
+  public static void Reset(string mode){Mode=mode;Phase="idle";Device="touch";Downs=Generation=LastCancel=Reads=BeforeOpposite=LastX=LastY=0;Active=Held=Moved=false;Offset=50;}
+  public static void Initialize(uint process){if(Device!="touch")throw new System.ArgumentException("Invalid inertia device");if(process!=33)throw new System.Exception("Foreign inertia owner");}
+  static void Validate(uint id){if(id!=1||Device!="touch")throw new System.ArgumentException("Invalid inertia id or device");}
+  public static void Down(uint id,int x,int y){Validate(id);if(Active)throw new System.Exception("Invalid inertia contact");LastX=x;LastY=y;Downs++;Generation++;Reads=0;Active=true;Held=Moved=false;Phase="pressed";}
+  static void Observe(){if(Downs==2&&Active&&!Moved){Reads++;if(Mode!="unheld"&&Reads>=5){Held=true;Phase="held";}}}
+  static void Motion(int dy){
+   if(!Active)throw new System.Exception("Missing inertia contact");
+   if(Downs==2&&!Moved)BeforeOpposite=Reads;
+   Moved=true;
+   if(Held)return;
+   if(Phase=="pressed"){LastCancel=Generation;if(Downs==2&&Mode=="stale")LastCancel--;Generation++;Phase=Downs==2&&Mode=="missing"?"pressed":"idle";}
+   Offset-=dy*.04;
+  }
+  public static double MoveTimed(uint id,int dx,int dy,int milliseconds,bool release){if(milliseconds<=0)throw new System.ArgumentOutOfRangeException("milliseconds");Move(id,LastX+dx,LastY+dy);if(release)Up(id);return milliseconds;}
+  public static void Move(uint id,int x,int y){Validate(id);Motion(y-LastY);LastX=x;LastY=y;}
+  public static void Up(uint id){Validate(id);if(!Active)throw new System.Exception("Missing inertia release");Active=false;}
+  public static void Dispose(){Active=false;}
+  public static double Percent(){Observe();if(Downs==1&&!Active)Offset+=.1;return Offset;}
+  public static string Native(){
+   Observe();string device=Downs==2&&Mode=="device"?"pen":"touch";
+   return "{\"device\":\""+device+"\",\"phase\":\""+Phase+"\",\"generation\":"+Generation+",\"touch_contacts\":"+(Phase=="idle"?0:1)+",\"pointer_id\":"+(Phase=="idle"?"null":"41")+",\"last_cancel\":{\"reason\":\"native_scroll\",\"generation\":"+LastCancel+"}}";
+  }
+ }
+}
+'@
+ $tokens=$null;$errors=$null
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-tool-bubbles.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $actual=@($source.FindAll({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Native-InertiaInterruption'},$true))
+ if($actual.Count-ne1){throw 'Missing actual Native-InertiaInterruption'}
+ . ([scriptblock]::Create($actual[0].Extent.Text.Replace('[CapyCanvasTouch]','[CapyInertiaFixtureTest.Input]')))
+ function Settle-LayerScroll($Pattern){}
+ function Settled-LayerState{
+  @{state=@{layers=@(@{id=1},@{id=2});document_file=@{revision=7};layer_tools=@{editing_layer=@{id=1}}};windows_tabs=@{selected=3;session_stamps=@(@{id=3;stamp=@{checkpoint=9}})}}
+ }
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt10;$poll++){if(& $Condition){return}};throw $Message}
+ function Start-Sleep([int]$Milliseconds){}
+ $native=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{X=0;Y=0;Width=100;Height=100}}
+ $native|Add-Member ScriptProperty ItemStatus {[CapyInertiaFixtureTest.Input]::Native()}
+ $list=[pscustomobject]@{Current=$native}
+ $percent=[pscustomobject]@{}
+ $percent|Add-Member ScriptProperty VerticalScrollPercent {[CapyInertiaFixtureTest.Input]::Percent()}
+ $scroll=[pscustomobject]@{Current=$percent}
+ $scroll|Add-Member ScriptMethod SetScrollPercent {param($Horizontal,$Vertical)[CapyInertiaFixtureTest.Input]::Offset=$Vertical}
+ $review=[pscustomobject]@{Id=33}
+ $run=Join-Path ([IO.Path]::GetTempPath()) ('capy-native-inertia-'+[guid]::NewGuid().ToString('N'))
+ $null=New-Item -ItemType Directory -Path $run
+ try{
+  foreach($mode in 'unheld','normal','stale','device','missing'){
+   [CapyInertiaFixtureTest.Input]::Reset($mode);$checks=[Collections.Generic.List[string]]::new()
+   $failure=$null;try{Native-InertiaInterruption 23 $list $scroll}catch{$failure=$_}
+   if($mode-in@('unheld','normal')){
+    if($failure){throw $failure}
+    if(($mode-eq'normal'-and[CapyInertiaFixtureTest.Input]::BeforeOpposite-ne0)-or[CapyInertiaFixtureTest.Input]::Downs-ne3-or$checks.Count-ne1){throw 'Native inertia contact observed before movement or repeated'}
+    if($mode-eq'unheld'){'Actual native inertia: unheld observer schedule passed the original opposite-direction assertion.'}
+   }elseif(!$failure-or$failure.Exception.Message-cne'Native layer list did not hand the interrupting contact to scrolling'){
+    throw "Native inertia accepted a noncausal contact acknowledgement: $mode; $failure"
+   }
+  }
+ }finally{Remove-Item -LiteralPath $run -Recurse -Force}
+ foreach($invalid in 'id','device'){
+  [CapyInertiaFixtureTest.Input]::Reset('normal');$rejected=$false
+  try{if($invalid-eq'id'){[CapyInertiaFixtureTest.Input]::Down(2,10,20)}else{[CapyInertiaFixtureTest.Input]::Device='pen';[CapyInertiaFixtureTest.Input]::Down(1,10,20)}}catch{$rejected=$true}
+  if(!$rejected){throw 'Native inertia test driver accepted an invalid id or device'}
+ }
+ 'Actual native inertia: movement precedes synchronous observers; stale, wrong-device and missing handoffs fail before offset can stand in for admission.'
+}
+
+& {
+ $tokens=$null;$errors=$null
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/BubbleVisualChecks.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $actual=@($source.FindAll({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Open-BubbleVisualChooser'},$true))
+ if($actual.Count-ne1){throw 'Missing actual Open-BubbleVisualChooser'}
+ . ([scriptblock]::Create($actual[0].Extent.Text))
+ function Center([long]$Id){if($Id-ne23){throw 'Chooser addressed another bubble'};@{x=10;y=20}}
+ function Tap($Point){
+  if($Point.x-ne10-or$Point.y-ne20){throw 'Chooser missed its actual center'}
+  $script:chooserTaps++
+  if($script:chooserMode-like'missing-*'){return}
+  if($script:chooserMode-eq'delayed-each'){$script:chooserPublishAt=$script:chooserReads+3}
+  if(!$script:chooserSelected){$script:chooserSelected=$true;$script:chooserPhase=1}elseif($script:chooserMode-eq'no-sliders'){$script:chooserPhase=if($script:chooserPhase-eq0){2}else{0}}else{$script:chooserPhase=($script:chooserPhase+1)%3}
+ }
+ function View([long]$Id){
+  if($Id-ne23){throw 'Chooser observed another bubble'}
+  $script:chooserReads++
+  if(($script:chooserMode-ne'delayed'-or$script:chooserReads-ge6)-and($script:chooserMode-ne'delayed-each'-or$script:chooserReads-ge$script:chooserPublishAt)){$script:chooserPublishedPhase=$script:chooserPhase;$script:chooserPublishedSelected=$script:chooserSelected}
+  $items=[object[]]@()
+  if($script:chooserPublishedPhase-eq2){$items=[object[]]@([pscustomobject]@{kind='medium';center=@(0,90);label='Pen';icon='pen';preview=$null;selected=$true;shown=$true;enabled=$true;tag=@{x=-45;y=110;width=90;height=24}})}
+  [pscustomobject]@{id=23;kind='dial';enabled=$true;selected=[bool]$script:chooserPublishedSelected;halo=$(if($script:chooserPublishedPhase-eq1){134.0}else{$null});chooser=$items;open=$script:chooserPublishedPhase-ne0}
+ }
+ function Wait-BubbleVisualLayout{
+  if(!@((View 23).chooser).Count){throw 'Chooser layout check preceded its state acknowledgement'}
+  $script:chooserLayouts++
+ }
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt12;$poll++){if(& $Condition){return}};throw $Message}
+ function Start-Sleep([int]$Milliseconds){}
+ foreach($mode in 'immediate','delayed','delayed-each','halo','chooser','unselected','no-sliders','missing-selection','missing-controls','missing-chooser'){
+  $script:chooserMode=$mode;$script:chooserReads=0;$script:chooserTaps=0;$script:chooserLayouts=0;$script:chooserPublishAt=0
+  $script:chooserSelected=$mode-notin@('unselected','missing-selection');$script:chooserPublishedSelected=$script:chooserSelected
+  $script:chooserPhase=if($mode-in@('halo','missing-chooser')){1}elseif($mode-eq'chooser'){2}else{0};$script:chooserPublishedPhase=$script:chooserPhase
+  $failure=$null;try{Open-BubbleVisualChooser 23}catch{$failure=$_}
+  if($mode-like'missing-*'){
+   $message=switch($mode){'missing-selection'{'Visual scene dial did not select'}'missing-controls'{'Visual scene dial did not open its controls'}'missing-chooser'{'Visual scene dial did not open its chooser'}}
+   if(!$failure-or$failure.Exception.Message-cne$message-or$script:chooserTaps-ne1-or$script:chooserLayouts-ne0){throw "Missing chooser transition was retried or accepted: $mode; $failure"}
+  }else{
+   if($failure){throw $failure}
+   $expected=if($mode-eq'chooser'){0}elseif($mode-in@('halo','no-sliders')){1}else{2}
+   if($script:chooserTaps-ne$expected-or$script:chooserLayouts-ne1){throw "Chooser repeated or skipped a semantic transition: $mode"}
+   if($mode-eq'immediate'){'Actual chooser: immediate publication control passed with two distinct dial transitions.'}
+  }
+ }
+ 'Actual chooser: stage-aware selection, halo and chooser receipts acknowledge once; missing transitions never retry.'
+}

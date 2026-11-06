@@ -885,8 +885,19 @@ function Set-BubbleVisualTransparency([ValidateRange(0,3)][int]$Index){
     Wait-BubbleVisualLayout
 }
 function Open-BubbleVisualChooser([long]$Id){
-    for($i=0;$i -lt 4 -and !@((View $Id).chooser).Count;$i++){Tap (Center $Id);Start-Sleep -Milliseconds 250}
-    if(!@((View $Id).chooser).Count){throw 'Visual scene dial did not open its chooser'}
+    $receipt=@{view=View $Id}
+    if(!$receipt.view.selected){
+        Tap (Center $Id)
+        Wait-Until {$receipt.view=View $Id;$receipt.view.selected} 'Visual scene dial did not select'
+    }
+    if(!@($receipt.view.chooser).Count -and $null -eq $receipt.view.halo){
+        Tap (Center $Id)
+        Wait-Until {$receipt.view=View $Id;$null -ne $receipt.view.halo -or @($receipt.view.chooser).Count} 'Visual scene dial did not open its controls'
+    }
+    if(!@($receipt.view.chooser).Count){
+        Tap (Center $Id)
+        Wait-Until {$receipt.view=View $Id;@($receipt.view.chooser).Count} 'Visual scene dial did not open its chooser'
+    }
     Wait-BubbleVisualLayout
 }
 function Assert-BubbleVisualEdges([long]$Dial,[long]$Color){
