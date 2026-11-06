@@ -351,6 +351,7 @@ impl NativeHost {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("workspace_update", update)?;
         map.serialize_entry("state", state)?;
+        map.serialize_entry("presented_layer_rows", &state.layer_tools.presented_rows(&state.layers))?;
         map.serialize_entry("layout", &layout)?;
         map.serialize_entry("panels", &panels)?;
         map.serialize_entry("bubbles", &bubbles)?;
@@ -441,6 +442,34 @@ mod tests {
         assert_eq!(&read(host)["state"]["workspace"], saved);
         host.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace }).unwrap();
         assert_eq!(read(host)["state"]["workspace"], committed["state"]["workspace"]);
+    }
+
+    #[test]
+    fn android_layer_drawer_uses_presented_rows_with_collapsed_groups_and_paper() {
+        use layer_ui::{LayerAction, PanelScrollMeasurement, occurrence_token};
+        for paper in [true, false] {
+            let mut host = host(Platform::Android);
+            if !paper {
+                let id = occurrence_token(layer_core::paper::paper_occurrence(host.session.engine().document().scene(), None).unwrap());
+                host.dispatch(UiAction::Layer { action: LayerAction::Delete { id } }).unwrap();
+            }
+            for _ in 0..7 { host.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap(); }
+            host.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
+            let group = occurrence_token(host.session.engine().document().working.occurrence.unwrap());
+            host.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
+            let child = occurrence_token(host.session.engine().document().working.occurrence.unwrap());
+            host.dispatch(UiAction::Layer { action: LayerAction::Select { id: group, mask: false } }).unwrap();
+            host.dispatch(UiAction::Layer { action: LayerAction::Collapse { id: group } }).unwrap();
+            let snapshot: Value = serde_json::from_slice(&host.snapshot_bytes().unwrap()).unwrap();
+            assert!(!snapshot["state"]["layers"].as_array().unwrap().iter().any(|row| row["id"] == child));
+            assert_eq!(snapshot["state"]["layer_tools"]["add_paper"].is_null(), paper);
+            assert_eq!(snapshot["presented_layer_rows"], 10, "paper={paper}");
+            let sizes = layer_ui::drawer_frame(&json!({"progress":1., "layer":{
+                "measurement":PanelScrollMeasurement { fixed_height:32., unit_height:40. },
+                "rows":snapshot["presented_layer_rows"], "viewport_height":1000., "properties_height":200.
+            }}).to_string()).unwrap();
+            assert_eq!(sizes["sizes"]["heights"], json!([481.,321.]), "paper={paper}");
+        }
     }
 
     #[test]

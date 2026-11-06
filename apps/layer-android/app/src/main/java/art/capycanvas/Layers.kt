@@ -109,7 +109,7 @@ internal class LayerSwipe {
     fun reportContent() {
         val fixedHeight=if(full)fixedHeights.sum() else 0f
         if(!full || fixedHeights.all { it>0f })
-            onContent(PanelContentSize(fixedHeight+(layers.size+if(addPaper!=null)1 else 0)*rowHeight,fixedHeight,rowHeight))
+            onContent(PanelContentSize(fixedHeight+host.snapshot!!.getInt("presented_layer_rows")*rowHeight,fixedHeight,rowHeight))
     }
     SideEffect { reportContent() }
     val currentLayers by rememberUpdatedState(layers)

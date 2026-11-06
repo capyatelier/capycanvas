@@ -395,7 +395,7 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
         val properties=propertiesHeight ?: return
         val source=obj("measure" to drawerMeasure,"progress" to 1f,"layer" to obj(
             "measurement" to obj("fixed_height" to ((measurement.fixedHeight ?: 0f)+inset.value*2),"unit_height" to measurement.unitHeight),
-            "rows" to state.array("layers").length(),"viewport_height" to host.snapshot!!.getJSONObject("layout").getJSONArray("viewport").getDouble(1),
+            "rows" to host.snapshot!!.getInt("presented_layer_rows"),"viewport_height" to host.snapshot!!.getJSONObject("layout").getJSONArray("viewport").getDouble(1),
             "properties_height" to properties)).toString()
         if(lastSizing[0]==source)return
         lastSizing[0]=source
