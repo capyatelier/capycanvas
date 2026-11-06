@@ -103,7 +103,7 @@ pub struct PointerBatch<'a> {
 #[cfg(not(target_arch="wasm32"))]
 impl PointerBatch<'_> {
     pub fn validate(&self, updates: &[u64], correction: bool) -> Result<(), &'static str> {
-        if self.device_flags.0 & !(SampleFlags::INDIRECT_POINTER.0 | SampleFlags::BARREL_TWIST.0) != 0
+        if self.device_flags.0 & !(SampleFlags::UNCLASSIFIED.0 | SampleFlags::INDIRECT_POINTER.0 | SampleFlags::BARREL_TWIST.0) != 0
             || self.records.is_empty() || !self.records.len().is_multiple_of(9)
         {
             return Err("Invalid native pointer batch");
@@ -3325,6 +3325,7 @@ mod tests {
         host.dispatch(UiAction::RestoreSettings { settings: Box::new(settings) }).unwrap();
         for (device_flags, visible) in [
             (SampleFlags::NONE, false),
+            (SampleFlags::UNCLASSIFIED, false),
             (SampleFlags::BARREL_TWIST, false),
             (SampleFlags::INDIRECT_POINTER, true),
             (SampleFlags(SampleFlags::INDIRECT_POINTER.0 | SampleFlags::BARREL_TWIST.0), true),

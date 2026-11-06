@@ -4708,7 +4708,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if result.is_err() { (self.selection_tools.gesture_mode, self.selection_tools.start_modifiers) = gesture; }
         if result.is_ok() && event.phase == PenPhase::Down {
             self.dismiss_notice_unless_raised(notice);
-            self.finger.admitted_pen |= event.tool.is_pen() && !self.pen_contact
+            self.finger.admitted_pen |= event.tool.is_pen() && !event.flags.contains(layer_engine::SampleFlags::UNCLASSIFIED) && !self.pen_contact
                 && (!self.canvas_contact_idle() || self.operation.dragging());
         }
         if result.is_ok() && (event.phase == PenPhase::Cancel || (event.phase == PenPhase::Up && self.layer_interaction.path.is_empty())) {

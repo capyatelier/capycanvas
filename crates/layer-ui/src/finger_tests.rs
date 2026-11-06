@@ -191,6 +191,31 @@ fn finger_pen_wins_and_rejected_fingers_wait_for_lift() {
 }
 
 #[test]
+fn unclassified_pen_paints_without_disabling_finger_auto() {
+    for command in [None, Some(CommandId::RectangleSelect)] {
+        for unclassified in [false, true] {
+            let mut s = session(Platform::Android);
+            s.set_device_class(DeviceClass::Tablet);
+            if let Some(command) = command { invoke(&mut s, command); }
+            let flags = if unclassified { SampleFlags::UNCLASSIFIED } else { SampleFlags::PRIMARY };
+            s.pen(PenEvent { flags, ..event(&s, 1, PenPhase::Hover, 0.) });
+            finger_frames(&mut s, 10);
+            assert!(!s.state.settings.pen_seen);
+            for (sequence, phase) in [(2, PenPhase::Down), (3, PenPhase::Move), (4, PenPhase::Up)] {
+                let mut sample = event(&s, sequence, phase, 0.7);
+                sample.surface_position.y += sequence as f32 * 20.;
+                s.pen(PenEvent { flags, ..sample });
+            }
+            finger_frames(&mut s, 40);
+            assert_eq!(s.state.settings.pen_seen, !unclassified, "{command:?}/{unclassified}");
+            assert_eq!(s.finger_drawing(), unclassified);
+            if command.is_none() { assert!(s.renderer_mut().dabs > 0); }
+            else { assert!(s.has_selection()); }
+        }
+    }
+}
+
+#[test]
 fn finger_pen_seen_requires_authentic_admission_and_survives_broadcast_and_restart() {
     for tool in [ToolKind::Pen, ToolKind::Eraser, ToolKind::Brush, ToolKind::Pencil, ToolKind::Airbrush, ToolKind::Unknown, ToolKind::Finger, ToolKind::Mouse] {
         for (phase, through_filter) in [(PenPhase::Up, true), (PenPhase::Cancel, true), (PenPhase::Cancel, false)] {

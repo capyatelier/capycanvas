@@ -47,6 +47,7 @@ impl SampleFlags {
     pub const NONE: Self = Self(0);
     pub const PREDICTED: Self = Self(1 << 0);
     pub const PRIMARY: Self = Self(1 << 1);
+    pub const UNCLASSIFIED: Self = Self(1 << 2);
     pub const INVERTED: Self = Self(1 << 3);
     /// A later correction may replace this real sample. `sequence` is its
     /// contact-local token until the final correction releases it.

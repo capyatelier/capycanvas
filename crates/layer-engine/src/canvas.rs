@@ -2040,7 +2040,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     momentum: None,
                 };
                 self.active_stroke = Some(active);
-                self.admitted_pen |= event.tool.is_pen();
+                self.admitted_pen |= event.tool.is_pen() && !event.flags.contains(SampleFlags::UNCLASSIFIED);
                 self.recording.begin(
                     event.timestamp_ns,
                     crate::recording::Policy {

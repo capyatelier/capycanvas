@@ -286,7 +286,8 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost,
 internal fun pointerDeviceFlags(event: MotionEvent, index: Int, barrelTwist: Boolean): Int {
     val pen = event.getToolType(index) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(index) == MotionEvent.TOOL_TYPE_ERASER
     val indirect = event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_TOUCHPAD)
-    return (if (pen && indirect) 0x40 else 0) or (if (barrelTwist) 0x80 else 0)
+    return (if (event.getToolType(index) == MotionEvent.TOOL_TYPE_UNKNOWN && !indirect) 0x04 else 0) or
+        (if (pen && indirect) 0x40 else 0) or (if (barrelTwist) 0x80 else 0)
 }
 
 internal fun pointerContactId(event: MotionEvent, index: Int) =
