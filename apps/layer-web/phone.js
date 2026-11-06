@@ -75,11 +75,13 @@ export function createPhone({app,state,workspace,capy,header,element,button,icon
     geometry=resolved.phone;
     const next=!!geometry;
     if(next!==active) {
+      const focused=document.activeElement===capy;
       cancelContact();
       active=next;root.hidden=!active;header.phone(active);
       const parent=active?capyTarget:workspace;
       if(parent.moveBefore)parent.moveBefore(capy,null);
-      else {const focused=document.activeElement===capy;parent.append(capy);if(focused)capy.focus({preventScroll:true});}
+      else parent.append(capy);
+      if(focused)capy.focus({preventScroll:true});
       if(!active)for(const slider of sliders.values())slider.closeComponent();
     }
     if(!active)return;

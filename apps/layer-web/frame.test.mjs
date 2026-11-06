@@ -419,6 +419,27 @@ test('shared chrome replies retain the same Capy control and contact state', t =
   assert.equal(native.geometry,accepted,'drag presentation preserves the accepted layout for cancellation');
 });
 
+test('phone-to-desktop relocation preserves Capy focus before hiding its ancestor',t=>{
+  const phoneSource=readFileSync(new URL('phone.js',import.meta.url),'utf8');
+  const headerSource=readFileSync(new URL('header.js',import.meta.url),'utf8'),start=headerSource.indexOf('phone:active=>{');
+  const phoneHeader=headerSource.slice(start+6,headerSource.indexOf('\n  }};',start)+4);
+  for(const nativeMove of [false,true])for(const focused of [false,true]){
+    const {doc,element}=colorDialogDom(t),workspace=element('div'),root=element('div'),capyTarget=element('div'),capy=element('button'),other=element('input');
+    doc.body.append(workspace,other);workspace.append(root);root.append(capyTarget);capyTarget.append(capy);
+    if(nativeMove)workspace.moveBefore=node=>workspace.append(node);
+    Object.defineProperty(root,'hidden',{set(value){if(value&&root.contains(doc.activeElement))doc.activeElement=doc.body;}});
+    let hidden=false;
+    Object.defineProperty(capy,'hidden',{get:()=>hidden,set(value){hidden=value;if(value&&doc.activeElement===capy)doc.activeElement=doc.body;}});
+    capy.focus=()=>{if(!hidden)doc.activeElement=capy;};
+    (focused?capy:other).focus();
+    const header={phone:runInNewContext(`(${phoneHeader})`,{phone:true,root:element('div'),bank:element('div'),editing:false,frame:0,refreshKey:null,cancelAnimationFrame(){},queue(){},refresh(){presentCapy(capy,null,false,false,false);},allocate(){presentCapy(capy,{capy_item:0},false,false,false);}})};
+    const context={document:doc,workspace,root,capyTarget,capy,active:true,geometry:{},sliders:new Map(),cancelContact(){},header};
+    runInNewContext(phoneSource.slice(phoneSource.indexOf('  function layout('),phoneSource.indexOf("  const probe="))+'layout({phone:null});',context);
+    assert.equal(capy.parentNode,workspace);
+    assert.ok(doc.activeElement===(focused?capy:other),'Relocation preserves owned focus without stealing another control’s focus');
+  }
+});
+
 test('panel frames keep one scroll owner through body overflow, scroll movement and thumb dragging', () => {
   const callbacks=[],resizes=[],mutations=[];
   class Node {

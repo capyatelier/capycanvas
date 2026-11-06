@@ -477,6 +477,6 @@ export function createHeader({app, state, paintPair, workspace, element, button,
   refresh();
   return {refresh,queue,interaction:reply=>{interaction=reply;reconcileCapy();},phone:active=>{
     if(phone===active)return;phone=active;root.hidden=active;bank.hidden=active||!editing;
-    if(!active){refreshKey=null;refresh();queue();}
+    if(!active){refreshKey=null;refresh();if(frame)cancelAnimationFrame(frame);allocate();}
   }};
 }
