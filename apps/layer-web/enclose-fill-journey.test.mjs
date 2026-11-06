@@ -93,7 +93,15 @@ export async function checkEncloseFill({call,evaluate,settle,fillAreasOnly=false
   const click=label=>evaluate(`(()=>{const button=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!button||button.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});button.click()})()`);
   const output=async()=>{
     await invoke('export_document');await wait(`!!document.querySelector('dialog[open] .dropdown[aria-label="Format"]')`);
-    for(const [label,value] of [['Format','Png'],['Bit depth','U8'],['Pixel size','Original'],['Dither','None']])await clickDropdownChoice({call,evaluate,settle},`dialog[open] .dropdown[aria-label="${label}"]`,value);
+    await clickDropdownChoice({call,evaluate,settle},'dialog[open] #export-format','Png');
+    await contact('dialog[open] [data-export-page="size"]');
+    await clickDropdownChoice({call,evaluate,settle},'dialog[open] #export-size','Original');
+    await contact('dialog[open] .dialog-back');
+    await contact('dialog[open] [data-export-page="color"]');
+    await clickDropdownChoice({call,evaluate,settle},'dialog[open] #export-depth','U8');
+    if(await evaluate('document.querySelector("#export-dither").checked'))await contact('dialog[open] #export-dither');
+    assert.equal(await evaluate('document.querySelector("#export-dither").checked'),false);
+    await contact('dialog[open] .dialog-back');
     await evaluate('placementTest.saved=null');await click('Choose File…');
     await wait('placementTest.saved?.length>0&&!document.querySelector("dialog[open]")');await idle();
     return evaluate(`(async()=>{const bitmap=await createImageBitmap(new Blob([placementTest.saved],{type:'image/png'})),canvas=new OffscreenCanvas(bitmap.width,bitmap.height),context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(bitmap,0,0);bitmap.close();return{extent:[canvas.width,canvas.height],pixels:Array.from(context.getImageData(0,0,canvas.width,canvas.height).data)}})()`);
