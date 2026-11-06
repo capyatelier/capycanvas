@@ -94,6 +94,8 @@ the app. It targets `CAPY_ANDROID_SERIAL`, default `emulator-5554`.
 `run.sh headless` starts the emulator without a window. `run.sh` and
 `run.sh headless` install the development application ID `art.capycanvas.dev`.
 
+The recorded phone launcher `tools/devices/android-emulators.py configure` selects and verifies navigation with `--navigation gestural` (default) or `--navigation threebutton`.
+
 `run.sh test` runs every instrumented test through
 `:app:connectedDebugAndroidTest`. Gradle uninstalls the app and its test APK
 after the run, so `run.sh test` builds them under an
@@ -210,6 +212,7 @@ These tests need other arguments:
 | Test | Arguments |
 | --- | --- |
 | `AndroidFirstUiTest#unsupportedGpuExplainsTheDeviceInTheCanvasArea` | `-e unsupportedGpu true`, on an emulator started with `-gpu host -feature -Vulkan` |
+| `AndroidPhoneAuditTest#admission` | `-e case NAME -e size WxH -e density DPI -e theme light\|dark`, optionally `-e fontScale -e cutout corner -e textSize`, on an emulator started and configured by `tools/devices/android-emulators.py` |
 | `AndroidToolBubblesTest#sketchEraserBubbleKeepsItsHaloChooserAndSettingsAcrossThemesAndDevices` | `-e bubbleTheme light\|dark -e bubbleInput mouse\|touch\|pen` for one variant |
 | `AndroidInteractionTest`, `AndroidColorPanelTest` | `-e systemInput true` uses OS input injection where the device allows it |
 | `AndroidFeatureParityTest#paperLibraryImportsRenamesAndDeletesWithoutChangingTheDrawing` | `-e theme light` or `dark` |

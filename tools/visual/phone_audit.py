@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare paired GTK/Web phone captures and their actual widget bounds."""
+"""Compare paired GTK/Web phone captures and their actual widget bounds, or candidate captures against a reference manifest."""
 import argparse
 import hashlib
 import json
@@ -66,14 +66,18 @@ def image_path(path):
     return path.with_name(path.name[:-len(suffix)] + ".png") if path.name.endswith(suffix) else path.with_suffix(".png")
 
 
-def compare_pair(gtk, web, output):
-    geometry = compare(gtk, web)
+def compare_pixels(reference, candidate, output):
     output.mkdir(parents=True, exist_ok=True)
     result = subprocess.run([sys.executable, str(Path(__file__).with_name("compare.py")),
-        str(image_path(gtk)), str(image_path(web)), "--output", str(output), "--sheet"], capture_output=True, text=True)
+        str(reference), str(candidate), "--output", str(output), "--sheet"], capture_output=True, text=True)
     if result.returncode not in (0, 1) or not result.stdout.strip():
         raise ValueError(result.stderr.strip() or "Pixel comparison failed")
-    pixels = json.loads(result.stdout)
+    return json.loads(result.stdout)
+
+
+def compare_pair(gtk, web, output):
+    geometry = compare(gtk, web)
+    pixels = compare_pixels(image_path(gtk), image_path(web), output)
     metadata, _ = load(gtk)
     expected = [round(value * metadata["dpr"]) for value in metadata["viewport"]]
     if pixels["dimensions"] != expected:
@@ -118,16 +122,66 @@ def compare_matrix(gtk, web, output):
     return report
 
 
+def capture_key(value):
+    return (value["family"], value["state"], value["case"], value["theme"], float(value["text_size"]), value["fixture"])
+
+
+def compare_manifest(manifest, candidates, output):
+    references = {}
+    for entry in sorted(json.loads(manifest.read_text())["references"], key=lambda entry: entry.get("duplicate_of") is not None):
+        references.setdefault(capture_key(entry), entry)
+    states = []
+    for path in sorted(candidates.rglob("*.json")):
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict) or value.get("host") != "android" or value.get("schema_version") != 1:
+            continue
+        state = {key: value[key] for key in ("family", "case", "state", "theme", "text_size", "fixture")}
+        state["candidate"] = str(path.with_suffix(".png"))
+        entry = references.get(capture_key(value))
+        if entry is None:
+            state["status"] = "missing"
+        else:
+            directory = output / value["family"] / value["case"] / value["state"]
+            state["reference"] = entry["png"]
+            try:
+                pixels = compare_pixels(Path(entry["png"]), path.with_suffix(".png"), directory)
+                state.update(status="compared", sheet=str((directory / "sheet.png").relative_to(output)),
+                             different_fraction=pixels["exact_different_fraction"], passed=pixels["passed"])
+            except ValueError as error:
+                state.update(status="error", error=str(error))
+        states.append(state)
+    output.mkdir(parents=True, exist_ok=True)
+    report = {"manifest": str(manifest), "candidates": str(candidates), "states": states,
+              "passed": bool(states) and all(state.get("passed") is True for state in states)}
+    (output / "index.json").write_text(json.dumps(report, indent=2) + "\n")
+    rows = ["| Family | Case | State | Status | Different pixels | Sheet |", "| --- | --- | --- | --- | --- | --- |"]
+    for state in states:
+        fraction = f"{state['different_fraction']:.4f}" if "different_fraction" in state else ""
+        sheet = f"[sheet]({state['sheet']})" if "sheet" in state else state.get("error", "")
+        rows.append(f"| {state['family']} | {state['case']} | {state['state']} | {state['status']} | {fraction} | {sheet} |")
+    (output / "index.md").write_text("\n".join(rows) + "\n")
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("gtk", type=Path, help="GTK allocation JSON or capture directory")
-    parser.add_argument("web", type=Path, help="Web allocation JSON or capture directory")
+    parser.add_argument("gtk", nargs="?", type=Path, help="GTK allocation JSON or capture directory")
+    parser.add_argument("web", nargs="?", type=Path, help="Web allocation JSON or capture directory")
+    parser.add_argument("--reference", type=Path, help="Reference manifest JSON")
+    parser.add_argument("--candidate", type=Path, help="Candidate capture directory")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
-        if args.gtk.is_dir() != args.web.is_dir():
+        if args.reference or args.candidate:
+            if not (args.reference and args.candidate) or args.gtk or args.web:
+                raise ValueError("Use --reference with --candidate and no GTK/Web captures")
+            report = compare_manifest(args.reference, args.candidate, args.output)
+        elif not (args.gtk and args.web):
+            raise ValueError("Provide GTK and Web captures, or --reference with --candidate")
+        elif args.gtk.is_dir() != args.web.is_dir():
             raise ValueError("Provide two allocation JSON files or two capture directories")
-        report = compare_matrix(args.gtk, args.web, args.output) if args.gtk.is_dir() else compare_pair(args.gtk, args.web, args.output)
+        else:
+            report = compare_matrix(args.gtk, args.web, args.output) if args.gtk.is_dir() else compare_pair(args.gtk, args.web, args.output)
         print(json.dumps(report, indent=2))
         return 0 if report["passed"] else 1
     except (ValueError, KeyError, OSError, TypeError) as error:

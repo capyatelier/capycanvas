@@ -139,6 +139,32 @@ class PhoneAuditTests(unittest.TestCase):
         self.assertEqual(len(result["unpaired_gtk"]), 1)
         self.assertEqual(len(result["unpaired_web"]), 1)
 
+    def test_manifest_pairs_android_captures_and_reports_missing_references(self):
+        reference = self.root / "gtk/rest.png"
+        reference.parent.mkdir()
+        Image.new("RGBA", (3, 2), (20, 40, 60, 255)).save(reference)
+        (self.root / "gtk/rest.json").write_text(json.dumps({"pixel_encoding": "gamma22-on-srgb"}))
+        key = {"family": "frame", "state": "rest", "case": "3x2-light", "theme": "light", "text_size": 11, "fixture": "builtin:workspace:painter"}
+        (self.root / "references.json").write_text(json.dumps({"references": [
+            dict(key, png=str(self.root / "gtk/repeat.png"), duplicate_of=str(reference)), dict(key, png=str(reference))]}))
+        for case, theme in (("3x2-light", "light"), ("3x2-dark", "dark")):
+            directory = self.root / "android" / case
+            directory.mkdir(parents=True)
+            (directory / "admission.json").write_text(json.dumps(dict(key, schema_version=1, host="android", case=case, theme=theme, text_size=11.0)))
+            (directory / "run.json").write_text(json.dumps({"case": case, "passed": True}))
+            Image.new("RGB", (3, 2), (20, 40, 60)).save(directory / "admission.png")
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("phone_audit.py")), "--reference", str(self.root / "references.json"),
+            "--candidate", str(self.root / "android"), "--output", str(self.root / "sheets")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        states = json.loads(result.stdout)["states"]
+        self.assertEqual([(state["case"], state["status"]) for state in states], [("3x2-dark", "missing"), ("3x2-light", "compared")])
+        self.assertEqual(states[1]["reference"], str(reference))
+        with Image.open(self.root / "sheets/frame/3x2-light/rest/sheet.png") as sheet:
+            self.assertEqual(sheet.size, (9, 2))
+        comparison = json.loads((self.root / "sheets/frame/3x2-light/rest/comparison.json").read_text())
+        self.assertIn("gamma22-on-srgb", comparison["input_profiles"][0])
+        self.assertIn("| frame | 3x2-dark | rest | missing |", (self.root / "sheets/index.md").read_text())
+
     def test_duplicate_capture_states_are_rejected(self):
         for name in ("one", "two"):
             (self.root / f"{name}.allocations.json").write_text(json.dumps(self.gtk))
