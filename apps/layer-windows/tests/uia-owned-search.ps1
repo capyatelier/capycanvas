@@ -1651,3 +1651,47 @@ namespace CapyFitReceiptTest {
  }
  'Actual camera receipt reader retains one packet camera/navigation and validates isolated PID, registered HWND and window identity.'
 }
+& {
+ $drawerAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-drawer-layout.ps1'),[ref]$null,[ref]$null)
+ $open=$drawerAst.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Open-Header'},$true)
+ if(!$open){throw 'Missing actual drawer Open-Header path'}
+ . ([scriptblock]::Create($open.Extent.Text))
+ function Model{[pscustomobject]@{header=@{model=@{zones=@(@(),@(),@(@{id=12}))}}}}
+ function Header{
+  $bounds=@{x=985.3333740234375;y=8;width=48;height=48}
+  if($script:headerCase-eq'overflow'){@{geometry=@{hidden=@(@(),@(),@(12));overflow=@($null,$null,$bounds)};actual_items=@()}}
+  else{@{geometry=@{hidden=@(@(),@(),@());overflow=@($null,$null,$null)};actual_items=@(@{id=12;bounds=$bounds})}}
+ }
+ function Find([string]$Id,[switch]$Visible){
+  if($Id-eq'tool-drawer'){return $script:headerOpened}
+  if($Id-eq'header-item-12'){
+   $script:headerFinds++
+   if($script:headerCase-eq'overflow'-or($script:headerCase-eq'transient'-and$script:headerFinds-eq1)){return $null}
+   return [pscustomobject]@{Current=@{IsOffscreen=$false;BoundingRectangle=@{Width=48;Height=48}}}
+  }
+  if($Id-eq'header-overflow-2'-and$script:headerCase-eq'overflow'){return [pscustomobject]@{Current=@{IsOffscreen=$false;BoundingRectangle=@{Width=48;Height=48}}}}
+  if($Id-eq'header-overflow-item-12'-and$script:headerMenu){return $true}
+ }
+ function Tap([string]$Id){
+  $script:headerTaps.Add($Id)
+  if($Id-eq'header-overflow-2'){
+   if($script:headerCase-ne'overflow'){throw 'Missing control: header-overflow-2'}
+   $script:headerMenu=$true;return
+  }
+  if($Id-eq'header-item-12'-or($Id-eq'header-overflow-item-12'-and$script:headerMenu)){$script:headerOpened=$true;return}
+  throw "Unexpected header target: $Id"
+ }
+ function Drawer{@{placement=@{bounds=@{height=400}}}}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt4;$poll++){if(& $Condition){return}};throw $Message}
+ function Start-Sleep{}
+ foreach($case in @('direct','overflow','transient')){
+  $script:headerCase=$case;$script:headerFinds=0;$script:headerMenu=$false;$script:headerOpened=$false;$script:headerTaps=[Collections.Generic.List[string]]::new()
+  try{Open-Header @{id=12}}catch{
+   if($case-eq'transient'-and$_.Exception.Message-eq'Missing control: header-overflow-2'){throw 'A transient direct header item selected nonexistent overflow'}
+   throw
+  }
+  $expected=if($case-eq'overflow'){'header-overflow-2,header-overflow-item-12'}else{'header-item-12'}
+  if(($script:headerTaps-join',')-cne$expected){throw "Header readiness changed input cardinality: $case"}
+ }
+ 'Actual drawer header path waits for native direct-item readiness and preserves genuine overflow with one input per target.'
+}

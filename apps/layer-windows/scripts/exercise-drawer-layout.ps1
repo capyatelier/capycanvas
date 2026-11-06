@@ -21,7 +21,21 @@ function Header-Entry([string]$kind,[string]$panel=''){@((Model).header.model.zo
 function Open-Header($entry){
  $id='header-item-'+$entry.id;$zone=-1
  for($i=0;$i-lt3;$i++){if(@((Model).header.model.zones[$i]|Where-Object id -eq $entry.id).Count){$zone=$i;break}}
- if(!(Find $id -Visible)){Tap ('header-overflow-'+$zone);$id='header-overflow-item-'+$entry.id}
+ $ready=@{id=$null;overflow=$false}
+ Wait-Until {
+  if($zone-lt0){return $false}
+  $native=Header;$actual=@($native.actual_items|Where-Object id -eq $entry.id)[0]
+  $overflow=$native.geometry.overflow[$zone]
+  if($actual-and$actual.bounds.width-gt0-and$actual.bounds.height-gt0){$target=$id;$hidden=$false}
+  elseif($entry.id-in@($native.geometry.hidden[$zone])-and$overflow-and$overflow.width-gt0-and$overflow.height-gt0){$target='header-overflow-'+$zone;$hidden=$true}
+  else{return $false}
+  $control=Find $target -Visible
+  if(!$control){return $false}
+  $bounds=$control.Current.BoundingRectangle
+  if($bounds.Width-le0-or$bounds.Height-le0){return $false}
+  $ready.id=$target;$ready.overflow=$hidden;$true
+ } 'Header drawer source did not arrange'
+ if($ready.overflow){Tap $ready.id;$id='header-overflow-item-'+$entry.id}
  Tap $id;Wait-Until {(Find 'tool-drawer' -Visible)-and(Drawer).placement.bounds.height-gt0} 'Drawer did not present'
  Start-Sleep -Milliseconds 700
 }
