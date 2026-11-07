@@ -198,7 +198,11 @@ impl ReadCache {
                 entry.leases+=1;
                 Ok(RangeState::Ready(ByteRange::leased(bytes.clone(),Arc::new(Lease {source:source.clone(),key}))))
             },
-            Phase::Failed(error)=>Err(error.clone()),
+            Phase::Failed(error)=>{
+                let error=error.clone();
+                if error==crate::MEMORY_BUDGET_EXCEEDED && entry.waiters.is_empty() {state.remove(&key);}
+                Err(error)
+            },
             Phase::Cold=>{
                 if queued<QUEUED_READS {
                     entry.phase=Phase::Queued;state.cold.retain(|cold|*cold!=key);state.queued.push(key);
@@ -383,7 +387,9 @@ impl Drop for ReadWait {
             entry.waiters.retain(|(id,_)|*id!=self.id);
             let unpinned=if entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)) {entry.bytes() as u64}else{0};
             let cold=entry.waiters.is_empty() && matches!(entry.phase,Phase::Cold);
+            let refused=entry.waiters.is_empty() && matches!(&entry.phase,Phase::Failed(error) if error==crate::MEMORY_BUDGET_EXCEEDED);
             state.pinned-=unpinned;if cold {state.cold.retain(|cold|*cold!=self.key);}
+            if refused {state.remove(&self.key);}
         }
         let trim=state.physical>cache.limit_bytes();cache.publish(&state);drop(state);if trim {cache.schedule();}
     }
@@ -440,6 +446,35 @@ mod tests {
         let cache=ReadCache::new(budget.clone());cache.set_scheduler(Arc::new(|_|{}));
         let reader=Arc::new(Controlled::default());let source=cache.source(2*HOT_SET_BYTES,reader.clone());
         (budget,cache,reader,source)
+    }
+    #[test]
+    fn temporary_refusals_reach_all_consumers_and_allow_a_new_read() {
+        for subscribers in [0, 2] {
+            let (_budget, cache, reader, source) = setup();
+            let mut waits = (0..subscribers).map(|_| source.wait(0, 64).unwrap()).collect::<Vec<_>>();
+            let mut context = Context::from_waker(Waker::noop());
+            if subscribers == 0 { assert!(matches!(source.poll(0, 64).unwrap(), RangeState::Pending)); }
+            for wait in &mut waits {
+                assert!(std::future::Future::poll(std::pin::Pin::new(wait), &mut context).is_pending());
+            }
+            cache.drive_inner();
+            let (_, _, completion) = reader.requests.lock().unwrap().pop_front().unwrap();
+            completion.complete(Err(crate::MEMORY_BUDGET_EXCEEDED.into()));
+            if subscribers == 0 { assert_eq!(source.poll(0, 64).unwrap_err(), crate::MEMORY_BUDGET_EXCEEDED); }
+            for wait in &mut waits {
+                assert!(matches!(std::future::Future::poll(std::pin::Pin::new(wait), &mut context),
+                    Poll::Ready(Err(error)) if error == crate::MEMORY_BUDGET_EXCEEDED));
+            }
+            drop(waits);
+            cache.drive_inner();
+            assert_eq!(reader.calls.load(Ordering::Relaxed), 1);
+            assert!(matches!(source.poll(0, 64).unwrap(), RangeState::Pending));
+            cache.drive_inner();
+            reader.finish(9);
+            let RangeState::Ready(bytes) = source.poll(0, 64).unwrap() else { panic!("explicit read completes"); };
+            assert_eq!(&*bytes, &[9; 64]);
+            assert_eq!(reader.calls.load(Ordering::Relaxed), 2);
+        }
     }
     fn trim(cache:&ReadCache,limit:u64)->(u64,u64) {
         let mut state=cache.0.state.lock().unwrap();let retired=cache.trim(&mut state,limit,false);

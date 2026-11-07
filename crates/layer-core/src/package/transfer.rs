@@ -512,6 +512,34 @@ mod tests {
         assert_eq!(file.reads.load(Ordering::SeqCst),0);
     }
     #[test]
+    #[cfg(not(target_arch="wasm32"))]
+    fn filtered_package_tiles_recover_after_temporary_memory_refusal() {
+        const CHILD: &str = "CAPY_TEST_PACKAGE_MEMORY_REFUSAL";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "package::transfer::tests::filtered_package_tiles_recover_after_temporary_memory_refusal",
+                    "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1").output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success() && stdout.contains("1 passed; 0 failed"),
+                "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let (capture, file) = reference_fixture(true);
+        let tile = capture.artwork.paint.iter().next().unwrap().2.base.as_ref().unwrap()
+            .image.tiles.values().next().unwrap();
+        let budget = crate::MemoryBudget::process();
+        budget.flush_reports();
+        let held = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+        assert_eq!(tile.decode_on_worker().unwrap_err(), crate::MEMORY_BUDGET_EXCEEDED);
+        assert!(tile.compressed.healthy().is_ok(), "a budget refusal is not damaged source data");
+        drop(held);
+        budget.flush_reports();
+        assert_eq!(tile.decode_on_worker().unwrap(), vec![21; 256 * 256 * 4]);
+        assert!(tile.compressed.healthy().is_ok());
+        assert_eq!(file.reads.load(Ordering::SeqCst), 2);
+    }
+    #[test]
     fn filtered_references_normalize_lazily_and_keep_their_generation() {
         let (capture,file)=reference_fixture(true);let cancel=AtomicBool::new(false);
         let transfer=pollster::block_on(PreparedTransfer::capture_referenced(&capture,&None,&cancel,&crate::MemoryBudget::process())).unwrap();

@@ -75,6 +75,7 @@ impl ImmutableBacking {
     }
     pub fn fail(&self, error: String) -> String {
         match self.owner.integrity_failure.lock() {
+            Ok(failure) if error==crate::MEMORY_BUDGET_EXCEEDED => failure.clone().unwrap_or(error),
             Ok(mut failure) => failure.get_or_insert(error).clone(),
             Err(_) => "Package failure lock".into(),
         }
@@ -107,7 +108,7 @@ impl ImmutableBacking {
         });
         if let Some(error)=self.owner.integrity_failure.lock().map_err(|_|"Package failure lock")?.clone() {return Err(error);}
         let mut failure=self.owner.failure.lock().map_err(|_|"Package failure lock")?;
-        if failure.is_none() && let Err(error)=&result {*failure=Some(error.clone());}
+        if failure.is_none() && let Err(error)=&result && error!=crate::MEMORY_BUDGET_EXCEEDED {*failure=Some(error.clone());}
         if let Some(error)=&*failure {return Err(error.clone());}result
     }
     fn checked(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
@@ -136,7 +137,7 @@ impl ImmutableBacking {
             Ok(state)
         });
         let mut failure = self.owner.failure.lock().map_err(|_| "Package failure lock")?;
-        if failure.is_none() && let Err(error) = &result { *failure = Some(error.clone()); }
+        if failure.is_none() && let Err(error) = &result && error!=crate::MEMORY_BUDGET_EXCEEDED { *failure = Some(error.clone()); }
         if let Some(failure) = failure.as_ref() { return Err(failure.clone()); }
         result
     }
@@ -146,6 +147,31 @@ impl ImmutableBacking {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+    #[test]
+    fn temporary_memory_refusals_leave_poll_and_wait_backings_healthy() {
+        struct Budgeted(AtomicBool);
+        impl ByteSource for Budgeted {
+            fn byte_len(&self) -> u64 { 4 }
+            fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String> {
+                if !self.0.load(Ordering::Acquire) { return Err(crate::MEMORY_BUDGET_EXCEEDED.into()); }
+                Ok(RangeState::Ready(ByteRange::new(Arc::from([17, 23, 31, 41]), offset as usize..offset as usize + len)?))
+            }
+        }
+        for wait in [false, true] {
+            let source = Arc::new(Budgeted(AtomicBool::new(false)));
+            let backing = ImmutableBacking::new(source.clone()).unwrap();
+            let read = || if wait { pollster::block_on(backing.wait(0, 4)) } else {
+                backing.poll(0, 4).map(|state| match state { RangeState::Ready(bytes) => bytes, _ => panic!("ready source") })
+            };
+            assert_eq!(read().unwrap_err(), crate::MEMORY_BUDGET_EXCEEDED);
+            assert!(backing.healthy().is_ok());
+            source.0.store(true, Ordering::Release);
+            assert_eq!(&*read().unwrap(), &[17, 23, 31, 41]);
+            assert_eq!(backing.fail("bad checksum".into()), "bad checksum");
+            assert_eq!(backing.fail(crate::MEMORY_BUDGET_EXCEEDED.into()), "bad checksum");
+            assert_eq!(read().unwrap_err(), "bad checksum");
+        }
+    }
     struct Deferred(AtomicBool);
     impl ByteSource for Deferred {
         fn byte_len(&self)->u64 {4}
