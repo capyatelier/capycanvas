@@ -153,15 +153,19 @@ and class, so it never needs a cache to guess its share from headroom.
 **RAM (discrete) or the whole pool (unified):**
 
 ```text
-B_ram(t) = min( memory limit,
-                process limit − pinned,
-                max(floor, ours(t) + available(t) − reserve) )
+target_ram(t) = max( floor,
+                     min( memory limit, process headroom,
+                          ours(t) + max(last 3 available samples) − reserve − band ) )
 
 memory limit = the internal override, or share × physical by default
+process headroom = ours(t) + max(0, process limit − process usage)
+band = reserve / 4
 ```
 
 - `available(t)` is the OS figure above; `ours(t)` is what the ledger holds, so the
   budget measures headroom as if our caches were free.
+- Without available samples, use the memory/process ceiling. Without process
+  usage, use the process limit; without that limit, omit its cap.
 - `reserve` keeps room for the system and other apps: max(10 % of physical,
   1 GiB) on desktops, max(15 %, 0.75 GiB) on tablets.
 - `share` is the default limit: 0.6 of physical memory on desktops, 0.45 on
@@ -189,11 +193,13 @@ B_vram(t) = 0.8 × driver budget(t) − fixed allocations
 budget of 1 GiB on desktop user agents and 512 MiB otherwise. Halve the GPU
 budget after an `out-of-memory` error scope; rebuild at half after a device loss.
 
-**Change over time:** shrink at once when a pressure signal fires or available
-memory falls below the reserve: trim the RAM caches to half and recompute.
-Grow by at most 10 % every five seconds while available memory stays above the
-reserve plus 10 %. Re-read driver budgets on Windows' change event, otherwise
-about once a second off the frame path.
+**Change over time:** a pressure signal or three samples below the reserve cuts
+the grant by 25 % on the first trip, or to the target if lower. Held pressure
+allows further target reductions but no growth. Outside pressure, follow target
+drops below 90 % immediately; grow by at most 10 % every five seconds when the
+minimum of the recent three samples clears reserve plus band. Process and user
+ceilings apply immediately, subject to the working floor. Re-read driver budgets on
+Windows' change event, otherwise about once a second off the frame path.
 
 ### Controls
 

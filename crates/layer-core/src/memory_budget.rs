@@ -116,6 +116,9 @@ struct State {
     ram_limit: u64,
     initialized: bool,
     last_growth: u64,
+    available_samples: [u64; 3],
+    sample_count: usize,
+    pressure_trip: bool,
     next: u64,
     devices: BTreeMap<MemoryDevice, DeviceMemoryFacts>,
     retired_devices: BTreeSet<MemoryDevice>,
@@ -241,25 +244,48 @@ impl MemoryBudget {
     pub fn update_ram(&self, facts: MemoryFacts, now_ms: u64) {
         let mut state = self.0.state.lock().unwrap();
         let reserved = reserve(facts);
+        let band = reserved / 4;
         let ours = state.ram_physical(false);
         let share = state.override_bytes.or(facts.override_bytes).unwrap_or_else(|| facts.total_bytes.map_or(facts.host_default_bytes.unwrap_or(384 * MIB), |total| fraction(total, if facts.tablet {45} else {60}, 100)));
-        let headroom = facts.available_bytes.map_or(share, |available| ours.saturating_add(available).saturating_sub(reserved).max(384 * MIB));
+        if let Some(available) = facts.available_bytes {
+            state.available_samples.rotate_right(1);
+            state.available_samples[0] = available;
+            state.sample_count = (state.sample_count + 1).min(3);
+        }
+        let samples = &state.available_samples[..state.sample_count];
+        let low = samples.iter().min().copied();
+        let high = samples.iter().max().copied();
+        let sustained = state.sample_count == 3 && high.is_some_and(|available| available < reserved);
+        let headroom = high.map_or(share, |available| ours.saturating_add(available).saturating_sub(reserved).saturating_sub(band));
         let process = facts.process_limit_bytes.map_or(u64::MAX, |limit| match facts.process_used_bytes {
             Some(used) => ours.saturating_add(limit.saturating_sub(used)), None => limit,
         });
-        let mut target = share.min(process).min(headroom);
-        let pressured = facts.pressure || facts.available_bytes.is_some_and(|available| available < reserved);
-        let was_pressured = state.facts.pressure || state.facts.available_bytes.is_some_and(|available| available < reserve(state.facts));
-        if state.initialized && pressured && !was_pressured { target = target.min(state.ram_limit / 2); }
-        target = target.max(384 * MIB);
-        if !state.initialized || target < state.ram_limit {
+        let ceiling = share.min(process).max(384 * MIB);
+        let target = ceiling.min(headroom).max(384 * MIB);
+        if !state.initialized {
             state.ram_limit = target;
             state.last_growth = now_ms;
-        } else if now_ms.saturating_sub(state.last_growth) >= 5000
-            && facts.available_bytes.is_some_and(|available| available >= reserved.saturating_add(reserved / 10)) {
-            state.ram_limit = target.min(state.ram_limit.saturating_add((state.ram_limit / 10).max(1)));
-            state.last_growth = now_ms;
+        } else if facts.pressure || sustained {
+            if !state.pressure_trip {
+                state.ram_limit = target.min(fraction(state.ram_limit, 3, 4)).max(384 * MIB);
+                state.last_growth = now_ms;
+                state.pressure_trip = true;
+            } else if target < state.ram_limit {
+                state.ram_limit = target;
+                state.last_growth = now_ms;
+            }
+        } else {
+            state.pressure_trip = false;
+            if target < fraction(state.ram_limit, 9, 10) {
+                state.ram_limit = target;
+                state.last_growth = now_ms;
+            } else if now_ms.saturating_sub(state.last_growth) >= 5000 && state.ram_limit < target
+                && low.is_some_and(|available| available >= reserved.saturating_add(band)) {
+                state.ram_limit = target.min(state.ram_limit.saturating_add((state.ram_limit / 10).max(1)));
+                state.last_growth = now_ms;
+            }
         }
+        state.ram_limit = state.ram_limit.min(ceiling);
         state.initialized = facts.available_bytes.is_some() || facts.total_bytes.is_some() || facts.host_default_bytes.is_some() || state.override_bytes.or(facts.override_bytes).is_some();
         state.facts = facts;
         self.rebalance(state);
@@ -537,17 +563,128 @@ mod tests {
         first.report(MemoryReport {demand_ram_bytes:300*MIB,..Default::default()});
         assert_eq!(warm.grant().ram_bytes,GIB-300*MIB);
     }
+    struct ControllerTrace { limits: Vec<u64>, quarter_cuts: u64 }
+    impl ControllerTrace {
+        fn steady_score(&self) -> [u64; 4] {
+            let values = self.limits.iter().skip(600).map(|bytes| bytes / MIB).collect::<Vec<_>>();
+            assert!(!values.is_empty());
+            [values.iter().sum::<u64>() / values.len() as u64,
+                *values.iter().min().unwrap(), *values.iter().max().unwrap(), self.quarter_cuts]
+        }
+    }
+    fn controller_noise(rng: &mut u64, other_bytes: u64, percent: u64) -> i128 {
+        *rng ^= (*rng).wrapping_shl(13);
+        *rng ^= *rng >> 7;
+        *rng ^= (*rng).wrapping_shl(17);
+        let span = 2 * percent * other_bytes / 100 + 1;
+        i128::from(*rng % span) - i128::from(percent * other_bytes / 100)
+    }
+    fn controller_samples(other_mib: u64, noise_percent: u64, seconds: u64,
+        external_change: impl Fn(u64) -> (u64, bool)) -> ControllerTrace
+    {
+        let budget = MemoryBudget::new();
+        let cache = owner(&budget, MemoryClass::Visible, None, 8 * GIB, 0);
+        let mut resident = 0;
+        let mut previous = 0;
+        let mut rng = 0x9E3779B97F4A7C15;
+        let mut trace = ControllerTrace { limits: Vec::new(), quarter_cuts: 0 };
+        for second in 0..seconds {
+            let other_bytes = other_mib * MIB;
+            let noise = controller_noise(&mut rng, other_bytes, noise_percent);
+            let (extra, pressure) = external_change(second);
+            let available = (i128::from(8 * GIB) - i128::from(other_bytes) - noise
+                - i128::from(extra) - i128::from(resident)).max(0) as u64;
+            assert_eq!(budget.snapshot().ram_physical_bytes, resident);
+            budget.update_ram(MemoryFacts { total_bytes: Some(8 * GIB),
+                available_bytes: Some(available), tablet: true, pressure, ..Default::default() }, second * 1000);
+            let limit = budget.ram_limit_bytes();
+            assert_eq!(cache.grant().ram_bytes, limit);
+            if previous != 0 && limit < previous && limit <= previous * 3 / 4 {
+                trace.quarter_cuts += 1;
+            }
+            previous = limit;
+            resident = if resident < limit { resident + (limit - resident) / 2 } else { limit };
+            cache.report(MemoryReport { ram_bytes: resident, demand_ram_bytes: 8 * GIB, ..Default::default() });
+            trace.limits.push(limit);
+        }
+        trace
+    }
     #[test]
-    fn pressure_shrinks_immediately_and_growth_waits_five_seconds_with_reserve() {
-        let budget=MemoryBudget::new();budget.update_ram(facts(),0);
-        let initial=budget.snapshot().ram_limit_bytes;
-        let cache=owner(&budget,MemoryClass::Warm,None,u64::MAX,0);
-        budget.update_ram(MemoryFacts {pressure:true,..facts()},1000);
-        let shrunk=budget.snapshot().ram_limit_bytes;assert_eq!(shrunk,initial/2);assert_eq!(cache.grant().ram_bytes,shrunk);
-        budget.update_ram(MemoryFacts {pressure:true,..facts()},1001);assert_eq!(budget.snapshot().ram_limit_bytes,shrunk);
-        budget.update_ram(facts(),5999);assert_eq!(budget.snapshot().ram_limit_bytes,shrunk);
-        budget.update_ram(facts(),6000);assert_eq!(budget.snapshot().ram_limit_bytes,shrunk+shrunk/10);
-        budget.update_ram(facts(),6001);assert_eq!(budget.snapshot().ram_limit_bytes,shrunk+shrunk/10);
+    fn sustained_pressure_does_not_regrow_the_budget() {
+        let trace = controller_samples(3584, 0, 638, |second| (0, (600..632).contains(&second)));
+        let before = trace.limits[599];
+        let cut = trace.limits[600];
+        assert_eq!([before / MIB, cut / MIB], [3360, 2520]);
+        assert_eq!(cut, before * 3 / 4);
+        assert_eq!(trace.quarter_cuts, 1);
+        assert!(trace.limits[601..632].iter().all(|&limit| limit == cut));
+        let grown = cut + cut / 10;
+        assert_eq!(trace.limits[632], grown);
+        assert!(trace.limits[633..637].iter().all(|&limit| limit == grown));
+        assert_eq!(trace.limits[637], grown + grown / 10);
+    }
+    #[test]
+    fn isolated_low_samples_do_not_collapse_the_budget() {
+        let budget = MemoryBudget::new();
+        let cache = owner(&budget, MemoryClass::Visible, None, 8 * GIB, 0);
+        let tablet = |available| MemoryFacts { total_bytes: Some(8 * GIB),
+            available_bytes: Some(available), tablet: true, ..Default::default() };
+        budget.update_ram(tablet(6 * GIB), 0);
+        let initial = budget.ram_limit_bytes();
+        assert_eq!(initial / MIB, 3686);
+        for second in 1..=600 {
+            cache.report(MemoryReport { ram_bytes: 0, demand_ram_bytes: 8 * GIB, ..Default::default() });
+            budget.update_ram(tablet(if second % 30 == 0 { GIB } else { 6 * GIB }), second * 1000);
+            assert_eq!(budget.snapshot().ram_physical_bytes, 0);
+            assert_eq!(cache.grant().ram_bytes, initial, "sample {second}");
+            assert_eq!(budget.ram_limit_bytes(), initial, "sample {second}");
+        }
+    }
+    #[test]
+    fn closed_loop_controls_match_scored_limits() {
+        for (others, noise, expected) in [
+            (3584, 0, [3360, 3360, 3360, 0]),
+            (4608, 2, [2174, 2174, 2174, 0]),
+            (2560, 2, [3686, 3686, 3686, 0]),
+        ] {
+            let trace = controller_samples(others, noise, 1800, |_| (0, false));
+            assert_eq!(trace.steady_score(), expected, "others={others}, noise={noise}");
+        }
+    }
+    #[test]
+    fn noisy_closed_loop_matches_scored_limits() {
+        for (noise, expected) in [(2, [3145, 3145, 3145, 1]), (5, [3206, 2433, 3250, 2])] {
+            let trace = controller_samples(3584, noise, 1800, |_| (0, false));
+            assert_eq!(trace.steady_score(), expected, "noise={noise}");
+        }
+    }
+    #[test]
+    fn one_sample_external_loss_keeps_scored_limit() {
+        let trace = controller_samples(3584, 0, 400,
+            |second| (if second == 200 { 800 * MIB } else { 0 }, false));
+        let lowest = trace.limits[200..230].iter().map(|bytes| bytes / MIB).min().unwrap();
+        assert_eq!([trace.limits[199] / MIB, lowest, trace.limits[230] / MIB,
+            trace.limits[320] / MIB], [3360; 4]);
+        assert_eq!(trace.quarter_cuts, 0);
+    }
+    #[test]
+    fn sustained_external_loss_reaches_scored_limit() {
+        let trace = controller_samples(3584, 0, 400,
+            |second| (if second >= 200 { 2 * GIB } else { 0 }, false));
+        let before = trace.limits[199] / MIB;
+        let first = (200..400).find(|&second| trace.limits[second] / MIB < before * 9 / 10).unwrap();
+        assert_eq!([before, (first - 200) as u64, trace.limits[399] / MIB], [3360, 2, 1024]);
+    }
+    #[test]
+    fn process_and_user_caps_apply_below_the_controller_band() {
+        for process_cap in [false, true] {
+            let budget = MemoryBudget::with_facts(facts());
+            let cap = fraction(budget.ram_limit_bytes(), 99, 100);
+            let facts = if process_cap { MemoryFacts { process_limit_bytes: Some(cap), ..facts() } }
+                else { MemoryFacts { override_bytes: Some(cap), ..facts() } };
+            budget.update_ram(facts, 1000);
+            assert_eq!(budget.ram_limit_bytes(), cap);
+        }
     }
     #[test]
     fn pressure_and_configuration_cannot_reduce_the_final_target_below_the_floor() {
