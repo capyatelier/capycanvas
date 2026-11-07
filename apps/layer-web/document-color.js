@@ -23,7 +23,7 @@ export async function chooseDocumentColor({app,dialog,element,button,icon,dropdo
       if(original){original.line.classList.add('source-current');group.list.append(original.line);}
       const spaces=history||source||operation==='depth'?[]:app.profile_picker_standard({kind:'output'}).map(profile=>[profile.profile.Builtin,()=>app.profile_name_copy(profile.name)]);
       const space=!history&&!source&&operation!=='depth'?select(()=>exportCopy.profile,spaces,current.space):null;
-      const depth=operation==='depth'?select(()=>exportCopy.depth,[['U8',()=>copy.depth_8],['U16',()=>copy.depth_16],['F16',()=>copy.depth_float16],['F32',()=>copy.depth_float32]],current.depth):null;
+      const depth=operation==='depth'?select(()=>exportCopy.depth,[['U8',()=>copy.depth_8],['U16',()=>copy.depth_16],['F16',()=>copy.depth_float16],['F32',()=>copy.depth_float32]],app.document_color_suggested_depth(current.depth)):null;
       const dither=operation==='depth'?element('input','settings-switch'):null;
       if(dither){dither.type='checkbox';dither.setAttribute('role','switch');bindCopy(dither,()=>exportCopy.reduce_banding,'ariaLabel');dither.onchange=()=>schedule();group.list.append(kit.row({title:()=>exportCopy.reduce_banding,description:()=>exportCopy.dither_gradients,suffix:dither}).line);}
       const result=operation==='convert'?select(()=>copy.result,[['layers',()=>copy.convert_layers],['copy',()=>copy.create_flattened]],'layers',true):null;

@@ -15,6 +15,14 @@ pub struct DocumentColorDither {
     pub available: bool,
     pub value: layer_core::color::OutputDither,
 }
+pub fn document_color_suggested_depth(depth: layer_core::color::SampleDepth) -> layer_core::color::SampleDepth {
+    use layer_core::color::SampleDepth;
+    match depth {
+        SampleDepth::U8 => SampleDepth::U16,
+        SampleDepth::U16 => SampleDepth::U8,
+        SampleDepth::F16 | SampleDepth::F32 => SampleDepth::F16,
+    }
+}
 pub fn document_color_dither(depth: layer_core::color::SampleDepth, active: bool) -> DocumentColorDither {
     use layer_core::color::{SampleDepth, OutputDither};
     let available = depth == SampleDepth::U8;
@@ -416,6 +424,13 @@ impl SourceWorkflow {
 mod presentation_tests {
     use super::*;
     use layer_core::color::{SampleDepth, OutputDither, RgbSpace};
+    #[test]
+    fn suggested_document_depth_keeps_the_native_change_for_every_input() {
+        for (current, suggested) in [(SampleDepth::U8, SampleDepth::U16), (SampleDepth::U16, SampleDepth::U8),
+            (SampleDepth::F16, SampleDepth::F16), (SampleDepth::F32, SampleDepth::F16)] {
+            assert_eq!(document_color_suggested_depth(current), suggested);
+        }
+    }
     #[test]
     fn document_dither_is_available_only_for_eight_bit_and_keeps_its_disabled_value_empty() {
         for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {

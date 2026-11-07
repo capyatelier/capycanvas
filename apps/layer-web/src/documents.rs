@@ -129,6 +129,9 @@ impl WebApp {
         serialize(&serde_json::json!({"copy":layer_ui::color_feature_copy::ComparisonCopy::new(self.session.localization()),
             "gap":layer_ui::color_comparison::GAP,"height":layer_ui::color_comparison::HEIGHT,"width":layer_ui::color_comparison::WIDTH}))
     }
+    pub fn document_color_suggested_depth(&self, depth: JsValue) -> Result<JsValue, JsValue> {
+        serialize(&layer_ui::document_color_suggested_depth(serde_wasm_bindgen::from_value(depth).map_err(js)?))
+    }
     pub fn document_color_dither(&self, depth: JsValue, active: bool) -> Result<JsValue, JsValue> {
         serialize(&layer_ui::document_color_dither(serde_wasm_bindgen::from_value(depth).map_err(js)?,active))
     }

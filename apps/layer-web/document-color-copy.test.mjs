@@ -27,7 +27,7 @@ class Element extends SharedElement {
   remove(){if(this.parentNode)this.parentNode.children.splice(this.parentNode.children.indexOf(this),1);this.parentNode=null;}
 }
 const settle=()=>new Promise(done=>setImmediate(done));
-function harness(t,{source=false,history=false,operation='assign',comparisonRequired=true,missing=null,failure=null}={}) {
+function harness(t,{source=false,history=false,operation='assign',comparisonRequired=true,missing=null,failure=null,currentDepth='U8',suggestedDepth='U16'}={}) {
   const previous=globalThis.ImageData;globalThis.ImageData=class{constructor(data,width,height){Object.assign(this,{data,width,height});}};t.after(()=>{globalThis.ImageData=previous;});
   const doc={createTextNode:nodeValue=>({nodeType:3,nodeValue:String(nodeValue)})};
   doc.createElement=tag=>new Element(tag,doc);doc.body=new Element('body',doc);
@@ -38,7 +38,7 @@ function harness(t,{source=false,history=false,operation='assign',comparisonRequ
   let language='en',form,finish,resolver,intent,title,freed=false,reads=0,prepares=0;const choices=[];
   const fields=['depth_title','depth_8','depth_16','depth_float16','depth_float32','assign_native_help','convert_native_help','depth_native_help','source_baked_help','source_native_help','current_source','choose_destination','choose_different','compare_before_apply','clipped_comparison','layered_open','preparing_comparison','convert_layers','create_flattened','assign_title','assign_help','repair_title','repair_help','space','correct_profile','outside_gamut','preparing','preparing_title','preparing_help','prepared_composition','original_composition','before','after','preview','add_source','apply_profile'];
   const documentCopy=()=>({...Object.fromEntries(fields.map(field=>[field,`${language}:${field}`])),dialog:{frame:{kind:'alert',prefer_wide:true},role:'editor',modal:true,primary:'action'},common:{apply:`${language}:apply`,cancel:`${language}:cancel`},progress_dialog:{frame:{kind:'alert',prefer_wide:false},role:'alert',modal:true,primary:null}});
-  const app={...dialogProjection,bootstrap_view:()=>({common:{cancel:`${language}:cancel`}}),document_color:()=>({space:'Srgb',depth:'U8'}),document_color_copy:documentCopy,export_copy:()=>({profile:`${language}:profile`,depth:`${language}:depth`,reduce_banding:`${language}:reduce_banding`,dither_gradients:`${language}:dither_gradients`}),comparison_copy:()=>({gap:12,height:120,width:160,copy:{before:`${language}:before`,after:`${language}:after`}}),profile_picker_standard:()=>['Srgb','DisplayP3','AdobeRgb','ProPhoto'].map(value=>({profile:{Builtin:value},name:value})),profile_name_copy:name=>name,profile_picker_inventory:async()=>({document:false,current:false,saved:[],standard:true}),validate_profile_picker:async value=>value,document_color_dither:(depth,active)=>({available:depth==='U8',value:depth==='U8'&&active?'Stochastic8':'None'}),color_comparison_needed:()=>comparisonRequired,profile_library:async()=>[],source_dialog_context:()=>({baked:true,assumed:true,name:missing,purpose:{kind:'source',channels:'Rgb'}}),source_description:(name,assumed)=>`${name==null?language+':unnamed':name} / ${assumed}`,profile_copy:()=>({import:`${language}:import`,saved_dialog:`${language}:saved`}),
+  const app={...dialogProjection,bootstrap_view:()=>({common:{cancel:`${language}:cancel`}}),document_color:()=>({space:'Srgb',depth:currentDepth}),document_color_suggested_depth:depth=>{assert.equal(depth,currentDepth);return suggestedDepth;},document_color_copy:documentCopy,export_copy:()=>({profile:`${language}:profile`,depth:`${language}:depth`,reduce_banding:`${language}:reduce_banding`,dither_gradients:`${language}:dither_gradients`}),comparison_copy:()=>({gap:12,height:120,width:160,copy:{before:`${language}:before`,after:`${language}:after`}}),profile_picker_standard:()=>['Srgb','DisplayP3','AdobeRgb','ProPhoto'].map(value=>({profile:{Builtin:value},name:value})),profile_name_copy:name=>name,profile_picker_inventory:async()=>({document:false,current:false,saved:[],standard:true}),validate_profile_picker:async value=>value,document_color_dither:(depth,active)=>({available:depth==='U8',value:depth==='U8'&&active?'Stochastic8':'None'}),color_comparison_needed:()=>comparisonRequired,profile_library:async()=>[],source_dialog_context:()=>({baked:true,assumed:true,name:missing,purpose:{kind:'source',channels:'Rgb'}}),source_description:(name,assumed)=>`${name==null?language+':unnamed':name} / ${assumed}`,profile_copy:()=>({import:`${language}:import`,saved_dialog:`${language}:saved`}),
     capture_control:()=>{let cancelled=false,freed=false;return{cancelled:()=>cancelled,cancel(){assert.equal(freed,false);cancelled=true;},free(){freed=true;}};},color_feature_error_copy:error=>`${language}:${error.color_feature_error}`,
     source_profile_name_copy:value=>value==null?`${language}:unnamed`:value,
     prepare_color(_id,choice){choices.push(choice);prepares++;return new Promise((done,reject)=>{resolver=failure?()=>reject(failure):done;});},prepare_source(){prepares++;return new Promise(done=>{resolver=done;});},prepare_source_comparison:prepared=>prepared};
@@ -115,7 +115,7 @@ test('color history uses one cancel-only progress surface without an underlying 
 
 
 test('Bit Depth renders the native Reduce banding switch and forwards its shared dither value',async t=>{
-  const h=harness(t,{operation:'depth'});await settle();
+  const h=harness(t,{operation:'depth',currentDepth:'U16',suggestedDepth:'U8'});await settle();
   const dither=h.form.querySelectorAll('input')[0];
   assert.equal(dither.getAttribute('role'),'switch');assert.equal(dither.ariaLabel,'en:reduce_banding');assert.equal(dither.disabled,false);
   assert.ok(h.form.querySelectorAll('p').some(node=>node.textContent==='en:dither_gradients'));
@@ -125,6 +125,15 @@ test('Bit Depth renders the native Reduce banding switch and forwards its shared
   h.buttons().find(node=>node.textContent==='en:cancel').click();h.resolve();await h.result;
 });
 
+
+test('Bit Depth uses the shared sixteen-bit suggestion and keeps Reduce banding visible but disabled',async t=>{
+  const h=harness(t,{operation:'depth',currentDepth:'U8',suggestedDepth:'U16'});await settle();
+  const depth=h.buttons().find(node=>node.menuModel),dither=h.form.querySelectorAll('input')[0];
+  assert.equal(depth.value,'U16');assert.equal(dither.disabled,true);assert.notEqual(dither.hidden,true);
+  assert.ok(h.form.textContent.includes('en:reduce_banding'));
+  assert.deepEqual(h.choices,[{Depth:{depth:'U16',dither:'None'}}]);
+  h.buttons().find(node=>node.textContent==='en:cancel').click();h.resolve();await h.result;
+});
 
 test('an unchanged color choice shows the shared explanation without starting a comparison',async t=>{
   const h=harness(t,{comparisonRequired:false});await settle();

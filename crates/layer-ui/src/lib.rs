@@ -47,7 +47,7 @@ mod new_drawing;
 pub use new_drawing::*;
 pub use document_creation::{BlendingChoice, DocumentBackground, MAX_NEW_DOCUMENT_RESOLUTION, NewDocumentAction, NewDocumentBlending, NewDocumentOptions, NewDocumentSettings, NewDocumentError};
 mod document_workflow;
-pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow, DocumentColorDither, document_color_dither, color_comparison_needed};
+pub use document_workflow::{CandidateIdentity, ColorWorkflow, ColorPreparation, SourceWorkflow, DocumentColorDither, document_color_dither, document_color_suggested_depth, color_comparison_needed};
 
 pub mod paper_library;
 pub mod profile_library;

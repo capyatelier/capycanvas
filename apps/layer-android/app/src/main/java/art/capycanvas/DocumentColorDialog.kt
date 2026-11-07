@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
@@ -156,7 +157,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
     var space by remember { mutableStateOf("Srgb") }
     var depth by remember { mutableStateOf("U16") }
     var intent by remember { mutableStateOf("RelativeColorimetric") }
-    var dither by remember { mutableStateOf("None") }
+    var dither by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("layers") }
     var spaces by remember { mutableStateOf<List<Pair<String,String>>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
@@ -165,13 +166,16 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
             val current = JSONObject(host.withNative { Native.query(it, obj("type" to "document_color").toString()) })
             val form=JSONObject(host.withNative { Native.query(it,obj("type" to "export_form").toString()) })
             spaces=form.array("profiles").objects().mapNotNull {profile -> profile.getJSONObject("profile").nullableString("Builtin")?.let{it to profile.getString("name")} }
-            space = current.getString("space"); depth = current.getString("depth"); loaded = true
+            space = current.getString("space")
+            depth = org.json.JSONTokener(Native.dialogUi(obj("kind" to "document_color_suggested_depth", "depth" to current.getString("depth")).toString())).nextValue() as String
+            loaded = true
             if (history) job.prepare(null, true)
         } catch (e: Exception) { job.error = e }
     }
+    val ditherChoice = JSONObject(Native.dialogUi(obj("kind" to "document_color_dither", "depth" to depth, "active" to dither).toString()))
     val choice = when (operation) {
         "assign" -> obj("Assign" to space)
-        "depth" -> obj("Depth" to obj("depth" to depth, "dither" to if (depth == "U8") dither else "None"))
+        "depth" -> obj("Depth" to obj("depth" to depth, "dither" to ditherChoice.getString("value")))
         else -> obj("Convert" to obj("space" to space, "options" to obj("intent" to intent, "black_point_compensation" to false)))
     }
     LaunchedEffect(loaded, history, choice.toString(), result) { if (loaded && !history) job.prepare(choice, copy = result == "copy") }
@@ -201,9 +205,9 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
                         if (operation != "depth") ColorChoice(exportCopy.getString("profile"),spaces,space, enabled = !job.applying) { if (!job.applying) { space = it; job.invalidate() } }
                         if (operation == "depth") {
                             ColorChoice(exportCopy.getString("depth"), listOf("U8" to copy.getString("depth_8"), "U16" to copy.getString("depth_16"), "F16" to copy.getString("depth_float16"), "F32" to copy.getString("depth_float32")), depth, enabled = !job.applying) { if (!job.applying) { depth = it; job.invalidate() } }
-                            if(depth=="U8")Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {Text(exportCopy.getString("reduce_banding"));Text(exportCopy.getString("dither_gradients"),color=LocalPalette.current.settingsSecondary)}
-                                Switch(dither=="Stochastic8",{dither=if(it)"Stochastic8" else "None";job.invalidate()},enabled=!job.applying)
+                                Switch(dither,{dither=it;job.invalidate()},modifier=Modifier.testTag("document-color-dither"),enabled=ditherChoice.getBoolean("available")&&!job.applying)
                             }
                         }
                         if (operation == "convert") ColorChoice(copy.getString("result"), listOf("layers" to copy.getString("convert_layers"), "copy" to copy.getString("create_flattened")), result, enabled = !job.applying) { if (!job.applying) { result = it; job.invalidate() } }

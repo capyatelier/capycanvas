@@ -170,7 +170,8 @@ pub(super) async fn run(
         &[copy.depth_8.as_ref(), copy.depth_16.as_ref(), copy.depth_float16.as_ref(), copy.depth_float32.as_ref()],
         false,
     );
-    depth.set_selected(if color.depth.is_float() { 2 } else { u32::from(color.depth == SampleDepth::U8) });
+    let depths = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32];
+    depth.set_selected(depths.iter().position(|d| *d == layer_ui::document_color_suggested_depth(color.depth)).unwrap() as u32);
     depth.set_visible(operation == DocumentColorOperation::Depth);
     group.add(&depth);
     let result = choice(
@@ -255,7 +256,7 @@ pub(super) async fn run(
         move || {
             if state.localizing.get() { return; }
             let copy = state.copy.borrow().clone();
-            let depth = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32][depth.selected() as usize];
+            let depth = depths[depth.selected() as usize];
             let intent = [
                 RenderingIntent::RelativeColorimetric,
                 RenderingIntent::Perceptual,

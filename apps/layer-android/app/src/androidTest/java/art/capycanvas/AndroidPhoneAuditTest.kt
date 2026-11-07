@@ -22,6 +22,13 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
@@ -150,6 +157,48 @@ class AndroidPhoneAuditTest {
             instrumentation.runOnMainSync { view?.let { it.disposeComposition(); (it.parent as android.view.ViewGroup).removeView(it) } }
             scenario.close()
         }
+    }
+
+    @Test fun bitDepthSuggestsAChangeAndKeepsBandingVisible() {
+        val scenario = launchCapy(180_000, compose)
+        try {
+            val host = scenario.activity().host
+            assertNotNull(host.snapshot!!.getJSONObject("layout").objectOrNull("phone"))
+            val copy = host.catalog.getJSONObject("document_color_copy")
+            val depthLabel = host.catalog.getJSONObject("export_copy").getString("depth")
+            for (theme in listOf("light", "dark")) {
+                host.drain(obj("type" to "set_theme", "theme" to theme))
+                for ((current, suggested) in listOf("U16" to "U8", "U8" to "U16")) {
+                    val epoch = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch")
+                    host.drain(obj("type" to "invoke", "command" to "new_document"))
+                    host.awaitMain("New Drawing opens", 30_000, diagnostics = { "" }, compose = compose) { findTag("new-drawing-create") != null }
+                    for (action in listOf(obj("op" to "unit", "unit" to "px"), obj("op" to "width", "value" to 64),
+                        obj("op" to "height", "value" to 64), obj("op" to "depth", "depth" to current))) {
+                        host.drain(obj("type" to "new_drawing", "action" to action))
+                    }
+                    compose.onNodeWithTag("new-drawing-create").performClick()
+                    host.awaitMain("The new drawing is adopted", 180_000, diagnostics = { "" }, compose = compose) {
+                        host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch") != epoch && !host.documents.working && !host.drawingTabs.switching
+                    }
+                    host.awaitReady(compose = compose)
+                    host.drain(obj("type" to "invoke", "command" to "change_bit_depth"))
+                    host.awaitMain("Bit depth controls are composed", 30_000, diagnostics = { "" }, compose = compose) { findTag("document-color-dither") != null }
+                    compose.onNodeWithTag("color-choice-$depthLabel").assertTextContains(copy.getString(if (suggested == "U8") "depth_8" else "depth_16"))
+                    val dither = compose.onNodeWithTag("document-color-dither").assertIsDisplayed().assertIsOff()
+                    if (current == "U16") dither.assertIsEnabled() else dither.assertIsNotEnabled()
+                    screenshot("f3-depth-$current-$theme.png")
+                    if (current == "U16") {
+                        dither.performClick().assertIsOn()
+                        compose.onNodeWithTag("color-choice-$depthLabel").performClick()
+                        compose.onNodeWithText(copy.getString("depth_16"), useUnmergedTree = true).performClick()
+                        dither.assertIsNotEnabled().assertIsOn()
+                    }
+                    compose.onNodeWithTag("document-color-cancel").performClick()
+                    host.awaitMain("Bit depth closes", 30_000, diagnostics = { "" }, compose = compose) { findTag("document-color") == null }
+                    assertNull(host.failure)
+                }
+            }
+        } finally { scenario.close() }
     }
 
     @Test fun admission() = visit(true)
