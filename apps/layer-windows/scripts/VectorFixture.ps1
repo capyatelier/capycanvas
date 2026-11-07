@@ -292,11 +292,27 @@ function Accept-Notice([string]$Action,[string[]]$Offers,[string]$Name,[string]$
    $null -ne $hit.parts
   } "No notice offered $Label" 30
  }catch{throw "No notice offered $Label ($($contact.ElapsedMilliseconds) ms after the contact; native frame found: $([bool]$script:noticeFrame); slowest notice query $(($hit.polls|Measure-Object -Maximum).Maximum) ms): $($_.Exception.Message)"}
- $view=Snapshot;$picture=Grab
- $clicked=$contact.ElapsedMilliseconds
- $parts=$hit.parts;$target=$parts[$key].bounds
- [CapyRowPointer]::Down('mouse',[int]($target.X+$target.Width/2),[int]($target.Y+$target.Height/2));Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
- try{$styles=Notice-Presentation $hit.parts $view $picture}finally{Save-Grab $picture "$Name-notice-$Theme"}
+ $pixels=@{parts=$null;styles=$null;failure=$null;picture=$null};$pixelTimeout='Notice action fill did not settle'
+ try{Wait-Until {
+  if($pixels.picture){$pixels.picture.Dispose();$pixels.picture=$null}
+  $view=Snapshot;$parts=Notice-Parts;$pixels.picture=Grab
+  try{$pixels.styles=Notice-Presentation $parts $view $pixels.picture}catch{
+    $messages=@(foreach($offer in @($view.state.notice.actions)){$role=if($offer.accent -and $offer.enabled){'accent'}else{'panel'};"The $($offer.id) notice action does not render its shared $role fill"})
+    if($_.Exception.Message -cnotin $messages){throw}
+    $pixels.failure=$_.Exception.Message;return $false
+  }
+  $pixels.parts=$parts;$true
+ } $pixelTimeout}catch{
+  try{
+   if($_.Exception.Message -cne $pixelTimeout -or !$pixels.failure){throw}
+   throw $pixels.failure
+  }finally{if($pixels.picture){Save-Grab $pixels.picture "$Name-notice-$Theme";$pixels.picture=$null}}
+ }
+ try{
+  $clicked=$contact.ElapsedMilliseconds
+  $parts=$pixels.parts;$styles=$pixels.styles;$target=$parts[$key].bounds
+  [CapyRowPointer]::Down('mouse',[int]($target.X+$target.Width/2),[int]($target.Y+$target.Height/2));Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
+ }finally{if($pixels.picture){Save-Grab $pixels.picture "$Name-notice-$Theme";$pixels.picture=$null}}
  Park
  $frame=$parts['canvas-notice'].bounds;$contained=$frame;$contained.Inflate(1,1)
  $actions=@($parts.Keys|Where-Object {$_ -like 'canvas-notice-action-*'})
