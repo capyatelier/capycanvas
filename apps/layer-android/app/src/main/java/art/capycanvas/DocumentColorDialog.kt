@@ -181,10 +181,14 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
     val exportCopy = host.catalog.getJSONObject("export_copy")
     val title = if (history) copy.getString(if (spec.getBoolean("redo")) "redo_title" else "undo_title") else when (operation) { "assign" -> copy.getString("assign_title"); "depth" -> copy.getString("depth_title"); else -> copy.getString("convert_title") }
     val apply={if(job.copy)job.openCopy() else job.apply()}
-    DialogShell(host,copy.getJSONObject(if(job.applying || history)"progress_dialog" else "dialog"),title,
-        onCancel=job::close,onPrimary=apply,primaryLabel=common.getString("apply"),primaryEnabled=job.ready&&!job.busy,tag="document-color",
+    if (job.applying) {
+        ProgressDialog(host, copy.getString("applying"), "document-color", onCancel = job::close)
+        return
+    }
+    DialogShell(host,copy.getJSONObject(if(history)"progress_dialog" else "dialog"),title,
+        onCancel=job::close,onPrimary=apply,primaryLabel=common.getString("apply"),primaryEnabled=job.ready&&!job.busy,tag="document-color",primaryTag="document-color-apply",
         responses=listOf(DialogResponse(common.getString("cancel"),"document-color-cancel",action=job::close))+
-            if(history || job.applying)emptyList() else listOf(DialogResponse(common.getString("apply"),"document-color-apply",accent=true,enabled=job.ready&&!job.busy,action=apply)),
+            if(history)emptyList() else listOf(DialogResponse(common.getString("apply"),"document-color-apply",accent=true,enabled=job.ready&&!job.busy,action=apply)),
         body={padding ->
             Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                 if (!history) {

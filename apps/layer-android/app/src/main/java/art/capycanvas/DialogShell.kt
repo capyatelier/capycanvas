@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LookaheadScope
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -39,6 +40,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -254,7 +257,7 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     val cancel={if(enabled)onCancel()}
     DialogShell(host,host.bootstrap!!.getJSONObject("progress_dialog"),label,onCancel=cancel,tag=tag,
         responses=listOf(DialogResponse(host.bootstrap!!.getJSONObject("common").getString("cancel"),"$tag-cancel",enabled=enabled,action=cancel)),
-        body={CircularProgressIndicator()})
+        body={CircularProgressIndicator(Modifier.testTag("$tag-progress"))})
 }
 
 @Composable private fun AlertShell(host: CanvasHost,title: String,tag: String,preferWide: Boolean,visible: JSONObject,
@@ -264,34 +267,50 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     val colors = LocalPalette.current
     val scroll = rememberScrollState()
     Surface(modifier.testTag(tag),shape = SurfaceShape,color = colors.settingsBackground) {
-    SubcomposeLayout { constraints ->
-        val heading = subcompose("heading") { DialogTitle(title,"$tag-title") }.single()
-        val content = subcompose("body") { ProvideTextStyle(LocalTextStyle.current.copy(textAlign = TextAlign.Center)) { Box(Modifier.verticalScroll(scroll),contentAlignment = Alignment.TopCenter) { body(PaddingValues()) } } }.single()
-        val buttons = responses.mapIndexed { index,response -> subcompose("response-$index") {
-            DialogButton(response.label,response.tag,response.accent,response.enabled,modifier = Modifier.fillMaxWidth(),multiline = true,destructive=response.destructive,onClick = response.action)
-        }.single() }
-        val widths = buttons.map { it.maxIntrinsicWidth(Int.MAX_VALUE)/density.density }
-        val minimum = maxOf(heading.minIntrinsicWidth(Int.MAX_VALUE),content.minIntrinsicWidth(Int.MAX_VALUE))/density.density+48f
-        val natural = maxOf(heading.maxIntrinsicWidth(Int.MAX_VALUE),content.maxIntrinsicWidth(Int.MAX_VALUE))/density.density+48f
-        val geometry = JSONObject(Native.dialogUi(obj("kind" to "alert_layout","viewport" to JSONArray(listOf(visible.number("width"),visible.number("height"))),
-            "metrics" to obj("minimum" to minimum,"natural" to natural,"heading" to heading.maxIntrinsicWidth(Int.MAX_VALUE)/density.density,"responses" to JSONArray(widths)),
-            "font_pixels" to font,"prefer_wide" to preferWide).toString()))
-        val width = (geometry.number("width")*density.density).roundToInt()
-        val inset = ((if (geometry.getBoolean("short")) 18 else 24)*density.density).roundToInt()
-        val inner = (width-2*inset).coerceAtLeast(0)
-        val gap = (12*density.density).roundToInt()
-        val stacked = geometry.getBoolean("stacked")
-        val buttonWidth = if (stacked) inner else ((inner-gap*(buttons.size-1))/buttons.size.coerceAtLeast(1)).coerceAtLeast(0)
-        val placedButtons = buttons.map { it.measure(Constraints.fixedWidth(buttonWidth)) }
-        val responseHeight = if (stacked) placedButtons.sumOf { it.height }+gap*(buttons.size-1).coerceAtLeast(0) else placedButtons.maxOfOrNull { it.height } ?: 0
-        val title = heading.measure(Constraints.fixedWidth(inner))
-        val text = content.measure(Constraints(minWidth = inner,maxWidth = inner,maxHeight = (visible.number("height")*density.density-2*inset-title.height-responseHeight-2*gap).roundToInt().coerceAtLeast(0)))
-        val height = title.height+text.height+responseHeight+2*inset+2*gap
-        layout(width,height) {
-            title.place(inset,inset);text.place(inset,inset+title.height+gap)
-            var x = inset;var y = inset+title.height+gap+text.height+gap
-            (if(stacked)placedButtons.asReversed()else placedButtons).forEach { button -> button.placeRelative(x,y);if(stacked)y+=button.height+gap else x+=button.width+gap }
+    val naturalWidths = remember(responses.size) { IntArray(responses.size+2) }
+    LookaheadScope {
+    Layout(content = {
+        DialogTitle(title,"$tag-title",Modifier)
+        ProvideTextStyle(LocalTextStyle.current.copy(textAlign = TextAlign.Center)) {
+            Box(Modifier.verticalScroll(scroll),contentAlignment = Alignment.TopCenter) { body(PaddingValues()) }
         }
+        responses.forEach { response ->
+            DialogButton(response.label,response.tag,response.accent,response.enabled,multiline = true,destructive=response.destructive,onClick = response.action)
+        }
+    }) { children, constraints ->
+        val viewportWidth = (visible.number("width")*density.density).roundToInt().coerceAtLeast(0)
+        val viewportHeight = (visible.number("height")*density.density).roundToInt().coerceAtLeast(0)
+        if (isLookingAhead) {
+            val natural = children.map { it.measure(Constraints(maxWidth = viewportWidth,maxHeight = viewportHeight)) }
+            natural.forEachIndexed { index,child -> naturalWidths[index] = child.width }
+            layout(constraints.constrainWidth(natural.maxOfOrNull { it.width } ?: 0),constraints.constrainHeight(natural.sumOf { it.height })) {
+                var y = 0
+                natural.forEach { it.place(0,y);y+=it.height }
+            }
+        } else {
+            val widths = naturalWidths.drop(2).map { it/density.density }
+            val natural = maxOf(naturalWidths[0],naturalWidths[1])/density.density+48f
+            val geometry = JSONObject(Native.dialogUi(obj("kind" to "alert_layout","viewport" to JSONArray(listOf(visible.number("width"),visible.number("height"))),
+                "metrics" to obj("minimum" to 0f,"natural" to natural,"heading" to naturalWidths[0]/density.density,"responses" to JSONArray(widths)),
+                "font_pixels" to font,"prefer_wide" to preferWide).toString()))
+            val width = (geometry.number("width")*density.density).roundToInt()
+            val inset = ((if (geometry.getBoolean("short")) 18 else 24)*density.density).roundToInt()
+            val inner = (width-2*inset).coerceAtLeast(0)
+            val gap = (12*density.density).roundToInt()
+            val stacked = geometry.getBoolean("stacked")
+            val buttonWidth = if (stacked) inner else ((inner-gap*(responses.size-1))/responses.size.coerceAtLeast(1)).coerceAtLeast(0)
+            val placedButtons = children.drop(2).map { it.measure(Constraints.fixedWidth(buttonWidth)) }
+            val responseHeight = if (stacked) placedButtons.sumOf { it.height }+gap*(responses.size-1).coerceAtLeast(0) else placedButtons.maxOfOrNull { it.height } ?: 0
+            val heading = children[0].measure(Constraints.fixedWidth(inner))
+            val text = children[1].measure(Constraints(minWidth = inner,maxWidth = inner,maxHeight = (viewportHeight-2*inset-heading.height-responseHeight-2*gap).coerceAtLeast(0)))
+            val height = heading.height+text.height+responseHeight+2*inset+2*gap
+            layout(width,height) {
+                heading.place(inset,inset);text.place(inset,inset+heading.height+gap)
+                var x = inset;var y = inset+heading.height+gap+text.height+gap
+                (if(stacked)placedButtons.asReversed()else placedButtons).forEach { button -> button.placeRelative(x,y);if(stacked)y+=button.height+gap else x+=button.width+gap }
+            }
+        }
+    }
     }
     }
 }
@@ -337,8 +356,8 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
         horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }
 
-@Composable internal fun DialogTitle(text: String, tag: String) =
-    Text(text, Modifier.fillMaxWidth().testTag(tag).semantics {heading()}, fontWeight = FontWeight.Bold, fontSize = 16.sp, textAlign = TextAlign.Center)
+@Composable internal fun DialogTitle(text: String, tag: String, modifier: Modifier = Modifier.fillMaxWidth()) =
+    Text(text, modifier.testTag(tag).semantics {heading()}, fontWeight = FontWeight.Bold, fontSize = 16.sp, textAlign = TextAlign.Center)
 
 @Composable internal fun DialogButton(label: String, tag: String, accent: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, multiline: Boolean = false, destructive:Boolean=false, onClick: () -> Unit) {
     val colors = LocalPalette.current

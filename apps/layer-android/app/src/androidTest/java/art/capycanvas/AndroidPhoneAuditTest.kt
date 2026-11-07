@@ -7,7 +7,21 @@ import android.view.WindowInsets
 import android.view.RoundedCorner
 import android.view.MotionEvent
 import android.view.KeyEvent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
@@ -90,6 +104,52 @@ class AndroidPhoneAuditTest {
             pressKey(KeyEvent.KEYCODE_TAB)
             host.awaitFrame("Hardware Tab restores chrome") { !hidden() }
         } finally { scenario.close() }
+    }
+
+    @Test fun alertBodiesCanSubcomposeWithoutIntrinsicMeasurements() {
+        val scenario = launchCapy(180_000, compose)
+        var view: ComposeView? = null
+        try {
+            val activity = scenario.activity()
+            val host = activity.host
+            val state = host.snapshot!!.getJSONObject("state")
+            val palette = Palette(state.getString("theme") == "dark", state.getJSONObject("palette"))
+            val dialogs = mutableStateListOf<@Composable () -> Unit>()
+            val copy = host.catalog.getJSONObject("document_color_copy")
+            val cancel = host.bootstrap!!.getJSONObject("common").getString("cancel")
+            compose.runOnIdle {
+                view = ComposeView(activity).also { mounted ->
+                    activity.addContentView(mounted, android.widget.FrameLayout.LayoutParams(-1, -1))
+                    mounted.setContent {
+                        CompositionLocalProvider(LocalCanvasHost provides host, LocalPalette provides palette, LocalDialogLayer provides dialogs) {
+                            MaterialTheme {
+                                Box(Modifier.fillMaxSize()) {
+                                    DialogShell(host, host.bootstrap!!.getJSONObject("progress_dialog"), copy.getString("applying"),
+                                        tag = "subcompose-alert", onCancel = {},
+                                        responses = listOf(DialogResponse(cancel, "subcompose-alert-cancel", action = {})),
+                                        body = { BoxWithConstraints(Modifier.testTag("subcompose-alert-body")) { Text(copy.getString("compare_before_apply"), Modifier.widthIn(max = maxWidth)) } })
+                                    WorkspaceDialogs()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            host.awaitMain("The subcomposing alert body is composed", 30_000, diagnostics = { "" }, compose = compose) { findTag("subcompose-alert-body", view!!.descendant<ViewRootForTest>()) != null }
+            val body = compose.onNodeWithTag("subcompose-alert-body").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val response = compose.onNodeWithTag("subcompose-alert-cancel").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val card = compose.onNodeWithTag("subcompose-alert").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue("The alert contains its body", card.left <= body.left && card.top <= body.top && card.right >= body.right && card.bottom >= body.bottom)
+            assertTrue("The alert contains its response", card.left <= response.left && card.top <= response.top && card.right >= response.right && card.bottom >= response.bottom)
+            assertTrue("The response follows the body", response.top >= body.bottom)
+            assertNull(host.failure)
+        } catch (error: Throwable) {
+            runCatching { screenshot("b6-subcompose-alert-failure.png") }
+            throw error
+        } finally {
+            instrumentation.runOnMainSync { view?.let { it.disposeComposition(); (it.parent as android.view.ViewGroup).removeView(it) } }
+            scenario.close()
+        }
     }
 
     @Test fun admission() = visit(true)

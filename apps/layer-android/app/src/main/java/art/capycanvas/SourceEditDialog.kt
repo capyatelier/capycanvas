@@ -28,10 +28,14 @@ import org.json.JSONObject
     LaunchedEffect(host.languageTag) { job.refreshCopy() }
     val common=copy.getJSONObject("common")
     val label=copy.getString(if(rasterize)"rasterize" else if(job.addsLayer)"add_source" else "apply_profile")
-    DialogShell(host,copy.getJSONObject(if(job.applying)"progress_dialog" else "dialog"),copy.getString(if(rasterize)"rasterize_title" else "repair_title"),
+    if (job.applying) {
+        ProgressDialog(host, copy.getString(if (rasterize) "rasterizing" else "applying"), "source-edit", onCancel = job::close)
+        return
+    }
+    DialogShell(host,copy.getJSONObject("dialog"),copy.getString(if(rasterize)"rasterize_title" else "repair_title"),
         onCancel=job::close,onPrimary=job::apply,primaryLabel=label,primaryEnabled=job.ready&&!job.busy,tag="source-edit",
-        responses=listOf(DialogResponse(common.getString("cancel"),"source-edit-cancel",action=job::close))+
-            if(job.applying)emptyList() else listOf(DialogResponse(label,"source-edit-apply",accent=true,enabled=job.ready&&!job.busy,action=job::apply)),
+        responses=listOf(DialogResponse(common.getString("cancel"),"source-edit-cancel",action=job::close),
+            DialogResponse(label,"source-edit-apply",accent=true,enabled=job.ready&&!job.busy,action=job::apply)),
         body={padding -> Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text(copy.getString(if(rasterize)"rasterize_help" else "repair_help"))
             if(!rasterize) {
