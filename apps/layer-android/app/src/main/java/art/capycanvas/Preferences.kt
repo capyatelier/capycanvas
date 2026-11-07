@@ -79,8 +79,6 @@ import org.json.JSONObject
 internal val LocalPreferencesOpen = compositionLocalOf { true }
 
 @Composable internal fun PreferencesOverlay(host: CanvasHost, view: JSONObject?) {
-    var profilesOpen by remember { mutableStateOf(false) }
-    LaunchedEffect(view != null) {profilesOpen=false}
     var retained by remember { mutableStateOf<JSONObject?>(null) }
     val model=if(view != null && retained?.toString()==view.toString())retained!! else view ?: retained ?: return
     if(view != null)SideEffect { retained=model }
@@ -90,7 +88,7 @@ internal val LocalPreferencesOpen = compositionLocalOf { true }
     val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
     val content=@Composable {
         ProvideTextStyle(LocalTextStyle.current.copy(fontSize=16.sp,lineHeight=22.sp)) {
-            CompositionLocalProvider(LocalPreferencesOpen provides (view != null)) { PreferencesScreen(host,model,view != null,{profilesOpen=true}) }
+            CompositionLocalProvider(LocalPreferencesOpen provides (view != null)) { PreferencesScreen(host,model,view != null) }
         }
     }
     if(phone)DialogShell(host,model.getJSONObject("dialog"),model.getString("title"),
@@ -110,11 +108,6 @@ internal val LocalPreferencesOpen = compositionLocalOf { true }
             }
         }
     }
-    if(view != null) {
-        ShortcutDialogs(host,view)
-        KeymapDialogs(host,view.getJSONObject("keymap"))
-        if(profilesOpen)ProfileLibraryDialog(host,{profilesOpen=false})
-    }
 }
 
 private fun JSONObject.shortcutCategory(): String? =
@@ -128,7 +121,9 @@ private fun JSONObject.preferencesBack():JSONObject? = when {
 }
 private fun JSONObject.preferencesDepth() = getJSONObject("navigation").getJSONArray(if(getString("page")=="input")"input" else "shortcuts").length()-1+if(objectOrNull("shortcut_editor")!=null)1 else 0
 
-@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean,openProfiles:()->Unit) {
+@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean) {
+    var profilesOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(open) { profilesOpen = false }
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val paneFocus = remember { FocusRequester() }
@@ -239,7 +234,7 @@ private fun JSONObject.preferencesDepth() = getJSONObject("navigation").getJSONA
                                     val profiles=host.catalog.getJSONObject("profile_copy")
                                     SettingsCard(rows=listOf {
                                         SettingRow(profiles.getString("library_title"),"settings-profile-library",profiles.getString("menu_help")) {
-                                            TextButton(openProfiles,Modifier.testTag("settings-manage-profiles")){Text(profiles.getString("manage"))}
+                                            TextButton({ profilesOpen = true },Modifier.testTag("settings-manage-profiles")){Text(profiles.getString("manage"))}
                                         }
                                     })
                                 }
@@ -253,6 +248,11 @@ private fun JSONObject.preferencesDepth() = getJSONObject("navigation").getJSONA
                 }
             }
         }
+    }
+    if (open) {
+        ShortcutDialogs(host, view)
+        KeymapDialogs(host, view.getJSONObject("keymap"))
+        if (profilesOpen) ProfileLibraryDialog(host, { profilesOpen = false })
     }
 }
 

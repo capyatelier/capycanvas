@@ -78,6 +78,38 @@ class AndroidHostTest {
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
     private fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
+    @Test fun proofProfileDialogUsesWindowBoundsOutsideItsPanel() {
+        val decor = compose.activity.window.decorView
+        val density = compose.activity.resources.displayMetrics.density
+        assertFalse("This regression uses a tablet window", Native.dialogUi(obj("kind" to "phone_window", "viewport" to JSONArray(listOf(decor.width/density, decor.height/density))).toString()).toBoolean())
+        fun screenBounds(tag: String): androidx.compose.ui.geometry.Rect {
+            val (root, node) = checkNotNull(findTag(tag))
+            val origin = IntArray(2).also(root.view::getLocationOnScreen)
+            return node.boundsInRoot.translate(origin[0].toFloat(), origin[1].toFloat())
+        }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "proof", "visible" to true)))
+            host.awaitMain("Proof has its print mode", 30_000, diagnostics = { "" }, compose = compose) { findTag("proof-mode-print") != null }
+            compose.onNodeWithTag("proof-mode-print").performScrollTo().performClick()
+            host.awaitMain("Proof profile row is ready", 30_000, diagnostics = { "" }, compose = compose) { findTag("proof-profile") != null }
+            compose.onNodeWithTag("proof-profile").performScrollTo().performClick()
+            host.awaitMain("Proof profile picker opens outside its panel", 30_000, diagnostics = { "" }, compose = compose) { findTag("proof-profile-picker") != null }
+            compose.runOnIdle {
+                val window = screenBounds("dialog-layer")
+                val picker = screenBounds("proof-profile-picker")
+                assertEquals("Alert is centred on the window, not the panel", window.center.x, picker.center.x, 1f)
+                assertEquals("Alert is centred on the window, not the panel", window.center.y, picker.center.y, 1f)
+                assertTrue("Alert fits the window", window.contains(picker.topLeft) && window.contains(picker.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
+            }
+            screenshot("b5-proof-profile-$theme.png")
+            compose.onNodeWithTag("proof-profile-done").performClick()
+            host.awaitMain("Proof profile picker is removed", 10_000, diagnostics = { "" }, compose = compose) { findTag("proof-profile-picker") == null }
+            assertNull(host.failure)
+            assertNull(host.actionError)
+        }
+    }
+
     @Test fun brushSizeUpdatesInvalidateOnlyTheirReaders() {
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))

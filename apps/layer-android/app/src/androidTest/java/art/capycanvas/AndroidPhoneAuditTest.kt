@@ -94,6 +94,7 @@ class AndroidPhoneAuditTest {
 
     @Test fun admission() = visit(true)
     @Test fun frame() = visit(false)
+    @Test fun proofProfileDialogUsesWindowBoundsOutsideItsPanel() = visit(false, "proofProfile")
     @Test fun menu() = visit(false, "menu")
     @Test fun drawers() = visit(false, "drawers")
     @Test fun customize() = visit(false, "customize")
@@ -333,6 +334,22 @@ class AndroidPhoneAuditTest {
         compose.waitForIdle()
         host.drain()
         compose.waitForIdle()
+        if (family == "proofProfile") {
+            state("proof-profile-picker") {
+                host.drain(obj("type" to "phone", "action" to obj("kind" to "panel", "panel" to "proof")))
+                host.awaitFrame("Proof drawer opens") { findTag("proof-mode-print") != null }
+                tap("proof-mode-print")
+                host.awaitFrame("Proof profile row is ready", 30_000) { findTag("proof-profile") != null }
+                compose.onNodeWithTag("proof-profile", useUnmergedTree = true).performScrollTo()
+                tap("proof-profile")
+                host.awaitFrame("Proof profile picker opens outside its scroller") { findTag("proof-profile-picker") != null }
+                awaitEditorPage(activity, host, "proof-profile-picker")
+            }
+            tap("proof-profile-picker-done")
+            host.awaitFrame("Proof profile picker is removed") { findTag("proof-profile-picker") == null }
+            assertTrue(failures.joinToString("\n"), failures.isEmpty())
+            return
+        }
         if (family == "alertIme") {
             host.drain(obj("type" to "invoke","command" to "search_commands"))
             host.awaitFrame("Standalone alert fixture has a search field") { findTag("command-search") != null }

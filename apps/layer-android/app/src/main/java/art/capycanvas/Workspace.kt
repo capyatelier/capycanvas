@@ -214,8 +214,9 @@ private val HiddenChromeShape=object:Shape {
         bodySmall = textStyle, labelLarge = textStyle.copy(fontWeight = FontWeight.Bold),
         labelMedium = textStyle, labelSmall = textStyle,
         titleMedium = textStyle.copy(fontWeight = FontWeight.Bold)) }
+    val dialogs = remember(host) { mutableStateListOf<@Composable () -> Unit>() }
     MaterialTheme(typography = typography, colorScheme = scheme) {
-        CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
+        CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text, LocalDialogLayer provides dialogs) {
             ProvideTextStyle(textStyle) {
                 StrokeRecordingSave(host)
                 PaletteFiles(host)
@@ -271,6 +272,7 @@ private val HiddenChromeShape=object:Shape {
                                 }
                             })
                     }
+                    WorkspaceDialogs()
                 }
                 }
             }

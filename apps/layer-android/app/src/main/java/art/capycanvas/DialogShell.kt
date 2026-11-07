@@ -50,6 +50,14 @@ import org.json.JSONObject
 import kotlin.math.roundToInt
 
 private val LocalDialogFocus=compositionLocalOf<FocusRequester?> {null}
+internal val LocalDialogLayer = staticCompositionLocalOf<androidx.compose.runtime.snapshots.SnapshotStateList<@Composable () -> Unit>> { error("Missing workspace dialog layer") }
+
+@Composable internal fun WorkspaceDialogs() {
+    val dialogs = LocalDialogLayer.current
+    Box(Modifier.fillMaxSize().zIndex(1000f).testTag("dialog-layer")) {
+        dialogs.forEach { content -> key(content) { content() } }
+    }
+}
 
 @Composable internal fun <T> rememberDialogContent(current:T?):T? {
     var retained by remember {mutableStateOf<T?>(null)}
@@ -66,6 +74,9 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     primaryEnabled: Boolean = true, primaryLabel: String = "", tag: String = "dialog-shell", naturalWidth: Dp = 720.dp,
     responses: List<DialogResponse> = emptyList(), shown: Boolean = true, scrollBody: Boolean = true, header: Boolean = true, windowed: Boolean = true, primaryTag: String? = null, cancelTag: String? = null,
     secondary: (@Composable () -> Unit)? = null, navigation: (@Composable () -> Unit)? = null, keys: ((KeyEvent) -> Boolean)? = null, overlay: (@Composable BoxScope.() -> Unit)? = null, body: @Composable (PaddingValues) -> Unit, actions: (@Composable RowScope.() -> Unit)? = null) {
+    val dialogs = LocalDialogLayer.current
+    val environment = rememberUpdatedState(currentCompositionLocalContext)
+    val content = rememberUpdatedState<@Composable () -> Unit>(shell@{
     val colors = LocalPalette.current
     val density = LocalDensity.current
     val phone = host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")
@@ -127,7 +138,7 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
         onDispose { host.dialogKeys.remove(keys) }
     }
     BackHandler(phone == null && shown) { escape() }
-    if (!visibility.currentState && !visibility.targetState) return
+    if (!visibility.currentState && !visibility.targetState) return@shell
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(500f).semantics { paneTitle = title },contentAlignment = AbsoluteAlignment.TopLeft) {
         val visible = obj("x" to 0,"y" to 0,"width" to maxWidth.value,
             "height" to (maxHeight.value-WindowInsets.ime.getBottom(density)/density.density).coerceAtLeast(0f))
@@ -224,6 +235,12 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
             Box(contentAlignment = Alignment.Center) { card() }
         }
         }
+    }
+    })
+    val entry = remember<@Composable () -> Unit> { { CompositionLocalProvider(environment.value) { content.value() } } }
+    DisposableEffect(dialogs, entry) {
+        dialogs.add(entry)
+        onDispose { dialogs.remove(entry) }
     }
 }
 
