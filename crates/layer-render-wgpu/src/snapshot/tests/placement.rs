@@ -199,3 +199,75 @@ fn snapshot_bounds_preserve_clipped_fills_when_the_capture_domain_expands() {
     assert_eq!(document.scene().clipping_base(fill), Some(base));
     assert_eq!(bounds(&document,layer_core::ContentScope::PlacedTarget(group)),expected);
 }
+
+#[test]
+fn downscaled_native_snapshot_reuses_source_slots_without_changing_pixels() {
+    let extent = [2048; 2];
+    let mut document = Document::new(PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() });
+    hide_paper(&mut document);
+    let color = document.composition().color;
+    let paint = paint_id(&document);
+    let owner = paint_occurrence(&document);
+    let mut raster = RasterData::default();
+    let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, [0; 2]);
+    mask.source.default_coverage = 0.;
+    let mut coverage = RasterData::default();
+    for y in 0..8 {
+        for x in 0..8 {
+            let rgba = [17 + x as u8 * 29, 11 + y as u8 * 31, 37 + (x ^ y) as u8 * 23, 255];
+            raster.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [x, y] }, RasterTile::backed(
+                TileBlob::encode(color.paint_descriptor(), &rgba.repeat(65536)).unwrap()));
+            coverage.tiles.insert(TileKey { plane: RasterPlane::Mask, coordinate: [x, y] }, RasterTile::backed(
+                TileBlob::encode(color.coverage_descriptor(), &vec![31 + (x * 13 + y * 17) as u8; 65536]).unwrap()));
+        }
+    }
+    document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(raster);
+    mask.source.raster = RasterRevision::backed(coverage);
+    document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
+    document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(mask.use_);
+    refresh(&mut document);
+    let map = layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Nearest,
+        ..layer_core::LayerPlacement::from_affine(Affine([0.125, 0., 0., 0.125, 0., 0.])) };
+    let plan = document.layer_transform_plan(SourceTarget::Paint(paint), &map, None, Default::default()).unwrap();
+    assert_eq!(plan.extent, extent);
+    assert_eq!(plan.scope, layer_core::TransformPixelsScope::Paint { linked_mask: true });
+    let capture = |slots: u64| {
+        let mut snapshot = SnapshotRenderer::construct(plan.scene.clone(), SceneScope::Raw(SourceTarget::Paint(paint)),
+            Default::default(), &gpu()).unwrap();
+        let mask_target = SourceTarget::Coverage(plan.coverage.unwrap());
+        snapshot.backing.insert(mask_target, plan.scene.view().raster(mask_target).unwrap().wait_data().unwrap());
+        snapshot.extent = plan.extent;
+        snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
+        snapshot.set_raw_plan(plan.clone());
+        snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
+        pollster::block_on(snapshot.prepare_pipelines()).unwrap();
+        let planes = snapshot.raw_planes.clone();
+        let (r, packet, _, mut encoder) = snapshot.prepare_region_gpu([0, 0, 256, 256], 8 << 20).unwrap();
+        assert!(r.snapshot_worker);
+        let mut scene = r.scene.take().unwrap();
+        for target in [SourceTarget::Paint(paint), mask_target] {
+            let plane = if target.is_coverage() { RasterPlane::Mask } else { RasterPlane::Color };
+            let blob = r.native_backing(target).unwrap().tiles[&TileKey { plane, coordinate: [0; 2] }].try_backing().unwrap().unwrap();
+            scene.raster_tile_for_query(r, &blob, color.space, &mut encoder).unwrap();
+        }
+        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(r);
+        let overhead = r.source_tiles.borrow().non_slot_bytes();
+        r.source_tiles.borrow_mut().admit_limits(slots * scene::sources::NORMALIZED_PAGE_BYTES + overhead, 64 << 20, 0);
+        assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], slots * scene::sources::NORMALIZED_PAGE_BYTES);
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        let (tiles, capture) = scene.capture_raw_tile(r, packet, [0; 2], &plan, &planes, &mut encoder).unwrap();
+        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(r);
+        capture.finish().unwrap();
+        tiles.into_iter().map(|(plane, tile)| (plane, tile.try_backing().unwrap().unwrap().decode_on_worker().unwrap())).collect::<Vec<_>>()
+    };
+    let ample = capture(1024);
+    let bounded = capture(20);
+    assert_eq!(bounded.len(), ample.len());
+    for ((plane, actual), (expected_plane, expected)) in bounded.iter().zip(&ample) {
+        assert_eq!(plane, expected_plane);
+        assert_eq!(actual.len(), expected.len());
+        assert!(actual == expected, "{plane:?}: first differing byte {:?}",
+            actual.iter().zip(expected).position(|(a, b)| a != b));
+    }
+}

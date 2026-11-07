@@ -28,6 +28,13 @@ pub(super) struct PlacementJob {
     positions: Option<wgpu::TextureView>,
 }
 
+impl PlacementJob {
+    pub(super) fn reads(&self, texture: &wgpu::Texture) -> bool {
+        self.sources.iter().any(|(_, view)| view.texture() == texture)
+            || self.positions.as_ref().is_some_and(|view| view.texture() == texture)
+    }
+}
+
 impl Scene {
     pub(crate) const MATERIAL_CACHE_PAGES: usize = 64;
 

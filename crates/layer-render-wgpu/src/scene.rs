@@ -103,7 +103,7 @@ enum Job {
     PaintBase(Arc<crate::source_access::PaintBaseAssembly>),
     Positions(Arc<paint_transform::mesh::MeshGeometry>, [u32; 2]),
     Placement(Box<placement::PlacementJob>),
-    Reduce { binding: wgpu::BindGroup, values: [u32; 20], size: [u32; 2], kernel: Reduction },
+    Reduce { binding: wgpu::BindGroup, sources: [wgpu::TextureView; 4], values: [u32; 20], size: [u32; 2], kernel: Reduction },
     DecodedTile(std::sync::Arc<sources::PendingTile>),
     Effect {
         target: wgpu::TextureView,
@@ -2359,8 +2359,14 @@ impl Scene {
                 continue;
             }
             if is_material_compute(i) {
-                let end = (i + 1..self.jobs.len()).find(|&j| !is_material_compute(j) && !material_clear(j)
-                    && !matches!(self.jobs[j],Job::DecodedTile(_))).unwrap_or(self.jobs.len());
+                let end = (i + 1..self.jobs.len()).find(|&j| match &self.jobs[j] {
+                    Job::DecodedTile(pending) => self.jobs[i..j].iter().any(|job| match job {
+                        Job::Placement(job) => job.reads(&pending.texture),
+                        Job::Reduce { sources, .. } => sources.iter().any(|source| source.texture() == &pending.texture),
+                        _ => false,
+                    }),
+                    _ => !is_material_compute(j) && !material_clear(j),
+                }).unwrap_or(self.jobs.len());
                 let mut draws = Vec::new();
                 for (j,job) in self.jobs.iter().enumerate().take(end).skip(i) {
                     match job {

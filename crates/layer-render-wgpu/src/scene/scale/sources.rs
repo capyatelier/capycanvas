@@ -477,7 +477,8 @@ impl Scene {
                 }
                 let reads = if values[7] & 4 != 0 { 0 } else { values[6].pow(2) * (1 + (values[7] & 1) + (values[7] >> 7 & 1)) };
                 r.metrics.display_reduction_reads += u64::from(size[0] * size[1] * reads);
-                self.jobs.push(Job::Reduce { binding: Commands::binding(r, &source, &base, output), values, size, kernel: Reduction::Pages });
+                let sources = [source, base, r.empty_view.clone(), r.empty_view.clone()];
+                self.jobs.push(Job::Reduce { binding: Commands::inputs(r, sources.each_ref(), output), sources, values, size, kernel: Reduction::Pages });
                 for slot in scratch.into_iter().flatten() { self.free(slot); }
             }
             commands.flush(r, encoder)?;
@@ -542,7 +543,8 @@ impl Scene {
         for (word, input) in values[8..12].iter_mut().zip(&inputs) { *word = input.as_ref().filter(|input| !input.empty).map_or(0, |input| 16 | input.level); }
         values[12..16].copy_from_slice(&[phase[0], phase[1], low[0] | low[1] << 16, high[0] | high[1] << 16]);
         let views: [&wgpu::TextureView; 4] = std::array::from_fn(|i| inputs[i].as_ref().map_or(&r.empty_view, |input| &input.source));
-        self.jobs.push(Job::Reduce { binding: Commands::inputs(r, views, output), values, size: [high[0] - low[0], high[1] - low[1]], kernel: Reduction::Phased });
+        self.jobs.push(Job::Reduce { binding: Commands::inputs(r, views, output), sources: views.map(Clone::clone), values,
+            size: [high[0] - low[0], high[1] - low[1]], kernel: Reduction::Phased });
         Ok(Some((part, reads)))
     }
     pub(super) fn prepare_scale_mask(
