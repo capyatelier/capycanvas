@@ -583,8 +583,10 @@ public static class CapyFullscreenProbe {
         $before=[CapyFullscreenProbe]::Read($drawingWindow)
         $script:fullscreenReceipts.Add(@{mode=$mode;stage='before';native=$before})
         Check-Fullscreen -WindowOnly
-        $after=[CapyFullscreenProbe]::Read($drawingWindow)
-        if(!$FullscreenBaseline -and (($before.window -join ',') -ne ($after.window -join ',') -or $before.maximized -ne $after.maximized)){throw 'Leaving fullscreen did not restore the prior window bounds and maximized state'}
+        if(!$FullscreenBaseline){Wait-Until {
+            $after=[CapyFullscreenProbe]::Read($drawingWindow)
+            ($before.window -join ',') -eq ($after.window -join ',') -and $before.maximized -eq $after.maximized
+        } 'Leaving fullscreen did not restore the prior window bounds and maximized state'}
     }
 }
 
