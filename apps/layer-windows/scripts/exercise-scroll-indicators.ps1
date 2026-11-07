@@ -149,6 +149,6 @@ try{
     ConvertTo-Json -InputObject @($thumbTargets.ToArray()) -Depth 20|Set-Content (Join-Path $run 'thumb-targets.json')
     ConvertTo-Json -InputObject @($records.ToArray()) -Depth 30|Set-Content (Join-Path $run 'checks.json')
     if($owned-and!$owned.HasExited){try{State|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'failure-state.json')}catch{}}
-    [CapyRowPointer]::Dispose();foreach($key in $previous.Keys){[Environment]::SetEnvironmentVariable($key,$previous[$key])}
+    [CapyRowPointer]::Dispose();foreach($key in $previous.Keys){Restore-CapyEnvironmentValue $key $previous[$key]}
     if($owned-and!$owned.HasExited){[CapyWindowApi]::PostMessage($window,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)|Out-Null;if(!$owned.WaitForExit(8000)){'Forced cleanup after failure'|Set-Content (Join-Path $run 'cleanup-failure.txt');Stop-Process -Id $owned.Id}}
 }

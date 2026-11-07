@@ -141,6 +141,7 @@ $buildManifest=if($BuildRecord){Get-Content -LiteralPath $BuildRecord -Raw|Conve
 if($buildManifest -and ($buildManifest.profile -ne $RustProfile -or [bool]$buildManifest.hardware_gpu -ne [bool]$HardwareGpu)){throw 'The fixture build record has a different profile or adapter mode'}
 $controlBuilds=@{}
 $scripts = (Resolve-Path (Join-Path $PSScriptRoot '../../apps/layer-windows/scripts')).Path
+. (Join-Path $scripts 'CapyEnvironment.ps1')
 function Get-FixtureVariantArguments([string]$Fixture,[string]$Option,[string]$Choice){
     if($Fixture -eq 'switcher-drag' -and $Option -eq 'ContextEnding'){'-ContextHoldOnly'}
     "-$Option";if($Choice){$Choice}
@@ -334,7 +335,7 @@ function Start-Shortcuts {
     $env:CAPY_SMOKE_TEST = '1'
     $env:CAPY_TRACE_UI = '1'
     $env:CAPY_STORAGE_DIR = Join-Path $Output 'shortcuts-profile'
-    try { $review = Start-Process $Executable -WorkingDirectory (Split-Path $Executable) -PassThru } finally { foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) } }
+    try { $review = Start-Process $Executable -WorkingDirectory (Split-Path $Executable) -PassThru } finally { foreach ($entry in $saved.GetEnumerator()) { Restore-CapyEnvironmentValue $entry.Key $entry.Value } }
     $directory = Split-Path $Executable
     @{process_id=$review.Id;trace_directory=$directory;profile=(Join-Path $Output 'shortcuts-profile')} | ConvertTo-Json | Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT
     $deadline = (Get-Date).AddMinutes(2)

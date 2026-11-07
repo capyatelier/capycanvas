@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 . (Join-Path $repo 'apps/layer-windows/scripts/WindowsArchitecture.ps1')
+. (Join-Path $repo 'apps/layer-windows/scripts/CapyEnvironment.ps1')
 $build = Resolve-WindowsArchitecture native
 if (!$BuildDirectory) { $BuildDirectory = Get-WindowsBuildDirectory $repo $build $Configuration }
 $BuildDirectory = (Resolve-Path -LiteralPath $BuildDirectory).Path
@@ -115,7 +116,7 @@ try {
 } finally {
     @{results=$results;limitations=@('HDR output requires a physical HDR display','Physical pen, touch, mixed-DPI and multiple-display checks require physical devices','No performance target is established by this suite')} |
         ConvertTo-Json -Depth 5 | Set-Content (Join-Path $Output 'results.json')
-    foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) }
+    foreach ($entry in $saved.GetEnumerator()) { Restore-CapyEnvironmentValue $entry.Key $entry.Value }
     foreach ($path in $ownedRuntime) { Remove-Item -LiteralPath $path -Force }
     Pop-Location
 }

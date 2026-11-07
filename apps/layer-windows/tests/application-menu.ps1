@@ -1,5 +1,6 @@
 param([string]$Helper=(Join-Path $PSScriptRoot '../scripts/open-application-menu.ps1'))
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot '../scripts/CapyEnvironment.ps1')
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 function Menu-Root([string]$Mode){
     $result=[pscustomobject]@{reads=0;mode=$Mode}
@@ -187,5 +188,5 @@ try{
         elseif($failure -or $route){if($failure){throw $failure};throw "Header menu accepted $negative"}
         if($state.events.Count -ne 1){throw 'Header route validation injected native input'}
     }
-}finally{[Environment]::SetEnvironmentVariable('CAPY_FIXTURE_CONTEXT',$oldContext,'Process');if(Test-Path -LiteralPath $owned){Remove-Item -LiteralPath $owned -Recurse -Force}}
+}finally{Restore-CapyEnvironmentValue 'CAPY_FIXTURE_CONTEXT' $oldContext;if(Test-Path -LiteralPath $owned){Remove-Item -LiteralPath $owned -Recurse -Force}}
 Write-Output 'Actual menu opener retains inline aliases, discovers generic Flyout rows by owned ID/PID before windowed MenuFlyout discovery, keeps Inspect passive and rejects wrong-zone or foreign ownership.'

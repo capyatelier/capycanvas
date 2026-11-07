@@ -12,6 +12,7 @@ foreach($file in $files){
 }
 Write-Output "PowerShell source encoding and parsing passed for $($files.Count) scripts."
 & (Join-Path $PSScriptRoot 'fixture-type-references.ps1')
+& (Join-Path $PSScriptRoot 'fixture-environment.ps1')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $run=Join-Path $repo ('artifacts/windows/script-encoding/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null

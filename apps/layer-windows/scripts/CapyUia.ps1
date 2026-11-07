@@ -1,4 +1,5 @@
-﻿Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+﻿. (Join-Path $PSScriptRoot 'CapyEnvironment.ps1')
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyWindowApi' -as [type])){Add-Type -TypeDefinition @"
 using System;using System.Runtime.InteropServices;using System.Text;
 public static class CapyWindowApi {
@@ -705,8 +706,7 @@ function Exit-CapyEnvironment{
         Update-CapyFixtureContext {param($context);$context.run=$run;$context.process_id=$review.Id;$context.trace_directory=$(if($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{$directory});$context.profile=$env:CAPY_STORAGE_DIR}
     }
     foreach($entry in $script:CapyEnvironment.GetEnumerator()){
-        if($null -eq $entry.Value){Remove-Item -LiteralPath ('Env:'+$entry.Key) -ErrorAction SilentlyContinue}
-        else{[Environment]::SetEnvironmentVariable($entry.Key,$entry.Value,'Process')}
+        Restore-CapyEnvironmentValue $entry.Key $entry.Value
     }
 }
 function Wait-NativeGestureRelease($Before,[long]$TerminalGeneration){
