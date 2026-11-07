@@ -61,7 +61,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     var exportRequest by mutableStateOf<JSONObject?>(null)
         private set
     private var exportRecipe: JSONObject? = null
-    private var exportDestination = 0
+    private var exportRemember: JSONObject? = null
     var profilePrompt by mutableStateOf<JSONObject?>(null)
         private set
     var packagePrompt by mutableStateOf<JSONObject?>(null)
@@ -271,9 +271,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (shown) newDrawingShown = true
         else if (newDrawingShown) { newDrawing = null; newDrawingShown = false; complete(request.getInt("id"), false) }
     }
-    fun chooseExport(recipe: JSONObject, destination: Int) {
+    fun chooseExport(recipe: JSONObject, remember: JSONObject) {
         val request = exportRequest ?: return
-        exportRecipe = recipe; exportDestination = destination; exportRequest = null
+        exportRecipe = recipe; exportRemember = remember; exportRequest = null
         val document = request.getJSONObject("kind").getJSONObject("request")
         val extension = exportFileType(recipe.getString("format")).second.first()
         document.put("name", document.getString("name").substringBeforeLast('.') + "." + extension)
@@ -363,8 +363,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         host.documentChanged()
                     } else finish(id, true)
                     if(kind=="export"&&document.objectOrNull("repeat")==null)try {
-                        val color=JSONObject(host.withNative{Native.query(it,obj("type" to "document_color").toString())})
-                        ColorPreferencesStore.presets(application,color,obj("type" to "remember","index" to if(exportDestination<4)exportDestination else 3,"recipe" to exportRecipe))
+                        exportRemember?.let {ColorPreferencesStore.replace(application,it)}
                     }catch(e:Exception){host.reportActionError(deliveryMessage("export_preferences", "detail" to (e.message ?: actionFailed)))}
                     if (kind == "save") host.recovery.capture()
                 } else {
@@ -463,8 +462,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             modifier = Modifier.testTag("preserved-package-preview"))
     }
     controller.profilePrompt?.let { SourceProfileDialog(host,it, controller::chooseProfile) }
-    controller.exportRequest?.let { pending ->
-        key(pending.getInt("id")) { ExportDialog(host, { controller.cancel(pending.getInt("id")) }, controller::chooseExport) }
+    rememberDialogContent(controller.exportRequest)?.let {pending ->
+        key(pending.getInt("id")) {ExportDialog(host,pending.getInt("id"),controller.exportRequest != null,{controller.cancel(pending.getInt("id"))},controller::chooseExport)}
     }
     val activity = LocalActivity.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->

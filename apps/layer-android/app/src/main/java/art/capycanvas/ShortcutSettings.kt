@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
@@ -30,6 +31,8 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,10 +93,10 @@ private fun subtitle(row: JSONObject): String =
     }
 }
 
-@Composable private fun SettingRow(title: String, tag: String, subtitle: String = "", onClick: (() -> Unit)? = null,
-    titleColor: androidx.compose.ui.graphics.Color = LocalPalette.current.text, trailing: @Composable RowScope.() -> Unit = {}) {
+@Composable internal fun SettingRow(title: String, tag: String, subtitle: String = "", onClick: (() -> Unit)? = null,
+    titleColor: androidx.compose.ui.graphics.Color = LocalPalette.current.text, enabled:Boolean=true, trailing: @Composable RowScope.() -> Unit = {}) {
     val colors = LocalPalette.current
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).alpha(if(enabled)1f else .5f).semantics{if(!enabled)disabled()}.then(if (onClick != null) Modifier.clickable(enabled=enabled,onClick = onClick) else Modifier)
         .testTag(tag).padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -109,7 +112,7 @@ private fun subtitle(row: JSONObject): String =
         color = LocalPalette.current.settingsSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
-@Composable private fun Chevron() {
+@Composable internal fun Chevron() {
     SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(-90f), tint = LocalPalette.current.settingsSecondary)
 }
 
@@ -164,20 +167,25 @@ private fun subtitle(row: JSONObject): String =
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable private fun ShortcutFilters(host: CanvasHost, view: JSONObject, page: JSONObject) {
     val key = page.nullableString("key")
     var keySearch by remember { mutableLongStateOf(0L) }
     LaunchedEffect(key) { if (key != null) keySearch++ }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
-            modifier = Modifier.weight(1f).testTag("shortcuts-search").onPreviewKeyEvent { event ->
+            modifier = Modifier.widthIn(min=150.dp).weight(1f).testTag("shortcuts-search").onPreviewKeyEvent { event ->
                 if (host.textComposition.owns(event.nativeKeyEvent)) return@onPreviewKeyEvent false
                 val chord = host.searchChord(event.nativeKeyEvent) ?: return@onPreviewKeyEvent false
                 host.preference(obj("type" to "search_shortcut_key", "chord" to chord))
                 true
             }, height = 48.dp, focusRequest = keySearch,
             placeholder = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("search_or_press")) }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) },
-            background = LocalPalette.current.dialogField)
+            trailingIcon=if(view.optString("shortcut_query").isEmpty() && key==null)null else ({
+                IconButton({host.preference(obj("type" to "search_shortcuts","query" to ""))}) {
+                    SharedIcon("close",view.getString("clear_search_label"),Modifier.size(20.dp))
+                }
+            }),background = LocalPalette.current.dialogField)
         val contexts = page.array("contexts").objects()
         val context = page.nullableString("context")
         val selected = contexts.indexOfFirst { it.nullableString("category") == context }.coerceAtLeast(0)
@@ -372,30 +380,27 @@ private fun subtitle(row: JSONObject): String =
     }
 }
 
-@Composable private fun SheetFrame(title: String, tag: String, close: () -> Unit, keys: (androidx.compose.ui.input.key.KeyEvent) -> Boolean,
-    content: @Composable ColumnScope.() -> Unit) {
-    val host = LocalCanvasHost.current
-    Dialog(close) {
-        val focus = remember { FocusRequester() }
-        LaunchedEffect(Unit) { focus.requestFocus() }
-        Surface(shape = RoundedCornerShape(16.dp), color = LocalPalette.current.settingsBackground) {
-            Column(Modifier.widthIn(max = 520.dp).heightIn(max = 680.dp).testTag(tag).onPreviewKeyEvent { if (host.textComposition.owns(it.nativeKeyEvent)) false else keys(it) }
-                .focusRequester(focus).focusable().padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 8.dp)) {
-                    Text(title, Modifier.align(Alignment.Center).padding(horizontal = 56.dp).testTag("$tag-title"),
-                        fontSize = 18.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconButton(close, Modifier.align(Alignment.CenterEnd)) { SharedIcon("close", host.bootstrap!!.getJSONObject("common").getString("close"), Modifier.size(20.dp)) }
-                }
-                content()
+@Composable private fun SheetFrame(intent:JSONObject,title: String,tag: String,close: () -> Unit,
+    keys: (androidx.compose.ui.input.key.KeyEvent) -> Boolean,content: @Composable ColumnScope.() -> Unit) {
+    val host=LocalCanvasHost.current
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null
+    DialogShell(host,intent,title,onCancel=close,tag=tag,naturalWidth=520.dp,scrollBody=false,header=phone,
+        navigation=if(phone)null else ({
+            Box(Modifier.fillMaxWidth().heightIn(min=56.dp).padding(horizontal=8.dp)) {
+                Text(title,Modifier.align(Alignment.Center).padding(horizontal=56.dp).testTag("$tag-title"),
+                    fontSize=18.sp,fontWeight=FontWeight.SemiBold,textAlign=TextAlign.Center,maxLines=1,overflow=TextOverflow.Ellipsis)
+                IconButton(close,Modifier.align(Alignment.CenterEnd)){SharedIcon("close",host.bootstrap!!.getJSONObject("common").getString("close"),Modifier.size(20.dp))}
             }
-        }
-    }
+        }),
+        keys={ if(host.textComposition.owns(it))false else keys(androidx.compose.ui.input.key.KeyEvent(it)) },body={
+            Column(Modifier.fillMaxWidth().padding(bottom=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)
+        })
 }
 
 @Composable internal fun ShortcutDialogs(host: CanvasHost, view: JSONObject) {
     val capture = view.objectOrNull("capture")
     if (capture?.getString("id") == MODIFIER_CAPTURE) {
-        SheetFrame(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("new_modifier"), "modifier-key", { host.preference(obj("type" to "cancel_shortcut")) }, { event ->
+        SheetFrame(view.getJSONObject("dialog"),capture.getString("label"), "modifier-key", { host.preference(obj("type" to "cancel_shortcut")) }, { event ->
             if (event.key == Key.Back) false else { host.key(event.nativeKeyEvent); true }
         }) {
             Description(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("press_hold_key"), Modifier.padding(horizontal = 16.dp), TextAlign.Center)
@@ -404,7 +409,7 @@ private fun subtitle(row: JSONObject): String =
     }
     val picker = view.getJSONObject("shortcut_page").objectOrNull("picker") ?: return
     val close = { host.preference(obj("type" to "close_action_picker")) }
-    SheetFrame(picker.getString("title"), "action-picker", close, { event ->
+    SheetFrame(picker.getJSONObject("dialog"),picker.getString("title"), "action-picker", close, { event ->
         if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) { close(); true } else false
     }) {
         Description(picker.getString("description"), Modifier.padding(horizontal = 16.dp).testTag("action-picker-description"), TextAlign.Center)
@@ -501,9 +506,12 @@ private fun subtitle(row: JSONObject): String =
             }
         })
     }
+}
+
+@Composable internal fun KeymapDialogs(host:CanvasHost,keymap:JSONObject) {
     if (keymap.optBoolean("details") && LocalPreferencesOpen.current) {
         val close = { host.preference(obj("type" to "keymap_details", "open" to false)) }
-        SheetFrame(keymap.getString("title"), "keymap-details", close, { false }) {
+        SheetFrame(keymap.getJSONObject("dialog"),keymap.getString("title"), "keymap-details", close, { false }) {
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Description(keymap.getString("source"))
@@ -514,12 +522,10 @@ private fun subtitle(row: JSONObject): String =
         }
     }
     keymap.objectOrNull("import")?.let { preview ->
-        AlertDialog({ host.preference(obj("type" to "cancel_keymap_import")) },
-            confirmButton = { TextButton({ host.preference(obj("type" to "confirm_keymap_import")) }, Modifier.testTag("keymap-confirm-import")) { Text(preview.getString("import_label")) } },
-            dismissButton = { TextButton({ host.preference(obj("type" to "cancel_keymap_import")) }) { Text(preview.getString("cancel_label")) } },
-            title = { Text(preview.getString("heading")) },
-            text = {
-                Text(preview.getString("body"), Modifier.verticalScroll(rememberScrollState()).testTag("keymap-import-preview"))
-            })
+        val cancel={host.preference(obj("type" to "cancel_keymap_import"))}
+        DialogShell(host,keymap.getJSONObject("import_dialog"),preview.getString("heading"),onCancel=cancel,tag="keymap-import",
+            responses=listOf(DialogResponse(preview.getString("cancel_label"),"keymap-import-cancel",action=cancel),
+                DialogResponse(preview.getString("import_label"),"keymap-confirm-import",accent=true,action={host.preference(obj("type" to "confirm_keymap_import"))})),
+            body={ Text(preview.getString("body"),Modifier.testTag("keymap-import-preview")) })
     }
 }

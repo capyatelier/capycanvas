@@ -211,9 +211,9 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
         let (previews,stats)=crate::inspection::on_worker("capy-output-preview", "Output preview worker failed", move || {
             let mut renderer=job.gpu.capture(job.capture,job.control).map_err(error)?;
-            let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
+            let (before,transparent)=renderer.preview_document_with_coverage([512,384],layer_core::color::RgbSpace::Srgb,1.)?;
             let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe)?;
-            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});
+            let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked,"transparent":transparent});
             Ok::<_,crate::color_preferences::ColorCallError>(([before,output.after].into_iter().chain(output.sdr_base).collect::<Vec<_>>(),json.to_string()))
         })?;
         let result = env

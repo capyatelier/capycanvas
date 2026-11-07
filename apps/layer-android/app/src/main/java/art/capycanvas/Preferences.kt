@@ -12,12 +12,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import kotlin.math.roundToInt
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -69,119 +69,101 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import org.json.JSONObject
 
 // This value changes on every open/close. Track its readers so unrelated
 // retained controls can skip recomposition when interaction ownership changes.
 internal val LocalPreferencesOpen = compositionLocalOf { true }
 
-/** Keep the settings nodes after their first use. Closing still finishes the
- * native slide and releases input/focus; hidden nodes are neither placed nor
- * exposed to accessibility. Rust owns the settings session and every value. */
 @Composable internal fun PreferencesOverlay(host: CanvasHost, view: JSONObject?) {
-    val visible = remember { MutableTransitionState(false) }
-    visible.targetState = view != null
+    var profilesOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(view != null) {profilesOpen=false}
     var retained by remember { mutableStateOf<JSONObject?>(null) }
-    // A reopened session often publishes identical rows. Keep their identities
-    // as well as their nodes so Compose can skip unchanged controls.
-    val model = if (view != null && retained?.toString() == view.toString()) retained!!
-        else view ?: retained ?: return
-    if (view != null) SideEffect { retained = model }
-    val transition = updateTransition(visible, label = "preferences")
-    val slide by transition.animateFloat(transitionSpec = {
-        tween(if (targetState) 240 else 200, easing = FastOutSlowInEasing)
-    }, label = "preferences-slide") { if (it) 0f else -1f }
-    val active = visible.currentState || visible.targetState
-    Box(Modifier.fillMaxSize()) {
-        if (active) Box(Modifier.matchParentSize().pointerInput(Unit) {
-            awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
-        })
-        Layout(content = {
-            ProvideTextStyle(LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 22.sp)) {
-                CompositionLocalProvider(LocalPreferencesOpen provides (view != null)) {
-                    PreferencesScreen(host, model, view != null)
-                }
-            }
-        }, modifier = Modifier.fillMaxSize()
-            .then(if (active) Modifier else Modifier.clearAndSetSemantics {})) { children, constraints ->
-            val child = children.single().measure(constraints)
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                if (active) child.place(0, (slide * child.height).roundToInt())
+    val model=if(view != null && retained?.toString()==view.toString())retained!! else view ?: retained ?: return
+    if(view != null)SideEffect { retained=model }
+    val close={ host.dispatch(obj("type" to "close_settings")) }
+    val navigation=model.getJSONObject("navigation")
+    val back={ model.preferencesBack()?.let(host::preference) ?: close() }
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
+    val content=@Composable {
+        ProvideTextStyle(LocalTextStyle.current.copy(fontSize=16.sp,lineHeight=22.sp)) {
+            CompositionLocalProvider(LocalPreferencesOpen provides (view != null)) { PreferencesScreen(host,model,view != null,{profilesOpen=true}) }
+        }
+    }
+    if(phone)DialogShell(host,model.getJSONObject("dialog"),model.getString("title"),
+        subpage=model.optBoolean("page_requested") || navigation.nullableString("title") != null,
+        onCancel=close,onBack=back,header=false,shown=view != null,scrollBody=false,tag="preferences-dialog",body={ content() })
+    else {
+        val visible=remember {MutableTransitionState(false)}
+        visible.targetState=view != null
+        val transition=updateTransition(visible,label="preferences")
+        val slide by transition.animateFloat(transitionSpec={tween(if(targetState)240 else 200,easing=FastOutSlowInEasing)},label="preferences-slide"){if(it)0f else -1f}
+        val active=visible.currentState || visible.targetState
+        Box(Modifier.fillMaxSize()) {
+            if(active)Box(Modifier.matchParentSize().pointerInput(Unit){awaitPointerEventScope{while(true)awaitPointerEvent().changes.forEach{it.consume()}}})
+            Layout(content={content()},modifier=Modifier.fillMaxSize().then(if(active)Modifier else Modifier.clearAndSetSemantics{})) {children,constraints ->
+                val child=children.single().measure(constraints)
+                layout(constraints.maxWidth,constraints.maxHeight){if(active)child.place(0,(slide*child.height).roundToInt())}
             }
         }
+    }
+    if(view != null) {
+        ShortcutDialogs(host,view)
+        KeymapDialogs(host,view.getJSONObject("keymap"))
+        if(profilesOpen)ProfileLibraryDialog(host,{profilesOpen=false})
     }
 }
 
 private fun JSONObject.shortcutCategory(): String? =
     objectOrNull("shortcut_page")?.takeIf { getString("page") == "shortcuts" && !it.isNull("category") }?.getString("category")
 
-private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") }
-    ?: objectOrNull("modifier_editor")?.let { "modifier:" + it.getString("label") }
-    ?: objectOrNull("pen_button_editor")?.let { "pen:" + it.getString("trigger") }
-    ?: shortcutCategory()?.let { "category:$it" }
-    ?: "page:" + getString("page")
-
-private fun String.routeDepth() = when (substringBefore(':')) {
-    "page" -> 0
-    "category", "pen" -> 1
-    else -> 2
+private fun JSONObject.preferencesContentKey() = Triple(getString("page"),getJSONObject("navigation").toString(),objectOrNull("shortcut_editor")?.getString("id"))
+private fun JSONObject.preferencesBack():JSONObject? = when {
+    objectOrNull("capture") != null -> obj("type" to "cancel_shortcut")
+    objectOrNull("shortcut_editor") != null -> obj("type" to "close_shortcut_editor")
+    else -> getJSONObject("navigation").objectOrNull("back")
 }
+private fun JSONObject.preferencesDepth() = getJSONObject("navigation").getJSONArray(if(getString("page")=="input")"input" else "shortcuts").length()-1+if(objectOrNull("shortcut_editor")!=null)1 else 0
 
-private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor")?.getString("label")
-    ?: objectOrNull("modifier_editor")?.getString("label")
-    ?: objectOrNull("pen_button_editor")?.getString("label")
-    ?: objectOrNull("shortcut_page")?.array("categories")?.objects()?.firstOrNull { it.getString("id") == shortcutCategory() }?.getString("label")
-
-@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean) {
-    var profilesOpen by remember { mutableStateOf(false) }
-    if(open && profilesOpen) ProfileLibraryDialog(host,{profilesOpen=false})
+@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject, open: Boolean,openProfiles:()->Unit) {
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val paneFocus = remember { FocusRequester() }
-    LaunchedEffect(open, view.settingsRoute()) { if (open) paneFocus.requestFocus() else focus.clearFocus() }
-    var showPage by rememberSaveable { mutableStateOf(view.getString("page") != "appearance") }
-    LaunchedEffect(open) {
-        if (open) { showPage = view.getString("page") != "appearance"; profilesOpen = false }
-    }
+    LaunchedEffect(open, view.preferencesContentKey()) { if (open) paneFocus.requestFocus() else if(host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")==null)focus.clearFocus() }
     val reveal = view.optString("reveal").takeUnless { it.isEmpty() || it == "null" }
-    LaunchedEffect(reveal) { if (reveal != null) showPage = true }
-    LaunchedEffect(view.optLong("search_focus")) {
-        if (view.optLong("search_focus") != 0L) showPage = false
-    }
-    BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding()
+    BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground)
+        .then(if(host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")==null)Modifier.imePadding() else Modifier)
         .focusRequester(paneFocus).focusable().testTag("preferences-surface")) {
-        val wide = maxWidth >= 840.dp
-        val detail = view.settingsTitle()
-        fun close() { focus.clearFocus(); host.dispatch(obj("type" to "close_settings")) }
+        var layout by remember { mutableStateOf<JSONObject?>(null) }
+        LaunchedEffect(maxWidth,view.getJSONObject("navigation").toString(),view.optBoolean("page_requested")) {
+            layout=host.awaitQuery(obj("type" to "preferences_layout","width" to maxWidth.value,"minimum" to org.json.JSONArray(listOf(260f,400f))))
+        }
+        val arranged=layout ?: return@BoxWithConstraints
+        val wide=!arranged.getBoolean("single_pane")
+        val showPage=arranged.getBoolean("subpage")
+        val navigation=view.getJSONObject("navigation")
+        val detail=view.objectOrNull("shortcut_editor")?.getString("label") ?: navigation.nullableString("title")
+        fun close() { focus.clearFocus();host.dispatch(obj("type" to "close_settings")) }
         fun back() {
             focus.clearFocus()
-            when {
-                view.objectOrNull("capture") != null -> host.preference(obj("type" to "cancel_shortcut"))
-                view.objectOrNull("shortcut_editor") != null -> host.preference(obj("type" to "close_shortcut_editor"))
-                view.objectOrNull("modifier_editor") != null -> host.preference(obj("type" to "close_modifier_key"))
-                view.objectOrNull("pen_button_editor") != null -> host.preference(obj("type" to "close_pen_button"))
-                view.shortcutCategory() != null -> host.preference(obj("type" to "shortcut_category", "id" to null))
-                !wide && showPage -> showPage = false
-                else -> close()
-            }
+            view.preferencesBack()?.let(host::preference) ?: close()
         }
-        BackHandler(enabled = open, onBack = ::back)
-        if (open) ShortcutDialogs(host, view)
+        BackHandler(enabled=open && host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")==null,onBack=::back)
         // Two full-height panes, not a global app bar stacked over two columns.
         Row(Modifier.fillMaxSize()) {
             if (wide || !showPage) PreferencesNavigation(host, view,
                 Modifier.then(if (wide) Modifier.width(260.dp) else Modifier.fillMaxWidth()).fillMaxHeight(),
-                showDone = !wide, close = ::close) { showPage = true }
+                showDone = !wide, close = ::close)
             if (wide || showPage) {
                 Column(Modifier.weight(1f).fillMaxHeight().testTag("settings-main-pane")) {
                     val page = view.array("pages").objects().find { it.getString("id") == view.getString("page") }
                     // Pane controls stay put while only its contents slide.
                     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)) {
                         Text(detail ?: page?.getString("title") ?: "",
-                            Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 88.dp).testTag("settings-page-title"),
+                            Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 88.dp).testTag("settings-page-title").semantics{heading()},
                             fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
                         if (detail != null || !wide) {
                             IconButton(::back, Modifier.align(Alignment.CenterStart).size(48.dp)) {
@@ -190,10 +172,10 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                         }
                         SettingsDone(::close, Modifier.align(Alignment.CenterEnd))
                     }
-                    AnimatedContent(view, Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentKey = { it.settingsRoute() },
+                    AnimatedContent(view, Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentKey = { it.preferencesContentKey() },
                         transitionSpec = {
-                            val from = initialState.settingsRoute().routeDepth()
-                            val to = targetState.settingsRoute().routeDepth()
+                            val from = initialState.preferencesDepth()
+                            val to = targetState.preferencesDepth()
                             if (from == 0 && to == 0) {
                                 fadeIn(tween(140)) togetherWith fadeOut(tween(100))
                             } else {
@@ -202,17 +184,18 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                                     (slideOutHorizontally(tween(220)) { -it * direction / 3 } + fadeOut(tween(120)))
                             }
                         }, label = "settings-detail") { model ->
-                        val editor = model.objectOrNull("shortcut_editor")
+                        val editor=model.objectOrNull("shortcut_editor")
                         val modifierKey = model.objectOrNull("modifier_editor")
                         val penButton = model.objectOrNull("pen_button_editor")
                         val category = model.shortcutCategory()
                         val page = model.array("pages").objects().find { it.getString("id") == model.getString("page") }
-                        Column(Modifier.fillMaxSize().testTag("settings-content-" + model.settingsRoute())
+                        Column(Modifier.fillMaxSize().testTag(if(editor!=null)"settings-content-shortcut:"+editor.getString("id") else "settings-content-"+model.getString("page")+"-"+model.getJSONObject("navigation").getJSONArray(if(model.getString("page")=="input")"input" else "shortcuts").let{it.getString(it.length()-1)})
                             .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
-                            Column(Modifier.widthIn(max = 632.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            val contentWidth=(org.json.JSONTokener(Native.dialogUi(obj("kind" to "preferences_content_width","width" to this@BoxWithConstraints.maxWidth.value,"minimum" to 0f).toString())).nextValue() as Number).toFloat()
+                            Column(Modifier.widthIn(max = contentWidth.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                                 when {
-                                    editor != null -> ShortcutEditor(host, model, editor)
+                                    editor != null -> ShortcutEditor(host,model,editor)
                                     modifierKey != null -> {
                                         val key = modifierKey.getJSONObject("key")
                                         PerToolPage(host, "modifier", JSONObject(Native.nativeCaption(obj("type" to "modifier_hold", "label" to modifierKey.getString("label")).toString(),host.languageTag)).getString("text"), modifierKey,
@@ -251,8 +234,15 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                                         }
                                     }
                                 }
-                                if (model.settingsRoute() == "page:input") TriggerGroups(host, model)
-                                if(model.getString("page")=="color")TextButton({profilesOpen=true}){Text(host.catalog.getJSONObject("profile_copy").getString("manage"))}
+                                if (model.getString("page") == "input") TriggerGroups(host, model)
+                                if(model.getString("page")=="color") {
+                                    val profiles=host.catalog.getJSONObject("profile_copy")
+                                    SettingsCard(rows=listOf {
+                                        SettingRow(profiles.getString("library_title"),"settings-profile-library",profiles.getString("menu_help")) {
+                                            TextButton(openProfiles,Modifier.testTag("settings-manage-profiles")){Text(profiles.getString("manage"))}
+                                        }
+                                    })
+                                }
                                 model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
                                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
                                 }
@@ -277,7 +267,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
 }
 
 @Composable private fun PreferencesNavigation(host: CanvasHost, view: JSONObject, modifier: Modifier,
-    showDone: Boolean, close: () -> Unit, onPage: () -> Unit) {
+    showDone: Boolean, close: () -> Unit) {
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val searching = view.optBoolean("searching")
@@ -301,19 +291,19 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
             if (searching) {
                 view.array("search_results").objects().forEach { result ->
                     Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(8.dp)).clickable {
-                        focus.clearFocus(); host.preference(result.getJSONObject("action")); onPage()
+                        focus.clearFocus(); host.preference(result.getJSONObject("action"))
                     }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(result.getString("title"), fontWeight = FontWeight.Medium)
                         Text(result.getString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
                     }
                 }
-                if (view.optBoolean("empty")) Text(host.catalog.getJSONObject("native_copy").getJSONObject("shortcuts").getString("no_matching_settings"), Modifier.padding(12.dp), color = colors.settingsSecondary)
+                if (view.optBoolean("empty")) Text(view.getString("no_results"), Modifier.fillMaxWidth().padding(12.dp), color = colors.settingsSecondary,textAlign=TextAlign.Center)
             } else view.array("pages").objects().forEach { page ->
                 val selected = view.getString("page") == page.getString("id")
                 Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
                     .background(if (selected) colors.active else Color.Transparent)
                     .selectable(selected, role = Role.Tab) {
-                        focus.clearFocus(); host.preference(obj("type" to "page", "page" to page.getString("id"))); onPage()
+                        focus.clearFocus(); host.preference(obj("type" to "page", "page" to page.getString("id")))
                     }.testTag("settings-category-" + page.getString("id"))
                     .padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
@@ -642,7 +632,7 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
                             tool.nullableString("icon")?.let { SharedIcon(it,null) }
                             Column(Modifier.weight(1f),verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text(tool.getString("label"),fontWeight = FontWeight.Medium)
-                                Text(tool.getString("description"),color = LocalPalette.current.settingsSecondary)
+                                Text(tool.getString("description"),color = LocalPalette.current.settingsSecondary,maxLines = 1,overflow = TextOverflow.Ellipsis)
                             }
                             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
                                 Checkbox(tool.getBoolean("selected"),onCheckedChange = null,modifier = Modifier.size(20.dp),enabled = enabled)

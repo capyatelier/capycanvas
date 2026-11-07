@@ -109,8 +109,9 @@ internal class ColorEditorRequest(val slot: String?, val color: JSONObject?, val
 @Composable internal fun inSeparateWindow(): Boolean = LocalActivity.current?.window?.decorView !== LocalView.current.rootView
 
 @Composable internal fun ColorEditorLayer(host: CanvasHost) {
-    val request = host.colorEditor ?: return
-    key(request) { ColorEditorOverlay(host, request) }
+    val current=host.colorEditor
+    val request=rememberDialogContent(current) ?: return
+    key(request) {ColorEditorOverlay(host,request,current != null)}
 }
 
 private val Shapes = listOf("circle" to "OKLCH", "square" to "HSB", "triangle" to "HLS")
@@ -154,7 +155,7 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
     return form
 }
 
-@Composable private fun ColorEditorOverlay(host: CanvasHost, request: ColorEditorRequest) {
+@Composable private fun ColorEditorOverlay(host: CanvasHost, request: ColorEditorRequest, visible:Boolean) {
     val colors = LocalPalette.current
     val copy = host.catalog.getJSONObject("native_copy").getJSONObject("color")
     val common = host.bootstrap!!.getJSONObject("common")
@@ -184,7 +185,7 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
         }
     }
     if (picking) {
-        if (pickerActive) PickStrip(host, form.editor, form.view, pickerState!!, form.rendition)
+        if (pickerActive && visible) PickStrip(host, form.editor, form.view, pickerState!!, form.rendition)
         return
     }
     val keys = { event: AndroidKeyEvent ->
@@ -206,17 +207,32 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
             true
         } else false
     }
-    PickerDialog(host, request.windowed, "color-editor", keys, { close(null) }, page = {
-        ColorFormBody(host, form, copy.getString("edit"), "color-editor-title", pick = if (request.windowed) null else ({
-            picking = true; seenPicking = false
-            val metrics = context.resources.displayMetrics
-            host.dispatch(obj("type" to "color_picker", "action" to obj("kind" to "editor", "original" to form.view.getJSONObject("value"),
-                "touch_offset" to (metrics.ydpi * 10f / 25.4f).coerceIn(36f * metrics.density, 64f * metrics.density))))
-        }))
-        androidx.compose.animation.AnimatedVisibility(sheet, Modifier.matchParentSize(), enter = slideInVertically(tween(250, easing = EaseOutCubic)) { it }, exit = slideOutVertically(tween(250, easing = EaseOutCubic)) { it }) {
-            SwatchSheet(host, form.editor, form.view, { text -> runCatching { form.send(obj("op" to "search", "text" to text)) } }, { color -> form.act(obj("op" to "color", "color" to color)) }) { sheet = false }
-        }
-    }) {
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
+    val use={ close(form.view.getJSONObject("value") to if(form.view.isNull("stops"))null else form.view.number("stops")) }
+    val swatches=@Composable { SwatchSheet(host,form.editor,form.view,
+        {text -> runCatching {form.send(obj("op" to "search","text" to text))}},
+        {color -> form.act(obj("op" to "color","color" to color))}) {sheet=false} }
+    DialogShell(host,form.view.getJSONObject("dialog"),copy.getString(if(sheet)"all_swatches" else "edit"),subpage=sheet,
+        onCancel={close(null)},onBack={sheet=false},onPrimary=use,primaryLabel=copy.getString("use_color"),primaryEnabled=!form.invalidOpen,
+        tag="color-editor",primaryTag="color-use",cancelTag="color-cancel",windowed=request.windowed,header=phone,scrollBody=phone && !sheet,keys=keys,shown=visible,
+        secondary=if(phone && !sheet)({
+            Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                RecentRow(host,form.view,Modifier.weight(1f)) {color -> form.act(obj("op" to "color","color" to color))}
+                DialogButton(copy.getString("all_swatches"),"color-swatches") {sheet=true}
+            }
+        })else null,
+        overlay=if(phone)null else ({
+            androidx.compose.animation.AnimatedVisibility(sheet,Modifier.matchParentSize(),enter=slideInVertically(tween(250,easing=EaseOutCubic)){it},exit=slideOutVertically(tween(250,easing=EaseOutCubic)){it}) {swatches()}
+        }),body={
+            if(phone && sheet)swatches()
+            else ColorFormBody(host,form,copy.getString("edit"),"color-editor-title",heading=!phone,scroll=!phone,pick=if(request.windowed)null else ({
+                picking=true;seenPicking=false
+                val metrics=context.resources.displayMetrics
+                host.dispatch(obj("type" to "color_picker","action" to obj("kind" to "editor","original" to form.view.getJSONObject("value"),
+                    "touch_offset" to (metrics.ydpi*10f/25.4f).coerceIn(36f*metrics.density,64f*metrics.density))))
+            }))
+        },actions=if(phone)null else ({
+
         androidx.compose.animation.Crossfade(sheet, modifier = Modifier.weight(1f), label = "color-footer") { expanded ->
             if (expanded) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ColorPair(form.view, 38.dp, 34.dp, Modifier.testTag("color-mini-pair"))
@@ -231,20 +247,32 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
         DialogButton(copy.getString("use_color"), "color-use", accent = true, enabled = !form.invalidOpen) {
             close(form.view.getJSONObject("value") to (if (form.view.isNull("stops")) null else form.view.number("stops")))
         }
-    }
+            }))
 }
 
 /** The wheel and shapes, the current and new colors, the hex value and the value rows. `pick`
  * shows the eyedropper, `single` shows only the new color, `mode` takes the eyedropper's place at
  * the end of the header, and `transparent` dims the form and names the transparent new color.
  * `extra` follows the value rows. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun ColorFormBody(host: CanvasHost, form: ColorForm, title: String, titleTag: String, pick: (() -> Unit)? = null,
-    copies: Boolean = true, single: Boolean = false, mode: (@Composable () -> Unit)? = null, transparent: String? = null, extra: @Composable ColumnScope.() -> Unit = {}) {
+    copies: Boolean = true, single: Boolean = false, mode: (@Composable () -> Unit)? = null, transparent: String? = null, heading: Boolean = true, scroll: Boolean = true, extra: @Composable ColumnScope.() -> Unit = {}) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
     val colors = LocalPalette.current
     val copy = host.catalog.getJSONObject("native_copy").getJSONObject("color")
     val context = LocalContext.current
     val view = form.view
-    val wide = colorEditorWide()
+    val names=view.array("rows").objects().flatMap {it.array("forms").objects().map {form -> form.getString("label")}}
+    val measurer=rememberTextMeasurer()
+    val density=LocalDensity.current
+    val style=LocalTextStyle.current
+    val formatWidth=remember(names,style,density) { names.maxOfOrNull {with(density){measurer.measure(it,style).size.width.toDp().value}} ?: 0f }
+    val count=view.array("rows").objects().maxOfOrNull {it.array("values").length()} ?: 0
+    val minimum=maxOf(108f+112f+(if(pick != null)48f else 0f)+24f,formatWidth+28f+count*62f+(if(copies)28f else 0f))
+    val layout=JSONObject(Native.dialogUi(obj("kind" to "color_editor_layout","width" to (maxWidth.value-40f).coerceAtLeast(0f),
+        "minimum" to JSONArray(listOf(232f,minimum))).toString()))
+    val wide=layout.getBoolean("split")
+    val compact=layout.getBoolean("compact_fields")
     val dimmed = Modifier.alpha(if (transparent == null) 1f else .4f)
     val wheel = @Composable { modifier: Modifier ->
         Column(modifier.then(dimmed), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(WheelGap)) {
@@ -284,22 +312,24 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
                 if (pick != null) IconButton(pick, Modifier.size(48.dp).clip(ControlShape).background(colors.button).testTag("color-pick")) {
                     SharedIcon("eyedropper", copy.getString("pick_canvas"), Modifier.size(24.dp))
                 }
-                if (mode != null && wide) { hex(); Spacer(Modifier.weight(1f)); mode() }
+                if(compact) { Spacer(Modifier.weight(1f));if(mode != null)mode() }
+                else if (mode != null && wide) { hex(); Spacer(Modifier.weight(1f)); mode() }
                 else { Spacer(Modifier.weight(1f)); hex() }
             }
             if (!single) Row(Modifier.width(108.dp)) {
                 Text(copy.getString("current"), Modifier.weight(1f), color = colors.secondary, fontSize = 11.sp, textAlign = TextAlign.Center)
                 Text(copy.getString("new"), Modifier.weight(1f), color = colors.secondary, fontSize = 11.sp, textAlign = TextAlign.Center)
             }
-            if (mode != null && !wide) Box(Modifier.padding(top = 6.dp)) { mode() }
+            if(compact)hex()
+            if (mode != null && !wide && !compact) Box(Modifier.padding(top = 6.dp)) { mode() }
         }
     }
     val rows = @Composable {
         val formNames = view.array("rows").objects().flatMap { it.array("forms").objects().map { form -> form.getString("label") } }
         Column(dimmed, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("rows").objects().forEachIndexed { row, shown ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                val format=@Composable {
+                    Row(Modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         var open by remember { mutableStateOf(false) }
                         Box {
                             Row(Modifier.clip(ControlShape).clickable { open = true }.padding(horizontal = 6.dp, vertical = 6.dp).testTag("color-format-$row")
@@ -316,6 +346,8 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
                         }
                         if (!shown.isNull("space")) Badge(shown.getString("space"))
                     }
+                }
+                val values=@Composable {
                     shown.array("values").objects().forEachIndexed { index, value ->
                         val name = "$row-$index"
                         val target = obj("kind" to "value", "row" to row, "index" to index)
@@ -326,6 +358,12 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
                             { cancel -> form.act(obj("op" to "end_scrub", "cancel" to cancel), name) })
                     }
                     if (copies) CopyButton(copy, "color-copy-$row") { copyText(context, shown.getString("copy")) }
+                }
+                if(compact)Column(Modifier.fillMaxWidth()) {
+                    format()
+                    FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)) {values()}
+                } else Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.weight(1f)) {format()};values()
                 }
             }
             view.objectOrNull("intensity")?.let { value ->
@@ -344,14 +382,15 @@ internal class ColorForm(private val host: CanvasHost, opened: JSONObject, val r
             extra()
         }
     }
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        DialogTitle(title, titleTag)
+    Column(Modifier.then(if(scroll)Modifier.verticalScroll(rememberScrollState()) else Modifier).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        if(heading)DialogTitle(title, titleTag)
         if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             wheel(Modifier)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) { header(); rows() }
         } else Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             header(); wheel(Modifier.align(Alignment.CenterHorizontally)); rows()
         }
+    }
     }
 }
 

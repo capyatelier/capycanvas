@@ -35,17 +35,28 @@ import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
+
+private val LocalDialogFocus=compositionLocalOf<FocusRequester?> {null}
+
+@Composable internal fun <T> rememberDialogContent(current:T?):T? {
+    var retained by remember {mutableStateOf<T?>(null)}
+    if(current != null)SideEffect {retained=current}
+    return current ?: retained
+}
 
 internal data class SearchState(val focused: Boolean, val text: String, val clear: () -> Unit, val focus: FocusRequester)
 internal data class DialogResponse(val label: String, val tag: String, val accent: Boolean = false,
@@ -54,8 +65,8 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
 @Composable internal fun DialogShell(host: CanvasHost, intent: JSONObject, title: String, subpage: Boolean = false,
     search: SearchState? = null, onCancel: () -> Unit, onBack: () -> Unit = onCancel, onPrimary: () -> Unit = {},
     primaryEnabled: Boolean = true, primaryLabel: String = "", tag: String = "dialog-shell", naturalWidth: Dp = 720.dp,
-    responses: List<DialogResponse> = emptyList(), shown: Boolean = true, scrollBody: Boolean = true, body: @Composable (PaddingValues) -> Unit,
-    actions: @Composable RowScope.() -> Unit = {}) {
+    responses: List<DialogResponse> = emptyList(), shown: Boolean = true, scrollBody: Boolean = true, header: Boolean = true, windowed: Boolean = true, primaryTag: String? = null, cancelTag: String? = null,
+    secondary: (@Composable () -> Unit)? = null, navigation: (@Composable () -> Unit)? = null, keys: ((KeyEvent) -> Boolean)? = null, overlay: (@Composable BoxScope.() -> Unit)? = null, body: @Composable (PaddingValues) -> Unit, actions: (@Composable RowScope.() -> Unit)? = null) {
     val colors = LocalPalette.current
     val density = LocalDensity.current
     val phone = host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")
@@ -68,12 +79,16 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     val currentSearch by rememberUpdatedState(search)
     val currentSubpage by rememberUpdatedState(subpage)
     val focus = remember { FocusRequester() }
+    val active=visibility.currentState || visibility.targetState
+    val ancestor=LocalDialogFocus.current
+    val parentFocus=remember(active) {ancestor ?: host.dialogFocus.lastOrNull {it !== focus} ?: host.workspaceFocus}
+    val opener=remember(active) {host.workspaceOpener}
     val focusManager = LocalFocusManager.current
     val scroll = rememberScrollState()
     LaunchedEffect(shown) { if(shown)scroll.scrollTo(0) }
     val currentBody by rememberUpdatedState(body)
     val content = remember { movableContentOf<PaddingValues> { currentBody(it) } }
-    val header = remember(intent.toString(),subpage) { JSONObject(Native.dialogUi(obj("kind" to "header","intent" to intent,"subpage" to subpage).toString())) }
+    val headerView = remember(intent.toString(),subpage) { JSONObject(Native.dialogUi(obj("kind" to "header","intent" to intent,"subpage" to subpage).toString())) }
     fun escape() {
         val search = currentSearch
         when (org.json.JSONTokener(Native.dialogUi(obj("kind" to "escape","subpage" to currentSubpage,"search_focused" to (search?.focused == true),
@@ -84,26 +99,33 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
         }
     }
     val keyHandler: (KeyEvent) -> Boolean = { event ->
-        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) { if (event.action == KeyEvent.ACTION_DOWN) escape();true } else false
+        keys?.invoke(event) ?: if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) { if (event.action == KeyEvent.ACTION_DOWN) escape();true } else false
     }
     val currentKeys by rememberUpdatedState(keyHandler)
     DisposableEffect(host,phone != null,shown,intent.getBoolean("modal")) {
+        if (phone != null && shown)host.dialogFocus.add(focus)
         val dock = host.workspaceInteraction?.takeIf { phone != null && shown && intent.getBoolean("modal") }
         dock?.popup(true)
         if(dock != null)host.retirePhoneContacts()
-        onDispose { dock?.popup(false) }
+        onDispose {
+            dock?.popup(false)
+            host.dialogFocus.remove(focus)
+        }
     }
-    DisposableEffect(host,phone != null,shown) {
-        val opener = host.workspaceOpener
-        if (phone != null && shown) host.workspaceFocus.saveFocusedChild()
-        onDispose { if (phone != null && shown && host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null) {
-            if(opener?.requestFocus() != true)host.workspaceFocus.restoreFocusedChild()
-        } }
+    DisposableEffect(host,phone != null,active) {
+        if(phone != null && active)parentFocus.saveFocusedChild()
+        onDispose {
+            if(phone != null && active && host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null) {
+                if(host.dialogFocus.isEmpty()) {
+                    if(opener?.requestFocus() != true)host.workspaceFocus.restoreFocusedChild()
+                } else if(host.dialogFocus.lastOrNull() === parentFocus)parentFocus.restoreFocusedChild()
+            }
+        }
     }
     DisposableEffect(host,shown) {
         val keys: (KeyEvent) -> Boolean = { event -> currentKeys(event) }
-        if(shown)host.dialogKeyHandler = keys
-        onDispose { if (host.dialogKeyHandler === keys) host.dialogKeyHandler = null }
+        if(shown)host.dialogKeys.add(keys)
+        onDispose { host.dialogKeys.remove(keys) }
     }
     BackHandler(phone == null && shown) { escape() }
     if (!visibility.currentState && !visibility.targetState) return
@@ -122,27 +144,33 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
         val frame = intent.getJSONObject("frame")
         val alert = frame.getString("kind") == "alert"
         val canvas = mode == "canvas_panel"
+        val floatingArea=if(phone==null && !alert)obj("x" to 0,"y" to 0,"width" to maxWidth.value,"height" to maxHeight.value) else visible
         val floatingWidth = (org.json.JSONTokener(Native.dialogUi(obj("kind" to "floating_width","window" to maxWidth.value,"natural" to naturalWidth.value).toString())).nextValue() as Number).toFloat()
         val card = @Composable {
             if (canvas) Surface(Modifier.width(IntrinsicSize.Min).widthIn(max = naturalWidth).testTag(tag)
                 .focusRequester(focus).onPreviewKeyEvent { currentKeys(it.nativeKeyEvent) }.focusable(),shape = SurfaceShape,color = colors.panel) {
                 Column {
-                    DialogHeader(host,header,title,tag,onCancel,onBack,onPrimary,primaryEnabled,primaryLabel)
+                    DialogHeader(host,headerView,title,tag,onCancel,onBack,onPrimary,primaryEnabled,primaryLabel,primaryTag,cancelTag)
                     HorizontalDivider(color = colors.dialogSeparator)
                     content(PaddingValues(16.dp))
                 }
             }
-            else if (alert) AlertShell(host,title,tag,frame.optBoolean("prefer_wide"),visible,responses,
+            else if (alert) AlertShell(host,title,tag,frame.optBoolean("prefer_wide"),visible,responses,intent.getString("role")=="alert",
                 Modifier.focusRequester(focus).onPreviewKeyEvent { currentKeys(it.nativeKeyEvent) }.focusable(),content)
-            else Surface(Modifier.padding(16.dp).widthIn(max = floatingWidth.dp).fillMaxWidth().heightIn(max = (visible.number("height")-32f).coerceAtLeast(0f).dp)
+            else Surface(Modifier.padding(16.dp).widthIn(max = floatingWidth.dp).fillMaxWidth().heightIn(max = (floatingArea.number("height")-32f).coerceAtLeast(0f).dp)
                 .testTag(tag).focusRequester(focus).onPreviewKeyEvent { currentKeys(it.nativeKeyEvent) }.focusable(),shape = SurfaceShape,color = colors.settingsBackground) {
-                Column {
-                    DialogTitle(title,"$tag-title")
-                    Box(Modifier.weight(1f,fill = false).then(if(scrollBody)Modifier.verticalScroll(scroll) else Modifier)) { content(PaddingValues(16.dp)) }
-                    PickerFooter(tag,actions)
+                Box {
+                    Column {
+                        navigation?.invoke()
+                        if(header)DialogTitle(title,"$tag-title")
+                        Box(Modifier.weight(1f,fill = false).then(if(scrollBody)Modifier.verticalScroll(scroll) else Modifier)) { content(PaddingValues(16.dp)) }
+                        if(actions != null || secondary != null)PickerFooter(tag) { secondary?.invoke();actions?.invoke(this) }
+                    }
+                    overlay?.invoke(this)
                 }
             }
         }
+        CompositionLocalProvider(LocalDialogFocus provides focus) {
         if (mode == "page") {
             if (intent.getBoolean("modal")) DialogCapture(Color.Transparent)
             Surface(Modifier.placedAbsolute(presentation!!.getJSONObject("bounds"),density.density).testTag(tag)
@@ -156,9 +184,15 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
                     } else currentKeys(key)
                 }.focusable(),color = colors.settingsBackground) {
                 Column {
-                    DialogHeader(host,header,title,tag,onCancel,onBack,onPrimary,primaryEnabled,primaryLabel)
-                    HorizontalDivider(color = colors.dialogSeparator)
-                    Box(Modifier.weight(1f).fillMaxWidth().then(if(scrollBody)Modifier.verticalScroll(scroll) else Modifier)) { content(PaddingValues(16.dp)) }
+                    navigation?.invoke()
+                    if(header) {
+                        DialogHeader(host,headerView,title,tag,onCancel,onBack,onPrimary,primaryEnabled,primaryLabel,primaryTag,cancelTag)
+                        HorizontalDivider(color = colors.dialogSeparator)
+                    }
+                    Column(Modifier.weight(1f).fillMaxWidth().then(if(scrollBody)Modifier.verticalScroll(scroll) else Modifier)) {
+                        Box(if(scrollBody)Modifier else Modifier.weight(1f)) { content(PaddingValues(16.dp)) }
+                        secondary?.invoke()
+                    }
                 }
             }
             if(!shown)DialogCapture(Color.Transparent)
@@ -178,11 +212,12 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
                 if (measured?.toString() != next.toString()) measured = next
                 layout(constraints.maxWidth,constraints.maxHeight) { bounds?.let { child.place((it.number("x")*density.density).roundToInt(),(it.number("y")*density.density).roundToInt()) } }
             }
-        } else if (phone != null) {
+        } else if (phone != null || !windowed) {
             if (intent.getBoolean("modal")) DialogCapture(Color.Black.copy(alpha = .32f))
-            Box(Modifier.placedAbsolute(visible,density.density),contentAlignment = Alignment.Center) { card() }
+            Box(Modifier.placedAbsolute(floatingArea,density.density),contentAlignment = Alignment.Center) { card() }
         } else Dialog({ onCancel() },DialogProperties(usePlatformDefaultWidth = false)) {
             Box(contentAlignment = Alignment.Center) { card() }
+        }
         }
     }
 }
@@ -194,7 +229,7 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
 }
 
 @Composable private fun AlertShell(host: CanvasHost,title: String,tag: String,preferWide: Boolean,visible: JSONObject,
-    responses: List<DialogResponse>,modifier: Modifier,body: @Composable (PaddingValues) -> Unit) {
+    responses: List<DialogResponse>,centre:Boolean,modifier: Modifier,body: @Composable (PaddingValues) -> Unit) {
     val density = LocalDensity.current
     val font = with(density) { LocalTextStyle.current.fontSize.toPx()/density.density }
     val colors = LocalPalette.current
@@ -202,7 +237,7 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     Surface(modifier.testTag(tag),shape = SurfaceShape,color = colors.settingsBackground) {
     SubcomposeLayout { constraints ->
         val heading = subcompose("heading") { DialogTitle(title,"$tag-title") }.single()
-        val content = subcompose("body") { Box(Modifier.verticalScroll(scroll)) { body(PaddingValues()) } }.single()
+        val content = subcompose("body") { ProvideTextStyle(LocalTextStyle.current.copy(textAlign = if(centre)TextAlign.Center else TextAlign.Start)) { Box(Modifier.verticalScroll(scroll),contentAlignment = Alignment.TopCenter) { body(PaddingValues()) } } }.single()
         val buttons = responses.mapIndexed { index,response -> subcompose("response-$index") {
             DialogButton(response.label,response.tag,response.accent,response.enabled,modifier = Modifier.fillMaxWidth(),multiline = true,onClick = response.action)
         }.single() }
@@ -232,34 +267,54 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     }
 }
 
-@Composable private fun DialogHeader(host: CanvasHost,header: JSONObject,title: String,tag: String,onCancel: () -> Unit,
-    onBack: () -> Unit,onPrimary: () -> Unit,primaryEnabled: Boolean,primaryLabel: String) {
+@Composable internal fun DialogHeader(host: CanvasHost,header: JSONObject,title: String,tag: String,onCancel: () -> Unit,
+    onBack: () -> Unit,onPrimary: () -> Unit,primaryEnabled: Boolean,primaryLabel: String,primaryTag: String? = null,cancelTag: String? = null) {
     Layout(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 8.dp),content = {
         Box(Modifier.width(56.dp),contentAlignment = Alignment.CenterStart) {
-            if (!header.isNull("start")) IconButton({ if (header.getString("start") == "back") onBack() else onCancel() },Modifier.testTag("$tag-cancel")) {
+            if (!header.isNull("start")) IconButton({ if (header.getString("start") == "back") onBack() else onCancel() },Modifier.testTag(cancelTag ?: "$tag-cancel")) {
                 SharedIcon(if (header.getString("start") == "back") "back" else "close",host.bootstrap!!.getJSONObject("common").getString(if (header.getString("start") == "back") "back" else "cancel"))
             }
         }
-        Text(title,textAlign = TextAlign.Center,maxLines = 1,overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        Text(title,Modifier.testTag("$tag-title").semantics {heading()},fontWeight=FontWeight.Bold,textAlign = TextAlign.Center,maxLines = 1,overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         Box(Modifier.widthIn(min = 56.dp),contentAlignment = Alignment.CenterEnd) {
             when (header.optString("end")) {
-                "primary" -> DialogButton(primaryLabel,"$tag-confirm",accent = true,enabled = primaryEnabled,onClick = onPrimary)
-                "close" -> TextButton(onCancel,Modifier.testTag("$tag-done")) { Text(host.bootstrap!!.getJSONObject("common").getString("done")) }
+                "primary" -> DialogButton(primaryLabel,primaryTag ?: "$tag-confirm",accent = true,enabled = primaryEnabled,onClick = onPrimary)
+                "close" -> DialogButton(host.bootstrap!!.getJSONObject("common").getString("done"),"$tag-done",accent=true,enabled=primaryEnabled,onClick=onCancel)
             }
         }
     }) { (start,title,end),constraints ->
         val width = if(constraints.hasBoundedWidth)constraints.maxWidth else
             maxOf(start.maxIntrinsicWidth(constraints.maxHeight),end.maxIntrinsicWidth(constraints.maxHeight))*2+title.maxIntrinsicWidth(constraints.maxHeight)
-        val endPlace = end.measure(Constraints(maxWidth = width/2,maxHeight = constraints.maxHeight))
-        val slot = maxOf(56.dp.roundToPx(),endPlace.width).coerceAtMost(width/2)
-        val startPlace = start.measure(Constraints.fixedWidth(slot))
-        val titlePlace = title.measure(Constraints.fixedWidth((width-2*slot).coerceAtLeast(0)))
+        val startPlace = start.measure(Constraints(maxWidth=56.dp.roundToPx(),maxHeight=constraints.maxHeight))
+        val endPlace = end.measure(Constraints(maxWidth=(width-startPlace.width-48.dp.roundToPx()).coerceAtLeast(0),maxHeight=constraints.maxHeight))
+        val remaining=width-startPlace.width-endPlace.width
+        val natural=title.maxIntrinsicWidth(constraints.maxHeight)
+        val titleWidth=minOf(natural,remaining).coerceAtLeast(0)
+        val titlePlace = title.measure(Constraints.fixedWidth(titleWidth))
+        val titleX=((width-titleWidth)/2).coerceIn(startPlace.width,(width-endPlace.width-titleWidth).coerceAtLeast(startPlace.width))
         val height = maxOf(constraints.minHeight,startPlace.height,titlePlace.height,endPlace.height)
         layout(width,height) {
             startPlace.placeRelative(0,(height-startPlace.height)/2)
-            titlePlace.placeRelative(slot,(height-titlePlace.height)/2)
+            titlePlace.placeRelative(titleX,(height-titlePlace.height)/2)
             endPlace.placeRelative(width-endPlace.width,(height-endPlace.height)/2)
         }
     }
 
+}
+
+@Composable internal fun PickerFooter(tag: String, content: @Composable RowScope.() -> Unit) {
+    HorizontalDivider(Modifier.testTag("$tag-divider"), color = LocalPalette.current.dialogSeparator)
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 20.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
+}
+
+@Composable internal fun DialogTitle(text: String, tag: String) =
+    Text(text, Modifier.fillMaxWidth().testTag(tag).semantics {heading()}, fontWeight = FontWeight.Bold, fontSize = 16.sp, textAlign = TextAlign.Center)
+
+@Composable internal fun DialogButton(label: String, tag: String, accent: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, multiline: Boolean = false, onClick: () -> Unit) {
+    val colors = LocalPalette.current
+    Button(onClick, modifier.then(if(multiline)Modifier.heightIn(min = 34.dp) else Modifier.height(34.dp)).testTag(tag), enabled = enabled, shape = ControlShape, contentPadding = PaddingValues(horizontal = 16.dp),
+        colors = if (accent) ButtonDefaults.buttonColors() else ButtonDefaults.buttonColors(containerColor = colors.button, contentColor = colors.text)) {
+        Text(label, fontWeight = FontWeight.Medium,maxLines=if(multiline)Int.MAX_VALUE else 1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+    }
 }

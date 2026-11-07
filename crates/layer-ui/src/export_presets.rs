@@ -23,6 +23,11 @@ impl ExportPresets {
     pub const MAX_NAMES: usize = 64;
     pub const MAX_PROFILE_BYTES: usize = 16 * 1024 * 1024;
     pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
+    pub fn replace_encoded<'a>(current: &[u8], expected: &[u8], next: &'a [u8]) -> Result<&'a [u8],ColorFeatureError> {
+        if Self::restore(current) != Self::restore(expected) { return Err(ColorFeatureError::PresetChanged); }
+        Self::decode(next)?;
+        Ok(next)
+    }
     pub const DESTINATIONS: [&'static str; 4] = [
         "Web / Share",
         "Wide-color image",
@@ -655,4 +660,15 @@ fn worker_protocol_validates_before_mutation_and_lists_only_names() {
         .unwrap();
     assert_eq!(view.recipe, Some(recipe));
     assert!(!view.changed);
+}
+
+#[test]
+fn encoded_replacement_refuses_changed_or_invalid_libraries() {
+    let original=ExportPresets::default().encode().unwrap();
+    let mut changed=ExportPresets::default();
+    changed.save("Delivery",ExportRecipe::web_share()).unwrap();
+    let next=changed.encode().unwrap();
+    assert_eq!(ExportPresets::replace_encoded(&original,&original,&next).unwrap(),next);
+    assert_eq!(ExportPresets::replace_encoded(&next,&original,&next),Err(ColorFeatureError::PresetChanged));
+    assert!(ExportPresets::replace_encoded(&original,&original,b"invalid").is_err());
 }

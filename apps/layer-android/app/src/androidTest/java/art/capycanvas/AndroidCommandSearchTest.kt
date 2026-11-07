@@ -128,23 +128,36 @@ class AndroidCommandSearchTest {
         if (::scenario.isInitialized) scenario.close()
     }
     @Test fun tabletSearchUsesItsKeyboardVisibleAreaAndPlacedFocus() {
-        for (theme in listOf("light","dark")) {
-            action(obj("type" to "set_theme","theme" to theme));open()
-            val (root,_) = checkNotNull(tagged("command-search"))
-            main { root.view.windowInsetsController?.show(android.view.WindowInsets.Type.ime()) }
-            waitFor("Search has a native keyboard") { root.view.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime()) }
-            val density = instrumentation.targetContext.resources.displayMetrics.density
-            val available = (root.view.height-root.view.rootWindowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom)/density
-            val expected = (available/5f).coerceIn(48f,192f)*density
-            waitFor("Tablet search uses its keyboard-visible height") { tagged("command-bar")?.second?.boundsInRoot?.top?.let { abs(it-expected)<=1f } == true }
-            assertEquals(1280f,mainWindow.width/density,.5f)
-            assertNull(host.snapshot!!.getJSONObject("layout").objectOrNull("phone"))
-            instrumentation.sendStringSync("undo")
-            waitFor("Placed search accepts typing without another tap") { search()?.optString("query") == "undo" }
-            main { root.view.windowInsetsController?.hide(android.view.WindowInsets.Type.ime()) }
-            waitFor("Search keyboard closes") { !root.view.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime()) }
-            tapTag("command-close",MotionEvent.TOOL_TYPE_FINGER)
-            waitFor("Search closes after the native focus check") { tagged("command-bar") == null && mainWindow.hasWindowFocus() }
+        val originalTheme=state().getJSONObject("settings").get("theme")
+        val ime=android.view.WindowInsets.Type.ime()
+        val keyboard=mainWindow.rootWindowInsets.isVisible(ime)
+        try {
+            for (theme in listOf("light","dark")) {
+                action(obj("type" to "set_theme","theme" to theme));open()
+                val (root,_) = checkNotNull(tagged("command-search"))
+                main { root.view.windowInsetsController?.show(android.view.WindowInsets.Type.ime()) }
+                waitFor("Search has a native keyboard") { root.view.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime()) }
+                val density = instrumentation.targetContext.resources.displayMetrics.density
+                val available = (root.view.height-root.view.rootWindowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom)/density
+                val expected = (available/5f).coerceIn(48f,192f)*density
+                waitFor("Tablet search uses its keyboard-visible height") { tagged("command-bar")?.second?.boundsInRoot?.top?.let { abs(it-expected)<=1f } == true }
+                assertEquals(1280f,mainWindow.width/density,.5f)
+                assertNull(host.snapshot!!.getJSONObject("layout").objectOrNull("phone"))
+                instrumentation.sendStringSync("undo")
+                waitFor("Placed search accepts typing without another tap") { search()?.optString("query") == "undo" }
+                main { root.view.windowInsetsController?.hide(android.view.WindowInsets.Type.ime()) }
+                waitFor("Search keyboard closes") { !root.view.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime()) }
+                tapTag("command-close",MotionEvent.TOOL_TYPE_FINGER)
+                waitFor("Search closes after the native focus check") { tagged("command-bar") == null && mainWindow.hasWindowFocus() }
+            }
+        } finally {
+            main { tagged("command-search")?.first?.view?.windowInsetsController?.hide(ime) }
+            if(search()!=null)action(obj("type" to "command_search","action" to obj("type" to "close")))
+            waitFor("Tablet search restores its window") { search()==null && tagged("command-bar")==null && mainWindow.hasWindowFocus() }
+            main { mainWindow.windowInsetsController?.let {if(keyboard)it.show(ime) else it.hide(ime)} }
+            waitFor("Tablet search restores the keyboard") {mainWindow.rootWindowInsets.isVisible(ime)==keyboard}
+            action(obj("type" to "set_theme","theme" to originalTheme))
+            waitFor("Tablet search restores its theme") {state().getJSONObject("settings").get("theme")==originalTheme}
         }
     }
     @Test fun nativeInputConnectionCompositionKeepsCandidateKeysInsideSearch() {
@@ -414,6 +427,18 @@ class AndroidCommandSearchTest {
             main { tagged(tag)!!.second.config[SemanticsActions.OnClick].action!!() }
             SystemClock.sleep(150)
         }
+        fun shell(tag:String) {
+            waitFor("$tag has finite window bounds") {
+                val bounds=tagged(tag)?.second?.boundsInRoot ?: return@waitFor false
+                val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")
+                if(phone==null || tag=="keymap-import")bounds.width.isFinite() && bounds.height.isFinite() && bounds.width>0 && bounds.height>0
+                else {
+                    val page=tagged("preferences-dialog")?.second?.boundsInRoot ?: return@waitFor false
+                    kotlin.math.abs(bounds.left-page.left)<1 && kotlin.math.abs(bounds.top-page.top)<1 &&
+                        kotlin.math.abs(bounds.width-page.width)<1 && kotlin.math.abs(bounds.height-page.height)<1
+                }
+            }
+        }
         fun keymap() = state().getJSONObject("settings").optJSONObject("keymap")?.getString("id")
         action(obj("type" to "invoke", "command" to "keyboard_shortcuts"))
         press("keymap-preset")
@@ -421,10 +446,12 @@ class AndroidCommandSearchTest {
         waitFor("Krita keymap") { keymap() == "krita" }
         press("keymap-menu")
         press("keymap-differences")
-        waitFor("differences") { tagged("keymap-details") != null && labelled("5") != null }
+        waitFor("differences") { tagged("keymap-details") != null && tagged("keymap-difference-0") != null }
+        shell("keymap-details")
         action(obj("type" to "preferences", "action" to obj("type" to "keymap_details", "open" to false)))
         val text = obj("format" to "capycanvas-keymap", "version" to 1, "keymap" to obj("id" to "photoshop", "revision" to 1)).toString()
         main { host.preference(obj("type" to "import_keymap", "text" to text)) }
+        shell("keymap-import")
         press("keymap-confirm-import")
         waitFor("imported keymap") { keymap() == "photoshop" }
         action(obj("type" to "preferences", "action" to obj("type" to "edit_shortcut", "id" to "command.Move")))

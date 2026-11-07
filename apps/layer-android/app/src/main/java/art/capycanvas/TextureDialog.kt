@@ -92,13 +92,13 @@ internal fun JSONObject.paperId(): String? = if (isNull("id")) null else getStri
     }
 }
 
-private class TexturePicker(val tiles: List<JSONObject>, val import: JSONObject?, val selected: Int, val key: String)
+private class TexturePicker(val dialog: JSONObject, val tiles: List<JSONObject>, val import: JSONObject?, val selected: Int, val key: String)
 private data class Pick(val id: String?)
 
 private fun texturePicker(state: JSONObject?, layer: Long): TexturePicker? {
     val properties = state?.objectOrNull("layer_properties")?.takeIf { !it.isNull("layer") && it.getLong("layer") == layer } ?: return null
     return properties.array("controls").objects().firstNotNullOfOrNull { control ->
-        control.objectOrNull("paper")?.let { TexturePicker(it.array("tiles").objects(), it.objectOrNull("import"), control.getJSONObject("value").getInt("value"), control.getString("key")) }
+        control.objectOrNull("paper")?.let { TexturePicker(it.getJSONObject("dialog"),it.array("tiles").objects(), it.objectOrNull("import"), control.getJSONObject("value").getInt("value"), control.getString("key")) }
     }
 }
 
@@ -123,11 +123,12 @@ private fun documentEpoch(state: JSONObject?) = state?.objectOrNull("document_fi
 }
 
 @Composable internal fun TextureDialogLayer(host: CanvasHost) {
-    val request = host.textureDialog ?: return
-    key(request) { TextureDialog(host, request) }
+    val current=host.textureDialog
+    val request=rememberDialogContent(current) ?: return
+    key(request) {TextureDialog(host,request,current != null)}
 }
 
-@Composable private fun TextureDialog(host: CanvasHost, request: TextureDialogRequest) {
+@Composable private fun TextureDialog(host: CanvasHost, request: TextureDialogRequest, visible:Boolean) {
     val copy = host.catalog.getJSONObject("native_copy").getJSONObject("paper")
     val common = host.bootstrap!!.getJSONObject("common")
     val state = host.snapshot?.objectOrNull("state")
@@ -168,10 +169,21 @@ private fun documentEpoch(state: JSONObject?) = state?.objectOrNull("document_fi
     val scroll = rememberScrollState()
     val placed = remember { arrayOfNulls<LayoutCoordinates>(2) }
     val margin = with(LocalDensity.current) { TexturePageEnd.toPx() }
-    PickerDialog(host, request.windowed, "texture-dialog", keys, { host.textureDialog = null }, page = {
-        Column(Modifier.padding(start = 20.dp, top = 20.dp, end = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            DialogTitle(copy.getString("choose"), "texture-dialog-title")
-            BoxWithConstraints(Modifier.weight(1f, fill = false).height(maxOf(colorEditorBodyHeight(), threeTextureRows()) + TexturePageEnd)) {
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
+    DialogShell(host,picker.dialog,copy.getString("choose"),onCancel={host.textureDialog=null},onPrimary=::use,
+        primaryLabel=copy.getString("use_texture"),primaryTag="texture-use",cancelTag="texture-cancel",tag="texture-dialog",
+        header=phone,windowed=request.windowed,keys=keys,scrollBody=false,shown=visible,secondary=if(picker.import == null)null else ({
+        picker.import?.let { import ->
+            DialogButton(import.getString("label"), "texture-import",modifier=if(phone)Modifier.padding(16.dp) else Modifier) {
+                host.textureDialog = null
+                host.dispatch(obj("type" to "effect", "action" to import.getJSONObject("action")))
+            }
+        }
+        }),body={
+
+        Column(Modifier.then(if(phone)Modifier.fillMaxSize() else Modifier).padding(start = 20.dp, top = 20.dp, end = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            if(!phone)DialogTitle(copy.getString("choose"), "texture-dialog-title")
+            BoxWithConstraints(Modifier.weight(1f,fill=phone).then(if(phone)Modifier else Modifier.height(maxOf(colorEditorBodyHeight(), threeTextureRows()) + TexturePageEnd))) {
                 val columns = ((maxWidth + TextureGap) / (TextureFrame + TextureGap)).toInt().coerceIn(1, 6)
                 Column(Modifier.fillMaxSize().onPlaced { placed[0] = it }.panelScroll(scroll).padding(bottom = TexturePageEnd).testTag("texture-grid"), verticalArrangement = Arrangement.spacedBy(TextureRowGap)) {
                     picker.tiles.withIndex().chunked(columns).forEach { row ->
@@ -195,33 +207,29 @@ private fun documentEpoch(state: JSONObject?) = state?.objectOrNull("document_fi
             }
             runCatching { focus.requestFocus() }
         }
-    }) {
-        picker.import?.let { import ->
-            DialogButton(import.getString("label"), "texture-import") {
-                host.textureDialog = null
-                host.dispatch(obj("type" to "effect", "action" to import.getJSONObject("action")))
-            }
-        }
+        },actions=if(phone)null else ({
+
         Spacer(Modifier.weight(1f))
         DialogButton(common.getString("cancel"), "texture-cancel") { host.textureDialog = null }
         DialogButton(copy.getString("use_texture"), "texture-use", accent = true) { use() }
-    }
-    renaming?.let { action -> PaperRenameDialog(host, action) { renaming = null } }
+            }))
+
+    rememberDialogContent(renaming)?.let { action -> PaperRenameDialog(host,action,renaming != null) {renaming=null} }
 }
 
-@Composable private fun PaperRenameDialog(host: CanvasHost, action: JSONObject, close: () -> Unit) {
+@Composable private fun PaperRenameDialog(host: CanvasHost, action: JSONObject, visible:Boolean, close: () -> Unit) {
     val copy = host.catalog.getJSONObject("native_copy").getJSONObject("paper")
     var name by remember { mutableStateOf(action.getString("name")) }
     val error = remember(name, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "paper_name_error", "name" to name).toString(), host.languageTag)).getString("text") }
-    AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("paper-rename-dialog"),
-        title = { Text(copy.getString("rename_title")) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("paper-rename-name"), maxLength = 64, focusRequest = 1, background = LocalPalette.current.dialogField)
-            if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
-        } },
-        dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },
-        confirmButton = { TextButton({ close(); host.dispatch(obj("type" to "effect", "action" to JSONObject(action.toString()).put("name", name))) },
-            enabled = error.isEmpty(), modifier = Modifier.testTag("paper-rename-save")) { Text(copy.getString("rename")) } })
+    val use={close();host.dispatch(obj("type" to "effect","action" to JSONObject(action.toString()).put("name",name)))}
+    DialogShell(host,copy.getJSONObject("rename_dialog"),copy.getString("rename_title"),onCancel=close,onPrimary=use,
+        primaryEnabled=error.isEmpty(),primaryLabel=copy.getString("rename"),primaryTag="paper-rename-save",tag="paper-rename-dialog",shown=visible,
+        responses=listOf(DialogResponse(host.bootstrap!!.getJSONObject("common").getString("cancel"),"paper-rename-cancel",action=close),
+            DialogResponse(copy.getString("rename"),"paper-rename-save",accent=true,enabled=error.isEmpty(),action=use)),
+        body={ padding -> Column(Modifier.padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            CoreTextField(name,{name=it},Modifier.fillMaxWidth().testTag("paper-rename-name"),maxLength=64,focusRequest=1,background=LocalPalette.current.dialogField)
+            if(error.isNotEmpty())Text(error,color=MaterialTheme.colorScheme.error)
+        } })
 }
 
 internal val TextureFrame = 102.dp

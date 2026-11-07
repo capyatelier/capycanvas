@@ -97,3 +97,19 @@ pub extern "system" fn Java_art_capycanvas_Native_paletteFile(
     or_throw(&mut env, result, std::ptr::null_mut())
     })
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_replaceExportPresets(
+    mut env: JNIEnv, _: JClass, current: JByteArray, expected: JByteArray, next: JByteArray,
+) -> jni::sys::jbyteArray {
+    crate::jni_entry!(env, {
+        let result = (|| -> Result<_,ColorCallError> {
+            let current=env.convert_byte_array(current).map_err(error)?;
+            let expected=env.convert_byte_array(expected).map_err(error)?;
+            let next=env.convert_byte_array(next).map_err(error)?;
+            let bytes=layer_ui::ExportPresets::replace_encoded(&current,&expected,&next)?;
+            Ok(env.byte_array_from_slice(bytes).map_err(error)?.into_raw())
+        })();
+        color_or_throw(&mut env,result,std::ptr::null_mut())
+    })
+}

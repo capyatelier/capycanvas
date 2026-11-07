@@ -285,7 +285,8 @@ class AndroidColorPanelTest {
             assertEquals("the title is centered", box("color-editor").center.x, box("color-editor-title").center.x, 1.5f)
             assertEquals("Current and New match the eyedropper height", box("color-pair").height, box("color-pick").height, 1f)
             for (tag in listOf("color-pick", "color-value-hex")) assertEquals("$tag centers on Current and New", box("color-pair").center.y, box(tag).center.y, 1f)
-            val opened = box("color-editor").size
+            val openedBounds = box("color-editor")
+            val opened = openedBounds.size
             assertTrue(description("color-value-hex").endsWith("#FFFFFF"))
             assertEquals("remembered row format", "HSL", description("color-format-1"))
             type("hex", "#CA4B35")
@@ -295,6 +296,7 @@ class AndroidColorPanelTest {
             assertNotNull("a refused number stays open", findTag("color-value-0-0-input"))
             assertNotNull(findTag("color-editor-error"))
             assertFalse(enabled("color-use"))
+            assertEquals("Typing preserves tablet editor coordinates", openedBounds, box("color-editor"))
             fullCapture("edit-color-refused-$theme")
             instrumentation.runOnMainSync { findTag("color-value-0-0-input")!!.first.view.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)) }
             waitFor("refusal dismissed") { findTag("color-value-0-0-input") == null }

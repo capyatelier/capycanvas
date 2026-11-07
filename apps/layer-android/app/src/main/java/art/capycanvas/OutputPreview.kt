@@ -14,14 +14,22 @@ internal class OutputPreview(private val host:CanvasHost) {
     var error by mutableStateOf<Exception?>(null)
     var clipped by mutableStateOf(0L)
     var rangeBlocked by mutableStateOf(false)
+    var ready by mutableStateOf(false)
+        private set
+    var transparent by mutableStateOf<Boolean?>(null)
+        private set
+    private var requested:JSONObject?=null
+    private var pending:JSONObject?=null
     private var control=0L
     private var closed=false
     private var after:(()->Unit)?=null
-    fun invalidate(){images=emptyList();sdr=null;error=null;clipped=0;rangeBlocked=false}
+    fun invalidate(){requested=null;pending=null;if(busy&&control!=0L)Native.captureCancel(control);images=emptyList();sdr=null;error=null;clipped=0;rangeBlocked=false;ready=false;transparent=null}
     fun close(done:(()->Unit)?=null){closed=true;after=done;if(control!=0L)Native.captureCancel(control);if(!busy){after?.invoke();after=null}}
     fun prepare(recipe:JSONObject) {
-        if(busy||closed||host.drawingTabs.switching)return
-        busy=true;invalidate();control=Native.captureControl()
+        if(closed||host.drawingTabs.switching)return
+        requested=recipe
+        if(busy){pending=recipe;Native.captureCancel(control);return}
+        busy=true;invalidate();requested=recipe;control=Native.captureControl()
         host.viewModelScope.launch {
             val registered=control;host.drawingTabs.registerInspection(registered,currentCoroutineContext().job)
             try {
@@ -30,9 +38,9 @@ internal class OutputPreview(private val host:CanvasHost) {
                     withContext(Dispatchers.IO){val values=Native.inspectionOutput(task,recipe.toString());
                         JSONObject(values[0] as String) to values.drop(1).map{comparisonBitmap(it as ByteArray)}}
                 }
-                if(!closed){clipped=result.first.optLong("clipped_channels");rangeBlocked=result.first.optBoolean("range_blocked");images=result.second.take(2);sdr=result.second.getOrNull(2)}
-            }catch(e:Exception){if(!closed)error=e}
-            finally{host.drawingTabs.releaseInspection(registered);val flag=control;control=0;Native.captureFree(flag);busy=false;after?.invoke();after=null}
+                if(!closed && requested === recipe){clipped=result.first.optLong("clipped_channels");rangeBlocked=result.first.optBoolean("range_blocked");images=result.second.take(2);sdr=result.second.getOrNull(2);transparent=result.first.optBoolean("transparent");ready=true}
+            }catch(e:Exception){if(!closed && requested === recipe)error=e}
+            finally{host.drawingTabs.releaseInspection(registered);val flag=control;control=0;Native.captureFree(flag);busy=false;after?.invoke();after=null;pending?.let {pending=null;prepare(it)}}
         }
     }
 }

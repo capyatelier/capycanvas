@@ -782,6 +782,18 @@ impl NativeHost {
             ProofForm,
             ProofCopy,
             ProofStatus,
+            BeginExportDialog { id: u32, presets: Vec<u8>, capabilities: layer_ui::ExportDialogCapabilities },
+            ExportDialogAction { id: u32, action: layer_ui::ExportDialogAction },
+            ExportDialogView { id: u32 },
+            ExportDialogProfile { id: u32, index: usize },
+            ProfileChannels { profile: layer_core::color::ColorProfile },
+            ExportDialogProfiles { id: u32 },
+            ExportDialogPrintProfile { id: u32 },
+            ExportDialogSource { id: u32 },
+            ExportDialogRecipe { id: u32 },
+            ExportDialogLibrary { id: u32 },
+            ExportDialogRememberWrite { id: u32 },
+            ExportDialogPresetWrite { id: u32, operation: layer_ui::ExportDialogPresetOperation },
             ExportForm,
             ExportValidate { recipe: layer_ui::ExportRecipe },
             ExportValidation { recipe: layer_ui::ExportRecipe },
@@ -973,6 +985,36 @@ impl NativeHost {
             },
             Query::DocumentColor => json!(self.session.engine().document().composition().color),
             Query::Requests => json!(self.session.state().requests),
+            Query::BeginExportDialog { id, presets, capabilities } => {
+                let source = self.session.capture_project_export(id)?;
+                let profiles = layer_ui::ExportForm::new_localized(self.session.engine().document(),self.session.localization()).profiles;
+                let context = layer_ui::ExportDialogContext::new(source,capabilities,profiles);
+                json!(self.session.begin_export_dialog(id,context,layer_ui::ExportPresets::restore(&presets))?)
+            }
+            Query::ExportDialogAction { id, action } => json!(self.session.export_dialog_action(id,action)?),
+            Query::ExportDialogView { id } => json!(self.session.export_dialog_view(id)?),
+            Query::ProfileChannels { profile } => json!(layer_color::profile_channels(&profile).map_err(|e|e.to_string())?),
+            Query::ExportDialogProfile { id, index } => json!(self.session.export_dialog_profile(id,index)?),
+            Query::ExportDialogProfiles { id } => json!(self.session.export_dialog_profiles(id)?),
+            Query::ExportDialogPrintProfile { id } => json!(self.session.export_dialog_print_profile(id)?),
+            Query::ExportDialogSource { id } => {
+                let source = self.session.export_dialog_source(id)?;
+                let composition = source.composition();
+                json!({"extent":composition.size,"color":composition.color,"resolution":composition.resolution,
+                    "metadata":!source.capture.artwork.metadata.is_empty()})
+            }
+            Query::ExportDialogRecipe { id } => json!(self.session.export_dialog_recipe(id).map_err(|e|e.message(self.session.localization()))?),
+            Query::ExportDialogLibrary { id } => json!(self.session.export_dialog_library(id)?.encode().map_err(|e|e.message(self.session.localization()))?),
+            Query::ExportDialogRememberWrite { id } => {
+                let (expected,next) = self.session.export_dialog_remember_write(id).map_err(|e|e.message(self.session.localization()))?;
+                json!({"expected":expected.encode().map_err(|e|e.message(self.session.localization()))?,
+                    "next":next.encode().map_err(|e|e.message(self.session.localization()))?})
+            }
+            Query::ExportDialogPresetWrite { id, operation } => {
+                let write = self.session.export_dialog_preset_write(id,operation).map_err(|e|e.message(self.session.localization()))?;
+                json!({"expected":write.expected.encode().map_err(|e|e.message(self.session.localization()))?,
+                    "next":write.next.encode().map_err(|e|e.message(self.session.localization()))?,"result":write})
+            }
             Query::ExportForm => json!(layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization())),
             Query::ExportDraft { recipe, action } => json!(recipe.draft_localized(action, self.session.localization())),
             Query::ExportValidate { recipe } => {
@@ -3074,6 +3116,31 @@ mod tests {
         assert_eq!(menu["sections"][3][1]["selected"], false);
         assert_eq!(menu["sections"][3][2]["selected"], true);
         assert_eq!(menu["buttons"].as_array().unwrap().len(), layer_ui::NAVIGATOR_COMMANDS.len());
+    }
+
+    #[test]
+    fn export_dialog_queries_round_trip_the_shared_request_and_presets() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.dispatch(layer_ui::UiAction::Invoke { command:layer_ui::CommandId::ExportDocument }).unwrap();
+        let id = app.session.state().requests.last().unwrap().id;
+        let view = app.query(json!({"type":"begin_export_dialog","id":id,"presets":[],
+            "capabilities":{"formats":["Png"],"profile_import":false}})).unwrap();
+        assert_eq!(view["page"],"root");
+        assert_eq!(view["dialog"],json!(layer_ui::DialogIntent::editor(Some(layer_ui::DialogPrimary::Action))));
+        let changed = app.query(json!({"type":"export_dialog_action","id":id,"action":{"type":"navigate","page":"size"}})).unwrap();
+        assert_eq!(changed["page"],"size");
+        assert_eq!(app.query(json!({"type":"export_dialog_view","id":id})).unwrap(),changed);
+        let recipe = app.query(json!({"type":"export_dialog_recipe","id":id})).unwrap();
+        assert_eq!(recipe["format"],"Png");
+        let profiles = app.query(json!({"type":"export_dialog_profiles","id":id})).unwrap();
+        assert_eq!(app.query(json!({"type":"export_dialog_profile","id":id,"index":0})).unwrap(),profiles[0]);
+        assert!(app.query(json!({"type":"export_dialog_print_profile","id":id})).unwrap().is_null());
+        assert_eq!(app.query(json!({"type":"export_dialog_source","id":id})).unwrap()["extent"],json!(app.session.engine().document().composition().size));
+        assert!(app.query(json!({"type":"export_form"})).is_ok());
+        assert!(app.query(json!({"type":"export_draft","recipe":recipe,"action":{"type":"refresh"}})).is_ok());
+        assert!(app.query(json!({"type":"export_dialog_view","id":id.wrapping_add(1)})).is_err());
+        app.session.complete_document_request(id,Ok(false)).unwrap();
+        assert!(app.query(json!({"type":"export_dialog_recipe","id":id})).is_err());
     }
 
     #[test]

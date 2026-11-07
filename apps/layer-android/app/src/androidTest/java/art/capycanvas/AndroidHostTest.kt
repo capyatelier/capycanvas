@@ -3321,13 +3321,13 @@ class AndroidHostTest {
             compose.onNodeWithTag("shortcut-category-Edit").performScrollTo().performClick()
             compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_page").optString("category") == "Edit" }
             compose.mainClock.advanceTimeBy(80)
-            val enteringCategory = compose.onNodeWithTag("settings-content-category:Edit").fetchSemanticsNode().positionInRoot.x
+            val enteringCategory = compose.onNodeWithTag("settings-content-shortcuts-category").fetchSemanticsNode().positionInRoot.x
             compose.mainClock.advanceTimeBy(300)
-            val settledCategory = compose.onNodeWithTag("settings-content-category:Edit").fetchSemanticsNode().positionInRoot.x
+            val settledCategory = compose.onNodeWithTag("settings-content-shortcuts-category").fetchSemanticsNode().positionInRoot.x
             assertTrue("A category slides in from the right ($enteringCategory -> $settledCategory)", enteringCategory > settledCategory)
             val shortcut = preferences().array("shortcuts").objects().first { it.getBoolean("visible") }
             compose.onNode(hasText(shortcut.getString("label")) and hasClickAction()
-                and hasAnyAncestor(hasTestTag("settings-content-category:Edit"))).performScrollTo().performClick()
+                and hasAnyAncestor(hasTestTag("settings-content-shortcuts-category"))).performScrollTo().performClick()
             compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
             compose.mainClock.advanceTimeBy(80)
             val tag = "settings-content-shortcut:" + shortcut.getString("id")
@@ -3341,11 +3341,11 @@ class AndroidHostTest {
             compose.onNodeWithContentDescription("Back").performClick()
             compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") == null }
             compose.mainClock.advanceTimeBy(400)
-            compose.onNodeWithTag("settings-content-category:Edit").assertIsDisplayed()
+            compose.onNodeWithTag("settings-content-shortcuts-category").assertIsDisplayed()
             compose.onNodeWithContentDescription("Back").performClick()
             compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_page").isNull("category") }
             compose.mainClock.advanceTimeBy(400)
-            compose.onNodeWithTag("settings-content-page:shortcuts").assertIsDisplayed()
+            compose.onNodeWithTag("settings-content-shortcuts-root").assertIsDisplayed()
             compose.onNodeWithTag("settings-done").performClick()
             compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
             compose.mainClock.advanceTimeBy(80)
@@ -4005,7 +4005,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-category-canvas").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
         compose.onNodeWithTag("preference-pan_speed", useUnmergedTree = true).performScrollTo()
-        compose.onNodeWithTag("settings-content-page:canvas", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("settings-content-canvas-root", useUnmergedTree = true).assertIsDisplayed()
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         val slider = compose.onNodeWithTag("setting-slider-zoom_speed", useUnmergedTree = true).performScrollTo().assertTouchHeightIsEqualTo(48.dp)
@@ -5574,7 +5574,7 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { preferences().array("pages").objects().first { it.getString("id") == "input" }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == row.getString("id") }
             .getJSONObject("kind").getInt("selected") == selection }
-        compose.onNodeWithTag("settings-content-page:input").assertIsDisplayed()
+        compose.onNodeWithTag("settings-content-input-root").assertIsDisplayed()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onNodeWithText("About").performClick()
@@ -5602,7 +5602,7 @@ class AndroidHostTest {
                 control.performScrollTo().performClick()
                 compose.onAllNodes(isPopup()).assertCountEquals(1)
                 compose.onAllNodes(isDialog()).assertCountEquals(0)
-                compose.onNodeWithTag("settings-content-page:$page").assertIsDisplayed()
+                compose.onNodeWithTag("settings-content-$page-root").assertIsDisplayed()
                 assertNull(preferences().objectOrNull("shortcut_editor"))
                 compose.onNodeWithTag("setting-choice-option-$id-$selected").assertIsSelected()
                 before.array("options").values().forEachIndexed { index, label ->

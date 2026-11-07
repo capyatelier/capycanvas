@@ -195,10 +195,9 @@ pub fn raster_worker_export_presets(metadata:&str,buffers:js_sys::Array)->Result
             Ok(bytes.into())
         }
         Request::Write=>{
-            let expected=layer_ui::ExportPresets::restore(&js_sys::Uint8Array::new(&buffers.get(1)).to_vec());
-            if library!=expected {return Err(color_feature_rejection(layer_ui::ColorFeatureError::PresetChanged));}
+            let expected=js_sys::Uint8Array::new(&buffers.get(1)).to_vec();
             let next=js_sys::Uint8Array::new(&buffers.get(2));
-            layer_ui::ExportPresets::decode(&next.to_vec()).map_err(color_feature_rejection)?;
+            layer_ui::ExportPresets::replace_encoded(&bytes.to_vec(),&expected,&next.to_vec()).map_err(color_feature_rejection)?;
             Ok(next.into())
         }
     }

@@ -554,15 +554,16 @@ class AndroidLanguageTest {
                         assertFalse(before.contentEquals(file.readBytes()))
                         switch(host, "en")
                         host.drain(obj("type" to "invoke", "command" to "export_document"))
-                        host.awaitMain("export dialog", 30_000, { "${host.documents.exportRequest}" }, compose) { findTag("export-preset-name") != null }
+                        host.awaitMain("export dialog", 30_000, { "${host.documents.exportRequest}" }, compose) { findTag("export-choose-file") != null }
                         val exportCopy = host.catalog.getJSONObject("export_copy")
                         compose.onNodeWithTag("color-choice-${exportCopy.getString("format")}").performScrollTo().performClick()
                         compose.onNode(hasText(exportCopy.getString("format_jpeg")) and !hasTestTag("color-choice-${exportCopy.getString("format")}")).performClick()
                         host.awaitMain("JPEG quality control", 30_000, { "${host.documents.exportRequest}" }, compose) { findTag("export-quality") != null }
-                        input("export-preset-name").performScrollTo().performTextReplacement(literal)
-                        input("export-quality").performScrollTo().performTextReplacement("１＋２ไทย")
+                        input("export-quality").performScrollTo().performClick().performTextReplacement("１＋２ไทย")
                         compose.onNodeWithTag("export-choose-file").performClick()
-                        val originalError = runBlocking { colorFailureCopy(host, ColorFeatureFailure("ExportQuality")) }
+                        val control=native {JSONObject(Native.query(it,obj("type" to "export_dialog_view","id" to host.documents.exportRequest!!.getInt("id")).toString()))}.getJSONObject("numeric").getJSONObject("quality")
+                        val refusal=runCatching {Native.number(obj("control" to control,"value" to 90,"operation" to obj("type" to "expression","text" to "１＋２ไทย")).toString(),"en")}.exceptionOrNull() as Exception
+                        val originalError=numericFailureCopy(refusal,"en",host.bootstrap!!.getString("action_failed"))
                         host.awaitMain("typed export quality refusal", 10_000, { host.catalog.toString() }, compose) { findNode(hasLabel(originalError)) != null }
                         input("export-quality").performScrollTo().performClick()
                         compose.waitForIdle()
@@ -575,7 +576,6 @@ class AndroidLanguageTest {
                         }
                         android.os.SystemClock.sleep(400)
                         compose.waitForIdle()
-                        val nameView = findTag("export-preset-name")!!.first.view
                         val exportId = host.documents.exportRequest!!.getInt("id")
                         val drawing = state().getJSONObject("document_file").toString()
                         val draft = if (tag == "vi") "１＋２Tie\u0302\u0301ng Vie\u0323\u0302t" else "１＋２ผู้วาด"
@@ -597,8 +597,6 @@ class AndroidLanguageTest {
                         val selection = field("export-quality").config.getOrNull(SemanticsProperties.TextSelectionRange)
                         host.awaitMain("export language $tag after InputConnection composition", 30_000, { host.bootstrap.toString() }, compose) { host.languageTag == tag }
                         compose.runOnIdle {
-                            assertSame(nameView, findTag("export-preset-name")!!.first.view)
-                            assertEquals(literal, field("export-preset-name").config.getOrNull(SemanticsProperties.EditableText)!!.text)
                             assertEquals(draft, field("export-quality").config.getOrNull(SemanticsProperties.EditableText)!!.text)
                             assertEquals(selection, field("export-quality").config.getOrNull(SemanticsProperties.TextSelectionRange))
                             assertEquals(exportId, host.documents.exportRequest!!.getInt("id"))
@@ -606,16 +604,30 @@ class AndroidLanguageTest {
                         }
                         val title = host.catalog.getJSONObject("export_copy").getString("title")
                         compose.onNodeWithText(title).assertIsDisplayed()
-                        val localizedError = runBlocking { colorFailureCopy(host, ColorFeatureFailure("ExportQuality")) }
+                        val localizedError=numericFailureCopy(refusal,tag,host.bootstrap!!.getString("action_failed"))
                         host.awaitMain("retained typed quality refusal relabel", 10_000, { host.catalog.toString() }, compose) { findNode(hasLabel(localizedError)) != null }
                         capture("export-draft", theme, tag)
                         input("export-quality").performTextReplacement("90")
+                        input("export-quality").performImeAction()
+                        compose.onNodeWithTag("export-presets").performScrollTo().performClick()
+                        compose.onNodeWithTag("export-preset-save").performScrollTo().performClick()
+                        host.awaitMain("shared preset-name page",10_000,{host.documents.exportRequest.toString()},compose){findTag("export-preset-name")!=null}
+                        input("export-preset-name").performTextReplacement(literal)
+                        val nameView=findTag("export-preset-name")!!.first.view
+                        switch(host,"en");switch(host,tag)
+                        compose.runOnIdle {
+                            assertSame(nameView,findTag("export-preset-name")!!.first.view)
+                            assertEquals(literal,field("export-preset-name").config.getOrNull(SemanticsProperties.EditableText)!!.text)
+                        }
+                        compose.onNodeWithTag(if(findTag("export-preset-cancel")!=null)"export-preset-cancel" else "export-dialog-cancel").performClick()
                         val color = native { JSONObject(Native.query(it, obj("type" to "document_color").toString())) }
                         val savedRecipe = runBlocking { ColorPreferencesStore.presets(scenario.activity(), color, obj("type" to "get", "index" to 0)) }.getJSONObject("recipe")
                         val recipe = native { JSONObject(Native.query(it, obj("type" to "export_draft", "recipe" to savedRecipe, "action" to obj("type" to "format", "value" to "Jpeg")).toString())) }.getJSONObject("recipe").put("jpeg_quality", 90)
                         val output = File(device.root, "$theme-$tag-日本-ไทย-Tiếng Việt.jpg")
+                        native { Native.query(it,obj("type" to "export_dialog_action","id" to exportId,"action" to obj("type" to "edit","action" to obj("type" to "format","value" to "Jpeg"))).toString()) }
+                        val remember=native { JSONObject(Native.query(it,obj("type" to "export_dialog_remember_write","id" to exportId).toString())) }
                         compose.runOnIdle {
-                            host.documents.chooseExport(recipe, 0)
+                            host.documents.chooseExport(recipe,remember)
                             host.documents.picked(Uri.fromFile(output))
                         }
                         host.awaitMain("localized fixture export", 120_000, { "${host.documents.working} ${host.hostError} ${host.notice}" }, compose) { assertNull(host.hostError); !host.documents.working && host.documents.exportRequest == null && output.exists() && output.length() > 0 }
@@ -644,9 +656,12 @@ class AndroidLanguageTest {
                 val color = native { JSONObject(Native.query(it, obj("type" to "document_color").toString())) }
                 val recipe = runBlocking { ColorPreferencesStore.presets(activity, color, obj("type" to "get", "index" to 1)) }.getJSONObject("recipe").put("format", "Png")
                 host.drain(obj("type" to "invoke", "command" to "export_document"))
-                host.awaitMain("profile fixture export dialog", 30_000, { state().toString() }, compose) { host.documents.exportRequest != null }
+                host.awaitMain("profile fixture export dialog", 30_000, { state().toString() }, compose) {host.documents.exportRequest != null && findTag("export-choose-file")!=null}
                 val png = File(device.root, "nameless-profile-source.png")
-                compose.runOnIdle { host.documents.chooseExport(recipe, 1); host.documents.picked(Uri.fromFile(png)) }
+                val exportId=host.documents.exportRequest!!.getInt("id")
+                native { Native.query(it,obj("type" to "export_dialog_action","id" to exportId,"action" to obj("type" to "preset","index" to 1)).toString()) }
+                val remember=native {JSONObject(Native.query(it,obj("type" to "export_dialog_remember_write","id" to exportId).toString()))}
+                compose.runOnIdle { host.documents.chooseExport(recipe,remember); host.documents.picked(Uri.fromFile(png)) }
                 idle("wide-gamut profile fixture export")
                 assertTrue(png.length() > 0)
                 val output = java.io.ByteArrayOutputStream()

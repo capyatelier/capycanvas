@@ -33,6 +33,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -87,13 +89,8 @@ private val FooterHeight = 34.dp
 private val ControlGap = 6.dp
 private val RowGap = 10.dp
 private val SectionGap = 14.dp
-private val Preview = DpSize(232.dp, 250.dp)
-private val NarrowPreview = DpSize(348.dp, 140.dp)
-private val PreviewInset = 36.dp
-private val WideDialog = 600.dp
 private val NumberWidth = 96.dp
 private val LinkWidth = 26.dp
-private val UnitWidth = 76.dp
 private val ReliefWidth = 76.dp
 private val OrientationWidth = 70.dp
 private val PresetTile = 120.dp
@@ -143,24 +140,33 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
 }
 
 @Composable internal fun NewDrawingLayer(host: CanvasHost) {
-    val view = host.snapshot?.objectOrNull("state")?.objectOrNull("new_drawing") ?: return
+    val current=host.snapshot?.objectOrNull("state")?.objectOrNull("new_drawing")
+    val view=rememberDialogContent(current) ?: return
     val actions = remember(host) { NewDrawingActions(host) }
-    Box(Modifier.fillMaxSize().imePadding()) { NewDrawingDialog(host, view, actions) }
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
+    Box(Modifier.fillMaxSize().then(if(phone)Modifier else Modifier.imePadding())) {NewDrawingDialog(host,view,actions,current != null)}
 }
 
-@Composable private fun NewDrawingDialog(host: CanvasHost, view: JSONObject, actions: NewDrawingActions) {
+@Composable private fun NewDrawingDialog(host: CanvasHost, view: JSONObject, actions: NewDrawingActions, visible:Boolean) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
     val copy = view.getJSONObject("copy")
     val drawer = view.objectOrNull("drawer")
     val memory = remember { DrawerMemory() }
     if (drawer != null) { if (!memory.open) memory.opening++; memory.shown = drawer }
     memory.open = drawer != null
-    val wide = minOf(720, LocalConfiguration.current.screenWidthDp - 32).dp >= WideDialog
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
+    val width=if(phone)maxWidth.value else (org.json.JSONTokener(Native.dialogUi(obj("kind" to "floating_width","window" to maxWidth.value,"natural" to 720f).toString())).nextValue() as Number).toFloat()
+    val layout=JSONObject(Native.dialogUi(obj("kind" to "new_drawing_layout","width" to (width-40f).coerceAtLeast(0f)).toString()))
+    val wide=!layout.getBoolean("single_pane")
+    val paperModel=memory.shown?.takeIf {it.getString("kind")=="paper_color"}
+    val paperForm=paperModel?.let {rememberColorForm(host,null,it.getJSONObject("color"),true)}
     fun accept() {
         when (drawer?.getString("kind")) {
             null -> if (view.getBoolean("can_create")) actions.create()
             "presets" -> drawer.objectOrNull("save")?.let { if (it.getBoolean("can_save")) actions.send("save_preset") }
                 ?: run { if (drawer.getBoolean("can_select")) actions.send("use_preset") }
             "paper" -> actions.usePaper()
+            "paper_color" -> paperForm?.takeUnless {it.invalidOpen}?.let { actions.send("paper_color_value","color" to it.view.getJSONObject("value"));actions.send("use_paper_color") }
         }
     }
     val keys = { event: AndroidKeyEvent ->
@@ -174,21 +180,42 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
             else -> false
         }
     }
-    PickerDialog(host, false, "new-drawing-dialog", keys, { actions.send("back") }, page = {
-        Box(if (drawer == null) Modifier else Modifier.clearAndSetSemantics {}) { MainPage(host, view, actions, wide) }
-    }, sheet = {
-        AnimatedVisibility(drawer != null, Modifier.matchParentSize(), enter = slideInVertically(tween(250, easing = EaseOutCubic)) { it },
-            exit = slideOutVertically(tween(250, easing = EaseOutCubic)) { it }) {
-            val shown = memory.shown ?: return@AnimatedVisibility
-            key(memory.opening) {
-                when (shown.getString("kind")) {
-                    "presets" -> PresetsDrawer(host, copy, shown, actions, wide)
-                    "paper" -> PaperDrawer(host, copy, shown, actions)
-                    else -> PaperColorDrawer(host, copy, shown, actions)
-                }
+    val title=copy.getString(when(drawer?.getString("kind")){"presets"->"presets";"paper"->"paper";"paper_color"->"paper_color";else->"title"})
+    val saving=drawer?.objectOrNull("save")
+    val primary=when(drawer?.getString("kind")){"presets"->saving?.getString("confirm") ?: copy.getString("select");"paper"->copy.getString("use_texture");"paper_color"->copy.getString("use_color");else->copy.getString("create")}
+    val primaryTag=when(drawer?.getString("kind")){"presets"->if(saving==null)"new-drawing-select" else "new-drawing-save-confirm";"paper"->"new-drawing-paper-use";"paper_color"->"new-drawing-color-use";else->"new-drawing-create"}
+    val canConfirm=when(drawer?.getString("kind")){"presets"->saving?.getBoolean("can_save") ?: drawer.getBoolean("can_select");"paper_color"->paperForm?.invalidOpen==false;"paper"->true;else->view.getBoolean("can_create")}
+    val sheet=@Composable {
+        val shown=memory.shown
+        if(shown != null)key(memory.opening) {
+            when(shown.getString("kind")) {
+                "presets"->PresetsDrawer(host,copy,shown,actions,wide)
+                "paper"->PaperDrawer(host,copy,shown,actions)
+                else->paperForm?.let {PaperColorDrawer(host,copy,shown,actions,it)}
             }
         }
-    }) {
+    }
+    DialogShell(host,view.getJSONObject("dialog"),title,subpage=drawer!=null,onCancel={actions.send("cancel")},onBack={actions.send("back")},
+        onPrimary=::accept,primaryLabel=primary,primaryEnabled=canConfirm,tag="new-drawing-dialog",primaryTag=primaryTag,cancelTag="new-drawing-cancel",
+        windowed=false,header=phone,scrollBody=phone,keys=keys,shown=visible,
+        secondary=if(!phone)null else ({
+            when(drawer?.getString("kind")) {
+                null->Box(Modifier.fillMaxWidth().padding(16.dp)) {
+                    DialogButton(copy.getString("presets"),"new-drawing-presets-button") {actions.page("presets")}
+                }
+                "presets"->Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(RowGap)) {
+                    PresetSummary(host,drawer,Modifier.fillMaxWidth());PresetControls(copy,drawer,actions,true)
+                }
+                "paper"->PaperReliefControls(copy,drawer,actions,Modifier.fillMaxWidth().padding(16.dp))
+            }
+        }),
+        overlay=if(phone)null else ({
+            AnimatedVisibility(drawer!=null,Modifier.matchParentSize(),enter=slideInVertically(tween(250,easing=EaseOutCubic)){it},exit=slideOutVertically(tween(250,easing=EaseOutCubic)){it}) {sheet()}
+        }),body={
+            if(phone && drawer!=null)sheet()
+            else Box(if(drawer==null)Modifier else Modifier.clearAndSetSemantics{}) {MainPage(host,view,actions,wide,layout,phone)}
+        },actions=if(phone)null else ({
+
         val colors = LocalPalette.current
         Button({ actions.page("presets") }, Modifier.height(34.dp).testTag("new-drawing-presets-button"), shape = ControlShape, contentPadding = PaddingValues(horizontal = 16.dp),
             colors = ButtonDefaults.buttonColors(containerColor = colors.button, contentColor = colors.text)) {
@@ -199,32 +226,34 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
         Spacer(Modifier.weight(1f))
         DialogButton(copy.getString("cancel"), "new-drawing-cancel") { actions.send("cancel") }
         DialogButton(copy.getString("create"), "new-drawing-create", accent = true, enabled = view.getBoolean("can_create")) { actions.create() }
+        }))
     }
 }
 
-@Composable private fun MainPage(host: CanvasHost, view: JSONObject, actions: NewDrawingActions, wide: Boolean) {
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(SectionGap)) {
-        DialogTitle(view.getJSONObject("copy").getString("title"), "new-drawing-title")
+
+@Composable private fun MainPage(host: CanvasHost, view: JSONObject, actions: NewDrawingActions, wide: Boolean, layout:JSONObject, phone:Boolean) {
+    Column(Modifier.then(if(phone)Modifier else Modifier.verticalScroll(rememberScrollState())).padding(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(SectionGap)) {
+        if(!phone)DialogTitle(view.getJSONObject("copy").getString("title"), "new-drawing-title")
         if (wide) Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            SheetPreview(host, view, actions, Modifier.width(Preview.width), Modifier.size(Preview))
+            SheetPreview(host, view, actions, Modifier.width(layout.getJSONArray("preview").getInt(0).dp), Modifier.size(layout.getJSONArray("preview").getInt(0).dp,layout.getJSONArray("preview").getInt(1).dp),layout)
             DrawingForm(host, view, actions, Modifier.weight(1f))
         } else Column(verticalArrangement = Arrangement.spacedBy(SectionGap)) {
-            SheetPreview(host, view, actions, Modifier.fillMaxWidth(), Modifier.widthIn(max = NarrowPreview.width).fillMaxWidth().height(NarrowPreview.height))
+            SheetPreview(host, view, actions, Modifier.fillMaxWidth(), Modifier.widthIn(max=layout.getJSONArray("preview").getInt(0).dp).fillMaxWidth().height(layout.getJSONArray("preview").getInt(1).dp),layout)
             DrawingForm(host, view, actions, Modifier.fillMaxWidth())
         }
     }
 }
 
-@Composable private fun SheetPreview(host: CanvasHost, view: JSONObject, actions: NewDrawingActions, modifier: Modifier, well: Modifier) {
+@Composable private fun SheetPreview(host: CanvasHost, view: JSONObject, actions: NewDrawingActions, modifier: Modifier, well: Modifier, layout:JSONObject) {
     val colors = LocalPalette.current
     val copy = view.getJSONObject("copy")
     val page = view.getJSONObject("page")
     val sheet = view.getJSONObject("sheet")
     val paper = rememberDisplayColors(host, listOf(sheet.getJSONObject("color"))).first()
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        BoxWithConstraints(well.clip(SquircleShape(22.dp)).background(colors.view).clickable(role = Role.Button) { actions.page("presets") }
+        Box(well.clip(SquircleShape(22.dp)).background(colors.view).clickable(role = Role.Button) { actions.page("presets") }
             .semantics { contentDescription = copy.getString("presets") }.testTag("new-drawing-preview"), contentAlignment = Alignment.Center) {
-            SheetArt(host, sheet, paper, DpSize(maxWidth - PreviewInset, maxHeight - PreviewInset), 40.dp, false)
+            SheetArt(host, sheet, paper, DpSize(layout.getJSONArray("fit").getInt(0).dp,layout.getJSONArray("fit").getInt(1).dp), 40.dp, false)
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(buildAnnotatedString {
@@ -349,38 +378,51 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
     val values = view.getJSONArray("values")
     val numeric = view.getJSONObject("numeric")
     val linked = view.getBoolean("linked")
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val number = ((maxWidth - LinkWidth - UnitWidth - OrientationWidth - ControlGap * 2) / 2).coerceIn(56.dp, NumberWidth)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            key(numeric.toString()) {
-                DialogNumber(actions, values.getDouble(0), numeric, copy.getString("width_name"), copy.getString("width"), null, "new-drawing-width", Modifier.width(number)) {
-                    actions.send("width", "value" to it)
+    Layout(modifier=Modifier.fillMaxWidth(),content={
+        key(numeric.toString()) {
+            DialogNumber(actions, values.getDouble(0), numeric, copy.getString("width_name"), copy.getString("width"), null, "new-drawing-width", Modifier.widthIn(min=NumberWidth)) {
+                actions.send("width", "value" to it)
+            }
+        }
+        Box(Modifier.size(LinkWidth, FieldHeight).clip(ControlShape).toggleable(linked, role = Role.Checkbox) { actions.page("linked", "linked" to it) }
+            .semantics { contentDescription = copy.getString("link") }.testTag("new-drawing-link"), contentAlignment = Alignment.Center) {
+            SharedIcon(if (linked) "link" else "unlink", null, Modifier.size(12.dp), tint = if (linked) colors.accent else colors.text.copy(alpha = .62f))
+        }
+        key(numeric.toString()) {
+            DialogNumber(actions, values.getDouble(1), numeric, copy.getString("height_name"), copy.getString("height"), null, "new-drawing-height", Modifier.widthIn(min=NumberWidth)) {
+                actions.send("height", "value" to it)
+            }
+        }
+        val units = view.getJSONArray("units").objects()
+        Choice(units.map { it.getString("label") }, units.indexOfFirst { it.getString("value") == setup.getString("unit") }, "new-drawing-unit", copy.getString("unit"),
+            Modifier.width(IntrinsicSize.Min)) { actions.page("unit", "unit" to units[it].getString("value")) }
+        val orientation = view.getJSONObject("page").getString("orientation")
+        Row(Modifier.width(OrientationWidth).clip(SquircleShape(ControlRadius + 3.dp)).background(fieldColor()).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            for (choice in listOf("portrait", "landscape")) {
+                Box(Modifier.weight(1f).height(FieldHeight - 6.dp).clip(ControlShape).background(if (orientation == choice) colors.headerActive else Color.Transparent)
+                    .selectable(orientation == choice, role = Role.RadioButton) { actions.page("orientation", "orientation" to choice) }
+                    .semantics { contentDescription = copy.getString(choice) }.testTag("new-drawing-$choice"), contentAlignment = Alignment.Center) {
+                    SharedIcon(choice, null, Modifier.size(16.dp))
                 }
             }
-            Box(Modifier.size(LinkWidth, FieldHeight).clip(ControlShape).toggleable(linked, role = Role.Checkbox) { actions.page("linked", "linked" to it) }
-                .semantics { contentDescription = copy.getString("link") }.testTag("new-drawing-link"), contentAlignment = Alignment.Center) {
-                SharedIcon(if (linked) "link" else "unlink", null, Modifier.size(12.dp), tint = if (linked) colors.accent else colors.text.copy(alpha = .62f))
-            }
-            key(numeric.toString()) {
-                DialogNumber(actions, values.getDouble(1), numeric, copy.getString("height_name"), copy.getString("height"), null, "new-drawing-height", Modifier.width(number)) {
-                    actions.send("height", "value" to it)
-                }
-            }
-            Spacer(Modifier.width(ControlGap))
-            val units = view.getJSONArray("units").objects()
-            Choice(units.map { it.getString("label") }, units.indexOfFirst { it.getString("value") == setup.getString("unit") }, "new-drawing-unit", copy.getString("unit"),
-                Modifier.width(UnitWidth)) { actions.page("unit", "unit" to units[it].getString("value")) }
-            Spacer(Modifier.weight(1f).widthIn(min = ControlGap))
-            val orientation = view.getJSONObject("page").getString("orientation")
-            Row(Modifier.width(OrientationWidth).clip(SquircleShape(ControlRadius + 3.dp)).background(fieldColor()).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                for (choice in listOf("portrait", "landscape")) {
-                    Box(Modifier.weight(1f).height(FieldHeight - 6.dp).clip(ControlShape).background(if (orientation == choice) colors.headerActive else Color.Transparent)
-                        .selectable(orientation == choice, role = Role.RadioButton) { actions.page("orientation", "orientation" to choice) }
-                        .semantics { contentDescription = copy.getString(choice) }.testTag("new-drawing-$choice"), contentAlignment = Alignment.Center) {
-                        SharedIcon(choice, null, Modifier.size(16.dp))
-                    }
-                }
-            }
+        }
+    }) {children,constraints ->
+        val height=FieldHeight.roundToPx()
+        val gap=ControlGap.roundToPx()
+        val widths=children.map{it.maxIntrinsicWidth(height)}
+        val width=if(constraints.hasBoundedWidth)constraints.maxWidth else widths.sum()+gap*2
+        val wrap=widths.sum()+gap*2>width
+        val numberWidth=((width-widths[1])/2).coerceAtLeast(0)
+        val placed=children.mapIndexed {index,child -> child.measure(Constraints.fixedWidth(if(wrap && (index==0 || index==2))numberWidth else widths[index]))}
+        val firstHeight=placed.take(3).maxOf{it.height}
+        val secondY=if(wrap)firstHeight+gap else 0
+        val totalHeight=if(wrap)secondY+placed.drop(3).maxOf{it.height} else placed.maxOf{it.height}
+        layout(width,totalHeight) {
+            placed[0].placeRelative(0,0)
+            placed[1].placeRelative(placed[0].width,0)
+            placed[2].placeRelative(placed[0].width+placed[1].width,0)
+            placed[3].placeRelative(if(wrap)0 else placed.take(3).sumOf{it.width}+gap,secondY)
+            placed[4].placeRelative(width-placed[4].width,secondY)
         }
     }
 }
@@ -524,13 +566,42 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
 }
 
 @Composable private fun DrawerSheet(tag: String, head: @Composable () -> Unit, footer: @Composable RowScope.() -> Unit, body: @Composable ColumnScope.() -> Unit) {
+    val page=LocalCanvasHost.current.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
     Column(Modifier.fillMaxSize().background(LocalPalette.current.settingsBackground).pointerInput(Unit) {
         awaitEachGesture { awaitFirstDown(requireUnconsumed = false); do { val event = awaitPointerEvent() } while (event.changes.any { it.pressed }) }
     }.testTag(tag)) {
         Box(Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp)) { head() }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 16.dp),
+        Column(Modifier.then(if(page)Modifier else Modifier.weight(1f).verticalScroll(rememberScrollState())).padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(SectionGap), content = body)
-        PickerFooter(tag, footer)
+        if(!page)PickerFooter(tag, footer)
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable private fun PresetControls(copy:JSONObject,drawer:JSONObject,actions:NewDrawingActions,page:Boolean) {
+    val save=drawer.objectOrNull("save")
+    val focus=LocalFocusManager.current
+    var retainedSave by remember {mutableStateOf(save)}
+    if(save != null)retainedSave=save
+    AnimatedContent(save != null,label="preset-save-footer",transitionSpec={fadeIn() togetherWith fadeOut()}) {saving ->
+        FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp,Alignment.End),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            if(!saving) {
+                if(!page)DialogButton(copy.getString("cancel"),"new-drawing-browser-cancel"){actions.send("close_drawer")}
+                DialogButton(drawer.getString("save_label"),"new-drawing-save-as"){focus.clearFocus();actions.send("save_as")}
+                if(!page)DialogButton(copy.getString("select"),"new-drawing-select",accent=true,enabled=drawer.getBoolean("can_select")){actions.send("use_preset")}
+            } else retainedSave?.let {value ->
+                val canSave=value.getBoolean("can_save")
+                CoreTextField(value.getString("name"),{actions.send("preset_name","text" to it)},
+                    Modifier.width(150.dp).then(if(canSave)Modifier else Modifier.border(1.5.dp,MaterialTheme.colorScheme.error,ControlShape))
+                        .semantics {contentDescription=copy.getString("preset_name")}.testTag("new-drawing-save-name"),
+                    placeholder={Text(copy.getString("preset_name"))},height=34.dp,shape=ControlShape,background=fieldColor())
+                val groups=value.getJSONArray("groups").objects()
+                Choice(groups.map{it.getString("label")},groups.indexOfFirst{it.getString("value")==value.getString("group")},"new-drawing-save-group",
+                    copy.getString("preset_category"),Modifier.width(140.dp)){actions.send("preset_group","group" to groups[it].getString("value"))}
+                if(!page)DialogButton(copy.getString("cancel"),"new-drawing-save-cancel"){actions.send("cancel_save")}
+                if(!page)DialogButton(value.getString("confirm"),"new-drawing-save-confirm",accent=true,enabled=canSave){actions.send("save_preset")}
+            }
+        }
     }
 }
 
@@ -539,35 +610,12 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
     val colors = LocalPalette.current
     val tiles = drawer.getJSONArray("tiles").objects()
     val sheets = rememberDisplayColors(host, tiles.map { it.getJSONObject("sheet").getJSONObject("color") })
-    val save = drawer.objectOrNull("save")
-    val focus = LocalFocusManager.current
     DrawerSheet("new-drawing-browser", head = {
         CoreTextField(drawer.getString("query"), { actions.send("search", "query" to it) }, Modifier.fillMaxWidth().semantics { contentDescription = copy.getString("search") }.testTag("new-drawing-search"),
             placeholder = { Text(copy.getString("search")) }, leadingIcon = { SharedIcon("search", null, Modifier.size(16.dp)) },
             height = FieldHeight, shape = ControlShape, background = fieldColor(), focusRequest = 1)
     }, footer = {
-        var retainedSave by remember { mutableStateOf(save) }
-        if (save != null) retainedSave = save
-        val controls = @Composable {
-            AnimatedContent(save != null, label = "preset-save-footer", transitionSpec = { fadeIn() togetherWith fadeOut() }) { saving -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!saving) {
-                DialogButton(copy.getString("cancel"), "new-drawing-browser-cancel") { actions.send("close_drawer") }
-                DialogButton(drawer.getString("save_label"), "new-drawing-save-as") { focus.clearFocus(); actions.send("save_as") }
-                DialogButton(copy.getString("select"), "new-drawing-select", accent = true, enabled = drawer.getBoolean("can_select")) { actions.send("use_preset") }
-            } else retainedSave?.let { save ->
-                val canSave = save.getBoolean("can_save")
-                CoreTextField(save.getString("name"), { actions.send("preset_name", "text" to it) },
-                    Modifier.width(150.dp).then(if (canSave) Modifier else Modifier.border(1.5.dp, MaterialTheme.colorScheme.error, ControlShape))
-                        .semantics { contentDescription = copy.getString("preset_name") }.testTag("new-drawing-save-name"),
-                    placeholder = { Text(copy.getString("preset_name")) }, height = 34.dp, shape = ControlShape, background = fieldColor())
-                val groups = save.getJSONArray("groups").objects()
-                Choice(groups.map { it.getString("label") }, groups.indexOfFirst { it.getString("value") == save.getString("group") }, "new-drawing-save-group",
-                    copy.getString("preset_category"), Modifier.width(140.dp)) { actions.send("preset_group", "group" to groups[it].getString("value")) }
-                DialogButton(copy.getString("cancel"), "new-drawing-save-cancel") { actions.send("cancel_save") }
-                DialogButton(save.getString("confirm"), "new-drawing-save-confirm", accent = true, enabled = canSave) { actions.send("save_preset") }
-            }
-            } }
-        }
+        val controls=@Composable {PresetControls(copy,drawer,actions,false)}
         if (wide) {
             PresetSummary(host, drawer, Modifier.weight(1f))
             controls()
@@ -665,22 +713,26 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
     }
 }
 
-@Composable private fun PaperDrawer(host: CanvasHost, copy: JSONObject, drawer: JSONObject, actions: NewDrawingActions) {
-    val failed = host.bootstrap!!.getString("action_failed")
-    val chooser = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) host.viewModelScope.launch { importLibraryPaper(host, uri) }
-    }
-    val tiles = drawer.getJSONArray("tiles").objects()
-    val relief = drawer.getJSONObject("relief")
-    DrawerSheet("new-drawing-paper-drawer", head = { DialogTitle(copy.getString("paper"), "new-drawing-paper-title") }, footer = {
+@Composable private fun PaperReliefControls(copy:JSONObject,drawer:JSONObject,actions:NewDrawingActions,modifier:Modifier) {
+    val relief=drawer.getJSONObject("relief")
         val enabled = relief.getBoolean("enabled")
-        Row(Modifier.weight(1f).alpha(if (enabled) 1f else .5f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(RowGap)) {
+        Row(modifier.alpha(if (enabled) 1f else .5f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(RowGap)) {
             Text(copy.getString("relief"), Modifier.weight(1f, fill = false).testTag("new-drawing-paper-relief-label"), maxLines = 1, overflow = TextOverflow.Ellipsis)
             DialogNumber(actions, relief.getDouble("value"), relief.getJSONObject("numeric"), copy.getString("relief"), null, copy.getString("relief_unit"),
                 "new-drawing-paper-relief", Modifier.width(ReliefWidth), FooterHeight, enabled, trailing = { Spacer(Modifier.width(7.dp)) }) {
                 actions.send("paper_relief", "value" to it)
             }
         }
+    }
+
+@Composable private fun PaperDrawer(host: CanvasHost, copy: JSONObject, drawer: JSONObject, actions: NewDrawingActions) {
+    val failed = host.bootstrap!!.getString("action_failed")
+    val chooser = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) host.viewModelScope.launch { importLibraryPaper(host, uri) }
+    }
+    val tiles = drawer.getJSONArray("tiles").objects()
+    DrawerSheet("new-drawing-paper-drawer", head = { if(host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")==null)DialogTitle(copy.getString("paper"), "new-drawing-paper-title") }, footer = {
+        PaperReliefControls(copy,drawer,actions,Modifier.weight(1f))
         DialogButton(copy.getString("cancel"), "new-drawing-paper-cancel") { actions.send("close_drawer") }
         DialogButton(copy.getString("use_texture"), "new-drawing-paper-use", accent = true) { actions.usePaper() }
     }) {
@@ -717,10 +769,9 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
 }
 
 @OptIn(ExperimentalLayoutApi::class)
-@Composable private fun PaperColorDrawer(host: CanvasHost, copy: JSONObject, drawer: JSONObject, actions: NewDrawingActions) {
+@Composable private fun PaperColorDrawer(host: CanvasHost, copy: JSONObject, drawer: JSONObject, actions: NewDrawingActions, form:ColorForm) {
     val colors = LocalPalette.current
-    val form = rememberColorForm(host, null, drawer.getJSONObject("color"), true)
-    if (form == null) { LaunchedEffect(Unit) { actions.send("close_drawer") }; return }
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null
     val value = form.view.getJSONObject("value").toString()
     val reported = remember { arrayOf(value) }
     fun report() { if (value != reported[0]) { reported[0] = value; actions.send("paper_color_value", "color" to JSONObject(value)) } }
@@ -731,8 +782,8 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
     Column(Modifier.fillMaxSize().background(colors.settingsBackground).pointerInput(Unit) {
         awaitEachGesture { awaitFirstDown(requireUnconsumed = false); do { val event = awaitPointerEvent() } while (event.changes.any { it.pressed }) }
     }.testTag("new-drawing-color-drawer")) {
-        Box(Modifier.weight(1f)) {
-            ColorFormBody(host, form, copy.getString("paper_color"), "new-drawing-color-title", copies = false, single = true,
+        Box(if(phone)Modifier else Modifier.weight(1f)) {
+            ColorFormBody(host, form, copy.getString("paper_color"), "new-drawing-color-title", copies = false, single = true, heading=!phone, scroll=!phone,
                 transparent = if (transparent) copy.getString("transparent") else null, mode = {
                 Row(Modifier.clip(SquircleShape(ControlRadius + 3.dp)).background(fieldColor()).padding(3.dp).semantics { contentDescription = copy.getString("sheet_mode") }
                     .testTag("new-drawing-color-mode"), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -767,7 +818,7 @@ private class DrawerMemory { var shown: JSONObject? = null; var open = false; va
                 }
             }
         }
-        PickerFooter("new-drawing-color-drawer") {
+        if(!phone)PickerFooter("new-drawing-color-drawer") {
             Spacer(Modifier.weight(1f))
             DialogButton(copy.getString("cancel"), "new-drawing-color-cancel") { actions.send("close_drawer") }
             DialogButton(copy.getString("use_color"), "new-drawing-color-use", accent = true, enabled = !form.invalidOpen) { report(); actions.send("use_paper_color") }

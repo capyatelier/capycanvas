@@ -579,7 +579,9 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         publishedHostError = error
         hostError = error
     }
-    internal var dialogKeyHandler: ((android.view.KeyEvent) -> Boolean)? = null
+    internal val dialogFocus = mutableListOf<androidx.compose.ui.focus.FocusRequester>()
+    internal val dialogKeys = mutableListOf<(android.view.KeyEvent) -> Boolean>()
+    internal val dialogKeyHandler get() = dialogKeys.lastOrNull()
     internal fun commandFocus() = if (editingText || dialogKeyHandler != null) "text" else if (palettes.focus != null) "palette" else "canvas"
     fun dispatch(action: JSONObject, moving: Boolean = false, published: (() -> Unit)? = null) {
         // Capture the editor owner before a menu action opens a native dialog.

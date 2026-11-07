@@ -98,6 +98,8 @@ class AndroidPhoneAuditTest {
     @Test fun drawers() = visit(false, "drawers")
     @Test fun customize() = visit(false, "customize")
     @Test fun dialogsA2() = visit(false, "dialogsA2")
+    @Test fun dialogsD1() = visit(false, "dialogsD1")
+    @Test fun pagesD1() = visit(false, "pagesD1")
     @Test fun ime() = visit(false, "ime")
     @Test fun alertIme() = visit(false, "alertIme")
     @Test fun modalFocus() = visit(false, "modalFocus")
@@ -153,7 +155,7 @@ class AndroidPhoneAuditTest {
             assertTrue("Completed first canvas frame", frameReady)
             fun capture(name: String) {
                 captureName = name
-                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else if(family == "dialogsA2") "pages" else family)
+                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else if(family == "dialogsA2" || family == "pagesD1") "pages" else family)
                     .put("fixture",host.workspaceManager?.optString("id") ?: "builtin:workspace:painter").put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
                 host.drain()
                 compose.waitForIdle()
@@ -211,7 +213,7 @@ class AndroidPhoneAuditTest {
                     surface.getLocationOnScreen(canvasLocation)
                     report.put("canvas_origin_pixels", JSONArray(canvasLocation.toList()))
                     val root = checkNotNull(findTag("workspace"))
-                    collect(root.second, allocations)
+                    collect(if(family == "pagesD1")root.first.semanticsOwner.unmergedRootSemanticsNode else root.second, allocations)
                     report.put("phone_active", host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null)
                     report.put("revision", host.snapshot?.getJSONObject("state")?.getLong("revision"))
                     assertEquals("System theme", expectedTheme, host.snapshot?.getJSONObject("state")?.getString("theme"))
@@ -342,6 +344,15 @@ class AndroidPhoneAuditTest {
         }
         if (family == "ime" || family == "modalFocus") {
             visitIme(activity,host,::tap,::state,checkAlert = family == "ime")
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
+        if(family=="dialogsD1") {
+            visitDialogsD1(host,::tap)
+            return
+        }
+        if(family=="pagesD1") {
+            visitPagesD1(activity,host,::event,::tap,::state)
             assertTrue(failures.joinToString("\n"),failures.isEmpty())
             return
         }
@@ -763,6 +774,328 @@ class AndroidPhoneAuditTest {
             instrumentation.runOnMainSync { nativeView.layoutDirection = direction }
             compose.waitForIdle()
         }
+    }
+
+    private fun visitDialogsD1(host:CanvasHost,tap:(String)->Unit) {
+        fun wait(tag:String)=host.awaitFrame("D1 $tag is composed"){findTag(tag)!=null}
+        fun gone(tag:String)=host.awaitFrame("D1 $tag closes"){findTag(tag)==null}
+        host.drain(obj("type" to "invoke","command" to "settings"))
+        wait("settings-search")
+        tap("settings-category-canvas")
+        host.awaitFrame("Preferences uses the shared page route") {host.snapshot?.objectOrNull("preferences")?.getString("page")=="canvas" && findTag("settings-main-pane")!=null}
+        tap("settings-done");gone("preferences-dialog")
+        host.drain(obj("type" to "invoke","command" to "new_document"))
+        wait("new-drawing-create")
+        compose.onNodeWithTag("new-drawing-width").performScrollTo()
+        val width=checkNotNull(findTag("new-drawing-width")).second.boundsInRoot
+        val unit=checkNotNull(findTag("new-drawing-unit")).second.boundsInRoot
+        val metrics=instrumentation.targetContext.resources.displayMetrics
+        when((metrics.widthPixels/metrics.density).roundToInt()) {
+            412->assertEquals("Dimensions stay on one row when their natural widths fit",width.center.y,unit.center.y,1f)
+            280->assertTrue("Narrow dimensions wrap the unit below the values",unit.top>=width.bottom)
+        }
+        compose.onNodeWithTag("new-drawing-name").performScrollTo()
+        instrumentation.runOnMainSync {
+            val entry=checkNotNull(findTag("new-drawing-name")).second.find {it.config.getOrNull(SemanticsActions.SetText)!=null}
+            assertTrue(checkNotNull(entry).config[SemanticsActions.SetText].action!!.invoke(androidx.compose.ui.text.AnnotatedString("D1 draft")))
+        }
+        host.awaitFrame("New drawing keeps its native draft") {host.snapshot?.getJSONObject("state")?.objectOrNull("new_drawing")?.getString("name")=="D1 draft"}
+        compose.onNodeWithTag("new-drawing-preview").performScrollTo();tap("new-drawing-preview")
+        wait("new-drawing-save-as")
+        compose.onNodeWithTag("new-drawing-save-as").performScrollTo();tap("new-drawing-save-as")
+        wait("new-drawing-save-name")
+        tap("new-drawing-cancel")
+        host.awaitFrame("Back keeps the preset browser") {host.snapshot?.getJSONObject("state")?.objectOrNull("new_drawing")?.objectOrNull("drawer")?.isNull("save")==true}
+        tap("new-drawing-cancel")
+        host.awaitFrame("Back restores the New drawing draft") {
+            host.snapshot?.getJSONObject("state")?.objectOrNull("new_drawing")?.let {it.isNull("drawer") && it.getString("name")=="D1 draft"}==true
+        }
+        tap("new-drawing-cancel");gone("new-drawing-dialog")
+        host.drain(obj("type" to "invoke","command" to "export_document"))
+        wait("export-choose-file")
+        tap("export-size");wait("export-fit");tap("export-back")
+        wait("export-presets");tap("export-presets")
+        wait("export-preset-save");tap("export-preset-save")
+        wait("export-preset-name")
+        tap("export-dialog-cancel")
+        wait("export-preset-save");tap("export-back")
+        wait("export-size");tap("export-back");gone("export-dialog")
+        instrumentation.runOnMainSync {host.colorEditor=ColorEditorRequest("foreground",null,false,false){_,_->}}
+        wait("color-use")
+        val hex=checkNotNull(findTag("color-value-hex")).second.config[SemanticsProperties.ContentDescription]
+        compose.onNodeWithTag("color-swatches").performScrollTo();tap("color-swatches")
+        wait("color-sheet-search");tap("color-cancel")
+        wait("color-value-hex")
+        compose.onNodeWithTag("color-pick").performScrollTo();tap("color-pick")
+        wait("color-strip")
+        assertNull("Picking releases the page key owner",host.dialogKeyHandler)
+        assertFalse("Picking releases page modality",host.workspaceInteraction!!.popupOpen)
+        tap("color-strip");wait("color-value-hex")
+        assertEquals("Picking keeps the editor draft",hex,checkNotNull(findTag("color-value-hex")).second.config[SemanticsProperties.ContentDescription])
+        assertNotNull("Picking restores the page key owner",host.dialogKeyHandler)
+        tap("color-cancel");gone("color-editor")
+    }
+
+    private fun visitPagesD1(activity: MainActivity,host: CanvasHost,event: (Int,Offset) -> Unit,tap: (String) -> Unit,state: (String,() -> Unit) -> Unit) {
+        val decor = activity.window.decorView
+        fun shared() = host.snapshot!!.getJSONObject("state")
+        fun preferences() = host.snapshot?.objectOrNull("preferences")
+        fun preference(action: JSONObject) = host.drain(obj("type" to "preferences","action" to action))
+        fun invoke(command: String) = host.drain(obj("type" to "invoke","command" to command))
+        fun placed(tag: String) = findTag(tag)?.second?.let { it.layoutInfo.isPlaced && it.boundsInRoot.width > 0f && it.boundsInRoot.height > 0f } == true
+        fun wait(tag: String) = host.awaitFrame("Pages D1 $tag is placed") { placed(tag) }
+        fun gone(tag: String) = host.awaitFrame("Pages D1 $tag closes") { findTag(tag) == null }
+        fun keyboard() = decor.rootWindowInsets.isVisible(WindowInsets.Type.ime())
+        fun hideIme() {
+            instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("Keyboard-free page reference") { !keyboard() }
+            compose.waitForIdle()
+        }
+        fun reveal(tag: String) { compose.onNodeWithTag(tag,useUnmergedTree = true).performScrollTo();compose.waitForIdle() }
+        fun type(tag: String,text: String,done: () -> Boolean) {
+            tap(tag)
+            host.awaitFrame("$tag owns native focus") { findTag(tag)?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true } != null }
+            pressKey(KeyEvent.KEYCODE_A,KeyEvent.META_CTRL_ON);compose.waitForIdle()
+            instrumentation.sendStringSync(text)
+            host.awaitFrame("$tag query reaches the session",diagnostics = { "${preferences()}" }) { done() }
+            hideIme()
+        }
+        fun hold(tag: String) {
+            reveal(tag)
+            val center = checkNotNull(findTag(tag)).let { (root,node) ->
+                val screen = IntArray(2);instrumentation.runOnMainSync { root.view.getLocationOnScreen(screen) }
+                node.boundsInRoot.center + Offset(screen[0].toFloat(),screen[1].toFloat())
+            }
+            event(MotionEvent.ACTION_DOWN,center);SystemClock.sleep(900);event(MotionEvent.ACTION_UP,center);host.drain()
+        }
+        fun closeAll() {
+            if(keyboard())hideIme()
+            if(preferences() != null) {
+                preferences()?.objectOrNull("capture")?.let { preference(obj("type" to "cancel_shortcut")) }
+                host.drain(obj("type" to "close_settings"))
+            }
+            if(shared().objectOrNull("new_drawing") != null)host.drain(obj("type" to "new_drawing","action" to obj("op" to "cancel")))
+            instrumentation.runOnMainSync { host.colorEditor = null;host.textureDialog = null }
+            if(findTag("export-preset-cancel") != null) { tap("export-preset-cancel");compose.waitForIdle() }
+            repeat(3) { if(findTag("export-back") != null) { tap("export-back");compose.waitForIdle() } }
+            host.awaitFrame("Pages D1 surfaces close") { preferences() == null && shared().objectOrNull("new_drawing") == null &&
+                findTag("color-editor") == null && findTag("texture-dialog") == null && findTag("export-dialog") == null }
+            compose.waitForIdle()
+        }
+        fun preferencesRoot() {
+            if(preferences() == null) { invoke("settings");wait("settings-search") }
+            if(preferences()?.optBoolean("page_requested") == true)preference(obj("type" to "page_list"))
+            host.awaitFrame("Preferences root list") { placed("settings-category-appearance") && findTag("settings-main-pane") == null }
+        }
+        fun page(id: String) {
+            preferencesRoot()
+            reveal("settings-category-$id");tap("settings-category-$id")
+            host.awaitFrame("Preferences opens $id") { preferences()?.getString("page") == id && placed("settings-main-pane") }
+        }
+
+        state("preferences-root") {
+            tap("phone-capy");wait("phone-preferences");tap("phone-preferences")
+            wait("settings-search");preferencesRoot()
+        }
+        state("preferences-query") {
+            preferencesRoot()
+            type("settings-search","color") { preferences()?.optString("query") == "color" }
+        }
+        state("preferences-empty") {
+            preference(obj("type" to "search","query" to ""))
+            type("settings-search","zzznomatchzzz") { preferences()?.optString("query") == "zzznomatchzzz" }
+        }
+        if(preferences() != null) {
+            preference(obj("type" to "search","query" to ""));preference(obj("type" to "toggle_search","open" to false))
+            if(keyboard())hideIme()
+        }
+        for ((id,rows) in listOf("appearance" to listOf("language","theme"),"canvas" to listOf("wheel_behavior"),"color" to listOf("missing_profile","photo_depth"),
+            "input" to listOf("eraser_tool","finger_drawing"),"about" to emptyList())) {
+            state("preferences-$id") { page(id) }
+            for (row in rows) state("preferences-$id-${row.replace('_','-')}") {
+                if(preferences()?.getString("page") != id || findTag("settings-main-pane") == null)page(id)
+                reveal("preference-$row")
+            }
+            if(id == "appearance")state("preferences-language-popup") {
+                if(preferences()?.getString("page") != id || findTag("settings-main-pane") == null)page(id)
+                reveal("setting-choice-language");tap("setting-choice-language");wait("setting-choice-menu-language")
+            }
+            if(findTag("setting-choice-menu-language") != null) { pressKey(KeyEvent.KEYCODE_ESCAPE);gone("setting-choice-menu-language") }
+            if(id == "about") {
+                state("preferences-about-website") {
+                    if(preferences()?.getString("page") != id || findTag("settings-main-pane") == null)page(id)
+                    reveal("preference-website")
+                }
+                state("preferences-about-values") {
+                    if(preferences()?.getString("page") != id || findTag("settings-main-pane") == null)page(id)
+                    val rows = preferences()!!.array("pages").objects().first { it.getString("id") == "about" }.array("groups").objects().flatMap { it.array("rows").objects() }
+                    reveal("preference-"+rows.last().getString("id"))
+                }
+            }
+        }
+        state("preferences-shortcuts") { page("shortcuts") }
+        state("shortcuts-query") {
+            if(preferences()?.getString("page") != "shortcuts")page("shortcuts")
+            type("shortcuts-search","Undo") { preferences()?.optString("shortcut_query") == "Undo" }
+        }
+        state("shortcuts-empty") {
+            preference(obj("type" to "search_shortcuts","query" to ""))
+            type("shortcuts-search","zzznomatchzzz") { preferences()?.optString("shortcut_query") == "zzznomatchzzz" }
+        }
+        if(preferences() != null) { preference(obj("type" to "search_shortcuts","query" to ""));if(keyboard())hideIme() }
+        state("preferences-shortcuts-category") {
+            if(preferences()?.getString("page") != "shortcuts")page("shortcuts")
+            val first = preferences()!!.getJSONObject("shortcut_page").array("categories").objects().first().getString("id")
+            reveal("shortcut-category-$first");tap("shortcut-category-$first")
+            host.awaitFrame("The first Shortcuts category opens") { preferences()?.getJSONObject("shortcut_page")?.isNull("category") == false }
+        }
+        if(preferences()?.objectOrNull("shortcut_page")?.isNull("category") == false)preference(obj("type" to "shortcut_category","id" to JSONObject.NULL))
+        state("preferences-shortcuts-bottom") {
+            if(preferences()?.getString("page") != "shortcuts")page("shortcuts")
+            host.awaitFrame("Shortcuts home") { findTag("shortcut-categories") != null }
+            reveal("shortcut-category-"+preferences()!!.getJSONObject("shortcut_page").array("categories").objects().last().getString("id"))
+        }
+        closeAll()
+        state("preferences-shortcuts-direct") {
+            invoke("keyboard_shortcuts")
+            host.awaitFrame("Direct Keyboard Shortcuts opens its page") { preferences()?.getString("page") == "shortcuts" && placed("settings-main-pane") }
+        }
+        if(preferences() == null)invoke("keyboard_shortcuts")
+        state("choose-action") {
+            preference(obj("type" to "open_action_picker","trigger" to "touch.tap.2"));wait("action-picker")
+        }
+        if(findTag("action-picker") != null) { preference(obj("type" to "close_action_picker"));gone("action-picker") }
+        state("shortcut-editor") {
+            preference(obj("type" to "edit_shortcut","id" to "command.Redo"));wait("settings-content-shortcut:command.Redo")
+        }
+        if(preferences()?.objectOrNull("shortcut_editor") != null) { preference(obj("type" to "close_shortcut_editor"));gone("settings-content-shortcut:command.Redo") }
+        state("modifier-key") {
+            preference(obj("type" to "add_modifier_key"));wait("modifier-key")
+        }
+        if(preferences()?.objectOrNull("capture") != null) { preference(obj("type" to "cancel_shortcut"));gone("modifier-key") }
+        state("shortcut-recording") {
+            preference(obj("type" to "edit_shortcut","id" to "command.Hand"));wait("settings-content-shortcut:command.Hand")
+            reveal("add-shortcut");tap("add-shortcut")
+            host.awaitFrame("Hand records a shortcut") { preferences()?.objectOrNull("capture") != null && placed("shortcut-recording") }
+        }
+        state("shortcut-conflict") {
+            pressKey(KeyEvent.KEYCODE_E)
+            host.awaitFrame("The Eraser chord conflicts with Hand",diagnostics = { "${preferences()?.opt("capture")}" }) { preferences()?.objectOrNull("capture")?.isNull("conflict") == false }
+        }
+        if(preferences()?.objectOrNull("capture") != null)preference(obj("type" to "cancel_shortcut"))
+        if(preferences()?.objectOrNull("shortcut_editor") != null)preference(obj("type" to "close_shortcut_editor"))
+        state("modifier-per-tool") {
+            val key = preferences()!!.getJSONObject("shortcut_page").array("modifiers").objects().first().getJSONObject("key")
+            preference(obj("type" to "edit_modifier_key","key" to key))
+            preference(obj("type" to "modifier_key_per_tool","key" to key,"per_tool" to true))
+            host.awaitFrame("Modifier per-tool page") { preferences()?.objectOrNull("modifier_editor")?.optBoolean("per_tool") == true && placed("modifier-page") }
+        }
+        state("pen-button-per-tool") {
+            preference(obj("type" to "page","page" to "input"))
+            preference(obj("type" to "edit_pen_button","trigger" to "pen.button.primary"))
+            preference(obj("type" to "pen_button_per_tool","trigger" to "pen.button.primary","per_tool" to true))
+            host.awaitFrame("Pen button per-tool page") { preferences()?.objectOrNull("pen_button_editor")?.optBoolean("per_tool") == true && placed("pen-button-page") }
+        }
+        if(preferences()?.getString("page") != "shortcuts")invoke("keyboard_shortcuts")
+        state("keymap-details") {
+            preference(obj("type" to "keymap_details","open" to true));wait("keymap-details")
+        }
+        if(findTag("keymap-details") != null) { preference(obj("type" to "keymap_details","open" to false));gone("keymap-details") }
+        state("keymap-import") {
+            preference(obj("type" to "import_keymap","text" to obj("format" to "capycanvas-keymap","version" to 1,"keymap" to obj("id" to "photoshop","revision" to 1)).toString()))
+            wait("keymap-import")
+        }
+        if(findTag("keymap-import-cancel") != null) { tap("keymap-import-cancel");gone("keymap-import-cancel") }
+        closeAll()
+
+        state("new-drawing") { invoke("new_document");wait("new-drawing-create") }
+        fun newDrawing() { if(shared().objectOrNull("new_drawing") == null) { invoke("new_document");wait("new-drawing-create") } }
+        fun drawer() = shared().objectOrNull("new_drawing")?.objectOrNull("drawer")
+        fun mainPage() { repeat(3) { if(drawer() != null) { tap("new-drawing-cancel");compose.waitForIdle() } };host.awaitFrame("New Drawing main page") { drawer() == null && placed("new-drawing-create") } }
+        state("new-drawing-presets") {
+            newDrawing();reveal("new-drawing-presets-button");tap("new-drawing-presets-button")
+            host.awaitFrame("Preset browser subpage") { drawer()?.optString("kind") == "presets" && findTag("new-drawing-presets") != null }
+        }
+        state("new-drawing-save-preset") {
+            reveal("new-drawing-save-as");tap("new-drawing-save-as");wait("new-drawing-save-name")
+            if(keyboard())hideIme()
+        }
+        if(shared().objectOrNull("new_drawing") != null)mainPage()
+        state("new-paper") {
+            newDrawing();reveal("new-drawing-texture");tap("new-drawing-texture")
+            host.awaitFrame("Paper subpage") { drawer()?.optString("kind") == "paper" && findTag("new-drawing-papers") != null }
+        }
+        if(shared().objectOrNull("new_drawing") != null)mainPage()
+        state("new-drawing-paper-color") {
+            newDrawing();reveal("new-drawing-paper-color");tap("new-drawing-paper-color")
+            host.awaitFrame("Paper colour subpage") { drawer()?.optString("kind") == "paper_color" && findTag("new-drawing-paper-colors") != null }
+        }
+        state("new-drawing-paper-color-menu") {
+            if(drawer()?.optString("kind") != "paper_color") { newDrawing();reveal("new-drawing-paper-color");tap("new-drawing-paper-color");host.awaitFrame("Paper colour subpage") { findTag("new-drawing-paper-colors") != null } }
+            hold("new-drawing-paper-color-0")
+            if(findTag("new-drawing-paper-color-delete") == null)compose.onNodeWithTag("new-drawing-paper-color-0",useUnmergedTree = true).performSemanticsAction(SemanticsActions.OnLongClick)
+            wait("new-drawing-paper-color-delete")
+        }
+        if(findTag("new-drawing-paper-color-delete") != null) { pressKey(KeyEvent.KEYCODE_ESCAPE);gone("new-drawing-paper-color-delete") }
+        closeAll()
+
+        state("color") {
+            instrumentation.runOnMainSync { host.colorEditor = ColorEditorRequest("foreground",null,false,false) { _,_ -> } }
+            wait("color-use")
+        }
+        state("color-model-popover") {
+            reveal("color-format-0");tap("color-format-0")
+            host.awaitFrame("Colour format menu opens") { findNode({ it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("color-form-") == true }) != null }
+        }
+        if(findNode({ it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("color-form-") == true }) != null) {
+            pressKey(KeyEvent.KEYCODE_ESCAPE)
+            host.awaitFrame("Colour format menu closes") { findNode({ it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("color-form-") == true }) == null }
+        }
+        state("all-swatches") {
+            if(findTag("color-use") == null) { instrumentation.runOnMainSync { host.colorEditor = ColorEditorRequest("foreground",null,false,false) { _,_ -> } };wait("color-use") }
+            reveal("color-swatches");tap("color-swatches");wait("color-sheet-search")
+            if(keyboard())hideIme()
+        }
+        if(findTag("color-sheet-search") != null) { tap("color-cancel");host.awaitFrame("All Swatches returns to Edit Color") { findTag("color-sheet-search") == null && findTag("color-value-hex") != null } }
+        state("color-eyedropper") {
+            if(findTag("color-use") == null) { instrumentation.runOnMainSync { host.colorEditor = ColorEditorRequest("foreground",null,false,false) { _,_ -> } };wait("color-use") }
+            reveal("color-pick");tap("color-pick");wait("color-strip")
+        }
+        if(findTag("color-strip") != null) { tap("color-strip");host.awaitFrame("Picking returns to Edit Color") { findTag("color-strip") == null && findTag("color-value-hex") != null } }
+        closeAll()
+
+        state("paper") {
+            val paper = shared().array("layers").objects().first { it.optJSONObject("paper")?.optBoolean("editable") == true }.getLong("id")
+            host.drain(obj("type" to "layer","action" to obj("op" to "select","id" to paper,"mask" to false)))
+            instrumentation.runOnMainSync { host.textureDialog = TextureDialogRequest(paper,false) }
+            wait("texture-use")
+        }
+        closeAll()
+
+        state("export") {
+            invoke("export_document");wait("export-choose-file")
+            val deadline = SystemClock.uptimeMillis()+20_000
+            while(SystemClock.uptimeMillis() < deadline && findTag("export-dialog")?.second?.let { dialog ->
+                    var images = 0
+                    fun count(node: SemanticsNode) { if(node.config.getOrNull(SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Image)images++;node.children.forEach(::count) }
+                    count(dialog);images < 2 } != false) SystemClock.sleep(100)
+            compose.waitForIdle()
+        }
+        fun exportRoot() { if(findTag("export-dialog") == null) { invoke("export_document");wait("export-choose-file") };host.awaitFrame("Export root page") { findTag("export-presets") != null } }
+        state("export-size") { exportRoot();reveal("export-size");tap("export-size");wait("export-fit") }
+        if(findTag("export-fit") != null) { tap("export-back");host.awaitFrame("Export Back returns to its root") { findTag("export-presets") != null } }
+        state("export-color") {
+            exportRoot();reveal("export-color");tap("export-color")
+            host.awaitFrame("Export colour page") { findTag("export-presets") == null && placed("export-back") }
+        }
+        if(findTag("export-presets") == null && findTag("export-dialog") != null) { tap("export-back");host.awaitFrame("Export Back returns to its root") { findTag("export-presets") != null } }
+        state("export-presets") { exportRoot();reveal("export-presets");tap("export-presets");wait("export-preset-save") }
+        state("export-preset-name") {
+            if(findTag("export-preset-save") == null) { exportRoot();reveal("export-presets");tap("export-presets");wait("export-preset-save") }
+            tap("export-preset-save");wait("export-preset-name")
+            if(keyboard())hideIme()
+        }
+        closeAll()
     }
 
     private fun visitIme(activity: MainActivity,host: CanvasHost,tap: (String) -> Unit,state: (String,() -> Unit) -> Unit,checkAlert: Boolean = true) {
