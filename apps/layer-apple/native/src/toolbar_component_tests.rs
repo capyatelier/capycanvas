@@ -67,7 +67,7 @@ fn apple_geometry_metrics_do_not_require_a_prepared_language() {
 #[test]
 fn apple_toolbar_queries_match_the_shared_transport_without_a_session() {
     let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
-    let prepared = App(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
+    let prepared = App::from_handle(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
     assert!(!(prepared.0==0));
     for request in [
         json!({"type":"slider_layout","width":44,"height":176,"axis":"vertical","style":"small","slider_style":{"show_value":false,"expand":false}}),

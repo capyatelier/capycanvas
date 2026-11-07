@@ -53,8 +53,15 @@ unsafe fn launch_json(platform: u32, json: *const c_char, bootstrap: *mut u64, e
     app
 }
 
-struct App(u64, Option<(std::path::PathBuf, layer_host::session_stores::SessionStores)>);
+struct App(u64, Option<(std::path::PathBuf, layer_host::session_stores::SessionStores)>, std::cell::Cell<u64>);
 impl App {
+    fn from_handle(handle: u64) -> Self { Self(handle, None, std::cell::Cell::new(2_000_000_000)) }
+    fn frame_time(&self, now: u64) -> u64 {
+        let now = now.max(self.2.get());
+        self.2.set(now);
+        now
+    }
+    fn next_frame_time(&self) -> u64 { self.frame_time(self.2.get() + 8_000_000) }
     fn borrow(&self)->layer_host::handles::LocalBorrowed<CapyApple> {handles::app(self.0).unwrap()}
     fn document(&self)->layer_core::Document {self.borrow().host.session.engine().document().clone()}
     fn with<T>(&self,work:impl FnOnce(&mut CapyApple)->T)->T {work(&mut self.borrow())}
@@ -1273,7 +1280,7 @@ impl App {
     }
     fn unbound(platform: u32) -> Self {
         layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
-        let app = Self(capy_apple_create(platform), None);
+        let app = Self::from_handle(capy_apple_create(platform));
         assert!(!(app.0==0));
         assert_eq!(unsafe { capy_apple_resize(app.0, 1200, 900, 1.) }, 0);
         app
@@ -1340,9 +1347,10 @@ impl App {
         serde_json::to_value(self.borrow().host.session.state()).unwrap()
     }
     fn draw_frame(&self) {
+        let now = self.next_frame_time();
         let mut lease_app=self.borrow();let app=&mut *lease_app;
         app.host
-            .prepare_canvas_frame(2_000_000_000, 2_000_000_000, true)
+            .prepare_canvas_frame(now, now, true)
             .unwrap();
     }
     fn draw_until_transform(&self) {
@@ -1675,7 +1683,8 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
             let host = &mut app.borrow().host;
             host.session.renderer_mut().0 = Some(staged.into());
             host.startup = Default::default();
-            host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, false)
+            let now = app.frame_time(2_000_000_000);
+            host.prepare_canvas_frame(now, now, false)
                 .unwrap();
             assert!(!host.startup.canvas_ready);
             assert!(host.dirty, "Startup must keep the frame driver awake");
@@ -1687,7 +1696,8 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
         loop {
             let ready=app.with(|native| {
                 let host=&mut native.host;
-                host.prepare_canvas_frame(2_100_000_000,2_100_000_000,true).unwrap();
+                let now = app.frame_time(2_100_000_000);
+                host.prepare_canvas_frame(now,now,true).unwrap();
                 host.startup.brush_ready
             });
             if ready && app.pixels() != paper {
@@ -1795,7 +1805,7 @@ fn stateless_color_editors_preserve_tagged_precision_and_convert_previews() {
 #[test]
 fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     let launch = CString::new(json!({"saved":"", "preferred_languages":["en"]}).to_string()).unwrap();
-    let prepared = App(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
+    let prepared = App::from_handle(unsafe { launch_json(0, launch.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
     assert!(!(prepared.0==0));
     let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
     let resolve = |operation| localized_stateless(capy_apple_numeric,
@@ -1999,7 +2009,7 @@ fn apple_launch_resolves_saved_preference_before_native_session() {
     for platform in [0, 1] {
         let saved = json!({"language": {"Explicit": "en"}}).to_string();
         let source = CString::new(json!({"saved": saved, "preferred_languages": ["ja-JP", "ko-KR", "en-US"]}).to_string()).unwrap();
-        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
+        let app = App::from_handle(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
         assert!(!(app.0==0));
         let localization = app.borrow().host.session.localization().clone();
         assert_eq!(localization.language(), layer_ui::UiLanguage::English);
@@ -2030,7 +2040,7 @@ fn apple_launch_rejects_invalid_transport_without_a_session() {
 
     }
     let mut error = 7;
-    let app = App(unsafe { launch_json(0, valid.as_ptr(), std::ptr::null_mut(), &mut error) }, None);
+    let app = App::from_handle(unsafe { launch_json(0, valid.as_ptr(), std::ptr::null_mut(), &mut error) });
     assert!(!(app.0==0));
     assert_eq!(error,0);
 }
@@ -2052,7 +2062,7 @@ fn apple_native_boundaries_preserve_panic_diagnostics() {
 fn apple_launch_configuration_passes_the_display_to_the_startup_sheet() {
     let source = CString::new(json!({"saved":"", "preferred_languages":["en"], "screen":{"extent":[2880,1800],"ppi":220}}).to_string()).unwrap();
     for platform in [0, 1] {
-        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
+        let app = App::from_handle(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
         assert!(!(app.0==0));
         let document=app.document();
         assert_eq!(document.composition().size, [2400, 1800]);
@@ -2063,7 +2073,7 @@ fn apple_launch_configuration_passes_the_display_to_the_startup_sheet() {
 #[test]
 fn apple_launch_prepared_context_survives_restore_and_invalid_platform_keeps_bootstrap_copy() {
     let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
-    let app = App(apple_launch_localized(1, "", localization.clone()).unwrap(), None);
+    let app = App::from_handle(apple_launch_localized(1, "", localization.clone()).unwrap());
     assert!(!(app.0==0));
     app.action(json!({"type": "restore_saved_settings", "saved": "{\"language\":{\"Explicit\":\"en\"}}"}));
     assert!(std::sync::Arc::ptr_eq(&localization, &app.with(|native|native.host.session.localization().clone())));
@@ -2140,7 +2150,7 @@ fn apple_language_publication_is_atomic_deferred_and_window_local() {
 fn apple_launch_uses_each_scene_settings_instead_of_first_process_language() {
     for (platform, language) in [(0, "ja"), (1, "ko"), (0, "en")] {
         let source = CString::new(json!({"saved":json!({"language":{"Explicit":language}}).to_string(),"preferred_languages":["en"]}).to_string()).unwrap();
-        let app = App(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) }, None);
+        let app = App::from_handle(unsafe { launch_json(platform, source.as_ptr(), std::ptr::null_mut(), std::ptr::null_mut()) });
         assert!(!(app.0==0));
         assert_eq!(app.request(2, json!({"type":"bootstrap"})).unwrap()["active_tag"], language);
     }

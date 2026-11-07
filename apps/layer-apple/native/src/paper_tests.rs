@@ -214,7 +214,7 @@ fn apple_initial_paper_is_prepared_before_publication_and_later_library_reload_d
     let (id,paper,entries)=layer_host::papers::import(&directory,&image,"Cotton",&||false).unwrap();
     for platform in [0,1] {
         let configuration=CString::new(remembered_launch(&directory,&id)).unwrap();
-        let app=App(unsafe {launch_json(platform,configuration.as_ptr(),std::ptr::null_mut(),std::ptr::null_mut())}, None);assert!(!(app.0==0));
+        let app=App::from_handle(unsafe {launch_json(platform,configuration.as_ptr(),std::ptr::null_mut(),std::ptr::null_mut())});assert!(!(app.0==0));
         let document=document(&app);
         assert_eq!(document.paper(None).texture,layer_core::paper::built_in_paper("cold_press").unwrap().texture);
         let layer_core::TextureSource::Image(actual)=app.borrow().host.session.new_drawing_paper() else {panic!("initial remembered image must exist before publication")};
@@ -239,7 +239,7 @@ fn apple_new_drawing_resolves_its_uncached_library_paper_on_the_project_worker()
     for missing in [false,true] {
         if missing { std::fs::write(directory.join(format!("{id}.png")),b"invalid PNG").unwrap(); }
         let configuration=CString::new(json!({"saved":"","preferred_languages":["en"],"paper_directory":directory}).to_string()).unwrap();
-        let app=App(unsafe {launch_json(1,configuration.as_ptr(),std::ptr::null_mut(),std::ptr::null_mut())}, None);assert!(!(app.0==0));
+        let app=App::from_handle(unsafe {launch_json(1,configuration.as_ptr(),std::ptr::null_mut(),std::ptr::null_mut())});assert!(!(app.0==0));
         app.borrow().host.session.renderer_mut().0=Some(native_renderer());
         assert_eq!(unsafe {capy_apple_resize(app.0,1200,900,1.)},0);app.draw_frame();
         let list=PaperJob::new(&app,0,&directory);list.work(None);list.apply(&app);
@@ -353,7 +353,7 @@ fn apple_failed_initial_material_notifies_once_and_reload_does_not_repeat_the_fa
     let (id,_,_)=layer_host::papers::import(&directory,&image,"Cotton",&||false).unwrap();
     std::fs::write(directory.join(format!("{id}.png")),b"invalid PNG").unwrap();
     let configuration=CString::new(remembered_launch(&directory,&id)).unwrap();
-    let app=App(unsafe {launch_json(1,configuration.as_ptr(),std::ptr::null_mut(),std::ptr::null_mut())}, None);assert!(!(app.0==0));
+    let app=App::from_handle(unsafe {launch_json(1,configuration.as_ptr(),std::ptr::null_mut(),std::ptr::null_mut())});assert!(!(app.0==0));
     let before=document(&app);let mark=checkpoint(&app);let notice=app.state()["notice"]["id"].clone();assert!(!notice.is_null());
     assert_eq!(before.paper(None).texture,layer_core::paper::built_in_paper("cold_press").unwrap().texture);
     for _ in 0..2 {let job=PaperJob::new(&app,0,&directory);job.work(None);job.apply(&app);}

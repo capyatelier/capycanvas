@@ -82,7 +82,8 @@ fn canvas_update_counter_observes_paint_without_advancing_it() {
         assert!(painted > before);
         assert_ne!(app.pixels(), pixels);
         assert_eq!(unsafe { capy_apple_submitted_canvas_updates(app.0) }, painted);
-        assert_eq!(unsafe { capy_apple_frame(app.0, 3_000_000_000, 3_000_000_000, std::ptr::null_mut()) }, 0);
+        let now = app.frame_time(3_000_000_000);
+        assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut()) }, 0);
         assert_eq!(unsafe { capy_apple_submitted_canvas_updates(app.0) }, painted);
     }
 }
@@ -135,7 +136,8 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             // that real callback through the owner; do not assume it is inline.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !app.borrow().host.session.rendering_suspended() {
-                assert_eq!(unsafe { capy_apple_frame(app.0, 3_010_000_000, 3_010_000_000, std::ptr::null_mut()) }, 0);
+                let now = app.frame_time(3_010_000_000);
+                assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut()) }, 0);
                 assert!(std::time::Instant::now() < deadline, "{platform} {fault}: loss callback did not arrive");
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
@@ -205,7 +207,7 @@ fn unsupported_metal_adapter_keeps_localized_explanation_and_native_cause_on_bot
     for platform in [0, 1] {
         for language in [layer_ui::UiLanguage::English, layer_ui::UiLanguage::Japanese] {
             let localization = layer_ui::Localizer::shared(language);
-            let app = App(apple_launch_localized(platform, "", localization.clone()).unwrap(), None);
+            let app = App::from_handle(apple_launch_localized(platform, "", localization.clone()).unwrap());
             let mut lease_native=app.borrow();let native=&mut *lease_native;
             assert!(layer_host::admit_adapter(native.host.session.localization(), adapter, &limits).is_ok());
             let expected = layer_ui::gpu_unsupported(&localization, &cause);

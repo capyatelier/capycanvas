@@ -263,7 +263,8 @@ fn apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart() {
         let gpu = native_renderer();
         let staged = layer_host::GpuContext::of(&gpu).rasterizer(Default::default(), &Default::default(), false).unwrap();
         first_presented.borrow().host.session.renderer_mut().0 = Some(staged);
-        first_presented.borrow().host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, true).unwrap();
+        let now = first_presented.frame_time(2_000_000_000);
+        first_presented.borrow().host.prepare_canvas_frame(now, now, true).unwrap();
         assert!(!first_presented.borrow().host.startup.complete);
         let task = open(&first_presented, &path, false);
         task.run();
@@ -274,7 +275,8 @@ fn apple_fill_selection_survives_background_checkpoint_undo_redo_and_restart() {
         let before = presented_pixel(&first_presented);
         assert!(i32::from(before[2]) > i32::from(before[0]) + 20,
             "platform {platform}: prepared viewport is not blue: {before:?}");
-        first_presented.borrow().host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, false).unwrap();
+        let now = first_presented.frame_time(2_000_000_000);
+        first_presented.borrow().host.prepare_canvas_frame(now, now, false).unwrap();
         let backdrop = presented_pixel(&first_presented);
         first_presented.draw_until_idle();
         let viewport = presented_pixel(&first_presented);

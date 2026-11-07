@@ -472,11 +472,13 @@ fn mac_manual_prediction_adds_lead_only_for_the_pen() {
             let offset = (ahead.y as usize * width + ahead.x as usize) * 4;
             let mut record = [500., 450., 0.8, 0., 0., 0., 0., 0., 1.];
             let handle = app.0;
+            let owner = &app;
             let send = move |record: &[f64]| {
                 assert_eq!(unsafe { capy_apple_pointer(handle, 1, tool, 0,
                     record.as_ptr(), record.len(), 0, capy_apple_camera_revision(handle), 0) }, 0);
+                let now = owner.frame_time(record[7] as u64);
                 handles::app(handle).unwrap().host.prepare_canvas_frame(
-                    record[7] as u64, record[7] as u64 + 8_000_000, true).unwrap();
+                    now, now + 8_000_000, true).unwrap();
             };
             for index in 0..101 {
                 record[0] = 500. + f64::from(index) * 2.;
@@ -563,9 +565,10 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
                 );
             };
             let frame = |time: f64| {
+                let now = app.frame_time(time as u64);
                 app.borrow()
                     .host
-                    .prepare_canvas_frame(time as u64, time as u64 + 8_000_000, true)
+                    .prepare_canvas_frame(now, now + 8_000_000, true)
                     .unwrap()
             };
             let mut record = [500., 450., 0.8, 0., 0., 0., 0., 0., 1.];
