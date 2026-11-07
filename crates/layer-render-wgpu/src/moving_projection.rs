@@ -88,7 +88,7 @@ impl MovingProjection {
             if let Some(request)=group.iter_mut().find(|request|request.bounds.union(bounds).area()
                 == request.bounds.area()+bounds.area()-request.bounds.intersect(bounds).area()) {
                 request.bounds=request.bounds.union(bounds);request.rank=request.rank.max(rank);
-            } else { group.push(object_image_mips::MovingRequest {id,source:source.clone(),level,nearest,bounds,format:if nearest {wgpu::TextureFormat::Rgba32Float}else{format},rank}); }
+            } else { group.push(object_image_mips::MovingRequest {id,source:source.clone(),level,nearest,bounds,format:if nearest {object_image_mips::MovingImages::source_format(source)}else{format},rank}); }
         }
         let artwork = scene.artwork();
         *cache = Some(MovingProjection {artwork:artwork.id,root:artwork.root,objects:artwork.objects.clone(),

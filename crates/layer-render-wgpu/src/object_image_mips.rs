@@ -18,6 +18,7 @@ pub(crate) struct MovingSource {
     pub level: u32,
     pub extent: [u32;2],
     pub origin: [u32;2],
+    pub samples: Option<crate::scene::sources::Samples>,
 }
 struct Planned { request: MovingRequest, plan: display_mips::Plan, bytes: u64, root: bool }
 pub(crate) struct MipPlan { targets: Vec<Planned>, pub bytes: u64, pub waiting: bool }
@@ -39,6 +40,9 @@ impl Entry {
     }
     fn ready(&self) -> bool { self.pending.is_empty() && self.valid.load(Ordering::Acquire) }
     fn storage_bytes(&self) -> u64 { self.image.storage_bytes() }
+    fn encoded(&self) -> bool {
+        matches!(self.image.texture.format(),wgpu::TextureFormat::Rgba8Unorm|wgpu::TextureFormat::Rg32Uint)
+    }
     fn requested(&self, requests: &[MovingRequest]) -> bool { requests.iter().any(|request| self.matches(request.id, &request.source)) }
 }
 struct Retired { entry: Entry, complete: Arc<AtomicBool> }
@@ -84,6 +88,10 @@ impl MovingRequest {
     }
 }
 impl MovingImages {
+    pub(crate) fn source_format(source:&SourceImage)->wgpu::TextureFormat {
+        crate::scene::sources::Samples::for_source(source,[0;2],RgbSpace::Srgb)
+            .map_or(wgpu::TextureFormat::Rgba32Float,|samples|samples.format())
+    }
     pub(crate) fn format(scene: layer_core::SceneView<'_>) -> wgpu::TextureFormat {
         let full=scene.composition().color.depth.is_float() || scene.order().iter().any(|&owner| {
             scene.effect(owner).is_some()
@@ -99,7 +107,7 @@ impl MovingImages {
         let reduced=if requests.iter().any(|request|!request.nearest) {pixels.saturating_mul(bpp).saturating_mul(8)}else{0};
         let mut seen=std::collections::BTreeSet::new();
         let level_zero=requests.iter().filter(|request|request.nearest && !request.bounds.is_empty() && seen.insert(request.id))
-            .map(|request|request.source.extent.map(|side|u64::from(side.div_ceil(PAGE_SIZE)*PAGE_SIZE)).into_iter().fold(16u64,u64::saturating_mul))
+            .map(|request|request.source.extent.map(|side|u64::from(side.div_ceil(PAGE_SIZE)*PAGE_SIZE)).into_iter().fold(u64::from(request.format.block_copy_size(None).unwrap()),u64::saturating_mul))
             .fold(0u64,u64::saturating_add);
         let bytes=working_bytes().saturating_add(reduced).saturating_add(level_zero);
         Ok(if level_zero>0 {bytes.min(LEVEL_ZERO_BYTES)}else{bytes})
@@ -274,7 +282,11 @@ impl MovingImages {
             display_mips::Plan::at([PAGE_SIZE;2],display_mips::MAX_LEVEL),display_mips::MAX_LEVEL));
         let mut replacements=Vec::new();let mut copied:Vec<(PortableId,Weak<SourceImage>)>=Vec::new();
         for target in plan.targets {
-            let image=display_mips::Window::new(&r.device,target.plan,target.request.format,work,self.pipelines.as_ref().unwrap());
+            let mut image=display_mips::Window::new(&r.device,target.plan,target.request.format,work,self.pipelines.as_ref().unwrap());
+            if image.texture.format()==wgpu::TextureFormat::Rgba8Unorm
+                && crate::scene::sources::Samples::for_source(&target.request.source,[0;2],r.device.working_space()).is_some_and(|samples|samples.srgb_view()) {
+                image.view=image.texture.create_view(&wgpu::TextureViewDescriptor {format:Some(wgpu::TextureFormat::Rgba8UnormSrgb),usage:Some(wgpu::TextureUsages::TEXTURE_BINDING),..Default::default()});
+            }
             let mut pending:Vec<_>=crate::page_coordinates(target.plan.bounds).collect();
             let centre=[target.plan.bounds.min_x()+target.plan.bounds.width()/2,target.plan.bounds.min_y()+target.plan.bounds.height()/2];
             if target.plan.bounds!=PixelRect::full(target.plan.extent) {
@@ -326,8 +338,12 @@ impl MovingImages {
             .max_by_key(|entry|entry.image.plan.level)
             .or_else(||candidates().filter(|entry|!entry.root && entry.image.plan.level>requested).min_by_key(|entry|entry.image.plan.level))
             .or_else(||candidates().filter(|entry|entry.root).max_by_key(|entry|entry.image.plan.level))?;
-        Some(MovingSource {view:entry.image.view.clone(),level:entry.image.plan.level,extent:entry.image.plan.size,
-            origin:[entry.image.plan.bounds.min_x(),entry.image.plan.bounds.min_y()]})
+        let samples=entry.encoded().then(||crate::scene::sources::Samples::for_source(source,[0;2],context)).flatten();
+        let view=entry.image.view.clone();
+        let origin=[entry.image.plan.bounds.min_x(),entry.image.plan.bounds.min_y()];
+        let scale=1<<entry.image.plan.level;
+        let extent=std::array::from_fn(|axis|entry.image.plan.size[axis].min(source.extent[axis].saturating_sub(origin[axis]).div_ceil(scale)));
+        Some(MovingSource {view,level:entry.image.plan.level,extent,origin,samples})
     }
     pub(crate) fn next_build(&mut self)->Option<(PortableId,Arc<SourceImage>,[u32;2])> {
         for entry in &mut self.entries {
@@ -350,13 +366,35 @@ impl MovingImages {
     pub(crate) fn accepts_tile(&self,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2])->bool {
         self.entries.iter().any(|entry|entry.matches(id,source) && entry.valid.load(Ordering::Acquire) && entry.pending.front()==Some(&coordinate))
     }
-    pub(crate) fn write_tile(&mut self,r:&WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2],texture:&wgpu::Texture)->Result<bool,GpuRasterError> {
+    pub(crate) fn needs_samples(&self,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2],texture:&wgpu::Texture)->bool {
+        self.entries.iter().any(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate)
+            && entry.encoded() && entry.image.texture.format()!=texture.format())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn write_tile(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2],texture:&wgpu::Texture,pixels:Option<&crate::scene::sources::PreparedSourcePixels>)->Result<bool,GpuRasterError> {
         if !self.accepts_tile(id,source,coordinate) {return Err(GpuRasterError::InvalidImage);}
-        let level=self.entries.iter().filter(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate))
-            .map(|entry|entry.image.plan.level).max().unwrap();
-        self.pipelines.as_ref().unwrap().prepare_tile(&r.device,encoder,self.work.as_mut().unwrap(),texture,level)?;
-        display_mips::Window::copy_tiles(self.pipelines.as_ref().unwrap(),encoder,self.work.as_ref().unwrap(),coordinate,
-            self.entries.iter().filter(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate)).map(|entry|&entry.image))?;
+        let windows=||self.entries.iter().filter(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate));
+        let level=windows().filter(|entry|!entry.encoded())
+            .map(|entry|entry.image.plan.level).max();
+        for entry in windows().filter(|entry|entry.encoded()) {
+            let origin=coordinate.map(|value|value*PAGE_SIZE);
+            let destination=[origin[0]-entry.image.plan.bounds.min_x(),origin[1]-entry.image.plan.bounds.min_y()];
+            let extent=wgpu::Extent3d {width:PAGE_SIZE,height:PAGE_SIZE,depth_or_array_layers:1};
+            if entry.image.texture.format()==texture.format() {
+                encoder.copy_texture_to_texture(texture.as_image_copy(),wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:destination[0],y:destination[1],z:0},..entry.image.texture.as_image_copy()},extent);
+            } else {
+                let Some(crate::scene::sources::PreparedSourcePixels::NativeSamples(bytes))=pixels else {return Err(GpuRasterError::DeferredObjectWork);};
+                let row=PAGE_SIZE*entry.image.texture.format().block_copy_size(None).unwrap();
+                if bytes.len()!=row as usize*PAGE_SIZE as usize {return Err(GpuRasterError::InvalidImage);}
+                r.uploads.write_texture_region(encoder,&entry.image.texture,destination,extent,row,|mapped|mapped.copy_from_slice(bytes))?;
+                r.source_tiles.borrow().charge_upload(encoder,bytes.len() as u64);
+            }
+        }
+        if let Some(level)=level {
+            self.pipelines.as_ref().unwrap().prepare_tile(r,encoder,self.work.as_mut().unwrap(),texture,source,coordinate,level)?;
+            display_mips::Window::copy_tiles(self.pipelines.as_ref().unwrap(),encoder,self.work.as_ref().unwrap(),coordinate,
+                windows().filter(|entry|!entry.encoded()).map(|entry|&entry.image))?;
+        }
         let mut changed=false;
         for entry in self.entries.iter_mut().filter(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate)) {
             crate::submission::CacheWrite::shared(entry.valid.clone()).track(encoder);
@@ -371,6 +409,7 @@ impl MovingImages {
 }
 
 pub(crate) struct ImageDecodeRequest {
+    pub use_:crate::scene::sources::SourceUse,
     pub id:PortableId,
     pub source:Arc<SourceImage>,
     pub coordinate:[u32;2],
@@ -468,7 +507,9 @@ fn prepare_image_tile_with(source:&SourceImage,coordinate:[u32;2],destination:Rg
     let bytes=pixels.into_iter().flat_map(|[r,g,b,a]|[r*a,g*a,b*a,a]).flat_map(f32::to_ne_bytes).collect();
     Ok(PreparedSourcePixels::PremultipliedWorkingPixels(Arc::new(bytes)))
 }
+#[derive(Clone)]
 pub(crate) struct PreparedMipTile {
+    pub use_:crate::scene::sources::SourceUse,
     pub id:PortableId,
     pub source:Arc<SourceImage>,
     pub coordinate:[u32;2],
@@ -609,7 +650,7 @@ fn prepare_request(request:MipDecodeRequest,destination:RgbSpace,cache:&layer_co
                 decoders.push_back(decoder);
                 decoded
             });
-            PreparedImageWork::Image(PreparedMipTile {id:request.id,source:request.source,coordinate:request.coordinate,pixels})
+            PreparedImageWork::Image(PreparedMipTile {use_:request.use_,id:request.id,source:request.source,coordinate:request.coordinate,pixels})
         },
     }
 }
@@ -632,9 +673,13 @@ impl MipDecodeQueue {
     }
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {let _=self.context.wake.set(wake);}
+    #[cfg(test)]
     pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
+        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Display)
+    }
+    pub(crate) fn request_for(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2],use_:crate::scene::sources::SourceUse)->bool {
         let weak=Arc::downgrade(&source);
-        self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)))
+        self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {use_,id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)))
     }
     pub(crate) fn request_raster(&mut self,blob:Arc<layer_core::raster::TileBlob>,space:RgbSpace,destination:RgbSpace,scalar:bool)->bool {
         let key=DecodeKey::Raster(Arc::downgrade(&blob),space,destination,scalar);
@@ -783,9 +828,9 @@ mod tests {
         let b=layer_core::color::source::rgba8_source([1;2],|_,_|[9,8,7,255]);
         let (aid,bid)=(PortableId::random(),PortableId::random());
         let weak=Arc::downgrade(&a);let mut failures=Vec::new();
-        let stale=PreparedMipTile {id:aid,source:a.clone(),coordinate:[0;2],pixels:Err("retired A decode".into())};
+        let stale=PreparedMipTile {use_:crate::scene::sources::SourceUse::Display,id:aid,source:a.clone(),coordinate:[0;2],pixels:Err("retired A decode".into())};
         assert!(!retain_image_decode(&stale,RgbSpace::Srgb,&mut failures));
-        let current=PreparedMipTile {id:bid,source:b.clone(),coordinate:[0;2],pixels:Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(Arc::new(vec![9,8,7,255])))};
+        let current=PreparedMipTile {use_:crate::scene::sources::SourceUse::Display,id:bid,source:b.clone(),coordinate:[0;2],pixels:Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(Arc::new(vec![9,8,7,255])))};
         assert!(retain_image_decode(&current,RgbSpace::Srgb,&mut failures));
         assert!(image_decode_failure(&failures,bid,&b,[0;2],RgbSpace::Srgb).is_none());
         assert!(image_decode_failure(&failures,aid,&b,[0;2],RgbSpace::Srgb).is_none());
@@ -804,7 +849,7 @@ mod tests {
         let aid=PortableId::random();let bid=PortableId::random();
         let pending=|r:&WgpuRasterizer,source:&Arc<SourceImage>|Arc::new(r.source_tiles.borrow_mut().plan(r,source,[0;2]).unwrap().1.unwrap());
         let (ra,rb)=(pending(&r,&a),pending(&r,&b));
-        let result=|id,source:&Arc<SourceImage>|PreparedImageWork::Image(PreparedMipTile {id,source:source.clone(),coordinate:[0;2],
+        let result=|id,source:&Arc<SourceImage>|PreparedImageWork::Image(PreparedMipTile {use_:crate::scene::sources::SourceUse::Display,id,source:source.clone(),coordinate:[0;2],
             pixels:prepare_image_tile(source,[0;2],space,&r.device.source_samples,None)});
         let (send,results)=std::sync::mpsc::sync_channel(2);assert!(send.send(result(bid,&b)).is_ok());assert!(send.send(result(aid,&a)).is_ok());
         let (requests,receive)=std::sync::mpsc::sync_channel(2);

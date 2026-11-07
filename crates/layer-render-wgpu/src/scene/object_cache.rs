@@ -345,7 +345,7 @@ impl ObjectCache {
                 1 if task.tile < task.tiles.len() => {
                     let coordinate = task.tiles[task.tile];
                     let input = if deferred {
-                        let Some(input) = objects::decode_live(r, task.key.object.image, &task.job.source, coordinate)? else { break; };
+                        let Some(input) = objects::decode_live(r, encoder, task.key.object.image, &task.job.source, coordinate)? else { break; };
                         input
                     } else { objects::decode(r, encoder, &task.job.source, coordinate)? };
                     let origin = coordinate.map(|v| v * PAGE_SIZE);

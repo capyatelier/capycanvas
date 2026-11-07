@@ -510,7 +510,7 @@ impl RetouchSources {
         }
         let prepared = raw_prepared_view(r, layer, coordinate);
         let view = match prepared {
-            Prepared::View(view) => Some(view),
+            Prepared::View(view) => Some(exact_source_view(r, view, encoder)?),
             Prepared::Absent => None,
             Prepared::Decode if !wait => return Ok(None),
             Prepared::Decode => {
@@ -582,7 +582,7 @@ impl RetouchSources {
             return Ok(Some(page.active().view.clone()));
         }
         match raw_prepared_view(r, target, coordinate) {
-            Prepared::View(view) => Ok(Some(view)),
+            Prepared::View(view) => exact_source_view(r, view, encoder).map(Some),
             Prepared::Absent => Ok(None),
             Prepared::Decode if self.live.is_some() => {
                 self.miss();
@@ -610,7 +610,7 @@ impl RetouchSources {
         }
         if let Some(layer) = self.cache.frame.as_deref().and_then(lone_layer) {
             match lone_page(r, layer, coordinate) {
-                Prepared::View(view) => return Ok(Some(view)),
+                Prepared::View(view) => return exact_source_view(r, view, encoder).map(Some),
                 Prepared::Absent => return Ok(None),
                 Prepared::Decode if self.live.is_some() => {
                     self.miss();
@@ -826,8 +826,13 @@ enum Prepared {
     Decode,
 }
 
-/// A lone reference layer's page as the renderer holds it: painted, or an
-/// original or backed tile it already decoded.
+fn exact_source_view(r: &mut WgpuRasterizer, view: wgpu::TextureView,
+    encoder: &mut crate::submission::CommandEncoder) -> Result<wgpu::TextureView, GpuRasterError> {
+    crate::scene::Scene::promote_source(r, encoder, crate::source_access::RawTile {
+        texture: view.texture().clone(), view,
+    }).map(|tile| tile.view)
+}
+
 fn lone_page(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 2]) -> Prepared {
     r.paint_layers
         .iter()
@@ -836,13 +841,11 @@ fn lone_page(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 2]) -> P
         .map_or_else(|| raw_prepared_view(r, layer, coordinate), |page| Prepared::View(page.active().view.clone()))
 }
 
-/// A layer page the renderer can read without uploading: an original or
-/// backed tile it already decoded. `Decode` when reading needs an upload.
 fn raw_prepared_view(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 2]) -> Prepared {
     let sources = r.source_tiles.borrow();
     match r.native_color_tile(layer, coordinate) {
         Ok(Some(blob)) => {
-            return sources.prepared_raster_view(&blob, r.document_color().space, r.document_color().space)
+            return sources.prepared_raster_any_view(&blob, r.document_color().space, r.document_color().space)
                 .map_or(Prepared::Decode, |view| Prepared::View(view.clone()));
         }
         Err(_) => return Prepared::Decode,
@@ -851,8 +854,10 @@ fn raw_prepared_view(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 
     match r.tiled_sources.get(&layer) {
         Some(source) if source_access::paint_base_contains(source, coordinate) =>
         {
-            sources.prepared_base_view(source, coordinate)
-                .map_or(Prepared::Decode, |view| Prepared::View(view.clone()))
+            let view = if source.offset.iter().all(|value| value % PAGE_SIZE == 0) {
+                sources.prepared_view(source.image.storage(), std::array::from_fn(|axis| coordinate[axis] - source.offset[axis] / PAGE_SIZE))
+            } else { sources.prepared_base_view(source, coordinate) };
+            view.map_or(Prepared::Decode, |view| Prepared::View(view.clone()))
         }
         _ => Prepared::Absent,
     }

@@ -225,7 +225,7 @@ fn drained_headroom_keeps_a_decoded_batch_for_native_thumbnails() {
     cold.publish_memory(true);
     budget.flush_reports();
     cold.renderer.refresh_memory_limits();
-    assert_eq!(cold.source_tiles.borrow().admitted_bytes()[0], (SOURCE_SLOTS as u64 + 4) * scene::sources::FLOAT_TILE_BYTES);
+    assert_eq!(cold.source_tiles.borrow().admitted_bytes()[0], (SOURCE_SLOTS as u64 + 4) * scene::sources::NORMALIZED_PAGE_BYTES);
     assert!(cold.source_tiles.borrow().free_slots() >= SOURCE_SLOTS + 4);
     assert_eq!(thumbnail(&mut cold, id), expected);
     assert_eq!(cold.metrics.thumbnail_pages, 33);

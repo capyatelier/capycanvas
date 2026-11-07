@@ -1031,13 +1031,18 @@ fn moving_blurred_object_layer_publishes_every_pose_without_queueing_canonical_w
 
 #[test]
 fn cold_tablet_object_previews_and_canonical_results_settle_in_bounded_submissions() {
-    let (doc, _, _, mut view) = tablet_scene(false, 4, false);
+    let (doc, _, handles, mut view) = tablet_scene(false, 4, false);
     let zoom = 0.1597f32;
     view.document_to_surface = [zoom, 0., 0., zoom, (1920. - 4248. * zoom) / 2., (1200. - 2832. * zoom) / 2.];
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let passes = r.metrics.command_passes;
+    let before=crate::test_support::PassCounts::snapshot();
     settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);
-    assert!(r.metrics.command_passes - passes < 4000, "exact canonical tent windows need one dispatch per source tile and child part plus boundary denominators: {}", r.metrics.command_passes - passes);
+    let counts=crate::test_support::PassCounts::snapshot().delta(before);
+    let source_pages=doc.scene().object(handles[0]).unwrap().image.extent.into_iter().map(|side|u64::from(side.div_ceil(PAGE_SIZE))).product::<u64>();
+    let non_normalization=counts.total-counts.normalizations;
+    assert!(non_normalization<4000,"exact canonical tent windows keep their pass budget: non-normalization={non_normalization}, {counts:?}");
+    assert!(counts.normalizations<=704+source_pages,"source normalization is bounded by the parent work plus {source_pages} display pages: {counts:?}");
+    assert!(counts.material_batches<=7,"cold source normalization must preserve the parent placement batches: {counts:?}");
     let (doc, _, _, view) = tablet_scene(true, 4, false);
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     settle_live_frames(&mut r, FramePacket { view, ..packet(doc.scene(), [4248, 2832]) }, 4000);

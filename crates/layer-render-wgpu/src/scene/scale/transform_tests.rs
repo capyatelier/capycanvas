@@ -641,7 +641,7 @@ fn native_previews_larger_than_the_decoded_floor_draw_from_resumed_original_capt
         r
     });
     let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
-    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * crate::scene::sources::FLOAT_TILE_BYTES);
+    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * crate::scene::sources::NORMALIZED_PAGE_BYTES);
     assert!(!floor.transform_sources_pending && floor.transforms.as_ref().unwrap().has_preview());
     assert_eq!(pixels(&floor,crate::test_support::document_texture(&floor)),pixels(&reference,crate::test_support::document_texture(&reference)),
         "a preview reading more originals than the decoded slots hold must match one whose originals all fit");

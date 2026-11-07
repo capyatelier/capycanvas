@@ -9,6 +9,32 @@ is 4248 × 2832.
 - Geometry measurements use the 12 MP photo at Fit zoom. Older UI-only rows
   name their own canvas sizes.
 
+## Stored image-source format comparison
+
+Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK
+`5963a035…`, release Rust/unminified benchmark, P/C/C/P. Each build has six
+six-second contacts per row on the 12 MP JPEG, factory density 320/font 1,
+60 Hz and thermal 0. G-Pen is 1024 px; Smudge/Clone are 512 px. Brushes count
+fresh GPU-completed updates; navigation counts actual canvas presents. Rates
+are medians of contact summaries; gaps are the worst contact p99.
+
+| Row | Hz, parent → candidate | Gap p99 ms, parent → candidate |
+| --- | ---: | ---: |
+| G-Pen above Photo | 31.974 → 31.566 | 57.949 → 76.110 |
+| Smudge on Photo | 1.496 → 1.489 | 1426.142 → 1383.682 |
+| Clone with Photo reference | 45.603 → 45.861 | 42.053 → 41.797 |
+| Pan, Navigator closed | 54.520 → 54.426 | 33.479 → 33.397 |
+| Pinch, Navigator closed | 48.156 → 48.156 | 49.985 → 49.976 |
+| Pan, Navigator open | 60.023 → 60.023 | 16.786 → 16.845 |
+| Pinch, Navigator open | 54.348 → 54.519 | 33.480 → 33.494 |
+
+Only Navigator-open pan meets both targets in both builds. No parent-met target
+becomes a miss. CPU/GPU costs over 5% do not repeat beyond both controls and
+their spread; smaller and uneven costs remain in the
+[ABBA results](../../artifacts/issue24-impl/formats-c1-tablet-results.md).
+These Photo/PaintBase fixtures save **0 B** in commit 1; its storage saving is
+limited to image objects. First-touch primers do not prove encoded-cold state.
+
 ## Android UI motion
 
 TCL TAB 11 Gen 2, 4248 × 2832 photo at Fit, factory density 320/font scale 1,

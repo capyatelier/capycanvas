@@ -198,7 +198,7 @@ pub(crate) struct Commands {
 struct Composition {
     values: [u32; 20],
     binding: wgpu::BindGroup,
-    leases: Vec<Arc<()>>,
+    leases: Vec<super::sources::Lease>,
 }
 struct RootComposition {
     target: wgpu::TextureView,
@@ -1709,7 +1709,7 @@ impl Placed {
 struct TransformSource { id: SourceTarget, placement: layer_core::Affine, opacity: f32, backdrop: [f32; 4], encode: bool }
 
 #[derive(Clone)]
-enum Slot { Root, Cache(scratch::Lease), Scene(scratch::Lease), Scenes([scratch::Lease; 2]), Decoded(Arc<()>) }
+enum Slot { Root, Cache(scratch::Lease), Scene(scratch::Lease), Scenes([scratch::Lease; 2]), Decoded(super::sources::Lease) }
 
 #[derive(Clone)]
 struct Target {

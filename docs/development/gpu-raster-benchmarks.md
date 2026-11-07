@@ -116,6 +116,7 @@ Hue/Saturation and Color Balance, slider previews, cyclic pan/zoom, simultaneous
 native save and profiled ProPhoto U16 PNG export, full-resolution histograms,
 Gaussian blur and exact native paint/mask undo restoration. `multiple` retains
 all three adjusted documents and edits the 60 MP document while save/export run.
+Use explicit `61mp --photo-capture` for 9504 × 6336; `--photo-bands` separately records awaited export-band wall time, including GPU execution and readback, without PNG encoding or concurrent saving.
 The synthetic source includes low-order U16 variation; it is a reproducible
 resource workload, not a photographic accuracy corpus.
 

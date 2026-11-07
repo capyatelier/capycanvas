@@ -55,7 +55,7 @@ export async function checkDrawingTabRecovery({cdp,call,evaluate,settle}) {
     window.nativeRestoreHold={held:false,released:false,release(){this.released=true;for(const release of releases.splice(0))release()},restore(){GPUDevice.prototype.createRenderPipelineAsync=original}};
     GPUDevice.prototype.createRenderPipelineAsync=function(descriptor){
       const result=original.call(this,descriptor);
-      if(descriptor.label!=='decode source tile')return result;
+      if(!['decode source tile','normalize source tile'].includes(descriptor.label))return result;
       return result.then(pipeline=>nativeRestoreHold.released?pipeline:new Promise(resolve=>{nativeRestoreHold.held=true;releases.push(()=>resolve(pipeline))}));
     };
   })()`});

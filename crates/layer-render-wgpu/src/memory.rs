@@ -3,7 +3,7 @@ use layer_core::{MemoryOwner, MemoryOwnerKind as Kind, MemoryReport};
 
 const MIB: u64 = 1024 * 1024;
 const PARTS: usize = 5;
-const SOURCE_WORKING_BYTES: u64 = SOURCE_SLOTS as u64 * scene::sources::FLOAT_TILE_BYTES;
+const SOURCE_WORKING_BYTES: u64 = SOURCE_SLOTS as u64 * scene::sources::NORMALIZED_PAGE_BYTES;
 const WORKING_BYTES: u64 = (SOURCE_SLOTS as u64 + 4) * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 pub(crate) const CACHE_BYTES: u64 = 608 * MIB;
 pub(crate) const OBJECT_CACHE_BYTES: u64 = 128 * MIB;

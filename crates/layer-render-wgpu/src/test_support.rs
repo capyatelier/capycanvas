@@ -1,6 +1,30 @@
 use super::*;
 use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PassCounts {
+    pub total:u64,
+    pub normalizations:u64,
+    pub material_batches:u64,
+}
+std::thread_local! {
+    static PASS_COUNTS:std::cell::Cell<PassCounts>=const {std::cell::Cell::new(PassCounts {total:0,normalizations:0,material_batches:0})};
+}
+impl PassCounts {
+    pub fn snapshot()->Self {PASS_COUNTS.with(std::cell::Cell::get)}
+    pub fn delta(self,before:Self)->Self {
+        Self {total:self.total-before.total,normalizations:self.normalizations-before.normalizations,
+            material_batches:self.material_batches-before.material_batches}
+    }
+    pub fn record(self) {
+        PASS_COUNTS.with(|counts| {
+            let before=counts.get();
+            counts.set(Self {total:before.total+self.total,normalizations:before.normalizations+self.normalizations,
+                material_batches:before.material_batches+self.material_batches});
+        });
+    }
+}
+
 pub(crate) fn photo_limits() -> layer_color::photo::DecodeLimits {
     layer_color::photo::DecodeLimits::from_memory_budget(layer_color::photo::PhotoMemoryBudget::from_limit(2 << 30))
 }

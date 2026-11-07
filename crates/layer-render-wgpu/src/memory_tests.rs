@@ -102,7 +102,7 @@ pub(crate) fn declare_source_budget(r: &mut WgpuRasterizer, frame: FramePacket<'
     r.prepare_moving_projection(frame).unwrap();
     let mut demand = r.memory.demand.get();
     demand[2] = mips;
-    demand[3] = (slots as u64).saturating_mul(scene::sources::FLOAT_TILE_BYTES).saturating_add(overhead);
+    demand[3] = (slots as u64).saturating_mul(scene::sources::NORMALIZED_PAGE_BYTES).saturating_add(overhead);
     r.memory.demand.set(demand);
     r.publish_memory(true);
     let mut staging = r.memory.staging.published.get();

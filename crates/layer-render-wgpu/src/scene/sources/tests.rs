@@ -3,7 +3,7 @@ use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
 fn cache_with_slots(slots: usize) -> DecodedTiles {
     let mut cache = DecodedTiles::default();
-    cache.admit_limits(slots as u64 * FLOAT_TILE_BYTES, 16 * FLOAT_TILE_BYTES, 44 * FLOAT_TILE_BYTES);
+    cache.admit_limits(slots as u64 * NORMALIZED_PAGE_BYTES, 16 * NORMALIZED_PAGE_BYTES, 44 * NORMALIZED_PAGE_BYTES);
     cache
 }
 
@@ -71,7 +71,7 @@ fn equal_generated_rasters_reuse_gpu_pixels_without_another_sample_decode() {
 fn borrowed_source_tiles_survive_eviction_and_release_their_capacity() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cache = DecodedTiles {
-        limits: SourceLimits { slots: 2, ..Default::default() },
+        limits: SourceLimits { bytes: NORMALIZED_PAGE_BYTES / 2, ..Default::default() },
         ..Default::default()
     };
     let source = scan_source(4, 0);
@@ -91,25 +91,27 @@ fn borrowed_source_tiles_survive_eviction_and_release_their_capacity() {
     drop(first_lease);
     let (fourth, fourth_write) = cache.plan_key(&r, key(4)).unwrap();
     assert_eq!(fourth.view, first.view);
-    assert_eq!(cache.gpu_bytes(), 2 * FLOAT_TILE_BYTES);
+    assert_eq!(cache.gpu_bytes(), NORMALIZED_PAGE_BYTES / 2);
     drop((first_write, second_write, third_write, fourth_write));
 }
 
 fn scan_source(tiles: usize, offset: u8) -> Arc<SourceImage> {
-    layer_core::color::source::rgba8_source([tiles as u32 * PAGE_SIZE, PAGE_SIZE], |x, _| {
-        let id = (x / PAGE_SIZE) as u8 + offset;
+    let columns = (tiles as u32).min(128);
+    layer_core::color::source::rgba8_source([columns * PAGE_SIZE, (tiles as u32).div_ceil(columns) * PAGE_SIZE], |x, y| {
+        let id = (y / PAGE_SIZE * columns + x / PAGE_SIZE) as u8 + offset;
         [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11), 255]
     })
 }
 
-fn lease_foreign_sources(r: &mut WgpuRasterizer, count: usize) -> (Option<Arc<SourceImage>>, Vec<Arc<()>>) {
+fn lease_foreign_sources(r: &mut WgpuRasterizer, count: usize) -> (Option<Arc<SourceImage>>, Vec<crate::scene::sources::Lease>) {
     if count == 0 { return (None, Vec::new()); }
     let source = scan_source(count, 173);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let mut leases = Vec::with_capacity(count);
     for x in 0..count as u32 {
         let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
-        let tile = Scene::decode_prepared(r, &mut encoder, &source, [x, 0], prepared).unwrap();
+        let tile=Scene::decode_prepared_for(r,&mut encoder,&source,[x,0],prepared,SourceUse::Exact).unwrap();
+        assert_eq!(tile.texture.format(), wgpu::TextureFormat::Rgba32Float);
         leases.push(r.source_tiles.borrow().lease(&tile.view).unwrap());
     }
     r.uploads.finish(&encoder);
@@ -118,7 +120,7 @@ fn lease_foreign_sources(r: &mut WgpuRasterizer, count: usize) -> (Option<Arc<So
     (Some(source), leases)
 }
 
-fn drained_source_renderer() -> (WgpuRasterizer, layer_core::MemoryReservation, Option<Arc<SourceImage>>, Vec<Arc<()>>, usize) {
+fn drained_source_renderer() -> (WgpuRasterizer, layer_core::MemoryReservation, Option<Arc<SourceImage>>, Vec<crate::scene::sources::Lease>, usize) {
     let (doc, ..) = threshold_document(threshold_source(1, 0));
     let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
         layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
@@ -133,18 +135,32 @@ fn drained_source_renderer() -> (WgpuRasterizer, layer_core::MemoryReservation, 
     assert_eq!(budget.import_headroom_bytes(), 0);
     r.begin_frame_memory(frame);
     let capacity = r.source_tiles.borrow().free_slots();
-    assert!(capacity >= SOURCE_SLOTS + 4);
+    let sources = r.source_tiles.borrow();
+    let foreign_bytes = sources.slots.iter().filter(|slot| foreign.iter().any(|lease| Arc::ptr_eq(lease, &slot.lease)))
+        .map(|slot| texture_bytes(&slot.texture)).sum::<u64>();
+    assert_eq!(capacity as u64, sources.limits.bytes.saturating_sub(sources.non_slot_bytes())
+        .saturating_sub(sources.retired_bytes.load(Ordering::Acquire)).saturating_sub(foreign_bytes) / NORMALIZED_PAGE_BYTES);
+    assert!(capacity > SOURCE_SLOTS);
+    drop(sources);
     (r, pressure, source, foreign, capacity)
 }
 
-fn assert_working_source_slots(r: &WgpuRasterizer, capacity: usize, foreign: &[Arc<()>]) {
+fn assert_working_source_slots(r: &WgpuRasterizer, capacity: usize, foreign: &[crate::scene::sources::Lease]) {
     let sources = r.source_tiles.borrow();
     let retained = sources.slots.iter().filter(|slot| foreign.iter().any(|lease| Arc::ptr_eq(lease, &slot.lease))).count();
     assert_eq!(retained, foreign.len(), "unrelated source leases survive the traversal");
     assert!(sources.slots.iter().filter(|slot| foreign.iter().any(|lease| Arc::ptr_eq(lease, &slot.lease)))
-        .all(|slot| slot.valid.load(Ordering::Acquire)));
-    assert_eq!(sources.slots.len() - retained, capacity);
-    assert_eq!(sources.slot_limit() - retained, capacity);
+        .all(|slot| slot.valid.load(Ordering::Acquire) && slot.texture.format() == wgpu::TextureFormat::Rgba32Float));
+    assert!(sources.slots.iter().filter(|slot| !foreign.iter().any(|lease| Arc::ptr_eq(lease, &slot.lease))
+        && slot.texture.format() == wgpu::TextureFormat::Rgba32Float).count() <= capacity);
+    assert!(sources.gpu_bytes() <= sources.limits.bytes);
+    assert_eq!(sources.gpu_bytes(), sources.slots.iter().map(|slot| texture_bytes(&slot.texture)).sum::<u64>()
+        + sources.non_slot_bytes() + sources.retired_bytes.load(Ordering::Acquire));
+    for (index, slot) in sources.slots.iter().enumerate() {
+        if let Some(key) = &slot.key {
+            assert!(sources.slots[index + 1..].iter().all(|other| other.key.as_ref().is_none_or(|other| !key.matches(other))));
+        }
+    }
 }
 
 fn assert_threshold_pixels(r: &WgpuRasterizer, threshold: f32, offset: u8) {
@@ -210,6 +226,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             let after = r.source_cache_work();
             let work = [after[0] - before[0], after[1] - before[1]];
             if round > 0 { assert!(work[0] >= capacity as u64, "warm traversal must reuse resident tiles: {work:?}"); }
+            assert_threshold_pixels(&r, threshold, 0);
             let sources = r.source_tiles.borrow();
             if let Some(bytes) = allocated { assert_eq!(sources.gpu_bytes(), bytes); }
             else { allocated = Some(sources.gpu_bytes()); }
@@ -218,7 +235,6 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             let cache = r.scale_display.as_ref().unwrap();
             assert_eq!(cache.plan.level, 2);
             assert_eq!(cache.plan.bounds, PixelRect::full(extent));
-            assert_threshold_pixels(&r, threshold, 0);
         }
         let replacement = threshold_source(capacity, 64);
         doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new((replacement).into()));
@@ -236,9 +252,9 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
         crate::test_support::submit_published(&mut r, frame);
         let after = r.source_cache_work();
         assert_eq!(after[1], before[1], "a replacement set within capacity must be warm on its next update");
+        assert_threshold_pixels(&r, 0.6, 64);
         assert_eq!(r.source_tiles.borrow().gpu_bytes(), allocated.unwrap());
         assert_working_source_slots(&r, capacity, &foreign);
-        assert_threshold_pixels(&r, 0.6, 64);
     }
 }
 
@@ -247,16 +263,21 @@ fn discarded_source_decodes_cannot_be_reused_as_valid_pixels() {
     let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut r = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), Default::default()).unwrap();
     drop(gpu);
-    r.source_tiles.get_mut().limits.slots = 2;
+    let encoded_bytes = u64::from(PAGE_SIZE).pow(2) * u64::from(wgpu::TextureFormat::Rgba8Unorm.block_copy_size(None).unwrap());
+    r.source_tiles.get_mut().limits.bytes = 2 * NORMALIZED_PAGE_BYTES + transfer::TABLE_BYTES + encoded_bytes;
     let source = scan_source(3, 32);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    r.paint_base_tile(&layer_core::authored::PaintBase::new(source.clone().into()), [0, 0], &mut encoder).unwrap();
+    let prepared = crate::prepare_image_tile(&source, [0, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+    Scene::decode_prepared(&mut r, &mut encoder, &source, [0, 0], prepared).unwrap();
     assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_some());
     drop(encoder);
     assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_none());
     for x in 0..2 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let tile = r.paint_base_tile(&layer_core::authored::PaintBase::new(source.clone().into()), [x, 0], &mut encoder).unwrap().unwrap();
+        let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+        let raw = Scene::decode_prepared(&mut r, &mut encoder, &source, [x, 0], prepared).unwrap();
+        assert_eq!(texture_bytes(&raw.texture), encoded_bytes);
+        let tile = Scene::promote_source(&mut r, &mut encoder, raw).unwrap();
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         let id = x as u8 + 32;
         let expected = [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11)]
@@ -343,23 +364,23 @@ fn effect_mask_bindings_reuse_retire_and_bound_real_texture_views() {
 
 #[test]
 fn source_residency_and_upload_window_follow_explicit_grants() {
-    for (decoded, uploads) in [(0, 0), (FLOAT_TILE_BYTES - 1, FLOAT_TILE_BYTES - 1),
-        (FLOAT_TILE_BYTES, FLOAT_TILE_BYTES), (3 * FLOAT_TILE_BYTES + 1, 5 * FLOAT_TILE_BYTES), (2048 * FLOAT_TILE_BYTES, 8 * FLOAT_TILE_BYTES)] {
+    for (decoded, uploads) in [(0, 0), (NORMALIZED_PAGE_BYTES - 1, NORMALIZED_PAGE_BYTES - 1),
+        (NORMALIZED_PAGE_BYTES, NORMALIZED_PAGE_BYTES), (3 * NORMALIZED_PAGE_BYTES + 1, 5 * NORMALIZED_PAGE_BYTES), (2048 * NORMALIZED_PAGE_BYTES, 8 * NORMALIZED_PAGE_BYTES)] {
         let limits = SourceLimits::admitted(decoded, uploads);
-        assert_eq!(limits.slots as u64, decoded / FLOAT_TILE_BYTES);
+        assert_eq!(limits.bytes, decoded);
         assert_eq!(limits.upload_bytes, uploads);
         let cache = DecodedTiles { limits, ..Default::default() };
         let mut charges = Vec::new();
         while !cache.uploads_full() {
-            let bytes = if charges.len() % 2 == 0 { FLOAT_TILE_BYTES / 4 } else { FLOAT_TILE_BYTES };
+            let bytes = if charges.len() % 2 == 0 { NORMALIZED_PAGE_BYTES / 4 } else { NORMALIZED_PAGE_BYTES };
             let total = cache.in_flight.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes;
             charges.push(UploadCharge(cache.in_flight.clone(), bytes));
             assert!(total <= uploads);
         }
         drop(charges);
         assert_eq!(cache.in_flight.bytes.load(Ordering::Acquire), 0);
-        assert_eq!(cache.uploads_full(), uploads < FLOAT_TILE_BYTES);
-        assert_eq!(cache.admitted_bytes(), [limits.slots as u64 * FLOAT_TILE_BYTES, uploads]);
+        assert_eq!(cache.uploads_full(), uploads < NORMALIZED_PAGE_BYTES);
+        assert_eq!(cache.admitted_bytes(), [decoded, uploads]);
     }
 }
 
@@ -368,9 +389,7 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
     let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut r = WgpuRasterizer::native_capture_on_factory(gpu.factory.clone(), gpu.device.clone(), Default::default()).unwrap();
     drop(gpu);
-    let mut scene = Scene::new(&r).unwrap();
-    let mut exact = cache_with_slots(64);
-    exact.admit_limits(512 << 20, 64 << 20, 492 << 20);
+    r.source_tiles.get_mut().admit_limits(512 << 20, 64 << 20, 492 << 20);
     let mut builder = SourceBuilder::new([255, 19], SourceInterpretation {
         channels: SourceChannels::Rgb, depth: SampleDepth::U8,
         profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
@@ -380,7 +399,13 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
         builder.push_row(&row).unwrap();
     }
     let source = Arc::new(builder.finish().unwrap());
-    let (source_tile, _) = exact.plan(&r, &source, [0, 0]).unwrap();
+    let prepared = crate::prepare_image_tile(&source, [0, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let raw = Scene::decode_prepared(&mut r, &mut encoder, &source, [0, 0], prepared).unwrap();
+    assert_eq!(raw.texture.format(), wgpu::TextureFormat::Rgba8Unorm);
+    let source_tile = crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| {
+        Scene::promote_source(r, encoder, RawTile {texture:raw.texture.clone(),view:raw.view.clone()})
+    });
     let source_view = source_tile.view.clone();
     let (output, view) = create_target(&r.device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "sampled display codes");
     let shader = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -400,11 +425,6 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&source_view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
         ],
-    });
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| {
-        let (_, pending) = exact.plan(r, &source, [0, 0])?;
-        scene.encode_decode(r, pending, encoder)
     });
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
@@ -426,7 +446,7 @@ fn decoded_sources_preserve_srgb_codes_and_padding() {
         }
     }
     eprintln!("maximum display source error {maximum_error} of one 8-bit code");
-    let (query, pending_query) = exact.plan(&r, &source, [0, 0]).unwrap();
+    let (query, pending_query) = r.source_tiles.borrow_mut().plan(&r, &source, [0, 0]).unwrap();
     assert_eq!(query.texture.format(), wgpu::TextureFormat::Rgba32Float);
     assert_eq!(query.view, source_view);
     assert!(pending_query.is_none());
@@ -439,56 +459,63 @@ fn decoded_grant_shrink_waits_for_retired_slots_and_releases_discarded_charges()
     let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cache=cache_with_slots(24);let source=scan_source(25,0);
     let first:Vec<_>=(0..24).map(|x|cache.plan(&r,&source,[x,0]).unwrap()).collect();
-    assert_eq!(cache.gpu_bytes(),24*FLOAT_TILE_BYTES);
+    let page_bytes=texture_bytes(&first[0].0.texture);
+    let overhead=cache.non_slot_bytes();
+    assert_eq!(first[0].0.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(cache.gpu_bytes(),24*page_bytes+overhead);
     let mip_bytes=cache.mip_budget();
-    cache.admit_limits(20*FLOAT_TILE_BYTES,16*FLOAT_TILE_BYTES,mip_bytes);
+    cache.admit_limits(20*page_bytes+overhead,16*NORMALIZED_PAGE_BYTES,mip_bytes);
     let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    assert_eq!(cache.trim_unused(&encoder),4*FLOAT_TILE_BYTES);
+    assert_eq!(cache.trim_unused(&encoder),4*page_bytes);
     assert_eq!(cache.slots.len(),20);
-    assert_eq!(cache.gpu_bytes(),24*FLOAT_TILE_BYTES);
+    assert_eq!(cache.gpu_bytes(),24*page_bytes+overhead);
     assert!(cache.reserve_mips(mip_bytes,&encoder).unwrap());
     assert!(!cache.reserve_mips(mip_bytes+1,&encoder).unwrap());
     drop(first);encoder.submit(&r.queue);crate::test_support::complete(&r);
-    assert_eq!(cache.gpu_bytes(),20*FLOAT_TILE_BYTES);
-    cache.admit_limits(24*FLOAT_TILE_BYTES,16*FLOAT_TILE_BYTES,mip_bytes);
+    assert_eq!(cache.gpu_bytes(),20*page_bytes+overhead);
+    cache.admit_limits(24*page_bytes+overhead,16*NORMALIZED_PAGE_BYTES,mip_bytes);
     let second:Vec<_>=(0..24).map(|x|cache.plan(&r,&source,[x,0]).unwrap()).collect();
-    cache.admit_limits(20*FLOAT_TILE_BYTES,16*FLOAT_TILE_BYTES,mip_bytes);
+    cache.admit_limits(20*page_bytes+overhead,16*NORMALIZED_PAGE_BYTES,mip_bytes);
     let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    assert_eq!(cache.trim_unused(&encoder),4*FLOAT_TILE_BYTES);
+    assert_eq!(cache.trim_unused(&encoder),4*page_bytes);
     drop((encoder,second));cache.reap_retired();
     assert_eq!(cache.retired_bytes.load(Ordering::Acquire),0);
-    assert_eq!(cache.gpu_bytes(),20*FLOAT_TILE_BYTES);
+    assert_eq!(cache.gpu_bytes(),20*page_bytes+overhead);
 }
 
 #[test]
 fn canonical_source_requirements_survive_optional_uploads_with_separate_mip_grants() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cache = cache_with_slots(64);
-    let source = scan_source(80, 0);
+    let page_bytes = u64::from(PAGE_SIZE).pow(2) * u64::from(wgpu::TextureFormat::Rgba8Unorm.block_copy_size(None).unwrap());
+    let pages = (cache.admitted_bytes()[0] / page_bytes) as u32 + 64;
+    let source = scan_source(pages as usize, 0);
+    let columns = source.extent[0] / PAGE_SIZE;
+    let coordinate = |index: u32| [index % columns, index / columns];
     cache.require_images((0..36).chain(0..36).map(|x| (source.clone(), [x, 0])));
     assert_eq!(cache.required.len(), 36);
-    assert_eq!(cache.mip_budget(), 44 * FLOAT_TILE_BYTES);
+    assert_eq!(cache.mip_budget(), 44 * NORMALIZED_PAGE_BYTES);
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     for x in 0..36 {
-        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+        let (_, pending) = cache.plan(&r, &source, coordinate(x)).unwrap();
         pending.unwrap().write.track(&encoder);
     }
     assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
-    for x in 36..80 {
-        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+    for x in 36..pages {
+        let (_, pending) = cache.plan(&r, &source, coordinate(x)).unwrap();
         pending.unwrap().write.track(&encoder);
-        assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_some()));
+        assert!((0..36).all(|x| cache.prepared_view(&source, coordinate(x)).is_some()));
         assert!(cache.gpu_bytes() <= cache.admitted_bytes()[0]);
     }
     cache.require_images(std::iter::empty());
-    assert_eq!(cache.mip_budget(), 44 * FLOAT_TILE_BYTES);
-    for x in 36..80 {
-        let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
+    assert_eq!(cache.mip_budget(), 44 * NORMALIZED_PAGE_BYTES);
+    for x in 36..pages {
+        let (_, pending) = cache.plan(&r, &source, coordinate(x)).unwrap();
         if let Some(pending) = pending { pending.write.track(&encoder); }
     }
     assert!(cache.prepared_view(&source, [0, 0]).is_none());
     drop(encoder);
-    assert!((0..36).all(|x| cache.prepared_view(&source, [x, 0]).is_none()));
+    assert!((0..36).all(|x| cache.prepared_view(&source, coordinate(x)).is_none()));
 }
 
 #[test]
@@ -533,7 +560,9 @@ fn canonical_source_demand_does_not_reduce_an_independent_mip_grant() {
 fn canonical_requirements_leave_streaming_capacity_beside_other_composition_leases() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cache = cache_with_slots(20);
-    let source = scan_source(40, 0);
+    let page_bytes = u64::from(PAGE_SIZE).pow(2) * u64::from(wgpu::TextureFormat::Rgba8Unorm.block_copy_size(None).unwrap());
+    let pages = (cache.admitted_bytes()[0] / page_bytes) as u32 + 20;
+    let source = scan_source(pages as usize, 0);
     let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let previous = cache.mip_budget();
     assert!(cache.reserve_mips(previous, &encoder).unwrap());
@@ -542,7 +571,7 @@ fn canonical_requirements_leave_streaming_capacity_beside_other_composition_leas
     let lease = cache.lease(&outside.view).unwrap();
     cache.require_images((0..19).map(|x| (source.clone(), [x, 0])));
     assert_eq!(cache.mip_budget(), previous);
-    for x in (0..19).chain(20..40) {
+    for x in (0..19).chain(20..pages) {
         let (_, pending) = cache.plan(&r, &source, [x, 0]).unwrap();
         pending.unwrap().write.track(&encoder);
         assert_eq!(cache.prepared_view(&source, [19, 0]), Some(&outside.view));
@@ -568,13 +597,17 @@ fn prepared_source_samples_upload_without_renderer_decompression_and_share_cache
     let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(bytes)).unwrap();
     r.uploads.finish(&encoder);encoder.submit(&r.queue);
     assert_eq!(r.device.source_samples.stats().misses,0);
+    assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(crate::layer_tests::page_bytes(&r,&tile.texture),[64,128,192,128].repeat((PAGE_SIZE*PAGE_SIZE) as usize));
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let hit=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(Arc::new(Vec::new()))).unwrap();
     assert_eq!(tile.view,hit.view);
     assert_eq!(r.source_cache_work(),[1,1]);
+    let exact=Scene::promote_source(&mut r,&mut encoder,hit).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
     let alpha=128./255.;
     let expected=[64,128,192].map(|code| RgbSpace::Srgb.decode(f64::from(code)/255.) as f32*alpha);
-    for pixel in crate::test_support::float_pixels(&r,&tile.texture) {
+    for pixel in crate::test_support::float_pixels(&r,&exact.texture) {
         assert!((pixel[3]-alpha).abs()<2e-6);
         for c in 0..3 {assert!((pixel[c]-expected[c]).abs()<2e-6);}
     }
@@ -586,7 +619,7 @@ fn prepared_icc_working_pixels_upload_exactly_without_renderer_color_transform()
     let mut source=(*scan_source(1,0)).clone();
     source.interpretation.profile=ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::ProPhoto)).unwrap().into());
     let source=Arc::new(source);let expected=[0.25f32,0.125,0.0625,0.5];
-    let mut bytes=Vec::with_capacity(FLOAT_TILE_BYTES as usize);
+    let mut bytes=Vec::with_capacity(NORMALIZED_PAGE_BYTES as usize);
     for _ in 0..PAGE_SIZE*PAGE_SIZE {for value in expected {bytes.extend_from_slice(&value.to_ne_bytes());}}
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::PremultipliedWorkingPixels(Arc::new(bytes))).unwrap();
@@ -605,12 +638,18 @@ fn prepared_gray_alpha_samples_are_expanded_by_shared_worker_before_upload() {
     let prepared=crate::prepare_image_tile(&source,[0;2],RgbSpace::Srgb,&r.device.source_samples,None).unwrap();
     let PreparedSourcePixels::NativeSamples(bytes)=&prepared else {panic!("Expected native working samples")};
     assert!(bytes.as_chunks::<4>().0.iter().all(|pixel|*pixel==[96,96,96,192]));
+    let codes=bytes.clone();
     let reads=r.device.source_samples.stats();let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],prepared).unwrap();
     r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+    assert_eq!(crate::layer_tests::page_bytes(&r,&tile.texture).as_slice(),codes.as_slice());
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let exact=Scene::promote_source(&mut r,&mut encoder,tile).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
     let after=r.device.source_samples.stats();assert_eq!((reads.hits,reads.misses),(after.hits,after.misses));
     let alpha=192f32/255.;let value=RgbSpace::Srgb.decode(96./255.) as f32*alpha;
-    for pixel in crate::test_support::float_pixels(&r,&tile.texture) {
+    for pixel in crate::test_support::float_pixels(&r,&exact.texture) {
         assert!((pixel[3]-alpha).abs()<2e-6);for channel in &pixel[..3] {assert!((*channel-value).abs()<2e-6);}
     }
 }
@@ -618,7 +657,7 @@ fn prepared_gray_alpha_samples_are_expanded_by_shared_worker_before_upload() {
 #[test]
 fn abandoned_source_writes_are_reused_before_resident_tiles_are_evicted() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut cache = DecodedTiles { limits: SourceLimits { slots: 2, ..SourceLimits::admitted(64 * FLOAT_TILE_BYTES, 16 * FLOAT_TILE_BYTES) }, ..cache_with_slots(64) };
+    let mut cache = DecodedTiles { limits: SourceLimits { bytes: 2 * NORMALIZED_PAGE_BYTES, ..SourceLimits::admitted(64 * NORMALIZED_PAGE_BYTES, 16 * NORMALIZED_PAGE_BYTES) }, ..cache_with_slots(64) };
     let source = scan_source(3, 0);
     let key = |x: u32| Key::raster(&source.tiles[&[x, 0]], RgbSpace::Srgb, RgbSpace::Srgb);
     let (resident, write) = cache.plan_key(&r, key(0)).unwrap();
@@ -635,8 +674,8 @@ fn later_source_grants_change_residency_independently_of_display_allowance() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cache = cache_with_slots(64);
     for slots in [384, 64, 3] {
-        cache.admit_limits(slots * FLOAT_TILE_BYTES, 16 * FLOAT_TILE_BYTES, 44 * FLOAT_TILE_BYTES);
-        assert_eq!(cache.admitted_bytes()[0], slots * FLOAT_TILE_BYTES);
+        cache.admit_limits(slots * NORMALIZED_PAGE_BYTES, 16 * NORMALIZED_PAGE_BYTES, 44 * NORMALIZED_PAGE_BYTES);
+        assert_eq!(cache.admitted_bytes()[0], slots * NORMALIZED_PAGE_BYTES);
         let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         assert!(cache.reserve_mips(cache.mip_budget(), &encoder).unwrap());
         assert_eq!(cache.slot_limit() as u64, slots);
@@ -682,8 +721,8 @@ fn native_threshold_larger_than_the_decoded_floor_publishes_every_page_once() {
     let floor = render(64);
     let reference = render(1024);
     let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
-    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * FLOAT_TILE_BYTES);
-    assert!(reference.source_tiles.borrow().admitted_bytes()[0] > pages * FLOAT_TILE_BYTES);
+    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * NORMALIZED_PAGE_BYTES);
+    assert!(reference.source_tiles.borrow().admitted_bytes()[0] > pages * NORMALIZED_PAGE_BYTES);
     let [floor_cache, reference_cache] = [&floor, &reference].map(|r| r.scale_display.as_ref().unwrap());
     assert_eq!((floor_cache.plan.level, floor_cache.plan.bounds), (2, PixelRect::full(extent)));
     let texels = floor_cache.plan.size.into_iter().map(u64::from).product::<u64>();
@@ -720,4 +759,363 @@ fn cold_native_threshold_frames_replan_only_unfinished_pages() {
     let plan = r.scale_display.as_ref().unwrap().plan;
     assert_eq!((plan.level, plan.bounds), (0, PixelRect::full(extent)));
     assert_eq!(r.metrics.composited_pixels, u64::from(extent[0]) * u64::from(extent[1]), "resumed composition draws each pixel once");
+}
+
+fn stored_code_source(depth: SampleDepth, tiles: u32) -> Arc<SourceImage> {
+    let pixel = match depth {
+        SampleDepth::U8 => vec![64, 128, 192, 128],
+        SampleDepth::U16 => [16384u16, 32768, 49152, 32768].into_iter().flat_map(u16::to_le_bytes).collect(),
+        _ => unreachable!(),
+    };
+    let extent = [PAGE_SIZE * tiles, PAGE_SIZE];
+    let mut builder = SourceBuilder::new(extent, SourceInterpretation {
+        channels: SourceChannels::Rgba, depth, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
+    }, extent[0] as usize * extent[1] as usize * pixel.len() * 2).unwrap();
+    let row = pixel.repeat(extent[0] as usize);
+    for _ in 0..extent[1] { builder.push_row(&row).unwrap(); }
+    Arc::new(builder.finish().unwrap())
+}
+
+fn stored_code_tile(r: &mut WgpuRasterizer, source: &Arc<SourceImage>, x: u32,
+    encoder: &mut crate::submission::CommandEncoder) -> RawTile {
+    let prepared = crate::prepare_image_tile(source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+    Scene::decode_prepared(r, encoder, source, [x, 0], prepared).unwrap_or_else(|error| {
+        let cache = r.source_tiles.borrow();
+        panic!("source {x}: {error}; {} slots, {} GPU bytes, {} granted", cache.slots.len(), cache.gpu_bytes(), cache.limits.bytes)
+    })
+}
+
+fn stored_code_format(depth: SampleDepth) -> wgpu::TextureFormat {
+    match depth {
+        SampleDepth::U8 => wgpu::TextureFormat::Rgba8Unorm,
+        SampleDepth::U16 => wgpu::TextureFormat::Rg32Uint,
+        _ => unreachable!(),
+    }
+}
+
+fn stored_code_renderer(source: &Arc<SourceImage>) -> (WgpuRasterizer, layer_core::Document, layer_core::authored::SourceTarget) {
+    let mut doc = layer_core::Document::new(layer_core::authored::PortableId::random(), source.extent[0], source.extent[1],
+        layer_core::DocumentNames { paint: "Photo".into(), paper: "Paper".into() });
+    let target = doc.working.target.unwrap();
+    let layer_core::authored::SourceTarget::Paint(paint) = target else { unreachable!() };
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(source.clone().into()));
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    r.ensure_document_metadata(source.extent, doc.scene()).unwrap();
+    (r, doc, target)
+}
+
+fn assert_stored_code_upload(depth: SampleDepth) {
+    let source = stored_code_source(depth, 1);
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let tile = stored_code_tile(&mut r, &source, 0, &mut encoder);
+    r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+    assert_eq!(tile.texture.format(), stored_code_format(depth));
+    let sources = r.source_tiles.borrow();
+    assert_eq!(sources.slots.len(), 1);
+    assert_eq!(crate::texture_bytes(&sources.slots[0].texture), u64::from(PAGE_SIZE).pow(2) * if depth == SampleDepth::U8 {4} else {8});
+    assert_eq!(sources.gpu_bytes(), crate::texture_bytes(&sources.slots[0].texture) + sources.non_slot_bytes());
+}
+
+#[test]
+fn stored_source_u8_upload_retains_four_byte_codes() { assert_stored_code_upload(SampleDepth::U8); }
+
+#[test]
+fn stored_source_u16_upload_retains_eight_byte_packed_codes() { assert_stored_code_upload(SampleDepth::U16); }
+
+#[test]
+fn stored_source_encoded_slot_count_does_not_overstate_exact_working_capacity() {
+    let source=stored_code_source(SampleDepth::U8,32);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let overhead=r.source_tiles.borrow().non_slot_bytes();
+    r.source_tiles.get_mut().admit_limits(overhead+8*NORMALIZED_PAGE_BYTES,16*NORMALIZED_PAGE_BYTES,0);
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    for x in 0..32 {stored_code_tile(&mut r,&source,x,&mut encoder);}
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let mut cache=r.source_tiles.borrow_mut();
+    assert_eq!(cache.slots.len(),32);
+    assert_eq!(cache.free_slots(),8,"exact work needs normalized pages, not the count of smaller encoded pages");
+    cache.require_images((0..32).map(|x|(source.clone(),[x,0])));
+    assert_eq!(cache.required.len(),7,"leave space for the next exact page");
+}
+
+#[test]
+fn stored_source_cancelled_promotion_does_not_leave_a_protected_duplicate_key() {
+    let source=stored_code_source(SampleDepth::U8,1);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let tile=stored_code_tile(&mut r,&source,0,&mut encoder);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let mut cancelled=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    Scene::promote_source(&mut r,&mut cancelled,tile).unwrap();
+    r.uploads.finish(&cancelled);drop(cancelled);
+    assert!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_none());
+    r.source_tiles.borrow_mut().require_images([(source.clone(),[0,0])]);
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let tile=stored_code_tile(&mut r,&source,0,&mut encoder);
+    assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+    let key=Key::Image(Arc::downgrade(&source),[0,0]);
+    assert_eq!(r.source_tiles.borrow().slots.iter().filter(|slot|slot.key.as_ref().is_some_and(|stored|stored.matches(&key))).count(),1);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    Scene::promote_source(&mut r,&mut encoder,tile).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    assert_eq!(r.source_tiles.borrow().prepared_view(&source,[0,0]).unwrap().texture().format(),wgpu::TextureFormat::Rgba32Float);
+}
+
+#[test]
+fn stored_source_promotion_reuses_an_unleased_normalized_resource_under_pressure() {
+    let source=stored_code_source(SampleDepth::U8,3);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let target=stored_code_tile(&mut r,&source,0,&mut encoder);
+    let middle=stored_code_tile(&mut r,&source,1,&mut encoder);
+    let reusable=Scene::promote_source(&mut r,&mut encoder,middle).unwrap();
+    let untouched=stored_code_tile(&mut r,&source,2,&mut encoder);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let lease=r.source_tiles.borrow().lease(&target.view).unwrap();
+    let grant=r.source_tiles.borrow().non_slot_bytes()+2*NORMALIZED_PAGE_BYTES;
+    r.source_tiles.borrow_mut().admit_limits(grant,16*NORMALIZED_PAGE_BYTES,0);
+    let before=r.source_tiles.borrow().gpu_bytes();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let promoted=Scene::promote_source(&mut r,&mut encoder,target).unwrap();
+    assert_eq!(promoted.view,reusable.view,"ordinary LRU storage can serve the new representation");
+    let cache=r.source_tiles.borrow();
+    assert!(Arc::ptr_eq(&lease,&cache.lease(&promoted.view).unwrap()));
+    assert!(cache.prepared_view(&source,[1,0]).is_none());
+    assert_eq!(cache.prepared_view(&source,[2,0]).unwrap(),&untouched.view);
+    assert_eq!(cache.gpu_bytes(),before,"reuse needs no new source allocation");
+    assert!(cache.gpu_bytes()<=grant);drop(cache);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+}
+
+#[test]
+fn stored_source_new_exact_leases_do_not_retain_the_retired_encoded_representation() {
+    let source=stored_code_source(SampleDepth::U16,1);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let encoded=stored_code_tile(&mut r,&source,0,&mut encoder);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let encoded_lease=r.source_tiles.borrow().lease(&encoded.view).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let exact=Scene::promote_source(&mut r,&mut encoder,encoded).unwrap();
+    let exact_lease=r.source_tiles.borrow().lease(&exact.view).unwrap();
+    assert!(Arc::ptr_eq(&encoded_lease,&exact_lease));
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    assert_eq!(r.source_tiles.borrow().retired_bytes.load(Ordering::Acquire),NORMALIZED_PAGE_BYTES/2);
+    drop(encoded_lease);
+    let cache=r.source_tiles.borrow();
+    assert_eq!(cache.gpu_bytes(),NORMALIZED_PAGE_BYTES+cache.non_slot_bytes());
+    assert_eq!(cache.retired_bytes.load(Ordering::Acquire),0);
+    assert!(Arc::ptr_eq(&exact_lease,&cache.lease(&exact.view).unwrap()));
+}
+
+#[test]
+fn stored_source_display_decode_stays_within_its_profile_bound_of_exact_promotion() {
+    let mut differences=Vec::new();
+    for depth in [SampleDepth::U8,SampleDepth::U16] { for space in [RgbSpace::Srgb,RgbSpace::DisplayP3,RgbSpace::AdobeRgb,RgbSpace::ProPhoto] {
+        let extent=[257,259];
+        let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth,profile:ColorProfile::Builtin(space),profile_assumed:false};
+        let mut builder=SourceBuilder::new(extent,interpretation,16<<20).unwrap();
+        for y in 0..extent[1] {
+            let row=(0..extent[0]).flat_map(|x| {
+                let index=x+y*256;
+                let codes=[index%65536,(index*17)%65536,(index*31)%65536,if x%3==0 {0}else if x%3==1 {65535}else{32768}];
+                codes.into_iter().flat_map(|code|if depth==SampleDepth::U8 {vec![(code>>8) as u8]}else{(code as u16).to_le_bytes().to_vec()})
+            }).collect::<Vec<_>>();
+            builder.push_row(&row).unwrap();
+        }
+        let source=Arc::new(builder.finish().unwrap());
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut maximum=[0f64;3];
+        for coordinate in [[0,0],[1,1]] {
+            let pixels=crate::prepare_image_tile(&source,coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            let raw=Scene::decode_prepared(&mut r,&mut encoder,&source,coordinate,pixels.clone()).unwrap();
+            assert_eq!(encoder.pass_count(),0,"upload performs no normalization");
+            let expected=match pixels {PreparedSourcePixels::NativeSamples(bytes)=>bytes,_=>unreachable!()};
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+            assert_eq!(crate::layer_tests::page_bytes(&r,&raw.texture),*expected,"stored codes and padding are lossless");
+            let display=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            Scene::display_source(&mut r,&mut encoder,&source,coordinate,&raw.texture,&display.create_view(&Default::default())).unwrap();
+            let exact=Scene::promote_source(&mut r,&mut encoder,raw).unwrap();
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+            let a=crate::layer_tests::page_bytes(&r,&display);
+            let b=crate::layer_tests::page_bytes(&r,&exact.texture);
+            for (a,b) in a.as_chunks::<16>().0.iter().zip(b.as_chunks::<16>().0) {
+                let a:[f32;4]=std::array::from_fn(|channel|f32::from_le_bytes(a[channel*4..channel*4+4].try_into().unwrap()));
+                let b:[f32;4]=std::array::from_fn(|channel|f32::from_le_bytes(b[channel*4..channel*4+4].try_into().unwrap()));
+                if b[3]==0. || b[3]==1. {assert_eq!(a[3],b[3]);}else{assert!((a[3]-b[3]).abs()<=f32::EPSILON);}
+                for channel in 0..3 {
+                    let code=|pixel:[f32;4]|if pixel[3]==0. {0.}else{(RgbSpace::Srgb.encode(f64::from(pixel[channel]/pixel[3])).clamp(0.,1.)*255.).round()};
+                    maximum[channel]=maximum[channel].max((code(a)-code(b)).abs());
+                }
+            }
+        }
+        let bound=if depth==SampleDepth::U8 && space!=r.device.working_space()
+            && matches!(space,RgbSpace::Srgb|RgbSpace::DisplayP3) {2.}else{1.};
+        differences.push((depth,space,maximum,bound));
+    }}
+    assert!(differences.iter().all(|(_,_,maximum,bound)|maximum.iter().all(|error|error<=bound)),"eight-bit display-code differences: {differences:?}");
+}
+
+#[test]
+fn stored_source_exact_neighborhood_promotes_one_slot_and_reuses_its_lease() {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
+        let source = stored_code_source(depth, 2);
+        let (mut r, _doc, target) = stored_code_renderer(&source);
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let original = stored_code_tile(&mut r, &source, 0, &mut encoder);
+        stored_code_tile(&mut r, &source, 1, &mut encoder);
+        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        let lease = r.source_tiles.borrow().lease(&original.view).unwrap();
+        let index = r.source_tiles.borrow().slots.iter().position(|slot| slot.view == original.view).unwrap();
+        let expected_key = Key::Image(Arc::downgrade(&source), [0, 0]);
+        let sample_misses = r.device.source_samples.stats().misses;
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        r.prepare_raw_neighborhood(target, [0, 0], [Some([0, 0])], false, &mut encoder).unwrap();
+        let base = layer_core::authored::PaintBase::new(source.clone().into());
+        let exact = r.paint_base_tile(&base, [0, 0], &mut encoder).unwrap().unwrap();
+        assert_eq!(encoder.pass_count(), 1, "the first exact acquisition normalizes the encoded source once");
+        assert_eq!(exact.texture.format(), wgpu::TextureFormat::Rgba32Float);
+        {
+            let sources = r.source_tiles.borrow();
+            assert_eq!(sources.slots.len(), 2);
+            assert_eq!(sources.slots[index].view, exact.view);
+            assert!(sources.slots[index].key.as_ref().unwrap().matches(&expected_key));
+            assert!(Arc::ptr_eq(&lease, &sources.lease(&exact.view).unwrap()));
+            assert_eq!(sources.prepared_view(&source, [1, 0]).unwrap().texture().format(), stored_code_format(depth));
+        }
+        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        let misses = r.source_tiles.borrow().misses;
+        for _ in 0..3 {
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            r.prepare_raw_neighborhood(target, [0, 0], [Some([0, 0])], false, &mut encoder).unwrap();
+            let reused = r.paint_base_tile(&base, [0, 0], &mut encoder).unwrap().unwrap();
+            assert_eq!(reused.view, exact.view);
+            assert!(Arc::ptr_eq(&lease, &r.source_tiles.borrow().lease(&reused.view).unwrap()));
+            assert_eq!(encoder.pass_count(), 0, "resident exact acquisitions cannot normalize again");
+            r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        }
+        assert_eq!(r.source_tiles.borrow().misses, misses);
+        assert_eq!(r.device.source_samples.stats().misses, sample_misses);
+        assert_ne!(original.view, exact.view);
+        let maximum = depth.maximum() as f64;
+        let codes = if depth == SampleDepth::U8 {[64., 128., 192., 128.]} else {[16384., 32768., 49152., 32768.]};
+        let alpha = (codes[3] / maximum) as f32;
+        let rgb = codes.map(|value| RgbSpace::Srgb.decode(value / maximum) as f32 * alpha);
+        for pixel in crate::test_support::float_pixels(&r, &exact.texture) {
+            assert!((pixel[3] - alpha).abs() < 2e-6);
+            for channel in 0..3 { assert!((pixel[channel] - rgb[channel]).abs() < 2e-6); }
+        }
+    }
+}
+
+#[test]
+fn stored_source_promoted_slot_reloads_encoded_after_ordinary_eviction() {
+    for depth in [SampleDepth::U8, SampleDepth::U16] {
+        let source = stored_code_source(depth, 1);
+        let (mut r, _doc, _) = stored_code_renderer(&source);
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        stored_code_tile(&mut r, &source, 0, &mut encoder);
+        let base = layer_core::authored::PaintBase::new(source.clone().into());
+        let promoted = r.paint_base_tile(&base, [0, 0], &mut encoder).unwrap().unwrap();
+        assert_eq!(promoted.texture.format(), wgpu::TextureFormat::Rgba32Float);
+        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        drop(promoted);
+        let overhead = r.source_tiles.borrow().non_slot_bytes();
+        r.source_tiles.borrow_mut().admit_limits(overhead, 16 * NORMALIZED_PAGE_BYTES, 44 * NORMALIZED_PAGE_BYTES);
+        let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        assert!(r.source_tiles.borrow_mut().trim_unused(&encoder) > 0);
+        drop(encoder);
+        assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_none());
+        r.source_tiles.borrow_mut().admit_limits(overhead + 4 * NORMALIZED_PAGE_BYTES, 16 * NORMALIZED_PAGE_BYTES, 44 * NORMALIZED_PAGE_BYTES);
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let reloaded = stored_code_tile(&mut r, &source, 0, &mut encoder);
+        assert_eq!(reloaded.texture.format(), stored_code_format(depth));
+        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    }
+}
+
+#[test]
+fn stored_source_promotion_under_a_full_leased_grant_defers_without_overgrant() {
+    let source = stored_code_source(SampleDepth::U8, 8);
+    let (mut r, _doc, target) = stored_code_renderer(&source);
+    let grant = r.source_tiles.borrow().non_slot_bytes() + 2 * NORMALIZED_PAGE_BYTES;
+    r.source_tiles.borrow_mut().admit_limits(grant, 16 * NORMALIZED_PAGE_BYTES, 44 * NORMALIZED_PAGE_BYTES);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let mut leases = Vec::new();
+    for x in 0..8 {
+        let tile = stored_code_tile(&mut r, &source, x, &mut encoder);
+        leases.push(r.source_tiles.borrow().lease(&tile.view).unwrap());
+    }
+    r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+    let before = r.source_tiles.borrow().gpu_bytes();
+    assert_eq!(before, grant);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let result = r.prepare_raw_neighborhood(target, [0, 0], [Some([0, 0])], false, &mut encoder);
+    assert!(matches!(result, Err(GpuRasterError::SourceWorkingSetExceeded | GpuRasterError::DeferredObjectWork)),
+        "promotion cannot fit while every encoded slot is leased");
+    assert!(r.source_tiles.borrow().gpu_bytes() <= grant);
+    assert_eq!(r.source_tiles.borrow().slots.len(), 8);
+    assert!(r.source_tiles.borrow().slots.iter().all(|slot| slot.texture.format() == wgpu::TextureFormat::Rgba8Unorm));
+    drop((encoder, leases));
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    assert!(matches!(r.prepare_raw_neighborhood(target,[0,0],[Some([0,0])],false,&mut encoder),Err(GpuRasterError::DeferredObjectWork)));
+    assert!(encoder.has_work(),"retirement must be submitted before admission can resume");
+    assert!(r.source_tiles.borrow().gpu_bytes()<=grant);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    r.prepare_raw_neighborhood(target,[0,0],[Some([0,0])],false,&mut encoder).unwrap();
+    assert!(r.source_tiles.borrow().gpu_bytes()<=grant);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    assert_eq!(r.source_tiles.borrow().prepared_view(&source,[0,0]).unwrap().texture().format(),wgpu::TextureFormat::Rgba32Float);
+}
+
+#[path = "smudge_tests.rs"]
+mod smudge_tests;
+
+#[test]
+fn source_display_records_reuse_scene_uniform_storage_and_preserve_encoded_order() {
+    let fixtures=[(RgbSpace::Srgb,[64u8,128,192,128]),(RgbSpace::ProPhoto,[192,64,128,255])];
+    let sources=fixtures.map(|(space,pixel)| {
+        let mut builder=SourceBuilder::new([PAGE_SIZE;2],SourceInterpretation {channels:SourceChannels::Rgba,
+            depth:SampleDepth::U8,profile:ColorProfile::Builtin(space),profile_assumed:false},8<<20).unwrap();
+        let row=pixel.repeat(PAGE_SIZE as usize);
+        for _ in 0..PAGE_SIZE {builder.push_row(&row).unwrap();}
+        Arc::new(builder.finish().unwrap())
+    });
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    let tiles=sources.each_ref().map(|source|stored_code_tile(&mut r,source,0,&mut encoder));
+    if r.scene.is_none() {r.scene=Some(Scene::new(&r).unwrap());}
+    r.scene.as_mut().unwrap().begin_frame();
+    let scene=r.scene.as_ref().unwrap();
+    let (buffer,binding)=(scene.buffer.clone(),scene.binding.clone());
+    let mut outputs=Vec::new();
+    for (step,index) in [0usize,1,1,0].into_iter().enumerate() {
+        if step==2 {r.scene.as_mut().unwrap().begin_frame();}
+        let output=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+        Scene::display_source(&mut r,&mut encoder,&sources[index],[0;2],&tiles[index].texture,&output.create_view(&Default::default())).unwrap();
+        let scene=r.scene.as_ref().unwrap();
+        assert_eq!(scene.buffer,buffer);
+        assert_eq!(scene.binding,binding);
+        assert_eq!(scene.record_count,step%2+1);
+        outputs.push((index,output));
+    }
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    for (index,output) in outputs {
+        let (space,pixel)=fixtures[index];
+        let alpha=f32::from(pixel[3])/255.;
+        let rgb=layer_core::color::rgb::apply(space.linear_transform(r.device.working_space()),
+            std::array::from_fn(|c|space.decode(f64::from(pixel[c])/255.)));
+        for actual in crate::test_support::float_pixels(&r,&output) {
+            assert_eq!(actual[3],alpha);
+            for c in 0..3 {
+                let code=|linear:f64|(r.device.working_space().encode(linear).clamp(0.,1.)*255.).round() as i16;
+                assert!((code(f64::from(actual[c]/alpha))-code(rgb[c])).abs()<=1,"record {index}, channel {c}: {actual:?}");
+            }
+        }
+    }
 }

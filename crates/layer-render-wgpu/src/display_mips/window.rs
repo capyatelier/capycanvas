@@ -22,11 +22,15 @@ impl WindowPipelines {
         Self { reduce: Pipelines::new(device), half: Deferred::compute(device,
             "display mip window", &pipeline_layout, &shader, "copy"), layout }
     }
-    pub fn prepare_tile(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,
-        work:&mut Image,source:&wgpu::Texture,level:u32,
+    pub fn prepare_tile(&self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,
+        work:&mut Image,source:&wgpu::Texture,image:&layer_core::color::source::SourceImage,coordinate:[u32;2],level:u32,
     )->Result<(),GpuRasterError> {
-        work.copy_to_scratch(encoder,source,PixelRect::full([PAGE_SIZE;2]),[0;2])?;
-        Image::reduce_to_level(device,&self.reduce,encoder,&work.views,&mut work.records,[PAGE_SIZE;2],level);
+        if source.format()==wgpu::TextureFormat::Rgba32Float {
+            work.copy_to_scratch(encoder,source,PixelRect::full([PAGE_SIZE;2]),[0;2])?;
+        } else {
+            crate::scene::Scene::display_source(r,encoder,image,coordinate,source,&work.views[0])?;
+        }
+        Image::reduce_to_level(&r.device,&self.reduce,encoder,&work.views,&mut work.records,[PAGE_SIZE;2],level);
         Ok(())
     }
 }
@@ -54,7 +58,8 @@ impl Window {
                 width: plan.size[0], height: plan.size[1], depth_or_array_layers: 1,
             }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST, view_formats: &[],
+                | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            view_formats: if format==wgpu::TextureFormat::Rgba8Unorm {&[wgpu::TextureFormat::Rgba8UnormSrgb]}else{&[]},
         });
         let view = texture.create_view(&Default::default());
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(16);

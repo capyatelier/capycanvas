@@ -68,10 +68,21 @@ impl TargetRestore {
         })
     }
     fn complete(&self)->bool {self.next==self.pending.len()}
+    fn source_kinds(&self)->startup::SourceKinds {
+        let mut kinds=startup::SourceKinds::default();
+        for source in self.pending.iter().skip(self.next).take(PREFETCH) {
+            match source {
+                SourcePage::Base(_,base)=>kinds.include(startup::SourceKinds::for_source(base.image.storage())),
+                SourcePage::Raster(key,tile) if key.plane==RasterPlane::Color=>kinds.include(startup::SourceKinds::for_descriptor(tile.descriptor())),
+                _=>{},
+            }
+        }
+        kinds
+    }
     fn ready(&self,r:&WgpuRasterizer)->bool {
         let Some(SourcePage::Raster(key,tile))=self.pending.get(self.next) else {return false;};
         let Some(Ok(blob))=tile.try_backing() else {return false;};
-        if key.plane==RasterPlane::Color {r.source_tiles.borrow().prepared_raster_view(&blob,r.document_color().space,r.document_color().space).is_some()}
+        if key.plane==RasterPlane::Color {r.source_tiles.borrow().prepared_raster_any_view(&blob,r.document_color().space,r.document_color().space).is_some()}
         else {self.held(&blob).is_some() && r.source_tiles.borrow().can_upload_bytes(native_tiles::scalar::COVERAGE_TILE_BYTES)}
     }
     fn advance(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
@@ -80,7 +91,7 @@ impl TargetRestore {
             match source {
                 SourcePage::Raster(key,tile)=> {
                     let Some(blob)=tile.try_backing().transpose().map_err(GpuRasterError::Effect)? else {break;};
-                    let requested=if key.plane==RasterPlane::Color {r.source_tiles.borrow().prepared_raster_view(&blob,space,space).is_some() || r.request_raster_decode(blob,space)?}
+                    let requested=if key.plane==RasterPlane::Color {r.source_tiles.borrow().prepared_raster_any_view(&blob,space,space).is_some() || r.request_raster_decode(blob,space)?}
                         else {self.held(&blob).is_some() || r.request_scalar_decode(blob,space)?};
                     if !requested {break;}
                 },
@@ -91,22 +102,22 @@ impl TargetRestore {
             let Some(source)=self.pending.get(self.next) else {break;};
             if let SourcePage::Base(coordinate,base)=source {
                 if !Self::prepare_base(r,base,*coordinate)? {break;}
-                let Some(read)=source_access::plan_paint_base(r,base,*coordinate)? else {self.next+=1;continue;};
-                if !read.pending.is_empty() {return Err(GpuRasterError::DeferredObjectWork);}
-                if let Some(assembly)=read.assembly {source_access::encode_paint_base(&assembly,encoder);}
+                let Some(tile)=r.paint_base_tile(base,*coordinate,encoder)? else {self.next+=1;continue;};
                 let mut page=r.create_page(*coordinate,"staged photo base");page.primary_needs_clear=false;
-                encoder.copy_texture_to_texture(read.tile.texture.as_image_copy(),page.primary.texture.as_image_copy(),page.primary.texture.size());
+                encoder.copy_texture_to_texture(tile.texture.as_image_copy(),page.primary.texture.as_image_copy(),page.primary.texture.size());
                 self.pages.colors.push(page);self.next+=1;continue;
             }
             let SourcePage::Raster(key,tile)=source else {unreachable!()};
             let Some(blob)=tile.try_backing().transpose().map_err(GpuRasterError::Effect)? else {break;};
             if blob.descriptor!=tile.descriptor() {return Err(GpuRasterError::Effect("Raster plane has the wrong pixel representation".into()));}
             if key.plane==RasterPlane::Color {
-                let Some(view)=r.source_tiles.borrow().prepared_raster_view(&blob,space,space).cloned() else {
+                let view=r.source_tiles.borrow().prepared_raster_any_view(&blob,space,space).cloned();
+                let Some(view)=view else {
                     r.request_raster_decode(blob,space)?;break;
                 };
+                let tile=scene::Scene::promote_source(r,encoder,source_access::RawTile {texture:view.texture().clone(),view})?;
                 let mut page=r.create_page(key.coordinate,"staged raster tile");page.primary_needs_clear=false;
-                encoder.copy_texture_to_texture(view.texture().as_image_copy(),page.primary.texture.as_image_copy(),page.primary.texture.size());
+                encoder.copy_texture_to_texture(tile.texture.as_image_copy(),page.primary.texture.as_image_copy(),page.primary.texture.size());
                 self.pages.colors.push(page);self.next+=1;continue;
             }
             let Some(prepared)=self.held(&blob) else {r.request_scalar_decode(blob,space)?;break;};
@@ -138,7 +149,7 @@ impl TargetRestore {
         let mut ready=true;
         for coordinate in page_coordinates(source_access::paint_base_source_bounds(base,coordinate)) {
             if r.source_tiles.borrow().prepared_view(base.image.storage(),coordinate).is_none() {
-                ready=false;if !r.request_image_decode(base.image.id(),base.image.storage().clone(),coordinate)? {break;}
+                ready=false;if !r.request_exact_image_decode(base.image.id(),base.image.storage().clone(),coordinate)? {break;}
             }
         }
         Ok(ready)
@@ -234,18 +245,23 @@ impl WgpuRasterizer {
         }
         std::mem::swap(&mut self.uploads,&mut self.restore_uploads);result
     }
-    fn restore_pipelines_ready(&self)->bool {
+    fn restore_pipelines_ready(&self,kinds:startup::SourceKinds)->bool {
         self.startup.as_ref().map(|startup|&startup.compiler).or(self.preparation_compiler.as_ref()).is_none_or(|compiler| {
-            let ready=compiler.require([&self.scene_pipelines.source.pipeline],startup::VALIDATION);compiler.start();ready
+            let ready=compiler.require(kinds.pipelines(&self.scene_pipelines.source),startup::VALIDATION);compiler.start();ready
         })
     }
     pub(crate) fn prepare_raster_uploads(&mut self,requests:&[(Arc<TileBlob>,layer_core::color::RgbSpace,layer_core::color::RgbSpace)])->Result<(),GpuRasterError> {
         if self.snapshot_worker {return Ok(());}
-        if !self.restore_pipelines_ready() {return Err(GpuRasterError::DeferredObjectWork);}
+        let mut kinds=startup::SourceKinds::default();
+        for (blob,..) in requests {kinds.include(startup::SourceKinds::for_descriptor(blob.descriptor));}
+        if !self.restore_pipelines_ready(kinds) {return Err(GpuRasterError::DeferredObjectWork);}
         let ready=self.record_restore_uploads(|r,encoder| {
             r.drain_image_decodes(encoder)?;let mut ready=true;
             for (blob,source,destination) in requests {
-                if r.source_tiles.borrow().prepared_raster_view(blob,*source,*destination).is_none() {
+                let view=r.source_tiles.borrow().prepared_raster_any_view(blob,*source,*destination).cloned();
+                if let Some(view)=view {
+                    scene::Scene::promote_source(r,encoder,source_access::RawTile {texture:view.texture().clone(),view})?;
+                } else {
                     ready=false;if !r.request_raster_decode_to(blob.clone(),*source,*destination)? {break;}
                 }
             }
@@ -262,7 +278,8 @@ impl WgpuRasterizer {
         }
     }
     fn advance_restore(&mut self)->Result<bool,GpuRasterError> {
-        if self.restore_preparation_pending() && !self.restore_pipelines_ready() {return Ok(false);}
+        if let Some(target)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete()))
+            && !self.restore_pipelines_ready(target.source_kinds()) {return Ok(false);}
         if self.restore_preflight.is_none() {return Ok(true);}
         let projected = self.projected_restore_bytes();
         if let Err(error) = self.admit_preparation_bytes(projected, self.bake_preflight.as_ref().map_or(0, |bake| bake.projected_bytes())) {

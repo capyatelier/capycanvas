@@ -1447,11 +1447,11 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
         let mut window=crate::memory::memory_tests::renderer_for_restore(&doc);
         crate::memory::memory_tests::declare_source_budget(&mut window, frame, 64, 16 << 20, 44 << 20);
         let [resident,uploads]=window.source_tiles.borrow().admitted_bytes();
+        let source_grant=resident+window.source_tiles.borrow().non_slot_bytes();
         assert!(u64::from(extent[0].div_ceil(PAGE_SIZE)*extent[1].div_ceil(PAGE_SIZE))*u64::from(PAGE_SIZE).pow(2)*16>resident);
         let tight=if sigma==21. {128u64<<20}else{160<<20};let mut allocated=0;
         for cap in [320u64<<20,tight] {
             window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);window.metrics.image_window_peak_bytes=0;
-            crate::memory::memory_tests::declare_source_budget(&mut window, frame, 64, 16 << 20, 44 << 20);
             let before=window.metrics().image_window_submissions;
             submit_published(&mut window, frame);
             let actual=display_pixels(&window);assert_eq!(actual.len(),reference.len());
@@ -1465,7 +1465,9 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
             assert!(metrics.source_tile_misses>=85,"all85 imported tiles must actually be decoded");
             let image_bytes=window.scene.as_ref().unwrap().image_cache_bytes();
             if windows>0 {assert_eq!(image_bytes,0);}else{assert!(image_bytes<=cap);}
-            let bytes=window.source_tiles.borrow().gpu_bytes();assert!(bytes<=resident+4*(1<<20));
+            let sources=window.source_tiles.borrow();
+            assert_eq!(sources.admitted_bytes()[0]+sources.non_slot_bytes(),source_grant,"image-window caps must keep the total source grant fixed");
+            let bytes=sources.gpu_bytes();assert!(bytes<=resident+4*(1<<20));
             if allocated!=0 {assert_eq!(bytes,allocated,"source working-set changes must not grow the fixed decoded allocation");}allocated=bytes;
             println!("{id} sigma={sigma} cap={cap} submissions={windows} image peak={} source bytes={bytes} upload peak={} misses={} hits={} maximum={maximum}",metrics.image_window_peak_bytes,metrics.source_upload_peak_bytes,metrics.source_tile_misses,metrics.source_tile_hits);
             if id=="gaussian_blur" {for x in [2047,2048,2049,3071,3072,4099] {

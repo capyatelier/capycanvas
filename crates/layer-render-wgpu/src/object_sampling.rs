@@ -34,18 +34,19 @@ pub fn prepare_nearest_coordinates(inverse:[f64;6],size:[u32;2],first:u32,count:
 pub(crate) struct ObjectSampler {
     layout: wgpu::BindGroupLayout,
     empty_coordinates:wgpu::Buffer,
-    preview_layout:wgpu::BindGroupLayout,
+    preview_layouts:[wgpu::BindGroupLayout;2],
     preview_uniform:wgpu::Buffer,
     pub denominator: Deferred<wgpu::ComputePipeline>,
     pub contribute: Deferred<wgpu::ComputePipeline>,
     pub normalize: Deferred<wgpu::ComputePipeline>,
     pub preview: Deferred<wgpu::ComputePipeline>,
+    pub preview_integer: Deferred<wgpu::ComputePipeline>,
 }
 pub(crate) const PREVIEW_SOURCES: usize = 8;
 const PREVIEW_OBJECTS: usize = 16;
-const PREVIEW_UNIFORM: u64 = 16 + PREVIEW_OBJECTS as u64 * 64;
+const PREVIEW_UNIFORM: u64 = 16 + PREVIEW_OBJECTS as u64 * 160;
 #[derive(Clone)]
-pub(crate) struct PreviewSource { pub source: usize, pub inverse: [f64; 6], pub extent: [u32; 2], pub nearest: bool }
+pub(crate) struct PreviewSource { pub source: usize, pub inverse: [f64; 6], pub extent: [u32; 2], pub nearest: bool, pub samples: Option<crate::scene::sources::Samples> }
 #[derive(Clone)]
 pub(crate) struct CollectionPreview {
     pub sources: Vec<wgpu::TextureView>,
@@ -64,7 +65,9 @@ impl CollectionPreview {
     }
     fn batch(objects: &[PreviewSource]) -> usize {
         let mut sources = Vec::new();
+        let integer=objects.first().is_some_and(|object|object.samples.is_some_and(|samples|samples.format()==wgpu::TextureFormat::Rg32Uint));
         objects.iter().take(PREVIEW_OBJECTS).take_while(|object| {
+            if integer!=object.samples.is_some_and(|samples|samples.format()==wgpu::TextureFormat::Rg32Uint) {return false;}
             if !sources.contains(&object.source) { if sources.len() == PREVIEW_SOURCES { return false; } sources.push(object.source); }
             true
         }).count()
@@ -276,21 +279,25 @@ impl ObjectSampler {
                 let mapped=[a*centre[0]+c*centre[1]+tx,b*centre[0]+d*centre[1]+ty];
                 let anchor=mapped.map(f64::floor);
                 let slot=slots.iter().position(|source|*source==object.source).unwrap_or_else(||{slots.push(object.source);slots.len()-1});
-                let base=16+index*64;
+                let base=16+index*160;
                 for (i,value) in [a,c,mapped[0]-anchor[0],0.,b,d,mapped[1]-anchor[1],0.].into_iter().enumerate() {data[base+i*4..base+i*4+4].copy_from_slice(&(value as f32).to_le_bytes());}
                 for (i,value) in [-anchor[0] as i32,-anchor[1] as i32,object.extent[0] as i32,object.extent[1] as i32].into_iter().enumerate() {data[base+32+i*4..base+36+i*4].copy_from_slice(&value.to_le_bytes());}
                 data[base+48..base+52].copy_from_slice(&(slot as u32).to_le_bytes());
                 data[base+52..base+56].copy_from_slice(&u32::from(object.nearest).to_le_bytes());
+                if let Some(samples)=object.samples {
+                    samples.display_parameters().write_uniform(&mut data[base+64..]);
+                }
             }
             uploads.write_at(encoder,&self.preview_uniform,0,&data)?;
             let target=if (passes-1-pass).is_multiple_of(2) {&job.output} else {job.scratch.as_ref().ok_or(GpuRasterError::InvalidExtent)?};
-            let sources:Vec<_>=(0..PREVIEW_SOURCES).map(|slot|slots.get(slot).map_or(empty,|source|&job.sources[*source])).collect();
-            let binding=crate::bindings::group(device,"image-object collection preview",&self.preview_layout,std::iter::once(self.preview_uniform.as_entire_binding())
+            let integer=objects[0].samples.is_some_and(|samples|samples.format()==wgpu::TextureFormat::Rg32Uint);
+            let sources:Vec<_>=(0..PREVIEW_SOURCES).map(|slot|&job.sources[*slots.get(slot).unwrap_or(&slots[0])]).collect();
+            let binding=crate::bindings::group(device,"image-object collection preview",&self.preview_layouts[usize::from(integer)],std::iter::once(self.preview_uniform.as_entire_binding())
                 .chain(std::iter::once(wgpu::BindingResource::TextureView(back.as_ref().unwrap_or(empty))))
                 .chain(std::iter::once(wgpu::BindingResource::TextureView(target)))
                 .chain(sources.into_iter().map(wgpu::BindingResource::TextureView)).collect::<Vec<_>>());
             let mut compute=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("image-object collection preview"),timestamp_writes:None});
-            compute.set_pipeline(&self.preview);compute.set_bind_group(0,&binding,&[]);compute.dispatch_workgroups(job.size[0].div_ceil(8),job.size[1].div_ceil(8),1);
+            compute.set_pipeline(if integer {&self.preview_integer}else{&self.preview});compute.set_bind_group(0,&binding,&[]);compute.dispatch_workgroups(job.size[0].div_ceil(8),job.size[1].div_ceil(8),1);
             drop(compute);
             back=Some(target.clone());
             first+=count;
@@ -321,17 +328,23 @@ impl ObjectSampler {
         });
         let pipeline = |entry| Deferred::compute(device,"image-object stretched tent",&pipeline_layout,&shader,entry);
         let empty_coordinates=device.create_buffer(&wgpu::BufferDescriptor {label:Some("empty image-object coordinates"),size:8,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false});
-        let preview_layout = crate::bindings::layout(device,"image-object collection preview",&std::iter::once(crate::bindings::buffer(0,stage,wgpu::BufferBindingType::Uniform,false,wgpu::BufferSize::new(PREVIEW_UNIFORM)))
+        let preview_layouts = [false,true].map(|integer|crate::bindings::layout(device,"image-object collection preview",&std::iter::once(crate::bindings::buffer(0,stage,wgpu::BufferBindingType::Uniform,false,wgpu::BufferSize::new(PREVIEW_UNIFORM)))
             .chain(std::iter::once(crate::bindings::texture(1,stage,false)))
             .chain(std::iter::once(crate::bindings::storage_texture(2,stage,wgpu::TextureFormat::Rgba32Float,wgpu::StorageTextureAccess::WriteOnly)))
-            .chain((0..PREVIEW_SOURCES as u32).map(|slot|crate::bindings::texture(3+slot,stage,false))).collect::<Vec<_>>());
-        let preview_shader = Deferred::wgsl(device,"image-object collection preview",crate::compose_wgsl(&[&crate::working_color::shader(device),include_str!("object_preview.wgsl")]));
-        let preview_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label:Some("image-object collection preview"),bind_group_layouts:&[Some(&preview_layout)],immediate_size:0,
+            .chain((0..PREVIEW_SOURCES as u32).map(|slot|crate::bindings::texture_of(3+slot,stage,
+                if integer {wgpu::TextureSampleType::Uint}else{wgpu::TextureSampleType::Float {filterable:false}},wgpu::TextureViewDimension::D2))).collect::<Vec<_>>()));
+        let [preview,preview_integer] = std::array::from_fn(|index| {
+            let unpack=if index==0 {"fn unpack(value:vec4<f32>)->vec4<f32> {return value;}"}else {
+                "fn unpack(value:vec4<u32>)->vec4<f32> {let code=vec4(value.r&65535u,value.r>>16u,value.g&65535u,value.g>>16u);return vec4(vec3<f32>(code.rgb)/65535.,select(f32(code.a)/65535.,1.,code.a==65535u));}"
+            };
+            let source=include_str!("object_preview.wgsl").replace("SOURCE_TYPE",if index==0 {"f32"}else{"u32"}).replace("SOURCE_UNPACK",unpack);
+            let shader=Deferred::wgsl(device,"image-object collection preview",crate::compose_wgsl(&[
+                &crate::working_color::shader(device),include_str!("scene/source_color.wgsl"),&source]));
+            let layout=device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {label:Some("image-object collection preview"),bind_group_layouts:&[Some(&preview_layouts[index])],immediate_size:0});
+            Deferred::compute(device,"image-object collection preview",&layout,&shader,"main")
         });
-        let preview = Deferred::compute(device,"image-object collection preview",&preview_pipeline_layout,&preview_shader,"main");
         let preview_uniform = device.create_buffer(&wgpu::BufferDescriptor {label:Some("image-object collection preview parameters"),size:PREVIEW_UNIFORM,usage:wgpu::BufferUsages::UNIFORM|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
-        Self { layout,empty_coordinates,preview_layout,preview_uniform,denominator:pipeline("denominator"),contribute:pipeline("contribute"),normalize:pipeline("normalize"),preview }
+        Self { layout,empty_coordinates,preview_layouts,preview_uniform,denominator:pipeline("denominator"),contribute:pipeline("contribute"),normalize:pipeline("normalize"),preview,preview_integer }
     }
     #[cfg(test)]
     #[expect(clippy::too_many_arguments, reason = "Test sampling keeps the image extent explicit")]

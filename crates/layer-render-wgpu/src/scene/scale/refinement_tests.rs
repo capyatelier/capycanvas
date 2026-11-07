@@ -420,7 +420,7 @@ fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
         r.after_present();
         crate::test_support::complete(&r);
     }
-    let capacity = (r.source_tiles.borrow().admitted_bytes()[0] / crate::scene::sources::FLOAT_TILE_BYTES) as usize;
+    let capacity = (r.source_tiles.borrow().admitted_bytes()[0] / crate::scene::sources::NORMALIZED_PAGE_BYTES) as usize;
     assert!(capacity >= SOURCE_SLOTS + 4);
     assert!(SOURCE_SLOTS * 4 > capacity, "one idle batch needs more cold sources than fit");
     let pages = page_coordinates(PixelRect::full(extent)).count();

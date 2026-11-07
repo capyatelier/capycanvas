@@ -45,7 +45,7 @@ impl Scene {
             }
         }
         let index = self.mask_tile_input(r, &coverage.use_, &coverage.source, coverage.use_.offset, tile, Some(command))?;
-        Ok(ColorInput { view: self.pool[index].view.clone(), lease: Some(self.own(index).into_owner()) })
+        Ok(ColorInput { view: self.pool[index].view.clone(), lease: Some(self.own(index).into_owner().into()) })
     }
 
     pub(crate) fn mesh_geometry(&self, transform: &layer_core::ImageTransform) -> Option<Arc<paint_transform::mesh::MeshGeometry>> {
@@ -198,6 +198,8 @@ impl Scene {
         let space = r.document_color().space;
         let (tile, pending) = r.source_tiles.borrow_mut().plan_raster(r, &blob, space, space)?;
         if let Some(pending) = pending { self.enqueue_source_decode(pending); }
+        let (tile,pending)=r.source_tiles.borrow_mut().promote(r,tile)?;
+        if let Some(pending)=pending {self.enqueue_source_decode(pending);}
         let lease = r.source_tiles.borrow().lease(&tile.view);
         Ok(Some(ColorInput { view: tile.view, lease }))
     }

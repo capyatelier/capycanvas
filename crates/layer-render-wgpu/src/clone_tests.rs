@@ -317,3 +317,128 @@ fn smudge_keeps_to_paint_and_never_writes_image_layers() {
         "smudging empty paint above the image picks up nothing from it");
     assert!(engine.document().scene().object_layer(layer).is_some());
 }
+
+fn resident_code_cloner(depth: layer_core::color::SampleDepth) -> (
+    InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>, Arc<layer_core::color::source::SourceImage>,
+) {
+    let extent = [1024, 768];
+    let source = crate::test_support::depth_source(extent, depth, layer_core::color::RgbSpace::Srgb, 16 << 20,
+        |x, y| [(x % 251) as f32 / 250., (y % 241) as f32 / 240., 0.37, 1.]);
+    let mut doc = document(extent);
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color.depth = depth;
+    let SourceTarget::Paint(photo) = PHOTO else { unreachable!() };
+    doc.artwork.paint.get_mut(photo).unwrap().base = Some(layer_core::authored::PaintBase::new(source.clone().into()));
+    let (input, mut engine) = cloner(doc, PHOTO, RetouchSource::Editing, false);
+    let r = engine.backend_mut();
+    crate::test_support::complete(r);
+    let (decoded_grant, upload_grant, mip_grant) = {
+        let mut sources = r.source_tiles.borrow_mut();
+        let [decoded, upload] = sources.admitted_bytes();
+        let grants = (decoded + sources.non_slot_bytes(), upload, sources.mip_budget());
+        sources.require_images(std::iter::empty());
+        let overhead = sources.non_slot_bytes();
+        sources.admit_limits(overhead, upload, grants.2);
+        grants
+    };
+    while r.source_tiles.borrow().gpu_bytes() > r.source_tiles.borrow().non_slot_bytes() {
+        let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        assert!(r.source_tiles.borrow_mut().trim_unused(&encoder) > 0, "completed fixture sources must remain evictable");
+        encoder.submit(&r.queue);
+        crate::test_support::complete(r);
+    }
+    assert!(r.source_tiles.borrow().prepared_view(&source, [1, 1]).is_none());
+    r.source_tiles.borrow_mut().admit_limits(decoded_grant, upload_grant, mip_grant);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    for coordinate in page_coordinates(PixelRect::full(extent)) {
+        let prepared = crate::prepare_image_tile(&source, coordinate, r.document_color().space, &r.device.source_samples, None).unwrap();
+        crate::scene::Scene::decode_prepared(r, &mut encoder, &source, coordinate, prepared).unwrap();
+    }
+    r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(r);
+    (input, engine, source)
+}
+
+fn resident_code_format(depth: layer_core::color::SampleDepth) -> wgpu::TextureFormat {
+    if depth == layer_core::color::SampleDepth::U8 { wgpu::TextureFormat::Rgba8Unorm } else { wgpu::TextureFormat::Rg32Uint }
+}
+
+fn prepared_photo_view(r: &WgpuRasterizer, source: &Arc<layer_core::color::source::SourceImage>, coordinate: [u32; 2]) -> wgpu::TextureView {
+    r.source_tiles.borrow().prepared_view(source, coordinate).unwrap().clone()
+}
+
+fn assert_clone_promotes_resident_codes_once(depth: layer_core::color::SampleDepth) {
+    let (mut input, mut engine, source) = resident_code_cloner(depth);
+    let original = prepared_photo_view(engine.backend(), &source, [1, 1]);
+    let untouched = prepared_photo_view(engine.backend(), &source, [3, 0]);
+    assert_eq!(original.texture().format(), resident_code_format(depth));
+    assert_eq!(untouched.texture().format(), resident_code_format(depth));
+    let lease = engine.backend().source_tiles.borrow().lease(&original).unwrap();
+    source_at(&mut engine, 384., 384., |_| {});
+    draw(&mut engine, &mut input, pen(1, PenPhase::Down, [64., 64.], SampleFlags::PRIMARY));
+    assert_eq!(offset_of(&engine), [320, 320]);
+    let exact = prepared_photo_view(engine.backend(), &source, [1, 1]);
+    assert_eq!(exact.texture().format(), wgpu::TextureFormat::Rgba32Float);
+    assert_ne!(exact, original);
+    assert!(Arc::ptr_eq(&lease, &engine.backend().source_tiles.borrow().lease(&exact).unwrap()));
+    for (sequence, x) in [(2, 68.), (3, 72.), (4, 80.)] {
+        draw(&mut engine, &mut input, pen(sequence, PenPhase::Move, [x, 64.], SampleFlags::PRIMARY));
+        assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact);
+        assert_eq!(prepared_photo_view(engine.backend(), &source, [3, 0]), untouched);
+        let r = engine.backend_mut();
+        let mut retouch = r.retouch_sources();
+        let mapping = retouch.mapping(r, &Gather { region: PixelRect::new(64, 64, 81, 65), scale: [1.; 2], offset: [320.; 2], stroke: None }).unwrap();
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let (_, complete) = retouch.pages(r, &mapping, &mut encoder).unwrap();
+        assert!(complete);
+        assert_eq!(encoder.pass_count(), 0, "warm clone sources cannot normalize again");
+        assert!(Arc::ptr_eq(&lease, &r.source_tiles.borrow().lease(&exact).unwrap()));
+        r.retouch = Some(retouch);
+    }
+    draw(&mut engine, &mut input, pen(5, PenPhase::Up, [80., 64.], SampleFlags::PRIMARY));
+    flush(&mut engine);
+    assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact);
+    assert_eq!(prepared_photo_view(engine.backend(), &source, [3, 0]).texture().format(), resident_code_format(depth));
+    let maximum = depth.maximum() as f32;
+    for (x, y) in [(68, 64), (72, 64)] {
+        let code = [((x + 320) % 251) as f32 / 250., ((y + 320) % 241) as f32 / 240., 0.37];
+        let expected = code.map(|value| layer_core::color::RgbSpace::Srgb.decode(f64::from((value * maximum).round() / maximum)) as f32);
+        let actual = pixel(engine.backend(), PHOTO, x, y);
+        assert!((actual[3] - 1.).abs() < 1e-6);
+        for channel in 0..3 { assert!((actual[channel] - expected[channel]).abs() < 2e-5, "{depth:?}: {actual:?}, {expected:?}"); }
+    }
+}
+
+#[test]
+fn clone_stroke_promotes_resident_u8_once_and_keeps_untouched_codes() {
+    assert_clone_promotes_resident_codes_once(layer_core::color::SampleDepth::U8);
+}
+
+#[test]
+fn clone_stroke_promotes_resident_u16_once_and_keeps_untouched_codes() {
+    assert_clone_promotes_resident_codes_once(layer_core::color::SampleDepth::U16);
+}
+
+#[test]
+fn retouch_source_promotion_keeps_the_ready_display_window() {
+    for depth in [layer_core::color::SampleDepth::U8, layer_core::color::SampleDepth::U16] {
+        let (_input, mut engine, source) = resident_code_cloner(depth);
+        let r = engine.backend_mut();
+        let encoded = prepared_photo_view(r, &source, [1, 1]);
+        assert_eq!(encoded.texture().format(), resident_code_format(depth));
+        let window = r.scale_display.as_ref().map(|cache| cache.view().clone());
+        let document = crate::test_support::document_texture(r).clone();
+        let composed = r.metrics.composited_pixels;
+        let mut retouch = r.retouch_sources();
+        let mapping = retouch.mapping(r, &Gather { region: PixelRect::new(64, 64, 81, 65), scale: [1.; 2], offset: [320.; 2], stroke: None }).unwrap();
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+        let (_, complete) = retouch.pages(r, &mapping, &mut encoder).unwrap();
+        assert!(complete);
+        assert_eq!(prepared_photo_view(r, &source, [1, 1]).texture().format(), wgpu::TextureFormat::Rgba32Float);
+        assert_eq!(r.scale_display.as_ref().map(|cache| cache.view().clone()), window);
+        assert_eq!(crate::test_support::document_texture(r), &document);
+        assert_eq!(r.metrics.composited_pixels, composed);
+        r.retouch = Some(retouch);
+        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        engine.render_frame().unwrap();
+        assert!(engine.backend().metrics.frame_composited_pages.is_empty(), "promotion alone cannot invalidate display windows");
+    }
+}

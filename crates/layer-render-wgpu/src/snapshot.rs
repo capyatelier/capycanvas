@@ -272,7 +272,8 @@ impl SnapshotRenderer {
         self.control.check()?;
         let r = &mut self.renderer;
         let mut required = startup::Requirements::default();
-        required.render.push(r.scene_pipelines.source.pipeline.clone());
+        required.render.extend(startup::SourceKinds::for_scene(self.scene.view().with_scope(&self.scope))
+            .pipelines(&r.scene_pipelines.source).cloned());
         if let Some(plan) = &self.raw_plan {
             for &plane in &self.raw_planes {
                 let target = if plane == RasterPlane::Mask { plan.coverage.map(SourceTarget::Coverage).unwrap_or(plan.target) }
@@ -547,7 +548,7 @@ impl SnapshotRenderer {
         self.prepare_scene_pipelines().await?;
         let paper=layer_core::paper::separate_paper(self.scene.view().with_scope(&self.scope).with_offset(self.offset))
             .filter(|_|matches!(output,scene::Output::Artwork(None))).map(|(paper,_)|paper);
-        let reserved=reserved_bytes.saturating_add(scene::sources::FLOAT_TILE_BYTES*(1+u64::from(paper.is_some())));
+        let reserved=reserved_bytes.saturating_add(scene::sources::NORMALIZED_PAGE_BYTES*(1+u64::from(paper.is_some())));
         let control=self.control.clone();
         let (r,packet,region,mut encoder)=self.prepare_region_gpu([x,y,width,height],reserved)?;
         let (target,_) = create_color_target(&r.device,[width,height],"snapshot region");

@@ -107,6 +107,8 @@ impl CommandEncoder {
     /// the helper so its complete batch fits the same command-buffer ceiling.
     pub fn reserve_passes(&mut self, count: usize) {
         assert!(count <= Self::PASSES_PER_SUBMISSION);
+        #[cfg(test)]
+        crate::test_support::PassCounts {total:count as u64,..Default::default()}.record();
         self.resource_work |= count != 0;
         self.compute = None;
         if self.passes + count > Self::PASSES_PER_SUBMISSION {
@@ -124,6 +126,7 @@ impl CommandEncoder {
     }
     pub fn pass_count(&self) -> u64 { self.total_passes }
     pub fn has_work(&self)->bool {self.resource_work || self.total_passes!=0}
+    pub fn retain_resources(&mut self) { self.resource_work = true; }
     pub fn can_fit_passes(&self, count: usize) -> bool {
         count <= Self::PASSES_PER_SUBMISSION - self.passes
     }

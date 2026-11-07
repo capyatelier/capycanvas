@@ -221,6 +221,9 @@ Named modes such as `--drag-pickup`, `--workspace-motion`, `--color-panel` or
 [`native-input.js`](../../apps/layer-linux/bench/native-input.js). Test-specific
 instructions live with the feature's guide under [`docs/ui/`](../ui/README.md).
 
+`native_frame_pacing` with `LAYER_PACING_WORKSPACE=object24|object61 LAYER_PACING_BRUSH=Transform` records object gesture-up to UI/edit readiness and worker queue idle with 20 ms polling, and checks image identity and Undo/Redo outside timing; this does not measure exact convergence or scanout.
+`LAYER_PACING_WORKSPACE=object24-nearest LAYER_PACING_BRUSH=Transform` uses the same endpoint with a nearest U16 object's level-zero native-window preview.
+
 [`tools/performance/gtk-raster.sh`](../../tools/performance/gtk-raster.sh) runs an
 already built test executable on the same kind of private display, for tests
 that need no injected input, such as `native_application_file_launch`.

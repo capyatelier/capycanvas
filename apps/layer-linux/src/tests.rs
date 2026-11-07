@@ -9726,9 +9726,30 @@ fn finish_canvas_operation(w: &Rc<Workspace>) {
 #[ignore = "hardware Wayland benchmark: run separately in release with --ignored --test-threads=1"]
 fn native_frame_pacing() {
     use layer_core::DefaultBrushPreset;
+    let nearest_object = std::env::var("LAYER_PACING_WORKSPACE").as_deref() == Ok("object24-nearest");
+    let object_fixture = matches!(std::env::var("LAYER_PACING_WORKSPACE").as_deref(), Ok("object24" | "object61" | "object24-nearest"));
+    if object_fixture { assert_eq!(std::env::var("LAYER_PACING_BRUSH").as_deref(), Ok("Transform")); }
     let app = native_test_app("dev.layer.FramePacingTest");
     let w = match std::env::var("LAYER_PACING_WORKSPACE").as_deref() {
         Ok("fixture") => fixture_workspace(&app),
+        Ok(mode @ ("object24" | "object61" | "object24-nearest")) => {
+            let extent = if mode == "object61" { [9504, 6336] } else { [6000, 4000] };
+            let mut project = native_navigation::photo(extent);
+            let source = project.scene().paint_source(project.working.occurrence.unwrap()).unwrap().base.as_ref().unwrap().image.clone();
+            let mut object = layer_core::ImageObject::new(source);
+            if nearest_object { object.interpolation = layer_core::ImageInterpolation::Nearest; }
+            let (layer, edit) = project.create_object_layer_edit("Photo object", object, None, 0).unwrap();
+            project.apply(edit).unwrap();
+            let stack = project.composition().result;
+            project.artwork.stacks.get_mut(stack).unwrap().entries = vec![layer];
+            project.working.occurrence = Some(layer); project.working.target = None;
+            project.working.layer_selection = [layer].into(); project.working.layer_anchor = Some(layer);
+            let working = project.working.clone();
+            project = layer_core::Document::from_artwork(project.artwork).unwrap(); project.working = working;
+            let w = Workspace::with_project(&app, Some((project, None)));
+            w.window.maximize();
+            w
+        }
         Ok("photo24") => {
             let mut project = native_navigation::photo([6000, 4000]);
             match std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() {
@@ -9850,6 +9871,12 @@ fn native_frame_pacing() {
         .clone();
     let mut reports = Vec::new();
     let mut sequence = 0;
+    let object_before = object_fixture.then(|| {
+        let document = ui_session(&w).engine().document().clone();
+        let object = document.selected_objects().into_iter().next().unwrap();
+        let image = document.scene().object(object).unwrap();
+        (object, image.image.id(), image.affine)
+    });
     for (name, preset) in [
         ("GPen", Some(DefaultBrushPreset::GPen)),
         ("Pan", None),
@@ -9899,7 +9926,7 @@ fn native_frame_pacing() {
                 w.dispatch(UiAction::Invoke {
                     command: CommandId::SelectAll,
                 });
-            } else {
+            } else if !object_fixture {
                 w.dispatch(UiAction::Layer {
                     action: LayerAction::Tool {
                         tool: LayerCanvasTool::Figure {
@@ -10081,7 +10108,9 @@ fn native_frame_pacing() {
         let transform_path = match name {
             "Transform" | "Move" => {
                 let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box or selection");
-                let from = if distort { [x0, y0] } else { [(x0 + x1) * 0.5, (y0 + y1) * 0.5] };
+                let from = if distort { [x0, y0] } else if object_fixture {
+                    [x0 + (x1 - x0) * 0.35, y0 + (y1 - y0) * 0.35]
+                } else { [(x0 + x1) * 0.5, (y0 + y1) * 0.5] };
                 Some((from, [(x1 - x0) * 0.17, (y1 - y0) * 0.13]))
             }
             "Crop" => {
@@ -10214,6 +10243,7 @@ fn native_frame_pacing() {
                 "benchmark must keep the overview live"
             );
         }
+        let object_commit = object_fixture.then(Instant::now);
         if name == "Refine" {
             w.dispatch(UiAction::Selection { action: SelectionAction::CancelResize });
         } else if preset.is_some() || transform_path.is_some() {
@@ -10238,7 +10268,11 @@ fn native_frame_pacing() {
                 time_ns: 0,
             });
         }
-        pump(150);
+        let object_commit_worker_idle_ms = object_commit.map(|started| {
+            new_photo::ready(&w);
+            started.elapsed().as_secs_f64() * 1000.
+        });
+        if !object_fixture { pump(150); }
         if name == "Move" {
             assert_ne!(
                 ui_session(&w).engine().document().working.selection,
@@ -10332,6 +10366,15 @@ fn native_frame_pacing() {
         };
         let mut report = report;
         report["document"] = serde_json::json!(extent);
+        if nearest_object {
+            let document = ui_session(&w).engine().document().clone();
+            let object = document.selected_objects().into_iter().next().unwrap();
+            let object = document.scene().object(object).unwrap();
+            assert_eq!(object.interpolation, layer_core::ImageInterpolation::Nearest);
+            assert_eq!(object.image.storage().interpretation.depth, layer_core::color::SampleDepth::U16);
+            report["object_interpolation"] = serde_json::json!("Nearest");
+            report["source_depth"] = serde_json::json!("U16");
+        }
         if name == "Refine" {
             report["refine"] = serde_json::json!({
                 "values": refine_values,
@@ -10345,9 +10388,26 @@ fn native_frame_pacing() {
             stats.gpu.len(),
             stats.presented.len()
         );
-        reports.push(report);
         drop(stats);
-        finish_canvas_operation(&w);
+        if let Some((object, image, before)) = object_before {
+            report["commit_worker_idle_ms"] = serde_json::json!(object_commit_worker_idle_ms.unwrap());
+            report["settle_poll_ms"] = serde_json::json!(20);
+            assert!(ui_session(&w).engine().transform_preview().is_none());
+            assert!(!ui_session(&w).engine().has_pending_input());
+            let document = ui_session(&w).engine().document().clone();
+            let committed = document.scene().object(object).unwrap();
+            assert_eq!(committed.image.id(), image);
+            assert_ne!(committed.affine, before);
+            let after = committed.affine;
+            for (command, expected) in [(CommandId::Undo, before), (CommandId::Redo, after)] {
+                w.dispatch(UiAction::Invoke { command }); new_photo::ready(&w);
+                let document = ui_session(&w).engine().document().clone();
+                let restored = document.scene().object(object).unwrap();
+                assert_eq!(restored.image.id(), image); assert_eq!(restored.affine, expected);
+            }
+        }
+        reports.push(report);
+        if !object_fixture { finish_canvas_operation(&w); }
     }
     assert!(
         !reports.is_empty(),

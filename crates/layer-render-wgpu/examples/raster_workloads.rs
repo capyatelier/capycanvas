@@ -429,6 +429,7 @@ fn main() -> Result<()> {
     let mut selected = "all";
     let mut photo = false;
     let mut capture_only = false;
+    let mut bands_only = false;
     let mut navigation_only = false;
     let mut calibrate = false;
     let mut output = PathBuf::from("artifacts/color-m2/final-performance/dense");
@@ -438,10 +439,11 @@ fn main() -> Result<()> {
         match argument.as_str() {
             "--photo" => photo = true,
             "--photo-capture" => { photo = true; capture_only = true; },
+            "--photo-bands" => { photo = true; capture_only = true; bands_only = true; },
             "--photo-navigation" => navigation_only = true,
             "--calibrate" => calibrate = true,
             "--output-dir" => output = PathBuf::from(arguments.next().ok_or("--output-dir needs a path")?),
-            "all" | "24mp" | "45mp" | "60mp" | "multiple" => selected = argument,
+            "all" | "24mp" | "45mp" | "60mp" | "61mp" | "multiple" => selected = argument,
             "--space" => color.space = match arguments.next().map(String::as_str) {
                 Some("srgb") => RgbSpace::Srgb,
                 Some("p3") => RgbSpace::DisplayP3,
@@ -454,9 +456,11 @@ fn main() -> Result<()> {
                 Some("16") => SampleDepth::U16,
                 _ => return Err("--depth needs 8 or 16".into()),
             },
-            _ => return Err("raster_workloads [all|24mp|45mp|60mp|multiple] [--photo|--photo-capture|--photo-navigation] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
+            _ => return Err("raster_workloads [all|24mp|45mp|60mp|61mp|multiple] [--photo|--photo-capture|--photo-bands|--photo-navigation] [--output-dir PATH] [--space srgb|p3|adobe-rgb|prophoto] [--depth 8|16]".into()),
         }
     }
+    if selected == "61mp" && (!photo || navigation_only) { return Err("61mp requires --photo, --photo-capture or --photo-bands".into()); }
+    if bands_only && selected == "multiple" { return Err("--photo-bands measures one document at a time".into()); }
     println!("Source ownership: tiled copy-on-write; native {color:?}, Float32 working tiles");
     std::fs::create_dir_all(&output)?;
     if calibrate { return calibration::run(&output); }
@@ -464,7 +468,7 @@ fn main() -> Result<()> {
         return photo::navigation::run(selected, color, &output);
     }
     if photo {
-        return photo::run(selected, color, &output, capture_only);
+        return photo::run(selected, color, &output, capture_only, bands_only);
     }
     for (name, extent) in [
         ("24mp", [6000, 4000]),

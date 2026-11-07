@@ -288,7 +288,12 @@ impl Uploads {
         bytes_per_row: u32,
         fill: impl FnOnce(&mut wgpu::BufferViewMut),
     ) -> Result<(), GpuRasterError> {
-        let size = wgpu::BufferSize::new(u64::from(bytes_per_row) * u64::from(texture.height()))
+        self.write_texture_region(encoder, texture, [0;2], texture.size(), bytes_per_row, fill)
+    }
+    fn write_texture_region(&mut self, encoder:&mut wgpu::CommandEncoder, texture:&wgpu::Texture,
+        origin:[u32;2], extent:wgpu::Extent3d, bytes_per_row:u32, fill:impl FnOnce(&mut wgpu::BufferViewMut),
+    )->Result<(),GpuRasterError> {
+        let size = wgpu::BufferSize::new(u64::from(bytes_per_row) * u64::from(extent.height))
             .ok_or(GpuRasterError::SizeOverflow)?;
         let slice = self.allocate(size, u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT));
         {
@@ -301,10 +306,10 @@ impl Uploads {
                 buffer: slice.buffer(),
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: slice.offset(), bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(texture.height()),
+                    rows_per_image: Some(extent.height),
                 },
             },
-            texture.as_image_copy(), texture.size(),
+            wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:origin[0],y:origin[1],z:0},..texture.as_image_copy()}, extent,
         );
         Ok(())
     }
@@ -3470,15 +3475,24 @@ fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Sele
     })
 }
 pub(crate) struct PreparedImageUpload {
-    id: layer_core::authored::PortableId,
-    source: Arc<layer_core::color::source::SourceImage>,
-    coordinate: [u32; 2],
+    prepared: object_image_mips::PreparedMipTile,
     tile: source_access::RawTile,
 }
 impl WgpuRasterizer {
     fn held_result_ready(&self)->bool {
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
-        self.source_results.iter().any(|(context,result)|*context==self.device.working_space() && receipt.as_ref().is_none_or(|receipt|Self::receipt_matches(receipt,result)))
+        self.source_results.iter().any(|(context,result)|*context==self.device.working_space() && self.decode_result_eligible(receipt.as_deref(),result))
+    }
+    fn decode_result_eligible(&self,receipt:Option<&scene::sources::PendingTile>,result:&object_image_mips::PreparedImageWork)->bool {
+        if let Some(receipt)=receipt { return Self::receipt_matches(receipt,result); }
+        !self.window_samples_needed(result)
+    }
+    fn window_samples_needed(&self,result:&object_image_mips::PreparedImageWork)->bool {
+        if let object_image_mips::PreparedImageWork::Image(tile)=result
+            && self.moving_images.accepts_tile(tile.id,&tile.source,tile.coordinate)
+            && let Some(view)=self.source_tiles.borrow().prepared_view(&tile.source,tile.coordinate)
+            && self.moving_images.needs_samples(tile.id,&tile.source,tile.coordinate,view.texture()) { return true; }
+        false
     }
     fn receipt_matches(receipt:&scene::sources::PendingTile,prepared:&object_image_mips::PreparedImageWork)->bool {
         match prepared {
@@ -3503,11 +3517,11 @@ impl WgpuRasterizer {
         if let Some(result) = self.browser_image_result.borrow_mut().take() {
             if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(result); }
         }
-        if !self.source_tiles.borrow().can_upload_bytes(scene::sources::FLOAT_TILE_BYTES) { return Ok(None); }
+        if !self.source_tiles.borrow().can_upload_bytes(scene::sources::NORMALIZED_PAGE_BYTES) { return Ok(None); }
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
         let space=self.device.working_space();
         self.source_results.retain(|(context,_)|*context==space);
-        let held=self.source_results.iter().position(|(_,result)|receipt.as_ref().is_none_or(|receipt|Self::receipt_matches(receipt,result)));
+        let held=self.source_results.iter().position(|(_,result)|self.decode_result_eligible(receipt.as_deref(),result));
         let Some(prepared)=held.and_then(|index|self.source_results.remove(index)).map(|(_,result)|result)
             .or_else(||self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll())) else {return Ok(None);};
         let prepared=match prepared {
@@ -3520,41 +3534,59 @@ impl WgpuRasterizer {
         if let Some(receipt)=receipt && !Self::receipt_matches(&receipt,&prepared) {
             self.source_results.push_back((space,prepared));return Ok(None);
         }
-        self.preparation_progress=self.preparation_progress.saturating_add(1);
-        let prepared = match prepared {
-            object_image_mips::PreparedImageWork::Image(prepared) => prepared,
-            object_image_mips::PreparedImageWork::Paper {..}=>return Err(GpuRasterError::InvalidImage),
+        let result = (|| match &prepared {
+            object_image_mips::PreparedImageWork::Paper {..} => Err(GpuRasterError::InvalidImage),
             object_image_mips::PreparedImageWork::Coordinates {destination,pixels} => {
-                if let Some(destination) = destination.upgrade() { *destination.lock().unwrap() = Some(pixels); }
-                return Ok(None);
+                if let Some(destination) = destination.upgrade() { *destination.lock().unwrap() = Some(pixels.clone()); }
+                Ok(None)
             },
             object_image_mips::PreparedImageWork::Raster(prepared) => {
-                let pixels=match prepared.pixels {
-                    Ok(pixels)=>pixels,
-                    Err(error)=> {
+                let pixels = match &prepared.pixels {
+                    Ok(pixels) => pixels,
+                    Err(error) => {
                         let weak=Arc::downgrade(&prepared.blob);
                         self.failed_raster_tiles.retain(|(blob,space,destination,_)|blob.strong_count()>0
                             && !(blob.ptr_eq(&weak) && *space==prepared.space && *destination==prepared.destination));
-                        self.failed_raster_tiles.push((weak,prepared.space,prepared.destination,error));
+                        self.failed_raster_tiles.push((weak,prepared.space,prepared.destination,error.clone()));
                         return Ok(None);
                     },
                 };
-                if !self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.accept_raster(&prepared.blob,prepared.space,prepared.destination,&pixels)) {
-                    scene::Scene::decode_prepared_raster(self,encoder,&prepared.blob,prepared.space,prepared.destination,pixels)?;
+                if !self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.accept_raster(&prepared.blob,prepared.space,prepared.destination,pixels)) {
+                    scene::Scene::decode_prepared_raster(self,encoder,&prepared.blob,prepared.space,prepared.destination,pixels.clone())?;
                 }
-                return Ok(None);
+                Ok(None)
             },
-        };
-        if !object_image_mips::retain_image_decode(&prepared,self.device.working_space(),&mut self.failed_image_tiles) {return Ok(None);}
-        let pixels=prepared.pixels.map_err(GpuRasterError::Color)?;
-        if self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.accept_image(&prepared.source,prepared.coordinate,&pixels)) {return Ok(None);}
-        let tile = scene::Scene::decode_prepared(self, encoder, &prepared.source, prepared.coordinate, pixels)?;
-        Ok(Some(PreparedImageUpload {id:prepared.id, source:prepared.source, coordinate:prepared.coordinate, tile}))
+            object_image_mips::PreparedImageWork::Image(prepared) => {
+                if !object_image_mips::retain_image_decode(prepared,self.device.working_space(),&mut self.failed_image_tiles) {return Ok(None);}
+                let pixels=prepared.pixels.as_ref().map_err(|error|GpuRasterError::Color(error.clone()))?;
+                if self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.accept_image(&prepared.source,prepared.coordinate,pixels)) {
+                    return Ok(None);
+                }
+                let tile=scene::Scene::decode_prepared_for(self,encoder,&prepared.source,prepared.coordinate,pixels.clone(),prepared.use_)?;
+                Ok(Some(PreparedImageUpload {prepared:prepared.clone(),tile}))
+            },
+        })();
+        if matches!(&result,Err(GpuRasterError::DeferredObjectWork|GpuRasterError::SourceWorkingSetExceeded)) {
+            self.source_results.push_front((space,prepared));
+            return Ok(None);
+        }
+        self.preparation_progress=self.preparation_progress.saturating_add(1);
+        result
     }
     pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        self.drain_image_decode(encoder)?;
-        while (self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.ready()))
-            && self.source_tiles.borrow().can_upload_bytes(scene::sources::FLOAT_TILE_BYTES) { self.drain_image_decode(encoder)?; }
+        loop {
+            let previous=self.preparation_progress;
+            if let Some(upload)=self.drain_image_decode(encoder)? {
+                let prepared=upload.prepared;
+                if self.moving_images.accepts_tile(prepared.id,&prepared.source,prepared.coordinate)
+                    && self.moving_images.needs_samples(prepared.id,&prepared.source,prepared.coordinate,&upload.tile.texture) {
+                    self.source_results.push_back((self.device.working_space(),object_image_mips::PreparedImageWork::Image(prepared)));
+                    break;
+                }
+            }
+            if self.preparation_progress==previous || !(self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready()))
+                || !self.source_tiles.borrow().can_upload_bytes(scene::sources::NORMALIZED_PAGE_BYTES) {break;}
+        }
         Ok(())
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -3598,10 +3630,16 @@ impl WgpuRasterizer {
     pub fn preparation_progress(&self) -> u64 { self.preparation_progress }
     pub fn raster_preparation_ready(&self, previous: u64) -> bool {
         self.preparation_progress()>previous && self.restore_preparation_pending() && (self.restore_pages_ready()
-            || self.source_tiles.borrow().can_upload_bytes(scene::sources::FLOAT_TILE_BYTES)
+            || self.source_tiles.borrow().can_upload_bytes(scene::sources::NORMALIZED_PAGE_BYTES)
                 && (self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready())))
     }
     pub(crate) fn request_image_decode(&mut self, id: layer_core::authored::PortableId, source: Arc<layer_core::color::source::SourceImage>, coordinate: [u32; 2]) -> Result<bool, GpuRasterError> {
+        self.request_image_decode_for(id,source,coordinate,scene::sources::SourceUse::Display)
+    }
+    pub(crate) fn request_exact_image_decode(&mut self,id:layer_core::authored::PortableId,source:Arc<layer_core::color::source::SourceImage>,coordinate:[u32;2])->Result<bool,GpuRasterError> {
+        self.request_image_decode_for(id,source,coordinate,scene::sources::SourceUse::Exact)
+    }
+    fn request_image_decode_for(&mut self,id:layer_core::authored::PortableId,source:Arc<layer_core::color::source::SourceImage>,coordinate:[u32;2],use_:scene::sources::SourceUse)->Result<bool,GpuRasterError> {
         #[cfg(target_arch="wasm32")]
         if self.browser_image_decoder.is_none() { return Err(GpuRasterError::Color("Image preparation worker unavailable".into())); }
         let space = self.device.working_space();
@@ -3613,10 +3651,16 @@ impl WgpuRasterizer {
             #[cfg(target_arch = "wasm32")]
             { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
         }
-        if self.source_results.iter().any(|(context,result)|*context==space && matches!(result,object_image_mips::PreparedImageWork::Image(tile) if Arc::ptr_eq(&tile.source,&source) && tile.coordinate==coordinate)) {return Ok(true);}
-        let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.matches_image(&source,coordinate));
+        for (context,result) in &mut self.source_results {
+            if *context==space && let object_image_mips::PreparedImageWork::Image(tile)=result
+                && Arc::ptr_eq(&tile.source,&source) && tile.coordinate==coordinate {
+                if use_==scene::sources::SourceUse::Exact {tile.use_=use_;}
+                return Ok(true);
+            }
+        }
+        let receipt=use_==scene::sources::SourceUse::Exact || self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|receipt|receipt.matches_image(&source,coordinate));
         if self.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.accepts_held(self.source_results.len(),receipt)) {return Ok(false);}
-        let requested = self.image_decode_queue(space)?.request(id, source, coordinate);
+        let requested = self.image_decode_queue(space)?.request_for(id,source,coordinate,use_);
         #[cfg(target_arch = "wasm32")]
         self.dispatch_browser_image_decode()?;
         Ok(requested)
@@ -3681,7 +3725,7 @@ impl WgpuRasterizer {
                     let space = self.device.working_space();
                     Box::pin(async move {
                         let pixels = callback(request.source.clone(),request.coordinate,space).await;
-                        object_image_mips::PreparedImageWork::Image(object_image_mips::PreparedMipTile {id:request.id,source:request.source,coordinate:request.coordinate,pixels})
+                        object_image_mips::PreparedImageWork::Image(object_image_mips::PreparedMipTile {use_:request.use_,id:request.id,source:request.source,coordinate:request.coordinate,pixels})
                     })
                 },
                 object_image_mips::MipDecodeRequest::Raster(request) => {
@@ -3722,6 +3766,10 @@ impl WgpuRasterizer {
     }
     fn decode_wait_blocks_frame(&self)->bool {self.preparation_can_wake() && self.image_decode_waiting()}
     fn moving_images_pending(&self) -> bool {
+        if self.source_results.iter().any(|(context,result)|*context==self.device.working_space() && self.window_samples_needed(result))
+            && self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_none() {
+            return true;
+        }
         if self.decode_wait_blocks_frame() {
             return self.moving_images_waiting;
         }
@@ -3734,7 +3782,7 @@ impl WgpuRasterizer {
         if MovingProjection::update(&mut self.moving_projection, packet.scene, packet.view,
             self.device.working_space(), available, &mut self.failed_image_tiles,self.moving_layer)? {
             let bytes = object_image_mips::MovingImages::demand(&self.moving_projection.as_ref().unwrap().requests, [packet.view.width_px,packet.view.height_px])?;
-            if self.memory.mip_demand(bytes, [packet.view.width_px,packet.view.height_px]) {
+            if self.memory.mip_demand(bytes,[packet.view.width_px,packet.view.height_px]) {
                 self.publish_memory(true);
                 self.factory.memory_budget().flush_reports();
                 self.refresh_memory_limits();
@@ -3763,9 +3811,10 @@ impl WgpuRasterizer {
                 { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
             }
             let mut steps = 0;
-            while steps < budget && let Some(prepared) = self.drain_image_decode(encoder)? {
+            while steps < budget && let Some(upload) = self.drain_image_decode(encoder)? {
+                let prepared=upload.prepared;
                 if images.accepts_tile(prepared.id, &prepared.source, prepared.coordinate) {
-                    images.write_tile(self, encoder, prepared.id, &prepared.source, prepared.coordinate, &prepared.tile.texture)?;
+                    changed|=images.write_tile(self, encoder, prepared.id, &prepared.source, prepared.coordinate, &upload.tile.texture,Some(prepared.pixels.as_ref().map_err(|error|GpuRasterError::Color(error.clone()))?))?;
                 }
                 steps += 1;
             }
@@ -3778,7 +3827,11 @@ impl WgpuRasterizer {
                         }
                         break;
                     };
-                    changed|=images.write_tile(self, encoder, id, &source, coordinate, &texture)?;
+                    if images.needs_samples(id,&source,coordinate,&texture) {
+                        self.request_image_decode(id,source,coordinate)?;
+                        break;
+                    }
+                    changed|=images.write_tile(self, encoder, id, &source, coordinate, &texture,None)?;
                 } else { break; }
                 steps += 1;
             }
@@ -4535,6 +4588,7 @@ impl WgpuRasterizer {
                 label: Some("layer incremental sparse frame"),
             },
         );
+        self.source_tiles.get_mut().flush_retired(&mut encoder);
         self.telemetry.begin(&self.device, &self.queue, encoder.diagnostics(), self.metrics.submissions + 1);
         let moving_images_changed = self.prepare_moving_images(packet, &mut encoder)?;
         if moving_images_changed && let Some(scene) = &mut self.scene {

@@ -1,26 +1,27 @@
-struct PreviewObject { x: vec4<f32>, y: vec4<f32>, source: vec4<i32>, slot: vec4<u32> }
+struct PreviewObject { x: vec4<f32>, y: vec4<f32>, source: vec4<i32>, slot: vec4<u32>, color: SourceColor }
 struct Collection { size: vec4<u32>, objects: array<PreviewObject, 16> }
 @group(0) @binding(0) var<uniform> collection: Collection;
 @group(0) @binding(1) var back: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba32float,write>;
-@group(0) @binding(3) var s0: texture_2d<f32>;
-@group(0) @binding(4) var s1: texture_2d<f32>;
-@group(0) @binding(5) var s2: texture_2d<f32>;
-@group(0) @binding(6) var s3: texture_2d<f32>;
-@group(0) @binding(7) var s4: texture_2d<f32>;
-@group(0) @binding(8) var s5: texture_2d<f32>;
-@group(0) @binding(9) var s6: texture_2d<f32>;
-@group(0) @binding(10) var s7: texture_2d<f32>;
+@group(0) @binding(3) var s0: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(4) var s1: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(5) var s2: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(6) var s3: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(7) var s4: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(8) var s5: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(9) var s6: texture_2d<SOURCE_TYPE>;
+@group(0) @binding(10) var s7: texture_2d<SOURCE_TYPE>;
+SOURCE_UNPACK
 fn load(slot: u32, p: vec2<i32>) -> vec4<f32> {
     switch slot {
-        case 0u: { return textureLoad(s0, p, 0); }
-        case 1u: { return textureLoad(s1, p, 0); }
-        case 2u: { return textureLoad(s2, p, 0); }
-        case 3u: { return textureLoad(s3, p, 0); }
-        case 4u: { return textureLoad(s4, p, 0); }
-        case 5u: { return textureLoad(s5, p, 0); }
-        case 6u: { return textureLoad(s6, p, 0); }
-        default: { return textureLoad(s7, p, 0); }
+        case 0u: { return unpack(textureLoad(s0, p, 0)); }
+        case 1u: { return unpack(textureLoad(s1, p, 0)); }
+        case 2u: { return unpack(textureLoad(s2, p, 0)); }
+        case 3u: { return unpack(textureLoad(s3, p, 0)); }
+        case 4u: { return unpack(textureLoad(s4, p, 0)); }
+        case 5u: { return unpack(textureLoad(s5, p, 0)); }
+        case 6u: { return unpack(textureLoad(s6, p, 0)); }
+        default: { return unpack(textureLoad(s7, p, 0)); }
     }
 }
 fn sample(object: PreviewObject, position: vec2<u32>) -> vec4<f32> {
@@ -31,7 +32,7 @@ fn sample(object: PreviewObject, position: vec2<u32>) -> vec4<f32> {
     if object.slot.y != 0u {
         let texel = vec2<i32>(floor(point + vec2(0.5)));
         if any(texel < origin) || any(texel >= origin + extent) { return vec4(0.); }
-        return load(object.slot.x, texel - origin);
+        return display_decode(load(object.slot.x, texel - origin), object.color);
     }
     let low = vec2<i32>(floor(point));
     if any(low < origin - vec2(1)) || any(low >= origin + extent) { return vec4(0.); }
@@ -40,7 +41,7 @@ fn sample(object: PreviewObject, position: vec2<u32>) -> vec4<f32> {
     for (var y = 0; y < 2; y++) { for (var x = 0; x < 2; x++) {
         let p = low + vec2(x, y);
         if all(p >= origin) && all(p < origin + extent) {
-            sum += load(object.slot.x, p - origin) * select(1. - fraction.x, fraction.x, x == 1) * select(1. - fraction.y, fraction.y, y == 1);
+            sum += display_decode(load(object.slot.x, p - origin), object.color) * select(1. - fraction.x, fraction.x, x == 1) * select(1. - fraction.y, fraction.y, y == 1);
         }
     }}
     return sum;

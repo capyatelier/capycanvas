@@ -60,8 +60,9 @@ struct DocumentKey {
     selection: bool,
     mask: bool,
     locked: bool,
-    source: bool,
+    sources: SourceKinds,
     objects: bool,
+    integer_preview: bool,
     vectors: bool,
     operations: bool,
     transform: bool,
@@ -82,8 +83,9 @@ impl DocumentKey {
             extent: document.composition().size, color: document.composition().color,
             selection: document.working.selection.is_some(), mask,
             locked: !mask && target.and_then(|t| document.target_owner(t)).and_then(|h| scene.occurrence(h)).is_some_and(|o| o.alpha_locked),
-            source: objects || scene.targets().any(|t| scene.original(t).is_some()),
+            sources: SourceKinds::for_scene(scene),
             objects,
+            integer_preview: integer_object_preview(scene),
             vectors: scene.order().iter().any(|&h| scene.vector_layer(h).is_some()),
             operations: scene.order().iter().any(|&h| scene.mask(h).is_some()) || operations().next().is_some(),
             transform: operations().any(|op| matches!(op.kind, layer_core::RasterOperationKind::Transform(_))),
@@ -100,6 +102,56 @@ impl DocumentKey {
                 }).collect(), execution, identity, normal)
             }).collect(),
         }
+    }
+}
+fn integer_object_preview(scene: SceneView<'_>) -> bool {
+    scene.order().iter().filter_map(|&handle| scene.object_layer(handle)).any(|object|
+        object.interpolation == layer_core::authored::ImageInterpolation::Nearest
+            && object_image_mips::MovingImages::source_format(object.image.storage()) == wgpu::TextureFormat::Rg32Uint)
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SourceKinds { float: bool, integer: bool }
+impl SourceKinds {
+    pub(crate) fn for_depth(depth: layer_core::color::SampleDepth) -> Self {
+        let float = depth == layer_core::color::SampleDepth::U8;
+        Self { float, integer: !float }
+    }
+    pub(crate) fn for_descriptor(descriptor: layer_core::color::PixelDescriptor) -> Self {
+        if descriptor.channels == 1 { Self { float: false, integer: true } } else { Self::for_depth(descriptor.depth()) }
+    }
+    pub(crate) fn for_source(source: &layer_core::color::source::SourceImage) -> Self {
+        if matches!(source.interpretation.profile, layer_core::color::ColorProfile::Builtin(_))
+            && source.interpretation.channels != layer_core::color::source::SourceChannels::Cmyk {
+            Self::for_depth(source.interpretation.depth)
+        } else { Self::default() }
+    }
+    pub(crate) fn include(&mut self, other: Self) { self.float |= other.float; self.integer |= other.integer; }
+    pub(crate) fn for_scene(scene: SceneView<'_>) -> Self {
+        let mut kinds = Self::default();
+        for target in scene.targets() {
+            if let Some(source) = scene.original(target) { kinds.include(Self::for_source(source)); }
+            if let Some(raster) = scene.raster(target) {
+                match raster.try_data() {
+                    Some(Ok(data)) => for plane in [layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::Mask,layer_core::raster::RasterPlane::WatercolorWetness] {
+                        let low=layer_core::raster::TileKey {plane,coordinate:[0;2]};
+                        let high=layer_core::raster::TileKey {plane,coordinate:[u32::MAX;2]};
+                        if let Some((_,tile))=data.tiles.range(low..=high).next() { kinds.include(Self::for_descriptor(tile.descriptor())); }
+                    },
+                    None => {
+                        let plane=if target.is_coverage() {layer_core::raster::RasterPlane::Mask} else {layer_core::raster::RasterPlane::Color};
+                        kinds.include(Self::for_descriptor(plane.descriptor_for(scene.composition().color,scene.color_mode(target))));
+                    },
+                    Some(Err(_)) => {},
+                }
+            }
+        }
+        for source in scene.order().iter().filter_map(|&handle| scene.object_layer(handle)) {
+            kinds.include(Self::for_source(source.image.storage()));
+        }
+        kinds
+    }
+    pub(crate) fn pipelines(self, source: &scene::sources::Pipelines) -> impl Iterator<Item = &Deferred<wgpu::RenderPipeline>> {
+        [(self.float, &source.pipeline), (self.integer, &source.integer)].into_iter().filter_map(|(used, pipeline)| used.then_some(pipeline))
     }
 }
 impl ShaderDocument {
@@ -134,7 +186,12 @@ impl Requirements {
         }
         if view.order().iter().any(|&h| view.object_layer(h).is_some()) {
             required.compute.extend(r.scene_pipelines.objects.pipelines().into_iter().cloned());
-            required.render.push(r.scene_pipelines.source.pipeline.clone());
+            let mut sources=SourceKinds::default();
+            for object in view.order().iter().filter_map(|&owner|view.object_layer(owner)) {
+                sources.include(SourceKinds::for_source(object.image.storage()));
+            }
+            required.render.extend(sources.pipelines(&r.scene_pipelines.source).cloned());
+            if integer_object_preview(view) { required.compute.push(r.scene_pipelines.objects.preview_integer.clone()); }
         }
         if view.order().iter().any(|&h| view.vector_layer(h).is_some()) {
             required.compute.push(r.scene_pipelines.vector.pipeline().clone());
@@ -419,11 +476,12 @@ impl WgpuRasterizer {
                 required.compute.extend([mip.reduce.clone(), mip.fused_reduce.clone()]);
                 required.compute.extend(self.scene_pipelines.scale_pipelines().into_iter().cloned());
             }
-            if self.native_edit.is_some() || shader.key.source {
-                required.render.push(self.scene_pipelines.source.pipeline.clone());
-            }
+            let mut sources = shader.key.sources;
+            if self.native_edit.is_some() { sources.include(SourceKinds::for_depth(document.composition().color.depth)); }
+            required.render.extend(sources.pipelines(&self.scene_pipelines.source).cloned());
             if shader.key.objects {
                 required.compute.extend(self.scene_pipelines.objects.pipelines().map(Clone::clone));
+                if shader.key.integer_preview { required.compute.push(self.scene_pipelines.objects.preview_integer.clone()); }
                 required.compute.extend(self.moving_images.pipelines(&self.device).into_iter().cloned());
             }
             if shader.key.vectors {
@@ -655,6 +713,53 @@ fn object_document(icc:bool)->Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_normalizer_kinds_follow_depth_and_native_scalar_layout() {
+        use layer_core::color::{DocumentColor,SampleDepth,RgbSpace};
+        for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
+            let source=crate::test_support::depth_source([8;2],depth,RgbSpace::Srgb,2<<20,|_,_|[0.25,0.5,0.75,1.]);
+            let expected=SourceKinds {float:depth==SampleDepth::U8,integer:depth!=SampleDepth::U8};
+            assert_eq!(SourceKinds::for_source(&source),expected);
+            assert_eq!(SourceKinds::for_descriptor(DocumentColor {depth,..Default::default()}.paint_descriptor()),expected);
+            let mut document=object_document(false);
+            let object=document.artwork.objects.iter().next().unwrap().0;
+            document.artwork.objects.get_mut(object).unwrap().image=layer_core::authored::Image::new(source);
+            assert_eq!(SourceKinds::for_scene(document.scene()),expected);
+            let mut pending=Document::new(layer_core::authored::PortableId::random(),8,8,
+                layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+            pending.artwork.compositions.get_mut(pending.artwork.root).unwrap().color.depth=depth;
+            let SourceTarget::Paint(paint)=pending.working.target.unwrap() else {unreachable!()};
+            pending.artwork.paint.get_mut(paint).unwrap().raster=layer_core::raster::RasterRevision::pending();
+            assert_eq!(SourceKinds::for_scene(pending.scene()),expected);
+        }
+        assert_eq!(SourceKinds::for_scene(object_document(true).scene()),SourceKinds::default());
+        assert_eq!(SourceKinds::for_descriptor(layer_core::raster::RasterPlane::Mask.descriptor(DocumentColor::default())),
+            SourceKinds {float:false,integer:true});
+    }
+    #[test]
+    fn shader_document_invalidates_when_source_depth_changes_the_normalizer() {
+        use layer_core::color::{RgbSpace,SampleDepth};
+        let mut document=object_document(false);
+        let key=ShaderDocument::new(&document);
+        let object=document.artwork.objects.iter().next().unwrap().0;
+        document.artwork.objects.get_mut(object).unwrap().image=layer_core::authored::Image::new(
+            crate::test_support::depth_source([8;2],SampleDepth::U16,RgbSpace::Srgb,2<<20,|_,_|[0.25,0.5,0.75,1.]));
+        document.revision+=1;
+        assert!(!key.matches(&document));
+        let key=ShaderDocument::new(&document);
+        document.artwork.objects.get_mut(object).unwrap().interpolation=layer_core::authored::ImageInterpolation::Nearest;
+        document.revision+=1;
+        assert!(!key.matches(&document));
+        let key=ShaderDocument::new(&document);
+        document.artwork.objects.get_mut(object).unwrap().interpolation=layer_core::authored::ImageInterpolation::Linear;
+        document.revision+=1;
+        assert!(!key.matches(&document));
+        let key=ShaderDocument::new(&document);
+        document.artwork.objects.get_mut(object).unwrap().image=layer_core::authored::Image::new(
+            crate::test_support::depth_source([8;2],SampleDepth::F16,RgbSpace::Srgb,2<<20,|_,_|[0.25,0.5,0.75,1.]));
+        document.revision+=1;
+        assert!(key.matches(&document));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn backdrop_submission_defers_display_recipes_to_the_compiler() {
@@ -695,10 +800,10 @@ mod tests {
         assert!(pixels.iter().all(|pixel| *pixel == [1.; 4]));
     }
     #[test]
-    fn shader_document_tracks_object_dependencies_without_tracking_geometry_or_profiles() {
+    fn shader_document_tracks_typed_source_dependencies_without_tracking_geometry() {
         let mut document=object_document(false);
         let key=ShaderDocument::new(&document);
-        assert!(key.key.source && key.key.objects);
+        assert!(key.key.sources.float && key.key.objects);
         assert!(document.scene().targets().next().is_none());
         let handle=document.artwork.objects.iter().next().unwrap().0;
         let object=document.artwork.objects.get_mut(handle).unwrap();
@@ -709,14 +814,16 @@ mod tests {
         assert!(key.matches(&document));
         document.artwork.objects.get_mut(handle).unwrap().image=object_document(true).artwork.objects.iter().next().unwrap().2.image.clone();
         document.revision+=1;
-        assert!(key.matches(&document));
+        assert!(!key.matches(&document));
+        let key=ShaderDocument::new(&document);
         let stack=document.composition().result;
         let original=document.artwork.stacks.get(stack).unwrap().clone();
         let mut removed=original.clone();removed.entries.clear();
         document.apply(layer_core::Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks,stack,Some(removed)).unwrap())).unwrap();
         assert!(!key.matches(&document));
         let key=ShaderDocument::new(&document);
-        assert!(!key.key.source && !key.key.objects);
+        assert_eq!(key.key.sources,SourceKinds::default());
+        assert!(!key.key.objects);
         document.apply(layer_core::Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks,stack,Some(original)).unwrap())).unwrap();
         assert!(!key.matches(&document));
     }
@@ -1093,6 +1200,33 @@ mod tests {
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
+    #[test]
+    fn restore_readiness_admits_the_integer_normalizer_without_the_float_recipe() {
+        use layer_core::color::{DocumentColor,SampleDepth,RgbSpace};
+        let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut renderer=crate::test_support::staged_renderer(&reference,Default::default());
+        let descriptor=DocumentColor {depth:SampleDepth::U16,..Default::default()}.paint_descriptor();
+        let blob=Arc::new(layer_core::raster::TileBlob::encode(descriptor,
+            &[16384u16,32768,49152,65535].into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap());
+        let (entered,entry)=mpsc::channel();let (release,held)=mpsc::channel();
+        let compiler=&renderer.startup.as_ref().unwrap().compiler;
+        compiler.enqueue(DOCUMENT,move||{let _=entered.send(());let _=held.recv();Ok(())});compiler.start();
+        entry.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(renderer.prepare_raster_uploads(&[(blob,RgbSpace::Srgb,RgbSpace::Srgb)]),Err(GpuRasterError::DeferredObjectWork)));
+        assert!(!renderer.scene_pipelines.source.integer.ready());
+        assert!(renderer.scene_pipelines.source.integer.promote(VALIDATION).is_none());
+        release.send(()).unwrap();
+        let compiler=&renderer.startup.as_ref().unwrap().compiler;
+        let deadline=std::time::Instant::now()+Duration::from_secs(30);
+        while compiler.pending()!=0 {
+            compiler.check().unwrap();
+            assert!(std::time::Instant::now()<deadline);
+            std::thread::yield_now();
+        }
+        compiler.check().unwrap();
+        assert!(renderer.scene_pipelines.source.integer.ready());
+        assert!(!renderer.scene_pipelines.source.pipeline.ready());
+    }
     #[test]
     fn object_only_startup_prepares_sampling_and_source_recipes_before_canvas_readiness() {
         let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();

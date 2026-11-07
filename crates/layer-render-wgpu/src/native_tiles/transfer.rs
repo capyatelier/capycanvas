@@ -14,6 +14,7 @@ impl Tables {
             RgbSpace::ProPhoto => 2,
         }
     }
+    pub(crate) fn contains(&self, space: RgbSpace) -> bool { self.0[Self::index(space)].is_some() }
     pub fn gpu_bytes(&self) -> u64 {
         self.0
             .iter()

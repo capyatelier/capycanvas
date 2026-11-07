@@ -5,6 +5,30 @@
 Reference: Wacom MovinkPad Pro 14 (DTHA140) with a 1800 × 2880, 120 Hz OLED. The
 canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 
+## Stored image-source format comparison
+
+Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK
+`5963a035…`, release Rust/unminified benchmark, P/C/C/P. Each build has six
+six-second contacts per row on the 61 MP JPEG, factory density 280/font 1,
+120 Hz and thermal 0. G-Pen is 2048 px. Brush rates count fresh GPU-completed
+updates; navigation counts actual canvas presents. Rates are medians of contact
+summaries; gaps are the worst contact p99.
+
+| Row | Hz, parent → candidate | Gap p99 ms, parent → candidate |
+| --- | ---: | ---: |
+| G-Pen above Photo | 102.901 → 101.357 | 22.352 → 24.152 |
+| Pan, Navigator closed | 119.393 → 119.393 | 8.539 → 8.538 |
+| Pinch, Navigator closed | 101.938 → 110.673 | 25.001 → 16.668 |
+| Pan, Navigator open | 119.651 → 119.394 | 8.517 → 8.495 |
+| Pinch, Navigator open | 114.816 → 114.302 | 16.668 → 16.668 |
+
+Both pan rows meet the tier in both builds; the others share misses. The initial
+closed-pinch GPU cost also appears in the later control, so no speedup or
+repeatable cost over 5% is claimed. Smaller open-navigation differences remain
+in the [ABBA results](../../artifacts/issue24-impl/formats-c1-tablet-results.md).
+These Photo/PaintBase fixtures save **0 B** in commit 1; its storage saving is
+limited to image objects.
+
 ## Navigation presentation
 
 Measured 2026-10-24 on the reference Wacom MovinkPad Pro 14, comparing

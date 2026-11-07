@@ -432,7 +432,7 @@ struct SourcePlan {
     coordinates: std::collections::BTreeSet<[u32; 2]>,
     initialize: std::collections::BTreeSet<[u32; 2]>,
     channels: Vec<ChannelPlan>,
-    leases: Vec<Arc<()>>,
+    leases: Vec<crate::scene::sources::Lease>,
 }
 struct ChannelPlan {
     pages: Vec<[u32; 2]>,

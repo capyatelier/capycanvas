@@ -455,7 +455,7 @@ fn contacts_neither_upload_nor_wait_and_a_miss_replays_after_pen_up() {
         {
             let r = engine.backend_mut();
             let color = r.document_color();
-            let slots = r.source_tiles.borrow().admitted_bytes()[0] / scene::sources::FLOAT_TILE_BYTES;
+            let slots = r.source_tiles.borrow().admitted_bytes()[0] / scene::sources::NORMALIZED_PAGE_BYTES;
             let pressure: Vec<_> = (0..slots.saturating_sub(SOURCE_SLOTS as u64)).map(|seed| {
                 let pixel = [seed as u8, (seed >> 8) as u8, (seed >> 16) as u8, 255];
                 Arc::new(layer_core::raster::TileBlob::encode(color.paint_descriptor(), &pixel.repeat((PAGE_SIZE * PAGE_SIZE) as usize)).unwrap())

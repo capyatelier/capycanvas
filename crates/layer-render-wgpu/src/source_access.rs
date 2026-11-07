@@ -74,8 +74,9 @@ pub(super) fn plan_paint_base(r: &WgpuRasterizer, base: &PaintBase, coordinate: 
     let mut cache = r.source_tiles.borrow_mut();
     if base.offset.iter().all(|v| v % PAGE_SIZE == 0) {
         let source_coordinate = std::array::from_fn(|i| coordinate[i] - base.offset[i] / PAGE_SIZE);
-        let (tile, pending) = cache.plan(r, base.image.storage(), source_coordinate)?;
-        return Ok(Some(PaintBaseRead { tile, pending: pending.into_iter().collect(), assembly: None }));
+        let (tile, pending) = cache.plan_exact(r, base.image.storage(), source_coordinate)?;
+        let (tile, promotion) = cache.promote(r, tile)?;
+        return Ok(Some(PaintBaseRead { tile, pending: pending.into_iter().chain(promotion).collect(), assembly: None }));
     }
     let (tile, write) = cache.plan_base(r, base, coordinate)?;
     let Some(write) = write else { return Ok(Some(PaintBaseRead {tile,pending:Vec::new(),assembly:None})); };
@@ -85,9 +86,10 @@ pub(super) fn plan_paint_base(r: &WgpuRasterizer, base: &PaintBase, coordinate: 
     let mut copies = Vec::with_capacity(4);
     for source_coordinate in page_coordinates(source_bounds) {
         let overlap = source_bounds.intersect(page_rect(source_coordinate));
-        let (source, decode) = cache.plan(r, base.image.storage(), source_coordinate)?;
+        let (source, decode) = cache.plan_exact(r, base.image.storage(), source_coordinate)?;
+        let (source, promotion) = cache.promote(r, source)?;
         leases.push(cache.lease(&source.view).unwrap());
-        pending.extend(decode);
+        pending.extend(decode.into_iter().chain(promotion));
         copies.push(PaintBaseCopy {
             source, source_origin: [overlap.min_x() % PAGE_SIZE, overlap.min_y() % PAGE_SIZE],
             origin: [overlap.min_x() + base.offset[0] - coordinate[0] * PAGE_SIZE, overlap.min_y() + base.offset[1] - coordinate[1] * PAGE_SIZE],

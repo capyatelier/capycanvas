@@ -20,6 +20,29 @@ fn capture(document: Document) -> Result<SnapshotRenderer, GpuRasterError> {
 }
 
 #[test]
+fn cold_raster_snapshots_prepare_the_normalizer_for_their_stored_depth() {
+    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
+        let color=DocumentColor {depth,..Default::default()};
+        let mut document=Document::new(PortableId::random(),16,16,
+            layer_core::DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=color;
+        let descriptor=color.paint_descriptor();
+        let blob=TileBlob::encode(descriptor,&vec![0;descriptor.byte_len([PAGE_SIZE;2]).unwrap()]).unwrap();
+        paint_mut(&mut document).raster=RasterRevision::backed(RasterData {tiles:[(TileKey {
+            plane:RasterPlane::Color,coordinate:[0;2]},RasterTile::backed(blob))].into(),..Default::default()});
+        refresh(&mut document);
+        let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut snapshot=reference.snapshot_gpu().capture_scene(document.snapshot(),SceneScope::All,Default::default()).unwrap();
+        let source=&snapshot.renderer.scene_pipelines.source;
+        assert!(!source.pipeline.ready()&&!source.integer.ready());
+        pollster::block_on(snapshot.prepare_pipelines()).unwrap();
+        let source=&snapshot.renderer.scene_pipelines.source;
+        assert_eq!(source.pipeline.ready(),depth==SampleDepth::U8,"{depth:?}");
+        assert_eq!(source.integer.ready(),depth!=SampleDepth::U8,"{depth:?}");
+    }
+}
+
+#[test]
 fn scene_captures_reject_nonfinite_effect_phases_before_preparing_pixels() {
     let document=Document::new(PortableId::random(),16,16,layer_core::DocumentNames {paint:"Layer".into(),paper:"Paper".into()});
     let effect=document.artwork.effects.iter().next().unwrap().0;

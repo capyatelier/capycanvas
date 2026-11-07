@@ -25,6 +25,32 @@ canvas is 6000 × 4000.
   Kamvas Pad 12: a MediaTek MT8391 with the same Mali-G57 MC2 GPU and a 90 Hz
   panel. Use them only until the MovinkPad 11 is measured.
 
+## Stored image-source format comparison
+
+Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK
+`5963a035…`, release Rust/unminified benchmark, P/C/C/P. Each build has six
+six-second contacts per row on the 24 MP JPEG, factory density 240/font 1,
+verified Adaptive 90 Hz and thermal 0. G-Pen is 1536 px; Smudge/Clone are 512 px.
+Brushes count fresh GPU-completed updates; navigation counts actual canvas
+presents. Rates are medians of contact summaries; gaps are the worst contact p99.
+
+| Row | Hz, parent → candidate | Gap p99 ms, parent → candidate |
+| --- | ---: | ---: |
+| G-Pen above Photo | 22.782 → 22.697 | 104.773 → 108.276 |
+| Smudge on Photo | 3.575 → 3.658 | 406.058 → 383.834 |
+| Clone with Photo reference | 73.445 → 72.942 | 22.898 → 23.187 |
+| Pan, Navigator closed | 67.315 → 67.273 | 22.437 → 22.411 |
+| Pinch, Navigator closed | 66.497 → 66.497 | 22.411 → 22.403 |
+| Pan, Navigator open | 79.063 → 79.073 | 22.357 → 22.342 |
+| Pinch, Navigator open | 73.388 → 73.459 | 22.391 → 22.401 |
+
+Every row misses the tier in both builds. The initial G-Pen CPU signal also
+moves in the later control; no CPU/GPU cost over 5% repeats beyond both controls
+and their spread. Smudge CPU and Clone rate/gap retain smaller costs in the
+[ABBA results](../../artifacts/issue24-impl/formats-c1-tablet-results.md).
+These Photo/PaintBase fixtures save **0 B** in commit 1; its storage saving is
+limited to image objects. First-touch primers do not prove encoded-cold state.
+
 ## Android UI motion
 
 Wacom MovinkPad 11, 6000 × 4000 photo at Fit, factory density 240/font scale 1,

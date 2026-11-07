@@ -95,7 +95,7 @@ impl TileSnapshot {
             .map_err(GpuRasterError::InvalidTransform)?;
         Ok(source)
     }
-    pub fn prepare_pages(&self, r: &mut WgpuRasterizer, coordinates: &[[u32;2]], encoder: &mut crate::submission::CommandEncoder) -> Result<Vec<Arc<()>>, GpuRasterError> {
+    pub fn prepare_pages(&self, r: &mut WgpuRasterizer, coordinates: &[[u32;2]], encoder: &mut crate::submission::CommandEncoder) -> Result<Vec<crate::scene::sources::Lease>, GpuRasterError> {
         let mut leases = Vec::new();
         let mut pending = false;
         for coordinate in coordinates.iter().copied().filter(|c| self.contains(*c) && !self.pages.contains_key(c)) {
@@ -107,8 +107,11 @@ impl TileSnapshot {
                     Some(Err(error)) => return Err(GpuRasterError::Effect(error)),
                     None => {pending=true;continue;},
                 };
-                let view = r.source_tiles.borrow().prepared_raster_view(&blob, *space,r.document_color().space).cloned();
-                if let Some(view) = view { leases.extend(r.source_tiles.borrow().lease(&view)); }
+                let view = r.source_tiles.borrow().prepared_raster_any_view(&blob, *space,r.document_color().space).cloned();
+                if let Some(view) = view {
+                    let tile=crate::scene::Scene::promote_source(r,encoder,crate::source_access::RawTile {texture:view.texture().clone(),view})?;
+                    leases.extend(r.source_tiles.borrow().lease(&tile.view));
+                }
                 else {r.request_raster_decode(blob, *space)?;pending=true;}
                 continue;
             }
@@ -119,7 +122,7 @@ impl TileSnapshot {
                 for source_coordinate in page_coordinates(local) {
                     let view = r.source_tiles.borrow().prepared_view(base.image.storage(),source_coordinate).cloned();
                     if let Some(view) = view {leases.extend(r.source_tiles.borrow().lease(&view));}
-                    else {r.request_image_decode(self.decode_id,base.image.storage().clone(),source_coordinate)?;ready=false;pending=true;}
+                    else {r.request_exact_image_decode(self.decode_id,base.image.storage().clone(),source_coordinate)?;ready=false;pending=true;}
                 }
                 if ready && let Some(tile) = r.paint_base_tile(base,coordinate,encoder)? {leases.extend(r.source_tiles.borrow().lease(&tile.view));}
             }

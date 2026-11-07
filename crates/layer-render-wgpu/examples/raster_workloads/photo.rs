@@ -246,6 +246,29 @@ struct Job {
     setup: Option<Instant>,
     cleanup: Option<Instant>,
 }
+fn bands(canvas: &mut Canvas, output: &Path) -> Result<()> {
+    let wall = Instant::now();
+    let mut capture = canvas.engine.backend().snapshot_gpu().capture(canvas.snapshot()?, Default::default())?;
+    let setup_ms = ms(wall);
+    let extent = canvas.engine.document().composition().size;
+    let mut csv = BufWriter::new(std::fs::File::create(output)?);
+    writeln!(csv, "y,rows,pixels,awaited_wall_ms")?;
+    let mut y = 0;
+    let mut awaited_ms = 0.;
+    let mut count = 0;
+    while y < extent[1] {
+        let start = Instant::now();
+        let (rows, pixels) = pollster::block_on(capture.read_band_async(y))?;
+        let elapsed = ms(start);
+        assert!(rows > 0 && y + rows <= extent[1]);
+        assert_eq!(pixels.len(), extent[0] as usize * rows as usize);
+        writeln!(csv, "{y},{rows},{},{elapsed:.6}", pixels.len())?;
+        awaited_ms += elapsed; count += 1; y += rows;
+    }
+    csv.flush()?;
+    println!("Isolated export bands {:?}: setup_wall_ms={setup_ms:.6} awaited_band_wall_ms={awaited_ms:.6} total_wall_ms={:.6} bands={count}; awaited wall includes GPU execution and readback, not GPU timestamps", extent, ms(wall));
+    Ok(())
+}
 fn concurrent(
     canvas: &mut Canvas,
     observations: &mut Observations,
@@ -489,10 +512,12 @@ pub(super) fn run(
     color: DocumentColor,
     output: &Path,
     capture_only: bool,
+    bands_only: bool,
 ) -> Result<()> {
     if selected == "all" {
         for case in ["24mp", "45mp", "60mp", "multiple"] {
-            run(case, color, output, capture_only)?;
+            if bands_only && case == "multiple" { continue; }
+            run(case, color, output, capture_only, bands_only)?;
         }
         return Ok(());
     }
@@ -500,11 +525,13 @@ pub(super) fn run(
         ("24mp", [6000, 4000]),
         ("45mp", [8192, 5504]),
         ("60mp", [8192, 7324]),
+        ("61mp", [9504, 6336]),
     ];
     let multiple = selected == "multiple";
     let mut retained = Vec::new();
     let mut retained_gpu = 0;
     for (name, extent) in cases {
+        if name == "61mp" && selected != "61mp" { continue; }
         if !multiple && selected != "all" && selected != name {
             continue;
         }
@@ -518,6 +545,10 @@ pub(super) fn run(
             navigate(&mut canvas, &mut observations, 128, false)?;
         }
         canvas.settle()?;
+        if bands_only {
+            bands(&mut canvas, &output.join(format!("photo-{name}-bands.csv")))?;
+            continue;
+        }
         if multiple && name != "60mp" {
             observations.memory(&canvas);
             retained_gpu += observations.gpu_reserved_peak;

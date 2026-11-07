@@ -55,7 +55,7 @@ These rules define the end state:
 | Opening a file | `ResourceReader` materialises every tile into RAM and transcodes deflate tiles to LZ4. | RAM grows with document size on open. |
 | Spill | `raster_storage::Bytes` supports `Disk` and `External` backings, but only parked tabs use them. `Disk` reads seek synchronously on the decode worker, with no read cache. | The open document can't use the disk. |
 | Recovery | `SessionStore` writes every tile as its own file (`resources/<id>.bin`), each created, written, synced, renamed and its directory synced (`crates/layer-core/src/package/session_store.rs`). Live tiles never point at those files. | A first checkpoint of about 2,000 tiles takes 6.6–8.6 s, about 3.5–4.7 ms a tile (Linux, RTX PRO 6000 workstation, 2026-11-01). RAM keeps the only copy the editor uses. |
-| GPU precision | Paint pages, source slots, scratch and display levels are RGBA32F. | 16 bytes per pixel where the document stores 3–8. |
+| GPU precision | Paint pages, scratch and display levels are RGBA32F. | 16 bytes per pixel where the document stores 3–8. |
 | Complete hierarchy | An optional full-document RGBA32F pyramid including level 0, kept even when image objects make it unusable. | A blank 61 MP document holds 1.22 GB of GPU memory on an RTX PRO 6000 (Linux, 2026-10-31). |
 | Scheduling | One first-in, first-out decode pool (up to three workers, eighteen jobs) for every window; no viewport priority, no motion prediction, partial cancellation. | Work for views the painter left competes with the current one. |
 | Parked tabs | Inactive documents spill to disk once together they pass a fixed 64 MiB, whatever RAM is free. | Switching back to a tab reads from disk even on a machine with RAM to spare. |
@@ -565,8 +565,9 @@ Changing such an effect's gain invalidates its half-float caches.
 
 | Data | Format |
 | --- | --- |
-| Level-0 view tiles of 8-bit documents | `Rgba8UnormSrgb` or `Rgba8Unorm`, as stored; the shader converts on read |
-| Level-0 view tiles of 16-bit documents | `Rgba16Unorm` where supported, else `Rgba16Float` |
+| U8 source slots and level-0 view tiles | `Rgba8Unorm`, with an `Rgba8UnormSrgb` display view for sRGB transfer; source interpretation determines conversion |
+| U16 source slots and level-0 view tiles | Lossless RGBA codes packed into `Rg32Uint` on every backend |
+| Source slots acquired by an exact consumer | Promoted in place to premultiplied `Rgba32Float` until ordinary eviction; display identity stays unchanged |
 | Reduced levels, mips, composites, pivot and operator images, scratch | `Rgba16Float`, premultiplied, in the blend space |
 | Extended effects, float sources, their downstream nodes and the input ancestry of extended effects | `Rgba32Float` |
 | Working tiles of the edit target; brush material; exact evaluation | `Rgba32Float`, as today |
