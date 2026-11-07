@@ -3796,6 +3796,7 @@ impl WgpuRasterizer {
         self.source_tiles.borrow_mut().require_images(required);
         let mut images = std::mem::take(&mut self.moving_images);
         let budget = if packet.dab_batches.is_empty() && self.moving_layer.is_none() { MOVING_IMAGE_IDLE_STEPS } else { MOVING_IMAGE_INPUT_STEPS };
+        let mut changed = false;
         let result = (|| {
             let budget_bytes = self.source_tiles.borrow().mip_budget();
             let plan = images.plan(self, &self.moving_projection.as_ref().unwrap().requests, budget_bytes, encoder)?;
@@ -3804,7 +3805,7 @@ impl WgpuRasterizer {
                 self.moving_images_waiting = true;
                 return Ok(false);
             }
-            let mut changed=images.allocate(self, plan, encoder);
+            changed = images.allocate(self, plan, encoder);
             if self.moving_decode.as_ref().is_some_and(|(space,_)| *space != self.device.working_space()) {
                 self.moving_decode = None;self.source_results.clear();
                 #[cfg(target_arch = "wasm32")]
@@ -3838,7 +3839,13 @@ impl WgpuRasterizer {
             Ok(changed)
         })();
         self.moving_images = images;
-        result
+        match result {
+            Err(GpuRasterError::DeferredObjectWork) => {
+                self.moving_images_waiting = true;
+                Ok(changed)
+            }
+            result => result,
+        }
     }
     fn hold_background(&mut self, refinement: bool) {
         self.background_refinement = refinement;

@@ -895,3 +895,66 @@ fn held_native_window_samples_do_not_starve_exact_queries_without_a_frame() {
     r.moving_images=images;
     r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
 }
+
+
+#[test]
+fn deferred_window_color_preparation_preserves_the_submitted_dab() {
+    use layer_core::{authored::*, color::ColorProfile, BrushExecution};
+    use layer_render::{CanvasRenderer, FramePacket};
+    let extent = [256; 2];
+    let mut photo = request(extent, PixelRect::full(extent), 31);
+    Arc::make_mut(&mut photo.source).interpretation.profile = ColorProfile::Builtin(RgbSpace::AdobeRgb);
+    let mut doc = photo_document(std::slice::from_ref(&photo), extent);
+    let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource {
+        domain: extent, color_mode: Default::default(), base: None,
+        raster: Default::default(), operations: Default::default(),
+    }).unwrap();
+    let owner = doc.artwork.occurrences.insert(PortableId::random(),
+        Occurrence::new(OccurrenceContent::Paint(paint), "Ink")).unwrap();
+    let stack = doc.artwork.compositions.get(doc.artwork.root).unwrap().result;
+    doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, owner);
+    let doc = layer_core::Document::from_artwork(doc.artwork).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    r.ensure_document_metadata(extent, doc.scene()).unwrap();
+    r.source_tiles.borrow_mut().prepare_transfer(&r.device, RgbSpace::Srgb).unwrap();
+    assert_eq!(r.source_tiles.borrow().non_slot_bytes(), crate::native_tiles::transfer::TABLE_BYTES);
+    let dab = crate::tests::test_dab([128.; 2], [1., 0., 0., 1.], 1.);
+    let batch = crate::test_support::dab_batch(SourceTarget::Paint(paint),
+        crate::tests::test_style(BrushExecution::Dry),
+        layer_core::Rect { min: layer_core::Point {x: 108., y: 108.}, max: layer_core::Point {x: 148., y: 148.} });
+    let frame = FramePacket {
+        view: layer_render::ViewState { width_px: 128, height_px: 128,
+            document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] },
+        dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch),
+        ..crate::test_support::packet(doc.scene(), extent)
+    };
+    crate::memory::memory_tests::declare_source_budget(&mut r, frame, 20, 8 << 20, 8 << 20);
+    assert_eq!(r.moving_projection.as_ref().unwrap().requests[0].level, 1);
+    assert!(!r.moving_projection.as_ref().unwrap().requests[0].nearest);
+    let encoded_bytes = u64::from(PAGE_SIZE).pow(2) * 4;
+    let allowance = r.source_tiles.borrow().admitted_bytes()[0];
+    assert_eq!(allowance % encoded_bytes, 0);
+    let mut sources = vec![photo.source.clone()];
+    sources.extend((1..allowance / encoded_bytes).map(|value|
+        layer_core::color::source::rgba8_source(extent, |_, _| [value as u8, 73, 149, 255])));
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    for source in &sources {
+        let pixels = prepare_image_tile(source, [0; 2], r.device.working_space(), &r.device.source_samples, None).unwrap();
+        crate::scene::Scene::decode_prepared(&mut r, &mut encoder, source, [0; 2], pixels).unwrap();
+    }
+    r.uploads.finish(&encoder); encoder.submit(&r.queue); complete(&r);
+    assert_eq!(r.source_tiles.borrow().gpu_bytes(), allowance + r.source_tiles.borrow().non_slot_bytes());
+    assert!(r.source_tiles.borrow().prepared_view(&photo.source, [0; 2]).is_some());
+    assert_eq!(r.source_tiles.borrow().non_slot_bytes(), crate::native_tiles::transfer::TABLE_BYTES,
+        "only the working-space sRGB table is allocated");
+    r.submit(frame).unwrap();
+    complete(&r);
+    let page = r.paint_layers.iter().find(|layer| layer.id == SourceTarget::Paint(paint)).unwrap()
+        .pages.iter().find(|page| page.coordinate == [0; 2]).unwrap();
+    let ink = crate::test_support::float_pixels(&r, &page.active().texture);
+    assert_eq!(ink[128 * 256 + 128], [1., 0., 0., 1.]);
+    let idle = FramePacket { dabs: &[], dab_batches: &[], composite_all: false, ..frame };
+    crate::test_support::submit_settled(&mut r, idle);
+    let output = r.readback_srgb_rgba8().unwrap();
+    assert_eq!(&output[(128 * 256 + 128) * 4..(128 * 256 + 128) * 4 + 4], &[255, 0, 0, 255]);
+}
