@@ -61,8 +61,14 @@ try {
 
  Query 'brush size'
  Wait-Until {(Row 0) -and (Row 0).Current.Name -match 'size'} 'Brush size did not rank first' 5
- $detail=(Find 'command-search-detail').Current.Name
- if($detail -notmatch 'Current' -or $detail -notmatch 'Range'){throw "Parameter help did not describe the value and range: $detail"}
+ $help=@{detail=$null};$helpFailure='Parameter help did not describe the value and range:'
+ try{Wait-Until {
+  $help.detail=(Find 'command-search-detail').Current.Name
+  $help.detail -match 'Current' -and $help.detail -match 'Range'
+ } $helpFailure}catch{
+  if($_.Exception.Message -cne $helpFailure){throw}
+  throw "$helpFailure $($help.detail)"
+ }
  Capture 'query'
  Key 0x0D
  Wait-Until {!(Visible 'command-result-0') -and (Visible 'command-search')} 'Enter did not open parameter entry' 5
