@@ -581,7 +581,8 @@ it.
    restoring an older layout from history, and an empty toolbar survives a save
    and reload.
 4. **The other hosts and real devices**, after GTK approval. Web, Android, Apple
-   (adding the iPhone device family) and Windows present the same shared views.
+   (adding the iPhone device family; see [iPhone phone layout](phone-layout-iphone.md))
+   and Windows present the same shared views.
    *Done when* the milestone 1–3 journeys pass on each host in both themes,
    including toolbar holds and their cancellation, enlarged text, a right-to-left
    language with Swap Sides, and Auto across two windows and a restart. Every

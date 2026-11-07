@@ -76,6 +76,8 @@ and how parity is checked.
 - [Phone layout](phone-layout.md) defines the fixed short-edge presentation for
   windows under 480 px on their short side: the Capy bar, a phone toolbar per
   workspace, Capy's menu and drawing with a finger.
+- [iPhone phone layout](phone-layout-iphone.md) is the plan and acceptance bar for
+  presenting the phone layout on iPhone and narrow iPad windows.
 - [Memory architecture](memory-architecture.md) keeps RAM and VRAM proportional
   to the view instead of the document: one process-wide memory budget with a
   Memory limit setting, a disk-backed session store, edit-ready residency, a
