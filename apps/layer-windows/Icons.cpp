@@ -1,6 +1,6 @@
 #include "pch.h"
 #include "UiControls.h"
-#include <winrt/Windows.Storage.h>
+#include <fstream>
 #include <winrt/Windows.Storage.Streams.h>
 
 using namespace CapyUi;
@@ -29,8 +29,14 @@ struct IconSources {
         auto source=Current().sources.at(key).source;
         apartment_context apartment;co_await resume_background();
         try{
-            auto file=co_await Windows::Storage::StorageFile::GetFileFromPathAsync(path.make_preferred().wstring());
-            auto stream=co_await file.OpenReadAsync();co_await apartment;
+            Windows::Storage::Streams::InMemoryRandomAccessStream stream;
+            {
+                std::ifstream file(path,std::ios::binary);if(!file)co_return;
+                std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};
+                Windows::Storage::Streams::DataWriter writer(stream);writer.WriteBytes(bytes);
+                co_await writer.StoreAsync();writer.DetachStream();stream.Seek(0);
+            }
+            co_await apartment;
             auto status=co_await source.SetSourceAsync(stream);stream.Close();
             if(status==Imaging::SvgImageSourceLoadStatus::Success){
                 Ready(key);auto theme=path.parent_path().filename()==L"dark"?L"light":L"dark";

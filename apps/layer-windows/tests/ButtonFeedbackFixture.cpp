@@ -4,6 +4,7 @@
 #include "SdkFeedbackFixture.h"
 #include "NavigatorLayoutFixture.h"
 #include "ScrollIndicatorsFixture.h"
+#include "IconOrpcFixture.h"
 #include "WorkspaceDrawers.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <chrono>
@@ -15,6 +16,7 @@ using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::Media;
 namespace {
 std::shared_ptr<NavigatorLayoutFixture> navigatorFixture;
+std::shared_ptr<CapyTests::IconOrpcFixture> iconOrpcFixture;
 struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata;
     Window window{nullptr};Grid root;ContentDialog dialog{nullptr};Flyout flyout;
@@ -62,6 +64,7 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
     }
     void OnLaunched(LaunchActivatedEventArgs const&){
         Resources().MergedDictionaries().Append(XamlControlsResources());Resources().MergedDictionaries().Append(CapyUi::paletteResources());
+        if(iconOrpcFixture){iconOrpcFixture->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_SCROLL_INDICATORS",nullptr,0)){indicators=std::make_shared<ScrollIndicatorsFixture>();indicators->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_NAVIGATOR_LAYOUT",nullptr,0)){navigatorFixture=std::make_shared<NavigatorLayoutFixture>(context);navigatorFixture->open();return;}
         if(GetEnvironmentVariableW(L"CAPY_FEEDBACK_SDK",nullptr,0)){sdk=std::make_shared<SdkFeedbackFixture>();sdk->open();return;}
@@ -99,5 +102,12 @@ struct App:ApplicationT<App,Markup::IXamlMetadataProvider>{
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int){
     ControlContext context;if(GetEnvironmentVariableW(L"CAPY_NAVIGATOR_LAYOUT",nullptr,0))context=fixtureContext(L"CAPY_NAVIGATOR_LAYOUT");
-    init_apartment(apartment_type::single_threaded);Application::Start([context](auto&&){make<App>(context);});return navigatorFixture?navigatorFixture->write():0;
+    init_apartment(apartment_type::single_threaded);
+    if(GetEnvironmentVariableW(L"CAPY_ICON_ORPC_FIXTURE",nullptr,0)){
+        iconOrpcFixture=std::make_shared<CapyTests::IconOrpcFixture>();
+        try{iconOrpcFixture->calibrate();Application::Start([context](auto&&){make<App>(context);});return iconOrpcFixture->finish();}
+        catch(hresult_error const& error){return iconOrpcFixture->finish(CapyTests::IconOrpcFixture::describe(error));}
+        catch(...){return iconOrpcFixture->finish(L"Unhandled icon ORPC fixture failure");}
+    }
+    Application::Start([context](auto&&){make<App>(context);});return navigatorFixture?navigatorFixture->write():0;
 }
