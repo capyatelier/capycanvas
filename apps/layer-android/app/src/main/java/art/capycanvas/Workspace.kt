@@ -244,8 +244,8 @@ private val HiddenChromeShape=object:Shape {
                         Workspace(host, snapshot)
                     }
                     host.dialogError?.takeIf { snapshot?.objectOrNull("preferences") == null }?.let { message ->
-                        AlertDialog(onDismissRequest = host::clearActionError, text = { Text(message) },
-                            confirmButton = { TextButton(host::clearActionError) { Text(host.bootstrap!!.getJSONObject("common").getString("ok")) } })
+                        DialogShell(host,host.bootstrap!!.getJSONObject("file_error_dialog"),host.bootstrap!!.getString("action_failed"),onCancel=host::clearActionError,tag="action-error",
+                            responses=listOf(DialogResponse(host.bootstrap!!.getJSONObject("common").getString("ok"),"action-error-ok",action=host::clearActionError)),body={Text(message)})
                     }
                     CommandSearch(host)
                     ColorEditorLayer(host)
@@ -261,15 +261,15 @@ private val HiddenChromeShape=object:Shape {
                         snapshot?.objectOrNull("toolbar_prompt")?.let { ToolbarPrompt(host, it) }
                     state?.getJSONObject("customization")?.optString("control")?.takeIf {
                         snapshot?.objectOrNull("preferences") == null && it.isNotEmpty() && it != "null"
-                    }?.let { control ->
-                        AlertDialog(onDismissRequest = { host.customize(obj("type" to "close_control")) },
-                            title = { Text(if (control == "brush_color") host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("color") else host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity")) },
-                            text = { Column {
-                                if (control == "brush_color") ColorControls(host)
-                                else NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("opacity"), state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity"), fieldFill = colors.dialogField) {
-                                    host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
+                    }?.let {
+                        val copy=host.catalog.getJSONObject("native_copy").getJSONObject("color")
+                        val close={host.customize(obj("type" to "close_control"))}
+                        DialogShell(host,copy.getJSONObject("control_dialog"),copy.getString("color"),
+                            onCancel=close,tag="brush-control",responses=listOf(DialogResponse(host.bootstrap!!.getJSONObject("common").getString("done"),"brush-control-done",action=close)),body={padding ->
+                                Column(Modifier.padding(padding)) {
+                                    ColorControls(host)
                                 }
-                            } }, confirmButton = { TextButton({ host.customize(obj("type" to "close_control")) }) { Text(host.bootstrap!!.getJSONObject("common").getString("done")) } })
+                            })
                     }
                 }
                 }

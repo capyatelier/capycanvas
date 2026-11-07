@@ -149,13 +149,10 @@ impl WebApp {
         serialize(&layer_ui::color_feature_copy::ProofCopy::new(self.session.localization()))
     }
     pub fn begin_export_dialog(&mut self,id:u32,bytes:js_sys::Uint8Array)->Result<JsValue,JsValue> {
-        use layer_ui::{ExportDialogCapabilities,ExportDialogContext,ExportFormat as F};
-        let source=self.session.capture_project_export(id).map_err(js)?;
-        let profiles=layer_ui::ExportForm::new_localized(self.session.engine().document(),self.session.localization()).profiles;
-        let context=ExportDialogContext::new(source,ExportDialogCapabilities {
+        use layer_ui::{ExportDialogCapabilities,ExportFormat as F};
+        serialize(&self.session.begin_export_dialog_for(id,ExportDialogCapabilities {
             formats:vec![F::Png,F::Tiff,F::Jpeg,F::Webp,F::Exr,F::PngHdr,F::JpegHdr,F::AvifHdr],profile_import:true,
-        },profiles);
-        serialize(&self.session.begin_export_dialog(id,context,layer_ui::ExportPresets::restore(&bytes.to_vec())).map_err(js)?)
+        },&bytes.to_vec()).map_err(js)?)
     }
     pub fn export_dialog_action(&mut self,id:u32,action:JsValue)->Result<JsValue,JsValue> {
         serialize(&self.session.export_dialog_action(id,serde_wasm_bindgen::from_value(action).map_err(js)?).map_err(js)?)

@@ -615,6 +615,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
+    pub fn begin_export_dialog_for(&mut self, id: u32, capabilities: crate::ExportDialogCapabilities, presets: &[u8]) -> Result<ExportDialogView, String> {
+        let source = self.capture_project_export(id)?;
+        let profiles = crate::ExportForm::new_localized(self.engine().document(),self.localization()).profiles;
+        self.begin_export_dialog(id,ExportDialogContext::new(source,capabilities,profiles),ExportPresets::restore(presets))
+    }
     pub fn begin_export_dialog(&mut self, id: u32, context: ExportDialogContext, library: ExportPresets) -> Result<ExportDialogView, String> {
         if !matches!(self.document_request(id)?,DocumentRequest::Export {owner,epoch,..}
             if *owner==context.source.capture.checkpoint.owner && *owner==self.engine.document().owner && *epoch==self.state.document_file.epoch) {

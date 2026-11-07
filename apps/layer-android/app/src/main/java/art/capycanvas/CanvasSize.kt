@@ -34,7 +34,7 @@ private val AnchorCellSize = 40.dp
                         row.forEach { choice ->
                             val anchor = choice.getString("anchor")
                             val selected = anchor == view.getString("anchor")
-                            Box(Modifier.size(AnchorCellSize).clip(ControlShape).background(if (selected) colors.active else colors.input)
+                            Box(Modifier.size(AnchorCellSize).clip(ControlShape).background(if (selected) colors.active else colors.button)
                                 .focusProperties { canFocus = false }.testTag("canvas-size-anchor-$anchor")
                                 .semantics { contentDescription = choice.getString("label") }
                                 .selectable(selected, role = Role.RadioButton) { actions.choose(obj("op" to "anchor", "anchor" to anchor)) },

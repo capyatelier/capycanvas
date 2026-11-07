@@ -985,12 +985,7 @@ impl NativeHost {
             },
             Query::DocumentColor => json!(self.session.engine().document().composition().color),
             Query::Requests => json!(self.session.state().requests),
-            Query::BeginExportDialog { id, presets, capabilities } => {
-                let source = self.session.capture_project_export(id)?;
-                let profiles = layer_ui::ExportForm::new_localized(self.session.engine().document(),self.session.localization()).profiles;
-                let context = layer_ui::ExportDialogContext::new(source,capabilities,profiles);
-                json!(self.session.begin_export_dialog(id,context,layer_ui::ExportPresets::restore(&presets))?)
-            }
+            Query::BeginExportDialog { id, presets, capabilities } => json!(self.session.begin_export_dialog_for(id,capabilities,&presets)?),
             Query::ExportDialogAction { id, action } => json!(self.session.export_dialog_action(id,action)?),
             Query::ExportDialogView { id } => json!(self.session.export_dialog_view(id)?),
             Query::ProfileChannels { profile } => json!(layer_color::profile_channels(&profile).map_err(|e|e.to_string())?),

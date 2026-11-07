@@ -1,8 +1,6 @@
 package art.capycanvas
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -19,10 +17,14 @@ import org.json.JSONObject
             view = withContext(Dispatchers.IO) { JSONObject(Native.documentInfo(task)) }
         } } catch (e: Exception) { error = e.message }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text(view?.getString("title") ?: host.bootstrap?.getString("preparing_document").orEmpty()) },
-        dismissButton = { view?.let { properties -> TextButton(onAppearance) { Text(properties.getString("proof")) } } },
-        confirmButton = { TextButton(onDismiss) { Text(view?.getString("done") ?: host.bootstrap?.getJSONObject("common")?.getString("done").orEmpty()) } }, text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 580.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val done=view?.getString("done") ?: host.bootstrap!!.getJSONObject("common").getString("done")
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null
+    DialogShell(host,view?.getJSONObject("dialog") ?: host.bootstrap!!.getJSONObject("progress_dialog"),
+        view?.getString("title") ?: host.bootstrap!!.getString("preparing_document"),onCancel=onDismiss,tag="document-properties",
+        responses=(if(view!=null&&!phone)listOf(DialogResponse(view!!.getString("proof"),"document-properties-proof",action=onAppearance))else emptyList())+
+            DialogResponse(done,"document-properties-done",action=onDismiss),
+        secondary=if(view==null||!phone)null else ({TextButton(onAppearance){Text(view!!.getString("proof"))}}),body={padding ->
+            Column(Modifier.fillMaxWidth().padding(padding), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 view?.getJSONArray("rows")?.let { values -> for (i in 0 until values.length()) {
                     val row = values.getJSONArray(i)
                     Text(row.getString(0), style = MaterialTheme.typography.titleSmall)

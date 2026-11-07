@@ -2,8 +2,6 @@ package art.capycanvas
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -29,10 +27,12 @@ import org.json.JSONObject
     val copy=host.catalog.getJSONObject("document_color_copy")
     LaunchedEffect(host.languageTag) { job.refreshCopy() }
     val common=copy.getJSONObject("common")
-    AlertDialog(onDismissRequest=job::close,title={Text(copy.getString(if(rasterize)"rasterize_title" else "repair_title"))},
-        dismissButton={TextButton(job::close){Text(common.getString("cancel"))}},
-        confirmButton={TextButton(job::apply,enabled=job.ready&&!job.busy){Text(copy.getString(if(rasterize)"rasterize" else if(job.addsLayer)"add_source" else "apply_profile"))}},
-        text={Column(Modifier.fillMaxWidth().heightIn(max=600.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+    val label=copy.getString(if(rasterize)"rasterize" else if(job.addsLayer)"add_source" else "apply_profile")
+    DialogShell(host,copy.getJSONObject(if(job.applying)"progress_dialog" else "dialog"),copy.getString(if(rasterize)"rasterize_title" else "repair_title"),
+        onCancel=job::close,onPrimary=job::apply,primaryLabel=label,primaryEnabled=job.ready&&!job.busy,tag="source-edit",
+        responses=listOf(DialogResponse(common.getString("cancel"),"source-edit-cancel",action=job::close))+
+            if(job.applying)emptyList() else listOf(DialogResponse(label,"source-edit-apply",accent=true,enabled=job.ready&&!job.busy,action=job::apply)),
+        body={padding -> Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text(copy.getString(if(rasterize)"rasterize_help" else "repair_help"))
             if(!rasterize) {
                     ColorChoice(copy.getString("correct_profile"),listOf("Srgb" to "sRGB","DisplayP3" to "Display P3","AdobeRgb" to "Adobe RGB (1998)","ProPhoto" to "ProPhoto RGB")+(custom?.let{listOf("custom" to profileCaption(host,it))}?:emptyList()),space,enabled=!job.applying){if(!job.applying){space=it;job.invalidate()}}

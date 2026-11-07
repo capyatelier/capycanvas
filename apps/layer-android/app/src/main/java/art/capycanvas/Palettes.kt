@@ -807,25 +807,27 @@ private fun DrawScope.checker(colors: Palette) {
     val close = { controller.dialog = null }
     if (dialog.kind == "remove") {
         val removeCaption=remember(dialog.initial, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "remove_palette", "name" to dialog.initial).toString(), host.languageTag)).getString("text") }
-        AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("palette-remove-dialog"),
-            title = { Text(host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("remove_title")) }, text = { Text(removeCaption) },
-            dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },
-            confirmButton = { TextButton({ close(); controller.apply(obj("op" to "remove_palette", "id" to dialog.id)) },
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(host.bootstrap!!.getJSONObject("common").getString("remove")) } })
+        val confirm={close();controller.apply(obj("op" to "remove_palette","id" to dialog.id));Unit}
+        val common=host.bootstrap!!.getJSONObject("common")
+        DialogShell(host,controller.view()!!.getJSONObject("delete_dialog"),host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("remove_title"),
+            onCancel=close,tag="palette-remove-dialog",responses=listOf(DialogResponse(common.getString("cancel"),"palette-remove-cancel",action=close),
+                DialogResponse(common.getString("remove"),"palette-remove-confirm",accent=true,destructive=true,action=confirm)),body={Text(removeCaption)})
         return
     }
     var name by remember(dialog) { mutableStateOf(dialog.initial) }
     var error by remember(dialog) { mutableStateOf<String?>(null) }
     fun action() = if (dialog.kind == "rename") obj("op" to "rename_palette", "id" to dialog.id, "name" to name) else obj("op" to "create_palette", "name" to name)
     LaunchedEffect(name) { host.paletteAction(action(), dryRun = true) { error = it } }
-    AlertDialog(onDismissRequest = close, modifier = Modifier.testTag("palette-name-dialog"),
-        title = { Text(if (dialog.kind == "rename") host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("rename_title") else host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString("new_title")) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("palette-library-name"), maxLength = 64, focusRequest = 1, background = LocalPalette.current.dialogField)
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        } },
-        dismissButton = { TextButton(close) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) } },
-        confirmButton = { TextButton({
-            controller.apply(action()) { if (it == null) { close(); controller.chooser = false } else error = it }
-        }, enabled = error == null, modifier = Modifier.testTag("palette-name-save")) { Text(host.bootstrap!!.getJSONObject("common").getString("save")) } })
+    val common=host.bootstrap!!.getJSONObject("common")
+    val save={controller.apply(action()){if(it==null){close();controller.chooser=false}else error=it};Unit}
+    DialogShell(host,controller.view()!!.getJSONObject("edit_dialog"),
+        host.catalog.getJSONObject("native_copy").getJSONObject("palettes").getString(if(dialog.kind=="rename")"rename_title" else "new_title"),
+        onCancel=close,onPrimary=save,primaryLabel=common.getString("save"),primaryEnabled=error==null,primaryTag="palette-name-save",tag="palette-name-dialog",
+        responses=listOf(DialogResponse(common.getString("cancel"),"palette-name-cancel",action=close),
+            DialogResponse(common.getString("save"),"palette-name-save",accent=true,enabled=error==null,action=save)),body={padding ->
+            Column(Modifier.padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                CoreTextField(name,{name=it},Modifier.fillMaxWidth().testTag("palette-library-name"),maxLength=64,focusRequest=1,background=LocalPalette.current.dialogField)
+                error?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+            }
+        })
 }

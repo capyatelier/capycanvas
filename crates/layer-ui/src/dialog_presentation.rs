@@ -195,7 +195,7 @@ impl UiState {
         let Some(phone) = self.phone_presentation(viewport) else { return DialogPresentation::Floating; };
         match role {
             DialogRole::Alert => DialogPresentation::Floating,
-            DialogRole::CanvasPanel => DialogPresentation::CanvasPanel(phone.work_area),
+            DialogRole::CanvasPanel => DialogPresentation::CanvasPanel(phone.work_area.intersection(visible).unwrap_or(phone.work_area)),
             DialogRole::Editor => {
                 let [left, top, right, bottom] = self.phone.insets;
                 DialogPresentation::Page(Bounds { x: left, y: top,

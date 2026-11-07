@@ -266,7 +266,7 @@ copy_struct! { ColorCopy {
     log_scale: NATIVE_COLOR_LOG_SCALE,
     refresh: NATIVE_COLOR_REFRESH,
     picking: NATIVE_COLOR_PICKING,
-} }
+} ; control_dialog = crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Close), false) }
 
 copy_struct! { ShortcutCopy {
     clear_search: SETTINGS_CLEAR_SEARCH,

@@ -19,6 +19,7 @@ pub fn rasterize_details(localizer: &Localizer, color: layer_core::color::Docume
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ProofCopy {
+    pub profile_dialog: crate::DialogIntent,
     pub common: CommonCopy,
     pub unavailable: Arc<str>,
     pub preparing: Arc<str>,
@@ -61,7 +62,7 @@ pub struct ProofCopy {
 }
 impl ProofCopy {
     pub fn new(localizer: &Localizer) -> Self {
-        Self { common: CommonCopy::new(localizer),
+        Self { profile_dialog:crate::DialogIntent::alert_editor(Some(crate::DialogPrimary::Close), false), common: CommonCopy::new(localizer),
             title: localizer.text(MessageId::COLOR_FEATURES_PROOF_TITLE),
             mode: localizer.text(MessageId::COLOR_FEATURES_PROOF_MODE),
             balance_contrast: localizer.text(MessageId::COLOR_FEATURES_PROOF_BALANCE_CONTRAST),

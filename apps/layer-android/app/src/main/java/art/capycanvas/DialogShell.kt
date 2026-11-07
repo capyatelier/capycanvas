@@ -20,7 +20,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -60,7 +59,7 @@ private val LocalDialogFocus=compositionLocalOf<FocusRequester?> {null}
 
 internal data class SearchState(val focused: Boolean, val text: String, val clear: () -> Unit, val focus: FocusRequester)
 internal data class DialogResponse(val label: String, val tag: String, val accent: Boolean = false,
-    val enabled: Boolean = true, val action: () -> Unit)
+    val enabled: Boolean = true, val destructive:Boolean=false, val action: () -> Unit)
 
 @Composable internal fun DialogShell(host: CanvasHost, intent: JSONObject, title: String, subpage: Boolean = false,
     search: SearchState? = null, onCancel: () -> Unit, onBack: () -> Unit = onCancel, onPrimary: () -> Unit = {},
@@ -155,7 +154,7 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
                     content(PaddingValues(16.dp))
                 }
             }
-            else if (alert) AlertShell(host,title,tag,frame.optBoolean("prefer_wide"),visible,responses,intent.getString("role")=="alert",
+            else if (alert) AlertShell(host,title,tag,frame.optBoolean("prefer_wide"),visible,responses,
                 Modifier.focusRequester(focus).onPreviewKeyEvent { currentKeys(it.nativeKeyEvent) }.focusable(),content)
             else Surface(Modifier.padding(16.dp).widthIn(max = floatingWidth.dp).fillMaxWidth().heightIn(max = (floatingArea.number("height")-32f).coerceAtLeast(0f).dp)
                 .testTag(tag).focusRequester(focus).onPreviewKeyEvent { currentKeys(it.nativeKeyEvent) }.focusable(),shape = SurfaceShape,color = colors.settingsBackground) {
@@ -164,7 +163,13 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
                         navigation?.invoke()
                         if(header)DialogTitle(title,"$tag-title")
                         Box(Modifier.weight(1f,fill = false).then(if(scrollBody)Modifier.verticalScroll(scroll) else Modifier)) { content(PaddingValues(16.dp)) }
-                        if(actions != null || secondary != null)PickerFooter(tag) { secondary?.invoke();actions?.invoke(this) }
+                        if(actions != null || secondary != null || responses.isNotEmpty())PickerFooter(tag) {
+                            secondary?.invoke()
+                            if(actions != null)actions(this) else {
+                                Spacer(Modifier.weight(1f))
+                                responses.forEach {response -> DialogButton(response.label,response.tag,response.accent,response.enabled,destructive=response.destructive,onClick=response.action)}
+                            }
+                        }
                     }
                     overlay?.invoke(this)
                 }
@@ -228,8 +233,15 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     })
 }
 
+@Composable internal fun ProgressDialog(host:CanvasHost,label:String,tag:String,enabled:Boolean=true,onCancel:()->Unit) {
+    val cancel={if(enabled)onCancel()}
+    DialogShell(host,host.bootstrap!!.getJSONObject("progress_dialog"),label,onCancel=cancel,tag=tag,
+        responses=listOf(DialogResponse(host.bootstrap!!.getJSONObject("common").getString("cancel"),"$tag-cancel",enabled=enabled,action=cancel)),
+        body={CircularProgressIndicator()})
+}
+
 @Composable private fun AlertShell(host: CanvasHost,title: String,tag: String,preferWide: Boolean,visible: JSONObject,
-    responses: List<DialogResponse>,centre:Boolean,modifier: Modifier,body: @Composable (PaddingValues) -> Unit) {
+    responses: List<DialogResponse>,modifier: Modifier,body: @Composable (PaddingValues) -> Unit) {
     val density = LocalDensity.current
     val font = with(density) { LocalTextStyle.current.fontSize.toPx()/density.density }
     val colors = LocalPalette.current
@@ -237,9 +249,9 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
     Surface(modifier.testTag(tag),shape = SurfaceShape,color = colors.settingsBackground) {
     SubcomposeLayout { constraints ->
         val heading = subcompose("heading") { DialogTitle(title,"$tag-title") }.single()
-        val content = subcompose("body") { ProvideTextStyle(LocalTextStyle.current.copy(textAlign = if(centre)TextAlign.Center else TextAlign.Start)) { Box(Modifier.verticalScroll(scroll),contentAlignment = Alignment.TopCenter) { body(PaddingValues()) } } }.single()
+        val content = subcompose("body") { ProvideTextStyle(LocalTextStyle.current.copy(textAlign = TextAlign.Center)) { Box(Modifier.verticalScroll(scroll),contentAlignment = Alignment.TopCenter) { body(PaddingValues()) } } }.single()
         val buttons = responses.mapIndexed { index,response -> subcompose("response-$index") {
-            DialogButton(response.label,response.tag,response.accent,response.enabled,modifier = Modifier.fillMaxWidth(),multiline = true,onClick = response.action)
+            DialogButton(response.label,response.tag,response.accent,response.enabled,modifier = Modifier.fillMaxWidth(),multiline = true,destructive=response.destructive,onClick = response.action)
         }.single() }
         val widths = buttons.map { it.maxIntrinsicWidth(Int.MAX_VALUE)/density.density }
         val minimum = maxOf(heading.minIntrinsicWidth(Int.MAX_VALUE),content.minIntrinsicWidth(Int.MAX_VALUE))/density.density+48f
@@ -256,12 +268,12 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
         val placedButtons = buttons.map { it.measure(Constraints.fixedWidth(buttonWidth)) }
         val responseHeight = if (stacked) placedButtons.sumOf { it.height }+gap*(buttons.size-1).coerceAtLeast(0) else placedButtons.maxOfOrNull { it.height } ?: 0
         val title = heading.measure(Constraints.fixedWidth(inner))
-        val text = content.measure(Constraints(maxWidth = inner,maxHeight = (visible.number("height")*density.density-2*inset-title.height-responseHeight-2*gap).roundToInt().coerceAtLeast(0)))
+        val text = content.measure(Constraints(minWidth = inner,maxWidth = inner,maxHeight = (visible.number("height")*density.density-2*inset-title.height-responseHeight-2*gap).roundToInt().coerceAtLeast(0)))
         val height = title.height+text.height+responseHeight+2*inset+2*gap
         layout(width,height) {
             title.place(inset,inset);text.place(inset,inset+title.height+gap)
             var x = inset;var y = inset+title.height+gap+text.height+gap
-            placedButtons.forEach { button -> button.placeRelative(x,y);if(stacked)y+=button.height+gap else x+=button.width+gap }
+            (if(stacked)placedButtons.asReversed()else placedButtons).forEach { button -> button.placeRelative(x,y);if(stacked)y+=button.height+gap else x+=button.width+gap }
         }
     }
     }
@@ -311,10 +323,10 @@ internal data class DialogResponse(val label: String, val tag: String, val accen
 @Composable internal fun DialogTitle(text: String, tag: String) =
     Text(text, Modifier.fillMaxWidth().testTag(tag).semantics {heading()}, fontWeight = FontWeight.Bold, fontSize = 16.sp, textAlign = TextAlign.Center)
 
-@Composable internal fun DialogButton(label: String, tag: String, accent: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, multiline: Boolean = false, onClick: () -> Unit) {
+@Composable internal fun DialogButton(label: String, tag: String, accent: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, multiline: Boolean = false, destructive:Boolean=false, onClick: () -> Unit) {
     val colors = LocalPalette.current
     Button(onClick, modifier.then(if(multiline)Modifier.heightIn(min = 34.dp) else Modifier.height(34.dp)).testTag(tag), enabled = enabled, shape = ControlShape, contentPadding = PaddingValues(horizontal = 16.dp),
-        colors = if (accent) ButtonDefaults.buttonColors() else ButtonDefaults.buttonColors(containerColor = colors.button, contentColor = colors.text)) {
+        colors = if(destructive)ButtonDefaults.buttonColors(containerColor=colors.error,contentColor=MaterialTheme.colorScheme.onError) else if (accent) ButtonDefaults.buttonColors() else ButtonDefaults.buttonColors(containerColor = colors.button, contentColor = colors.text)) {
         Text(label, fontWeight = FontWeight.Medium,maxLines=if(multiline)Int.MAX_VALUE else 1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
     }
 }

@@ -12,14 +12,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 
 internal fun Uri.fromContentProvider() = scheme == android.content.ContentResolver.SCHEME_CONTENT
 internal fun ClipData.imageUris(failure:String): List<Uri> = (0 until itemCount).mapNotNull { getItemAt(it).uri?.takeIf(Uri::fromContentProvider) }
@@ -213,14 +209,9 @@ internal class ImageImportController(private val host: CanvasHost, private val a
 
 @Composable internal fun ImportAndTransformControls(host: CanvasHost) {
     val images = host.documents.images
-    if (images.working && !images.choosing) androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
-        Surface(Modifier.padding(12.dp), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (images.cancelled) host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else host.bootstrap!!.getString("preparing_document"))
-                TextButton(images::cancel, enabled = !images.cancelled) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
-            }
-        }
-    }
+    if(images.working&&!images.choosing)ProgressDialog(host,
+        if(images.cancelled)host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else host.bootstrap!!.getString("preparing_document"),
+        "image-import-progress",enabled=!images.cancelled,onCancel=images::cancel)
     images.profilePrompt?.let { SourceProfileDialog(host,it, images::chooseProfile) }
     val cancel = host.canvasBar?.array("completion")?.objects()?.mapNotNull { it.getJSONObject("option").optJSONObject("Action")?.getJSONObject("state") }
         ?.any { it.getString("id") == "cancel_transform" && it.getBoolean("enabled") } == true

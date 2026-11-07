@@ -100,6 +100,8 @@ class AndroidPhoneAuditTest {
     @Test fun dialogsA2() = visit(false, "dialogsA2")
     @Test fun dialogsD1() = visit(false, "dialogsD1")
     @Test fun pagesD1() = visit(false, "pagesD1")
+    @Test fun dialogsD2() = visit(false, "dialogsD2")
+    @Test fun pagesD2() = visit(false, "pagesD2")
     @Test fun ime() = visit(false, "ime")
     @Test fun alertIme() = visit(false, "alertIme")
     @Test fun modalFocus() = visit(false, "modalFocus")
@@ -155,7 +157,7 @@ class AndroidPhoneAuditTest {
             assertTrue("Completed first canvas frame", frameReady)
             fun capture(name: String) {
                 captureName = name
-                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else if(family == "dialogsA2" || family == "pagesD1") "pages" else family)
+                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else if(family in listOf("dialogsA2","pagesD1","pagesD2")) "pages" else family)
                     .put("fixture",host.workspaceManager?.optString("id") ?: "builtin:workspace:painter").put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
                 host.drain()
                 compose.waitForIdle()
@@ -206,6 +208,7 @@ class AndroidPhoneAuditTest {
                     }
                     report.put("insets_pixels", JSONArray(actualInsets))
                     report.put("insets", JSONArray(actualInsets.map { it / density }))
+                        report.put("ime_bottom_pixels", insets.getInsets(WindowInsets.Type.ime()).bottom)
                     report.put("crop", obj("x" to crop[0], "y" to crop[1], "width" to crop[2], "height" to crop[3]))
                     val surface = checkNotNull(decor.descendant<CanvasSurfaceView>())
                     report.put("canvas_viewport", JSONArray(listOf(surface.width / density, surface.height / density)))
@@ -213,7 +216,7 @@ class AndroidPhoneAuditTest {
                     surface.getLocationOnScreen(canvasLocation)
                     report.put("canvas_origin_pixels", JSONArray(canvasLocation.toList()))
                     val root = checkNotNull(findTag("workspace"))
-                    collect(if(family == "pagesD1")root.first.semanticsOwner.unmergedRootSemanticsNode else root.second, allocations)
+                    collect(if(family == "pagesD1" || family == "pagesD2")root.first.semanticsOwner.unmergedRootSemanticsNode else root.second, allocations)
                     report.put("phone_active", host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null)
                     report.put("revision", host.snapshot?.getJSONObject("state")?.getLong("revision"))
                     assertEquals("System theme", expectedTheme, host.snapshot?.getJSONObject("state")?.getString("theme"))
@@ -345,6 +348,15 @@ class AndroidPhoneAuditTest {
         if (family == "ime" || family == "modalFocus") {
             visitIme(activity,host,::tap,::state,checkAlert = family == "ime")
             assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
+        if(family=="pagesD2") {
+            visitPagesD2(activity,host,::event,::tap,::state)
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
+        if(family=="dialogsD2") {
+            visitDialogsD2(activity,host,::tap)
             return
         }
         if(family=="dialogsD1") {
@@ -776,6 +788,204 @@ class AndroidPhoneAuditTest {
         }
     }
 
+    private fun visitPagesD2(activity: MainActivity,host: CanvasHost,event: (Int,Offset) -> Unit,tap: (String) -> Unit,state: (String,() -> Unit) -> Unit) {
+        val decor = activity.window.decorView
+        fun shared() = host.snapshot!!.getJSONObject("state")
+        fun invoke(command: String) = host.drain(obj("type" to "invoke","command" to command))
+        fun exists(tag: String) = findTag(tag) != null
+        fun wait(tag: String) = host.awaitFrame("Pages D2 $tag is composed") { exists(tag) }
+        fun gone(tag: String) = host.awaitFrame("Pages D2 $tag closes") { !exists(tag) }
+        fun keyboard() = decor.rootWindowInsets.isVisible(WindowInsets.Type.ime())
+        fun hideIme() {
+            instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("Keyboard-free page reference") { !keyboard() }
+            compose.waitForIdle()
+        }
+        fun settle() { compose.waitForIdle();SystemClock.sleep(400);if(keyboard())hideIme() }
+        fun customize(action: JSONObject) = host.drain(obj("type" to "customize","action" to action))
+        fun manager(input: JSONObject) {
+            instrumentation.runOnMainSync { host.workspaceInput(input) }
+            host.awaitFrame("Workspace manager settles") { host.workspaceManager?.optBoolean("busy") == false && host.workspaceManager?.optBoolean("saving") != true }
+        }
+        fun close(tag: String) { if(exists(tag)) { try { tap(tag) } catch(error: Throwable) { predictiveBack(activity,cancel = false) };compose.waitForIdle() } }
+        var keyboardHeight = 0
+        fun measureKeyboard() {
+            if(keyboardHeight > 0) return
+            invoke("search_commands")
+            host.awaitFrame("Command search measures the native keyboard") { findTag("command-search") != null && keyboard() }
+            keyboardHeight = decor.rootWindowInsets.getInsets(WindowInsets.Type.ime()).bottom
+            if(keyboard())hideIme()
+            close("command-close")
+            host.awaitFrame("Search closes") { host.commandSearch == null && findTag("command-bar") == null }
+        }
+        fun withKeyboard(tag: String) {
+            measureKeyboard()
+            val view = checkNotNull(findTag("workspace")).first.view
+            val original = decor.rootWindowInsets
+            instrumentation.runOnMainSync { view.dispatchApplyWindowInsets(WindowInsets.Builder(original)
+                .setInsets(WindowInsets.Type.ime(),android.graphics.Insets.of(0,0,0,keyboardHeight)).setVisible(WindowInsets.Type.ime(),true).build()) }
+            host.awaitFrame("$tag follows the reduced visible area") { findTag(tag)?.second?.boundsInRoot?.let { it.bottom <= decor.height-keyboardHeight+1 } == true }
+            compose.waitForIdle()
+        }
+        fun restoreKeyboard() {
+            val view = findTag("workspace")?.first?.view ?: return
+            val original = decor.rootWindowInsets
+            instrumentation.runOnMainSync { view.dispatchApplyWindowInsets(WindowInsets.Builder(original)
+                .setInsets(WindowInsets.Type.ime(),android.graphics.Insets.NONE).setVisible(WindowInsets.Type.ime(),false).build()) }
+            compose.waitForIdle()
+        }
+        for ((command,tag) in listOf("canvas_size" to "canvas-size","image_size" to "image-size")) {
+            state(tag) { invoke(command);wait("$tag-panel");settle() }
+            close("$tag-cancel");gone("$tag-panel")
+        }
+        state("properties") { invoke("document_properties");wait("document-properties");settle() }
+        close("document-properties-done");gone("document-properties")
+        for ((command,name) in listOf("assign_profile" to "assign-profile","change_bit_depth" to "change-bit-depth","convert_color_space" to "convert-color-space")) {
+            state(name) { invoke(command);wait("document-color");SystemClock.sleep(1500);settle() }
+            close("document-color-cancel");gone("document-color")
+        }
+        state("brush-control") { customize(obj("type" to "open_control","control" to "brush_color"));wait("brush-control");settle() }
+        close("brush-control-done");gone("brush-control")
+        state("cannot-open-file") {
+            val previous = DocumentController.nativeFileJobsForTest
+            DocumentController.nativeFileJobsForTest = true
+            try {
+                invoke("open_document")
+                host.awaitFrame("Open requests a document") { shared().array("requests").objects().any { it.getJSONObject("kind").optString("type") == "document" } }
+                val id = shared().array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }.getInt("id")
+                runBlocking { host.withNative { Native.documentComplete(it,id,false,JSONObject.quote("Could not open “broken.png”.")) } }
+                host.drain()
+                wait("file-error-ok");settle()
+                val alert=checkNotNull(findTag("file-error")).second.boundsInRoot
+                val body=checkNotNull(findNode(hasLabel("Could not open “broken.png”."))).second.boundsInRoot
+                assertEquals("The alert body is centred",alert.center.x,body.center.x,1f)
+                assertNotNull(findNode(hasLabel(host.bootstrap!!.getString("cannot_open_file"))))
+            } finally { DocumentController.nativeFileJobsForTest = previous }
+        }
+        close("file-error-ok");gone("file-error")
+        state("profile-library") {
+            invoke("settings");wait("settings-search")
+            host.drain(obj("type" to "preferences","action" to obj("type" to "page","page" to "color")))
+            compose.onNodeWithTag("settings-manage-profiles",useUnmergedTree = true).performScrollTo();tap("settings-manage-profiles")
+            wait("profile-library");settle()
+        }
+        close("profile-library-done")
+        if(host.snapshot?.objectOrNull("preferences") != null)host.drain(obj("type" to "close_settings"))
+        host.awaitFrame("Preferences closes") { host.snapshot?.objectOrNull("preferences") == null && !exists("profile-library") }
+        val palette = host.palettes.view()?.array("palettes")?.objects()?.firstOrNull()?.getLong("id")
+        for ((command,name,tag) in listOf(Triple("rename_palette","palette-name","palette-name-dialog"),Triple("remove_palette","palette-delete","palette-remove-dialog"))) {
+            state(name) {
+                instrumentation.runOnMainSync { host.palettes.command(obj("command" to command,"id" to checkNotNull(palette) { "No palette" })) }
+                wait(tag);settle()
+            }
+            instrumentation.runOnMainSync { host.palettes.dialog = null };gone(tag)
+        }
+        state("workspace-manager") { manager(obj("type" to "open","page" to "workspaces"));wait("workspace-manager");settle() }
+        state("workspace-new") {
+            if(!exists("workspace-manager")) { manager(obj("type" to "open","page" to "workspaces"));wait("workspace-manager") }
+            manager(obj("type" to "form","action" to obj("type" to "new")));wait("workspace-form");settle()
+        }
+        if(exists("workspace-form")) {
+            manager(obj("type" to "submit","name" to "Canvas study"))
+            host.awaitFrame("New workspace is stored") { host.workspaceManager?.objectOrNull("prompt_action") == null }
+        }
+        state("workspace-delete") {
+            if(!exists("workspace-manager")) { manager(obj("type" to "open","page" to "workspaces"));wait("workspace-manager") }
+            val row = host.workspaceManager!!.array("rows").objects().first { it.optString("title") == "Canvas study" }.getString("id")
+            manager(obj("type" to "select","id" to row))
+            manager(obj("type" to "form","action" to obj("type" to "delete","value" to row)));wait("workspace-form");settle()
+        }
+        if(exists("workspace-form"))manager(obj("type" to "cancel"))
+        manager(obj("type" to "cancel"));manager(obj("type" to "dismiss"))
+        host.awaitFrame("Workspace manager closes") { !exists("workspace-manager") && !exists("workspace-form") }
+        if(host.workspaceManager?.optString("id") != "builtin:workspace:painter")workspace(host,"painter")
+        state("toolbar-manager") { customize(obj("type" to "manage_toolbars"));wait("toolbar-manager");settle() }
+        if(host.snapshot?.objectOrNull("toolbar_manager") == null)customize(obj("type" to "manage_toolbars"))
+        host.awaitFrame("Toolbar manager view") { host.snapshot?.objectOrNull("toolbar_manager") != null }
+        val toolbar = host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").objects().firstOrNull()?.get("panel")
+        customize(obj("type" to "close_toolbar_manager"));gone("toolbar-manager")
+        for (kind in listOf("rename","duplicate","delete")) {
+            state("$kind-toolbar") {
+                customize(obj("type" to "${kind}_toolbar","panel" to checkNotNull(toolbar) { "No toolbar" }));wait("toolbar-prompt");settle()
+                if(kind=="delete") {
+                    val cancel=checkNotNull(findTag("toolbar-prompt-cancel")).second.boundsInRoot
+                    val confirm=checkNotNull(findTag("toolbar-prompt-confirm")).second.boundsInRoot
+                    if(kotlin.math.abs(cancel.top-confirm.top)>1f)assertTrue("Stacked alerts put the last response first",confirm.bottom<=cancel.top)
+                }
+            }
+            if(host.snapshot?.objectOrNull("toolbar_prompt") != null)customize(obj("type" to "cancel_toolbar"))
+            gone("toolbar-prompt")
+        }
+        invoke("select_all")
+        state("selection-refine") { invoke("feather_selection");wait("selection-refine-panel");awaitCanvasPresentation(host);settle() }
+        state("selection-refine-ime") {
+            if(!exists("selection-refine-panel")) { invoke("feather_selection");wait("selection-refine-panel") }
+            withKeyboard("selection-refine-panel")
+        }
+        restoreKeyboard()
+        close("selection-refine-panel-cancel");gone("selection-refine-panel")
+        state("frequency-separation") { invoke("frequency_separation");wait("frequency-separation-panel");awaitCanvasPresentation(host);settle() }
+        state("frequency-separation-ime") {
+            if(!exists("frequency-separation-panel")) { invoke("frequency_separation");wait("frequency-separation-panel") }
+            withKeyboard("frequency-separation-panel")
+        }
+        restoreKeyboard()
+        close("frequency-separation-panel-cancel");gone("frequency-separation-panel")
+        if(shared().array("commands").objects().any { it.optString("id") == "deselect" && it.optBoolean("enabled") })invoke("deselect")
+        var database: android.database.sqlite.SQLiteDatabase? = null
+        try {
+            state("workspace-save-status") {
+                val path = AppStorage.of(instrumentation.targetContext).workspaces.resolve("workspaces.sqlite3")
+                assertTrue("The injected failure belongs to this private test",path.canonicalPath.startsWith(device.root.canonicalPath+File.separator))
+                database = android.database.sqlite.SQLiteDatabase.openDatabase(path.absolutePath,null,android.database.sqlite.SQLiteDatabase.OPEN_READWRITE or android.database.sqlite.SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+                database!!.execSQL("CREATE TRIGGER d2_fail_editing BEFORE INSERT ON editing WHEN NEW.id=1 BEGIN SELECT RAISE(ABORT,'owned workspace write failure'); END;")
+                host.drain(obj("type" to "set_brush_size","value" to 83))
+                host.awaitFrame("Owned workspace write failure is presented") { host.workspaceManager?.objectOrNull("status")?.optBoolean("error") == true && exists("workspace-status") }
+                settle()
+            }
+        } finally {
+            database?.let { try { it.execSQL("DROP TRIGGER IF EXISTS d2_fail_editing") } finally { it.close() } }
+        }
+        if(host.workspaceManager?.objectOrNull("status")?.optBoolean("error") == true) {
+            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "retry")) }
+            host.awaitFrame("The owned failure recovers after Retry") { host.workspaceManager?.objectOrNull("status")?.optBoolean("error") != true }
+        }
+        state("proof-profile-picker") {
+            host.drain(obj("type" to "phone","action" to obj("kind" to "panel","panel" to "proof")))
+            instrumentation.runOnMainSync { host.proof.action(obj("type" to "mode","mode" to "print"));host.proof.action(obj("type" to "reveal")) }
+            host.awaitFrame("Proof profile control",30_000) { exists("proof-profile") }
+            compose.onNodeWithTag("proof-profile",useUnmergedTree = true).performScrollTo();tap("proof-profile")
+            host.awaitFrame("Proof profile picker",30_000) { exists("proof-profile-picker") };settle()
+        }
+    }
+
+    private fun visitDialogsD2(activity:MainActivity,host:CanvasHost,tap:(String)->Unit) {
+        fun wait(tag:String)=host.awaitFrame("D2 $tag is composed"){findTag(tag)!=null}
+        fun gone(tag:String)=host.awaitFrame("D2 $tag closes"){findTag(tag)==null}
+        fun invoke(command:String)=host.drain(obj("type" to "invoke","command" to command))
+        val file=host.snapshot!!.getJSONObject("state").getJSONObject("document_file")
+        val epoch=file.getLong("epoch")
+        val revision=file.getLong("revision")
+        for((command,tag)in listOf("canvas_size" to "canvas-size-panel","image_size" to "image-size-panel")) {
+            invoke(command);wait(tag);awaitEditorPage(activity,host,tag)
+            tap(tag.removeSuffix("-panel")+"-cancel");gone(tag)
+        }
+        invoke("document_properties");wait("document-properties");awaitEditorPage(activity,host,"document-properties")
+        tap("document-properties-done");gone("document-properties")
+        invoke("assign_profile");wait("document-color");awaitEditorPage(activity,host,"document-color")
+        tap("document-color-cancel");gone("document-color")
+        host.drain(obj("type" to "customize","action" to obj("type" to "open_control","control" to "brush_color")))
+        wait("brush-control");awaitEditorPage(activity,host,"brush-control")
+        tap("brush-control-done");gone("brush-control")
+        instrumentation.runOnMainSync {host.reportActionError("D2 owned error")}
+        compose.waitUntil(10_000){findTag("action-error-ok")!=null}
+        compose.onNodeWithTag("action-error-ok").performSemanticsAction(SemanticsActions.OnClick){assertTrue(it())}
+        gone("action-error")
+        val after=host.snapshot!!.getJSONObject("state").getJSONObject("document_file")
+        assertEquals("Dialog cancellation keeps the drawing",epoch,after.getLong("epoch"))
+        assertEquals("Dialog cancellation keeps authored history",revision,after.getLong("revision"))
+    }
+
     private fun visitDialogsD1(host:CanvasHost,tap:(String)->Unit) {
         fun wait(tag:String)=host.awaitFrame("D1 $tag is composed"){findTag(tag)!=null}
         fun gone(tag:String)=host.awaitFrame("D1 $tag closes"){findTag(tag)==null}
@@ -853,7 +1063,7 @@ class AndroidPhoneAuditTest {
         }
         fun reveal(tag: String) { compose.onNodeWithTag(tag,useUnmergedTree = true).performScrollTo();compose.waitForIdle() }
         fun type(tag: String,text: String,done: () -> Boolean) {
-            tap(tag)
+            reveal(tag);tap(tag)
             host.awaitFrame("$tag owns native focus") { findTag(tag)?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true } != null }
             pressKey(KeyEvent.KEYCODE_A,KeyEvent.META_CTRL_ON);compose.waitForIdle()
             instrumentation.sendStringSync(text)

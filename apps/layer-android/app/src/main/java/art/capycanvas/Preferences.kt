@@ -104,7 +104,7 @@ internal val LocalPreferencesOpen = compositionLocalOf { true }
         val active=visible.currentState || visible.targetState
         Box(Modifier.fillMaxSize()) {
             if(active)Box(Modifier.matchParentSize().pointerInput(Unit){awaitPointerEventScope{while(true)awaitPointerEvent().changes.forEach{it.consume()}}})
-            Layout(content={content()},modifier=Modifier.fillMaxSize().then(if(active)Modifier else Modifier.clearAndSetSemantics{})) {children,constraints ->
+            Layout(content={Box(Modifier.fillMaxSize()){content()}},modifier=Modifier.fillMaxSize().then(if(active)Modifier else Modifier.clearAndSetSemantics{})) {children,constraints ->
                 val child=children.single().measure(constraints)
                 layout(constraints.maxWidth,constraints.maxHeight){if(active)child.place(0,(slide*child.height).roundToInt())}
             }

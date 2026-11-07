@@ -24,7 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -171,6 +170,11 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
     val colors = LocalPalette.current
     val rows = view.array("rows").objects()
     val workspaces = view.optString("page") == "workspaces"
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null
+    fun select(id:String) {
+        host.workspaceInput(obj("type" to "select","id" to id))
+        if(phone&&!workspaces)host.workspaceInput(obj("type" to "open_details"))
+    }
     val metrics=panelMetrics()
     val rowHeight=if(workspaces)workspaceRowHeight() else 56.dp
     val renaming=workspaces&&view.objectOrNull("prompt_action")?.optString("type")=="rename"
@@ -233,15 +237,15 @@ private fun Modifier.workspaceRowInput(drag: WorkspaceRowInteraction, focused: B
                             drag.reorderMenu = false; drag.menu = id; true
                         } else false
                     }.selectable(selected, enabled = enabled || renaming, role = Role.RadioButton) {
-                        host.workspaceInput(obj("type" to "select", "id" to id))
+                        select(id)
                     }.padding(vertical = if(workspaces)4.dp else 8.dp).testTag("workspace-row-$id").semantics { contentDescription = switchCaption },
                         verticalArrangement = Arrangement.spacedBy(if(workspaces)2.dp else 3.dp)) {
                         val renameAction=if(workspaces)row.array("options").objects().find {it.optBoolean("enabled")&&it.getJSONObject("action").getString("type")=="rename"} else null
                         val rename=view.objectOrNull("prompt_action")
                         Box(Modifier.fillMaxWidth().heightIn(min=if(workspaces)metrics.height else 0.dp).testTag("workspace-name-slot-$id"),contentAlignment=Alignment.CenterStart) {
-                        if(workspaces&&rename?.optString("type")=="rename"&&rename.optString("value")==id)WorkspaceNameEditor(host,view,id)
+                        if(!phone&&workspaces&&rename?.optString("type")=="rename"&&rename.optString("value")==id)WorkspaceNameEditor(host,view,id)
                         else Text(row.getString("title"),Modifier.fillMaxWidth().padding(horizontal=if(workspaces)metrics.padding else 0.dp).testTag("workspace-name-$id").combinedClickable(enabled=enabled || renaming,
-                            onClick={host.workspaceInput(obj("type" to "select","id" to id))},
+                            onClick={select(id)},
                             onDoubleClick=renameAction?.let {action->{host.workspaceInput(obj("type" to "action","action" to action.getJSONObject("action")))}}),maxLines=1,overflow=TextOverflow.Ellipsis)
                         }
                         row.getString("subtitle").takeIf { it.isNotEmpty() }?.let {

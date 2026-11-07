@@ -38,7 +38,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.em
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -227,10 +226,10 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
 @Composable internal fun ToolbarManager(host: CanvasHost, view: JSONObject) {
     val colors = LocalPalette.current
     val close = { host.customize(obj("type" to "close_toolbar_manager")) }
-    Dialog(onDismissRequest = close) {
-        Surface(shape = RoundedCornerShape(16.dp), color = colors.settingsBackground, modifier = Modifier.testTag("toolbar-manager")) {
-            Column(Modifier.width(480.dp).heightIn(max = 420.dp).padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null
+    val content=@Composable {
+            Column((if(phone)Modifier.fillMaxSize().padding(16.dp) else Modifier.width(480.dp).heightIn(max=420.dp).padding(24.dp)), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                if(!phone)Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(view.getString("title"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                     IconButton(close, Modifier.size(36.dp).semantics { contentDescription = view.getString("close_label") }.testTag("close-toolbar-manager")) {
                         SharedIcon("close", null)
@@ -265,17 +264,23 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError)) { Text(view.getString("delete_label")) }
             }
-        }
+    }
+    if(phone)DialogShell(host,view.getJSONObject("dialog"),view.getString("title"),onCancel=close,tag="toolbar-manager",scrollBody=false,body={content()})
+    else Dialog(onDismissRequest=close) {
+        Surface(shape=RoundedCornerShape(16.dp),color=colors.settingsBackground,modifier=Modifier.testTag("toolbar-manager")){content()}
     }
 }
 
 @Composable internal fun ToolbarPrompt(host: CanvasHost, view: JSONObject) {
     fun send(type: String) = host.customize(obj("type" to type))
-    AlertDialog(onDismissRequest = { send("cancel_toolbar") },
-        modifier = Modifier.testTag("toolbar-prompt"),
-        title = { Text(view.getString("title"), style = MaterialTheme.typography.titleLarge) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val close={send("cancel_toolbar")}
+    val confirm={send("confirm_toolbar")}
+    DialogShell(host,view.getJSONObject("dialog"),view.getString("title"),onCancel=close,onPrimary=confirm,
+        primaryLabel=view.getString("confirm_label"),primaryEnabled=view.getBoolean("can_confirm"),tag="toolbar-prompt",
+        responses=listOf(DialogResponse(view.getString("cancel_label"),"toolbar-prompt-cancel",action=close),
+            DialogResponse(view.getString("confirm_label"),"toolbar-prompt-confirm",accent=true,enabled=view.getBoolean("can_confirm"),destructive=view.getBoolean("destructive"),action=confirm)),
+        body={padding ->
+            Column(Modifier.padding(padding),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                 view.getString("message").takeIf { it.isNotEmpty() }?.let { message ->
                     // Keep core copy (including the accessible arrow) intact,
                     // without relying on a fallback font's low arrow glyph.
@@ -291,12 +296,5 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
                 }, Modifier.testTag("toolbar-name"), label = { Text(view.getString("name_label")) }, background = LocalPalette.current.dialogField)
                 view.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
-        },
-        dismissButton = { TextButton({ send("cancel_toolbar") }) { Text(view.getString("cancel_label")) } },
-        confirmButton = {
-            Button({ send("confirm_toolbar") }, enabled = view.getBoolean("can_confirm"),
-                colors = if (view.getBoolean("destructive")) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError)
-                    else ButtonDefaults.buttonColors()) { Text(view.getString("confirm_label")) }
         })
 }

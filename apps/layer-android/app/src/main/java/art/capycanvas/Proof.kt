@@ -8,14 +8,12 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -257,8 +255,9 @@ internal class ProofController(private val host: CanvasHost) {
         }
     }
     fun select(profile:JSONObject){controller.edit("profile",profile);picker=false;localError=null}
-    if(picker)AlertDialog(onDismissRequest={picker=false},title={Text(copy.getString("profile_choice"))},confirmButton={TextButton({picker=false}){Text(copy.getJSONObject("common").getString("done"))}},text={
-        Column(Modifier.fillMaxWidth().heightIn(max=520.dp).verticalScroll(rememberScrollState()).testTag("proof-profile-picker")){
+    if(picker)DialogShell(host,copy.getJSONObject("profile_dialog"),copy.getString("profile_choice"),onCancel={picker=false},tag="proof-profile-picker",
+        responses=listOf(DialogResponse(copy.getJSONObject("common").getString("done"),"proof-profile-done",action={picker=false})),body={padding ->
+        Column(Modifier.fillMaxWidth().padding(padding)){
             val original=model?.objectOrNull("print_settings")?.objectOrNull("profile")
             if(original!=null){Text(profiles.getString("document"));TextButton({select(original)}){Text(profileCaption(host,original))}}
             Text(profiles.getString("saved"))

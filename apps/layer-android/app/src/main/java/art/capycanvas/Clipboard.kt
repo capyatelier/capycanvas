@@ -7,10 +7,6 @@ import android.os.PersistableBundle
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
@@ -126,12 +122,6 @@ internal class ClipboardController(private val host: CanvasHost, private val app
         val next = host.withNative { Native.documentRequestTitle(it, id) }.orEmpty()
         if (language == host.languageTag && id == clipboard.progress) label = next
     }
-    androidx.compose.ui.window.Popup(alignment = Alignment.BottomCenter) {
-        Surface(Modifier.padding(12.dp).testTag("clipboard-progress"), shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (clipboard.cancelling) host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else label)
-                TextButton(clipboard::cancel, enabled = !clipboard.cancelling) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
-            }
-        }
-    }
+    ProgressDialog(host,if(clipboard.cancelling)host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else label,
+        "clipboard-progress",enabled=!clipboard.cancelling,onCancel=clipboard::cancel)
 }

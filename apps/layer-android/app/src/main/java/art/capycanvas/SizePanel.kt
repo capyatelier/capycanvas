@@ -57,6 +57,18 @@ internal class SizePanelActions(private val dispatch: (JSONObject) -> Unit, priv
     view: JSONObject, content: @Composable ColumnScope.(SizePanelActions) -> Unit) {
     val focus = LocalFocusManager.current
     val actions = remember(host, type, focus) { SizePanelActions({ host.dispatch(obj("type" to type, "action" to it)) }, { focus.clearFocus() }) }
+    if(host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null) {
+        val cancel={actions.choose(obj("op" to "cancel"))}
+        DialogShell(host,view.getJSONObject("dialog"),view.getString("title"),onCancel=cancel,
+            onPrimary={actions.choose(obj("op" to "apply"))},primaryLabel=view.getString("apply_label"),primaryEnabled=view.getBoolean("can_apply"),
+            tag="$tag-panel",primaryTag="$tag-apply",cancelTag="$tag-cancel",body={padding ->
+                Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    content(actions)
+                    Text(view.getString("message"),Modifier.testTag("$tag-message"),color=LocalPalette.current.secondary)
+                }
+            })
+        return
+    }
     BackHandler { actions.choose(obj("op" to "cancel")) }
     val colors = LocalPalette.current
     val ime = WindowInsets.ime

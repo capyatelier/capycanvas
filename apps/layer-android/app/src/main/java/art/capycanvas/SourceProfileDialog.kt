@@ -3,8 +3,6 @@ package art.capycanvas
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -51,8 +49,13 @@ import org.json.JSONArray
     val copy = host.catalog.getJSONObject("profile_copy")
     var selection by remember { mutableStateOf("Srgb") }
     var custom by remember { mutableStateOf<JSONObject?>(null) }
-    AlertDialog(onDismissRequest = { onChoose(null) }, title = { Text(copy.getString("interpret_title")) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val cancel={onChoose(null)}
+    val choose={onChoose(if(selection=="custom")custom!!.getJSONObject("profile") else obj("Builtin" to selection))}
+    DialogShell(host,copy.getJSONObject("dialog"),copy.getString("interpret_title"),onCancel=cancel,onPrimary=choose,
+        primaryLabel=copy.getString("use_profile"),tag="source-profile",
+        responses=listOf(DialogResponse(copy.getJSONObject("common").getString("cancel"),"source-profile-cancel",action=cancel),
+            DialogResponse(copy.getString("use_profile"),"source-profile-use",accent=true,action=choose)),
+        body={padding -> Column(Modifier.padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text(copy.getString("interpret_help"))
             ColorChoice(copy.getString("interpret_as"), listOf("Srgb" to "sRGB", "DisplayP3" to "Display P3", "AdobeRgb" to "Adobe RGB (1998)", "ProPhoto" to "ProPhoto RGB") +
                 (custom?.let { listOf("custom" to profileCaption(host, it)) } ?: emptyList()), selection) { selection = it }
@@ -61,8 +64,7 @@ import org.json.JSONArray
                 Text(interpretation.getString("channels"))
                 Text(host.catalog.getJSONObject("export_copy").getString(if (interpretation.getString("depth") == "U16") "depth_16" else "depth_8"))
             }
-        } }, dismissButton = { TextButton({ onChoose(null) }) { Text(copy.getJSONObject("common").getString("cancel")) } },
-        confirmButton = { TextButton({ onChoose(if(selection=="custom")custom!!.getJSONObject("profile") else obj("Builtin" to selection)) }) { Text(copy.getString("use_profile")) } })
+        } })
 }
 
 @Composable internal fun ImportProfileButton(host:CanvasHost,enabled:Boolean=true,onProfile:(JSONObject)->Unit) {
@@ -94,19 +96,32 @@ import org.json.JSONArray
         val projected=profileEntriesCopy(host,retained)
         if(language==host.languageTag && retained===rawEntries)entries=projected
     }
-    AlertDialog(onDismissRequest={ if (!busy && !importBusy) onDismiss() },title={Text(copy.getString("library_title"))},confirmButton={TextButton(onDismiss,Modifier.testTag("profile-library-done"),enabled=!busy&&!importBusy){Text(copy.getJSONObject("common").getString("done"))}},text={
-        Column(Modifier.fillMaxWidth().heightIn(max=580.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){
+    val close={if(!busy&&!importBusy)onDismiss()}
+    val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null
+    DialogShell(host,copy.getJSONObject("library_dialog"),copy.getString("library_title"),onCancel=close,primaryEnabled=!busy&&!importBusy,
+        naturalWidth=copy.getJSONArray("library_size").getInt(0).dp,tag="profile-library",
+        responses=listOf(DialogResponse(copy.getJSONObject("common").getString("done"),"profile-library-done",enabled=!busy&&!importBusy,action=close)),body={padding ->
+        Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             Text(copy.getString("library_help"))
             if (entries.size > 7 || query.isNotEmpty()) CoreTextField(query, { query = it }, Modifier.testTag("profile-library-search"), placeholder = { Text(copy.getString("search")) }, background = LocalPalette.current.dialogField)
             if(busy)CircularProgressIndicator()
             for(entry in entries.filter { it.getString("id") in matching }){
                 Text(entry.getString("name"),style=MaterialTheme.typography.titleSmall)
                 Text(entry.optString("issue").ifEmpty { entry.getString("details") })
+                val remove={busy=true;scope.launch{try{ProfileStore.remove(context,entry.getString("id"));refresh++}catch(e:Exception){error=e}finally{busy=false}};Unit}
+                val show={busy=true;scope.launch{try{ProfileStore.show(context,entry.getString("id"),!entry.optBoolean("visible",true));refresh++}catch(e:Exception){error=e}finally{busy=false}};Unit}
                 Row {
                     if(onProfile!=null)TextButton(enabled=!busy&&!importBusy&&!entry.has("issue"),onClick={busy=true;scope.launch{try{onProfile(ProfileStore.get(context,entry.getString("id")))}catch(e:Exception){error=e}finally{busy=false}}}){Text(copy.getString("use_profile"))}
-                    TextButton(enabled=!busy&&!importBusy,onClick={busy=true;scope.launch{try{ProfileStore.remove(context,entry.getString("id"));refresh++}catch(e:Exception){error=e}finally{busy=false}}}){Text(copy.getString("remove"))}
+                    if(phone)Box {
+                        var menu by remember(entry.getString("id")){mutableStateOf(false)}
+                        IconButton({menu=true},enabled=!busy&&!importBusy){SharedIcon("more",copy.getString("library_title"))}
+                        DropdownMenu(menu,{menu=false}) {
+                            DropdownMenuItem(text={Text(copy.getString("remove"))},onClick={menu=false;remove()})
+                            DropdownMenuItem(text={Text(if(entry.optBoolean("visible",true))copy.getString("hide") else copy.getString("show"))},onClick={menu=false;show()})
+                        }
+                    } else TextButton(remove,enabled=!busy&&!importBusy){Text(copy.getString("remove"))}
                 }
-                TextButton(enabled=!busy&&!importBusy,onClick={busy=true;scope.launch{try{ProfileStore.show(context,entry.getString("id"),!entry.optBoolean("visible",true));refresh++}catch(e:Exception){error=e}finally{busy=false}}}){Text(if(entry.optBoolean("visible",true))copy.getString("hide") else copy.getString("show"))}
+                if(!phone)TextButton(show,enabled=!busy&&!importBusy){Text(if(entry.optBoolean("visible",true))copy.getString("hide") else copy.getString("show"))}
             }
             if(entries.isEmpty()&&!busy)Text(copy.getString("empty"))
             ProfileFileButton(host, onBusy = { importBusy = it }, enabled = !busy) {if(onProfile!=null)onProfile(it)else refresh++}

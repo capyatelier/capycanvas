@@ -1088,6 +1088,32 @@ fn dialog_roles_follow_the_same_phone_threshold_and_safe_area_as_chrome() {
 }
 
 #[test]
+fn phone_canvas_panels_fit_the_visible_part_of_the_work_area() {
+    for extent in [[412,891],[891,412],[320,568]] {
+        let s=phone_session(extent);
+        let viewport=extent.map(|v|v as f32);
+        let work=s.phone_layout().unwrap().work_area;
+        for visible in [Bounds {x:0.,y:0.,width:viewport[0],height:180.},
+            Bounds {x:40.,y:60.,width:180.,height:220.}] {
+            let expected=work.intersection(visible).unwrap();
+            let panel=s.state.dialog_presentation_in(DialogRole::CanvasPanel,viewport,visible);
+            assert_eq!(panel,DialogPresentation::CanvasPanel(expected));
+            let bounds=panel.bounds(||[900.,900.]).unwrap();
+            assert!(bounds.x>=expected.x && bounds.y>=expected.y);
+            assert!(bounds.x+bounds.width<=expected.x+expected.width+0.01);
+            assert!(bounds.y+bounds.height<=expected.y+expected.height+0.01);
+        }
+        for covered in [Bounds::default(),Bounds {x:0.,y:0.,width:viewport[0],height:work.y}] {
+            let panel=s.state.dialog_presentation_in(DialogRole::CanvasPanel,viewport,covered);
+            assert_eq!(panel,DialogPresentation::CanvasPanel(work));
+            let bounds=panel.bounds(||[900.,900.]).unwrap();
+            assert!(bounds.width>0. && bounds.height>0.);
+        }
+        assert_eq!(s.state.dialog_presentation_in(DialogRole::CanvasPanel,[1280.,800.],Bounds::default()),DialogPresentation::Floating);
+    }
+}
+
+#[test]
 fn phone_editor_panels_notices_and_search_stay_between_the_bars() {
     for viewport in [[412, 891], [891, 412], [320, 568], [320, 320]] {
         let mut s = phone_session(viewport);

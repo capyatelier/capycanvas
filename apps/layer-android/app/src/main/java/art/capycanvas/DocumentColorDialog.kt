@@ -3,16 +3,16 @@ package art.capycanvas
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
+import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -158,10 +158,13 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
     var intent by remember { mutableStateOf("RelativeColorimetric") }
     var dither by remember { mutableStateOf("None") }
     var result by remember { mutableStateOf("layers") }
+    var spaces by remember { mutableStateOf<List<Pair<String,String>>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(id) {
         try {
             val current = JSONObject(host.withNative { Native.query(it, obj("type" to "document_color").toString()) })
+            val form=JSONObject(host.withNative { Native.query(it,obj("type" to "export_form").toString()) })
+            spaces=form.array("profiles").objects().mapNotNull {profile -> profile.getJSONObject("profile").nullableString("Builtin")?.let{it to profile.getString("name")} }
             space = current.getString("space"); depth = current.getString("depth"); loaded = true
             if (history) job.prepare(null, true)
         } catch (e: Exception) { job.error = e }
@@ -177,33 +180,47 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
     val common = copy.getJSONObject("common")
     val exportCopy = host.catalog.getJSONObject("export_copy")
     val title = if (history) copy.getString(if (spec.getBoolean("redo")) "redo_title" else "undo_title") else when (operation) { "assign" -> copy.getString("assign_title"); "depth" -> copy.getString("depth_title"); else -> copy.getString("convert_title") }
-    AlertDialog(onDismissRequest = job::close, title = { Text(title) },
-        dismissButton = { TextButton(job::close) { Text(common.getString("cancel")) } },
-        confirmButton = { if (!history) TextButton({
-            if (job.copy) job.openCopy() else job.apply()
-        }, enabled = job.ready && !job.busy) { Text(common.getString("apply")) } },
-        text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 600.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val apply={if(job.copy)job.openCopy() else job.apply()}
+    DialogShell(host,copy.getJSONObject(if(job.applying || history)"progress_dialog" else "dialog"),title,
+        onCancel=job::close,onPrimary=apply,primaryLabel=common.getString("apply"),primaryEnabled=job.ready&&!job.busy,tag="document-color",
+        responses=listOf(DialogResponse(common.getString("cancel"),"document-color-cancel",action=job::close))+
+            if(history || job.applying)emptyList() else listOf(DialogResponse(common.getString("apply"),"document-color-apply",accent=true,enabled=job.ready&&!job.busy,action=apply)),
+        body={padding ->
+            Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                 if (!history) {
                     Text(when (operation) {
-                        "assign" -> copy.getString("assign_help")
-                        "depth" -> copy.getString("depth_help")
-                        else -> copy.getString("convert_help")
+                        "assign" -> copy.getString("assign_native_help")
+                        "depth" -> copy.getString("depth_native_help")
+                        else -> copy.getString("convert_native_help")
                     })
                     if (loaded) {
-                        if (operation != "depth") ColorChoice(copy.getString("space"), listOf("Srgb" to "sRGB", "DisplayP3" to "Display P3", "AdobeRgb" to "Adobe RGB", "ProPhoto" to "ProPhoto RGB"), space, enabled = !job.applying) { if (!job.applying) { space = it; job.invalidate() } }
+                        if (operation != "depth") ColorChoice(exportCopy.getString("profile"),spaces,space, enabled = !job.applying) { if (!job.applying) { space = it; job.invalidate() } }
                         if (operation == "depth") {
-                            ColorChoice(copy.getString("depth"), listOf("U8" to copy.getString("depth_8"), "U16" to copy.getString("depth_16"), "F16" to copy.getString("depth_float16"), "F32" to copy.getString("depth_float32")), depth, enabled = !job.applying) { if (!job.applying) { depth = it; job.invalidate() } }
-                            if (depth == "U8") ColorChoice(copy.getString("dither"), listOf("None" to exportCopy.getString("dither_none"), "Stochastic8" to copy.getString("dither_stochastic")), dither, enabled = !job.applying) { if (!job.applying) { dither = it; job.invalidate() } }
+                            ColorChoice(exportCopy.getString("depth"), listOf("U8" to copy.getString("depth_8"), "U16" to copy.getString("depth_16"), "F16" to copy.getString("depth_float16"), "F32" to copy.getString("depth_float32")), depth, enabled = !job.applying) { if (!job.applying) { depth = it; job.invalidate() } }
+                            if(depth=="U8")Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {Text(exportCopy.getString("reduce_banding"));Text(exportCopy.getString("dither_gradients"),color=LocalPalette.current.settingsSecondary)}
+                                Switch(dither=="Stochastic8",{dither=if(it)"Stochastic8" else "None";job.invalidate()},enabled=!job.applying)
+                            }
                         }
-                        if (operation == "convert") ColorChoice(copy.getString("result"), listOf("layers" to copy.getString("editable_layers"), "copy" to copy.getString("flattened_copy")), result, enabled = !job.applying) { if (!job.applying) { result = it; job.invalidate() } }
+                        if (operation == "convert") ColorChoice(copy.getString("result"), listOf("layers" to copy.getString("convert_layers"), "copy" to copy.getString("create_flattened")), result, enabled = !job.applying) { if (!job.applying) { result = it; job.invalidate() } }
                         if (operation == "convert") ColorChoice(exportCopy.getString("intent"), listOf("RelativeColorimetric" to exportCopy.getString("relative"), "Perceptual" to exportCopy.getString("perceptual"), "Saturation" to exportCopy.getString("saturation"), "AbsoluteColorimetric" to exportCopy.getString("absolute")), intent, enabled = !job.applying) { if (!job.applying) { intent = it; job.invalidate() } }
 
                     }
                 }
                 if (job.busy) { CircularProgressIndicator(); Text(copy.getString("preparing")) }
                 if (job.clipped > 0) Text(copy.getString("outside_gamut"))
-                job.previews.forEachIndexed { index, bitmap -> Text(copy.getString(if (index == 0) "before" else "after")); Image(bitmap, copy.getString(if (index == 0) "original_composition" else "prepared_composition"), Modifier.fillMaxWidth().heightIn(max = 180.dp)) }
+                if(!history)Text(copy.getString("compare_before_apply"))
+                if(job.previews.isNotEmpty())BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val split=Native.dialogUi(obj("kind" to "panes_fit","width" to maxWidth.value,"minimum" to JSONArray(listOf(160,160)),"gap" to 12).toString()).toBoolean()
+                    @Composable fun picture(index:Int,modifier:Modifier) {
+                        Column(modifier,horizontalAlignment=Alignment.CenterHorizontally) {
+                            Text(copy.getString(if(index==0)"before" else "after"))
+                            Image(job.previews[index],copy.getString(if(index==0)"original_composition" else "prepared_composition"),Modifier.fillMaxWidth().heightIn(max=180.dp))
+                        }
+                    }
+                    if(split)Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)){job.previews.indices.forEach{picture(it,Modifier.weight(1f))}}
+                    else Column(verticalArrangement=Arrangement.spacedBy(12.dp)){job.previews.indices.forEach{picture(it,Modifier.fillMaxWidth())}}
+                }
                 ColorFailureText(host, job.error)
             }
         })

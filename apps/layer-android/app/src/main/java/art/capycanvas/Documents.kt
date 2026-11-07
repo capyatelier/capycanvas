@@ -15,13 +15,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
@@ -422,44 +420,43 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     val recovery = host.recovery
     val recoveryCopy = host.bootstrap!!.getJSONObject("recovery")
     val common = host.bootstrap!!.getJSONObject("common")
-    if (recovery.candidate != null) AlertDialog(
-        onDismissRequest = { recovery.dismiss() },
-        title = { Text(recoveryCopy.getString("title")) },
-        text = { Text(recoveryCopy.getString(if (recovery.working) "restoring" else "explanation")) },
-        confirmButton = { TextButton({ recovery.recover() }, enabled = !recovery.working, modifier = Modifier.testTag("recover-drawing")) { Text(recoveryCopy.getString("restore")) } },
-        dismissButton = {
-            TextButton({ recovery.dismiss() }, enabled = !recovery.working) { Text(recoveryCopy.getString("later")) }
-            TextButton({ recovery.discard() }, enabled = !recovery.working, modifier = Modifier.testTag("discard-recovery"),
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(recoveryCopy.getString("discard")) }
-        }
-    )
-    val controller = host.documents
-    if ((controller.exporting || controller.opening) && controller.packagePrompt == null) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,
-        properties = androidx.compose.ui.window.PopupProperties(focusable = false)) {
-        Surface(shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium, modifier = Modifier.padding(16.dp)) {
-            Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text(if (controller.publishing) host.catalog.getJSONObject("export_copy").getString("writing_image") else if (controller.exportCancelled) host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else if (controller.opening) host.bootstrap!!.getString("preparing_document") else host.catalog.getJSONObject("export_copy").getString("preparing"))
-                TextButton(controller::cancelExport, enabled = !controller.publishing && !controller.exportCancelled) { Text(common.getString("cancel")) }
-            }
-        }
+    if(recovery.candidate!=null) {
+        val close={if(!recovery.working)recovery.dismiss()}
+        DialogShell(host,if(recovery.working)host.bootstrap!!.getJSONObject("progress_dialog") else recoveryCopy.getJSONObject("dialog"),recoveryCopy.getString("title"),
+            onCancel=close,tag="drawing-recovery",responses=listOf(
+                DialogResponse(recoveryCopy.getString("later"),"recovery-later",enabled=!recovery.working,action=close),
+                DialogResponse(recoveryCopy.getString("discard"),"discard-recovery",enabled=!recovery.working,destructive=true,action={recovery.discard()}),
+                DialogResponse(recoveryCopy.getString("restore"),"recover-drawing",accent=true,enabled=!recovery.working,action={recovery.recover()})),
+            body={Text(recoveryCopy.getString(if(recovery.working)"restoring" else "explanation"))})
     }
+    val controller = host.documents
+    if((controller.exporting||controller.opening)&&controller.packagePrompt==null)ProgressDialog(host,
+        if(controller.publishing)host.catalog.getJSONObject("export_copy").getString("writing_image") else if(controller.exportCancelled)host.catalog.getJSONObject("document_delivery_copy").getString("cancelling") else if(controller.opening)host.bootstrap!!.getString("preparing_document") else host.catalog.getJSONObject("export_copy").getString("preparing"),
+        "document-progress",enabled=!controller.publishing&&!controller.exportCancelled,onCancel=controller::cancelExport)
     val packageCopy = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.capycanvas")) {uri -> controller.choosePackageCopy(uri)}
     val packagePreviewExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) {uri -> controller.choosePackageCopy(uri,true)}
     controller.packagePrompt?.let {summary ->
-        AlertDialog(onDismissRequest = {if(!controller.packageCopying)controller.choosePackageCopy(null)},
-            title = {Text(summary.getString("status"))},
-            text = {Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                controller.packagePreview?.let {Image(it.asImageBitmap(),null,Modifier.fillMaxWidth().heightIn(max=320.dp))}
-                summary.optString("body").takeIf {it.isNotEmpty()}?.let {Text(it)}
+        val close={if(!controller.packageCopying)controller.choosePackageCopy(null)}
+        val copy={packageCopy.launch("Copy.capy")}
+        val export={packagePreviewExport.launch("Preview.png")}
+        val phone=host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")!=null
+        val responses=mutableListOf<DialogResponse>()
+        if(!phone) {
+            if(summary.getJSONObject("capabilities").optBoolean("export"))responses+=DialogResponse(summary.getString("export_preview"),"export-package-preview",enabled=!controller.packageCopying,action=export)
+            responses+=DialogResponse(summary.getString("copy_original"),"copy-original-package",enabled=!controller.packageCopying,action=copy)
+        }
+        responses+=DialogResponse(summary.getString("close"),"package-close",enabled=!controller.packageCopying,action=close)
+        DialogShell(host,summary.getJSONObject("dialog"),summary.getString("status"),onCancel=close,primaryEnabled=!controller.packageCopying,
+            tag="preserved-package-preview",responses=responses,secondary=if(!phone)null else ({
+                Column {
+                    if(summary.getJSONObject("capabilities").optBoolean("export"))TextButton(export,enabled=!controller.packageCopying,modifier=Modifier.testTag("export-package-preview")){Text(summary.getString("export_preview"))}
+                    TextButton(copy,enabled=!controller.packageCopying,modifier=Modifier.testTag("copy-original-package")){Text(summary.getString("copy_original"))}
+                }
+            }),body={padding -> Column(Modifier.padding(padding),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                controller.packagePreview?.let{Image(it.asImageBitmap(),null,Modifier.fillMaxWidth().heightIn(max=320.dp))}
+                summary.optString("body").takeIf{it.isNotEmpty()}?.let{Text(it)}
                 if(controller.packageCopying)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)
-            }},
-            confirmButton = {Column {
-                if(summary.getJSONObject("capabilities").optBoolean("export"))TextButton({packagePreviewExport.launch("Preview.png")},enabled=!controller.packageCopying,modifier=Modifier.testTag("export-package-preview")) {Text(summary.getString("export_preview"))}
-                TextButton({packageCopy.launch("Copy.capy")},enabled=!controller.packageCopying,modifier=Modifier.testTag("copy-original-package")) {Text(summary.getString("copy_original"))}
-            }},
-            dismissButton = {TextButton({controller.choosePackageCopy(null)},enabled=!controller.packageCopying) {Text(summary.getString("close"))}},
-            modifier = Modifier.testTag("preserved-package-preview"))
+            }})
     }
     controller.profilePrompt?.let { SourceProfileDialog(host,it, controller::chooseProfile) }
     rememberDialogContent(controller.exportRequest)?.let {pending ->
@@ -537,8 +534,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     ImportAndTransformControls(host)
     ClipboardProgress(host.documents.clipboard)
     host.hostError?.let { message ->
-        AlertDialog(onDismissRequest = host::dismissHostError, title = { Text(host.bootstrap!!.getString("action_failed")) }, text = { Text(message) },
-            confirmButton = { TextButton(host::dismissHostError) { Text(common.getString("ok")) } })
+        DialogShell(host,host.bootstrap!!.getJSONObject("file_error_dialog"),host.bootstrap!!.getString("cannot_open_file"),onCancel=host::dismissHostError,tag="file-error",
+            responses=listOf(DialogResponse(common.getString("ok"),"file-error-ok",action=host::dismissHostError)),body={Text(message)})
     }
     if (request != null && !controller.working) {
         val id = request.getInt("id")
