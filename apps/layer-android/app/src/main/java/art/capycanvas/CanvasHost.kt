@@ -43,6 +43,8 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     internal val layerSwipe=LayerSwipe()
     internal val palettes=PaletteController(this)
     internal var workspaceInteraction: DockInteraction? = null
+    internal val workspaceFocus = androidx.compose.ui.focus.FocusRequester()
+    internal var workspaceOpener: androidx.compose.ui.focus.FocusRequester? = null
     internal var phoneContactEpoch by androidx.compose.runtime.mutableIntStateOf(0)
         private set
     internal fun retirePhoneContacts() {

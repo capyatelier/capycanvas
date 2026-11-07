@@ -182,6 +182,7 @@ internal class DockInteraction(val host: CanvasHost) {
     var configurationHeight by mutableFloatStateOf(0f)
     var contextMenu by mutableStateOf<JSONObject?>(null)
     var contextRequest: JSONObject? = null
+    var contextPresentation: JSONObject? = null
     var headerHeld = false
     var contactHeld by mutableStateOf(false)
     var contactType: PointerType? = null
@@ -198,6 +199,7 @@ internal class DockInteraction(val host: CanvasHost) {
     }
     /** The canvas bar's place, kept while a canvas contact hides the bar. */
     var canvasBarSlot by mutableStateOf<Rect?>(null)
+    var noticeBounds by mutableStateOf<Rect?>(null)
     private var position = Offset.Zero
     private var contextGeneration = 0
     private var gestureGeneration = 0
@@ -331,7 +333,10 @@ internal class DockInteraction(val host: CanvasHost) {
         if (contactHeld && retiredContext == key) return
         val owner = contactSource?.takeIf { anchors[it]?.target == key }
             ?: anchors.entries.filter { it.value.target == key }.minByOrNull { it.value.bounds.width * it.value.bounds.height }?.key ?: return
-        val anchor = contactPosition?.let { Rect(it, it) } ?: anchors.getValue(owner).bounds
+        val presentation = if (phone != null) JSONObject(Native.dialogUi(obj("kind" to "menu_presentation",
+            "target" to obj("kind" to "customization","target" to target)).toString())) else null
+        val anchor = if(presentation?.optString("anchor") == "widget")anchors.getValue(owner).bounds
+            else contactPosition?.let { Rect(it, it) } ?: anchors.getValue(owner).bounds
         if (contextTarget == key) return
         contextTarget = key
         contextOwner = owner
@@ -340,7 +345,7 @@ internal class DockInteraction(val host: CanvasHost) {
         host.query(query) {
             if (request != contextGeneration) return@query
             if (dragging || !focused || !enabled || anchors[owner]?.target != key) { closeContext(); return@query }
-            contextRequest = query; contextAnchor = anchor; contextMenu = it as? JSONObject; refresh()
+            contextRequest = query; contextAnchor = anchor; contextPresentation = presentation; contextMenu = it as? JSONObject; refresh()
         }
     }
     fun holdContext(target: JSONObject) {
@@ -350,7 +355,7 @@ internal class DockInteraction(val host: CanvasHost) {
         contextGeneration++
         if (contextMenu == null) { contextTarget = null; contextOwner = null }
     }
-    fun closeContext() { retireContextRequest(); contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; refresh() }
+    fun closeContext() { retireContextRequest(); contextTarget = null; contextOwner = null; contextMenu = null; contextRequest = null; contextPresentation = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
         host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
             if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))

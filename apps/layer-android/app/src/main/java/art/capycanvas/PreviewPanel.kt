@@ -27,29 +27,11 @@ private val PanelMaxWidth = 440.dp
 /** The ops a one-value dialog sends in the actions of `type`. */
 internal class PreviewOps(val type: String, val value: String, val apply: String, val cancel: String)
 
-/** A shared one-value dialog the session previews on the canvas: Refine (Grow,
- * Shrink, Feather, Border or Smooth) or Frequency Separation. The canvas stays
- * visible and undimmed above the panel. It sits at the bottom of the canvas,
- * above a canvas action bar along that edge. It is not a popup, so it never
- * takes window focus or cancels a selection or transform. Back cancels it. */
 @Composable internal fun PreviewPanel(host: CanvasHost, dock: DockInteraction, status: JSONObject, view: JSONObject?, name: String, ops: PreviewOps) {
     view ?: return
     fun send(action: JSONObject) = host.dispatch(obj("type" to ops.type, "action" to action))
-    BackHandler { send(obj("op" to ops.cancel)) }
     val colors = LocalPalette.current
-    Surface(Modifier.zIndex(240f).layout { measurable, constraints ->
-        val gap = PanelGap.toPx()
-        val left = status.number("x") * density
-        val width = status.number("width") * density
-        val top = status.number("y") * density
-        val bar = dock.canvasBarSlot?.takeIf { it.bottom > top - 2 * gap }
-        val bottom = minOf(top, bar?.top ?: top)
-        val panel = measurable.measure(Constraints(maxWidth = minOf(PanelMaxWidth.toPx(), width - 2 * gap).roundToInt().coerceAtLeast(0)))
-        layout(constraints.maxWidth, constraints.maxHeight) {
-            panel.place((left + (width - panel.width) / 2).roundToInt(), (bottom - gap - panel.height).roundToInt())
-        }
-    }.chromeRegion(dock).testTag("$name-panel"), shape = SurfaceShape, color = colors.panel, contentColor = colors.text,
-        shadowElevation = 8.dp) {
+    val content = @Composable {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(view.getString("title"), Modifier.padding(end = 8.dp), fontWeight = FontWeight.Bold)
             key(view.optString("kind", view.getString("label"))) {
@@ -63,6 +45,33 @@ internal class PreviewOps(val type: String, val value: String, val apply: String
                 PanelButton(host.bootstrap!!.getJSONObject("common").getString("apply"), "$name-apply", colors.accent) { send(obj("op" to ops.apply)) }
             }
         }
+    }
+    if (host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") != null) {
+        DialogShell(host,view.getJSONObject("dialog"),view.getString("title"),onCancel = { send(obj("op" to ops.cancel)) },
+            onPrimary = { send(obj("op" to ops.apply)) },primaryLabel = host.bootstrap!!.getJSONObject("common").getString("apply"),
+            tag = "$name-panel",naturalWidth = PanelMaxWidth,body = { padding ->
+                key(view.optString("kind",view.getString("label"))) {
+                    NumericSetting(view.getString("label"),view.number("radius"),view.getJSONObject("numeric"),
+                        Modifier.padding(padding).testTag("$name-value"),id = name) { send(obj("op" to ops.value,"radius" to it)) }
+                }
+            })
+        return
+    }
+    BackHandler { send(obj("op" to ops.cancel)) }
+    Surface(Modifier.zIndex(240f).layout { measurable, constraints ->
+        val gap = PanelGap.toPx()
+        val left = status.number("x") * density
+        val width = status.number("width") * density
+        val top = status.number("y") * density
+        val bar = dock.canvasBarSlot?.takeIf { it.bottom > top - 2 * gap }
+        val bottom = minOf(top, bar?.top ?: top)
+        val panel = measurable.measure(Constraints(maxWidth = minOf(PanelMaxWidth.toPx(), width - 2 * gap).roundToInt().coerceAtLeast(0)))
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            panel.place((left + (width - panel.width) / 2).roundToInt(), (bottom - gap - panel.height).roundToInt())
+        }
+    }.chromeRegion(dock).testTag("$name-panel"), shape = SurfaceShape, color = colors.panel, contentColor = colors.text,
+        shadowElevation = 8.dp) {
+        content()
     }
 }
 

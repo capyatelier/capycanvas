@@ -127,6 +127,26 @@ class AndroidCommandSearchTest {
         instrumentation.uiAutomation.setRotation(if (autoRotate) android.app.UiAutomation.ROTATION_UNFREEZE else previousRotation)
         if (::scenario.isInitialized) scenario.close()
     }
+    @Test fun tabletSearchUsesItsKeyboardVisibleAreaAndPlacedFocus() {
+        for (theme in listOf("light","dark")) {
+            action(obj("type" to "set_theme","theme" to theme));open()
+            val (root,_) = checkNotNull(tagged("command-search"))
+            main { root.view.windowInsetsController?.show(android.view.WindowInsets.Type.ime()) }
+            waitFor("Search has a native keyboard") { root.view.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime()) }
+            val density = instrumentation.targetContext.resources.displayMetrics.density
+            val available = (root.view.height-root.view.rootWindowInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom)/density
+            val expected = (available/5f).coerceIn(48f,192f)*density
+            waitFor("Tablet search uses its keyboard-visible height") { tagged("command-bar")?.second?.boundsInRoot?.top?.let { abs(it-expected)<=1f } == true }
+            assertEquals(1280f,mainWindow.width/density,.5f)
+            assertNull(host.snapshot!!.getJSONObject("layout").objectOrNull("phone"))
+            instrumentation.sendStringSync("undo")
+            waitFor("Placed search accepts typing without another tap") { search()?.optString("query") == "undo" }
+            main { root.view.windowInsetsController?.hide(android.view.WindowInsets.Type.ime()) }
+            waitFor("Search keyboard closes") { !root.view.rootWindowInsets.isVisible(android.view.WindowInsets.Type.ime()) }
+            tapTag("command-close",MotionEvent.TOOL_TYPE_FINGER)
+            waitFor("Search closes after the native focus check") { tagged("command-bar") == null && mainWindow.hasWindowFocus() }
+        }
+    }
     @Test fun nativeInputConnectionCompositionKeepsCandidateKeysInsideSearch() {
         open()
         lateinit var connection: android.view.inputmethod.InputConnection

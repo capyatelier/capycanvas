@@ -47,6 +47,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -586,39 +589,73 @@ private fun JSONObject.settingsTitle(): String? = objectOrNull("shortcut_editor"
     }
 }
 
-@Composable internal fun ToolPicker(host: CanvasHost, picker: JSONObject) {
-    Dialog({ host.customize(obj("type" to "cancel_tools")) }) {
-        Surface(shape = RoundedCornerShape(16.dp), color = LocalPalette.current.settingsBackground) {
-            Column(Modifier.widthIn(max = 560.dp).heightIn(max = 650.dp).padding(20.dp).testTag("tool-picker"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(picker.getString("title"), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+@Composable internal fun ToolPicker(host: CanvasHost, current: JSONObject?) {
+    var retained by remember { mutableStateOf<JSONObject?>(null) }
+    val picker = current ?: retained ?: return
+    if(current != null)SideEffect { retained = current }
+    val scope = rememberCoroutineScope()
+    val focus = remember { FocusRequester() }
+    val bring = remember { BringIntoViewRequester() }
+    val choicesScroll = rememberScrollState()
+    LaunchedEffect(current != null,picker.getString("query")) { if(current != null)choicesScroll.scrollTo(0) }
+    var focused by remember { mutableStateOf(false) }
+    var searchText by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(picker.getString("query"))) }
+    LaunchedEffect(current != null) { if(current != null)searchText = androidx.compose.ui.text.input.TextFieldValue(picker.getString("query")) }
+    val focusManager = LocalFocusManager.current
+    val cancel = { host.customize(obj("type" to "cancel_tools")) }
+    val confirm = { host.customize(obj("type" to "confirm_tools")) }
+    val search = { text: String -> host.customize(obj("type" to "picker_search", "query" to text)) }
+    val common = host.bootstrap!!.getJSONObject("common")
+    val disabled = picker.array("disabled").values().map { it.toString() }.toSet()
+    DialogShell(host,picker.getJSONObject("dialog"),picker.getString("title"),
+        search = SearchState(focused,searchText.text,{ searchText = androidx.compose.ui.text.input.TextFieldValue("");search("") },focus),onCancel = cancel,onPrimary = confirm,
+        primaryEnabled = picker.getBoolean("can_confirm"),primaryLabel = picker.getString("confirm_label"),tag = "tool-picker",naturalWidth = 560.dp,shown = current != null,scrollBody = false,
+        body = { padding ->
+            Column(Modifier.fillMaxWidth().padding(padding),verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 picker.optString("name").takeIf { !picker.isNull("name") }?.let { name ->
                     CoreTextField(name, { host.customize(obj("type" to "picker_name", "name" to it)) }, Modifier.fillMaxWidth().testTag("toolbar-name"),
                         label = { Text(picker.getString("name_label")) }, background = LocalPalette.current.dialogField)
                 }
-                CoreTextField(picker.optString("query"), { host.customize(obj("type" to "picker_search", "query" to it)) }, Modifier.testTag("tool-picker-search"),
-                    placeholder = { Text(picker.getString("search_hint")) }, background = LocalPalette.current.dialogField)
-                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                    picker.array("choices").objects().forEachIndexed { index, tool ->
+                CoreTextField(searchText,{ value ->
+                    val previous = searchText.text
+                    searchText = value
+                    if(value.text != previous)search(value.text)
+                },Modifier.fillMaxWidth().height(36.dp).edgeControl().background(LocalPalette.current.dialogField,RoundedCornerShape(6.dp))
+                    .padding(horizontal = 6.dp).textCursorRegion().focusRequester(focus).bringIntoViewRequester(bring)
+                    .onFocusChanged { focused = it.isFocused;if(it.isFocused)scope.launch { bring.bringIntoView() } }.testTag("tool-picker-search"),
+                    textStyle = LocalTextStyle.current.copy(color = LocalPalette.current.text),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    decorationBox = { field -> Box(Modifier.fillMaxSize(),contentAlignment = Alignment.CenterStart) {
+                        if(searchText.text.isEmpty())Text(picker.getString("search_hint"),color = LocalPalette.current.secondary)
+                        field()
+                    } })
+                LaunchedEffect(Unit) { focus.requestFocus() }
+                Column(Modifier.weight(1f,fill = false).verticalScroll(choicesScroll).testTag("tool-picker-list")) {
+                    picker.array("choices").objects().forEachIndexed { index,tool ->
                         if (index > 0) HorizontalDivider(color = LocalPalette.current.dialogSeparator)
-                        Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).testTag("tool-picker-choice-${tool.getString("label")}").toggleable(tool.optBoolean("selected"), role = Role.Checkbox) { selected ->
-                            host.customize(obj("type" to "picker_select", "control" to tool.getJSONObject("control"), "selected" to selected))
-                        }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            tool.optString("icon").takeIf { it.isNotEmpty() && it != "null" }?.let { SharedIcon(it, null) }
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text(tool.getString("label"), fontWeight = FontWeight.Medium)
-                                Text(tool.getString("description"), color = LocalPalette.current.settingsSecondary)
+                        val enabled = tool.getJSONObject("control").toString() !in disabled
+                        Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).testTag("tool-picker-choice-${tool.getString("label")}")
+                            .alpha(if(enabled)1f else .38f).toggleable(tool.getBoolean("selected"),enabled = enabled,role = Role.Checkbox) { selected ->
+                                host.customize(obj("type" to "picker_select", "control" to tool.getJSONObject("control"), "selected" to selected))
+                            }.padding(vertical = 8.dp),horizontalArrangement = Arrangement.spacedBy(12.dp),verticalAlignment = Alignment.CenterVertically) {
+                            tool.nullableString("icon")?.let { SharedIcon(it,null) }
+                            Column(Modifier.weight(1f),verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(tool.getString("label"),fontWeight = FontWeight.Medium)
+                                Text(tool.getString("description"),color = LocalPalette.current.settingsSecondary)
                             }
                             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
-                                Checkbox(tool.optBoolean("selected"), onCheckedChange = null, modifier = Modifier.size(20.dp))
+                                Checkbox(tool.getBoolean("selected"),onCheckedChange = null,modifier = Modifier.size(20.dp),enabled = enabled)
                             }
                         }
                     }
                 }
-                Row(Modifier.align(Alignment.End)) {
-                    TextButton({ host.customize(obj("type" to "cancel_tools")) }, Modifier.testTag("tool-picker-cancel")) { Text(host.bootstrap!!.getJSONObject("common").getString("cancel")) }
-                    Button({ host.customize(obj("type" to "confirm_tools")) }, Modifier.testTag("tool-picker-confirm"), enabled = picker.getBoolean("can_confirm")) { Text(picker.getString("confirm_label")) }
-                }
+                Text(picker.getString("selected_label"),Modifier.testTag("tool-picker-count"),color = LocalPalette.current.settingsSecondary)
+                picker.nullableString("error")?.let { Text(it,color = MaterialTheme.colorScheme.error) }
             }
-        }
-    }
+        },actions = {
+            Spacer(Modifier.weight(1f))
+            DialogButton(common.getString("cancel"),"tool-picker-cancel",onClick = cancel)
+            DialogButton(picker.getString("confirm_label"),"tool-picker-confirm",accent = true,enabled = picker.getBoolean("can_confirm"),onClick = confirm)
+        })
 }

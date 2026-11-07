@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
@@ -25,6 +26,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
+import kotlin.math.roundToInt
 
 class AndroidPhoneAuditTest {
     @get:Rule(order = 0) val device = CapyDeviceRule()
@@ -36,12 +38,43 @@ class AndroidPhoneAuditTest {
     private fun shell(command: String): String = ParcelFileDescriptor.AutoCloseInputStream(
         instrumentation.uiAutomation.executeShellCommand(command)).bufferedReader().use { it.readText().trim() }
 
+    private fun awaitCanvasPresentation(host: CanvasHost) {
+        val deadline = SystemClock.uptimeMillis() + 30_000
+        var presented = false
+        do {
+            presented = runBlocking { host.withNative {
+                val display = JSONObject(Native.displayStatus(it))
+            !Native.renderingPending(it) && display.optLong("completed_frames") == display.optLong("submitted_frames") &&
+                !display.isNull("presented_canvas_revision") &&
+                    display.getLong("canvas_revision") == display.getLong("presented_canvas_revision")
+            } }
+            if (!presented) SystemClock.sleep(16)
+        } while (!presented && SystemClock.uptimeMillis() < deadline)
+        assertTrue("Current document composition is presented", presented)
+    }
+
     private fun collect(node: SemanticsNode, allocations: JSONObject) {
         node.config.getOrNull(SemanticsProperties.TestTag)?.let { tag ->
             val bounds = node.boundsInRoot
             allocations.put(tag, JSONArray(listOf(bounds.left, bounds.top, bounds.width, bounds.height)))
         }
         node.children.forEach { collect(it, allocations) }
+    }
+
+    private fun awaitEditorPage(activity: MainActivity,host: CanvasHost,tag: String) {
+        val decor = activity.window.decorView
+        val density = activity.resources.displayMetrics.density
+        val visible = obj("x" to 0,"y" to 0,"width" to decor.width/density,
+            "height" to (decor.height-decor.rootWindowInsets.getInsets(WindowInsets.Type.ime()).bottom).coerceAtLeast(0)/density)
+        val presentation = runBlocking { host.awaitQuery(obj("type" to "dialog_presentation","role" to "editor","visible" to visible)) }!!
+        assertEquals("IME preserves the shared page presentation","page",presentation.getString("kind"))
+        val expected = presentation.getJSONObject("bounds").rect()
+        host.awaitFrame("$tag uses its shared visible bounds",diagnostics = { "expected=$expected; actual=${findTag(tag)?.second?.boundsInRoot}; visible=$visible" }) {
+            findTag(tag)?.second?.boundsInRoot?.let { actual ->
+                kotlin.math.abs(actual.left-expected.left*density)<=1f && kotlin.math.abs(actual.top-expected.top*density)<=1f &&
+                    kotlin.math.abs(actual.width-expected.width*density)<=1f && kotlin.math.abs(actual.height-expected.height*density)<=1f
+            } == true
+        }
     }
 
     @Test fun hardwareTab() {
@@ -63,6 +96,11 @@ class AndroidPhoneAuditTest {
     @Test fun frame() = visit(false)
     @Test fun menu() = visit(false, "menu")
     @Test fun drawers() = visit(false, "drawers")
+    @Test fun customize() = visit(false, "customize")
+    @Test fun dialogsA2() = visit(false, "dialogsA2")
+    @Test fun ime() = visit(false, "ime")
+    @Test fun alertIme() = visit(false, "alertIme")
+    @Test fun modalFocus() = visit(false, "modalFocus")
 
     private fun visit(admissionOnly: Boolean, family: String = "frame") {
         val args = InstrumentationRegistry.getArguments()
@@ -115,24 +153,11 @@ class AndroidPhoneAuditTest {
             assertTrue("Completed first canvas frame", frameReady)
             fun capture(name: String) {
                 captureName = name
-                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else family)
+                report.put("family",if (name == "hidden") "frame" else if (name.startsWith("inventory-")) "inventory" else if(family == "dialogsA2") "pages" else family)
                     .put("fixture",host.workspaceManager?.optString("id") ?: "builtin:workspace:painter").put("state", if (admissionOnly) "rest" else name).put("status", "failed").put("passed", false)
                 host.drain()
                 compose.waitForIdle()
-                if (!admissionOnly) {
-                    val deadline = SystemClock.uptimeMillis() + 30_000
-                    var presented = false
-                    do {
-                        presented = runBlocking { host.withNative {
-                            val display = JSONObject(Native.displayStatus(it))
-                        !Native.renderingPending(it) && display.optLong("completed_frames") == display.optLong("submitted_frames") &&
-                            !display.isNull("presented_canvas_revision") &&
-                                display.getLong("canvas_revision") == display.getLong("presented_canvas_revision")
-                        } }
-                        if (!presented) SystemClock.sleep(16)
-                    } while (!presented && SystemClock.uptimeMillis() < deadline)
-                    assertTrue("Current document composition is presented", presented)
-                }
+                if (!admissionOnly) awaitCanvasPresentation(host)
                 host.awaitFrame("Brush ready and Compose idle") { host.snapshot?.optBoolean("brush_ready") == true &&
                     host.snapshot?.isNull("canvas_notice") == true }
                 compose.waitForIdle()
@@ -303,6 +328,33 @@ class AndroidPhoneAuditTest {
         compose.waitForIdle()
         host.drain()
         compose.waitForIdle()
+        if (family == "alertIme") {
+            host.drain(obj("type" to "invoke","command" to "search_commands"))
+            host.awaitFrame("Standalone alert fixture has a search field") { findTag("command-search") != null }
+            val owner = checkNotNull(findTag("command-search")).first.view
+            host.awaitFrame("Standalone alert fixture measures the native keyboard") { owner.rootWindowInsets.isVisible(WindowInsets.Type.ime()) }
+            val keyboardHeight = owner.rootWindowInsets.getInsets(WindowInsets.Type.ime()).bottom
+            tap("command-close")
+            host.awaitFrame("Search closes before the standalone alert") { host.commandSearch == null && findTag("command-bar") == null }
+            alertImeAllocation(activity,host,keyboardHeight,::state)
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
+        if (family == "ime" || family == "modalFocus") {
+            visitIme(activity,host,::tap,::state,checkAlert = family == "ime")
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
+        if (family == "dialogsA2") {
+            visitDialogsA2(activity,host,::event,::tap,::state)
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
+        if (family == "customize") {
+            visitCustomize(activity,host,::event,::tap,::state)
+            assertTrue(failures.joinToString("\n"),failures.isEmpty())
+            return
+        }
         if (family == "drawers") {
             visitDrawers(activity,host,::event,::tap,::state)
             assertTrue(failures.joinToString("\n"),failures.isEmpty())
@@ -711,6 +763,443 @@ class AndroidPhoneAuditTest {
             instrumentation.runOnMainSync { nativeView.layoutDirection = direction }
             compose.waitForIdle()
         }
+    }
+
+    private fun visitIme(activity: MainActivity,host: CanvasHost,tap: (String) -> Unit,state: (String,() -> Unit) -> Unit,checkAlert: Boolean = true) {
+        pressKey(KeyEvent.KEYCODE_DPAD_RIGHT);compose.waitForIdle()
+        instrumentation.runOnMainSync {
+            val opener = checkNotNull(findTag("phone-tool-settings-hit")).second.find { it.config.getOrNull(SemanticsActions.RequestFocus) != null }
+            assertTrue(checkNotNull(opener).config[SemanticsActions.RequestFocus].action!!.invoke())
+        }
+        host.drain(obj("type" to "phone","action" to obj("kind" to "insert_tools","before" to null)))
+        host.awaitFrame("IME journey opens the shared picker") { findTag("tool-picker-search") != null }
+        compose.waitForIdle()
+        val decor = activity.window.decorView
+        fun keyboard() = decor.rootWindowInsets.isVisible(WindowInsets.Type.ime())
+        var keyboardHeight = 0
+        state("inventory-picker-ime") {
+            val viewport = jsonValue(host.snapshot!!.getJSONObject("layout").getJSONArray("viewport"))
+            if(findTag("tool-picker-search")?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true } == null)tap("tool-picker-search")
+            host.awaitFrame("Native keyboard appears for the picker search") { keyboard() }
+            keyboardHeight = decor.rootWindowInsets.getInsets(WindowInsets.Type.ime()).bottom
+            awaitEditorPage(activity,host,"tool-picker")
+            assertNotNull("IME does not change phone classification",host.snapshot!!.getJSONObject("layout").objectOrNull("phone"))
+            assertEquals("IME does not shrink the logical viewport",viewport,jsonValue(host.snapshot!!.getJSONObject("layout").getJSONArray("viewport")))
+            val search = checkNotNull(findTag("tool-picker-search")).second.boundsInRoot
+            assertTrue("Focused search remains visible: $search; page=${findTag("tool-picker")?.second?.boundsInRoot}; window=${decor.width}x${decor.height}; ime=${decor.rootWindowInsets.getInsets(WindowInsets.Type.ime())}",search.width>0f && search.height>0f)
+            assertTrue("Focused search $search stays above keyboard y=${decor.height-decor.rootWindowInsets.getInsets(WindowInsets.Type.ime()).bottom}",search.bottom <= decor.height-decor.rootWindowInsets.getInsets(WindowInsets.Type.ime()).bottom+1)
+        }
+        state("inventory-picker-modal-focus") {
+            instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("Focus traversal has no keyboard owner") { !keyboard() }
+            val last = host.snapshot!!.getJSONObject("picker").array("choices").objects().last().getString("label")
+            compose.onNodeWithTag("tool-picker-choice-$last",useUnmergedTree = true).performScrollTo().performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue("Last picker choice accepts native keyboard focus",it()) }
+            for (meta in listOf(0,KeyEvent.META_SHIFT_ON)) {
+                pressKey(KeyEvent.KEYCODE_TAB,meta);compose.waitForIdle()
+                assertNotNull("Modal picker confines keyboard traversal",findTag("tool-picker")?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true })
+            }
+            instrumentation.runOnMainSync { host.workspaceFocus.requestFocus() }
+            assertNotNull("Modal picker excludes workspace focus",findTag("tool-picker")?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true })
+        }
+        state("inventory-picker-search-escape") {
+            instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("IME releases the native search key route") { !keyboard() }
+            tap("tool-picker-search")
+            host.awaitFrame("Native search owns focus before typing") {
+                findTag("tool-picker-search")?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true } != null
+            }
+            instrumentation.sendStringSync("pen")
+            host.awaitFrame("Native search input reaches the shared picker") { host.snapshot?.objectOrNull("picker")?.optString("query") == "pen" }
+            instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("Search Escape is tested without IME ownership") { !keyboard() }
+            pressKey(KeyEvent.KEYCODE_ESCAPE)
+            host.awaitFrame("Shared search Escape clears the focused native field") {
+                host.snapshot?.objectOrNull("picker")?.optString("query") == "" &&
+                    findTag("tool-picker-search")?.second?.find { it.config.getOrNull(SemanticsProperties.EditableText) != null }
+                        ?.config?.getOrNull(SemanticsProperties.EditableText)?.text == ""
+            }
+        }
+        instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+        host.awaitFrame("IME is hidden before page Back") { !keyboard() }
+        predictiveBack(activity,cancel = true)
+        assertNotNull("Cancelled predictive Back preserves the picker",host.snapshot?.objectOrNull("picker"))
+        predictiveBack(activity,cancel = false)
+        host.awaitFrame("Completed predictive Back closes the picker") { host.snapshot?.objectOrNull("picker") == null && findTag("tool-picker") == null }
+        host.awaitFrame("Closing the modal picker restores its opener") { findTag("phone-tool-settings-hit")?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true } != null }
+        if(checkAlert)alertImeAllocation(activity,host,keyboardHeight,state)
+    }
+
+    private fun alertImeAllocation(activity: MainActivity,host: CanvasHost,keyboardHeight: Int,state: (String,() -> Unit) -> Unit) {
+        val decor = activity.window.decorView
+        val view = checkNotNull(findTag("workspace")).first.view
+        val original = decor.rootWindowInsets
+        val oldIme = original.getInsets(WindowInsets.Type.ime())
+        val oldVisible = original.isVisible(WindowInsets.Type.ime())
+        try {
+            state("inventory-alert-ime") {
+                assertTrue("The reduced area comes from the measured native keyboard",keyboardHeight>0)
+                instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "form","action" to obj("type" to "reset","value" to host.workspaceManager!!.getString("id")))) }
+                host.awaitFrame("Restore alert is composed") { findTag("workspace-form") != null }
+                instrumentation.runOnMainSync { view.dispatchApplyWindowInsets(WindowInsets.Builder(original)
+                    .setInsets(WindowInsets.Type.ime(),android.graphics.Insets.of(0,0,0,keyboardHeight)).setVisible(WindowInsets.Type.ime(),true).build()) }
+                host.awaitFrame("Alert follows its reduced native visible area") {
+                    findTag("workspace-form")?.second?.boundsInRoot?.center?.y?.let { kotlin.math.abs(it-(decor.height-keyboardHeight)/2f)<=1f } == true
+                }
+                val bounds = checkNotNull(findTag("workspace-form")).second.boundsInRoot
+                val visible = androidx.compose.ui.geometry.Rect(0f,0f,decor.width.toFloat(),(decor.height-keyboardHeight).toFloat())
+                assertTrue("Alert card $bounds lies inside native IME-visible $visible (keyboard=$keyboardHeight)",bounds.left>=visible.left && bounds.top>=visible.top && bounds.right<=visible.right && bounds.bottom<=visible.bottom)
+            }
+        } finally {
+            instrumentation.runOnMainSync {
+                view.dispatchApplyWindowInsets(WindowInsets.Builder(original).setInsets(WindowInsets.Type.ime(),oldIme).setVisible(WindowInsets.Type.ime(),oldVisible).build())
+                host.workspaceInput(obj("type" to "cancel"))
+            }
+            host.awaitFrame("IME allocation alert cancels") { findTag("workspace-form") == null }
+        }
+    }
+
+    private fun visitDialogsA2(activity: MainActivity,host: CanvasHost,event: (Int,Offset) -> Unit,tap: (String) -> Unit,state: (String,() -> Unit) -> Unit) {
+        fun shared() = host.snapshot!!.getJSONObject("state")
+        fun invoke(command: String) = host.drain(obj("type" to "invoke","command" to command))
+        fun cancel(type: String,op: String) = host.drain(obj("type" to type,"action" to obj("op" to op)))
+        fun panel(name: String) {
+            host.awaitFrame("Canvas panel $name is placed") { findTag("$name-panel")?.second?.let { it.layoutInfo.isPlaced && it.boundsInRoot.width > 0f } == true }
+            compose.waitForIdle()
+            val native = checkNotNull(findTag("$name-panel")).second.boundsInRoot
+            val density = activity.resources.displayMetrics.density
+            val expected = runBlocking { host.awaitQuery(obj("type" to "dialog_bounds","role" to "canvas_panel",
+                "visible" to obj("x" to 0,"y" to 0,"width" to activity.window.decorView.width/density,"height" to activity.window.decorView.height/density),
+                "measured" to JSONArray(listOf(native.width/density,native.height/density)))) }!!
+            assertEquals("Shared panel x",expected.number("x")*density,native.left,1f)
+            assertEquals("Shared panel y",expected.number("y")*density,native.top,1f)
+            awaitCanvasPresentation(host);host.drain()
+            val revision = shared().getJSONObject("document_file").getLong("revision")
+            val outside = checkNotNull(findTag("workspace")).second.boundsInRoot.center
+            if(!native.contains(outside)) {
+                event(MotionEvent.ACTION_DOWN,outside);event(MotionEvent.ACTION_UP,outside);host.drain()
+                assertEquals("Modal preview captures canvas contacts",revision,shared().getJSONObject("document_file").getLong("revision"))
+            }
+            predictiveBack(activity,cancel = true)
+            assertNotNull("Cancelled Back preserves the preview",findTag("$name-panel"))
+        }
+        workspace(host,"painter")
+        invoke("select_all")
+        state("selection-refine") {
+            invoke("feather_selection");panel("selection-refine")
+        }
+        if(shared().getJSONObject("layer_tools").objectOrNull("selection_resize") != null) {
+            predictiveBack(activity,cancel = false)
+            host.awaitFrame("Predictive Back cancels Refine") { shared().getJSONObject("layer_tools").objectOrNull("selection_resize") == null }
+        }
+        state("frequency-separation") {
+            invoke("frequency_separation");panel("frequency-separation")
+        }
+        if(shared().getJSONObject("layer_tools").objectOrNull("frequency_separation") != null) {
+            tap("frequency-separation-panel-cancel")
+            host.awaitFrame("Frequency Separation cancels") { shared().getJSONObject("layer_tools").objectOrNull("frequency_separation") == null }
+        }
+        invoke("add_layer")
+        if(shared().array("commands").objects().any { it.optString("id") == "deselect" && it.optBoolean("enabled") })invoke("deselect")
+        invoke("search_commands")
+        host.awaitFrame("Command search opens") { findTag("command-bar") != null && findTag("command-search") != null }
+        fun settleSearch() {
+            compose.waitForIdle()
+            val view = checkNotNull(findTag("command-search")).first.view
+            instrumentation.runOnMainSync { view.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("Keyboard-free search reference") { !view.rootWindowInsets.isVisible(WindowInsets.Type.ime()) }
+            compose.waitForIdle()
+        }
+        host.awaitFrame("Placed command search receives native focus") { findTag("command-search")?.second?.find { it.config.getOrNull(SemanticsProperties.Focused) == true } != null }
+        settleSearch();state("command-search") {}
+        instrumentation.sendStringSync("undo")
+        host.awaitFrame("Native search query reaches the session") { host.commandSearch?.optString("query") == "undo" }
+        settleSearch();state("command-search-query") {}
+        compose.waitForIdle()
+        pressKey(KeyEvent.KEYCODE_A,KeyEvent.META_CTRL_ON)
+        host.awaitFrame("Native search selects the whole query") {
+            findTag("command-search")?.second?.find { it.config.getOrNull(SemanticsProperties.TextSelectionRange) != null }
+                ?.config?.getOrNull(SemanticsProperties.TextSelectionRange)?.let { it.min == 0 && it.max == 4 } == true
+        }
+        instrumentation.sendStringSync("zzznomatchzzz")
+        host.awaitFrame("Native search has the exact empty-result query") {
+            host.commandSearch?.optString("query") == "zzznomatchzzz" && host.commandSearch?.array("results")?.length() == 0
+        }
+        settleSearch();state("command-search-empty") {}
+        tap("command-close")
+        host.awaitFrame("Search closes") { host.commandSearch == null && findTag("command-bar") == null }
+        state("unsaved-changes") {
+            instrumentation.runOnMainSync { host.drawingTabs.closeSelected() }
+            host.awaitFrame("Unsaved Changes opens") { findTag("document-close") != null }
+        }
+        if(findTag("document-close") != null) {
+            tap("document-close-cancel")
+            host.awaitFrame("Unsaved Changes cancels") { findTag("document-close") == null }
+        }
+        invoke("drawing_brush")
+        val canvas = checkNotNull(findTag("workspace")).second.boundsInRoot.center
+        val stylus = android.view.InputDevice.getDeviceIds().asSequence().mapNotNull(android.view.InputDevice::getDevice)
+            .firstOrNull { it.sources and android.view.InputDevice.SOURCE_STYLUS == android.view.InputDevice.SOURCE_STYLUS }
+        val started = SystemClock.uptimeMillis()
+        for (phase in listOf(MotionEvent.ACTION_HOVER_ENTER,MotionEvent.ACTION_HOVER_MOVE,MotionEvent.ACTION_HOVER_EXIT)) {
+            val hover = MotionEvent.obtain(started,SystemClock.uptimeMillis(),phase,1,
+                arrayOf(MotionEvent.PointerProperties().apply { id=0;toolType=MotionEvent.TOOL_TYPE_STYLUS }),
+                arrayOf(MotionEvent.PointerCoords().apply { x=canvas.x;y=canvas.y;pressure=0f;setAxisValue(MotionEvent.AXIS_TILT,Math.toRadians(30.0).toFloat()) }),
+                0,0,1f,1f,stylus?.id ?: -1,0,android.view.InputDevice.SOURCE_STYLUS,0)
+            try { assertTrue(instrumentation.uiAutomation.injectInputEvent(hover,true)) } finally { hover.recycle() }
+        }
+        host.drain()
+        for (kind in listOf("pressure","tilt")) {
+            state("$kind-calibration") {
+                host.drain(obj("type" to "open_settings","page" to "input"))
+                host.awaitFrame("Input preferences open") { findTag("setting-action-pen_$kind") != null }
+                val action = "setting-action-pen_$kind"
+                compose.onNodeWithTag(action,useUnmergedTree=true).performScrollTo();tap(action)
+                host.awaitFrame("$kind calibration is placed") { findTag("pen-$kind-dialog")?.second?.let { it.layoutInfo.isPlaced && it.boundsInRoot.width>0f } == true }
+                host.awaitFrame("$kind calibration measurement is published",diagnostics = {
+                    "shared=${shared().objectOrNull("${kind}_calibration")?.opt("bounds")}; native=${host.calibrationPenBounds}; area=${host.snapshot?.getJSONObject("layout")?.getJSONObject("phone")?.opt("work_area")}; blocked=${host.documentInputBlocked}"
+                }) {
+                    val bounds = shared().objectOrNull("${kind}_calibration")?.getJSONObject("bounds")
+                    val native = host.calibrationPenBounds
+                    val density = activity.resources.displayMetrics.density
+                    bounds != null && native != null && kotlin.math.abs((bounds.number("width")*density).roundToInt()-native.width)<.5f &&
+                        kotlin.math.abs((bounds.number("height")*density).roundToInt()-native.height)<.5f
+                }
+                host.drain();compose.waitForIdle()
+                val body = checkNotNull(findTag("pen-$kind-dialog")).second.boundsInRoot
+                val area = host.snapshot!!.getJSONObject("layout").getJSONObject("phone").getJSONObject("work_area").rect()
+                val density = activity.resources.displayMetrics.density
+                assertTrue("Calibration fits the shared work area: $body in $area",body.left>=area.left*density-1 && body.top>=area.top*density-1 && body.right<=area.right*density+1 && body.bottom<=area.bottom*density+1)
+            }
+            if(shared().objectOrNull("${kind}_calibration") != null) {
+                tap("pen-$kind-close")
+                host.awaitFrame("$kind calibration closes") { shared().objectOrNull("${kind}_calibration") == null }
+            }
+            if(host.snapshot?.objectOrNull("preferences") != null)host.drain(obj("type" to "close_settings"))
+        }
+        var database: android.database.sqlite.SQLiteDatabase? = null
+        try {
+            state("workspace-save-status") {
+                assertNotEquals(android.os.Looper.getMainLooper().thread,Thread.currentThread())
+                val path = AppStorage.of(instrumentation.targetContext).workspaces.resolve("workspaces.sqlite3")
+                assertTrue("The injected failure belongs to this private test",path.canonicalPath.startsWith(device.root.canonicalPath+File.separator))
+                assertTrue("The private workspace store exists",path.isFile)
+                database = android.database.sqlite.SQLiteDatabase.openDatabase(path.absolutePath,null,android.database.sqlite.SQLiteDatabase.OPEN_READWRITE or android.database.sqlite.SQLiteDatabase.NO_LOCALIZED_COLLATORS)
+                database!!.execSQL("CREATE TRIGGER a2_fail_editing BEFORE INSERT ON editing WHEN NEW.id=1 BEGIN SELECT RAISE(ABORT,'owned workspace write failure'); END;")
+                host.drain(obj("type" to "set_brush_size","value" to 83))
+                host.awaitFrame("Owned workspace write failure is presented") { host.workspaceManager?.objectOrNull("status")?.optBoolean("error") == true && findTag("workspace-status") != null }
+                compose.waitForIdle()
+                val body = checkNotNull(findTag("workspace-status")).second.boundsInRoot
+                val notice = host.snapshot!!.getJSONObject("layout").getJSONObject("notice")
+                val density = activity.resources.displayMetrics.density
+                val placed = JSONObject(Native.dialogUi(obj("kind" to "notice_above","notice" to notice,"bar" to host.workspaceInteraction?.canvasBarSlot?.let { obj("x" to it.left/density,"y" to it.top/density,"width" to it.width/density,"height" to it.height/density) }).toString()))
+                assertEquals("Status uses the shared bottom anchor",placed.number("y")*density,body.bottom,1f)
+                assertEquals("Status uses the shared horizontal anchor",notice.number("x")*density,body.center.x,1f)
+                assertTrue("Status respects the shared maximum width",body.width<=notice.number("max_width")*density+1)
+                assertEquals("The phone failure has one persistent presenter",false,host.workspaceInteraction?.popupOpen)
+                assertNotNull("Retry is available",findTag("workspace-status-retry"))
+                assertNotNull("Save as New is available",findTag("workspace-status-action"))
+                host.drain(obj("type" to "layer","action" to obj("op" to "new_vector")))
+                val pencil = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }.first { it.getString("label") == "Pencil" }.getLong("id")
+                host.drain(obj("type" to "select_brush","id" to pencil));host.awaitReady(180_000,compose)
+                val surface = checkNotNull(activity.window.decorView.descendant<CanvasSurfaceView>())
+                val start = SystemClock.uptimeMillis()
+                for ((phase,x) in listOf(MotionEvent.ACTION_DOWN to .4f,MotionEvent.ACTION_MOVE to .6f,MotionEvent.ACTION_UP to .6f)) {
+                    val input = motion(MotionEvent.TOOL_TYPE_MOUSE,phase,Offset(surface.width*x,surface.height*.5f),start)
+                    try { instrumentation.runOnMainSync { surface.dispatchTouchEvent(input) } } finally { input.recycle() }
+                }
+                host.awaitFrame("Timed notice and persistent status coexist") { host.notice?.id != null && host.workspaceInteraction?.noticeBounds != null && findTag("workspace-status") != null }
+                compose.waitForIdle()
+                val bubble = checkNotNull(host.workspaceInteraction?.noticeBounds)
+                val status = checkNotNull(findTag("workspace-status")).second.boundsInRoot
+                assertTrue("Persistent status does not overlap its timed notice",status.bottom < bubble.top)
+                val expected = JSONObject(Native.dialogUi(obj("kind" to "notice_above","notice" to notice,
+                    "bar" to host.workspaceInteraction?.canvasBarSlot?.let { obj("x" to it.left/density,"y" to it.top/density,"width" to it.width/density,"height" to it.height/density) },
+                    "bubble" to obj("x" to bubble.left/density,"y" to bubble.top/density,"width" to bubble.width/density,"height" to bubble.height/density)).toString()))
+                assertEquals("Status clears both native surfaces through the shared placement",expected.number("y")*density,status.bottom,1f)
+            }
+        } finally {
+            database?.let { try { it.execSQL("DROP TRIGGER IF EXISTS a2_fail_editing") } finally { it.close() } }
+        }
+        if(host.workspaceManager?.objectOrNull("status")?.optBoolean("error") == true) {
+            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "retry")) }
+            host.awaitFrame("The owned failure recovers after Retry") { host.workspaceManager?.objectOrNull("status")?.optBoolean("error") != true }
+        }
+    }
+
+    private fun visitCustomize(activity: MainActivity,host: CanvasHost,event: (Int,Offset) -> Unit,tap: (String) -> Unit,state: (String,() -> Unit) -> Unit) {
+        fun shared() = host.snapshot!!.getJSONObject("state")
+        fun layout() = shared().getJSONObject("workspace").getJSONObject("layout")
+        fun tiles() = layout().array("phone").objects()
+        fun history() = JSONObject(runBlocking { host.withNative { Native.workspace(it,obj("type" to "capture").toString()) } }).getJSONObject("history")
+        fun invoke(command: String) = host.drain(obj("type" to "invoke","command" to command))
+        fun allocatedTools() {
+            compose.waitForIdle()
+            host.awaitFrame("Phone contacts and allocations match the published toolbar") {
+                val dock = host.workspaceInteraction ?: return@awaitFrame false
+                val input = dock.phone ?: return@awaitFrame false
+                val phone = host.snapshot!!.getJSONObject("layout").getJSONObject("phone")
+                val density = activity.resources.displayMetrics.density
+                dock.enabled && !dock.popupOpen && input.tiles.toString() == layout().array("phone").toString() && input.layout.toString() == phone.toString() &&
+                    tiles().withIndex().all { (index,tile) ->
+                        findTag("phone-tool-${tile.getInt("id")}")?.second?.let { node ->
+                            val target = phone.array("tools").getJSONObject(index)
+                            node.layoutInfo.isPlaced && kotlin.math.abs(node.boundsInRoot.left-dock.origin.x-target.number("x")*density)<=1f &&
+                                kotlin.math.abs(node.boundsInRoot.top-dock.origin.y-target.number("y")*density)<=1f
+                        } == true
+                    }
+            }
+        }
+        fun point(tag: String): Offset {
+            compose.waitForIdle()
+            val (view,node) = checkNotNull(findTag(tag)) { tag }
+            val origin = IntArray(2);instrumentation.runOnMainSync { view.view.getLocationOnScreen(origin) }
+            return node.boundsInRoot.center+Offset(origin[0].toFloat(),origin[1].toFloat())
+        }
+        fun hold(tile: Int?) {
+            allocatedTools()
+            val at = if(tile != null)point("phone-tool-$tile") else {
+                val phone = host.snapshot!!.getJSONObject("layout").getJSONObject("phone")
+                val excluded = phone.array("tool_hits").objects()+phone.array("controls").objects()+listOf("capy_hit","settings_hit","size","strength").map { phone.getJSONObject(it) }
+                val empty = phone.array("bars").objects().asSequence().flatMap { bar ->
+                    (bar.number("y").toInt() until (bar.number("y")+bar.number("height")).toInt()).asSequence().flatMap { y ->
+                        (bar.number("x").toInt() until (bar.number("x")+bar.number("width")).toInt()).asSequence().map { x -> Offset(x+.5f,y+.5f) }
+                    }
+                }.first { p -> phone.array("bars").objects().any { it.rect().contains(p) } && excluded.none { it.rect().contains(p) } }
+                val root = checkNotNull(findTag("workspace")).first.view
+                val origin = IntArray(2);instrumentation.runOnMainSync { root.getLocationOnScreen(origin) }
+                empty*instrumentation.targetContext.resources.displayMetrics.density+Offset(origin[0].toFloat(),origin[1].toFloat())
+            }
+            event(MotionEvent.ACTION_DOWN,at)
+            host.awaitFrame("Hold arms native pickup without opening a menu",diagnostics = {
+                val dock = host.workspaceInteraction
+                "at=$at; enabled=${dock?.enabled}; popup=${dock?.popupOpen}; windowFocus=${activity.hasWindowFocus()}; contact=${dock?.phone?.contact != null}; outcome=${dock?.phone?.preview?.opt("outcome")}"
+            }) { host.workspaceInteraction?.phone?.held == true }
+            assertNull("The editing menu opens on release",findTag("workspace-menu"))
+            event(MotionEvent.ACTION_UP,at)
+            host.awaitFrame("Hold release opens the editing menu") { findTag("workspace-menu") != null }
+            compose.waitForIdle()
+            val presentation = checkNotNull(host.workspaceInteraction?.contextPresentation)
+            assertEquals("contact",presentation.getString("anchor"))
+            assertTrue(presentation.getBoolean("has_arrow"))
+        }
+        fun menuLabel(label: String) {
+            val (root,menu) = checkNotNull(findTag("workspace-menu"))
+            val text = checkNotNull(menu.find { it.config.getOrNull(SemanticsProperties.Text)?.any { value -> value.text == label } == true }) { label }
+            val origin = IntArray(2);instrumentation.runOnMainSync { root.view.getLocationOnScreen(origin) }
+            val point = text.boundsInRoot.center+Offset(origin[0].toFloat(),origin[1].toFloat())
+            event(MotionEvent.ACTION_DOWN,point);event(MotionEvent.ACTION_UP,point);host.drain();compose.waitForIdle()
+        }
+        fun picker(): JSONObject {
+            host.awaitFrame("ToolPicker is presented") { host.snapshot?.objectOrNull("picker") != null && findTag("tool-picker-search") != null }
+            compose.waitForIdle()
+            return host.snapshot!!.getJSONObject("picker")
+        }
+        fun settlePicker() {
+            picker()
+            val decor = activity.window.decorView
+            instrumentation.runOnMainSync { decor.windowInsetsController?.hide(WindowInsets.Type.ime()) }
+            host.awaitFrame("Keyboard-free reference fixture hides IME") { !decor.rootWindowInsets.isVisible(WindowInsets.Type.ime()) }
+            awaitEditorPage(activity,host,"tool-picker")
+            compose.waitForIdle()
+        }
+        fun select(count: Int) {
+            val choices = picker().array("choices").objects().filter { it.getJSONObject("control").getString("kind") != "divider" }.take(count)
+            assertEquals(count,choices.size)
+            choices.forEach { choice ->
+                val tag = "tool-picker-choice-${choice.getString("label")}"
+                compose.onNodeWithTag(tag,useUnmergedTree = true).performScrollTo();tap(tag)
+            }
+            assertEquals(count,picker().getInt("selected_count"))
+        }
+        fun confirm() {
+            tap("tool-picker-confirm")
+            host.awaitFrame("ToolPicker closes after confirmation") { host.snapshot?.objectOrNull("picker") == null && findTag("tool-picker") == null }
+        }
+        workspace(host,"painter")
+        val before = jsonValue(layout())
+        val removed = tiles().first().getInt("id")
+        hold(removed);state("customize-tile-menu") {}
+        val removeLabel = host.workspaceInteraction!!.contextMenu!!.array("sections").values().flatMap { (it as JSONArray).objects() }
+            .first { it.objectOrNull("action")?.objectOrNull("action")?.optString("kind") == "remove_tool" }.getString("label")
+        menuLabel(removeLabel)
+        host.awaitFrame("Remove Tool changes the phone toolbar") { tiles().none { it.getInt("id") == removed } }
+        val afterRemove = jsonValue(layout())
+        invoke("undo_workspace");assertEquals(before,jsonValue(layout()))
+        invoke("redo_workspace");assertEquals(afterRemove,jsonValue(layout()))
+        val anchor = tiles().first().getInt("id")
+        fun insert() {
+            hold(anchor)
+            val label = host.workspaceInteraction!!.contextMenu!!.array("sections").values().flatMap { (it as JSONArray).objects() }
+                .first { it.objectOrNull("action")?.objectOrNull("action")?.optString("kind") == "insert_tools" }.getString("label")
+            menuLabel(label);settlePicker()
+        }
+        insert();select(2);state("customize-insert-two") {};confirm()
+        assertEquals(anchor,tiles()[2].getInt("id"))
+        insert();select(1);confirm()
+        assertEquals(10,tiles().count { it.getJSONObject("control").getString("kind") != "divider" })
+        hold(null)
+        menuLabel(host.workspaceInteraction!!.contextMenu!!.array("sections").getJSONArray(0).getJSONObject(0).getString("label"))
+        settlePicker()
+        val capacity = picker()
+        assertFalse(capacity.getBoolean("can_confirm"))
+        val disabled = capacity.array("disabled").values().map { it.toString() }.toSet()
+        capacity.array("choices").objects().forEach { choice ->
+            val row = checkNotNull(findTag("tool-picker-choice-${choice.getString("label")}")).second
+            assertEquals("Native capacity row follows shared availability",choice.getJSONObject("control").toString() in disabled,
+                row.config.getOrNull(SemanticsProperties.Disabled) != null)
+        }
+        state("customize-capacity") {}
+        val divider = capacity.array("choices").objects().first { it.getJSONObject("control").getString("kind") == "divider" }
+        val tag = "tool-picker-choice-${divider.getString("label")}"
+        compose.onNodeWithTag(tag,useUnmergedTree = true).performScrollTo();tap(tag)
+        assertTrue(picker().getBoolean("can_confirm"));state("customize-capacity-divider") {}
+        pressKey(KeyEvent.KEYCODE_ESCAPE)
+        host.awaitFrame("Capacity picker cancels") { host.snapshot?.objectOrNull("picker") == null && findTag("tool-picker") == null }
+        state("frame-ten-tools") {}
+        val beforeMove = jsonValue(layout())
+        val first = tiles()[0].getInt("id")
+        val from = point("phone-tool-$first")
+        val to = point("phone-tool-${tiles()[2].getInt("id")}")+if(host.snapshot!!.getJSONObject("layout").getJSONObject("phone").getString("edge") == "top")Offset(1f,0f) else Offset(0f,1f)
+        event(MotionEvent.ACTION_DOWN,from)
+        host.awaitFrame("Reorder pickup is armed") { host.workspaceInteraction?.phone?.held == true }
+        event(MotionEvent.ACTION_MOVE,to);state("customize-reorder-held") {}
+        event(MotionEvent.ACTION_UP,to);host.drain()
+        host.awaitFrame("Reorder moves the first tile after two peers") { tiles()[2].getInt("id") == first }
+        invoke("undo_workspace");assertEquals(beforeMove,jsonValue(layout()))
+        var offbarDown = false
+        state("customize-offbar-cancelled") {
+            allocatedTools()
+            event(MotionEvent.ACTION_DOWN,from);offbarDown = true
+            host.awaitFrame("Off-bar pickup is armed",diagnostics = {
+                val dock = host.workspaceInteraction
+                "at=$from; enabled=${dock?.enabled}; popup=${dock?.popupOpen}; windowFocus=${activity.hasWindowFocus()}; contact=${dock?.phone?.contact != null}; outcome=${dock?.phone?.preview?.opt("outcome")}"
+            }) { host.workspaceInteraction?.phone?.held == true }
+            val outside = checkNotNull(findTag("workspace")).second.boundsInRoot.center
+            event(MotionEvent.ACTION_MOVE,outside);event(MotionEvent.ACTION_UP,outside);offbarDown = false;host.drain()
+            assertEquals("Off-bar release preserves the layout",beforeMove,jsonValue(layout()))
+        }
+        if(offbarDown)event(MotionEvent.ACTION_CANCEL,from)
+        val workspace = JSONObject(shared().getJSONObject("workspace").toString())
+        workspace.getJSONObject("layout").put("phone",JSONArray())
+        host.drain(obj("type" to "restore_workspace","workspace" to workspace))
+        state("frame-empty-tools") {}
+        hold(null);state("customize-empty-toolbar") {}
+        menuLabel(host.workspaceInteraction!!.contextMenu!!.array("sections").getJSONArray(0).getJSONObject(0).getString("label"));settlePicker()
+        pressKey(KeyEvent.KEYCODE_ESCAPE)
+        host.awaitFrame("Empty-toolbar picker cancels") { host.snapshot?.objectOrNull("picker") == null && findTag("tool-picker") == null }
+        val empty = jsonValue(layout())
+        val prior = history()
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "form","action" to obj("type" to "reset","value" to host.workspaceManager!!.getString("id")))) }
+        host.awaitFrame("Phone restore confirmation") { findTag("workspace-form") != null }
+        state("customize-phone-restore-confirm") {}
+        tap("workspace-submit")
+        host.awaitFrame("Phone restore completes") { host.workspaceManager?.objectOrNull("prompt") == null && host.workspaceManager?.optBoolean("busy") == false && tiles().isNotEmpty() }
+        val restored = jsonValue(layout())
+        assertEquals("Restore appends one workspace edit",prior.array("undo").length()+1,history().array("undo").length())
+        assertNotEquals(empty,restored)
+        invoke("undo_workspace");assertEquals(empty,jsonValue(layout()))
+        invoke("redo_workspace");assertEquals(restored,jsonValue(layout()))
+        state("customize-phone-restored") {}
     }
 
     private fun visitMenu(activity: MainActivity, host: CanvasHost, event: (Int, Offset) -> Unit, tap: (String) -> Unit,

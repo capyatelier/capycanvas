@@ -112,6 +112,7 @@ internal class Palette(val dark: Boolean, private val source: org.json.JSONObjec
     val text = role("text")
     val secondary = text.copy(alpha = .55f)
     val accent = role("accent")
+    val error = role("error")
     val relationship = role("relationship")
     val accentForeground = role("accent_foreground")
     val sliderFill = lerp(panel, text, .5f)

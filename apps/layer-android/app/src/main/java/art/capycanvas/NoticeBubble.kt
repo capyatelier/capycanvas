@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -18,6 +19,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
@@ -33,7 +36,6 @@ import org.json.JSONObject
 import kotlin.math.roundToInt
 
 private const val NoticeTimeoutMs = 4_000L
-private val NoticeMargin = 12.dp
 private val RowTextPadding = 6.dp
 private val StackedTextTop = 10.dp
 private val StackedTextBottom = 2.dp
@@ -54,6 +56,7 @@ internal data class CanvasNotice(val id: Long?, val name: String, val text: Stri
 @OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun NoticeBubble(host: CanvasHost, dock: DockInteraction, placement: JSONObject) {
     val notice = host.notice ?: return
+    DisposableEffect(dock) { onDispose { dock.noticeBounds = null } }
     val current by rememberUpdatedState(notice)
     LaunchedEffect(notice.id ?: notice) {
         delay(NoticeTimeoutMs)
@@ -65,10 +68,10 @@ internal data class CanvasNotice(val id: Long?, val name: String, val text: Stri
     val gap = tiles.number("gap").dp
     val control = panelMetrics().height
     Box(Modifier.zIndex(250f).layout { measurable, constraints ->
-        val x = placement.number("x") * density
-        val anchor = placement.number("y") * density
-        val bar = dock.canvasBarSlot?.takeIf { it.bottom > placement.number("bar_floor") * density }
-        val bottom = minOf(anchor, bar?.let { it.top - NoticeMargin.toPx() } ?: anchor)
+        val placed = JSONObject(Native.dialogUi(obj("kind" to "notice_above","notice" to placement,
+            "bar" to dock.canvasBarSlot?.let { obj("x" to it.left/density,"y" to it.top/density,"width" to it.width/density,"height" to it.height/density) }).toString()))
+        val x = placed.number("x")*density
+        val bottom = placed.number("y")*density
         val bubble = measurable.measure(Constraints(maxWidth = (placement.number("max_width") * density).roundToInt().coerceAtLeast(0)))
         layout(constraints.maxWidth, constraints.maxHeight) {
             bubble.place((x - bubble.width / 2f).roundToInt(), (bottom - bubble.height).roundToInt())
@@ -76,7 +79,7 @@ internal data class CanvasNotice(val id: Long?, val name: String, val text: Stri
     }.chromeRegion(dock).testTag("canvas-notice").semantics { liveRegion = LiveRegionMode.Polite; paneTitle = notice.name }
         .panelSurface(BarElevation, SurfaceShape).glass(SurfaceShape)) {
         CompositionLocalProvider(LocalPalette provides colors.onGlass) {
-            Surface(color = colors.onGlass.panelFill, contentColor = colors.text) {
+            Surface(Modifier.onGloballyPositioned { dock.noticeBounds = it.boundsInRoot().translate(-dock.origin) },color = colors.onGlass.panelFill, contentColor = colors.text) {
                 Layout({
                     Text(notice.text, Modifier.testTag("canvas-notice-text"))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(gap, Alignment.End)) {

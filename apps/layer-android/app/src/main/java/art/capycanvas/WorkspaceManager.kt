@@ -22,9 +22,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -110,7 +116,16 @@ import org.json.JSONArray
         var choice by remember(action.toString()) { mutableStateOf(form.optString("selected").takeUnless { form.isNull("selected") }) }
         val nameError = if (!named) null else remember(name, host.languageTag) { JSONObject(Native.workspaceNameError(name, host.languageTag)).let { it.optString("error").takeUnless { _ -> it.isNull("error") } } }
         val title = form.getString("title")
-        AlertDialog(onDismissRequest = cancel, modifier = Modifier.testTag("workspace-form"), title = { Text(title) }, text = {
+        val submit = { host.workspaceInput(obj("type" to "submit", "name" to name, "description" to description.takeUnless { form.isNull("description") }, "choice" to choice)) }
+        if (action.getString("type") == "reset") DialogShell(host,form.getJSONObject("dialog"),title,onCancel = cancel,tag = "workspace-form",
+            responses = listOf(
+                DialogResponse(form.nullableString("cancel") ?: host.bootstrap!!.getJSONObject("common").getString("cancel"),"workspace-reset-cancel",action = cancel),
+                DialogResponse(form.getString("confirm"),"workspace-submit",accent = true,enabled = !busy,action = submit)),
+            body = { padding -> Column(Modifier.padding(padding),verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(form.getString("message"))
+                error?.let { Text(it,color = MaterialTheme.colorScheme.error) }
+            } })
+        else AlertDialog(onDismissRequest = cancel, modifier = Modifier.testTag("workspace-form"), title = { Text(title) }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 form.getString("message").takeIf { it.isNotEmpty() }?.let { Text(it) }
                 if (named) CoreTextField(name, { name = it }, Modifier.fillMaxWidth().testTag("workspace-name"), label = { Text(host.bootstrap!!.getJSONObject("common").getString("name")) }, background = LocalPalette.current.dialogField)
@@ -119,14 +134,14 @@ import org.json.JSONArray
                 if (nameError != null || error != null) Text(nameError ?: error.orEmpty(), color = MaterialTheme.colorScheme.error)
             }
         }, dismissButton = { TextButton(cancel) { Text(form.optString("cancel").takeUnless {form.isNull("cancel")} ?: host.bootstrap!!.getJSONObject("common").getString("cancel")) } }, confirmButton = {
-            TextButton({ host.workspaceInput(obj("type" to "submit", "name" to name, "description" to description.takeUnless { form.isNull("description") }, "choice" to choice)) }, enabled = !busy && nameError == null,
+            TextButton(submit, enabled = !busy && nameError == null,
                 modifier = Modifier.testTag("workspace-submit")) { Text(if (view.optBoolean("retry") && action.getString("type") != "save_as_new") copy.getString("retry") else form.getString("confirm"),
                 color = if (form.optBoolean("destructive")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
         })
     }
     var dismissedError by remember { mutableStateOf<String?>(null) }
     if (error == null) dismissedError = null
-    if (error != null && page == null && form == null && error != dismissedError) AlertDialog(
+    if (host.snapshot?.getJSONObject("layout")?.objectOrNull("phone") == null && error != null && page == null && form == null && error != dismissedError) AlertDialog(
         onDismissRequest = { dismissedError = error; send("resume") }, title = { Text(copy.getString("workspaces")) }, text = { Text(error) },
         dismissButton = { TextButton({ dismissedError = error; send("resume") }) { Text(host.bootstrap!!.getJSONObject("common").getString("keep_open")) } }, confirmButton = {
             Column {
@@ -137,6 +152,47 @@ import org.json.JSONArray
 }
 
 internal fun workspaceSwitcherMenu(view: JSONObject?): JSONObject = view?.optJSONObject("switcher_menu") ?: obj("sections" to JSONArray())
+
+@Composable internal fun WorkspaceStatus(host: CanvasHost,dock: DockInteraction,notice: JSONObject) {
+    val status = host.workspaceManager?.objectOrNull("status") ?: return
+    val colors = LocalPalette.current
+    val copy = host.catalog.getJSONObject("native_copy").getJSONObject("header")
+    Surface(Modifier.zIndex(250f).layout { measurable,constraints ->
+        fun bounds(rect: androidx.compose.ui.geometry.Rect?) = rect?.let { obj("x" to it.left/density,"y" to it.top/density,"width" to it.width/density,"height" to it.height/density) }
+        val placed = JSONObject(Native.dialogUi(obj("kind" to "notice_above","notice" to notice,
+            "bar" to bounds(dock.canvasBarSlot),"bubble" to bounds(dock.noticeBounds)).toString()))
+        val child = measurable.measure(Constraints(maxWidth = (placed.number("max_width")*density).roundToInt().coerceAtLeast(0)))
+        layout(constraints.maxWidth,constraints.maxHeight) {
+            child.place((placed.number("x")*density-child.width/2f).roundToInt(),(placed.number("y")*density-child.height).roundToInt())
+        }
+    }.testTag("workspace-status").chromeRegion(dock).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite },
+        shape = SurfaceShape,color = colors.surround,contentColor = if(status.getBoolean("error"))colors.error else colors.text) {
+        Layout(modifier = Modifier.padding(vertical = 6.dp),content = {
+            Text(status.getString("text"),Modifier.testTag("workspace-status-text"))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp),modifier = Modifier.testTag("workspace-status-actions")) {
+                if (status.getBoolean("retry")) DialogButton(copy.getString("retry"),"workspace-status-retry",multiline = true) { host.workspaceInput(obj("type" to "retry")) }
+                status.objectOrNull("action")?.let { action -> DialogButton(action.getString("label"),"workspace-status-action",enabled = action.getBoolean("enabled"),multiline = true) {
+                    host.workspaceInput(obj("type" to "form","action" to action.getJSONObject("action")))
+                } }
+            }
+        }) { (text,actions),constraints ->
+            val gap = 8.dp.roundToPx()
+            val natural = text.maxIntrinsicWidth(Int.MAX_VALUE)
+            val offers = actions.maxIntrinsicWidth(Int.MAX_VALUE)
+            val beside = toolbarUi(host.languageTag,obj("type" to "notice_layout","text" to natural,"content" to constraints.maxWidth,
+                "actions" to offers,"gap" to gap,"min_text_width" to notice.number("min_text_width")*density)).getBoolean("beside")
+            val buttons = actions.measure(Constraints(maxWidth = minOf(offers,constraints.maxWidth)))
+            val label = text.measure(Constraints(maxWidth = (constraints.maxWidth-if(beside && buttons.width>0)buttons.width+gap else 0).coerceAtLeast(0)))
+            val width = if(beside)label.width+buttons.width+(if(buttons.width>0)gap else 0) else maxOf(label.width,buttons.width)
+            val lines = if(buttons.height>0)6.dp.roundToPx() else 0
+            val height = if(beside)maxOf(label.height,buttons.height) else label.height+lines+buttons.height
+            layout(width,height) {
+                label.placeRelative(0,if(beside)(height-label.height)/2 else 0)
+                buttons.placeRelative(width-buttons.width,if(beside)(height-buttons.height)/2 else label.height+lines)
+            }
+        }
+    }
+}
 
 @Composable internal fun WorkspaceSwitcher(host: CanvasHost, modifier: Modifier = Modifier, interactive: Boolean = true, options: () -> Unit) {
     val view = host.workspaceManager ?: return

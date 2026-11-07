@@ -680,6 +680,10 @@ class AndroidTitleBarTest {
         SystemClock.sleep(250)
         drag("header-component-tools", center())
         waitFor("picker") { node("tool-picker-search") != null }
+        tapOutsideDialog(scenario.activity(),"tool-picker-search")
+        waitFor("Outside contact cancels ToolPicker") { host.snapshot?.objectOrNull("picker") == null && node("tool-picker-search") == null }
+        drag("header-component-tools",center())
+        waitFor("ToolPicker reopens after outside cancellation") { node("tool-picker-search") != null }
         action(obj("type" to "customize", "action" to obj("type" to "picker_search", "query" to "Brush color")))
         waitFor("Color choice") { node("tool-picker-choice-Brush color") != null }
         tap("tool-picker-choice-Brush color"); tap("tool-picker-confirm")

@@ -36,10 +36,18 @@ pub fn phone_ui(source: &str) -> Result<serde_json::Value, String> {
 pub type CommandSearchPlacement = Bounds;
 impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
     pub fn command_search_placement(&self, viewport: [f32; 2]) -> CommandSearchPlacement {
-        let visible = Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] };
+        self.command_search_placement_in(viewport, Bounds { x: 0., y: 0., width: viewport[0], height: viewport[1] })
+    }
+    pub fn command_search_placement_in(&self, viewport: [f32; 2], visible: Bounds) -> CommandSearchPlacement {
         let phone = self.phone_layout();
         let area = phone.as_ref().and_then(|phone| phone.work_area.intersection(visible)).unwrap_or(visible);
-        crate::COMMAND_SEARCH_STYLE.placement(viewport, area, phone.is_some())
+        if phone.is_some() { crate::COMMAND_SEARCH_STYLE.placement(viewport, area, true) }
+        else {
+            let mut placement = crate::COMMAND_SEARCH_STYLE.placement([visible.width,visible.height],visible,false);
+            placement.x += visible.x;
+            placement.y += visible.y;
+            placement
+        }
     }
 }
 

@@ -13,6 +13,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -224,13 +227,14 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
         }
         PhoneTile(host, dock, input, snapshot.getJSONObject("phone_settings"), layout.getJSONObject("settings"), layout.getJSONObject("settings_hit"),
             "phone-tool-settings", obj("kind" to "tool_settings"), null, obj("kind" to "tool_settings"), layout.number("icon"))
+        val capyFocus = remember { FocusRequester() }
         val capy = snapshot.getJSONObject("header").getJSONObject("capy")
         val source = (dock.drawerSources["menu"] ?: dock.drawerSources["tool"])?.takeIf { it.anchor?.optString("kind") == "phone" && it.anchor.objectOrNull("anchor")?.optString("kind") == "capy" }
         val rect = layout.getJSONObject("capy"); val hit = layout.getJSONObject("capy_target")
         Box(Modifier.placedAbsolute(hit, density).chromeRegion(dock).testTag("phone-capy-target"), contentAlignment = androidx.compose.ui.AbsoluteAlignment.TopLeft) {
             key(host.phoneContactEpoch) {
             HeaderButton(snapshot.getString("capy_caption"), false, true, source != null,
-                Modifier.fillMaxSize().testTag("phone-capy"), inBar = true, shape = drawerButtonShape(source?.direction),
+                Modifier.fillMaxSize().phoneFocus(host,capyFocus).testTag("phone-capy"), inBar = true, shape = drawerButtonShape(source?.direction),
                 face = Modifier.placedAbsolute(rect.copy().put("x", rect.number("x") - hit.number("x")).put("y", rect.number("y") - hit.number("y")), density),
                 onClick = { input.click(obj("kind" to "capy")) }) {
                 SharedIcon(capy.getString("icon"), null, Modifier.size(layout.number("capy_icon").dp))
@@ -257,6 +261,7 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
     icon: Float, divider: Boolean = false, lifted: Boolean = false) {
     if (hit.number("width") <= 0 || hit.number("height") <= 0) return
     val density = LocalDensity.current.density
+    val focus = remember { FocusRequester() }
     val opened = host.snapshot?.getJSONObject("state")?.getJSONObject("customization")?.objectOrNull("drawer")?.objectOrNull("anchor")
         ?.takeIf { it.optString("kind") == "phone" }?.getJSONObject("anchor")?.toString() == anchor.toString()
     Box(Modifier.placedAbsolute(hit, density).zIndex(if (lifted) 1f else 0f).chromeRegion(dock)
@@ -264,7 +269,7 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
         val face = Modifier.placedAbsolute(visual.copy().put("x", visual.number("x") - hit.number("x")).put("y", visual.number("y") - hit.number("y")), density).testTag(tag)
         if (divider) ToolbarDivider(face, horizontal = input.layout.getString("edge") != "top", length = null)
         else key(host.phoneContactEpoch) { HeaderButton(view.getString("tooltip"), view.optBoolean("selected"), view.optBoolean("enabled") || view.optBoolean("has_variants"), opened,
-            Modifier.fillMaxSize().semantics { selected = view.optBoolean("selected") }.testTag("$tag-hit"), inBar = true, face = face,
+            Modifier.fillMaxSize().phoneFocus(host,focus).semantics { selected = view.optBoolean("selected") }.testTag("$tag-hit"), inBar = true, face = face,
             reason = view.nullableString("disabled_reason"),
             onDoubleClick = if (view.optBoolean("double_click")) ({ host.dispatch(obj("type" to "double_click_tool", "control" to view.getJSONObject("resolved_control"))) }) else null,
             onClick = { input.click(action) }) {
@@ -272,6 +277,11 @@ internal class PhoneInteraction(val host: CanvasHost, val dock: DockInteraction,
             if (view.optBoolean("has_variants")) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) { ToolGroupIndicator() }
         } }
     }
+}
+
+private fun Modifier.phoneFocus(host: CanvasHost,focus: FocusRequester) = focusRequester(focus).onFocusChanged {
+    if(it.isFocused)host.workspaceOpener = focus
+    else if(host.workspaceOpener === focus)host.workspaceOpener = null
 }
 
 @Composable private fun PhoneMetrics(host: CanvasHost, state: JSONObject) {

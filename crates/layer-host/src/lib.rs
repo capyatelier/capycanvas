@@ -897,7 +897,7 @@ impl NativeHost {
             Drawer { #[serde(flatten)] query: layer_ui::DrawerFrameQuery },
             DrawerMeasure { column: Option<u32>, #[serde(default)] tiles: Vec<layer_ui::DrawerTileMeasurement> },
             LayerDrawerSizing { measurement: layer_ui::PanelScrollMeasurement, properties_height: f32, column: Option<u32> },
-            CommandSearchPlacement,
+            CommandSearchPlacement { visible: Option<layer_ui::Bounds> },
             DialogPresentation { role: layer_ui::DialogRole, visible: layer_ui::Bounds },
             DialogBounds { role: layer_ui::DialogRole, visible: layer_ui::Bounds, measured: [f32; 2] },
             PreferencesLayout { width: f32, minimum: [f32; 2] },
@@ -1104,7 +1104,8 @@ impl NativeHost {
             }
             Query::DrawerMeasure { column, tiles } => self.session.drawer_measurement(self.logical, column, tiles)?,
             Query::LayerDrawerSizing { measurement, properties_height, column } => self.session.layer_drawer_sizing(self.logical, column, measurement, properties_height)?,
-            Query::CommandSearchPlacement => json!(self.session.command_search_placement(self.logical)),
+            Query::CommandSearchPlacement { visible } => json!(self.session.command_search_placement_in(self.logical,
+                visible.unwrap_or(layer_ui::Bounds { x:0.,y:0.,width:self.logical[0],height:self.logical[1] }))),
             Query::DialogPresentation { role, visible } => json!(self.session.state().dialog_presentation_in(role, self.logical, visible)),
             Query::DialogBounds { role, visible, measured } => json!(self.session.state().dialog_presentation_in(role, self.logical, visible).bounds(|| measured)),
             Query::PreferencesLayout { width, minimum } => json!(self.session.state().preferences_layout(self.logical, width, minimum)),
@@ -2695,6 +2696,17 @@ mod tests {
         assert!(response["error"].is_null());
         assert!(app.take_filter_preview_image().is_none());
         assert!(app.session.renderer_mut().0.is_none());
+    }
+    #[test]
+    fn command_search_uses_the_visible_tablet_extent_without_resizing_the_workspace() {
+        let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        host.resize(1280,800,1.).unwrap();
+        let full = host.query(json!({"type":"command_search_placement"})).unwrap();
+        assert_eq!(full["y"],160.);
+        let reduced = host.query(json!({"type":"command_search_placement","visible":{"x":0.,"y":0.,"width":1280.,"height":500.}})).unwrap();
+        assert_eq!(reduced["y"],100.);
+        assert_eq!(host.logical,[1280.,800.]);
+        assert!(host.session.phone_layout().is_none());
     }
     #[test]
     fn native_phone_queries_share_drawer_frames_and_dialog_geometry() {

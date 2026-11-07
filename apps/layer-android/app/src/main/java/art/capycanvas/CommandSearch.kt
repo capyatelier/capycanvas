@@ -34,6 +34,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
@@ -72,11 +74,7 @@ import org.json.JSONObject
         val value = parameter?.getJSONObject("parameter")?.getString("text") ?: view.optString("query")
         text = TextFieldValue(value, if (parameter != null) TextRange(0, value.length) else TextRange(value.length))
     }
-    LaunchedEffect(Unit) {
-        visible = true
-        focus.requestFocus()
-        if (configuration.keyboard == Configuration.KEYBOARD_NOKEYS) keyboard?.show()
-    }
+    LaunchedEffect(Unit) { visible = true }
     LaunchedEffect(selected, parameterId) { if (parameter == null && selected in results.indices) list.scrollToItem(selected) }
     Dialog(onDismissRequest = { back() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         val root = LocalView.current
@@ -88,13 +86,25 @@ import org.json.JSONObject
         }
         // A stable native window avoids a WindowManager resize for every result
         // count. Compose sizes only the visible card inside the IME-safe area.
-        BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+        BoxWithConstraints(Modifier.fillMaxSize().imePadding(),contentAlignment = androidx.compose.ui.AbsoluteAlignment.TopLeft) {
             Box(Modifier.matchParentSize().pointerInput(Unit) { detectTapGestures { close() } })
-            val top = if (configuration.screenWidthDp < 600) 16.dp else (maxHeight / 5).coerceIn(metric("top_min", 48), metric("top_max", 192))
-            val availableHeight = (maxHeight - top - 16.dp).coerceAtLeast(144.dp)
+            val phone = host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")
+            var placement by remember { mutableStateOf<JSONObject?>(null) }
+            LaunchedEffect(maxWidth,maxHeight,phone?.toString()) {
+                placement = host.awaitQuery(obj("type" to "command_search_placement",
+                    "visible" to obj("x" to 0,"y" to 0,"width" to maxWidth.value,"height" to maxHeight.value)))
+            }
+            val bounds = placement ?: return@BoxWithConstraints
+            val availableHeight = minOf(bounds.number("height").dp,(maxHeight-bounds.number("y").dp).coerceAtLeast(0.dp))
+            var placed by remember { mutableStateOf(false) }
+            LaunchedEffect(placed,bounds.toString()) {
+                if(!placed)return@LaunchedEffect
+                focus.requestFocus()
+                if (configuration.keyboard == Configuration.KEYBOARD_NOKEYS) keyboard?.show()
+            }
             Surface(color = colors.panelFill, shape = shape,
-                modifier = Modifier.align(Alignment.TopCenter).padding(start = 16.dp, end = 16.dp, top = top).widthIn(max = metric("width", 560))
-                    .fillMaxWidth().testTag("command-bar").graphicsLayer { alpha = progress; translationY = (1f - progress) * -4.dp.toPx() }
+                modifier = Modifier.onPlaced { placed = true }.absoluteOffset { IntOffset(bounds.number("x").dp.roundToPx(),bounds.number("y").dp.roundToPx()) }
+                    .width(bounds.number("width").dp).testTag("command-bar").graphicsLayer { alpha = progress; translationY = (1f - progress) * -4.dp.toPx() }
                     .panelShadow(12.dp, shape).glass(shape, rootOffset = { root.screenOffset(editor) })
                     .onPreviewKeyEvent { event ->
                         val native = event.nativeKeyEvent

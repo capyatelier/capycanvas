@@ -25,6 +25,12 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
@@ -64,7 +70,8 @@ internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = sus
  * items. They never reconstruct eligibility, naming, defaults or commands. */
 @Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, preserveContact: Boolean = false,
     focusable: Boolean = !preserveContact, command: ((JSONObject) -> Unit)? = null,
-    copy: (suspend () -> JSONObject?)? = null, showTitle: Boolean = true, maxHeight: Dp = Dp.Unspecified, dismiss: () -> Unit) {
+    copy: (suspend () -> JSONObject?)? = null, showTitle: Boolean = true, maxHeight: Dp = Dp.Unspecified,
+    presentation: JSONObject? = null,anchor: Rect? = null,dismiss: () -> Unit) {
     var projected by remember(menu) { mutableStateOf(menu) }
     val currentCopy by rememberUpdatedState(copy)
     var refresh by remember { mutableIntStateOf(0) }
@@ -74,15 +81,27 @@ internal suspend fun CanvasHost.menuCopy(request: JSONObject): JSONObject? = sus
         currentCopy?.invoke()?.let { if (host.languageTag == tag && host.menuEpoch() == epoch) projected = it }
     }
     val current = if (copy == null) menu else projected
+    var popup by remember { mutableStateOf(Offset.Zero) }
+    val scale = androidx.compose.ui.platform.LocalDensity.current.density
+    val shape: Shape = if(presentation?.optBoolean("has_arrow") == true && anchor != null) androidx.compose.foundation.shape.GenericShape { size,_ ->
+        val arrow = 8f*scale
+        val below = popup.y >= anchor.center.y
+        val tip = (anchor.center.x-popup.x).coerceIn(16f*scale,(size.width-16f*scale).coerceAtLeast(16f*scale))
+        addRoundRect(RoundRect(Rect(0f,if(below)arrow else 0f,size.width,if(below)size.height else size.height-arrow),CornerRadius(10f*scale)))
+        if(below) { moveTo(tip-6f*scale,arrow);lineTo(tip,0f);lineTo(tip+6f*scale,arrow) }
+        else { moveTo(tip-6f*scale,size.height-arrow);lineTo(tip,size.height);lineTo(tip+6f*scale,size.height-arrow) }
+        close()
+    } else RoundedCornerShape(10.dp)
     // A focusable Android popup cancels the contact in the activity that opened
     // it. Context menus must leave that contact with the original drag owner.
     BackHandler(!focusable, dismiss)
-    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).heightIn(max = maxHeight).testTag("workspace-menu").onPreviewKeyEvent { event ->
+    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).heightIn(max = maxHeight).testTag("workspace-menu")
+        .onGloballyPositioned { popup = it.localToScreen(Offset.Zero) }.onPreviewKeyEvent { event ->
             val key = event.nativeKeyEvent
             if (key.keyCode == KeyEvent.KEYCODE_ESCAPE) { if (key.action == KeyEvent.ACTION_DOWN) dismiss(); true } else false
         },
         properties = if (focusable) PopupProperties(focusable = true) else WindowlessMenu,
-        shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
+        shape = shape, containerColor = LocalPalette.current.panel) {
         if (!focusable) {
             val view = LocalView.current
             val currentDismiss by rememberUpdatedState(dismiss)

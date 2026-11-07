@@ -227,6 +227,11 @@ class AndroidDrawingTabsUiTest {
     }
     @Test fun dirtyCloseCancelAndActualSavePickerCancelPreserveDrawing() {
         val first = tabs().getLong("selected"); dirty(); val second = create()
+        closeTab(first)
+        assertAlertResponseOrder(host,"document-close-save")
+        tapOutsideDialog(activity,"document-close-save")
+        waitFor("Outside contact cancels Unsaved Changes") { point(tag("document-close-save")) == null };ready()
+        assertEquals(listOf(first,second),ids())
         closeTab(first); tap(tag("document-close-cancel")); ready()
         assertEquals(listOf(first, second), ids()); assertEquals(first, tabs().getLong("selected"))
         closeTab(first); tap(tag("document-close-save"))

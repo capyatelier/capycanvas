@@ -23,6 +23,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -44,15 +46,16 @@ import kotlin.math.roundToInt
     key(kind) {
         val colors = LocalPalette.current
         val density = LocalDensity.current.density
+        val phone = host.snapshot?.getJSONObject("layout")?.objectOrNull("phone")
         val metrics = panelMetrics()
         val current by rememberUpdatedState(view)
         val prefix = "pen-$kind"
         fun send(action: JSONObject, published: (() -> Unit)? = null) = host.dispatch(if (tilt != null)
             obj("type" to "tilt_calibration", "action" to obj("kind" to "panel", "action" to action))
             else obj("type" to "pressure_calibration", "action" to action), published = published)
-        BackHandler { send(obj("kind" to "cancel")) }
+        BackHandler(phone == null) { send(obj("kind" to "cancel")) }
         DisposableEffect(host) { onDispose { host.calibrationPenBounds = null; host.endCalibrationMotion() } }
-        BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
+        BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f),contentAlignment = if(phone != null)androidx.compose.ui.AbsoluteAlignment.TopLeft else Alignment.TopStart) {
             val viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
             val bounds = view.getJSONObject("bounds")
             var extent by remember { mutableStateOf(Offset.Zero) }
@@ -65,10 +68,21 @@ import kotlin.math.roundToInt
                 }
             }
             val fitted = extent.x > 0 && acceptedMeasurement == (extent to viewport.toString()) &&
-                kotlin.math.abs(bounds.number("width") - extent.x) < .5f && kotlin.math.abs(bounds.number("height") - extent.y) < .5f
+                (bounds.number("width")*density).roundToInt() == (extent.x*density).roundToInt() &&
+                (bounds.number("height")*density).roundToInt() == (extent.y*density).roundToInt()
             LaunchedEffect(fitted) { if (fitted) exposed = true }
-            Surface(Modifier.offset { IntOffset((bounds.number("x") * density).roundToInt(), (bounds.number("y") * density).roundToInt()) }
-                .width(maxOf(384.dp, bounds.number("width").dp).coerceAtMost(maxWidth)).heightIn(max = maxHeight)
+            val position: androidx.compose.ui.unit.Density.() -> IntOffset = { IntOffset((bounds.number("x") * density).roundToInt(), (bounds.number("y") * density).roundToInt()) }
+            Surface((if(phone != null)Modifier.absoluteOffset(position) else Modifier.offset(position))
+                .then(if(phone == null)Modifier.width(maxOf(384.dp, bounds.number("width").dp).coerceAtMost(maxWidth)).heightIn(max = maxHeight)
+                    else Modifier.layout { measurable,_ ->
+                        val area = phone.getJSONObject("work_area")
+                        fun fit(natural: List<Float>) = org.json.JSONTokener(Native.dialogUi(obj("kind" to "calibration_extent",
+                            "area" to JSONArray(listOf(area.number("width"),area.number("height"))),"natural" to JSONArray(natural)).toString())).nextValue() as JSONArray
+                        val width = fit(listOf(measurable.minIntrinsicWidth(Int.MAX_VALUE)/density,0f)).getDouble(0).toFloat()
+                        val extent = fit(listOf(width,measurable.maxIntrinsicHeight((width*density).roundToInt())/density))
+                        val child = measurable.measure(Constraints.fixed((extent.getDouble(0)*density).roundToInt(),(extent.getDouble(1)*density).roundToInt()))
+                        layout(child.width,child.height) { child.place(0,0) }
+                    })
                 .onSizeChanged { extent = Offset(it.width / density, it.height / density) }
                 .onGloballyPositioned { host.calibrationPenBounds = it.boundsInWindow() }
                 .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } }

@@ -548,15 +548,12 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             "repair_source_profile", "rasterize_source" -> if (!DocumentController.nativeFileJobsForTest) key(id) { SourceEditDialog(host, request) }
             "properties" -> key(id) { DocumentPropertiesDialog(host, { controller.cancel(id) }, { controller.appearance(id) }) }
             "change_color", "color_history" -> if (!DocumentController.nativeFileJobsForTest) key(id) { DocumentColorDialog(host, request) }
-            "confirm_close" -> AlertDialog(onDismissRequest = { controller.close(id, "cancel") }, title = { Text(document.getString("title")) },
-                text = { Text(options.getString("unsaved_description")) }, confirmButton = {
-                    TextButton({ controller.close(id, "save") }, Modifier.testTag("document-close-save")) { Text(common.getString("save")) }
-                }, dismissButton = {
-                    Row {
-                        TextButton({ controller.close(id, "cancel") }, Modifier.testTag("document-close-cancel")) { Text(common.getString("cancel")) }
-                        TextButton({ controller.close(id, "discard") }, Modifier.testTag("document-close-discard")) { Text(options.getString("discard_label")) }
-                    }
-                })
+            "confirm_close" -> DialogShell(host,options.getJSONObject("dialog"),document.getString("title"),onCancel = { controller.close(id,"cancel") },tag = "document-close",
+                responses = listOf(
+                    DialogResponse(common.getString("cancel"),"document-close-cancel") { controller.close(id,"cancel") },
+                    DialogResponse(options.getString("discard_label"),"document-close-discard") { controller.close(id,"discard") },
+                    DialogResponse(common.getString("save"),"document-close-save",accent = true) { controller.close(id,"save") }),
+                body = { padding -> Text(options.getString("unsaved_description"),Modifier.padding(padding)) })
         }
     }
 }

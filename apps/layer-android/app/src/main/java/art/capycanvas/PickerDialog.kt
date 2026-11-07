@@ -69,9 +69,9 @@ import androidx.compose.ui.window.DialogProperties
 @Composable internal fun DialogTitle(text: String, tag: String) =
     Text(text, Modifier.fillMaxWidth().testTag(tag), fontWeight = FontWeight.Bold, fontSize = 16.sp, textAlign = TextAlign.Center)
 
-@Composable internal fun DialogButton(label: String, tag: String, accent: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+@Composable internal fun DialogButton(label: String, tag: String, accent: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, multiline: Boolean = false, onClick: () -> Unit) {
     val colors = LocalPalette.current
-    Button(onClick, Modifier.height(34.dp).testTag(tag), enabled = enabled, shape = ControlShape, contentPadding = PaddingValues(horizontal = 16.dp),
+    Button(onClick, modifier.then(if(multiline)Modifier.heightIn(min = 34.dp) else Modifier.height(34.dp)).testTag(tag), enabled = enabled, shape = ControlShape, contentPadding = PaddingValues(horizontal = 16.dp),
         colors = if (accent) ButtonDefaults.buttonColors() else ButtonDefaults.buttonColors(containerColor = colors.button, contentColor = colors.text)) {
         Text(label, fontWeight = FontWeight.Medium)
     }

@@ -7,6 +7,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.CubicBezierEasing
@@ -251,8 +253,8 @@ private val HiddenChromeShape=object:Shape {
                     NewDrawingLayer(host)
                     PreferencesOverlay(host, snapshot?.objectOrNull("preferences"))
                     ResponseCalibration(host, state, state.objectOrNull("pressure_calibration"), state.objectOrNull("tilt_calibration"))
-                    if (snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") != null)
-                        ToolPicker(host, snapshot.getJSONObject("picker"))
+                    if (snapshot?.objectOrNull("preferences") == null)
+                        ToolPicker(host, snapshot?.objectOrNull("picker"))
                     if (snapshot?.objectOrNull("preferences") == null)
                         snapshot?.objectOrNull("toolbar_manager")?.let { ToolbarManager(host, it) }
                     if (snapshot?.objectOrNull("preferences") == null)
@@ -340,6 +342,7 @@ private val HiddenChromeShape=object:Shape {
     }
     BackHandler(phone == null && expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().clipToBounds().testTag("workspace")
+        .then(if (phone != null) Modifier.focusProperties { onEnter = { if(dock.popupOpen)cancelFocusChange() } }.focusRequester(host.workspaceFocus).focusGroup() else Modifier)
         .then(if (phone == null) Modifier.bubbleGestures(bubbles).headerGestures(header) else Modifier.phoneGestures(host, dock)).workspaceGestures(dock)
         .imageCanvasDropTarget(host) { point ->
             dock.chromeRegions.values.any { it.bounds.contains(point) } || dock.regions.values.any { it.bounds.contains(point) }
@@ -396,6 +399,7 @@ private val HiddenChromeShape=object:Shape {
             if (phone != null) PhoneMenu(host, snapshot, dock)
             CanvasBar(host, dock, IntSize(constraints.maxWidth, constraints.maxHeight))
             NoticeBubble(host, dock, layout.getJSONObject("notice"))
+            if (phone != null) WorkspaceStatus(host,dock,layout.getJSONObject("notice"))
             CanvasSizePanel(host, dock, layout.getJSONObject("work_area"), state)
             ImageSizePanel(host, dock, layout.getJSONObject("work_area"), state)
             val tools = state.getJSONObject("layer_tools")
@@ -428,9 +432,14 @@ private val HiddenChromeShape=object:Shape {
         PaletteDragOverlay(host, dock.origin)
         dock.contextMenu?.let { menu ->
             val anchor = dock.contextAnchor
-            Box(Modifier.offset { IntOffset(anchor.left.roundToInt(), anchor.top.roundToInt()) }
+            val screen = IntArray(2)
+            androidx.compose.ui.platform.LocalView.current.getLocationOnScreen(screen)
+            val screenAnchor = anchor.translate(dock.origin+Offset(screen[0].toFloat(),screen[1].toFloat()))
+            val position: androidx.compose.ui.unit.Density.() -> IntOffset = { IntOffset(anchor.left.roundToInt(),anchor.top.roundToInt()) }
+            Box((if(phone != null)Modifier.align(androidx.compose.ui.AbsoluteAlignment.TopLeft).absoluteOffset(position) else Modifier.offset(position))
                 .size((anchor.width / density).dp, (anchor.height / density).dp)) {
-                WorkspaceMenu(host, menu, preserveContact = dock.contactHeld, copy = { dock.contextRequest?.let { host.menuCopy(it) } }, dismiss = dock::closeContext)
+                WorkspaceMenu(host, menu, preserveContact = dock.contactHeld, copy = { dock.contextRequest?.let { host.menuCopy(it) } },showTitle = phone == null,
+                    presentation = dock.contextPresentation,anchor = screenAnchor,dismiss = dock::closeContext)
             }
         }
     }

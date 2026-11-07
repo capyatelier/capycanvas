@@ -384,3 +384,44 @@ internal fun CanvasHost.writeDrawingCopy(file: File, compose: ComposeTestRule? =
         } finally { DocumentController.nativeFileJobsForTest = previous }
     }
 }
+
+fun tapOutsideDialog(activity: MainActivity, tag: String) {
+    var point = Offset.Zero
+    instrumentation.runOnMainSync {
+        val root = checkNotNull(findTag(tag)).first.view
+        val origin = IntArray(2);root.getLocationOnScreen(origin)
+        val dialog = androidx.compose.ui.geometry.Rect(origin[0].toFloat(),origin[1].toFloat(),origin[0]+root.width.toFloat(),origin[1]+root.height.toFloat())
+        val app = activity.window.decorView
+        val window = IntArray(2);app.getLocationOnScreen(window)
+        point = Offset(window[0]+2f,window[1]+app.height/2f)
+        assertFalse("The dismissal contact is outside native dialog content: $point in $dialog",dialog.contains(point))
+    }
+    val started = SystemClock.uptimeMillis()
+    for (phase in listOf(MotionEvent.ACTION_DOWN,MotionEvent.ACTION_UP)) {
+        val event = motion(MotionEvent.TOOL_TYPE_FINGER,phase,point,started)
+        try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event,true)) } finally { event.recycle() }
+    }
+}
+
+fun assertAlertResponseOrder(host: CanvasHost, primaryTag: String) {
+    host.awaitMain("Alert responses are composed") { findTag(primaryTag) != null }
+    val (owner,_) = checkNotNull(findTag(primaryTag))
+    val parent = checkNotNull(findTag("workspace")).first.view
+    val original = parent.layoutDirection
+    fun bounds(primary: Boolean) = if(primary)checkNotNull(findTag(primaryTag)).second.boundsInRoot
+        else checkNotNull(findNode(hasLabel(host.bootstrap!!.getJSONObject("common").getString("cancel")),owner)).second.boundsInRoot
+    try {
+        for (direction in listOf(View.LAYOUT_DIRECTION_LTR,View.LAYOUT_DIRECTION_RTL)) {
+            instrumentation.runOnMainSync { parent.layoutDirection = direction }
+            host.awaitMain("Alert responses follow native direction $direction",diagnostics = {
+                "native=${parent.layoutDirection}; compose=${findTag(primaryTag)?.second?.layoutInfo?.layoutDirection}; cancel=${bounds(false)}; primary=${bounds(true)}"
+            }) {
+                val cancel = bounds(false);val primary = bounds(true)
+                val rtl = checkNotNull(findTag(primaryTag)).second.layoutInfo.layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl
+                rtl == (direction == View.LAYOUT_DIRECTION_RTL) && if(primary.top>=cancel.bottom)true
+                else cancel.top<primary.bottom && primary.top<cancel.bottom &&
+                    if(direction == View.LAYOUT_DIRECTION_RTL)primary.center.x<cancel.center.x else primary.center.x>cancel.center.x
+            }
+        }
+    } finally { instrumentation.runOnMainSync { parent.layoutDirection = original } }
+}

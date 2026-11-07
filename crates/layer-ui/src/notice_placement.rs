@@ -52,6 +52,13 @@ impl NoticePlacement {
         }
     }
 
+    pub fn above_notice(self, notice: Option<Bounds>) -> Self {
+        match notice {
+            Some(notice) => Self { y:self.y.min(notice.y-Self::MARGIN), ..self },
+            None => self,
+        }
+    }
+
     /// Whether actions `actions` wide keep the text's row in a bubble whose
     /// content is `content` wide with `gap` between text and actions.
     pub fn actions_beside(&self, text: f32, content: f32, actions: f32, gap: f32) -> bool {
@@ -115,6 +122,19 @@ mod tests {
         assert_eq!(placement.above(Some(returned)).y, 748., "a returning bar uses its current bounds");
     }
 
+    #[test]
+    fn persistent_status_clears_a_timed_notice_after_canvas_bar_clearance() {
+        let placement = NoticePlacement::within(Bounds { x:0.,y:24.,width:412.,height:800. });
+        let bar = Bounds { x:20.,y:730.,width:372.,height:60. };
+        let timed = placement.above(Some(bar));
+        let bubble = Bounds { x:60.,y:timed.y-80.,width:292.,height:80. };
+        assert!(bubble.y+bubble.height < placement.bar_floor);
+        let status = placement.above(Some(bar)).above_notice(Some(bubble));
+        assert_eq!(status.y,bubble.y-NoticePlacement::MARGIN);
+        assert_eq!(status.x,placement.x);
+        assert_eq!(status.max_width,placement.max_width);
+        assert_eq!(placement.above_notice(None),placement);
+    }
     #[test]
     fn every_viewport_publishes_a_notice_that_fits_the_window() {
         for viewport in [[1600., 1000.], [1440., 900.], [1280., 900.], [640., 900.], [1200., 1920.]] {
