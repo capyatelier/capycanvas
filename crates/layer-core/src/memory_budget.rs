@@ -1,7 +1,7 @@
 mod system;
 pub use system::system_facts;
 
-use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}}};
+use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, MutexGuard, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}}};
 use web_time::Instant;
 
 const MIB: u64 = 1024 * 1024;
@@ -137,7 +137,7 @@ impl Drop for Owner {
         let mut state = self.budget.0.state.lock().unwrap();
         state.owners.remove(&self.id);
         state.remove_retired_devices();
-        state.rebalance(&self.budget.0.cache);
+        self.budget.rebalance(state);
     }
 }
 impl std::fmt::Debug for MemoryOwner {
@@ -154,7 +154,7 @@ impl MemoryOwner {
         let mut state = self.0.budget.0.state.lock().unwrap();
         let owner=state.owners.get_mut(&self.0.id).unwrap();
         owner.report = report;owner.applied=owner.pending.version.load(Ordering::Acquire);
-        state.rebalance(&self.0.budget.0.cache);
+        self.0.budget.rebalance(state);
     }
     pub fn reported(&self) -> MemoryReport { self.0.budget.0.state.lock().unwrap().owners[&self.0.id].report }
     pub fn grant(&self) -> MemoryGrant {
@@ -167,7 +167,7 @@ struct Reservation { budget: MemoryBudget, id: u64, bytes: AtomicU64, active: At
 impl Drop for Reservation {
     fn drop(&mut self) {
         let mut state = self.budget.0.state.lock().unwrap();
-        if state.reservations.remove(&self.id).is_some() { state.rebalance(&self.budget.0.cache); }
+        if state.reservations.remove(&self.id).is_some() { self.budget.rebalance(state); }
     }
 }
 impl std::fmt::Debug for MemoryReservation {
@@ -185,16 +185,23 @@ impl MemoryReservation {
         let bytes=first.checked_add(second).ok_or("Memory reservation size overflow")?;
         state.reservations.insert(self.0.id,bytes);state.reservations.remove(&other.0.id);
         self.0.bytes.store(bytes,Ordering::Release);other.0.bytes.store(0,Ordering::Release);other.0.active.store(false,Ordering::Release);
-        state.rebalance(&self.0.budget.0.cache);drop(state);Ok(())
+        self.0.budget.rebalance(state);Ok(())
     }
     pub fn resize(&self, bytes: u64) -> bool {
         let mut state = self.0.budget.0.state.lock().unwrap();
-        if state.apply_reports() {state.rebalance(&self.0.budget.0.cache);}
-        let Some(previous) = state.reservations.get(&self.0.id).copied() else { return false; };
-        if bytes.saturating_sub(previous) > state.import_headroom() { self.0.budget.refused(); return false; }
+        let changed = state.apply_reports();
+        let Some(previous) = state.reservations.get(&self.0.id).copied() else {
+            if changed { self.0.budget.rebalance(state); }
+            return false;
+        };
+        if bytes.saturating_sub(previous) > state.import_headroom() {
+            self.0.budget.refused();
+            if changed { self.0.budget.rebalance(state); }
+            return false;
+        }
         state.reservations.insert(self.0.id, bytes);
         self.0.bytes.store(bytes, Ordering::Release);
-        state.rebalance(&self.0.budget.0.cache);
+        self.0.budget.rebalance(state);
         true
     }
     pub fn commit(self, owner: &MemoryOwner, mut report: MemoryReport) -> Result<(), &'static str> {
@@ -207,9 +214,8 @@ impl MemoryReservation {
         let owner=state.owners.get_mut(&owner.0.id).unwrap();
         owner.report = report;owner.applied=owner.pending.version.load(Ordering::Acquire);
         self.0.bytes.store(0, Ordering::Release);
-        state.rebalance(&self.0.budget.0.cache);
         self.0.active.store(false,Ordering::Release);
-        drop(state);
+        self.0.budget.rebalance(state);
         Ok(())
     }
 }
@@ -217,6 +223,11 @@ impl std::fmt::Debug for MemoryBudget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_struct("MemoryBudget").field("limit", &self.ram_limit_bytes()).field("headroom", &self.import_headroom_bytes()).finish() }
 }
 impl MemoryBudget {
+    fn rebalance(&self, state: MutexGuard<'_, State>) {
+        let wakes = state.rebalance(&self.0.cache);
+        drop(state);
+        for wake in wakes { wake(); }
+    }
     pub fn new() -> Self { Self::with_facts(MemoryFacts::default()) }
     pub fn with_facts(facts: MemoryFacts) -> Self { let budget = Self(Arc::new(Manager::default())); budget.update_ram(facts, 0); budget }
     pub fn process() -> Self {
@@ -251,7 +262,7 @@ impl MemoryBudget {
         }
         state.initialized = facts.available_bytes.is_some() || facts.total_bytes.is_some() || facts.host_default_bytes.is_some() || state.override_bytes.or(facts.override_bytes).is_some();
         state.facts = facts;
-        state.rebalance(&self.0.cache);
+        self.rebalance(state);
     }
     pub fn set_ram_override(&self, bytes: Option<u64>) {
         let facts = {
@@ -266,19 +277,19 @@ impl MemoryBudget {
         state.next = state.next.checked_add(1).expect("Memory owner identity exhausted");
         let id = MemoryDevice(state.next);
         state.devices.insert(id, facts);
-        state.rebalance(&self.0.cache);
+        self.rebalance(state);
         id
     }
     pub fn update_device(&self, device: MemoryDevice, facts: DeviceMemoryFacts) {
         let mut state = self.0.state.lock().unwrap();
         if let Some(current) = state.devices.get_mut(&device) { *current = facts; }
-        state.rebalance(&self.0.cache);
+        self.rebalance(state);
     }
     pub fn unregister_device(&self, device: MemoryDevice) {
         let mut state = self.0.state.lock().unwrap();
         state.retired_devices.insert(device);
         state.remove_retired_devices();
-        state.rebalance(&self.0.cache);
+        self.rebalance(state);
     }
     pub fn register_owner(&self, kind: MemoryOwnerKind, class: MemoryClass, device: Option<MemoryDevice>) -> MemoryOwner {
         let mut state = self.0.state.lock().unwrap();
@@ -290,19 +301,23 @@ impl MemoryBudget {
     }
     pub fn flush_reports(&self) {
         let mut state=self.0.state.lock().unwrap();
-        if state.apply_reports() {state.rebalance(&self.0.cache);}
+        if state.apply_reports() {self.rebalance(state);}
     }
     pub fn ram_limit_bytes(&self) -> u64 { self.0.cache.limit.load(Ordering::Acquire) }
     pub fn import_headroom_bytes(&self) -> u64 { self.0.cache.headroom.load(Ordering::Acquire) }
     fn refused(&self) { let _ = self.0.cache.refusals.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| Some(count.saturating_add(1))); }
     pub fn admit_import(&self, bytes: u64) -> Option<MemoryReservation> {
         let mut state = self.0.state.lock().unwrap();
-        if state.apply_reports() {state.rebalance(&self.0.cache);}
-        if bytes > state.import_headroom() { self.refused(); return None; }
+        let changed = state.apply_reports();
+        if bytes > state.import_headroom() {
+            self.refused();
+            if changed { self.rebalance(state); }
+            return None;
+        }
         state.next = state.next.checked_add(1).expect("Memory owner identity exhausted");
         let id = state.next;
         state.reservations.insert(id, bytes);
-        state.rebalance(&self.0.cache);
+        self.rebalance(state);
         Some(MemoryReservation(Arc::new(Reservation { budget: self.clone(), id, bytes: AtomicU64::new(bytes), active: AtomicBool::new(true) })))
     }
     pub fn snapshot(&self) -> MemoryBudgetSnapshot {
@@ -384,7 +399,7 @@ impl State {
         self.owners.values().fold(0u64, |bytes,owner| bytes.saturating_add(if pinned {owner.report.pinned_ram_bytes}else {owner.report.ram_bytes})
             .saturating_add(if self.unified(owner.device) {if pinned {owner.report.pinned_gpu_bytes}else {owner.report.gpu_bytes}}else {0}))
     }
-    fn rebalance(&self, cache: &BudgetCache) {
+    fn rebalance(&self, cache: &BudgetCache) -> Vec<Arc<dyn Fn() + Send + Sync>> {
         cache.limit.store(self.ram_limit, Ordering::Release);
         let headroom=self.import_headroom();
         let headroom_changed=cache.headroom.swap(headroom, Ordering::AcqRel)!=headroom;
@@ -413,11 +428,13 @@ impl State {
                 remaining-=grant;
             }
         }
+        let mut wakes = Vec::new();
         for (i,owner) in owners.iter().enumerate() {
             let changed=owner.grants.ram.swap(ram[i],Ordering::AcqRel)!=ram[i];
             let gpu_changed=owner.grants.gpu.swap(unified[i],Ordering::AcqRel)!=unified[i];
-            if (changed || gpu_changed || headroom_changed) && let Some(wake)=owner.grants.wake.get() {wake();}
+            if (changed || gpu_changed || headroom_changed) && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
         }
+        wakes
     }
 }
 
@@ -430,6 +447,47 @@ mod tests {
     fn owner(budget:&MemoryBudget,class:MemoryClass,device:Option<MemoryDevice>,ram:u64,gpu:u64)->MemoryOwner {
         let owner=budget.register_owner(MemoryOwnerKind::Scene,class,device);
         owner.report(MemoryReport {demand_ram_bytes:ram,demand_gpu_bytes:gpu,..Default::default()});owner
+    }
+    #[test]
+    fn grant_wakes_can_complete_pressure_work_and_reenter_the_budget() {
+        let budget = MemoryBudget::with_facts(facts());
+        let cache = owner(&budget, MemoryClass::Warm, None, u64::MAX, 0);
+        let locked = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicU64::new(0));
+        let manager = Arc::downgrade(&budget.0);
+        let observed = locked.clone();
+        let completed = calls.clone();
+        cache.set_wake(Arc::new(move || {
+            completed.fetch_add(1, Ordering::Relaxed);
+            let budget = MemoryBudget(manager.upgrade().unwrap());
+            if budget.0.state.try_lock().is_err() {
+                observed.store(true, Ordering::Relaxed);
+                return;
+            }
+            budget.flush_reports();
+            let _ = budget.snapshot();
+        }));
+        let report = |bytes| MemoryReport { ram_bytes: bytes, pinned_ram_bytes: bytes,
+            demand_ram_bytes: u64::MAX, ..Default::default() };
+        cache.report(report(MIB));
+        budget.update_ram(MemoryFacts { override_bytes: Some(2 * GIB), ..facts() }, 1000);
+        assert!(cache.publish(report(2 * MIB)));
+        budget.flush_reports();
+        let reservation = budget.admit_import(64 * MIB).unwrap();
+        assert!(reservation.resize(128 * MIB));
+        let second = budget.admit_import(64 * MIB).unwrap();
+        reservation.merge(second).unwrap();
+        assert!(cache.publish(report(3 * MIB)));
+        assert!(reservation.resize(193 * MIB));
+        let authored = budget.register_owner(MemoryOwnerKind::Authored, MemoryClass::Pinned, None);
+        reservation.commit(&authored, report(64 * MIB)).unwrap();
+        let reservation = budget.admit_import(MIB).unwrap();
+        drop(reservation);
+        drop(authored);
+        cache.report(report(0));
+        budget.set_ram_override(Some(GIB));
+        assert!(calls.load(Ordering::Relaxed) >= 10);
+        assert!(!locked.load(Ordering::Relaxed), "grant wakes must run after releasing the budget lock");
     }
     #[test]
     fn cloned_handles_and_windows_charge_one_physical_owner_until_final_drop() {
