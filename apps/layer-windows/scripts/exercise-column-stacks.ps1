@@ -194,7 +194,7 @@ function Drag([string]$Id,$To,[switch]$Cancel,[switch]$Hold,[switch]$Stack,[swit
     [CapyRowPointer]::Down($Device,$from.x,$from.y)
     Wait-Until {(Gesture).generation -gt $generation} 'Native handle did not receive pointer down'
     if((Gesture).requires_hold -ne [bool]$Hold -or (Gesture).device -ne $Device){throw 'Source used the wrong device or pickup policy'}
-    if($Captured -and !(Gesture).captured){throw 'Immediate custom handle did not capture its contact on press'}
+    if($Captured){Wait-Until {(Gesture).captured} 'Immediate custom handle did not capture its contact on press'}
     if($Hold){
         Wait-Until {(Gesture).phase -eq 'held'} 'Tile did not reach a native stationary hold'
         if($Device -eq 'mouse'){if((Gesture).menu_open){throw 'Mouse hold opened a context menu'}}

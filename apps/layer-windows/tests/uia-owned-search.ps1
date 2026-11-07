@@ -1978,3 +1978,40 @@ public static class CapyCaptionOriginTest {
   'Actual Caption helpers: floating reference, 100/150/200% content origins, displaced ink and identity negatives passed.'
  }finally{Remove-Item -LiteralPath $folder -Recurse -Force}
 }
+
+& {
+ $tokens=$null;$errors=$null
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-column-stacks.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $actual=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Drag'},$true)
+ if(!$actual){throw 'Missing actual column Drag function'}
+ . ([scriptblock]::Create($actual.Extent.Text.Replace('[CapyRowPointer]','[CapyEdgeReleaseTest]')))
+ $Device='touch'
+ function At($Id){@{x=10;y=20}}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt8;$poll++){if(& $Condition){return}};throw $Message}
+ function Gesture{
+  $phase=[CapyEdgeReleaseTest]::Phase
+  $value=[pscustomobject]@{generation=$phase;requires_hold=$false;device=$(if($script:columnCapture.mode-eq'wrong-device'){'pen'}else{'touch'});phase=$(if($phase-eq2){'idle'}else{'dragging'});menu_open=$false}
+  $value|Add-Member ScriptProperty captured {
+   if([CapyEdgeReleaseTest]::Phase-ne1){throw 'Capture was queried outside the admitted contact'}
+   $script:columnCapture.reads++
+   $script:columnCapture.mode-ne'lost'-and$script:columnCapture.reads-ge2
+  }
+  $value
+ }
+ foreach($mode in 'delayed','lost','unguarded','wrong-device'){
+  $script:columnCapture=@{mode=$mode;reads=0}
+  [CapyEdgeReleaseTest]::Phase=0;[CapyEdgeReleaseTest]::Downs=0;[CapyEdgeReleaseTest]::Ups=0
+  $failure=$null;try{Drag 'group-grip-7' @{x=30;y=40} -Captured:($mode-ne'unguarded')}catch{$failure=$_}
+  if($mode-eq'delayed'-and$failure){throw $failure}
+  if($mode-eq'lost'){
+   if(!$failure-or$failure.Exception.Message-cne'Immediate custom handle did not capture its contact on press'-or$script:columnCapture.reads-ne8-or[CapyEdgeReleaseTest]::Ups-ne0){throw 'Missing column capture did not retain its original failure'}
+  }elseif($mode-eq'wrong-device'){
+   if(!$failure-or$failure.Exception.Message-cne'Source used the wrong device or pickup policy'-or$script:columnCapture.reads-ne0){throw 'Column pickup policy failure was weakened'}
+  }else{
+   $expectedReads=if($mode-eq'unguarded'){0}else{2}
+   if($failure-or$script:columnCapture.reads-ne$expectedReads-or[CapyEdgeReleaseTest]::Downs-ne1-or[CapyEdgeReleaseTest]::Ups-ne1){throw "Actual column Drag did not preserve delayed capture or its optional guard: $failure"}
+  }
+ }
+ 'Actual column Drag: advanced generation waits for delayed capture; missing capture, optional guard and device policy preserved.'
+}
