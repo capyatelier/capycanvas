@@ -98,7 +98,7 @@ import SwiftUI
         scheduled = true
         DispatchQueue.main.async { [weak self] in self?.flush() }
     }
-    private func flush() {
+    func flush(presented: (@Sendable () -> Void)? = nil) {
         scheduled = false
         let panels = panelSurfaces()
         let payload = JSON(["regions": boxes.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) },
@@ -107,9 +107,10 @@ import SwiftUI
             "color_bubbles": colorBubbles.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map(Double.init) },
             "panels": panels, "panel_revision": panelRevision])
         let key = payload.stableKey
-        guard key != sent else { return }
+        guard key != sent || presented != nil else { return }
         sent = key
-        store?.native?.glassRegions(payload)
+        guard let native = store?.native else { presented?(); return }
+        native.glassRegions(payload, presented: presented)
     }
     private func panelSurfaces() -> [Any] {
         panelSurfaceColumns.removeAll(keepingCapacity: true)

@@ -147,8 +147,7 @@ private struct WorkspaceContentDrawer: View {
         if !placement.isNull {
             ZStack(alignment: .topLeading) {
                 if visible && !connection.isNull {
-                    DrawerBridge(connection: connection).fill(palette.glassPanel).placed(connection["bounds"])
-                        .modifier(GlassConnection(key: "drawer:" + drawer.id, connection: connection))
+                    DrawerBridge(connection: connection).fill(drawer.glassShown ? palette.glassPanel : palette["panel"]).placed(connection["bounds"])
                 }
                 GeometryReader { viewport in
                     if phone && drawer.measurement["scrolls_together"].bool {
@@ -161,7 +160,7 @@ private struct WorkspaceContentDrawer: View {
                     .environment(\.editorPalette, palette.glassy)
                     .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: placement["bounds"].rect,
                         cuts: DrawerShadow.cuts(placement: placement, connection: connection),
-                        fill: palette.glassPanel, shadow: 12, joined: connection["square_corners"], excluding: drawer.id,
+                        fill: drawer.glassShown ? palette.glassPanel : palette["panel"], shadow: 12, joined: connection["square_corners"], excluding: drawer.id, drawer: drawer,
                         active: visible, identifier: drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id))
                     .modifier(NavigatorReveal())
                     .background(GeometryReader { body in
@@ -360,13 +359,15 @@ struct DrawerContainerSurface: ViewModifier {
     var joined = JSON()
     var excluding: String?
     var extra: [DrawerSource] = []
+    var drawer: ContentDrawerPresentation?
+    @Environment(\.workspaceChromeOpacity) private var opacity
     var sharedRadii: [CGFloat]? = nil
     var gpuSurface = false
     var active = true
     let identifier: String
     func body(content: Content) -> some View {
         let sources = drawers.sources.filter { $0.key != excluding }.map(\.value) + extra
-        let shape = sharedRadii.map { SquircleShape(topLeading: $0[0], topTrailing: $0[1], bottomTrailing: $0[2], bottomLeading: $0[3]) }
+        let shape = drawer?.glassShape ?? sharedRadii.map { SquircleShape(topLeading: $0[0], topTrailing: $0[1], bottomTrailing: $0[2], bottomLeading: $0[3]) }
             ?? SquircleShape(SquircleShape.surfaceRadius,
                 square: DrawerSource.square(bounds, sources: sources, joined: joined))
         ZStack(alignment: .topLeading) {
@@ -376,7 +377,9 @@ struct DrawerContainerSurface: ViewModifier {
             }
             content.clipShape(shape.fittedClip)
                 .background { if !gpuSurface { shape.fill(fill) } }
-                .modifier(GlassRegistration(shape: shape, active: active && !gpuSurface))
+                .modifier(GlassRegistration(shape: shape, active: active && !gpuSurface && drawer == nil))
+                .onChange(of: [CGFloat(opacity)] + shape.radii(in: bounds), initial: true) { _, _ in drawer?.registerGlass(opacity: opacity) }
+                .onDisappear { drawer?.clearGlass() }
                 .accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
         }
     }

@@ -7,6 +7,15 @@ import SwiftUI
     @Published private(set) var model = JSON()
     @Published private(set) var geometry = JSON()
     @Published private(set) var interactive = false
+    @Published private(set) var glass = JSON()
+    @Published private(set) var glassShown = false
+    private let glassID = UUID()
+    private var glassOpacity = 1.0
+    private var glassWait: (@MainActor @Sendable () -> Void)?
+    var glassShape: SquircleShape {
+        SquircleShape(SquircleShape.surfaceRadius, square: DrawerSource.square(geometry["placement"]["bounds"].rect,
+            sources: store?.contentDrawers.sources.filter { $0.key != id }.map(\.value) ?? [], joined: geometry["connection"]["square_corners"]))
+    }
     @Published private(set) var pagePosition: CGFloat = 0
     @Published private(set) var layerSizes = JSON()
     @Published private(set) var measurement = JSON()
@@ -128,6 +137,11 @@ import SwiftUI
                 guard !Task.isCancelled else { return }
                 guard self.latest?.token == request.token else { continue }
                 guard !target.isNull else { self.task = nil; if request.closing { store.contentDrawers.remove(self.id) }; return }
+                if !self.glass.isNull {
+                    await self.handoff(JSON())
+                    guard !Task.isCancelled else { return }
+                    guard self.latest?.token == request.token else { continue }
+                }
                 let start = ProcessInfo.processInfo.systemUptime
                 while !Task.isCancelled && self.latest?.token == request.token {
                     let progress = request.animate && !self.reduceMotion ? min(1, (ProcessInfo.processInfo.systemUptime - start) / duration) : 1
@@ -137,6 +151,9 @@ import SwiftUI
                     self.geometry = result; self.pagePosition = position; store.workspace.refreshChrome()
                     store.contentDrawers.source(self.id, geometry: result, anchor: self.model["anchor"])
                     if progress == 1 {
+                        if !request.closing { await self.handoff(result["glass"]) }
+                        guard !Task.isCancelled else { return }
+                        guard self.latest?.token == request.token else { continue }
                         self.task = nil
                         if request.closing { store.contentDrawers.remove(self.id) }
                         return
@@ -167,7 +184,32 @@ import SwiftUI
         layerSizes = next; refresh(current)
     }
     func toggleLayerProperties() { store?.customize(["type": "toggle_layer_drawer_properties"]) }
-    func stop() { latest = nil; task?.cancel(); task = nil }
+    func registerGlass(opacity: Double) {
+        glassOpacity = opacity
+        let bounds = glass.rect, active = !glass.isNull && opacity > 0
+        store?.glass.box(glassID, active ? [bounds.minX, bounds.minY, bounds.width, bounds.height]
+            + glassShape.radii(in: CGRect(origin: .zero, size: bounds.size)) + [1, opacity] : nil)
+        store?.glass.connection("drawer:" + id, active && !geometry["connection"].isNull
+            ? geometry["connection"].replacing("strength", with: JSON(opacity)) : nil)
+    }
+    private func handoff(_ bounds: JSON) async {
+        guard let store else { return }
+        let request = latest?.token
+        glassShown = false; glass = bounds; registerGlass(opacity: glassOpacity)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var pending: CheckedContinuation<Void, Never>? = continuation
+            let resume: @MainActor @Sendable () -> Void = { let waiter = pending; pending = nil; waiter?.resume() }
+            glassWait = resume
+            store.glass.flush { DispatchQueue.main.async { resume() } }
+        }
+        guard !Task.isCancelled, latest?.token == request else { return }
+        glassShown = !bounds.isNull && store.canvasReady
+    }
+    func clearGlass() { store?.glass.box(glassID, nil); store?.glass.connection("drawer:" + id, nil) }
+    func stop() {
+        latest = nil; task?.cancel(); task = nil; glassWait?(); glassWait = nil
+        glass = JSON(); glassShown = false; clearGlass()
+    }
     func retire() { stop(); key = ""; model = JSON(); geometry = JSON(); interactive = false }
 }
 

@@ -246,8 +246,8 @@ struct PhoneMenu: View {
         let placement = input.frame["placement"], bounds = placement["bounds"], connection = input.frame["connection"]
         return ZStack(alignment: .topLeading) {
             if !connection.isNull {
-                DrawerBridge(connection: connection).fill(palette.glassPanel).placed(connection["bounds"])
-                    .modifier(GlassConnection(key: "phone-menu", connection: connection)).allowsHitTesting(false)
+                DrawerBridge(connection: connection).fill(input.drawer.glassShown ? palette.glassPanel : palette["panel"]).placed(connection["bounds"])
+                    .allowsHitTesting(false)
                     .accessibilityIdentifier("phone-menu-bridge")
             }
             ZStack(alignment: .topLeading) {
@@ -271,8 +271,8 @@ struct PhoneMenu: View {
             }.frame(width: input.target["bounds"]["width"].number, height: input.target["bounds"]["height"].number, alignment: .topLeading)
                 .frame(width: bounds["width"].number, height: bounds["height"].number, alignment: .topLeading).clipped()
                 .modifier(DrawerContainerSurface(drawers: store.contentDrawers, bounds: bounds.rect,
-                    cuts: DrawerShadow.cuts(placement: placement, connection: connection), fill: palette.glassPanel,
-                    shadow: 6, shadowOpacity: 0.16, joined: connection["square_corners"], excluding: input.drawer.id,
+                    cuts: DrawerShadow.cuts(placement: placement, connection: connection), fill: input.drawer.glassShown ? palette.glassPanel : palette["panel"],
+                    shadow: 6, shadowOpacity: 0.16, joined: connection["square_corners"], excluding: input.drawer.id, drawer: input.drawer,
                     identifier: "phone-menu"))
                 .placed(bounds).accessibilityLabel(input.page["title"].string).allowsHitTesting(input.enabled)
         }

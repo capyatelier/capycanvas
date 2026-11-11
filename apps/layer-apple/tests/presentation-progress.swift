@@ -59,15 +59,34 @@ import SwiftUI
             }
             guard let blank = pixels() else { throw HostFailure(message: "Initial artwork preview missing") }
             store.dispatch(["type": "set_color", "rgba": [0.1, 0.3, 0.8, 1]])
-            store.invoke("select_all"); store.invoke("fill_selection")
+            try await store.apply(["type": "invoke", "command": "select_all"])
+            try await store.apply(["type": "invoke", "command": "fill_selection"])
             try await wait("painted preview without display-timing callbacks") { pixels() != nil && pixels() != blank }
             let painted = pixels()!
-            store.invoke("undo")
+            try await store.apply(["type": "invoke", "command": "undo"])
             try await wait("Undo without display-timing callbacks") { pixels() == blank }
-            store.invoke("redo")
+            try await store.apply(["type": "invoke", "command": "redo"])
             try await wait("Redo without display-timing callbacks") { pixels() == painted }
             try require(calls.total - before > 3, "The test must withhold more than one drawable pool's callbacks")
             try require(store.failure == nil && store.snapshot["error"].isNull, store.failure ?? "Renderer error")
+            let drawer = ContentDrawerPresentation(id: "glass-check", store: store)
+            let placement = JSON(["bounds": ["x": 80, "y": 80, "width": 240, "height": 300],
+                "anchor": ["x": 80, "y": 40, "width": 40, "height": 36], "direction": "bottom", "columns": []] as [String: Any])
+            let callbacks = calls.total
+            drawer.reduceMotion = true; drawer.present(JSON(["columns": []]), placement: placement)
+            try await wait("Drawer frame submission") { drawer.geometry["placement"].stableKey == placement.stableKey && calls.total > callbacks }
+            try require(!drawer.glassShown, "A drawer stays opaque until its glass is presented")
+            drawer.stop(); drawer.retire()
+            try require(drawer.glass.isNull && !drawer.glassShown, "Retirement releases the pending glass handoff")
+            drawer.present(JSON(["columns": []]), placement: placement)
+            try await wait("Drawer reopens after a stopped handoff") { drawer.geometry["placement"].stableKey == placement.stableKey }
+            drawer.retire()
+            let finished = Callbacks(), submitted = calls.total
+            store.glass.flush { finished.withheld() }
+            await frame(store.native!)
+            try require(calls.total > submitted && finished.total == 0, "Glass completion waits for the withheld presentation")
+            window.contentView = nil
+            try await wait("Detach drains submitted glass completion") { finished.total == 1 }
             note("PASS platform \(platform): startup, rendered artwork and exact preview Undo/Redo with \(calls.total - before) missing presentation callbacks")
         }
     }

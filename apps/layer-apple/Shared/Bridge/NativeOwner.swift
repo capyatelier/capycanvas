@@ -96,6 +96,12 @@ private final class LaunchFrame: @unchecked Sendable {
     var ticket: UInt64 = 0
 }
 
+private final class PresentedCallback: @unchecked Sendable {
+    var pending: (@Sendable () -> Void)?
+    init(_ callback: @escaping @Sendable () -> Void) { pending = callback }
+    func finish() { let callback = pending; pending = nil; callback?() }
+}
+
 final class NativeOwner: @unchecked Sendable {
     private let queue: RenderOwnerQueue
     private let sliderInput = LatestOwnerInput<JSON>()
@@ -117,6 +123,11 @@ final class NativeOwner: @unchecked Sendable {
     private var workspaceStart: JSON?
     private var layer: CAMetalLayer?
     private var launchFrame: LaunchFrame?
+    private var glassPresented: [PresentedCallback] = []
+    private func finishGlass() {
+        let callbacks = glassPresented; glassPresented.removeAll()
+        for callback in callbacks { callback.finish() }
+    }
     private var launchVisible = true
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
     private var gpuHealth: DispatchSourceTimer?
@@ -285,7 +296,9 @@ final class NativeOwner: @unchecked Sendable {
         persistence.unsubscribe(observerID)
         trace?.finish()
         let cleanup = NativeOwnerCleanup(handle: handle, layer: layer, wake: preparationWake, workspaceWake: workspaceWake)
+        let glass = glassPresented
         queue.finish {
+            for callback in glass { callback.finish() }
             (cleanup.layer as? ObservedMetalLayer)?.frameRate = nil
             _ = capy_apple_set_workspace_wake(nativeValue(cleanup.handle), nil, nil)
             _ = capy_apple_set_wake(nativeValue(cleanup.handle), nil, nil)
@@ -428,11 +441,15 @@ final class NativeOwner: @unchecked Sendable {
             } catch { receive(nil, error.localizedDescription); completion(nil) }
         }
     }
-    func glassRegions(_ value: JSON) {
+    func glassRegions(_ value: JSON, presented: (@Sendable () -> Void)? = nil) {
         perform { [self] in
-            let source = try value.encoded()
-            try check(source.withCString { capy_apple_glass_regions(nativeValue(handle), $0) })
-            receive(nil, nil)
+            do {
+                let source = try value.encoded()
+                try check(source.withCString { capy_apple_glass_regions(nativeValue(handle), $0) })
+                if let presented { try check(capy_apple_redraw(nativeValue(handle))); glassPresented.append(PresentedCallback(presented)) }
+                receive(nil, nil)
+                if layer == nil { finishGlass() }
+            } catch { presented?(); throw error }
         }
     }
     func navigatorPlacements(_ value: JSON) {
@@ -1033,6 +1050,7 @@ final class NativeOwner: @unchecked Sendable {
     }
     func detach() {
         perform { [self] in
+            finishGlass()
             launchFrame = nil
             (layer as? ObservedMetalLayer)?.frameRate = nil
             try check(capy_apple_detach(nativeValue(handle)))
@@ -1173,12 +1191,17 @@ final class NativeOwner: @unchecked Sendable {
             let start = observation == nil ? 0 : FrameTrace.now()
             var encodedCameraRevision: UInt64 = 0, frameOutcome: UInt64 = 0
             let submitted = launchVisible ? LaunchFrame() : nil
-            if let submitted {
+            let glass = glassPresented
+            if submitted != nil || !glass.isEmpty {
                 (layer as? ObservedMetalLayer)?.launchPresented = { [weak self] in
                     self?.queue.async { [weak self] in
-                        guard let self, launchFrame === submitted, submitted.ticket != 0 else { return }
-                        launchFrame = nil
-                        if capy_apple_launch_presented(nativeValue(handle), submitted.ticket) { try? publish() }
+                        guard let self else { return }
+                        for callback in glass { callback.finish() }
+                        glassPresented.removeAll { $0.pending == nil }
+                        if let submitted, launchFrame === submitted, submitted.ticket != 0 {
+                            launchFrame = nil
+                            if capy_apple_launch_presented(nativeValue(handle), submitted.ticket) { try? publish() }
+                        }
                     }
                 }
             }
@@ -1214,6 +1237,12 @@ final class NativeOwner: @unchecked Sendable {
                     frameOutcome = UInt64(result) + 1
                 }
                 try check(result)
+                #if targetEnvironment(simulator)
+                if costs[2] > 0 {
+                    for callback in glass { callback.finish() }
+                    glassPresented.removeAll { $0.pending == nil }
+                }
+                #endif
                 syncCanvasBarHold()
                 // Always flush the final state before the display link sleeps.
                 // Throttling the pen-up frame can otherwise leave Undo/layers
@@ -1239,6 +1268,7 @@ final class NativeOwner: @unchecked Sendable {
             } catch {
                 observation?.record(FrameTraceEvent(kind: .state, a: FrameTrace.now(), b: now, d: 1))
                 try? publish()
+                finishGlass()
                 receive(nil, error.localizedDescription)
                 completion(false, capy_apple_camera_revision(nativeValue(handle)), costs)
             }

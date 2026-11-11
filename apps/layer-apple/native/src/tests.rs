@@ -32,6 +32,23 @@ fn localized_stateless(call: unsafe extern "C" fn(*const c_char) -> u64, request
 }
 
 #[test]
+fn glass_arrival_and_removal_wake_an_idle_canvas() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        for regions in [json!([[40., 60., 200., 300., 16., 16., 16., 16., 1., 1.]]), json!([])] {
+            let source = CString::new(json!({"regions": regions, "connections": []}).to_string()).unwrap();
+            app.with(|a| { assert!(a.host.session.engine().backend().0.is_none()); a.host.dirty = false; });
+            assert_eq!(unsafe { capy_apple_glass_regions(app.0, source.as_ptr()) }, 0);
+            app.with(|a| { assert_ne!(a.host.poll_preparation(), layer_render::FrameDemand::Wait); a.host.dirty = false; });
+            assert_eq!(unsafe { capy_apple_glass_regions(app.0, source.as_ptr()) }, 0);
+            assert!(!app.borrow().host.dirty);
+            assert_eq!(unsafe { capy_apple_redraw(app.0) }, 0);
+            assert!(app.borrow().host.dirty);
+        }
+    }
+}
+
+#[test]
 fn stateless_edge_reach_projects_the_published_mac_layout() {
     let layout = layer_ui::WorkspacePreset::Illustrator.layout(layer_ui::Platform::Mac).resolve(1600., 1000.);
     let reach = |position: [f32; 2], kind: &str, contact: &str| {
