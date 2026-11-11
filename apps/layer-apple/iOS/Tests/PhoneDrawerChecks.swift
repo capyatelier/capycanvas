@@ -6,8 +6,14 @@ extension EditorLaunchTests {
     @MainActor func testPhoneToolDrawersDark() throws { try checkPhoneToolDrawers(theme: "dark") }
     @MainActor func testPhoneCommandSettingsLight() throws { try checkPhoneCommandSettings(theme: "light") }
     @MainActor func testPhoneCommandSettingsDark() throws { try checkPhoneCommandSettings(theme: "dark") }
-    @MainActor func testPhoneWindowDrawersLight() throws { try checkPhoneWindowDrawers(theme: "light") }
-    @MainActor func testPhoneWindowDrawersDark() throws { try checkPhoneWindowDrawers(theme: "dark") }
+    @MainActor func testPhoneWindowDrawersLight() throws { try checkPhoneWindowDrawers(theme: "light", visit: visitPhoneWindowDrawers) }
+    @MainActor func testPhoneKeyboardDrawersLight() throws { try checkPhoneWindowDrawers(theme: "light", visit: visitPhoneKeyboardDrawer) }
+    @MainActor func testPhoneLayerCountDrawersLight() throws { try checkPhoneWindowDrawers(theme: "light", visit: visitPhoneLayerCounts) }
+    @MainActor func testPhoneDrawerAnchorsLight() throws { try checkPhoneWindowDrawers(theme: "light", visit: visitPhoneDrawerAnchors) }
+    @MainActor func testPhoneWindowDrawersDark() throws { try checkPhoneWindowDrawers(theme: "dark", visit: visitPhoneWindowDrawers) }
+    @MainActor func testPhoneKeyboardDrawersDark() throws { try checkPhoneWindowDrawers(theme: "dark", visit: visitPhoneKeyboardDrawer) }
+    @MainActor func testPhoneLayerCountDrawersDark() throws { try checkPhoneWindowDrawers(theme: "dark", visit: visitPhoneLayerCounts) }
+    @MainActor func testPhoneDrawerAnchorsDark() throws { try checkPhoneWindowDrawers(theme: "dark", visit: visitPhoneDrawerAnchors) }
 
     @MainActor private func checkPhoneToolDrawers(theme: String) throws {
         for orientation in phoneCaptureOrientations {
@@ -85,13 +91,10 @@ extension EditorLaunchTests {
         }
     }
 
-    @MainActor private func checkPhoneWindowDrawers(theme: String) throws {
+    @MainActor private func checkPhoneWindowDrawers(theme: String, visit: (String) throws -> Void) throws {
         for orientation in phoneCaptureOrientations {
             requestedPhoneOrientation = orientation
-            try visitPhoneKeyboardDrawer(theme: theme)
-            try visitPhoneWindowDrawers(theme: theme)
-            try visitPhoneLayerCounts(theme: theme)
-            try visitPhoneDrawerAnchors(theme: theme)
+            try visit(theme)
         }
     }
 
