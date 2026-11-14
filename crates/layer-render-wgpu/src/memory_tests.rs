@@ -596,6 +596,24 @@ fn a_restore_is_refused_or_admitted_after_one_budget_rebalance() {
 }
 
 #[test]
+fn an_effect_analysis_refused_under_import_pressure_is_admitted_once_the_pressure_releases() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
+    let budget = r.factory.memory_budget().clone();
+    budget.set_ram_override(Some(384 << 20));
+    r.publish_memory();
+    budget.flush_reports();
+    r.refresh_memory_limits();
+    let import = budget.admit_import(budget.import_headroom_bytes() - (8 << 20)).unwrap();
+    r.refresh_memory_limits();
+    let bytes = r.device.resource_limit.load(std::sync::atomic::Ordering::Acquire) + (16 << 20);
+    assert!(bytes < budget.ram_limit_bytes() / 2);
+    assert!(r.reserve_effect_analysis(bytes).is_err());
+    drop(import);
+    let lease = r.reserve_effect_analysis(bytes);
+    assert!(lease.is_ok(), "the released analysis must publish its need: {:?}", lease.map(|_| ()));
+}
+
+#[test]
 fn ample_budget_keeps_scene_retention_and_returns_unused_source_allowance() {
     use layer_core::{authored::{Image, ImageObject, Occurrence, OccurrenceContent, PortableId}, color::source::SourceImage};
     let extent = [4096, 3072];

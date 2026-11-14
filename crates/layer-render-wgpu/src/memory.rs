@@ -489,7 +489,8 @@ impl WgpuRasterizer {
         let mut pinned=usage.pinned;pinned[0]=pinned[0].saturating_add(presented).saturating_add(self.retired_display_bytes.used());
         let pinned=demand.pinned(pinned);let wanted=demand.wanted(self.memory.preparation.get());
         let floor=self.scene_tiers.display.floor();let refused=self.memory.refused.get();
-        let required=total(pinned).saturating_add(floor).max(if refused==0 {0}else {gpu.saturating_add(refused).saturating_add(floor)}).max(self.memory.preparation.get());
+        let required=total(pinned).saturating_add(wanted[4].saturating_sub(pinned[4])).saturating_add(floor)
+            .max(if refused==0 {0}else {gpu.saturating_add(refused).saturating_add(floor)}).max(self.memory.preparation.get());
         self.memory.target.set(total(std::array::from_fn(|part| wanted[part].max(pinned[part]))).max(required));
         MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes: total(pinned),
             demand_ram_bytes: ram, demand_gpu_bytes: required, optional_gpu_bytes: u64::MAX, ..Default::default() }
