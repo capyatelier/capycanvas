@@ -335,19 +335,21 @@ fn crossing_a_level_shows_the_previous_one_resampled_and_refines_a_few_pages_a_f
         let mut fresh = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
         submit_ready(&mut fresh, FramePacket { view: at(to), ..packet(editor.document().scene(), extent) });
         let expected = presented(&fresh, at(to));
+        let composed = r.metrics.composited_pixels;
         r.submit(FramePacket { view: at(to), composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap();
         r.wait_idle().unwrap();
         assert_ne!(r.scale_display.as_ref().unwrap().plan.level, level, "the zoom from {from} to {to} crosses a level");
-        let pages = r.metrics.frame_composited_pages.len();
-        assert!(pages <= scale::APPROXIMATE_PAGES, "the first frame at {to} renders {pages} pages exactly");
+        let texels = r.metrics.composited_pixels - composed;
+        assert!(texels <= crate::scene::object_cache::INTERACTIVE_TAPS, "the first frame at {to} composes {texels} texels, beyond a moving view's work budget");
         let resampled = presented(&r, at(to));
         let error = resampled.iter().zip(&expected).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / expected.len() as f64;
         assert!(error < 16., "the level at {from} stands in for the one at {to}: mean byte error {error}");
         let mut frames = 0;
         while r.next_frame()==layer_render::FrameDemand::Work {
+            let composed = r.metrics.composited_pixels;
             r.submit(FramePacket { view: at(to), composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap();
             r.wait_idle().unwrap();
-            assert!(r.metrics.frame_composited_pages.len() <= scale::APPROXIMATE_PAGES + 4, "refinement stays within its budget");
+            assert!(r.metrics.composited_pixels - composed <= crate::scene::object_cache::IDLE_TAPS, "refinement stays within its budget");
             frames += 1;
             assert!(frames < 500, "refinement finishes");
         }
