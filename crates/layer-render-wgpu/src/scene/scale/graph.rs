@@ -499,8 +499,9 @@ impl Evaluator<'_> {
             return Err(GpuRasterError::NotReady);
         }
         let reduction=self.cache.pages.lock().unwrap().reduction(&key,required_input_level,self.class)
+            .map(|(inputs,accuracy)|(inputs,if exact_at_view {pages::Accuracy::Display}else {accuracy}))
             .filter(|(_,accuracy)|*accuracy==pages::Accuracy::Exact || presented==pages::Accuracy::Display);
-        if !exact_at_view && matches!(&reduction,Some((_,pages::Accuracy::Exact))) {key.format=wgpu::TextureFormat::Rgba32Float;}
+        if matches!(&reduction,Some((_,pages::Accuracy::Exact))) {key.format=wgpu::TextureFormat::Rgba32Float;}
         let Ok(image)=self.cache.claim_page(self.scene,self.r,key.clone(),class)? else {return Ok(None);};
         self.unit.reads.push(image.clone());
         if let Some((inputs,accuracy))=reduction {

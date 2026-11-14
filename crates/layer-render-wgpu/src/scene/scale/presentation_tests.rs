@@ -1220,3 +1220,26 @@ fn a_crossing_at_the_pinned_grant_keeps_the_previous_level_until_required_work_n
         if r.next_frame() != layer_render::FrameDemand::Work { std::thread::sleep(std::time::Duration::from_millis(1)); }
     }
 }
+
+fn assert_crossing_settles_to_the_level_a_fresh_view_renders(kind: Crossed) {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(kind));
+    for space in layer_core::BlendSpace::ALL {
+    for (from, to) in [(0.4f32, 0.6f32), (0.9, 0.45)] {
+        let frame = |view| FramePacket { view, blend_space: space, ..packet(doc.scene(), extent) };
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        settle_at(&mut r, frame(crossing_view(from)));
+        settle_at(&mut r, FramePacket { composite_all: false, ..frame(crossing_view(to)) });
+        let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        settle_at(&mut fresh, frame(crossing_view(to)));
+        let [crossed, rendered] = [&r, &fresh].map(|r| pixels(r, r.scale_display.as_ref().unwrap().texture()));
+        let error = crate::test_support::max_error(&crossed, &rendered);
+        assert!(error < 1e-5, "{kind:?} {space:?} {from}->{to} settles {error} away from a fresh view");
+    }}
+}
+
+#[test]
+fn a_raster_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossing_settles_to_the_level_a_fresh_view_renders(Crossed::Raster); }
+#[test]
+fn a_vector_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossing_settles_to_the_level_a_fresh_view_renders(Crossed::Vector); }
+#[test]
+fn an_object_crossing_settles_to_the_level_a_fresh_view_renders() { assert_crossing_settles_to_the_level_a_fresh_view_renders(Crossed::Object); }
