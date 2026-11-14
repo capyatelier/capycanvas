@@ -20,7 +20,14 @@ pub fn active(cancelled: &AtomicBool) -> Result<(), String> {
 
 pub fn helper() -> Result<std::path::PathBuf, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    executable.ancestors().skip(1).take(2).map(|folder| folder.join(HELPER))
+    helper_for(&executable)
+}
+
+fn helper_for(executable: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let cargo_profile = executable.parent().filter(|folder| folder.file_name().is_some_and(|name| name == "out"))
+        .and_then(|folder| folder.ancestors().nth(3)).filter(|folder| folder.file_name().is_some_and(|name| name == "build"))
+        .and_then(std::path::Path::parent);
+    executable.ancestors().skip(1).take(2).chain(cargo_profile).map(|folder| folder.join(HELPER))
         .find(|path| path.is_file()).ok_or_else(|| "Photo decoder is unavailable".into())
 }
 
@@ -92,6 +99,27 @@ pub fn serve(input: File, output: &mut impl Write, limits: DecodeLimits) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_discovery_supports_installed_and_cargo_artifacts() {
+        let directory = std::env::temp_dir().join(format!("capy-photo-helper-{}", layer_core::PortableId::random()));
+        let profile = directory.join("debug");
+        let output = profile.join("build/layer-linux/0123456789abcdef/out");
+        std::fs::create_dir_all(&output).unwrap();
+        let helper = profile.join(HELPER);
+        std::fs::write(&helper, []).unwrap();
+        for executable in [profile.join("capy"), profile.join("deps/capy-hash"), output.join("capy-hash")] {
+            assert_eq!(helper_for(&executable).unwrap(), helper, "{executable:?}");
+        }
+        assert!(helper_for(&profile.join("other/package/unit/out/capy")).is_err());
+        let adjacent = output.join(HELPER);
+        std::fs::write(&adjacent, []).unwrap();
+        assert_eq!(helper_for(&output.join("capy-hash")).unwrap(), adjacent);
+        std::fs::remove_file(adjacent).unwrap();
+        std::fs::remove_file(helper).unwrap();
+        assert!(helper_for(&output.join("capy-hash")).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn confined_photos_match_local_decoding() {
