@@ -294,6 +294,9 @@ pub(crate) struct Cache {
     graph: graph::Graph,
     transform: Option<layer_render::TransformPreview>,
     retired: Option<Box<Cache>>,
+    previous: Option<Box<Cache>>,
+    standing: Option<Arc<crate::residency::Lease>>,
+    complete: bool,
     contact: bool,
     gesture: Option<contact::Contact>,
     stroked: Option<Arc<SignatureFrame>>,
@@ -609,7 +612,7 @@ impl Cache {
         let unchanged=unchanged && old.transform==r.transform_preview;
         if old.plan.extent==plan.extent && old.plan.level==plan.level && old.plan.bounds.intersect(required)==required
             && old.layer_count==packet.scene.order().len() {
-            old.evaluation=evaluation;old.transform=r.transform_preview.clone();old.unchanged=unchanged;
+            old.evaluation=evaluation;old.transform=r.transform_preview.clone();old.unchanged=unchanged;old.release_previous(r);
             if let Some(overview)=&mut old.overview {
                 overview.unchanged=unchanged;
             }
@@ -629,7 +632,16 @@ impl Cache {
             }
         }
         if let Some(old)=&old {old.exit_contact();}
-        next.retired=old.filter(|old|old.has_direct_cells());
+        let view=old.as_ref().is_some_and(|old|old.plan.extent==plan.extent && old.layer_count==next.layer_count);
+        match old {
+            Some(mut old) if view && old.picture().is_some()=>{
+                let lease=r.scene_tiers.display.heap().lease(&Arc::default());lease.offer(old.window_bytes(),0);
+                old.previous=None;old.standing=Some(lease);next.previous=Some(old);
+            },
+            Some(mut old)=>{next.previous=old.previous.take().filter(|_|view);next.retired=Some(old).filter(|old|old.has_direct_cells());},
+            None=>{},
+        }
+        next.release_previous(r);
         (next,true)
     }
 
@@ -641,7 +653,7 @@ impl Cache {
             .then(|| Box::new(Self::new(r, Request { plan: overview_plan, evaluation:Evaluation::Display }, layers)));
         let window=pages::WindowId::new();
         if let Some(overview)=&mut overview {overview.pages=pages.clone();overview.window=window;}
-        let geometry = Self::geometry(r, plan, overview.as_ref().map_or_else(|| coarse_level(plan), |c| coarse_level(c.plan)));
+        let geometry = Self::geometry(r, plan);
         Self {
             submission_valid: None,
             evaluation, plan, precision:crate::display_precision::DisplayPrecision::Full,color:r.document_color(),
@@ -652,15 +664,14 @@ impl Cache {
             geometry,
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
-            unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
+            unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
         }
     }
-    fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan, coarse: u32) -> wgpu::Buffer {
+    fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
         let level = plan.level;
         let pages=pages::coordinates(plan.bounds,plan.level).count();
         let mut geometry = vec![0u32;8+pages.div_ceil(32).next_multiple_of(4).max(4)];
         geometry[0] = 1 << level;
-        geometry[1] = 1 << coarse;
         geometry[2] = 1 << (level + 1);
         geometry[4..8].copy_from_slice(&[
             plan.bounds.min_x() >> level, plan.bounds.min_y() >> level,
@@ -751,30 +762,43 @@ impl Cache {
 
     pub(super) fn held(&self,r:&WgpuRasterizer)->bool {r.vector_motion_split.is_some() && self.pixels.committed_root().is_some()}
     pub(crate) fn presentable(&self) -> Option<&Self> {
-        if self.pixels.committed_root().is_some() {Some(self)}
-        else {self.overview.as_deref().and_then(Self::presentable)}
+        if self.pixels.committed_root().is_some() {return Some(self);}
+        self.overview.as_deref().filter(|overview|overview.picture().is_some())
+            .or_else(||self.previous.as_deref().and_then(Self::presentable))
+            .or_else(||self.overview.as_deref().and_then(Self::presentable))
     }
     pub fn presentation(&self)->Option<PresentedPage<'_>> {
         let root=self.pixels.committed_root()?;
         let next=self.pixels.committed_next().unwrap_or(root);
-        Some(PresentedPage {views:[root,self.coarse_projection()?,next],geometry:&self.geometry})
+        let stand_in=self.stand_in();
+        Some(PresentedPage {views:[root,stand_in.unwrap_or(root),next],stand_in:stand_in.is_some(),geometry:&self.geometry})
     }
     #[cfg(test)]
     pub fn view(&self) -> &wgpu::TextureView {&self.pixels.root().expect("composition target").view}
     #[cfg(test)]
     pub fn texture(&self) -> &wgpu::Texture {&self.pixels.root().expect("composition target").texture}
-    fn coarse_projection(&self)->Option<&pages::CommittedImage> {
-        if let Some(image)=self.overview.as_deref().and_then(|overview|overview.coarse_projection()) {return Some(image);}
+    fn picture(&self)->Option<&pages::CommittedImage> {
+        if let Some(overview)=&self.overview {return overview.picture();}
+        if !self.complete || self.plan.bounds!=PixelRect::full(self.plan.extent) {return None;}
         self.pixels.committed_next().filter(|_|coarse_level(self.plan)>self.plan.level).or_else(||self.pixels.committed_root())
+    }
+    fn stand_in(&self)->Option<&pages::CommittedImage> {
+        self.overview.as_deref().and_then(Self::picture).or_else(||self.previous.as_deref().and_then(Self::picture))
+    }
+    fn release_previous(&mut self,r:&WgpuRasterizer) {
+        let Some((previous,lease))=self.previous.as_ref().and_then(|previous|Some((previous,previous.standing.as_ref()?))) else {self.previous=None;return;};
+        if self.complete || self.overview.as_deref().is_some_and(|overview|overview.picture().is_some()) || self.refused_bytes()>0 || lease.evicted()
+            || r.memory.retention_grant()<r.scene_tiers.display.floor().saturating_add(previous.window_bytes()) {self.previous=None;}
+        else {lease.stamp(Class::Fallback);}
     }
     fn write_projection_scales(&self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
         let next=self.pixels.committed_next().map_or(self.plan.level,|image|image.image().plan.level);
-        let levels=[1<<self.plan.level,1<<self.coarse_projection().map_or(self.plan.level,|image|image.image().plan.level),1<<next];
+        let levels=[1<<self.plan.level,0,1<<next];
         let bytes=levels.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
         r.uploads.write_at(encoder,&self.geometry,0,&bytes)
     }
     pub(crate) fn pinned_page_bytes(&self) -> u64 { self.pages.lock().unwrap().pinned_bytes() }
-    pub(crate) fn charged_scratch_bytes(&self)->u64 {self.output_charge.bytes()+self.overview.as_ref().map_or(0,|cache|cache.charged_scratch_bytes())}
+    pub(crate) fn charged_scratch_bytes(&self)->u64 {self.output_charge.bytes()+self.overview.iter().chain(&self.previous).map(|cache|cache.charged_scratch_bytes()).sum::<u64>()}
     fn window_memory(&self)->u64 { self.window_bytes().saturating_sub(self.charged_scratch_bytes()) }
     fn owed_window_bytes(&self)->u64 {
         if self.pixels.root().is_none() || self.pixels.next().is_some() {return 0;}
@@ -841,7 +865,7 @@ impl Cache {
             .sum::<u64>()
             + self.geometry.size()
             + self.pixels.storage_bytes() + self.above.storage_bytes()
-            + self.overview.as_ref().map_or(0, |cache| cache.window_bytes())
+            + self.overview.iter().chain(&self.previous).map(|cache| cache.window_bytes()).sum::<u64>()
             + self.graph.storage_bytes()
             + self.exact_tile.as_ref().map_or(0, |image| texture_bytes(&image.texture))
     }
@@ -897,6 +921,7 @@ impl Cache {
     ) -> Result<bool, GpuRasterError> {
         if self.coverage_complete() { return Ok(false); }
         let result = self.render_graph(scene, r, packet, dirty, encoding, Destination::Preview, tiles);
+        self.release_previous(r);
         match result {
             Err(GpuRasterError::NotReady) if !scene.pending_pipelines.ready()=>Err(GpuRasterError::NotReady),
             Ok(_) | Err(GpuRasterError::NotReady)=>Ok(self.coverage_complete()),
@@ -916,6 +941,7 @@ impl Cache {
         encoding.retained=retained;
         r.telemetry.phase_end(9,encoding.encoder);
         self.overview=overview;
+        self.release_previous(r);
         result
     }
     #[expect(clippy::too_many_arguments, reason = "The view and its overview share one frame's input, damage and encoding")]
@@ -955,6 +981,7 @@ impl Cache {
         if self.refused_at.replace(packet.view)!=Some(packet.view) {self.forget_refusals();}
         self.derive_cells(finer.map(|(finer,_)|finer));
         if let Some(mut previous)=self.retired.take() {previous.write_back(r,scene,encoder)?;}
+        if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}
         let stroking=!packet.dab_batches.is_empty();
         let view=matches!(destination,Destination::View);
         if self.gesture.is_some() && !self.contact_continues(scene,r,packet,encoder) {
@@ -963,7 +990,7 @@ impl Cache {
         let live=self.gesture.is_some();
         if std::mem::replace(&mut self.contact,stroking) && !stroking && !live {self.write_back(r,scene,encoder)?;}
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
-        if !self.ensure_window(r,scene,encoder) {return Err(GpuRasterError::NotReady);}
+        if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
         let visible=if matches!(destination,Destination::View) {display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY)}else {PixelRect::EMPTY};
         let deferred=match destination {Destination::View=>Class::Prefetch,Destination::Navigator=>Class::Navigator,Destination::Overview(..)|Destination::Preview=>Class::Fallback};

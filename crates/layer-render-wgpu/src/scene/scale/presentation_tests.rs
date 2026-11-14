@@ -1105,3 +1105,118 @@ fn native_to_fit_stroke_undo_preserves_attachment_precision_and_pixels() {
     assert!(baseline.1==undone.1,"real Undo changed {differences} attachment bytes");
     assert!(baseline.1==control.1,"fresh Fit differs from the first fitted baseline attachment");
 }
+
+#[derive(Clone, Copy, Debug)]
+enum Crossed { Raster, Vector, Object }
+
+const CROSSING_EXTENT: [u32; 2] = [1200, 900];
+
+fn crossing_document(kind: Crossed) -> Document {
+    let extent = CROSSING_EXTENT;
+    match kind {
+        Crossed::Raster => super::document_at(extent),
+        Crossed::Vector => {
+            let mut editor = layer_core::Editor::new(Document::from_artwork(Artwork::new(extent).unwrap()).unwrap());
+            let records = crate::vector::bench::scene_b([f64::from(extent[0]), f64::from(extent[1])], 5000).into_iter().map(layer_core::authored::vector::Record::Path).collect();
+            let (_, edit) = editor.document().create_vector_layer_edit("Ink", layer_core::authored::vector::VectorObject::from_records(records), None, 0).unwrap();
+            editor.perform(edit).unwrap();
+            editor.document().clone()
+        }
+        Crossed::Object => {
+            let mut artwork = Artwork::new(extent).unwrap();
+            let image = layer_core::authored::Image::new(rgba8_source(extent, |x, y| [(x / 5) as u8, (y / 4) as u8, (x ^ y) as u8, 255]));
+            let object = artwork.objects.insert(PortableId::random(), ImageObject::new(image)).unwrap();
+            let owner = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Objects(object), "Image")).unwrap();
+            let stack = artwork.compositions.get(artwork.root).unwrap().result;
+            artwork.stacks.get_mut(stack).unwrap().entries = vec![owner];
+            Document::from_artwork(artwork).unwrap()
+        }
+    }
+}
+
+fn crossing_view(zoom: f32) -> ViewState {
+    ViewState { width_px: 600, height_px: 450, document_to_surface: [zoom, 0., 0., zoom, 300. - 600. * zoom, 225. - 450. * zoom] }
+}
+
+fn settle_at(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    crate::test_support::submit_ready(r, frame).unwrap();
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    while r.next_frame() != layer_render::FrameDemand::Wait || !r.scale_display.as_ref().unwrap().complete {
+        assert!(std::time::Instant::now() < deadline, "display did not settle");
+        if r.next_frame() == layer_render::FrameDemand::Work { r.submit(FramePacket { composite_all: false, ..frame }).unwrap(); }
+        r.wait_idle().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+fn surround_inside_document(r: &WgpuRasterizer, presenter: &mut ViewportPresenter, view: ViewState, extent: [u32; 2]) -> usize {
+    let render = |presenter: &mut ViewportPresenter, surround: [f32; 4]| {
+        let (texture, target) = create_target(&r.device, [view.width_px, view.height_px], wgpu::TextureFormat::Rgba32Float, "crossing surround oracle");
+        presenter.present(r, &target, view, surround).unwrap();
+        pixels(r, &texture)
+    };
+    let [first, second] = [[0.9, 0.1, 0.8, 1.], [0.1, 0.9, 0.2, 1.]].map(|surround| render(presenter, surround));
+    let [zoom, _, _, _, x, y] = view.document_to_surface;
+    let inside = |surface: f32, offset: f32, side: u32| { let p = (surface + 0.5 - offset) / zoom; p >= 1. && p < side as f32 - 1. };
+    (0..view.height_px).flat_map(|row| (0..view.width_px).map(move |column| (column, row)))
+        .filter(|&(column, row)| inside(column as f32, x, extent[0]) && inside(row as f32, y, extent[1]))
+        .filter(|&(column, row)| { let index = (row * view.width_px + column) as usize; first[index] != second[index] }).count()
+}
+
+fn assert_crossing_shows_no_surround_until_it_completes(kind: Crossed) {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(kind));
+    for space in layer_core::BlendSpace::ALL {
+    for (from, to) in [(0.4f32, 0.6f32), (0.9, 0.45)] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let frame = |view| FramePacket { view, blend_space: space, ..packet(doc.scene(), extent) };
+        settle_at(&mut r, frame(crossing_view(from)));
+        let level = r.scale_display.as_ref().unwrap().plan.level;
+        let mut presenter = crate::test_support::float_presenter(&r);
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        for step in 0.. {
+            r.submit(FramePacket { composite_all: false, ..frame(crossing_view(to)) }).unwrap();
+            r.wait_idle().unwrap();
+            let cache = r.scale_display.as_ref().unwrap();
+            assert_ne!(cache.plan.level, level, "{kind:?} {space:?} {from}->{to} crosses a level");
+            let shown = surround_inside_document(&r, &mut presenter, crossing_view(to), extent);
+            assert_eq!(shown, 0, "{kind:?} {space:?} {from}->{to} frame {step} shows the surround at {shown} document pixels");
+            assert_eq!(cache.previous.is_some(), !cache.complete, "{kind:?} {space:?} {from}->{to} frame {step} keeps the previous level exactly until the window completes");
+            if cache.complete && r.next_frame() == layer_render::FrameDemand::Wait { break; }
+            assert!(std::time::Instant::now() < deadline, "{kind:?} {space:?} {from}->{to} settles");
+            if r.next_frame() != layer_render::FrameDemand::Work { std::thread::sleep(std::time::Duration::from_millis(1)); }
+        }
+    }}
+}
+
+#[test]
+fn crossing_a_raster_level_shows_no_surround_inside_the_document_until_it_completes() { assert_crossing_shows_no_surround_until_it_completes(Crossed::Raster); }
+#[test]
+fn crossing_a_vector_level_shows_no_surround_inside_the_document_until_it_completes() { assert_crossing_shows_no_surround_until_it_completes(Crossed::Vector); }
+#[test]
+fn crossing_an_object_level_shows_no_surround_inside_the_document_until_it_completes() { assert_crossing_shows_no_surround_until_it_completes(Crossed::Object); }
+
+#[test]
+fn a_crossing_at_the_pinned_grant_keeps_the_previous_level_until_required_work_needs_its_memory() {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(Crossed::Vector));
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let frame = |view| FramePacket { view, ..packet(doc.scene(), extent) };
+    settle_at(&mut r, frame(crossing_view(0.4)));
+    let _other = crate::memory::memory_tests::display_frame_with_budget(&mut r, frame(crossing_view(0.6)), 0);
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    for step in 0.. {
+        r.submit(FramePacket { composite_all: false, ..frame(crossing_view(0.6)) }).unwrap();
+        r.wait_idle().unwrap();
+        let cache = r.scale_display.as_ref().unwrap();
+        assert_eq!(cache.refused_bytes(), 0, "frame {step}: the crossing refuses no required work");
+        match step {
+            0 => {
+                assert!(cache.previous.is_some() && !cache.complete, "optional work leaves the previous level standing in");
+                r.scene_tiers.display.heap().evict(1, Class::Visible);
+            },
+            _ => assert!(cache.previous.is_none(), "frame {step}: required work took the previous level's memory first"),
+        }
+        if cache.complete && r.next_frame() == layer_render::FrameDemand::Wait { break; }
+        assert!(std::time::Instant::now() < deadline, "the crossing settles");
+        if r.next_frame() != layer_render::FrameDemand::Work { std::thread::sleep(std::time::Duration::from_millis(1)); }
+    }
+}

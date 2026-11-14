@@ -44,10 +44,12 @@ impl Window {
 }
 pub(crate) struct PresentedPage<'a> {
     pub(super) views: [&'a CommittedImage;3],
+    pub(super) stand_in: bool,
     pub(super) geometry: &'a wgpu::Buffer,
 }
 impl<'a> PresentedPage<'a> {
     pub fn views(&self)->[&'a wgpu::TextureView;3] {self.views.map(CommittedImage::view)}
+    pub fn stand_in_scale(&self)->f32 {if self.stand_in {(1u32<<self.views[1].image.plan.level) as f32}else {0.}}
     pub fn geometry(&self)->&'a wgpu::Buffer {self.geometry}
 }
 impl Pixels {
@@ -1519,12 +1521,14 @@ impl Cache {
         let mut written=vec![0u32;(self.geometry.size() as usize-32)/4];
         for (index,cell) in cells.cells.iter().enumerate() {if cell.derived && cell.reduced || cell.shown.is_some() {written[index/32]|=1<<(index%32);}}
         let versions=cells.cells.iter().filter_map(|cell|cell.shown.as_ref().and_then(|shown|shown.recorded.clone())).collect::<Vec<_>>();
+        let cell_count=cells.cells.len();
         let current=self.gesture.as_ref().filter(|_|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.shown.is_some()))
             .map(|_|Current {frame:frame.clone(),derived:false});
         let same=current.is_some() || !versions.is_empty() && versions.iter().all(|recorded|recorded.authored==authored || authored_matches(std::slice::from_ref(recorded),&frame,authored,recorded.written));
         drop((cells,store));
         if written.iter().all(|word|*word==0) {return Ok(());}
         let count=written.iter().map(|word|word.count_ones()).sum::<u32>();
+        self.complete=count as usize==cell_count;
         let level=self.plan.level;let window=self.plan.bounds;
         let data=[count,window.min_x()>>level,window.min_y()>>level,window.max_x().div_ceil(1<<level),window.max_y().div_ceil(1<<level)];
         #[cfg(test)]

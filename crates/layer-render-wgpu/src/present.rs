@@ -1394,6 +1394,7 @@ impl ViewportPresenter {
         data[62..64].copy_from_slice(&renderer.clipping_preview.map(f32::from));
         data[128..152].copy_from_slice(&motion.map_or([0.; 24], |(_, values, ..)| values));
         data[152] = f32::from(composite.texture().format() == wgpu::TextureFormat::Rgba16Float);
+        data[153] = page.as_ref().map_or(0.,|page|page.stand_in_scale());
         if let Some(reveal)=renderer.fill_reveal.filter(|reveal|reveal.radius>=0. && self.fill_before.as_ref().is_some_and(|(id,_)|*id==reveal.transaction)) {
             data[156..160].copy_from_slice(&[reveal.center[0],reveal.center[1],reveal.radius,1.]);
         }

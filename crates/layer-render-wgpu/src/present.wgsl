@@ -29,7 +29,7 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
 @group(0) @binding(11) var saved_selection: texture_2d<u32>;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
-struct DisplayCache { scale: u32, coarse_scale: u32, next_scale: u32, written_pages: u32, window: vec4<u32>, written:array<u32> }
+struct DisplayCache { scale: u32, padding: u32, next_scale: u32, written_pages: u32, window: vec4<u32>, written:array<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
 @group(0) @binding(6) var kept: texture_2d<f32>;
 @group(0) @binding(13) var navigator: texture_2d<f32>;
@@ -74,6 +74,16 @@ fn mip_coordinate(p: f32, extent: f32, scale: f32) -> f32 {
         return last - 1. + clamp((p - previous) / distance, 0., 1.);
     }
     return clamp(p / scale - .5, 0., last);
+}
+fn coarse_point(p: vec2<f32>) -> vec4<f32> {
+    let extent = camera.offset_document.zw;
+    let scale = camera.levels.y;
+    let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
+    let low = vec2<u32>(floor(q));
+    let high = min(low+1u, textureDimensions(coarse)-1u);
+    let t = fract(q);
+    return mix(mix(textureLoad(coarse, vec2<i32>(low), 0), textureLoad(coarse, vec2<i32>(i32(high.x), i32(low.y)), 0), t.x),
+        mix(textureLoad(coarse, vec2<i32>(i32(low.x), i32(high.y)), 0), textureLoad(coarse, vec2<i32>(high), 0), t.x), t.y);
 }
 fn detail_point(p: vec2<f32>) -> vec4<f32> {
     let extent = camera.offset_document.zw;
@@ -183,7 +193,10 @@ fn moving_between(p: vec2<f32>, composite: vec4<f32>) -> vec4<f32> {
     return above + moving * (1. - above.a) + (composite - above) * (1. - moving.a);
 }
 fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
-    if !grid_written(p) {return vec4<f32>(0.);}
+    if !grid_written(p) {
+        if camera.levels.y==0. {return vec4<f32>(0.);}
+        return coarse_point(p);
+    }
     if !grid_complete() {return detail_point(p);}
     let scale = f32(cache.scale);
     let coarser = clamp(log2(max(length(dx), length(dy)) / scale) * 5. - 4., 0., 1.);
@@ -341,7 +354,7 @@ fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     let extent = camera.offset_document.zw;
     let cropping = camera.crop_offset.w > .5;
     if any(p < vec2<f32>(0.)) || any(p >= extent) { return surround_color(surface, p); }
-    if source==0u && !grid_written(p) {return surround_color(surface,p);}
+    if source==0u && camera.levels.y==0. && !grid_written(p) {return surround_color(surface,p);}
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let dx = camera.inverse.xy * footprint;
     let dy = camera.inverse.zw * footprint;
