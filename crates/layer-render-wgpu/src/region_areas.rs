@@ -21,20 +21,20 @@ impl AreasJob {
         self.data.tiles.values().map(|tile|tile.descriptor().byte_len([PAGE_SIZE;2]).unwrap_or(0) as u64).sum()
     }
     pub fn advance(&mut self,r:&mut WgpuRasterizer,regions:&mut RegionRequests)->Result<Option<RegionOutput>,GpuRasterError> {
-        if self.submission.as_ref().is_some_and(|owner|owner.discarded()) {return Err(GpuRasterError::DeferredObjectWork);}
+        if self.submission.as_ref().is_some_and(|owner|owner.discarded()) {return Err(GpuRasterError::Invariant("prepared advance state is inconsistent"));}
         if self.submission.as_ref().is_some_and(|owner|!owner.submitted()) || self.in_flight.load(Ordering::Acquire)>0 {return Ok(None);}
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&wgpu::CommandEncoderDescriptor {label:Some("flat areas")});
         let result=self.encode(r,regions,&mut encoder);
         r.uploads.finish(&encoder);
         r.metrics.command_passes+=encoder.pass_count();
-        if !encoder.has_work() {return match result {Err(GpuRasterError::DeferredObjectWork)=>Ok(None),other=>other};}
+        if !encoder.has_work() {return match result {Err(GpuRasterError::NotReady)=>Ok(None),other=>other};}
         self.submission=Some(encoder.submission());
         self.in_flight.fetch_add(1,Ordering::AcqRel);
-        let done=self.in_flight.clone();
-        encoder.on_submitted_work_done(move||{done.fetch_sub(1,Ordering::AcqRel);});
+        let done=crate::InFlightCompletion(self.in_flight.clone());
+        encoder.hold(done);
         encoder.submit(&r.queue);
         if let Some(refiner)=&mut regions.refiner {refiner.timed(&r.queue,regions.chunk_timing.take());}
-        match result {Err(GpuRasterError::DeferredObjectWork)=>Ok(None),other=>other}
+        match result {Err(GpuRasterError::NotReady)=>Ok(None),other=>other}
     }
     fn encode(&mut self,r:&mut WgpuRasterizer,regions:&mut RegionRequests,encoder:&mut crate::submission::CommandEncoder)->Result<Option<RegionOutput>,GpuRasterError> {
         r.compilation.check()?;
@@ -50,11 +50,11 @@ impl AreasJob {
             let bytes=r.document_color().paint_descriptor().byte_len([PAGE_SIZE;2]).ok_or(GpuRasterError::SizeOverflow)? as u64;
             if pages[0].checked_mul(pages[1]).and_then(|count|count.checked_mul(bytes)).is_none_or(|bytes|bytes>layer_core::raster::MAX_PUBLICATION_BYTES) {return Err(GpuRasterError::SizeOverflow);}
             if let Some(binding)=&self.request.paper {r.prepare_paper_binding(binding,startup::BRUSH)?;}
-            if regions.cache.as_ref().is_some_and(|cache|cache.pending()) {return Err(GpuRasterError::DeferredObjectWork);}
+            if regions.cache.as_ref().is_some_and(|cache|cache.pending()) {return Err(GpuRasterError::NotReady);}
             {
                 let ready=regions.raw.prepare(&r.compilation,startup::BRUSH)
                     & r.compilation.require(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color.depth,false),startup::BRUSH);
-                if !regions.flood.prepare_areas(&r.compilation,startup::BRUSH) || !ready {return Err(GpuRasterError::DeferredObjectWork);}
+                if !regions.flood.prepare_areas(&r.compilation,startup::BRUSH) || !ready {return Err(GpuRasterError::NotReady);}
             }
             r.drain_image_decodes(encoder)?;
             regions.refiner(r).poll_timing();

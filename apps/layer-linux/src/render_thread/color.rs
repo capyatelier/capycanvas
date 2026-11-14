@@ -180,10 +180,6 @@ impl Worker {
         renderer.finish_startup_catalog();
         while !renderer.poll_startup().map_err(error)?.brush_ready {
             check()?;
-            renderer
-                .device()
-                .poll(wgpu::PollType::Poll)
-                .map_err(error)?;
             std::thread::sleep(Duration::from_millis(2));
         }
         check()?;
@@ -206,26 +202,23 @@ impl Worker {
             composite_all: true,
             blend_space: document.composition().blend,
         };
-        while !renderer.raster_dependencies_ready(packet, None) {
+        loop {
+            match renderer.submit_when_ready(packet, None) {
+                std::task::Poll::Ready(result) => { result.map_err(error)?; break; }
+                std::task::Poll::Pending => {},
+            }
             check()?;
-            renderer
-                .device()
-                .poll(wgpu::PollType::Poll)
-                .map_err(error)?;
             std::thread::sleep(Duration::from_millis(2));
         }
-        renderer.submit(packet).map_err(error)?;
-        let finished = Arc::new(AtomicBool::new(false));
-        let completed = finished.clone();
-        renderer
-            .queue()
-            .on_submitted_work_done(move || completed.store(true, Ordering::Release));
-        while !finished.load(Ordering::Acquire) {
+        let (completed,finished)=mpsc::channel();
+        renderer.on_gpu_done(move || {let _=completed.send(());});
+        loop {
+            match finished.try_recv() {
+                Ok(())=>break,
+                Err(mpsc::TryRecvError::Disconnected)=>return Err("The operation stopped".into()),
+                Err(mpsc::TryRecvError::Empty)=>{},
+            }
             check()?;
-            renderer
-                .device()
-                .poll(wgpu::PollType::Poll)
-                .map_err(error)?;
             std::thread::sleep(Duration::from_millis(2));
         }
         let mut presenter = workspace_presenter(
@@ -237,7 +230,6 @@ impl Worker {
         while !presenter.prepare_chrome(&renderer) {
             check()?;
             renderer.poll_startup().map_err(error)?;
-            renderer.device().poll(wgpu::PollType::Poll).map_err(error)?;
             std::thread::sleep(Duration::from_millis(2));
         }
         check()?;

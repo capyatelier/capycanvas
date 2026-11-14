@@ -2,6 +2,9 @@
 //! Synthetic software gestures do not measure physical device input latency.
 use super::*;
 
+#[path = "cold_first_photo_tests.rs"]
+mod cold_first_photo;
+
 
 #[test]
 #[ignore = "private Wayland display, hardware GPU and native mouse wheel"]

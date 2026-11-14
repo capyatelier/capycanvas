@@ -57,15 +57,18 @@ pub(super) fn masked(extent: [u32; 2], corners: [[f32; 2]; 4]) -> Document {
 pub(super) fn mask_target(doc: &Document) -> SourceTarget { SourceTarget::Coverage(mask_snapshot(doc).target) }
 /// Each resident coverage page for a source.
 pub(super) fn mask_values(r: &WgpuRasterizer, target: SourceTarget) -> std::collections::BTreeMap<[u32; 2], Vec<f32>> {
-    r.layer_masks
-        .pages
-        .iter()
-        .filter(|((owner, _), _)| *owner == target)
-        .map(|((_, c), page)| {
-            let values = page_bytes(r, &page.texture).as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect();
-            (*c, values)
-        })
-        .collect()
+    let source=&r.layer_masks.definitions[&target];
+    let data=r.mask_data(target,source).unwrap();
+    data.tiles.keys().filter(|key|key.plane==layer_core::raster::RasterPlane::Mask).map(|key|key.coordinate)
+        .chain(r.layer_masks.pages.keys().chain(r.layer_masks.previews.keys()).filter(|(owner,_)|*owner==target).map(|(_,coordinate)|*coordinate))
+        .collect::<std::collections::BTreeSet<_>>().into_iter().map(|coordinate| {
+            let selected=r.current_mask_version(target,coordinate).unwrap();
+            let bytes=if let Some(preview)=r.layer_masks.previews.get(&(target,coordinate)).filter(|preview|preview.matches(&selected)) {
+                page_bytes(r,&preview.page.read(&preview.version,None).unwrap().value().texture)
+            } else {crate::test_support::mask_page_bytes(r,target,coordinate)};
+            let values=bytes.as_chunks::<4>().0.iter().map(|value|f32::from_le_bytes(*value)).collect();
+            (coordinate,values)
+        }).collect()
 }
 
 #[test]
@@ -189,9 +192,13 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
         }))
         .unwrap();
         frame(&mut r);
+        let transforms=r.transforms.as_ref().unwrap();
+        let capture=transforms.declared_capture(&r,layer.scene(),r.transform_preview.as_ref().unwrap()).unwrap();
         let mut brightest = 0f32;
         for page in &r.paint_layers[0].pages {
-            let bytes = page_bytes(&r, &page.active().texture);
+            let expected=transforms.requested_version_for_capture(&r,&capture,RasterPlane::Color,page.coordinate).unwrap();
+            let read=page.active().read(expected,None).unwrap();
+            let bytes = page_bytes(&r, &read.value().texture);
             for texel in bytes.as_chunks::<16>().0 {
                 let v: [f32; 4] = std::array::from_fn(|k| f32::from_le_bytes(texel[k * 4..k * 4 + 4].try_into().unwrap()));
                 assert!(v.iter().all(|c| c.is_finite() && *c >= 0.), "{depth:?} {interpolation:?}: negative lobe {v:?}");
@@ -698,7 +705,7 @@ fn default_canvas_folded_warp_survives_motion_cancel_commit_and_replay() {
 fn mask_warps_commit_and_replay_as_previewed() {
     let extent = [384, 256];
     let frame = |r: &mut WgpuRasterizer, layer: &Document, batches: &[DabBatch], reset| {
-        frame(r, layer.scene(), extent, &[], batches, reset)
+        crate::test_support::submit_settled(r,FramePacket {dab_batches:batches,reset_layers:reset,..packet(layer.scene(),extent)})
     };
     let layer = masked(extent, [[20., 20.], [260., 30.], [230., 200.], [30., 180.]]);
     let source = Rect {
@@ -805,4 +812,37 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
     }
     assert!(covered > 100_000, "the selection lands inside the layer");
     assert_eq!(warped.bounds(), expected.bounds());
+}
+
+#[test]
+fn mask_transform_preview_and_cancel_preserve_selected_persistent_names() {
+    let extent=[384,256];
+    let mut document=paint_document(extent,"Mask transform names");
+    let mut mask=reveal_all(extent,[0,0]);
+    mask.source.default_coverage=0.;
+    mask.source.raster=layer_core::raster::RasterRevision::pending();
+    set_mask(&mut document,mask);
+    let target=mask_target(&document);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut ink=dab([1.;4]);ink.center=Point {x:96.,y:96.};ink.radii=[48.;2];
+    let stroke=DabBatch {damage:Rect {min:Point::default(),max:Point {x:256.,y:256.}},..batch(target)};
+    crate::test_support::submit_settled(&mut r,FramePacket {reset_layers:true,dabs:&[ink],dab_batches:&[stroke],..packet(document.scene(),extent)});
+    let original=mask_values(&r,target);
+    assert!(!original.is_empty());
+    let selected=original.keys().map(|coordinate|(*coordinate,r.current_mask_version(target,*coordinate).unwrap())).collect::<Vec<_>>();
+    let preview=layer_render::TransformPreview {transaction:1,moving:false,target,selection:None,
+        transform:ImageTransform {placement:LayerPlacement::from_affine(Affine::translation(Point {x:31.,y:17.})),..Default::default()}};
+    r.set_transform_preview(Some(&preview)).unwrap();
+    crate::test_support::submit_settled(&mut r,packet(document.scene(),extent));
+    assert!(!r.layer_masks.previews.is_empty());
+    assert_ne!(mask_values(&r,target),original);
+    for (coordinate,version) in &selected {
+        assert_eq!(r.current_mask_version(target,*coordinate).unwrap().matches(version),Some(true));
+        assert!(r.layer_masks.pages[&(target,*coordinate)].read(version,None).is_ok());
+    }
+    r.set_transform_preview(None).unwrap();
+    crate::test_support::submit_settled(&mut r,packet(document.scene(),extent));
+    assert!(r.layer_masks.previews.is_empty());
+    assert_eq!(mask_values(&r,target),original);
+    for (coordinate,version) in selected {assert_eq!(r.current_mask_version(target,coordinate).unwrap().matches(&version),Some(true));}
 }

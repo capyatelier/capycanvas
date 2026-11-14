@@ -302,7 +302,7 @@ pub unsafe extern "C" fn capy_apple_prepare_recovery(app: u64, now: u64) -> i32 
 impl CapyApple {
     fn prepare_recovery(&mut self, now: u64) -> i32 {
         self.perform(|app| {
-            app.metal.observe_failure(&mut app.host, true);
+            app.metal.observe_failure(&mut app.host);
             if app.host.session.engine().backend().0.is_some() {
                 // A failed GPU is suspended with its surviving CPU state. Recovery
                 // still proceeds; the shared snapshot/worker validates the pixels.

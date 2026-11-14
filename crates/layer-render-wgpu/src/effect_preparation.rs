@@ -1,6 +1,7 @@
 //! Bounded, parameter-dependent WGSL work. No filter mathematics lives here.
 use super::*;
 use layer_core::{EffectLookup, EffectValue};
+use std::sync::Weak;
 
 #[derive(Clone, PartialEq)]
 pub(super) struct Key {
@@ -17,10 +18,22 @@ pub(super) struct Dispatch {
     pub pipeline: Deferred<wgpu::ComputePipeline>,
     pub binding: wgpu::BindGroup,
     pub groups: [u32; 3],
+    pub parameters: Weak<wgpu::Buffer>,
 }
 pub(super) enum Work {
     Dispatch(Dispatch),
-    Copy { source: wgpu::Buffer, destination: wgpu::Buffer, offset: u64, size: u64 },
+    Copy { source: Arc<wgpu::Buffer>, destination: Weak<wgpu::Buffer>, offset: u64, size: u64 },
+    Upload { buffer: Weak<wgpu::Buffer>, offset: u64, bytes: Vec<u8> },
+}
+impl Work {
+    fn destination(&self) -> &Weak<wgpu::Buffer> {
+        match self {
+            Self::Dispatch(dispatch) => &dispatch.parameters,
+            Self::Copy {destination,..} => destination,
+            Self::Upload {buffer,..} => buffer,
+        }
+    }
+    pub(super) fn needed(&self) -> bool { self.destination().strong_count() != 0 }
 }
 pub(super) struct Recipes {
     layout: wgpu::BindGroupLayout,
@@ -48,6 +61,33 @@ impl Recipes {
     }
 }
 impl Preparation {
+    pub fn discard_unreferenced(&mut self) {
+        self.pending.reverse();
+        self.pending.retain(Work::needed);
+        self.pending.reverse();
+    }
+    pub fn pending_for(&self, buffer: &Arc<wgpu::Buffer>) -> bool {
+        let buffer = Arc::downgrade(buffer);
+        self.pending.iter().any(|work| work.destination().ptr_eq(&buffer))
+    }
+    fn selected<'a>(&self, parameters: impl IntoIterator<Item = &'a Arc<wgpu::Buffer>>) -> Vec<bool> {
+        if self.pending.is_empty() { return Vec::new(); }
+        let mut required: std::collections::HashSet<_> = parameters.into_iter().map(Arc::as_ptr).collect();
+        let mut selected = vec![false; self.pending.len()];
+        for (index, work) in self.pending.iter().enumerate().rev() {
+            if required.contains(&work.destination().as_ptr()) {
+                selected[index] = true;
+                if let Work::Copy { source, .. } = work { required.insert(Arc::as_ptr(source)); }
+            }
+        }
+        selected
+    }
+    pub fn ready<'a>(&self, parameters: impl IntoIterator<Item = &'a Arc<wgpu::Buffer>>) -> bool {
+        self.pending.iter().zip(self.selected(parameters)).all(|(work, selected)| !selected || match work {
+            Work::Dispatch(dispatch) => dispatch.pipeline.ready(),
+            Work::Copy { .. } | Work::Upload { .. } => true,
+        })
+    }
     pub fn retain_programs(&mut self, programs: &[Arc<EffectProgram>]) {
         self.pipelines
             .retain(|(key, _)| programs.iter().any(|p| p.lookups.contains(&key.definition)));
@@ -167,11 +207,18 @@ impl Preparation {
         self.pipelines.push((key.clone(), pipeline.clone()));
         Ok(pipeline)
     }
-    pub fn encode(&mut self, encoder: &mut crate::submission::CommandEncoder) {
-        let mut pending = self.pending.drain(..).peekable();
+    pub fn encode<'a>(&mut self, uploads: &mut crate::Uploads, encoder: &mut crate::submission::CommandEncoder,
+        parameters: impl IntoIterator<Item = &'a Arc<wgpu::Buffer>>,
+    ) -> Result<(), GpuRasterError> {
+        self.discard_unreferenced();
+        let mut selected = self.selected(parameters).into_iter();
+        let mut pending = self.pending.extract_if(.., |_| selected.next().unwrap()).collect::<Vec<_>>().into_iter().peekable();
         while let Some(work) = pending.next() {
             match work {
-                Work::Copy { source, destination, offset, size } => encoder.copy_buffer_to_buffer(&source, offset, &destination, offset, size),
+                Work::Upload { buffer, offset, bytes } => if let Some(buffer) = buffer.upgrade() { uploads.write_at(encoder, &buffer, offset, &bytes)?; },
+                Work::Copy { source, destination, offset, size } => if let Some(destination) = destination.upgrade() {
+                    encoder.copy_buffer_to_buffer(&source, offset, &destination, offset, size);
+                },
                 Work::Dispatch(mut dispatch) => {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("changed effect lookup tables"), timestamp_writes: None,
@@ -189,12 +236,72 @@ impl Preparation {
                 }
             }
         }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_preparation_encodes_copy_dependencies_without_unrelated_parameters() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let buffer=||Arc::new(r.device.create_buffer(&wgpu::BufferDescriptor {
+            label:Some("selected effect parameters"),size:16,
+            usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false,
+        }));
+        let source=buffer();let intermediate=buffer();let output=buffer();let other=buffer();
+        let mut preparation=Preparation::new(&r.device);
+        preparation.pending.push(Work::Upload {buffer:Arc::downgrade(&source),offset:0,bytes:vec![42;16]});
+        preparation.pending.push(Work::Copy {source:source.clone(),destination:Arc::downgrade(&intermediate),offset:0,size:16});
+        preparation.pending.push(Work::Copy {source:intermediate.clone(),destination:Arc::downgrade(&output),offset:0,size:16});
+        preparation.pending.push(Work::Upload {buffer:Arc::downgrade(&other),offset:0,bytes:vec![99;16]});
+        assert_eq!(preparation.selected([&output]),[true,true,true,false]);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let mut uploads=crate::Uploads::new(&r.device,1024);
+        preparation.encode(&mut uploads,&mut encoder,[&output]).unwrap();
+        uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+        assert_eq!(preparation.pending.len(),1);
+        let read=|buffer:&wgpu::Buffer|pollster::block_on(crate::local_tone::read_buffer_async(&r.device,&r.queue,buffer)).unwrap();
+        assert_eq!(read(&output),vec![42;16]);
+        assert_eq!(read(&other),vec![0;16]);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        preparation.encode(&mut uploads,&mut encoder,[&other]).unwrap();
+        uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+        assert!(preparation.pending.is_empty());
+        assert_eq!(read(&other),vec![99;16]);
+    }
+    #[test]
+    fn cancelled_preparation_releases_copy_dependencies_but_keeps_owned_parameters() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let buffer=||Arc::new(r.device.create_buffer(&wgpu::BufferDescriptor {
+            label:Some("effect preparation lifetime"),size:16,
+            usage:wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false,
+        }));
+        let source=buffer();let intermediate=buffer();let output=buffer();
+        let source_weak=Arc::downgrade(&source);
+        let intermediate_weak=Arc::downgrade(&intermediate);
+        let output_weak=Arc::downgrade(&output);
+        let mut preparation=Preparation::new(&r.device);
+        preparation.pending.push(Work::Upload {buffer:source_weak.clone(),offset:0,bytes:vec![0;16]});
+        preparation.pending.push(Work::Copy {source:source.clone(),destination:intermediate_weak.clone(),offset:0,size:16});
+        preparation.pending.push(Work::Copy {source:intermediate.clone(),destination:output_weak.clone(),offset:0,size:16});
+        let reader=source.clone();
+        drop((source,intermediate));
+        preparation.discard_unreferenced();
+        assert_eq!(preparation.pending.len(),3);
+        assert!(preparation.pending_for(&output));
+        drop(output);
+        preparation.discard_unreferenced();
+        assert_eq!(preparation.pending.len(),1);
+        assert!(intermediate_weak.upgrade().is_none());
+        assert!(output_weak.upgrade().is_none());
+        assert!(preparation.pending_for(&reader));
+        drop(reader);
+        preparation.discard_unreferenced();
+        assert!(preparation.pending.is_empty());
+        assert!(source_weak.upgrade().is_none());
+    }
     #[test]
     fn preparation_refuses_aggregate_workgroup_overflow_before_dispatch() {
         let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();

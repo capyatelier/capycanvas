@@ -14,7 +14,7 @@ pub struct ColorCanvas {
     analysis: Option<crate::effect_analysis::Job>,
     analysed: bool,
     submitted: bool,
-    finished: Option<Arc<AtomicBool>>,
+    finished: Option<Arc<std::sync::atomic::AtomicU8>>,
 }
 impl SnapshotGpu {
     pub fn color_canvas(
@@ -32,6 +32,7 @@ impl SnapshotGpu {
         )?;
         #[cfg(target_arch = "wasm32")]
         self.install_browser_workers(&mut renderer);
+        if let Some(wake)=&self.preparation_wake {renderer.set_preparation_wake(wake.clone());}
         renderer.seed_evaluation_context(context.clone());
         renderer.resize_surface(view.width_px, view.height_px)?;
         let mut programs = Vec::new();
@@ -72,15 +73,10 @@ impl ColorCanvas {
     }
     pub fn poll(&mut self) -> Result<bool, GpuRasterError> {
         self.control.check()?;
-        let renderer = self.renderer.as_mut().unwrap();
-        #[cfg(not(target_arch = "wasm32"))]
-        renderer
-            .device()
-            .poll(wgpu::PollType::Poll)
-            .map_err(|e| GpuRasterError::Color(e.to_string()))?;
         if let Some(finished) = &self.finished {
-            return Ok(finished.load(Ordering::Acquire));
+            return match finished.load(Ordering::Acquire) {0=>Ok(false),1=>Ok(true),_=>Err(GpuRasterError::Color("The operation stopped".into()))};
         }
+        let renderer = self.renderer.as_mut().unwrap();
         if self.validating
             && let Some(result) = renderer.take_effect_validation()
         {
@@ -129,20 +125,22 @@ impl ColorCanvas {
         renderer.submit(packet)?;
         self.submitted = true;
         if renderer.has_presentable_frame() {
-            let finished = Arc::new(AtomicBool::new(false));
-            let done = finished.clone();
-            renderer
-                .queue()
-                .on_submitted_work_done(move || done.store(true, Ordering::Release));
+            let finished = Arc::new(std::sync::atomic::AtomicU8::new(0));
+            let done = Completion(finished.clone());
+            renderer.device.on_queue_done(renderer.queue(),move || {done.0.store(1,Ordering::Release);drop(done);});
             self.finished = Some(finished);
         }
         Ok(false)
     }
     pub fn take_ready(mut self) -> Result<WgpuRasterizer, GpuRasterError> {
         self.control.check()?;
-        if !self.finished.as_ref().is_some_and(|finished| finished.load(Ordering::Acquire)) {
+        if self.finished.as_ref().is_some_and(|finished|finished.load(Ordering::Acquire)==2) {return Err(GpuRasterError::Color("The operation stopped".into()));}
+        if !self.finished.as_ref().is_some_and(|finished| finished.load(Ordering::Acquire)==1) {
             return Err(GpuRasterError::Color("Color canvas is not ready".into()));
         }
         Ok(self.renderer.take().unwrap())
     }
 }
+
+struct Completion(Arc<std::sync::atomic::AtomicU8>);
+impl Drop for Completion {fn drop(&mut self) {let _=self.0.compare_exchange(0,2,Ordering::AcqRel,Ordering::Acquire);}}

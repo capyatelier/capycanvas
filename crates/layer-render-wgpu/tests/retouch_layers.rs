@@ -261,7 +261,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     let settle = |engine: &mut Engine| {
         let start = std::time::Instant::now();
         engine.render_frame_at(0).unwrap();
-        while engine.wants_continuous_frames() {
+        while engine.frame_demand() != layer_render::FrameDemand::Wait {
             assert!(start.elapsed().as_secs() < 60, "retouching did not settle");
             engine.backend_mut().wait_idle().unwrap();
             engine.render_frame_at(0).unwrap();

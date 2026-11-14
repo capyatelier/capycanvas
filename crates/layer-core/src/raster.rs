@@ -5,9 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 mod decoded_cache;
 pub use decoded_cache::{DecodedTileCache, DecodedTileCacheStats};
+mod contents;
+pub use contents::{CanonicalName, ContentName, ContentStamp, ContentTree, ContentVersion, RasterTiles};
 use std::time::Duration;
 use std::{
-    collections::BTreeMap,
     sync::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -57,7 +58,7 @@ struct Publication<T> {
 impl<T> Default for Publication<T> {
     fn default() -> Self {
         Self {
-            id: NEXT_PUBLICATION.fetch_add(1, Ordering::Relaxed),
+            id: ContentName::fresh().0,
             value: Mutex::new(None),
             ready: Condvar::new(),
             #[cfg(target_arch="wasm32")]
@@ -278,6 +279,7 @@ impl TileBlob {
     pub fn memory_compressed(&self)->Result<Option<Arc<[u8]>>,String> {self.compressed.memory()}
     pub fn poll_compressed(&self)->Result<crate::package::RangeState,String> {self.compressed.poll()}
     pub async fn read_compressed(&self)->Result<crate::package::ByteRange,String> {self.compressed.read().await}
+    pub fn read_interest(&self)->Result<Option<crate::tile_io::ReadWait>,String> {self.compressed.read_interest()}
     pub(crate) fn has_package_origin(&self)->bool {matches!(self.content_identity,Some(TileContentIdentity::Package {..})) || self.compressed.package_origin()}
     pub fn resident_bytes(&self) -> usize { self.compressed.resident_bytes() }
     fn decode_samples(descriptor: PixelDescriptor, compressed: &[u8]) -> Result<Vec<u8>, String> {
@@ -421,6 +423,7 @@ impl TileBlob {
 struct TilePublication {
     data: Publication<TileBlob>,
     descriptor: PixelDescriptor,
+    canonical: Option<Arc<CanonicalName>>,
 }
 #[derive(Clone, Debug)]
 pub struct RasterTile(Arc<TilePublication>);
@@ -431,8 +434,17 @@ impl RasterTile {
         Self(Arc::new(TilePublication {
             data: Publication::default(),
             descriptor,
+            canonical: None,
         }))
     }
+    pub fn pending_from_live(descriptor: PixelDescriptor, before: ContentVersion) -> (Self, Arc<CanonicalName>) {
+        let canonical = CanonicalName::new(before);
+        (Self(Arc::new(TilePublication { data: Publication::default(), descriptor, canonical: Some(canonical.clone()) })), canonical)
+    }
+    pub fn content_version(&self) -> ContentVersion {
+        self.0.canonical.as_ref().map_or_else(|| ContentName::captured(self).into(), |name| name.version())
+    }
+    pub fn capture_name(&self) -> ContentName { ContentName::captured(self) }
     pub fn descriptor(&self) -> PixelDescriptor {
         self.0.descriptor
     }
@@ -487,7 +499,7 @@ pub struct RasterWatercolor {
 
 #[derive(Clone, Debug, Default)]
 pub struct RasterData {
-    pub tiles: BTreeMap<TileKey, RasterTile>,
+    pub tiles: RasterTiles,
     pub watercolor: Option<RasterWatercolor>,
 }
 impl RasterData {
@@ -817,7 +829,7 @@ mod tests {
         let tile = RasterTile::pending(descriptor);
         assert_eq!(tile.descriptor().byte_len([TILE_SIZE; 2]), Some(524288));
         let data = RasterData {
-            tiles: BTreeMap::from([(
+            tiles: RasterTiles::from([(
                 TileKey {
                     plane: RasterPlane::Color,
                     coordinate: [0, 0],
@@ -839,7 +851,7 @@ mod tests {
             .is_err()
         );
         let wetness = TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [0, 0] };
-        let mut watercolor = RasterData { tiles: BTreeMap::from([(wetness, RasterTile::pending(RasterPlane::WatercolorWetness.descriptor(color)))]), watercolor: None };
+        let mut watercolor = RasterData { tiles: RasterTiles::from([(wetness, RasterTile::pending(RasterPlane::WatercolorWetness.descriptor(color)))]), watercolor: None };
         assert!(watercolor.validate_index([256; 2], false, color).is_err());
         watercolor.watercolor = Some(RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. });
         watercolor.validate_index([256; 2], false, color).unwrap();
@@ -878,7 +890,7 @@ mod tests {
                 tile.publish(Err("readback failed".into())).unwrap();
                 pending
                     .publish(Ok(RasterData {
-                        tiles: BTreeMap::from([(
+                        tiles: RasterTiles::from([(
                             TileKey {
                                 plane: RasterPlane::Color,
                                 coordinate: [0, 0],
@@ -942,7 +954,7 @@ mod tests {
             coordinate: [0, 0],
         };
         let original = RasterData {
-            tiles: BTreeMap::from([(key, tile.clone())]),
+            tiles: RasterTiles::from([(key, tile.clone())]),
             watercolor: None,
         };
         let revision = RasterRevision::backed(original.clone());

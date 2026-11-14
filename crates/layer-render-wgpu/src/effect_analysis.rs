@@ -44,6 +44,11 @@ pub(crate) struct BakeTask {
     job: Option<Job>,
     result: Option<Result<Candidate, String>>,
 }
+impl BakeTask {
+    pub(crate) fn set_wake(&self,wake:Arc<dyn Fn()+Send+Sync>) {
+        if let Some(job)=&self.job {job.set_wake(wake);}
+    }
+}
 enum Request { Artwork(ArtworkQuery), Bake(BakeInput) }
 pub struct Candidate {
     pub(crate) entries: Vec<Arc<Prepared>>,
@@ -55,13 +60,14 @@ impl Job {
         Self::analyze(gpu, Request::Artwork(query))
     }
     pub(crate) fn frame(gpu: snapshot::SnapshotGpu, input: BakeInput) -> Result<Self, String> { Self::analyze(gpu, Request::Bake(input)) }
-    #[cfg(not(target_arch = "wasm32"))]
     fn analyze(gpu: snapshot::SnapshotGpu, request: Request) -> Result<Self, String> {
-        Self::spawn("capy-effect-analysis", move |control| pollster::block_on(run(gpu, request, control)))
-    }
-    #[cfg(target_arch = "wasm32")]
-    fn analyze(gpu: snapshot::SnapshotGpu, request: Request) -> Result<Self, String> {
-        Ok(Self::spawn_local(move |control| run(gpu, request, control)))
+        let wake=gpu.preparation_wake.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let job=Self::spawn("capy-effect-analysis", move |control| pollster::block_on(run(gpu, request, control)))?;
+        #[cfg(target_arch = "wasm32")]
+        let job=Self::spawn_local(move |control| run(gpu, request, control));
+        if let Some(wake)=wake {job.set_wake(wake);}
+        Ok(job)
     }
 }
 async fn run(gpu: snapshot::SnapshotGpu, request: Request, control: snapshot::CaptureControl) -> Result<Candidate, String> {
@@ -85,7 +91,6 @@ impl WgpuRasterizer {
     pub(crate) fn analysis_changed(&mut self) {
         self.analysis_dirty = true;
         if let Some(scene) = &mut self.scene { scene.analysis_changed(); }
-        self.scale_display = None;
     }
     #[cfg(target_arch = "wasm32")]
     pub fn set_analysis_backing_waiter(&mut self, waiter: BackingWaiter) { self.analysis_backing_waiter = Some(waiter); }
@@ -158,21 +163,16 @@ fn bake_needs_masks(scene: &Arc<SceneSnapshot>, scope: &SceneScope) -> bool {
 }
 
 #[derive(Debug)]
-pub(crate) struct Lease { counter: Arc<std::sync::Mutex<u64>>, bytes: u64 }
+pub(crate) struct Lease(crate::residency::Charge);
 impl Lease {
     pub fn reserve(device: &PipelineDevice, bytes: u64) -> Result<Self, String> {
-        let mut retained = device.analysis_memory.lock().unwrap();
-        let budget = device.resource_limit.load(std::sync::atomic::Ordering::Acquire);
-        if retained.saturating_add(bytes) > budget { return Err("Effect analysis exceeds available GPU memory".into()); }
-        *retained += bytes;
-        Ok(Self {counter: device.analysis_memory.clone(), bytes})
+        device.analysis_memory.charge_within(device.resource_limit.load(std::sync::atomic::Ordering::Acquire), bytes).map(Self)
+            .ok_or_else(|| "Effect analysis exceeds available GPU memory".into())
     }
     pub fn split(&mut self, bytes: u64) -> Arc<Self> {
-        self.bytes = self.bytes.checked_sub(bytes).expect("guide exceeds reserved analysis storage");
-        Arc::new(Self {counter: self.counter.clone(), bytes})
+        Arc::new(Self(self.0.split(bytes).expect("guide exceeds reserved analysis storage")))
     }
 }
-impl Drop for Lease { fn drop(&mut self) { *self.counter.lock().unwrap() -= self.bytes; } }
 
 #[cfg(test)]
 #[path = "effect_analysis_lease_tests.rs"]

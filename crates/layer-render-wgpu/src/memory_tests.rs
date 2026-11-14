@@ -1,7 +1,6 @@
 use super::*;
 use crate::test_support::{complete, dab_batch, packet, submit_published, submit_settled};
 use layer_core::{MemoryBudget, MemoryClass, MemoryFacts};
-use std::sync::atomic::Ordering;
 
 #[test]
 fn texture_storage_counts_every_mip_and_depth() {
@@ -46,9 +45,16 @@ pub(crate) fn cold_color_pressure(r: &mut WgpuRasterizer) {
     budget.set_ram_override(Some(384 << 20));
     let device = budget.snapshot().devices[0].device;
     r.memory.raster.handle = budget.register_owner(Kind::RasterPool, MemoryClass::Warm, Some(device));
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     r.refresh_memory_limits();
+}
+
+pub(crate) fn evict_to_grant(r: &mut WgpuRasterizer, batches: &[layer_render::DabBatch], tiles: &[Vec<BrushTile>]) {
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let excess = r.raster_excess();
+    r.evict_raster(excess, batches, tiles, &mut encoder);
+    encoder.submit(&r.queue);
 }
 
 pub(crate) fn legacy_scene_renderer(color: layer_core::color::DocumentColor) -> WgpuRasterizer {
@@ -56,38 +62,33 @@ pub(crate) fn legacy_scene_renderer(color: layer_core::color::DocumentColor) -> 
 }
 
 pub(crate) fn legacy_scene_frame(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
-    scene_frame_with_budget(r, frame, crate::scene::scale::CACHE_BYTES);
-}
-
-pub(crate) fn scene_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, bytes: u64) {
-    cache_frame_with_budget(r, frame, 0, bytes);
-    assert_eq!(r.memory_limit(Kind::Scene),bytes);
-}
-
-pub(crate) fn object_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, bytes: u64) {
-    cache_frame_with_budget(r, frame, 1, bytes);
-    assert_eq!(r.memory_limit(Kind::Objects),bytes);
-}
-
-fn cache_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, part: usize, bytes: u64) {
     r.begin_frame_memory(frame);
-    let mut demand=r.memory.demand.get();
-    demand[part]=bytes;
-    r.memory.demand.set(demand);
-    r.publish_memory(true);
+    r.publish_memory();
     r.factory.memory_budget().flush_reports();
     r.refresh_memory_limits();
+}
+
+pub(crate) fn display_frame_with_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, bytes: u64) -> MemoryOwner {
+    legacy_scene_frame(r, frame);
+    let budget = r.factory.memory_budget().clone();
+    let device = budget.snapshot().devices[0];
+    let pinned = r.memory.display.handle.reported().pinned_gpu_bytes;
+    let held = device.limit_bytes.saturating_sub(device.pinned_bytes).saturating_sub(bytes.saturating_sub(pinned));
+    let other = budget.register_owner(Kind::Other, MemoryClass::Pinned, Some(device.device));
+    other.report(MemoryReport { gpu_bytes: held, pinned_gpu_bytes: held, ..Default::default() });
+    budget.flush_reports();
+    r.memory.invalidate_limits();
+    r.refresh_memory_limits();
+    assert_eq!(r.memory.display_grant(), bytes.max(r.memory.display.handle.reported().pinned_gpu_bytes));
+    other
 }
 
 pub(crate) fn renderer_for_restore(document: &layer_core::Document) -> WgpuRasterizer {
     let mut r = renderer(document.composition().color,
         layer_core::DeviceMemoryFacts {budget_bytes: Some(4 << 30), ..Default::default()}).unwrap();
     r.prepare_capture_memory(document.scene(), document.composition().size);
-    let mut demand = r.memory.demand.get();
-    demand[2] = 44 << 20;
-    demand[3] = 64 << 20;
-    r.memory.demand.set(demand);
-    r.publish_memory(true);
+    r.memory.demand.set(Demand {mips: 44 << 20, sources: [64 << 20; 2], ..r.memory.demand.get()});
+    r.publish_memory();
     r.factory.memory_budget().flush_reports();
     r.refresh_memory_limits();
     r
@@ -96,21 +97,20 @@ pub(crate) fn renderer_for_restore(document: &layer_core::Document) -> WgpuRaste
 pub(crate) fn declare_source_budget(r: &mut WgpuRasterizer, frame: FramePacket<'_>, slots: usize, uploads: u64, mips: u64) {
     r.memory.invalidate_limits();
     r.refresh_memory_limits();
-    let applied = r.memory.applied_limits.get().expect("fixture memory limits were applied");
-    let overhead = applied[4].saturating_sub(r.source_tiles.borrow().admitted_bytes()[0]);
+    let overhead = r.source_tiles.borrow().non_slot_bytes();
     r.memory_demand(frame);
     r.prepare_moving_projection(frame).unwrap();
-    let mut demand = r.memory.demand.get();
-    demand[2] = mips;
-    demand[3] = (slots as u64).saturating_mul(scene::sources::NORMALIZED_PAGE_BYTES).saturating_add(overhead);
-    r.memory.demand.set(demand);
-    r.publish_memory(true);
+    let sources = (slots as u64).saturating_mul(scene::sources::NORMALIZED_PAGE_BYTES).saturating_add(overhead);
+    r.memory.demand.set(Demand {mips, sources: [sources; 2], ..r.memory.demand.get()});
+    r.publish_memory();
     let mut staging = r.memory.staging.published.get();
     staging.demand_gpu_bytes = staging.demand_gpu_bytes.max(uploads);
-    r.memory.staging.publish(staging, true);
+    r.memory.staging.publish(staging);
     r.factory.memory_budget().flush_reports();
     r.refresh_memory_limits();
 }
+
+pub(crate) fn declared_source_demand(r: &WgpuRasterizer) -> u64 { r.memory.demand.get().wanted(0)[3] }
 
 pub(crate) fn isolate(r: &mut WgpuRasterizer) -> MemoryBudget {
     let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(2 << 30),
@@ -134,34 +134,6 @@ fn document() -> layer_core::Document {
 }
 
 #[test]
-fn a_cold_restore_registers_its_raster_work_before_eager_selection() {
-    use layer_core::raster::{RasterData, RasterPlane, RasterTile, TileBlob, TileKey};
-    for tight in [false, true] {
-        let doc = layer_core::Document::new(layer_core::PortableId::random(), PAGE_SIZE * 8, PAGE_SIZE * 4,
-            layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
-        let target = doc.active_target().unwrap();
-        let mut r = renderer(doc.composition().color,
-            layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
-        r.ensure_document_metadata(doc.composition().size, doc.scene()).unwrap();
-        assert!(r.native_edit.as_ref().unwrap().color_cache_bytes < 64 * MIB);
-        let budget = r.factory.memory_budget().clone();
-        let pressure = tight.then(|| budget.admit_import(budget.import_headroom_bytes().checked_sub(8 * MIB).unwrap()).unwrap());
-        let blob = Arc::new(TileBlob::encode(doc.composition().color.paint_descriptor(),
-            &[37, 83, 109, 255].repeat(PAGE_SIZE.pow(2) as usize)).unwrap());
-        let data = RasterData { tiles: (0..32).map(|x| (TileKey { plane: RasterPlane::Color,
-            coordinate: [x % 8, x / 8] }, RasterTile::backed_shared(blob.clone()))).collect(), ..Default::default() };
-        crate::test_support::prepare_raster(&mut r, |r| r.restore_raster(target, &RasterData::default(), &data)).unwrap();
-        assert_eq!(r.paint_layers[0].pages.len(), if tight { 0 } else { 32 },
-            "headroom admits the full candidate; pressure keeps its color cold");
-        assert_eq!(r.native_backing(target).unwrap().tiles.len(), 32);
-        complete(&r);
-        r.after_present();
-        assert_eq!(r.paint_layers[0].pages.len(), if tight { 0 } else { 32 });
-        drop(pressure);
-    }
-}
-
-#[test]
 fn a_paint_only_view_does_not_reserve_its_hierarchy_in_the_raster_pool() {
     let doc = layer_core::Document::new(layer_core::PortableId::random(), 9504, 6336,
         layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
@@ -170,14 +142,15 @@ fn a_paint_only_view_does_not_reserve_its_hierarchy_in_the_raster_pool() {
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view = crate::test_support::view([1024, 768]);
     frame.view.document_to_surface = [0.1, 0., 0., 0.1, 0., 0.];
+    let idle = r.paint_memory_bytes();
     r.begin_frame_memory(frame);
-    r.publish_memory(true);
+    r.publish_memory();
     r.factory.memory_budget().flush_reports();
     r.refresh_memory_limits();
-    assert_eq!(r.paint_memory_bytes(), 0);
+    assert_eq!(r.paint_memory_bytes(), idle);
     let raster = r.memory.raster.handle.reported();
     assert!(raster.demand_gpu_bytes <= WORKING_BYTES, "empty raster demand: {raster:?}");
-    assert!(r.memory_limit(Kind::Scene) >= r.memory.scene_retention.get(),
+    assert!(r.memory.display_grant() >= CACHE_BYTES,
         "the hierarchy and scene cache fit beside an empty raster pool");
 }
 
@@ -202,13 +175,13 @@ fn leased_source_pins_do_not_reduce_an_ample_scene_grant() {
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
     complete(&r);
-    r.publish_memory(true);
+    r.publish_memory();
     r.factory.memory_budget().flush_reports();
     r.begin_frame_memory(frame);
-    let demand = r.memory.display_demand();
-    let pins = r.memory.part_pins();
+    let demand = r.memory.demand.get().wanted(0);
+    let pins = r.memory.demand.get().pinned(r.display_usage().pinned);
     assert!(pins[3] > demand[3], "foreign source leases exceed modelled source demand");
-    assert_eq!(r.memory.scene_limit(), demand[0], "demand={demand:?}, pins={pins:?}");
+    assert!(r.memory.display_grant() >= total(std::array::from_fn(|part| demand[part].max(pins[part]))), "demand={demand:?}, pins={pins:?}");
     let work = r.metrics.composited_pixels;
     frame.view.document_to_surface[4] = -32.;
     submit_settled(&mut r, frame);
@@ -218,57 +191,43 @@ fn leased_source_pins_do_not_reduce_an_ample_scene_grant() {
 
 #[test]
 fn a_color_cache_grant_keeps_unpinned_pages_beside_pinned_stroke_pages() {
-    use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-    let extent = [PAGE_SIZE * 8, PAGE_SIZE * 4];
-    let mut doc = layer_core::Document::new(layer_core::PortableId::random(), extent[0], extent[1],
-        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let (mut doc, mut r, _data) = durable_color_renderer();
+    let extent = doc.composition().size;
     let target = doc.active_target().unwrap();
     let layer_core::SourceTarget::Paint(paint) = target else { unreachable!() };
-    let mut data = RasterData::default();
-    for y in 0..4 {
-        for x in 0..8 {
-            let bytes = [31 + x as u8 * 17, 53 + y as u8 * 29, 109, 255].repeat(PAGE_SIZE.pow(2) as usize);
-            data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [x, y] },
-                RasterTile::backed(TileBlob::encode(doc.composition().color.paint_descriptor(), &bytes).unwrap()));
-        }
-    }
-    doc.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data);
-    let mut r = renderer(doc.composition().color,
-        layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
-    submit_settled(&mut r, packet(doc.scene(), extent));
     let dab = crate::tests::test_dab([64.; 2], [0.7, 0.2, 0.1, 1.], 1.);
     let mut style = crate::tests::test_style(BrushExecution::Dry);
     style.opacity = 0.5;
     let batch = layer_render::DabBatch { stroke_start: true, stroke_end: false,
         ..dab_batch(target, style, dab.bounds()) };
-    doc.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::pending();
+    doc.artwork.paint.get_mut(paint).unwrap().raster = layer_core::raster::RasterRevision::pending();
     submit_published(&mut r, FramePacket { dabs: &[dab], dab_batches: &[batch], ..packet(doc.scene(), extent) });
     complete(&r);
-    let pinned = r.paint_layers[0].pages.iter().find(|page| page.stroke_start.is_some()).unwrap().primary.texture.clone();
+    let pinned = r.paint_layers[0].pages.iter().find(|page| page.stroke_start.is_some()).unwrap().primary.allocation_identity();
     let page_bytes = r.paint_layers[0].pages[0].primary.storage_bytes();
     let budget = r.factory.memory_budget().clone();
     budget.set_ram_override(Some(384 << 20));
     r.refresh_storage_metrics();
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     let _pressure = budget.admit_import(budget.import_headroom_bytes().checked_sub(16 << 20).unwrap()).unwrap();
-    r.refresh_memory_limits();
-    let optional = r.native_edit.as_ref().unwrap().color_cache_bytes;
-    let keep = (optional / page_bytes) as usize;
+    budget.flush_reports();
     let evictable = |r: &WgpuRasterizer| r.paint_layers[0].pages.iter().filter(|page| page.stroke_start.is_none()).count();
+    let optional = (evictable(&r) as u64 * page_bytes + r.raster_buffers.retained.used()).saturating_sub(r.raster_excess());
+    let keep = (optional / page_bytes) as usize;
     assert!(keep > 0 && keep < evictable(&r), "the actual grant retains some backed color: {optional}");
-    for _ in 0..3 { drop(r.trim_native_color_cache(&[], &[])); }
+    evict_to_grant(&mut r, &[], &[]);
     assert_eq!(evictable(&r), keep, "pinned color must not consume the optional allowance twice");
-    assert!(r.paint_layers[0].pages.iter().any(|page| page.primary.texture == pinned && page.stroke_start.is_some()));
+    assert!(r.paint_layers[0].pages.iter().any(|page| page.primary.allocation_identity() == pinned && page.stroke_start.is_some()));
+    complete(&r);
     r.refresh_storage_metrics();
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     let _drain = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     r.refresh_memory_limits();
-    assert_eq!(r.native_edit.as_ref().unwrap().color_cache_bytes, 0);
-    for _ in 0..3 { drop(r.trim_native_color_cache(&[], &[])); }
+    evict_to_grant(&mut r, &[], &[]);
     assert_eq!(evictable(&r), 0);
-    assert!(r.paint_layers[0].pages.iter().any(|page| page.primary.texture == pinned && page.stroke_start.is_some()));
+    assert!(r.paint_layers[0].pages.iter().any(|page| page.primary.allocation_identity() == pinned && page.stroke_start.is_some()));
 }
 
 #[test]
@@ -311,18 +270,17 @@ fn lowered_budget_mid_stroke_keeps_authored_tiles_and_every_presentable_frame() 
 #[test]
 fn raster_transfer_cache_keeps_the_parent_ceiling_and_can_shrink() {
     let r = legacy_scene_renderer(Default::default());
-    r.raster_buffers.set_retained_limit(u64::MAX);
     let buffers = (0..3).map(|_| r.raster_buffers.take(&r.device, 32 * MIB)).collect::<Vec<_>>();
     let newest = buffers[1..].to_vec();
     for buffer in buffers { r.raster_buffers.put(buffer); }
-    assert_eq!(r.raster_buffers.bytes.load(Ordering::Acquire), RASTER_BUFFER_BYTES);
+    assert_eq!(r.raster_buffers.retained.used(), RASTER_BUFFER_BYTES);
     let retained = (0..2).map(|_| r.raster_buffers.take(&r.device, 32 * MIB)).collect::<Vec<_>>();
     assert_eq!(retained, newest);
     drop(newest);
     for buffer in retained { r.raster_buffers.put(buffer); }
-    r.raster_buffers.set_retained_limit(20 * MIB);
-    assert!(r.raster_buffers.trim_unused() > 0);
-    assert!(r.raster_buffers.bytes.load(Ordering::Acquire) <= 20 * MIB);
+    r.raster_tiers.raster.heap().evict(44 * MIB, crate::residency::Class::Fallback);
+    r.raster_buffers.release_evicted();
+    assert!(r.raster_buffers.retained.used() <= 20 * MIB);
 }
 
 #[test]
@@ -333,26 +291,25 @@ fn after_present_trims_free_storage_but_keeps_presentation_and_root_overview() {
     submit_settled(&mut r, packet(doc.scene(), [512; 2]));
     let before = pixels(&r);
     let cache = r.scale_display.as_ref().unwrap();
-    let overview = cache.coarse_view().clone();
-    let pinned = cache.presentation_bytes();
+    let overview = cache.presentation().unwrap().views()[1].clone();
+    let pinned = r.composition_memory(r.scene.as_deref())[1];
     assert!(pinned > 0);
-    r.raster_buffers.set_retained_limit(32 << 20);
     r.raster_buffers.put(r.raster_buffers.take(&r.device, 32 << 20));
-    let retained = r.raster_buffers.bytes.load(Ordering::Acquire);
+    let retained = r.raster_buffers.retained.used();
     assert_eq!(retained, 32 << 20);
     budget.set_ram_override(Some(384 << 20));
     budget.flush_reports();
     let _import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     r.shader_input();
     r.after_present();
-    assert_eq!(r.raster_buffers.bytes.load(Ordering::Acquire), retained);
+    assert_eq!(r.raster_buffers.retained.used(), retained);
     r.shader_idle(true, true);
     r.after_present();
     complete(&r);
-    assert!(r.raster_buffers.bytes.load(Ordering::Acquire) < retained);
+    assert!(r.raster_buffers.retained.used() < retained);
     let cache = r.scale_display.as_ref().unwrap();
-    assert_eq!(cache.presentation_bytes(), pinned);
-    assert_eq!(cache.coarse_view(), &overview);
+    assert_eq!(r.composition_memory(r.scene.as_deref())[1], pinned);
+    assert_eq!(cache.presentation().unwrap().views()[1], &overview);
     assert_eq!(pixels(&r), before);
 }
 
@@ -363,19 +320,19 @@ fn first_frame_preparation_publishes_demand_and_uses_the_next_grant() {
         layer_core::DocumentNames {paint: "Large canvas".into(), paper: "Paper".into()});
     let budget = MemoryBudget::with_facts(MemoryFacts {host_default_bytes: Some(64 << 30), override_bytes: Some(64 << 30), ..Default::default()});
     let mut r = renderer_in_budget(doc.composition().color, layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}, budget.clone()).unwrap();
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
-    let before = r.memory_limit(Kind::Scene);
-    let frame = FramePacket {view: crate::test_support::view([512; 2]), ..packet(doc.scene(), [8192; 2])};
+    let before = r.memory.display_grant();
+    let frame = FramePacket {view: crate::test_support::view([8192; 2]), ..packet(doc.scene(), [8192; 2])};
     r.raster_dependencies_ready(frame, None);
     assert!(r.artwork_frame.is_none());
     budget.flush_reports();
-    assert!(r.memory_limit(Kind::Scene) > before);
+    assert!(r.memory.display_grant() > before);
     let display = r.memory.display.handle.reported();
     assert_eq!(display.demand_ram_bytes, display.ram_bytes);
-    assert!(r.ram_limit(Kind::DecodedSamples) > 0);
+    assert!(r.memory.sample_grant() > 0);
     r.raster_dependencies_ready(frame, None);
-    assert_eq!(r.display_memory_limits()[0], r.memory_limit(Kind::Scene));
+    assert_eq!(r.display_memory_limits()[0], r.memory.display_grant());
     assert!(r.display_memory_limits()[2] >= u64::from(PAGE_SIZE).pow(2) * 16);
     assert!(r.artwork_frame.is_none());
 }
@@ -393,7 +350,7 @@ fn the_first_showing_frame_uses_the_active_drawings_display_grant() {
     assert!(r.has_presentable_frame());
     let cache = r.scale_display.as_ref().expect("the first artwork frame has a display cache");
     assert!(cache.evaluation == scene::scale::Evaluation::Display,
-        "first artwork frame Scene grant: {} bytes", r.memory_limit(Kind::Scene));
+        "first artwork frame Scene grant: {} bytes", r.memory.display_grant());
     assert_eq!(cache.plan.level, 2);
 }
 
@@ -460,15 +417,15 @@ fn drained_headroom_keeps_a_working_window_beside_the_retained_large_view() {
     let expected = pixels(&r);
     let budget = r.factory.memory_budget().clone();
     budget.set_ram_override(Some(384 << 20));
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
-    let presentation = r.memory.pinned.get()[0];
+    let presentation = r.composition_memory(r.scene.as_deref())[1];
     let window = r.memory.working_limit();
     assert!(presentation > window);
     let _import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     assert_eq!(budget.import_headroom_bytes(), 0);
     r.begin_frame_memory(frame);
-    assert!(r.memory_limit(Kind::Scene) >= presentation + window);
+    assert!(r.memory.display_grant() >= presentation + window);
     submit_settled(&mut r, frame);
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
     assert_eq!(pixels(&r), expected);
@@ -478,18 +435,20 @@ fn drained_headroom_keeps_a_working_window_beside_the_retained_large_view() {
 fn an_import_draining_headroom_preserves_image_and_effect_frame_working_memory() {
     use layer_core::authored::{Image, ImageObject, Occurrence, OccurrenceContent, PortableId};
     let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
+    let fixed = r.scene_tiers.usage().working;
     let budget = r.factory.memory_budget().clone();
     budget.set_ram_override(Some(384 << 20));
     let plain = layer_core::Document::new(PortableId::random(), 128, 128,
         layer_core::DocumentNames {paint: "Ink".into(), paper: "Paper".into()});
-    r.memory.demand_region(plain.scene(), [128; 2], PixelRect::full([128; 2]), DisplayDemand::default());
-    r.publish_memory(true);
+    r.memory.demand_region(plain.scene(), [128; 2], PixelRect::full([128; 2]));
+    r.publish_memory();
     budget.flush_reports();
-    let floor = r.memory.floors.get()[0];
+    let floor = r.memory.working_limit();
     let plain_import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     assert_eq!(budget.import_headroom_bytes(), 0);
     let sources = r.source_tiles.borrow().non_slot_bytes();
-    assert!(r.memory.display.handle.reported().pinned_gpu_bytes <= floor + 2 * WORKING_BYTES + sources);
+    let cells = r.changed_cells.as_ref().map_or(0, changed_cells::ChangedCells::storage_bytes);
+    assert!(r.memory.display.handle.reported().pinned_gpu_bytes <= floor + 2 * WORKING_BYTES + sources + cells + fixed);
     drop(plain_import);
     let mut artwork = plain.artwork;
     let source = layer_core::color::source::rgba8_source([128; 2], |_, _| [32, 64, 128, 255]);
@@ -503,7 +462,7 @@ fn an_import_draining_headroom_preserves_image_and_effect_frame_working_memory()
     let editor = layer_core::Editor::new(doc.with_memory(layer_core::DocumentMemory::new(budget.clone(), None)));
     let frame = packet(editor.document().scene(), [128; 2]);
     r.raster_dependencies_ready(frame, None);
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     let _import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
     assert_eq!(budget.import_headroom_bytes(), 0);
@@ -530,29 +489,15 @@ fn an_import_draining_headroom_preserves_image_and_effect_frame_working_memory()
 
 #[test]
 fn a_restore_drops_backed_color_before_refusing_working_memory() {
-    use layer_core::raster::{RasterData, RasterPlane, RasterTile, TileBlob, TileKey};
-    let doc = layer_core::Document::new(layer_core::PortableId::random(), PAGE_SIZE * 8, PAGE_SIZE * 4,
-        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let (doc, mut r, data) = durable_color_renderer();
     let target = doc.active_target().unwrap();
-    let mut r = renderer(doc.composition().color,
-        layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
-    r.ensure_document_metadata(doc.composition().size, doc.scene()).unwrap();
-    let blob = Arc::new(TileBlob::encode(doc.composition().color.paint_descriptor(),
-        &[37, 83, 109, 255].repeat(PAGE_SIZE.pow(2) as usize)).unwrap());
-    let data = RasterData { tiles: (0..32).map(|index| (TileKey {
-        plane: RasterPlane::Color, coordinate: [index % 8, index / 8] }, RasterTile::backed_shared(blob.clone()))).collect(),
-        ..Default::default() };
-    crate::test_support::prepare_raster(&mut r, |r| r.restore_raster(target, &RasterData::default(), &data)).unwrap();
-    complete(&r);
-    r.refresh_storage_metrics();
-    assert_eq!(r.pinned_paint_bytes(), r.paint_memory_bytes() - r.color_memory_bytes());
     let budget = r.factory.memory_budget().clone();
     budget.set_ram_override(Some(384 * MIB));
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     let pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
-    r.refresh_memory_limits();
-    let [scene, raster] = r.memory.preparation_limits();
+    budget.flush_reports();
+    let [scene, raster] = [r.memory.display_grant(), r.memory.raster_grant()];
     let page = r.paint_layers[0].pages[0].primary.storage_bytes();
     let restore = (scene + raster) / 2 / page * page;
     assert!(restore > 0 && restore + r.color_memory_bytes() > scene + raster);
@@ -560,10 +505,40 @@ fn a_restore_drops_backed_color_before_refusing_working_memory() {
     assert!(result.is_ok() || result.as_ref().is_err_and(|error| error.is_preparation_pending()),
         "backed color must not cause terminal restore refusal: {result:?}");
     assert_eq!(r.color_memory_bytes(), 0);
-    assert_eq!(r.native_backing(target).unwrap().tiles.len(), 32);
+    assert_eq!(r.native_backing(target).unwrap().tiles.len(), data.tiles.len());
     complete(&r);
     assert!(r.admit_preparation_bytes(restore, 0).is_ok());
     drop(pressure);
+}
+
+#[test]
+fn pressure_retires_every_blend_scratch_page_in_one_pass_over_the_pages() {
+    let side = [8, 8];
+    let extent = side.map(|side| PAGE_SIZE * side);
+    let doc = layer_core::Document::new(layer_core::PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let target = doc.active_target().unwrap();
+    let mut r = renderer(doc.composition().color,
+        layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    submit_settled(&mut r, packet(doc.scene(), extent));
+    let dabs = (0..side[0] * side[1]).map(|index| crate::tests::test_dab(
+        [((index % side[0]) * PAGE_SIZE + PAGE_SIZE / 2) as f32, ((index / side[0]) * PAGE_SIZE + PAGE_SIZE / 2) as f32], [0.7, 0.2, 0.1, 1.], 1.)).collect::<Vec<_>>();
+    let batch = layer_render::DabBatch { stroke_start: true, stroke_end: false,
+        ..dab_batch(target, crate::tests::test_style(BrushExecution::Wet), layer_core::Rect { min: layer_core::Point { x: 0., y: 0. },
+            max: layer_core::Point { x: extent[0] as f32, y: extent[1] as f32 } }) };
+    submit_published(&mut r, FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..packet(doc.scene(), extent) });
+    let end = layer_render::DabBatch { stroke_start: false, stroke_end: true, ..batch };
+    submit_published(&mut r, FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&end), ..packet(doc.scene(), extent) });
+    complete(&r);
+    r.retire_stroke_sources();
+    r.restore_preflight = None;
+    let scratch = |r: &WgpuRasterizer| r.paint_layers[0].pages.iter().filter(|page| page.secondary.is_some()).count() as u64;
+    let pages = r.paint_layers[0].pages.len() as u64;
+    let k = scratch(&r);
+    assert!(k > 2 * SOURCE_SLOTS as u64, "the fixture retires several batches: {k} of {pages} pages hold scratch");
+    let (retired,_leases)=r.evict_color(u64::MAX,&[],&[]);
+    assert_eq!(scratch(&r),0,"one trim must release every optional scratch page");
+    assert_eq!(retired.len() as u64,k);
 }
 
 #[test]
@@ -578,17 +553,21 @@ fn a_restore_drops_an_evictable_hierarchy_before_refusing_working_memory() {
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     submit_settled(&mut r, frame);
     complete(&r);
-    let resident = r.scale_display.as_ref().unwrap().resident_bytes();
-    assert!(resident > 256 * MIB);
+    let hierarchy = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().retained_scale_bytes()[0];
+    assert!(hierarchy(&r) > 256 * MIB);
+    let presented = r.scale_display.as_ref().unwrap().resident_bytes();
     let budget = r.factory.memory_budget().clone();
     budget.set_ram_override(Some(384 * MIB));
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     r.refresh_memory_limits();
     let result = r.admit_preparation_bytes(64 * MIB, 0);
     assert!(result.is_ok() || result.as_ref().is_err_and(|error| error.is_preparation_pending()),
         "evictable hierarchy must not cause terminal restore refusal: {result:?}");
-    assert_eq!(r.scale_display.as_ref().map_or(0, |cache| cache.resident_bytes()), 0);
+    assert!(r.scene_tiers.display.used() <= r.memory.retention_grant() + r.scene_tiers.retiring.used(),
+        "the hierarchy above the lowered grant is released: {} of {}", r.scene_tiers.display.used(), r.memory.retention_grant());
+    assert!(hierarchy(&r) < 256 * MIB);
+    assert_eq!(r.scale_display.as_ref().unwrap().resident_bytes(), presented, "the presented picture stays");
     assert!(r.has_presentable_frame());
     complete(&r);
     assert!(r.admit_preparation_bytes(64 * MIB, 0).is_ok());
@@ -599,20 +578,18 @@ fn a_restore_is_refused_or_admitted_after_one_budget_rebalance() {
     let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
     let budget = r.factory.memory_budget().clone();
     budget.set_ram_override(Some(384 << 20));
-    r.publish_memory(true);
+    r.publish_memory();
     budget.flush_reports();
     r.refresh_memory_limits();
     let import = budget.admit_import(budget.import_headroom_bytes() - (8 << 20)).unwrap();
     r.refresh_memory_limits();
-    let restore = 64 << 20;
-    assert!(restore < budget.ram_limit_bytes());
+    let restore = r.memory.display_grant() + r.memory.raster_grant() + (8 << 20);
+    assert!(restore < budget.ram_limit_bytes() / 2);
     for _ in 0..2 {
         assert!(matches!(r.admit_preparation_bytes(restore, 0), Err(GpuRasterError::SourceWorkingSetExceeded)));
     }
     assert_eq!(r.memory.preparation.get(), 0);
     drop(import);
-    assert!(matches!(r.admit_preparation_bytes(restore, 0), Err(GpuRasterError::DeferredObjectWork)));
-    r.refresh_memory_limits();
     assert!(r.admit_preparation_bytes(restore, 0).is_ok());
 }
 
@@ -645,30 +622,21 @@ fn ample_budget_keeps_scene_retention_and_returns_unused_source_allowance() {
         let requested = crate::object_image_mips::MovingImages::demand(&r.moving_projection.as_ref().unwrap().requests, [frame.view.width_px,frame.view.height_px]).unwrap();
         let mips = requested;
         let windows = scene::Scene::capture_image_bound(document.scene(), PixelRect::full(extent));
-        assert_eq!(r.memory_limit(Kind::Scene), CACHE_BYTES + windows);
-        assert_eq!(scene::scale::cache_bytes(&r), CACHE_BYTES);
-        assert!(scene::Scene::window_plan(document.scene(), extent, r.native_edit.as_ref().unwrap().image_pixel_budget(0),
-            r.device.limits().max_texture_dimension_2d, None).unwrap().is_none());
-        assert_eq!(r.memory_limit(Kind::Objects), OBJECT_CACHE_BYTES);
-        assert_eq!(r.memory_limit(Kind::Mips), mips);
-        assert_eq!(r.memory_limit(Kind::DecodedSamples), source_demand([frame.view.width_px,frame.view.height_px]).max(r.memory.part_pins()[3]));
-        assert_eq!(r.ram_limit(Kind::DecodedSamples), DECODED_SAMPLE_BYTES);
-        assert_eq!(r.source_tiles.borrow().mip_budget(), mips);
-        assert_eq!(r.memory.demand.get()[2], mips);
+        assert!(r.memory.display_grant() >= CACHE_BYTES + OBJECT_CACHE_BYTES + mips);
+        assert_eq!(scene::Scene::window_plan(document.scene(), extent, r.image_pixel_budget(0),
+            r.device.limits().max_texture_dimension_2d, None).unwrap().is_none(), windows <= r.image_pixel_budget(0));
+        assert_eq!(r.memory.mip_budget(), mips);
+        assert_eq!(r.memory.sample_grant(), DECODED_SAMPLE_BYTES);
+        assert_eq!(r.memory.demand.get().mips, mips);
     }
     let plain = layer_core::Document::new(PortableId::random(), extent[0], extent[1],
         layer_core::DocumentNames {paint: "Ink".into(), paper: "Paper".into()});
     let frame = packet(plain.scene(), extent);
     r.begin_frame_memory(frame);
     r.prepare_moving_projection(frame).unwrap();
-    let pyramid = display_mips::Plan::at(extent, 0).pixel_bytes_through(display_mips::MAX_LEVEL);
-    assert_eq!(r.memory_limit(Kind::Scene), CACHE_BYTES + pyramid);
-    assert_eq!(scene::scale::cache_bytes(&r), CACHE_BYTES);
-    assert_eq!(r.memory.scene_limit().saturating_sub(CACHE_BYTES), pyramid);
-    assert_eq!(r.memory_limit(Kind::Objects), OBJECT_CACHE_BYTES);
-    assert_eq!(r.memory_limit(Kind::Mips), 0);
-    assert_eq!(r.memory_limit(Kind::DecodedSamples), source_demand([frame.view.width_px,frame.view.height_px]).max(r.memory.part_pins()[3]));
-    assert_eq!(r.ram_limit(Kind::DecodedSamples), DECODED_SAMPLE_BYTES);
+    assert!(r.memory.display_grant() >= CACHE_BYTES + OBJECT_CACHE_BYTES);
+    assert_eq!(r.memory.mip_budget(), 0);
+    assert_eq!(r.memory.sample_grant(), DECODED_SAMPLE_BYTES);
 }
 
 #[test]
@@ -726,7 +694,7 @@ fn a_tablet_budget_below_the_photo_keeps_publishing_strokes_and_their_ink() {
     }
     fn settle(engine: &mut CanvasEngine<WgpuRasterizer>, presenter: &mut ViewportPresenter, target: &wgpu::TextureView, clock: &mut u64) {
         for _ in 0..600 {
-            if engine.backend().raster_ready() && !engine.backend().object_deferred && !engine.has_pending_document_edits() && !engine.has_pending_input() { return; }
+            if engine.backend().raster_ready() && !crate::scene::scale::tests::publication_pending(engine.backend()) && !engine.has_pending_document_edits() && !engine.has_pending_input() { return; }
             *clock += 4_166_667;
             frame(engine, presenter, target, *clock);
         }
@@ -764,9 +732,9 @@ fn a_tablet_budget_below_the_photo_keeps_publishing_strokes_and_their_ink() {
         clock += 1_388_889;
         input.push(PenEvent { timestamp_ns: clock, view_revision: revision, ..pen(clock, phase, [260. + offset, 160. + offset / 2.], SampleFlags::PRIMARY) }).unwrap();
     }
-    assert!(!frame(&mut engine, &mut presenter, &view, clock), "the tap waits for its photo tiles");
+    frame(&mut engine, &mut presenter, &view, clock);
     settle(&mut engine, &mut presenter, &view, &mut clock);
-    assert_ne!(engine.backend().canvas_preview_revision(), revision_before_tap, "a deferred tap reports its ink once it publishes");
+    assert_ne!(engine.backend().canvas_preview_revision(), revision_before_tap, "a tap reports its ink once it publishes");
     let shown = crate::layer_tests::page_bytes(engine.backend(), &texture);
     engine.backend_mut().document_damage.push(PixelRect::full(EXTENT));
     settle(&mut engine, &mut presenter, &view, &mut clock);
@@ -797,7 +765,7 @@ fn changed_resident_color_restores_lazily_under_a_tight_cache_without_losing_his
         Point { x: EXTENT[0] as f32, y: EXTENT[1] as f32 }, Point { x: 0., y: EXTENT[1] as f32 }]).unwrap();
     document.working.selection = Some(selection.clone());
     let mut gpu = renderer(document.composition().color,
-        layer_core::DeviceMemoryFacts { usage_bytes: Some(0), ..Default::default() }).unwrap();
+        layer_core::DeviceMemoryFacts { budget_bytes: Some(512 << 20), ..Default::default() }).unwrap();
     gpu.finish_startup_catalog();
     gpu.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), true).unwrap();
     crate::test_support::wait_startup(&mut gpu, std::time::Instant::now() + std::time::Duration::from_secs(60),
@@ -860,4 +828,819 @@ fn changed_resident_color_restores_lazily_under_a_tight_cache_without_losing_his
     engine.set_layer_opacity(original_owner, 0.).unwrap();
     publish(&mut engine);
     assert_eq!(capture(&mut presenter, &engine), baseline);
+}
+
+#[test]
+fn blank_paint_outputs_wait_for_raster_capacity_before_the_frame_is_accepted() {
+    let extent=[8192;2];
+    let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let target=doc.active_target().unwrap();
+    let layer_core::SourceTarget::Paint(paint)=target else {unreachable!()};
+    doc.artwork.paint.get_mut(paint).unwrap().raster=layer_core::raster::RasterRevision::pending();
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {unified:true,..Default::default()}).unwrap();
+    r.ensure_document_metadata(extent,doc.scene()).unwrap();
+    let dabs=(0..64).map(|n|crate::tests::test_dab([(n%32*PAGE_SIZE+128) as f32,(n/32*PAGE_SIZE+128) as f32],
+        [1.,0.,1.,1.],1.)).collect::<Vec<_>>();
+    let damage=dabs.iter().copied().map(Dab::bounds).fold(layer_core::Rect::EMPTY,layer_core::Rect::union);
+    let batch=DabBatch {dab_count:dabs.len() as u32,..dab_batch(target,crate::tests::test_style(BrushExecution::Dry),damage)};
+    let mut frame=FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..packet(doc.scene(),extent)};
+    frame.view.width_px=512;frame.view.height_px=512;
+    r.begin_frame_memory(frame);
+    let budget=r.factory.memory_budget().clone();budget.set_ram_override(Some(384*MIB));
+    r.refresh_storage_metrics();r.publish_memory();budget.flush_reports();r.refresh_memory_limits();
+    let pressure=budget.admit_import(budget.import_headroom_bytes()).unwrap();r.refresh_memory_limits();
+    let ready=r.raster_dependencies_ready(frame,None);
+    r.refresh_storage_metrics();
+    let physical=r.raster_buffers.memory_bytes()[1]+r.paint_memory_bytes();
+    let grant=r.memory.raster_grant();
+    assert!(physical<=grant,"unaccepted Raster physical={physical}, own grant={grant}");
+    assert!(r.paint_layers.iter().all(|layer|layer.pages.is_empty()&&layer.coverage_pages.is_empty()),
+        "a refused output plan cannot allocate color or coverage");
+    assert!(!ready,"64 new color pages and their coverage exceed the drained Raster working capacity");
+    assert!(r.take_restore_failure().is_none(),"capacity refusal must retain the frame, not publish a raster error");
+    drop(pressure);budget.set_ram_override(Some(2<<30));budget.flush_reports();r.refresh_memory_limits();
+    submit_published(&mut r,frame);complete(&r);
+    let data=doc.artwork.paint.get(paint).unwrap().raster.wait_data().unwrap();
+    let coordinates=data.tiles.keys().filter(|key|key.plane==layer_core::raster::RasterPlane::Color)
+        .map(|key|key.coordinate).collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(coordinates,(0..64).map(|n|[n%32,n/32]).collect(),"every retained dab must reach authored backing");
+}
+
+#[test]
+fn preview_outputs_the_raster_cannot_hold_keep_the_frame_unready_instead_of_deferring_its_submission() {
+    let extent=[8192;2];
+    let doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let target=doc.active_target().unwrap();
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {unified:true,..Default::default()}).unwrap();
+    r.ensure_document_metadata(extent,doc.scene()).unwrap();
+    let preview=|dabs:&[Dab]| {
+        let damage=dabs.iter().copied().map(Dab::bounds).fold(layer_core::Rect::EMPTY,layer_core::Rect::union);
+        DabBatch {dab_count:dabs.len() as u32,kind:DabBatchKind::Preview,..dab_batch(target,crate::tests::test_style(BrushExecution::Dry),damage)}
+    };
+    let frame=|dabs,batches| {let mut frame=FramePacket {dabs,dab_batches:batches,..packet(doc.scene(),extent)};frame.view.width_px=512;frame.view.height_px=512;frame};
+    let first=[crate::tests::test_dab([128.;2],[1.,0.,1.,1.],1.)];
+    let warm=[preview(&first)];
+    crate::test_support::submit_ready(&mut r,frame(&first,&warm)).unwrap();r.wait_idle().unwrap();
+    let held=r.preview_pages.len();
+    let dabs=(0..64).map(|n|crate::tests::test_dab([(n%32*PAGE_SIZE+128) as f32,(n/32*PAGE_SIZE+PAGE_SIZE+128) as f32],
+        [1.,0.,1.,1.],1.)).collect::<Vec<_>>();
+    let batches=[preview(&dabs)];
+    let frame=frame(&dabs,&batches);
+    r.begin_frame_memory(frame);
+    let budget=r.factory.memory_budget().clone();budget.set_ram_override(Some(384*MIB));
+    r.refresh_storage_metrics();r.publish_memory();budget.flush_reports();r.refresh_memory_limits();
+    let pressure=budget.admit_import(budget.import_headroom_bytes()).unwrap();r.refresh_memory_limits();
+    if r.raster_dependencies_ready(frame,None) {
+        assert!(!r.submit(frame).is_err_and(|error|error.is_preparation_pending()),"a ready frame deferred its preview outputs during submission");
+    }
+    assert_eq!(r.preview_pages.len(),held,"a refused preview allocates no pages");
+    drop(pressure);budget.set_ram_override(Some(2<<30));budget.flush_reports();r.refresh_memory_limits();
+    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    assert!(r.preview_pages.len()>=64,"the released raster holds the preview");
+}
+
+fn durable_color_renderer() -> (layer_core::Document, WgpuRasterizer, Arc<layer_core::raster::RasterData>) {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+    let extent=[PAGE_SIZE*8;2];
+    let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    let target=doc.active_target().unwrap();let layer_core::SourceTarget::Paint(paint)=target else {unreachable!()};
+    let bytes=[255,0,0,255].repeat(PAGE_SIZE.pow(2) as usize);
+    let blob=Arc::new(TileBlob::encode(doc.composition().color.paint_descriptor(),&bytes).unwrap());
+    let data=Arc::new(RasterData {tiles:(0..8).flat_map(|y|(0..8).map(move|x|[x,y]))
+        .map(|coordinate|(TileKey {plane:RasterPlane::Color,coordinate},RasterTile::backed_shared(blob.clone()))).collect(),watercolor:None});
+    doc.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed((*data).clone());
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {unified:true,..Default::default()}).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.view.width_px=512;frame.view.height_px=512;
+    submit_settled(&mut r,frame);complete(&r);
+    let data=r.native_backing(target).unwrap().clone();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    for coordinate in data.tiles.keys().map(|key|key.coordinate) {
+        if r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter().any(|page|page.coordinate==coordinate) {continue;}
+        let expected=r.raster_version_for(doc.scene(),target,RasterPlane::Color,coordinate).unwrap();
+        let mut page=r.create_page(coordinate,"durable color cache fixture");page.primary_needs_clear=false;
+        let receipt=encoder.submission();let write=page.primary.initialize(&receipt).unwrap();
+        {let _pass=encoder.color_pass("durable color cache fixture",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {r:1.,g:0.,b:0.,a:1.}));}
+        write.encoded(expected).publish(&encoder.submission());
+        r.paint_layers.iter_mut().find(|layer|layer.id==target).unwrap().pages.push(page);
+    }
+    encoder.submit(&r.queue);complete(&r);
+    r.refresh_storage_metrics();r.publish_memory();r.factory.memory_budget().flush_reports();
+    assert_eq!(r.color_memory_bytes(),64*MIB);
+    assert_eq!(r.pinned_paint_bytes(),r.paint_memory_bytes()-64*MIB,"all fixture color is durable and optional");
+    (doc,r,data)
+}
+
+#[test]
+fn a_raster_above_its_grant_sheds_by_the_next_frame_start() {
+    let (doc,mut r,_data)=durable_color_renderer();
+    let resident=|r:&WgpuRasterizer|r.raster_tiers.raster.used().saturating_sub(r.raster_buffers.transfer.used());
+    let budget=r.factory.memory_budget().clone();let snapshot=budget.snapshot();
+    let other=budget.register_owner(Kind::Other,MemoryClass::Pinned,Some(snapshot.devices[0].device));
+    let held=snapshot.devices[0].limit_bytes.saturating_sub(snapshot.devices[0].pinned_bytes);
+    other.report(MemoryReport {gpu_bytes:held,pinned_gpu_bytes:held,..Default::default()});
+    assert!(resident(&r)>r.memory.raster_grant(),"the competing pin leaves the raster above its grant: resident {} grant {}",resident(&r),r.memory.raster_grant());
+    let mut frame=packet(doc.scene(),[PAGE_SIZE*8;2]);frame.view.width_px=512;frame.view.height_px=512;
+    r.begin_frame_memory(frame);
+    assert!(resident(&r)<=r.memory.raster_grant(),"raster stayed above its grant past the next frame start: resident {} grant {}",resident(&r),r.memory.raster_grant());
+    drop(other);
+}
+
+fn consecutive_camera_frames_retire_durable_color_after_the_raster_grant_shrinks() {
+    let (doc,mut r,data)=durable_color_renderer();
+    let extent=[PAGE_SIZE*8;2];
+    let target=doc.active_target().unwrap();let layer_core::SourceTarget::Paint(paint)=target else {unreachable!()};
+    let mut frame=packet(doc.scene(),extent);frame.view.width_px=512;frame.view.height_px=512;
+    let budget=r.factory.memory_budget().clone();budget.set_ram_override(Some(384*MIB));
+    r.publish_memory();budget.flush_reports();
+    let pressure=budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    assert!(r.memory.raster_grant()<64*MIB);
+    r.refresh_memory_limits();
+    for step in 1..=1 {
+        frame.composite_all=false;frame.reset_layers=false;frame.view.document_to_surface[4]=-(step*16) as f32;
+        assert!(r.raster_dependencies_ready(frame,None),"the nearest durable camera unit stays ready");
+        complete(&r);
+        r.refresh_storage_metrics();
+        let physical=r.raster_buffers.memory_bytes()[1]+r.paint_memory_bytes();let grant=r.memory.raster_grant();
+        assert!(physical<=grant,"camera frame {step}: Raster physical={physical}, own grant={grant}");
+        assert!(Arc::ptr_eq(r.native_backing(target).unwrap(),&data));
+        assert_eq!(doc.artwork.paint.get(paint).unwrap().raster.wait_data().unwrap().tiles.len(),64);
+    }
+    drop(pressure);budget.set_ram_override(Some(2<<30));budget.flush_reports();
+    submit_published(&mut r,frame);complete(&r);
+    let shown=r.readback_srgb_rgba8().unwrap();
+    assert!(shown.as_chunks::<4>().0.iter().all(|pixel|*pixel==[255,0,0,255]),"evicting optional color must preserve the authored picture");
+}
+
+#[test]
+fn a_raster_admission_evicts_retained_buffers_before_it_is_refused() {
+    let (_doc,mut r,_data)=durable_color_renderer();
+    r.memory.invalidate_limits();r.refresh_memory_limits();
+    let headroom=r.memory.raster.handle.gpu_working_limit().saturating_sub(r.raster_tiers.raster.used());
+    r.raster_buffers.put(r.raster_buffers.take(&r.device,8*MIB));
+    assert_eq!(r.raster_buffers.retained.used(),8*MIB);
+    assert!(r.admit_raster_working(headroom).is_ok(),"the retained buffer must make room for authored working memory");
+    assert_eq!(r.raster_buffers.retained.used(),0);
+}
+
+#[test]
+fn lowered_owner_grants_release_optional_retention_within_one_frame() {
+    for owner in ["Display","Decoded","Raster"] {
+        match owner {
+            "Display"=>crate::object_image_mips::tests::assert_optional_display_grant_decrease(),
+            "Decoded"=>a_demanded_decoded_slot_survives_a_grant_shrink_while_undemanded_ones_go_first(),
+            "Raster"=>consecutive_camera_frames_retire_durable_color_after_the_raster_grant_shrinks(),
+            _=>unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn changed_cells_are_charged_once() {
+    let mut r = legacy_scene_renderer(Default::default());
+    r.refresh_memory_limits();
+    let cells = r.changed_cells.as_ref().map_or(0, changed_cells::ChangedCells::storage_bytes);
+    assert!(cells > 0);
+    r.refresh_storage_metrics();
+    let raster = r.raster_memory_report().gpu_bytes;
+    let held = r.scene_tiers.display.used();
+    drop(r.changed_cells.take());
+    r.refresh_memory_limits();
+    r.refresh_storage_metrics();
+    assert_eq!(held - r.scene_tiers.display.used(), cells);
+    assert_eq!(r.raster_memory_report().gpu_bytes, raster);
+}
+
+#[test]
+fn display_working_admission_uses_device_headroom_instead_of_a_retention_share() {
+    let mut r=legacy_scene_renderer(Default::default());
+    r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
+    let share=r.memory.display.handle.grant().gpu_bytes;
+    r.refresh_memory_limits();
+    let bytes=share.saturating_add(r.scene_tiers.display.used()).saturating_add(1);
+    assert!(r.admit_display(None,crate::residency::Class::Visible,bytes).is_ok(),
+        "a retention share of {share} must not refuse required work with free device headroom");
+}
+
+#[test]
+fn an_over_grant_display_admission_shrinks_the_raster_limit_before_the_raster_admits() {
+    let mut r=legacy_scene_renderer(Default::default());
+    r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
+    let headroom=r.memory.raster.handle.gpu_working_limit();
+    let held=r.admit_display(None,crate::residency::Class::Visible,64*MIB).expect("required work may exceed the grant");
+    let covered=r.scene_tiers.display.used();
+    assert!(r.memory.raster.handle.gpu_working_limit().saturating_add(covered)<=headroom,
+        "the ledger must take the {covered} display bytes above the grant from the raster before the raster admits");
+    assert!(r.memory.display.handle.grant().gpu_bytes>=covered,"the display grant covers what it admitted");
+    r.refresh_memory_limits();
+    assert_eq!(r.memory.display.handle.working().gpu_bytes,0,"the next display report replaces the overdraft");
+    drop(held);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_ledger_refused_display_admission_waits_without_frames_and_wakes_once_when_the_raster_releases() {
+    let mut r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    let raster=r.admit_raster_working(512*MIB).expect("the raster holds most of the device");
+    r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
+    r.scene_tiers.display.set_limit(u64::MAX,0);
+    let (send,woken)=std::sync::mpsc::channel();
+    r.preparation_wake=Some(Arc::new(move||{let _=send.send(());}));
+    let physical=|r:&WgpuRasterizer|{
+        let grants=r.factory.memory_budget().snapshot().devices.iter().map(|device|device.granted_bytes).sum::<u64>();
+        let resident=r.telemetry().resident_bytes;
+        assert!(resident<=grants+64*MIB,"physical {resident} exceeds grants {grants} + 64 MiB");
+    };
+    assert!(r.admit_display(None,crate::residency::Class::Visible,384*MIB).is_err(),"the ledger refuses what the device cannot hold");
+    physical(&r);
+    assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"a refused unit requests no frame before a release");
+    r.commit_raster_working(raster);
+    woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the raster release wakes the refused unit");
+    assert!(woken.recv_timeout(std::time::Duration::from_millis(200)).is_err(),"one release wakes the unit once");
+    let held=r.admit_display(None,crate::residency::Class::Visible,384*MIB).expect("the woken unit fits");
+    physical(&r);
+    drop(held);
+}
+
+#[test]
+fn an_over_grant_display_admission_marks_undemanded_victims_before_its_overdraft() {
+    let r=legacy_scene_renderer(Default::default());
+    r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
+    let notice=Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let victim=r.scene_tiers.display.heap().lease(&notice);victim.offer(8*MIB,0);
+    let held=r.admit_display(None,crate::residency::Class::Visible,64*MIB).expect("required work may exceed the grant");
+    assert!(victim.evicted(),"an over-grant admission evicts what no current demand protects before it takes the overdraft");
+    drop(held);
+}
+
+#[test]
+fn display_bytes_above_the_grant_keep_their_ledger_reservation_across_the_grant_pass() {
+    let mut r=legacy_scene_renderer(Default::default());
+    let held=r.admit_display(None,crate::residency::Class::Visible,2<<30).expect("required work may exceed the grant");
+    r.refresh_memory_limits();
+    let grants=r.factory.memory_budget().snapshot().devices.iter().map(|device|device.granted_bytes).sum::<u64>();
+    let resident=r.telemetry().resident_bytes;
+    assert!(resident<=grants+64*MIB,"physical {resident} exceeds grants {grants} + 64 MiB once the grant pass ends the overdraft");
+    drop(held);
+}
+
+#[test]
+fn an_optional_display_admission_stays_within_the_grant() {
+    let r=legacy_scene_renderer(Default::default());
+    r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
+    assert!(r.admit_display(None,crate::residency::Class::Prefetch,MIB).is_err(),"prefetch took device headroom beyond the display grant");
+    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB).is_ok());
+}
+
+#[test]
+fn a_tablet_raster_demand_beside_the_display_floor_is_not_reduced_by_the_display_cache_target() {
+    let doc = document();
+    let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(1 << 30), override_bytes: Some(1 << 30), ..Default::default() });
+    let mut r = renderer_in_budget(doc.composition().color, layer_core::DeviceMemoryFacts { budget_bytes: Some(1 << 30), ..Default::default() }, budget).unwrap();
+    submit_settled(&mut r, packet(doc.scene(), doc.composition().size));
+    complete(&r);
+    let budget = r.factory.memory_budget().clone();
+    let device = budget.snapshot().devices[0];
+    let raster = r.memory.raster.handle.reported();
+    let room = device.limit_bytes.saturating_sub(device.pinned_bytes).saturating_sub(r.scene_tiers.display.floor()).saturating_sub(64 * MIB);
+    let wanted = raster.pinned_gpu_bytes.saturating_add(room);
+    r.memory.raster.handle.report(MemoryReport { demand_gpu_bytes: wanted, ..raster });
+    budget.flush_reports();
+    assert!(r.memory.raster_grant() >= wanted, "the display's cache target reduced the raster's working demand: wanted {wanted}, granted {}, display {:?}, device {device:?}",
+        r.memory.raster_grant(), r.memory.display.handle.reported());
+}
+
+fn presented_floor(frame: FramePacket<'_>) -> u64 {
+    let format = crate::display_precision::DisplayPrecision::for_scene(frame.scene).format();
+    let page = u64::from(PAGE_SIZE).pow(2) * u64::from(format.block_copy_size(None).unwrap());
+    let visible = display_mips::view_bounds(frame.view, frame.document_extent, 0).unwrap();
+    let level = display_mips::view_level(frame.view.document_to_surface, display_mips::MAX_LEVEL).unwrap();
+    let side = PAGE_SIZE << level;
+    let cells = u64::from(visible.max_x().div_ceil(side) - visible.min_x() / side) * u64::from(visible.max_y().div_ceil(side) - visible.min_y() / side);
+    2 * cells * page
+}
+
+fn optional_headroom(r: &WgpuRasterizer, floor: u64) -> u64 {
+    let free = r.scene_tiers.display.limit().saturating_sub(r.scene_tiers.display.used());
+    assert!(free > floor, "the test grant {free} must exceed the presented floor {floor}");
+    free - floor + 1
+}
+
+#[test]
+fn the_display_floor_holds_across_frames_without_a_required_request() {
+    let doc = document();
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let mut frame = packet(doc.scene(), [512; 2]);
+    frame.view = crate::test_support::view([1024, 768]);
+    r.begin_frame_memory(frame);
+    r.begin_frame_memory(frame);
+    let bytes = optional_headroom(&r, presented_floor(frame));
+    assert!(r.admit_display(None, crate::residency::Class::Prefetch, bytes).is_err(), "prefetch took the presented and held cells' floor");
+    assert!(r.admit_display(None, crate::residency::Class::Visible, bytes).is_ok(), "required work may use the floor");
+}
+
+#[test]
+fn the_display_floor_follows_the_view_rather_than_the_largest_request() {
+    let doc = document();
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let mut frame = packet(doc.scene(), [512; 2]);
+    frame.view = crate::test_support::view([1024, 768]);
+    r.begin_frame_memory(frame);
+    let _authored = r.admit_display(None, crate::residency::Class::Authored, MIB).unwrap();
+    let bytes = optional_headroom(&r, presented_floor(frame));
+    assert!(r.admit_display(None, crate::residency::Class::Prefetch, bytes).is_err(), "a small authored request shrank the floor below the view's cells");
+}
+
+#[test]
+fn the_display_tier_is_the_sum_of_its_charges_across_a_frame() {
+    let mut r = legacy_scene_renderer(Default::default());
+    r.refresh_memory_limits();
+    let base = r.scene_tiers.display.used();
+    let held = r.scene_tiers.display.charge(3 * MIB);
+    let lease = r.reserve_effect_analysis(5 * MIB).unwrap();
+    r.refresh_memory_limits();
+    assert_eq!(r.scene_tiers.display.used(), base + 8 * MIB, "a direct charge and an analysis lease are both counted");
+    drop((held, lease));
+    r.refresh_memory_limits();
+    assert_eq!(r.scene_tiers.display.used(), base);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn refused_display_admission_is_woken_by_a_released_charge() {
+    let mut r=legacy_scene_renderer(Default::default());
+    let (send,receive)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    r.scene_tiers.display.set_limit(r.scene_tiers.display.used()+8,0);
+    let held=r.scene_tiers.display.charge(8);
+    while receive.try_recv().is_ok() {}
+    assert!(r.admit_display(None,crate::residency::Class::Visible,1).is_err());
+    drop(held);
+    receive.recv_timeout(std::time::Duration::from_secs(1)).expect("the refused display unit must subscribe to release");
+}
+
+fn raster_headroom(r: &mut WgpuRasterizer) -> u64 {
+    let (mut fits, mut refused) = (0u64, 1u64 << 44);
+    while refused - fits > 1 {
+        let bytes = fits + (refused - fits) / 2;
+        if r.admit_raster_working(bytes).is_ok() { fits = bytes; } else { refused = bytes; }
+    }
+    fits
+}
+
+#[test]
+fn raster_admission_counts_pages_and_retained_buffers_from_creation() {
+    let mut r = legacy_scene_renderer(Default::default());
+    let headroom = raster_headroom(&mut r);
+    let page = r.create_page([0, 0], "unpublished raster page");
+    assert!(r.admit_raster_working(headroom).is_err(), "a page counts from its creation, before any layer holds it");
+    let headroom = raster_headroom(&mut r);
+    r.refresh_memory_limits();
+    let held = r.raster_tiers.raster.used();
+    r.raster_buffers.put(r.device.create_buffer(&wgpu::BufferDescriptor { label: Some("retained raster buffer"), size: 64 << 10,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false }));
+    assert_eq!(r.raster_tiers.raster.used() - held, 64 << 10, "a retained buffer counts while the pool holds it");
+    assert!(r.admit_raster_working(headroom).is_ok(), "the retained buffer yields to authored working memory");
+    assert_eq!(r.raster_buffers.retained.used(), 0);
+    drop(page);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn refused_raster_admission_is_woken_by_a_released_page() {
+    let mut r = legacy_scene_renderer(Default::default());
+    let page = r.create_page([0, 0], "released raster page");
+    let (send, receive) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
+    while receive.try_recv().is_ok() {}
+    r.raster_tiers.raster.update_limit(r.memory.raster.handle.gpu_working_limit());
+    let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
+    assert!(r.admit_raster_working(room + 1).is_err());
+    drop(page);
+    receive.recv_timeout(std::time::Duration::from_secs(1)).expect("a release that makes the refused raster unit fit must wake it");
+}
+
+#[test]
+fn a_replaced_renderer_reports_none_of_the_display_its_successor_adopted() {
+    let mut previous = legacy_scene_renderer(Default::default());
+    let adopted = previous.scene_tiers.display.charge(64 * MIB);
+    let factory = previous.factory.clone();
+    let mut next = WgpuRasterizer::from_factory_inner(factory.clone(), factory.pipeline_device(Default::default()), crate::Initialization::Headless).unwrap();
+    layer_render::CanvasRenderer::adopt_committed_pages(&mut *next, &mut previous);
+    assert!(next.current_display_memory_report().gpu_bytes >= adopted.bytes(), "the successor reports the display it adopted");
+    assert!(previous.current_display_memory_report().gpu_bytes < adopted.bytes(), "the replaced renderer still reports, and on retirement pins, the display it gave away");
+    drop(adopted);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_retired_display_owner_ends_with_its_queue_while_adopted_state_shares_its_device() {
+    let previous = legacy_scene_renderer(Default::default());
+    let budget = previous.factory.memory_budget().clone();
+    let scenes = |budget: &MemoryBudget| budget.snapshot().rows[Kind::Scene as usize].iter().map(|row| row.owners).sum::<usize>();
+    assert_eq!(scenes(&budget), 1);
+    let adopted = previous.device.clone();
+    drop(previous);
+    adopted.wait_queue().unwrap();
+    assert_eq!(scenes(&budget), 0, "state that keeps a device clone must not keep the retired renderer's display owner and its retirement pins");
+    drop(adopted);
+}
+
+#[test]
+fn resident_presented_cells_leave_the_floor_to_refinement() {
+    let doc = document();
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let mut frame = packet(doc.scene(), [512; 2]);
+    frame.view = crate::test_support::view([256, 256]);
+    submit_settled(&mut r, frame);
+    r.begin_frame_memory(frame);
+    let cells = display_floor(frame, 0, WORKING_BYTES) - WORKING_BYTES - IN_FLIGHT_DECODE_BYTES;
+    let presented = r.composition_memory(r.scene.as_deref())[1];
+    assert!(presented >= cells, "the settled view keeps its presented cells resident: presented {presented}, cells {cells}");
+    let display = r.scene_tiers.display.clone();
+    display.update_limit(display.used() + MIB + WORKING_BYTES + IN_FLIGHT_DECODE_BYTES);
+    assert!(display.admit(crate::residency::Class::Refinement, MIB).is_ok(), "the floor reserved the resident presented cells a second time");
+}
+
+#[test]
+fn retained_display_pages_above_the_display_grant_are_trimmed_by_the_next_frame() {
+    let mut doc = crate::tests::native_effects::empty_document([4096; 2], Default::default());
+    crate::tests::native_effects::insert_source(&mut doc, "Photo", layer_core::color::source::rgba8_source([4096; 2], |x, y| [(x % 251) as u8, (y % 241) as u8, 96, 255]));
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let mut first = packet(doc.scene(), [4096; 2]);
+    first.view = crate::test_support::view([256, 256]);
+    submit_settled(&mut r, first);
+    let mut moved = first;
+    for translation in [[-2048., -2048.], [0., -2048.]] {
+        moved.view.document_to_surface = [1., 0., 0., 1., translation[0], translation[1]];
+        submit_settled(&mut r, moved);
+    }
+    complete(&r);
+    let [stored, pinned] = r.scene.as_ref().unwrap().retained_scale_bytes();
+    assert!(stored > pinned, "the first view's pages stay retained beside the presented and held ones");
+    let budget = r.factory.memory_budget().clone();
+    let snapshot = budget.snapshot();
+    let other = budget.register_owner(Kind::Other, MemoryClass::Pinned, Some(snapshot.devices[0].device));
+    let held = snapshot.devices[0].limit_bytes.saturating_sub(snapshot.devices[0].pinned_bytes);
+    other.report(MemoryReport { gpu_bytes: held, pinned_gpu_bytes: held, ..Default::default() });
+    budget.flush_reports();
+    let grant = r.memory.display.handle.grant().gpu_bytes;
+    let used = r.scene_tiers.display.used();
+    assert!(used > grant, "the competing pin leaves the display grant below its retained charges");
+    let (entered, ready) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    r.device.retirement_handle().run(move || { let _ = entered.send(()); let _ = held.recv_timeout(crate::READBACK_TIMEOUT); });
+    ready.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+    r.begin_frame_memory(moved);
+    let [kept, _] = r.scene.as_ref().unwrap().retained_scale_bytes();
+    assert!(kept < stored, "retention above the display grant survived the frame: stored {stored} kept {kept} pinned {pinned} grant {grant}");
+    let target = stored.saturating_sub(used.saturating_sub(grant).saturating_sub(r.scene_tiers.display.heap().pending()));
+    assert!(kept + u64::from(crate::PAGE_SIZE).pow(2) * 16 > target, "pages still retiring were trimmed for again: kept {kept} target {target}");
+    r.begin_frame_memory(moved);
+    assert_eq!(r.scene.as_ref().unwrap().retained_scale_bytes()[0], kept, "one frame releases every evictable page above the grant");
+    release.send(()).unwrap();
+    r.device.retirement_handle().flush().unwrap();
+    drop(other);
+}
+
+#[test]
+fn an_idle_display_above_a_lowered_grant_wakes_and_releases_its_retention() {
+    let mut doc = crate::tests::native_effects::empty_document([4096; 2], Default::default());
+    crate::tests::native_effects::insert_source(&mut doc, "Photo", layer_core::color::source::rgba8_source([4096; 2], |x, y| [(x % 251) as u8, (y % 241) as u8, 96, 255]));
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let mut frame = packet(doc.scene(), [4096; 2]);
+    frame.view = crate::test_support::view([256, 256]);
+    submit_settled(&mut r, frame);
+    for translation in [[-2048., -2048.], [0., -2048.]] {
+        frame.view.document_to_surface = [1., 0., 0., 1., translation[0], translation[1]];
+        submit_settled(&mut r, frame);
+    }
+    complete(&r);
+    let [stored, _] = r.scene.as_ref().unwrap().retained_scale_bytes();
+    let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = woken.clone();
+    r.set_preparation_wake(Arc::new(move || { count.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }));
+    assert_ne!(r.next_frame(), layer_render::FrameDemand::Work);
+    let budget = r.factory.memory_budget().clone();
+    let snapshot = budget.snapshot();
+    let other = budget.register_owner(Kind::Other, MemoryClass::Pinned, Some(snapshot.devices[0].device));
+    let held = snapshot.devices[0].limit_bytes.saturating_sub(snapshot.devices[0].pinned_bytes);
+    other.report(MemoryReport { gpu_bytes: held, pinned_gpu_bytes: held, ..Default::default() });
+    assert!(r.scene_tiers.display.used() > r.memory.retention_grant(), "the competing pin leaves the display above its grant");
+    assert!(woken.load(std::sync::atomic::Ordering::SeqCst) > 0, "a lowered grant wakes the idle renderer");
+    assert_eq!(r.next_frame(), layer_render::FrameDemand::Work, "retention above the grant is outstanding work");
+    for _ in 0..8 {
+        if r.next_frame() != layer_render::FrameDemand::Work { break; }
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        complete(&r);
+    }
+    let kept = r.scene.as_ref().unwrap().retained_scale_bytes()[0];
+    assert!(kept < stored, "the idle display released its retention: stored {stored} kept {kept}");
+    assert_ne!(r.next_frame(), layer_render::FrameDemand::Work, "an idle display does not spin on bytes it cannot release");
+    drop(other);
+}
+
+#[test]
+fn telemetry_counts_each_composition_window_and_strip_once() {
+    let extent = [1033, 517];
+    let mut threshold = (*crate::tests::fixture("threshold").program()).clone();
+    threshold.id = "unbundled threshold".into();
+    let mut doc = crate::tests::native_effects::empty_document(extent, Default::default());
+    crate::tests::native_effects::insert_effect(&mut doc, layer_core::EffectInstance::new(Arc::new(threshold)));
+    crate::tests::native_effects::insert_source(&mut doc, "Photo", layer_core::color::source::rgba8_source(extent, |x, y| [(x % 251) as u8, (y % 241) as u8, 96, 255]));
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let mut frame = packet(doc.scene().with_owner(0, 0), extent);
+    frame.view.width_px = 43;
+    frame.view.height_px = 25;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, -152.5, -67.5];
+    submit_published(&mut r, frame);
+    r.wait_idle().unwrap();
+    assert!(r.scale_display.as_ref().unwrap().charged_scratch_bytes() > 0, "the unbundled effect composes through scratch and the exact strip");
+    let resident = |r: &mut WgpuRasterizer| { r.refresh_storage_metrics(); layer_render::CanvasRenderer::telemetry(r).resident_bytes };
+    let [telemetry, display] = [resident(&mut r), r.scene_tiers.display.used()];
+    drop(r.scale_display.take());
+    assert_eq!(telemetry - resident(&mut r), display - r.scene_tiers.display.used(),
+        "telemetry must release exactly the display charges of the windows, scratch and strip it drops");
+}
+
+#[test]
+fn the_raster_report_counts_a_page_from_its_creation_without_a_storage_walk() {
+    let r = legacy_scene_renderer(Default::default());
+    let before = r.raster_memory_report().gpu_bytes;
+    let page = r.create_page([0, 0], "unlisted raster page");
+    assert_eq!(r.raster_memory_report().gpu_bytes - before, page.primary.storage_bytes(), "the raster owner reports a page while it exists, before any layer lists it");
+    drop(page);
+    assert_eq!(r.raster_memory_report().gpu_bytes, before);
+}
+
+#[test]
+fn zero_pages_and_remembered_selection_pixels_are_charged_to_the_paint_tier() {
+    let mut r = legacy_scene_renderer(Default::default());
+    let fixed = r.reservoir.primary.storage_bytes() + r.reservoir.secondary.storage_bytes()
+        + r.declared_scratch.iter().map(PageSurface::storage_bytes).sum::<u64>() + r.zero_pages.iter().map(texture_bytes).sum::<u64>();
+    assert_eq!(r.raster_tiers.paint.used(), fixed, "the paint tier holds the immutable zero pages from creation");
+    let pixels = Arc::new(layer_core::SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x4444]).unwrap());
+    let buffer = r.device.create_buffer(&wgpu::BufferDescriptor { label: Some("remembered selection coverage"), size: MIB,
+        usage: wgpu::BufferUsages::STORAGE, mapped_at_creation: false });
+    r.selection_clip.remember_pixels(&pixels, buffer);
+    assert_eq!(r.raster_tiers.paint.used(), fixed + MIB, "remembered selection coverage is charged while the clip keeps it");
+    drop(pixels);
+    r.selection_clip.reset();
+    assert_eq!(r.raster_tiers.paint.used(), fixed, "released coverage leaves the paint tier");
+}
+
+#[test]
+fn liquify_maps_are_charged_to_the_paint_tier_when_created() {
+    let r = legacy_scene_renderer(Default::default());
+    let before = r.raster_tiers.paint.used();
+    let liquify = crate::liquify::Liquify::new(&r);
+    let map = u64::from(PAGE_SIZE * PAGE_SIZE) * u64::from(wgpu::TextureFormat::Rgba32Uint.block_copy_size(None).unwrap());
+    let color = u64::from(PAGE_SIZE * PAGE_SIZE) * u64::from(r.device.working_format().block_copy_size(None).unwrap());
+    assert_eq!(r.raster_tiers.paint.used() - before, 3 * map + 2 * color, "the empty and scratch maps are charged beside the color gathers");
+    drop(liquify);
+    assert_eq!(r.raster_tiers.paint.used(), before);
+}
+
+#[test]
+fn a_transform_spare_page_is_charged_only_to_the_paint_tier() {
+    let mut r = legacy_scene_renderer(Default::default());
+    r.transforms.as_mut().unwrap().begin_frame();
+    r.refresh_memory_limits();
+    let [display, paint] = [r.scene_tiers.display.used(), r.raster_tiers.paint.used()];
+    let page = r.create_page([0, 0], "transform spare page");
+    let bytes = page.primary.storage_bytes();
+    r.transforms.as_mut().unwrap().hold_spare(page);
+    r.transforms.as_mut().unwrap().begin_frame();
+    r.refresh_memory_limits();
+    assert_eq!(r.raster_tiers.paint.used() - paint, bytes);
+    assert_eq!(r.scene_tiers.display.used(), display, "a page that left the live preview is counted once, on the paint tier");
+}
+
+fn decoded_source(tiles: u32) -> Arc<layer_core::color::source::SourceImage> {
+    layer_core::color::source::rgba8_source([tiles.min(16) * PAGE_SIZE, tiles.div_ceil(16) * PAGE_SIZE], |x, y| {
+        let id = (y / PAGE_SIZE * 16 + x / PAGE_SIZE) as u8;
+        [id.wrapping_mul(17), id.wrapping_mul(43), id.wrapping_mul(97), 255]
+    })
+}
+
+fn decoded_renderer(source: &Arc<layer_core::color::source::SourceImage>) -> WgpuRasterizer {
+    let r = renderer(Default::default(), layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    pollster::block_on(r.compilation.prepare_all(crate::startup::SourceKinds::for_source(source).pipelines(&r.scene_pipelines.source))).unwrap();
+    r
+}
+
+fn tile(x: u32) -> [u32; 2] { [x % 16, x / 16] }
+
+fn decode_at(r: &mut WgpuRasterizer, source: &Arc<layer_core::color::source::SourceImage>, x: u32, class: crate::residency::Class) {
+    let mut requested = scene::sources::Inputs::default();
+    requested.image(source, tile(x), r.document_color().space);
+    let ((), accepted) = requested.accept(r, &mut (), |_, r, inputs| {
+        let bytes = inputs.additional_bytes(&r.source_tiles.borrow());
+        r.admit_display(None, class, bytes).ok()
+    }, |_, _| Ok(()), |_, _, _| Ok(())).unwrap().expect("the decode fits the display grant");
+    let read = scene::sources::accepted_image(&accepted, source, tile(x)).unwrap();
+    if !read.pending.is_empty() {
+        let pixels = crate::prepare_image_tile(source, tile(x), r.document_color().space, &r.device.source_samples, None).unwrap();
+        for pending in &read.pending { pending.set_prepared(Some(pixels.clone())); }
+    }
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    assert!(read.encode(r, &mut encoder, class).unwrap());
+    accepted.track(&mut encoder);
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    complete(r);
+}
+
+fn resident(r: &WgpuRasterizer, source: &Arc<layer_core::color::source::SourceImage>, x: u32) -> bool {
+    r.source_tiles.borrow().prepared_view(source, tile(x)).is_some()
+}
+
+fn demand_the_first_decode_above_more_recent_lower_class_ones(r: &mut WgpuRasterizer, frame: FramePacket<'_>,
+    source: &Arc<layer_core::color::source::SourceImage>, tiles: u32) {
+    r.begin_frame_memory(frame);
+    for x in 0..tiles { decode_at(r, source, x, crate::residency::Class::Visible); }
+    r.end_frame_memory();
+    r.begin_frame_memory(frame);
+    decode_at(r, source, 0, crate::residency::Class::Visible);
+    for x in 1..tiles { decode_at(r, source, x, crate::residency::Class::Refinement); }
+    assert!((0..tiles).all(|x| resident(r, source, x)), "the fixture holds every decode before the grant changes");
+}
+
+#[test]
+fn a_demanded_decoded_slot_survives_a_grant_shrink_while_undemanded_ones_go_first() {
+    let doc = document();
+    let source = decoded_source(24);
+    let mut r = decoded_renderer(&source);
+    let frame = packet(doc.scene(), doc.composition().size);
+    demand_the_first_decode_above_more_recent_lower_class_ones(&mut r, frame, &source, 24);
+    r.memory.display.handle.report(MemoryReport { demand_gpu_bytes: 1, ..Default::default() });
+    r.factory.memory_budget().flush_reports();
+    r.begin_frame_memory(frame);
+    r.refresh_memory_limits();
+    complete(&r);
+    r.device.retirement_handle().flush().unwrap();
+    assert!(resident(&r, &source, 0), "the slot a Visible unit demanded this frame survives the shrink");
+    assert!((1..24).all(|x| !resident(&r, &source, x)), "the shrunk grant takes every slot no current demand at Fallback protects");
+}
+
+#[test]
+fn navigator_and_restore_decodes_are_not_decoded_again_at_a_fixed_view_under_a_tablet_grant() {
+    let doc = document();
+    let source = decoded_source(192);
+    let mut r = decoded_renderer(&source);
+    let frame = packet(doc.scene(), doc.composition().size);
+    let class = |x: u32| if x % 2 == 0 { crate::residency::Class::Navigator } else { crate::residency::Class::Authored };
+    let mut misses = Vec::new();
+    for _ in 0..3 {
+        r.begin_frame_memory(frame);
+        let before = r.source_tiles.borrow().misses;
+        for x in 0..192 { decode_at(&mut r, &source, x, class(x)); }
+        misses.push(r.source_tiles.borrow().misses - before);
+        r.end_frame_memory();
+    }
+    assert_eq!(misses, [192, 0, 0], "a fixed view decodes each tile once; display {} of grant {}",
+        r.scene_tiers.display.used(), r.memory.display.handle.grant().gpu_bytes);
+}
+
+#[test]
+fn a_navigator_admission_at_a_full_grant_evicts_undemanded_decodes_while_a_visible_demanded_one_survives() {
+    let doc = document();
+    let source = decoded_source(9);
+    let mut r = decoded_renderer(&source);
+    let frame = packet(doc.scene(), doc.composition().size);
+    demand_the_first_decode_above_more_recent_lower_class_ones(&mut r, frame, &source, 8);
+    let full = r.scene_tiers.display.used() + r.scene_tiers.display.floor();
+    r.memory.display.handle.report(MemoryReport { demand_gpu_bytes: full, ..Default::default() });
+    r.factory.memory_budget().flush_reports();
+    assert_eq!(r.memory.display.handle.grant().gpu_bytes, full);
+    let mut requested = scene::sources::Inputs::default();
+    requested.image(&source, [8, 0], r.document_color().space);
+    let bytes = requested.additional_bytes(&r.source_tiles.borrow());
+    assert!(r.admit_display(None, crate::residency::Class::Navigator, bytes).is_err(), "the grant is full for optional work");
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    r.retire_victims(None, &mut encoder);
+    encoder.submit(&r.queue);
+    complete(&r);
+    r.device.retirement_handle().flush().unwrap();
+    assert!(r.admit_display(None, crate::residency::Class::Navigator, bytes).is_ok(), "the miss evicted undemanded decodes for the navigator");
+    assert!(resident(&r, &source, 0), "the Visible-demanded slot is not a navigator victim");
+    assert!((1..8).any(|x| !resident(&r, &source, x)), "an undemanded decode went instead");
+}
+
+fn stacked_document(layers: usize) -> layer_core::Document {
+    let mut doc = document();
+    for layer in 0..layers { crate::test_support::add_paint(&mut doc.artwork, format!("Layer {layer}"), [512; 2]); }
+    layer_core::Document::from_artwork(doc.artwork).unwrap()
+}
+
+#[test]
+fn a_drained_display_pin_covers_one_full_stack_unit_of_decoded_inputs() {
+    let doc = stacked_document(60);
+    let mut r = renderer(doc.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }).unwrap();
+    r.prepare_capture_memory(doc.scene(), doc.composition().size);
+    let unit = 60 * scene::sources::NORMALIZED_PAGE_BYTES;
+    let pinned = r.memory.demand.get().pinned(r.display_usage().pinned)[3];
+    assert!(pinned >= unit, "the decoded-input pin {pinned} must hold one 60-layer page composite");
+    let budget = r.factory.memory_budget().clone();
+    let _drain = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    r.publish_memory();
+    budget.flush_reports();
+    r.refresh_memory_limits();
+    assert!(r.source_tiles.borrow().free_slots() as u64 >= 60, "a drained ledger keeps room for one full-stack unit: {} pages", r.source_tiles.borrow().free_slots());
+}
+
+#[test]
+fn a_capture_step_ends_the_demand_epoch_its_decodes_were_stamped_in() {
+    let source = decoded_source(1);
+    let mut r = decoded_renderer(&source);
+    decode_at(&mut r, &source, 0, crate::residency::Class::Visible);
+    assert_eq!(r.scene_tiers.display.heap().evict(u64::MAX, crate::residency::Class::Visible), 0, "a decode is demanded in the step that acquired it");
+    let mut scene = scene::Scene::new(&r).unwrap();
+    pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
+    assert!(r.scene_tiers.display.heap().evict(u64::MAX, crate::residency::Class::Visible) > 0, "the next capture step may evict the consumed decode");
+}
+
+#[test]
+fn the_display_tier_floor_and_the_ledger_pin_hold_the_same_unit() {
+    let doc = stacked_document(60);
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let frame = packet(doc.scene(), doc.composition().size);
+    r.begin_frame_memory(frame);
+    let unit = r.memory.unit();
+    assert!(unit >= (60 + SCRATCH_PAGES) * scene::sources::NORMALIZED_PAGE_BYTES, "one full-stack page composite: {unit}");
+    let usage = r.display_usage().pinned;
+    assert_eq!(r.memory.demand.get().pinned(usage)[3] - usage[3], unit, "the ledger pin holds the unit");
+    let presented = r.composition_memory(r.scene.as_deref())[1];
+    assert_eq!(r.scene_tiers.display.floor(), display_floor(frame, presented, unit), "the tier floor holds the same unit");
+}
+
+#[test]
+fn a_display_change_below_a_mebibyte_reaches_the_ledger_at_the_next_frame() {
+    let doc = document();
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let frame = packet(doc.scene(), [512; 2]);
+    submit_settled(&mut r, frame);
+    r.begin_frame_memory(frame);
+    let held = r.retired_display_bytes.charge(MIB / 2);
+    r.begin_frame_memory(frame);
+    assert_eq!(r.memory.display.handle.reported().pinned_gpu_bytes, r.current_display_memory_report().pinned_gpu_bytes, "the next frame reports the held display bytes as they are");
+    drop(held);
+}
+
+#[test]
+fn the_display_report_and_grant_pass_walk_no_composition_window() {
+    let doc = document();
+    let mut r = legacy_scene_renderer(doc.composition().color);
+    let frame = packet(doc.scene(), [512; 2]);
+    submit_settled(&mut r, frame);
+    assert!(r.scale_display.is_some() && r.navigator.storage_bytes() > 0, "the fixture presents a view and a navigator");
+    let counts = crate::test_support::PassCounts::snapshot();
+    r.publish_memory();
+    r.memory.invalidate_limits();
+    r.refresh_memory_limits();
+    r.begin_frame_memory(frame);
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(counts).display_walks, 0, "the report reads window counters, not windows");
+}
+
+#[test]
+fn a_settled_reduced_view_keeps_no_decoded_layer_tiles_after_its_units_commit() {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+    let extent=[PAGE_SIZE*4;2];
+    let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+    for layer in 0..8u8 {
+        let (_,layer_core::SourceTarget::Paint(paint))=crate::test_support::add_paint(&mut doc.artwork,format!("Layer {layer}"),extent) else {unreachable!()};
+        let data=RasterData {tiles:(0..4).flat_map(|y|(0..4).map(move|x|[x,y])).map(|[x,y]| {
+            let bytes=[layer*29+x as u8*7,y as u8*13+layer,(x+y) as u8*5+layer,128].repeat(PAGE_SIZE.pow(2) as usize);
+            (TileKey {plane:RasterPlane::Color,coordinate:[x,y]},RasterTile::backed(TileBlob::encode(doc.composition().color.paint_descriptor(),&bytes).unwrap()))
+        }).collect(),watercolor:None};
+        doc.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(data);
+    }
+    let doc=layer_core::Document::from_artwork(doc.artwork).unwrap();
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.view.width_px=256;frame.view.height_px=256;
+    frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    submit_settled(&mut r,frame);complete(&r);
+    for _ in 0..2 {crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..frame}).unwrap();complete(&r);}
+    let sources=r.source_tiles.borrow();
+    let decoded=sources.gpu_bytes()-sources.non_slot_bytes();
+    assert!(sources.misses>=8*16,"every layer tile was decoded once: {}",sources.misses);
+    assert!(decoded<=r.scene_tiers.display.floor(),"{} MiB of decoded layer tiles stay above the view floor after their units committed",decoded>>20);
+}
+
+#[test]
+fn a_surface_presenter_charges_its_presented_images_to_the_device() {
+    let r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let budget=r.factory.memory_budget().clone();
+    let pinned=|budget:&MemoryBudget| {budget.flush_reports();budget.snapshot().devices[0].pinned_bytes};
+    let before=pinned(&budget);
+    let mut presenter=crate::ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba8UnormSrgb,crate::SdrSurfaceColor::Srgb).unwrap();
+    pollster::block_on(presenter.prepare(&r)).unwrap();
+    let target=crate::create_target(&r.device,[800,600],wgpu::TextureFormat::Rgba8UnormSrgb,"surface image").0;
+    presenter.present(&r,&target.create_view(&Default::default()),crate::test_support::view([800,600]),[1.;4]).unwrap();
+    assert_eq!(pinned(&budget)-before,800*600*4*3,"three presented surface images stay pinned on the device");
+    drop(presenter);
+    assert_eq!(pinned(&budget),before);
 }

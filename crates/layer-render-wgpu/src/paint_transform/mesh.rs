@@ -413,14 +413,14 @@ impl MeshDraw {
 pub(crate) struct MeshBuffers {
     vertices: Option<wgpu::Buffer>,
     indices: Option<wgpu::Buffer>,
-    uploaded: Option<Arc<MeshGeometry>>,
+    uploaded: Option<(Arc<MeshGeometry>,Arc<std::sync::atomic::AtomicBool>)>,
     bytes: Vec<u8>,
 }
 impl MeshBuffers {
     pub fn storage_bytes(&self) -> u64 {
         self.vertices.as_ref().map_or(0, wgpu::Buffer::size) + self.indices.as_ref().map_or(0, wgpu::Buffer::size)
     }
-    pub fn range_for_region(&self,region:layer_core::Rect)->Range<u32> {self.uploaded.as_ref().map_or(0..0,|g|g.range_for_region(region))}
+    pub fn range_for_region(&self,region:layer_core::Rect)->Range<u32> {self.uploaded.as_ref().map_or(0..0,|(g,_)|g.range_for_region(region))}
     pub fn drawing(&self,triangles:Range<u32>)->MeshDraw {MeshDraw {vertices:self.vertices.as_ref().unwrap().clone(),indices:self.indices.as_ref().unwrap().clone(),triangles}}
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, triangles: Range<u32>) {
         if triangles.is_empty() { return; }
@@ -438,7 +438,7 @@ impl MeshBuffers {
         if self
             .uploaded
             .as_ref()
-            .is_some_and(|g| Arc::ptr_eq(g, geometry))
+            .is_some_and(|(g,valid)| Arc::ptr_eq(g, geometry) && valid.load(std::sync::atomic::Ordering::Acquire))
         {
             return Ok(());
         }
@@ -481,7 +481,9 @@ impl MeshBuffers {
             }
             r.uploads.write(encoder, buffer.as_ref().unwrap(), bytes)?;
         }
-        self.uploaded = Some(geometry.clone());
+        let write=crate::submission::CacheWrite::new();
+        self.uploaded = Some((geometry.clone(),write.validity()));
+        write.track(encoder);
         Ok(())
     }
 }
@@ -501,6 +503,7 @@ pub(crate) struct Positions {
     window: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     target: Option<(wgpu::Texture, wgpu::TextureView)>,
     buffers: MeshBuffers,
+    charge: crate::residency::Charge,
 }
 impl Positions {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -559,9 +562,11 @@ impl Positions {
         Self::from_pipelines(Arc::new(Pipelines { pipeline, layout }))
     }
     pub(super) fn from_pipelines(pipelines: Arc<Pipelines>) -> Self {
-        Self { pipelines, window: None, target: None, buffers: MeshBuffers::default() }
+        Self { pipelines, window: None, target: None, buffers: MeshBuffers::default(), charge: Arc::<crate::residency::Tier>::default().charge(0) }
     }
     pub fn fork(&self) -> Self { Self::from_pipelines(self.pipelines.clone()) }
+    pub(crate) fn charged(mut self, tier: &Arc<crate::residency::Tier>) -> Self { self.charge = tier.charge(self.charge.bytes()); self }
+    fn account(&mut self) { self.charge.resize(self.storage_bytes()); }
     /// Positions drawn with the transforms' pipeline.
     pub fn sharing(transforms: &PaintTransforms) -> Self {
         transforms.0[0].positions.fork()
@@ -593,12 +598,13 @@ impl Positions {
             });
             let view = texture.create_view(&Default::default());
             self.target = Some((texture, view));
+            self.account();
         }
         self.target.as_ref().unwrap().1.clone()
     }
     pub fn upload(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         geometry: &Arc<MeshGeometry>,
-    ) -> Result<(), GpuRasterError> { self.buffers.upload(r, encoder, geometry) }
+    ) -> Result<(), GpuRasterError> { let uploaded = self.buffers.upload(r, encoder, geometry); self.account(); uploaded }
     /// Rasterize the uploaded mesh for the window whose first page is `page`.
     pub fn draw(
         &mut self,
@@ -606,7 +612,7 @@ impl Positions {
         encoder: &mut crate::submission::CommandEncoder,
         page: [u32; 2],
     ) -> Result<(), GpuRasterError> {
-        let triangles=self.buffers.uploaded.as_ref().map_or(0..0,|g|g.window(page.map(|v| v as i32)));
+        let triangles=self.buffers.uploaded.as_ref().map_or(0..0,|(g,_)|g.window(page.map(|v| v as i32)));
         let origin=page.map(|v|(v*PAGE_SIZE) as f32-1.);
         self.draw_window(r,encoder,triangles,origin,layer_core::Affine::IDENTITY,1.)
     }
@@ -629,6 +635,7 @@ impl Positions {
         {
             dst.copy_from_slice(&value.to_le_bytes());
         }
+        if self.window.is_none() { self.charge.resize(self.storage_bytes() + WINDOW_BYTES); }
         let (buffer, binding) = &*self.window.get_or_insert_with(|| {
             let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("mesh position window"),

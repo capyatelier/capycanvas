@@ -145,7 +145,7 @@ pub(crate) fn run(selected: &str, color: DocumentColor, output: &Path) -> Result
                         file,
                         "{phase},{repeat},{step},{scale},{angle},{frame_cpu:.6},{total_cpu:.6},{complete:.6},{pixels},{},{}",
                         after.source_tile_misses - before.source_tile_misses,
-                        after.composite_storage_bytes
+                        canvas.engine.backend().display_bytes()
                     )?;
                     cpu.push(total_cpu);
                     completed.push(complete);

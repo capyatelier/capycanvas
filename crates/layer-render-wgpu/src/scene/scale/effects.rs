@@ -5,31 +5,36 @@ pub(super) fn native_alpha_capture(scene: layer_core::SceneView<'_>, handles: &[
         && (level > 0 || handles.iter().all(|handle| !scene.effect(*handle).unwrap().program.fusion_boundary()))
 }
 
+fn capture_frame<'a>(packet: FramePacket<'a>, target: &Target, regions: &[DocRect]) -> Result<(FramePacket<'a>, display_mips::Plan, Vec<PixelRect>, [i64; 2]), GpuRasterError> {
+    if target.plan.doc_bounds == DocRect::from(target.plan.bounds) {
+        return Ok((packet, target.plan, regions.iter().map(|region| region.in_frame(packet.document_extent)).collect(), [0; 2]));
+    }
+    let origin = target.plan.doc_bounds.min;
+    let size = target.plan.doc_bounds.size()?;
+    let packet = FramePacket { scene: packet.scene.with_offset64(origin.map(|value| -(value as f64))), document_extent: size, ..packet };
+    Ok((packet, display_mips::Plan::at(size, target.plan.level), regions.iter().map(|region| target.plan.doc_bounds.local(*region)).collect(), origin))
+}
+
 #[expect(clippy::too_many_arguments, reason = "Native capture keeps output ownership, initialized pages and exact regions explicit")]
+#[cfg(test)]
 pub(super) fn capture_native_effect(
     scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle,
     target: &Target, regions: &[DocRect], initialized: Option<&BTreeSet<[u32; 2]>>, encoder: &mut submission::CommandEncoder,
 ) -> Result<(), GpuRasterError> {
     let reserved = scene.used.clone();
-    let rebased = target.plan.doc_bounds != DocRect::from(target.plan.bounds);
-    let (packet, plan, regions, initialized) = if rebased {
-        let origin = target.plan.doc_bounds.min;
-        let size = target.plan.doc_bounds.size()?;
-        let packet = FramePacket { scene: packet.scene.with_offset64(origin.map(|value| -(value as f64))), document_extent: size, ..packet };
-        (packet, display_mips::Plan::at(size, target.plan.level), regions.iter().map(|region| target.plan.doc_bounds.local(*region)).collect::<Vec<_>>(), None)
-    } else {
-        (packet, target.plan, regions.iter().map(|region| region.in_frame(packet.document_extent)).collect::<Vec<_>>(), initialized)
-    };
+    let (packet, plan, regions, _) = capture_frame(packet, target, regions)?;
+    let initialized = initialized.filter(|_| target.plan.doc_bounds == DocRect::from(target.plan.bounds));
     let bounds = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(*region));
     let destination = Image { texture: target.view.texture().clone(), view: target.view.clone(), plan };
     let window = scene.cached_capture_window(packet.scene, bounds);
+    let output=scene::Output::EffectComposite(handle);
     let result = scene.prepare_region_in_frame(r, packet, (bounds, window), PixelRect::EMPTY, false, encoder)
-        .and_then(|()| scene.capture_prepared_regions_reuse(r, packet, &destination, &regions,
-            scene::Output::EffectComposite(handle), false, Some(&reserved), initialized, encoder));
+        .and_then(|()| scene.declare_capture(r,packet,&destination,&regions,output,Some(&reserved),initialized)?.accept_query(r,Some(scene)))
+        .and_then(|mut accepted| {accepted.clone().track(encoder);
+            scene.capture_prepared_regions_reuse(r, packet, &destination, &regions, output, false, Some(&reserved), initialized, encoder, &mut accepted)});
     scene.used.iter_mut().for_each(scratch::Usage::reset); scene.used[..reserved.len()].clone_from_slice(&reserved); scene.placement_display = true;
     result
 }
-
 
 impl Evaluator<'_> {
     pub(super) fn effect(
@@ -94,7 +99,6 @@ impl Evaluator<'_> {
                 target: target.clone(), sources: [previous, input.view().unwrap().clone(), self.r.empty_view.clone(), self.r.empty_paper_view.clone()],
                 data, prepared, masks: views.clone(),source_target:None,changed_cells:None,
             });
-            self.encode_scene_jobs()?;
             self.release(previous_slot);
             previous_slot = temporary;
             previous = target;
@@ -104,41 +108,60 @@ impl Evaluator<'_> {
     }
 
     fn native_effect(&mut self, handles: &[OccurrenceHandle], output: Option<Target>) -> Result<Value, GpuRasterError> {
-        self.encode_scene_jobs()?;
-        self.commands.flush(self.r, self.encoder)?;
-        let target = match output { Some(target) => target, None => {
-            let plan = self.working_plan();
-            let slot = self.cache.allocate(self.r, plan)?;
-            Target { view: self.cache.output[slot.index].view.clone(), slot: Some(Slot::Cache(slot)), plan }
-        }};
+        let target = match output { Some(target) => target, None => self.target()? };
         let handle = *handles.last().unwrap();
         if !self.packet.scene.effect(handle).unwrap().program.fusion_boundary() {
-            let side=if target.plan.level==0 {PAGE_SIZE} else {1<<target.plan.level};
-            let bounds=self.region.aligned(side).intersect(target.plan.doc_bounds);
-            let initialized=self.cache.initialized_pages(&target);
-            capture_native_effect(self.scene,self.r,self.packet,handle,&target,&[bounds],initialized,self.encoder)?;
-            return Ok(target.value());
-        }
-        let mut strip = self.cache.exact_tile.get_or_insert_with(|| Image::new(self.r,
-            display_mips::Plan::at(exact_strip(self.packet.document_extent), 0), "exact composition working strip")).clone();
-        let side = 1 << target.plan.level;
-        let region = self.region.aligned(side).intersect(target.plan.doc_bounds);
-        for y in (region.min[1]..region.max[1]).step_by(PAGE_SIZE as usize) {
-            for x in (region.min[0]..region.max[0]).step_by(strip.texture.width() as usize) {
-                let bounds = DocRect { min: [x, y], max: [(x + i64::from(strip.texture.width())).min(region.max[0]), (y + i64::from(PAGE_SIZE)).min(region.max[1])] };
-                let size = bounds.size()?;
-                strip.plan = display_mips::Plan::window(self.packet.document_extent, 0, PixelRect::full(size));
-                strip.plan.doc_bounds = bounds;
-                let target_strip = Target { view: strip.view.clone(), slot: None, plan: strip.plan };
-                capture_native_effect(self.scene, self.r, self.packet, handle, &target_strip, &[bounds], None, self.encoder)?;
-                let [dx, dy, width, height] = paint_transform::texel_rect(target.plan.doc_bounds.local(bounds), side);
-                let mut values = [0; 20];
-                values[..8].copy_from_slice(&[dx, dy, width, height, size[0], size[1], side, 0]);
-                let binding = Commands::binding(self.r, &strip.view, &self.r.empty_view, &target.view);
-                self.commands.reduce(self.r, self.encoder, values, &binding, "reduce native effect output")?;
+            let side = if target.plan.level == 0 { PAGE_SIZE } else { 1 << target.plan.level };
+            let bounds = self.region.aligned(side).intersect(target.plan.doc_bounds);
+            self.capture_native_jobs(handle, &target, bounds)?;
+        } else {
+            if self.cache.exact_tile.is_none() {
+                let strip = Image::new(self.r, display_mips::Plan::at(exact_strip(self.packet.document_extent), 0), "exact composition working strip");
+                self.cache.output_charge.resize(self.cache.output_charge.bytes() + strip.bytes());
+                self.cache.exact_tile = Some(strip);
+            }
+            let mut strip = self.cache.exact_tile.clone().unwrap();
+            let side = 1 << target.plan.level;
+            let region = self.region.aligned(side).intersect(target.plan.doc_bounds);
+            for y in (region.min[1]..region.max[1]).step_by(strip.texture.height() as usize) {
+                for x in (region.min[0]..region.max[0]).step_by(strip.texture.width() as usize) {
+                    let bounds = DocRect { min: [x, y], max: [(x + i64::from(strip.texture.width())).min(region.max[0]), (y + i64::from(strip.texture.height())).min(region.max[1])] };
+                    let size = bounds.size()?;
+                    strip.plan = display_mips::Plan::window(self.packet.document_extent, 0, PixelRect::full(size));
+                    strip.plan.doc_bounds = bounds;
+                    self.capture_native_jobs(handle, &Target { view: strip.view.clone(), slot: None, plan: strip.plan }, bounds)?;
+                    let [dx, dy, width, height] = paint_transform::texel_rect(target.plan.doc_bounds.local(bounds), side);
+                    let mut values = [0; 20];
+                    values[..8].copy_from_slice(&[dx, dy, width, height, size[0], size[1], side, 0]);
+                    self.scene.jobs.push(Job::Reduce { output: target.view.clone(), values, size: [width, height], kernel: super::super::Reduction::Pages,format:target.view.texture().format(),
+                        sources: [strip.view.clone(), self.r.empty_view.clone(), self.r.empty_view.clone(), self.r.empty_view.clone()] });
+                }
             }
         }
         Ok(target.value())
+    }
+
+    fn capture_native_jobs(&mut self, handle: OccurrenceHandle, target: &Target, region: DocRect) -> Result<(), GpuRasterError> {
+        let (packet, plan, regions, origin) = capture_frame(self.packet, target, &[region])?;
+        let initialized = self.cache.initialized_pages(target).filter(|_| target.plan.doc_bounds == DocRect::from(target.plan.bounds));
+        let destination = Image { texture: target.view.texture().clone(), view: target.view.clone(), plan };
+        let previous = self.scene.images.doc_bounds;
+        self.scene.images.doc_bounds = previous.translated(origin.map(|v| -v));
+        let display = std::mem::replace(&mut self.scene.placement_display, false);
+        let result = (|| {
+            for tile in regions.iter().flat_map(|region| page_coordinates(*region)) {
+                let covered = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(page_rect(tile).intersect(*region))).intersect(plan.bounds);
+                if covered.is_empty() { continue; }
+                match self.scene.capture_prepared_tile_jobs(self.r, packet, &destination, tile, covered, scene::Output::EffectComposite(handle), initialized.as_ref(), self.accepted) {
+                    Err(GpuRasterError::NotReady) => self.unit.waiting = true,
+                    result => result?,
+                }
+            }
+            Ok(())
+        })();
+        self.scene.images.doc_bounds = previous;
+        self.scene.placement_display = display;
+        result
     }
 
     pub(super) fn with_region<T>(&mut self, region: DocRect, evaluate: impl FnOnce(&mut Self) -> Result<T, GpuRasterError>) -> Result<T, GpuRasterError> {

@@ -1,5 +1,7 @@
 //! Bounded native SDR writeback primitives. Working pixels remain Float32 until
 //! a publication boundary, which stores NaN as zero and clamps alpha to 0–1.
+pub(crate) mod comparison;
+
 use crate::{GpuRasterError, PipelineDevice};
 use layer_core::color::{AlphaAssociation, SampleDepth, PixelDescriptor, TransferEncoding};
 pub mod promote;
@@ -84,8 +86,11 @@ impl crate::WgpuRasterizer {
         if requests.is_empty() {
             return Ok(());
         }
-        self.prepare_raster_uploads(&requests.iter().map(|request|(request.blob.clone(),request.space,request.destination)).collect::<Vec<_>>())?;
-        self.submit_restore(|r, scene, encoder| scene.restore_native_tiles(r, requests, encoder))
+        let inputs=self.prepare_raster_uploads(&requests.iter().map(|request|(request.blob.clone(),request.space,request.destination)).collect::<Vec<_>>())?;
+        self.submit_restore(|r, scene, encoder| {
+            scene.restore_native_tiles(r,requests,&inputs,encoder)?;
+            inputs.track(encoder);Ok(())
+        })
     }
     /// Restorations submit their own commands, possibly while a frame is still
     /// recording. Their uploads use a separate staging belt, so recalling it
@@ -105,7 +110,7 @@ impl crate::WgpuRasterizer {
         std::mem::swap(&mut self.uploads, &mut self.restore_uploads);
         self.scene = Some(scene);
         if result.is_ok() {
-            self.last_submission = Some(encoder.submit(&self.queue));
+            self.last_submission = encoder.submit(&self.queue);
             self.metrics.native_restore_submissions += 1;
         }
         result
@@ -165,6 +170,7 @@ impl NativeTileBatch {
 /// Pipelines are independent of working primaries, transfer curve and alpha.
 pub struct NativeTileEncoder {
     in_place: bool,
+    comparison_scratch: wgpu::Buffer,
     layouts: Vec<wgpu::BindGroupLayout>,
     pub(crate) pipelines: Vec<crate::Deferred<wgpu::ComputePipeline>>,
     tiles_per_dispatch: usize,
@@ -237,9 +243,12 @@ impl NativeTileEncoder {
                 weights[0], weights[1], weights[2],
                 (match mode { LayerColorMode::FullColor => 0f32, LayerColorMode::Grayscale => 1f32, LayerColorMode::TwoTone => 2f32 }).to_bits()]
         });
+        let compared=records.iter().copied().map(|mut record| {record[3]|=2;record});
+        let records=records.iter().copied().chain(compared).collect::<Vec<_>>();
         let (full_parameters, parameter_stride) = full_parameters(device, &records);
         Self {
             in_place,
+            comparison_scratch: comparison::scratch(device),
             layouts,
             pipelines,
             full_parameters,
@@ -296,8 +305,10 @@ impl NativeTileEncoder {
             entries.push(buffer_entry(shared+2+i,wgpu::BufferBindingType::Storage {read_only:false},false,20));
             textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> changes{i}:ChangedCells;\n",shared+2+i));
         }
+        entries.push(buffer_entry(shared+2+if tracked {count as u32}else {0},wgpu::BufferBindingType::Storage {read_only:false},false,(count as u64)*comparison::STRIDE));
+        textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> canonical_changes:array<atomic<u32>>;\n",shared+2+if tracked {count as u32}else {0}));
         let changed_cases=(0..if tracked {count} else {0}).map(|i|format!("case {i}u: {{if changes{i}.enabled!=0u && any(bitcast<vec4<u32>>(linear)!=bitcast<vec4<u32>>(original)) {{let c=pixel/changes{i}.side;atomicStore(&changes{i}.cells[c.y*(256u/changes{i}.side)+c.x],1u);}} }}")).collect::<String>();
-        textures.push_str(&format!("fn mark_canonical(tile:u32,pixel:vec2<u32>,linear:vec4<f32>) {{switch tile {{{changed_cases} default: {{}} }} }}\n"));
+        textures.push_str(&format!("fn mark_canonical(tile:u32,pixel:vec2<u32>,linear:vec4<f32>) {{if comparison_enabled() && any(bitcast<vec4<u32>>(linear)!=bitcast<vec4<u32>>(original)) {{atomicStore(&canonical_changes[tile*1024u+(pixel.y/8u)*32u+pixel.x/8u],1u);}} switch tile {{{changed_cases} default: {{}} }} }}\n"));
         entries.extend([
             buffer_entry(
                 shared,
@@ -333,7 +344,7 @@ impl NativeTileEncoder {
         (entries,source)
     }
     pub(crate) fn storage_bytes(&self) -> u64 {
-        self.full_parameters.size()
+        self.full_parameters.size()+self.comparison_scratch.size()
     }
     /// Prepare and validate the whole batch before recording any tile writes.
     /// Bindings and parameters can be reused while these resources/regions remain.
@@ -343,12 +354,14 @@ impl NativeTileEncoder {
         requests: &[NativeTileRequest<'_>],
         views: &mut crate::native_tiles::PublicationViews,
     ) -> Result<NativeTileBatch, GpuRasterError> {
-        self.prepare_tracked(device,requests,views,&[])
+        self.prepare_compared(device,requests,views,&[],None)
     }
-    pub(crate) fn prepare_tracked(
+    pub(crate) fn prepare_compared(
         &self, device:&wgpu::Device, requests:&[NativeTileRequest<'_>],
         views:&mut PublicationViews, changes:&[Option<&wgpu::Buffer>],
+        comparison:Option<&comparison::CanonicalComparisons>,
     )->Result<NativeTileBatch,GpuRasterError> {
+        if comparison.is_some_and(|c|c.len()!=requests.len() || requests.iter().any(|r|r.region!=[0,0,256,256])) {return Err(GpuRasterError::InvalidExtent);}
         if !changes.is_empty() && changes.len()!=requests.len() {return Err(GpuRasterError::InvalidExtent);}
         if requests.len() > MAX_BATCH_TILES {
             return Err(GpuRasterError::Color(
@@ -385,7 +398,7 @@ impl NativeTileEncoder {
                     if r.depth.is_float() { 0 } else { r.depth.maximum() },
                     if r.depth.is_float() { r.depth.bits() as u32 } else { 65535 / r.depth.maximum() },
                     r.transfer.curve,
-                    u32::from(r.alpha == AlphaAssociation::Straight),
+                    u32::from(r.alpha == AlphaAssociation::Straight)|if comparison.is_some() {2}else {0},
                     r.region[0],
                     r.region[1],
                     r.region[2],
@@ -474,6 +487,11 @@ impl NativeTileEncoder {
                 entries.extend((0..count).map(|i|wgpu::BindGroupEntry {binding:shared+2+i as u32,
                     resource:changes[first+i].unwrap().as_entire_binding()}));
             }
+            let status=comparison.map_or(&self.comparison_scratch,|c|c.buffer());
+            entries.push(wgpu::BindGroupEntry {binding:shared+2+if tracked {count as u32}else {0},
+                resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {buffer:status,
+                    offset:comparison.map_or(0,|c|c.offset()+first as u64*comparison::STRIDE),
+                    size:wgpu::BufferSize::new(count as u64*comparison::STRIDE)})});
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("native SDR tile writeback"),
                 layout: &self.layouts[format],
@@ -490,7 +508,8 @@ impl NativeTileEncoder {
                             mode * 32 + layer_core::color::RgbSpace::ALL.iter().position(|s| *s == r.space).unwrap() as u32 * 8
                         }
                     }) + depth as u32 * 2
-                        + u32::from(r.alpha == AlphaAssociation::Straight))
+                        + u32::from(r.alpha == AlphaAssociation::Straight)
+                        + if comparison.is_some() {96}else {0})
                         * stride
                 } else {
                     first as u32 * stride

@@ -162,7 +162,7 @@ mod selection_refine_checks {
         let requests = s.renderer_mut().region_requests.len();
         s.frame(6, 6).unwrap();
         assert_eq!(s.renderer_mut().region_requests.len(), requests, "a moving value runs nothing exact");
-        assert!(s.wants_continuous_frames(), "frames continue until the value settles");
+        assert!(s.frame_demand() != layer_render::FrameDemand::Wait, "frames continue until the value settles");
         assert!(s.state.revision - revision <= 3, "previews publish nothing: {}", s.state.revision - revision);
         let idle = s.state.commands.clone();
         selection_action(&mut s, SelectionAction::ResizeRadius { radius: 10. });
@@ -219,7 +219,7 @@ mod selection_refine_checks {
         selection_action(&mut s, SelectionAction::CancelResize);
         assert_eq!(s.engine.display_selection().as_deref(), original.as_ref(), "Cancel takes the preview away");
         assert_eq!(s.engine.document().working.selection, original);
-        assert!(!s.wants_continuous_frames());
+        assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod selection_refine_checks {
             assert_eq!(applied.shape, selection.shape);
             match (&applied.shape, &selection.shape) {
                 (SelectionShape::Pixels(a), SelectionShape::Pixels(b)) => assert!(Arc::ptr_eq(a, b), "coverage is shared"),
-                (SelectionShape::Contours(a), SelectionShape::Contours(b)) => assert!(Arc::ptr_eq(a, b)),
+                (SelectionShape::Contours(a), SelectionShape::Contours(b)) => assert!(a.same_owner(b)),
                 _ => unreachable!(),
             }
             s.frame(3, 3).unwrap();

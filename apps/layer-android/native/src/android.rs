@@ -14,7 +14,7 @@ use raw_window_handle::{
 use std::ptr::NonNull;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 #[unsafe(no_mangle)]
@@ -87,6 +87,7 @@ pub(crate) struct Surface {
     trace_timings: bool,
     // One surface-owned completion source for startup and update admission.
     completed_frames: Arc<AtomicU64>,
+    completion_waiter: Arc<AtomicBool>,
     completion_observer: Option<Arc<Mutex<Vec<[u64; 6]>>>>,
     logical_extent: [u32; 2],
     quarter_turns: u32,
@@ -101,13 +102,19 @@ pub(crate) struct Surface {
     _window: Window,
 }
 impl Surface {
+    fn waits_for_completion(&self, frames: u64) -> bool {
+        let busy = || self.submitted_frames.saturating_sub(self.completed_frames.load(Ordering::Acquire)) >= frames;
+        if !busy() { return false; }
+        self.completion_waiter.store(true, Ordering::Release);
+        busy()
+    }
     fn sync_launch(&mut self, current: Option<u64>) {
         self.launch_frame.cancel(current);
         if let Some((_,ticket)) = &mut self.pending_target && *ticket != current { *ticket = None; }
     }
-    fn track_launch(&mut self, queue: &wgpu::Queue, frame: Option<u64>, wake: Arc<dyn Fn()+Send+Sync>) {
+    fn track_launch(&mut self, gpu: &WgpuRasterizer, frame: Option<u64>, wake: Arc<dyn Fn()+Send+Sync>) {
         let Some(complete) = self.launch_frame.submit(frame) else { return; };
-        queue.on_submitted_work_done(move || { complete.store(true, Ordering::Release); wake(); });
+        gpu.on_gpu_done(move || { complete.store(true, Ordering::Release); wake(); });
     }
     fn configure(&mut self, gpu: &WgpuRasterizer, extent: [u32; 2]) -> Result<(), String> {
         self.quarter_turns = match (unsafe { self.surface.as_hal::<wgpu::hal::api::Vulkan>() },
@@ -201,7 +208,7 @@ pub extern "system" fn Java_art_capycanvas_Native_displayStatus(
                 "present_mode": format!("{:?}", surface.config.present_mode),
                 "ink_present_mode": format!("{:?}", surface.ink_present_mode),
                 "retained_target": surface.presenter.retains_target(),
-                "pending_composition": layer_render::CanvasRenderer::has_pending_work(gpu.as_ref()),
+                "pending_composition": !gpu.settled(),
                 "pending_edits": a.host.session.engine().has_pending_document_edits(),
                 "pending_presentation": surface.pending_target.is_some(),
                 "canvas_revision": gpu.canvas_preview_revision(),
@@ -243,7 +250,7 @@ pub extern "system" fn Java_art_capycanvas_Native_renderingPending(
     let a = &mut *capy_app;
     let engine = a.host.session.engine();
     (engine.has_pending_document_edits()
-        || layer_render::CanvasRenderer::has_pending_work(engine.backend())
+        || engine.backend().0.as_ref().is_some_and(|gpu| !gpu.settled())
         || a.surface.as_ref().is_some_and(|surface|
             surface.pending_target.is_some() || surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames)) as jboolean
     })
@@ -256,8 +263,8 @@ pub extern "system" fn Java_art_capycanvas_Native_rendererMemory(
     crate::jni_entry!(env, handle, capy_app, {
     let a = &mut *capy_app;
     let report = a.host.session.engine().backend().0.as_ref()
-        .and_then(|gpu| gpu.device().generate_allocator_report().map(|report| (report, gpu.metrics())))
-        .map(|(report, metrics)| {
+        .and_then(|gpu| gpu.device().generate_allocator_report().map(|report| (report, gpu.metrics(), gpu.display_bytes())))
+        .map(|(report, metrics, display_bytes)| {
             let mut labels = std::collections::BTreeMap::<String, (u64, u64)>::new();
             for allocation in report.allocations {
                 let entry = labels.entry(allocation.name).or_default();
@@ -274,7 +281,7 @@ pub extern "system" fn Java_art_capycanvas_Native_rendererMemory(
                 "moving_image_evictions": metrics.moving_image_evictions,
                 "source_upload_peak_bytes": metrics.source_upload_peak_bytes,
                 "source_upload_submissions": metrics.source_upload_submissions,
-                "composite_storage_bytes": metrics.composite_storage_bytes,
+                "display_bytes": display_bytes,
             })
         });
     string(&mut env, Ok(serde_json::to_string(&report).unwrap()))
@@ -351,11 +358,10 @@ impl App {
             let (Some(surface), Some(gpu)) = (self.surface.as_mut(), self.host.session.engine().backend().0.as_deref()) else {
                 return false;
             };
-            let _ = gpu.device().poll(wgpu::PollType::Poll);
             match surface.presenter.screen_check_result() {
                 Some(result) => result.ok(),
                 None => {
-                    if !self.host.dirty
+                    if self.host.frame_demand() == layer_render::FrameDemand::Wait
                         && surface.submitted_frames == surface.completed_frames.load(Ordering::Acquire)
                         && self.screen_presented.elapsed() >= SCREEN_CHECK_DELAY
                     {
@@ -540,6 +546,7 @@ impl App {
             submitted_frames: 0,
             trace_timings: false,
             completed_frames: Arc::new(AtomicU64::new(0)),
+            completion_waiter: Arc::default(),
             completion_observer: None,
             logical_extent: [width, height],
             quarter_turns: 0,
@@ -580,14 +587,7 @@ impl App {
         }
         Ok(())
     }
-    fn observe_gpu_failure(&mut self, poll: bool) {
-        if poll && let Some(gpu) = self.host.session.engine().backend().0.as_ref() {
-            // Device loss callbacks may be pending when a queued thumbnail asks
-            // for resources. Deliver them before either preview or frame work.
-            if let Err(error) = gpu.device().poll(wgpu::PollType::Poll) {
-                self.gpu_watch.report_error(error.to_string());
-            }
-        }
+    fn observe_gpu_failure(&mut self) {
         if let Err(error) = self.check_gpu() {
             if !self.host.session.rendering_suspended() {
                 let _ = self.host.suspend_renderer();
@@ -620,17 +620,17 @@ impl App {
                     surface.pending_target = Some((target, launch));
                     return Ok(true);
                 }
-                surface.track_launch(self.host.session.engine().backend().0.as_ref().unwrap().queue(), launch, self.host.wake_callback());
+                surface.track_launch(self.host.session.engine().backend().0.as_ref().unwrap(), launch, self.host.wake_callback());
                 self.frame_cost[3] = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
                 self.host.session.renderer_mut().0.as_mut().unwrap().after_present();
             }
         }
         let launch_needed = self.host.launch_frame().is_some_and(|frame|
             self.surface.as_ref().is_some_and(|surface| surface.launch_frame.ticket() != Some(frame)));
-        if (!self.host.dirty && self.host.startup.complete && !launch_needed) || self.surface.is_none() {
+        if (self.host.frame_demand() == layer_render::FrameDemand::Wait && self.host.startup.complete && !launch_needed) || self.surface.is_none() {
             return Ok(self.surface.as_ref().is_some_and(|surface| surface.launch_frame.ticket().is_some()));
         }
-        if self.surface.as_ref().is_some_and(|s| s.submitted_frames.saturating_sub(s.completed_frames.load(Ordering::Acquire)) >= 2) { return Ok(true); }
+        if self.surface.as_ref().is_some_and(|s| s.waits_for_completion(2)) { return Ok(false); }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
         let view = self.host.session.state().camera.view();
@@ -649,7 +649,7 @@ impl App {
                 surface.ink
             };
             if surface.ink != ink {
-                if surface.completed_frames.load(Ordering::Acquire) < surface.submitted_frames { return Ok(true); }
+                if surface.waits_for_completion(1) { return Ok(false); }
                 surface.present_with(ink);
                 let switch_started = std::time::Instant::now();
                 surface.configure(gpu, [view.width_px, view.height_px])?;
@@ -698,6 +698,8 @@ impl App {
         surface.sync_launch(launch);
         let launch_needed = launch.is_some() && surface.launch_frame.ticket() != launch;
         let wake = self.host.wake_callback();
+        let completed = wake.clone();
+        let waiter = surface.completion_waiter.clone();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         surface.presenter.set_screen_check(gpu, screen_check);
         let trace_timings = unsafe { ndk_sys::ATrace_isEnabled() };
@@ -712,7 +714,7 @@ impl App {
 
         self.frame_cost[0] = elapsed();
         if !surface.presenter.needs_present(gpu, view, surround) && !launch_needed {
-            return Ok(self.host.dirty || surface.launch_frame.ticket().is_some());
+            return Ok(self.host.frame_demand() != layer_render::FrameDemand::Wait || surface.launch_frame.ticket().is_some());
         }
         let target = match surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
@@ -746,7 +748,7 @@ impl App {
         let submitted_ns = surface.completion_observer.as_ref().map_or(0, |_| monotonic_ns());
         if surface.ink { gpu.queue().present(target); }
         else { surface.pending_target = gpu.queue().try_present(target).err().map(|target| (target, launch)); }
-        if surface.pending_target.is_none() { surface.track_launch(gpu.queue(), launch, wake); }
+        if surface.pending_target.is_none() { surface.track_launch(gpu, launch, wake); }
         surface.last_view = Some(view);
         surface.last_paint_start = paint_start;
         surface.submitted_frames += 1;
@@ -758,12 +760,13 @@ impl App {
             let frame = surface.submitted_frames;
             let observer = surface.completion_observer.clone();
             let raster_frame = observer.as_ref().map_or(0, |_| gpu.submitted_updates());
-            let object_revision = observer.as_ref().and_then(|_| gpu.evaluated_object_revision()).unwrap_or(u64::MAX);
+            let object_revision = observer.as_ref().map_or(u64::MAX,|_|gpu.canvas_preview_revision());
             if object_revision != u64::MAX {
-                unsafe { ndk_sys::ATrace_setCounter(c"Capy object evaluated revision".as_ptr(), object_revision as i64); }
+                unsafe { ndk_sys::ATrace_setCounter(c"Capy artwork revision".as_ptr(), object_revision as i64); }
             }
-            gpu.queue().on_submitted_work_done(move || {
+            gpu.on_gpu_done(move || {
                 complete.fetch_max(frame, Ordering::Release);
+                if waiter.swap(false, Ordering::AcqRel) { completed(); }
                 if let Some(observer) = observer {
                     let completed_ns = monotonic_ns();
                     let mut rows = observer.lock().unwrap();
@@ -793,7 +796,7 @@ impl App {
         if !pending { self.host.session.renderer_mut().0.as_mut().unwrap().after_present(); }
         let launch_pending = surface.launch_frame.ticket().is_some();
         self.check_gpu()?;
-        Ok(self.host.dirty || pending || launch_pending)
+        Ok(self.host.frame_demand() != layer_render::FrameDemand::Wait || pending || launch_pending)
     }
 }
 
@@ -804,7 +807,7 @@ pub(crate) fn with_app_owner<T>(handle:jlong,work:impl FnOnce(&mut App)->Result<
 }
 pub(crate) fn with_app<T>(handle:jlong,work:impl FnOnce(&mut App)->Result<T,String>)->Result<T,String> {
     with_app_owner(handle,|app|layer_host::contain(app,|app| {
-        app.observe_gpu_failure(false);
+        app.observe_gpu_failure();
         let result = work(app);
         if let Some(surface) = &mut app.surface && (surface.launch_frame.ticket().is_some()
             || surface.pending_target.as_ref().is_some_and(|(_,ticket)| ticket.is_some())) {
@@ -1297,7 +1300,7 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     crate::jni_entry!(env, handle, capy_app, {
     let app = &mut *capy_app;
     let clock = app.profiling.then(std::time::Instant::now);
-    app.observe_gpu_failure(true);
+    app.observe_gpu_failure();
     let poll = clock.map_or(0, |clock| clock.elapsed().as_nanos() as i64);
     let previous_submission = app.host.session.engine().backend().0.as_ref().map(|gpu| gpu.submitted_updates());
     let result = app.render(now.max(0) as u64, presentation.max(now).max(0) as u64);
@@ -1334,10 +1337,6 @@ pub extern "system" fn Java_art_capycanvas_Native_surfaceReady(
     let Some(surface) = app.surface.as_ref() else {
         return Ok(0);
     };
-    if let Some(gpu) = app.host.session.renderer_mut().0.as_ref()
-        && let Err(e) = gpu.device().poll(wgpu::PollType::Poll) {
-        fail(&mut env, Err(error(e)));return Ok(0);
-    }
     (surface.completed_frames.load(Ordering::Acquire) > 0) as jboolean
     })
 }
@@ -1404,7 +1403,7 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
         .and_then(|s| serde_json::from_str(&s).map_err(error))
         .and_then(|query| {
             let a = &mut *capy_app;
-            a.observe_gpu_failure(true);
+            a.observe_gpu_failure();
             a.host.query(query)
         })
         .map(|v| v.to_string());
@@ -1508,7 +1507,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toolbarStamp(
         let result = (|| {
             let context = read(&mut env, &context)?;
             let context = if context.is_empty() { None } else { Some(serde_json::from_str(&context).map_err(error)?) };
-            capy_app.observe_gpu_failure(true);
+            capy_app.observe_gpu_failure();
             let Some(mut stamp) = capy_app.host.toolbar_stamp(context, (known_request > 0).then_some(known_request as u64))? else {
                 return Ok(std::ptr::null_mut());
             };
@@ -1536,7 +1535,7 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     crate::jni_entry!(env, handle, capy_app, {
     let result = (|| {
         let a = &mut *capy_app;
-        a.observe_gpu_failure(true);
+        a.observe_gpu_failure();
         let Some(atlas) = a.host.take_filter_preview_image() else {
             return Ok(std::ptr::null_mut());
         };

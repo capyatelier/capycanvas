@@ -191,7 +191,8 @@ fn oversized_surface_preserves_viewport_pixels_and_overlays_at_every_rotation() 
 
 // Inspect persistent pigment/wetness independently of layer-level effects.
 // This is test-only readback, never a drawing or selection raster path.
-pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
+pub(super) fn page_bytes(r: &WgpuRasterizer, texture: impl Into<crate::source_access::TileTexture>) -> Vec<u8> {
+    let texture = &texture.into();
     let row = texture.width() * texture.format().block_copy_size(None).unwrap();
     let stride = row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
@@ -213,7 +214,7 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
         },
         texture.size(),
     );
-    let submission = encoder.submit(&r.queue);
+    let submission = encoder.submit(&r.queue).expect("live test submission");
     let (send, receive) = mpsc::channel();
     buffer
         .slice(..)
@@ -497,8 +498,9 @@ fn in_place_dry_strokes_match_ping_pong_pages() {
         stroke.style = style;
         stroke.damage = ink.bounds();
         crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[stroke], ..packet(document.scene(), extent) }).unwrap();
+        let versions = r.raster_versions(document.scene(), target(&document)).unwrap();
         let mut pages: Vec<_> = r.paint_layers.iter().find(|l| l.id == target(&document)).unwrap().pages.iter()
-            .map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect();
+            .map(|p| (p.coordinate, page_bytes(&r, &p.active().read(versions.tile(layer_core::raster::RasterPlane::Color, p.coordinate), None).unwrap().value().texture))).collect();
         pages.sort_by_key(|(coordinate, _)| *coordinate);
         pages
     };
@@ -544,7 +546,10 @@ fn display_predictions_wider_than_the_input_sets_match_single_page_predictions()
         stroke.stroke_end = false;
         crate::test_support::submit_ready(&mut r, FramePacket { dabs: &ink, dab_batches: std::slice::from_ref(&stroke), composite_all: false, ..frame }).unwrap();
         assert!(r.dry_display_gathers(&stroke), "the prediction averages its inputs at display resolution");
-        let predicted: Vec<_> = predicted.iter().map(|&page| page_bytes(&r, &r.preview_page(page).unwrap().active().texture)).collect();
+        let predicted: Vec<_> = predicted.iter().map(|&page| {
+            let expected = r.preview_expected(target(&document), layer_core::raster::RasterPlane::Color, page, scene::PreviewStage::Final).unwrap();
+            page_bytes(&r, &r.preview_page(page).unwrap().active().read(expected, None).unwrap().value().texture)
+        }).collect();
         (r.dry_display_inputs.len(), predicted)
     };
     let (sets, together) = predict(&pages);
@@ -578,8 +583,10 @@ fn reduced_color_live_strokes_constrain_pixels_before_publication() {
             assert!(paint(&document).raster.is_empty());
             let pages = &r.paint_layers.iter().find(|p| p.id == target(&document)).unwrap().pages;
             assert!(!pages.is_empty());
+            let versions = r.raster_versions(document.scene(), target(&document)).unwrap();
             for page in pages {
-                for pixel in page_bytes(&r, &page.active().texture).as_chunks::<16>().0 {
+                let read = page.active().read(versions.tile(layer_core::raster::RasterPlane::Color, page.coordinate), None).unwrap();
+                for pixel in page_bytes(&r, &read.value().texture).as_chunks::<16>().0 {
                     let channels = std::array::from_fn::<_, 4, _>(|c| f32::from_le_bytes(pixel[c * 4..c * 4 + 4].try_into().unwrap()));
                     assert_eq!(channels[0], channels[1], "{mode:?} {preset:?}");
                     assert_eq!(channels[1], channels[2], "{mode:?} {preset:?}");
@@ -618,7 +625,7 @@ pub(crate) fn reduced_color_scaled_preview(mut r: WgpuRasterizer, mode: layer_co
     stroke.damage = ink.bounds(); stroke.kind = DabBatchKind::Preview; stroke.stroke_end = false;
     send(&mut r, &mut document, &[ink], &[stroke.clone()], false);
     assert!(r.preview_level > 0);
-    assert!(r.preview_pages.iter().all(|p| p.active().texture.width() < 256));
+    assert!(r.preview_pages.iter().all(|p| p.active().size().width < 256));
     let prediction = crate::scene::scale::tests::display_pixels(&r);
     assert_ne!(prediction, original);
     for pixel in &prediction {
@@ -716,4 +723,101 @@ fn swept_contact_preview(mode: layer_core::color::LayerColorMode) {
         render(&mut r, &[], &[], false);
         assert_eq!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?}: cancel restores pixels");
     }
+}
+
+#[test]
+fn a_grayscale_preview_stroke_start_over_paint_seeds_what_its_declaration_recorded() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut document = paint_document([512; 2], "grayscale preview stroke start");
+    paint_mut(&mut document).color_mode = layer_core::color::LayerColorMode::Grayscale;
+    let mut base = dab([0.6, 0.3, 0.2, 0.8]); base.center = Point { x: 256., y: 256. }; base.radii = [300.; 2];
+    let mut background = batch(target(&document)); background.damage = base.bounds();
+    paint_mut(&mut document).raster = layer_core::raster::RasterRevision::pending();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[base], dab_batches: &[background], ..packet(document.scene(), [512; 2]) }).unwrap();
+    let mut ink = dab([0.2, 0.3, 0.4, 0.9]); ink.center = Point { x: 200., y: 250. }; ink.radii = [10.; 2];
+    let mut preview = batch(target(&document));
+    preview.style = preset_style(layer_core::DefaultBrushPreset::GPen); preview.style.opacity = 0.5;
+    preview.stroke_id = StrokeId(7); preview.kind = DabBatchKind::Preview; preview.stroke_end = false; preview.damage = ink.bounds();
+    assert!(WgpuRasterizer::tracks_stroke_start(&preview) && r.preview_from_persistent(std::slice::from_ref(&preview)));
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[preview], ..packet(document.scene(), [512; 2]) }).unwrap();
+}
+
+#[test]
+fn a_persistent_stroke_start_preview_redrawn_under_its_held_declaration_accepts_its_recorded_inputs() {
+    for preset in [layer_core::DefaultBrushPreset::Paintbrush, layer_core::DefaultBrushPreset::ScatterBlender] { redrawn_persistent_stroke_start_preview(preset); }
+}
+
+fn redrawn_persistent_stroke_start_preview(preset: layer_core::DefaultBrushPreset) {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let document = paint_document([1024; 2], "redrawn persistent stroke start preview");
+    let mut base = dab([0.6, 0.3, 0.2, 0.8]); base.center = Point { x: 512., y: 512. }; base.radii = [600.; 2];
+    let mut background = batch(target(&document)); background.damage = base.bounds();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[base], dab_batches: &[background], ..packet(document.scene(), [1024; 2]) }).unwrap();
+    let mut ink = dab([0.2, 0.3, 0.4, 0.9]); ink.center = Point { x: 256., y: 256. }; ink.radii = [120.; 2];
+    let mut preview = batch(target(&document));
+    preview.style = preset_style(preset);
+    preview.stroke_id = StrokeId(7); preview.kind = DabBatchKind::Preview; preview.stroke_end = false; preview.damage = ink.bounds();
+    assert!(WgpuRasterizer::tracks_stroke_start(&preview) && r.preview_from_persistent(std::slice::from_ref(&preview)), "{preset:?}");
+    let frame = FramePacket { dabs: &[ink], dab_batches: std::slice::from_ref(&preview), ..packet(document.scene(), [1024; 2]) };
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    let mut panned = frame; panned.view.document_to_surface[4] += 1.;
+    crate::test_support::submit_ready(&mut r, panned).unwrap();
+}
+
+#[test]
+fn a_color_png_preview_declaration_is_not_reused_after_its_batch_index_changes() {
+    let extent = [512; 2];
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, extent[0], extent[1]);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[70, 130, 200, 255].repeat(512 * 512)).unwrap();
+    }
+    let image = layer_color::photo::read_photo(std::io::Cursor::new(png), crate::test_support::photo_limits()).unwrap();
+    let mut document = paint_document(extent, "colour PNG preview declaration layout");
+    placement::set_source(&mut document, Arc::new(image));
+    let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    r.ensure_document_metadata(extent, document.scene()).unwrap();
+    r.reconcile_rasters(packet(document.scene(), extent), false, &[]).unwrap();
+    let mut ink = dab([0., 0., 0., 1.]);
+    ink.center = Point { x: 200., y: 200. }; ink.radii = [24.; 2];
+    let mut preview = batch(target(&document));
+    preview.style = preset_style(layer_core::DefaultBrushPreset::Paintbrush);
+    preview.stroke_id = StrokeId(7); preview.kind = DabBatchKind::Preview; preview.stroke_end = false;
+    preview.damage = ink.bounds();
+    let prefix = DabBatch { kind: DabBatchKind::Persistent, dab_count: 0, damage: Rect::EMPTY, stroke_start: false, stroke_end: false, ..preview.clone() };
+    let dabs = [ink];
+    let first_batches = [prefix, preview.clone()];
+    let next_batches = [preview];
+    let view = ViewState { width_px: 128, height_px: 128, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
+    let first = FramePacket { view, dabs: &dabs, dab_batches: &first_batches, ..packet(document.scene(), extent) };
+    let next = FramePacket { dab_batches: &next_batches, ..first };
+    let first_plans = brush_tiles::plan_packet(first, |target| first.scene.target_extent(target)).unwrap();
+    let next_plans = brush_tiles::plan_packet(next, |target| next.scene.target_extent(target)).unwrap();
+    let quality = scene::PreviewQuality { level: 2, contribution: false, requires_base: true };
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    assert!(!r.prepare_preview_declaration(first, quality, &first_plans, true, None, &encoder.submission()).unwrap());
+    let authored_before = r.preview_declaration.as_ref().unwrap().authored_version();
+    assert!(!r.prepare_preview_declaration(next, quality, &next_plans, true, None, &encoder.submission()).unwrap(),
+        "a Preview declaration retains packet-local batch indices and cannot be reused after the prefix disappears");
+    let authored_after = r.preview_declaration.as_ref().unwrap().authored_version().unwrap();
+    assert_eq!(authored_before.unwrap().matches(&authored_after), Some(true), "packet-local indices cannot change authored pixels");
+    assert!(r.prepare_preview_declaration(next, quality, &next_plans, true, None, &encoder.submission()).unwrap(), "an unchanged execution layout still reuses its declaration");
+}
+
+#[test]
+fn a_declare_pass_creates_no_bind_groups() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut document = paint_document([1024; 2], "declared bind groups");
+    let mut ink = dab([0.4, 0.2, 0.1, 0.9]); ink.center = Point { x: 512., y: 512. }; ink.radii = [400.; 2];
+    let mut stroke = batch(target(&document)); stroke.damage = ink.bounds();
+    paint_mut(&mut document).raster = layer_core::raster::RasterRevision::pending();
+    for (dabs, batches) in [(&[ink][..], std::slice::from_ref(&stroke)), (&[][..], &[][..])] {
+        let mut frame = packet(document.scene(), [1024; 2]);
+        frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.]; frame.view.width_px = 512; frame.view.height_px = 512;
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs, dab_batches: batches, ..frame }).unwrap();
+    }
+    assert!(r.scale_display.is_some(), "the frame refines a reduced display");
+    assert_eq!(crate::scene::sources::DECLARED_GPU_OBJECTS.with(std::cell::Cell::get), 0);
 }

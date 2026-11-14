@@ -79,13 +79,27 @@ static PROCESS_GPU: std::sync::Mutex<Option<ProcessGpu>> = std::sync::Mutex::new
 static INITIALIZING: futures_util::lock::Mutex<()> = futures_util::lock::Mutex::new(());
 
 #[cfg(not(target_arch = "wasm32"))]
-fn healthy_cached<T: Clone>(cache: &std::sync::Mutex<Option<T>>, healthy: impl FnOnce(&T) -> bool) -> Result<Option<T>, String> {
+fn healthy_cached<T: Clone>(cache: &std::sync::Mutex<Option<T>>, healthy: impl FnOnce(&T) -> bool, retire: impl FnOnce(T) -> Result<(), String>) -> Result<Option<T>, String> {
     let mut cached = cache.lock().map_err(|e| e.to_string())?;
     if cached.as_ref().is_some_and(healthy) { return Ok(cached.clone()); }
     let retired = cached.take();
     drop(cached);
-    drop(retired);
+    if let Some(retired) = retired { retire(retired)?; }
     Ok(None)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn finish_process_gpu() -> Result<(), String> { finish_cached_gpu(&PROCESS_GPU) }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_cached_gpu(cache: &std::sync::Mutex<Option<ProcessGpu>>) -> Result<(), String> {
+    let retirement = (|| {
+        let gpu = cache.lock().map_err(|error| error.to_string())?.take();
+        if let Some(gpu) = gpu { gpu.factory.retire_device_services().map_err(|error| error.to_string())?; }
+        Ok(())
+    })();
+    layer_render_wgpu::finish_shader_compiler_shutdown();
+    retirement
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -161,7 +175,7 @@ pub async fn process_gpu<'a>(instance: &wgpu::Instance, surface: &wgpu::Surface<
     let _initializing = INITIALIZING.lock().await;
     let refused = |adapter: &wgpu::Adapter| surface_refusal(adapter, surface, refusal)
         .map_or(Ok(()), |cause| Err(layer_ui::gpu_unsupported(localization, &cause)));
-    if let Some(gpu) = healthy_cached(&PROCESS_GPU, |gpu| gpu.watch.failure().is_none())? {
+    if let Some(gpu) = healthy_cached(&PROCESS_GPU, |gpu| gpu.watch.failure().is_none(), |gpu| gpu.factory.retire_device_services().map_err(|error| error.to_string()))? {
         return refused(gpu.factory.adapter()).map(|()| gpu);
     }
     let adapter = surface_adapter(instance, surface, choice.into(), refusal).await
@@ -314,7 +328,7 @@ mod tests {
         *cache.lock().unwrap() = Some(Arc::new(Owner { released: released.clone(), unlocked: Box::new(move || {
             if let Some(cache) = weak_cache.upgrade() { assert!(cache.try_lock().is_ok()); }
         }) }));
-        assert!(healthy_cached(&cache, |_| false).unwrap().is_none());
+        assert!(healthy_cached(&cache, |_| false, |retired| { drop(retired); Ok(()) }).unwrap().is_none());
         assert!(cache.lock().unwrap().is_none());
         assert!(released.load(Ordering::SeqCst));
     }
@@ -323,12 +337,114 @@ mod tests {
     fn healthy_process_cache_reuses_its_owner_and_eviction_preserves_siblings() {
         let owner = Arc::new(());
         let cache = std::sync::Mutex::new(Some(owner.clone()));
-        let reused = healthy_cached(&cache, |_| true).unwrap().unwrap();
+        let reused = healthy_cached(&cache, |_| true, |retired| { drop(retired); Ok(()) }).unwrap().unwrap();
         assert!(Arc::ptr_eq(&owner, &reused));
         assert_eq!(Arc::strong_count(&owner), 3);
-        assert!(healthy_cached(&cache, |_| false).unwrap().is_none());
+        assert!(healthy_cached(&cache, |_| false, |retired| { drop(retired); Ok(()) }).unwrap().is_none());
         assert_eq!(Arc::strong_count(&owner), 2);
         assert!(Arc::ptr_eq(&owner, &reused));
+    }
+
+    #[test]
+    fn failed_process_cache_schedules_retirement_before_admitting_its_replacement() {
+        use std::sync::{Mutex, atomic::{AtomicBool, Ordering}};
+        let old = Arc::new(());
+        let sibling = old.clone();
+        let cache = Arc::new(Mutex::new(Some(old)));
+        let scheduled = Arc::new(AtomicBool::new(false));
+        let next = scheduled.clone();
+        assert!(healthy_cached(&cache, |_| false, |retired| {
+            assert!(cache.try_lock().is_ok());
+            assert!(Arc::ptr_eq(&sibling, &retired));
+            next.store(true, Ordering::Release);
+            Ok(())
+        }).unwrap().is_none());
+        assert!(scheduled.load(Ordering::Acquire));
+        *cache.lock().unwrap() = Some(Arc::new(()));
+        assert!(!Arc::ptr_eq(cache.lock().unwrap().as_ref().unwrap(), &sibling));
+    }
+
+    fn copied_gpu_bytes(factory: &RendererFactory) -> Vec<u8> {
+        let device = factory.device();
+        let bytes = [17, 43, 97, 255, 1, 2, 3, 4, 211, 37, 81, 63, 5, 6, 7, 8];
+        let source = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16,
+            usage: wgpu::BufferUsages::COPY_SRC, mapped_at_creation: true });
+        source.slice(..).get_mapped_range_mut().unwrap().copy_from_slice(&bytes);
+        source.unmap();
+        let output = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(&source, 0, &output, 0, 16);
+        factory.submit([encoder.finish()]);
+        let (send, received) = std::sync::mpsc::channel();
+        output.slice(..).map_async(wgpu::MapMode::Read, move |result| { let _ = send.send(result); });
+        factory.submit(std::iter::empty());
+        received.recv_timeout(std::time::Duration::from_secs(2)).unwrap().unwrap();
+        let actual = output.slice(..).get_mapped_range().unwrap().to_vec();
+        output.unmap();
+        assert_eq!(actual, bytes);
+        actual
+    }
+
+    #[test]
+    fn failed_process_gpu_replacement_finishes_with_an_old_raw_device_held_by_a_straggler() {
+        use std::sync::{Mutex, mpsc};
+        use std::time::Duration;
+        struct HeldDevice { device: Option<wgpu::Device>, dropped: mpsc::Sender<std::thread::ThreadId> }
+        impl Drop for HeldDevice {
+            fn drop(&mut self) {
+                drop(self.device.take());
+                let _ = self.dropped.send(std::thread::current().id());
+            }
+        }
+        let old = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let replacement = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        assert_ne!(old.device(), replacement.device());
+        assert_ne!(old.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        assert_ne!(replacement.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        let old_factory = old.renderer_factory();
+        let replacement_factory = replacement.renderer_factory();
+        let expected = copied_gpu_bytes(&replacement_factory);
+        old_factory.submit(std::iter::empty());
+        let watch = DeviceWatch::for_device(old.device());
+        watch.report_error("process GPU replacement fixture");
+        let (dropped, drop_seen) = mpsc::channel();
+        let held = HeldDevice { device: Some(old.device().clone()), dropped };
+        let (entered, holding) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let consumer = std::thread::spawn(move || {
+            entered.send(std::thread::current().id()).unwrap();
+            released.recv_timeout(Duration::from_secs(10)).unwrap();
+            drop(held);
+        });
+        let consumer_thread = holding.recv_timeout(Duration::from_secs(10)).unwrap();
+        drop((old, replacement));
+        let cache = Mutex::new(Some(ProcessGpu { factory: old_factory, watch }));
+        assert!(healthy_cached(&cache, |gpu| gpu.watch.failure().is_none(), |gpu| {
+            assert!(cache.try_lock().is_ok());
+            gpu.factory.retire_device_services().map_err(|error| error.to_string())
+        }).unwrap().is_none());
+        *cache.lock().unwrap() = Some(ProcessGpu { factory: replacement_factory.clone(),
+            watch: DeviceWatch::for_device(replacement_factory.device()) });
+        let (finished, finish_seen) = mpsc::channel();
+        let finishing = std::thread::spawn(move || {
+            let result = finish_cached_gpu(&Mutex::new(None));
+            finished.send((std::thread::current().id(), result)).unwrap();
+        });
+        let completed_with_consumer = finish_seen.recv_timeout(Duration::from_secs(2));
+        let consumer_was_held = matches!(drop_seen.try_recv(), Err(mpsc::TryRecvError::Empty));
+        release.send(()).unwrap();
+        consumer.join().unwrap();
+        finishing.join().unwrap();
+        let (finishing_thread, result) = completed_with_consumer.expect("device retirement waited for a raw consumer clone");
+        result.unwrap();
+        assert_ne!(finishing_thread, std::thread::current().id());
+        assert!(consumer_was_held);
+        assert_eq!(drop_seen.recv_timeout(Duration::from_secs(2)).unwrap(), consumer_thread);
+        assert_eq!(copied_gpu_bytes(&replacement_factory), expected,
+            "retiring the old root cannot close the replacement root's service");
+        finish_cached_gpu(&cache).unwrap();
+        assert!(cache.lock().unwrap().is_none());
     }
 
     #[test]

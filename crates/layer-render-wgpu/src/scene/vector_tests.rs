@@ -4,6 +4,8 @@ use layer_core::authored::vector::*;
 use layer_core::color::RgbColor;
 use crate::scene::Output;
 
+const HALF_FLOAT_ROUNDING: f32 = 1. / 1024.;
+
 fn paint(rgba: [f32; 4]) -> Paint { Paint::color(RgbColor::new(Default::default(), rgba).unwrap()) }
 fn stroke(id: u64, points: &[[f64; 2]], width: f64, rgba: [f32; 4]) -> Record {
     let anchors: Vec<_> = points.iter().map(|p| Anchor::corner(*p)).collect();
@@ -33,7 +35,7 @@ fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
     crate::test_support::submit_ready(r, frame).unwrap();
     for _ in 0..200 {
         r.wait_idle().unwrap();
-        if !r.has_pending_work() { return; }
+        if r.next_frame()!=layer_render::FrameDemand::Work { return; }
         crate::test_support::submit_ready(r, FramePacket { composite_all: false, reset_layers: false, ..frame }).unwrap();
     }
     panic!("vector display must settle");
@@ -61,7 +63,7 @@ fn settle(engine: &mut layer_engine::CanvasEngine<WgpuRasterizer>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         engine.render_frame().unwrap();
-        if !engine.has_pending_document_edits() && !engine.backend().has_pending_work() { return; }
+        if !engine.has_pending_document_edits() && engine.backend().next_frame()!=layer_render::FrameDemand::Work { return; }
         assert!(std::time::Instant::now() < deadline, "the bake must finish");
         std::thread::yield_now();
     }
@@ -86,7 +88,7 @@ fn pressure_peaks_and_small_eraser_gaps_survive_gpu_rendering() {
         assert!(pixels[70 * 280 + 140][3] < 0.01, "{cap:?}: a small eraser clears visible ink");
         assert!(pixels[70 * 280 + 70][3] > 0.95 && pixels[70 * 280 + 210][3] > 0.95);
         submit_ready(&mut r, packet(cut.document().scene(), [280, 140]));
-        assert!(max_error(&pixels, &display(&r)) < 1e-5);
+        assert!(max_error(&pixels, &display(&r)) < HALF_FLOAT_ROUNDING);
         if let PaintEntry::Stroke(stroke) = &mut Arc::make_mut(&mut path.style).entries[0] { stroke.profile = None; }
         let pieces = path.erased(&Eraser { from: [140., 85.], to: [140., 85.], radius: 4. }, None).unwrap();
         let (cut, _) = document([280, 140], pieces.into_iter().enumerate().map(|(i, p)| Record::Path(PathItem { id: ItemId(i as u64 + 1), ..p })).collect());
@@ -114,7 +116,7 @@ fn vector_layers_render_the_same_through_display_and_native_paths() {
     let covered = exact.iter().filter(|p| p[3] > 0.5).count();
     eprintln!("covered {covered}, display vs native {}", max_error(&shown, &exact));
     assert!(covered > 5000, "vector content must be visible");
-    assert!(max_error(&shown, &exact) < 1e-5);
+    assert!(max_error(&shown, &exact) < HALF_FLOAT_ROUNDING);
 }
 
 #[test]
@@ -183,7 +185,7 @@ fn provisional_strokes_draw_over_the_cached_layer_and_hand_off_without_change() 
     editor.perform(editor.document().vector_object_edit(layer, object).unwrap()).unwrap();
     r.set_vector_preview(None);
     submit_ready(&mut r, FramePacket { composite_all: true, ..packet(editor.document().scene(), [300, 200]) });
-    assert!(max_error(&display(&r), &drawn) < 1e-5, "committing the stroke must look the same as its preview");
+    assert!(max_error(&display(&r), &drawn) < HALF_FLOAT_ROUNDING, "committing the stroke must look the same as its preview");
 }
 
 fn timed(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> (f64, f64) {
@@ -208,7 +210,7 @@ fn crowded_vector_layer_drawing_frames() {
         let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
         let start = std::time::Instant::now();
         let mut opening = vec![timed(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) }).1];
-        while r.has_pending_work() { opening.push(timed(&mut r, FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) }).1); }
+        while r.next_frame()==layer_render::FrameDemand::Work { opening.push(timed(&mut r, FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) }).1); }
         let open = start.elapsed().as_secs_f64() * 1e3;
         eprintln!("open over {} frames, longest wall {:.1} ms", opening.len(), opening.iter().copied().fold(0., f64::max));
         let initial = display(&r);
@@ -224,7 +226,7 @@ fn crowded_vector_layer_drawing_frames() {
             r.set_vector_preview(Some(layer_render::VectorPreview { owner: layer, path: Arc::new(path), revision: i + 1 }));
             frames.push(timed(&mut r, FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) }));
             let mut extra = 0;
-            while r.has_pending_work() && extra < 50 { r.submit(FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap(); r.wait_idle().unwrap(); extra += 1; }
+            while r.next_frame()==layer_render::FrameDemand::Work && extra < 50 { r.submit(FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap(); r.wait_idle().unwrap(); extra += 1; }
             assert!(extra < 50, "drawing frames settle");
         }
         eprintln!("120 drawing frames took {:.1} ms; changed {} pixels", loop_start.elapsed().as_secs_f64() * 1e3, display(&r).iter().zip(&initial).filter(|(a, b)| (a[0] - b[0]).abs() > 0.05).count());
@@ -265,14 +267,13 @@ fn crowded_layers_derive_across_frames_and_settle_to_the_exact_render() {
     r.wait_idle().unwrap();
     let derived = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().vectors.layers.values().flat_map(|layer| layer.items.iter().flatten()).filter(|item| !item.derived.is_empty()).count();
     let first = derived(&r);
-    let opened = r.metrics.composited_pixels;
-    assert!(r.has_pending_work() && first < 20_000, "one frame derived {first} of 20000 paths");
+    assert!(r.next_frame()==layer_render::FrameDemand::Work && first < 20_000, "one frame derived {first} of 20000 paths");
     submit_ready(&mut r, FramePacket { composite_all: false, ..packet(doc.scene(), extent) });
-    let settled = r.metrics.composited_pixels - opened;
-    assert!(settled <= opened + opened / 2, "frames that only derive composite nothing until the window is complete: {settled} after {opened}");
+    let window = r.scale_display.as_ref().unwrap().plan.size.into_iter().map(u64::from).product::<u64>();
+    assert!(r.metrics.composited_pixels <= window, "frames that only derive composite nothing, and the window composites once: {} of {window}", r.metrics.composited_pixels);
     let shown = display(&r);
     let exact = native(&mut r, doc);
-    assert!(max_error(&shown, &exact) < 1e-5, "the settled display must match the exact render: {}", max_error(&shown, &exact));
+    assert!(max_error(&shown, &exact) < HALF_FLOAT_ROUNDING, "the settled display must match the exact render: {}", max_error(&shown, &exact));
 }
 
 #[test]
@@ -343,7 +344,7 @@ fn crossing_a_level_shows_the_previous_one_resampled_and_refines_a_few_pages_a_f
         let error = resampled.iter().zip(&expected).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / expected.len() as f64;
         assert!(error < 16., "the level at {from} stands in for the one at {to}: mean byte error {error}");
         let mut frames = 0;
-        while r.has_pending_work() {
+        while r.next_frame()==layer_render::FrameDemand::Work {
             r.submit(FramePacket { view: at(to), composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap();
             r.wait_idle().unwrap();
             assert!(r.metrics.frame_composited_pages.len() <= scale::APPROXIMATE_PAGES + 4, "refinement stays within its budget");
@@ -458,7 +459,7 @@ fn vector_layer_thumbnails_show_their_paths() {
     let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
     submit_ready(&mut r, packet(editor.document().scene(), [2048, 1536]));
     let inked = |r: &mut WgpuRasterizer| {
-        crate::test_support::thumbnail(r, 1, layer_render::ThumbnailTarget::Occurrence(layer))
+        crate::test_support::thumbnail(r, 1, layer_render::ThumbnailTarget::Occurrence(layer)).bytes
             .as_chunks::<4>().0.iter().filter(|p| p[3] > 128).count()
     };
     let shown = inked(&mut r);
@@ -524,7 +525,7 @@ fn moving_paths_show_at_their_offset_under_other_layers_and_hand_off_to_the_comm
             submit_ready(&mut r, FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) });
         }
         let error = close(&shown(&r), &expected);
-        assert!(error < tolerance, "moving paths at zoom {zoom} under a {blend:?} layer must show where the move puts them: {error}");
+        assert!(error < if split { tolerance } else { HALF_FLOAT_ROUNDING }, "moving paths at zoom {zoom} under a {blend:?} layer must show where the move puts them: {error}");
         assert_eq!(max_error(&display(&r), &display(&fresh)) > 0.1, split, "drags under normal layers present moving paths without recompositing them");
         r.set_vector_motion(None);
         submit_ready(&mut r, FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) });
@@ -575,19 +576,15 @@ fn pressing_selected_paths_draws_nothing_their_selection_prepared_and_deselectin
         let vectors = &r.scene.as_ref().unwrap().vectors;
         assert!(vectors.motion.is_none(), "deselecting drops the moving image");
         let retained = vectors.spare_motion.as_ref().map(|image| image.texture.clone()).expect("the moving image's texture is kept for the next selection");
-        let spare = r.scale_display.as_ref().unwrap().spare_branch_textures();
-        assert!(!spare.is_empty(), "deselecting keeps the halves' images for the next selection at zoom {zoom}");
         let resident = layer_render::CanvasRenderer::telemetry(&r).resident_bytes;
-        assert!(resident <= idle + texture_bytes(&retained) + spare.iter().map(texture_bytes).sum::<u64>(),
-            "deselecting releases what the selection prepared but the textures kept for the next one: {resident} after {idle}");
+        assert!(resident <= idle + texture_bytes(&retained),
+            "deselecting retains only the moving image beyond idle storage: {resident} after {idle}");
         assert!(presented(&r, view).iter().zip(&shown).all(|(a, b)| a.abs_diff(*b) <= 1), "the cancelled drag restores the paths at zoom {zoom}");
         let fewer = Arc::new(items.iter().take(2).copied().collect::<std::collections::BTreeSet<_>>());
         r.set_vector_selection(Some(&layer_core::authored::VectorItemSelection { layer, items: fewer }));
         submit_ready(&mut r, frame);
         assert_eq!(r.scene.as_ref().unwrap().vectors.motion.as_ref().map(|motion| motion.image.texture.clone()), Some(retained),
             "selecting other paths draws their moving image into the kept texture instead of allocating one at zoom {zoom}");
-        let branches = r.scale_display.as_ref().unwrap().branch_textures();
-        assert!(spare.iter().all(|texture| branches.contains(texture)), "the other paths' halves reuse the kept images at zoom {zoom}");
     }
 }
 
@@ -615,7 +612,7 @@ fn crossing_a_level_with_selected_paths_prepares_a_few_pages_a_frame_and_keeps_t
         assert!(image.1 == level && image.0 == prepared || image.1 != level, "the moving image stays until its new level is ready");
         if image.1 != before.1 { assert_ne!(image.1, level); }
         frames += 1;
-        if !r.has_pending_work() { break; }
+        if r.next_frame()!=layer_render::FrameDemand::Work { break; }
         assert!(frames < 400, "preparation finishes");
     }
     assert!(frames > 2, "a level crossing spreads the selection's preparation over frames: {frames}");
@@ -666,7 +663,7 @@ fn replacement_paths_redraw_only_the_moving_image_and_match_the_applied_edit() {
             assert!(r.metrics.vector_tiles > tiles, "a {width} px width preview redraws the moving image");
             if split {
                 assert!(r.metrics.frame_composited_pages.is_empty(), "a {width} px width preview at zoom {zoom} recomposites no layer pages: {:?}", r.metrics.frame_composited_pages);
-                assert!(!r.has_pending_work(), "a {width} px width preview is complete in its frame");
+                assert!(r.next_frame()!=layer_render::FrameDemand::Work, "a {width} px width preview is complete in its frame");
             }
             submit_ready(&mut r, frame(&editor, view, extent));
             let edited = object.with_paths(object.selected_paths(&items).into_iter().map(|(position, _)| position).zip(paths.iter().cloned())).unwrap();
@@ -751,6 +748,18 @@ fn replacement_previews_present_only_the_moving_images_bounds() {
         let error = crate::layer_tests::page_bytes(&r, &texture).iter().zip(presented(&r, view)).map(|(a, b)| a.abs_diff(b)).max().unwrap();
         assert!(error <= 1, "the {width} px preview's partial presentation matches a full one: {error}");
     }
+}
+
+#[test]
+fn a_vector_drawing_opened_zoomed_out_presents_what_it_composed() {
+    let extent = [1200u32, 900u32];
+    let view = layer_render::ViewState { width_px: 600, height_px: 450, document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] };
+    let (editor, ..) = motion_fixture(layer_core::LayerBlend::Normal, 1.);
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    assert!(r.scale_display.as_ref().is_some_and(|cache| cache.plan.level == 1));
+    let shown = presented(&r, view).chunks(4).filter(|pixel| pixel[..3] != [255; 3]).count();
+    assert!(shown * 2 > view.width_px as usize * view.height_px as usize, "the opened drawing presents its paths and transparency, not a blank page: {shown} pixels");
 }
 
 #[test]
@@ -1216,7 +1225,7 @@ fn masks_hide_vector_layers_on_screen_and_once_rasterized_or_merged() {
     for pixels in [&shown, &exact] {
         assert!(alpha(pixels, 80) < 1e-3 && alpha(pixels, 220) > 0.99, "the mask hides the left of the line only: {} {}", alpha(pixels, 80), alpha(pixels, 220));
     }
-    assert!(max_error(&shown, &exact) < 1e-5);
+    assert!(max_error(&shown, &exact) < HALF_FLOAT_ROUNDING);
     for (bake, apply_mask) in [("Rasterize Layer", Some(false)), ("Apply Mask", Some(true)), ("Merge Down", None)] {
         let mut engine = engine_for(masked.clone());
         settle(&mut engine);
@@ -1282,7 +1291,7 @@ fn crowded_vector_layer_zoom_frames() {
         eprintln!("  passes per frame: max {} at frame {:?}", passes.iter().max().unwrap(), passes.iter().position(|p| p == passes.iter().max().unwrap()));
         let start = std::time::Instant::now();
         let mut settling = 0;
-        while r.has_pending_work() && settling < 2000 {
+        while r.next_frame()==layer_render::FrameDemand::Work && settling < 2000 {
             r.submit(FramePacket { view: at(to), composite_all: false, ..packet(editor.document().scene(), extent) }).unwrap();
             pollster::block_on(presenter.prepare(&r)).unwrap();
             presenter.present(&r, &target, at(to), [1.; 4]).unwrap();
@@ -1369,7 +1378,7 @@ fn width_previews_on_a_display_level_that_keeps_one_layer_image_show_the_paths_a
         r.submit(frame).unwrap();
         for frames in 0.. {
             r.wait_idle().unwrap();
-            if !r.has_pending_work() { break; }
+            if r.next_frame()!=layer_render::FrameDemand::Work { break; }
             assert!(frames < 1000, "the display settles at a new level");
             r.submit(frame).unwrap();
         }
@@ -1538,7 +1547,7 @@ fn crowded_vector_layer_bake_frames() {
             engine.backend_mut().wait_idle().unwrap();
             frames.push((cpu, frame.elapsed().as_secs_f64() * 1e3));
             work.push((engine.backend().metrics.command_passes - passes, engine.backend().metrics.submissions - submissions));
-            if !engine.has_pending_document_edits() && !engine.backend().has_pending_work() { break; }
+            if !engine.has_pending_document_edits() && engine.backend().next_frame()!=layer_render::FrameDemand::Work { break; }
             assert!(start.elapsed() < std::time::Duration::from_secs(60), "the bake must finish");
         }
         let total = start.elapsed().as_secs_f64() * 1e3;

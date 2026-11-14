@@ -19,9 +19,27 @@ impl SnapshotGpu {
     }
 }
 
+enum Outcome<T> {Pending,Ready(Result<T,String>),Taken}
+struct Completion<T> {outcome:Outcome<T>,wake:Option<Arc<dyn Fn()+Send+Sync>>}
+struct Publisher<T>(Option<Arc<std::sync::Mutex<Completion<T>>>>);
+impl<T> Publisher<T> {
+    fn publish(shared:&Arc<std::sync::Mutex<Completion<T>>>,result:Result<T,String>) {
+        let wake={
+            let mut completion=shared.lock().unwrap();
+            if matches!(completion.outcome,Outcome::Pending) {
+                completion.outcome=Outcome::Ready(result);completion.wake.clone()
+            }else {None}
+        };
+        if let Some(wake)=wake {wake();}
+    }
+    fn send(mut self,result:Result<T,String>) {Self::publish(&self.0.take().unwrap(),result);}
+}
+impl<T> Drop for Publisher<T> {
+    fn drop(&mut self) {if let Some(shared)=self.0.take() {Self::publish(&shared,Err("The operation stopped".into()));}}
+}
 pub struct Job<T> {
     control: CaptureControl,
-    receiver: mpsc::Receiver<Result<T, String>>,
+    completion:Arc<std::sync::Mutex<Completion<T>>>,
     #[cfg(not(target_arch = "wasm32"))]
     worker: Option<std::thread::JoinHandle<()>>,
 }
@@ -38,43 +56,130 @@ pub type BrowserSnapshot = std::rc::Rc<dyn Fn(layer_render::SnapshotRequest, Cap
     -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<layer_render::SnapshotResult, String>>>>>;
 
 impl<T> Job<T> {
+    fn pending(control:CaptureControl)->(Self,Publisher<T>) {
+        let completion=Arc::new(std::sync::Mutex::new(Completion {outcome:Outcome::Pending,wake:None}));
+        (Self {control,completion:completion.clone(),#[cfg(not(target_arch="wasm32"))] worker:None},Publisher(Some(completion)))
+    }
+    pub fn set_wake(&self,wake:Arc<dyn Fn()+Send+Sync>) {
+        let (previous,notify)={
+            let mut completion=self.completion.lock().unwrap();
+            if matches!(completion.outcome,Outcome::Taken) {return;}
+            let previous=completion.wake.replace(wake.clone());
+            (previous,matches!(completion.outcome,Outcome::Ready(_)))
+        };
+        drop(previous);
+        if notify {wake();}
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn spawn(name: &str, work: impl FnOnce(CaptureControl) -> Result<T, String> + Send + 'static) -> Result<Self, String>
     where T: Send + 'static {
         let control = CaptureControl::default();
         let capture = control.clone();
-        let (sender, receiver) = mpsc::channel();
+        let (mut job,publisher)=Self::pending(control);
         let worker = std::thread::Builder::new().name(name.into()).stack_size(8 * 1024 * 1024).spawn(move || {
-            let _ = sender.send(work(capture));
+            publisher.send(work(capture));
         }).map_err(|e| e.to_string())?;
-        Ok(Self { control, receiver, worker: Some(worker) })
+        job.worker=Some(worker);Ok(job)
     }
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn spawn_local<F: std::future::Future<Output = Result<T, String>> + 'static>(work: impl FnOnce(CaptureControl) -> F + 'static) -> Self
     where T: 'static {
         let control = CaptureControl::default();
         let capture = control.clone();
-        let (sender, receiver) = mpsc::channel();
+        let (job,publisher)=Self::pending(control);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = sender.send(work(capture).await);
+            publisher.send(work(capture).await);
         });
-        Self { control, receiver }
+        job
     }
     pub fn take(&mut self) -> Option<Result<T, String>> {
-        match self.receiver.try_recv() {
-            Ok(result) => Some(result),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err("The operation stopped".into())),
-        }
+        let (result,wake)={
+            let mut completion=self.completion.lock().unwrap();
+            match std::mem::replace(&mut completion.outcome,Outcome::Taken) {
+                Outcome::Pending=> {completion.outcome=Outcome::Pending;(None,None)},
+                Outcome::Ready(result)=>(Some(result),completion.wake.take()),
+                Outcome::Taken=>(None,None),
+            }
+        };
+        drop(wake);result
     }
 }
 impl SnapshotJob {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn start(gpu: SnapshotGpu, request: layer_render::SnapshotRequest) -> Result<Self, String> {
-        Self::spawn("capy-snapshot", move |control| pollster::block_on(gpu.run_snapshot(request, control)))
+        let wake=gpu.preparation_wake.clone();
+        let job=Self::spawn("capy-snapshot", move |control| pollster::block_on(gpu.run_snapshot(request, control)))?;
+        if let Some(wake)=wake {job.set_wake(wake);}
+        Ok(job)
     }
     #[cfg(target_arch = "wasm32")]
     pub fn start(worker: BrowserSnapshot, request: layer_render::SnapshotRequest) -> Result<Self, String> {
         Ok(Self::spawn_local(move |control| worker(request, control)))
     }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    fn counter()->(Arc<AtomicUsize>,Arc<dyn Fn()+Send+Sync>) {
+        let calls=Arc::new(AtomicUsize::new(0));let count=calls.clone();
+        (calls,Arc::new(move || {count.fetch_add(1,Ordering::Relaxed);}))
+    }
+    #[test]
+    fn completion_before_subscription_keeps_success_and_error() {
+        for result in [Ok(7u32),Err("analysis failure".into())] {
+            let (mut job,publisher)=Job::pending(CaptureControl::default());
+            publisher.send(result.clone());
+            let (calls,wake)=counter();job.set_wake(wake);
+            assert_eq!(calls.load(Ordering::Relaxed),1);
+            assert_eq!(job.take(),Some(result));assert_eq!(job.take(),None);
+        }
+    }
+    #[test]
+    fn completion_after_subscription_publishes_success_and_error_before_waking() {
+        for result in [Ok(11u32),Err("analysis failure".into())] {
+            let (mut job,publisher)=Job::pending(CaptureControl::default());
+            let (calls,wake)=counter();job.set_wake(wake);assert_eq!(calls.load(Ordering::Relaxed),0);
+            publisher.send(result.clone());
+            assert_eq!(calls.load(Ordering::Relaxed),1);assert_eq!(job.take(),Some(result));
+        }
+    }
+    #[test]
+    fn an_abandoned_publisher_wakes_with_the_existing_operation_stopped_error() {
+        let (mut job,publisher)=Job::<u32>::pending(CaptureControl::default());
+        let (calls,wake)=counter();job.set_wake(wake);drop(publisher);
+        assert_eq!(calls.load(Ordering::Relaxed),1);
+        assert_eq!(job.take(),Some(Err("The operation stopped".into())));assert_eq!(job.take(),None);
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_panicked_worker_wakes_a_late_waiter_with_the_existing_stopped_error() {
+        let mut job=Job::<u32>::spawn("capy-analysis-panic-test",|_|panic!("analysis worker failed")).unwrap();
+        assert!(job.worker.take().unwrap().join().is_err());
+        let (calls,wake)=counter();job.set_wake(wake);assert_eq!(calls.load(Ordering::Relaxed),1);
+        assert_eq!(job.take(),Some(Err("The operation stopped".into())));
+    }
+    #[test]
+    fn publication_and_late_subscription_notify_outside_the_completion_mutex() {
+        for late in [false,true] {
+            let (mut job,publisher)=Job::pending(CaptureControl::default());
+            let state=Arc::downgrade(&job.completion);
+            let wake:Arc<dyn Fn()+Send+Sync>=Arc::new(move || {
+                let state=state.upgrade().unwrap();let completion=state.try_lock().expect("completion callback holds the result mutex");
+                assert!(matches!(completion.outcome,Outcome::Ready(Ok(13))));
+            });
+            if late {publisher.send(Ok(13u32));job.set_wake(wake);}else {job.set_wake(wake);publisher.send(Ok(13u32));}
+            assert_eq!(job.take(),Some(Ok(13)));
+        }
+    }
+    #[test]
+    fn taking_the_result_releases_the_subscription_and_does_not_rearm_it() {
+        let (mut job,publisher)=Job::pending(CaptureControl::default());
+        let (calls,wake)=counter();let subscription=Arc::downgrade(&wake);job.set_wake(wake);
+        publisher.send(Ok(17u32));assert_eq!(calls.load(Ordering::Relaxed),1);
+        assert_eq!(job.take(),Some(Ok(17)));assert!(subscription.upgrade().is_none());
+        let (_,wake)=counter();job.set_wake(wake);assert_eq!(job.take(),None);
+    }
+
 }

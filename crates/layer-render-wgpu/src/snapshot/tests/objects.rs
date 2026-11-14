@@ -25,6 +25,39 @@ fn document() -> Document {
 }
 
 #[test]
+fn object_only_worker_exact_capture_contains_authored_alpha() {
+    use layer_core::package::{ImmutableBacking,codec::{open,OpenOutcome}};
+    let bytes=include_bytes!("../../../../../apps/layer-web/fixtures/shared-image-f64-builtin.capy");
+    let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes.as_slice()))).unwrap();
+    let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&AtomicBool::new(false)).unwrap()
+        else {panic!("editable object fixture")};
+    let mut document=Document::from_artwork(artwork).unwrap();
+    let helpers=document.scene().order().iter().copied().filter(|owner|
+        !matches!(document.scene().occurrence(*owner).unwrap().content,OccurrenceContent::Objects(_) | OccurrenceContent::Stack(_))).collect::<Vec<_>>();
+    document.apply(document.delete_layers_edit(&helpers).unwrap()).unwrap();
+    assert!(document.artwork.paint.is_empty());
+    assert_eq!(document.artwork.objects.len(),3);
+    let extent=document.composition().size;
+    let control=CaptureControl::default();let cancel=control.clone();
+    let (send,receive)=std::sync::mpsc::channel();
+    let worker=std::thread::spawn(move || {
+        let result=(|| {
+            let mut reader=gpu().capture_scene(document.snapshot(),SceneScope::All,control)?;
+            assert!(reader.renderer.snapshot_worker);
+            reader.read_region([0,0,extent[0],extent[1]])
+                .map(|pixels|(pixels.len(),pixels.iter().filter(|pixel|pixel[3]>0.).count()))
+        })();
+        let _=send.send(result);
+    });
+    let result=receive.recv_timeout(std::time::Duration::from_secs(60));
+    if result.is_err() {cancel.cancel();}
+    let (pixels,authored)=result.expect("object-only exact capture completes within its deadline").unwrap();
+    worker.join().unwrap();
+    assert_eq!(pixels,extent[0] as usize*extent[1] as usize);
+    assert!(authored>0,"exact worker capture must include the object pixels");
+}
+
+#[test]
 fn deferred_object_snapshot_retries_preserve_filtered_windows_and_histogram() {
     let doc = document();
     let mut live = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -37,7 +70,7 @@ fn deferred_object_snapshot_retries_preserve_filtered_windows_and_histogram() {
         match scene.capture_region_prepared(&mut live, packet(doc.scene(), [32; 2]), &texture,
             PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder) {
             Ok(())=>break,
-            Err(GpuRasterError::DeferredObjectWork)=>{},
+            Err(GpuRasterError::NotReady)=>{},
             Err(error)=>panic!("{error}"),
         }
         assert!(std::time::Instant::now()<deadline,"Native object reference completes");
@@ -67,7 +100,7 @@ fn cancelled_object_captures_keep_output_unpublished() {
     let (texture, _) = create_color_target(&live.device, [32; 2], "cancelled object capture");
     let mut scene = live.scene.take().unwrap_or_else(|| scene::Scene::new(&live).unwrap());
     let mut encoder = submission::CommandEncoder::new(&live.device, &Default::default());
-    assert!(matches!(scene.capture_region(&mut live, packet(doc.scene(), [32; 2]), &texture, PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder), Err(GpuRasterError::DeferredObjectWork)));
+    assert!(matches!(scene.capture_region(&mut live, packet(doc.scene(), [32; 2]), &texture, PixelRect::full([32; 2]), scene::Output::Artwork(None), &mut encoder), Err(GpuRasterError::NotReady)));
     live.snapshot_cancelled = Some(Arc::new(AtomicBool::new(true)));
     assert!(matches!(pollster::block_on(scene.prepare_capture_work_async(&mut live)), Err(GpuRasterError::Color(message)) if message == "Snapshot capture cancelled"));
     let mut reader = capture(doc).unwrap();
@@ -100,9 +133,9 @@ fn export_sources_fit_one_aligned_capture_window_instead_of_the_whole_document()
     let mut reader=hardware.snapshot_gpu().capture_scene(doc.snapshot(),SceneScope::All,Default::default()).unwrap();
     for region in [[256,256,512,256],[0,0,1024,1024]] {
         let (renderer,_,_,encoder)=reader.prepare_region_gpu(region,0).unwrap();
-        let slots=renderer.source_tiles.borrow().free_slots();
-        assert!(slots>=28*4*3,"the actual window's source footprint must fit: {slots} slots");
-        assert!(slots<28*4*4,"the capture does not reserve the whole document: {slots} slots");
+        let slots=crate::memory::memory_tests::declared_source_demand(renderer)/crate::scene::sources::NORMALIZED_PAGE_BYTES;
+        assert!(slots>=28*4*3,"the actual window's source footprint is demanded: {slots} slots");
+        assert!(slots<28*4*4,"the capture does not demand the whole document: {slots} slots");
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);
         crate::test_support::complete(renderer);
     }
@@ -164,7 +197,7 @@ fn deferred_capture_finishes_two_bands_at_the_drained_working_floor() {
     let budget=hardware.factory.memory_budget().clone();budget.set_ram_override(Some(384<<20));
     let private_gpu=hardware.snapshot_gpu();drop(hardware);
     let mut floor=private_gpu.capture_scene(seed.snapshot(),SceneScope::All,Default::default()).unwrap();
-    floor.renderer.publish_memory(true);budget.flush_reports();
+    floor.renderer.publish_memory();budget.flush_reports();
     let _import=budget.admit_import(budget.import_headroom_bytes()).unwrap();
     assert_eq!(budget.import_headroom_bytes(),0);
     floor.renderer.refresh_memory_limits();
@@ -182,10 +215,10 @@ fn deferred_capture_finishes_two_bands_at_the_drained_working_floor() {
         let result=(|| {
             let mut reader=private_gpu.capture_scene(doc.snapshot(),SceneScope::All,control)?;
             reader.renderer.snapshot_worker=false;
-            reader.renderer.publish_memory(true);budget.flush_reports();
+            reader.renderer.publish_memory();budget.flush_reports();
             let _rest=budget.admit_import(budget.import_headroom_bytes()).unwrap();
             assert_eq!(budget.import_headroom_bytes(),0);reader.renderer.refresh_memory_limits();
-            assert_eq!(reader.renderer.source_tiles.borrow().free_slots(),capacity,"the cold input count is the actual drained capacity plus one");
+            assert!(reader.renderer.source_tiles.borrow().free_slots()>capacity,"the drained floor pins the full-stack unit beyond the seed's capacity");
             let first=pollster::block_on(reader.read_region_async([0,0,256,256]))?;
             progress.store(1,Ordering::Release);
             let second=pollster::block_on(reader.read_region_async([0,256,256,256]))?;

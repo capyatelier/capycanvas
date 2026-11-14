@@ -39,7 +39,7 @@ impl ImportFailure {
 }
 impl From<super::session::OpenFailure> for ImportFailure {
     fn from(error:super::session::OpenFailure)->Self {match error {
-        super::session::OpenFailure::Invalid(error)=>Self::Invalid(error),super::session::OpenFailure::Unsupported(error)=>Self::Unsupported(error),super::session::OpenFailure::MemoryBudgetExceeded=>Self::MemoryBudgetExceeded,
+        super::session::OpenFailure::Invalid(error)=>Self::Invalid(error),super::session::OpenFailure::Unsupported(error)=>Self::Unsupported(error),super::session::OpenFailure::MemoryBudgetExceeded|super::session::OpenFailure::Uncovered=>Self::MemoryBudgetExceeded,
     }}
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -708,7 +708,12 @@ impl SessionStore {
         let (stored,mut resources,value)=self.indexed_generation(generation,limits,cancelled).await?;
         resources.prepare(&value,&budget).await?;
         let programs=self.programs.get(&generation.id).cloned().unwrap_or_default();
-        let session=super::session::open_stored_parts(&stored.metadata,&resources,limits,cancelled,&programs,budget)?;
+        let session=loop {
+            match super::session::open_stored_parts(&stored.metadata,&resources,limits,cancelled,&programs,budget.clone()) {
+                Err(super::session::OpenFailure::Uncovered)=>if let Some(admission)=&resources.admission {admission.covering().await;},
+                session=>break session?,
+            }
+        };
         resources.verify_pending().await?;Ok(session)
     }
 
@@ -857,6 +862,7 @@ impl Pack {
 }
 impl RangeReader for Pack {
     fn transfer_key(&self)->Option<String> {self.file.transfer_key()}
+    fn allocation_bytes(&self,offset:u64,length:usize)->usize {self.file.allocation_bytes(offset,length)}
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {self.file.read(offset,length,crc,completion);}
 }
 struct StoreRange {pack:Arc<Pack>,source:ReadSource,offset:u64}
@@ -906,7 +912,8 @@ impl StoreLocation {
         }
         if checksum.finalize()!=self.crc {return Err("Recovery resource checksum failed".into());}Ok(())
     }
-    pub(crate) async fn read(&self)->Result<ByteRange,String> {let range=self.range();range.source.wait_checked(range.offset,self.length as usize,self.crc)?.await}
+    pub(crate) fn read_interest(&self)->Result<crate::tile_io::ReadWait,String> {let range=self.range();range.source.wait_checked(range.offset,self.length as usize,self.crc)}
+    pub(crate) async fn read(&self)->Result<ByteRange,String> {self.read_interest()?.await}
     pub(crate) fn poll(&self)->Result<RangeState,String> {let range=self.range();range.source.poll_checked(range.offset,self.length as usize,self.crc)}
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {let range=self.range();range.source.read_checked_on_worker(range.offset,self.length as usize,self.crc)}
@@ -950,7 +957,8 @@ impl StoreResources {
             let location=self.locations.get(&id).ok_or("Missing stored resource location")?;
             total=total.checked_add(location.length).ok_or("Stored resource size overflow")?;pending.push(id);
         }
-        self.admission=Some(budget.admit_import(total).ok_or(super::session::OpenFailure::MemoryBudgetExceeded)?);
+        let admission=budget.admit_import(total).ok_or(super::session::OpenFailure::MemoryBudgetExceeded)?;
+        admission.covering().await;self.admission=Some(admission);
         for id in pending {
             let bytes=self.locations.get(&id).ok_or("Missing stored resource location")?.read_all().await?;
             self.loaded.insert(id,bytes);

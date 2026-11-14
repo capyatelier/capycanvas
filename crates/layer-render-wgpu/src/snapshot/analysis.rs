@@ -104,24 +104,27 @@ impl SnapshotGpu {
             r.layer_masks.prepare_regions(&r.device, &mut encoder, (view, &[],None), snapshot.extent, false,
                 &mut r.selection_clip, Some(&regions)).map_err(|e| e.to_string())?;
             r.uploads.finish(&encoder);
-            r.last_submission = Some(encoder.submit(&r.queue));
+            r.last_submission = encoder.submit(&r.queue);
             for (&target, data) in snapshot.backing.iter().filter(|(target, _)| target.is_coverage()) {
                 let region = regions[&target];
                 for (key, tile) in data.tiles.iter().filter(|(key, _)| !page_rect(key.coordinate).intersect(region).is_empty()) {
                     control.check().map_err(|e| e.to_string())?;
                     let blob = tile.wait_backing_cancellable(control.cancellation_flag())?;
-                    let page = crate::layer_masks::MaskPage::new(&r.device);
                     #[cfg(not(target_arch="wasm32"))]
-                    r.restore_native_scalars(&[crate::native_tiles::scalar::NativeScalarRestore {
-                        blob: &blob, working: &page.texture,
-                    }]).map_err(|e| e.to_string())?;
+                    let page=r.restore_mask_page(&blob,tile.content_version()).map_err(|e|e.to_string())?;
                     #[cfg(target_arch="wasm32")]
-                    {
+                    let page={
+                        let mut page=crate::layer_masks::MaskPage::new(&r.device);
                         let space = r.document_color().space;
                         let pixels = r.browser_raster_decoder.as_ref().ok_or("Raster preparation worker unavailable")?(blob.clone(),space,space,false).await?;
                         let scene::sources::PreparedSourcePixels::NativeSamples(samples) = pixels else {return Err("Coverage requires native samples".into());};
-                        r.submit_restore(|r,_,encoder| crate::native_tiles::scalar::upload_coverage(r,encoder,&page.texture,blob.descriptor.depth(),&samples,4)).map_err(|e|e.to_string())?;
-                    }
+                        r.submit_restore(|r,_,encoder| {
+                            let receipt=encoder.submission();let write=page.initialize(&receipt)?;
+                            crate::native_tiles::scalar::upload_coverage(r,encoder,&write.value().texture,blob.descriptor.depth(),&samples,4,crate::residency::Class::Authored)?;
+                            write.publish(tile.content_version());Ok(())
+                        }).map_err(|e|e.to_string())?;
+                        page
+                    };
                     r.layer_masks.pages.insert((target, key.coordinate), page);
                 }
             }

@@ -5,7 +5,7 @@ use layer_ui::{EffectAction, FilterPreviewCache, Platform, UiAction, UiSession};
 fn settle_picker(session: &mut UiSession<WgpuRasterizer>) {
     static CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    while !session.filter_previews_idle() || session.engine().backend().has_pending_work() {
+    while !session.filter_previews_idle() || session.engine().backend().frame_demand() == layer_render::FrameDemand::Work {
         let document = session.engine().document().clone();
         let brush = session.engine().brush().clone();
         let renderer = session.renderer_mut();

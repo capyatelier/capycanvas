@@ -10,7 +10,7 @@ pub(crate) struct BakePreflight {
     color:layer_core::color::DocumentColor,owner:u64,revision:u64,inputs:Vec<Input>,next:usize,
     renderer:Option<Box<WgpuRasterizer>>,pipelines:Option<compile::Needs>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,windowed:bool,
     steps:Vec<([u32;2],PixelRect,DocRect)>,retiring:Option<Arc<std::sync::atomic::AtomicBool>>,coordinate:usize,output:Option<Image>,output_recorded:bool,planning:bool,
-    pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,projected_bytes:u64,
+    pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,projected_bytes:u64,sources:Option<sources::AcceptedInputs>,
 }
 impl BakePreflight {
     pub fn matches(&self,packet:FramePacket<'_>,color:layer_core::color::DocumentColor)->bool {self.color==color && self.owner==packet.scene.owner() && self.revision==packet.scene.revision()}
@@ -18,6 +18,12 @@ impl BakePreflight {
     pub fn pending(&self)->bool {!self.complete()}
     pub fn projected_bytes(&self)->u64 {self.projected_bytes}
     pub fn waiting(&self)->bool {self.renderer.as_ref().is_some_and(|r|r.image_decode_waiting())}
+    pub(crate) fn register_decode_waker(&self,wake:&std::task::Waker) {
+        if let Some(renderer)=&self.renderer {renderer.register_image_decode_waker(wake);}
+    }
+    pub(crate) fn clear_decode_waker(&self) {
+        if let Some(renderer)=&self.renderer {renderer.clear_image_decode_waker();}
+    }
     fn advance(&mut self,parent:&mut WgpuRasterizer,packet:FramePacket<'_>)->Result<(),GpuRasterError> {
         if self.complete() {return Ok(());}
         let input=&self.inputs[self.next];
@@ -48,7 +54,7 @@ impl BakePreflight {
             }
             let retained=self.projected_bytes.checked_add(parent.projected_restore_bytes()).and_then(|bytes|bytes.checked_add(parent.scale_display.as_ref().map_or(0,|cache|cache.resident_bytes())))
                 .ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
-            let budget=parent.native_edit.as_ref().map_or(parent.memory_limit(layer_core::MemoryOwnerKind::Scene),|native|native.image_pixel_budget(retained));
+            let budget=parent.image_pixel_budget(retained);
             let plan=windows::Plan::new(scene,input.key.extent,budget,parent.device.limits().max_texture_dimension_2d)?;
             let damage=input.key.damage;
             let outputs:Vec<_>=plan.map_or_else(||vec![damage],|plan|plan.outputs(DocRect::from(damage).aligned(PAGE_SIZE).in_frame(input.key.extent)).map(|output|output.intersect(damage)).collect());
@@ -78,56 +84,61 @@ impl BakePreflight {
             self.scene=Some(Scene::new(r)?);self.scene.as_mut().unwrap().ordered=true;self.initialized=true;
         }
         let Some(&(coordinate,output,window))=self.steps.get(self.coordinate) else {
-            self.next+=1;self.renderer=None;self.scene=None;self.source=None;self.initialized=false;self.coordinate=0;self.planning=false;return Ok(());
+            self.next+=1;self.renderer=None;self.scene=None;self.source=None;self.initialized=false;self.coordinate=0;self.planning=false;self.sources=None;return Ok(());
         };
-        if self.retiring.as_ref().is_some_and(|retired|!retired.load(std::sync::atomic::Ordering::Acquire)) {
-            #[cfg(not(target_arch="wasm32"))]
-            let _=r.device.poll(wgpu::PollType::Poll);
-            return Ok(());
-        }
+        if self.retiring.as_ref().is_some_and(|retired|!retired.load(std::sync::atomic::Ordering::Acquire)) {return Ok(());}
         let compositor=self.scene.as_mut().unwrap();
+        let unit=sources::InputUnit::tile(coordinate);
+        if self.sources.as_ref().is_some_and(|sources|sources.unit()!=Some(unit)) {
+            compositor.discard_unencoded_jobs();self.output=None;self.output_recorded=false;self.planning=false;self.sources=None;
+        }
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         let completed=self.pages.len();
         let result=(|| {
             r.drain_image_decodes(&mut encoder)?;
+            if self.output_recorded && self.sources.is_none() {return Err(GpuRasterError::Invariant("accepted bake sources are missing"));}
+            if let Some(sources)=&self.sources {sources.check_unit(unit)?;sources.clone().track(&mut encoder);}
             if !compositor.jobs.is_empty() {
                 if !compositor.encode_ordered_jobs(r,&mut encoder,None)? {return Ok(());}
                 if self.output_recorded {
                     self.pages.push((self.next,coordinate,self.output.take().unwrap()));self.coordinate+=1;
-                    self.output_recorded=false;self.planning=false;return Ok(());
+                    self.output_recorded=false;self.planning=false;self.sources.take().ok_or(GpuRasterError::Invariant("accepted bake sources are missing"))?.track(&mut encoder);return Ok(());
                 }
             }
-            let mut objects=std::mem::take(&mut compositor.exact_object_results);
-            let advanced=objects.advance(r,compositor,&mut encoder,false);
-            compositor.exact_object_results=objects;advanced?;
-            compositor.object_display=false;compositor.object_query=false;compositor.object_live=false;
-            if !compositor.prepare_object_pages(r,source,None,page_coordinates(window.in_frame(input.key.extent)))? {return Ok(());}
             if !self.planning {r.source_tiles.borrow_mut().invalidate();compositor.begin_frame();self.planning=true;}
             let prepared=(|| {
                 compositor.image_window=Some(window);compositor.image_output=Some(output);
                 compositor.update_images(r,source,output,&mut encoder)?;
                 compositor.jobs.clear();compositor.source_jobs.clear();compositor.used.iter_mut().for_each(scratch::Usage::reset);
-                let tile=compositor.group(r,source,None,coordinate)?;
+                if self.sources.is_none() {
+                    let declaration=compositor.capture_declaration(r,source)?;
+                    self.sources=Some(compositor.accept_capture(r,source,Some(scene::Output::Artwork(None)),&declaration,|this,r,accepted|this.group(r,source,None,coordinate,accepted).map(drop))?.for_unit(unit)?);
+                }
+                let inputs=self.sources.as_mut().ok_or(GpuRasterError::Invariant("accepted bake sources are missing"))?;
+                inputs.check_unit(unit)?;inputs.clone().track(&mut encoder);
+                #[cfg(test)]
+                let _record=sources::record_reads(inputs);
+                let tile=compositor.group(r,source,None,coordinate,inputs)?;
                 let (texture,view)=create_color_target(&r.device,[PAGE_SIZE;2],"prepared bake page");
                 let image=Image {texture,view,plan:display_mips::Plan::window(input.key.extent,0,page_rect(coordinate).intersect(PixelRect::full(input.key.extent)))};
                 compositor.copy_window_tile(tile,&image,coordinate);self.output=Some(image);self.output_recorded=true;
                 if compositor.encode_ordered_jobs(r,&mut encoder,None)? {
                     self.pages.push((self.next,coordinate,self.output.take().unwrap()));self.coordinate+=1;
-                    self.output_recorded=false;self.planning=false;
+                    self.output_recorded=false;self.planning=false;self.sources.take().ok_or(GpuRasterError::Invariant("accepted bake sources are missing"))?.track(&mut encoder);
                 }
                 Ok(())
             })();
-            match prepared {Err(GpuRasterError::DeferredObjectWork)=>Ok(()),result=>result,}
+            match prepared {Err(GpuRasterError::NotReady)=>Ok(()),result=>result,}
         })();
         let finished=self.windowed && self.pages.len()>completed && self.steps.get(self.coordinate).is_none_or(|next|next.1!=output);
         if finished {
             parent.metrics.image_window_peak_bytes=parent.metrics.image_window_peak_bytes.max(compositor.images.storage_bytes());
             parent.metrics.image_window_submissions+=1;
         }
-        if encoder.has_work() {r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));}
+        if encoder.has_work() {r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);}
         if finished {
-            let complete=Arc::new(std::sync::atomic::AtomicBool::new(false));let signal=complete.clone();
-            r.queue.on_submitted_work_done(move||signal.store(true,std::sync::atomic::Ordering::Release));
+            let complete=Arc::new(std::sync::atomic::AtomicBool::new(false));let signal=crate::CompletionFlag(complete.clone());
+            r.device.on_queue_done(&r.queue,move||drop(signal));
             self.retiring=Some(complete);
         }
         result
@@ -152,11 +163,11 @@ impl WgpuRasterizer {
             let columns=u64::from(damage.max_x().div_ceil(PAGE_SIZE).saturating_sub(damage.min_x()/PAGE_SIZE));
             let rows=u64::from(damage.max_y().div_ceil(PAGE_SIZE).saturating_sub(damage.min_y()/PAGE_SIZE));
             columns.checked_mul(rows).and_then(|pages|pages.checked_mul(u64::from(PAGE_SIZE).pow(2)*u64::from(self.device.working_format().block_copy_size(None).unwrap())))
-                .and_then(|added|bytes.checked_add(added)).ok_or(GpuRasterError::SourceWorkingSetExceeded)
+                .and_then(|added|bytes.checked_add(added)).ok_or(GpuRasterError::SizeOverflow)
         }).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes).map(|()|bytes));
         let mut state=self.bake_preflight.take().filter(|old|old.color==self.document_color() && old.inputs.iter().map(|input|&input.key).eq(inputs.iter().map(|input|&input.key)))
             .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,windowed:false,steps:Vec::new(),retiring:None,coordinate:0,
-                output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,projected_bytes:0});
+                output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,projected_bytes:0,sources:None});
         match projected {Ok(bytes)=>state.projected_bytes=bytes,Err(error)=>state.failure=Some(error)}
         if let Err(error)=state.advance(self,packet) {state.failure=Some(error);}
         let complete=state.complete();self.bake_preflight=Some(state);complete

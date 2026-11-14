@@ -11,7 +11,7 @@ use native as platform;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native::Coordinator;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::retire;
+pub(crate) use native::{retire, retire_device_services};
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{Activity, finish_shader_compiler_shutdown, stop_shader_compilers};
 #[cfg(target_arch = "wasm32")]
@@ -148,37 +148,16 @@ impl Scope {
         }
     }
     fn request<T: Resource>(&self, recipe: &Deferred<T>, class: Class, generation: Option<u64>) {
-        if let Some(error) = recipe.error() {
-            self.with_queue(|q| {
-                q.owners
-                    .get_mut(&self.0.id)
-                    .unwrap()
-                    .error
-                    .get_or_insert_with(|| error.into());
-            });
-            return;
-        }
-        let changed = self.with_queue(|q| {
-            q.submit(
-                Key::Recipe(recipe.identity()),
-                Demand {
-                    owner: self.0.id,
-                    generation,
-                    class,
-                },
-                recipe.async_pipeline(),
-                || {
-                    let ready = recipe.clone();
-                    (
-                        platform::pipeline(recipe.clone()),
-                        Some(Box::new(move || ready.ready())),
-                    )
-                },
-            )
+        let (changed,wake)=self.with_queue(|q| {
+            let demand=Demand {owner:self.0.id,generation,class};
+            if !q.live(&demand) {return (false,None);}
+            if let Some(error)=recipe.error() {
+                return (false,(q.fail(self.0.id,error.into()) && class<=Class::Visible).then(||q.owners[&self.0.id].wake.clone()).flatten());
+            }
+            (q.submit(Key::Recipe(recipe.identity()),demand,recipe.async_pipeline(),||platform::pipeline(recipe.clone())),None)
         });
-        if changed {
-            self.0.coordinator.notify_one();
-        }
+        wake_owners(wake.map(|wake|(self.0.id,wake)),|owner,error|self.with_queue(|q|{q.fail(owner,error);}));
+        if changed {self.0.coordinator.notify_one();}
     }
     pub fn enqueue(&self, class: Class, work: impl Task) -> u64 {
         self.submit(class, platform::task(work))
@@ -203,7 +182,7 @@ impl Scope {
                     class,
                 },
                 false,
-                || (work, None),
+                || work,
             );
             id
         });
@@ -227,9 +206,9 @@ impl Scope {
     pub fn activity(&self) -> Activity {
         Activity(Arc::downgrade(&self.0))
     }
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
-        self.with_queue(|q| q.owners.get_mut(&self.0.id).unwrap().wake = Some(wake));
+        self.with_queue(|q| q.owners.get_mut(&self.0.id).unwrap().wake = Some(wake.clone()));
+        wake_owners([(self.0.id,wake)],|owner,error|self.with_queue(|q|{q.fail(owner,error);}));
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn blocking<T>(&self, work: impl FnOnce() -> T) -> T {
@@ -259,8 +238,10 @@ impl Scope {
     ) -> Result<(), String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            self.check().map_err(|error|error.to_string())?;
             self.blocking(|| {
                 for p in recipes {
+                    self.check().map_err(|error|error.to_string())?;
                     if let Some(error) = p.error() {
                         return Err(error.into());
                     }
@@ -328,12 +309,16 @@ impl Needs {
     }
 }
 
+fn wake_owners(wakes:impl IntoIterator<Item=(u64,Arc<dyn Fn()+Send+Sync>)>,mut fail:impl FnMut(u64,String)) {
+    for (owner,wake) in wakes {
+        if let Err(payload)=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||wake())) {
+            fail(owner,crate::panic_message(&*payload));
+        }
+    }
+}
+
 pub(super) const QUIET: Duration = Duration::from_millis(200);
 pub(super) const BACKGROUND_QUIET: Duration = Duration::from_secs(1);
-#[cfg(not(target_arch = "wasm32"))]
-type Readiness = Box<dyn Fn() -> bool + Send + Sync>;
-#[cfg(target_arch = "wasm32")]
-type Readiness = Box<dyn Fn() -> bool>;
 struct Owner {
     generation: u64,
     idle: bool,
@@ -374,7 +359,6 @@ struct Entry<W> {
     sequence: u64,
     independent: bool,
     running: bool,
-    ready: Option<Readiness>,
 }
 struct Running<W> {
     key: Key,
@@ -453,21 +437,20 @@ impl<W> Queue<W> {
         key: Key,
         demand: Demand,
         independent: bool,
-        work: impl FnOnce() -> (W, Option<Readiness>),
+        work: impl FnOnce() -> W,
     ) -> bool {
+        if self.stopped {return false;}
         let sequence = self.next();
         let mut changed = false;
         let entry = self.entries.entry(key).or_insert_with(|| {
             changed = true;
-            let (work, ready) = work();
             Entry {
-                work: Some(work),
+                work: Some(work()),
                 demands: Vec::new(),
                 class: demand.class,
                 sequence,
                 independent,
                 running: false,
-                ready,
             }
         });
         if !entry.demands.iter().any(|d| {
@@ -499,9 +482,6 @@ impl<W> Queue<W> {
                 self.sequence += 1;
                 entry.class = class;
                 entry.sequence = self.sequence;
-            }
-            if !entry.running && entry.ready.as_ref().is_some_and(|ready| ready()) {
-                return false;
             }
             entry.running || !entry.demands.is_empty()
         });
@@ -639,6 +619,11 @@ impl<W> Queue<W> {
             .min()
             .unwrap_or_else(|| self.remaining(Class::Background, now))
     }
+    fn fail(&mut self,owner:u64,error:String)->bool {
+        let Some(owner)=self.owners.get_mut(&owner) else {return false;};
+        if owner.error.is_some() {return false;}
+        owner.error=Some(error);true
+    }
     fn check(&self, owner: u64) -> Result<(), GpuRasterError> {
         self.owners
             .get(&owner)
@@ -655,3 +640,6 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod admission_tests;
+
+#[cfg(test)]
+mod completion_tests;

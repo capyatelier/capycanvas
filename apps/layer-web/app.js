@@ -386,7 +386,16 @@ function applyChange(change) {
   if (change.regions) { refreshColorEditors(); refreshTextureDialogs(); }
   if (change.canvas_wake) wake();
   if (change.regions && !workspaceGesture?.started) wake();
+  scheduleFrameTimer();
 }
+let frameTimer = null;
+function scheduleFrameTimer() {
+  clearTimeout(frameTimer);
+  frameTimer = null;
+  const delay = app.next_frame_ms();
+  if (delay > 0) frameTimer = setTimeout(() => { frameTimer = null; wake(); }, Math.ceil(delay));
+}
+document.addEventListener('visibilitychange', () => { app?.set_window_hidden(document.hidden); if (!document.hidden) wake(); });
 let canvasCursorActive = false;
 function cursorInput(e) {
   if (!gpuReady) return;
@@ -1926,7 +1935,7 @@ try {
   const fileWorker = createRasterWorker(wasmModule,event=>gpuDiagnostics.record(event),storageWorker);
   const rasterWorker = async request=>{
     try{return await fileWorker(request);}
-    finally{if(request.operation==='image-decode'||request.operation==='package-normalize'||request.operation==='nearest-coordinates')wake();}
+    finally{if(request.operation==='image-decode'||request.operation==='package-normalize'||request.operation==='nearest-coordinates'||request.operation==='encode')wake();}
   };
   configure_raster_worker(rasterWorker);
   configure_store_transport(storageWorker,wake,(metadata,bytes)=>rasterWorker({operation:'package-normalize',metadata,buffers:[bytes]}));

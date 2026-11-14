@@ -87,18 +87,24 @@ private struct MacEditorScene: View {
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // AppKit must receive terminateLater before its eventual reply.
-        DispatchQueue.main.async { EditorStore.flushAll { saved in
-            if saved { EditorStore.detachWorkspaceOwners { sender.reply(toApplicationShouldTerminate: true) } }
-            else {
-                let alert = NSAlert()
-                alert.messageText = self.applicationCopy["recovery"]["changes_not_saved"].string
-                alert.informativeText = self.applicationCopy["recovery"]["quit_unsaved_description"].string
-                alert.addButton(withTitle: self.applicationCopy["common"]["keep_open"].string); alert.addButton(withTitle: self.applicationCopy["recovery"]["quit_anyway"].string)
-                let quit = alert.runModal() == .alertSecondButtonReturn
-                if quit { EditorStore.detachWorkspaceOwners { sender.reply(toApplicationShouldTerminate: true) } }
-                else { sender.reply(toApplicationShouldTerminate: false) }
+        DispatchQueue.main.async {
+            let attempt = ProcessTermination { result in
+                ProcessTermination.exitIfIncomplete(result)
+                sender.reply(toApplicationShouldTerminate: result != .storagePending)
             }
-        } }
+            attempt.start(flush: { ready in
+                EditorStore.flushAll { saved in
+                    if saved { ready(true) }
+                    else {
+                        let alert = NSAlert()
+                        alert.messageText = self.applicationCopy["recovery"]["changes_not_saved"].string
+                        alert.informativeText = self.applicationCopy["recovery"]["quit_unsaved_description"].string
+                        alert.addButton(withTitle: self.applicationCopy["common"]["keep_open"].string); alert.addButton(withTitle: self.applicationCopy["recovery"]["quit_anyway"].string)
+                        ready(alert.runModal() == .alertSecondButtonReturn)
+                    }
+                }
+            }, detach: { ready in EditorStore.detachWorkspaceOwners(ready) }, finishGPU: ProcessTermination.finishGPU)
+        }
         return .terminateLater
     }
 }

@@ -263,8 +263,8 @@ impl Job {
     /// Wait for the GPU to finish everything encoded so far before the next chunk.
     pub fn track(&self, encoder: &crate::submission::CommandEncoder) {
         self.idle.store(false, Ordering::Release);
-        let idle = self.idle.clone();
-        encoder.on_submitted_work_done(move || idle.store(true, Ordering::Release));
+        let idle = crate::CompletionFlag(self.idle.clone());
+        encoder.hold(idle);
     }
 
 }

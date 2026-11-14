@@ -3,11 +3,6 @@ use crate::submission::ColorPass;
 
 pub(crate) const UNIFORM_BYTES: u64 = 256;
 
-pub(crate) struct Mapped {
-    pub view: wgpu::TextureView,
-    pub values: [u8; UNIFORM_BYTES as usize],
-}
-
 pub(crate) struct Request<'a> {
     pub moved: &'a layer_core::ImageTransform,
     pub kept: &'a layer_core::ImageTransform,
@@ -168,6 +163,7 @@ impl Resample {
         compute.dispatch_workgroups(texels[2].div_ceil(8), texels[3].div_ceil(8), 1);
     }
 
+    #[cfg(test)]
     pub fn mesh_binding(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer, views: &[wgpu::TextureView; 2]) -> wgpu::BindGroup {
         self.mesh_binding_at(device, uniforms, 0, views)
     }
@@ -201,7 +197,7 @@ impl Resample {
         let mesh=mesh.map(|(buffers,range)|buffers.drawing(range));
         self.draw_mesh(&mut pass,binding,texels,mesh.as_ref(),kept);
     }
-    pub(super) fn draw_mesh(&self,pass:&mut wgpu::RenderPass<'_>,binding:&wgpu::BindGroup,texels:[u32;4],mesh:Option<&paint_transform::mesh::MeshDraw>,kept:bool) {
+    pub(crate) fn draw_mesh(&self,pass:&mut wgpu::RenderPass<'_>,binding:&wgpu::BindGroup,texels:[u32;4],mesh:Option<&paint_transform::mesh::MeshDraw>,kept:bool) {
         pass.set_scissor_rect(texels[0], texels[1], texels[2], texels[3]);
         pass.set_bind_group(0, binding, &[]);
         pass.set_pipeline(&self.mesh[if mesh.is_some() { 0 } else { 4 } + usize::from(kept)]);

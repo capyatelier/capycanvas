@@ -1,6 +1,8 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI, frame scheduling and serial execution.
 #![recursion_limit = "256"]
+mod termination;
+pub use termination::*;
 mod handles;
 pub use handles::{capy_apple_string_copy,capy_apple_string_free,capy_apple_string_length};
 mod metal;
@@ -61,7 +63,7 @@ impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
         self.error = None;
         let result = layer_host::contain(self, |a| {
-            a.metal.observe_failure(&mut a.host, false);
+            a.metal.observe_failure(&mut a.host);
             work(a)
         });
         #[cfg(target_abi = "sim")]
@@ -819,7 +821,7 @@ pub unsafe extern "C" fn capy_apple_poll_renderer(app: u64) -> i32 {
     let app=&mut *lease_app;
     app.perform(|a| {
         a.gpu_operation(|a| {
-            a.metal.observe_failure(&mut a.host, true);
+            a.metal.observe_failure(&mut a.host);
             let changed=a.metal.poll_color(&mut a.host)? | a.metal.screen_tick(&mut a.host)
                 | a.metal.poll_presentation(&mut a.host)?;
             #[cfg(target_abi = "sim")]

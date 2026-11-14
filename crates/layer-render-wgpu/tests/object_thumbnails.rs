@@ -82,7 +82,7 @@ fn object_layer_rows_preview_placed_content_from_one_coarse_image() {
     loop {
         engine.render_frame_at(clock).unwrap();
         engine.backend_mut().wait_idle().unwrap();
-        if !engine.backend().has_pending_work() { break; }
+        if engine.backend().next_frame()!=layer_render::FrameDemand::Work { break; }
         assert!(std::time::Instant::now() < deadline, "the visible layer settles");
         clock += 8_000_000;
     }

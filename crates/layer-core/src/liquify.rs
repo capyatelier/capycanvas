@@ -17,6 +17,7 @@ pub fn substeps(mode: crate::LiquifyMode, radii: [f32; 2], hardness: f32, streng
 
 #[cfg(not(target_arch = "wasm32"))]
 pub trait Field: Any + Debug + Send + Sync {
+    fn content_version(&self) -> crate::raster::ContentVersion;
     fn as_any(&self) -> &dyn Any;
     fn resources(&self, visit: &mut dyn FnMut(u64, usize));
     fn tiles(&self) -> Vec<[u32; 2]>;
@@ -24,6 +25,7 @@ pub trait Field: Any + Debug + Send + Sync {
 
 #[cfg(target_arch = "wasm32")]
 pub trait Field: Any + Debug {
+    fn content_version(&self) -> crate::raster::ContentVersion;
     fn as_any(&self) -> &dyn Any;
     fn resources(&self, visit: &mut dyn FnMut(u64, usize));
     fn tiles(&self) -> Vec<[u32; 2]>;

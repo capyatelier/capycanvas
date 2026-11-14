@@ -296,7 +296,7 @@ impl CountedReads {
     fn calls(&self)->usize {self.calls.load(Ordering::Acquire)}
     fn open(&self,path:&Path)->SessionStore {
         let calls=self.calls.clone();
-        crate::package::store_io::test_support::open_observed(path,self.cache.clone(),Arc::new(move ||{calls.fetch_add(1,Ordering::Relaxed);})).wait().unwrap()
+        crate::package::store_io::test_support::open_observed(path,self.cache.clone(),Arc::new(move |_,_|{calls.fetch_add(1,Ordering::Relaxed);})).wait().unwrap()
     }
 }
 #[test]

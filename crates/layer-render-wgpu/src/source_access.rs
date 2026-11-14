@@ -32,28 +32,51 @@ pub(super) fn neighborhood<const N:usize>(coordinate:[u32;2],offsets:[Option<[i3
     })
 }
 
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub(super) struct TileTexture { texture: wgpu::Texture, layer: u32 }
+impl From<wgpu::Texture> for TileTexture { fn from(texture: wgpu::Texture) -> Self { Self { texture, layer: 0 } } }
+impl From<&wgpu::Texture> for TileTexture { fn from(texture: &wgpu::Texture) -> Self { texture.clone().into() } }
+impl From<&TileTexture> for TileTexture { fn from(texture: &TileTexture) -> Self { texture.clone() } }
+impl TileTexture {
+    pub fn layer_of(texture: wgpu::Texture, layer: u32) -> Self { Self { texture, layer } }
+    pub fn raw(&self) -> &wgpu::Texture { &self.texture }
+    pub fn format(&self) -> wgpu::TextureFormat { self.texture.format() }
+    pub fn width(&self) -> u32 { self.texture.width() }
+    pub fn height(&self) -> u32 { self.texture.height() }
+    pub fn size(&self) -> wgpu::Extent3d { wgpu::Extent3d { depth_or_array_layers: 1, ..self.texture.size() } }
+    pub fn as_image_copy(&self) -> wgpu::TexelCopyTextureInfo<'_> { self.copy_at([0; 2]) }
+    pub fn copy_at(&self, [x, y]: [u32; 2]) -> wgpu::TexelCopyTextureInfo<'_> {
+        wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x, y, z: self.layer }, ..self.texture.as_image_copy() }
+    }
+    pub fn create_view(&self, descriptor: &wgpu::TextureViewDescriptor<'_>) -> wgpu::TextureView {
+        self.texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: self.layer, array_layer_count: Some(1), ..descriptor.clone() })
+    }
+}
+#[derive(Clone)]
 pub(super) struct RawTile {
-    pub texture: wgpu::Texture,
+    pub texture: TileTexture,
     pub view: wgpu::TextureView,
 }
+impl resident::Storage for RawTile {fn storage_bytes(&self)->u64 {texture_bytes(&self.texture.texture)/u64::from(self.texture.texture.depth_or_array_layers())}}
+impl resident::TextureStorage for RawTile {
+    fn texture(&self)->&wgpu::Texture {&self.texture.texture}
+    fn view(&self)->&wgpu::TextureView {&self.view}
+}
 
-pub(super) struct PaintBaseRead {
+pub(super) struct SourceRead {
     pub tile: RawTile,
-    pub pending: Vec<scene::sources::PendingTile>,
-    pub assembly: Option<PaintBaseAssembly>,
+    pub pending: Vec<Arc<scene::sources::PendingTile>>,
+    pub assembly: Option<Arc<scene::sources::PaintBaseAssembly>>,
 }
-
-pub(super) struct PaintBaseCopy {
-    source: RawTile,
-    source_origin: [u32; 2],
-    origin: [u32; 2],
-    extent: [u32; 2],
-}
-
-pub(super) struct PaintBaseAssembly {
-    tile: RawTile,
-    copies: Vec<PaintBaseCopy>,
-    write: crate::submission::CacheWrite,
+impl SourceRead {
+    pub fn ready(&self)->bool {self.pending.iter().all(|pending|pending.ready())}
+    pub fn encode(&self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,class:crate::residency::Class)->Result<bool,GpuRasterError> {
+        if !self.ready() && (!r.snapshot_worker || cfg!(target_arch="wasm32")) {return Ok(false);}
+        for pending in &self.pending {if !scene::sources::encode_pending(r,encoder,pending.clone(),class)? {return Ok(false);}}
+        if let Some(assembly)=&self.assembly {assembly.encode(r,encoder);}
+        Ok(true)
+    }
 }
 
 pub(super) fn paint_base_bounds(base: &PaintBase) -> PixelRect {
@@ -72,55 +95,12 @@ pub(super) fn prepare_paint_base(r:&mut WgpuRasterizer,base:&PaintBase,coordinat
     let mut ready=true;
     for coordinate in page_coordinates(paint_base_source_bounds(base,coordinate)) {
         if r.source_tiles.borrow().prepared_view(base.image.storage(),coordinate).is_none() {
-            ready=false;if !r.request_exact_image_decode(base.image.id(),base.image.storage().clone(),coordinate)? {break;}
+            ready=false;if !r.request_exact_image_decode(base.image.id(),base.image.storage().clone(),coordinate,crate::residency::Class::Visible)? {break;}
         }
     }
     Ok(ready)
 }
 
-pub(super) fn plan_paint_base(r: &WgpuRasterizer, base: &PaintBase, coordinate: [u32; 2]) -> Result<Option<PaintBaseRead>, GpuRasterError> {
-    let bounds = paint_base_bounds(base).intersect(page_rect(coordinate));
-    if bounds.is_empty() { return Ok(None); }
-    let mut cache = r.source_tiles.borrow_mut();
-    if base.offset.iter().all(|v| v % PAGE_SIZE == 0) {
-        let source_coordinate = std::array::from_fn(|i| coordinate[i] - base.offset[i] / PAGE_SIZE);
-        let (tile, pending) = cache.plan_exact(r, base.image.storage(), source_coordinate)?;
-        let (tile, promotion) = cache.promote(r, tile)?;
-        return Ok(Some(PaintBaseRead { tile, pending: pending.into_iter().chain(promotion).collect(), assembly: None }));
-    }
-    let (tile, write) = cache.plan_base(r, base, coordinate)?;
-    let Some(write) = write else { return Ok(Some(PaintBaseRead {tile,pending:Vec::new(),assembly:None})); };
-    let mut leases = vec![cache.lease(&tile.view).unwrap()];
-    let source_bounds = paint_base_source_bounds(base,coordinate);
-    let mut pending = Vec::with_capacity(4);
-    let mut copies = Vec::with_capacity(4);
-    for source_coordinate in page_coordinates(source_bounds) {
-        let overlap = source_bounds.intersect(page_rect(source_coordinate));
-        let (source, decode) = cache.plan_exact(r, base.image.storage(), source_coordinate)?;
-        let (source, promotion) = cache.promote(r, source)?;
-        leases.push(cache.lease(&source.view).unwrap());
-        pending.extend(decode.into_iter().chain(promotion));
-        copies.push(PaintBaseCopy {
-            source, source_origin: [overlap.min_x() % PAGE_SIZE, overlap.min_y() % PAGE_SIZE],
-            origin: [overlap.min_x() + base.offset[0] - coordinate[0] * PAGE_SIZE, overlap.min_y() + base.offset[1] - coordinate[1] * PAGE_SIZE],
-            extent: [overlap.width(),overlap.height()],
-        });
-    }
-    let assembly = PaintBaseAssembly {tile:RawTile {texture:tile.texture.clone(),view:tile.view.clone()},copies,write};
-    Ok(Some(PaintBaseRead {tile,pending,assembly:Some(assembly)}))
-}
-
-pub(super) fn encode_paint_base(assembly: &PaintBaseAssembly, encoder: &mut crate::submission::CommandEncoder) {
-    { let _pass = encoder.color_pass("paint base window", &assembly.tile.view, wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)); }
-    for copy in &assembly.copies {
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:copy.source_origin[0],y:copy.source_origin[1],z:0},..copy.source.texture.as_image_copy()},
-            wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:copy.origin[0],y:copy.origin[1],z:0},..assembly.tile.texture.as_image_copy()},
-            wgpu::Extent3d {width:copy.extent[0],height:copy.extent[1],depth_or_array_layers:1},
-        );
-    }
-    assembly.write.track(encoder);
-}
 
 impl WgpuRasterizer {
     pub(super) fn source_cache_work(&self) -> [u64; 2] {
@@ -138,91 +118,105 @@ impl WgpuRasterizer {
         self.preview_pages.iter().find(|p| p.coordinate == coordinate)
     }
 
-    /// Prepare at most one job's neighborhood before borrowing its views.
-    /// Ordinary paint has no source preparation or resource-handle cloning.
-    pub(super) fn prepare_raw_neighborhood<const N: usize>(
-        &mut self,
-        layer: SourceTarget,
-        coordinate: [u32; 2],
-        offsets: [Option<[i32; 2]>; N],
-        preview: bool,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        assert!(N <= SOURCE_SLOTS);
-        if !self.tiled_sources.contains_key(&layer) && self.native_backing(layer).is_none() {
-            return Ok(());
-        }
-        let mut leases = Vec::with_capacity(N);
-        for neighbor in neighborhood(coordinate,offsets) {
-            if preview && self.preview_page(neighbor).is_some()
-            {
-                continue;
+    pub(super) fn preview_wetness_page(&self, target: SourceTarget, coordinate: [u32; 2]) -> Option<&WatercolorWetnessPage> {
+        if self.preview_layer_id != Some(target) || self.preview_damage.intersect(page_rect(coordinate)).is_empty() {return None;}
+        self.preview_watercolor_wetness_pages.iter().find(|page| page.coordinate == coordinate)
+    }
+
+    pub(super) fn preview_input_tiles(&self, target: SourceTarget) -> std::collections::BTreeSet<[u32; 2]> {
+        if self.preview_layer_id != Some(target) {return Default::default();}
+        self.preview_pages.iter().map(|page| page.coordinate).filter(|c| self.preview_page(*c).is_some())
+            .chain(self.preview_watercolor_wetness_pages.iter().map(|page| page.coordinate).filter(|c| self.preview_wetness_page(target, *c).is_some()))
+            .collect()
+    }
+
+    pub(super) fn accept_raw_neighborhood<const N:usize>(
+        &mut self,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
+        preview:Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,expected:Option<&raster::contents::Versions>,
+        encoder:&mut crate::submission::CommandEncoder,
+    )->Result<scene::sources::AcceptedInputs,GpuRasterError> {
+        assert!(N<=SOURCE_SLOTS);
+        let declaration=scene::sources::Declaration::raw(preview,expected.cloned(),Some(encoder.submission()));
+        let accepted=scene::sources::declare(Default::default(),declaration,|declaring|
+            self.raw_layer_neighborhood(declaring,layer,coordinate,offsets,None,encoder).map(drop))?.accept_query(self,None)?;
+        if !accepted.prepare(self)? {return Err(GpuRasterError::NotReady);}
+        accepted.clone().track(encoder);
+        Ok(accepted)
+    }
+
+    #[cfg(test)]
+    pub(super) fn read_raw_neighborhood<const N:usize>(&mut self,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
+        encoder:&mut crate::submission::CommandEncoder,
+    )->Result<(scene::sources::AcceptedInputs,[Option<wgpu::TextureView>;N]),GpuRasterError> {
+        let mut accepted=self.accept_raw_neighborhood(layer,coordinate,offsets,None,None,encoder)?;
+        let views=self.raw_layer_neighborhood(&mut accepted,layer,coordinate,offsets,None,encoder)?;
+        Ok((accepted,views))
+    }
+
+    pub(super) fn raw_layer_neighborhood<const N:usize>(
+        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
+        captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
+    )->Result<[Option<wgpu::TextureView>;N],GpuRasterError> {
+        self.layer_neighborhood(inputs,layer,coordinate,offsets,captured,encoder,|inputs,r,layer,at,_|inputs.raw_color(r,layer,at))
+    }
+
+    pub(super) fn brush_layer_neighborhood<const N:usize>(
+        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
+        preview:Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
+    )->Result<[Option<wgpu::TextureView>;N],GpuRasterError> {
+        let read=std::cell::RefCell::new(Vec::new());
+        let views=self.layer_neighborhood(inputs,layer,coordinate,offsets,captured,encoder,|inputs,r,layer,at,receipt| {
+            if let Some(tile)=r.material_reads.as_ref().and_then(|reads|reads.get(&(layer,at,preview))) {
+                return Ok([tile.clone().map(|tile|SourceRead {tile,pending:Vec::new(),assembly:None}),None]);
             }
-            if let Some(tile) = self.raw_layer_tile(layer, neighbor, encoder)? {
-                leases.extend(self.source_tiles.borrow().lease(&tile.view));
+            #[cfg(test)] crate::test_support::record_material_read((at,preview.map(|(stage,_)|stage)));
+            let choices=inputs.brush_color(r,layer,at,preview,receipt)?;
+            if r.material_reads.is_some() && let [base,None]=&choices && base.as_ref().is_none_or(|base|base.pending.is_empty() && base.assembly.is_none()) {
+                read.borrow_mut().push(((layer,at,preview),base.as_ref().map(|base|base.tile.clone())));
             }
+            Ok(choices)
+        })?;
+        if let Some(reads)=self.material_reads.as_mut() {reads.extend(read.into_inner());}
+        Ok(views)
+    }
+
+    pub(super) fn brush_layer_tiles(
+        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,tiles:&[[u32;2]],
+        preview:Option<(scene::PreviewStage,Option<(scene::PreviewPass,u32)>)>,encoder:&mut crate::submission::CommandEncoder,
+    )->Result<Vec<Option<wgpu::TextureView>>,GpuRasterError> {
+        let mut views=vec![None;tiles.len()];
+        self.layer_tiles(inputs,layer,tiles.iter().copied().enumerate(),&mut views,None,encoder,|inputs,r,layer,at,receipt|inputs.brush_color(r,layer,at,preview,receipt))?;
+        Ok(views)
+    }
+
+    fn layer_neighborhood<const N:usize>(
+        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
+        captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
+        read:impl Fn(&mut scene::sources::AcceptedInputs,&Self,SourceTarget,[u32;2],&submission::Submission)->Result<[Option<SourceRead>;2],GpuRasterError>,
+    )->Result<[Option<wgpu::TextureView>;N],GpuRasterError> {
+        let mut views=std::array::from_fn(|_|None);
+        let tiles=offsets.into_iter().enumerate().filter_map(|(index,offset)|Some((index,neighborhood(coordinate,[offset]).next()?)));
+        self.layer_tiles(inputs,layer,tiles,&mut views,captured,encoder,read)?;
+        Ok(views)
+    }
+
+    fn layer_tiles(
+        &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,tiles:impl Iterator<Item=(usize,[u32;2])>,views:&mut [Option<wgpu::TextureView>],
+        mut captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
+        read:impl Fn(&mut scene::sources::AcceptedInputs,&Self,SourceTarget,[u32;2],&submission::Submission)->Result<[Option<SourceRead>;2],GpuRasterError>,
+    )->Result<(),GpuRasterError> {
+        let receipt=encoder.submission();
+        #[cfg(test)]
+        let _record=scene::sources::record_reads(inputs);
+        for (index,at) in tiles {
+            let [base,overlay]=read(inputs,self,layer,at,&receipt)?;
+            if let Some(captured)=captured.as_mut() {captured.extend(inputs.witnesses(layer,RasterPlane::Color,at));}
+            debug_assert!(overlay.is_none(),"raw neighborhood has a composite preview");
+            if let Some(read)=&base && !read.encode(self,encoder,crate::residency::Class::Authored)? {return Err(GpuRasterError::NotReady);}
+            views[index]=base.map(|read|read.tile.view);
         }
+        if !inputs.declaring() {self.source_tiles.borrow_mut().flush_retired(encoder);}
         Ok(())
-    }
-
-    /// Whether preparing this neighborhood reads decoded-tile slots, which a
-    /// later preparation may reuse before earlier commands execute.
-    pub(super) fn borrows_decoded_tiles<const N: usize>(
-        &self,
-        layer: SourceTarget,
-        coordinate: [u32; 2],
-        offsets: [Option<[i32; 2]>; N],
-        preview: bool,
-    ) -> bool {
-        let pages = self.paint_layers.iter().find(|l| l.id == layer).map_or(&[][..], |l| &l.pages[..]);
-        (self.tiled_sources.contains_key(&layer) || self.native_backing(layer).is_some())
-            && offsets.into_iter().flatten().any(|[dx, dy]| {
-                let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
-                let neighbor = [x as u32, y as u32];
-                x >= 0 && y >= 0 && !(preview && self.preview_page(neighbor).is_some())
-                    && pages.iter().all(|p| p.coordinate != neighbor)
-            })
-    }
-
-    /// Consume the resulting binding before preparing another neighborhood;
-    /// no cache eviction may intervene. All returned resources are borrowed.
-    pub(super) fn raw_layer_neighborhood<'a, const N: usize>(
-        &'a self,
-        sources: &'a scene::sources::DecodedTiles,
-        layer: &'a PaintLayer,
-        coordinate: [u32; 2],
-        offsets: [Option<[i32; 2]>; N],
-        preview: bool,
-    ) -> [&'a wgpu::TextureView; N] {
-        offsets.map(|offset| {
-            let Some([dx, dy]) = offset else { return &self.empty_view; };
-            let [x, y] = [coordinate[0] as i32 + dx, coordinate[1] as i32 + dy];
-            if x < 0 || y < 0 {
-                return &self.empty_view;
-            }
-            let neighbor = [x as u32, y as u32];
-            let predicted = if preview {
-                self.preview_page(neighbor)
-            } else {
-                None
-            };
-            if let Some(page) =
-                predicted.or_else(|| layer.pages.iter().find(|p| p.coordinate == neighbor))
-            {
-                return &page.active().view;
-            }
-            if let Ok(Some(blob)) = self.native_color_tile(layer.id, neighbor)
-                && let Some(view) = sources.prepared_raster_view(&blob, self.document_color().space, self.document_color().space)
-            {
-                return view;
-            }
-            if let Some(source) = self.tiled_sources.get(&layer.id)
-                && let Some(view) = sources.prepared_base_view(source, neighbor)
-            {
-                return view;
-            }
-            &self.empty_view
-        })
     }
 
     pub(super) fn raw_layer_tile(
@@ -231,26 +225,15 @@ impl WgpuRasterizer {
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<RawTile>, GpuRasterError> {
-        if let Some(page) = self
-            .paint_layers
-            .iter()
-            .find(|l| l.id == layer)
-            .and_then(|l| l.pages.iter().find(|p| p.coordinate == coordinate))
-        {
-            return Ok(Some(RawTile {
-                texture: page.active().texture.clone(),
-                view: page.active().view.clone(),
-            }));
-        }
-        if let Some(blob) = self.native_color_tile(layer, coordinate)? {
-            return self
-                .backed_raster_tile(&blob, self.document_color().space, encoder)
-                .map(Some);
-        }
-        let Some(source) = self.tiled_sources.get(&layer).cloned() else {
-            return Ok(None);
-        };
-        self.paint_base_tile(&source, coordinate, encoder)
+        let read=|r:&WgpuRasterizer,accepted:&mut scene::sources::AcceptedInputs|if layer.is_coverage() {accepted.raw_scalar(r,layer,RasterPlane::Mask,coordinate)}
+            else {accepted.raw_color(r,layer,coordinate).map(|[base,_]|base)};
+        let declaration=scene::sources::Declaration::raw(None,None,Some(encoder.submission()));
+        let mut accepted=scene::sources::declare(Default::default(),declaration,|declaring|read(self,declaring).map(drop))?.accept_query(self,None)?;
+        if !accepted.prepare(self)? {return Err(GpuRasterError::NotReady);}
+        let read=read(self,&mut accepted)?;
+        accepted.clone().track(encoder);
+        if let Some(read)=&read && !read.encode(self,encoder,crate::residency::Class::Authored)? {return Err(GpuRasterError::NotReady);}
+        accepted.track(encoder);Ok(read.map(|read|read.tile))
     }
 
     pub(super) fn paint_base_tile(&mut self, base: &PaintBase, coordinate: [u32; 2], encoder: &mut crate::submission::CommandEncoder) -> Result<Option<RawTile>, GpuRasterError> {
@@ -286,15 +269,44 @@ mod tests {
     }
     fn submit(r: &mut WgpuRasterizer, encoder: crate::submission::CommandEncoder) { r.uploads.finish(&encoder); encoder.submit(&r.queue); }
 
+    fn cold_source_query(raster: bool) {
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let base=PaintBase::new(rgba8_source([PAGE_SIZE;2],codes).into());
+        let samples=(0..PAGE_SIZE).flat_map(|y|(0..PAGE_SIZE).flat_map(move|x|codes(x,y))).collect::<Vec<_>>();
+        let blob=Arc::new(TileBlob::encode(r.document_color().paint_descriptor(),&samples).unwrap());
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let tile=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder| {
+            if raster {r.backed_raster_tile(&blob,RgbSpace::Srgb,encoder)}
+            else {r.paint_base_tile(&base,[0;2],encoder).map(|tile|tile.unwrap())}
+        });
+        submit(&mut r,encoder);
+        let pixels=crate::test_support::float_pixels(&r,&tile.texture);
+        assert_eq!(pixels.len(),PAGE_SIZE.pow(2) as usize);
+        for (index,pixel) in pixels.into_iter().enumerate() {
+            let expected=expected(index as u32%PAGE_SIZE,index as u32/PAGE_SIZE);
+            assert!(pixel.into_iter().zip(expected).all(|(actual,expected)|(actual-expected).abs()<2e-6),
+                "cold raster={raster}, pixel={index}: {pixel:?} != {expected:?}");
+        }
+    }
+
+    #[test]
+    fn a_cold_paint_base_query_requests_and_reads_its_pixels() {cold_source_query(false);}
+
+    #[test]
+    fn a_cold_backed_raster_query_requests_and_reads_its_pixels() {cold_source_query(true);}
+
     #[test]
     fn paint_base_four_tile_window_and_aligned_lookup_preserve_edges_and_codes() {
         let source = rgba8_source([300,270],codes);
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let base = PaintBase {image:source.clone().into(),offset:[17,31],policy:Default::default()};
         let mut encoder = crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan = plan_paint_base(&r,&base,[1,1]).unwrap().unwrap();
+        let mut requested=scene::sources::Inputs::default();
+        requested.base(&base,[1,1],r.document_color().space);
+        let inputs=requested.accept_query(&mut r,None).unwrap();
+        let plan=scene::sources::accepted_base(&inputs,&base,[1,1]).unwrap().unwrap();
         assert_eq!(plan.pending.len(),4);
-        drop(plan);
+        drop((plan,inputs));
         let tile = crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.paint_base_tile(&base,[1,1],encoder)).unwrap();
         submit(&mut r,encoder);
         for (i,actual) in crate::test_support::float_pixels(&r,&tile.texture).into_iter().enumerate() {
@@ -321,7 +333,7 @@ mod tests {
         paint.raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[1,1]},RasterTile::backed(TileBlob::encode(layer_core::color::DocumentColor::default().paint_descriptor(),&vec![0;256*256*4]).unwrap()))].into(),..Default::default()});
         (Document::from_artwork(artwork).unwrap(),target)
     }
-    fn thumbnail(r:&mut WgpuRasterizer,target:SourceTarget)->Vec<u8>{crate::test_support::thumbnail(r,1,ThumbnailTarget::Source(target))}
+    fn thumbnail(r:&mut WgpuRasterizer,target:SourceTarget)->Vec<u8>{crate::test_support::thumbnail(r,1,ThumbnailTarget::Source(target)).bytes}
     fn sample(r:&mut WgpuRasterizer,target:SourceTarget,position:[u32;2])->[f32;4]{
         crate::test_support::color_sample(r, ColorSampleRequest {request_id:1,source:ColorSampleSource::Source(target),position,area:ColorSampleArea::Average5}).rgba
     }
@@ -347,6 +359,31 @@ mod tests {
         assert_eq!(pixels(&r),pixels(&reference));
     }
     #[test]
+    fn a_bound_raw_neighborhood_survives_source_retirement_before_submission() {
+        let (document,target)=document(true);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.ensure_document_metadata(document.composition().size,document.scene()).unwrap();
+        let coordinate=[0,0];let offsets=[Some([0,0])];
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let (accepted,views)=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,coordinate,offsets,encoder));
+        let source=views[0].as_ref().unwrap().texture().clone();
+        assert_eq!([source.width(),source.height()],[PAGE_SIZE;2]);
+        submit(&mut r,encoder);crate::test_support::complete(&r);
+        crate::test_support::evict_sources(&mut r);
+        let validation=r.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let output=r.device.create_texture(&wgpu::TextureDescriptor {label:None,size:source.size(),mip_level_count:1,sample_count:1,
+            dimension:wgpu::TextureDimension::D2,format:source.format(),usage:wgpu::TextureUsages::COPY_DST|wgpu::TextureUsages::COPY_SRC,view_formats:&[]});
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        encoder.copy_texture_to_texture(source.as_image_copy(),output.as_image_copy(),source.size());accepted.track(&mut encoder);submit(&mut r,encoder);
+        let error=pollster::block_on(validation.pop());
+        assert!(error.is_none(),"a bound neighborhood must keep its selected source alive: {error:?}");
+        for (index,pixel) in crate::test_support::float_pixels(&r,&output).into_iter().enumerate() {
+            let [x,y]=[index as u32%PAGE_SIZE,index as u32/PAGE_SIZE];
+            let reference=if x>=17 && y>=31 {expected(x-17,y-31)}else {[0.;4]};
+            assert!(pixel.into_iter().zip(reference).all(|(actual,expected)|(actual-expected).abs()<2e-6));
+        }
+    }
+    #[test]
     fn arbitrary_base_neighborhood_keeps_outputs_when_source_slots_are_reserved_for_mips() {
         let extent=[2304;2];let mut artwork=Artwork::new(extent).unwrap();
         let (_,target)=crate::test_support::add_paint(&mut artwork,"Photo",extent);
@@ -356,13 +393,9 @@ mod tests {
         let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         r.ensure_document_metadata(extent,document.scene()).unwrap();
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let mip_bytes=r.source_tiles.borrow().mip_budget();assert!(r.source_tiles.borrow_mut().reserve_mips(mip_bytes,&encoder).unwrap());
         let offsets=std::array::from_fn::<_,9,_>(|i|Some([3*(i as i32%3),3*(i as i32/3)]));
-        crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.prepare_raw_neighborhood(target,[1,1],offsets,false,encoder));
-        let sources=r.source_tiles.borrow();let layer=r.paint_layers.iter().find(|l|l.id==target).unwrap();
-        let views=r.raw_layer_neighborhood(&sources,layer,[1,1],offsets,false);
-        assert!(views.iter().all(|view|**view!=r.empty_view));
-        let textures=views.map(|view|view.texture().clone());drop(sources);submit(&mut r,encoder);
+        let (accepted,views)=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,[1,1],offsets,encoder));
+        let textures=views.map(|view|view.expect("every neighbor has a source").texture().clone());accepted.track(&mut encoder);submit(&mut r,encoder);
         for (i,texture) in textures.into_iter().enumerate() {
             let pixels=crate::test_support::float_pixels(&r,&texture);
             let coordinate=[1+3*(i as u32%3),1+3*(i as u32/3)];

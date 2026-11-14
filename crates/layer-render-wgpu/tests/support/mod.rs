@@ -18,6 +18,8 @@ pub fn submit_settled(r: &mut WgpuRasterizer, frame: layer_render::FramePacket<'
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let idle = layer_render::FramePacket { dabs: &[], dab_batches: &[], restore_rasters: &[],
         reset_layers: false, composite_all: false, ..frame };
+    let (signal, woken) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = signal.send(()); }));
     let mut first = true;
     loop {
         r.poll_pending(frame.view).unwrap();
@@ -27,9 +29,12 @@ pub fn submit_settled(r: &mut WgpuRasterizer, frame: layer_render::FramePacket<'
             first = false;
         }
         r.wait_idle().unwrap();
-        if !first && !r.has_pending_work() && r.raster_ready() && !r.has_pending_submission() { return; }
-        assert!(std::time::Instant::now() < deadline, "renderer work must settle");
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(!remaining.is_zero(), "renderer work must settle");
+        if first { std::thread::sleep(std::time::Duration::from_millis(1)); continue; }
+        if r.next_frame() == layer_render::FrameDemand::Work { continue; }
+        if r.settled() { return; }
+        assert!(woken.recv_timeout(remaining).is_ok(), "an idle renderer waits on inputs whose completion never woke it");
     }
 }
 

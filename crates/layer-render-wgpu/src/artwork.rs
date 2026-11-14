@@ -28,14 +28,6 @@ impl Drop for PendingFrame {
     }
 }
 impl Frame {
-    pub fn paint_sources_changed(&self,scene:SceneView<'_>)->bool {
-        let previous=self.scene.view();
-        scene.targets().any(|target|match (scene.paint_base(target),previous.paint_base(target)) {
-            (Some(a),Some(b))=>a.offset!=b.offset || a.policy!=b.policy || !Arc::ptr_eq(a.image.storage(),b.image.storage()),
-            (None,None)=>false,
-            _=>true,
-        })
-    }
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
     pub fn same_evaluation(&self, packet: FramePacket<'_>) -> bool {
@@ -66,33 +58,27 @@ impl Frame {
         })
     }
 
-    pub fn same_preview(&self, packet: FramePacket<'_>) -> bool {
-        if self.previews.is_empty()
-            || self.previews.len() != packet.dab_batches.len()
-            || self.view != packet.view
-            || self.scope != packet.scene.scope().cloned().unwrap_or_default()
-        {
-            return false;
-        }
-        self.previews
+    pub fn same_preview_inputs(&self, packet: FramePacket<'_>) -> bool {
+        let batches=packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview);
+        self.previews.len()==batches.clone().count()
+            && self.previews
             .iter()
-            .zip(packet.dab_batches)
-            .all(|(old, batch)| {
-                let normalized = DabBatch {
-                    first_dab: old.first_dab,
-                    ..batch.clone()
-                };
-                *old == normalized
-                    && batch.kind == DabBatchKind::Preview
-                    && dry_material::dry_flow(&batch.style)
-                    && pointwise(&batch.style)
-                    && packet
-                        .dabs
-                        .get(batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize)
-                        == self
-                            .preview_dabs
-                            .get(old.first_dab as usize..(old.first_dab + old.dab_count) as usize)
+            .zip(batches)
+            .all(|(old,batch)| {
+                *old==DabBatch {first_dab:old.first_dab,..batch.clone()}
+                    && packet.dabs.get(batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize)
+                        == self.preview_dabs.get(old.first_dab as usize..(old.first_dab+old.dab_count) as usize)
             })
+    }
+
+    pub fn same_preview(&self, packet: FramePacket<'_>) -> bool {
+        !self.previews.is_empty()
+            && self.previews.len() == packet.dab_batches.len()
+            && self.view == packet.view
+            && self.scope == packet.scene.scope().cloned().unwrap_or_default()
+            && self.same_preview_inputs(packet)
+            && packet.dab_batches.iter().all(|batch|
+                dry_material::dry_flow(&batch.style) && pointwise(&batch.style))
             && self.same_evaluation(packet)
             && self
                 .scene
@@ -147,6 +133,7 @@ pub(super) struct Capture {
     window: Option<DocRect>,
     pub peak_image_bytes: u64,
     pub image_limit: Option<u64>,
+    retiring: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 impl Capture {
     pub fn layer_tile(&mut self, r: &mut WgpuRasterizer, id: SourceTarget, coordinate: [u32; 2],
@@ -157,7 +144,7 @@ impl Capture {
     }
     pub fn layer_tile_at(&mut self,r:&mut WgpuRasterizer,frame:&Frame,id:SourceTarget,coordinate:[u32;2],encoder:&mut crate::submission::CommandEncoder)->Result<source_access::RawTile,GpuRasterError> {
         if self.scene.is_none() {self.scene=Some(scene::Scene::new(r)?);}
-        self.scene.as_mut().unwrap().layer_tile_for_query(r,frame.scene.view(),id,coordinate,encoder)
+        self.scene.as_mut().unwrap().layer_tile_for_query(r,frame.packet(r.document_extent),id,coordinate,encoder)
     }
     pub fn thumbnail_tile(&mut self, r: &mut WgpuRasterizer, target: layer_render::ThumbnailTarget, coordinate: [u32;2], encoder: &mut submission::CommandEncoder) -> Result<source_access::RawTile, GpuRasterError> {
         let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
@@ -176,7 +163,6 @@ impl Capture {
     }
     pub fn storage_bytes(&self) -> u64 {
         self.target.as_ref().map_or(0, |(t, _)| texture_bytes(t))
-            + self.scene.as_deref().map_or(0, scene::Scene::scratch_bytes)
     }
     /// The caller consumes this target before requesting another region. Edges
     /// occupy its top-left prefix; no samples outside `region` are meaningful.
@@ -208,7 +194,7 @@ impl Capture {
         }
         let (texture, view) = self.target.clone().unwrap();
         self.region_into(r, packet, region, &texture, encoder)?;
-        Ok(source_access::RawTile { texture, view })
+        Ok(source_access::RawTile { texture: texture.into(), view })
     }
     /// Capture `region` into the top-left prefix of `destination`, a working
     /// format texture at least as large.
@@ -225,10 +211,11 @@ impl Capture {
         }
         r.ensure_exact_preview(encoder)?;
         let (window, bytes) = self.image_bytes(packet, region)?;
-        // Retire previous image windows before replacing their storage. Exact
-        // query scheduling/cancellation will move these drains off interaction.
+        let retiring = self.retiring.take();
         if self.retires_window(window) {
-            scene::Scene::submit_chunk(r, encoder, "artwork query window")?;
+            let wake = r.preparation_wake.clone();
+            let retired = match retiring { Some(retired) => retired, None => scene::Scene::submit_window(r, encoder, "artwork query window", wake)? };
+            if !retired.load(std::sync::atomic::Ordering::Acquire) { self.retiring = Some(retired); return Err(GpuRasterError::NotReady); }
             if let Some(scene) = &mut self.scene {
                 scene.release_capture_window(window);
             }
@@ -262,9 +249,9 @@ impl Capture {
     pub fn would_block(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect) -> bool {
         let window = scene::Scene::capture_window(packet.scene, region, packet.document_extent);
         scene::Scene::capture_image_bound(packet.scene, region) > 0
-            || self.retires_window(window)
+            || self.retires_window(window) && !self.retiring.as_ref().is_some_and(|retired| retired.load(std::sync::atomic::Ordering::Acquire))
             || page_coordinates(region).any(|tile| {
-                r.source_tiles.borrow().uploads_full() || source_tile_decodes(r, packet.scene, tile)
+                r.source_tiles.borrow().uploads_full(crate::residency::Class::Visible) || source_tile_decodes(r, packet.scene, tile)
             })
     }
 }
@@ -303,21 +290,35 @@ impl WgpuRasterizer {
             let dabs = &packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
             brush_tiles::plan(batch, dabs, self.target_extent(batch.target))
         }).collect::<Vec<_>>();
-        self.preview_level = 0;
-        self.preview_contribution = false;
-        self.preview_requires_base = true;
-        self.preview_pages.clear();
-        self.ensure_preview_pages(self.preview_damage, self.preview_contact_tiles.clone().as_ref());
-        self.prepare_uploads(packet, &mut tiles, encoder)?;
-        for (index, batch) in packet.dab_batches.iter().enumerate() {
-            self.encode_brush_batch(encoder, index, batch, BrushEncodingContext {
-                batches: packet.dab_batches, dabs: packet.dabs, tiles: &tiles[index],
-                    target_extent: self.target_extent(batch.target),
-                target: BrushEncodingTarget::Preview { from_persistent: true },
-            })?;
+        let quality=scene::PreviewQuality {level:self.preview_level,contribution:self.preview_contribution,requires_base:self.preview_requires_base};
+        let declaration=self.preview_declaration.clone();
+        let previous=self.brush_inputs.take();
+        let result=(|| {
+            self.preview_level=0;self.preview_contribution=false;self.preview_requires_base=true;
+            if !self.prepare_raster_outputs(packet,&tiles) {return Err(GpuRasterError::NotReady);}
+            if let Some(error)=self.take_restore_failure() {return Err(error);}
+            self.prepare_preview_outputs(0)?;
+            self.brush_inputs=Some(self.prepare_brush_inputs(self.preview_layer_id,None)?);
+            self.brush_inputs.as_ref().unwrap().clone().track(encoder);
+            self.prepare_uploads(packet, &mut tiles, encoder)?;
+            let plans=self.preview_material_plans(packet,&tiles,true)?;
+            self.prepare_preview_declaration(packet,scene::PreviewQuality {level:0,contribution:false,requires_base:true},
+                &plans,true,None,&encoder.submission())?;
+            for (index, batch) in packet.dab_batches.iter().enumerate() {
+                self.encode_brush_batch(encoder, index, batch, BrushEncodingContext {source:packet.scene,
+                    batches: packet.dab_batches, dabs: packet.dabs, tiles: &tiles[index],
+                        target_extent: self.target_extent(batch.target),
+                    target: BrushEncodingTarget::Preview { from_persistent: true },
+                })?;
+            }
+            Ok::<_,GpuRasterError>(())
+        })();
+        self.brush_inputs=previous;
+        if result.is_err() {
+            self.preview_level=quality.level;self.preview_contribution=quality.contribution;self.preview_requires_base=quality.requires_base;
+            self.preview_declaration=declaration;
         }
-        self.refresh_storage_metrics();
-        Ok(())
+        result
     }
 }
 

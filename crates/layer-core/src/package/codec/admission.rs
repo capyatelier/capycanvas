@@ -264,7 +264,7 @@ fn image_identity_cannot_alias_a_tile_in_portable_or_private_transfer() {
     let artwork=editable(bytes.to_vec());
     let transfer=crate::package::transfer::PreparedTransfer::capture(&capture(&artwork),&AtomicBool::new(false)).unwrap();
     let mut descriptor=transfer.descriptor().clone();collide_image_and_tile(&mut descriptor.manifest);
-    assert!(crate::package::transfer::TransferReceiver::new(descriptor,Default::default()).is_err());
+    assert!(pollster::block_on(crate::package::transfer::TransferReceiver::new(descriptor,Default::default())).is_err());
 }
 
 #[test]

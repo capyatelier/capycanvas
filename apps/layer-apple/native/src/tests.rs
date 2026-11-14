@@ -1442,7 +1442,7 @@ impl App {
                 && (if active_operation { session.document_idle_reason() != Some(layer_ui::DocumentIdleReason::CanvasInteraction) }
                     else { session.require_document_idle().is_ok() })
                 && !engine.has_pending_document_edits()
-                && !layer_render::CanvasRenderer::has_pending_work(engine.backend())
+                && engine.backend().0.as_ref().is_none_or(|gpu| gpu.settled())
             {
                 return;
             }

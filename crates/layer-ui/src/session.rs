@@ -5,7 +5,7 @@ use layer_core::{DefaultBrushPreset, Document, LayerKind, StrokeTool};
 #[cfg(test)]
 use layer_core::default_brush;
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, input_queue};
-use layer_render::CanvasRenderer;
+use layer_render::{CanvasRenderer, FrameDemand};
 use layer_core::authored::{OccurrenceHandle, OccurrenceContent, SourceTarget};
 
 pub fn occurrence_token(handle: OccurrenceHandle) -> u64 { u64::from(handle.index()) + 1 }
@@ -294,6 +294,8 @@ pub struct UiSession<R: CanvasRenderer> {
     pen_contact: bool,
     discarded_contacts: Vec<u64>,
     rendering_suspended: bool,
+    window_hidden: bool,
+    frame_clock: Option<(u64, web_time::Instant)>,
     storage_activity:layer_core::package::session_store::CompactionActivity,
     drawing_switch_pending: bool,
     launch_finished: bool,
@@ -580,6 +582,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             finger: finger_input::FingerInput::new(platform),
             discarded_contacts: Vec::new(),
             rendering_suspended: false,
+            window_hidden: false,
+            frame_clock: None,
             storage_activity:Default::default(),
             drawing_switch_pending: false,
             launch_finished: false,
@@ -5161,16 +5165,27 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn input_ui_pending(&self)->bool {self.pressure_meter_changed || self.tilt_meter_changed}
 
-    /// Includes shared background work as well as the drawing engine's needs.
-    pub fn wants_continuous_frames(&self) -> bool {
-        self.ui_work_pending() || self.engine.wants_continuous_frames()
+    pub fn frame_demand(&self) -> FrameDemand {
+        if self.window_hidden { return FrameDemand::Wait; }
+        self.ui_demand().sooner(self.engine.frame_demand())
     }
+    pub(crate) fn ui_demand(&self) -> FrameDemand {
+        let animate = self.canvas_transition.running() || self.edge_catching_up() || self.interaction.axes.active() || self.paper_preview.active();
+        let timers = [self.touch_repeat_pending().then(|| self.interaction.gestures.repeat_deadline()),
+            self.layer_interaction.touches.pending().then(|| self.layer_interaction.touches.hold_deadline())];
+        if animate { FrameDemand::Animate }
+        else if self.ui_work_pending() { FrameDemand::Work }
+        else { timers.into_iter().flatten().fold(FrameDemand::Wait, |demand, deadline| demand.sooner(self.deadline(deadline))) }
+    }
+    fn deadline(&self, deadline_ns: Option<u64>) -> FrameDemand {
+        match (deadline_ns, self.frame_clock) {
+            (Some(deadline), Some((now, instant))) => FrameDemand::WaitUntil(instant + std::time::Duration::from_nanos(deadline.saturating_sub(now))),
+            _ => FrameDemand::Work,
+        }
+    }
+    pub fn set_window_hidden(&mut self, hidden: bool) { self.window_hidden = hidden; }
     fn ui_work_pending(&self) -> bool {
-        self.canvas_transition.running() || self.input_ui_pending() || self.edge_catching_up() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
-            || self.interaction.axes.active()
-            || self.touch_repeat_pending()
-            || self.layer_interaction.touches.pending()
-            || self.paper_preview.active()
+        self.input_ui_pending() || self.effect_analyses.busy() || (self.histogram.demand && !self.histogram.settled) || (self.tonal_histogram.demand && !self.tonal_histogram.settled)
             || (!self.rendering_suspended && self.papers.pending.as_ref().is_some_and(|pending| pending.image.is_some()))
             || self.vector_lines.active()
             || self.pending_filters.is_some()
@@ -5187,6 +5202,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.notices.publishing()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
+        self.frame_clock = Some((now_ns, web_time::Instant::now()));
         let commands_pending = std::mem::replace(&mut self.frame_commands_pending, true);
         let pending_edits = self.engine.has_pending_document_edits();
         let command_activity = (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());
@@ -5325,7 +5341,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut change = merge_change(settled, self.changed(
             changed,
             analyses_changed != 0 || tonal_changed || self.engine.document().working.generation != working_generation
-                || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
+                || matches!(self.frame_demand(), FrameDemand::Animate | FrameDemand::Work),
         ));
         change.presentation_wake |= transition_changed;
         Ok(change)
@@ -9335,7 +9351,7 @@ mod tests {
         }
         send(&mut s, PenPhase::Down);
         send(&mut s, PenPhase::Up);
-        assert!(s.wants_continuous_frames());
+        assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
         s.frame(1, 1).unwrap();
         let request = s.renderer_mut().region_requests[0].clone();
         assert_eq!(request.position, [48, 72]);
@@ -10740,20 +10756,20 @@ mod tests {
         }}).unwrap();
         s.frame(1, 1).unwrap();
         assert!(!s.engine.document().has_animated_effects());
-        assert!(s.engine.wants_continuous_frames());
+        assert!(s.engine.frame_demand() != layer_render::FrameDemand::Wait);
         s.frame(2, 2).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
         s.dispatch(UiAction::Effect { action: EffectAction::Set {
             layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(true),
         }}).unwrap();
         s.frame(3, 3).unwrap();
-        assert!(s.engine.document().has_animated_effects() && s.engine.wants_continuous_frames());
+        assert!(s.engine.document().has_animated_effects() && s.engine.frame_demand() != layer_render::FrameDemand::Wait);
         assert!(s.filter_previews_idle());
         assert_eq!(s.engine.backend().shader_idle, (true, false));
         s.dispatch(UiAction::SetLayerVisibility { id: layer, visible: false }).unwrap();
         s.frame(4, 4).unwrap();
         assert!(!s.engine.document().has_animated_effects());
-        assert!(s.engine.wants_continuous_frames());
+        assert!(s.engine.frame_demand() != layer_render::FrameDemand::Wait);
         s.frame(5, 5).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
         s.dispatch(UiAction::SetLayerVisibility { id: layer, visible: true }).unwrap();
@@ -10763,12 +10779,12 @@ mod tests {
             layer, key: "animate".into(), value: layer_core::EffectValue::Toggle(false),
         }}).unwrap();
         s.frame(7, 7).unwrap();
-        assert!(s.engine.wants_continuous_frames());
+        assert!(s.engine.frame_demand() != layer_render::FrameDemand::Wait);
         s.frame(8, 8).unwrap();
         assert_eq!(s.engine.backend().shader_idle, (true, true));
         s.renderer_mut().refining = true;
         s.frame(9, 9).unwrap();
-        assert!(s.filter_previews_idle() && s.engine.wants_continuous_frames());
+        assert!(s.filter_previews_idle() && s.engine.frame_demand() != layer_render::FrameDemand::Wait);
         assert!(s.background_readback_idle());
         assert_eq!(s.engine.backend().shader_idle, (true, false));
         s.renderer_mut().refining = false;

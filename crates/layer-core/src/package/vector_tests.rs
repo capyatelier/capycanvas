@@ -918,7 +918,7 @@ fn future_slots_open_editable_or_from_their_fallback_and_save_back_byte_for_byte
 
     let transfer = super::transfer::PreparedTransfer::capture(&editor.capture(1, Default::default()).unwrap(), &cancel).unwrap();
     let descriptor = serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
-    let mut receiver = super::transfer::TransferReceiver::new(descriptor, crate::ProjectLimits::default()).unwrap();
+    let mut receiver = pollster::block_on(super::transfer::TransferReceiver::new(descriptor, crate::ProjectLimits::default())).unwrap();
     for index in receiver.missing_payloads() {
         let length = transfer.payload_len(index).unwrap();
         let mut offset = 0;

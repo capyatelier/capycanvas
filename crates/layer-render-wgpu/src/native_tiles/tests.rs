@@ -21,7 +21,13 @@ fn encoder_bindings_follow_tile_count_and_optional_tracking() {
                 assert_eq!(flags,if tracked {count} else {0});
                 let mut bindings:Vec<_>=entries.iter().map(|entry|entry.binding).collect();bindings.sort();
                 let shared=count as u32*if in_place {2} else {3};
-                assert_eq!(bindings,(0..shared+2+flags as u32).collect::<Vec<_>>());
+                let canonical=shared+2+flags as u32;
+                assert_eq!(bindings,(0..=canonical).collect::<Vec<_>>());
+                let comparison=entries.iter().find(|entry|entry.binding==canonical).unwrap();
+                assert_eq!(comparison.ty,wgpu::BindingType::Buffer {ty:wgpu::BufferBindingType::Storage {read_only:false},
+                    has_dynamic_offset:false,min_binding_size:std::num::NonZeroU64::new(count as u64*comparison::STRIDE)});
+                assert!(module.global_variables.iter().any(|(_,variable)|variable.name.as_deref()==Some("canonical_changes")
+                    && variable.binding==Some(naga::ResourceBinding {group:0,binding:canonical})));
             }
         }
     }}

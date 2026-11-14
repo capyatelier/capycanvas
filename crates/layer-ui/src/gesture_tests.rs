@@ -145,7 +145,7 @@ fn held_fingers_repeat_history_and_release_never_adds_a_tap() {
         let count = s.state.layers.len();
         finger(&mut s, 10, ContactPhase::Down, [300., 400.], 0);
         let down = finger(&mut s, 11, ContactPhase::Down, [400., 400.], 10);
-        assert!(down.change.canvas_wake && s.wants_continuous_frames());
+        assert!(down.change.canvas_wake && s.frame_demand() != layer_render::FrameDemand::Wait);
         for time in [1_020_000_000, 1_519_999_999] { s.frame(time, time).unwrap(); }
         assert_eq!(s.state.layers.len(), count);
         for id in [10, 11] {
@@ -801,9 +801,9 @@ fn stick_axes_navigate_with_dead_zones_and_stop_on_blur() {
     };
     let camera = s.state.camera.clone();
     assert!(!axes(&mut s, [0.1, -0.1], 0.12).change.canvas_wake, "drift inside the dead zone");
-    assert!(!s.wants_continuous_frames());
+    assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     assert!(axes(&mut s, [1., 0.], 0.).change.canvas_wake);
-    assert!(s.wants_continuous_frames());
+    assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
     s.frame(1_000_000_000, 1_000_000_000).unwrap();
     let change = s.frame(1_016_000_000, 1_016_000_000).unwrap();
     assert!(change.regions & regions::CAMERA != 0 && change.canvas_wake);
@@ -818,7 +818,7 @@ fn stick_axes_navigate_with_dead_zones_and_stop_on_blur() {
     s.frame(2_100_000_000, 2_100_000_000).unwrap();
     assert!(s.state.camera.zoom > moved.zoom, "positive zoom deflection zooms in");
     s.input(UiInput::Blur).unwrap();
-    assert!(!s.wants_continuous_frames());
+    assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     let stopped = s.state.camera.clone();
     s.frame(2_200_000_000, 2_200_000_000).unwrap();
     assert_eq!(s.state.camera, stopped);
@@ -1082,4 +1082,20 @@ fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
     let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
     assert_eq!(s.state.layers.iter().find(|l| l.id == id).unwrap().right_swipe, Some(LayerAction::TogglePassThrough { id }));
     assert!(s.dispatch(UiAction::Layer { action: LayerAction::ToggleAlphaLock { id } }).is_err());
+}
+
+#[test]
+fn held_fingers_wait_for_their_repeat_deadline_and_a_hidden_window_waits() {
+    let mut s = session(Platform::Android);
+    finger(&mut s, 10, ContactPhase::Down, [300., 400.], 0);
+    finger(&mut s, 11, ContactPhase::Down, [400., 400.], 10);
+    s.frame(1_020_000_000, 1_020_000_000).unwrap();
+    let demand = s.frame_demand();
+    let layer_render::FrameDemand::WaitUntil(deadline) = demand else { panic!("held fingers must wait for their repeat, not poll: {demand:?}") };
+    let remaining = deadline.saturating_duration_since(web_time::Instant::now());
+    assert!(remaining > std::time::Duration::from_millis(400) && remaining <= std::time::Duration::from_millis(500), "{remaining:?}");
+    s.set_window_hidden(true);
+    assert_eq!(s.frame_demand(), layer_render::FrameDemand::Wait);
+    s.set_window_hidden(false);
+    assert_eq!(s.frame_demand(), demand);
 }

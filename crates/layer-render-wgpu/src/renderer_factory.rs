@@ -18,6 +18,8 @@ struct Factory {
     memory_update_pending: std::sync::atomic::AtomicBool,
     #[cfg(not(target_arch = "wasm32"))]
     memory: Mutex<std::sync::Weak<crate::memory_sample::MemorySampler>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    allocator_memory: layer_core::MemoryOwner,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     _memory_fixture: Option<Arc<crate::memory_sample::MemorySampler>>,
 }
@@ -36,6 +38,7 @@ pub(crate) fn fixture_factory(hardware: &RendererFactory, budget: layer_core::Me
         #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
         #[cfg(target_arch = "wasm32")] memory_update_pending: Default::default(),
         #[cfg(not(target_arch = "wasm32"))] memory: Mutex::new(Arc::downgrade(&memory)),
+        #[cfg(not(target_arch = "wasm32"))] allocator_memory: budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device)),
         #[cfg(not(target_arch = "wasm32"))] _memory_fixture: Some(memory),
     }));
     factory
@@ -56,6 +59,8 @@ impl RendererFactory {
         Self::with_device(adapter, &PipelineDevice::from(device).with_saved_pipelines(saved), queue)
     }
     pub(super) fn with_device(adapter: wgpu::Adapter, device: &PipelineDevice, queue: wgpu::Queue) -> Self {
+        #[cfg(not(target_arch="wasm32"))]
+        device.bind_queue(&queue);
         let budget = layer_core::MemoryBudget::process();
         #[cfg(not(target_arch = "wasm32"))]
         let facts = crate::display_memory::facts(device, crate::display_memory::usage(device));
@@ -64,10 +69,13 @@ impl RendererFactory {
         let memory_device = budget.register_device(facts);
         let mut shared = pipeline_device::DeviceRecipes::from(device);
         shared.transient_memory = Some(budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device)));
+        #[cfg(not(target_arch = "wasm32"))]
+        let allocator_memory = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device));
         let factory = Self(Arc::new(Factory { adapter_summary: Arc::new(adapter_summary(&adapter.get_info())), adapter, device: (**device).clone(), queue, choices: Default::default(), shared, budget, memory_device,
             #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
             #[cfg(target_arch = "wasm32")] memory_update_pending: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] memory: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))] allocator_memory,
             #[cfg(all(test, not(target_arch = "wasm32")))] _memory_fixture: None }));
         factory
     }
@@ -75,15 +83,22 @@ impl RendererFactory {
         PipelineDevice::from(self.device().clone()).with_device_recipes(&self.0.shared)
             .with_working_space(color.space).with_depth(color.depth)
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn retire_device_services(self) -> std::io::Result<()> {
+        crate::compile::retire_device_services(self.0.shared.poll_binding(), self)
+    }
     pub fn adapter(&self) -> &wgpu::Adapter { &self.0.adapter }
     pub(super) fn adapter_summary(&self) -> Arc<layer_render::GpuAdapter> { self.0.adapter_summary.clone() }
     pub fn device(&self) -> &wgpu::Device { &self.0.device }
     pub fn queue(&self) -> &wgpu::Queue { &self.0.queue }
+    pub fn submit(&self,commands:impl IntoIterator<Item=wgpu::CommandBuffer>)->Option<wgpu::SubmissionIndex> {
+        self.pipeline_device(Default::default()).submit(self.queue(),commands)
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn memory_samples(&self) -> Arc<crate::memory_sample::MemorySampler> {
         let mut cached=self.0.memory.lock().unwrap();
         if let Some(memory)=cached.upgrade() { return memory; }
-        let memory=Arc::new(crate::memory_sample::MemorySampler::new(self.device().clone(),self.0.budget.clone(),self.0.memory_device));
+        let memory=Arc::new(crate::memory_sample::MemorySampler::new(self.device().clone(),self.0.budget.clone(),self.0.memory_device,self.0.allocator_memory.clone()));
         *cached=Arc::downgrade(&memory);
         memory
     }

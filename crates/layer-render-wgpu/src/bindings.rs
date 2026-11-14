@@ -81,5 +81,6 @@ pub(super) fn group<'a>(
     resources: impl IntoIterator<Item = wgpu::BindingResource<'a>>,
 ) -> wgpu::BindGroup {
     let entries: Vec<_> = (0..).zip(resources).map(|(binding, resource)| wgpu::BindGroupEntry { binding, resource }).collect();
+    #[cfg(test)] crate::scene::sources::gpu_object_created();
     device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(label), layout, entries: &entries })
 }

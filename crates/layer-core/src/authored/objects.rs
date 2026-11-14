@@ -9,6 +9,7 @@ impl Image {
     pub fn new(samples:Arc<crate::color::source::SourceImage>)->Self {Self(super::Resource::new(samples))}
     pub fn with_id(id:super::PortableId,samples:Arc<crate::color::source::SourceImage>)->Self {Self(super::Resource::with_id(id,samples))}
     pub fn id(&self)->super::PortableId {self.0.id()}
+    pub fn content_version(&self)->crate::raster::ContentVersion { self.0.content_name().into() }
     pub fn storage(&self)->&Arc<crate::color::source::SourceImage> {self.0.storage()}
     pub fn same_owner(&self,other:&Self)->bool {self.0.same_owner(&other.0)}
     pub(crate) fn owner_identity(&self)->usize {self.0.owner_identity()}
@@ -90,14 +91,14 @@ impl ImageResourceOwners {
     }
     fn raster(&mut self,root:&crate::raster::RasterRevision)->Result<crate::raster::RasterRevision,String> {
         let Some(data)=root.try_data() else {return Ok(root.clone());};
-        let mut data=(*data?).clone();let mut changed=false;
-        for tile in data.tiles.values_mut() {
+        let mut data=(*data?).clone();let mut replacements=Vec::new();
+        for (&key,tile) in &data.tiles {
             if let Some(backing)=tile.try_backing() {
                 let backing=backing?;let canonical=self.tile(&backing)?;
-                if !Arc::ptr_eq(&backing,&canonical) {*tile=crate::raster::RasterTile::backed_shared(canonical);changed=true;}
+                if !Arc::ptr_eq(&backing,&canonical) {replacements.push((key,crate::raster::RasterTile::backed_shared(canonical)));}
             }
         }
-        Ok(if changed {crate::raster::RasterRevision::backed(data)}else {root.clone()})
+        Ok(if replacements.is_empty() {root.clone()}else {data.tiles.extend(replacements);crate::raster::RasterRevision::backed(data)})
     }
     fn artwork(reference:&crate::Artwork)->Result<Self,String> {
         let mut inventory=crate::RootInventory::default();inventory.artwork(reference);

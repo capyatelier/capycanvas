@@ -14,10 +14,10 @@ pub(super) struct SelectionClip {
     geometry: Option<Arc<layer_core::Selection>>,
     region: Option<PixelRect>,
     extent: Option<[u32; 2]>,
-    pub bytes: u64,
+    charge: crate::residency::Charge,
     pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer, u64)>,
     pixel_clock: u64,
-    pixels_bytes: u64,
+    pixels_charge: crate::residency::Charge,
 }
 pub(super) struct Pipelines {
     pub(super) crossings: Deferred<wgpu::ComputePipeline>,
@@ -31,9 +31,9 @@ impl std::ops::Deref for SelectionClip {
     fn deref(&self) -> &Self::Target { &self.pipelines }
 }
 impl SelectionClip {
-    pub fn from_pipelines(pipelines: Arc<Pipelines>) -> Self {
-        Self { pipelines, buffer: None, binding: None, geometry: None, region: None, extent: None, bytes: 0,
-            pixels: BTreeMap::new(), pixels_bytes: 0, pixel_clock: 0 }
+    pub fn from_pipelines(pipelines: Arc<Pipelines>, tier: &Arc<crate::residency::Tier>) -> Self {
+        Self { pipelines, buffer: None, binding: None, geometry: None, region: None, extent: None, charge: tier.charge(0),
+            pixels: BTreeMap::new(), pixels_charge: tier.charge(0), pixel_clock: 0 }
     }
 }
 impl Pipelines {
@@ -75,28 +75,30 @@ impl SelectionClip {
         self.geometry = None;
         self.region = None;
         self.extent = None;
-        self.bytes = 0;
+        self.charge.resize(0);
         self.prune_pixels();
     }
+    #[cfg(test)]
     pub fn storage_bytes(&self) -> u64 {
-        self.bytes + self.pixels_bytes
+        self.charge.bytes() + self.pixels_charge.bytes()
     }
     fn prune_pixels(&mut self) {
         self.pixels
             .retain(|_, (owner, _, _)| owner.strong_count() != 0);
-        self.pixels_bytes = self.pixels.values().map(|(_, b, _)| b.size()).sum();
+        let mut bytes = self.pixels.values().map(|(_, b, _)| b.size()).sum::<u64>();
         // Undo owns CPU coverage; keeping every history entry on the GPU can
         // retain gigabytes at photographic sizes. Recent masks avoid uploads,
         // while evicted masks are restored losslessly on demand.
-        while self.pixels_bytes > 128 * 1024 * 1024 && self.pixels.len() > 1 {
+        while bytes > 128 * 1024 * 1024 && self.pixels.len() > 1 {
             let key = *self
                 .pixels
                 .iter()
                 .min_by_key(|(_, (_, _, used))| used)
                 .unwrap()
                 .0;
-            self.pixels_bytes -= self.pixels.remove(&key).unwrap().1.size();
+            bytes -= self.pixels.remove(&key).unwrap().1.size();
         }
+        self.pixels_charge.resize(bytes);
     }
 
     /// Share recent GPU coverage with consumers. Older undo masks and renderer
@@ -241,7 +243,7 @@ impl SelectionClip {
         {
             return Err(GpuRasterError::SizeOverflow);
         }
-        if bytes > self.bytes || self.buffer.is_none() || (region.is_some() && bytes != self.bytes)
+        if bytes > self.charge.bytes() || self.buffer.is_none() || (region.is_some() && bytes != self.charge.bytes())
         {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("packed brush selection"),
@@ -253,7 +255,7 @@ impl SelectionClip {
             });
             self.binding = None;
             self.buffer = Some(buffer);
-            self.bytes = bytes;
+            self.charge.resize(bytes);
         }
         let offset = match geometry.shape {
             layer_core::SelectionShape::Pixels(_) if translation => layer_core::Point {

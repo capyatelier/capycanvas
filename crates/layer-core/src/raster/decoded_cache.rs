@@ -90,12 +90,7 @@ impl DecodedTileCache {
         if let Some(samples)=self.cached(tile)? {return Ok(samples);}
         self.retain(tile,Arc::new(tile.decode_bytes_on_worker(compressed)?))
     }
-    pub fn poll_decode_on_worker(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {
-        if let Some(samples)=self.cached(tile)? {return Ok(Some(samples));}
-        let crate::package::RangeState::Ready(bytes)=tile.compressed.poll()? else {return Ok(None);};
-        self.retain(tile,Arc::new(tile.decode_bytes_on_worker(&bytes)?)).map(Some)
-    }
-    fn cached(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {
+    pub fn cached(&self,tile:&Arc<TileBlob>)->Result<Option<Arc<Vec<u8>>>,String> {
         let mut state=self.state.lock().map_err(|_|"Source sample cache failed")?;
         state.clock=state.clock.saturating_add(1);let used=state.clock;
         if let Some(entry)=state.entries.get_mut(&tile.owner_identity()) {

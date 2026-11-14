@@ -29,6 +29,15 @@ pub(super) struct BrushTile {
     pub indices: Vec<u32>,
 }
 
+pub(super) fn destinations<'a>(tiles: &'a [BrushTile], damage: PixelRect, rectangular: bool, first_dab: u32) -> std::borrow::Cow<'a, [BrushTile]> {
+    if !rectangular { return std::borrow::Cow::Borrowed(tiles); }
+    std::borrow::Cow::Owned(page_coordinates(damage).map(|coordinate| BrushTile {
+        coordinate, local: PixelRect::full([PAGE_SIZE; 2]),
+        dabs: tiles.iter().find(|tile| tile.coordinate == coordinate)
+            .map_or(first_dab..first_dab, |tile| tile.dabs.clone()), indices: Vec::new(),
+    }).collect())
+}
+
 pub(super) fn preview_end_bounds(batch: &DabBatch, dabs: &[Dab]) -> Option<layer_core::Rect> {
     if batch.kind != DabBatchKind::Preview || !dry_material::dry_flow(&batch.style) {
         return None;

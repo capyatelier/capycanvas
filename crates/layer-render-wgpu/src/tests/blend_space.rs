@@ -144,12 +144,12 @@ const BACKGROUND: [f32; 4] = [0.95, 0.9, 0.8, 1.];
 fn settle(r: &mut WgpuRasterizer, packet: FramePacket<'_>) {
     crate::test_support::submit_ready(r, packet).unwrap();
     for _ in 0..32 {
-        if !layer_render::CanvasRenderer::has_pending_work(r) {
+        if layer_render::CanvasRenderer::next_frame(r)!=layer_render::FrameDemand::Work {
             break;
         }
         crate::test_support::submit_ready(r, FramePacket { reset_layers: false, composite_all: false, dabs: &[], dab_batches: &[], ..packet }).unwrap();
     }
-    assert!(!layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
+    assert!(layer_render::CanvasRenderer::next_frame(r)!=layer_render::FrameDemand::Work, "the composite settles");
 }
 
 fn composite(r: &WgpuRasterizer) -> Vec<u8> {

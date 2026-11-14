@@ -72,13 +72,10 @@ impl Plan {
         let size = [bounds.width(), bounds.height()].map(|v| v.div_ceil(1 << level));
         Self { extent, bounds, doc_bounds: bounds.into(), support: PixelRect::full(extent).into(), size, level }
     }
+    #[cfg(test)]
     pub fn level_size(self, level: u32) -> [u32; 2] {
         [self.bounds.width(), self.bounds.height()].map(|v| v.div_ceil(1 << level))
     }
-    pub fn level_bytes(self, level: u32) -> u64 {
-        self.level_size(level).map(u64::from).into_iter().product::<u64>() * 16
-    }
-
     pub fn pixel_bytes_through(self, last: u32) -> u64 {
         let scratch = (0..=self.level)
             .map(|level| u64::from(PAGE_SIZE >> level).pow(2) * 16)
@@ -384,10 +381,11 @@ impl Image {
     pub fn copy_to_scratch(
         &self,
         encoder: &mut crate::submission::CommandEncoder,
-        source: &wgpu::Texture,
+        source: impl Into<crate::source_access::TileTexture>,
         region: PixelRect,
         destination: [u32; 2],
     ) -> Result<(), GpuRasterError> {
+        let source = &source.into();
         if source.format() != wgpu::TextureFormat::Rgba32Float
             || region.max_x() > source.width() || region.max_y() > source.height()
             || destination[0] + region.width() > PAGE_SIZE || destination[1] + region.height() > PAGE_SIZE
@@ -395,10 +393,7 @@ impl Image {
             return Err(GpuRasterError::InvalidExtent);
         }
         encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                origin: wgpu::Origin3d { x: region.min_x(), y: region.min_y(), z: 0 },
-                ..source.as_image_copy()
-            },
+            source.copy_at([region.min_x(), region.min_y()]),
             wgpu::TexelCopyTextureInfo {
                 origin: wgpu::Origin3d { x: destination[0], y: destination[1], z: 0 },
                 ..self.scratch.as_image_copy()

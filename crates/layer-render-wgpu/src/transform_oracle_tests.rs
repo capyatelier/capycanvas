@@ -272,10 +272,13 @@ fn frame(r: &mut WgpuRasterizer, layer: &Document, reset: bool) {
 }
 
 /// Every Float32 texel of the layer's pages, by layer pixel.
-fn pages(r: &WgpuRasterizer) -> Vec<([u32; 2], [f32; 4])> {
+fn pages(r: &WgpuRasterizer, scene: SceneView<'_>, desired: &layer_render::TransformPreview) -> Vec<([u32; 2], [f32; 4])> {
+    let transforms = r.transforms.as_ref().unwrap();
+    let capture = transforms.declared_capture(r, scene, desired).unwrap();
     let mut texels = Vec::new();
-    for page in &r.paint_layers[0].pages {
-        let bytes = page_bytes(r, &page.active().texture);
+    for page in &r.paint_layers.iter().find(|layer| layer.id == desired.target).unwrap().pages {
+        let expected = transforms.requested_version_for_capture(r, &capture, layer_core::raster::RasterPlane::Color, page.coordinate).unwrap();
+        let bytes = page_bytes(r, &page.active().read(expected, None).unwrap().value().texture);
         let origin = page.coordinate.map(|v| v * PAGE_SIZE);
         for (i, texel) in bytes.as_chunks::<16>().0.iter().enumerate() {
             let [x, y] = [
@@ -352,7 +355,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                 r.set_transform_preview(Some(&preview)).unwrap();
                 frame(&mut r, &layer, false);
                 let h = map.projective().unwrap().0.map(f64::from);
-                let texels = pages(&r);
+                let texels = pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap());
                 assert!(!texels.is_empty(), "the preview draws pages");
                 check_pages(&oracle, h, interpolation, false, texels, format_args!("mode {mode} {interpolation:?} {map:?}"));
                 r.set_transform_preview(None).unwrap();
@@ -396,7 +399,7 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
                 .unwrap();
                 frame(&mut r, &layer, false);
                 let h = Projective::from_affine(affine).0.map(f64::from);
-                check_pages(&oracle, h, interpolation, true, pages(&r), format_args!("mode {mode} {interpolation:?} {affine:?}"));
+                check_pages(&oracle, h, interpolation, true, pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap()), format_args!("mode {mode} {interpolation:?} {affine:?}"));
                 r.set_transform_preview(None).unwrap();
                 frame(&mut r, &layer, false);
             }
@@ -442,7 +445,7 @@ fn minified_native_transforms_average_the_pixel_footprint() {
             }))
             .unwrap();
             frame(&mut r, &layer, false);
-            let values: Vec<f32> = pages(&r)
+            let values: Vec<f32> = pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap())
                 .into_iter()
                 .filter(|([x, y], _)| (8..60).contains(x) && (12..44).contains(y))
                 .map(|(_, v)| v[0])
@@ -716,7 +719,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                 }))
                 .unwrap();
                 frame(&mut r, &layer, false);
-                let texels = pages(&r);
+                let texels = pages(&r, layer.scene(), r.transform_preview.as_ref().unwrap());
                 assert!(!texels.is_empty());
                 let mut mismatches = Vec::new();
                 for ([x, y], actual) in &texels {
@@ -874,9 +877,14 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..LayerPlacement::from_affine(EIGHTH) },
         ..Default::default()
     };
-    let reduced = |r: &WgpuRasterizer| {
+    let reduced = |r: &WgpuRasterizer, scene: SceneView<'_>, desired: Option<&layer_render::TransformPreview>| {
         let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap();
-        let bytes = page_bytes(r, &page.active().texture);
+        let expected = if let Some(desired) = desired {
+            let transforms = r.transforms.as_ref().unwrap();
+            let capture = transforms.declared_capture(r, scene, desired).unwrap();
+            transforms.requested_version_for_capture(r, &capture, layer_core::raster::RasterPlane::Color, page.coordinate).unwrap()
+        } else { r.raster_version_for(scene, target(&layer), layer_core::raster::RasterPlane::Color, page.coordinate).unwrap() };
+        let bytes = page_bytes(r, &page.active().read(expected, None).unwrap().value().texture);
         (0..size * size)
             .map(|i| {
                 let offset = (((i / size) * PAGE_SIZE + i % size) * 16) as usize;
@@ -893,7 +901,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     }))
     .unwrap();
     submit(&mut r, &layer, &[], false);
-    let preview = largest_difference(reduced(&r).into_iter(), &expected);
+    let preview = largest_difference(reduced(&r, layer.scene(), r.transform_preview.as_ref()).into_iter(), &expected);
     r.set_transform_preview(None).unwrap();
     submit(&mut r, &layer, &[], false);
     let mut coverage = reveal_all(extent, [0, 0]);
@@ -908,7 +916,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let mut committed = layer.clone();
     Arc::make_mut(&mut paint_mut(&mut committed).operations).push(operation);
     submit(&mut r, &committed, &[batch], false);
-    let commit = largest_difference(reduced(&r).into_iter(), &expected);
+    let commit = largest_difference(reduced(&r, committed.scene(), None).into_iter(), &expected);
     assert!(preview > 0.1, "a moving preview averages at most four taps and aliases: {preview}");
     assert!(commit < 1e-3, "the commit averages the whole footprint: {commit} from the area reduction");
 

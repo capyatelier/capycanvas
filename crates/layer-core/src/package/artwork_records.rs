@@ -75,7 +75,7 @@ fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:Documen
     data.insert("domain".into(),v::encode_domain(domain)?); Ok(data)
 }
 fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:DocumentColor,mode:crate::color::LayerColorMode,reader:&mut ResourceReader<'_>)->DecodeResult<RasterRevision> {
-    let mut raster=RasterData {tiles:BTreeMap::new(),watercolor:data.get("material").map(material).transpose()?.flatten()};
+    let mut raster=RasterData {tiles:Default::default(),watercolor:data.get("material").map(material).transpose()?.flatten()};
     if let Some(tiles)=data.get("tiles") {
         let tiles=list(tiles)?;
         if tiles.len()>reader.limits.tiles {return Err(DecodeError::Unsupported("Too many raster tiles".into()));}
@@ -624,7 +624,7 @@ mod tests {
         let transfer=pollster::block_on(crate::package::transfer::PreparedTransfer::capture_async(&transfer_capture,&None,&cancel,&crate::MemoryBudget::process())).unwrap();
         let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
         let chunks=(0..transfer.payload_count()).map(|index|vec![Arc::from(transfer.read_chunk(index,0,transfer.payload_len(index).unwrap() as usize).unwrap())]).collect();
-        let transferred=crate::package::transfer::PreparedTransfer::from_chunks(descriptor,chunks).unwrap().adopt_verified(limits,&cancel).unwrap();
+        let transferred=pollster::block_on(crate::package::transfer::PreparedTransfer::from_chunks(descriptor,chunks)).unwrap().adopt_verified(limits,&cancel).unwrap();
         verify(&transferred.artwork);
         verify(&artwork);let (manifest,backing)=captured(&artwork);verify(&reopen(&manifest,&backing).unwrap());
         let mut editor=crate::Editor::new(crate::Document::from_artwork(artwork).unwrap());

@@ -70,8 +70,8 @@ without waiting for unrelated raster backing. Settings queued behind earlier
 edits keep their order and validate their original edit target. `UiSession` keeps
 edits that arrive during raster capture in one ordered queue with subsequent pen
 samples. Frames drain that queue after earlier edits finish, validating each
-action against the resulting document. Completed contacts wait for preparation;
-only unfinished contacts expire. Both share a bounded sample queue. Delayed
+action against the resulting document. Contacts wait for preparation and share
+a bounded sample queue. Delayed
 contacts keep their captured view and brush settings. A press or release that
 the session handles itself, such as a gradient, shape, selection, fill, ruler,
 Move or vector path contact, joins that queue while raster backing is pending,

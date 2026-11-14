@@ -1,54 +1,30 @@
 use super::*;
 use layer_core::{Affine, ImageTransform, Point};
-use layer_core::authored::{OccurrenceContent, SceneScope, SourceTarget};
+use layer_core::authored::{OccurrenceContent, SourceTarget};
 use std::time::{Duration, Instant};
 
 struct VariantFixture {
+    document: layer_core::Document,
     renderer: WgpuRasterizer,
     view: ViewState,
+    texture: wgpu::Texture,
     target: wgpu::TextureView,
 }
 
 impl VariantFixture {
     fn new(mode: usize) -> Self {
         let extent = [128; 2];
-        let mut document = crate::scene::scale::tests::document_at(extent);
+        let document = crate::scene::scale::tests::document_at(extent);
         let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-        let scope = SceneScope::All;
-        let initial = crate::test_support::packet(document.scene().with_scope(&scope), extent);
+        let initial = crate::test_support::packet(document.scene(), extent);
         crate::test_support::submit_settled(&mut renderer, initial);
-        assert_eq!(renderer.display_placement()[13], 0.);
-        let mut encoder = crate::submission::CommandEncoder::new(&renderer.device, &Default::default());
-        let backup = renderer.selected_display_cache().unwrap().backup(&renderer, &mut encoder).unwrap();
-        encoder.submit(&renderer.queue);
-        assert_eq!(backup.placement[13], 0.);
-        let owner = document.scene().order()[0];
-        let OccurrenceContent::Paint(source) = document.scene().occurrence(owner).unwrap().content else {
-            panic!("the viewport fixture requires one paint source");
-        };
-        let mut view = initial.view;
-        if mode != 0 {
-            view.document_to_surface = [0.25, 0., 0., 0.25, 16., 16.];
-            if mode == 1 {
-                document.artwork.occurrences.get_mut(owner).unwrap().offset = [1, 0];
-                renderer.prepare_moving_layer(Some(owner));
-            } else {
-                renderer.set_transform_preview(Some(&layer_render::TransformPreview {
-                    transaction: 1, target: SourceTarget::Paint(source), moving: true, selection: None,
-                    transform: ImageTransform::affine(Affine::translation(Point { x: 10., y: 0. })),
-                })).unwrap();
-            }
-            let frame = layer_render::FramePacket {
-                view, ..crate::test_support::packet(document.scene().with_scope(&scope), extent)
-            };
-            crate::test_support::submit_settled(&mut renderer, frame);
-        }
-        assert_eq!(renderer.display_placement()[13] as usize, mode, "the source fixture must produce the actual requested mode");
-        renderer.display_backup = Some(backup);
-        assert_eq!(renderer.display_placement()[13], 0., "an accepted backup determines the first viewport binding");
-        renderer.shader_idle(false, false);
-        let (_, target) = crate::create_target(&renderer.device, extent, wgpu::TextureFormat::Rgba8UnormSrgb, "viewport variants");
-        Self { renderer, view, target }
+        let view = initial.view;
+        let (texture, target) = crate::create_target(&renderer.device, extent, wgpu::TextureFormat::Rgba8UnormSrgb, "viewport projection");
+        let mut fixture = Self { document, renderer, view, texture, target };
+        if mode != 0 { fixture.expose(mode); }
+        fixture.assert_projection();
+        fixture.renderer.shader_idle(false, false);
+        fixture
     }
 
     fn presenter(&self) -> ViewportPresenter {
@@ -58,8 +34,32 @@ impl VariantFixture {
     }
 
     fn expose(&mut self, mode: usize) {
-        self.renderer.display_backup = None;
-        assert_eq!(self.renderer.display_placement()[13] as usize, mode);
+        self.view.document_to_surface = [0.25, 0., 0., 0.25, 16., 16.];
+        let owner = self.document.scene().order()[0];
+        let OccurrenceContent::Paint(source) = self.document.scene().occurrence(owner).unwrap().content else {
+            panic!("the viewport fixture requires one paint source");
+        };
+        if mode == 1 {
+            self.document.artwork.occurrences.get_mut(owner).unwrap().offset = [1, 0];
+            self.renderer.prepare_moving_layer(Some(owner));
+        } else {
+            assert_eq!(mode, 2);
+            self.renderer.set_transform_preview(Some(&layer_render::TransformPreview {
+                transaction: 1, target: SourceTarget::Paint(source), moving: true, selection: None,
+                transform: ImageTransform::affine(Affine::translation(Point { x: 10., y: 0. })),
+            })).unwrap();
+        }
+        crate::test_support::submit_settled(&mut self.renderer, layer_render::FramePacket {
+            view: self.view, ..crate::test_support::packet(self.document.scene(), self.document.composition().size)
+        });
+        self.assert_projection();
+    }
+
+    fn assert_projection(&self) {
+        let page = self.renderer.presentation_page().expect("the producer must publish committed keyed pixels");
+        assert!(page.geometry().size() > 0);
+        assert!(page.views().iter().all(|view| view.texture().width() > 0 && view.texture().height() > 0));
+        assert!(self.renderer.selected_display_cache().unwrap().presentable_pages() > 0);
     }
 
     fn encode(&self, presenter: &mut ViewportPresenter) -> wgpu::SubmissionIndex {
@@ -74,25 +74,33 @@ impl VariantFixture {
         }).unwrap();
     }
 
-    fn assert_binding(&self, presenter: &ViewportPresenter, mode: usize) {
-        assert_eq!(self.renderer.display_placement()[13] as usize, mode);
-        assert_eq!(presenter.camera_data.unwrap()[53] as usize, mode);
-        assert_eq!(presenter.last_artwork_pipeline.as_ref(), Some(presenter.pipeline[mode].compile()));
+    fn assert_binding(&self, presenter: &ViewportPresenter) {
+        self.assert_projection();
+        assert_eq!(presenter.camera_data.unwrap()[53], 0.);
+        assert_eq!(presenter.last_artwork_pipeline.as_ref(), Some(presenter.pipeline[0].compile()));
+    }
+
+    fn pixels(&self) -> Vec<u8> { crate::layer_tests::page_bytes(&self.renderer, &self.texture) }
+
+    fn assert_pixels(&self) {
+        let mut reference = ViewportPresenter::for_surface(&self.renderer, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
+        let expected = reference.readback_rgba8(&self.renderer, self.view, [0.; 4]).unwrap();
+        assert_eq!(self.pixels(), expected.bytes);
     }
 }
 
-fn prepare_mode(renderer: &WgpuRasterizer, presenter: &ViewportPresenter, mode: usize) {
+fn prepare_projection(renderer: &WgpuRasterizer, presenter: &ViewportPresenter) {
     pollster::block_on(renderer.compilation.prepare_all([
-        &presenter.pipeline[mode], &presenter.surround_pipeline,
+        &presenter.pipeline[0], &presenter.surround_pipeline,
         &presenter.cursor_pipeline, &presenter.recipes.transition.pipeline,
     ])).unwrap();
 }
 
-fn wait_for_mode(renderer: &WgpuRasterizer, presenter: &ViewportPresenter) {
+fn wait_for_projection(renderer: &WgpuRasterizer, presenter: &ViewportPresenter) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !presenter.pipelines_ready(renderer) {
         renderer.compilation.check().unwrap();
-        assert!(Instant::now() < deadline, "the bound viewport recipe must become ready");
+        assert!(Instant::now() < deadline, "the keyed viewport recipe must become ready");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -100,71 +108,70 @@ fn wait_for_mode(renderer: &WgpuRasterizer, presenter: &ViewportPresenter) {
 #[test]
 fn actual_viewport_sources_match_the_predicted_and_bound_variant() {
     for mode in 0..3 {
-        let mut fixture = VariantFixture::new(mode);
+        let fixture = VariantFixture::new(mode);
         let batch = fixture.renderer.compilation.batch();
         let mut presenter = fixture.presenter();
-        fixture.expose(mode);
         assert!(!presenter.pipelines_ready(&fixture.renderer));
-        prepare_mode(&fixture.renderer, &presenter, mode);
+        prepare_projection(&fixture.renderer, &presenter);
         assert!(presenter.pipelines_ready(&fixture.renderer));
-        for unused in (0..3).filter(|index| *index != mode) {
-            assert!(!presenter.pipeline[unused].ready(), "unused viewport variants must not hold this frame");
-        }
+        assert!(presenter.pipeline[1..].iter().all(|pipeline| !pipeline.ready()), "unused viewport variants must not hold this frame");
         let submission = fixture.encode(&mut presenter);
-        fixture.assert_binding(&presenter, mode);
+        fixture.assert_binding(&presenter);
         fixture.complete(submission);
+        fixture.assert_pixels();
         drop(batch);
     }
     crate::finish_shader_compiler_shutdown();
 }
 
 #[test]
-fn backup_reveal_promotes_only_the_new_cold_viewport_variant() {
-    for mode in [1, 2] {
-        let mut fixture = VariantFixture::new(mode);
+fn cold_keyed_projection_preserves_pixels_and_history_until_ready() {
+    for mode in 0..3 {
+        let fixture = VariantFixture::new(mode);
         let batch = fixture.renderer.compilation.batch();
         let mut presenter = fixture.presenter();
-        prepare_mode(&fixture.renderer, &presenter, 0);
-        assert!(presenter.pipelines_ready(&fixture.renderer));
-        assert!(!presenter.pipeline[1].ready() && !presenter.pipeline[2].ready());
-        let submission = fixture.encode(&mut presenter);
-        fixture.complete(submission);
-        fixture.assert_binding(&presenter, 0);
-        fixture.expose(mode);
+        pollster::block_on(fixture.renderer.compilation.prepare_all([
+            &presenter.surround_pipeline, &presenter.cursor_pipeline, &presenter.recipes.transition.pipeline,
+        ])).unwrap();
         assert!(!presenter.pipelines_ready(&fixture.renderer));
-        let previous = presenter.last_artwork_pipeline.clone();
+        let previous = fixture.pixels();
         let camera = presenter.camera_data;
+        let bound = presenter.last_artwork_pipeline.clone();
         let submission = fixture.encode(&mut presenter);
-        assert_eq!(presenter.last_artwork_pipeline, previous);
         assert_eq!(presenter.camera_data, camera);
-        assert!(!presenter.pipeline[mode].ready(), "encoding cannot compile the cold viewport inline");
+        assert_eq!(presenter.last_artwork_pipeline, bound);
+        assert!(!presenter.history.valid);
+        assert!(!presenter.pipeline[0].ready(), "encoding cannot compile the cold viewport inline");
         fixture.complete(submission);
-        prepare_mode(&fixture.renderer, &presenter, mode);
-        let other = 3 - mode;
-        assert!(!presenter.pipeline[other].ready());
-        assert!(presenter.pipelines_ready(&fixture.renderer), "a mode change cannot wait for the other unused variant");
+        assert_eq!(fixture.pixels(), previous);
+        prepare_projection(&fixture.renderer, &presenter);
         let submission = fixture.encode(&mut presenter);
-        fixture.assert_binding(&presenter, mode);
+        fixture.assert_binding(&presenter);
+        assert!(presenter.history.valid);
         fixture.complete(submission);
+        assert_ne!(fixture.pixels(), previous);
+        fixture.assert_pixels();
         drop(batch);
     }
     crate::finish_shader_compiler_shutdown();
 }
 
 #[test]
-fn immediate_viewport_variant_switch_prepares_on_the_coordinator() {
+fn immediate_viewport_source_switch_uses_the_ready_keyed_projection() {
     for mode in [1, 2] {
-        let mut fixture = VariantFixture::new(mode);
+        let mut fixture = VariantFixture::new(0);
         let mut presenter = fixture.presenter();
-        wait_for_mode(&fixture.renderer, &presenter);
-        assert!(!presenter.pipeline[1].ready() && !presenter.pipeline[2].ready());
+        wait_for_projection(&fixture.renderer, &presenter);
         let submission = fixture.encode(&mut presenter);
         fixture.complete(submission);
         fixture.expose(mode);
-        wait_for_mode(&fixture.renderer, &presenter);
+        assert!(presenter.pipelines_ready(&fixture.renderer));
         let submission = fixture.encode(&mut presenter);
         fixture.complete(submission);
-        fixture.assert_binding(&presenter, mode);
+        fixture.assert_binding(&presenter);
+        fixture.assert_pixels();
+        assert!(presenter.pipeline[1..].iter().all(|pipeline|
+            !crate::compile::tests::requested(&fixture.renderer.compilation, pipeline, crate::startup::DOCUMENT)));
     }
     crate::finish_shader_compiler_shutdown();
 }

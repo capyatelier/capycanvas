@@ -162,6 +162,8 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn scope(self)->Option<&'a SceneScope>{self.scope}
     #[inline]
+    pub fn offset(self)->[f64;2]{self.offset}
+    #[inline]
     pub fn original(self,t:SourceTarget)->Option<&'a Arc<crate::color::source::SourceImage>>{match t{SourceTarget::Paint(h)=>Some(self.paint(h)?.base.as_ref()?.image.storage()),_=>None}}
     #[inline]
     pub fn paint_base(self,t:SourceTarget)->Option<&'a PaintBase>{match t{SourceTarget::Paint(h)=>self.paint(h)?.base.as_ref(),_=>None}}

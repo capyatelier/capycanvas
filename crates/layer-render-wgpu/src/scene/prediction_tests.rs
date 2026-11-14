@@ -1,5 +1,5 @@
 use super::*;
-use crate::{layer_tests::placement, test_support::{packet, submit_published}};
+use crate::{layer_tests::placement, submission::ColorPass, test_support::{packet, submit_published}};
 
 fn document() -> layer_core::Document {
     let mut document = placement::paint_document([256; 2], "prediction");
@@ -39,9 +39,19 @@ fn assert_bindings(r: &mut WgpuRasterizer, frame: FramePacket<'_>, case: &str) {
         scene.discard_unencoded_jobs();
         scene.presented_backdrop = None;
         scene.stop_before = None;
+        let previous_modes=(scene.ordered,scene.object_display);
         scene.ordered = ordered;
         scene.object_display = true;
-        scene.group(r, frame, None, [0; 2]).unwrap_or_else(|error| panic!("{case}, ordered={ordered}, planning: {error:?}"));
+        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+        let region=PixelRect::full(frame.document_extent);
+        let window=scene.cached_capture_window(frame.scene,region);
+        crate::test_support::query_ready(r,&mut encoder,|r,encoder|
+            scene.prepare_region(r,frame,(region,window),region,false,encoder));
+        let declaration=scene.capture_declaration(r,frame)
+            .unwrap_or_else(|error|panic!("{case}, portable={}, ordered={ordered}, declaration: {error:?}",r.device.portable_blend()));
+        let mut accepted=scene.accept_capture(r,frame,Some(Output::Artwork(None)),&declaration,|scene,r,accepted|scene.group(r,frame,None,[0;2],accepted).map(drop))
+            .unwrap_or_else(|error|panic!("{case}, portable={}, ordered={ordered}, acceptance: {error:?}",r.device.portable_blend()));
+        scene.group(r, frame, None, [0; 2],&mut accepted).unwrap_or_else(|error| panic!("{case}, ordered={ordered}, planning: {error:?}"));
         let mut fragments = Vec::new();
         for i in 0..scene.jobs.len() {
             if let Some(index) = bound_fragment(&r.device, &scene.jobs, i) {
@@ -54,12 +64,12 @@ fn assert_bindings(r: &mut WgpuRasterizer, frame: FramePacket<'_>, case: &str) {
         if matches!(case, "multiply" | "clipped" | "hidden clip" | "offset" | "mask offset" | "masked Flow" | "future masked Flow" | "watercolor" | "batch watercolor" | "omitted clip" | "omitted ancestor") {
             assert!(fragments.contains(&6), "{case}: exercise fallback blending");
         }
-        let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
         pollster::block_on(scene.prepare_capture_work_async(r)).unwrap();
         scene.encode_query_jobs(r, &mut encoder, None).unwrap_or_else(|error| panic!("{case}, ordered={ordered}: {error:?}"));
         assert!(encoder.pass_count() > 0);
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
+        (scene.ordered,scene.object_display)=previous_modes;
         r.scene = Some(scene);
     }
 }
@@ -127,12 +137,23 @@ fn prediction_covers_normal_and_fallback_fragment_bindings() {
             let targets: Vec<_> = r.paint_layers.iter().map(|layer| layer.id).collect();
             for target in targets {
                 let mut page = r.create_page([0; 2], "prediction paint");
-                page.primary_needs_clear = false;
                 let pixels = [0.125_f32, 0.25, 0.5, 0.75].into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>().repeat(PAGE_SIZE.pow(2) as usize);
-                crate::test_support::upload_page(&r, &page.primary.texture, &pixels);
+                let intent = r.raster_intent(target, layer_core::raster::RasterPlane::Color, [0; 2]).unwrap();
+                let name = layer_core::raster::ContentName::fresh();
+                let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+                let receipt = encoder.submission();
+                let write = page.primary.initialize(&receipt).unwrap();
+                crate::test_support::upload_written_page(&mut r.uploads, &mut encoder, &write, &pixels);
+                write.encoded(name).publish(&receipt);
+                let written = page.primary.read(name, Some(&receipt)).unwrap().replace(&intent, &receipt);
+                page.primary_needs_clear = false;
                 r.paint_layers.iter_mut().find(|layer| layer.id == target).unwrap().pages = vec![page];
+                r.record_raster_write(target, written).unwrap();
+                r.uploads.finish(&encoder);
+                encoder.submit(&r.queue);
             }
             crate::test_support::prepare_scene_effects(&mut r, frame);
+            let dabs=[crate::tests::test_dab([128.;2],[0.2,0.4,0.6,1.],1.)];
             let mut batches = Vec::new();
             if matches!(case, "batch watercolor" | "future masked Flow") {
                 let style = crate::tests::test_style(if case == "batch watercolor" {BrushExecution::Watercolor} else {BrushExecution::Dry});
@@ -140,24 +161,41 @@ fn prediction_covers_normal_and_fallback_fragment_bindings() {
                 if case == "future masked Flow" { batch.kind = DabBatchKind::Preview; }
                 batches.push(batch);
             }
-            let frame = FramePacket {scene: document.scene().with_scope(&scope), dab_batches: &batches, ..frame};
+            let frame = FramePacket {scene: document.scene().with_scope(&scope), dabs:&dabs, dab_batches: &batches, ..frame};
             let before: Vec<_> = r.scene_pipelines.for_scene(&r, frame.scene, &batches).map(Deferred::identity).collect();
             if case == "watercolor" {
                 r.paint_layers.iter_mut().find(|layer| layer.id == target).unwrap().watercolor = Some(WatercolorLayerStyle::from_dab_style(&crate::tests::test_style(BrushExecution::Watercolor)));
             }
             if matches!(case, "masked Flow" | "future masked Flow") {
+                let mut batch=frame.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).cloned()
+                    .unwrap_or_else(||crate::test_support::dab_batch(target,crate::tests::test_style(BrushExecution::Dry),dabs[0].bounds()));
+                batch.kind=DabBatchKind::Preview;
+                let declaration=Arc::new(PreviewDeclaration::from_scene(FramePacket {dab_batches:std::slice::from_ref(&batch),..frame},
+                    Default::default(),Default::default(),PreviewQuality::default(),None,None).unwrap().unwrap());
+                declaration.accept_inputs(target,RasterPlane::Color,[0;2],PreviewStage::AfterBatch(0),PreviewPass::Color,Vec::new()).unwrap();
+                let name=declaration.version(target,RasterPlane::Color,[0;2],PreviewStage::Final).unwrap();
+                let mut page=r.create_page([0;2],"prediction preview");
+                let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+                let receipt=encoder.submission();
+                let write=page.primary.initialize(&receipt).unwrap();
+                drop(encoder.color_pass("prediction preview",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {r:0.2,g:0.4,b:0.6,a:1.})));
+                write.publish(&name);
+                page.primary_needs_clear=false;
+                encoder.submit(&r.queue);
+                assert!(page.primary.read(&name,None).is_some());
+                r.preview_declaration=Some(declaration);
                 r.preview_layer_id = Some(target);
                 r.preview_requires_base = false;
                 r.preview_damage = PixelRect::full([256; 2]);
                 r.preview_contact_tiles = None;
-                r.preview_pages = vec![r.create_page([0; 2], "prediction preview")];
-                assert!(r.preview_page([0; 2]).is_some());
+                r.preview_pages = vec![page];
             }
             if case == "future masked Flow" {
                 assert!(before.contains(&r.scene_pipelines.pipeline[6].identity()), "preview batches must predict blending before preview pages exist");
             }
             assert_bindings(&mut r, frame, case);
             r.preview_layer_id = None;
+            r.preview_declaration=None;
             r.preview_pages.clear();
         }
     }
@@ -180,7 +218,7 @@ fn coverage_prediction_prepares_bake_and_erase_before_binding() {
                 let predicted: Vec<_> = r.scene_pipelines.for_scene(&r, document.scene(), &[]).cloned().collect();
                 assert!(predicted.iter().any(|pipeline| pipeline.identity() == scene.pipeline[2].identity()));
                 let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-                assert!(matches!(scene.encode_query_jobs(&mut r, &mut encoder, None), Err(GpuRasterError::DeferredObjectWork)));
+                assert!(matches!(scene.encode_query_jobs(&mut r, &mut encoder, None), Err(GpuRasterError::NotReady)));
                 assert_eq!(encoder.pass_count(), 0);
                 assert!(scene.pending_pipelines.render.iter().any(|pipeline| pipeline.identity() == scene.pipeline[2].identity()));
                 pollster::block_on(r.compilation.prepare_all(&predicted)).unwrap();

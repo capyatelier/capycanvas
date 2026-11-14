@@ -71,10 +71,9 @@ fn pickup(color: DocumentColor, execution: BrushExecution, mix: ColorMixSpace, s
     r
 }
 
-fn composite(r: &WgpuRasterizer) -> [f32; 3] {
-    let bytes = page_bytes(r, crate::test_support::document_texture(r));
-    let texel = &bytes[(PROBE[1] * 128 + PROBE[0]) * 16..][..12];
-    std::array::from_fn(|i| f32::from_le_bytes(texel[i * 4..][..4].try_into().unwrap()))
+fn composite(r: &mut WgpuRasterizer) -> [f32; 3] {
+    let pixel=crate::test_support::blend_space_pixels(r)[PROBE[1]*128+PROBE[0]];
+    [pixel[0],pixel[1],pixel[2]]
 }
 
 #[test]
@@ -95,9 +94,9 @@ fn smudge_and_wet_pickups_mix_red_and_green_in_each_space() {
 #[test]
 fn classic_mixing_follows_the_document_transfer_curve() {
     for space in RgbSpace::ALL {
-        let r = pickup(DocumentColor { space, ..Default::default() }, BrushExecution::Wet, ColorMixSpace::Classic, BlendSpace::Linear);
+        let mut r = pickup(DocumentColor { space, ..Default::default() }, BrushExecution::Wet, ColorMixSpace::Classic, BlendSpace::Linear);
         let expected = mixed(space, ColorMixSpace::Classic, [0., 1., 0.], [1., 0., 0.]);
-        for (actual, expected) in composite(&r).into_iter().zip(expected) {
+        for (actual, expected) in composite(&mut r).into_iter().zip(expected) {
             let error = (space.encode(f64::from(actual)) - space.encode(expected)).abs();
             assert!(error < 1e-4, "{space:?}: {actual} != {expected}");
         }
@@ -142,7 +141,7 @@ fn wet_pickup_approaches_empty_paint_continuously() {
             contact.material = [0., 0., 1., 0.];
             let wet = DabBatch { stroke_id: StrokeId(2), ..crate::test_support::dab_batch(target(&document), style, batch(target(&document)).damage) };
             submit(&mut r, document.scene(), &[contact], &[wet], false, BlendSpace::Linear);
-            composite(&r)
+            composite(&mut r)
         };
         let (empty, faint) = (draw(0.), draw(1e-7));
         for c in 0..3 { assert!((empty[c] - faint[c]).abs() < 2e-6, "{mixing:?}: empty {empty:?}, faint {faint:?}"); }

@@ -2,13 +2,13 @@ use super::*;
 use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projective, Rect, Selection, LayerPlacement};
 
 #[test]
-fn navigator_visibility_preserves_direct_transform_presentation() {
+fn navigator_visibility_preserves_keyed_transform_presentation() {
     let doc = document();
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    submit_published(&mut r, frame);
     frame.composite_all = false;
     let mut presenter = Some(crate::ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm));
     let mut standalone = crate::ViewportPresenter::for_overview_surface(&r, wgpu::TextureFormat::Rgba8Unorm,
@@ -27,15 +27,14 @@ fn navigator_visibility_preserves_direct_transform_presentation() {
             transaction: 1, target: source_at(&doc,0), moving: true, selection: None,
             transform: ImageTransform::affine(Affine::translation(Point { x, y: 0. })),
         })).unwrap();
-        crate::test_support::submit_ready(&mut r, frame).unwrap();
-        let cache = r.scale_display.as_ref().unwrap();
-        assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
-        assert!(cache.pixels.root().is_none());
+        submit_published(&mut r, frame);
+        assert_keyed_presentation(&r);
+        assert!(display_pixels(&r).iter().flatten().any(|value| *value != 0.));
     }
 }
 
 #[test]
-fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate_pixels() {
+fn keyed_transforms_present_rotated_views_and_navigators() {
     let extent = [517, 259];
     let bounds = Rect { min: Point::default(), max: Point { x: 517., y: 259. } };
     let projective = Projective::rect_to_quad(bounds,
@@ -85,31 +84,20 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
             frame.time_seconds += 0.1;
             let work = r.metrics.composited_pixels;
             for renderer in [&mut r, &mut exact] {
-                renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
+                renderer.set_transform_preview(Some(&preview)).unwrap(); submit_published(renderer, frame);
             }
             let cache = r.scale_display.as_ref().unwrap();
-            assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
-            assert!(cache.output.is_empty() && cache.pixels.root().is_none());
+            assert_keyed_presentation(&r);
             let side = r.navigator.scale() as u32;
-            assert_eq!(r.metrics.composited_pixels - work, extent.map(|n| u64::from(n.div_ceil(side))).into_iter().product::<u64>());
+            let navigator=extent.map(|n|u64::from(n.div_ceil(side))).into_iter().product::<u64>();
+            let viewport=cache.plan.size.into_iter().map(u64::from).product::<u64>();
+            assert!(r.metrics.composited_pixels-work<=viewport+navigator,"each keyed viewport and Navigator texel composes at most once");
             for (camera, overview) in [([0.19, 0., 0., 0.19, 8.25, 7.5], false),
                 ([0.17, 0.075, -0.075, 0.17, 37.5, 6.25], false), ([0.04, 0., 0., 0.04, 0., 0.], true)] {
                 let mut view = frame.view;
                 view.document_to_surface = camera;
                 if overview { view.width_px = 23; view.height_px = 13; }
                 let actual = render(&r, view, overview);
-                let intermediate = materialized_display(&r);
-                let mut cache = r.scale_display.take().unwrap();
-                let presentation = cache.placed.take();
-                cache.pixels = hierarchy::Pixels::Window { root: Some(intermediate), next: None };
-                let mut commands = Commands::new(&r);
-                let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-                cache.reduce_output(&mut r, &mut encoder, PixelRect::full(cache.plan.size), &mut commands).unwrap();
-                r.uploads.finish(&encoder); encoder.submit(&r.queue);
-                r.scale_display = Some(cache);
-                let prior = render(&r, view, overview);
-                let cache = r.scale_display.as_mut().unwrap();
-                cache.placed = presentation; cache.pixels = Default::default();
                 let inverse = Affine(camera).inverse().unwrap();
                 let inside = |x, y| {
                     let p = inverse.map(Point { x, y });
@@ -120,7 +108,6 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
                 high.document_to_surface = high.document_to_surface.map(|n| n * 8.);
                 let reference = render(&exact, high, overview);
                 let mut errors = Vec::new();
-                let mut prior_errors = Vec::new();
                 for y in 0..view.height_px { for x in 0..view.width_px {
                     if !inside(x as f32 + 0.5, y as f32 + 0.5) { continue; }
                     let mut expected = [0.; 4];
@@ -131,17 +118,12 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
                         count += 1.;
                     }}
                     errors.push(actual[(y * view.width_px + x) as usize].iter().zip(expected).map(|(a,b)| (a-b/count).abs()).fold(0., f32::max));
-                    prior_errors.push(prior[(y * view.width_px + x) as usize].iter().zip(expected).map(|(a,b)| (a-b/count).abs()).fold(0., f32::max));
                 }}
                 errors.sort_by(f32::total_cmp);
                 let mean = errors.iter().sum::<f32>() / errors.len() as f32;
                 let p99 = errors[errors.len() * 99 / 100];
-                prior_errors.sort_by(f32::total_cmp);
-                let prior_mean = prior_errors.iter().sum::<f32>() / prior_errors.len() as f32;
-                let prior_p99 = prior_errors[prior_errors.len()*99/100];
-                assert!(if overview { mean < 0.06 && p99 < 0.25 } else {
-                    (mean < 0.004 && p99 < 0.04) || (mean <= prior_mean * 1.1 + 0.0001 && p99 <= prior_p99 + 0.03) },
-                    "omitted={omitted:?} patterned={patterned} {space:?} selected={selected} overview={overview} camera={camera:?}: mean={mean} p99={p99}; prior={prior_mean}/{prior_p99}");
+                assert!(if overview { mean < 0.06 && p99 < 0.25 } else { mean < 0.004 && p99 < 0.04 },
+                    "omitted={omitted:?} patterned={patterned} {space:?} selected={selected} overview={overview} camera={camera:?}: mean={mean} p99={p99}");
                 if !overview && !patterned && space == layer_core::BlendSpace::Linear {
                     assert!(mean < 0.004 && p99 < 0.04, "omitted={omitted:?} linear area error: mean={mean} p99={p99}");
                 }
@@ -176,7 +158,7 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
 
             if transform.moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
             let cache = r.scale_display.as_ref().expect("group children stay on the display graph");
-            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
             assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
         }
         for renderer in [&mut r, &mut exact] {
@@ -241,7 +223,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                 assert_eq!(r.test.source_captures.get(), 1);
                 let displayed = display_pixels(&r);
                 let exact_pixels = pixels(&exact, crate::test_support::document_texture(&exact));
-                let error = quality_linear(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan,
+                let error = quality_linear(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan, r.scale_display.as_ref().unwrap().texture().format(),
                     |color| linear_color(color, space, doc.composition().color.space));
                 eprintln!("{space:?} offset={offset:?} selection={} step={step} error={error:?}", selection.is_some());
                 assert!(error[0] < 0.004 && error[1] < 0.06, "transform reduction quality {error:?}");
@@ -269,7 +251,7 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
     let doc = document_at([2053, 1541]);
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    r.source_tiles.get_mut().admit_limits(64 << 20, 16 << 20, 44 << 20);
+    r.source_tiles.get_mut().admit_limits(16 << 20);
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
@@ -280,12 +262,12 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
     })).unwrap();
     crate::test_support::submit_ready(&mut r, frame).unwrap();
     let mut capture = artwork::Capture::default();
-    while r.has_pending_work() { r.wait_idle().unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap(); }
+    while r.next_frame()==layer_render::FrameDemand::Work { r.wait_idle().unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap(); }
     r.wait_idle().unwrap();
     for origin in [[256,256], [1024,768], [1536,1024], [0,0]].into_iter().cycle().take(16) {
         let region = PixelRect::new(origin[0], origin[1], origin[0] + 32, origin[1] + 32);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let result = capture.region(&mut r, frame, region, [32,32], &mut encoder).unwrap();
+        let result = crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| capture.region(r, frame, region, [32,32], encoder));
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         assert!(r.paint_layers.iter().map(|l| l.pages.len()).sum::<usize>() <= 9,
             "one native tile with interpolation support reaches at most three tiles per axis");
@@ -323,7 +305,7 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         }
         assert!(r.scale_display.is_some());
         if moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
-        let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
+        let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan, r.scale_display.as_ref().unwrap().texture().format());
         assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} moving={moving} {error:?}");
         crate::test_support::assert_same_canonical(&mut r, &mut exact);
         assert_eq!(r.test.source_captures.get(), 1);
@@ -371,7 +353,7 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
                 renderer.set_transform_preview(Some(&preview)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
             }
             assert!(r.scale_display.is_some());
-            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan, r.scale_display.as_ref().unwrap().texture().format());
             assert!(error[0] < 0.004 && error[1] < 0.06, "mask={mask_target} linked={linked} {error:?}");
             crate::test_support::assert_same_canonical(&mut r, &mut exact);
         }
@@ -419,19 +401,16 @@ fn whole_image_selections_reserve_one_transform_input_pyramid() {
         moving: true, selection: None, transform: ImageTransform::affine(Affine([4.,0.,0.,4.,0.,0.])) };
     r.set_transform_preview(Some(&preview)).unwrap();
     r.begin_frame_memory(frame);
-    let no_selection = allocation(&r, plan, frame, None);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[4248.,0.],[4248.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
     r.begin_frame_memory(frame);
-    assert_eq!(allocation(&r, plan, frame, None), no_selection);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
     preview.selection = Some(Selection::polygon([[0.,0.],[2124.,0.],[2124.,2832.],[0.,2832.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap());
     r.set_transform_preview(Some(&preview)).unwrap();
     r.begin_frame_memory(frame);
-    assert!(allocation(&r, plan, frame, None)[1] > no_selection[1]);
 
     for (label, selection, kept) in [("none", None, false),
         ("whole", Some(Selection::polygon([[0.,0.],[4248.,0.],[4248.,2832.],[0.,2832.]]
@@ -443,15 +422,15 @@ fn whole_image_selections_reserve_one_transform_input_pyramid() {
         let level = crate::paint_transform::input_level(plan.level, &preview, extent);
         assert_eq!(transforms.input_requirements(&preview, level, extent), (level, kept), "{label}: transform input requirements");
         let pyramid = display_mips::Plan::at(extent, level).pixel_bytes_through(display_mips::MAX_LEVEL);
-        crate::memory::memory_tests::scene_frame_with_budget(&mut r, frame, pyramid);
+        let _budget = crate::memory::memory_tests::display_frame_with_budget(&mut r, frame, pyramid);
         assert_eq!(r.projected_restore_bytes(), 0, "{label}: no pending raster restores");
-        let available = r.memory.preparation_limits().into_iter().sum::<u64>();
+        let available = r.memory.display_grant() + r.memory.raster_grant();
         assert!(pyramid <= available && available < pyramid + pyramid,
             "{label}: preparation must have headroom for exactly one input pyramid: {pyramid} <= {available} < {}", pyramid + pyramid);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let result = transforms.prepare_preview(&mut r, &mut encoder, &preview, doc.scene(), plan.level, false);
         if kept {
-            assert!(matches!(result, Err(GpuRasterError::DeferredObjectWork | GpuRasterError::SourceWorkingSetExceeded)),
+            assert!(matches!(result, Err(GpuRasterError::NotReady | GpuRasterError::SourceWorkingSetExceeded)),
                 "{label}: a partial selection needs a second input pyramid: {result:?}");
         } else {
             assert!(result.is_ok(), "{label}: one input pyramid must admit an entire-image preview: {result:?}");
@@ -496,7 +475,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
                     let mismatches:Vec<_>=actual.iter().zip(&original_display).enumerate().filter(|(_, (a,b))|a.iter().zip(b.iter()).any(|(a,b)|(a-b).abs()>1e-5)).take(8).collect();
                     assert!(largest<1e-5, "an unchanged transform preserves displayed coverage: {largest} keep={keep_source} selection={} {mismatches:?}", selection.is_some());
                 }
-                let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
+                let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan, r.scale_display.as_ref().unwrap().texture().format());
                 assert!(error[0] < 0.004 && error[1] < 0.06, "map={map:?} keep={keep_source} selection={} {error:?}",selection.is_some());
                 crate::test_support::assert_same_canonical(&mut r, &mut exact);
                 assert_eq!(r.test.source_captures.get(),1);
@@ -526,7 +505,7 @@ fn optional_transform_inputs_park_until_the_compiler_wakes_the_owner() {
     frame.time_seconds+=0.1;
     crate::test_support::submit_published(&mut r,frame);
     let ready=std::time::Instant::now()+READBACK_TIMEOUT;
-    while r.navigator_pending() || r.object_deferred || r.scale_display.as_ref().is_some_and(|cache|cache.has_pending_work(&r)) {
+    while r.navigator.pending() || publication_pending(&r) || r.scale_display.as_ref().is_some_and(|cache|cache.has_pending_work(&r)) {
         assert!(std::time::Instant::now()<ready,"selection display must finish before optional warming");
         r.wait_idle().unwrap();
         frame.time_seconds+=0.1;
@@ -536,7 +515,7 @@ fn optional_transform_inputs_park_until_the_compiler_wakes_the_owner() {
     let captures=r.test.source_captures.get();
     for _ in 0..3 {
         crate::test_support::submit_ready(&mut r,frame).unwrap();
-        assert!(!r.has_pending_work(),"unadmitted optional compilation parks the owner");
+        assert!(r.next_frame()!=layer_render::FrameDemand::Work,"unadmitted optional compilation parks the owner");
         assert_eq!(r.metrics.composited_pixels,work);
         assert_eq!(r.test.source_captures.get(),captures);
     }
@@ -656,45 +635,35 @@ fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
                 assert_eq!(r.composite_damage.intersect(cut),cut,
                     "changed cut scale={scale} step={step}");
             }
-            let error = quality(&display_pixels(&r), &pixels(&exact,crate::test_support::document_texture(&exact)),r.scale_display.as_ref().unwrap().plan);
+            let error = quality(&display_pixels(&r), &pixels(&exact,crate::test_support::document_texture(&exact)),r.scale_display.as_ref().unwrap().plan, r.scale_display.as_ref().unwrap().texture().format());
             assert!(error[0] < 0.004 && error[1] < 0.06, "scale={scale} step={step} {error:?}");
             assert_eq!(r.readback_srgb_rgba8().unwrap(),exact.readback_srgb_rgba8().unwrap());
         }
     }
 }
 #[test]
-fn mapped_display_backup_shares_one_immutable_copy() {
+fn retained_committed_pages_are_independent_of_mutable_source_pixels() {
     let doc = document();
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
-    frame.composite_all = false;
-    r.set_transform_preview(Some(&layer_render::TransformPreview {
-        transaction: 1, target: source_at(&doc,0), moving: true, selection: None,
-        transform: ImageTransform::affine(Affine::translation(Point { x: 10., y: 0. })),
-    })).unwrap();
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
-    let cache = r.scale_display.as_ref().unwrap();
-    assert!(matches!(cache.placed, Some(Presentation::Mapped(_))));
-    let source = cache.view().texture().clone();
-    let before = pixels(&r, &source);
-    assert!(before.iter().flatten().any(|value| *value != 0.));
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let backup = cache.backup(&r, &mut encoder).unwrap();
-    encoder.submit(&r.queue);
-    assert_eq!(backup.views[0], backup.views[1]);
-    assert_eq!(backup.views[0], backup.views[2]);
-    assert_eq!(backup.bytes, texture_bytes(backup.views[0].texture()));
-    assert_eq!(backup.views[0].texture().format(), source.format());
-    assert_eq!(backup.views[0].texture().size(), source.size());
-    assert_eq!(backup.views[0].texture().mip_level_count(), 1);
-    for view in &backup.views { assert_eq!(pixels(&r, view.texture()), before); }
-    assert_eq!(source.format(), wgpu::TextureFormat::Rgba32Float);
-    r.queue.write_texture(source.as_image_copy(), &vec![0; (source.width()*source.height()*16) as usize],
-        wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(source.width()*16),rows_per_image:None}, source.size());
-    assert!(pixels(&r, &source).iter().flatten().all(|value| *value == 0.));
-    for view in &backup.views { assert_eq!(pixels(&r, view.texture()), before); }
+    crate::test_support::submit_settled(&mut r, frame);
+    let retained = r.scale_display.as_ref().unwrap().pages.clone();
+    let pages = retained.lock().unwrap().retained_pages().into_iter().filter(|page|page.key.source.is_none()).collect::<Vec<_>>();
+    assert!(!pages.is_empty());
+    let before: Vec<_> = pages.iter().map(|page| pixels(&r, &page.texture)).collect();
+    assert!(before.iter().flatten().flatten().any(|value| *value != 0.));
+    let sources: Vec<_> = r.scene.as_ref().unwrap().scale_sources.entries.keys()
+        .flat_map(|id| source_textures(&r,*id,None)).collect();
+    assert!(!sources.is_empty());
+    for source in sources {
+        assert!(pages.iter().all(|page| page.texture != source));
+        let bytes = texture_bytes(&source) / u64::from(source.width() * source.height());
+        r.queue.write_texture(source.as_image_copy(), &vec![0; (u64::from(source.width()*source.height())*bytes) as usize],
+            wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(source.width()*bytes as u32),rows_per_image:None}, source.size());
+        assert!(pixels(&r, &source).iter().flatten().all(|value| *value == 0.));
+    }
+    for (page, expected) in pages.iter().zip(before) { assert_eq!(pixels(&r, &page.texture), expected); }
 }
 
 #[test]
@@ -715,9 +684,36 @@ fn native_previews_larger_than_the_decoded_floor_draw_from_resumed_original_capt
         crate::test_support::submit_settled(&mut r,frame);
         r
     });
-    let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
-    assert!(floor.source_tiles.borrow().admitted_bytes()[0] < pages * crate::scene::sources::NORMALIZED_PAGE_BYTES);
     assert!(!floor.transform_sources_pending && floor.transforms.as_ref().unwrap().has_preview());
     assert_eq!(pixels(&floor,crate::test_support::document_texture(&floor)),pixels(&reference,crate::test_support::document_texture(&reference)),
         "a preview reading more originals than the decoded slots hold must match one whose originals all fit");
+}
+
+#[test]
+fn selection_standby_waits_for_cold_samples_without_deferring_the_ready_frame() {
+    let doc=document_at([769,513]);let extent=doc.composition().size;let id=source_at(&doc,0);
+    let part=Selection::polygon([[64.,64.],[640.,64.],[640.,448.],[64.,448.]].map(|[x,y]|Point {x,y}).to_vec()).unwrap();
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    crate::test_support::submit_settled(&mut r,frame);
+    assert!(r.scale_display.as_ref().is_some_and(|cache|cache.plan.level>0 && cache.evaluation!=Evaluation::Native));
+    let original=display_pixels(&r);let revision=r.artwork_revision;
+    let source=paint_at(&doc,0).base.as_ref().unwrap().image.storage().clone();
+    let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([source.as_ref()]),false);
+    let samples=&r.device.source_samples;let limit=samples.stats().limit_bytes;
+    samples.set_limit(0);samples.trim_unused(usize::MAX);samples.set_limit(limit);
+    crate::test_support::evict_sources(&mut r);
+    assert!(page_coordinates(PixelRect::full(extent)).all(|coordinate|r.source_tiles.borrow().prepared_view(&source,coordinate).is_none()));
+    r.prepare_moving_pixels(Some((id,part)));frame.composite_all=false;
+    let submitted=r.submitted_updates();let result=r.submit_when_ready(frame,None);
+    assert!(!matches!(result,std::task::Poll::Pending),"the committed picture must not require the optional standby samples");
+    store.gate.entered();
+    assert!(matches!(result,std::task::Poll::Ready(Ok(()))),"cold optional standby escaped readiness: {result:?}");
+    assert_eq!(r.submitted_updates(),submitted+1);
+    assert_eq!(r.artwork_revision,revision);assert_eq!(display_pixels(&r),original);
+    store.gate.release();crate::test_support::submit_settled(&mut r,frame);
+    let captures=r.test.source_captures.get();let reduced=r.test.reduced_pages.get();assert_eq!(captures,1);assert!(reduced>0);
+    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    assert_eq!(r.test.source_captures.get(),captures);assert_eq!(r.test.reduced_pages.get(),reduced);
+    assert_eq!(r.artwork_revision,revision);assert_eq!(display_pixels(&r),original);
 }

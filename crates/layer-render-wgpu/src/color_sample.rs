@@ -12,14 +12,20 @@ pub(super) struct ColorSampler {
     rx: mpsc::Receiver<Result<ColorSample, GpuRasterError>>,
     pending: bool,
     waiting: Option<(ColorSampleRequest, Option<Arc<artwork::Frame>>)>,
+    charge: crate::residency::Charge,
 }
 impl ColorSampler {
     pub(super) fn storage_bytes(&self) -> u64 {
         self.buffer.as_ref().map_or(0, |b| b.size()) + self.capture.storage_bytes()
     }
-    pub fn new() -> Self {
+    fn account(&mut self) {
+        let bytes = self.storage_bytes();
+        self.charge.resize(bytes);
+    }
+    pub fn new(tier: &Arc<crate::residency::Tier>) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
+            charge: tier.charge(0),
             capture: Default::default(),
             buffer: None,
             tx,
@@ -58,7 +64,6 @@ impl WgpuRasterizer {
             && let Err(error) = self.encode_color_sample(request, frame) {
             return Some(Err(error));
         }
-        let _ = self.device.poll(wgpu::PollType::Poll);
         self.color_sampler.take()
     }
 
@@ -105,6 +110,7 @@ impl WgpuRasterizer {
                 })
             })
             .clone();
+        self.color_sampler.account();
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -127,7 +133,8 @@ impl WgpuRasterizer {
                 &mut encoder,
             );
             self.color_sampler.capture = capture;
-            if matches!(result, Err(GpuRasterError::DeferredObjectWork)) {
+                        self.color_sampler.account();
+            if matches!(result, Err(GpuRasterError::NotReady)) {
                 self.uploads.finish(&encoder);
                 encoder.submit(&self.queue);
                 self.color_sampler.waiting = Some((request, Some(frame)));
@@ -149,7 +156,8 @@ impl WgpuRasterizer {
                         let mut capture = mem::take(&mut self.color_sampler.capture);
                         let result=match &frame {Some(frame)=>capture.layer_tile_at(self,frame,id,[tx,ty],&mut encoder),None=>Err(GpuRasterError::InvalidExtent)};
                         self.color_sampler.capture = capture;
-                        if matches!(result, Err(GpuRasterError::DeferredObjectWork)) {
+                        self.color_sampler.account();
+                        if matches!(result, Err(GpuRasterError::NotReady)) {
                             self.uploads.finish(&encoder);
                             encoder.submit(&self.queue);
                             self.color_sampler.waiting = Some((request, frame));
@@ -182,6 +190,7 @@ impl WgpuRasterizer {
         let tx = self.color_sampler.tx.clone();
         let space = self.document_color.space;
         crate::raster::map_then(
+            &self.device,
             None,
             &buffer,
             buffer.size(),

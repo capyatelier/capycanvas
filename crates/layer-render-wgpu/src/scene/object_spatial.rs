@@ -1,6 +1,42 @@
 use super::*;
 use layer_core::authored::{ImageObject, Occurrence, Store};
 use std::collections::HashMap;
+use std::sync::{Mutex, Weak};
+use crate::residency::{Charge, Tier};
+
+#[derive(Default)]
+struct Registry {tier:Arc<Tier>,leases:Mutex<(HashMap<usize,Weak<KeyLease>>,Option<Charge>)>}
+#[derive(Clone,Default)]
+pub(super) struct KeyLeases(Arc<Registry>);
+pub(super) struct KeyLease {keys:Arc<[objects::ObjectKey]>,registry:Arc<Registry>,_charge:Charge}
+fn allocation(keys:&Arc<[objects::ObjectKey]>)->usize {Arc::as_ptr(keys) as *const objects::ObjectKey as usize}
+impl KeyLeases {
+    pub fn charged(tier:&Arc<Tier>)->Self {Self(Arc::new(Registry {tier:tier.clone(),leases:Default::default()}))}
+    pub fn charge(&self,bytes:u64)->Charge {self.0.tier.charge(bytes)}
+    pub fn lease(&self,keys:&Arc<[objects::ObjectKey]>)->Arc<KeyLease> {
+        let mut guard=self.0.leases.lock().unwrap();
+        let (leases,slots)=&mut *guard;
+        if let Some(lease)=leases.get(&allocation(keys)).and_then(Weak::upgrade) {return lease;}
+        let lease=Arc::new(KeyLease {keys:keys.clone(),registry:self.0.clone(),
+            _charge:self.charge(keys.len() as u64*std::mem::size_of::<objects::ObjectKey>() as u64)});
+        leases.insert(allocation(keys),Arc::downgrade(&lease));
+        let bytes=leases.capacity() as u64*std::mem::size_of::<(usize,Weak<KeyLease>)>() as u64;
+        slots.get_or_insert_with(||self.0.tier.charge(0)).resize(bytes);
+        lease
+    }
+    #[cfg(test)]
+    pub fn walked_bytes(&self)->u64 {
+        let (leases,_)=&*self.0.leases.lock().unwrap();
+        leases.values().filter_map(Weak::upgrade).map(|lease|lease.keys.len() as u64*std::mem::size_of::<objects::ObjectKey>() as u64).sum::<u64>()
+            +leases.capacity() as u64*std::mem::size_of::<(usize,Weak<KeyLease>)>() as u64
+    }
+}
+impl Drop for KeyLease {
+    fn drop(&mut self) {
+        let (leases,_)=&mut *self.registry.leases.lock().unwrap();
+        if leases.get(&allocation(&self.keys)).is_some_and(|lease|lease.strong_count()==0) {leases.remove(&allocation(&self.keys));}
+    }
+}
 
 struct Entry { owner:OccurrenceHandle, bounds:DocRect, keys:Arc<[objects::ObjectKey]> }
 #[derive(Clone)]
@@ -20,18 +56,22 @@ impl Content {
     }
     pub fn len(&self)->usize {1}
 }
+#[derive(Clone)]
+struct Layer {content:Content,_keys:Arc<KeyLease>,_entry:Arc<Charge>}
 #[derive(Default,Clone)]
 pub(super) struct SpatialIndex {
     objects:Option<Store<ImageObject>>,
     occurrences:Option<Store<Occurrence>>,
-    layers:HashMap<OccurrenceHandle,Content>,
+    layers:HashMap<OccurrenceHandle,Layer>,
+    keys:KeyLeases,
 }
 impl SpatialIndex {
+    pub fn charged(keys:KeyLeases)->Self {Self {keys,..Default::default()}}
     pub fn prepare(&mut self,scene:SceneView<'_>) {
         let artwork=scene.artwork();
         if self.objects.as_ref().is_none_or(|objects|!objects.same_root(&artwork.objects))
             || self.occurrences.as_ref().is_none_or(|occurrences|!occurrences.same_root(&artwork.occurrences)) {
-            self.layers.retain(|owner,content|scene.object_handle(*owner).is_some_and(|h|objects::ObjectKey::new(scene,*owner,h)==content.0.keys[0]));
+            self.layers.retain(|owner,layer|scene.object_handle(*owner).is_some_and(|h|objects::ObjectKey::new(scene,*owner,h)==layer.content.0.keys[0]));
             self.objects=Some(artwork.objects.clone());self.occurrences=Some(artwork.occurrences.clone());
         }
     }
@@ -39,15 +79,18 @@ impl SpatialIndex {
         self.prepare(scene);
         let handle=scene.object_handle(owner)?;
         let key=objects::ObjectKey::new(scene,owner,handle);
-        if self.layers.get(&owner).is_none_or(|content|content.0.keys[0]!=key) {
+        if self.layers.get(&owner).is_none_or(|layer|layer.content.0.keys[0]!=key) {
             let bounds=objects::object_bounds(scene,&key);
-            self.layers.insert(owner,Content(Arc::new(Entry {owner,bounds,keys:vec![key].into()})));
+            let keys:Arc<[objects::ObjectKey]>=vec![key].into();
+            let layer=Layer {_keys:self.keys.lease(&keys),_entry:Arc::new(self.keys.charge(std::mem::size_of::<Entry>() as u64)),content:Content(Arc::new(Entry {owner,bounds,keys}))};
+            self.layers.insert(owner,layer);
         }
-        self.layers.get(&owner).cloned()
+        self.layers.get(&owner).map(|layer|layer.content.clone())
     }
-    pub fn key_allocations(&self)->impl Iterator<Item=(usize,u64)>+'_ {
-        self.layers.values().map(|content|(Arc::as_ptr(&content.0.keys) as *const objects::ObjectKey as usize,std::mem::size_of::<objects::ObjectKey>() as u64))
-    }
+    #[cfg(test)]
+    pub fn key_bytes(&self)->u64 {self.layers.len() as u64*std::mem::size_of::<objects::ObjectKey>() as u64}
+    #[cfg(test)]
+    pub fn walked_key_bytes(&self)->u64 {self.keys.walked_bytes()}
     pub fn storage_bytes(&self)->u64 {
         self.layers.len() as u64*(std::mem::size_of::<Entry>()+std::mem::size_of::<objects::ObjectKey>()) as u64
     }

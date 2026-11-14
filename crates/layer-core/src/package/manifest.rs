@@ -91,7 +91,7 @@ fn shape(record: &Value, refs: &[PortableId], context: RecordContext, reasons: &
     match registry::validate_context(record, context) {
         Err(DecodeError::Unsupported(_)) => { reasons.insert("Unsupported authored record context"); },
         Err(DecodeError::Invalid(reason) | DecodeError::Io(reason)) => return Err(reason),
-        Err(DecodeError::MemoryBudgetExceeded) => return Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
+        Err(DecodeError::MemoryBudgetExceeded | DecodeError::Uncovered) => return Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
         Ok(()) => {},
     }
     Ok(match descriptor.kind {

@@ -29,12 +29,12 @@ impl WgpuRasterizer {
                 self.drain_image_decodes(encoder)?;
                 match capture.region(self, frame.packet(self.document_extent), region, [PAGE_SIZE;2], encoder) {
                     Ok(source) => break source,
-                    Err(GpuRasterError::DeferredObjectWork) => {
+                    Err(GpuRasterError::NotReady) => {
                         #[cfg(target_arch = "wasm32")]
-                        return Err(GpuRasterError::DeferredObjectWork);
+                        return Err(GpuRasterError::NotReady);
                         #[cfg(not(target_arch = "wasm32"))]
                         {
-                            scene::Scene::submit_chunk(self, encoder, "explicit artwork source preparation")?;
+                            scene::Scene::retire_window(self, encoder, "explicit artwork source preparation")?;
                             std::thread::yield_now();
                         }
                     },
@@ -75,7 +75,7 @@ impl WgpuRasterizer {
                 },
             );
             if index % 16 == 15 {
-                scene::Scene::submit_chunk(self, encoder, "explicit artwork readback chunk")?;
+                scene::Scene::retire_window(self, encoder, "explicit artwork readback chunk")?;
             }
         }
         Ok(())
@@ -141,9 +141,9 @@ impl WgpuRasterizer {
         let (sender, receiver) = mpsc::channel();
         buffer
             .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
+            .map_async(wgpu::MapMode::Read, {let callback=move |result:Result<(),wgpu::BufferAsyncError>| {
                 let _ = sender.send(result.map_err(|error| error.to_string()));
-            });
+            }; #[cfg(not(target_arch="wasm32"))] let callback=self.device.callback(callback);callback});
         raster::wait_mapping(&self.device, &receiver).map_err(GpuRasterError::MapFailed)?;
         let mapped = buffer
             .slice(..)

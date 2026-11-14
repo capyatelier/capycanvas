@@ -33,7 +33,7 @@ fn a_claimed_contact_drives_its_edge_and_catches_up_on_frames() {
     let claim = edge(&mut s, 1, ContactPhase::Move, PointerKind::Touch, [start[0] + 13., start[1]], 20);
     assert_eq!(claim.edge_cursor, Some("col-resize"));
     assert!(!claim.edge_pending);
-    assert!(claim.handled && claim.change.canvas_wake && s.wants_continuous_frames());
+    assert!(claim.handled && claim.change.canvas_wake && s.frame_demand() != layer_render::FrameDemand::Wait);
     let line = |s: &UiSession<Recorder>| column_edge(s).bounds.x;
     assert_eq!(line(&s), d.bounds.x, "the edge starts where it was");
     let target = start[0] + 13. - d.bounds.width * 0.5;
@@ -42,7 +42,7 @@ fn a_claimed_contact_drives_its_edge_and_catches_up_on_frames() {
     assert!(easing > d.bounds.x && easing < target, "the edge eases toward the contact: {easing}");
     s.frame(20_000_000 + 160_000_000, 0).unwrap();
     assert!((line(&s) - target).abs() < 0.5, "and reaches it");
-    assert!(!s.wants_continuous_frames());
+    assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     let moved = edge(&mut s, 1, ContactPhase::Move, PointerKind::Touch, [start[0] + 40., start[1]], 300);
     assert_eq!(moved.edge_cursor, Some("col-resize"));
     assert!((line(&s) - (start[0] + 40. - d.bounds.width * 0.5)).abs() < 0.5);

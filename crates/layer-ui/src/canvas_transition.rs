@@ -78,10 +78,10 @@ mod tests {
         let fade = s.renderer_mut().canvas_transition;
         assert_eq!(fade.drawing, None);
         assert!((fade.navigator.unwrap() - 1. / 27.).abs() < 0.000_001);
-        assert!(s.wants_continuous_frames());
+        assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
         s.frame(1_200_000_000, 1_200_000_000).unwrap();
         assert_eq!(s.renderer_mut().canvas_transition, layer_render::CanvasFade::default());
-        assert!(!s.wants_continuous_frames());
+        assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     }
 
     #[test]
@@ -89,26 +89,26 @@ mod tests {
         for platform in Platform::ALL {
             let mut s = session(platform);
             s.frame(0, 0).unwrap();
-            assert!(!s.wants_continuous_frames());
+            assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
             assert!(s.begin_canvas_transition().presentation_wake);
             let waiting_updates = s.renderer_mut().canvas_transition_updates;
             let waiting = s.frame(1_000_000_000, 1_000_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition.drawing, Some(1.));
             assert_eq!(s.renderer_mut().canvas_transition_updates, waiting_updates);
-            assert!(!s.wants_continuous_frames());
+            assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
             assert!(!waiting.needs_present());
 
             s.renderer_mut().showing_drawing = true;
             let start = s.frame(2_000_000_000, 2_000_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition.drawing, Some(1.));
-            assert!(start.presentation_wake && s.wants_continuous_frames());
+            assert!(start.presentation_wake && s.frame_demand() != layer_render::FrameDemand::Wait);
             let middle = s.frame(2_075_000_000, 2_075_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition.drawing, Some(0.125));
-            assert!(middle.presentation_wake && s.wants_continuous_frames());
+            assert!(middle.presentation_wake && s.frame_demand() != layer_render::FrameDemand::Wait);
             let end = s.frame(2_150_000_000, 2_150_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition.drawing, None);
             assert!(end.presentation_wake);
-            assert!(!s.wants_continuous_frames());
+            assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
             assert!(!s.frame(2_151_000_000, 2_151_000_000).unwrap().needs_present());
         }
     }
@@ -150,14 +150,14 @@ mod tests {
             s.inherit_window_state(&session(platform)).unwrap();
             s.frame(3_000_000_000, 3_000_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition.drawing, Some(1.));
-            assert!(s.wants_continuous_frames());
+            assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
             s.renderer_mut().showing_drawing = false;
             let showing_updates = s.renderer_mut().canvas_transition_updates;
             s.frame(3_025_000_000, 3_025_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition.drawing, Some(1.));
             assert_eq!(s.renderer_mut().canvas_transition_updates, showing_updates + 1);
             assert!(s.canvas_transition.drawing.started.is_none());
-            assert!(!s.wants_continuous_frames());
+            assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
             s.frame(3_050_000_000, 3_050_000_000).unwrap();
             assert_eq!(s.renderer_mut().canvas_transition_updates, showing_updates + 1);
             s.renderer_mut().showing_drawing = true;

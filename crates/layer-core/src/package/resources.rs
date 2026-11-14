@@ -369,6 +369,7 @@ pub struct ResourceReader<'a> {
     pub manifest: &'a Manifest, pub backing: &'a ImmutableBacking, pub cancelled: &'a AtomicBool,
     pub limits: crate::ProjectLimits,
     pub(crate) private: bool,
+    pub(crate) waits: bool,
     pub(crate) store:Option<&'a super::session_store::StoreResources>,
     pub(crate) trusted_programs: super::TrustedPrograms,
     pub(crate) bytes: BTreeMap<PortableId, Resource<[u8]>>, pub(crate) texts: BTreeMap<PortableId, Resource<str>>,
@@ -400,7 +401,7 @@ impl<'a> ResourceReader<'a> {
         Self::with_budget(manifest, backing, cancelled, limits, crate::MemoryBudget::process())
     }
     pub(crate) fn with_budget(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits, budget: crate::MemoryBudget) -> Self {
-        Self {admission:budget.admit_import(0),package:super::PackageLease::new(backing.clone()),prepared:Default::default(),prepared_bytes:0,manifest,backing,cancelled,limits,private:false,
+        Self {admission:budget.admit_import(0),package:super::PackageLease::new(backing.clone()),prepared:Default::default(),prepared_bytes:0,manifest,backing,cancelled,limits,private:false,waits:false,
             store:None,trusted_programs:Default::default(),bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),images:BTreeMap::new(),programs:BTreeMap::new(),vectors:BTreeMap::new(),opaque:BTreeMap::new()}
     }
     pub(crate) async fn prepare_metadata(&mut self)->DecodeResult<()> {
@@ -409,7 +410,7 @@ impl<'a> ResourceReader<'a> {
             let Some(bound)=stored_decode_bound(&record.value)? else {continue;};
             if record.bytes>lz4_flex::block::get_maximum_output_size(bound) as u64 {return Err(DecodeError::Unsupported("Resource exceeds encoded size bound".into()));}
             self.prepared_bytes=self.prepared_bytes.checked_add(record.bytes).ok_or("Metadata range size overflow")?;
-            self.charge(0)?;
+            self.charge_covered(0).await?;
             let range=record.range.ok_or("Missing metadata resource range")?;
             let mut bytes=Vec::with_capacity(record.bytes as usize);
             while bytes.len()<record.bytes as usize {
@@ -427,7 +428,7 @@ impl<'a> ResourceReader<'a> {
             }}
         }
         for id in slots {
-            let resource=self.opaque_location(id)?;self.charge(resource.length)?;
+            let resource=self.opaque_location(id)?;self.charge_covered(resource.length).await?;
             resource.verify_async(self.cancelled).await?;self.decoded+=resource.length;self.opaque.insert(id,resource);
         }
         Ok(())
@@ -463,8 +464,13 @@ impl<'a> ResourceReader<'a> {
         let decoded = self.decoded.checked_add(bytes).ok_or("Decoded resource size overflow")?;
         if decoded > self.limits.raster_bytes.saturating_add(self.limits.asset_bytes) { return Err(DecodeError::MemoryBudgetExceeded); }
         if self.admission.as_ref().is_some_and(|admission| !admission.resize(decoded.saturating_add(self.prepared_bytes).max(admission.reserved_bytes()))) { return Err(DecodeError::MemoryBudgetExceeded); }
+        if self.waits && self.admission.as_ref().is_some_and(|admission| !admission.covered()) { return Err(DecodeError::Uncovered); }
         Ok(())
     }
+    async fn charge_covered(&self, bytes: u64) -> DecodeResult<()> {
+        loop { match self.charge(bytes) { Err(DecodeError::Uncovered) => self.covering().await, result => return result } }
+    }
+    pub(crate) async fn covering(&self) { if let Some(admission) = &self.admission { admission.covering().await; } }
     pub fn raster_tile(&mut self, reference:&Value) -> DecodeResult<crate::raster::RasterTile> {
         let id = reference_id(reference)?;
         if let Some(tile) = self.rasters.get(&id) { return Ok(tile.clone()); }

@@ -140,7 +140,10 @@ pub fn run() -> gtk::glib::ExitCode {
     let result = app.run();
     let windows = std::mem::take(&mut *active.borrow_mut());
     drop(windows);
-    layer_render_wgpu::finish_shader_compiler_shutdown();
+    if let Err(error) = layer_host::gpu::finish_process_gpu() {
+        eprintln!("{error}");
+        return gtk::glib::ExitCode::FAILURE;
+    }
     result
 }
 

@@ -130,9 +130,7 @@ async fn run(shared: Arc<Coordinator>, jobs: Vec<Running<Work>>) -> Result<(), S
             .queue
             .borrow_mut()
             .finish(key, class, independent, compiled);
-        for (_, wake) in wakes {
-            wake();
-        }
+        wake_owners(wakes,|owner,error|shared.with_queue(|q|{q.fail(owner,error);}));
     }
     shared.notify();
     result

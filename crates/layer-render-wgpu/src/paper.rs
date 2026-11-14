@@ -239,7 +239,7 @@ impl SlopePrograms {
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
         }
-        queue.submit([encoder.finish()]);
+        device.submit(queue,[encoder.finish()]);
         Ok(texture.create_view(&Default::default()))
     }
 }
@@ -342,14 +342,24 @@ impl Papers {
     }
     #[cfg(target_arch="wasm32")]
     pub fn set_decoder(&mut self,decoder:BrowserRasterDecoder) {self.decoder=Some(decoder);}
-    #[cfg(target_arch="wasm32")]
-    pub fn register_waker(&self,wake:&std::task::Waker) {*self.wake.borrow_mut()=Some(wake.clone());}
+    pub fn register_waker(&self,wake:&std::task::Waker) {
+        #[cfg(not(target_arch="wasm32"))]
+        if let Some(queue)=&self.decode {queue.register_waker(wake);}
+        #[cfg(target_arch="wasm32")]
+        { *self.wake.borrow_mut()=Some(wake.clone()); }
+    }
+    pub fn clear_waker(&self) {
+        #[cfg(not(target_arch="wasm32"))]
+        if let Some(queue)=&self.decode {queue.clear_waker();}
+        #[cfg(target_arch="wasm32")]
+        { self.wake.borrow_mut().take(); }
+    }
     pub fn images_ready(&self)->bool {
         #[cfg(target_arch="wasm32")]
         if self.decoded.borrow().is_some() {return true;}
         self.decode.as_ref().is_some_and(|queue|queue.ready())
     }
-    pub fn image_waiting(&self)->bool {self.decode.as_ref().is_some_and(|queue|queue.in_flight()) && !self.images_ready()}
+    pub fn image_waiting(&self)->bool {self.decode.as_ref().is_some_and(|queue|queue.pending()) && !self.images_ready()}
     fn image_complete(bake:&Bake)->bool {
         match &bake.surface.texture {
             TextureSource::Image(source)=>bake.image.as_ref().is_some_and(|input|input.count==(source.extent[0].div_ceil(PAGE_SIZE)*source.extent[1].div_ceil(PAGE_SIZE)) as usize),
@@ -563,10 +573,7 @@ impl Papers {
         }
         self.advance_images(device,queue,held)?;
         if !wait && !self.submitted.load(Ordering::Acquire) {
-            let _ = device.poll(wgpu::PollType::Poll);
-            if !self.submitted.load(Ordering::Acquire) {
-                return Ok(());
-            }
+            return Ok(());
         }
         loop {
             let Some(index) = self.bakes.iter().enumerate()
@@ -579,9 +586,10 @@ impl Papers {
             if !wait {
                 if progressed {
                     let submitted = Arc::new(AtomicBool::new(false));
-                    let signal = submitted.clone();
-                    queue.on_submitted_work_done(move || signal.store(true, Ordering::Release));
+                    let signal = crate::CompletionFlag(submitted.clone());
+                    device.on_queue_done(queue,move || drop(signal));
                     self.submitted = submitted;
+                    device.request_poll();
                 }
                 return Ok(());
             }
@@ -640,18 +648,17 @@ impl Papers {
                     buffer: &readback,
                     layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(PROBE_SIZE * 4), rows_per_image: Some(PROBE_SIZE) },
                 }, wgpu::Extent3d { width: PROBE_SIZE, height: PROBE_SIZE, depth_or_array_layers: 1 });
-                queue.submit([encoder.finish()]);
+                device.submit(queue,[encoder.finish()]);
                 let state = Arc::new(AtomicU8::new(MAPPING));
                 let signal = state.clone();
-                readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-                    signal.store(if result.is_ok() { MAPPED } else { FAILED }, Ordering::Release);
-                });
+                let abandoned=MappingCompletion(signal.clone());
+                readback.slice(..).map_async(wgpu::MapMode::Read, {let callback=move |result:Result<(),wgpu::BufferAsyncError>| {
+                    signal.store(if result.is_ok() { MAPPED } else { FAILED }, Ordering::Release);drop(abandoned);
+                }; #[cfg(not(target_arch="wasm32"))] let callback=device.callback(callback);callback});
+                device.request_poll();
                 Stage::Probing { readback, state, image }
             }
             Stage::Probing { readback, state, image } => {
-                if !wait {
-                    let _ = device.poll(wgpu::PollType::Poll);
-                }
                 match state.load(Ordering::Acquire) {
                     MAPPED => {}
                     FAILED => return Err(GpuRasterError::MapFailed("Paper probe readback failed".into())),
@@ -703,7 +710,7 @@ impl Papers {
                         pass.draw(0..3, 0..1);
                     }
                 }
-                queue.submit([encoder.finish()]);
+                device.submit(queue,[encoder.finish()]);
                 *next = end;
                 if end < total {
                     return Ok(true);
@@ -780,14 +787,25 @@ mod tests {
             let result=renderer.papers.advance(&renderer.device,&renderer.queue,false,None);
             if renderer.papers.image_waiting() {
                 assert!(renderer.image_decode_waiting());
-                let target=Arc::new(std::sync::Mutex::new(None));
+                let target=Arc::new(std::sync::Mutex::new(object_image_mips::CoordinateSlot::new(&Default::default())));
                 renderer.source_results.push_back((renderer.device.working_space(),object_image_mips::PreparedImageWork::Coordinates {
                     destination:Arc::downgrade(&target),pixels:Ok(Arc::new(vec![0;8])),
                 }));
                 assert!(!renderer.image_decode_waiting(),"ready source work must run while paper reads are pending");
                 renderer.source_results.clear();
             }
-            let _=send.send(());(renderer,result)
+            {
+                struct Notify(std::sync::mpsc::Sender<()>);
+                impl std::task::Wake for Notify {fn wake(self:Arc<Self>) {let _=self.0.send(());}}
+                let (notify,woken)=std::sync::mpsc::channel();
+                let waker=std::task::Waker::from(Arc::new(Notify(notify)));
+                let mut future=std::pin::pin!(renderer.await_image_decode());
+                assert!(std::future::Future::poll(future.as_mut(),&mut std::task::Context::from_waker(&waker)).is_pending());
+                let _=send.send(());
+                woken.recv_timeout(std::time::Duration::from_secs(5)).expect("stored paper decode must wake its snapshot waiter");
+                assert!(matches!(std::future::Future::poll(future.as_mut(),&mut std::task::Context::from_waker(&waker)),std::task::Poll::Ready(Ok(()))));
+            }
+            (renderer,result)
         });
         let returned=receive.recv_timeout(std::time::Duration::from_secs(2)).is_ok();
         store.gate.entered();store.gate.release();
@@ -1130,3 +1148,6 @@ mod tests {
         }
     }
 }
+
+struct MappingCompletion(Arc<AtomicU8>);
+impl Drop for MappingCompletion {fn drop(&mut self) {let _=self.0.compare_exchange(MAPPING,FAILED,Ordering::AcqRel,Ordering::Acquire);}}

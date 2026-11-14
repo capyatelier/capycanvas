@@ -23,7 +23,7 @@ impl WindowPipelines {
             "display mip window", &pipeline_layout, &shader, "copy"), layout }
     }
     pub fn prepare_tile(&self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,
-        work:&mut Image,source:&wgpu::Texture,image:&layer_core::color::source::SourceImage,coordinate:[u32;2],level:u32,
+        work:&mut Image,source:&crate::source_access::TileTexture,image:&layer_core::color::source::SourceImage,coordinate:[u32;2],level:u32,
     )->Result<(),GpuRasterError> {
         if source.format()==wgpu::TextureFormat::Rgba32Float {
             work.copy_to_scratch(encoder,source,PixelRect::full([PAGE_SIZE;2]),[0;2])?;

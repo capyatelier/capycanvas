@@ -111,6 +111,7 @@ impl TouchGestures {
         !self.failed && !self.tap_failed && !self.lifted && (2..=3).contains(&self.contacts.len())
     }
     pub fn repeat_fingers(&self) -> usize { self.contacts.len() }
+    pub fn repeat_deadline(&self) -> Option<u64> { self.repeat_ns }
     pub fn advance(&mut self, now_ns: u64, policy: TouchPolicy) -> Option<TouchGesture> {
         if !self.repeat_pending() { self.repeat_ns = None; return None; }
         let deadline = self.repeat_ns.get_or_insert(now_ns.saturating_add(u64::from(policy.tap_ms) * 1_000_000));

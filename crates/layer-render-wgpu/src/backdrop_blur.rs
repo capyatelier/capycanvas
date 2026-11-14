@@ -492,7 +492,7 @@ impl BackdropBlur {
             uploads.write(encoder, self.region_buffer.as_ref().unwrap(), bytes)?;
         }
         self.uploaded.store(true, Ordering::Release);
-        write.track(encoder);
+        write.track_raw(&uploads.device,encoder);
         Ok(())
     }
 
@@ -623,7 +623,7 @@ impl BackdropBlur {
         let bytes: Vec<u8> = self.reprojection.0.into_iter().flat_map(f32::to_ne_bytes).collect();
         let write = crate::submission::CacheWrite::shared(self.uploaded.clone());
         uploads.write_at(encoder, &self.uniforms, REPROJECTION_OFFSET, &bytes)?;
-        write.track(encoder);
+        write.track_raw(&uploads.device,encoder);
         Ok(())
     }
 

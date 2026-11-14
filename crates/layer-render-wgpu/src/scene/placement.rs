@@ -29,29 +29,96 @@ pub(super) struct PlacementJob {
 }
 
 impl PlacementJob {
+    pub(super) fn work(&self)->u64 {self.region.area().saturating_mul(u64::from(self.taps.max(1)))}
+    pub(super) fn source_views(&self) -> impl Iterator<Item = &wgpu::TextureView> {
+        self.sources.iter().map(|(_, view)| view).chain(self.positions.iter())
+    }
     pub(super) fn reads(&self, texture: &wgpu::Texture) -> bool {
-        self.sources.iter().any(|(_, view)| view.texture() == texture)
-            || self.positions.as_ref().is_some_and(|view| view.texture() == texture)
+        self.source_views().any(|view| view.texture() == texture)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Placement {
+    pub transform:layer_core::ImageTransform,
+    pub mesh:Option<Arc<paint_transform::mesh::MeshGeometry>>,
+    pub bounds:PixelRect,
+    pub offset:[i64;2],
+    pub(in crate::scene) frame:scale::SourceFrame,
+    scene_offset:[f64;2],
+}
+impl Placement {
+    pub fn identity(bounds:PixelRect,offset:[i64;2])->Arc<Self> {
+        Arc::new(Self {transform:Default::default(),mesh:None,bounds,offset,frame:scale::SourceFrame::at(offset,[0;2]),scene_offset:[0.;2]})
+    }
+    pub fn capture(plan:&layer_core::TransformPixelsPlan,scene:SceneView<'_>,planes:&[RasterPlane])->Vec<(RasterPlane,Arc<Self>)> {
+        let target=plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target);
+        planes.iter().map(|&plane| {
+            let source=if plane==RasterPlane::Mask {plan.coverage.map(SourceTarget::Coverage).unwrap_or(plan.target)}else {target};
+            let mut transform=plan.plane_geometry(source);
+            transform.placement.interpolation=plan.geometry.placement.interpolation;
+            let bounds=pixel_rect(plan.plane_domain(source),scene.target_extent(source));
+            let mesh=transform.placement.mesh.as_ref().map(|mesh|Arc::new(paint_transform::mesh::MeshGeometry::new(mesh,transform.placement.outer,None)));
+            (plane,Arc::new(Self {transform,mesh,bounds,offset:[0;2],frame:scale::SourceFrame::at([0;2],[0;2]),scene_offset:[0.;2]}))
+        }).collect()
+    }
+    pub(in crate::scene) fn source(frame:scale::SourceFrame,extent:[u32;2])->Arc<Self> {
+        Arc::new(Self {transform:Default::default(),mesh:None,bounds:PixelRect::full(extent),offset:frame.origin(),frame,scene_offset:[0.;2]})
+    }
+    pub fn packet<'a>(&self,packet:FramePacket<'a>)->FramePacket<'a> {
+        FramePacket {scene:packet.scene.with_offset64(self.scene_offset),..packet}
+    }
+    pub fn material_window(&self,tile:[u32;2])->Self {
+        Self {offset:std::array::from_fn(|i|self.offset[i]+i64::from(PAGE_SIZE)-i64::from(tile[i]*PAGE_SIZE)),..self.clone()}
+    }
+    pub fn material_view(&self,origin:[i64;2])->Arc<Self> {
+        Arc::new(Self {offset:std::array::from_fn(|i|self.offset[i]-origin[i]),
+            frame:scale::SourceFrame {shift:std::array::from_fn(|i|self.frame.shift[i]-origin[i]),..self.frame},scene_offset:[0.;2],..self.clone()})
+    }
+    pub fn matches(&self,other:&Self)->bool {
+        self.transform==other.transform && self.bounds==other.bounds && self.offset==other.offset
+            && self.frame==other.frame && self.scene_offset==other.scene_offset
+            && match (&self.mesh,&other.mesh) {(None,None)=>true,(Some(a),Some(b))=>Arc::ptr_eq(a,b),_=>false}
+    }
+    pub fn footprints(&self,region:PixelRect)->Result<Vec<paint_transform::snapshot::Footprint>,GpuRasterError> {
+        self.footprints_where(region,|_|true)
+    }
+    pub fn footprints_where(&self,region:PixelRect,contains:impl Fn([u32;2])->bool)->Result<Vec<paint_transform::snapshot::Footprint>,GpuRasterError> {
+        let mut pieces=Vec::new();
+        Splitter::new(self.bounds,&self.transform,self.mesh.clone(),|coordinate|!page_rect(coordinate).intersect(self.bounds).is_empty() && contains(coordinate))?
+            .placed().shifted(self.offset).split(region,&mut pieces)?;
+        Ok(pieces)
     }
 }
 
 impl Scene {
+    pub(super) fn raw_placement(&self,transform:layer_core::ImageTransform,bounds:PixelRect,offset:[i64;2])->Arc<Placement> {
+        let mesh=self.mesh_geometry(&transform);
+        Arc::new(Placement {transform,mesh,bounds,offset,frame:scale::SourceFrame::at(offset,[0;2]),scene_offset:[0.;2]})
+    }
+    pub(super) fn reduced_placement(&self,packet:FramePacket<'_>,id:SourceTarget,phase:[u32;2])->Arc<Placement> {
+        let origin=packet.scene.target_offset(id);
+        Arc::new(Placement {transform:Default::default(),mesh:None,bounds:PixelRect::full(packet.scene.target_extent(id)),
+            offset:phase.map(i64::from),frame:scale::SourceFrame::at(origin,phase),scene_offset:std::array::from_fn(|i|(i64::from(phase[i])-origin[i]) as f64)})
+    }
     pub(crate) const MATERIAL_CACHE_PAGES: usize = 64;
 
-    pub(super) fn mask_at(&mut self, r: &WgpuRasterizer, mask: &MaskUse, source: &CoverageSource, offset: [i64; 2], tile: [u32; 2]) -> Result<usize, GpuRasterError> {
-        self.mask_tile_input(r, mask, source, offset, tile, None)
+    pub(super) fn mask_at(&mut self, r: &WgpuRasterizer, mask: &MaskUse, source: &CoverageSource, offset: [i64; 2], tile: [u32; 2], accepted:&mut sources::AcceptedInputs) -> Result<usize, GpuRasterError> {
+        self.mask_tile_input(r, mask, source, offset, tile, None, accepted)
     }
 
-    pub(super) fn command_mask_at(&mut self, r: &WgpuRasterizer, coverage: &layer_core::CoverageSnapshot, tile: [u32; 2], command: layer_masks::CommandCoverage) -> Result<ColorInput, GpuRasterError> {
+    pub(super) fn command_mask_at(&mut self, r: &WgpuRasterizer, coverage: &layer_core::CoverageSnapshot, tile: [u32; 2], command: layer_masks::CommandCoverage, accepted:&mut sources::AcceptedInputs) -> Result<ColorInput, GpuRasterError> {
         if coverage.use_.offset == [0; 2] && !coverage.use_.inverted {
             if let Some(page) = r.layer_masks.command_pages.get(&(command, tile)) {
-                return Ok(ColorInput { view: page.view.clone(), lease: None });
+                let name=crate::raster::contents::command_mask(&coverage.source,coverage.selection.as_ref(),tile)?;
+                if let Ok(read)=page.read(name,self.submission.as_ref()) {return Ok(ColorInput { view: read.value().view.clone(), lease: None });}
             }
-            if coverage.source.default_coverage == 0. {
+            if coverage.source.default_coverage == 0. && !layer_masks::command_page_needed(coverage,command.2,tile)
+                && (coverage.selection.is_some() || r.mask_data(SourceTarget::Coverage(coverage.use_.source),&coverage.source)?.tiles.get(&layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Mask,coordinate:tile}).is_none()) {
                 return Ok(ColorInput { view: r.empty_scalar_view.clone(), lease: None });
             }
         }
-        let index = self.mask_tile_input(r, &coverage.use_, &coverage.source, coverage.use_.offset, tile, Some(command))?;
+        let index = self.mask_tile_input(r, &coverage.use_, &coverage.source, coverage.use_.offset, tile, Some((command,coverage)), accepted)?;
         Ok(ColorInput { view: self.pool[index].view.clone(), lease: Some(self.own(index).into_owner().into()) })
     }
 
@@ -67,15 +134,15 @@ impl Scene {
         Some(geometry)
     }
 
-    #[expect(clippy::too_many_arguments, reason = "Placed-plane jobs keep transform, output domain, and generic tile source explicit")]
     fn placed_plane_jobs(
-        &mut self, r: &WgpuRasterizer, transform: layer_core::ImageTransform,
-        bounds: PixelRect, tile: [u32; 2], background: f32, scalar: bool, offset: [i64; 2],
+        &mut self, r: &WgpuRasterizer, placement:&Placement,
+        tile: [u32; 2], background: f32, scalar: bool,
         mut source: impl FnMut(&mut Self, [u32; 2]) -> Result<(Option<ColorInput>, Option<usize>), GpuRasterError>,
     ) -> Result<usize, GpuRasterError> {
-        let exact = pixel_transform::exact_taps(&transform);
+        let Placement {transform,mesh,bounds,offset,..}=placement;
+        let (bounds,offset)=(*bounds,*offset);
+        let exact = pixel_transform::exact_taps(transform);
         let taps = if self.placement_display { exact.min(pixel_transform::PREVIEW_TAPS) } else { exact };
-        let mesh = self.mesh_geometry(&transform);
         let positions = mesh.as_ref().map(|geometry| {
             let view = self.positions.view(&r.device, [PAGE_SIZE; 2]);
             let key = (transform.placement.clone(), tile);
@@ -86,9 +153,7 @@ impl Scene {
             view
         });
         let origin = std::array::from_fn(|axis| i64::from(tile[axis] * PAGE_SIZE) - offset[axis]);
-        let mut pieces = Vec::new();
-        Splitter::new(bounds, &transform, mesh, |c| !page_rect(c).intersect(bounds).is_empty())?
-            .placed().shifted(offset).split(page_rect(tile), &mut pieces)?;
+        let pieces=placement.footprints(page_rect(tile))?;
         let out = self.reserve_format(r, scalar)?;
         let held = self.own(out);
         if pieces.is_empty() {
@@ -125,28 +190,31 @@ impl Scene {
         Ok(self.keep(held))
     }
 
+    pub(crate) fn declare_raw_capture(&mut self,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,placements:&[(RasterPlane,Arc<Placement>)],coordinate:[u32;2])->Result<sources::Inputs,GpuRasterError> {
+        let declaration=self.capture_declaration(r,packet)?;
+        self.declare(r,Default::default(),declaration,|scene,r,accepted| {
+            scene.placement_display=false;
+            let mut pages=Vec::with_capacity(placements.len());
+            for (plane,placement) in placements {let page=scene.placed_raw_plane(r,packet.scene,target,placement,coordinate,*plane,accepted)?;pages.push(scene.own(page));}
+            Ok(())
+        })
+    }
     pub(crate) fn capture_raw_tile(
         &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, coordinate: [u32; 2],
-        plan: &layer_core::TransformPixelsPlan, planes: &[layer_core::raster::RasterPlane], encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(Vec<(layer_core::raster::RasterPlane, layer_core::raster::RasterTile)>, crate::raster::NativeCapture), GpuRasterError> {
-        use layer_core::raster::{RasterPlane, RasterTile};
+        plan: &layer_core::TransformPixelsPlan, placements:&[(RasterPlane,Arc<Placement>)], encoder: &mut crate::submission::CommandEncoder,
+     accepted:&mut sources::AcceptedInputs) -> Result<(Vec<(layer_core::raster::RasterPlane, layer_core::raster::RasterTile)>, crate::raster::NativeCapture), GpuRasterError> {
+        use layer_core::raster::RasterTile;
+        #[cfg(test)]
+        let _record=sources::record_reads(accepted);
         let target = plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target);
-        let geometry = &plan.geometry;
         self.clear_material_pages();
         self.placement_display = false;
-        let owner = packet.scene.source_owner(target).ok_or(GpuRasterError::MissingPaintLayer(target))?;
-        let extent = packet.scene.target_extent(target);
         let mut inputs = Vec::new();
         let mut tiles = Vec::new();
-        let mut pages = Vec::with_capacity(planes.len());
-        for &plane in planes {
-            let (mut transform, bounds) = if plane == RasterPlane::Mask {
-                let (mask, source) = packet.scene.mask(owner).unwrap();
-                let coverage = SourceTarget::Coverage(mask.source);
-                (plan.plane_geometry(coverage), pixel_rect(plan.plane_domain(coverage), source.domain))
-            } else { (geometry.clone(), pixel_rect(plan.plane_domain(target), extent)) };
-            transform.placement.interpolation = geometry.placement.interpolation;
-            let page = self.placed_raw_plane(r, packet.scene, target, transform, [0; 2], coordinate, plane, bounds)?;
+        let mut pages = Vec::with_capacity(placements.len());
+        for (plane,placement) in placements {
+            let plane=*plane;
+            let page = self.placed_raw_plane(r, packet.scene, target, &placement, coordinate, plane, accepted)?;
             let held = self.own(page);
             self.encode_jobs(r, encoder)?;
             let tile = RasterTile::pending(plane.descriptor_for(r.document_color(), packet.scene.color_mode(target)));
@@ -163,75 +231,46 @@ impl Scene {
     #[expect(clippy::too_many_arguments, reason = "Raw-plane mapping keeps source bounds, geometry, offset and raster plane explicit")]
     pub(super) fn placed_raw_plane(
         &mut self, r: &WgpuRasterizer, scene: SceneView<'_>, target: SourceTarget,
-        transform: layer_core::ImageTransform, offset: [i64; 2], tile: [u32; 2], plane: layer_core::raster::RasterPlane,
-        bounds: PixelRect,
-    ) -> Result<usize, GpuRasterError> {
+        placement:&Placement, tile: [u32; 2], plane: layer_core::raster::RasterPlane,
+     accepted:&mut sources::AcceptedInputs) -> Result<usize, GpuRasterError> {
         use layer_core::raster::RasterPlane;
-        let stored = r.paint_layers.iter().find(|stored| stored.id == target);
         let mask = scene.source_owner(target).and_then(|owner| scene.mask(owner));
         let background = if plane == RasterPlane::Mask { mask.unwrap().1.default_coverage } else { 0. };
         let source = if plane == RasterPlane::Mask { SourceTarget::Coverage(mask.unwrap().0.source) } else { target };
-        let scene_view = scene;
-        self.placed_plane_jobs(r, transform, bounds, tile, background, plane != RasterPlane::Color, offset, |scene, c| {
+        self.placed_plane_jobs(r, placement, tile, background, plane != RasterPlane::Color, |this, c| {
             if plane == RasterPlane::Color {
-                let preview = r.preview_layer_id == Some(target) && !r.preview_damage.intersect(page_rect(c)).is_empty();
-                let inputs = scene.color_inputs(r, scene_view, target, stored, c, preview)?;
+                let inputs = this.color_inputs(r,scene,target,c,accepted)?;
                 return match inputs {
                     [Some(base), Some(flow)] => {
-                        let page = scene.alloc(r, wgpu::Color::TRANSPARENT)?;
+                        let page = this.alloc(r, wgpu::Color::TRANSPARENT)?;
                         for input in [base, flow] {
-                            scene.draw(r, page, input.view, None, [0., 0., 256., 256.], [1., 1., 0., 0.], true, Convert::None);
+                            this.draw(r, page, input.view, None, [0., 0., 256., 256.], [1., 1., 0., 0.], true, Convert::None);
                         }
-                        Ok((Some(ColorInput { view: scene.pool[page].view.clone(), lease: None }), Some(page)))
+                        Ok((Some(ColorInput { view: this.pool[page].view.clone(), lease: None }), Some(page)))
                     }
                     [Some(input), None] | [None, Some(input)] => Ok((Some(input), None)),
                     [None, None] => Ok((None, None)),
                 };
             }
-            let view = if plane == RasterPlane::Mask { r.layer_masks.pages.get(&(source, c)).map(|page| &page.view) }
-            else { stored.and_then(|stored| match plane {
-                RasterPlane::WatercolorWetness => r.preview_watercolor_wetness_pages.iter()
-                    .find(|p| r.preview_layer_id == Some(target) && p.coordinate == c && !r.preview_damage.intersect(page_rect(c)).is_empty())
-                    .or_else(|| stored.watercolor_wetness_pages.iter().find(|p| p.coordinate == c)).map(|p| &p.active().view),
-                _ => None,
-            }) };
-            if let Some(view) = view { return Ok((Some(ColorInput { view: view.clone(), lease: None }), None)); }
-            Ok((scene.cold_plane(r, source, plane, c)?, None))
+            let view=if plane==RasterPlane::Mask {this.mask_input(r,source,mask.unwrap().1,c,accepted)?}else {this.scalar_input(r,scene,source,plane,c,accepted)?};
+            Ok((view.map(|view|ColorInput {view,lease:None}),None))
         })
     }
 
-    pub(super) fn cold_plane(&mut self, r: &WgpuRasterizer, id: SourceTarget, plane: layer_core::raster::RasterPlane, c: [u32; 2]) -> Result<Option<ColorInput>, GpuRasterError> {
-        let Some(blob) = r.native_plane_tile(id, plane, c)? else { return Ok(None); };
-        let space = r.document_color().space;
-        let (tile, pending) = r.source_tiles.borrow_mut().plan_raster(r, &blob, space, space)?;
-        if let Some(pending) = pending { self.enqueue_source_decode(pending); }
-        let (tile,pending)=r.source_tiles.borrow_mut().promote(r,tile)?;
-        if let Some(pending)=pending {self.enqueue_source_decode(pending);}
-        let lease = r.source_tiles.borrow().lease(&tile.view);
-        Ok(Some(ColorInput { view: tile.view, lease }))
-    }
-
-    pub(super) fn mask_page(&mut self, r: &WgpuRasterizer, id: SourceTarget, tile: [u32; 2]) -> Result<Option<wgpu::TextureView>, GpuRasterError> {
-        if let Some(page) = r.layer_masks.pages.get(&(id, tile)) { return Ok(Some(page.view.clone())); }
-        if !r.snapshot_worker { return Ok(None); }
-        Ok(self.cold_plane(r, id, layer_core::raster::RasterPlane::Mask, tile)?.map(|input| input.view))
+    pub(super) fn mask_page(&mut self,r:&WgpuRasterizer,id:SourceTarget,source:&CoverageSource,tile:[u32;2],accepted:&mut sources::AcceptedInputs)->Result<Option<wgpu::TextureView>,GpuRasterError> {
+        self.mask_input(r,id,source,tile,accepted)
     }
 
     /// Document page `tile` of a paint layer whose pixel (0, 0) lies `offset`
     /// pixels further on, as its color and, while a stroke previews a flow
     /// over that color, the flow.
     pub(super) fn placed_color(
-        &mut self, r: &WgpuRasterizer, scene: SceneView<'_>, target: SourceTarget, offset: [i64; 2], tile: [u32; 2],
-    ) -> Result<(usize, Option<usize>), GpuRasterError> {
-        let extent = scene.target_extent(target);
-        let bounds = PixelRect::full(extent);
-        let stored = r.paint_layers.iter().find(|stored| stored.id == target);
-        let read = DocRect::from(page_rect(tile)).translated(offset.map(|v| -v)).in_frame(extent);
-        let flows = r.preview_layer_id == Some(target) && !r.preview_requires_base
-            && page_coordinates(read).any(|c| !r.preview_damage.intersect(page_rect(c)).is_empty() && r.preview_page(c).is_some());
-        let plane = |this: &mut Self, flow: bool| this.placed_plane_jobs(r, Default::default(), bounds, tile, 0., false, offset, |this, c| {
-            let preview = r.preview_layer_id == Some(target) && !r.preview_damage.intersect(page_rect(c)).is_empty();
-            let [color, overlay] = this.color_inputs(r, scene, target, stored, c, preview)?;
+        &mut self, r: &WgpuRasterizer, scene: SceneView<'_>, target: SourceTarget, placement:&Placement, tile: [u32; 2],
+     accepted:&mut sources::AcceptedInputs) -> Result<(usize, Option<usize>), GpuRasterError> {
+        let flows=placement.footprints(page_rect(tile))?.iter().flat_map(|piece|&piece.sources)
+            .try_fold(false,|present,&c|Ok::<_,GpuRasterError>(present|accepted.color(r,scene,target,c)?[1].is_some()))?;
+        let mut plane = |this: &mut Self, flow: bool| this.placed_plane_jobs(r, placement, tile, 0., false, |this, c| {
+            let [color, overlay] = this.color_inputs(r,scene,target,c,accepted)?;
             Ok((if flow { overlay } else { color }, None))
         });
         let color = plane(self, false)?;
@@ -242,37 +281,37 @@ impl Scene {
 
     pub(super) fn placed_material_tile(
         &mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle,
-        offset: [i64; 2], tile: [u32; 2],
-    ) -> Result<usize, GpuRasterError> {
-        self.placed_material_inputs(r, packet, handle, offset, tile).map(|(page, _)| page)
+        placement:&Placement, tile: [u32; 2],
+     accepted:&mut sources::AcceptedInputs) -> Result<usize, GpuRasterError> {
+        self.placed_material_inputs(r, packet, handle, placement, tile, accepted).map(|(page, _)| page)
     }
 
     pub(super) fn placed_material_inputs(
         &mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle,
-        offset: [i64; 2], tile: [u32; 2],
-    ) -> Result<(usize, wgpu::TextureView), GpuRasterError> {
+        placement:&Placement, tile: [u32; 2],
+     accepted:&mut sources::AcceptedInputs) -> Result<(usize, wgpu::TextureView), GpuRasterError> {
         use layer_core::raster::RasterPlane;
+        let offset=placement.offset;
         let target = packet.scene.source_target(handle).unwrap();
         let (bounds, radius) = self.material_coverage(r, target, offset, packet.dab_batches);
         if bounds.expand(radius).intersect(page_rect(tile).into()).is_empty() {
-            let page = self.placed_raw_plane(r, packet.scene, target, Default::default(), offset, tile, RasterPlane::Color, PixelRect::full(packet.scene.local_extent(handle)))?;
+            let page = self.placed_raw_plane(r, packet.scene, target, placement, tile, RasterPlane::Color, accepted)?;
             return Ok((page, self.pool[page].view.clone()));
         }
         let mut pages = vec![r.empty_scalar_view.clone();10];
         for (neighbor,c) in [[1,1],[0,1],[2,1],[1,0],[1,2]].into_iter().enumerate() {
             for (plane_index,plane) in [RasterPlane::Color,RasterPlane::WatercolorWetness].into_iter().enumerate() {
-                pages[plane_index*5+neighbor] = self.material_page(r, packet, handle, offset, tile, c, plane)?;
+                pages[plane_index*5+neighbor] = self.material_page(r, packet, handle, placement, tile, c, plane, accepted)?;
             }
         }
-        let binding = views_group(&r.device, "placed material neighborhood", &r.watercolor_layout,
-            pages.iter());
         let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
         let held = self.own(out);
+        let color=pages[0].clone();
         self.jobs.push(Job::Watercolor {
-            coordinates: (self.material_coordinates.clone(), 0), target: self.pool[out].view.clone(), binding,
+            coordinates: (self.material_coordinates.clone(), 0), target: self.pool[out].view.clone(), views: pages,
             record: *r.layer_style_records.get(&handle).ok_or(GpuRasterError::MissingPaintLayer(target))?,
         });
-        Ok((self.keep(held), pages[0].clone()))
+        Ok((self.keep(held), color))
     }
 
     pub(super) fn material_coverage(&mut self, r: &WgpuRasterizer, id: SourceTarget, offset: [i64; 2], batches: &[DabBatch]) -> (DocRect, u32) {
@@ -289,10 +328,11 @@ impl Scene {
 
     #[expect(clippy::too_many_arguments, reason = "Material sampling keeps offset, tile, neighbor, and raster plane explicit")]
     fn material_page(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle,
-        offset: [i64; 2], tile: [u32; 2], neighbor: [u32; 2],
+        placement:&Placement, tile: [u32; 2], neighbor: [u32; 2],
         plane: layer_core::raster::RasterPlane,
-    ) -> Result<wgpu::TextureView, GpuRasterError> {
+     accepted:&mut sources::AcceptedInputs) -> Result<wgpu::TextureView, GpuRasterError> {
         let target = packet.scene.source_target(handle).unwrap();
+        let offset=placement.offset;
         let coordinate = std::array::from_fn(|i| tile[i] as i32 + neighbor[i] as i32 - 1);
         if plane == layer_core::raster::RasterPlane::WatercolorWetness || neighbor != [1, 1] {
             let origin = coordinate.map(|n| i64::from(n) * i64::from(PAGE_SIZE));
@@ -313,8 +353,8 @@ impl Scene {
         if self.material_pages.len() == Self::MATERIAL_CACHE_PAGES {
             self.material_pages.pop_front();
         }
-        let shift = std::array::from_fn(|i| offset[i] + i64::from(PAGE_SIZE) - i64::from(tile[i] * PAGE_SIZE));
-        let page = self.placed_raw_plane(r, packet.scene, target, Default::default(), shift, neighbor, plane, PixelRect::full(packet.scene.local_extent(handle)))?;
+        let window=placement.material_window(tile);
+        let page = self.placed_raw_plane(r, packet.scene, target, &window, neighbor, plane, accepted)?;
         let held = self.own(page);
         self.material_pages.push_back(MaterialPage { layer: target, offset, coordinate, plane, page: held });
         Ok(self.pool[page].view.clone())
@@ -327,12 +367,12 @@ impl Scene {
         packet: FramePacket<'_>,
         handle: OccurrenceHandle,
         c: [u32; 2],
-    ) -> Result<usize, GpuRasterError> {
+     accepted:&mut sources::AcceptedInputs) -> Result<usize, GpuRasterError> {
         let target = packet.scene.source_target(handle).unwrap();
         let out = self.alloc(r, wgpu::Color::TRANSPARENT)?;
         let held = self.own(out);
         let stored = r.paint_layers.iter().find(|l| l.id == target);
-        self.paint_page(r, packet, handle, stored, c, out, [0., 0., 256., 256.], Convert::None)?;
+        self.paint_page(r, packet, handle, stored, c, out, [0., 0., 256., 256.], Convert::None, accepted)?;
         Ok(self.keep(held))
     }
 }
@@ -395,12 +435,20 @@ mod tests {
 
     #[test]
     fn command_mask_reuse_preserves_fractional_coverage_and_placement() {
-        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let color=layer_core::color::DocumentColor {depth:layer_core::color::SampleDepth::F32,..Default::default()};
+        let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut scene = Scene::new(&r).unwrap();
         let command = (SourceTarget::default(), 0, false);
         for value in [0., 0.0001, 1. / 255., 0.12345, 0.5, 0.9995, 1.] {
-            let page = layer_masks::MaskPage::new(&r.device);
-            scene.jobs.push(Job::Clear(page.view.clone(), wgpu::Color { r:value, g:value, b:value, a:value }));
+            let code=(value as f64*f64::from(u16::MAX)).round() as u16;
+            let value=f64::from(code)/f64::from(u16::MAX);
+            let tile=layer_core::raster::RasterTile::backed(layer_core::raster::TileBlob::encode(
+                layer_core::raster::RasterPlane::Mask.descriptor(color),&code.to_le_bytes().repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap());
+            let data=layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+                tiles:[(layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Mask,coordinate:[0;2]},tile.clone())].into(),..Default::default()});
+            let mut page = layer_masks::MaskPage::new(&r.device);
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            page.clear(&mut encoder,value,tile.content_version()).unwrap();r.last_submission=encoder.submit(&r.queue);
             r.layer_masks.command_pages.insert((command, [0; 2]), page.clone());
             for (offset, inverted, tile, default) in [
                 ([0; 2], false, [0; 2], 0.), ([8, 0], false, [0; 2], 0.),
@@ -410,13 +458,22 @@ mod tests {
                 let mut coverage = layer_core::CoverageSnapshot::reveal_all(Default::default(), [512, 256], offset);
                 coverage.use_.inverted = inverted;
                 coverage.source.default_coverage = default;
+                coverage.source.raster=data.clone();
                 let before = scene.pool.len();
-                let input = scene.command_mask_at(&r, &coverage, tile, command).unwrap();
+                let doc=crate::scene::scale::tests::document_at([512,256]);
+                let packet=crate::test_support::packet(doc.scene(),[512,256]);
+                let declaration=scene.capture_declaration(&r,packet).unwrap();
+                let mut inputs=scene.accept_traversal(&mut r,Default::default(),declaration,|scene,r,accepted| {
+                    scene.command_mask_at(r,&coverage,tile,command,accepted)?;
+                    scene.mask_tile_input(r,&coverage.use_,&coverage.source,offset,tile,Some((command,&coverage)),accepted).map(drop)
+                }).unwrap();
+                let accepted=&mut inputs;
+                let input = scene.command_mask_at(&r, &coverage, tile, command, accepted).unwrap();
                 if offset == [0; 2] && !inverted && (tile == [0; 2] || default == 0.) {
                     assert_eq!(scene.pool.len(), before);
                     assert!(input.lease.is_none());
                 }
-                let pooled = scene.mask_tile_input(&r, &coverage.use_, &coverage.source, offset, tile, Some(command)).unwrap();
+                let pooled = scene.mask_tile_input(&r, &coverage.use_, &coverage.source, offset, tile, Some((command,&coverage)), accepted).unwrap();
                 let _pooled = scene.own(pooled);
                 let mut outputs = Vec::new();
                 for mask in [scene.pool[pooled].view.clone(), input.view.clone()] {

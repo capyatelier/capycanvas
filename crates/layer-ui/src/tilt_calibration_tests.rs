@@ -275,7 +275,7 @@ fn hidden_cursor_still_requests_a_frame_for_pen_binding_and_live_tilt() {
     let mut s=session(Platform::Gtk);let mut settings=s.state.settings.clone();settings.cursor=CursorMode::None;s.apply_settings(settings).unwrap();
     open(&mut s);s.frame(1,1).unwrap();assert!(!s.input_ui_pending());
     s.register_pen_device(&device(2,"pen",0));s.frame(2,2).unwrap();assert!(!s.input_ui_pending());
-    hover(&mut s,2,[0.4,0.]);assert!(s.input_ui_pending());assert!(s.wants_continuous_frames());assert!(view(&s).ready);
+    hover(&mut s,2,[0.4,0.]);assert!(s.input_ui_pending());assert!(s.frame_demand() != layer_render::FrameDemand::Wait);assert!(view(&s).ready);
     let change=s.frame(3,3).unwrap();assert_ne!(change.regions & regions::TILT_CALIBRATION,0);assert!(!s.input_ui_pending());
     hover(&mut s,2,[0.6,0.]);assert!(s.input_ui_pending());
 }

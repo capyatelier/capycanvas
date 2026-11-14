@@ -41,6 +41,26 @@ pub(super) fn receive(r: &mut WgpuRasterizer, mut request: SelectionPaint) -> Se
         std::thread::yield_now();
     }
 }
+#[test]
+fn a_selection_readback_completing_while_the_host_waits_wakes_the_host() {
+    let mut r = renderer();
+    let (wake, woken) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = wake.send(()); }));
+    let mut update = request(1, Selection::empty(), SelectionPaintMode::Add, 1.);
+    update.finish = true;
+    assert!(self::paint(&mut r, &update).unwrap());
+    let until = std::time::Instant::now() + READBACK_TIMEOUT;
+    let mut waits = 0;
+    loop {
+        if let Some(result) = r.take_selection_paint() { result.unwrap(); break; }
+        if r.next_frame() == layer_render::FrameDemand::Wait {
+            waits += 1;
+            woken.recv_timeout(std::time::Duration::from_secs(5)).expect("the selection readback never woke the waiting host");
+        }
+        assert!(std::time::Instant::now() < until, "selection paint capture timed out");
+    }
+    assert!(waits > 0 && waits < 64, "the host slept {waits} times for one readback");
+}
 fn value(s: &Selection, x: u32, y: u32) -> u8 {
     let layer_core::SelectionShape::Pixels(p) = &s.shape else {
         panic!("pixels")
@@ -49,22 +69,20 @@ fn value(s: &Selection, x: u32, y: u32) -> u8 {
 }
 fn renderer() -> WgpuRasterizer {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(
-        &mut r,
-        paint_document([128; 2], "artwork").scene(),
-        &[],
-        &[],
-        true,
-    );
+    crate::test_support::submit_settled(&mut r, FramePacket {reset_layers:true,
+        ..packet(paint_document([128;2],"artwork").scene(),[128;2])});
     r
 }
 
 #[test]
 fn selection_paint_opacity_accumulates_between_contacts_but_not_within_one() {
     let mut r = renderer();
+    let idle = r.raster_tiers.paint.used();
     let first = request(1, Selection::empty(), SelectionPaintMode::Add, 0.5);
     assert!(self::paint(&mut r, &first).unwrap());
     assert!(self::paint(&mut r, &first).unwrap());
+    assert_eq!(r.raster_tiers.paint.used() - idle, r.selection_painter.as_ref().unwrap().storage_bytes() + r.selection_clip.storage_bytes(),
+        "the painting's footprints and capture are charged to the paint tier");
     let first = receive(&mut r, first);
     assert_eq!(value(&first, 64, 64), 128);
     assert_eq!(value(&first, 2, 2), 0);

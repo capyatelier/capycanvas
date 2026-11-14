@@ -23,15 +23,12 @@ fn pixels(a: &mut App) -> Result<Vec<u8>, String> {
         .as_ref()
         .ok_or("Missing test GPU")?;
     let device = gpu.device();
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(TIMEOUT),
-        })
-        .map_err(error)?;
+    let (idle, settled) = std::sync::mpsc::channel();
+    gpu.on_gpu_done(move || { let _ = idle.send(()); });
+    settled.recv_timeout(TIMEOUT).map_err(error)?;
     if let Some((target, launch)) = surface.pending_target.take() {
         gpu.queue().present(target);
-        surface.track_launch(gpu.queue(), launch, a.host.wake_callback());
+        surface.track_launch(gpu, launch, a.host.wake_callback());
     }
     let start = Instant::now();
     let target = loop {
@@ -79,20 +76,10 @@ fn pixels(a: &mut App) -> Result<Vec<u8>, String> {
         },
         target.texture.size(),
     );
-    let submission = gpu.queue().submit([encoder.finish()]);
+    gpu.submit_commands([encoder.finish()]).ok_or("GPU device service retired")?;
     gpu.queue().present(target);
     let (send, receive) = std::sync::mpsc::channel();
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = send.send(result);
-        });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: Some(TIMEOUT),
-        })
-        .map_err(error)?;
+    gpu.map_read(&buffer, move |result| { let _ = send.send(result); });
     receive
         .recv_timeout(TIMEOUT)
         .map_err(error)?

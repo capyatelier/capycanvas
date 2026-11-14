@@ -10,7 +10,7 @@ pub(crate) struct Cache {
     pub uploads: u64,
 }
 impl Cache {
-    pub fn get(&mut self, device: &PipelineDevice, queue: &wgpu::Queue, resource: Option<&layer_core::Lut3d>) -> Result<Arc<Resource>, GpuRasterError> {
+    pub fn get(&mut self, device: &PipelineDevice, resource: Option<&layer_core::Lut3d>) -> Result<Arc<Resource>, GpuRasterError> {
         self.entries.retain(|_, value| value.strong_count() != 0);
         if let Some(resource) = resource {
             let key = (resource.digest(), resource.domain().map(|point| point.map(f32::to_bits)));
@@ -21,12 +21,14 @@ impl Cache {
                 return Err(GpuRasterError::Effect("Color lookup exceeds available GPU memory".into()));
             }
             let lease = Arc::new(crate::effect_analysis::Lease::reserve(device, size).map_err(GpuRasterError::Effect)?);
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("immutable color lookup"), size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             let headers=headers(resource);
             let header:[u8;96]=std::array::from_fn(|i|headers[i/16][i/4%4].to_le_bytes()[i%4]);
-            queue.write_buffer(&buffer, 0, &header);
-            queue.write_buffer(&buffer, 96, bytes);
+            let mut contents=vec![0;size as usize];
+            contents[..96].copy_from_slice(&header);
+            contents[96..96+bytes.len()].copy_from_slice(bytes);
+            let buffer=crate::initialized_buffer(device,&wgpu::util::BufferInitDescriptor {
+                label:Some("immutable color lookup"),contents:&contents,usage:wgpu::BufferUsages::STORAGE,
+            })?;
             let value = Arc::new(Resource {buffer, _analysis: Some(lease)});
             self.entries.insert(key, Arc::downgrade(&value)); self.uploads += 1;
             Ok(value)

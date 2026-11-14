@@ -9,7 +9,7 @@ fn declare(queue: &mut Queue<()>, owner: u64, key: usize, class: Class) {
             class,
         },
         true,
-        || ((), None),
+        || (),
     );
 }
 
@@ -174,7 +174,7 @@ fn warming_at_every_class_completes_without_waking_its_owner() {
                 class,
             },
             true,
-            || ((), None),
+            || (),
         );
         let job = queue.take(Instant::now(), true).unwrap();
         assert!(
@@ -206,7 +206,7 @@ fn real_waiters_at_every_class_wake_their_owner() {
                 class,
             },
             true,
-            || ((), None),
+            || (),
         );
         let job = queue.take(Instant::now(), true).unwrap();
         let owners = queue
@@ -234,7 +234,7 @@ fn shared_inflight_warming_wakes_only_the_promoted_real_waiter() {
             class: Class::Validation,
         },
         true,
-        || ((), None),
+        || (),
     );
     let job = queue.take(Instant::now(), true).unwrap();
     queue.submit(
@@ -271,7 +271,7 @@ fn cancelled_warming_generation_does_not_wake_its_owner() {
             class: Class::Validation,
         },
         true,
-        || ((), None),
+        || (),
     );
     let job = queue.take(Instant::now(), true).unwrap();
     queue.owners.get_mut(&owner).unwrap().generation += 1;
@@ -295,7 +295,7 @@ fn validation_warming_does_not_reopen_readiness_but_real_promotion_does() {
             class: Class::Validation,
         },
         true,
-        || ((), None),
+        || (),
     );
     assert_eq!(
         queue.pending(owner),

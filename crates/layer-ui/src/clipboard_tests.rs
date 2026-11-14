@@ -247,7 +247,7 @@ mod clipboard_checks {
         for tick in 3..7 { s.frame(tick, tick).unwrap(); }
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_eq!(s.engine.metrics().committed_strokes, 0);
-        assert!(!s.wants_continuous_frames());
+        assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     }
 
     #[test]

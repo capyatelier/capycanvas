@@ -5,7 +5,7 @@ use layer_core::{
     color::PixelDescriptor,
     raster::{TILE_SIZE, TileBlob},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wasm_bindgen_futures::JsFuture;
 
 thread_local! { static WORKER: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) }; }
@@ -59,6 +59,7 @@ pub(super) async fn call_cancellable(
 }
 
 pub(super) fn install(renderer: &mut WgpuRasterizer) {
+    renderer.set_preparation_wake(Arc::new(store_transport::wake));
     renderer.set_analysis_backing_waiter(Rc::new(|scene, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Analysis cancelled".into()); }
         artwork_transfer::wait_backing_cancellable(&layer_render_wgpu::snapshot::SnapshotGpu::scoped_transfer_artwork(&scene,&[]), Some(&control)).await.map_err(|e| format!("{e:?}"))?;
@@ -452,6 +453,7 @@ pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Resu
         RendererFactory::new(adapter, device, queue)
     };
     let mut renderer = factory.rasterizer(color).map_err(js)?;
+    renderer.set_preparation_wake(Arc::new(store_transport::wake));
     renderer.set_browser_raster_encoder(Rc::new(|bytes, descriptors| Box::pin(async move { encode_tiles(&bytes, descriptors) })));
     let samples=renderer.source_sample_cache();
     let image_samples=samples.clone();

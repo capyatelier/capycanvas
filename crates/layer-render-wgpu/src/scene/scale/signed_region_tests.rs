@@ -49,7 +49,7 @@ fn coarse_graph_retains_negative_effect_inputs_and_matches_larger_reference() {
             let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![255; descriptor.byte_len([256; 2]).unwrap()]).unwrap());
                 doc.artwork.paint.get_mut(handle).unwrap().raster = RasterRevision::backed(RasterData {
                     watercolor: Some(RasterWatercolor { wet_edge: 0.9, burnt_edge: 0.6, edge_width: 8. }),
-                    tiles: BTreeMap::from([(TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [0; 2] }, tile)]),
+                    tiles: RasterTiles::from([(TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [0; 2] }, tile)]),
                 });
             }
             crate::tests::native_effects::refresh(&mut doc);

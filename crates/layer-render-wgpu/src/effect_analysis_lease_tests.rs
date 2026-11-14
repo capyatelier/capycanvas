@@ -10,7 +10,7 @@ fn document(id: &str) -> layer_core::Document {
     document.working.occurrence=Some(handle);
     document
 }
-fn retained(renderer: &WgpuRasterizer) -> u64 { *renderer.device.analysis_memory.lock().unwrap() }
+fn retained(renderer: &WgpuRasterizer) -> u64 { renderer.device.analysis_memory.used() }
 
 #[test]
 fn analysis_admits_new_and_replacement_guides_before_the_next_frame() {
@@ -18,7 +18,8 @@ fn analysis_admits_new_and_replacement_guides_before_the_next_frame() {
     for id in ["shadows_highlights", "dehaze"] {
         let mut document = crate::artwork_sample_tests::document_in([1024, 768], layer_core::color::RgbSpace::Srgb,
             |_, _| [0.1, 0.2, 0.3, 1.]);
-        let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut renderer = crate::memory::memory_tests::renderer(document.composition().color,
+            layer_core::DeviceMemoryFacts {budget_bytes:Some(2 << 30),..Default::default()}).unwrap();
         crate::test_support::submit_settled(&mut renderer, crate::test_support::packet(document.scene(), document.composition().size));
         let target = crate::artwork_sample_tests::insert_effect(&mut document,
             EffectInstance::new(crate::tests::fixture(id).program()), 0);
@@ -26,10 +27,14 @@ fn analysis_admits_new_and_replacement_guides_before_the_next_frame() {
             "dehaze" => crate::dehaze::Builder::allocation_bound(document.composition().size),
             _ => crate::local_tone::Builder::allocation_bound(document.composition().size),
         }.unwrap();
-        assert!(required > renderer.device.resource_limit.load(std::sync::atomic::Ordering::Acquire));
         for opacity in [1., 0.5] {
             let paint = crate::artwork_sample_tests::paint_occurrence(&document);
             document.artwork.occurrences.get_mut(paint).unwrap().opacity = opacity;
+            let pressure=crate::memory::memory_tests::display_frame_with_budget(&mut renderer,
+                crate::test_support::packet(document.scene(),document.composition().size),required/2);
+            assert!(required > renderer.scene_tiers.display.limit().saturating_sub(renderer.scene_tiers.display.used()),
+                "the constrained Display tier must lack the next guide's allocation bound");
+            drop(pressure);
             let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(target));
             assert!(renderer.request_effect_analysis(query).unwrap());
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);

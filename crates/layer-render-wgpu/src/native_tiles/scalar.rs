@@ -54,11 +54,13 @@ pub(crate) fn upload_coverage(
     depth: SampleDepth,
     samples: &[u8],
     channels: usize,
+    class: crate::residency::Class,
 ) -> Result<(), GpuRasterError> {
     let step = depth.bytes();
     if depth.is_float() || samples.len() != 256 * 256 * channels * step {
         return Err(GpuRasterError::Color("Invalid native coverage samples".into()));
     }
+    let reservation = r.reserve_upload(class, COVERAGE_TILE_BYTES).ok_or(GpuRasterError::NotReady)?;
     let reciprocal = reciprocal(depth);
     r.uploads.write_texture(encoder, working, 1024, |mapped| {
         let mut row = [0u8; 1024];
@@ -79,8 +81,7 @@ pub(crate) fn upload_coverage(
             mapped.slice(y * 1024..(y + 1) * 1024).copy_from_slice(&row);
         }
     })?;
-    let in_flight = r.source_tiles.borrow().charge_upload(encoder, COVERAGE_TILE_BYTES);
-    r.metrics.source_upload_peak_bytes = r.metrics.source_upload_peak_bytes.max(in_flight);
+    r.charge_upload(encoder, reservation, COVERAGE_TILE_BYTES);
     Ok(())
 }
 
@@ -115,6 +116,7 @@ impl NativeScalarBatch {
 }
 pub struct NativeScalarEncoder {
     in_place: bool,
+    comparison_scratch: wgpu::Buffer,
     layouts: Vec<wgpu::BindGroupLayout>,
     pub(crate) pipelines: Vec<crate::Deferred<wgpu::ComputePipeline>>,
     tiles_per_dispatch: usize,
@@ -202,6 +204,8 @@ impl NativeScalarEncoder {
             }
             let shared = count as u32 * bindings;
             entries.push(buffer_entry(shared, wgpu::BufferBindingType::Uniform, true, 32));
+            entries.push(buffer_entry(shared+1,wgpu::BufferBindingType::Storage {read_only:false},false,count as u64*super::comparison::STRIDE));
+            textures.push_str(&format!("@group(0) @binding({}) var<storage,read_write> canonical_changes:array<atomic<u32>>;\n",shared+1));
             let layout = crate::bindings::layout(device, "native scalar encoder inputs", &entries);
             let body = include_str!("scalar.wgsl")
                 .replace("TEXTURES", &textures)
@@ -236,9 +240,12 @@ impl NativeScalarEncoder {
                 256,
             ]
         });
+        let compared=records.iter().copied().map(|mut record| {record[3]=1;record});
+        let records=records.iter().copied().chain(compared).collect::<Vec<_>>();
         let (full_parameters, parameter_stride) = super::full_parameters(device, &records);
         Self {
             in_place,
+            comparison_scratch: super::comparison::scratch(device),
             layouts,
             pipelines,
             tiles_per_dispatch,
@@ -247,7 +254,7 @@ impl NativeScalarEncoder {
         }
     }
     pub(crate) fn storage_bytes(&self) -> u64 {
-        self.full_parameters.size()
+        self.full_parameters.size()+self.comparison_scratch.size()
     }
     pub(crate) fn prepare(
         &self,
@@ -255,6 +262,14 @@ impl NativeScalarEncoder {
         requests: &[NativeScalarRequest<'_>],
         views: &mut crate::native_tiles::PublicationViews,
     ) -> Result<NativeScalarBatch, GpuRasterError> {
+        self.prepare_compared(device,requests,views,None)
+    }
+    pub(crate) fn prepare_compared(
+        &self,device:&wgpu::Device,requests:&[NativeScalarRequest<'_>],
+        views:&mut crate::native_tiles::PublicationViews,
+        comparison:Option<&super::comparison::CanonicalComparisons>,
+    )->Result<NativeScalarBatch,GpuRasterError> {
+        if comparison.is_some_and(|c|c.len()!=requests.len() || requests.iter().any(|r|r.region!=[0,0,256,256])) {return Err(GpuRasterError::InvalidExtent);}
         if requests.len() > MAX_BATCH_TILES {
             return Err(GpuRasterError::Color(
                 "Too many native scalar tiles in one batch".into(),
@@ -299,7 +314,7 @@ impl NativeScalarEncoder {
                         r.depth.maximum(),
                         4 / r.depth.bytes() as u32,
                         reciprocal(r.depth).to_bits(),
-                        0,
+                        u32::from(comparison.is_some()),
                         r.region[0],
                         r.region[1],
                         r.region[2],
@@ -359,6 +374,11 @@ impl NativeScalarEncoder {
                     size: wgpu::BufferSize::new(32),
                 }),
             });
+            entries.push(wgpu::BindGroupEntry {binding:shared+1,
+                resource:wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer:comparison.map_or(&self.comparison_scratch,|c|c.buffer()),
+                    offset:comparison.map_or(0,|c|c.offset()+first as u64*super::comparison::STRIDE),
+                    size:wgpu::BufferSize::new(count as u64*super::comparison::STRIDE)})});
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("native scalar writeback"),
                 layout: &self.layouts[count - 1],
@@ -370,7 +390,7 @@ impl NativeScalarEncoder {
                 binding,
                 count - 1,
                 if full {
-                    u32::from(r.depth == SampleDepth::U16) * stride
+                    (u32::from(r.depth == SampleDepth::U16)+if comparison.is_some() {2}else {0}) * stride
                 } else {
                     first as u32 * stride
                 },

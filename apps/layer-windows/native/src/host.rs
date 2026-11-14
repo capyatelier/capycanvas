@@ -7,7 +7,7 @@ use layer_host::{
     scene::SceneDisplay,
 };
 use layer_render::CanvasRenderer;
-use layer_render_wgpu::{HeldCanvas, ViewportPresenter};
+use layer_render_wgpu::{HeldCanvas, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
     cell::RefCell,
@@ -67,7 +67,7 @@ struct SurfaceReadiness {
     launch: Option<(u64,std::sync::Arc<std::sync::atomic::AtomicBool>)>,
 }
 impl SurfaceReadiness {
-    fn submitted(&mut self, queue: &wgpu::Queue, chrome: &crate::chrome::Chrome, document: Option<[u32;2]>, launch: Option<u64>) {
+    fn submitted(&mut self, gpu: &WgpuRasterizer, chrome: &crate::chrome::Chrome, document: Option<[u32;2]>, launch: Option<u64>) {
         let document=document.filter(|document|*document==chrome.document);
         let revision=if document.is_some(){chrome.revision()}else{0};
         let launch=launch.filter(|_|document.is_some());
@@ -80,7 +80,7 @@ impl SurfaceReadiness {
         if let Some(document)=document{self.documents.push_back((revision,document));}
         self.queued=true;self.queued_chrome=self.queued_chrome.max(revision);
         let ready=self.ready.clone();let completed=self.completed_chrome.clone();
-        queue.on_submitted_work_done(move|| {
+        gpu.on_gpu_done(move|| {
             if let Some(completed)=launch{completed.store(true,std::sync::atomic::Ordering::Release);}
             completed.fetch_max(revision,std::sync::atomic::Ordering::Release);
             ready.store(true,std::sync::atomic::Ordering::Release);
@@ -537,9 +537,6 @@ impl CapyHost {
             return Ok(0);
         }
         if self.target.is_none() { return Ok(1); }
-        if !self.surface_ready.ready() {
-            self.native.session.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).map_err(err)?;
-        }
         let prediction_before = self.prediction_frames.map(|_| self.native.session.engine().metrics());
         if draw { self.native.prepare_canvas_frame(now, presentation, self.blank_presented)?; }
         if let Some(timing) = &mut self.frame_timing { timing.prepared_ns = crate::frame_timing::now(); }
@@ -549,7 +546,6 @@ impl CapyHost {
             total[1] += after.engine_prediction_frames.saturating_sub(before.engine_prediction_frames);
         }
         self.gpu.check()?;
-        self.native.dirty |= self.native.session.wants_continuous_frames();
         let view = self.native.session.state().camera.view();
         let surround = self.native.session.state().palette.surround_linear;
         let gpu = self.native.session.engine().backend().0.as_ref().unwrap();
@@ -616,15 +612,15 @@ impl CapyHost {
                         })],..Default::default()
                     });
                 }
-                let submission=gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
-                self.native.canvas_frame_rate.submitted();self.pacing.submitted(submission);
-                self.surface_ready.submitted(gpu.queue(), &self.chrome, None, None);
+                gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
+                self.native.canvas_frame_rate.submitted();self.pacing.submitted(gpu,self.native.wake_callback());
+                self.surface_ready.submitted(gpu, &self.chrome, None, None);
             }
             self.native.dirty = true;
             self.poll_services()?;
             return Ok(1);
         };
-        let submission = presenter.present(
+        presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),
             view,
@@ -634,17 +630,16 @@ impl CapyHost {
         gpu.queue().present(target);
         if let Some(timing) = &mut self.frame_timing { timing.presented_ns = crate::frame_timing::now(); }
         if draw { self.native.canvas_frame_rate.submitted(); }
-        self.pacing.submitted(submission);
+        self.pacing.submitted(gpu, self.native.wake_callback());
         let document=self.native.session.engine().document().composition().size;
         let ready=composition.staged&&presenter.chrome_ready();
         let launch=if ready {self.native.launch_frame()}else{None};
-        self.surface_ready.submitted(gpu.queue(), &self.chrome, ready.then_some(document), launch);
+        self.surface_ready.submitted(gpu, &self.chrome, ready.then_some(document), launch);
         self.blank_presented = true;
-        gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
         self.native.session.renderer_mut().0.as_mut().unwrap().after_present();
         self.gpu.check()?;
         self.poll_services()?;
-        Ok(i32::from(self.native.dirty))
+        Ok(i32::from(self.native.frame_demand() != layer_render::FrameDemand::Wait))
     }
 }
 /// # Safety
@@ -814,7 +809,7 @@ pub unsafe extern "C" fn capy_start_services(
 /// Exclusive render-owner access to a live host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_needs_frame(host: u64) -> i32 {
-    guard(host, |host| Ok(i32::from(host.native.poll_preparation() || host.display_reconfigure)))
+    guard(host, |host| Ok(i32::from(host.native.poll_preparation() != layer_render::FrameDemand::Wait || host.display_reconfigure)))
 }
 
 /// # Safety
@@ -827,7 +822,7 @@ pub unsafe extern "C" fn capy_poll_services(host: u64) -> i32 {
             host.native.poll_canvas_presentation(presenter)?;
         }
         host.poll_surface()?;
-        Ok(i32::from(host.native.dirty || host.display_reconfigure))
+        Ok(i32::from(host.native.frame_demand() != layer_render::FrameDemand::Wait || host.display_reconfigure))
     })
 }
 /// # Safety
@@ -843,7 +838,7 @@ pub unsafe extern "C" fn capy_poll_surface(host: u64, pending: *mut bool) -> i32
     guard(host, |host| {
         host.poll_surface()?;
         if let Some(pending)=unsafe { pending.as_mut() } { *pending=host.surface_ready.pending(); }
-        Ok(i32::from(host.native.dirty))
+        Ok(i32::from(host.native.frame_demand() != layer_render::FrameDemand::Wait))
     })
 }
 /// # Safety
@@ -1250,7 +1245,7 @@ pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
             }
         }
         let pacing_start = host.frame_timing.map(|_| crate::frame_timing::now());
-        let ready = host.pacing.ready(host.native.session.engine().backend().0.as_ref().unwrap().device()).map_err(err)?;
+        let ready = host.pacing.ready();
         if let (Some(timing), Some(start)) = (&mut host.frame_timing, pacing_start) { timing.pacing_ns = crate::frame_timing::now() - start; }
         if !ready {
             return Ok(0);
@@ -1706,18 +1701,7 @@ pub unsafe extern "C" fn capy_test_device_loss(host: u64, json: *const c_char) -
         }
         let (token, participants) = unsafe { read_json(json) }?;
         host.target = None;
-        let gpu = host
-            .native
-            .session
-            .engine()
-            .backend()
-            .0
-            .as_ref()
-            .ok_or("GPU is not ready")?;
-        gpu.device().poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(10)),
-        }).map_err(err)?;
+        let gpu = host.native.session.engine().backend().0.as_ref().ok_or("GPU is not ready")?;
         // Remove the D3D12 device shared by this process's windows on the adapter.
         // The COM object remains owned by wgpu. Ordinary loss detection must
         // observe removal; this hook never sets the flag or resets the adapter.
@@ -1740,8 +1724,6 @@ pub unsafe extern "C" fn capy_test_device_loss(host: u64, json: *const c_char) -
                 Ok(())
             })?;
         }
-        // Drop the HAL guard before polling wgpu's device-loss notification.
-        let _ = gpu.device().poll(wgpu::PollType::Poll);
         Ok(0)
     })
 }
@@ -2085,7 +2067,7 @@ mod presentation_readiness_tests {
             let paper=[(a*48.+c*48.+tx).floor() as usize,(b*48.+d*48.+ty).floor() as usize];
             assert!(paper[0]<viewport[0] as usize&&paper[1]<viewport[1] as usize,"paper center outside fixture viewport: {view:?}");
             presenter.present(gpu,&output.create_view(&Default::default()),view,[0.25,0.25,0.25,1.]).unwrap();
-            readiness.submitted(gpu.queue(), &crate::chrome::Chrome::default(), None, None);assert!(readiness.queued);
+            readiness.submitted(gpu, &crate::chrome::Chrome::default(), None, None);assert!(readiness.queued);
             let pixel:u32=if format==wgpu::TextureFormat::Rgba16Float{8}else{4};
             let row=extent[0]*pixel;
             let stride=row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)*wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -2766,10 +2748,10 @@ mod chrome_completion_tests {
         let mut chrome=crate::chrome::Chrome::default();
         chrome.set(serde_json::from_value(serde_json::json!({"revision":7,"document":[192,192],"glass":{"regions":[],"connections":[]}})).unwrap()).unwrap();
         let mut readiness=SurfaceReadiness::default();
-        let submitted=gpu.queue().submit([encoder.finish()]);readiness.submitted(gpu.queue(),&chrome,Some([192;2]),Some(11));
+        let submitted=gpu.queue().submit([encoder.finish()]);readiness.submitted(&gpu,&chrome,Some([192;2]),Some(11));
         let launch_completed=readiness.launch.as_ref().unwrap().1.clone();
         chrome.set(serde_json::from_value(serde_json::json!({"revision":8,"document":[128,64],"glass":{"regions":[],"connections":[]}})).unwrap()).unwrap();
-        readiness.submitted(gpu.queue(),&chrome,Some([192;2]),None);assert_eq!(readiness.queued_chrome,7);
+        readiness.submitted(&gpu,&chrome,Some([192;2]),None);assert_eq!(readiness.queued_chrome,7);
         gpu.device().poll(wgpu::PollType::Poll).unwrap();readiness.changed(&mut chrome);
         assert_eq!(chrome.presented_revision,None,"queued chrome must remain covered until its submission completes");
         assert!(!launch_completed.load(std::sync::atomic::Ordering::Acquire));
@@ -2785,7 +2767,7 @@ mod chrome_completion_tests {
         assert!(launch_completed.load(std::sync::atomic::Ordering::Acquire));
         assert_eq!(readiness.completed_launch(Some(11)),None);assert!(!readiness.changed(&mut chrome));
         assert_eq!(chrome.document,[128,64]);assert_eq!(chrome.presented_document,Some([192;2]));
-        drop(unrelated);let next=gpu.queue().submit([]);readiness.submitted(gpu.queue(),&chrome,Some([128,64]),Some(3));
+        drop(unrelated);let next=gpu.queue().submit([]);readiness.submitted(&gpu,&chrome,Some([128,64]),Some(3));
         gpu.device().poll(wgpu::PollType::Wait{submission_index:Some(next),timeout:Some(Duration::from_secs(10))}).unwrap();
         assert!(!readiness.changed(&mut chrome));assert_eq!(chrome.presented_revision,Some(8));assert_eq!(chrome.presented_document,Some([128,64]));
         assert_eq!(readiness.completed_launch(Some(3)),Some(3));

@@ -37,7 +37,7 @@ fn photo(extent: [u32; 2]) -> Arc<SourceImage> {
     Arc::new(builder.finish().unwrap())
 }
 pub(crate) fn thumbnail(r: &mut WgpuRasterizer, target: ThumbnailTarget) -> Vec<u8> {
-    crate::test_support::thumbnail(r, 7, target)
+    crate::test_support::thumbnail(r, 7, target).bytes
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
         let ready = loop {
             match gpu.prepare(r, id, &mut encoder, 1) {
                 Ok(ready) => break ready,
-                Err(GpuRasterError::DeferredObjectWork) => {},
+                Err(GpuRasterError::NotReady) => {},
                 Err(error) => panic!("{error}"),
             }
             let mut worker = crate::submission::CommandEncoder::new(&r.device, &Default::default());

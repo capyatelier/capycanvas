@@ -236,20 +236,20 @@ impl DisplayInputs {
 
     /// The gather pass's outputs. Where the start is stored, the averaged
     /// starting paint goes straight to the prediction's output.
-    pub fn gather(&self, r: &WgpuRasterizer, output: &PageSurface) -> wgpu::BindGroup {
-        let original = if r.pipelines.dry_material.in_place { &output.view } else { &self.views[0] };
-        self.gather.get((r.style_buffer.clone(), original.clone()), || {
+    pub fn gather(&self,device:&PipelineDevice,style:&wgpu::Buffer,in_place:bool,layout:&wgpu::BindGroupLayout,output:&resident::RasterWrite<'_,PageSurface>)->wgpu::BindGroup {
+        let original = if in_place { &output.value().view } else { &self.views[0] };
+        self.gather.get((style.clone(), original.clone()), || {
             let entries = [wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &r.style_buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
+                    buffer: style, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
                 }),
             }].into_iter().chain([original, &self.views[1], &self.views[2]].into_iter().zip(4..).map(|(view, binding)| wgpu::BindGroupEntry {
                 binding, resource: wgpu::BindingResource::TextureView(view),
             })).collect::<Vec<_>>();
-            r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("dry display input gather"),
-                layout: &r.pipelines.dry_material.gather_layout,
+                layout,
                 entries: &entries,
             })
         })
@@ -381,10 +381,12 @@ pub(super) fn dither_output_layout(device: &PipelineDevice) -> wgpu::BindGroupLa
 }
 
 /// A page output binding, retained by the coverage page when there is one.
-pub(super) fn output_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, color: &PageSurface,
-    coverage: Option<&PageSurface>, wetness: Option<&PageSurface>, changed: Option<&wgpu::Buffer>) -> wgpu::BindGroup {
+pub(super) fn output_binding(device:&PipelineDevice,style_buffer:&wgpu::Buffer,layout:&wgpu::BindGroupLayout,
+    color:&resident::RasterWrite<'_,PageSurface>,coverage:Option<&resident::RasterWrite<'_,PageSurface>>,
+    wetness:Option<&resident::RasterWrite<'_,PageSurface>>,changed:Option<&wgpu::Buffer>)->wgpu::BindGroup {
+    let color=color.value();let coverage=coverage.map(|write|write.value());let wetness=wetness.map(|write|write.value());
     let style = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-        buffer: &r.style_buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
+        buffer: style_buffer, offset: 0, size: NonZeroU64::new(mem::size_of::<StyleGpu>() as u64),
     });
     let entries = [(0, Some(style)), (1, Some(wgpu::BindingResource::TextureView(&color.view))),
         (2, coverage.map(|page| wgpu::BindingResource::TextureView(&page.view))),
@@ -392,8 +394,8 @@ pub(super) fn output_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout,
         .into_iter().filter_map(|(binding, resource)| resource.map(|resource| wgpu::BindGroupEntry { binding, resource }))
         .collect::<Vec<_>>();
     coverage.unwrap_or(color).material_output.get(
-        (r.style_buffer.clone(), color.view.clone(), [coverage, wetness].map(|p| p.map(|p| p.view.clone())), changed.cloned()),
-        || r.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("destination material page output"), layout, entries: &entries }),
+        (style_buffer.clone(), color.view.clone(), [coverage, wetness].map(|p| p.map(|p| p.view.clone())), changed.cloned()),
+        || device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("destination material page output"), layout, entries: &entries }),
     )
 }
 
@@ -492,14 +494,12 @@ impl Pipelines {
 
     /// Changed cells are marked only for a tracked page; every other in-place
     /// destination binds the disabled set.
-    pub fn output(&self, r: &WgpuRasterizer, color: &PageSurface, coverage: Option<&PageSurface>,
-        tracked: Option<(SourceTarget, [u32; 2])>) -> wgpu::BindGroup {
-        let changed = self.in_place.then(|| {
-            let cells = r.changed_cells.as_ref().unwrap();
-            tracked.and_then(|(target, coordinate)| cells.buffer(target, coordinate)).unwrap_or(&cells.disabled)
-        });
-        output_binding(r, &self.layouts[usize::from(coverage.is_some())], color, coverage, None, changed)
+    pub fn gather_layout(&self)->&wgpu::BindGroupLayout {&self.gather_layout}
+    pub fn output(&self,device:&PipelineDevice,style:&wgpu::Buffer,color:&resident::RasterWrite<'_,PageSurface>,
+        coverage:Option<&resident::RasterWrite<'_,PageSurface>>,changed:Option<&wgpu::Buffer>)->wgpu::BindGroup {
+        output_binding(device,style,&self.layouts[usize::from(coverage.is_some())],color,coverage,None,changed)
     }
+
 }
 
 impl WgpuRasterizer {
@@ -908,10 +908,23 @@ mod tests {
                         assert!(std::ptr::eq(selected.compile(), expected.compile()), "{case:?}: recipe identity after encoding");
                     }
                     let layer = r.paint_layers.iter().find(|layer| layer.id == target).unwrap();
-                    let mut color = layer.pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
-                    let mut coverage = layer.coverage_pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
-                    let mut preview = r.preview_pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
-                    let mut preview_coverage = r.preview_coverage_pages.iter().map(|p| (p.coordinate, page_bytes(&r, &p.active().texture))).collect::<Vec<_>>();
+                    let mut color = layer.pages.iter().map(|p| {
+                        let expected=r.current_raster_version(target,RasterPlane::Color,p.coordinate).unwrap();
+                        (p.coordinate,page_bytes(&r,&p.active().read(expected,None).unwrap().value().texture))
+                    }).collect::<Vec<_>>();
+                    let mut coverage = layer.coverage_pages.iter().map(|p| {
+                        let input=r.raster_intent(target,RasterPlane::Color,p.coordinate).unwrap();
+                        let state=p.state.as_ref().filter(|state|state.matches(batch.stroke_id,&input)).unwrap();
+                        (p.coordinate,page_bytes(&r,&p.active().read(&state.version,None).unwrap().value().texture))
+                    }).collect::<Vec<_>>();
+                    let mut preview = r.preview_pages.iter().map(|p| {
+                        let expected=r.preview_expected(target,RasterPlane::Color,p.coordinate,scene::PreviewStage::Final).unwrap();
+                        (p.coordinate,page_bytes(&r,&p.active().read(expected,None).unwrap().value().texture))
+                    }).collect::<Vec<_>>();
+                    let mut preview_coverage = r.preview_coverage_pages.iter().map(|p| {
+                        let expected=r.preview_pass_expected(target,RasterPlane::Color,p.coordinate,scene::PreviewStage::Final,scene::PreviewPass::Coverage).unwrap();
+                        (p.coordinate,page_bytes(&r,&p.active().read(expected,None).unwrap().value().texture))
+                    }).collect::<Vec<_>>();
                     for pages in [&mut color, &mut coverage, &mut preview, &mut preview_coverage] { pages.sort_by_key(|(coordinate, _)| *coordinate); }
                     let painted = if case.preview { &preview } else { &color };
                     assert!(painted.iter().any(|(_, bytes)| bytes.chunks_exact(16)

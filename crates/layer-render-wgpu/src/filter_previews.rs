@@ -382,9 +382,6 @@ impl WgpuRasterizer {
         &mut self,
     ) -> Option<Result<FilterPreviewImage, GpuRasterError>> {
         let mut previews = self.filter_previews.take()?;
-        if previews.missing_rows() {
-            let _ = self.device.poll(wgpu::PollType::Poll);
-        }
         let result = previews.take(self);
         self.filter_previews = Some(previews);
         result
@@ -404,7 +401,6 @@ impl FilterPreviews {
         let bytes = |(texture, _): &Image| texture_bytes(texture);
         bytes(&self.tiles)
             + self.scratch.iter().map(bytes).sum::<u64>()
-            + self.scene.scratch_bytes()
     }
 }
 

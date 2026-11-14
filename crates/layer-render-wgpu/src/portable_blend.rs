@@ -217,6 +217,8 @@ mod tests {
         .unwrap();
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let device = PipelineDevice::from(device);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
         assert!(device.portable_blend());
         let a = Renderer::new(&device);
         let b = Renderer::new(&device);

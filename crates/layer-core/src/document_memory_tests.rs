@@ -13,6 +13,47 @@ fn current_inventory(editor: &Editor) -> Arc<crate::raster_storage::RetainedTile
     editor.document().memory.owner.inventories.lock().unwrap().current.clone()
 }
 
+#[test]
+fn shared_raster_content_metadata_is_charged_once_across_history_and_captures() {
+    use crate::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileKey};
+    use crate::raster_storage::CONTENT_TREE_METADATA;
+    for revisions in [1,4] {for capture_count in [0,1,3] {
+        let memory=budget();
+        let document=Document::new(crate::PortableId::random(),256,256,DocumentNames {paint:"Ink".into(),paper:"Paper".into()})
+            .with_memory(DocumentMemory::new(memory,None));
+        let target=document.working.target.unwrap();
+        let descriptor=RasterPlane::Color.descriptor(Default::default());
+        let blob=Arc::new(TileBlob::encode(descriptor,&[31,63,127,255].repeat(256*256)).unwrap());
+        let data=||RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed_shared(blob.clone()))].into(),..Default::default()};
+        let old=data();let current=data();
+        let old_owners=old.tiles.metadata_owners();let current_owners=current.tiles.metadata_owners();
+        assert!(old_owners.iter().all(|(id,_)|current_owners.iter().all(|(other,_)|id!=other)));
+        let mut editor=Editor::new(document);
+        editor.perform(Edit::SetRaster {target,revision:RasterRevision::backed(old)}).unwrap();
+        for _ in 0..revisions {
+            editor.perform(Edit::SetRaster {target,revision:RasterRevision::backed(current.clone())}).unwrap();
+        }
+        editor.flush_memory();
+        let inventory=current_inventory(&editor);
+        let captures=(0..capture_count).map(|_|editor.document().memory.capture_current()).collect::<Vec<_>>();
+        let (parts,_)=editor.document().memory.owner.parts(false);
+        let mut owners=std::collections::HashMap::new();inventory.resident_owners(&mut owners);
+        let authored_trees=owners.iter().filter(|((kind,_),(_,authored))|*kind==CONTENT_TREE_METADATA && *authored).map(|(_, (bytes,_))|*bytes as u64).sum::<u64>();
+        let history_trees=owners.iter().filter(|((kind,_),(_,authored))|*kind==CONTENT_TREE_METADATA && !*authored).map(|(_, (bytes,_))|*bytes as u64).sum::<u64>();
+        assert!(authored_trees>=current_owners.iter().map(|(_,bytes)|*bytes as u64).sum());
+        assert!(history_trees>=old_owners.iter().map(|(_,bytes)|*bytes as u64).sum());
+        assert_eq!(parts[2],inventory.authored_metadata as u64+capture_count as u64*inventory.metadata_bytes as u64+authored_trees,
+            "authored tree owners are metadata, shared by every capture and cloned revision");
+        assert_eq!(parts[3],(inventory.metadata_bytes-inventory.authored_metadata) as u64+history_trees,
+            "history-only tree owners remain history metadata");
+        let payload=owners.iter().filter(|((kind,_),_)|*kind!=CONTENT_TREE_METADATA).map(|(_, (bytes,_))|*bytes as u64).sum::<u64>();
+        assert_eq!(parts[0]+parts[1],payload,"tree metadata must not remain in spillable resident parts");
+        assert_eq!(parts.iter().sum::<u64>(),owners.values().map(|(bytes,_)|*bytes as u64).sum::<u64>()
+            +(capture_count as u64+1)*inventory.metadata_bytes as u64,"classification preserves the single-inventory physical total");
+        drop(captures);
+    }}
+}
+
 fn budget() -> MemoryBudget {
     MemoryBudget::with_facts(crate::MemoryFacts { total_bytes:Some(16 << 30),available_bytes:Some(12 << 30),override_bytes:Some(2 << 30),..Default::default() })
 }
@@ -397,7 +438,7 @@ fn new_and_pending_raster_publications_defer_inventory_until_idle() {
         memory.flush_reports();
         let physical=memory.snapshot().ram_physical_bytes;
         assert!(physical>before+1024*1024);
-        assert_eq!(physical,(inventory.resident_bytes()+inventory.metadata_bytes) as u64);
+        assert_eq!(physical,inventory.total_bytes() as u64);
     }
 }
 

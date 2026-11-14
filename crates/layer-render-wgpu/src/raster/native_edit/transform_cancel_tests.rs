@@ -2,19 +2,24 @@ use super::*;
 use layer_core::{Affine,Figure,FigurePaint,FigureShape,ImageTransform,Point,RasterOperation,RasterOperationKind,Selection};
 
 fn state(r:&WgpuRasterizer,id:SourceTarget)->(u64,u64,u64,Vec<[u32;2]>) {
-    let native=r.native_edit.as_ref().unwrap();
-    (native.color_cache_bytes,native.color_cache_pinned_bytes,r.paint_memory_bytes(),
+    (r.memory.raster_grant(),r.raster_tiers.raster.used(),r.paint_memory_bytes(),
         r.paint_layers.iter().filter(|layer|layer.id==id).flat_map(|layer|layer.pages.iter().map(|page|page.coordinate)).collect())
 }
 
 struct Pixels {plan:display_mips::Plan,size:[u32;2],bytes:Vec<u8>}
 
 fn capture(live:&mut CanvasEngine<WgpuRasterizer>)->Pixels {
+    let snapshot=live.document().snapshot();let view=live.view();
+    let blend_space=live.document().composition().blend;
+    let extent=live.document().composition().size;
     let r=live.backend_mut();
+    r.shader_idle(true,true);
+    crate::test_support::submit_settled(r,FramePacket {view,blend_space,composite_all:false,
+        ..crate::test_support::packet(snapshot.view(),extent)});
     let cache=r.scale_display.as_ref().unwrap();let texture=cache.texture();
     assert_eq!(texture.format(),wgpu::TextureFormat::Rgba32Float);
     let pixels=Pixels {plan:cache.plan,size:[texture.width(),texture.height()],bytes:crate::layer_tests::page_bytes(r,texture)};
-    r.shader_idle(true,true);r.after_present();crate::test_support::complete(r);
+    r.after_present();crate::test_support::complete(r);
     pixels
 }
 

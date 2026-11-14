@@ -15,7 +15,155 @@ pub(crate) use sampling::input_level;
 use snapshot::TileSnapshot;
 use layer_core::raster::{TileKey,RasterPlane};
 
+#[derive(Clone,Copy)]
+enum TransformWrite {Authored,Preview,Restore(u32)}
+
+pub(crate) enum NativeRead<'a> {
+    Resident(resident::Read<'a,PageSurface>),
+    Original(layer_core::raster::ContentVersion),
+    Display,
+}
+
+struct TransformOutput {
+    texture:wgpu::Texture,
+    input:raster::contents::Intent,
+    encoding:Option<resident::Encoding>,
+    written:Option<resident::Written>,
+}
+
+enum CommitPage {
+    Color {target:SourceTarget,version:layer_core::raster::ContentVersion,page:LayerPage},
+    Wetness {target:SourceTarget,version:layer_core::raster::ContentVersion,page:WatercolorWetnessPage},
+}
+impl CommitPage {
+    fn key(&self)->(SourceTarget,RasterPlane,[u32;2]) {
+        match self {
+            Self::Color {target,page,..}=>(*target,RasterPlane::Color,page.coordinate),
+            Self::Wetness {target,page,..}=>(*target,RasterPlane::WatercolorWetness,page.coordinate),
+        }
+    }
+    fn read(&self,receipt:Option<&submission::Submission>)->Option<resident::Read<'_,PageSurface>> {
+        match self {Self::Color {page,version,..}=>page.active().read(version,receipt),Self::Wetness {page,version,..}=>page.active().read(version,receipt)}
+    }
+    fn preparation_bytes(&self,known:&mut RetainedTextures)->u64 {
+        let account=|page:&resident::Resident<PageSurface>,known:&mut RetainedTextures|if page.account_texture(known) {page.storage_bytes()}else {0};
+        match self {
+            Self::Color {page,..}=>account(&page.primary,known)+page.secondary.as_ref().map_or(0,|page|account(page,known)),
+            Self::Wetness {page,..}=>account(&page.primary,known)+account(&page.secondary,known),
+        }
+    }
+}
+
+pub(crate) struct PreparedTransformCommit {
+    owner:u64,
+    revision:u64,
+    extent:[u32;2],
+    colour:layer_core::color::DocumentColor,
+    requests:Vec<(SourceTarget,u32,layer_core::RasterOperation)>,
+    sources:Vec<(SourceTarget,crate::scene::Capture)>,
+    pages:Vec<CommitPage>,
+}
+impl PreparedTransformCommit {
+    pub(crate) fn read(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],receipt:Option<&submission::Submission>)->Option<resident::Read<'_,PageSurface>> {
+        self.pages.iter().find(|page|page.key()==(target,plane,coordinate))?.read(receipt)
+    }
+    pub(crate) fn contains(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->bool {self.read(target,plane,coordinate,None).is_some()}
+    pub(crate) fn matches(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
+        self.owner==packet.scene.owner() && self.revision==packet.scene.revision() && self.extent==packet.document_extent
+            && self.colour==r.document_color() && self.pages.iter().all(|page|page.read(None).is_some())
+            && packet.dabs.is_empty() && self.requests.iter().all(|(target,index,operation)|
+                packet.dab_batches.iter().any(|batch|batch.target==*target && batch.kind==DabBatchKind::RasterOperation(*index))
+                && packet.scene.operations(*target).and_then(|operations|operations.get(*index as usize))==Some(operation))
+            && self.sources.iter().all(|(target,capture)|capture.matches_context(packet.scene) && r.current_raster_versions(*target).is_ok_and(|versions|
+                [RasterPlane::Color,RasterPlane::WatercolorWetness].into_iter().all(|plane|capture.matches_source(plane,&versions)==Some(true))))
+    }
+    pub(crate) fn preparation_bytes(&self,known:&mut RetainedTextures)->u64 {self.pages.iter().map(|page|page.preparation_bytes(known)).sum()}
+    pub(crate) fn adopt(self,r:&mut WgpuRasterizer,receipt:&submission::Submission)->Result<Vec<(SourceTarget,u32)>,GpuRasterError> {
+        let inputs=self.pages.iter().map(|page| {
+            let (target,plane,coordinate)=page.key();let intent=r.raster_intent(target,plane,coordinate)?;
+            if page.read(Some(receipt)).is_none() || !r.paint_layers.iter().any(|layer|layer.id==target) {return Err(GpuRasterError::Invariant("accepted input is not readable"));}
+            Ok(intent)
+        }).collect::<Result<Vec<_>,GpuRasterError>>()?;
+        for (page,intent) in self.pages.into_iter().zip(inputs) {
+            let (target,_,coordinate)=page.key();
+            r.record_raster_write(target,page.read(Some(receipt)).ok_or(GpuRasterError::Invariant("accepted input is not readable"))?.replace(&intent,receipt))?;
+            let layer=r.paint_layers.iter_mut().find(|layer|layer.id==target).ok_or(GpuRasterError::Invariant("prepared adopt state is inconsistent"))?;
+            match page {
+                CommitPage::Color {mut page,..}=>{page.derived=None;page.stroke_start=None;layer.pages.retain(|page|page.coordinate!=coordinate);layer.pages.push(page);}
+                CommitPage::Wetness {mut page,..}=>{page.derived=None;page.pending=None;layer.watercolor_wetness_pages.retain(|page|page.coordinate!=coordinate);layer.watercolor_wetness_pages.push(page);}
+            }
+        }
+        Ok(self.requests.into_iter().map(|(target,index,_)|(target,index)).collect())
+    }
+}
+
 pub(super) struct PaintTransforms([ImageTransformState; 2]);
+#[derive(Clone)]
+pub(crate) struct PreparedRegion(Region);
+#[derive(Clone)]
+enum Region {
+    Copy {
+        source: wgpu::TextureView,
+        destination: wgpu::TextureView,
+        origin: wgpu::Origin3d,
+        size: wgpu::Extent3d,
+        allocation: Arc<region_batches::Allocation>,
+        valid: Arc<std::sync::atomic::AtomicBool>,
+    },
+    Draw {
+        source: SourceTarget,
+        values: [u8; resample::UNIFORM_BYTES as usize],
+        sampling: [wgpu::TextureView; 2],
+        destination: wgpu::TextureView,
+        texels: [u32; 4],
+        mesh: Option<Arc<mesh::MeshGeometry>>,
+        kept: bool,
+    },
+}
+impl PreparedRegion {
+    pub fn pipelines<'a>(&self, r: &'a WgpuRasterizer) -> [Option<&'a Deferred<wgpu::RenderPipeline>>; 2] {
+        match &self.0 {
+            Region::Copy { .. } => [None, None],
+            Region::Draw { mesh, kept, .. } => {
+                let pipelines = &r.scene_pipelines.resample.mesh;
+                if mesh.is_some() { [Some(&pipelines[usize::from(*kept)]), Some(&pipelines[2+usize::from(*kept)])] }
+                else { [Some(&pipelines[4+usize::from(*kept)]), None] }
+            }
+        }
+    }
+    pub fn values(&self) -> Option<&[u8; resample::UNIFORM_BYTES as usize]> {
+        match &self.0 { Region::Draw { values, .. } => Some(values), Region::Copy { .. } => None }
+    }
+    pub fn encode(&self, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder,
+        uniforms: &wgpu::Buffer, offset: u64,
+    ) -> Result<(), GpuRasterError> {
+        match &self.0 {
+            Region::Copy { source, destination, origin, size, allocation, valid } => {
+                encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo { origin: *origin, ..source.texture().as_image_copy() },
+                    wgpu::TexelCopyTextureInfo { origin: *origin, ..destination.texture().as_image_copy() }, *size);
+                submission::CacheWrite::shared(valid.clone()).track(encoder);
+                let lease = allocation.clone(); encoder.hold(lease);
+            },
+            Region::Draw { source, sampling, destination, texels, mesh, kept, .. } => {
+                let mut transforms = r.transforms.take().unwrap();
+                let result: Result<(), GpuRasterError> = (|| {
+                    let mesh = if let Some(geometry) = mesh {
+                        let state = transforms.0.iter_mut().find(|state|state.preview.as_ref().is_some_and(|preview|preview.target==*source)).unwrap();
+                        state.display_mesh.upload(r, encoder, geometry)?;
+                        Some((&state.display_mesh,geometry.range_for_region(layer_core::Rect::UNBOUNDED)))
+                    } else { None };
+                    let pass = &r.scene_pipelines.resample;
+                    let binding = pass.mesh_binding_at(&r.device, uniforms, offset, sampling);
+                    pass.encode_mesh(encoder,&binding,destination,*texels,mesh,*kept);
+                    Ok(())
+                })();
+                r.transforms = Some(transforms);
+                result?;
+            },
+        }
+        Ok(())
+    }
+}
 pub(super) struct Recipes {
     passes: [Arc<pixel_transform::Kernels>; 3],
     positions: Arc<mesh::Pipelines>,
@@ -116,9 +264,17 @@ impl PaintTransforms {
             t.begin_frame();
         }
     }
+    #[cfg(test)]
+    pub(crate) fn hold_spare(&mut self, page: LayerPage) { self.0[0].spares.paint.push(page); }
+    #[cfg(test)]
     pub fn storage_bytes(&self) -> u64 {
         self.0.iter().map(ImageTransformState::storage_bytes).sum::<u64>() - 3 * 48
     }
+    pub(crate) fn charged(mut self, tier: &Arc<crate::residency::Tier>) -> Self {
+        for state in &mut self.0 { state.charge = tier.charge(0); state.account(); }
+        self
+    }
+    pub(crate) fn charged_bytes(&self) -> u64 { self.0.iter().map(|state| state.charge.bytes()).sum() }
     pub fn preparation_bytes(&self,known:&mut RetainedTextures)->u64 {
         self.0.iter().map(|state|state.preparation_bytes(known)).sum()
     }
@@ -137,22 +293,83 @@ impl PaintTransforms {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
         layer: SourceTarget,
+        index: u32,
         operation: &layer_core::RasterOperation,
     ) -> Result<(), GpuRasterError> {
-        self.0[0].apply(r, encoder, layer, operation, r.target_extent(layer))
+        let plan=r.accepted_transform_plan(layer,index)?;
+        self.0[0].apply(r, encoder, layer, operation, r.target_extent(layer), plan)
     }
-    pub fn consume_commit(&mut self, packet: FramePacket<'_>) -> Vec<(SourceTarget, u32)> {
-        let Some(matches) = self
-            .0
-            .iter()
-            .filter(|t| t.has_preview())
-            .map(|t| t.matching_commit(packet))
-            .collect::<Option<Vec<_>>>()
-        else {
-            return Vec::new();
-        };
-        if !matches.is_empty() { self.discard_preview(); }
-        matches
+    pub(crate) fn prepare_commit(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->Result<Option<PreparedTransformCommit>,GpuRasterError> {
+        let states=self.0.iter().filter(|state|state.has_preview()).collect::<Vec<_>>();
+        if states.is_empty() {return Ok(None);}
+        let Some(matches)=states.iter().map(|state|state.matching_commit(packet)).collect::<Option<Vec<_>>>() else {return Ok(None)};
+        let mut result=PreparedTransformCommit {owner:packet.scene.owner(),revision:packet.scene.revision(),extent:packet.document_extent,
+            colour:r.document_color(),requests:Vec::new(),sources:Vec::new(),pages:Vec::new()};
+        for (state,(target,index)) in states.into_iter().zip(matches) {
+            let Some(capture)=state.capture.as_ref() else {return Ok(None)};
+            if !capture.matches_context(packet.scene) {return Ok(None);}
+            let current=r.current_raster_versions(target)?;
+            if [RasterPlane::Color,RasterPlane::WatercolorWetness].into_iter().any(|plane|capture.matches_source(plane,&current)!=Some(true)) {return Ok(None);}
+            let preview=state.preview.as_ref().unwrap();
+            let layer=r.paint_layers.iter().find(|layer|layer.id==target).ok_or(GpuRasterError::NotReady)?;
+            let regions=state.plan.channel_regions(&preview.drawn(),r.target_extent(target));
+            for channel in 0..2 {
+                if state.sources[channel].is_none() {continue;}
+                let plane=if channel==0 {RasterPlane::Color}else {RasterPlane::WatercolorWetness};
+                let coordinates=regions[channel].into_iter().flat_map(page_coordinates).collect::<std::collections::BTreeSet<_>>();
+                for coordinate in coordinates {
+                    let version=capture.version(plane,page_rect(coordinate).into(),preview_taps(preview))?;
+                    if channel==0 {
+                        let Some(page)=layer.pages.iter().find(|page|page.coordinate==coordinate) else {return Ok(None)};
+                        if page.active().read(&version,None).is_none() {return Ok(None);}
+                        result.pages.push(CommitPage::Color {target,version,page:LayerPage {coordinate,primary:page.primary.shared_storage(),
+                            secondary:page.secondary.as_ref().map(resident::Resident::shared_storage),active_secondary:page.active_secondary,
+                            primary_needs_clear:page.primary_needs_clear,stroke_start:None,derived:None}});
+                    } else {
+                        let Some(page)=layer.watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate) else {return Ok(None)};
+                        if page.active().read(&version,None).is_none() {return Ok(None);}
+                        result.pages.push(CommitPage::Wetness {target,version,page:WatercolorWetnessPage {coordinate,primary:page.primary.shared_storage(),
+                            secondary:page.secondary.shared_storage(),active_secondary:page.active_secondary,primary_needs_clear:page.primary_needs_clear,
+                            secondary_needs_clear:page.secondary_needs_clear,pending:None,derived:None}});
+                    }
+                }
+            }
+            result.requests.push((target,index,packet.scene.operations(target).unwrap()[index as usize].clone()));
+            result.sources.push((target,capture.clone()));
+        }
+        Ok(Some(result))
+    }
+    pub(crate) fn declared_capture(&self,r:&WgpuRasterizer,scene:SceneView<'_>,desired:&layer_render::TransformPreview)->Result<crate::scene::Capture,GpuRasterError> {
+        let versions=r.raster_versions(scene,desired.target)?;
+        let state=self.0.iter().find(|state|state.preview.as_ref().is_some_and(|preview|preview.target==desired.target)
+            || state.prepared_preview.as_ref().is_some_and(|(preview,_,_)|preview.target==desired.target));
+        let mesh=state.and_then(|state|state.mesh.as_ref()).filter(|(placement,_,_)|*placement==desired.drawn().placement).map(|(_,_,mesh)|mesh.clone());
+        if let Some(capture)=state.and_then(|state|state.capture.as_ref()).filter(|capture|capture.matches_context(scene)
+            && [RasterPlane::Color,RasterPlane::Mask,RasterPlane::WatercolorWetness].into_iter().all(|plane|capture.matches_source(plane,&versions)==Some(true))) {
+            return Ok(capture.with_preview(desired.clone(),mesh).with_taps(preview_taps(desired)));
+        }
+        Ok(crate::scene::Capture::new(scene.snapshot(),versions,desired.clone(),mesh).with_taps(preview_taps(desired)))
+    }
+    pub(crate) fn requested_version_for_capture(&self,r:&WgpuRasterizer,wanted:&crate::scene::Capture,plane:RasterPlane,coordinate:[u32;2])->Result<layer_core::raster::ContentVersion,GpuRasterError> {
+        let desired=wanted.desired_preview();
+        let state=self.0.iter().find(|state|state.preview.as_ref().is_some_and(|preview|preview.target==desired.target && preview.selection==desired.selection)
+            || state.prepared_preview.as_ref().is_some_and(|(preview,_,_)|preview.target==desired.target && preview.selection==desired.selection))
+            .ok_or(GpuRasterError::NotReady)?;
+        let held=state.capture.as_ref().ok_or(GpuRasterError::NotReady)?;
+        if held.matches_source(plane,wanted.source_versions())!=Some(true) {return Err(GpuRasterError::NotReady);}
+        state.native_version(wanted,&desired.drawn(),r.target_extent(desired.target),plane,coordinate,preview_taps(desired))
+    }
+    pub(crate) fn read_native<'a>(&self,r:&'a WgpuRasterizer,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],wanted:&crate::scene::Capture,receipt:Option<&submission::Submission>)
+        ->Result<NativeRead<'a>,GpuRasterError> {
+        if target.is_coverage() {return Ok(NativeRead::Display);}
+        if wanted.desired_preview().target!=target {return Err(GpuRasterError::Invariant("prepared read native state is inconsistent"));}
+        let state=self.0.iter().find(|state|state.preview.as_ref().is_some_and(|preview|preview.target==target)).ok_or(GpuRasterError::NotReady)?;
+        if !state.native_preview && !state.queried.contains(&coordinate) {return Ok(NativeRead::Display);}
+        let expected=self.requested_version_for_capture(r,wanted,plane,coordinate)?;
+        if let Some(read)=destination(r,target,usize::from(plane==RasterPlane::WatercolorWetness),false,coordinate)
+            .and_then(|surface|surface.read(&expected,receipt)) {return Ok(NativeRead::Resident(read));}
+        if expected.matches(&wanted.original(plane,coordinate))==Some(true) {return Ok(NativeRead::Original(expected));}
+        Err(GpuRasterError::NotReady)
     }
     pub fn cancel_preview(
         &mut self,
@@ -168,6 +385,13 @@ impl PaintTransforms {
     pub fn cancel_preparation(&mut self) {
         for state in &mut self.0 {state.preparing=None;}
     }
+    pub(crate) fn cancel_restores(&self,r:&WgpuRasterizer)->Vec<(SourceTarget,TileKey)> {
+        let mut pages:Vec<_>=self.0.iter().flat_map(|state|state.cancel_restores(r)).collect();
+        pages.sort_unstable();pages
+    }
+    pub fn prepare_cancel(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+        self.0.iter_mut().try_for_each(|state|state.prepare_cancel(r,encoder))
+    }
     pub fn prepare_preview(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,
         next:&layer_render::TransformPreview,scene:SceneView<'_>,level:u32,fine:bool)->Result<(),GpuRasterError> {
         let local=|next:&layer_render::TransformPreview,extent| if fine {1} else {input_level(level,next,extent)};
@@ -175,9 +399,9 @@ impl PaintTransforms {
         let projected=previews.iter().flatten().filter(|next|!next.target.is_coverage()).try_fold(0u64,|bytes,next| {
             let extent=scene.target_extent(next.target);let phase=crate::scene::page_phase(scene.target_offset(next.target));
             let plan=display_mips::Plan::at([extent[0]+phase[0],extent[1]+phase[1]],local(next,extent));
-            bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL)*if self.input_requirements(next,local(next,extent),extent).1 {2}else {1}).ok_or(GpuRasterError::SourceWorkingSetExceeded)
+            bytes.checked_add(plan.pixel_bytes_through(display_mips::MAX_LEVEL)*if self.input_requirements(next,local(next,extent),extent).1 {2}else {1}).ok_or(GpuRasterError::SizeOverflow)
         })?;
-        let restore=r.projected_restore_bytes().checked_add(projected).ok_or(GpuRasterError::SourceWorkingSetExceeded)?;
+        let restore=r.projected_restore_bytes().checked_add(projected).ok_or(GpuRasterError::SizeOverflow)?;
         r.admit_preparation_with_transforms(restore,r.bake_preflight.as_ref().map_or(0,|bake|bake.projected_bytes()),Some(self))?;
         for (state,next) in self.0.iter_mut().zip(previews) {
             let Some(next)=next else {state.preparing=None;continue;};
@@ -189,7 +413,7 @@ impl PaintTransforms {
                     && old.transaction==next.transaction && old.target==next.target && old.selection==next.selection));
                 if !prepared {
                     let mut candidate=state.fork();
-                    candidate.capture_source(r,encoder,next.target,scene.paint_base(next.target),next.selection.as_ref(),(extent,Some(scene)))?;
+                    candidate.capture_source(r,encoder,next.target,scene.paint_base(next.target),next.selection.as_ref(),(extent,Some(scene)),None)?;
                     candidate.prepared_preview=Some((next.clone(),scene.owner(),scene.revision()));
                     state.preparing=Some(Box::new(candidate));
                 }
@@ -245,14 +469,17 @@ impl PaintTransforms {
                 & r.compilation.require(r.selection_clip.pipelines(), startup::OTHER);
             if !ready { return Ok(false); }
         }
-        let extent = r.target_extent(id);
-        let standby = Standby::of(scene, id, selection);
-        if state.standby.as_ref() != Some(&standby) {
-            state.capture_source(r, encoder, id, None, Some(selection), (extent,None))?;
-            state.standby = Some(standby);
-        }
-        let local = sampling::selection_level(level, Some(selection), extent);
-        state.prepare_reduced(r, encoder, Some(selection), Some((scene, id)), extent, local).map(|()|true)
+        let result=(|| {
+            let extent = r.target_extent(id);
+            let standby = Standby::of(scene, id, selection);
+            if state.standby.as_ref() != Some(&standby) {
+                state.capture_source(r, encoder, id, None, Some(selection), (extent,None), None)?;
+                state.standby = Some(standby);
+            }
+            let local = sampling::selection_level(level, Some(selection), extent);
+            state.prepare_reduced(r, encoder, Some(selection), Some((scene, id)), extent, local)
+        })();
+        match result {Err(error) if error.is_preparation_pending()=>Ok(false),result=>result.map(|()|true)}
     }
     pub fn release_standby(&mut self) {
         for state in &mut self.0 {
@@ -269,26 +496,22 @@ impl PaintTransforms {
     pub fn display_source(&self, id: SourceTarget) -> bool {
         self.0.iter().any(|t| t.preview.as_ref().is_some_and(|p| p.target == id) && !t.native_preview)
     }
-    pub fn direct_source(&self, id: SourceTarget) -> bool {
-        self.0.iter().any(|t| t.preview.as_ref().is_some_and(|p| p.target == id
-            && !p.transform.keep_source && p.transform.placement.mesh.is_none())
-            && !t.native_preview && t.reduced.as_ref().is_some_and(|input| input.kept.is_none() && input.fine.is_none()))
-    }
     pub fn fine_compatible(&self,preview:&layer_render::TransformPreview)->bool {
         self.0.iter().find(|state|state.displayable(preview)).is_none_or(|state|state.reduced.as_ref()
             .is_none_or(|input|input.fine.is_some() || input.level==1))
     }
     pub fn finish_frame(&mut self) {
-        for state in &mut self.0 {state.fine_progress.clear();}
+        for state in &mut self.0 {state.fine_progress.retain(|progress|progress.valid.load(std::sync::atomic::Ordering::Acquire));}
+    }
+    pub fn finish_region(&mut self, region: &PreparedRegion) {
+        if let Region::Copy { allocation, .. } = &region.0 {
+            for state in &mut self.0 {state.fine_progress.retain(|progress|!Arc::ptr_eq(&progress.allocation,allocation));}
+        }
     }
     pub fn waiting_for_display_input(&self,capacity:Option<usize>)->bool {
         self.0.iter().any(|state|state.preview.is_some() && !state.native_preview
             && (state.reduced.is_none() || capacity.is_some_and(|capacity|state.native_retirement_pending()
                 || state.reduced.as_ref().and_then(|input|input.fine.as_ref()).is_none_or(|fine|fine.capacity!=capacity))))
-    }
-    pub fn retiring_native_bytes(&self,preview:&layer_render::TransformPreview)->u64 {
-        self.0.iter().filter(|state|state.displayable(preview)).flat_map(|state|&state.retired_native)
-            .map(|(_,lease)|lease.bytes).sum()
     }
     pub fn fine_progress_bytes(&self)->u64 {
         self.0.iter().flat_map(|state|&state.fine_progress).map(|p|p.allocation.bytes).sum()
@@ -307,48 +530,38 @@ impl PaintTransforms {
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         scene: SceneView<'_>, region: DocRect,
     ) -> Result<(), GpuRasterError> {
-        if !self.materialization_needs().require(&r.compilation,startup::DOCUMENT) {return Err(GpuRasterError::DeferredObjectWork);}
+        #[cfg(test)]
+        crate::scene::sources::assert_reading("transform materialization");
+        if !self.materialization_needs().require(&r.compilation,startup::DOCUMENT) {return Err(GpuRasterError::NotReady);}
         let scene = scene.with_offset64(region.min.map(|value| -(value as f64)));
         let local = PixelRect::full(region.size()?);
         for state in self.0.iter_mut().filter(|t| !t.native_preview && t.preview.is_some()) {
             let preview = state.preview.clone().unwrap();
             let extent = r.target_extent(preview.target);
             let bounds = PixelRect::full(extent);
-            let splitter = snapshot::Splitter::new(bounds, &Default::default(), None, |c| !page_rect(c).intersect(bounds).is_empty())?
-                .shifted(scene.target_offset(preview.target));
-            let mut jobs = Vec::new();
-            splitter.split(local, &mut jobs)?;
+            let placement=scene::placement::Placement::identity(bounds,scene.target_offset(preview.target));
+            let jobs=placement.footprints(local)?;
             let pages: std::collections::BTreeSet<_> = jobs.into_iter().flat_map(|job| job.sources).collect();
             let retired: Vec<_> = state.queried.difference(&pages).copied().map(page_rect).collect();
-            state.render_source(r, encoder, preview.target, &Default::default(), pixel_transform::PREVIEW_TAPS, &retired)?;
+            state.render_source(r, encoder, preview.target, &Default::default(), pixel_transform::PREVIEW_TAPS, &retired,TransformWrite::Restore(preview_taps(&preview)))?;
             let missing: Vec<_> = pages.difference(&state.queried).map(|c| page_rect(*c).intersect(bounds)).collect();
-            state.render_source(r, encoder, preview.target, &preview.drawn(), preview_taps(&preview), &missing)?;
+            state.render_source(r, encoder, preview.target, &preview.drawn(), preview_taps(&preview), &missing,TransformWrite::Preview)?;
             let retained: Vec<_> = pages.iter().copied().map(page_rect).collect();
             state.retain_pages(r, preview.target, &retained, Some(&preview.transform));
             state.queried = pages;
         }
         Ok(())
     }
-    pub fn presentation(&self, id: SourceTarget, placement: layer_core::Affine, extent: [u32; 2], opacity: f32, backdrop: [f32; 4], encode: bool)
-        -> Result<resample::Mapped, GpuRasterError> {
-        let state = self.0.iter().find(|t| t.preview.as_ref().is_some_and(|p| p.target == id)).unwrap();
-        let preview = state.preview.as_ref().unwrap();
-        let inputs = state.reduced.as_ref().unwrap();
-        let display = pixel_transform::DisplayLevel { side: 1, extent, opacity, backdrop, encode };
-        let values = state.display_record(preview, extent, placement, display, display_mips::Plan::at(extent, 0), [0; 4])?;
-        Ok(resample::Mapped { view: inputs.sampling[0].clone(), values })
-    }
     #[expect(clippy::too_many_arguments, reason = "Paint transforms keep source placement and output sampling regions explicit")]
-    pub fn render_region(
+    pub fn prepare_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         id: SourceTarget, placement: layer_core::Affine, output: &wgpu::TextureView,
         display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: DocRect, fine_budget:u64,
-    ) -> Result<(), GpuRasterError> {
+    ) -> Result<PreparedRegion, GpuRasterError> {
         let fine_budget=fine_budget.saturating_sub(self.fine_progress_bytes());
         let state = self.0.iter_mut().find(|t| t.preview.as_ref().is_some_and(|p| p.target == id)).unwrap();
         let preview = state.preview.clone().unwrap();
-        let resample = r.scene_pipelines.resample.clone();
-        state.render_region(r, encoder, &preview, r.target_extent(id), placement, output, display, target, region, &resample, fine_budget)
+        state.prepare_region(r, encoder, &preview, r.target_extent(id), placement, output, display, target, region, fine_budget)
     }
 
 }
@@ -362,10 +575,10 @@ struct ImageTransformState {
     captures: [std::collections::BTreeMap<[u32; 2], snapshot::SnapshotPage>; 2],
     selection: Option<wgpu::Buffer>,
     has_selection: bool,
-    cut: layer_core::Rect,
+    plan: Plan,
     original_pages: [Vec<[u32; 2]>; 2],
-    source_bounds: [PixelRect; 2],
     preview: Option<layer_render::TransformPreview>,
+    capture:Option<crate::scene::Capture>,
     prepared_preview: Option<(layer_render::TransformPreview,u64,u64)>,
     preparing:Option<Box<ImageTransformState>>,
     preview_regions: [PixelRect; 2],
@@ -384,8 +597,47 @@ struct ImageTransformState {
     /// The warp mesh last tessellated, the display tolerance it was
     /// tessellated within, if any, and its geometry.
     mesh: Option<(layer_core::LayerPlacement, Option<f32>, Arc<mesh::MeshGeometry>)>,
+    charge: crate::residency::Charge,
 }
 
+#[derive(Clone,Copy,PartialEq)]
+pub(crate) struct Plan {source_bounds:[PixelRect;2],cut:layer_core::Rect}
+impl Plan {
+    const EMPTY:Self=Self {source_bounds:[PixelRect::EMPTY;2],cut:layer_core::Rect::EMPTY};
+    pub(crate) fn of<I:Iterator<Item=[u32;2]>>(pages:[I;2],base:Option<&layer_core::authored::PaintBase>,selection:Option<&layer_core::Selection>,extent:[u32;2])->Self {
+        let full=PixelRect::full(extent);
+        let mut source_bounds=pages.map(|pages|pages.fold(PixelRect::EMPTY,|bounds,c|bounds.union(page_rect(c).intersect(full))));
+        if let Some(base)=base {source_bounds[0]=source_bounds[0].union(source_access::paint_base_bounds(base).intersect(full));}
+        let source=source_bounds.into_iter().fold(PixelRect::EMPTY,PixelRect::union);
+        if source.is_empty() {return Self {source_bounds,cut:layer_core::Rect::EMPTY};}
+        let mut cut=source.to_rect();
+        if let Some(bounds)=selection.filter(|s|!s.inverted).map(|s|s.bounds()) {
+            cut.min.x=cut.min.x.max(bounds.min.x);cut.min.y=cut.min.y.max(bounds.min.y);
+            cut.max.x=cut.max.x.min(bounds.max.x);cut.max.y=cut.max.y.min(bounds.max.y);
+        }
+        Self {source_bounds,cut}
+    }
+    fn covers(&self,other:&Self)->bool {
+        let cut=|a:layer_core::Rect,b:layer_core::Rect|b.is_empty() || (a.min.x<=b.min.x && a.min.y<=b.min.y && a.max.x>=b.max.x && a.max.y>=b.max.y);
+        self.source_bounds.iter().zip(other.source_bounds).all(|(a,b)|b.is_empty() || a.union(b)==*a) && cut(self.cut,other.cut)
+    }
+    pub(crate) fn writes(&self,transform:&layer_core::ImageTransform,extent:[u32;2],wet:&std::collections::BTreeSet<[u32;2]>)->[std::collections::BTreeSet<[u32;2]>;2] {
+        let color=transform.affected_regions(self.cut).into_iter().flat_map(|region|page_coordinates(pixel_rect(region,extent))).collect::<std::collections::BTreeSet<_>>();
+        let support=self.channel_regions(transform,extent)[1];
+        let wetness=color.iter().copied().filter(|c|!self.source_bounds[1].is_empty()
+            && (wet.contains(c) || support.iter().any(|region|!region.page_local(*c).is_empty()))).collect();
+        [color,wetness]
+    }
+    fn channel_regions(&self,transform:&layer_core::ImageTransform,extent:[u32;2])->[[PixelRect;2];2] {
+        self.source_bounds.map(|b| {
+            let cut=layer_core::Rect {
+                min:layer_core::Point {x:(b.min_x() as f32).max(self.cut.min.x),y:(b.min_y() as f32).max(self.cut.min.y)},
+                max:layer_core::Point {x:(b.max_x() as f32).min(self.cut.max.x),y:(b.max_y() as f32).min(self.cut.max.y)},
+            };
+            transform.affected_regions(cut).map(|b|pixel_rect(b,extent))
+        })
+    }
+}
 struct FineProgress {
     preview:layer_render::TransformPreview,
     destination:wgpu::TextureView,
@@ -637,10 +889,10 @@ impl PreviewPages {
     fn storage_bytes(&self) -> u64 {
         self.paint
             .iter()
-            .map(|p| p.primary.storage_bytes() + p.secondary.as_ref().map_or(0, PageSurface::storage_bytes))
+            .map(|p| p.primary.storage_bytes() + p.secondary.as_ref().map_or(0, |surface|surface.storage_bytes()))
             .sum::<u64>()
             + self.watercolor.iter().map(|p| p.primary.storage_bytes() + p.secondary.storage_bytes()).sum::<u64>()
-            + self.masks.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>()
+            + self.masks.iter().map(layer_masks::MaskPage::storage_bytes).sum::<u64>()
     }
 }
 impl ImageTransformState {
@@ -671,10 +923,10 @@ impl ImageTransformState {
             captures: Default::default(),
             selection: None,
             has_selection: false,
-            cut: layer_core::Rect::EMPTY,
+            plan: Plan::EMPTY,
             original_pages: Default::default(),
-            source_bounds: [PixelRect::EMPTY; 2],
             preview: None,
+            capture:None,
             prepared_preview: None,
             preparing:None,
             preview_regions: [PixelRect::EMPTY; 2],
@@ -690,6 +942,7 @@ impl ImageTransformState {
             display_mesh: MeshBuffers::default(),
             positions,
             mesh: None,
+            charge: Arc::<crate::residency::Tier>::default().charge(0),
         }
     }
     pub fn pipelines(&self) -> [Deferred<wgpu::RenderPipeline>; 3] {
@@ -703,6 +956,14 @@ impl ImageTransformState {
         self.color.begin_frame();
         self.scalar.begin_frame();
         self.visibility.begin_frame();
+        self.account();
+    }
+    fn spare_bytes(&self) -> u64 {
+        self.spares.storage_bytes() + self.preparing.as_ref().map_or(0, |state| state.spare_bytes())
+    }
+    fn account(&mut self) {
+        let bytes = self.storage_bytes().saturating_sub(self.spare_bytes());
+        self.charge.resize(bytes);
     }
     pub fn storage_bytes(&self) -> u64 {
         self.spares.storage_bytes()
@@ -743,6 +1004,7 @@ impl ImageTransformState {
         layer: SourceTarget,
         operation: &layer_core::RasterOperation,
         extent: [u32; 2],
+        plan: Plan,
     ) -> Result<(), GpuRasterError> {
         let layer_core::RasterOperationKind::Transform(transform) = &operation.kind else {
             unreachable!()
@@ -757,12 +1019,13 @@ impl ImageTransformState {
             transform.source_base.as_ref(),
             operation.coverage.selection.as_ref(),
             (extent,None),
+            Some(plan),
         )?;
         let regions = transform
-            .affected_regions(self.cut)
+            .affected_regions(plan.cut)
             .map(|b| pixel_rect(b, extent));
         let taps = pixel_transform::exact_taps(transform);
-        let result = self.render_source(r, encoder, layer, transform, taps, &regions);
+        let result = self.render_source(r, encoder, layer, transform, taps, &regions,TransformWrite::Authored);
         let keeps_base = transform.source_base.is_none() && r.tiled_sources.contains_key(&layer);
         if result.is_ok() && !keeps_base && self.moves_everything(operation.coverage.selection.as_ref()) {
             let placed = regions[1];
@@ -774,7 +1037,7 @@ impl ImageTransformState {
     /// Whether the captured transform moves every pixel its target holds,
     /// leaving only the pages its forward bounds reach.
     fn moves_everything(&self, selection: Option<&layer_core::Selection>) -> bool {
-        let source = self.source_bounds.into_iter().fold(PixelRect::EMPTY, PixelRect::union);
+        let source = self.plan.source_bounds.into_iter().fold(PixelRect::EMPTY, PixelRect::union);
         self.sources[0].is_some()
             && !source.is_empty()
             && selection.is_none_or(|s| selects_all(s, source))
@@ -787,44 +1050,56 @@ impl ImageTransformState {
         base: Option<&layer_core::authored::PaintBase>,
         selection: Option<&layer_core::Selection>,
         source:([u32;2],Option<SceneView<'_>>),
+        plan:Option<Plan>,
     ) -> Result<(), GpuRasterError> {
         let (extent,scene)=source;
         self.spares.clear();
         self.release_snapshot();
         self.has_selection = selection.is_some();
-        self.cut = layer_core::Rect::EMPTY;
-        let (background,pages)=if scene.is_some() && r.staged_transform_source(layer).is_none() {(None,[Vec::new(),Vec::new()])}else {source_pages(r,layer)?};
+        let (background,pages)=if scene.is_some() && r.staged_transform_source(layer).is_none() {(None,[Vec::new(),Vec::new()])}else {source_pages(r,layer,Some(&encoder.submission()))?};
         let backing=if let Some(scene)=scene {
-            scene.raster(layer).map(|root|root.try_data().ok_or(GpuRasterError::DeferredObjectWork)?.map_err(GpuRasterError::Effect))
+            scene.raster(layer).map(|root|root.try_data().ok_or(GpuRasterError::NotReady)?.map_err(GpuRasterError::Effect))
                 .transpose()?.map(|data|(data,r.document_color().space))
-        }else {background.is_none().then(||r.staged_transform_source(layer).map(|(data,_)|data.clone()).or_else(||r.native_backing(layer).cloned())
+        }else if let Some(source)=r.layer_masks.definitions.get(&layer) {Some((r.mask_data(layer,source)?,r.document_color().space))}
+        else {background.is_none().then(||r.staged_transform_source(layer).map(|(data,_)|data.clone()).or_else(||r.native_backing(layer).cloned())
             .map(|data|(data,r.document_color().space))).flatten()};
+        if let Some(source)=r.layer_masks.definitions.get(&layer) {
+            let data=backing.as_ref().ok_or(GpuRasterError::NotReady)?.0.clone();
+            let coordinates=data.tiles.keys().filter(|key|key.plane==RasterPlane::Mask).map(|key|key.coordinate)
+                .chain(r.layer_masks.pages.keys().filter(|(target,_)|*target==layer).map(|(_,coordinate)|*coordinate));
+            let captured=pages[0].iter().map(|(coordinate,_)|*coordinate).collect::<std::collections::BTreeSet<_>>();
+            for coordinate in coordinates {
+                if captured.contains(&coordinate) {continue;}
+                let declared=data.tiles.get(&TileKey {plane:RasterPlane::Mask,coordinate}).map_or_else(
+                    ||crate::raster::contents::mask_default(source.domain,source.default_coverage,coordinate),|tile|tile.content_version());
+                if declared.matches(&r.current_mask_version(layer,coordinate)?)!=Some(true) {return Err(GpuRasterError::NotReady);}
+            }
+        }
         let original = background
             .is_none()
             .then(|| scene.map_or_else(||base.or_else(||r.tiled_sources.get(&layer)),|scene|scene.paint_base(layer)).cloned())
             .flatten();
         self.background = background;
         self.original_pages = std::array::from_fn(|i| pages[i].iter().map(|(c, _)| *c).collect());
-        self.source_bounds = std::array::from_fn(|i| {
-            pages[i]
-                .iter()
-                .fold(PixelRect::EMPTY, |b, (c, _)| b.union(page_rect(*c)))
-                .intersect(PixelRect::full(extent))
-        });
-        let planes = [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness];
+        let planes = [if background.is_some() {layer_core::raster::RasterPlane::Mask} else {layer_core::raster::RasterPlane::Color}, layer_core::raster::RasterPlane::WatercolorWetness];
         if let Some((data, _)) = &backing {
             for (i, plane) in planes.iter().enumerate() {
                 for key in data.tiles.keys().filter(|key| key.plane == *plane) {
                     if !self.original_pages[i].contains(&key.coordinate) { self.original_pages[i].push(key.coordinate); }
-                    self.source_bounds[i] = self.source_bounds[i].union(page_rect(key.coordinate).intersect(PixelRect::full(extent)));
                 }
             }
         }
-        if let Some(original) = &original {
-            self.source_bounds[0] = self.source_bounds[0]
-                .union(source_access::paint_base_bounds(original).intersect(PixelRect::full(extent)));
+        let versions=r.current_raster_versions(layer).ok();
+        let content=|i:usize,coordinate:[u32;2]|backing.as_ref().is_some_and(|(data,_)|data.tiles.contains_key(&TileKey {plane:planes[i],coordinate}))
+            || versions.as_ref().is_some_and(|versions|versions.authored(planes[i],coordinate));
+        let derived=Plan::of(std::array::from_fn(|i|self.original_pages[i].iter().copied().filter(move |c|plan.is_none() || content(i,*c))),original.as_ref(),selection,extent);
+        if plan.is_some_and(|plan|!plan.covers(&derived)) {
+            debug_assert!(false,"transform source exceeds its accepted plan");
+            return Err(GpuRasterError::Invariant("transform source exceeds its accepted plan"));
         }
+        self.plan=plan.unwrap_or(derived);
         let source_bounds = self
+            .plan
             .source_bounds
             .into_iter()
             .fold(PixelRect::EMPTY, PixelRect::union);
@@ -833,24 +1108,13 @@ impl ImageTransformState {
         }
         #[cfg(test)]
         r.test.source_captures.update(|n| n + 1);
-        let mut cut = source_bounds.to_rect();
         if let Some(s) = selection {
-            if !s.inverted {
-                let b = s.bounds();
-                cut.min.x = cut.min.x.max(b.min.x);
-                cut.min.y = cut.min.y.max(b.min.y);
-                cut.max.x = cut.max.x.min(b.max.x);
-                cut.max.y = cut.max.y.min(b.max.y);
-            }
             r.selection_clip.prepare(
                 &r.device,
                 encoder,
                 extent,
                 &std::sync::Arc::new(s.clone()),
             )?;
-        }
-        self.cut = cut;
-        if selection.is_some() {
             let source = r.selection_clip.buffer.as_ref().unwrap();
             let target = self
                 .selection
@@ -861,14 +1125,13 @@ impl ImageTransformState {
             encoder.copy_buffer_to_buffer(source, 0, target, 0, source.size());
         }
         for (channel, pages) in pages.into_iter().enumerate() {
-            if channel == 0 || !self.source_bounds[channel].is_empty() {
-                let bounds = if self.source_bounds[channel].is_empty() {
+            if channel == 0 || !self.plan.source_bounds[channel].is_empty() {
+                let bounds = if self.plan.source_bounds[channel].is_empty() {
                     source_bounds
                 } else {
-                    self.source_bounds[channel]
+                    self.plan.source_bounds[channel]
                 };
                 self.sources[channel] = Some(TileSnapshot {
-                    decode_id: layer_core::authored::PortableId::random(),
                     pages: pages.into_iter().collect(),
                     base: if channel == 0 { original.clone() } else { None },
                     backing: backing.as_ref().map(|(data, space)| (data.clone(), *space, planes[channel])),
@@ -905,9 +1168,10 @@ impl ImageTransformState {
         transform: &layer_core::ImageTransform,
         taps: u32,
         regions: &[PixelRect],
+        scope:TransformWrite,
     ) -> Result<(), GpuRasterError> {
         let plan = self.plan_source(r, encoder, layer, transform, regions)?;
-        self.draw_source(r, encoder, layer, transform, taps, plan)
+        self.draw_source(r, encoder, layer, transform, taps, plan,scope,None)
     }
     /// Every job a render needs, with the original pages they read decoded,
     /// found before any page changes.
@@ -924,7 +1188,7 @@ impl ImageTransformState {
         }
         let index = r.paint_layers.iter().position(|l| l.id == layer);
         let mesh = transform.placement.mesh.as_ref().map(|_| self.mesh_geometry(&transform.placement, None));
-        let support = self.channel_regions(transform, r.target_extent(layer));
+        let support = self.plan.channel_regions(transform, r.target_extent(layer));
         let coordinates: std::collections::BTreeSet<_> = regions
             .iter()
             .copied()
@@ -947,19 +1211,31 @@ impl ImageTransformState {
                 })
                 .collect()
         });
-        let source = self.sources[0].as_ref().unwrap();
-        let initialize: std::collections::BTreeSet<_> = match index.filter(|_| self.background.is_none()) {
-            Some(index) => coordinates.iter().copied().filter(|c| r.paint_layers[index].pages.iter().all(|p| p.coordinate != *c)
-                && source.contains(*c)).collect(),
-            None => Default::default(),
-        };
-        let reach = (transform.placement.interpolation.support().max(1) + 1) as f32;
-        let read = pixel_rect(self.cut.outset(reach), r.target_extent(layer));
+        let receipt=encoder.submission();
+        let mut initializes:[std::collections::BTreeSet<[u32;2]>;2]=Default::default();
+        for channel in 0..2 {
+            let Some(source)=self.sources[channel].as_ref() else {continue;};
+            let plane=if self.background.is_some() {RasterPlane::Mask}else if channel==0 {RasterPlane::Color}else {RasterPlane::WatercolorWetness};
+            for &coordinate in &channel_pages[channel] {
+                let expected=if self.background.is_none() && (self.native_preview || self.queried.contains(&coordinate)) {
+                    if let Some((capture,preview))=self.capture.as_ref().zip(self.preview.as_ref()) {
+                        self.native_version(capture,&preview.drawn(),r.target_extent(layer),plane,coordinate,preview_taps(preview))?
+                    }else {r.current_raster_version(layer,plane,coordinate)?}
+                }else {r.current_raster_version(layer,plane,coordinate)?};
+                let current=if self.background.is_some() {r.layer_masks.pages.get(&(layer,coordinate)).is_some_and(|page|page.read(&expected,Some(&receipt)).is_ok())}
+                    else {destination(r,layer,channel,false,coordinate).is_some_and(|surface|surface.read(&expected,Some(&receipt)).is_some())};
+                if !current && source.contains(coordinate) {initializes[channel].insert(coordinate);}
+            }
+        }
+        let initialize=initializes[0].clone();
+        let sampling=snapshot::sampling_support(transform);
+        let reach = (sampling + u32::from(sampling!=0)) as f32;
+        let read = pixel_rect(self.plan.cut.outset(reach), r.target_extent(layer));
         let plans = channel_pages.iter().enumerate().map(|(channel, pages)| {
             if pages.is_empty() { return Ok(Vec::new()); }
             let targets = pages.iter().filter_map(|&c| {
                 let region = regions.iter().map(|b| b.intersect(page_rect(c))).fold(PixelRect::EMPTY, PixelRect::union);
-                let target = Target { texture: (), region: region.page_local(c), initialize: channel == 0 && initialize.contains(&c) };
+                let target = Target { texture: (), region: region.page_local(c), initialize: initializes[channel].contains(&c) };
                 (!region.is_empty()).then_some((c, target))
             }).collect();
             self.plan_windows(r, channel, transform, mesh.as_ref(), targets, read)
@@ -975,6 +1251,104 @@ impl ImageTransformState {
         }
         Ok(Some(SourcePlan { index, mesh, support, coordinates, initialize, leases, channels }))
     }
+    fn draw_mask_source(
+        &mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,
+        layer:SourceTarget,transform:&layer_core::ImageTransform,taps:u32,plan:Option<SourcePlan>,preview:bool,declared:Option<&crate::scene::Capture>,
+    )->Result<(),GpuRasterError> {
+        let Some(SourcePlan {mesh,channels,initialize,leases:_leases,..})=plan else {return Ok(())};
+        if let Some(geometry)=&mesh {self.positions.upload(r,encoder,geometry)?;}
+        let receipt=encoder.submission();
+        let background=self.background.ok_or(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"))?;
+        for (channel,ChannelPlan {pages,windows:planned}) in channels.into_iter().enumerate() {
+            if pages.is_empty() {continue;}
+            let mut outputs=std::collections::BTreeMap::new();
+            for coordinate in pages {
+                let intent=r.raster_intent(layer,layer_core::raster::RasterPlane::Mask,coordinate)?;
+                let current=r.layer_masks.pages.get(&(layer,coordinate)).filter(|page|page.read(intent.version(),Some(&receipt)).is_ok());
+                let (page,version)=if preview {
+                    if let Some(previous)=r.layer_masks.previews.get(&(layer,coordinate)).filter(|entry|entry.matches(intent.version())
+                        && self.preview.as_ref().zip(self.capture.as_ref()).is_some_and(|(previous,capture)|self.native_version(capture,&previous.drawn(),r.target_extent(layer),RasterPlane::Mask,coordinate,preview_taps(previous)).is_ok_and(|expected|entry.version.matches(&expected)==Some(true)))).cloned() {(previous.page,previous.version)}
+                    else {
+                        let mut page=layer_masks::MaskPage::new(&r.device);
+                        let mut version=intent.version().clone();
+                        if let Some(base)=current {
+                            let read=base.read(intent.version(),Some(&receipt))?;
+                            let write=page.initialize(&receipt)?;
+                            encoder.copy_texture_to_texture(read.value().texture.as_image_copy(),write.value().texture.as_image_copy(),read.value().texture.size());
+                            write.publish(read.version().clone());
+                        } else {
+                            let source=r.layer_masks.definitions.get(&layer).ok_or(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"))?;
+                            let default=crate::raster::contents::mask_default(source.domain,background,coordinate);
+                            if !initialize.contains(&coordinate) && default.matches(intent.version())!=Some(true) {return Err(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"));}
+                            version=layer_core::raster::ContentName::fresh().into();
+                            page.clear(encoder,f64::from(background),version.clone())?;
+                        }
+                        (page,version)
+                    }
+                } else {
+                    if let Some(page)=current {
+                        let read=page.read(intent.version(),Some(&receipt))?;
+                        if self.sources[channel].as_ref().is_some_and(|source|source.aliases(coordinate,&read.value().texture)) {
+                            let reusable=self.captures[channel].remove(&coordinate);
+                            let capture=self.sources[channel].as_ref().unwrap().pages.get(&coordinate).unwrap().copy_named(r,encoder,reusable)?;
+                            self.captures[channel].insert(coordinate,capture.clone());
+                            self.sources[channel].as_mut().unwrap().pages.insert(coordinate,capture);
+                        }
+                    }
+                    if let Some(page)=current.cloned() {(page,intent.version().clone())}
+                    else {
+                        let source=r.layer_masks.definitions.get(&layer).ok_or(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"))?;
+                        let default=crate::raster::contents::mask_default(source.domain,background,coordinate);
+                        if !initialize.contains(&coordinate) && default.matches(intent.version())!=Some(true) {return Err(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"));}
+                        let version:layer_core::raster::ContentVersion=layer_core::raster::ContentName::fresh().into();
+                        let mut page=layer_masks::MaskPage::new(&r.device);page.clear(encoder,f64::from(background),version.clone())?;(page,version)
+                    }
+                };
+                page.read(&version,Some(&receipt))?;
+                outputs.insert(coordinate,(page,version,intent));
+            }
+            let windows=planned.into_iter().map(|window|Ok(Window {
+                origin:window.origin,jobs:window.jobs,
+                pages:window.pages.into_iter().map(|(coordinate,target)| {
+                    let (page,version,_)=outputs.get(&coordinate).ok_or(GpuRasterError::Invariant("planned transform output is missing"))?;
+                    let read=page.read(version,Some(&receipt))?;
+                    Ok((coordinate,Target {texture:read.value().texture.clone(),region:target.region,initialize:target.initialize}))
+                }).collect::<Result<Vec<_>,GpuRasterError>>()?,
+            })).collect::<Result<Vec<_>,GpuRasterError>>()?;
+            let names=outputs.keys().copied().map(|coordinate| {
+                let name=if preview {self.native_version(declared.ok_or(GpuRasterError::Invariant("prepared draw mask source state is inconsistent"))?,transform,r.target_extent(layer),RasterPlane::Mask,coordinate,taps)?}
+                    else {layer_core::raster::ContentName::fresh().into()};
+                Ok((coordinate,name))
+            }).collect::<Result<std::collections::BTreeMap<_,_>,GpuRasterError>>()?;
+            let mut copied=|coordinate,actual:&crate::submission::Submission| {
+                let (page,version,_)=outputs.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform output is missing"))?;
+                let name=names[&coordinate].clone();
+                let written=page.revise(version,actual)?.publish(name);
+                *version=written.version().clone();Ok(())
+            };
+            let result=self.draw_windows(r,encoder,channel,transform,taps,&windows,self.has_selection,Some(&mut copied));
+            let receipt=encoder.submission();
+            for (coordinate,(page,version,intent)) in outputs {
+                if result.is_ok() {
+                    if preview {r.layer_masks.previews.insert((layer,coordinate),layer_masks::MaskPreview {page,base:intent.version().clone(),version:version.clone()});}
+                    else {
+                        let read=page.read(&version,Some(&receipt))?;
+                        r.record_raster_write(layer,read.replace(&intent,&receipt))?;
+                        r.layer_masks.pages.insert((layer,coordinate),page);
+                        r.layer_masks.previews.remove(&(layer,coordinate));
+                    }
+                } else if preview {r.layer_masks.previews.insert((layer,coordinate),layer_masks::MaskPreview {page,base:intent.version().clone(),version});}
+                else {r.layer_masks.pages.insert((layer,coordinate),page);}
+            }
+            result?;
+        }
+        Ok(())
+    }
+    fn native_version(&self,capture:&crate::scene::Capture,transform:&layer_core::ImageTransform,extent:[u32;2],plane:RasterPlane,coordinate:[u32;2],taps:u32)->Result<layer_core::raster::ContentVersion,GpuRasterError> {
+        let channel=usize::from(plane==RasterPlane::WatercolorWetness);
+        if self.plan.channel_regions(transform,extent)[channel].iter().all(|region|region.page_local(coordinate).is_empty()) {return Ok(capture.original(plane,coordinate));}
+        capture.version(plane,page_rect(coordinate).into(),taps)
+    }
     fn draw_source(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -983,99 +1357,103 @@ impl ImageTransformState {
         transform: &layer_core::ImageTransform,
         taps: u32,
         plan: Option<SourcePlan>,
+        scope:TransformWrite,
+        declared:Option<&crate::scene::Capture>,
     ) -> Result<(), GpuRasterError> {
-        let Some(SourcePlan { index, mesh, support, coordinates, initialize, channels, leases: _leases }) = plan else { return Ok(()) };
-        let watercolor = self.sources[1].is_some();
-        if let Some(geometry) = &mesh { self.positions.upload(r, encoder, geometry)?; }
-        for c in coordinates {
-            if let Some(background) = self.background {
-                if !r.layer_masks.pages.contains_key(&(layer, c)) {
-                    let page = self
-                        .spares
-                        .masks
-                        .pop()
-                        .unwrap_or_else(|| layer_masks::MaskPage::new(&r.device));
-                    r.encode_clear_value(
-                        encoder,
-                        &page.view,
-                        "transformed visibility page",
-                        background,
-                    );
-                    r.layer_masks.pages.insert((layer, c), page);
-                }
-                continue;
-            }
-            let index = index.ok_or(GpuRasterError::MissingPaintLayer(layer))?;
-            if r.paint_layers[index]
-                .pages
-                .iter()
-                .all(|p| p.coordinate != c)
-            {
-                let mut page = self
-                    .spares
-                    .paint
-                    .pop()
-                    .unwrap_or_else(|| r.create_page(c, "transformed paint page"));
-                page.coordinate = c;
-                page.active_secondary = false;
-                if !initialize.contains(&c) {
-                    page.primary.clear(&r.zero_pages, encoder);
-                }
-                page.primary_needs_clear = false;
-                r.paint_layers[index].pages.push(page);
-            }
-            if watercolor
-                && support[1].iter().any(|b| !b.page_local(c).is_empty())
-                && r.paint_layers[index]
-                    .watercolor_wetness_pages
-                    .iter()
-                    .all(|p| p.coordinate != c)
-            {
-                let mut page =
-                    self.spares
-                        .watercolor
-                        .pop()
-                        .unwrap_or_else(|| WatercolorWetnessPage {
-                            coordinate: c,
-                            primary: r
-                                .create_scalar_page_surface("transformed watercolor wetness A"),
-                            secondary: r
-                                .create_scalar_page_surface("transformed watercolor wetness B"),
-                            active_secondary: false,
-                            primary_needs_clear: false,
-                            secondary_needs_clear: false,
-                        });
-                page.coordinate = c;
-                page.active_secondary = false;
-                page.primary_needs_clear = false;
-                page.secondary_needs_clear = false;
-                page.primary.clear(&r.zero_pages, encoder);
-                page.secondary.clear(&r.zero_pages, encoder);
-                r.paint_layers[index].watercolor_wetness_pages.push(page);
+        if matches!(scope,TransformWrite::Authored) && let Some(plan)=&plan {
+            for (channel,ChannelPlan {pages,..}) in plan.channels.iter().enumerate() {
+                for &c in pages {r.accepted_raster_output(layer,match (self.background,channel) {
+                    (Some(default),_)=>RasterOutput::Mask(c,default.to_bits()),(None,0)=>RasterOutput::Color(c),_=>RasterOutput::Wetness(c),
+                })?;}
             }
         }
-        for (channel, ChannelPlan { pages, windows: planned }) in channels.into_iter().enumerate() {
-            if pages.is_empty() {
-                continue;
+        if self.background.is_some() {
+            let capture=declared.cloned().or_else(||self.capture.clone());
+            return self.draw_mask_source(r,encoder,layer,transform,taps,plan,matches!(scope,TransformWrite::Preview),capture.as_ref());
+        }
+        let Some(SourcePlan {index,mesh,support,coordinates,initialize,channels,leases:_leases})=plan else {return Ok(())};
+        let index=index.ok_or(GpuRasterError::MissingPaintLayer(layer))?;
+        if let Some(geometry)=&mesh {self.positions.upload(r,encoder,geometry)?;}
+        let receipt=encoder.submission();
+        let mut cleared:[std::collections::BTreeMap<[u32;2],layer_core::raster::ContentVersion>;2]=Default::default();
+        let full:[std::collections::BTreeSet<[u32;2]>;2]=std::array::from_fn(|channel|channels[channel].windows.iter().flat_map(|window|&window.pages)
+            .filter(|(_,target)|target.initialize).map(|(coordinate,_)|*coordinate).collect());
+        for coordinate in coordinates {
+            if !r.paint_layers[index].pages.iter().any(|page|page.coordinate==coordinate) {
+                let mut page=self.spares.paint.pop().unwrap_or_else(||r.create_page(coordinate,"transformed paint page"));
+                page.coordinate=coordinate;page.active_secondary=false;page.derived=None;page.stroke_start=None;
+                if !initialize.contains(&coordinate) {
+                    let version:layer_core::raster::ContentVersion=layer_core::raster::ContentName::fresh().into();
+                    let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                    write.value().clear(&r.zero_pages,encoder);write.publish(&version);cleared[0].insert(coordinate,version);
+                }
+                page.primary_needs_clear=false;r.paint_layers[index].pages.push(page);
             }
-            // Complete copies before sampling any original in this channel.
-            for c in &pages {
-                self.capture_destination(r, encoder, layer, channel, *c);
+            if self.sources[1].is_some() && support[1].iter().any(|bounds|!bounds.page_local(coordinate).is_empty())
+                && !r.paint_layers[index].watercolor_wetness_pages.iter().any(|page|page.coordinate==coordinate) {
+                let mut page=self.spares.watercolor.pop().unwrap_or_else(||WatercolorWetnessPage {coordinate,
+                    primary:resident::Resident::unwritten(r.create_scalar_page_surface(&r.raster_tiers.paint,"transformed watercolor wetness A")),
+                    secondary:resident::Resident::unwritten(r.create_scalar_page_surface(&r.raster_tiers.paint,"transformed watercolor wetness B")),
+                    active_secondary:false,primary_needs_clear:false,secondary_needs_clear:true,pending:None,derived:None});
+                page.coordinate=coordinate;page.active_secondary=false;page.pending=None;page.derived=None;
+                if !full[1].contains(&coordinate) {
+                    let version:layer_core::raster::ContentVersion=layer_core::raster::ContentName::fresh().into();
+                    let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                    write.value().clear(&r.zero_pages,encoder);write.publish(&version);cleared[1].insert(coordinate,version);
+                }
+                page.primary_needs_clear=false;r.paint_layers[index].watercolor_wetness_pages.push(page);
             }
-            let mask = self.background.is_some();
-            let windows: Vec<_> = planned.into_iter().map(|window| Window {
-                origin: window.origin,
-                jobs: window.jobs,
-                pages: window.pages.into_iter().filter_map(|(c, target)| {
-                    let (texture, _) = destination(r, layer, channel, mask, c)?;
-                    Some((c, Target { texture: texture.clone(), region: target.region, initialize: target.initialize }))
-                }).collect(),
-            }).collect();
-            self.draw_windows(r, encoder, channel, transform, taps, &windows, self.has_selection)?;
+        }
+        for (channel,ChannelPlan {pages,windows:planned}) in channels.into_iter().enumerate() {
+            if pages.is_empty() {continue;}
+            let plane=if channel==0 {RasterPlane::Color}else {RasterPlane::WatercolorWetness};
+            let full=planned.iter().flat_map(|window|&window.pages).filter(|(_,target)|target.initialize).map(|(coordinate,_)|*coordinate).collect::<std::collections::BTreeSet<_>>();
+            let mut outputs=std::collections::BTreeMap::new();
+            for coordinate in pages {
+                let input=r.raster_intent(layer,plane,coordinate)?;
+                let existing=if let Some(version)=cleared[channel].get(&coordinate) {version.clone()}
+                    else if matches!(scope,TransformWrite::Authored) {input.version().clone()}
+                    else if let Some(capture)=self.capture.as_ref().filter(|_|self.native_preview || self.queried.contains(&coordinate)) {
+                        let quality=match scope {TransformWrite::Restore(taps)=>taps,_=>self.preview.as_ref().map_or(taps,preview_taps)};
+                        let previous=self.preview.as_ref().map(|preview|preview.drawn()).unwrap_or_else(||std::borrow::Cow::Owned(Default::default()));
+                        self.native_version(capture,&previous,r.target_extent(layer),plane,coordinate,quality)?
+                    } else {input.version().clone()};
+                let name=match scope {
+                    TransformWrite::Authored=>layer_core::raster::ContentName::fresh().into(),
+                    TransformWrite::Restore(_)=>self.capture.as_ref().map_or_else(||input.version().clone(),|capture|capture.original(plane,coordinate)),
+                    TransformWrite::Preview=>{
+                        let capture=declared.or(self.capture.as_ref()).ok_or(GpuRasterError::Invariant("prepared draw source state is inconsistent"))?;
+                        self.native_version(capture,transform,r.target_extent(layer),plane,coordinate,taps)?
+                    },
+                };
+                if matches!(scope,TransformWrite::Restore(_)) && name.matches(input.version())!=Some(true) {return Err(GpuRasterError::Invariant("prepared draw source state is inconsistent"));}
+                let surface=if channel==0 {r.paint_layers[index].pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap().active_mut()}
+                    else {let page=r.paint_layers[index].watercolor_wetness_pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap();page.surface_mut(page.active_secondary)};
+                let write=if full.contains(&coordinate) {surface.overwrite(&receipt)}else {surface.revise(&existing,&receipt)}.ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                let texture=write.value().texture.clone();let encoding=write.encoded(name);
+                self.capture_destination(r,encoder,channel,coordinate,&texture)?;
+                outputs.insert(coordinate,TransformOutput {texture,input,encoding:Some(encoding),written:None});
+            }
+            let windows=planned.into_iter().map(|window|Window {origin:window.origin,jobs:window.jobs,
+                pages:window.pages.into_iter().map(|(coordinate,target)|(coordinate,Target {texture:outputs[&coordinate].texture.clone(),region:target.region,initialize:target.initialize})).collect()}).collect::<Vec<_>>();
+            let mut copied=|coordinate,actual:&submission::Submission| {
+                let output=outputs.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform output is missing"))?;
+                output.written=Some(output.encoding.take().ok_or(GpuRasterError::Invariant("transform encoding already consumed"))?.publish(actual));Ok(())
+            };
+            self.draw_windows(r,encoder,channel,transform,taps,&windows,self.has_selection,Some(&mut copied))?;
+            for (coordinate,output) in outputs {
+                let written=output.written.ok_or(GpuRasterError::Invariant("transform output was not encoded"))?;
+                if matches!(scope,TransformWrite::Authored) {
+                    let surface=destination(r,layer,channel,false,coordinate).ok_or(GpuRasterError::Invariant("prepared draw source state is inconsistent"))?;
+                    r.record_raster_write(layer,surface.read(written.version(),Some(written.submission())).ok_or(GpuRasterError::Invariant("accepted input is not readable"))?.replace(&output.input,written.submission()))?;
+                }
+                if channel==0 {r.paint_layers[index].pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap().derived=None;}
+                else {let page=r.paint_layers[index].watercolor_wetness_pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap();page.derived=None;page.pending=None;}
+            }
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
         // persistent wetness and the layer-level watercolor edge style intact.
-        if let Some(index) = index {
+        {
             for p in &mut r.paint_layers[index].coverage_pages {
                 p.owner = None;
             }
@@ -1162,6 +1540,7 @@ impl ImageTransformState {
         taps: u32,
         windows: &[Window],
         selected: bool,
+        mut copied:Option<&mut dyn FnMut([u32;2],&crate::submission::Submission)->Result<(),GpuRasterError>>,
     ) -> Result<(), GpuRasterError> {
         let format = self.atlas_format(r, channel);
         let scalar = format != r.device.working_format() || channel != 0;
@@ -1214,7 +1593,8 @@ impl ImageTransformState {
                 self.positions.draw(r, encoder, window.origin)?;
             }
             let snapshot = self.sources[channel].as_ref().unwrap();
-            let batches = source_batches(&window.jobs, |c| snapshot.pages.contains_key(&c));
+            let receipt=encoder.submission();
+            let batches = source_batches(&window.jobs, |c| snapshot.pages.get(&c).is_some_and(|page|page.readable(&receipt)));
             for (n, batch) in batches.into_iter().enumerate() {
                 let mut sources = Vec::with_capacity(batch.len());
                 for (job, _) in &window.jobs[batch.clone()] {
@@ -1281,6 +1661,7 @@ impl ImageTransformState {
                         depth_or_array_layers: 1,
                     },
                 );
+                if let Some(copied)=copied.as_mut() {copied(*c,&encoder.submission())?;}
             }
         }
         Ok(())
@@ -1297,19 +1678,20 @@ impl ImageTransformState {
         read: &[[u32; 2]],
     ) -> Result<(), GpuRasterError> {
         let snapshot = self.sources[0].as_ref().unwrap();
-        let uncaptured = |c: &[u32; 2]| snapshot.contains(*c) && !snapshot.pages.contains_key(c);
+        let receipt=encoder.submission();
+        let uncaptured = |c: &[u32; 2]| snapshot.contains(*c) && !snapshot.pages.get(c).is_some_and(|page|page.readable(&receipt));
         if read.iter().filter(|c| uncaptured(c)).count() < r.source_tiles.borrow().free_slots() { return Ok(()); }
         let missing: Vec<_> = read.iter().copied().filter(uncaptured).collect();
-        let format = r.device.working_format();
+        let format = self.atlas_format(r,0);
         let identity = layer_core::ImageTransform::default();
         let mut waiting = false;
         for batch in missing.chunks(SOURCE_SLOTS) {
             let targets: Vec<_> = batch.iter().map(|&coordinate| {
                 let capture = self.captures[0]
                     .entry(coordinate)
-                    .or_insert_with(|| snapshot_page(&r.device, format));
+                    .or_insert_with(||snapshot_page(&r.device,format));
                 if capture.texture.format() != format {
-                    *capture = snapshot_page(&r.device, format);
+                    *capture=snapshot_page(&r.device,format);
                 }
                 (coordinate, Target { texture: capture.texture.clone(), region: PixelRect::full([PAGE_SIZE; 2]), initialize: false })
             }).collect();
@@ -1318,55 +1700,34 @@ impl ImageTransformState {
             let sources: Vec<_> = copies.iter().flat_map(|window| &window.jobs).flat_map(|(job, _)| job.sources.iter().copied())
                 .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
             let _leases = match snapshot.prepare_pages(r, &sources, encoder) {
-                Err(GpuRasterError::DeferredObjectWork) => {
+                Err(GpuRasterError::NotReady) => {
                     waiting = true;
                     if r.decode_queue_has_room() { continue; }
                     break;
                 }
                 leases => leases?,
             };
-            self.draw_windows(r, encoder, 0, &identity, pixel_transform::PREVIEW_TAPS, &copies, false)?;
+            {
+                let mut captures=std::mem::take(&mut self.captures[0]);
+                let mut copied=|coordinate,receipt:&crate::submission::Submission|captures.get_mut(&coordinate).ok_or(GpuRasterError::Invariant("planned transform capture is missing"))?.written(receipt);
+                let result=self.draw_windows(r,encoder,0,&identity,pixel_transform::PREVIEW_TAPS,&copies,false,Some(&mut copied));
+                self.captures[0]=captures;result?;
+            }
             let snapshot = self.sources[0].as_mut().unwrap();
             for (coordinate, _) in copies.iter().flat_map(|window| &window.pages) {
                 let capture = &self.captures[0][coordinate];
-                snapshot.pages.insert(*coordinate, snapshot::SnapshotPage::of(&capture.texture, &capture.view));
+                snapshot.pages.insert(*coordinate, capture.clone());
             }
         }
-        if waiting { Err(GpuRasterError::DeferredObjectWork) } else { Ok(()) }
+        if waiting { Err(GpuRasterError::NotReady) } else { Ok(()) }
     }
 
-    fn capture_destination(
-        &mut self,
-        r: &WgpuRasterizer,
-        encoder: &mut crate::submission::CommandEncoder,
-        layer: SourceTarget,
-        channel: usize,
-        coordinate: [u32; 2],
-    ) {
-        let Some((texture, _)) =
-            destination(r, layer, channel, self.background.is_some(), coordinate)
-        else {
-            return;
-        };
-        let snapshot = self.sources[channel].as_mut().unwrap();
-        if !snapshot.aliases(coordinate, texture) {
-            return;
-        }
-        let capture = self.captures[channel]
-            .entry(coordinate)
-            .or_insert_with(|| snapshot_page(&r.device, texture.format()));
-        if capture.texture.format() != texture.format() {
-            *capture = snapshot_page(&r.device, texture.format());
-        }
-        encoder.copy_texture_to_texture(
-            texture.as_image_copy(),
-            capture.texture.as_image_copy(),
-            texture.size(),
-        );
-        snapshot.pages.insert(
-            coordinate,
-            snapshot::SnapshotPage::of(&capture.texture, &capture.view),
-        );
+    fn capture_destination(&mut self,r:&WgpuRasterizer,encoder:&mut submission::CommandEncoder,channel:usize,coordinate:[u32;2],texture:&wgpu::Texture)->Result<(),GpuRasterError> {
+        let source=self.sources[channel].as_mut().unwrap();
+        if !source.aliases(coordinate,texture) {return Ok(());}
+        let reusable=self.captures[channel].remove(&coordinate);
+        let capture=source.pages.get(&coordinate).unwrap().copy_named(r,encoder,reusable)?;
+        self.captures[channel].insert(coordinate,capture.clone());source.pages.insert(coordinate,capture);Ok(())
     }
     fn mesh_geometry(&mut self, map: &layer_core::LayerPlacement, display: Option<f32>) -> Arc<mesh::MeshGeometry> {
         if let Some((cached, within, geometry)) = &self.mesh
@@ -1380,6 +1741,7 @@ impl ImageTransformState {
         geometry
     }
     fn release_snapshot(&mut self) {
+        self.capture=None;
         self.prepared_preview=None;self.preparing=None;
         self.sources = Default::default();
         self.atlases = Default::default();
@@ -1427,6 +1789,7 @@ impl ImageTransformState {
     pub fn matching_commit(&self, packet: FramePacket<'_>) -> Option<(SourceTarget, u32)> {
         if !self.native_preview { return None; }
         let preview = self.preview.as_ref()?;
+        if preview.target.is_coverage() {return None;}
         if packet
             .dab_batches
             .iter()
@@ -1460,25 +1823,42 @@ impl ImageTransformState {
         r: &mut WgpuRasterizer,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<(SourceTarget, PixelRect)>, GpuRasterError> {
-        let Some(previous) = self.preview.take() else {
+        let Some(previous) = self.preview.clone() else {
             return Ok(None);
         };
         let regions = self.preview_regions;
         // Removing the target already discarded its pixels. There is nothing
         // to restore, and cancellation must not turn deletion into a GPU error.
-        if (self.native_preview || !self.queried.is_empty()) && (r.paint_layers.iter().any(|l| l.id == previous.target)
-            || r.layer_masks.definitions.contains_key(&previous.target))
-        {
-            let restored: Vec<_> = if self.native_preview { regions.to_vec() } else { self.queried.iter().copied().map(page_rect).collect() };
-            self.render_source(r, encoder, previous.target, &Default::default(), pixel_transform::PREVIEW_TAPS, &restored)?;
+        if previous.target.is_coverage() {r.layer_masks.previews.retain(|(target,_),_|*target!=previous.target);}
+        else if let Some((target, restored)) = self.cancel_regions(r) {
+            self.render_source(r, encoder, target, &Default::default(), pixel_transform::PREVIEW_TAPS, &restored,TransformWrite::Restore(preview_taps(&previous)))?;
         }
         self.retain_pages(r, previous.target, &[], None);
+        self.preview=None;
         self.preview_regions = [PixelRect::EMPTY; 2];
         self.native_preview = false;
         self.queried.clear();
         self.spares.clear();
         self.release_snapshot();
         Ok(Some((previous.target, regions[0].union(regions[1]))))
+    }
+    fn cancel_regions(&self, r: &WgpuRasterizer) -> Option<(SourceTarget, Vec<PixelRect>)> {
+        let target = self.preview.as_ref()?.target;
+        (!target.is_coverage() && (self.native_preview || !self.queried.is_empty())
+            && (r.paint_layers.iter().any(|l| l.id == target) || r.layer_masks.definitions.contains_key(&target)))
+            .then(|| (target, if self.native_preview { self.preview_regions.to_vec() } else { self.queried.iter().copied().map(page_rect).collect() }))
+    }
+    fn cancel_restores(&self, r: &WgpuRasterizer) -> Vec<(SourceTarget, TileKey)> {
+        let Some((target, regions)) = self.cancel_regions(r).filter(|_| self.sources[0].is_some()) else { return Vec::new(); };
+        let restored: std::collections::BTreeSet<_> = regions.into_iter().flat_map(page_coordinates).collect();
+        let planes = [if self.background.is_some() { RasterPlane::Mask } else { RasterPlane::Color }, RasterPlane::WatercolorWetness];
+        (0..2).filter(|channel| self.sources[*channel].is_some())
+            .flat_map(|channel| self.original_pages[channel].iter().filter(|c| restored.contains(*c)).map(move |c| (target, TileKey { plane: planes[channel], coordinate: *c })))
+            .collect()
+    }
+    pub fn prepare_cancel(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        let Some((target, restored)) = self.cancel_regions(r) else { return Ok(()); };
+        self.plan_source(r, encoder, target, &Default::default(), &restored).map(drop)
     }
     fn plan_preview(
         &mut self,
@@ -1496,22 +1876,28 @@ impl ImageTransformState {
             update.damage=damage;
             return Ok(update);
         }
-        if self.preview.as_ref() == Some(next) && self.native_preview == native {
-            return Ok(PreviewUpdate { damage: Vec::new(), draw: None });
-        }
-        let same_source = self.holds_source(next, layer.map(|(scene, _)| scene))
+        let same_source = ( self.holds_source(next, layer.map(|(scene, _)| scene))
             || self.prepared_preview.as_ref().is_some_and(|(p,owner,revision)|layer.is_some_and(|(scene,_)|scene.owner()==*owner && scene.revision()==*revision)
-            && p.transaction==next.transaction && p.target==next.target && p.selection==next.selection);
+            && p.transaction==next.transaction && p.target==next.target && p.selection==next.selection)) && self.capture.as_ref().is_none_or(|capture|layer.is_some_and(|(scene,_)|
+                capture.matches_context(scene) && r.raster_versions(scene,next.target).is_ok_and(|current|
+                    [RasterPlane::Color,RasterPlane::Mask,RasterPlane::WatercolorWetness].into_iter().all(|plane|capture.matches_source(plane,&current)==Some(true)))));
+        if same_source && self.preview.as_ref()==Some(next) && self.native_preview==native {
+            return Ok(PreviewUpdate {damage:Vec::new(),draw:None});
+        }
         self.standby = None;
         let mut damage = Vec::with_capacity(2);
         if !same_source {
             damage.extend(self.cancel_preview(r, encoder)?);
-            self.capture_source(r, encoder, next.target, None, next.selection.as_ref(), (extent,None))?;
+            self.capture_source(r, encoder, next.target, None, next.selection.as_ref(), (extent,None), None)?;
             self.prepared_preview = layer.map(|(scene, _)| (next.clone(), scene.owner(), scene.revision()));
+        }
+        if self.capture.is_none() {
+            let scene=layer.map(|(scene,_)|scene).ok_or(GpuRasterError::Invariant("prepared plan preview state is inconsistent"))?;
+            self.capture=Some(crate::scene::Capture::new(scene.snapshot(),r.current_raster_versions(next.target)?,next.clone(),None));
         }
         let regions = next
             .transform
-            .affected_regions(self.cut)
+            .affected_regions(self.plan.cut)
             .map(|b| pixel_rect(b, extent));
         let cut = if !same_source || self.native_preview != native || self.preview_regions[0] != regions[0] {
             self.preview_regions[0].union(regions[0])
@@ -1536,13 +1922,20 @@ impl ImageTransformState {
         let PreviewUpdate { mut damage, draw } = update;
         let Some(PreviewDraw { regions, affected, source }) = draw else { return Ok(damage) };
         if native {
-            self.draw_source(r, encoder, next.target, &next.drawn(), preview_taps(next), source)?;
-            self.retain_pages(r, next.target, &regions, Some(&next.transform));
+            let capture=self.capture.as_ref().ok_or(GpuRasterError::Invariant("prepared draw preview state is inconsistent"))?.with_preview(next.clone(),source.as_ref().and_then(|plan|plan.mesh.clone())).with_taps(preview_taps(next));
+            if self.background.is_some() {self.draw_mask_source(r,encoder,next.target,&next.drawn(),preview_taps(next),source,true,Some(&capture))?;}
+            else {self.draw_source(r,encoder,next.target,&next.drawn(),preview_taps(next),source,TransformWrite::Preview,Some(&capture))?;}
+            self.capture=Some(capture);
+            self.retain_pages(r,next.target,&regions,Some(&next.transform));
         } else if self.native_preview || !self.queried.is_empty() {
-            self.draw_source(r, encoder, next.target, &Default::default(), pixel_transform::PREVIEW_TAPS, source)?;
+            if self.background.is_some() {r.layer_masks.previews.retain(|(target,_),_|*target!=next.target);}
+            else {self.draw_source(r, encoder, next.target, &Default::default(), pixel_transform::PREVIEW_TAPS, source,TransformWrite::Restore(self.preview.as_ref().map_or(pixel_transform::PREVIEW_TAPS,preview_taps)),None)?;}
             self.retain_pages(r, next.target, &[], None);
         }
-        if !native {self.retire_native_spares(r,encoder);}
+        if !native {
+            if let Some(capture)=&self.capture {self.capture=Some(capture.with_preview(next.clone(),None).with_taps(preview_taps(next)));}
+            self.retire_native_spares(r,encoder);
+        }
         self.native_preview = native;
         self.queried.clear();
         damage.push((
@@ -1563,7 +1956,7 @@ impl ImageTransformState {
         let pages=std::mem::take(&mut self.spares);
         let lease=Arc::new(region_batches::Allocation {bytes,retired:r.retired_display_bytes.clone(),pending:Default::default()});
         lease.retire();
-        let completion=lease.clone();encoder.on_submitted_work_done(move||drop(completion));
+        let completion=lease.clone();encoder.hold(completion);
         self.retired_native.push((pages,lease));
     }
     /// Whether this state already holds `next`'s originals: those of its
@@ -1586,24 +1979,23 @@ impl ImageTransformState {
     }
     fn reducible(&self) -> bool { self.background.is_none() && self.sources[0].is_some() }
     #[expect(clippy::too_many_arguments, reason = "Transform previews keep source level, preview geometry, and output sampling regions explicit")]
-    fn render_region(
+    fn prepare_region(
         &mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview, extent: [u32; 2], placement: layer_core::Affine,
         level: &wgpu::TextureView, display: pixel_transform::DisplayLevel, target: display_mips::Plan, region: DocRect,
-        resample: &resample::Resample, fine_budget:u64,
-    ) -> Result<(), GpuRasterError> {
+        fine_budget:u64,
+    ) -> Result<PreparedRegion, GpuRasterError> {
         if self.reduced.as_ref().is_some_and(|input|input.fine.is_some()) {
-            if self.native_retirement_pending() {return Err(GpuRasterError::DeferredObjectWork);}
+            if self.native_retirement_pending() {return Err(GpuRasterError::NotReady);}
             self.prepare_fine_reduced(r,encoder,next.selection.as_ref(),extent)?;
             let side=display.side;
             let texels=texel_rect(target.doc_bounds.local(region),side);
             let values=self.display_record(next,extent,placement,display,target,texels)?;
             let capacity=self.reduced.as_ref().unwrap().fine.as_ref().unwrap().capacity;
-            if next.transform.placement.mesh.is_some() {
+            let geometry=if next.transform.placement.mesh.is_some() {
                 let tolerance=0.5*side as f32/placement.magnification().max(1e-6);
-                let geometry=self.mesh_geometry(&next.transform.placement,Some(tolerance));
-                self.display_mesh.upload(r,encoder,&geometry)?;
-            }
+                Some(self.mesh_geometry(&next.transform.placement,Some(tolerance)))
+            } else {None};
             let index=if let Some(index)=self.fine_progress.iter().position(|p|p.preview==*next && p.destination==*level
                 && p.target==target && p.region==region && p.values==values && p.valid.load(std::sync::atomic::Ordering::Acquire)) {index}
             else {
@@ -1634,32 +2026,29 @@ impl ImageTransformState {
                 self.reduced.as_mut().unwrap().fine.as_mut().unwrap().require(batch.pages.clone())?;
                 let required=batch.pages.iter().copied().collect::<Vec<_>>();
                 self.fill_fine_pages(r,encoder,&required,extent)?;
+                if let Some(geometry)=&geometry {self.display_mesh.upload(r,encoder,geometry)?;}
                 self.reduced.as_mut().unwrap().draw(r,&pass,encoder,&output,&values,texels,
                     next.transform.placement.mesh.as_ref().map(|_|&self.display_mesh))?;
                 let progress=&mut self.fine_progress[index];
                 crate::submission::CacheWrite::shared(progress.valid.clone()).track(encoder);
-                let lease=progress.allocation.clone();encoder.on_submitted_work_done(move||drop(lease));
+                let lease=progress.allocation.clone();encoder.hold(lease);
                 progress.regions.advance();
             }
             let origin=wgpu::Origin3d {x:texels[0],y:texels[1],z:0};
-            encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {origin,..output.texture().as_image_copy()},
-                wgpu::TexelCopyTextureInfo {origin,..level.texture().as_image_copy()},
-                wgpu::Extent3d {width:texels[2],height:texels[3],depth_or_array_layers:1});
             let progress=&self.fine_progress[index];
-            crate::submission::CacheWrite::shared(progress.valid.clone()).track(encoder);
-            let lease=progress.allocation.clone();encoder.on_submitted_work_done(move||drop(lease));
-            return Ok(());
+            return Ok(PreparedRegion(Region::Copy {source:output,destination:level.clone(),origin,
+                size:wgpu::Extent3d {width:texels[2],height:texels[3],depth_or_array_layers:1},
+                allocation:progress.allocation.clone(),valid:progress.valid.clone()}));
         }
         let side = display.side;
-        let mesh = next.transform.placement.mesh.clone();
         let texels = texel_rect(target.doc_bounds.local(region), side);
         let values = self.display_record(next, extent, placement, display, target, texels)?;
-        if mesh.is_some() {
+        let mesh=if next.transform.placement.mesh.is_some() {
             let tolerance = 0.5 * side as f32 / placement.magnification().max(1e-6);
-            let geometry = self.mesh_geometry(&next.transform.placement, Some(tolerance));
-            self.display_mesh.upload(r, encoder, &geometry)?;
-        }
-        self.reduced.as_mut().unwrap().draw(r, resample, encoder, level, &values, texels, mesh.as_ref().map(|_| &self.display_mesh))
+            Some(self.mesh_geometry(&next.transform.placement, Some(tolerance)))
+        } else {None};
+        let input=self.reduced.as_ref().unwrap();
+        Ok(PreparedRegion(Region::Draw {source:next.target,values,sampling:input.sampling.clone(),destination:level.clone(),texels,mesh,kept:input.kept.is_some()}))
     }
     fn display_record(&self, next: &layer_render::TransformPreview, extent: [u32; 2], placement: layer_core::Affine,
         display: pixel_transform::DisplayLevel, target: display_mips::Plan, texels: [u32; 4],
@@ -1771,14 +2160,12 @@ impl ImageTransformState {
         if self.reduced.as_ref().is_none_or(|input|input.level>level) {
             let kept=keeps_pixels(selection,self.sources[0].as_ref().unwrap().bounds);
             let phase=layer.map_or([0;2],|(scene,target)|crate::scene::page_phase(scene.target_offset(target)));
-            let cached=(!kept).then(|| {let (scene,target)=layer?;r.scene.as_ref()?.reduced_layer(r,scene,target,extent,level)}.cloned()).flatten();
             let mut input=snapshot::DisplayInputs::new(r,level,extent,phase,kept);
-            if let Some(texture)=&cached {encoder.copy_texture_to_texture(texture.as_image_copy(),input.image.texture.as_image_copy(),texture.size());}
             let snapshot=self.sources[0].as_ref().unwrap();
             let bounds=PixelRect::full([extent[0]+phase[0],extent[1]+phase[1]]);
             input.pending=Some(page_coordinates(snapshot.bounds).filter(|c|snapshot.contains(*c))
                 .flat_map(|c|page_coordinates(page_rect(c).intersect(PixelRect::full(extent)).translated(phase)))
-                .collect::<std::collections::BTreeSet<_>>().into_iter().filter(|_|cached.is_none()).map(|c|page_rect(c).intersect(bounds)).collect());
+                .collect::<std::collections::BTreeSet<_>>().into_iter().map(|c|page_rect(c).intersect(bounds)).collect());
             self.reduced=Some(input);
         }
         if self.reduced.as_ref().unwrap().pending.is_none() {return Ok(());}
@@ -1787,12 +2174,16 @@ impl ImageTransformState {
         let result=(|| {
             while let Some(page)=self.reduced.as_ref().unwrap().pending.as_ref().unwrap().front().copied() {
                 let input=self.reduced.as_ref().unwrap();let phase=input.phase;let level=input.level;
+                if input.kept.is_none() && layer.is_some_and(|(scene,target)|r.scene.as_ref().is_some_and(|cached|
+                    cached.copy_reduced_source(r,scene,target,extent,level,page,&input.image.texture,encoder))) {
+                    self.reduced.as_mut().unwrap().pending.as_mut().unwrap().pop_front();continue;
+                }
                 let snapshot=self.sources[0].as_ref().unwrap();
                 let local=page.window_local(PixelRect::new(phase[0],phase[1],u32::MAX,u32::MAX)).intersect(PixelRect::full(extent));
                 let coordinates=page_coordinates(local).filter(|c|snapshot.contains(*c)).collect::<Vec<_>>();
                 let leases=snapshot.prepare_pages(r,&coordinates,encoder)?;
                 self.reduce_page(r,encoder,&pipelines,selection,extent,level,page)?;
-                encoder.on_submitted_work_done(move||drop(leases));
+                crate::scene::sources::Lease::track(leases,encoder);
                 self.reduced.as_mut().unwrap().pending.as_mut().unwrap().pop_front();
                 #[cfg(test)]
                 r.test.reduced_pages.update(|n|n+1);
@@ -1813,7 +2204,7 @@ impl ImageTransformState {
             let snapshot=self.sources[0].as_ref().unwrap();
             let _leases=match snapshot.prepare_pages(r,std::slice::from_ref(&coordinate),encoder) {
                 Ok(leases)=>leases,
-                Err(GpuRasterError::DeferredObjectWork)=>{pending=true;continue;},
+                Err(GpuRasterError::NotReady)=>{pending=true;continue;},
                 Err(error)=>return Err(error),
             };
             let input=self.reduced.as_mut().unwrap();
@@ -1836,9 +2227,9 @@ impl ImageTransformState {
                 }
             }
             fine.written(index,encoder);
-            encoder.on_submitted_work_done(move||drop(_leases));
+            crate::scene::sources::Lease::track(_leases,encoder);
         }
-        if pending {Err(GpuRasterError::DeferredObjectWork)} else {Ok(())}
+        if pending {Err(GpuRasterError::NotReady)} else {Ok(())}
     }
     fn prepare_fine_input(&mut self,r:&WgpuRasterizer,extent:[u32;2],phase:[u32;2],selection:Option<&layer_core::Selection>,capacity:usize)->Result<(),GpuRasterError> {
         let kept=keeps_pixels(selection,self.sources[0].as_ref().unwrap().bounds);
@@ -1847,7 +2238,7 @@ impl ImageTransformState {
         self.fine_progress.clear();
         if self.reduced.as_ref().is_some_and(|input|input.fine.is_some()) {
             self.reduced=None;
-            return Err(GpuRasterError::DeferredObjectWork);
+            return Err(GpuRasterError::NotReady);
         }
         let snapshot=self.sources[0].as_ref().unwrap();
         let bounds=PixelRect::full([extent[0]+phase[0],extent[1]+phase[1]]);
@@ -1877,7 +2268,7 @@ impl ImageTransformState {
                 let coordinates=page_coordinates(local).filter(|c|snapshot.contains(*c)).collect::<Vec<_>>();
                 let _leases=snapshot.prepare_pages(r,&coordinates,encoder)?;
                 self.reduce_page(r,encoder,&pipelines,selection,extent,1,page)?;
-                encoder.on_submitted_work_done(move||drop(_leases));
+                crate::scene::sources::Lease::track(_leases,encoder);
                 let fine=self.reduced.as_mut().unwrap().fine.as_mut().unwrap();
                 fine.track_coarse(encoder);fine.pages.pop_front();
             }
@@ -1910,7 +2301,7 @@ impl ImageTransformState {
         let local = page.window_local(PixelRect::new(phase[0], phase[1], u32::MAX, u32::MAX)).intersect(PixelRect::full(extent));
         let moves = reduced.kept.is_none()
             || selection.is_some_and(|s| selects_all(s, local.intersect(snapshot.bounds)));
-        let kept = !moves && local.intersect(pixel_rect(self.cut, extent)).is_empty();
+        let kept = !moves && local.intersect(pixel_rect(self.plan.cut, extent)).is_empty();
         let image = match &mut reduced.kept {
             Some(image) if kept => Some(image),
             _ => moves.then_some(&mut reduced.image),
@@ -1943,27 +2334,6 @@ impl ImageTransformState {
         };
         parts.iter().try_for_each(|(part, view)| self.draw_exact(r, encoder, phase, page, view, display, *part))
     }
-    fn channel_regions(
-        &self,
-        transform: &layer_core::ImageTransform,
-        extent: [u32; 2],
-    ) -> [[PixelRect; 2]; 2] {
-        self.source_bounds.map(|b| {
-            let cut = layer_core::Rect {
-                min: layer_core::Point {
-                    x: (b.min_x() as f32).max(self.cut.min.x),
-                    y: (b.min_y() as f32).max(self.cut.min.y),
-                },
-                max: layer_core::Point {
-                    x: (b.max_x() as f32).min(self.cut.max.x),
-                    y: (b.max_y() as f32).min(self.cut.max.y),
-                },
-            };
-            transform
-                .affected_regions(cut)
-                .map(|b| pixel_rect(b, extent))
-        })
-    }
     fn retain_pages(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -1972,20 +2342,13 @@ impl ImageTransformState {
         transform: Option<&layer_core::ImageTransform>,
     ) {
         let support = transform
-            .map(|t| self.channel_regions(t, r.target_extent(id)))
+            .map(|t| self.plan.channel_regions(t, r.target_extent(id)))
             .unwrap_or([[PixelRect::EMPTY; 2]; 2]);
         let keep = |c: [u32; 2], original: &Vec<_>, regions: &[PixelRect]| {
             original.contains(&c) || regions.iter().any(|b| !b.page_local(c).is_empty())
         };
         if self.background.is_some() {
-            self.spares.masks.extend(
-                r.layer_masks
-                    .pages
-                    .extract_if(.., |(mask, c), _| {
-                        *mask == id && !keep(*c, &self.original_pages[0], regions)
-                    })
-                    .map(|(_, page)| page),
-            );
+            r.layer_masks.previews.retain(|(mask,c),_|*mask!=id || regions.iter().any(|region|!region.page_local(*c).is_empty()));
         } else if let Some(layer) = r.paint_layers.iter_mut().find(|l| l.id == id) {
             self.spares.paint.extend(layer.pages.extract_if(.., |p| {
                 !keep(p.coordinate, &self.original_pages[0], regions)
@@ -2016,44 +2379,30 @@ fn snapshot_page(device: &wgpu::Device, format: wgpu::TextureFormat) -> snapshot
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    snapshot::SnapshotPage { texture, view }
+    snapshot::SnapshotPage::unwritten(texture,view)
 }
 
-fn destination(
-    r: &WgpuRasterizer,
-    id: SourceTarget,
-    channel: usize,
-    mask: bool,
-    coordinate: [u32; 2],
-) -> Option<(&wgpu::Texture, &wgpu::TextureView)> {
-    if mask {
-        return r
-            .layer_masks
-            .pages
-            .get(&(id, coordinate))
-            .map(|p| (&p.texture, &p.view));
-    }
-    let layer = r.paint_layers.iter().find(|l| l.id == id)?;
-    let surface = match channel {
-        0 => layer
-            .pages
-            .iter()
-            .find(|p| p.coordinate == coordinate)?
-            .active(),
-        _ => layer
-            .watercolor_wetness_pages
-            .iter()
-            .find(|p| p.coordinate == coordinate)?
-            .active(),
-    };
-    Some((&surface.texture, &surface.view))
+fn destination(r:&WgpuRasterizer,id:SourceTarget,channel:usize,mask:bool,coordinate:[u32;2])->Option<&resident::Resident<PageSurface>> {
+    if mask {return None;}
+    let layer=r.paint_layers.iter().find(|layer|layer.id==id)?;
+    match channel {0=>Some(layer.pages.iter().find(|page|page.coordinate==coordinate)?.active()),
+        _=>Some(layer.watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)?.active())}
 }
 
 type TexturePages = [Vec<([u32; 2], snapshot::SnapshotPage)>; 2];
 fn source_pages(
     r: &WgpuRasterizer,
     id: SourceTarget,
+    receipt: Option<&crate::submission::Submission>,
 ) -> Result<(Option<f32>, TexturePages), GpuRasterError> {
+    let capture=|coordinate,plane,surface:&crate::resident::Resident<PageSurface>,data:Option<&layer_core::raster::RasterData>| {
+        let expected=match data {
+            Some(data)=>data.tiles.get(&TileKey {plane,coordinate}).ok_or(GpuRasterError::Invariant("prepared source pages state is inconsistent"))?.content_version(),
+            None=>r.current_raster_version(id,plane,coordinate)?,
+        };
+        let read=surface.read(&expected,receipt).ok_or(GpuRasterError::NotReady)?;
+        Ok::<_,GpuRasterError>((coordinate,snapshot::SnapshotPage::captured(read)?))
+    };
     if let Some((data,pages))=r.staged_transform_source(id).filter(|_|!id.is_coverage()) {
         let original=r.native_backing(id);
         let unchanged=|coordinate,plane|original.and_then(|old|old.tiles.get(&TileKey {plane,coordinate}))
@@ -2061,12 +2410,12 @@ fn source_pages(
         let mut result:[std::collections::BTreeMap<_,_>;2]=Default::default();
         if let Some(layer)=r.paint_layers.iter().find(|layer|layer.id==id) {
             result[0].extend(layer.pages.iter().filter(|p|unchanged(p.coordinate,RasterPlane::Color))
-                .map(|p|(p.coordinate,snapshot::SnapshotPage::of(&p.active().texture,&p.active().view))));
+                .map(|p|capture(p.coordinate,RasterPlane::Color,p.active(),Some(data))).collect::<Result<Vec<_>,_>>()?);
             result[1].extend(layer.watercolor_wetness_pages.iter().filter(|p|unchanged(p.coordinate,RasterPlane::WatercolorWetness))
-                .map(|p|(p.coordinate,snapshot::SnapshotPage::of(&p.active().texture,&p.active().view))));
+                .map(|p|capture(p.coordinate,RasterPlane::WatercolorWetness,p.active(),Some(data))).collect::<Result<Vec<_>,_>>()?);
         }
-        result[0].extend(pages.colors.iter().map(|p|(p.coordinate,snapshot::SnapshotPage::of(&p.active().texture,&p.active().view))));
-        result[1].extend(pages.wetness.iter().map(|p|(p.coordinate,snapshot::SnapshotPage::of(&p.active().texture,&p.active().view))));
+        result[0].extend(pages.colors.iter().map(|p|capture(p.coordinate,RasterPlane::Color,p.active(),Some(data))).collect::<Result<Vec<_>,_>>()?);
+        result[1].extend(pages.wetness.iter().map(|p|capture(p.coordinate,RasterPlane::WatercolorWetness,p.active(),Some(data))).collect::<Result<Vec<_>,_>>()?);
         return Ok((None,result.map(|pages|pages.into_iter().collect())));
     }
     if let Some(mask) = r.layer_masks.definitions.get(&id) {
@@ -2077,8 +2426,11 @@ fn source_pages(
                     .pages
                     .iter()
                     .filter(|((target, _), _)| *target == id)
-                    .map(|((_, c), p)| (*c, snapshot::SnapshotPage::of(&p.texture, &p.view)))
-                    .collect(),
+                    .filter_map(|((_, c), p)| match r.current_mask_version(id,*c) {
+                        Err(error)=>Some(Err(error)),
+                        Ok(expected)=>p.read(&expected,receipt).ok().map(|read|snapshot::SnapshotPage::captured(read).map(|page|(*c,page))),
+                    })
+                    .collect::<Result<Vec<_>,GpuRasterError>>()?,
                 Vec::new(),
             ],
         ));
@@ -2093,12 +2445,12 @@ fn source_pages(
         [
             l.pages
                 .iter()
-                .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.active().texture, &p.active().view)))
-                .collect(),
+                .map(|p|capture(p.coordinate,RasterPlane::Color,p.active(),None))
+                .collect::<Result<Vec<_>,_>>()?,
             l.watercolor_wetness_pages
                 .iter()
-                .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.active().texture, &p.active().view)))
-                .collect(),
+                .map(|p|capture(p.coordinate,RasterPlane::WatercolorWetness,p.active(),None))
+                .collect::<Result<Vec<_>,_>>()?,
         ],
     ))
 }
@@ -2114,3 +2466,73 @@ fn selection_capture(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
 #[cfg(test)]
 #[path="paint_transform/preparation_tests.rs"]
 mod preparation_tests;
+
+#[cfg(test)]
+mod prepared_region_tests {
+    use super::*;
+
+    fn renderer() -> (WgpuRasterizer, SourceTarget) {
+        let doc=crate::layer_tests::placement::paint_document([64;2],"Transform");
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        r.ensure_document_metadata([64;2],doc.scene()).unwrap();
+        let input=snapshot::DisplayInputs::new(&r,0,[64;2],[0;2],false);
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        {let _pass=encoder.color_pass("prepared transform input",&input.image.view,wgpu::LoadOp::Clear(wgpu::Color {r:1.,g:0.,b:0.,a:1.}));}
+        encoder.submit(&r.queue);crate::test_support::complete(&r);
+        r.transforms.as_mut().unwrap().0[0].reduced=Some(input);
+        (r,crate::layer_tests::placement::target(&doc))
+    }
+    fn prepare(r:&mut WgpuRasterizer,target:SourceTarget,x:f32,destination:&wgpu::TextureView)->PreparedRegion {
+        let mesh=layer_core::MeshMap::from_affine(layer_core::Rect::from_extent([64;2]),[2;2],
+            layer_core::Affine::translation(layer_core::Point {x,y:0.})).unwrap();
+        let mut transforms=r.transforms.take().unwrap();
+        transforms.0[0].preview=Some(layer_render::TransformPreview {transaction:1,moving:false,target,selection:None,
+            transform:layer_core::ImageTransform {placement:layer_core::LayerPlacement {mesh:Some(Arc::new(mesh)),..Default::default()},..Default::default()}});
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        let region=transforms.prepare_region(r,&mut encoder,target,layer_core::Affine::IDENTITY,destination,
+            pixel_transform::DisplayLevel {side:1,extent:[64;2],opacity:1.,backdrop:[0.;4],encode:false},
+            display_mips::Plan::at([64;2],0),PixelRect::full([64;2]).into(),0).unwrap();
+        assert_eq!(encoder.pass_count(),0);
+        r.transforms=Some(transforms);region
+    }
+    fn encode(r:&mut WgpuRasterizer,regions:&[PreparedRegion])->submission::CommandEncoder {
+        let stride=resample::UNIFORM_BYTES.max(u64::from(r.device.limits().min_uniform_buffer_offset_alignment));
+        let uniforms=r.device.create_buffer(&wgpu::BufferDescriptor {label:Some("prepared transform records"),
+            size:stride*regions.len() as u64,usage:wgpu::BufferUsages::UNIFORM|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        for (index,region) in regions.iter().enumerate() {
+            let offset=index as u64*stride;
+            r.uploads.write_at(&mut encoder,&uniforms,offset,region.values().unwrap()).unwrap();
+            region.encode(r,&mut encoder,&uniforms,offset).unwrap();
+        }
+        r.uploads.finish(&encoder);encoder
+    }
+    fn pixel(r:&WgpuRasterizer,texture:&wgpu::Texture)->[f32;4] {
+        let bytes=crate::layer_tests::page_bytes(r,texture);let offset=(32*64+8)*16;
+        std::array::from_fn(|channel|f32::from_le_bytes(bytes[offset+channel*4..offset+channel*4+4].try_into().unwrap()))
+    }
+    #[test]
+    fn prepared_transform_draws_upload_their_own_geometry_at_commit() {
+        let (mut r,target)=renderer();
+        pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh.iter())).unwrap();
+        let a=create_target(&r.device,[64;2],wgpu::TextureFormat::Rgba32Float,"first prepared mesh");
+        let b=create_target(&r.device,[64;2],wgpu::TextureFormat::Rgba32Float,"second prepared mesh");
+        let first=prepare(&mut r,target,0.,&a.1);let second=prepare(&mut r,target,16.,&b.1);
+        assert_eq!(r.transforms.as_ref().unwrap().0[0].display_mesh.storage_bytes(),0);
+        encode(&mut r,&[first,second]).submit(&r.queue);crate::test_support::complete(&r);
+        let first=pixel(&r,&a.0);let second=pixel(&r,&b.0);
+        assert!(first[0]>0.99 && first[3]>0.99,"first geometry: {first:?}");
+        assert!(second[3]<0.01,"second geometry: {second:?}");
+    }
+    #[test]
+    fn discarded_transform_geometry_is_uploaded_before_its_next_draw() {
+        let (mut r,target)=renderer();
+        pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.resample.mesh.iter())).unwrap();
+        let output=create_target(&r.device,[64;2],wgpu::TextureFormat::Rgba32Float,"discarded prepared mesh");
+        let region=prepare(&mut r,target,0.,&output.1);
+        drop(encode(&mut r,std::slice::from_ref(&region)));
+        encode(&mut r,std::slice::from_ref(&region)).submit(&r.queue);crate::test_support::complete(&r);
+        let actual=pixel(&r,&output.0);
+        assert!(actual[0]>0.99 && actual[3]>0.99,"discarded geometry must be uploaded again: {actual:?}");
+    }
+}

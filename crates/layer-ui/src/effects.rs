@@ -89,7 +89,7 @@ impl<B: CanvasRenderer> UiSession<B> {
     pub(crate) fn update_shader_idle(&mut self) {
         self.storage_activity.set_busy(!self.rendering_suspended && (!self.background_readback_idle() || self.operation.transforming() || self.workspace_transition || self.drawing_switch_pending));
         let idle = self.filter_previews_idle() && !self.state.settings_open;
-        let speculative_idle = idle && !self.engine.wants_continuous_frames();
+        let speculative_idle = idle && self.engine.frame_demand() == layer_render::FrameDemand::Wait;
         self.engine.backend_mut().shader_idle(idle, speculative_idle);
     }
     pub(crate) fn filter_drawer_open(&self) -> bool {
@@ -119,7 +119,7 @@ impl<B: CanvasRenderer> UiSession<B> {
             && !self.engine.has_pending_document_edits()
     }
     pub fn background_readback_idle(&self) -> bool {
-        self.filter_previews_idle() && !self.engine.has_pending_input() && !self.ui_work_pending()
+        self.filter_previews_idle() && !self.engine.has_pending_input() && self.ui_demand() == layer_render::FrameDemand::Wait
     }
     pub fn filter_preview_revision(&self) -> u64 {
         self.state.filter_catalog_revision

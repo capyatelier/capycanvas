@@ -232,20 +232,22 @@ impl WgpuRasterizer {
     pub(super) fn material_source_binding(
         &mut self,
         batch: &DabBatch,
+        batch_index:usize,
         coordinate: [u32; 2],
-        preview: bool,
+        target: BrushEncodingTarget,
+        intent: &crate::raster::contents::Intent,
         display: Option<usize>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(wgpu::BindGroup, Option<wgpu::BindGroup>), GpuRasterError> {
         let started = self.telemetry.enabled.then(web_time::Instant::now);
-        let result = self.material_bind_group(batch, coordinate, preview, MaterialInputs::Neighborhood, display, encoder);
+        let result = self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Neighborhood, display, encoder);
         self.metrics.material_cpu_ms[4] += elapsed(started);
         result
     }
 
     pub(super) fn ensure_material_gather(&mut self) {
         if self.material_gather.is_none() {
-            let gather = Gather { fields: std::array::from_fn(|_| self.create_page_surface("full-resolution material sample field")) };
+            let gather = Gather { fields: std::array::from_fn(|_| self.create_page_surface(&self.raster_tiers.paint, "full-resolution material sample field")) };
             self.metrics.material_sample_storage_bytes = gather.storage_bytes();
             self.material_gather = Some(gather);
         }
@@ -256,17 +258,71 @@ impl WgpuRasterizer {
     pub(super) fn clone_source_binding(
         &mut self,
         batch: &DabBatch,
+        batch_index:usize,
         coordinate: [u32; 2],
         mapping: &crate::retouch_sources::Mapping,
-        preview: bool,
+        target: BrushEncodingTarget,
+        intent: &crate::raster::contents::Intent,
         display: Option<usize>,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(wgpu::BindGroup, Option<wgpu::BindGroup>), GpuRasterError> {
         let pages = self.retouch_pages(mapping, encoder)?;
-        self.material_bind_group(batch, coordinate, preview, MaterialInputs::Retouch(&pages), display, encoder)
+        self.material_bind_group(batch,batch_index, coordinate, target, intent, MaterialInputs::Retouch(&pages), display, encoder)
     }
 }
 
 pub(super) fn elapsed(started: Option<web_time::Instant>) -> f64 {
     started.map_or(0., |at| at.elapsed().as_secs_f64() * 1000.)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{PassCounts,dab_batch,packet,submit_ready};
+    use crate::layer_tests::{dab,preset_style,placement::{paint_document,target}};
+
+    #[test]
+    fn unchanged_material_neighborhood_is_accepted_once_for_a_multibatch_frame() {
+        let extent=[128;2];
+        let document=paint_document(extent,"brush neighborhood reuse");
+        let target=target(&document);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let style=preset_style(layer_core::DefaultBrushPreset::Paintbrush);
+        let mut contact=dab([0.8,0.2,0.1,1.]);
+        contact.center=Point {x:64.,y:64.};contact.radii=[20.;2];
+        if let Some(dry)=style.contact.and_then(|contact|contact.dry) {
+            let relief=dry.pose(0.5).relief;
+            contact.previous=[20.,20.,1.,0.];contact.motion=[4.,1.];
+            contact.contact=[0.7,relief[0],relief[1],relief[2]];contact.previous_contact=contact.contact;
+        }
+        let contacts=[contact;4];
+        let warm:Vec<_>=(0..contacts.len()).map(|index|DabBatch {first_dab:index as u32,stroke_start:index==0,stroke_end:false,
+            ..dab_batch(target,style.clone(),contact.bounds())}).collect();
+        submit_ready(&mut r,FramePacket {reset_layers:true,dabs:&contacts,dab_batches:&warm,..packet(document.scene(),extent)}).unwrap();
+        let batches:Vec<_>=(0..contacts.len()).map(|index|DabBatch {first_dab:index as u32,stroke_start:false,stroke_end:false,
+            ..dab_batch(target,style.clone(),contact.bounds())}).collect();
+        assert!(r.material_offsets(&batches[0]).iter().all(Option::is_none));
+        let before=PassCounts::snapshot();
+        submit_ready(&mut r,FramePacket {dabs:&contacts,dab_batches:&batches,..packet(document.scene(),extent)}).unwrap();
+        let counts=PassCounts::snapshot().delta(before);
+        assert_eq!(counts.material_encode_accepts,0,"brush encoding must never accept inputs");
+        assert_eq!(counts.material_neighborhoods,1,"a frame accepts its brush record once");
+        assert!(counts.material_bind_groups<=1,"unchanged material resources must reuse their bind group: {counts:?}");
+        assert!(r.readback_srgb_rgba8().unwrap().as_chunks::<4>().0.iter().any(|pixel|pixel[3]>0));
+    }
+    #[test]
+    fn brush_material_encoding_requires_a_prepared_record() {
+        let extent=[128;2];let document=paint_document(extent,"brush preparation boundary");let target=target(&document);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let contact=dab([0.2,0.4,0.8,1.]);
+        let mut batch=dab_batch(target,preset_style(layer_core::DefaultBrushPreset::Paintbrush),contact.bounds());
+        batch.stroke_end=false;
+        submit_ready(&mut r,FramePacket {reset_layers:true,dabs:&[contact],dab_batches:&[batch.clone()],..packet(document.scene(),extent)}).unwrap();
+        batch.stroke_start=false;
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        let intent=r.raster_intent(batch.target,RasterPlane::Color,[0,0]).unwrap();
+        let result=r.material_source_binding(&batch,0,[0,0],BrushEncodingTarget::Persistent,&intent,None,&mut encoder);
+        assert!(matches!(result,Err(GpuRasterError::Invariant(_))),"material encode must reject a missing prepared record");
+    }
+
 }

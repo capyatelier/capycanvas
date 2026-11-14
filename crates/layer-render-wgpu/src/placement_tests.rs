@@ -541,7 +541,7 @@ fn layer_tiles_beside_the_largest_offset_keep_their_exact_pixels() {
         (first..first + 3).map(|x| {
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             let tile = crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder|
-                scene.layer_tile_for_query(r, layer.scene(), target(&layer), [x, 0], encoder));
+                scene.layer_tile_for_query(r,crate::test_support::packet(layer.scene(),r.document_extent),target(&layer),[x,0],encoder));
             r.uploads.finish(&encoder);
             encoder.submit(&r.queue);
             crate::layer_tests::page_bytes(&r, &tile.texture)
@@ -564,15 +564,20 @@ fn watercolor_transport_batches_restored_empty_backing() {
 fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
     let mut layer = paint_document([512; 2], "multitile transport");
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut without_transport = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let send = |r: &mut WgpuRasterizer, layer: &Document, dabs: &[Dab], batches: &[DabBatch], reset| {
+        let before = r.metrics().command_passes;
         crate::test_support::submit_ready(r, FramePacket { dabs, dab_batches: batches, reset_layers: reset,
             ..crate::test_support::packet(layer.scene(), [512; 2]) }).unwrap();
-        r.readback_srgb_rgba8().unwrap()
+        let passes = r.metrics().command_passes - before;
+        (r.readback_srgb_rgba8().unwrap(), passes)
     };
-    let original = send(&mut r, &layer, &[], &[], true);
+    let original = send(&mut r, &layer, &[], &[], true).0;
+    assert_eq!(send(&mut without_transport, &layer, &[], &[], true).0, original);
     if restored_empty {
         let empty = layer_core::raster::RasterData::default();
         r.restore_raster(target(&layer), &empty, &empty).unwrap();
+        without_transport.restore_raster(target(&layer), &empty, &empty).unwrap();
         assert!(r.native_backing(target(&layer)).is_some_and(|data| data.tiles.is_empty()));
     }
     let mut ink = dab([0.1, 0.3, 0.8, 1.]);
@@ -583,7 +588,17 @@ fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
     stroke.style = preset_style(layer_core::DefaultBrushPreset::WetWatercolor);
     stroke.damage = ink.bounds();
     let mut preview = stroke.clone(); preview.kind = DabBatchKind::Preview;
-    let prediction = send(&mut r, &layer, &[ink], &[preview.clone()], false);
+    let (prediction, passes) = send(&mut r, &layer, &[ink], &[preview.clone()], false);
+    let mut stationary = preview.clone();
+    stationary.style.transport.as_mut().unwrap().distance = 0.;
+    let (stationary, stationary_passes) = send(&mut without_transport, &layer, &[ink], &[stationary], false);
+    let extra_passes = passes.checked_sub(stationary_passes).unwrap();
+    assert!(extra_passes <= 1, "every transport step of every page shares one compute pass: {passes} versus {stationary_passes}");
+    assert_ne!(prediction, stationary, "transport moves the deposited material");
+    let coordinates = |r: &WgpuRasterizer| (
+        r.preview_pages.iter().map(|page| page.coordinate).collect::<std::collections::BTreeSet<_>>(),
+        r.preview_watercolor_wetness_pages.iter().map(|page| page.coordinate).collect::<std::collections::BTreeSet<_>>());
+    assert_eq!(coordinates(&r), coordinates(&without_transport));
     assert_ne!(prediction, original);
     assert_eq!(r.preview_pages.len(), 4);
     assert_eq!(r.preview_watercolor_wetness_pages.len(), 4);
@@ -592,18 +607,86 @@ fn watercolor_multitile_prediction_commit_and_restore(restored_empty: bool) {
     preview.damage = moved.bounds();
     send(&mut r, &layer, &[moved], &[preview.clone()], false);
     assert!(paint(&layer).raster.is_empty());
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    r.encode_watercolor_transport(&mut encoder, 0, &preview,
-        &[pixel_rect(preview.damage, [512; 2])], true).unwrap();
-    let passes = encoder.pass_count();
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
-    assert_eq!(send(&mut r, &layer, &[], &[], false), original);
+    assert_eq!(send(&mut r, &layer, &[], &[], false).0, original);
     paint_mut(&mut layer).raster = layer_core::raster::RasterRevision::pending();
-    let accepted = send(&mut r, &layer, &[ink], &[stroke], false);
-    assert_eq!(send(&mut r, &layer, &[], &[], true), accepted);
-    println!("watercolor transport: restored_empty={restored_empty}, passes={passes}");
-    assert_eq!(passes, 1, "every transport step of every page shares one compute pass");
+    let accepted = send(&mut r, &layer, &[ink], &[stroke], false).0;
+    assert_ne!(accepted, original);
+    assert_eq!(send(&mut r, &layer, &[], &[], true).0, accepted);
+    println!("watercolor transport: restored_empty={restored_empty}, extra_passes={extra_passes}");
+}
+
+#[test]
+fn a_palette_knife_preview_over_painted_pages_accepts_its_transport_inputs() {
+    let extent = [512, 256];
+    let document = paint_document(extent, "palette knife preview");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut ink = dab([0.1, 0.3, 0.8, 1.]);
+    ink.center = Point { x: 256., y: 128. };
+    ink.radii = [96., 64.];
+    let paint = DabBatch { damage: ink.bounds(), ..batch(target(&document)) };
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[paint], ..packet(document.scene(), extent) })
+        .expect("the paint under the knife commits");
+    let mut knife = batch(target(&document));
+    knife.style = preset_style(layer_core::DefaultBrushPreset::PaletteKnife);
+    knife.kind = DabBatchKind::Preview;
+    knife.stroke_end = false;
+    knife.damage = ink.bounds();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[knife], composite_all: false, ..packet(document.scene(), extent) })
+        .expect("a Palette Knife Preview over painted pages submits");
+}
+
+#[test]
+fn a_first_two_page_wet_watercolor_preview_accepts_transport_inputs_before_tickets() {
+    let extent = [512, 256];
+    let document = paint_document(extent, "two-page wet watercolor preview");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    r.ensure_document_metadata(extent, document.scene()).unwrap();
+    r.reconcile_rasters(packet(document.scene(), extent), false, &[]).unwrap();
+    let mut ink = dab([0.1, 0.3, 0.8, 1.]);
+    ink.center = Point { x: 256., y: 128. };
+    ink.radii = [96., 64.];
+    ink.material = [0.8, 1., 1., 1.];
+    let mut preview = batch(target(&document));
+    preview.style = preset_style(layer_core::DefaultBrushPreset::WetWatercolor);
+    assert_eq!(preview.style.transport.as_ref().unwrap().distance, 28.);
+    preview.kind = DabBatchKind::Preview;
+    preview.stroke_end = false;
+    preview.damage = ink.bounds();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[preview],
+        composite_all: false, ..packet(document.scene(), extent) })
+        .expect("the first Wet Watercolor Preview spanning two pages submits");
+    assert_eq!(r.preview_pages.len(), 2);
+    assert_eq!(r.preview_watercolor_wetness_pages.len(), 2);
+    for (coordinate, local_x) in [([0, 0], 224), ([1, 0], 32)] {
+        let expected = r.preview_expected(target(&document), layer_core::raster::RasterPlane::Color, coordinate, scene::PreviewStage::Final).unwrap();
+        let read = r.preview_page(coordinate).unwrap().active().read(expected, None).expect("the Final Preview output is readable");
+        let pixels = crate::test_support::float_pixels(&r, &read.value().texture);
+        let at = 128 * PAGE_SIZE as usize + local_x;
+        assert!(pixels[at][3] > 0., "Preview ink is visible in page {coordinate:?} at ({local_x}, 128)");
+    }
+}
+
+#[test]
+fn a_repeated_first_wet_watercolor_preview_reads_the_inputs_it_accepted() {
+    let extent = [512, 256];
+    let document = paint_document(extent, "repeated wet watercolor preview");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    r.ensure_document_metadata(extent, document.scene()).unwrap();
+    r.reconcile_rasters(packet(document.scene(), extent), false, &[]).unwrap();
+    let mut ink = dab([0.1, 0.3, 0.8, 1.]);
+    ink.center = Point { x: 256., y: 128. };
+    ink.radii = [96., 64.];
+    ink.material = [0.8, 1., 1., 1.];
+    let mut preview = batch(target(&document));
+    preview.style = preset_style(layer_core::DefaultBrushPreset::WetWatercolor);
+    preview.kind = DabBatchKind::Preview;
+    preview.stroke_end = false;
+    preview.damage = ink.bounds();
+    for frame in ["first", "repeated"] {
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: std::slice::from_ref(&preview),
+            composite_all: false, ..packet(document.scene(), extent) })
+            .unwrap_or_else(|error| panic!("the {frame} Wet Watercolor Preview frame submits: {error}"));
+    }
 }
 
 #[test]
@@ -654,16 +737,31 @@ fn watercolor_microbatches_never_lower_the_wetness_of_their_update() {
             send(&[], &[], true);
             send(&[ink], std::slice::from_ref(&base), false);
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            for page in &r.paint_layers[0].watercolor_wetness_pages { r.encode_clear_value(&mut encoder, &page.active().view, "prior wetness", 0.5); }
+            let coordinates: Vec<_> = r.paint_layers[0].watercolor_wetness_pages.iter().map(|page| page.coordinate).collect();
+            for coordinate in coordinates {
+                let intent = r.raster_intent(target(&layer), layer_core::raster::RasterPlane::WatercolorWetness, coordinate).unwrap();
+                let receipt = encoder.submission();
+                let (view, output) = {
+                    let page = r.paint_layers[0].watercolor_wetness_pages.iter_mut().find(|page| page.coordinate == coordinate).unwrap();
+                    let write = page.write(page.active_secondary, &intent, &receipt).unwrap();
+                    (write.value().view.clone(), write.encoded(layer_core::raster::ContentName::fresh()))
+                };
+                r.encode_clear_value(&mut encoder, &view, "prior wetness", 0.5);
+                r.record_raster_write(target(&layer), output.publish(&encoder.submission())).unwrap();
+            }
             encoder.submit(&r.queue);
             let update: Vec<_> = dabs.iter().enumerate().take(microbatches).map(|(i, dab)| DabBatch {
                 stroke_id: StrokeId(2), stroke_start: i == 0, stroke_end: false, first_dab: i as u32, damage: dab.bounds(),
                 style: DabStyle { alpha_locked, ..style.clone() }, ..base.clone()
             }).collect();
             crate::test_support::submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &update, ..packet(layer.scene(), [512; 2]) }).unwrap();
+            let versions = r.raster_versions(layer.scene(), target(&layer)).unwrap();
             let mut pages: Vec<_> = r.paint_layers[0].watercolor_wetness_pages.iter().map(|page| (page.coordinate, page.active())).collect();
             pages.sort_by_key(|(coordinate, _)| [coordinate[1], coordinate[0]]);
-            let bytes: Vec<_> = pages.iter().flat_map(|(_, page)| crate::layer_tests::page_bytes(&r, &page.texture)).collect();
+            let bytes: Vec<_> = pages.iter().flat_map(|(coordinate, page)| {
+                let read = page.read(versions.tile(layer_core::raster::RasterPlane::WatercolorWetness, *coordinate), None).unwrap();
+                crate::layer_tests::page_bytes(&r, &read.value().texture)
+            }).collect();
             bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect::<Vec<_>>()
         }).collect::<Vec<_>>();
         assert_ne!(wetness[dabs.len()], wetness[0], "alpha_locked={alpha_locked}: the update deposits water");
@@ -683,7 +781,7 @@ fn page_zero_copies_reclear_both_formats_and_reduced_extents() {
     for format in [r.device.working_format(), r.device.scalar_format()] {
         for extent in [[PAGE_SIZE; 2], [PAGE_SIZE / 4; 2]] {
             let page = create_page_surface(&r.device, &r.float_texture_layout, &r.sampler,
-                extent, format, "dirty zero page");
+                extent, format, "dirty zero page", &r.raster_tiers.paint);
             for _ in 0..2 {
                 let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
                 r.encode_clear_value(&mut encoder, &page.view, "dirty zero page", 1.);

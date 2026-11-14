@@ -5,10 +5,11 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DecodeError { Invalid(String), Unsupported(String), Io(String), MemoryBudgetExceeded }
+pub enum DecodeError { Invalid(String), Unsupported(String), Io(String), MemoryBudgetExceeded, Uncovered }
+pub(crate) const MEMORY_UNCOVERED: &str = "Memory for the drawing is not free yet";
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self { Self::MemoryBudgetExceeded => f.write_str(crate::MEMORY_BUDGET_EXCEEDED), Self::Invalid(message) | Self::Unsupported(message) | Self::Io(message) => f.write_str(message) }
+        match self { Self::MemoryBudgetExceeded => f.write_str(crate::MEMORY_BUDGET_EXCEEDED), Self::Uncovered => f.write_str(MEMORY_UNCOVERED), Self::Invalid(message) | Self::Unsupported(message) | Self::Io(message) => f.write_str(message) }
     }
 }
 impl std::error::Error for DecodeError {}
@@ -17,7 +18,7 @@ impl From<std::io::Error> for DecodeError {
         if error.kind()==std::io::ErrorKind::UnexpectedEof { Self::Invalid(error.to_string()) } else { Self::Io(error.to_string()) }
     }
 }
-impl From<String> for DecodeError { fn from(message: String) -> Self { Self::Invalid(message) } }
+impl From<String> for DecodeError { fn from(message: String) -> Self { if message == MEMORY_UNCOVERED { Self::Uncovered } else { Self::Invalid(message) } } }
 impl From<&str> for DecodeError { fn from(message: &str) -> Self { Self::Invalid(message.into()) } }
 impl From<DecodeError> for String { fn from(error: DecodeError) -> Self { error.to_string() } }
 pub type DecodeResult<T> = Result<T, DecodeError>;

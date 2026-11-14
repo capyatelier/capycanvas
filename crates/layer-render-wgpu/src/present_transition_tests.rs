@@ -23,9 +23,9 @@ fn held_capture_blends_and_releases_its_device_charge_after_completion() {
     let view=HeldCanvas::texture(device,[8,8],format);
     HeldCanvas::capture(&mut encoder,&view,|pass| {pass.set_pipeline(&pipeline);pass.set_bind_group(0,&group,&[0]);pass.draw(0..3,0..1);});
     let held=HeldCanvas::new(device,[8,8],format,SdrSurfaceColor::Srgb,Some(view),None);
-    held.retain_until_complete(&encoder);
+    held.retain_until_complete(device,&encoder);
     let bytes=crate::texture_bytes(held.canvas.as_ref().unwrap().texture());
-    assert_eq!(device.transient_display.load(Ordering::Acquire),bytes);
+    assert_eq!(device.transient_display.used(),bytes);
     assert!(held.compatible(device,[8,8],format,SdrSurfaceColor::Srgb));
     assert!(!held.compatible(device,[9,8],format,SdrSurfaceColor::Srgb));
     assert!(!held.compatible(device,[8,8],wgpu::TextureFormat::Bgra8Unorm,SdrSurfaceColor::Srgb));
@@ -47,27 +47,27 @@ fn held_capture_blends_and_releases_its_device_charge_after_completion() {
                 depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,multiview_mask:None});
             draw.draw(&recipes,&mut pass,0);
         }
-        held.retain_until_complete(&encoder);uploads.finish(&encoder);renderer.queue.submit([encoder.finish()]);
+        held.retain_until_complete(device,&encoder);uploads.finish(&encoder);renderer.queue.submit([encoder.finish()]);
         let pixels=crate::layer_tests::page_bytes(&renderer,&texture);
         assert!(pixels.chunks_exact(4).all(|pixel|pixel.iter().zip(expected).all(|(actual,expected)|(*actual as i32-expected).abs()<=1)));
     }
     let encoder=device.create_command_encoder(&Default::default());
-    held.retain_until_complete(&encoder);
+    held.retain_until_complete(device,&encoder);
     drop(held);drop(draw);
-    assert_eq!(device.transient_display.load(Ordering::Acquire),bytes);
+    assert_eq!(device.transient_display.used(),bytes);
     renderer.queue.submit([encoder.finish()]);
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    assert_eq!(device.transient_display.load(Ordering::Acquire),0);
+    device.wait_queue().unwrap();
+    assert_eq!(device.transient_display.used(),0);
     pollster::block_on(renderer.compilation.prepare_all([&pipeline])).unwrap();
     let mut encoder=device.create_command_encoder(&Default::default());
     let view=HeldCanvas::texture(device,[8,8],format);
     HeldCanvas::capture(&mut encoder,&view,|pass| {pass.set_pipeline(&pipeline);pass.set_bind_group(0,&group,&[0]);pass.draw(0..3,0..1);});
     let held=HeldCanvas::new(device,[8,8],format,SdrSurfaceColor::Srgb,Some(view),None);
-    held.retain_until_complete(&encoder);
+    held.retain_until_complete(device,&encoder);
     renderer.queue.submit([encoder.finish()]);
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    device.wait_queue().unwrap();
     device.destroy();
-    assert_eq!(device.transient_display.load(Ordering::Acquire),bytes);
+    assert_eq!(device.transient_display.used(),bytes);
     drop(held);
-    assert_eq!(device.transient_display.load(Ordering::Acquire),0);
+    assert_eq!(device.transient_display.used(),0);
 }

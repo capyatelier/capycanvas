@@ -57,6 +57,7 @@ fn read_coverage(bytes:&[u8],extent:[u32;2],byte_coverage:bool,coverage_size:u64
 }
 
 pub(super) fn capture_selection<T:Send+'static>(
+    device:&crate::PipelineDevice,
     capture:Capture,
     extent:[u32;2],
     byte_coverage:bool,
@@ -66,7 +67,7 @@ pub(super) fn capture_selection<T:Send+'static>(
     convert:impl FnOnce(RegionResult,bool,&[u8])->T+Send+'static,
 ) {
     let Capture {buffer,size,coverage_size,underfill_offset,seal_records,seed_offset}=capture;
-    crate::raster::map_then(None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records,seed_offset),move|part| {
+    crate::raster::map_then(device,None,&buffer,size,move|bytes|read_coverage(bytes,extent,byte_coverage,coverage_size,underfill_offset,seal_records,seed_offset),move|part| {
         let result=part.and_then(|primary| {
             if gaps && primary.active>=5 {return Err(GpuRasterError::MapFailed("Invalid fill reach".into()));}
             let masks=gaps.then(||layer_render::RegionGapMasks {next:primary.next,active:primary.active,line_bounded:primary.line_bounded,seals:primary.seals.into()});

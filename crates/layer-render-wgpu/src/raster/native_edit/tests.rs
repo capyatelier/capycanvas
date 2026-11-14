@@ -60,10 +60,14 @@ fn stroke(
     }
 }
 fn working(r: &WgpuRasterizer, id: SourceTarget) -> BTreeMap<TileKey, Vec<u8>> {
-    r.raster_textures(id)
+    r.raster_inputs(id,None,|_|true).unwrap()
         .0
         .into_iter()
-        .map(|(key, texture)| (key, crate::layer_tests::page_bytes(r, texture)))
+        .map(|(key,pixels)| {
+            let expected=r.current_raster_version(id,key.plane,key.coordinate).unwrap();
+            let read=pixels.read(expected,None).unwrap();
+            (key,crate::layer_tests::page_bytes(r,&read.value().texture))
+        })
         .collect()
 }
 fn backing(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
@@ -215,11 +219,9 @@ fn native_cache_limits_use_renderer_grants_without_a_synthetic_image_reserve() {
     let document=paint_document([256;2],"Cache grants");
     let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
     crate::test_support::submit_published(&mut r,crate::test_support::packet(document.scene(),[256;2]));
-    let native=r.native_edit.as_ref().unwrap();
-    assert!(native.color_cache_bytes<=r.memory_limit(layer_core::MemoryOwnerKind::RasterPool));
-    assert_eq!(native.composition_bytes,r.memory_limit(layer_core::MemoryOwnerKind::Scene));
-    for resident in [0,native.composition_bytes/2,native.composition_bytes,native.composition_bytes.saturating_add(1)] {
-        assert_eq!(native.image_pixel_budget(resident),native.composition_bytes.saturating_sub(resident));
+    let grant=r.memory.display_grant();
+    for resident in [0,grant/2,grant,grant.saturating_add(1)] {
+        assert_eq!(r.image_pixel_budget(resident),grant.saturating_sub(resident));
     }
 }
 
@@ -321,7 +323,6 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
         engine.backend_mut().readback_srgb_rgba8().unwrap()
     };
     let original = pixels(&mut engine);
-    engine.backend_mut().native_edit.as_mut().unwrap().color_cache_bytes = 4 << 20;
     let filters = layer_core::SeparationFilters::new(layer_core::bundled_effect_catalog(), 8.).unwrap();
     let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let low = plan.operations[0].0;
@@ -660,20 +661,39 @@ fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
     crate::test_support::submit_ready(r, packet(&layers, true)).unwrap();
     layers
 }
-fn mark_changed(r: &mut WgpuRasterizer, layers: &mut Document) {
-    paint_mut(layers).raster = RasterRevision::pending();
-    let mask = mask_target(layers);
-    *layers.target_raster_mut(mask).unwrap() = RasterRevision::pending();
-    for id in [target(layers), mask_target(layers)] {
-        r.raster
-            .as_mut()
-            .unwrap()
-            .targets
-            .get_mut(&id)
-            .unwrap()
-            .changed
-            .extend((0..17).map(|x| [x, 0]));
+fn rewrite_native_inputs(r:&mut WgpuRasterizer,id:SourceTarget) {
+    let (inputs,_)=r.raster_inputs(id,None,|_|true).unwrap();
+    let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
+    let receipt=commands.submission();
+    let mut scratch=std::collections::HashMap::new();
+    let mut allocations=Vec::new();
+    for (key,mut pixels) in inputs {
+        let intent=r.raster_intent(id,key.plane,key.coordinate).unwrap();
+        let source=pixels.read(intent.version(),Some(&receipt)).unwrap().value().texture.clone();
+        let format=source.format();
+        let temporary=scratch.entry(format).or_insert_with(|| {
+            let bytes=u64::from(format.block_copy_size(None).unwrap())*u64::from(PAGE_SIZE).pow(2);
+            allocations.push(r.admit_raster_working(bytes).unwrap());
+            r.device.create_texture(&wgpu::TextureDescriptor {
+                label:Some("native publication fixture rewrite"),size:source.size(),mip_level_count:1,sample_count:1,
+                dimension:wgpu::TextureDimension::D2,format,
+                usage:wgpu::TextureUsages::COPY_SRC|wgpu::TextureUsages::COPY_DST,view_formats:&[],
+            })
+        });
+        commands.copy_texture_to_texture(source.as_image_copy(),temporary.as_image_copy(),source.size());
+        let write=pixels.write(&intent,&receipt).unwrap();
+        commands.copy_texture_to_texture(temporary.as_image_copy(),write.value().texture.as_image_copy(),source.size());
+        let written=write.publish(layer_core::raster::ContentName::fresh());
+        r.record_raster_write(id,written).unwrap();
     }
+    commands.retain_resources();
+    commands.on_submitted_work_done(move||drop(allocations));
+    commands.submit(&r.queue);
+}
+fn rewrite_working(r:&mut WgpuRasterizer,layers:&mut Document) {
+    for id in [target(layers),mask_target(layers)] {rewrite_native_inputs(r,id);}
+    paint_mut(layers).raster=RasterRevision::pending();
+    let mask=mask_target(layers);*layers.target_raster_mut(mask).unwrap()=RasterRevision::pending();
 }
 
 #[test]
@@ -688,7 +708,7 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
     let mask_before = backing(mask_raster(&layers));
     let scratch = r.native_edit.as_ref().unwrap().storage_bytes();
     for _ in 0..3 {
-        mark_changed(&mut r, &mut layers);
+        rewrite_working(&mut r, &mut layers);
         while !r.raster_ready() {
             std::thread::yield_now();
         }
@@ -874,8 +894,9 @@ fn mixed_tracking_marks_only_actual_canonical_changes() {
             size:16+u64::from(256/side).pow(2)*4,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_SRC|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
         r.queue.write_buffer(&flags,0,[side,1,0,0].map(u32::to_le_bytes).as_flattened());
         for expected in [1u32,0u32] {
-            let inputs=pages.iter().map(|page|(page.clone(),RasterTile::pending(color.paint_descriptor()),LayerColorMode::FullColor)).collect();
-            let mut job=r.native_capture_job(NativeFrame {capture:None,publications:Vec::new(),canonical_pages:Vec::new()},inputs).unwrap();
+            let inputs:Vec<_>=pages.iter().map(|page|(page.clone(),RasterTile::pending(color.paint_descriptor()),LayerColorMode::FullColor)).collect();
+            let count=inputs.len();
+            let mut job=r.native_capture_job(NativeFrame {capture:None,publications:Vec::new(),canonical_pages:Vec::new()},inputs,vec![None;count],vec![None;count],vec![None;count]).unwrap();
             job.changes=vec![None,Some(flags.clone())];
             let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
             commands.clear_buffer(&flags,16,None);
@@ -900,12 +921,12 @@ fn invalid_late_color_or_mask_publishes_defined_values_and_painting_continues() 
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut layers = restored_fixture(&mut r);
         let (id, plane, bad) = if mask_failure {
-            (mask_target(&layers), RasterPlane::Mask, r.layer_masks.pages[&(mask_target(&layers), [16, 0])].texture.clone())
+            (mask_target(&layers), RasterPlane::Mask, crate::test_support::mask_texture(&r,mask_target(&layers),[16,0]).clone())
         } else {
-            (target(&layers), RasterPlane::Color, r.paint_layers[0].pages.iter().find(|p| p.coordinate == [16, 0]).unwrap().active().texture.clone())
+            (target(&layers), RasterPlane::Color, r.read_layer_color(target(&layers),[16,0],&r.current_raster_version(target(&layers),RasterPlane::Color,[16,0]).unwrap(),None).unwrap().value().texture.clone())
         };
         set_pixel(&r, &bad, if mask_failure { &[-0.25] } else { &[f32::NAN, 0., 0., 1.] });
-        mark_changed(&mut r, &mut layers);
+        rewrite_working(&mut r, &mut layers);
         while !r.raster_ready() {
             std::thread::yield_now();
         }
@@ -918,7 +939,7 @@ fn invalid_late_color_or_mask_publishes_defined_values_and_painting_continues() 
         let stored = working(&r, id).into_iter().find(|(key, _)| key.plane == plane && key.coordinate == [16, 0]).unwrap().1;
         let expected: &[f32] = if mask_failure { &[0.] } else { &[0., 0., 0., 1.] };
         assert_eq!(stored[..expected.len() * 4], expected.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(), "mask_failure={mask_failure}");
-        mark_changed(&mut r, &mut layers);
+        rewrite_working(&mut r, &mut layers);
         while !r.raster_ready() {
             std::thread::yield_now();
         }
@@ -937,9 +958,9 @@ fn native_capture_pass_budget_keeps_mixed_plane_jobs_in_one_encoder() {
         let transfer = r.prepare_native_transfer(color.space).unwrap();
         r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
         pollster::block_on(r.compilation.prepare_all(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color.depth,true))).unwrap();
-        mark_changed(&mut r, &mut layers);
+        rewrite_working(&mut r, &mut layers);
         while !r.raster_ready() { std::thread::yield_now(); }
-        let mut job = r.prepare_native_rasters(layers.scene()).unwrap().unwrap();
+        let mut job = r.prepare_native_rasters(layers.scene(),None).unwrap().unwrap();
         assert!(job.inputs.len() > MAX_BATCH_TILES);
         assert!(job.inputs.iter().any(|(t, _, _)| t.format() == wgpu::TextureFormat::Rgba32Float));
         assert!(job.inputs.iter().any(|(t, _, _)| t.format() == wgpu::TextureFormat::R32Float));
@@ -991,7 +1012,7 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
     let before = working(&r, target(&layers));
-    mark_changed(&mut r, &mut layers);
+    rewrite_working(&mut r, &mut layers);
     while !r.raster_ready() {
         std::thread::yield_now();
     }
@@ -1086,15 +1107,8 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
         }
     }
     for _ in 0..16 {
+        rewrite_native_inputs(&mut r,target(&layers));
         paint_mut(&mut layers).raster = RasterRevision::pending();
-        r.raster
-            .as_mut()
-            .unwrap()
-            .targets
-            .get_mut(&target(&layers))
-            .unwrap()
-            .changed
-            .insert([0, 0]);
         while !r.raster_ready() {
             std::thread::yield_now();
         }
@@ -1112,18 +1126,18 @@ fn deferred_native_outputs_preserve_versions_during_following_frames() {
     let mask_before = backing(mask_raster(&layers));
     while !r.raster_ready() { std::thread::yield_now(); }
     let presentation = r.prioritize_raster_presentation();
-    mark_changed(&mut r, &mut layers);
+    rewrite_working(&mut r, &mut layers);
     crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     let first = layers.clone();
-    let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap().active().texture.clone();
+    let page=r.read_layer_color(target(&layers),[0;2],&r.current_raster_version(target(&layers),RasterPlane::Color,[0;2]).unwrap(),None).unwrap().value().texture.clone();
     set_pixel(&r, &page, &[0.; 4]);
-    let mask = r.layer_masks.pages[&(mask_target(&layers), [0, 0])].texture.clone();
+    let mask = crate::test_support::mask_texture(&r,mask_target(&layers),[0,0]).clone();
     set_pixel(&r, &mask, &[0.5]);
-    mark_changed(&mut r, &mut layers);
+    rewrite_working(&mut r, &mut layers);
     crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     let second = layers.clone();
     set_pixel(&r, &page, &[f32::NAN, 0., 0., 1.]);
-    mark_changed(&mut r, &mut layers);
+    rewrite_working(&mut r, &mut layers);
     crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
     for snapshot in [&first, &second, &layers] {
@@ -1131,7 +1145,7 @@ fn deferred_native_outputs_preserve_versions_during_following_frames() {
             assert!(root.wait_data().unwrap().tiles.values().all(|t| t.try_backing().is_none()));
         }
     }
-    assert_eq!(r.raster_buffers.transfer.load(Ordering::Relaxed), 0);
+    assert_eq!(r.raster_buffers.transfer.used(), 0);
     drop(presentation);
     assert_eq!(backing(&paint(&first).raster), before);
     assert_eq!(backing(mask_raster(&first)), mask_before);
@@ -1194,7 +1208,7 @@ fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
     let expected = backing(&paint(&checkpoint).raster);
     while !r.raster_ready() { std::thread::yield_now(); }
     let presentation = r.prioritize_raster_presentation();
-    mark_changed(&mut r, &mut layers);
+    rewrite_working(&mut r, &mut layers);
     crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
     r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
     assert!(!paint(&layers).raster.host_backed());
@@ -1227,7 +1241,7 @@ fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
             let transfer = r.prepare_native_transfer(color.space).unwrap();
             r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
             pollster::block_on(r.compilation.prepare_all(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color.depth,true))).unwrap();
-            mark_changed(&mut r, &mut layers);
+            rewrite_working(&mut r, &mut layers);
             while !r.raster_ready() { std::thread::yield_now(); }
             crate::test_support::submit_ready(&mut r, packet(&layers, false)).unwrap();
             assert_eq!(backing(&paint(&layers).raster), expected);
@@ -1449,8 +1463,10 @@ fn blend_pickup_of_excess_alpha_commits_bounded_color() {
         flush(&mut engine);
         drag(&mut engine, &[40., 140., 240., 340., 440.]);
         let id = engine.document().active_target().unwrap();
-        let (textures, _) = engine.backend().raster_textures(id);
-        let page = textures.into_iter().find(|(key, _)| key.coordinate == [0, 0] && key.plane == RasterPlane::Color).unwrap().1;
+        let (pixels,_)=engine.backend().raster_inputs(id,None,|key|key.coordinate==[0;2] && key.plane==RasterPlane::Color).unwrap();
+        let key=TileKey {plane:RasterPlane::Color,coordinate:[0;2]};
+        let expected=engine.backend().current_raster_version(id,key.plane,key.coordinate).unwrap();
+        let read=pixels[&key].read(expected,None).unwrap();let page=&read.value().texture;
         engine.backend().queue.write_texture(
             wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: 120, y: 120, z: 0 }, ..page.as_image_copy() },
             &texel.repeat(64).iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
@@ -1628,4 +1644,155 @@ fn native_fill_texture_matches_contact_and_flat_pixels_through_history() {
     assert!(recovered.redo().unwrap()); flush(&mut recovered);
     assert_eq!(backing(&paint(recovered.document()).raster), pixels);
     assert_eq!(recovered.backend_mut().readback_srgb_rgba8().unwrap(), composite);
+}
+
+#[test]
+fn refused_native_capture_keeps_painted_revision_pending_until_admission_returns() {
+    let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+    let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {
+        host_default_bytes: Some(2 << 30), override_bytes: Some(2 << 30), ..Default::default()
+    });
+    let mut r = crate::memory::memory_tests::renderer_in_budget(color,
+        layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget.clone()).unwrap();
+    let mut doc = restored_fixture(&mut r);
+    crate::test_support::complete(&r);
+    let original = backing(&paint(&doc).raster);
+    rewrite_working(&mut r, &mut doc);
+    let revision = paint(&doc).raster.clone();
+    let mut dab = crate::layer_tests::dab([0.2, 0.4, 0.6, 0.5]);
+    dab.center = layer_core::Point { x: 80., y: 80. };
+    let batch = crate::test_support::dab_batch(target(&doc), crate::tests::test_style(BrushExecution::Dry),
+        layer_core::Rect::from_extent(doc.composition().size));
+    let dabs = [dab];
+    let batches = [batch];
+    let frame = FramePacket { dabs: &dabs, dab_batches: &batches, ..packet(&doc, false) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !r.raster_dependencies_ready(frame, None) {
+        assert!(std::time::Instant::now() < deadline);
+        r.wait_idle().unwrap();
+        std::thread::yield_now();
+    }
+    let before = r.metrics().dabs;
+    let pressure = budget.admit_import(budget.import_headroom_bytes()).unwrap();
+    assert_eq!(budget.import_headroom_bytes(), 0);
+    let submitted = r.submit(frame);
+    let publication = revision.try_data();
+    assert!(submitted.is_ok() && publication.is_none(),
+        "late capture refusal must submit paint and leave its revision pending: submit={submitted:?}, publication={publication:?}");
+    assert_eq!(r.metrics().dabs, before + 1);
+    assert!(r.next_frame()==layer_render::FrameDemand::Work);
+    drop(pressure);
+    crate::test_support::submit_settled(&mut r, packet(&doc, false));
+    assert!(revision.try_data().unwrap().is_ok());
+    assert_eq!(r.metrics().dabs, before + 1, "capture settlement must not replay persistent dabs");
+    let stored = backing(&revision);
+    assert!(!stored.is_empty());
+    assert_ne!(stored, original, "the accepted persistent dab must reach authored backing");
+}
+
+#[test]
+fn a_native_capture_larger_than_the_raster_room_publishes_in_windows_within_the_limit() {
+    let extent = [8192; 2];
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+    let target = doc.active_target().unwrap();
+    let SourceTarget::Paint(paint) = target else { unreachable!() };
+    doc.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::pending();
+    let dabs = (0..64).map(|n| crate::tests::test_dab([(n % 32 * PAGE_SIZE + 128) as f32, (n / 32 * PAGE_SIZE + 128) as f32], [1., 0., 1., 1.], 1.)).collect::<Vec<_>>();
+    let damage = dabs.iter().copied().map(layer_render::Dab::bounds).fold(layer_core::Rect::EMPTY, layer_core::Rect::union);
+    let batch = layer_render::DabBatch { dab_count: dabs.len() as u32, ..crate::test_support::dab_batch(target, crate::tests::test_style(BrushExecution::Dry), damage) };
+    let frame = FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), view: view(), ..crate::test_support::packet(doc.scene(), extent) };
+    let renderer = || crate::memory::memory_tests::renderer(doc.composition().color, layer_core::DeviceMemoryFacts { budget_bytes: Some(4 << 30), ..Default::default() }).unwrap();
+    let ready = |r: &mut WgpuRasterizer| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !r.raster_dependencies_ready(frame, None) { assert!(std::time::Instant::now() < deadline, "the frame becomes ready"); std::thread::sleep(std::time::Duration::from_millis(1)); }
+    };
+    let mut whole = renderer();
+    ready(&mut whole);
+    let admission = whole.restore_preflight.as_ref().unwrap().native.as_ref().unwrap();
+    let (outputs, readback, held) = (admission.bytes, admission.readback, whole.raster_tiers.raster.used());
+    assert!(admission.whole() && outputs >= readback, "the unconstrained fixture admits a whole capture of many outputs: outputs {outputs}, readback {readback}");
+    drop(whole);
+    let mut r = renderer();
+    let budget = r.factory.memory_budget().clone();
+    let other = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(budget.snapshot().devices[0].device));
+    let limit = |r: &WgpuRasterizer| r.memory.raster_owner().gpu_working_limit();
+    let room = held.saturating_sub(outputs / 2);
+    let pin = limit(&r).saturating_sub(r.raster_tiers.raster.used()).saturating_sub(room);
+    other.report(layer_core::MemoryReport { gpu_bytes: pin, pinned_gpu_bytes: pin, ..Default::default() });
+    budget.flush_reports();
+    let revision = doc.artwork.paint.get(paint).unwrap().raster.clone();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut submitted = false;
+    while revision.try_data().is_none() {
+        assert!(std::time::Instant::now() < deadline, "a capture of {outputs} bytes never published within a {room} byte raster room: submitted {submitted}, settling {}, terms {:?}",
+            r.settling.is_some(), r.outstanding_terms());
+        r.poll_pending(frame.view).unwrap();
+        if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(if submitted { FramePacket { dabs: &[], dab_batches: &[], ..frame } } else { frame }, None) { result.unwrap(); submitted = true; }
+        let physical = r.telemetry().resident_bytes;
+        let device = budget.snapshot().devices[0].limit_bytes;
+        assert!(physical.saturating_add(pin) <= device, "the capture exceeded the device limit: physical {physical} beside a {pin} byte pin, limit {device}");
+        r.wait_idle().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let data = revision.wait_data().unwrap();
+    assert_eq!(data.tiles.keys().filter(|key| key.plane == RasterPlane::Color).count(), 64, "the windowed capture published every painted tile");
+    assert!(data.tiles.values().all(|tile| tile.wait_backing().is_ok()), "every windowed output reached its backing");
+    drop(other);
+}
+
+#[test]
+fn native_mask_capture_consumes_preflight_and_preserves_unchanged_working_names() {
+    use layer_core::raster::ContentName;
+    for in_place in [false,true] {
+        for changed in [false,true] {
+            let color=DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8};
+            let mut document=paint_document([256;2],"native semantic names");set_color(&mut document,color);
+            let descriptor=RasterPlane::Mask.descriptor(color);
+            let mut mask=reveal_all([256;2],[0;2]);
+            mask.source.raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},
+                RasterTile::backed(TileBlob::encode(descriptor,&vec![0;65536]).unwrap()))].into(),watercolor:None});
+            set_mask(&mut document,mask);
+            let target=mask_target(&document);
+            let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+            let transfer=r.prepare_native_transfer(color.space).unwrap();
+            r.native_edit=Some(NativeEdit::with_mode(&r,transfer,in_place));
+            crate::test_support::submit_ready(&mut r,packet(&document,true)).unwrap();
+            let dabs=[crate::layer_tests::dab([0.,0.,0.,1.])];
+            let batches=[crate::layer_tests::batch(target)];let plans=[Vec::<BrushTile>::new()];
+            let required=FramePacket {dabs:&dabs,dab_batches:&batches,..packet(&document,false)};
+            crate::test_support::prepare_raster(&mut r,|r| {
+                if !r.prepare_raster_outputs(required,&plans) {return Err(GpuRasterError::NotReady);}
+                r.reconcile_rasters(required,false,&plans)?;Ok(())
+            }).unwrap();
+            let live=ContentName::fresh();
+            let mut authored=submission::CommandEncoder::new(&r.device,&Default::default());
+            let receipt=authored.submission();let intent=r.raster_intent(target,RasterPlane::Mask,[0;2]).unwrap();
+            let write=r.layer_masks.pages.get_mut(&(target,[0;2])).unwrap().write(&intent,&receipt).unwrap();
+            drop(authored.color_pass("authored mask fixture",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {
+                r:if changed {0.25}else {0.},g:0.,b:0.,a:1.})));
+            let written=write.publish(live);r.record_raster_write(target,written).unwrap();authored.submit(&r.queue);
+            *document.target_raster_mut(target).unwrap()=RasterRevision::pending();
+            assert!(r.prepare_raster_outputs(packet(&document,false),&[]));
+            assert!(r.restore_preflight.as_ref().unwrap().native.as_ref().unwrap().readback>65536);
+            r.reconcile_rasters(packet(&document,false),false,&[]).unwrap();
+            let reserved=r.restore_preflight.as_ref().unwrap().native.as_ref().unwrap().comparisons.as_ref().unwrap().buffer().clone();
+            let mut commands=submission::CommandEncoder::new(&r.device,&Default::default());
+            let receipt=commands.submission();
+            r.layer_masks.prepare(&r.device,&mut commands,(document.scene(),&[],None),[256;2],false,&mut r.selection_clip).unwrap();
+            let mut job=r.prepare_native_rasters(document.scene(),Some(&receipt)).unwrap().unwrap();
+            assert_eq!(job.comparisons.as_ref().unwrap().buffer(),&reserved,"capture must consume the pre-authored admission");
+            let tile=job.inputs[0].1.clone();assert_eq!(tile.content_version().resolved(),None);
+            while r.step_native_rasters(&mut job,&mut commands).unwrap() {}
+            assert_eq!(tile.content_version().resolved(),None);
+            assert!(job.frame.capture.as_ref().unwrap().outputs[0].comparison.is_some());
+            commands.submit(&r.queue);
+            job.frame.capture.take().unwrap().finish().unwrap();
+            r.finish_native_rasters(job.frame,true).unwrap();
+            assert_eq!(tile.content_version().matches(&live.into()),Some(!changed),"in_place={in_place} changed={changed}");
+            let selected=r.raster_intent(target,RasterPlane::Mask,[0;2]).unwrap();
+            assert_eq!(selected.version().matches(&tile.content_version()),Some(true));
+            assert!(r.layer_masks.pages[&(target,[0;2])].read(selected.version().clone(),None).is_ok());
+            assert_eq!(&*tile.wait_backing().unwrap().decode_on_worker().unwrap(),&vec![if changed {64}else {0};65536]);
+        }
+    }
 }

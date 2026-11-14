@@ -166,7 +166,7 @@ fn region_list_changes_repaint_only_added_and_removed_glass() {
     let frame = |blur: &mut BackdropBlur| {
         let mut encoder = r.device().create_command_encoder(&Default::default());
         let mut repaint = Vec::new();
-        let mut uploads = crate::Uploads::new(r.device(), 4096);
+        let mut uploads = crate::Uploads::new(&r.device, 4096);
         blur.encode(&r, &mut encoder, &mut uploads, [512, 256], 0, layer_core::Affine::IDENTITY, false, Some(&[]), |_| {}, None, &mut repaint).unwrap();
         uploads.finish(&encoder);
         r.queue().submit([encoder.finish()]);
@@ -197,7 +197,7 @@ fn zero_strength_regions_keep_blur_demand_without_composite_draws() {
     pollster::block_on(r.compilation.prepare_all(blur.pipelines())).unwrap();
     blur.set_regions(&[region([32.,16.,128.,96.],[18.;4]).with_strength(0.)]);
     let mut encoder=r.device().create_command_encoder(&Default::default());
-    let mut uploads=crate::Uploads::new(r.device(),4096);
+    let mut uploads=crate::Uploads::new(&r.device,4096);
     let mut repaint=Vec::new();
     blur.encode(&r,&mut encoder,&mut uploads,[256,128],0,layer_core::Affine::IDENTITY,false,None,|_|{},None,&mut repaint).unwrap();
     uploads.finish(&encoder);

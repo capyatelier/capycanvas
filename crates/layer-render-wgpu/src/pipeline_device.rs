@@ -21,12 +21,16 @@ impl Drop for CompileTrace<'_> {
         }
     }
 }
+#[cfg(target_arch="wasm32")]
+thread_local! {static COMPLETION:std::cell::RefCell<(u64,Vec<std::sync::Arc<dyn Fn()+Send+Sync>>)>=Default::default();}
 #[derive(Clone)]
 pub(crate) struct DeviceRecipes {
+    #[cfg(not(target_arch="wasm32"))]
+    poll: crate::device_poll::Binding,
     compilation: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::compile::Coordinator>>>>,
     #[cfg(not(target_arch = "wasm32"))]
     saved_pipelines: Option<std::sync::Arc<crate::SavedPipelines>>,
-    pub transient_display: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub transient_display: std::sync::Arc<crate::residency::Tier>,
     pub transient_memory: Option<layer_core::MemoryOwner>,
     pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
@@ -35,9 +39,15 @@ pub(crate) struct DeviceRecipes {
     pub native_publication: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<super::raster::native_edit::Recipes>>>>,
     pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
 }
+#[cfg(not(target_arch="wasm32"))]
+impl DeviceRecipes {
+    pub(crate) fn poll_binding(&self) -> crate::device_poll::Binding { self.poll.owned() }
+}
 impl From<&PipelineDevice> for DeviceRecipes {
     fn from(device: &PipelineDevice) -> Self {
         Self {
+            #[cfg(not(target_arch="wasm32"))]
+            poll: device.poll.clone(),
             compilation: device.compilation.clone(),
             #[cfg(not(target_arch = "wasm32"))]
             saved_pipelines: device.saved_pipelines.clone(),
@@ -54,16 +64,17 @@ impl From<&PipelineDevice> for DeviceRecipes {
 }
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
+    #[cfg(not(target_arch="wasm32"))]
+    poll: crate::device_poll::Binding,
     compilation: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::compile::Coordinator>>>>,
     #[cfg(not(target_arch = "wasm32"))]
     saved_pipelines: Option<std::sync::Arc<crate::SavedPipelines>>,
-    pub transient_display: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub transient_display: std::sync::Arc<crate::residency::Tier>,
     pub transient_memory: Option<layer_core::MemoryOwner>,
     device: wgpu::Device,
     working_space: layer_core::color::RgbSpace,
     depth: layer_core::color::SampleDepth,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
-    pub memory: Option<layer_core::MemoryOwner>,
     pub sample_memory: Option<layer_core::MemoryOwner>,
     pub resource_limit: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
@@ -73,7 +84,7 @@ pub(crate) struct PipelineDevice {
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
     pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
     pub sample_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::snapshot::sample::SamplePipeline>>>,
-    pub analysis_memory: std::sync::Arc<std::sync::Mutex<u64>>,
+    pub analysis_memory: std::sync::Arc<crate::residency::Tier>,
     pub effect_resources: std::sync::Arc<std::sync::Mutex<super::effects::resources::Cache>>,
     pub native_publication: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<super::raster::native_edit::Recipes>>>>,
     pub native_transfers: std::sync::Arc<std::sync::Mutex<super::native_tiles::transfer::Tables>>,
@@ -81,13 +92,14 @@ pub(crate) struct PipelineDevice {
 impl From<wgpu::Device> for PipelineDevice {
     fn from(device: wgpu::Device) -> Self {
         Self {
+            #[cfg(not(target_arch="wasm32"))]
+            poll: Default::default(),
             compilation: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             saved_pipelines: None,
             device,
             transient_display: Default::default(),
             transient_memory: None,
-            memory: None,
             sample_memory: None,
             resource_limit: Default::default(),
             tone_pipelines: Default::default(),
@@ -117,6 +129,8 @@ impl std::ops::Deref for PipelineDevice {
 }
 impl PipelineDevice {
     pub fn with_device_recipes(mut self, recipes: &DeviceRecipes) -> Self {
+        #[cfg(not(target_arch="wasm32"))]
+        {self.poll=recipes.poll.clone();}
         self.compilation = recipes.compilation.clone();
         #[cfg(not(target_arch = "wasm32"))]
         { self.saved_pipelines = recipes.saved_pipelines.clone(); }
@@ -143,18 +157,84 @@ impl PipelineDevice {
     }
     pub fn for_recipe(&self) -> Self {
         Self { working_space: self.working_space, depth: self.depth, transient_display: self.transient_display.clone(), transient_memory: self.transient_memory.clone(),
+            #[cfg(not(target_arch="wasm32"))]
+            poll: self.poll.recipe(),
             #[cfg(not(target_arch = "wasm32"))]
             saved_pipelines: self.saved_pipelines.clone(),
             ..Self::from(self.device.clone()) }
     }
     pub(crate) fn for_compilation(&self) -> Self {
-        Self { compilation: Default::default(), ..self.clone() }
+        Self { compilation: Default::default(),
+            #[cfg(not(target_arch="wasm32"))]
+            poll:self.poll.recipe(),
+            ..self.clone() }
     }
+    pub(crate) fn for_resource(&self)->Self {
+        Self { compilation:Default::default(),..self.clone() }
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn poll_binding(&self)->crate::device_poll::Binding {self.poll.owned()}
+
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn bind_queue(&self,queue:&wgpu::Queue) {self.poll.bind_queue(queue);}
+    #[cfg(all(test,not(target_arch="wasm32")))]
+    pub(crate) fn initialize_poll_owner(&self)->Result<(),crate::GpuRasterError> {self.poll.handle(&self.device);Ok(())}
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn retirement_handle(&self)->crate::device_poll::RetirementHandle {self.poll.handle(&self.device)}
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn retirement<T:Send+'static>(&self,value:T)->crate::device_poll::Retirement<T> {self.retirement_handle().retirement(value)}
+    pub(crate) fn request_poll(&self) {
+        #[cfg(not(target_arch="wasm32"))]
+        self.poll.request(&self.device);
+    }
+    pub(crate) fn on_queue_done(&self,queue:&wgpu::Queue,callback:impl FnOnce()+Send+'static) {
+        let callback=self.callback(move|()|callback());
+        queue.on_submitted_work_done(move||callback(()));self.request_poll();
+    }
+    pub(crate) fn on_encoder_done(&self,encoder:&wgpu::CommandEncoder,callback:impl FnOnce()+Send+'static) {
+        let callback=self.callback(move|()|callback());encoder.on_submitted_work_done(move||callback(()));
+    }
+    pub(crate) fn callback<A:Send+'static>(&self,callback:impl FnOnce(A)+Send+'static)->impl FnOnce(A)+Send+'static {
+        #[cfg(not(target_arch="wasm32"))]
+        {self.poll.callback(&self.device,callback)}
+        #[cfg(target_arch="wasm32")]
+        {move|argument| {
+            callback(argument);
+            let wakes=COMPLETION.with_borrow_mut(|(count,wakes)| {*count+=1;std::mem::take(wakes)});
+            for wake in wakes {wake();}
+        }}
+    }
+    pub(crate) fn on_next_completion(&self,wake:&std::sync::Arc<dyn Fn()+Send+Sync>)->u64 {
+        #[cfg(not(target_arch="wasm32"))]
+        {self.retirement_handle().on_next_completion(wake)}
+        #[cfg(target_arch="wasm32")]
+        {COMPLETION.with_borrow_mut(|(count,wakes)| {
+            if !wakes.iter().any(|old|std::sync::Arc::ptr_eq(old,wake)) {wakes.push(wake.clone());}
+            *count
+        })}
+    }
+    pub(crate) fn submit(&self,queue:&wgpu::Queue,commands:impl IntoIterator<Item=wgpu::CommandBuffer>)->Option<wgpu::SubmissionIndex> {
+        self.queue_submit(||queue.submit(commands))
+    }
+    pub(crate) fn submit_for_present(&self,queue:&wgpu::Queue,commands:impl IntoIterator<Item=wgpu::CommandBuffer>)->Option<wgpu::SubmissionIndex> {
+        self.queue_submit(||queue.submit_for_present(commands))
+    }
+    fn queue_submit(&self,work:impl FnOnce()->wgpu::SubmissionIndex)->Option<wgpu::SubmissionIndex> {
+        #[cfg(not(target_arch="wasm32"))]
+        self.poll.handle(&self.device);
+        #[cfg(not(target_arch="wasm32"))]
+        let submitted=self.poll.submit(work);
+        #[cfg(target_arch="wasm32")]
+        let submitted=Some(work());
+        self.request_poll();submitted
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn wait_queue(&self)->Result<(),String> {self.retirement_handle().flush()}
     pub(crate) fn compilation(&self) -> Result<crate::compile::Scope, crate::GpuRasterError> {
         let mut shared = self.compilation.lock().unwrap();
         if let Some(scope)=shared.as_ref().and_then(|coordinator|coordinator.scope()) {return Ok(scope);}
         let coordinator=crate::compile::Coordinator::new(self)?;
-        let scope=coordinator.scope().expect("New compilation coordinator");
+        let scope=coordinator.scope().ok_or_else(||crate::GpuRasterError::WaitFailed("GPU device service retired".into()))?;
         *shared=Some(coordinator);
         Ok(scope)
     }

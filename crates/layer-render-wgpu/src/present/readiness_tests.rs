@@ -12,7 +12,8 @@ fn first_ready_frame_requires_only_its_viewport_variant() {
     let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let all = layer_core::SceneScope::All;
     crate::test_support::submit_settled(&mut r, crate::test_support::packet(document.scene().with_scope(&all), extent));
-    assert_eq!(r.display_placement()[13], 0.);
+    assert!(r.presentation_page().is_some(), "the first ready frame must have a committed keyed projection");
+    assert!(r.selected_display_cache().unwrap().presentable_pages() > 0);
     let batch = r.compilation.batch();
     let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8Unorm, SdrSurfaceColor::Srgb).unwrap();
     assert!(presenter.recipes.paper.get().is_none(), "an unlit canvas needs no lit viewport recipes");
@@ -105,7 +106,7 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
     assert!(paper.iter().all(crate::Deferred::ready));
     assert!(presenter.pipeline[1..].iter().all(crate::Deferred::ready));
     assert!(renderer.poll_startup().unwrap().complete);
-    assert!(!renderer.has_pending_work());
+    assert!(renderer.frame_demand() != layer_render::FrameDemand::Work);
     assert!(!presenter.needs_present(&renderer, crate::test_support::view([128; 2]), [0.; 4]));
     drop(presenter);
     drop(renderer);

@@ -9,20 +9,7 @@ fn stored_source_smudge_stroke_promotes_neighbors_once_for_the_slot_lifetime() {
         let extent = source.extent;
         crate::test_support::submit_published(&mut r, crate::test_support::packet(doc.scene(), extent));
         crate::test_support::complete(&r);
-        let (decoded_grant, upload_grant, mip_grant) = {
-            let mut sources = r.source_tiles.borrow_mut();
-            let [decoded, upload] = sources.admitted_bytes();
-            let grants = (decoded + sources.non_slot_bytes(), upload, sources.mip_budget());
-            sources.require_images(std::iter::empty());
-            let overhead = sources.non_slot_bytes();
-            sources.admit_limits(overhead, upload, grants.2);
-            grants
-        };
-        let encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.source_tiles.borrow_mut().trim_unused(&encoder);
-        encoder.submit(&r.queue);
-        crate::test_support::complete(&r);
-        r.source_tiles.borrow_mut().admit_limits(decoded_grant, upload_grant, mip_grant);
+        crate::test_support::evict_sources(&mut r);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let originals: Vec<_> = (0..5).map(|x| stored_code_tile(&mut r, &source, x, &mut encoder)).collect();
         r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
@@ -60,7 +47,7 @@ fn stored_source_smudge_stroke_promotes_neighbors_once_for_the_slot_lifetime() {
                     assert!(slot.key.as_ref().unwrap().matches(&Key::Image(Arc::downgrade(&source), [x as u32, 0])));
                     assert!(Arc::ptr_eq(lease, &sources.lease(&slot.view).unwrap()));
                     let format = if x <= 2 { wgpu::TextureFormat::Rgba32Float } else { stored_code_format(depth) };
-                    assert_eq!(slot.texture.format(), format, "{depth:?}, dab {step}, page {x}");
+                    assert_eq!(slot.layer.format(), format, "{depth:?}, dab {step}, page {x}");
                     if x <= 2 {
                         if step == 0 {
                             assert_ne!(slot.view, originals[x].view);
@@ -74,7 +61,7 @@ fn stored_source_smudge_stroke_promotes_neighbors_once_for_the_slot_lifetime() {
                 }
             }
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            r.prepare_raw_neighborhood(target, [1, 0], [Some([-1, 0]), Some([0, 0]), Some([1, 0])], false, &mut encoder).unwrap();
+            r.read_raw_neighborhood(target, [1, 0], [Some([-1, 0]), Some([0, 0]), Some([1, 0])], &mut encoder).unwrap();
             assert_eq!(encoder.pass_count(), 0, "the real smudge dab already prepared its immutable neighbors");
             r.uploads.finish(&encoder); encoder.submit(&r.queue);
         }
@@ -82,6 +69,8 @@ fn stored_source_smudge_stroke_promotes_neighbors_once_for_the_slot_lifetime() {
         let layer = r.paint_layers.iter().find(|layer| layer.id == target).unwrap();
         assert!(layer.pages.iter().all(|page| page.coordinate[1] == 0 && page.coordinate[0] <= 2));
         let painted = layer.pages.iter().find(|page| page.coordinate == [1, 0]).unwrap();
-        assert!(crate::test_support::float_pixels(&r, &painted.active().texture).iter().any(|pixel| pixel[3] > 0.));
+        let expected=r.current_raster_version(target,layer_core::raster::RasterPlane::Color,painted.coordinate).unwrap();
+        let read=r.read_layer_color(target,painted.coordinate,&expected,None).unwrap();
+        assert!(crate::test_support::float_pixels(&r, &read.value().texture).iter().any(|pixel| pixel[3] > 0.));
     }
 }

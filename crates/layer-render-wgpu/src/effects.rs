@@ -11,7 +11,6 @@ pub(crate) mod resources;
 /// Only immutable GPU handles are shared with the compiler thread.
 pub(super) trait Gpu {
     fn device(&self) -> &PipelineDevice;
-    fn queue(&self) -> &wgpu::Queue;
     fn analysis_resource(&self, _occurrence: OccurrenceHandle) -> Option<Arc<resources::Resource>> { None }
     fn effect_time(&self, scene: SceneView<'_>, occurrence: OccurrenceHandle, elapsed: f32) -> f32 {
         effective_phase(scene,occurrence,elapsed)
@@ -36,18 +35,13 @@ impl Gpu for WgpuRasterizer {
             .map_or_else(|| effect.time_seconds(elapsed), |(_, clock)| clock.clone().advance(effect, elapsed))
     }
     fn device(&self) -> &PipelineDevice { &self.device }
-    fn queue(&self) -> &wgpu::Queue { &self.queue }
 }
 pub(super) struct Context {
     pub device: PipelineDevice,
-    pub queue: wgpu::Queue,
 }
 impl Gpu for Context {
     fn device(&self) -> &PipelineDevice {
         &self.device
-    }
-    fn queue(&self) -> &wgpu::Queue {
-        &self.queue
     }
 }
 
@@ -149,6 +143,7 @@ pub(super) struct PreparedEffect {
     pub original_independent: bool,
     pub mask_slots: usize,
     pub _resource: Arc<resources::Resource>,
+    pub _parameters: Arc<wgpu::Buffer>,
 }
 #[derive(Clone)]
 pub(super) enum Pipeline {
@@ -179,13 +174,14 @@ impl CachedEffect {
 struct Instance {
     effects: Vec<CachedEffect>,
     properties: Vec<[f32; 4]>,
-    buffer: wgpu::Buffer,
+    buffer: Arc<wgpu::Buffer>,
     binding: wgpu::BindGroup,
     compute_binding: wgpu::BindGroup,
     resource: Arc<resources::Resource>,
     pipelines: HashMap<Stage, (Pipeline, bool)>,
     lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
+    _charge: crate::residency::Charge,
 }
 type PipelineRecipe = (Vec<Arc<EffectProgram>>, Stage, Pipeline, bool);
 pub(super) struct Recipes {
@@ -206,6 +202,7 @@ pub(super) struct Effects {
     // Reuse the lookup key; ordinary painting/animation does not repack inputs.
     ids: (Vec<OccurrenceHandle>, u32),
     preparation: preparation::Preparation,
+    tier: Arc<crate::residency::Tier>,
 }
 impl std::ops::Deref for Effects {
     type Target = Recipes;
@@ -239,14 +236,17 @@ impl Effects {
             .filter_map(|(pipeline,_)|match pipeline {Pipeline::Render(p)=>Some(p),_=>None}), priority)
             & compiler.require(self.instances.values().flat_map(|instance| instance.pipelines.values())
                 .filter_map(|(pipeline,_)|match pipeline {Pipeline::Compute(p)=>Some(p),_=>None}), priority)
-            & compiler.require(self.preparation.pending.iter().filter_map(|work| match work {
+            & compiler.require(self.preparation.pending.iter().filter(|work|work.needed()).filter_map(|work| match work {
                 preparation::Work::Dispatch(dispatch) => Some(&dispatch.pipeline),
-                preparation::Work::Copy { .. } => None,
+                preparation::Work::Copy { .. } | preparation::Work::Upload { .. } => None,
             }), priority)
     }
     pub(super) fn discard_instances(&mut self) {
         self.instances.clear();
-        self.preparation.pending.clear();
+        self.discard_unreferenced();
+    }
+    pub(super) fn discard_unreferenced(&mut self) {
+        self.preparation.discard_unreferenced();
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn compile(&self) {
@@ -306,8 +306,10 @@ impl Effects {
             instances: HashMap::new(),
             ids: (Vec::new(), 0),
             preparation: self.preparation.fork(),
+            tier: Default::default(),
         }
     }
+    pub(crate) fn charged(mut self, tier: &Arc<crate::residency::Tier>) -> Self { self.tier = tier.clone(); self }
     pub fn merge_validated(&mut self, other: Self) {
         for (programs, stage, pipeline, original_independent) in other.pipelines {
             if !self
@@ -320,19 +322,23 @@ impl Effects {
         }
         self.preparation.merge(other.preparation);
     }
-    pub fn encode_preparation(&mut self, encoder: &mut crate::submission::CommandEncoder) {
-        self.preparation.encode(encoder);
+    pub fn encode_preparation<'a>(&mut self, uploads: &mut crate::Uploads, encoder: &mut crate::submission::CommandEncoder,
+        parameters: impl IntoIterator<Item = &'a Arc<wgpu::Buffer>>,
+    ) -> Result<(), GpuRasterError> {
+        self.preparation.encode(uploads, encoder, parameters)
     }
-    pub(super) fn preparation_ready(&self)->bool {
-        self.preparation.pending.iter().all(|work|match work {
-            preparation::Work::Dispatch(dispatch)=>dispatch.pipeline.ready(),
-            preparation::Work::Copy {..}=>true,
-        })
+    pub(super) fn preparation_ready<'a>(&self, parameters: impl IntoIterator<Item = &'a Arc<wgpu::Buffer>>)->bool {
+        self.preparation.ready(parameters)
     }
     #[cfg(test)]
     pub fn preparation_count(&self) -> u64 {
         self.preparation.executions
     }
+    #[cfg(test)]
+    pub(crate) fn parameter_buffers(&self)->Vec<&wgpu::Buffer> {
+        self.instances.values().map(|instance| -> &wgpu::Buffer { &instance.buffer }).collect()
+    }
+    #[cfg(test)]
     pub fn storage_bytes(&self) -> u64 {
         self.instances.values().map(|i| i.buffer.size()).sum()
     }
@@ -340,7 +346,7 @@ impl Effects {
         if let Some(cache) = &r.validated_effects { return cache.fork(); }
         let recipes = r.recipes.effects.get_or_init(|| Arc::new(Recipes::new(&r.device, uniforms))).clone();
         Self { preparation: preparation::Preparation::from_recipes(recipes.preparation.clone()), recipes,
-            pipelines: Vec::new(), instances: HashMap::new(), ids: (Vec::new(), 0) }
+            pipelines: Vec::new(), instances: HashMap::new(), ids: (Vec::new(), 0), tier: Default::default() }
     }
 }
 impl Recipes {
@@ -392,6 +398,7 @@ impl Effects {
         self.instances.retain(|(ids, _), instance| ids.iter().zip(&instance.effects).all(|(id, old)|
             scene.position(*id).is_some() && scene.includes(*id) && scene.effect(*id).is_some_and(|effect|
                 old.program.as_ref() == effect.program && old.lut3d().map(|resource|resource.digest()) == effect.lut3d().map(|resource|resource.digest()))));
+        self.discard_unreferenced();
     }
     #[expect(clippy::too_many_arguments, reason = "Effect evaluation keeps scene, occurrence, phase, inputs and output space explicit")]
     pub fn prepare(
@@ -412,7 +419,7 @@ impl Effects {
         let analysis = if let Some(layer) = layers.first().filter(|&&h| scene.effect(h).unwrap().program.analysis().is_some()) {
             Some(match r.analysis_resource(*layer) {
                 Some(resource) => resource,
-                None => r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), None)?,
+                None => r.device().effect_resources.lock().unwrap().get(r.device(), None)?,
             })
         } else { None };
         if let Some(old) = self.instances.get(&self.ids)
@@ -436,6 +443,7 @@ impl Effects {
                 original_independent: *original_independent,
                 mask_slots: old.effects.len().min(MASK_SLOTS),
                 _resource: old.resource.clone(),
+                _parameters: old.buffer.clone(),
             });
         }
         let ids = self.ids.clone();
@@ -531,6 +539,7 @@ impl Effects {
             .is_some_and(|old| old.buffer.size() == bytes.len() as u64 && old.offsets == offsets
                 && old.properties == properties && old.effects.iter().zip(&effects)
                     .all(|(old, effect)| old.program == effect.program && old.values == effect.values && old.geometry == effect.geometry));
+        let unprepared = !reusable && self.instances.get(&ids).is_some_and(|old| self.preparation.pending_for(&old.buffer));
         let mut lookups = Vec::new();
         let mut dispatches = Vec::new();
         let mut copies = Vec::new();
@@ -574,7 +583,7 @@ impl Effects {
                     .instances
                     .get(&ids)
                     .and_then(|old| old.lookups.get(lookups.len()));
-                if old.is_none_or(|old| old.key != key || old.values != values) {
+                if unprepared || old.is_none_or(|old| old.key != key || old.values != values) {
                     dispatches.push((
                         self.preparation.pipeline(r.device(), &key)?,
                         definition.workgroups,
@@ -588,12 +597,12 @@ impl Effects {
         let buffer = if reusable {
             self.instances[&ids].buffer.clone()
         } else {
-            r.device().create_buffer(&wgpu::BufferDescriptor {
+            Arc::new(r.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("effect parameter values"),
                 size: bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
-            })
+            }))
         };
         for (i, (&base, effect)) in offsets.iter().zip(&effects).enumerate() {
             if reusable
@@ -606,15 +615,16 @@ impl Effects {
             }
             let directory = base as usize + 1 + data[base as usize + 1][0] as usize;
             let end = directory + effect.program.lookups.len();
-            r.queue().write_buffer(
-                &buffer,
-                u64::from(base - 4) * 16,
-                &bytes[(base as usize - 4) * 16..end * 16],
-            );
+            let offset = u64::from(base - 4) * 16;
+            let bytes = &bytes[(base as usize - 4) * 16..end * 16];
+            if !matches!(self.preparation.pending.last(), Some(preparation::Work::Upload {buffer:previous,offset:at,bytes:values})
+                if previous.ptr_eq(&Arc::downgrade(&buffer)) && *at==offset && values.as_slice()==bytes) {
+                self.preparation.pending.push(preparation::Work::Upload {buffer:Arc::downgrade(&buffer),offset,bytes:bytes.to_vec()});
+            }
         }
         let resource = match analysis {
             Some(resource) => resource,
-            None => r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), effects.first().and_then(|e| e.lut3d()).map(Arc::as_ref))?,
+            None => r.device().effect_resources.lock().unwrap().get(r.device(), effects.first().and_then(|e| e.lut3d()).map(Arc::as_ref))?,
         };
         let binding = if reusable && Arc::ptr_eq(&resource, &self.instances[&ids].resource) {
             self.instances[&ids].binding.clone()
@@ -631,13 +641,14 @@ impl Effects {
             ])
         };
         for (source, offset, size) in copies {
-            self.preparation.pending.push(preparation::Work::Copy { source, destination: buffer.clone(), offset, size });
+            self.preparation.pending.push(preparation::Work::Copy { source, destination: Arc::downgrade(&buffer), offset, size });
         }
         for (pipeline, groups) in dispatches {
             self.preparation.pending.push(preparation::Work::Dispatch(preparation::Dispatch {
                 pipeline,
                 binding: compute_binding.clone(),
                 groups,
+                parameters: Arc::downgrade(&buffer),
             }));
         }
         let mut pipelines = HashMap::new();
@@ -658,7 +669,9 @@ impl Effects {
             original_independent,
             mask_slots: effects.len().min(MASK_SLOTS),
             _resource: resource.clone(),
+            _parameters: buffer.clone(),
         };
+        let buffer_bytes = buffer.size();
         self.instances.insert(
             ids,
             Instance {
@@ -671,8 +684,10 @@ impl Effects {
                 pipelines,
                 lookups,
                 offsets,
+                _charge: self.tier.charge(buffer_bytes),
             },
         );
+        self.discard_unreferenced();
         Ok(prepared)
     }
 }

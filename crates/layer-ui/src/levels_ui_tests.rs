@@ -201,7 +201,7 @@ fn levels_auto_success_noop_and_refusal_restart_visible_histogram_without_anothe
         levels_reply(&mut s,result);assert!(s.auto_levels.is_none());
         if outcome!=0 {assert_eq!(s.engine.document().artwork,before);}
         assert!(s.tonal_histogram.demand,"completion must restore visible consumer {outcome}");
-        assert!(s.wants_continuous_frames());s.frame(100_000_000,100_000_000).unwrap();
+        assert!(s.frame_demand() != layer_render::FrameDemand::Wait);s.frame(100_000_000,100_000_000).unwrap();
         assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(_))));
     }
 }

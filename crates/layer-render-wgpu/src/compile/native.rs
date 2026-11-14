@@ -10,6 +10,7 @@ pub(super) struct Shared {
 pub(crate) struct Coordinator {
     pub(super) shared: Arc<Shared>,
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    poll: crate::device_poll::Binding,
 }
 #[derive(Clone)]
 pub struct Activity(pub(super) Weak<Lease>);
@@ -20,12 +21,28 @@ pub(crate) fn retire(workers: impl IntoIterator<Item = std::thread::JoinHandle<(
     retired.retain(|worker| !worker.is_finished());
     retired.extend(workers);
 }
+fn live_coordinators() -> Vec<Arc<Coordinator>> {
+    LIVE.lock().unwrap().iter().filter_map(Weak::upgrade).collect()
+}
+pub(crate) fn retire_device_services(poll: crate::device_poll::Binding, root: impl Send + 'static) -> std::io::Result<()> {
+    let worker = std::thread::Builder::new().name("capy-retired-device".into()).spawn(move || {
+        poll.retire_lost(|| {
+            let live: Vec<_> = live_coordinators().into_iter()
+                .filter(|coordinator| coordinator.poll.same(&poll)).collect();
+            for coordinator in &live { coordinator.stop(true); }
+            for coordinator in live { coordinator.join(); }
+        });
+        drop(root);
+    })?;
+    retire([worker]);
+    Ok(())
+}
 pub fn finish_shader_compiler_shutdown() {
     static FINISHING: Mutex<()> = Mutex::new(());
     let _finishing = FINISHING.lock().unwrap();
     loop {
         let mut joined = false;
-        for coordinator in live() {
+        for coordinator in live_coordinators() {
             if coordinator.stop(false) {
                 joined |= coordinator.join();
             }
@@ -40,33 +57,37 @@ pub fn finish_shader_compiler_shutdown() {
     }
 }
 pub fn stop_shader_compilers() {
-    for coordinator in live() {
+    for coordinator in live_coordinators() {
         coordinator.stop(false);
     }
-}
-fn live() -> Vec<Arc<Coordinator>> {
-    LIVE.lock().unwrap().iter().filter_map(Weak::upgrade).collect()
 }
 pub(super) fn workers(parallelism: usize) -> usize {
     (parallelism * 3).div_ceil(8).clamp(1, 6)
 }
 impl Coordinator {
     pub fn new(device: &crate::PipelineDevice) -> Result<Arc<Self>, GpuRasterError> {
-        Self::build(
+        let poll = device.poll_binding();
+        poll.admit(|| Self::build(
             std::thread::available_parallelism().map_or(1, |n| workers(n.get())),
             device.saved_pipelines().cloned(),
-        )
+            poll.owned(),
+        ))
     }
     #[cfg(test)]
     pub(super) fn with_workers(
         workers: usize,
         saved: Option<Arc<crate::SavedPipelines>>,
     ) -> Result<Arc<Self>, GpuRasterError> {
-        Self::build(workers, saved)
+        Self::build(workers, saved, crate::device_poll::Binding::default())
+    }
+    #[cfg(test)]
+    pub(super) fn with_binding(workers: usize, poll: &crate::device_poll::Binding) -> Result<Arc<Self>, GpuRasterError> {
+        poll.admit(|| Self::build(workers, None, poll.owned()))
     }
     fn build(
         workers: usize,
         saved: Option<Arc<crate::SavedPipelines>>,
+        poll: crate::device_poll::Binding,
     ) -> Result<Arc<Self>, GpuRasterError> {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue::new(workers)),
@@ -76,6 +97,7 @@ impl Coordinator {
         let coordinator = Self {
             shared,
             threads: Mutex::new(Vec::with_capacity(workers + 1)),
+            poll,
         };
         for index in 0..=workers {
             let shared = coordinator.shared.clone();
@@ -92,21 +114,28 @@ impl Coordinator {
         live.push(Arc::downgrade(&coordinator));
         Ok(coordinator)
     }
-    fn stop(&self, force: bool) -> bool {
+    pub(super) fn stop(&self, force: bool) -> bool {
         let mut queue = self.shared.queue.lock().unwrap();
         if !force && (!queue.owners.is_empty() || queue.sequence == 0) {
             return false;
         }
         queue.stopped = true;
         queue.entries.clear();
+        let wakes=if force {
+            queue.owners.iter_mut().filter_map(|(&id,owner)| {
+                owner.error.get_or_insert_with(||"GPU device service retired".into());
+                owner.wake.clone().map(|wake|(id,wake))
+            }).collect::<Vec<_>>()
+        }else {Vec::new()};
         drop(queue);
+        wake_owners(wakes,|owner,error|self.with_queue(|queue|{queue.fail(owner,error);}));
         self.notify();
         true
     }
-    fn join(&self) -> bool {
-        let threads = std::mem::take(&mut *self.threads.lock().unwrap());
+    pub(super) fn join(&self) -> bool {
+        let mut threads = self.threads.lock().unwrap();
         let joined = !threads.is_empty();
-        for thread in threads {
+        for thread in threads.drain(..) {
             let _ = thread.join();
         }
         joined
@@ -188,15 +217,10 @@ fn schedule_save(shared: &Shared, queue: &mut Queue<Work>) {
                 class: Class::Background,
             },
             false,
-            || {
-                (
-                    Box::new(move || {
-                        save.run();
-                        Ok(())
-                    }),
-                    None,
-                )
-            },
+            || Box::new(move || {
+                save.run();
+                Ok(())
+            }),
         );
     }
 }
@@ -230,15 +254,7 @@ fn compile(shared: Arc<Shared>) {
             wakes
         };
         shared.wake.notify_all();
-        for (owner, wake) in wakes {
-            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wake()))
-                && let Some(owner) = shared.queue.lock().unwrap().owners.get_mut(&owner)
-            {
-                owner
-                    .error
-                    .get_or_insert_with(|| crate::panic_message(&*payload));
-            }
-        }
+        wake_owners(wakes,|owner,error|{shared.queue.lock().unwrap().fail(owner,error);});
     }
 }
 impl Drop for Coordinator {

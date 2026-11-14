@@ -117,6 +117,7 @@ struct Slot {
 }
 
 pub struct GpuFrameTimer {
+    device:crate::PipelineDevice,
     slots: Vec<Slot>,
     active: Option<(usize, u64, u32)>,
     query_count: u32,
@@ -175,6 +176,7 @@ impl GpuFrameTimer {
             Vec::new()
         };
         Self {
+            device:device.for_resource(),
             slots,
             active: None,
             query_count,
@@ -195,7 +197,7 @@ impl GpuFrameTimer {
             return false;
         }
         let (index, _, _) = self.active.unwrap();
-        crate::submission::CacheWrite::shared(self.slots[index].busy.clone()).track(encoder);
+        crate::submission::CacheWrite::shared(self.slots[index].busy.clone()).track_raw(&self.device,encoder);
         self.marker.as_ref().unwrap().write(encoder, &self.slots[index].query, 0);
         true
     }
@@ -248,9 +250,7 @@ impl GpuFrameTimer {
         };
         let slot = &mut self.slots[index];
         let done = slot.gpu_done.clone();
-        queue.on_submitted_work_done(move || {
-            done.store(true, Ordering::Release);
-        });
+        self.device.on_queue_done(queue,move || done.store(true, Ordering::Release));
         slot.awaiting_resolve = Some((frame, end_index));
     }
     /// Optional host queue spans also include gaps between drawing/presentation
@@ -262,7 +262,7 @@ impl GpuFrameTimer {
         if !self.begin_encoded(&mut encoder, frame) {
             return false;
         }
-        queue.submit_for_present([encoder.finish()]);
+        if self.device.submit_for_present(queue,[encoder.finish()]).is_none() {self.active=None;return false;}
         true
     }
     pub fn end(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
@@ -273,7 +273,7 @@ impl GpuFrameTimer {
             label: Some("frame GPU end"),
         });
         self.end_encoded(&mut encoder);
-        queue.submit_for_present([encoder.finish()]);
+        if self.device.submit_for_present(queue,[encoder.finish()]).is_none() {self.active=None;return;}
         self.submitted(queue);
     }
     /// Resolve only after the marker submission has completed. On Metal,
@@ -282,7 +282,7 @@ impl GpuFrameTimer {
     pub fn poll(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if !self.slots.iter().any(|slot|slot.awaiting_resolve.is_some() && slot.gpu_done.load(Ordering::Acquire)) {return;}
         let mut encoder=device.create_command_encoder(&wgpu::CommandEncoderDescriptor {label:Some("completed frame timestamps")});
-        self.resolve_completed(&mut encoder);queue.submit_for_present([encoder.finish()]);
+        self.resolve_completed(&mut encoder);self.device.submit_for_present(queue,[encoder.finish()]);
     }
     pub(crate) fn resolve_completed(&mut self,encoder:&mut wgpu::CommandEncoder) {
         for slot in &mut self.slots {
@@ -291,9 +291,9 @@ impl GpuFrameTimer {
             slot.gpu_done.store(false,Ordering::Release);
             encoder.resolve_query_set(&slot.query,0..end_index+1,&slot.resolve,0);
             encoder.copy_buffer_to_buffer(&slot.resolve,0,&slot.read,0,u64::from(end_index+1)*8);
-            crate::submission::CacheWrite::shared(slot.busy.clone()).track(encoder);
+            crate::submission::CacheWrite::shared(slot.busy.clone()).track_raw(&self.device,encoder);
             let busy=slot.busy.clone();let ready=self.ready.clone();let invalid=self.invalid.clone();let omitted=self.omitted.clone();let period=self.period;
-            crate::raster::map_then(Some(encoder),&slot.read,u64::from(end_index+1)*8,move |bytes| {
+            crate::raster::map_then(&self.device,Some(encoder),&slot.read,u64::from(end_index+1)*8,move |bytes| {
                 let start=u64::from_le_bytes(bytes[..8].try_into().unwrap());let offset=end_index as usize*8;
                 let end=u64::from_le_bytes(bytes[offset..offset+8].try_into().unwrap());let elapsed=end.saturating_sub(start) as f64*period;
                 let mut sample=GpuFrameSample {frame,status:3,..Default::default()};
@@ -302,6 +302,7 @@ impl GpuFrameTimer {
                 }
                 Ok(sample)
             },move |result| {
+                if matches!(result,Err(crate::GpuRasterError::WaitFailed(_))) {busy.store(false,Ordering::Release);return;}
                 let sample=result.unwrap_or(GpuFrameSample {frame,status:2,..Default::default()});
                 if sample.status!=1 {invalid.fetch_add(1,Ordering::Relaxed);}
                 if let Ok(mut ready)=ready.try_lock() {
@@ -310,6 +311,10 @@ impl GpuFrameTimer {
                 busy.store(false,Ordering::Release);
             });
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn completed(&self)->usize {
+        self.slots.iter().filter(|slot|slot.awaiting_resolve.is_some() && slot.gpu_done.load(Ordering::Acquire)).count()
     }
     pub fn take_into(&self, output: &mut [GpuFrameSample]) -> usize {
         let Ok(mut ready) = self.ready.try_lock() else {
@@ -370,7 +375,9 @@ mod tests {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        let device=crate::PipelineDevice::from(device);
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
         let owner=device.compilation().unwrap();
         owner.idle(false,false);
         let mut timer = GpuFrameTimer::with_device(&device, &queue);
@@ -403,12 +410,9 @@ mod tests {
             if encoded { timer.end_encoded(&mut encoder); }
             queue.submit_for_present([encoder.finish()]);
             timer.submitted(&queue);
-            for _ in 0..2 {
-                device.poll(wgpu::PollType::Wait {
-                    submission_index: None, timeout: Some(std::time::Duration::from_secs(5)),
-                }).unwrap();
-                timer.poll(&device, &queue);
-            }
+            device.wait_queue().unwrap();
+            timer.poll(&device, &queue);
+            device.wait_queue().unwrap();
             let mut samples = [GpuFrameSample::default(); 2];
             assert_eq!(timer.take_into(&mut samples), 1);
             let sample = samples[0];
@@ -434,7 +438,9 @@ mod tests {
             ..Default::default()
         }))
         .unwrap();
-        let device=crate::PipelineDevice::from(device);
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
         let mut timer = GpuFrameTimer::with_device(&device, &queue);
         pollster::block_on(timer.prepare()).unwrap();
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -444,15 +450,9 @@ mod tests {
         timer.end_encoded(&mut encoder);
         queue.submit_for_present([encoder.finish()]);
         timer.submitted(&queue);
-        for _ in 0..2 {
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(std::time::Duration::from_secs(5)),
-                })
-                .unwrap();
-            timer.poll(&device, &queue);
-        }
+        device.wait_queue().unwrap();
+        timer.poll(&device, &queue);
+        device.wait_queue().unwrap();
         let mut samples = [GpuFrameSample::default(); 1];
         assert_eq!(timer.take_into(&mut samples), 1);
         assert_eq!(samples[0].frame, 42);
@@ -480,7 +480,9 @@ mod tests {
             ..Default::default()
         }))
         .unwrap();
-        let device=crate::PipelineDevice::from(device);
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
         let mut timer = GpuFrameTimer::with_device(&device, &queue);
         pollster::block_on(timer.prepare()).unwrap();
         let mut expected = Vec::new();
@@ -506,24 +508,14 @@ mod tests {
                 }
                 assert!(timer.stats().pending <= 3);
             }
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(std::time::Duration::from_secs(5)),
-                })
-                .unwrap();
+            device.wait_queue().unwrap();
             assert_eq!(
                 expected.len() - before,
                 3,
                 "A fourth pending observation must be skipped"
             );
             timer.poll(&device, &queue);
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(std::time::Duration::from_secs(5)),
-                })
-                .unwrap();
+            device.wait_queue().unwrap();
             let count = timer.take_into(&mut samples);
             for sample in &samples[..count] {
                 assert_eq!(sample.status, 1, "Invalid hardware timestamps: {sample:?}");
@@ -559,8 +551,10 @@ mod tests {
         let instance=crate::WgpuRasterizer::headless_instance();
         let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
         let (device,queue)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {required_features:wgpu::Features::TIMESTAMP_QUERY,..Default::default()})).unwrap();
-        let device=crate::PipelineDevice::from(device);
-        let wait=||device.poll(wgpu::PollType::Wait {submission_index:None,timeout:Some(std::time::Duration::from_secs(5))}).unwrap();
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
+        let wait=||device.wait_queue().unwrap();
         let mut timer=GpuFrameTimer::with_device(&device,&queue);pollster::block_on(timer.prepare()).unwrap();let mut samples=[GpuFrameSample::default();3];
         let mut held=device.create_command_encoder(&Default::default());
         assert!(timer.begin_encoded(&mut held,101));timer.end_encoded(&mut held);let held=held.finish();
@@ -581,6 +575,28 @@ mod tests {
         queue.submit([owner.finish()]);wait();
         assert_eq!(timer.take_into(&mut samples),1);assert_eq!(samples[0].frame,103);assert_eq!(samples[0].status,1);
         assert!(samples[0].end_tick>samples[0].start_tick);assert_eq!(timer.stats().pending,0);
+    }
+    #[test]
+    fn an_abandoned_completion_ticket_neither_resolves_nor_produces_a_sample() {
+        let instance=crate::WgpuRasterizer::headless_instance();
+        let adapter=pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device,queue)=pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {required_features:wgpu::Features::TIMESTAMP_QUERY,..Default::default()})).unwrap();
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        device.initialize_poll_owner().unwrap();
+        let wait=||device.poll(wgpu::PollType::Wait {submission_index:None,timeout:Some(std::time::Duration::from_secs(5))}).unwrap();
+        let mut timer=GpuFrameTimer::with_device(&device,&queue);pollster::block_on(timer.prepare()).unwrap();let mut samples=[GpuFrameSample::default();3];
+        let mut marker=device.create_command_encoder(&Default::default());
+        assert!(timer.begin_encoded(&mut marker,104));timer.end_encoded(&mut marker);
+        queue.submit([marker.finish()]);wait();
+        device.poll_binding().retire_lost(||{});
+        timer.submitted(&queue);
+        let completed=timer.slots.iter().any(|slot|slot.gpu_done.load(Ordering::Acquire));
+        let mut resolve=device.create_command_encoder(&Default::default());timer.resolve_completed(&mut resolve);
+        let resolved=timer.slots.iter().all(|slot|slot.awaiting_resolve.is_none());
+        queue.submit([resolve.finish()]);wait();
+        assert!(!completed,"an abandoned ticket read as GPU completion");
+        assert!(!resolved,"an abandoned ticket resolved a query set that may never have been written");
+        assert_eq!(timer.take_into(&mut samples),0,"an abandoned ticket produced a sample");
     }
 
 }

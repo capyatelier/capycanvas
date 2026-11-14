@@ -31,6 +31,7 @@
     struct TransportFile {inner:Arc<dyn StoreFile>,name:String,control:Arc<Mutex<Control>>}
     impl RangeReader for TransportFile {
         fn transfer_key(&self)->Option<String> {Some(format!("test-store:{}",self.name))}
+        fn allocation_bytes(&self,offset:u64,length:usize)->usize {self.inner.allocation_bytes(offset,length)}
         fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
             let mut state=self.control.lock().unwrap();
             if state.hold_reads {state.reads.push_back((self.inner.clone(),offset,length,crc,completion));return;}
@@ -275,19 +276,50 @@
         let mut read=Box::pin(tile.read_compressed());let mut context=Context::from_waker(Waker::noop());
         assert!(read.as_mut().poll(&mut context).is_pending());cache.drive();
         let (file,offset,length,crc,completion)=control.lock().unwrap().reads.pop_front().expect("one leased tile read");
+        let retained=file.allocation_bytes(offset,length) as u64;
         assert_eq!(crc,Some(location.crc));file.read(offset,length,crc,completion);
         location.range().source.evict();cache.drive();budget.flush_reports();
-        assert_eq!(budget.snapshot().ram_physical_bytes,physical+expected.len() as u64);
+        assert_eq!(budget.snapshot().ram_physical_bytes,physical+retained);
         let Poll::Ready(Ok(bytes))=read.as_mut().poll(&mut context) else {panic!("completed tile read retains its result")};drop(read);
-        assert_eq!(&*bytes,&*expected);assert_eq!(crc32fast::hash(&bytes),location.crc);
-        location.range().source.evict();budget.flush_reports();assert_eq!(budget.snapshot().ram_physical_bytes,physical+expected.len() as u64);
-        drop(bytes);location.range().source.evict();cache.drive();budget.flush_reports();
+        assert_eq!(&*bytes,&*expected);assert_eq!(crc32fast::hash(&bytes),location.crc);assert_eq!(bytes.retained_bytes() as u64,retained);
+        location.range().source.evict();budget.flush_reports();assert_eq!(budget.snapshot().ram_physical_bytes,physical+retained);
+        drop(bytes);location.range().source.evict();budget.flush_reports();assert_eq!(cache.limit_bytes(),0);
+        cache.drive();budget.flush_reports();
         assert_eq!(budget.snapshot().ram_physical_bytes,physical);assert!(control.lock().unwrap().reads.is_empty());drop(drain);
+    }
+    #[test]
+    fn a_session_open_reads_its_resources_only_into_room_another_owner_has_released() {
+        let directory=Directory::new();let cancel=AtomicBool::new(false);
+        let mut document=Document::new(PortableId::random(),64,64,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
+        document.artwork.metadata=Arc::new(crate::PhotoMetadata {xmp:Some(crate::authored::Resource::from(vec![7;64*1024])),..Default::default()});
+        let editor=Editor::new(document);
+        let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+        SessionStore::open(&directory.0).wait().unwrap().checkpoint(&capture,json!({}).into(),&cancel).wait().unwrap();
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let limit=budget.ram_limit_bytes();
+        let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);
+        cache.report(crate::MemoryReport {ram_bytes:limit,demand_ram_bytes:limit,..Default::default()});
+        let (send,receive)=std::sync::mpsc::channel();
+        let worker={let path=directory.0.clone();let budget=budget.clone();std::thread::spawn(move || {
+            let mut store=SessionStore::open(&path).wait().unwrap();
+            send.send(store.load_with_budget(ProjectLimits::default(),&AtomicBool::new(false),budget).wait().map(|session|session.is_some())).unwrap();
+        })};
+        assert!(receive.recv_timeout(std::time::Duration::from_millis(500)).is_err(),"the open read its resources into room another owner still holds");
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
+        let opened=loop {
+            cache.report(crate::MemoryReport {ram_bytes:cache.grant().ram_bytes,demand_ram_bytes:limit,..Default::default()});
+            let snapshot=budget.snapshot();
+            assert!(snapshot.ram_physical_bytes+snapshot.reserved_bytes<=limit,"physical {} reserved {} limit {limit}",snapshot.ram_physical_bytes,snapshot.reserved_bytes);
+            match receive.recv_timeout(std::time::Duration::from_millis(20)) {Ok(opened)=>break opened,Err(_)=>assert!(std::time::Instant::now()<deadline,"the cache's releases never let the open finish")}
+        };
+        assert_eq!(opened,Ok(true));
+        worker.join().unwrap();
     }
     #[test]
     fn oversized_known_resource_is_rejected_before_payload_reads() {
         struct CountedFile {inner:Arc<dyn StoreFile>,reads:Arc<AtomicU64>}
         impl RangeReader for CountedFile {
+            fn allocation_bytes(&self,offset:u64,length:usize)->usize {self.inner.allocation_bytes(offset,length)}
             fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
                 self.reads.fetch_add(1,Ordering::Relaxed);self.inner.read(offset,length,crc,completion)
             }

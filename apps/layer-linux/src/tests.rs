@@ -5,10 +5,14 @@
 mod pressure_calibration;
 #[path = "native_penup_tests.rs"]
 mod native_penup;
+#[path = "frame_demand_tests.rs"]
+mod frame_demand;
 #[path = "prediction_tests.rs"]
 mod prediction;
 #[path = "stroke_recording_tests.rs"]
 mod stroke_recording;
+#[path = "wrong_tile_repro_tests.rs"]
+mod wrong_tile_repro;
 #[path = "native_navigation_tests.rs"]
 mod native_navigation;
 #[path = "editing_tools_tests.rs"]
@@ -3227,7 +3231,7 @@ fn native_navigation_tools() {
     assert!(
         w.frame_timer.borrow().is_none(),
         "sampling timer: session={} active={} input={} edits={} present={} startup={}",
-        g.session.wants_continuous_frames(), g.session.engine().has_active_stroke(),
+        g.session.frame_demand() != layer_render::FrameDemand::Wait, g.session.engine().has_active_stroke(),
         g.session.engine().has_pending_input(), g.session.engine().has_pending_document_edits(),
         g.needs_present, g.session.engine().backend().startup.complete,
     );
@@ -9869,7 +9873,7 @@ fn native_backdrop_blur_capture() {
 }
 
 fn refine_busy(w: &Workspace) -> bool {
-    ui_session(w).wants_continuous_frames()
+    ui_session(w).frame_demand() != layer_render::FrameDemand::Wait
 }
 fn refine_preview_count(w: &Workspace) -> u64 {
     ui_session(w).renderer_stats().selection_previews

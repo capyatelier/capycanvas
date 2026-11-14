@@ -8,7 +8,7 @@ fn settle(engine: &mut CanvasEngine<WgpuRasterizer>) {
     loop {
         engine.render_frame().unwrap();
         engine.backend_mut().wait_idle().unwrap();
-        if !engine.has_pending_input() && !engine.has_pending_document_edits() && !engine.backend().has_pending_work() { return; }
+        if !engine.has_pending_input() && !engine.has_pending_document_edits() && engine.backend().next_frame()!=layer_render::FrameDemand::Work { return; }
         assert!(std::time::Instant::now() < deadline, "the canvas did not settle");
     }
 }
@@ -90,7 +90,7 @@ fn a_moved_layer_previews_a_large_brush_at_the_reduced_level_close_to_exact() {
     crate::test_support::submit_published(&mut exact, stroke);
     assert_eq!(r.preview_level, 2);
     let coarse = r.scale_display.as_ref().unwrap();
-    let error = quality(&pixels(&r, coarse.texture()), &pixels(&exact, crate::test_support::document_texture(&exact)), coarse.plan);
+    let error = quality(&pixels(&r, coarse.texture()), &pixels(&exact, crate::test_support::document_texture(&exact)), coarse.plan, coarse.texture().format());
     assert!(error[0] < 0.003, "a moved layer's large brush preview must remain close to exact reduction: {error:?}");
 }
 
@@ -118,7 +118,7 @@ fn painting_a_moved_layer_updates_only_the_painted_part_of_its_reduced_levels() 
         for renderer in [&mut r, &mut exact] { crate::test_support::submit_ready(renderer, stroke).unwrap(); }
         let cache = r.scale_display.as_ref().unwrap();
         assert!(cache.plan.level > 0);
-        let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
+        let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
         assert!(error[2] < 1e-3, "dab {index}: {error:?}");
     }
 }
@@ -153,6 +153,6 @@ fn a_moved_layer_settles_its_reduced_predictions_to_exact_reduction() {
     let stroke = FramePacket { dabs: &dabs[..1], dab_batches: std::slice::from_ref(&committed), ..frame };
     for renderer in [&mut r, &mut exact] { crate::test_support::submit_published(renderer, stroke); }
     let cache = r.scale_display.as_ref().unwrap();
-    let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
+    let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
     assert!(error[2] < 1e-3, "{error:?}");
 }

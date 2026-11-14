@@ -95,7 +95,7 @@ fn package_owners_preserve_large_offsets_readiness_failures_and_snapshot_lifetim
     assert_eq!(snapshot.poll(offset, 3).unwrap_err(), "Corrupt package block");
     *source.failure.lock().unwrap() = None;
     assert_eq!(snapshot.poll(offset, 3).unwrap_err(), "Corrupt package block");
-    assert_eq!(snapshot.poll_original(offset, 3).unwrap_err(), "Corrupt package block");
+    assert_eq!(snapshot.poll_original_on_worker(offset, 3).unwrap_err(), "Corrupt package block");
     assert!(matches!(other_open.poll(offset, 3).unwrap(), RangeState::Ready(_)));
 }
 
@@ -109,5 +109,5 @@ fn bounded_request_cannot_retain_a_whole_large_archive() {
     let unbounded=Source {ready:AtomicBool::new(true),failure:Mutex::new(None),requests:Mutex::new(Vec::new()),bytes};
     let backing=ImmutableBacking::new(Arc::new(unbounded)).unwrap();
     assert!(backing.poll(0,1).unwrap_err().contains("oversized buffer"));
-    assert!(backing.poll_original(0,1).is_err());
+    assert!(backing.poll_original_on_worker(0,1).is_err());
 }

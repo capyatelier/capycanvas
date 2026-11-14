@@ -336,7 +336,7 @@ fn retained_navigator_invalidates_a_legally_replaced_source_image() {
     let replacement=paint_mut(&mut overview_source(RgbSpace::Srgb,[5000,60000,12000,65535])).base.clone();
     overview_base(&mut layer,replacement);
     overview_frame(&mut r,&mut layer,1.);
-    assert!(!r.navigator_pending());
+    assert!(!r.navigator.pending());
     let navigator_revision=r.navigator.revision;
     crate::test_support::submit_settled(&mut r,FramePacket {time_seconds:1.1,composite_all:false,..packet(layer.scene(),[256;2])});
     assert_eq!(r.navigator.revision,navigator_revision,"settled Navigator must not redraw on idle frames");
@@ -458,9 +458,9 @@ fn native_surface_rotation_preserves_artwork_cursor_and_clipped_overview() {
     }
 }
 
-// Float16 is allowed only for display. Bound its rounding independently of the
-// Float32 document oracle: 0.05% relative plus 3e-6 arithmetic/conversion error.
-fn float_surface_close(actual: &[u8], format: wgpu::TextureFormat, expected: [f64; 3]) {
+// Float16 is allowed only for display. Display storage and a Float16 surface each
+// round once: 0.05% relative per rounding plus 3e-6 arithmetic/conversion error.
+fn float_surface_close(actual: &[u8], format: wgpu::TextureFormat, expected: [f64; 3], stored: bool) {
     let half = format == wgpu::TextureFormat::Rgba16Float;
     for c in 0..4 {
         let value = if half {
@@ -484,7 +484,7 @@ fn float_surface_close(actual: &[u8], format: wgpu::TextureFormat, expected: [f6
             ))
         };
         let expected = if c == 3 { 1. } else { expected[c] };
-        let tolerance = 3e-6 + if half { 0.0005 * expected.abs() } else { 0. };
+        let tolerance = 3e-6 + 0.0005 * f64::from(u8::from(stored) + u8::from(half)) * expected.abs();
         assert!(
             (value - expected).abs() <= tolerance,
             "{format:?} channel {c}: {value} vs {expected}"
@@ -517,7 +517,7 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                     let alpha = f64::from(codes[3]) / 65535.;
                     let export = r.readback_srgb_rgba8().unwrap();
                     close(&export[0..4], bytes(expected, alpha), "sRGB export");
-                    let thumbnail = crate::test_support::thumbnail(&mut r,7,ThumbnailTarget::Occurrence(owner(&layer)));
+                    let thumbnail = crate::test_support::thumbnail(&mut r,7,ThumbnailTarget::Occurrence(owner(&layer))).bytes;
                     let i = (16 * 32 + 16) * 4;
                     close(
                         &thumbnail[i..i + 4],
@@ -570,6 +570,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
         let codes = [17000, 65000, 5000, 17000];
         let mut layer = source(RgbSpace::ProPhoto, codes);
         frame(&mut r, &mut layer);
+        assert_eq!(crate::test_support::document_texture(&r).format(), wgpu::TextureFormat::Rgba16Float);
         let before = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for color in [
             SdrSurfaceColor::Srgb,
@@ -600,7 +601,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
                 let actual = crate::layer_tests::page_bytes(&r, &target);
                 let i = (16 * 256 + 16) * format.block_copy_size(None).unwrap() as usize;
                 if color == SdrSurfaceColor::ExtendedLinearSrgb {
-                    float_surface_close(&actual[i..], format, expected);
+                    float_surface_close(&actual[i..], format, expected, true);
                 } else {
                     close(&actual[i..i + 4], bytes(expected, 1.), "managed surface");
                 }
@@ -618,7 +619,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
                     .unwrap();
                 let actual = crate::layer_tests::page_bytes(&r, &target);
                 if color == SdrSurfaceColor::ExtendedLinearSrgb {
-                    float_surface_close(&actual, format, expected);
+                    float_surface_close(&actual, format, expected, false);
                 } else {
                     close(&actual[..4], bytes(expected, 1.), "UI surround");
                 }
@@ -717,7 +718,7 @@ fn native_paint_thumbnail_converts_the_same_color_as_export() {
         });
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         frame(&mut r, &mut layer);
-        let thumbnail = crate::test_support::thumbnail(&mut r,7,ThumbnailTarget::Occurrence(owner(&layer)));
+        let thumbnail = crate::test_support::thumbnail(&mut r,7,ThumbnailTarget::Occurrence(owner(&layer))).bytes;
         close(
             &thumbnail[(16 * 32 + 16) * 4..][..4],
             bytes(linear(space, codes, RgbSpace::Srgb), 1.),
@@ -754,7 +755,7 @@ fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
         let original = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for recipe in [SdrRendition::default(), SdrRendition { exposure: -2., ..Default::default() }, SdrRendition::default()] {
             r.set_ui_rendition(Some(recipe)).unwrap();
-            let thumbnail = crate::test_support::thumbnail(&mut r,7,ThumbnailTarget::Occurrence(owner(&layer)));
+            let thumbnail = crate::test_support::thumbnail(&mut r,7,ThumbnailTarget::Occurrence(owner(&layer))).bytes;
             let expected = recipe.mapper(RgbSpace::Srgb, RgbSpace::Srgb).map_rgb(pixel[..3].try_into().unwrap());
             close(&thumbnail[(16 * 32 + 16) * 4..][..4], bytes(expected.map(f64::from), 1.), "HDR thumbnail");
         }
@@ -775,10 +776,11 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
     // effect leaves hidden RGB, the output boundary must emit canonical zero.
     let pixel = [0.7f32, -0.1, 1.5, 0.]
         .into_iter()
-        .flat_map(f32::to_le_bytes)
+        .flat_map(|value| layer_core::color::f16::from_f32(value).to_bits().to_le_bytes())
         .collect::<Vec<_>>();
     let input = pixel.repeat(256 * 256);
     let texture = crate::test_support::document_texture(&r);
+    assert_eq!(texture.format(), wgpu::TextureFormat::Rgba16Float);
     r.queue.write_texture(
         texture.as_image_copy(),
         &input,

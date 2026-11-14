@@ -631,8 +631,8 @@ fn gpu_panel_shape_cache_keeps_reprojection_and_recovers_discarded_geometry() {
     let blur=crate::create_target(device,[64,56],wgpu::TextureFormat::Rgba16Float,"panel cached blur").0;
     let frame=|panels:&mut super::PanelSurfaces,affine| {
         let mut encoder=device.create_command_encoder(&Default::default());
-        let mut uploads=crate::Uploads::new(device,4096);
-        panels.prepare(device,&mut uploads,&mut encoder,Some((&blur,affine)),SIZE,0).unwrap();
+        let mut uploads=crate::Uploads::new(&renderer.device,4096);
+        panels.prepare(&renderer.device,&mut uploads,&mut encoder,Some((&blur,affine)),SIZE,0).unwrap();
         uploads.finish(&encoder);
         encoder
     };

@@ -1,4 +1,5 @@
-struct Settings { maximum:u32, components:u32, reciprocal:f32, padding:u32, region:vec4<u32> }
+struct Settings { maximum:u32, components:u32, reciprocal:f32, compare:u32, region:vec4<u32> }
+fn comparison_enabled()->bool {return settings.compare!=0u;}
 TEXTURES
 @group(0) @binding(SETTINGS_BINDING) var<uniform> settings:Settings;
 fn load_working(tile:u32,pixel:vec2<i32>)->f32 {
@@ -31,7 +32,9 @@ fn main(@builtin(global_invocation_id) invocation:vec3<u32>) {
         let x=word_x*settings.components+c;
         if x<settings.region.x || x>=settings.region.x+settings.region.z {continue;}
         let pixel=vec2(x,y);
-        let code=quantize_coverage(unit_scalar(load_working(invocation.z,vec2<i32>(pixel))),settings.maximum);
+        let original=load_working(invocation.z,vec2<i32>(pixel));
+        let code=quantize_coverage(unit_scalar(original),settings.maximum);
+        if comparison_enabled() && bitcast<u32>(original)!=bitcast<u32>(f32(code)*settings.reciprocal) {atomicStore(&canonical_changes[invocation.z*1024u+(pixel.y/8u)*32u+pixel.x/8u],1u);}
         let shift=c*depth;
         word=(word&~(settings.maximum<<shift))|(code<<shift);
         store_canonical(invocation.z,pixel,vec4(f32(code)*settings.reciprocal,0.,0.,1.));

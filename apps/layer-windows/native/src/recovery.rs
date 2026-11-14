@@ -230,7 +230,6 @@ fn prepare(environment:&layer_host::open::OpenEnvironment,restored:SessionRestor
     while !candidate.can_park_document()||candidate.retained_document_tiles().try_blobs()?.is_none(){
         if stopping.load(Ordering::Acquire){return Err("Session operation cancelled".into());}
         candidate.frame(0,0)?;
-        if let Some(renderer)=candidate.engine().backend().0.as_ref(){renderer.device().poll(wgpu::PollType::Poll).map_err(|error|error.to_string())?;}
         if Instant::now()>=deadline{return Err("Session drawing preparation timed out".into());}
         std::thread::sleep(Duration::from_millis(2));
     }

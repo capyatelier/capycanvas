@@ -27,15 +27,22 @@ pub struct ItemId(pub u64);
 pub enum Arrange { Front, Forward, Backward, Back }
 
 #[derive(Default)]
-pub(crate) struct IdHasher(u64);
+pub struct IdHasher(u64);
 impl Hasher for IdHasher {
-    fn finish(&self) -> u64 { self.0 }
-    fn write(&mut self, bytes: &[u8]) { for byte in bytes { self.write_u64(u64::from(*byte) ^ self.0.rotate_left(8)); } }
-    fn write_u64(&mut self, value: u64) { self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(0x9e37_79b9_7f4a_7c15); }
-    fn write_usize(&mut self, value: usize) { self.write_u64(value as u64); }
-    fn write_i32(&mut self, value: i32) { self.write_u64(u64::from(value as u32)); }
+    #[inline] fn finish(&self) -> u64 { self.0 }
+    #[inline] fn write(&mut self, bytes: &[u8]) {
+        let mut words = bytes.chunks_exact(8);
+        for word in &mut words { self.write_u64(u64::from_le_bytes(word.try_into().unwrap())); }
+        let rest = words.remainder();
+        if !rest.is_empty() { let mut word = [0; 8]; word[..rest.len()].copy_from_slice(rest); self.write_u64(u64::from_le_bytes(word)); }
+    }
+    #[inline] fn write_u64(&mut self, value: u64) { self.0 = (self.0.rotate_left(5) ^ value).wrapping_mul(0x9e37_79b9_7f4a_7c15); }
+    #[inline] fn write_u128(&mut self, value: u128) { self.write_u64(value as u64); self.write_u64((value >> 64) as u64); }
+    #[inline] fn write_u32(&mut self, value: u32) { self.write_u64(u64::from(value)); }
+    #[inline] fn write_usize(&mut self, value: usize) { self.write_u64(value as u64); }
+    #[inline] fn write_i32(&mut self, value: i32) { self.write_u64(u64::from(value as u32)); }
 }
-pub(crate) type IdBuild = BuildHasherDefault<IdHasher>;
+pub type IdBuild = BuildHasherDefault<IdHasher>;
 type IdSet = HashSet<ItemId, IdBuild>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -160,8 +167,11 @@ impl DoubleEndedIterator for AnchorIter<'_> {
 }
 impl ExactSizeIterator for AnchorIter<'_> {}
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct PathGeometry { subpaths: Box<[Subpath]>, hull: [f64; 4], anchors: usize, segments: usize }
+#[derive(Clone, Debug)]
+pub struct PathGeometry { subpaths: Box<[Subpath]>, hull: [f64; 4], anchors: usize, segments: usize, content: crate::raster::ContentName }
+impl PartialEq for PathGeometry {
+    fn eq(&self, other: &Self) -> bool { self.subpaths == other.subpaths }
+}
 impl PathGeometry {
     pub fn new(subpaths: Vec<Subpath>) -> Result<Self, &'static str> {
         if subpaths.is_empty() { return Err("A path requires a subpath"); }
@@ -179,8 +189,9 @@ impl PathGeometry {
                 }
             }
         }
-        Ok(Self { subpaths: subpaths.into(), hull, anchors, segments })
+        Ok(Self { subpaths: subpaths.into(), hull, anchors, segments, content: crate::raster::ContentName::fresh() })
     }
+    pub fn content_version(&self) -> crate::raster::ContentVersion { self.content.into() }
     pub fn subpaths(&self) -> &[Subpath] { &self.subpaths }
     pub fn hull(&self) -> [f64; 4] { self.hull }
     pub fn anchor_count(&self) -> usize { self.anchors }
@@ -743,8 +754,11 @@ pub struct Position { pub chunk: u32, pub index: u32 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Slot { Image(super::Image), Resource(Arc<super::OpaqueResource>) }
 
-#[derive(Debug, Default)]
-struct Root { chunks: Box<[Resource<VectorChunk>]>, slots: Arc<[Slot]>, counter: u64, valid: OnceLock<Result<(), &'static str>> }
+#[derive(Debug)]
+struct Root { chunks: Box<[Resource<VectorChunk>]>, slots: Arc<[Slot]>, counter: u64, valid: OnceLock<Result<(), &'static str>>, content: crate::raster::ContentName }
+impl Default for Root {
+    fn default() -> Self { Self { chunks: Box::default(), slots: Arc::default(), counter: 0, valid: OnceLock::new(), content: crate::raster::ContentName::fresh() } }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct VectorObject { root: Arc<Root> }
@@ -760,10 +774,11 @@ impl PartialEq for VectorObject {
     }
 }
 impl VectorObject {
+    pub fn content_version(&self) -> crate::raster::ContentVersion { self.root.content.into() }
     pub fn from_chunks(chunks: Vec<Resource<VectorChunk>>) -> Self { Self::with_slots(chunks, Arc::default()) }
-    pub fn with_slots(chunks: Vec<Resource<VectorChunk>>, slots: Arc<[Slot]>) -> Self { Self { root: Arc::new(Root { chunks: chunks.into(), slots, counter: 0, valid: OnceLock::new() }) } }
-    fn rechunked(&self, chunks: Vec<Resource<VectorChunk>>) -> Self { Self { root: Arc::new(Root { chunks: chunks.into(), slots: self.root.slots.clone(), counter: self.next_item(), valid: OnceLock::new() }) } }
-    pub fn with_next_item(&self, next_item: u64) -> Self { Self { root: Arc::new(Root { chunks: self.root.chunks.clone(), slots: self.root.slots.clone(), counter: next_item, valid: OnceLock::new() }) } }
+    pub fn with_slots(chunks: Vec<Resource<VectorChunk>>, slots: Arc<[Slot]>) -> Self { Self { root: Arc::new(Root { chunks: chunks.into(), slots, counter: 0, valid: OnceLock::new(), content: crate::raster::ContentName::fresh() }) } }
+    fn rechunked(&self, chunks: Vec<Resource<VectorChunk>>) -> Self { Self { root: Arc::new(Root { chunks: chunks.into(), slots: self.root.slots.clone(), counter: self.next_item(), valid: OnceLock::new(), content: crate::raster::ContentName::fresh() }) } }
+    pub fn with_next_item(&self, next_item: u64) -> Self { Self { root: Arc::new(Root { chunks: self.root.chunks.clone(), slots: self.root.slots.clone(), counter: next_item, valid: OnceLock::new(), content: self.root.content }) } }
     pub fn next_item(&self) -> u64 { self.chunks().iter().map(|chunk| chunk.summary().next_item).fold(self.root.counter.max(1), u64::max) }
     pub fn slots(&self) -> &Arc<[Slot]> { &self.root.slots }
     pub fn shares_slots(&self, other: &Self) -> bool { self.slots().is_empty() || Arc::ptr_eq(self.slots(), other.slots()) }

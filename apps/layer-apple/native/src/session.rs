@@ -192,8 +192,6 @@ impl SessionJob {
                 loop {
                     candidate.frame(0, 0)?;
                     if candidate.can_park_document() && candidate.retained_document_tiles().try_blobs()?.is_some() { break; }
-                    candidate.engine().backend().0.as_ref().ok_or("The canvas is unavailable")?.device()
-                        .poll(wgpu::PollType::Poll).map_err(|e| e.to_string())?;
                     if std::time::Instant::now() >= deadline { return Err("The saved drawing could not finish preparing".into()); }
                     std::thread::sleep(std::time::Duration::from_millis(2));
                 }

@@ -301,12 +301,12 @@ impl Lines {
             let readback=device.create_buffer(&wgpu::BufferDescriptor {label:Some("region line end count"),size:8,usage:wgpu::BufferUsages::COPY_DST|wgpu::BufferUsages::MAP_READ,mapped_at_creation:false});
             encoder.copy_buffer_to_buffer(self.data.as_ref().unwrap(),u64::from(self.offsets[1])*4,&readback,0,8);
             let (tx,rx)=mpsc::channel();
-            crate::raster::map_then(Some(encoder),&readback,8,|bytes|Ok(std::array::from_fn(|i|u32::from_le_bytes(bytes[i*4..i*4+4].try_into().unwrap()))),move|result|{let _=tx.send(result);});
+            crate::raster::map_then(device,Some(encoder),&readback,8,|bytes|Ok(std::array::from_fn(|i|u32::from_le_bytes(bytes[i*4..i*4+4].try_into().unwrap()))),move|result|{let _=tx.send(result);});
             work.ends=Some(rx);encoded=true;
         }
         if encoded {
             work.submission=Some(encoder.submission());work.in_flight.fetch_add(1,Ordering::AcqRel);
-            let in_flight=work.in_flight.clone();encoder.on_submitted_work_done(move||{in_flight.fetch_sub(1,Ordering::AcqRel);});
+            let in_flight=crate::InFlightCompletion(work.in_flight.clone());encoder.hold(in_flight);
         }
         if !encoded && work.steps.is_empty() && work.ranked {return Ok((true,spent));}
         self.building=Some(work);Ok((false,spent))

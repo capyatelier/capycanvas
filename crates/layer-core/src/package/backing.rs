@@ -13,7 +13,10 @@ impl ByteRange {
         if range.start > range.end || range.end > self.len() { return Err("Invalid owned byte range"); }
         Ok(Self {owner:self.owner.clone(),range:self.range.start+range.start..self.range.start+range.end,lease:self.lease.clone()})
     }
-    pub(crate) fn leased(owner:Arc<[u8]>,lease:Arc<crate::tile_io::Lease>)->Self {let end=owner.len();Self {owner,range:0..end,lease:Some(lease)}}
+    pub(crate) fn whole(owner:Arc<[u8]>)->Self {let end=owner.len();Self {owner,range:0..end,lease:None}}
+    pub(crate) fn leased(mut self,lease:Arc<crate::tile_io::Lease>)->Self {self.lease=Some(lease);self}
+    pub(crate) fn allocation(self)->Arc<[u8]> {self.owner}
+    pub(crate) fn unique_allocation(&self)->bool {Arc::strong_count(&self.owner)==1 && Arc::weak_count(&self.owner)==0 && self.lease.is_none()}
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn into_arc(self)->Arc<[u8]> {if self.lease.is_none() && self.range==(0..self.owner.len()) {self.owner.clone()}else{Arc::from(&*self)}}
     pub fn retained_bytes(&self) -> usize { self.owner.len() }
@@ -121,7 +124,7 @@ impl ImmutableBacking {
         }
         result
     }
-    pub(super) fn poll_original(&self,offset:u64,len:usize)->Result<RangeState,String> {self.access(offset,len,false)}
+    pub(super) fn poll_original_on_worker(&self,offset:u64,len:usize)->Result<RangeState,String> {self.access(offset,len,!cfg!(target_arch="wasm32"))}
     fn access(&self,offset:u64,len:usize,worker:bool)->Result<RangeState,String> {
         if len > MAX_RANGE_BYTES { return Err("Package read exceeds bounded range".into()); }
         let end = offset.checked_add(len as u64).ok_or("Package range overflow")?;

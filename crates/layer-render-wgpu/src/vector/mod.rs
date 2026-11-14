@@ -98,11 +98,15 @@ pub(crate) struct Pool {
     free: BTreeMap<u32, u32>,
     pending: Vec<(u32, std::sync::Arc<LevelGeometry>)>,
     retired: Vec<(u32, u32)>,
+    charge: crate::residency::Charge,
 }
 impl Pool {
-    pub fn new(limit_bytes: u64) -> Self { Self { buffer: None, capacity: 0, limit: (limit_bytes / 4).min(u64::from(u32::MAX)) as u32, free: BTreeMap::new(), pending: Vec::new(), retired: Vec::new() } }
+    #[cfg(test)]
+    pub fn new(limit_bytes: u64) -> Self { Self::charged(limit_bytes, &Default::default()) }
+    pub(crate) fn charged(limit_bytes: u64, tier: &std::sync::Arc<crate::residency::Tier>) -> Self { Self { buffer: None, capacity: 0, limit: (limit_bytes / 4).min(u64::from(u32::MAX)) as u32, free: BTreeMap::new(), pending: Vec::new(), retired: Vec::new(), charge: tier.charge(0) } }
     #[cfg(test)]
     pub fn used_words(&self) -> u32 { self.capacity - self.free.values().sum::<u32>() }
+    #[cfg(test)]
     pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
     pub fn allocate(&mut self, geometry: &std::sync::Arc<LevelGeometry>) -> Option<u32> {
         let words = (geometry.words.len() as u32).max(1);
@@ -147,6 +151,7 @@ impl Pool {
             let grown = device.create_buffer(&wgpu::BufferDescriptor { label: Some("vector geometry"), size: bytes,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
             if let Some(old) = &self.buffer { encoder.copy_buffer_to_buffer(old, 0, &grown, 0, old.size()); }
+            self.charge.resize(grown.size());
             self.buffer = Some(grown);
         }
         let buffer = self.buffer.clone().unwrap();
@@ -187,17 +192,20 @@ const ALIGNMENT: u64 = 256;
 /// A frame's coverage batches, one after another in a reusable buffer that the
 /// encoder's prologue fills.
 #[derive(Default)]
-pub(crate) struct Arena { buffer: Option<wgpu::Buffer>, used: u64 }
+pub(crate) struct Arena { buffer: Option<wgpu::Buffer>, used: u64, charge: Option<crate::residency::Charge> }
 impl Arena {
+    pub(crate) fn charged(tier: &std::sync::Arc<crate::residency::Tier>) -> Self { Self { charge: Some(tier.charge(0)), ..Default::default() } }
     pub fn restart(&mut self) { self.used = 0; }
+    #[cfg(test)]
     pub fn storage_bytes(&self) -> u64 { self.buffer.as_ref().map_or(0, wgpu::Buffer::size) }
     fn place(&mut self, device: &PipelineDevice, bytes: u64) -> Result<(wgpu::Buffer, u64), GpuRasterError> {
         let limit = device.limits().max_buffer_size;
         if bytes > limit { return Err(GpuRasterError::SizeOverflow); }
         let capacity = self.buffer.as_ref().map_or(0, wgpu::Buffer::size);
         if self.used + bytes > capacity {
-            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some("vector coverage batches"),
-                size: (capacity * 2).max(bytes).max(1 << 20).min(limit),
+            let size = (capacity * 2).max(bytes).max(1 << 20).min(limit);
+            if let Some(charge) = &mut self.charge { charge.resize(size); }
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor { label: Some("vector coverage batches"), size,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false }));
             self.used = 0;
         }

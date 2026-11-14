@@ -3,25 +3,29 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use wgpu::util::DeviceExt;
 
-pub(crate) use crate::memory::CACHE_BYTES;
-pub(crate) fn cache_bytes(r: &WgpuRasterizer) -> u64 { r.memory.scene_limit().min(CACHE_BYTES) }
 pub(super) const APPROXIMATE_PAGES: usize = 4;
 fn exact_strip(extent: [u32; 2]) -> [u32; 2] {
-    let columns = extent[0].div_ceil(PAGE_SIZE).next_power_of_two().min(SOURCE_SLOTS as u32);
+    let columns = extent[0].div_ceil(PAGE_SIZE).next_power_of_two().min((SOURCE_SLOTS as u32).isqrt().next_power_of_two());
     [PAGE_SIZE * columns, PAGE_SIZE * (SOURCE_SLOTS as u32 / columns).min(extent[1].div_ceil(PAGE_SIZE))]
 }
-fn exact_strip_bytes(extent: [u32; 2]) -> u64 {exact_strip(extent).map(u64::from).into_iter().product::<u64>() * 16}
 
 mod sources;
 mod graph;
+mod signatures;
+pub(crate) use signatures::{Capture,Declared,Input,Prepared as SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 mod effects;
 mod refinement;
-mod hierarchy;
-pub(crate) use hierarchy::eligible as hierarchy_eligible;
+mod pages;
+mod contact;
+pub(crate) use pages::PresentedPage;
 pub(crate) use sources::SOURCE_WORKING_BYTES;
 mod navigator;
 pub(crate) use navigator::Navigator;
 pub(crate) use sources::Sources;
+pub(super) type Pages=Arc<std::sync::Mutex<pages::Store>>;
+pub(super) fn pages_within(display:&Arc<crate::residency::Tier>)->Pages {Arc::new(std::sync::Mutex::new(pages::Store::within(display)))}
+pub(super) fn trim_pages_by(pages:&Pages,deficit:u64,class:Class) {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.trim(bytes.saturating_sub(deficit),class);}
+pub(super) fn release_pages_by(pages:&Pages,deficit:u64) {let mut store=pages.lock().unwrap();let bytes=store.bytes();store.release_undemanded(bytes.saturating_sub(deficit));}
 
 #[derive(Clone, Default)]
 pub(crate) struct Damage {
@@ -37,16 +41,12 @@ impl Damage {
         for region in regions { damage.push(region); }
         damage
     }
-    pub fn from_tiles(bounds: PixelRect, tiles: Option<&BTreeSet<[u32; 2]>>) -> Self {
-        tiles.map_or_else(|| bounds.into(), |tiles| Self::from_regions(tiles.iter().map(|c| page_rect(*c).intersect(bounds))))
-    }
     pub fn tile_region(tile: &brush_tiles::BrushTile) -> PixelRect {
         let [x, y] = tile.coordinate.map(|c| c * PAGE_SIZE);
         PixelRect::new(x + tile.local.min_x(), y + tile.local.min_y(), x + tile.local.max_x(), y + tile.local.max_y())
     }
     pub fn is_empty(&self) -> bool { self.regions.is_empty() }
     pub fn bounds(&self) -> PixelRect { self.regions.iter().fold(PixelRect::EMPTY, |r, n| r.union(*n)) }
-    pub fn area(&self) -> u64 { self.regions.iter().map(|r| r.area()).sum() }
     pub fn intersects(&self, region: PixelRect) -> bool { self.regions.iter().any(|r| !r.intersect(region).is_empty()) }
     pub fn union(mut self, other: Self) -> Self { self.extend(&other); self }
     pub fn extend(&mut self, other: &Self) { for &region in &other.regions { self.push(region); } }
@@ -68,17 +68,6 @@ impl Damage {
     pub fn expand(&self, radius: u32, extent: [u32; 2]) -> Self { self.map(|r| r.expand(radius, extent)) }
     pub fn map(&self, f: impl FnMut(PixelRect) -> PixelRect) -> Self { Self::from_regions(self.regions.iter().copied().map(f)) }
     pub fn pages(&self) -> BTreeSet<[u32; 2]> { self.regions.iter().flat_map(|r| page_coordinates(*r)).collect() }
-    fn update_regions(&self, plan: display_mips::Plan, initialized: &BTreeSet<[u32; 2]>) -> Vec<PixelRect> {
-        let mut work = Self::from_regions(page_regions(
-            page_coordinates(plan.bounds).filter(|c| !initialized.contains(c)), plan.bounds));
-        for region in &self.regions {
-            let region = paint_transform::aligned(*region, 1 << plan.level, plan.extent).intersect(plan.bounds);
-            for coordinate in page_coordinates(region).filter(|c| initialized.contains(c)) {
-                work.push(region.intersect(page_rect(coordinate)));
-            }
-        }
-        work.regions
-    }
     fn dependency(&self, radius: Option<u32>, plan: display_mips::Plan) -> Self {
         if self.is_empty() { Self::EMPTY }
         else if let Some(radius) = radius { self.expand(radius, plan.extent).intersect(plan.bounds) }
@@ -90,96 +79,63 @@ impl Damage {
 #[derive(Clone)]
 pub(crate) struct Pipelines {
     records: wgpu::BindGroupLayout,
+    pub full: OutputPipelines,
+    pub half: OutputPipelines,
+}
+#[derive(Clone)]
+pub(crate) struct OutputPipelines {
     inputs: wgpu::BindGroupLayout,
     pub reduce: Deferred<wgpu::ComputePipeline>,
     pub reduce_phased: Deferred<wgpu::ComputePipeline>,
     pub reduce_pair: Deferred<wgpu::ComputePipeline>,
     pub compose: Deferred<wgpu::ComputePipeline>,
-    half_inputs: wgpu::BindGroupLayout,
-    pub half: Deferred<wgpu::ComputePipeline>,
+    pub project: Deferred<wgpu::ComputePipeline>,
 }
-fn shader_source(space: layer_core::color::RgbSpace, sampling: &str) -> std::borrow::Cow<'static, str> {
-    compose_wgsl(&[&working_color::source(space), sampling, include_str!("../blend_codes.wgsl"), include_str!("../blend_modes.wgsl"), include_str!("scale.wgsl"), include_str!("scale/compose.wgsl")])
+fn shader_source(space:layer_core::color::RgbSpace,sampling:&str)->std::borrow::Cow<'static,str> {
+    compose_wgsl(&[&working_color::source(space),sampling,include_str!("../blend_codes.wgsl"),
+        include_str!("../blend_modes.wgsl"),include_str!("scale.wgsl"),include_str!("scale/compose.wgsl")])
 }
 impl Pipelines {
-    pub fn new(device: &PipelineDevice) -> Self {
-        let records_layout = crate::bindings::layout(
-            device,
-            "display composition records",
-            &[crate::bindings::buffer(
-                0,
-                wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-                true,
-                NonZeroU64::new(80),
-            ), crate::bindings::sampler(1, wgpu::ShaderStages::COMPUTE, wgpu::SamplerBindingType::Filtering)],
-        );
-        let inputs = crate::bindings::layout(
-            device,
-            "display composition inputs",
-            &[
-                crate::bindings::float_texture(0, wgpu::ShaderStages::COMPUTE, device),
-                crate::bindings::float_texture(1, wgpu::ShaderStages::COMPUTE, device),
-                crate::bindings::storage_texture(
-                    2,
-                    wgpu::ShaderStages::COMPUTE,
-                    wgpu::TextureFormat::Rgba32Float,
-                    wgpu::StorageTextureAccess::WriteOnly,
-                ),
-                crate::bindings::float_texture(3, wgpu::ShaderStages::COMPUTE, device),
-                crate::bindings::float_texture(4, wgpu::ShaderStages::COMPUTE, device),
-            ],
-        );
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("display resolution composition"),
-            bind_group_layouts: &[Some(&records_layout), Some(&inputs)],
-            immediate_size: 0,
-        });
-        let shader = Deferred::wgsl(
-            device,
-            "display resolution composition",
-            shader_source(device.working_space(), device.float_sampling_wgsl()),
-        );
-        let half_inputs = crate::bindings::layout(device, "half-float display levels", &[
-            crate::bindings::float_texture(0, wgpu::ShaderStages::COMPUTE, device),
-            crate::bindings::float_texture(1, wgpu::ShaderStages::COMPUTE, device),
-            crate::bindings::storage_texture(2, wgpu::ShaderStages::COMPUTE, wgpu::TextureFormat::Rgba16Float, wgpu::StorageTextureAccess::WriteOnly),
-            crate::bindings::storage_texture(3, wgpu::ShaderStages::COMPUTE, wgpu::TextureFormat::Rgba16Float, wgpu::StorageTextureAccess::WriteOnly),
+    pub fn new(device:&PipelineDevice)->Self {
+        let records=crate::bindings::layout(device,"display composition records",&[
+            crate::bindings::buffer(0,wgpu::ShaderStages::COMPUTE,wgpu::BufferBindingType::Uniform,true,NonZeroU64::new(96)),
+            crate::bindings::sampler(1,wgpu::ShaderStages::COMPUTE,wgpu::SamplerBindingType::Filtering),
         ]);
-        let half_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("half-float display level"),
-            bind_group_layouts: &[Some(&records_layout), Some(&half_inputs)],
-            immediate_size: 0,
-        });
-        let half_shader = Deferred::wgsl(device, "half-float display level", [include_str!("../display_mips/half.wgsl"), include_str!("scale/half.wgsl")].concat());
-        Self {
-            half: Deferred::compute(device, "half-float display level", &half_layout, &half_shader, "convert"),
-            half_inputs,
-            records: records_layout,
-            inputs,
-            reduce: Deferred::compute(
-                device,
-                "reduce paint to display",
-                &layout,
-                &shader,
-                "reduce",
-            ),
-            reduce_phased: Deferred::compute(device, "reduce offset paint to display", &layout, &shader, "reduce_phased"),
-            reduce_pair: Deferred::compute(device, "reduce adjacent display level", &layout, &shader, "reduce_pair"),
-            compose: Deferred::compute(
-                device,
-                "compose display layers",
-                &layout,
-                &shader,
-                "compose",
-            ),
-        }
+        let output=|format| {
+            let inputs=crate::bindings::layout(device,"display composition inputs",&[
+                crate::bindings::float_texture(0,wgpu::ShaderStages::COMPUTE,device),
+                crate::bindings::float_texture(1,wgpu::ShaderStages::COMPUTE,device),
+                crate::bindings::storage_texture(2,wgpu::ShaderStages::COMPUTE,format,wgpu::StorageTextureAccess::WriteOnly),
+                crate::bindings::float_texture(3,wgpu::ShaderStages::COMPUTE,device),
+                crate::bindings::float_texture(4,wgpu::ShaderStages::COMPUTE,device),
+            ]);
+            let layout=device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label:Some("display resolution composition"),bind_group_layouts:&[Some(&records),Some(&inputs)],immediate_size:0,
+            });
+            let source=shader_source(device.working_space(),device.float_sampling_wgsl());
+            let source=match format {wgpu::TextureFormat::Rgba16Float=>source.replace("texture_storage_2d<rgba32float","texture_storage_2d<rgba16float"),_=>source.into_owned()};
+            let shader=Deferred::wgsl(device,"display resolution composition",source);
+            let kernel=|entry|Deferred::compute(device,"display resolution composition",&layout,&shader,entry);
+            let source=compose_wgsl(&[&working_color::source(device.working_space()),include_str!("scale/project.wgsl")]);
+            let source=match format {wgpu::TextureFormat::Rgba16Float=>source.replace("texture_storage_2d<rgba32float","texture_storage_2d<rgba16float"),_=>source.into_owned()};
+            let projection=Deferred::wgsl(device,"retained page projection",source);
+            let project=Deferred::compute(device,"retained page projection",&layout,&projection,"project");
+            OutputPipelines {inputs,reduce:kernel("reduce"),reduce_phased:kernel("reduce_phased"),reduce_pair:kernel("reduce_pair"),compose:kernel("compose"),project}
+        };
+        let full=output(wgpu::TextureFormat::Rgba32Float);
+        let half=output(wgpu::TextureFormat::Rgba16Float);
+        Self {records,full,half}
+    }
+    pub fn output(&self,format:wgpu::TextureFormat)->&OutputPipelines {
+        match format {wgpu::TextureFormat::Rgba16Float=>&self.half,wgpu::TextureFormat::Rgba32Float=>&self.full,_=>unreachable!()}
     }
 }
 
 pub(super) struct Encoding<'a> {
     pub encoder: &'a mut crate::submission::CommandEncoder,
-    pub commands: &'a mut Commands,
+    pub commands: &'a mut RegionRecords,
+    pub retained: u64,
+    pub budget: &'a mut WorkBudget,
 }
 #[derive(Clone)]
 struct SourceRequest {
@@ -188,32 +144,22 @@ struct SourceRequest {
     covered: PixelRect,
 }
 
-pub(crate) struct Commands {
+pub(crate) struct RegionRecords {
     records: wgpu::Buffer,
     record_binding: wgpu::BindGroup,
     stride: u32,
     cursor: u32,
-    jobs: Vec<DisplayJob>,
+    charge: crate::residency::Charge,
 }
-struct Composition {
-    values: [u32; 20],
-    binding: wgpu::BindGroup,
-    leases: Vec<super::sources::Lease>,
-}
-struct RootComposition {
-    target: wgpu::TextureView,
-    composition: Composition,
-}
-#[expect(clippy::large_enum_variant, reason = "Display commands retain uniform records inline without per-job boxing")]
-enum DisplayJob {
-    Compose(Composition),
-    Resample { values: [u8; resample::UNIFORM_BYTES as usize], views: [wgpu::TextureView; 2], size: [u32; 2] },
-}
-impl Commands {
+impl RegionRecords {
+    #[cfg(test)]
     pub fn new(r: &WgpuRasterizer) -> Self {
-        Self::with_capacity(r, 256)
+        Self::with_capacity(r, 256, &Default::default())
     }
-    fn with_capacity(r: &WgpuRasterizer, bytes: u64) -> Self {
+    pub(crate) fn charged(r: &WgpuRasterizer, tier: &Arc<crate::residency::Tier>) -> Self {
+        Self::with_capacity(r, 256, tier)
+    }
+    fn with_capacity(r: &WgpuRasterizer, bytes: u64, tier: &Arc<crate::residency::Tier>) -> Self {
         let stride = r
             .device
             .limits()
@@ -226,14 +172,15 @@ impl Commands {
             mapped_at_creation: false,
         });
         let record_binding = Self::record_binding(r, &records);
-        Self { records, record_binding, stride, cursor: 0, jobs: Vec::new() }
+        Self { charge: tier.charge(records.size()), records, record_binding, stride, cursor: 0 }
     }
     pub(super) fn record_binding(r: &WgpuRasterizer, records: &wgpu::Buffer) -> wgpu::BindGroup {
         crate::bindings::group(&r.device, "display composition regions", &r.scene_pipelines.scale.records,
-            [wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: records, offset: 0, size: NonZeroU64::new(80) }),
+            [wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: records, offset: 0, size: NonZeroU64::new(96) }),
                 wgpu::BindingResource::Sampler(&r.scene_pipelines.resample.sampler)])
     }
-    pub fn begin(&mut self) { self.cursor = 0; self.jobs.clear(); }
+    pub fn begin(&mut self) { self.cursor = 0; }
+    #[cfg(test)]
     pub fn storage_bytes(&self) -> u64 { self.records.size() }
     pub(super) fn binding(
         r: &WgpuRasterizer,
@@ -243,11 +190,11 @@ impl Commands {
     ) -> wgpu::BindGroup {
         Self::inputs(r, [source, base, &r.empty_view, &r.empty_view], output)
     }
-    fn inputs(r: &WgpuRasterizer, sources: [&wgpu::TextureView; 4], output: &wgpu::TextureView) -> wgpu::BindGroup {
+    pub(super) fn inputs(r: &WgpuRasterizer, sources: [&wgpu::TextureView; 4], output: &wgpu::TextureView) -> wgpu::BindGroup {
         crate::bindings::group(
             &r.device,
             "display composition images",
-            &r.scene_pipelines.scale.inputs,
+            &r.scene_pipelines.scale.output(output.texture().format()).inputs,
             [
                 wgpu::BindingResource::TextureView(sources[0]),
                 wgpu::BindingResource::TextureView(sources[1]),
@@ -270,13 +217,12 @@ impl Commands {
         self.write(r, encoder, &bytes)
     }
     pub(super) fn write(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, bytes: &[u8]) -> Result<u32, GpuRasterError> {
-        self.flush(r, encoder)?;
         let offset = u64::from(self.cursor) * u64::from(self.stride);
         let needed = offset + bytes.len() as u64;
         if needed > self.records.size() {
             let size = needed.next_power_of_two().min(r.device.limits().max_buffer_size).min(u64::from(u32::MAX));
             if size < needed { return Err(GpuRasterError::ExtentUnsupported); }
-            let mut grown = Self::with_capacity(r, size);
+            let mut grown = Self::with_capacity(r, size, self.charge.tier());
             encoder.copy_buffer_to_buffer(&self.records, 0, &grown.records, 0, offset);
             grown.cursor = self.cursor;
             *self = grown;
@@ -291,71 +237,20 @@ impl Commands {
         values
     }
     fn reduce(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        values: [u32; 20], binding: &wgpu::BindGroup, label: &str,
+        values: [u32; 20], binding: &wgpu::BindGroup, label: &str, format:wgpu::TextureFormat,
     ) -> Result<(), GpuRasterError> {
         let values = Self::reduction_record(r, values);
         let offset = self.record(r, encoder, values)?;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(label), timestamp_writes: None,
         });
-        pass.set_pipeline(&r.scene_pipelines.scale.reduce);
+        pass.set_pipeline(&r.scene_pipelines.scale.output(format).reduce);
         pass.set_bind_group(0, &self.record_binding, &[offset]);
         pass.set_bind_group(1, binding, &[]);
         pass.dispatch_workgroups(values[2].div_ceil(8), values[3].div_ceil(8), 1);
         Ok(())
     }
-    fn push(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, job: DisplayJob) -> Result<(), GpuRasterError> {
-        let empty = match &job {
-            DisplayJob::Compose(job) => job.values[2] == 0 || job.values[3] == 0,
-            DisplayJob::Resample { size, .. } => size.contains(&0),
-        };
-        if empty { return Ok(()); }
-        self.jobs.push(job);
-        if self.jobs.len() >= 32 { self.flush(r, encoder)?; }
-        Ok(())
-    }
-    fn flush_root(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, jobs: &mut Vec<RootComposition>) -> Result<(), GpuRasterError> {
-        if jobs.is_empty() { return Ok(()); }
-        self.flush(r, encoder)?;
-        if !scene.jobs.is_empty() { scene.encode_jobs(r, encoder)?; }
-        self.jobs.extend(jobs.drain(..).map(|job|DisplayJob::Compose(job.composition)));
-        self.flush(r, encoder)
-    }
-    fn flush(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        if self.jobs.is_empty() { return Ok(()); }
-        let jobs = std::mem::take(&mut self.jobs);
-        let mut records = vec![0; jobs.len() * self.stride as usize];
-        for (record, job) in records.chunks_exact_mut(self.stride as usize).zip(&jobs) {
-            match job {
-                DisplayJob::Compose(job) => for (dst, value) in record.as_chunks_mut::<4>().0.iter_mut().zip(job.values) { dst.copy_from_slice(&value.to_le_bytes()); },
-                DisplayJob::Resample { values, .. } => record[..values.len()].copy_from_slice(values),
-            }
-        }
-        let offset = self.write(r, encoder, &records)?;
-        let resample = &r.scene_pipelines.resample;
-        let bindings: Vec<_> = jobs.iter().enumerate().map(|(i, job)| match job {
-            DisplayJob::Resample { views, .. } => Some(resample.binding(&r.device, &self.records,
-                u64::from(offset + i as u32 * self.stride), [&views[0], &views[1], &views[0]])),
-            DisplayJob::Compose(_) => None,
-        }).collect();
-        let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("display graph composition"),timestamp_writes:None});
-        for (i,job) in jobs.iter().enumerate() {
-            let size=match job {
-                DisplayJob::Compose(job)=> {
-                    pass.set_pipeline(&r.scene_pipelines.scale.compose);
-                    pass.set_bind_group(0,&self.record_binding,&[offset+i as u32*self.stride]);
-                    pass.set_bind_group(1,&job.binding,&[]);[job.values[2],job.values[3]]
-                }
-                DisplayJob::Resample {size,..}=> {
-                    pass.set_pipeline(&resample.area);pass.set_bind_group(0,bindings[i].as_ref().unwrap(),&[]);*size
-                }
-            };
-            pass.dispatch_workgroups(size[0].div_ceil(8),size[1].div_ceil(8),1);
-        }
-        drop(pass);
-        for mut job in jobs { if let DisplayJob::Compose(job) = &mut job { job.leases.clear(); } }
-        Ok(())
-    }
+
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -377,50 +272,33 @@ pub(crate) struct Cache {
     pub(super) submission_valid: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub evaluation: Evaluation,
     pub plan: display_mips::Plan,
+    precision: crate::display_precision::DisplayPrecision,
+    color: layer_core::color::DocumentColor,
     output: Vec<Image>,
+    output_charge: crate::residency::Charge,
     used: Vec<scratch::Usage>,
-    scratch_exhausted: bool,
-    pixels: hierarchy::Pixels,
-    half: Option<hierarchy::Half>,
-    half_stale: std::sync::Mutex<PixelRect>,
-    settling: bool,
-    placed: Option<Presentation>,
+    pixels: pages::Pixels,
+    cells: std::sync::Mutex<pages::Cells>,
+    above: pages::Pixels,
+    above_revision: Option<(graph::Node,u64)>,
+    pages: Pages,
+    window: pages::WindowId,
     pub geometry: wgpu::Buffer,
+    _geometry_charge: crate::residency::Charge,
     layer_count: usize,
-    // One adjacent level may survive unchanged navigation. Artwork changes
-    // release it, including its references to exact native tile captures.
-    spare: Option<Box<Cache>>,
-    ready: bool,
-    reuse_output: bool,
     overview: Option<Box<Cache>>,
-    shifted: Option<Box<Cache>>,
-    valid: BTreeSet<[u32; 2]>,
-    refined: BTreeSet<[u32; 2]>,
-    approximate: BTreeSet<[u32; 2]>,
     preparing: bool,
-    /// Whether this cache replaces one at another level or a smaller window,
-    /// so its first frame may show the pages that cache's overview holds.
-    zoomed: bool,
+    declaring: bool,
     exact_tile: Option<Image>,
     unchanged: bool,
     graph: graph::Graph,
     transform: Option<layer_render::TransformPreview>,
-    source_overlap: bool,
-    streamed_sources: bool,
-    hierarchy: Option<hierarchy::Hierarchy>,
-    residency_checked: bool,
-    resume: Option<Vec<PixelRect>>,
-    split: bool,
-    native_batch: usize,
-    deferred_changed: PixelRect,
-}
-
-pub(crate) struct DisplayBackup {
-    pub views: [wgpu::TextureView; 3],
-    pub geometry: wgpu::Buffer,
-    pub placement: [f32; 20],
-    pub resample: [u8; scene::resample::UNIFORM_BYTES as usize],
-    pub bytes: u64,
+    retired: Option<Box<Cache>>,
+    contact: bool,
+    gesture: Option<contact::Contact>,
+    stroked: Option<Arc<SignatureFrame>>,
+    presented: pages::Accuracy,
+    refused_at: Option<layer_render::ViewState>,
 }
 
 fn requires_native_effects(scene:SceneView<'_>,level:u32)->bool {
@@ -443,41 +321,13 @@ fn fine_request_capacity(r:&WgpuRasterizer,packet:FramePacket<'_>,plan:display_m
     let extent=packet.scene.target_extent(preview.target);
     if display_mips::Plan::at(extent,1).size.into_iter().any(|n|n>r.device.limits().max_texture_dimension_2d) {return None;}
     if let Some(capacity)=r.transforms.as_ref()?.fine_capacity(preview) {return (capacity<=48).then_some(capacity);}
-    let retiring=r.transforms.as_ref().map_or(0,|t|t.retiring_native_bytes(preview));
-    let retained=r.navigator.storage_bytes()+r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire).saturating_sub(retiring)
-        +r.display_backup.as_ref().map_or_else(||r.scale_display.as_ref().map_or(0,Cache::backup_bytes),|backup|backup.bytes)
-        +r.transforms.as_ref().map_or(0,|t|t.fine_progress_bytes()).saturating_add(plan.level_bytes(plan.level));
-    let peak=|capacity|allocation_for_mode(r,plan,packet,r.scene.as_ref().map(|scene|&scene.scale_sources),false,None,Evaluation::Tiled(capacity))
-        .into_iter().sum::<u64>().saturating_add(retained);
-
-    let mut low=1;
-    let mut high=page_coordinates(PixelRect::full(extent)).count().clamp(1,48);
-    let mut selected=None;
-    while low<=high {
-        let middle=low+(high-low)/2;
-        if peak(middle)<=cache_bytes(r) {selected=Some(middle);low=middle+1;}
-        else {high=middle.saturating_sub(1);}
-    }
-    selected
+    let kept=paint_transform::keeps_pixels(preview.selection.as_ref(),PixelRect::full(extent));
+    let available=r.memory.display_grant()
+        .saturating_sub(r.composition_storage_bytes()+r.navigator.storage_bytes());
+    (1..=page_coordinates(PixelRect::full(extent)).count().clamp(1,48)).rev()
+        .find(|capacity|paint_transform::fine_bytes(*capacity,kept)<=available)
 }
 
-pub(crate) fn memory_key(r: &WgpuRasterizer, packet: FramePacket<'_>) -> crate::memory::DisplayDemand {
-    let level = display_mips::view_level(packet.view.document_to_surface, 4).unwrap_or(0);
-    let mut transforms = [None; 2];
-    for (slot, plan) in transforms.iter_mut().zip(transform_plans(r, display_mips::Plan::at(packet.document_extent, level), packet.scene)) { *slot = Some(plan); }
-    let visible = display_mips::view_bounds(packet.view, packet.document_extent, 2 << level).unwrap_or(PixelRect::EMPTY);
-    let bounds = if visible.is_empty() { PixelRect::full(packet.document_extent) }
-        else { paint_transform::aligned(visible.expand(PAGE_SIZE, packet.document_extent), PAGE_SIZE.max(1 << level), packet.document_extent) };
-    let material = r.moving_layer.and_then(|owner| packet.scene.source_target(owner)).is_some_and(|target| mapped_material(r, packet, target));
-    crate::memory::DisplayDemand {level, transforms, moving: r.moving_layer, material, bounds}
-}
-
-fn native_bytes(r: &WgpuRasterizer, packet: FramePacket<'_>, plan: display_mips::Plan) -> u64 {
-    let output_bytes = |p: display_mips::Plan| p.level_bytes(p.level) + p.level_bytes(p.level + 1) + 32;
-    let material_pages = if targets(r, packet).any(|(_, id)| mapped_material(r, packet, id)) { Scene::MATERIAL_CACHE_PAGES as u64 } else { 0 };
-    Scene::geometry_bytes(r.scene.as_deref()) + output_bytes(plan) + exact_strip_bytes(packet.document_extent) + u64::from(PAGE_SIZE).pow(2) * 16 * material_pages
-        + if plan.bounds == PixelRect::full(plan.extent) { 0 } else { output_bytes(overview_plan(plan)) }
-}
 
 pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Request, GpuRasterError> {
     display_mips::Plan::new(packet.document_extent)?;
@@ -490,7 +340,7 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
     let coarsest = display_mips::Plan::new(packet.document_extent)?.level;
     let mut result = request_at(r, packet, level);
     for coarser in level + 1..=coarsest.max(level) {
-        if !matches!(result, Err(GpuRasterError::ExtentUnsupported | GpuRasterError::DeferredObjectWork)) { break; }
+        if !matches!(result, Err(GpuRasterError::ExtentUnsupported)) { break; }
         result = request_at(r, packet, coarser);
     }
     result
@@ -499,29 +349,25 @@ pub(crate) fn request(r: &WgpuRasterizer, packet: FramePacket<'_>) -> Result<Req
 /// The display request at `level`, or ExtentUnsupported when its native
 /// window would exceed the display budget or a texture.
 fn request_at(r: &WgpuRasterizer, packet: FramePacket<'_>, level: u32) -> Result<Request, GpuRasterError> {
-    let plan = view_plan(packet, level, Evaluation::Display).ok_or(GpuRasterError::InvalidExtent)?;
+    let plan = view_plan(packet, level).ok_or(GpuRasterError::InvalidExtent)?;
     let input = input_plan(plan, packet.scene,r.scene.as_ref().map(|s|&s.object_spatial));
-    let records = records_for(r, plan, packet.scene);
     let fits = transform_plans(r, plan, packet.scene).all(|(source, _)| source.size.iter()
         .all(|size| *size <= r.device.limits().max_texture_dimension_2d)) && targets(r, packet).all(|(_, id)| {
-        let source = source_plan(input, source_frame(r.scene.as_ref().map(|s| &s.scale_sources), packet.scene, id), packet.scene.target_extent(id), r.moving_layer == packet.scene.source_owner(id));
+        let source = source_plan(input, source_frame(r.scene.as_ref().map(|s| &s.scale_sources), packet.scene, id), packet.scene.target_extent(id), r.moving_layer == packet.scene.source_owner(id),
+            r.scene.as_ref().map_or(0, |scene| preview_input_level(&scene.scale_pages, id)));
         (plan.level == 0 && source.level == 0) || source.size.iter().all(|size| *size <= r.device.limits().max_texture_dimension_2d)
     });
     let native_effects=requires_native_effects(packet.scene,level);
-    let native = input.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) || !fits || records > r.device.limits().max_buffer_size.min(u64::from(u32::MAX))
-        || allocation_for(r, plan, packet, None, bounded(packet.scene), None).into_iter().sum::<u64>() > cache_bytes(r)
-        || native_effects;
+    let native = input.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) || !fits || native_effects;
     #[cfg(test)]
     let native = native || r.test.exact_display;
     let evaluation = if native && !native_effects {fine_request_capacity(r,packet,plan).map_or(Evaluation::Native,Evaluation::Tiled)}
         else if native_effects {Evaluation::Native}
         else {Evaluation::Display};
-    let plan = view_plan(packet, level, evaluation).ok_or(GpuRasterError::InvalidExtent)?;
-    let native_bytes = native_bytes(r, packet, plan);
+    let plan = view_plan(packet, level).ok_or(GpuRasterError::InvalidExtent)?;
     if plan.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) {
         return Err(GpuRasterError::ExtentUnsupported);
     }
-    if native_bytes > cache_bytes(r) { return Err(GpuRasterError::ExtentUnsupported); }
     Ok(Request { plan, evaluation })
 }
 
@@ -557,8 +403,11 @@ pub(super) fn source_frame(sources: Option<&Sources>, scene: SceneView<'_>, id: 
     SourceFrame::at(origin, sources.and_then(|sources| sources.entries.get(&id)).map_or_else(|| crate::scene::page_phase(origin), |source| source.phase))
 }
 
-pub(super) fn source_level(level: u32, frame: SourceFrame) -> u32 {
-    level.min(4).saturating_sub(u32::from(!frame.aligned()))
+pub(super) fn source_level(level: u32, frame: SourceFrame, moving: bool, preview: u32) -> u32 {
+    level.min(4).saturating_sub(u32::from(!frame.aligned())).saturating_sub(u32::from(moving && frame.aligned())).max(preview)
+}
+fn preview_input_level(pages: &std::sync::Mutex<pages::Store>, id: SourceTarget) -> u32 {
+    pages.lock().unwrap().expected().map_or(0, |frame| frame.preview_level(id))
 }
 
 fn native_pointwise_alpha(program: &layer_core::EffectProgram) -> bool {
@@ -567,6 +416,7 @@ fn native_pointwise_alpha(program: &layer_core::EffectProgram) -> bool {
         && !program.image_boundary() && program.auxiliary.is_none()
 }
 
+#[cfg(test)]
 fn page_regions(pages: impl IntoIterator<Item = [u32; 2]>, bounds: PixelRect) -> Vec<PixelRect> {
     let mut columns: Vec<PixelRect> = Vec::new();
     for page in pages.into_iter().collect::<BTreeSet<_>>() {
@@ -593,8 +443,8 @@ fn local_damage(required: &Damage, covered: PixelRect, frame: SourceFrame, exten
     (required.map(|region| local(region).expand(1 << level, frame.extent(extent))), PixelRect::EMPTY)
 }
 
-fn source_plan(output: display_mips::Plan, frame: SourceFrame, extent: [u32; 2], moving: bool) -> display_mips::Plan {
-    let level = source_level(output.level, frame).saturating_sub(u32::from(moving && frame.aligned()));
+fn source_plan(output: display_mips::Plan, frame: SourceFrame, extent: [u32; 2], moving: bool, preview: u32) -> display_mips::Plan {
+    let level = source_level(output.level, frame, moving, preview);
     let bounds = frame.local(output.doc_bounds, extent);
     let extent = frame.extent(extent);
     let bounds = if frame.aligned() && !moving { bounds } else { bounds.expand(1 << level, extent) };
@@ -605,14 +455,11 @@ fn source_plan(output: display_mips::Plan, frame: SourceFrame, extent: [u32; 2],
     display_mips::Plan::window(extent, level, bounds)
 }
 
-fn view_plan(packet: FramePacket<'_>, level: u32, evaluation: Evaluation) -> Option<display_mips::Plan> {
+fn view_plan(packet: FramePacket<'_>, level: u32) -> Option<display_mips::Plan> {
     let extent = packet.document_extent;
-    if evaluation != Evaluation::Native && level > 0 && effect_radius(packet.scene, level).is_none() {
-        return Some(display_mips::Plan::at(extent, level));
-    }
     let visible = display_mips::view_bounds(packet.view, extent, 2 << level).ok()?;
     if visible.is_empty() { return display_mips::Plan::new(extent).ok(); }
-    let bounds = paint_transform::aligned(visible.expand(PAGE_SIZE, extent), PAGE_SIZE.max(1 << level), extent);
+    let bounds = paint_transform::aligned(visible.expand(PAGE_SIZE<<level, extent), PAGE_SIZE<<level, extent);
     Some(display_mips::Plan::window(extent, level, bounds))
 }
 
@@ -631,20 +478,22 @@ fn input_plan(plan: display_mips::Plan, scene: SceneView<'_>, objects:Option<&ob
     result
 }
 
-fn overview_plan(plan: display_mips::Plan) -> display_mips::Plan {
-    let level = display_mips::Plan::new(plan.extent).unwrap().level.max(plan.level + 1);
-    display_mips::Plan::at(plan.extent, level)
+fn unit_plan(input: display_mips::Plan, scene: SceneView<'_>, region: PixelRect, tiled: bool, objects: Option<&object_spatial::SpatialIndex>) -> display_mips::Plan {
+    if tiled || bounded(scene) { return input; }
+    let cells = DocRect::from(region).aligned(PAGE_SIZE << input.level);
+    let window = images::dependency_window(scene, cells, input.level, objects).aligned(1 << input.level);
+    let margin: [i64; 2] = std::array::from_fn(|axis| (cells.min[axis] - window.min[axis]).max(window.max[axis] - cells.max[axis]));
+    let bounds = DocRect { min: std::array::from_fn(|axis| cells.min[axis] - margin[axis]), max: std::array::from_fn(|axis| cells.max[axis] + margin[axis]) };
+    let Ok(size) = bounds.size() else { return input; };
+    let mut result = display_mips::Plan::window(input.extent, input.level, PixelRect::full(size));
+    result.doc_bounds = bounds;
+    result
 }
 
-fn records_for(r: &WgpuRasterizer, plan: display_mips::Plan, scene: SceneView<'_>) -> u64 {
-    record_bytes(r, source_extent(plan.extent, scene), scene.order().len())
+fn overview_plan(plan: display_mips::Plan) -> display_mips::Plan {
+    display_mips::Plan::at(plan.extent, display_mips::Plan::new(plan.extent).unwrap().level.max(plan.level + 1))
 }
-pub(super) fn source_extent(extent: [u32; 2], scene: SceneView<'_>) -> [u32; 2] {
-    scene.order().iter().fold(extent, |size, handle| {
-        let local = scene.local_extent(*handle);
-        [size[0].max(local[0]), size[1].max(local[1])]
-    })
-}
+
 fn targets<'r, 'p: 'r>(r: &'r WgpuRasterizer, packet: FramePacket<'p>) -> impl Iterator<Item = (OccurrenceHandle, SourceTarget)> + 'r {
     packet.scene.order().iter().copied().flat_map(move |handle| {
         let scene = packet.scene;
@@ -661,72 +510,8 @@ fn targets<'r, 'p: 'r>(r: &'r WgpuRasterizer, packet: FramePacket<'p>) -> impl I
     })
 }
 
-#[cfg(test)]
-fn allocation(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>) -> [u64; 2] {
-    allocation_for(r, plan, packet, sources, false, None)
-}
-
-fn allocation_for(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>) -> [u64; 2] {
-    allocation_for_mode(r,plan,packet,sources,streamed,scene,Evaluation::Display)
-}
-fn allocation_for_mode(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>,evaluation:Evaluation) -> [u64;2] {
-    allocation_bound(r, plan, packet, sources, streamed, scene, evaluation, Some(cache_bytes(r)))
-}
-fn allocation_bound(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>, evaluation: Evaluation, limit: Option<u64>) -> [u64; 2] {
-    let bounded = bounded(packet.scene);
-    if bounded && (plan.level == 0 || !packet.scene.order().iter().any(|handle| packet.scene.visible(*handle) && packet.scene.effect(*handle).is_some())) {
-        return allocation_with_tiles(r, plan, packet, sources, streamed, scene, (true,evaluation), limit);
-    }
-    let untiled = allocation_with_tiles(r, plan, packet, sources, streamed, scene, (false,evaluation), limit);
-    if bounded && limit.is_some_and(|limit| untiled.into_iter().sum::<u64>() > limit) {
-        allocation_with_tiles(r, plan, packet, sources, streamed, scene, (true,evaluation), limit)
-    } else { untiled }
-}
-
-fn use_tiles(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>) -> bool {
-    bounded(packet.scene) && (plan.level == 0
-        || !packet.scene.order().iter().any(|handle| packet.scene.visible(*handle) && packet.scene.effect(*handle).is_some())
-        || allocation_with_tiles(r, plan, packet, sources, streamed, scene, (false,Evaluation::Display), Some(cache_bytes(r))).into_iter().sum::<u64>() > cache_bytes(r))
-}
-
-fn allocation_with_tiles(r: &WgpuRasterizer, plan: display_mips::Plan, packet: FramePacket<'_>, sources: Option<&Sources>, streamed: bool, scene: Option<&Scene>, mode:(bool,Evaluation), limit: Option<u64>) -> [u64; 2] {
-    let (tiled,evaluation)=mode;
-    let scene=scene.or(r.scene.as_deref());
-    let layers = packet.scene;
-    let images = if tiled { scratch_images(layers) }
-        else { graph::scratch_images(packet, plan.level, r.device.working_space(),scene.map(|s|&s.object_spatial),evaluation.fine_capacity().and(r.transform_preview.as_ref().map(|preview|preview.target))).unwrap_or_else(|_| scratch_images(layers)) };
-    let material = targets(r, packet).any(|(_, id)| mapped_material(r, packet, id));
-    let images = images + u64::from(plan.level > 0 && material);
-    let input = input_plan(plan, layers,scene.map(|s|&s.object_spatial));
-    let (source_bytes, root_mips) = targets(r, packet).fold((0, 0), |(sum, largest), (_, id)| {
-        if fine_source(evaluation,r.transform_preview.as_ref(),id) {return (sum,largest);}
-        let frame = source_frame(sources.or(scene.map(|s| &s.scale_sources)), layers, id);
-        if streamed && frame.aligned() { return (sum, largest); }
-        let source = source_plan(input, frame, packet.scene.target_extent(id), r.moving_layer == packet.scene.source_owner(id));
-        if plan.level == 0 && source.level == 0 { return (sum, largest); }
-        let source = sources.map_or(source, |s| s.resident_plan(id, source));
-        let extra = if plan.level == 0 { 0 } else { source.level_bytes(source.level + 1) + source.level_bytes(source_coarse_level(source)) };
-        (sum + source.level_bytes(source.level), largest.max(extra))
-    });
-    let records = records_for(r, plan, layers).next_power_of_two().max(
-        r.scene.as_ref().and_then(|scene| scene.scale_commands.as_ref()).map_or(0, Commands::storage_bytes));
-    let transform = transform_plans(r, plan, layers).map(|(source, kept)| {
-            let records = page_coordinates(PixelRect::full(source.extent)).count() as u64 * 512;
-            let source=if evaluation.fine_capacity().is_some() {display_mips::Plan::at(source.extent,1)} else {source};
-            (source.pixel_bytes_through(display_mips::MAX_LEVEL) + records * u64::from(display_mips::MAX_LEVEL))
-                * if kept {2} else {1} + evaluation.fine_capacity().map_or(0,|capacity|paint_transform::fine_bytes(capacity,kept))
-        }).sum::<u64>();
-    let output = plan.level_bytes(plan.level);
-    let working = if tiled {
-        u64::from(PAGE_SIZE).pow(2) * 16 * (images + pixel_transform::TRANSFORM_SLOTS as u64)
-    } else { input.level_bytes(input.level) * (images - 1) };
-    let own = [source_bytes+r.changed_cells.as_ref().map_or(0,changed_cells::ChangedCells::storage_bytes), Scene::geometry_bytes(scene) + output + working + root_mips + plan.level_bytes(plan.level + 1) + records + 32 + transform
-        + exact_strip_bytes(plan.extent) + u64::from(PAGE_SIZE).pow(2) * 16 * u64::from(material) * Scene::MATERIAL_CACHE_PAGES as u64];
-    if plan.bounds == PixelRect::full(plan.extent) { own }
-    else {
-        let overview = allocation_bound(r, overview_plan(plan), packet, sources, false, scene, evaluation, limit);
-        [own[0] + overview[0], own[1] + overview[1]]
-    }
+fn use_tiles(_r:&WgpuRasterizer,_plan:display_mips::Plan,packet:FramePacket<'_>,_scene:Option<&Scene>)->bool {
+    bounded(packet.scene)
 }
 
 fn transform_plans<'a>(r: &'a WgpuRasterizer, plan: display_mips::Plan, scene: SceneView<'a>)
@@ -754,13 +539,44 @@ fn transform_plans<'a>(r: &'a WgpuRasterizer, plan: display_mips::Plan, scene: S
 #[cfg(test)]
 pub(crate) mod tests;
 
-fn nearest_first(pages: &mut [[u32; 2]], view: layer_render::ViewState) {
-    let [a, b, c, d, tx, ty] = view.document_to_surface.map(f64::from);
-    let det = a * d - b * c;
-    let surface = [f64::from(view.width_px) * 0.5 - tx, f64::from(view.height_px) * 0.5 - ty];
-    let center = [(d * surface[0] - c * surface[1]) / det, (a * surface[1] - b * surface[0]) / det];
-    let distance = |page: &[u32; 2]| { let rect = page_rect(*page); (f64::from(rect.min_x() + rect.max_x()) * 0.5 - center[0]).hypot(f64::from(rect.min_y() + rect.max_y()) * 0.5 - center[1]) };
-    pages.sort_by(|p, q| distance(p).total_cmp(&distance(q)));
+fn work_view(packet:FramePacket<'_>,level:u32)->layer_render::ViewState {
+    let mut view=packet.view;
+    if let Some(batch)=packet.dab_batches.iter().rev().find(|batch|batch.dab_count!=0) {
+        let offset=layer_core::offsets::point(packet.scene.target_offset(batch.target));
+        let center=[(batch.damage.min.x+batch.damage.max.x)*0.5+offset.x,(batch.damage.min.y+batch.damage.max.y)*0.5+offset.y];
+        let [a,b,c,d,_,_]=view.document_to_surface;
+        view.document_to_surface[4]=view.width_px as f32*0.5-a*center[0]-c*center[1];
+        view.document_to_surface[5]=view.height_px as f32*0.5-b*center[0]-d*center[1];
+    }
+    for value in &mut view.document_to_surface[..4] {*value*=(1<<level) as f32;}
+    view
+}
+
+fn nearest_pages(bounds:PixelRect,view:layer_render::ViewState,limit:usize,held:impl IntoIterator<Item=[u32;2]>,needed:impl Fn(&[u32;2])->bool)->Vec<[u32;2]> {
+    if limit==0 || bounds.is_empty() {return Vec::new();}
+    let [a,b,c,d,tx,ty]=view.document_to_surface.map(f64::from);
+    let det=a*d-b*c;
+    let surface=[f64::from(view.width_px)*0.5-tx,f64::from(view.height_px)*0.5-ty];
+    let center=[(d*surface[0]-c*surface[1])/det,(a*surface[1]-b*surface[0])/det];
+    let held=held.into_iter().collect::<BTreeSet<_>>();
+    let distance=|coordinate:[u32;2]| {
+        let rect=page_rect(coordinate);
+        let dx=f64::from(rect.min_x()+rect.max_x())*0.5-center[0];
+        let dy=f64::from(rect.min_y()+rect.max_y())*0.5-center[1];
+        ((dx*dx+dy*dy).to_bits(),!held.contains(&coordinate),coordinate)
+    };
+    let mut result=Vec::new();
+    let first=bounds.min_x()/PAGE_SIZE;let end=bounds.max_x().div_ceil(PAGE_SIZE);
+    let column=((center[0]/f64::from(PAGE_SIZE)).ceil() as u32).saturating_sub(1).clamp(first,end-1);
+    let mut nearest=std::collections::BinaryHeap::new();
+    for row in bounds.min_y()/PAGE_SIZE..bounds.max_y().div_ceil(PAGE_SIZE) {nearest.push(std::cmp::Reverse(distance([column,row])));}
+    while let Some(std::cmp::Reverse((_,_,coordinate)))=nearest.pop() {
+        if needed(&coordinate) {result.push(coordinate);if result.len()==limit {break;}}
+        let [x,y]=coordinate;
+        if x<=column && x>first {nearest.push(std::cmp::Reverse(distance([x-1,y])));}
+        if x>=column && x+1<end {nearest.push(std::cmp::Reverse(distance([x+1,y])));}
+    }
+    result
 }
 
 fn source_coarse_level(plan: display_mips::Plan) -> u32 {
@@ -771,24 +587,6 @@ fn coarse_level(plan: display_mips::Plan) -> u32 {
     plan.level + u32::from(plan.size.iter().any(|size| *size > display_mips::MAX_SIDE))
 }
 
-fn scratch_images(scene: SceneView<'_>) -> u64 {
-    3 + u64::from((4 * scene.order().len().max(1)).next_power_of_two().ilog2())
-        + 2 * u64::from(scene.order().iter().any(|handle| scene.effect(*handle).is_some_and(|effect| effect.program.image_boundary())))
-        + scene.order().iter().filter(|handle| scene.effect(**handle).is_some() && scene.mask(**handle).is_some_and(|(mask, _)| mask.enabled)).count().min(crate::effects::MASK_SLOTS) as u64
-}
-
-pub(super) fn record_bytes(r: &WgpuRasterizer, extent: [u32; 2], layers: usize) -> u64 {
-    let pages = extent
-        .map(|n| u64::from(n.div_ceil(PAGE_SIZE)))
-        .into_iter()
-        .product::<u64>();
-    u64::from(
-        r.device
-            .limits()
-            .min_uniform_buffer_offset_alignment
-            .max(256),
-    ) * ((2 * pages + 12) * layers.max(1) as u64 + 2)
-}
 
 impl Cache {
     pub fn select(
@@ -798,127 +596,69 @@ impl Cache {
         request: Request,
         unchanged: bool,
     ) -> (Self, bool) {
-        let Request { plan, evaluation } = request;
-        let required = display_mips::view_bounds(packet.view, plan.extent, 2 << plan.level)
-            .expect("admitted display view");
-        let matches = |cache: &Self| {
-            cache.evaluation == evaluation && cache.plan.extent == plan.extent && cache.plan.level == plan.level
-                && cache.plan.bounds.intersect(required) == required
-                && cache.layer_count == packet.scene.order().len()
-                && (evaluation == Evaluation::Native || allocation_for_mode(r, cache.plan, packet, None, bounded(packet.scene), None,evaluation)
-                    .into_iter().sum::<u64>() <= cache_bytes(r))
+        let Request {plan,evaluation}=request;
+        let unchanged=unchanged && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty();
+        let required=display_mips::view_bounds(packet.view,plan.extent,2<<plan.level).expect("admitted display view");
+        let Some(mut old)=previous else {
+            let cache=Self::new(r,request,packet.scene.order().len());
+            return (cache,true);
         };
-        let unchanged = unchanged && !packet.composite_all && !packet.reset_layers && packet.restore_rasters.is_empty();
-        let Some(mut old) = previous.filter(|c| c.submission_valid.as_ref()
-            .is_none_or(|v| v.load(std::sync::atomic::Ordering::Acquire))) else {
-            let mut cache = Self::new(r, request, packet.scene.order().len());
-            cache.admit_source_overlap(r, packet);
-            return (cache, true);
-        };
-        let unchanged = unchanged && old.transform == r.transform_preview;
-        let reuse = unchanged && (old.reuse_output || !r.object_deferred);
-        if !unchanged || !r.object_deferred {
-            old.resume = None;
-            if let Some(overview) = &mut old.overview { overview.resume = None; }
+        if old.plan!=plan && old.overview.as_ref().is_some_and(|overview|overview.plan==plan) {
+            return Self::select(old.overview.take().map(|overview|*overview),r,packet,request,unchanged);
         }
-        old.transform = r.transform_preview.clone();
-        let hierarchy = old.hierarchy.take().filter(|c| old.plan.extent == plan.extent
-            && !packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some())
-            && (unchanged || !old.residency_checked || c.fits(r)));
-        if hierarchy.is_none() && matches!(old.pixels, hierarchy::Pixels::Resident { .. }) {
-            let mut next = Self::new(r, request, packet.scene.order().len());
-            next.graph = old.graph.without_pixels();
-            next.admit_source_overlap(r, packet);
-            return (next, true);
-        }
-        if !unchanged {
-            old.ready = false;
-            old.spare = None;
-            if let Some(overview) = &mut old.overview { overview.ready = false; }
-            old.residency_checked = false;
-        }
-        if matches(&old) {
-            old.hierarchy = hierarchy;
-            old.admit_source_overlap(r, packet);
-            old.unchanged = unchanged;
-            old.reuse_output = reuse && old.output_complete();
-            if let Some(overview) = &mut old.overview {
-                overview.unchanged = unchanged;
-                overview.reuse_output = reuse && overview.output_complete();
+        let unchanged=unchanged && old.transform==r.transform_preview;
+        if old.plan.extent==plan.extent && old.plan.level==plan.level && old.plan.bounds.intersect(required)==required
+            && old.layer_count==packet.scene.order().len() {
+            old.evaluation=evaluation;old.transform=r.transform_preview.clone();old.unchanged=unchanged;
+            if let Some(overview)=&mut old.overview {
+                overview.unchanged=unchanged;
             }
-            return (old, false);
+            return (old,false);
         }
-        let reusable = old.spare.take().filter(|cache| matches(cache));
-        let mut next = reusable.map(|cache| *cache)
-            .unwrap_or_else(|| Self::new(r, request, packet.scene.order().len()));
-        next.unchanged = unchanged;
-        next.reuse_output = reuse && next.output_complete();
-        if old.evaluation == evaluation && next.overview.as_ref().map(|c| c.plan) == old.overview.as_ref().map(|c| c.plan)
-            && let Some(mut overview) = old.overview.take() {
-                overview.unchanged = unchanged;
-                overview.reuse_output = reuse && overview.output_complete();
-                next.overview = Some(overview);
-        }
-        next.admit_source_overlap(r, packet);
-        if let Some(hierarchy) = hierarchy {
-            next.graph = old.graph.without_pixels();
-            next.share_levels(r, &hierarchy, true);
-            next.hierarchy = Some(hierarchy);
-            let rebuilt = !next.reuse_output;
-            return (next, rebuilt);
-        }
-        if old.evaluation != evaluation && old.plan == plan && old.placed.is_none() && next.pixels.root().is_none() {
-            next.pixels = hierarchy::Pixels::Window {
-                root: old.pixels.root().cloned(), next: old.pixels.next().cloned(),
-            };
-        }
-        let bound = allocation_for_mode(r, next.plan, packet,
-            r.scene.as_ref().filter(|_| next.source_overlap).map(|s| &s.scale_sources), next.streamed_sources, None,evaluation).into_iter().sum::<u64>();
-        next.zoomed = old.plan.level != plan.level || old.plan.bounds.area() < next.plan.bounds.area();
-        if unchanged && old.evaluation == evaluation && old.placed.is_none() && old.plan.extent == plan.extent {
-            if bound + old.storage_bytes() <= cache_bytes(r) {
-                if old.plan.level == plan.level && old.ready {
-                    next.shifted = Some(Box::new(old));
-                } else {
-                    next.spare = Some(Box::new(old));
-                }
-            } else if let Some(overview) = old.overview.take().filter(|overview| overview.plan.level != plan.level && bound + overview.storage_bytes() <= cache_bytes(r)) {
-                next.spare = Some(overview);
+        let mut next=Self::new(r,request,packet.scene.order().len());
+        next.pages=old.pages.clone();next.window=old.window;next.graph=old.graph.without_pixels();next.unchanged=unchanged;
+        let mut old=Some(Box::new(old));
+        if let Some(overview)=&mut next.overview {
+            overview.pages=next.pages.clone();overview.window=next.window;overview.unchanged=unchanged;
+            let previous=if old.as_ref().is_some_and(|old|old.plan==overview.plan) {old.take()}
+                else {old.as_mut().and_then(|old|old.overview.take()).filter(|cache|cache.plan==overview.plan)};
+            if let Some(mut previous)=previous {
+                previous.exit_contact();
+                previous.pages=next.pages.clone();previous.window=next.window;previous.evaluation=Evaluation::Display;previous.unchanged=unchanged;
+                next.overview=Some(previous);
             }
         }
-        (next, true)
+        if let Some(old)=&old {old.exit_contact();}
+        next.retired=old.filter(|old|old.has_direct_cells());
+        (next,true)
     }
 
     pub fn new(r: &WgpuRasterizer, request: Request, layers: usize) -> Self {
         let Request { plan, evaluation } = request;
-        let overview = (plan.bounds != PixelRect::full(plan.extent))
-            .then(|| Box::new(Self::new(r, Request { plan: overview_plan(plan), evaluation }, layers)));
+        let pages=r.scene.as_ref().map(|scene|scene.scale_pages.clone()).unwrap_or_default();
+        let overview_plan=overview_plan(plan);
+        let mut overview = (plan.bounds != PixelRect::full(plan.extent))
+            .then(|| Box::new(Self::new(r, Request { plan: overview_plan, evaluation:Evaluation::Display }, layers)));
+        let window=pages::WindowId::new();
+        if let Some(overview)=&mut overview {overview.pages=pages.clone();overview.window=window;}
         let geometry = Self::geometry(r, plan, overview.as_ref().map_or_else(|| coarse_level(plan), |c| coarse_level(c.plan)));
         Self {
             submission_valid: None,
-            evaluation, plan,
-            output: Vec::new(),
+            evaluation, plan, precision:crate::display_precision::DisplayPrecision::Full,color:r.document_color(),
+            output: Vec::new(), output_charge:r.scene_tiers.gpu.charge(0),
             used: Vec::new(),
-            pixels: Default::default(),
-            half: None,
-            half_stale: std::sync::Mutex::new(PixelRect::EMPTY),
-            settling: false,
-            placed: None,
+            pixels: Default::default(), cells:Default::default(), above:Default::default(),above_revision:None,pages,window,
+            _geometry_charge:r.scene_tiers.windows.charge(geometry.size()),
             geometry,
             layer_count: layers,
-            spare: None,
-            ready: false, source_overlap: false, streamed_sources: false,
-            hierarchy: None, residency_checked: false,
-            reuse_output: false,
-            overview, shifted: None, valid: BTreeSet::new(), refined: BTreeSet::new(), approximate: BTreeSet::new(), preparing: false, zoomed: false, exact_tile: None,
-            unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(),
-            resume: None, split: false, native_batch: SOURCE_SLOTS, deferred_changed: PixelRect::EMPTY,
-            scratch_exhausted: false,
+            overview, preparing: false, declaring: false, exact_tile: None,
+            unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan, coarse: u32) -> wgpu::Buffer {
         let level = plan.level;
-        let mut geometry = [0u32; 8];
+        let pages=pages::coordinates(plan.bounds,plan.level).count();
+        let mut geometry = vec![0u32;8+pages.div_ceil(32).next_multiple_of(4).max(4)];
         geometry[0] = 1 << level;
         geometry[1] = 1 << coarse;
         geometry[2] = 1 << (level + 1);
@@ -934,19 +674,8 @@ impl Cache {
                     .into_iter()
                     .flat_map(u32::to_le_bytes)
                     .collect::<Vec<_>>(),
-                usage: wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             })
-    }
-    fn admit_source_overlap(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>) {
-        if self.evaluation == Evaluation::Native { return; }
-        self.streamed_sources = bounded(packet.scene) && allocation_for_mode(r,self.plan,packet,None,false,None,self.evaluation)
-            .into_iter().sum::<u64>() > cache_bytes(r);
-        self.source_overlap = allocation_for_mode(r,self.plan,packet,r.scene.as_ref().map(|s|&s.scale_sources),false,None,self.evaluation)
-            .into_iter().sum::<u64>() <= cache_bytes(r);
-        if let Some(overview) = &mut self.overview { overview.source_overlap = self.source_overlap; }
-    }
-    fn source_plan(&self, sources: &Sources, id: SourceTarget, requested: display_mips::Plan) -> display_mips::Plan {
-        if self.source_overlap { sources.resident_plan(id, requested) } else { requested }
     }
     pub fn native_preview_input(&self,packet:FramePacket<'_>,id:SourceTarget)->bool {
         self.graph.root.as_ref().is_some_and(|root|root.source_domains(packet.scene)[1].contains(&id))
@@ -956,210 +685,116 @@ impl Cache {
         if !contribution && self.native_preview_input(packet,id) { return 0; }
         let frame = source_frame(r.scene.as_ref().map(|scene| &scene.scale_sources), packet.scene, id);
         if contribution && frame.phase != [0; 2] { return 0; }
-        source_level(self.plan.level, frame).min(crate::preview_block(packet.view.document_to_surface).ilog2())
+        source_level(self.plan.level, frame, false, 0).min(crate::preview_block(packet.view.document_to_surface).ilog2())
     }
-    pub fn source_levels(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, scene: &Scene) -> BTreeMap<SourceTarget, BTreeMap<u32, display_mips::Plan>> {
-        let sources=&scene.scale_sources;
-        let reduced = self.graph.root.as_ref().map(|root| root.source_domains(packet.scene)[0].clone());
-        let plans = std::iter::once((input_plan(self.plan, packet.scene,Some(self.graph.objects())), self.streamed_sources))
-            .chain(self.overview.as_ref().map(|c| (input_plan(c.plan, packet.scene,Some(c.graph.objects())), c.streamed_sources)));
-        let mut requested: BTreeMap<_, BTreeMap<_, _>> = targets(r, packet)
-            .filter(|(_, id)| sources.entries.contains_key(id) && reduced.as_ref().is_none_or(|ids| ids.contains(id))
-                && !fine_source(self.evaluation,r.transform_preview.as_ref(),*id)
-                && !r.transforms.as_ref().is_some_and(|t| t.display_source(*id))).map(|(_, id)| {
-            let frame = source_frame(Some(sources), packet.scene, id);
-            (id, plans.clone().filter(|(_, streamed)| !streamed || !frame.aligned())
-                .map(|(p, _)| (p, source_plan(p, frame, packet.scene.target_extent(id), r.moving_layer == packet.scene.source_owner(id))))
-                .filter_map(|(p, s)| (p.level > 0 || s.level > 0).then_some(s))
-                .filter(|p| !p.bounds.is_empty()).map(|p| (p.level, self.source_plan(sources, id, p))).collect())
-        }).collect();
-        if let Some(Presentation::Placed(root)) = &self.placed && let Some(levels) = requested.get_mut(&root.value.id)
-            && let Some(plan) = levels.get(&root.value.plan.level).copied() {
-                for level in [plan.level + 1, source_coarse_level(plan)] {
-                    levels.insert(level, display_mips::Plan::window(plan.extent, level, plan.bounds));
-                }
-            }
-        requested
-    }
-    pub(crate) fn auxiliary_budget(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->u64 {
-        let required=allocation_for_mode(r,self.plan,packet,None,self.streamed_sources,r.scene.as_deref(),self.evaluation).into_iter().sum::<u64>();
-        cache_bytes(r).saturating_sub(required+self.graph.reserved_bytes(input_plan(self.plan,packet.scene,Some(self.graph.objects()))))
-            .min(cache_bytes(r).saturating_sub(self.working_bytes()))
-    }
-    fn fine_output_budget(&self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,commands:&Commands)->u64 {
-        let estimate=allocation_for_mode(r,self.plan,packet,self.source_overlap.then_some(&scene.scale_sources),self.streamed_sources,Some(scene),self.evaluation)
-            .into_iter().sum::<u64>()+self.graph.reserved_bytes(input_plan(self.plan,packet.scene,Some(self.graph.objects())));
-        let transforms=r.transforms.as_ref().map_or(0,|t|t.storage_bytes().saturating_sub(t.fine_progress_bytes()));
-        let actual=self.working_bytes()+scene.scale_sources.storage_bytes()+commands.storage_bytes()+transforms
-            +scene.pool.iter().map(|image|texture_bytes(&image.texture)).sum::<u64>();
-        let retained=r.navigator.storage_bytes()+r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire)
-            +r.display_backup.as_ref().map_or(0,|backup|backup.bytes);
-        cache_bytes(r).saturating_sub(estimate.max(actual).saturating_add(retained))
-    }
-    pub fn source_budget(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, commands: &Commands, scene: Option<&Scene>) -> u64 {
-        let reserve = allocation_for_mode(r, self.plan, packet, scene.map(|s|&s.scale_sources).filter(|_| self.source_overlap), self.streamed_sources, scene,self.evaluation)[1]
-            + self.half_reserve()
-            + self.spare.as_ref().map_or(0, |cache| cache.storage_bytes())
-            + self.shifted.as_ref().map_or(0, |cache| cache.storage_bytes());
-        let retained_records = commands.storage_bytes().saturating_sub(records_for(r, self.plan, packet.scene).next_power_of_two());
-        let branches = self.graph.reserved_bytes(input_plan(self.plan, packet.scene,Some(self.graph.objects())))
-            + self.overview.as_ref().map_or(0, |c| c.graph.reserved_bytes(input_plan(c.plan, packet.scene,Some(c.graph.objects()))));
-        cache_bytes(r).saturating_sub((reserve + retained_records + branches).max(self.working_bytes() + commands.storage_bytes()))
+    fn fine_output_budget(&self,r:&WgpuRasterizer,scene:&Scene,retained:u64)->u64 {
+        r.memory.display_grant().saturating_sub(self.frame_memory(r,retained)[0]
+            +scene.working_bytes())
     }
 
-    pub fn prepare_graph(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, scene: &Scene, commands: &Commands, tiles: Option<&BTreeSet<[u32; 2]>>) -> Result<(), GpuRasterError> {
-        let sources=&scene.scale_sources;
-        let retained_records = commands.storage_bytes().saturating_sub(records_for(r, self.plan, packet.scene).next_power_of_two());
-        let budget = cache_bytes(r).saturating_sub(allocation_for_mode(r, self.plan, packet, self.source_overlap.then_some(sources), self.streamed_sources, Some(scene),self.evaluation).into_iter().sum::<u64>()
-            + retained_records + self.spare.as_ref().map_or(0, |c| c.storage_bytes()) + self.shifted.as_ref().map_or(0, |c| c.storage_bytes()));
-        let budget = if self.evaluation == Evaluation::Native { 0 } else { budget };
-        self.prepare_root(r, packet, sources, budget, tiles)?;
-        if let Some(overview) = &mut self.overview {
-            overview.prepare_root(r, packet, sources, budget.saturating_sub(self.graph.reserved_bytes(input_plan(self.plan, packet.scene,Some(self.graph.objects())))), tiles)?;
+    pub fn prepare_graph(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, scene: &Scene) -> Result<(), GpuRasterError> {
+        if !Arc::ptr_eq(&self.pages,&scene.scale_pages) {
+            self.pages=scene.scale_pages.clone();
+            if let Some(overview)=&mut self.overview {overview.pages=self.pages.clone();}
         }
+        let sources=&scene.scale_sources;
+        let held=self.contact_holds(r,packet);
+        if let Some(overview)=&mut self.overview {overview.prepare_root(r,packet,sources,held)?;}
+        self.prepare_root(r,packet,sources,held)?;
         Ok(())
     }
 
-    fn prepare_root(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, budget: u64, tiles: Option<&BTreeSet<[u32; 2]>>) -> Result<(), GpuRasterError> {
-        let previous = self.graph.root.clone();
+    pub(super) fn retain_shared_work(&self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,navigator:&Navigator) {
+        let mut windows=Vec::new();
+        self.append_wanted_work(r,packet,scene,&mut windows);
+        for cache in std::iter::once(self).chain(self.overview.as_deref()).filter(|_|!refinement::exact_at_view_level(packet.scene)) {
+            for level in 0..=cache.plan.level {windows.push(cache.refinement_interest(self.evaluation,level,cache.plan.bounds));}
+        }
+        navigator.append_wanted_work(r,packet,scene,&mut windows);
+        self.pages.lock().unwrap().retain_work(&windows);
+    }
+
+    fn refinement_interest(&self,evaluation:Evaluation,level:u32,region:PixelRect)->pages::Interest {
+        let span=PAGE_SIZE<<level;
+        let key=pages::Key {level,coordinate:[region.min_x()/span,region.min_y()/span],format:wgpu::TextureFormat::Rgba32Float,
+            ..self.page_key(self.graph.root.clone().unwrap(),region)};
+        Self::exact_interest(key,evaluation,region)
+    }
+    fn exact_interest(key:pages::Key,evaluation:Evaluation,region:PixelRect)->pages::Interest {pages::Interest::new(key,evaluation,region,0)}
+    fn parent_interest(&self,region:PixelRect)->pages::Interest {
+        pages::Interest::new(self.page_key(self.graph.root.clone().unwrap(),region),self.evaluation,region,self.required_input_level())
+    }
+
+    fn append_wanted_work(&self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,windows:&mut Vec<pages::Interest>) {
+        let sources=&scene.scale_sources;
+        windows.extend(std::iter::once(self).chain(self.overview.as_deref())
+            .map(|cache|cache.parent_interest(cache.plan.bounds)));
+        for cache in std::iter::once(self).chain(self.overview.as_deref()) {
+            let reduced=cache.graph.root.as_ref().unwrap().source_domains(packet.scene)[0].clone();
+            let input=input_plan(cache.plan,packet.scene,Some(cache.graph.objects()));
+            for (_,id) in targets(r,packet).filter(|(_,id)|reduced.contains(id) && sources.entries.contains_key(id)
+                && !fine_source(cache.evaluation,r.transform_preview.as_ref(),*id) && !r.transforms.as_ref().is_some_and(|t|t.display_source(*id))) {
+                let plan=source_plan(input,source_frame(Some(sources),packet.scene,id),packet.scene.target_extent(id),r.moving_layer==packet.scene.source_owner(id),preview_input_level(&scene.scale_pages,id));
+                if !plan.bounds.is_empty() {windows.push(sources.entries[&id].interest(r,id,plan,plan.bounds,cache.evaluation));}
+            }
+        }
+    }
+
+    fn prepare_root(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, held: bool) -> Result<(), GpuRasterError> {
+        self.color=r.document_color();
+        self.precision=r.display_precision(packet.scene);
         let plan = if self.evaluation == Evaluation::Native { display_mips::Plan::window(self.plan.extent, 0, self.plan.bounds) }
             else { input_plan(self.plan, packet.scene,Some(self.graph.objects())) };
-        self.graph.prepare(r, packet, sources, plan, budget)?;
-        if self.placed.is_some() && !self.graph.root.as_ref().unwrap().deferred(r, packet.scene, packet.dab_batches) {
-            self.valid.clear(); self.reuse_output = false;
-        }
-        if previous != self.graph.root {
-            if let Some(damage) = r.artwork_frame.as_ref().and_then(|old| Scene::object_edit_damage(old.scene.view().with_scope(&old.scope), packet.scene, self.plan.extent)) {
-                if let Some(hierarchy) = &mut self.hierarchy { hierarchy.invalidate(damage.clone()); }
-                self.valid.retain(|c| !damage.intersects(page_rect(*c)));
-                self.refined.retain(|c| !damage.intersects(page_rect(*c)));
-                self.reuse_output = false;
-                return Ok(());
-            }
-            if self.graph.split_changed && r.artwork_frame.as_ref().is_some_and(|old| old.same_artwork(packet)) {
-                self.reuse_output = false;
-                return Ok(());
-            }
-            let tiles = tiles.filter(|_| r.artwork_frame.as_ref().is_some_and(|old|
-                old.blend_space == packet.blend_space
-                    && (old.time == packet.time_seconds || !packet.scene.order().iter().any(|handle|
-                        packet.scene.visible(*handle) && packet.scene.effect(*handle).is_some_and(|effect| effect.animated())))
-                    && old.scene.view().with_scope(&old.scope).order() == packet.scene.order()
-                    && packet.scene.order().iter().all(|handle| metadata::Metadata::new(old.scene.view().with_scope(&old.scope), *handle) == metadata::Metadata::new(packet.scene, *handle))));
-            if !self.unchanged && let Some(hierarchy) = &mut self.hierarchy {
-                hierarchy.invalidate(Damage::from_tiles(PixelRect::full(self.plan.extent), tiles));
-            }
-            if self.evaluation == Evaluation::Native || tiles.is_none() {
-                self.valid.retain(|c| tiles.is_some_and(|tiles| !tiles.contains(c)));
-            }
-            self.refined.retain(|c| tiles.is_some_and(|tiles| !tiles.contains(c)));
-            self.reuse_output = false;
-        }
+        self.graph.prepare(r, packet, sources, plan, held)?;
         Ok(())
     }
 
-    pub(super) fn refresh_objects(&mut self) {
-        self.reuse_output = false;
-        if let Some(overview) = &mut self.overview { overview.reuse_output = false; }
+    pub(crate) fn presentable(&self) -> Option<&Self> {
+        if self.pixels.committed_root().is_some() {Some(self)}
+        else {self.overview.as_deref().and_then(Self::presentable)}
     }
-    fn coverage_complete(&self) -> bool {
-        self.ready && (self.placed.is_some() || page_coordinates(self.plan.bounds).all(|coordinate| self.valid.contains(&coordinate) || self.approximate.contains(&coordinate)))
+    pub fn presentation(&self)->Option<PresentedPage<'_>> {
+        let root=self.pixels.committed_root()?;
+        let next=self.pixels.committed_next().unwrap_or(root);
+        Some(PresentedPage {views:[root,self.coarse_projection()?,next],geometry:&self.geometry})
     }
-    fn output_complete(&self) -> bool {
-        self.approximate.is_empty() && self.coverage_complete()
+    #[cfg(test)]
+    pub fn view(&self) -> &wgpu::TextureView {&self.pixels.root().expect("composition target").view}
+    #[cfg(test)]
+    pub fn texture(&self) -> &wgpu::Texture {&self.pixels.root().expect("composition target").texture}
+    fn coarse_projection(&self)->Option<&pages::CommittedImage> {
+        if let Some(image)=self.overview.as_deref().and_then(|overview|overview.coarse_projection()) {return Some(image);}
+        self.pixels.committed_next().filter(|_|coarse_level(self.plan)>self.plan.level).or_else(||self.pixels.committed_root())
     }
-    pub(crate) fn unfinished(&self) -> Option<&[PixelRect]> {
-        match self.resume.as_deref()? {
-            [] => self.overview.as_ref()?.resume.as_deref().filter(|regions| !regions.is_empty()),
-            regions => Some(regions),
-        }
+    fn write_projection_scales(&self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
+        let next=self.pixels.committed_next().map_or(self.plan.level,|image|image.image().plan.level);
+        let levels=[1<<self.plan.level,1<<self.coarse_projection().map_or(self.plan.level,|image|image.image().plan.level),1<<next];
+        let bytes=levels.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
+        r.uploads.write_at(encoder,&self.geometry,0,&bytes)
     }
-    pub(crate) fn deferred_presentation(&self) -> Option<&Self> {
-        let current = (!self.approximate.is_empty()).then_some(self);
-        [self.overview.as_deref(), self.spare.as_deref(), current].into_iter().flatten().find(|cache|
-            cache.plan.extent == self.plan.extent && (cache.plan.level > self.plan.level || std::ptr::eq(*cache, self))
-                && cache.plan.bounds == PixelRect::full(self.plan.extent)
-                && cache.placed.is_none() && !self.pixels.shares_levels(&cache.pixels) && cache.coverage_complete()
-                && (!cache.approximate.is_empty() || cache.resume.as_ref().is_none_or(Vec::is_empty))
-                && cache.submission_valid.as_ref().is_none_or(|valid| valid.load(std::sync::atomic::Ordering::Acquire)))
+    pub(crate) fn pinned_page_bytes(&self) -> u64 { self.pages.lock().unwrap().pinned_bytes() }
+    pub(crate) fn charged_scratch_bytes(&self)->u64 {self.output_charge.bytes()+self.overview.as_ref().map_or(0,|cache|cache.charged_scratch_bytes())}
+    fn window_memory(&self)->u64 { self.window_bytes().saturating_sub(self.charged_scratch_bytes()) }
+    fn owed_window_bytes(&self)->u64 {
+        if self.pixels.root().is_none() || self.pixels.next().is_some() {return 0;}
+        let plan=display_mips::Plan::window(self.plan.extent,self.plan.level+1,self.plan.bounds);
+        plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(self.precision.format().block_copy_size(None).unwrap())
     }
-
-    pub fn view(&self) -> &wgpu::TextureView {
-        self.placed.as_ref().map_or_else(|| &self.pixels.root().expect("composed output").view, |root| root.view())
+    fn claim_page(&self,scene:&Scene,r:&WgpuRasterizer,key:pages::Key,class:Class)->Result<Result<pages::Held,crate::residency::Blocked>,GpuRasterError> {
+        if let Some(image)=self.pages.lock().unwrap().allocated(&key,class) {return Ok(Ok(image));}
+        let tier=self.pages.lock().unwrap().tier();
+        let mut reservation=match r.admit_tier(Some(scene),&tier,class,key.bytes()) {Ok(reservation)=>reservation,Err(blocked)=>return Ok(Err(blocked))};
+        let image=self.pages.lock().unwrap().claim_reserved(r,key.clone(),self.window,class,&mut reservation)?;
+        if key.source.is_none() && self.graph.content.as_ref()!=Some(&key.expression) {self.pages.lock().unwrap().set_optional(&key);}
+        Ok(Ok(image))
     }
-    fn backup_bytes(&self)->u64 {
-        if !self.output_complete() {return 0;}
-        let levels=match &self.placed {Some(Presentation::Placed(p))=>[0,1,p.coarse_level-p.value.plan.level],_=>[0;3]};
-        let mut unique=Vec::new();
-        let [current,next]=self.presented_views();
-        [current,next,self.coarse_view()].into_iter().zip(levels).map(|(view,level)| {
-            let texture=view.texture();let level=level.min(texture.mip_level_count()-1);
-            if unique.iter().any(|(t,m)|*t==texture && *m==level) {return 0;}
-            unique.push((texture,level));
-            u64::from((texture.width()>>level).max(1))*u64::from((texture.height()>>level).max(1))*u64::from(texture.format().block_copy_size(None).unwrap())
-        }).sum()
+    fn reserve_window(&self,r:&WgpuRasterizer,scene:&Scene,bytes:u64)->Option<crate::residency::Reservation> {
+        r.admit_tier(Some(scene),&r.scene_tiers.windows,Class::Visible,bytes).ok()
     }
-    pub fn backup(&self,r:&WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder)->Option<DisplayBackup> {
-        if self.placed.is_none() && self.pixels.root().is_none() {return None;}
-        let levels=match &self.placed {Some(Presentation::Placed(p))=>[0,1,p.coarse_level-p.value.plan.level],_=>[0;3]};
-        let [current,next]=self.presented_views();
-        let sources=[current,next,self.coarse_view()];
-        let mut bytes=0;
-        let mut copies: [Option<(&wgpu::Texture,u32,wgpu::TextureView)>;3]=std::array::from_fn(|_|None);
-        let views=std::array::from_fn(|index| {
-            let source=sources[index].texture();let level=levels[index].min(source.mip_level_count()-1);
-            for (texture,mip,view) in copies.iter().flatten() {
-                if *texture==source && *mip==level {return view.clone();}
-            }
-            let size=wgpu::Extent3d {width:(source.width()>>level).max(1),height:(source.height()>>level).max(1),depth_or_array_layers:1};
-            let texture=r.device.create_texture(&wgpu::TextureDescriptor {label:Some("retained accepted display"),size,
-                mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:source.format(),
-                usage:wgpu::TextureUsages::TEXTURE_BINDING|wgpu::TextureUsages::COPY_DST|wgpu::TextureUsages::COPY_SRC,view_formats:&[]});
-            encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {mip_level:level,..source.as_image_copy()},texture.as_image_copy(),size);
-            bytes+=texture_bytes(&texture);
-            let view=texture.create_view(&Default::default());
-            copies[index]=Some((source,level,view.clone()));
-            view
-        });
-        Some(DisplayBackup {views,geometry:self.geometry.clone(),placement:self.placement_values(),resample:self.resample_values(),bytes})
-    }
-    pub fn texture(&self) -> &wgpu::Texture {
-        &self.pixels.root().expect("composed output").texture
-    }
-    pub fn coarse_view(&self) -> &wgpu::TextureView {
-        if self.placed.is_none() && let hierarchy::Pixels::Resident { levels, .. } = &self.pixels {
-            return &levels.last().unwrap().view;
-        }
-        self.placed.as_ref().map_or_else(|| self.overview.as_ref().map_or_else(|| if coarse_level(self.plan) > self.plan.level { self.next_view() } else { self.view() }, |c| c.coarse_view()), |root| root.coarse())
-    }
-    pub(crate) fn presentation_bytes(&self) -> u64 {
-        fn retained(cache: &Cache, images: &mut std::collections::HashSet<wgpu::Texture>) -> u64 {
-            let mut bytes = cache.geometry.size();
-            for image in cache.pixels.root().into_iter().chain(cache.pixels.next()) {
-                if images.insert(image.texture.clone()) { bytes += image.bytes(); }
-            }
-            if let hierarchy::Pixels::Resident { levels, .. } = &cache.pixels
-                && let Some(image) = levels.last() && images.insert(image.texture.clone()) { bytes += image.bytes(); }
-            bytes + cache.overview.as_ref().map_or(0, |cache| retained(cache, images))
-        }
-        retained(self, &mut std::collections::HashSet::new())
-    }
-    pub fn next_view(&self) -> &wgpu::TextureView {
-        self.placed.as_ref().map_or_else(|| &self.pixels.next().expect("composed output mip").view, |root| root.next())
-    }
-    pub fn placement_values(&self) -> [f32; 20] {
-        let mut values = [0.; 20];
-        let Some(presentation) = &self.placed else { return values; };
-        let Presentation::Placed(root) = presentation else { values[13] = 2.; return values; };
-        let [x, y, _] = pixel_transform::inverse_rows(&root.value.transform).expect("validated placement");
-        let side = (1 << self.plan.level) as f32;
-        let shifted = |row: [f32; 3]| (f64::from(row[2]) - (f64::from(row[0]) * root.value.shift[0] as f64 + f64::from(row[1]) * root.value.shift[1] as f64) / f64::from(side)) as f32;
-        let source_side = (1 << root.value.plan.level) as f32;
-        let [width, height] = [root.value.plan.bounds.width(), root.value.plan.bounds.height()].map(|n| n as f32 / source_side);
-        let [r, g, b, a] = root.value.backdrop;
-        [x[0] / side, x[1] / side, shifted(x), 0., y[0] / side, y[1] / side, shifted(y), 0.,
-            width, height, (1 << (root.coarse_level - root.value.plan.level)) as f32, 2.,
-            root.value.opacity, 1., root.value.outside, f32::from(root.value.encode), r, g, b, a]
+    pub(crate) fn frame_memory(&self,r:&WgpuRasterizer,retained:u64)->[u64;2] {
+        let other=r.scale_display.as_ref().map_or(0,Cache::window_memory);
+        let pages=self.pages.lock().unwrap();
+        [self.window_memory()+retained+other+pages.bytes(),r.scene_tiers.windows.used()+pages.pinned_bytes()]
     }
     /// The layers above moving paths over `region`, which the presenter draws
     /// over the moving image and the composite without those paths; no view
@@ -1167,67 +802,83 @@ impl Cache {
     pub(crate) fn motion_above(&self, region: PixelRect) -> Option<(Option<&wgpu::TextureView>, display_mips::Plan)> {
         let [above, _] = self.graph.motion.as_ref()?;
         if graph::Expression::is_clear(above) { return Some((None, self.plan)); }
-        let pages: Vec<_> = page_coordinates(region.intersect(self.plan.bounds)).collect();
-        self.graph.branch_image(above, &pages).map(|(view, plan)| (Some(view), plan))
+        if !self.branch_ready(above,region,Class::Visible) {return None;}
+        let image=self.above.committed_root()?.image();
+        Some((Some(&image.view),image.plan))
     }
-    fn prepared_regions(&mut self, scene: &Scene, packet: FramePacket<'_>, destination: &Destination<'_>) -> Vec<PixelRect> {
-        if matches!(destination, Destination::View) { self.preparing = false; }
-        let (Destination::View, Some(halves), Some((_, _, bounds))) = (destination, &self.graph.prepared, &scene.scale_sources.prepared) else { return Vec::new() };
+    fn branch_ready(&self,node:&graph::Node,region:PixelRect,class:Class)->bool {
+        let region=region.intersect(self.plan.bounds);let required_input_level=self.required_input_level();
+        !region.is_empty() && pages::coordinates(region,self.plan.level).all(|coordinate| {
+            let key=self.page_key(node.clone(),pages::bounds(coordinate,self.plan.level,self.plan.extent));
+            let area=region.intersect(key.plan().bounds);
+            let mut store=self.pages.lock().unwrap();
+            store.get(&key,area,pages::Accuracy::Display,required_input_level,class).or_else(||store.get(&key,area,pages::Accuracy::Exact,0,class)).is_some()
+        })
+    }
+    fn prepared_regions(&mut self, scene: &Scene, packet: FramePacket<'_>, destination: &Destination<'_>, budget: &WorkBudget) -> Vec<PixelRect> {
+        if matches!(destination, Destination::View|Destination::Overview(..)) { self.preparing = false; }
+        let (Destination::View|Destination::Overview(..), Some(halves), Some((_, _, bounds))) = (destination, &self.graph.prepared, &scene.scale_sources.prepared) else { return Vec::new() };
         let region = bounds.turning_reach().expand(2).in_frame(packet.document_extent).intersect(self.plan.bounds);
-        let mut pages: Vec<_> = page_coordinates(region).filter(|page| halves.iter().any(|half| self.graph.caches(half) && !self.graph.branch_valid(half, *page))).collect();
-        nearest_first(&mut pages, packet.view);
-        self.preparing = pages.len() > APPROXIMATE_PAGES;
-        pages.into_iter().take(APPROXIMATE_PAGES)
-            .map(|page| paint_transform::aligned(page_rect(page).intersect(self.plan.bounds), 1 << self.plan.level, self.plan.extent).intersect(self.plan.bounds)).collect()
+        let side=1<<self.plan.level;
+        let bounds=PixelRect::new(region.min_x()/side,region.min_y()/side,region.max_x().div_ceil(side),region.max_y().div_ceil(side));
+        let view=work_view(packet,self.plan.level);
+        let missing=|coordinate:&[u32;2]|halves.iter().any(|half|self.graph.caches(half)
+            && !self.branch_ready(half,pages::bounds(*coordinate,self.plan.level,self.plan.extent),Class::Prefetch));
+        let limit=((budget.remaining()/object_cache::PASS_TAPS).max(1) as usize).min(APPROXIMATE_PAGES);
+        let pages=nearest_pages(bounds,view,limit+1,std::iter::empty(),missing);
+        self.preparing=pages.len()>limit;
+        pages.into_iter().take(limit).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
-    fn motion_missing(&self, region: PixelRect) -> Damage {
-        let Some([above, _]) = self.graph.motion.as_ref().filter(|[above, _]| !graph::Expression::is_clear(above)) else { return Damage::EMPTY };
-        Damage::from_regions(page_coordinates(region.intersect(self.plan.bounds))
-            .filter(|page| !self.graph.branch_valid(above, *page))
-            .map(|page| page_rect(page).intersect(self.plan.bounds)))
-    }
-    pub fn resample_values(&self) -> [u8; scene::resample::UNIFORM_BYTES as usize] {
-        match &self.placed { Some(Presentation::Mapped(mapped)) => mapped.values, _ => [0; scene::resample::UNIFORM_BYTES as usize] }
-    }
-    pub fn storage_bytes(&self) -> u64 {
+
+    pub fn storage_bytes(&self) -> u64 { self.window_bytes()+self.pages.lock().unwrap().bytes() }
+    fn window_bytes(&self) -> u64 {
+        #[cfg(test)]
+        crate::test_support::PassCounts {display_walks:1,..Default::default()}.record();
         self.output
             .iter()
             .map(|i| texture_bytes(&i.texture))
             .sum::<u64>()
             + self.geometry.size()
-            + self.pixels.storage_bytes()
-            + self.spare.as_ref().map_or(0, |cache| cache.storage_bytes())
-            + self.overview.as_ref().map_or(0, |cache| cache.storage_bytes())
-            + self.shifted.as_ref().map_or(0, |cache| cache.storage_bytes())
+            + self.pixels.storage_bytes() + self.above.storage_bytes()
+            + self.overview.as_ref().map_or(0, |cache| cache.window_bytes())
             + self.graph.storage_bytes()
             + self.exact_tile.as_ref().map_or(0, |image| texture_bytes(&image.texture))
-            + self.half.as_ref().map_or(0, hierarchy::Half::bytes)
-            + self.resident_bytes()
     }
     pub(crate) fn scratch_images(&self) -> usize { self.graph.root.as_ref().map_or(0, |root| root.cost().1 as usize + 1) }
     pub(crate) fn trim_scratch(&mut self) -> Vec<Image> {
-        let keep = if std::mem::take(&mut self.scratch_exhausted) { 0 } else { self.scratch_images() };
+        let keep = self.scratch_images();
         let mut retired = Vec::new();
-        while self.output.len() > keep && self.used.last().is_some_and(|usage| !usage.occupied()) {
-            retired.push(self.output.pop().unwrap());
-            self.used.pop();
+        if self.graph.motion.as_ref().is_none_or(|[above,_]|graph::Expression::is_clear(above)) {
+            retired.extend(self.above.take());self.above_revision=None;
         }
-        for cache in [&mut self.overview, &mut self.spare, &mut self.shifted].into_iter().flatten() {
+        while self.output.len() > keep && self.used.last().is_some_and(|usage| !usage.occupied()) {
+            let image=self.output.pop().unwrap();
+            self.output_charge.resize(self.output_charge.bytes()-image.bytes());
+            retired.push(image);self.used.pop();
+        }
+        for cache in self.overview.iter_mut() {
             retired.extend(cache.trim_scratch());
         }
         retired
     }
     fn allocate(&mut self, r: &WgpuRasterizer, plan: display_mips::Plan) -> Result<scratch::Lease, GpuRasterError> {
+        self.allocate_output(r,plan,None)
+    }
+    fn allocate_reserved(&mut self,r:&WgpuRasterizer,plan:display_mips::Plan,reservation:&mut crate::residency::Reservation)->Result<scratch::Lease,GpuRasterError> {
+        self.allocate_output(r,plan,Some(reservation))
+    }
+    fn allocate_output(&mut self,r:&WgpuRasterizer,plan:display_mips::Plan,reservation:Option<&mut crate::residency::Reservation>)->Result<scratch::Lease,GpuRasterError> {
         let slot = self.used.iter().enumerate().position(|(index, used)| !used.occupied() && self.output[index].plan.size == plan.size).unwrap_or(self.output.len());
-        let bytes = plan.size.map(u64::from).into_iter().product::<u64>() * 16;
-        let retained = self.output.iter().enumerate().filter(|(i,_)| *i != slot).map(|(_,image)| texture_bytes(&image.texture)).sum::<u64>();
-        let limit = cache_bytes(r).saturating_sub(r.retired_display_bytes.load(std::sync::atomic::Ordering::Acquire));
-        if retained.saturating_add(bytes) > limit {
-            self.scratch_exhausted = true;
-            return Err(GpuRasterError::DeferredObjectWork);
-        }
         if slot == self.output.len() {
-            self.output.push(Image::new(r, plan, "display composition level"));
+            let bytes=plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(r.device.working_format().block_copy_size(None).unwrap());
+            let mut charge=match reservation {Some(reservation)=>reservation.split(bytes).ok_or(GpuRasterError::Invariant("display scratch exceeds its accepted reservation"))?.charge(bytes),
+                None if self.declaring=>self.output_charge.tier().charge(bytes),
+                None=>r.admit_tier(None,self.output_charge.tier(),Class::Visible,bytes).map_err(|_|GpuRasterError::NotReady)?.charge(bytes)};
+            let image=if self.declaring { Image { texture: r.declared_scratch[0].texture.clone(), view: r.declared_scratch[0].view.clone(), plan } }
+                else { Image::new(r, plan, "display composition level") };
+            charge.resize(image.bytes());
+            self.output_charge.merge(charge);
+            self.output.push(image);
             self.used.push(Default::default());
         }
         self.output[slot].plan = plan;
@@ -1237,24 +888,8 @@ impl Cache {
     pub(super) fn render_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<bool, GpuRasterError> {
-        fn objects(node: &graph::Expression) -> bool {
-            match node {
-                graph::Expression::Objects { .. } => true,
-                graph::Expression::Opacity { input, .. } => objects(input),
-                graph::Expression::Combine { front, back, .. } => objects(front) || objects(back),
-                graph::Expression::Effect { input, masks, .. } => objects(input) || masks.iter().flatten().any(|node| objects(node)),
-                _ => false,
-            }
-        }
-        if self.graph.root.as_ref().is_none_or(|root| !objects(root)) { return Ok(false); }
-        if self.plan.bounds == PixelRect::full(self.plan.extent) {
-            return self.render_coarse_preview(scene, r, packet, dirty, encoding, tiles);
-        }
-        let Some(mut overview) = self.overview.take() else { return Ok(false); };
-        overview.submission_valid = self.submission_valid.clone();
-        let result = overview.render_coarse_preview(scene, r, packet, dirty, encoding, tiles);
-        self.overview = Some(overview);
-        result
+        if self.overview.is_some() {return Ok(false);}
+        self.render_coarse_preview(scene,r,packet,dirty,encoding,tiles)
     }
     fn render_coarse_preview(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
@@ -1262,8 +897,8 @@ impl Cache {
         if self.coverage_complete() { return Ok(false); }
         let result = self.render_graph(scene, r, packet, dirty, encoding, Destination::Preview, tiles);
         match result {
-            Err(GpuRasterError::DeferredObjectWork) if !scene.pending_pipelines.ready()=>Err(GpuRasterError::DeferredObjectWork),
-            Ok(_) | Err(GpuRasterError::DeferredObjectWork)=>Ok(self.coverage_complete() && !self.approximate.is_empty()),
+            Err(GpuRasterError::NotReady) if !scene.pending_pipelines.ready()=>Err(GpuRasterError::NotReady),
+            Ok(_) | Err(GpuRasterError::NotReady)=>Ok(self.coverage_complete()),
             Err(error)=>Err(error),
         }
     }
@@ -1271,372 +906,359 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
-        r.telemetry.phase_begin(9, &r.device, &r.queue, encoding.encoder);
-        let records = encoding.commands.cursor;
-        let mut changed = self.render_graph(scene, r, packet, dirty, encoding, Destination::View, tiles)?;
-        r.telemetry.phase_end(9, encoding.encoder);
-        crate::performance_trace::counter(c"Capy main composition records", u64::from(encoding.commands.cursor - records));
-        if let Some(mut overview) = self.overview.take() {
-            r.telemetry.phase_begin(10, &r.device, &r.queue, encoding.encoder);
-            let records = encoding.commands.cursor;
-            let result = overview.render_graph(scene, r, packet, dirty, encoding, Destination::Overview(self, changed), tiles);
-            r.telemetry.phase_end(10, encoding.encoder);
-            crate::performance_trace::counter(c"Capy overview composition records", u64::from(encoding.commands.cursor - records));
-            self.overview = Some(overview);
-            changed = match result {
-                Err(error) => { self.deferred_changed = changed; return Err(error); }
-                Ok(overview) => changed.union(overview),
-            };
+        let mut overview=self.overview.take();
+        let visible=display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY);
+        let first=overview.is_some() && self.holes(visible);
+        let retained=encoding.retained;
+        r.telemetry.phase_begin(9,&r.device,&r.queue,encoding.encoder);
+        let result=self.render_caches(overview.as_deref_mut(),first,scene,r,packet,dirty,encoding,tiles);
+        encoding.retained=retained;
+        r.telemetry.phase_end(9,encoding.encoder);
+        self.overview=overview;
+        result
+    }
+    #[expect(clippy::too_many_arguments, reason = "The view and its overview share one frame's input, damage and encoding")]
+    fn render_caches(
+        &mut self, mut overview: Option<&mut Cache>, first: bool, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
+    ) -> Result<PixelRect, GpuRasterError> {
+        let retained=encoding.retained;
+        let with=|memory:u64|retained+memory;
+        let rendered=|scene:&mut Scene,result|match result {Err(GpuRasterError::NotReady)=>{scene.clear_unencoded_jobs();Ok(PixelRect::EMPTY)},result=>result};
+        let mut changed=PixelRect::EMPTY;
+        if first && let Some(overview)=overview.as_deref_mut() {
+            encoding.retained=with(self.window_memory());
+            let result=overview.render_graph(scene,r,packet,dirty,encoding,Destination::Overview(self,PixelRect::EMPTY),tiles);
+            changed=rendered(scene,result)?;
         }
-        self.present_half(r, packet, encoding.encoder)?;
+        encoding.retained=with(overview.as_deref().map_or(0,Cache::window_memory));
+        let result=self.render_graph(scene,r,packet,dirty,encoding,Destination::View,tiles);
+        let view=rendered(scene,result)?;
+        changed=changed.union(view);
+        if !first && let Some(overview)=overview {
+            encoding.retained=with(self.window_memory());
+            let result=overview.render_graph(scene,r,packet,dirty,encoding,Destination::Overview(self,view),tiles);
+            changed=changed.union(rendered(scene,result)?);
+        }
         Ok(changed)
     }
 
     #[expect(clippy::too_many_arguments, reason = "Graph rendering keeps frame input, damage, encoding, and destination domains explicit")]
     fn render_graph(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        dirty: PixelRect, encoding: &mut Encoding<'_>, destination: Destination<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
+        _dirty: PixelRect, encoding: &mut Encoding<'_>, destination: Destination<'_>, _tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
-        let Encoding { encoder, commands } = encoding;
-        if self.reuse_output && !self.preparing { return Ok(PixelRect::EMPTY); }
-        let dirty = if self.unchanged { PixelRect::EMPTY } else { dirty };
-        let objects = packet.scene.order().iter().any(|&owner| packet.scene.object_layer(owner).is_some());
-        let finer = match destination { Destination::Overview(cache, changed) if !objects => Some((cache, changed)), _ => None };
-        let covered = finer.map_or(PixelRect::EMPTY, |(cache, _)| cache.plan.bounds);
-        let visible: Vec<_> = packet.scene.order().iter().copied().rev()
-            .filter(|handle| packet.scene.visible(*handle) && packet.scene.occurrence(*handle).unwrap().kind() == LayerKind::Paint
-                && stack::has_content(r, packet.scene, *handle)).collect();
-        let copied = self.copy_shifted(r, encoder);
-        let copied = if matches!(destination, Destination::View) { copied.union(self.seed_level(r, packet, encoder)) } else { copied };
-        self.refine_approximate(scene, r, packet);
-        let root = self.graph.root.clone().expect("prepared composition graph");
-        let reduced = root.source_domains(packet.scene)[0].clone();
-        let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
-        let resume = self.resume.as_ref().filter(|_| self.unchanged && r.object_deferred);
-        let invalid = if resume.is_some() { Damage::EMPTY } else {
-            tiles.map_or_else(|| Damage::from(dirty), |_| Damage::from_regions(r.document_damage.iter().copied()
-                .chain(r.transform_damage.iter().map(|&(target, region)|
-                    brush_tiles::document_damage(packet.scene, target, region, packet.document_extent)))))
+        let Encoding { encoder, commands, retained, budget } = encoding;
+        scene.placement_display=true;
+        let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
+        if self.refused_at.replace(packet.view)!=Some(packet.view) {self.forget_refusals();}
+        self.derive_cells(finer.map(|(finer,_)|finer));
+        if let Some(mut previous)=self.retired.take() {previous.write_back(r,scene,encoder)?;}
+        let stroking=!packet.dab_batches.is_empty();
+        let view=matches!(destination,Destination::View);
+        if self.gesture.is_some() && !self.contact_continues(scene,r,packet,encoder) {
+            self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
         }
-            .union(root.damage(&scene.scale_sources, self.plan))
-            .union(match (&destination, r.vector_motion_region(packet.document_extent)) { (Destination::View, Some(region)) => self.motion_missing(region), _ => Damage::EMPTY })
-            .union(match destination { Destination::View => Damage::from_regions(scene.scale_sources.exclusion_damage.iter().map(|bounds| bounds.in_frame(packet.document_extent))), _ => Damage::EMPTY });
-        if objects || packet.scene.order().iter().any(|&owner| packet.scene.vector_layer(owner).is_some()) { self.valid.retain(|c| !invalid.intersects(page_rect(*c))); }
-        self.refined.retain(|c| !invalid.intersects(page_rect(*c)));
-        let regions = match resume {
-            Some(remaining) => {
-                let mut initialized = self.valid.clone();
-                initialized.extend(remaining.iter().flat_map(|region| page_coordinates(*region)));
-                Damage::from_regions(remaining.iter().copied()).union(invalid).update_regions(self.plan, &initialized)
+        let live=self.gesture.is_some();
+        if std::mem::replace(&mut self.contact,stroking) && !stroking && !live {self.write_back(r,scene,encoder)?;}
+        if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
+        if !self.ensure_window(r,scene,encoder) {return Err(GpuRasterError::NotReady);}
+        let live=self.gesture.is_some();
+        let visible=if matches!(destination,Destination::View) {display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY)}else {PixelRect::EMPTY};
+        let deferred=match destination {Destination::View=>Class::Prefetch,Destination::Navigator=>Class::Navigator,Destination::Overview(..)|Destination::Preview=>Class::Fallback};
+        let served=if matches!(destination,Destination::View) {visible}else {self.plan.bounds};
+        let presented=refinement::presented_accuracy(r,packet.scene,matches!(destination,Destination::Preview));
+        if std::mem::replace(&mut self.presented,presented)==pages::Accuracy::Display && presented==pages::Accuracy::Exact {self.owe_exact();}
+        let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
+        let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_cells(),transition:false,waiting:false}}
+            else {self.select_cells(served,presented,&selected)?};
+        let transition=selection.transition;
+        let direct=if view {self.stroke_only(packet)}else {stroking};
+        let target=if transition && !direct {Root::Store}else {Root::Window};
+        let pages::Selection {mut copies,mut composes,..}=selection;
+        let blocking=|scene:&Scene,r:&WgpuRasterizer|if scene.compiling() {Some(crate::frame_demand::Input::Compile)}
+            else {r.image_decode_waiting().then_some(crate::frame_demand::Input::Decode)};
+        let mut blocks=Vec::new();let mut refusals=Vec::new();
+        let class=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else if transition {Class::Authored}else {Class::Visible};
+        let side=1<<self.plan.level;
+        let output_bounds=self.output_plan().bounds;
+        let mut written=PixelRect::EMPTY;
+        let mut composed=Vec::new();
+        if live {
+            let (done,blocked)=self.compose_contact(scene,r,packet,encoder,std::mem::take(&mut composes),*retained)?;
+            #[cfg(test)] crate::test_support::PassCounts {destination_units:(done.len()+blocked.len()) as u64,..Default::default()}.record();
+            for region in &done {
+                let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
+                self.pixels.wrote(PixelRect::new(x, y, x + width, y + height));
+                written = written.union(PixelRect::new(x, y, x + width, y + height));
             }
-            None => invalid.update_regions(self.plan, &self.valid),
-        };
-        let changed = regions.iter().fold(PixelRect::EMPTY, |a, b| a.union(*b));
-        let prepared = self.prepared_regions(scene, packet, &destination);
-        let required = if scene.scale_sources.reset { input.bounds.into() } else {
-            let changed = Damage::from_regions(regions.iter().chain(&prepared).copied());
-            root.required(changed.clone(), input).union(changed)
-        };
-        let mut source_plans=std::collections::HashMap::new();
-        let source_covered = if packet.scene.order().iter().any(|handle| packet.scene.effect(*handle).is_some_and(|effect| !effect.program.passes.is_empty())) { PixelRect::EMPTY } else { covered };
-        for &handle in &visible {
-            let id = packet.scene.source_target(handle).unwrap();
-            if !reduced.contains(&id) { continue; }
-            if r.transforms.as_ref().is_some_and(|t| t.display_source(id)) { continue; }
-            let frame = source_frame(Some(&scene.scale_sources), packet.scene, id);
-            if self.streamed_sources && frame.aligned() { continue; }
-            let extent = packet.scene.local_extent(handle);
-            let requested = source_plan(input, frame, extent, r.moving_layer == Some(handle));
-            source_plans.insert(id, (frame, extent, requested));
-            if self.plan.level == 0 && requested.level == 0 { continue; }
-            let plan = self.source_plan(&scene.scale_sources, id, requested);
-            let (needed, covered) = if input.doc_bounds != DocRect::from(input.bounds) {
-                (plan.bounds.into(), PixelRect::EMPTY)
-            } else { local_damage(&required, source_covered, frame, extent, plan.level, r.moving_layer == Some(handle)) };
-            scene.prepare_scale_color(commands, r, packet, encoder, handle, SourceRequest { plan, required: needed, covered })?;
-        }
-        for &handle in packet.scene.order() {
-            if let Some((mask, source)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled && (packet.inspect_mask == Some(handle) || packet.scene.visible(handle))) {
-                let id = SourceTarget::Coverage(mask.source);
-                if !reduced.contains(&id) { continue; }
-                let frame = source_frame(Some(&scene.scale_sources), packet.scene, id);
-                if self.streamed_sources && frame.aligned() { continue; }
-                let extent = source.domain;
-                let requested = source_plan(input, frame, extent, false);
-                source_plans.insert(id, (frame, extent, requested));
-                if self.plan.level == 0 && requested.level == 0 { continue; }
-                let plan = self.source_plan(&scene.scale_sources, id, requested);
-                let (needed, covered) = if input.doc_bounds != DocRect::from(input.bounds) {
-                (plan.bounds.into(), PixelRect::EMPTY)
-            } else { local_damage(&required, source_covered, frame, extent, plan.level, false) };
-                scene.prepare_scale_mask(commands, r, encoder, mask, source, SourceRequest { plan, required: needed, covered })?;
+            if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
+            for region in blocked {self.hide(region);self.block(region,blocking(scene,r));}
+            composed=done;
+        } else if !composes.is_empty() || !copies.is_empty() || self.graph.prepared.is_some() {
+            let root = self.graph.root.clone().expect("prepared composition graph");
+            let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
+            let tiled = use_tiles(r, self.plan, packet, Some(scene)) && !(self.plan.level > 0 && root.fused_transform(r));
+            let view=work_view(packet,0);
+            composes.sort_by_key(|region| {
+                let [a,b,c,d,x,y]=view.document_to_surface.map(f64::from);
+                let center=[f64::from(region.min_x()+region.max_x())*0.5,f64::from(region.min_y()+region.max_y())*0.5];
+                let offset=[a*center[0]+c*center[1]+x-f64::from(view.width_px)*0.5,b*center[0]+d*center[1]+y-f64::from(view.height_px)*0.5];
+                (offset[0]*offset[0]+offset[1]*offset[1]) as u64
+            });
+            let prepared = self.prepared_regions(scene, packet, &destination, budget);
+            let halves:Vec<_>=self.graph.prepared.clone().into_iter().flatten().filter(|half|self.graph.caches(half)).collect();
+            let preview=matches!(destination,Destination::Preview);
+            let mut accepted=Vec::new();
+            for region in composes {
+                if !budget.fits(class(region),!accepted.is_empty(),object_cache::PASS_TAPS) {break;}
+                let requests=self.region_sources(scene,r,packet,region,tiled);
+                for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?;}
+                if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
+                    #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
+                    blocks.push((region,blocking(scene,r)));continue;
+                }
+                let Some(handle)=self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},encoder)? else {continue;};
+                r.image_decode_queue(r.device.working_space())?.prioritize(packet.view,region);
+                budget.spend(object_cache::PASS_TAPS);
+                let sources=self.pages.lock().unwrap().take_inputs(&handle)?;
+                if let Some(refusal)=sources.objects_refusal() {
+                    refusals.push((region,refusal.clone()));
+                    if self.displays(region) {
+                        if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
+                        continue;
+                    }
+                }
+                let evaluated=if sources.objects_fall_back() {Class::Fallback}else {class(region)};
+                #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
+                accepted.push((region,handle,sources,evaluated));
             }
-        }
-        let side = 1 << self.plan.level;
-        let output_bounds = self.output_plan().bounds;
-        let [x, y, width, height] = paint_transform::texel_rect(copied.window_local(output_bounds), side);
-        let mut written = PixelRect::new(x, y, x + width, y + height);
-        let mut written_pixels = written.area();
-        let mut written_regions = u64::from(!written.is_empty());
-        let regions: Vec<_> = regions.into_iter().flat_map(|r| r.subtract(covered)).filter(|r| !r.is_empty()).collect();
-        let tiled = use_tiles(r, self.plan, packet, self.source_overlap.then_some(&scene.scale_sources), self.streamed_sources, Some(scene))
-            && !(self.plan.level > 0 && root.fused_transform(r));
-        let pages = |regions: Vec<PixelRect>| -> Vec<PixelRect> {
-            if !tiled { return regions; }
-            regions.into_iter().flat_map(|region| {
-                let [x, y, width, height] = paint_transform::texel_rect(region, side);
-                page_coordinates(PixelRect::new(x, y, x + width, y + height)).map(move |c| {
-                    let p = page_rect(c);
-                    PixelRect::new(p.min_x() * side, p.min_y() * side, p.max_x() * side, p.max_y() * side).intersect(region)
-                })
-            }).collect()
-        };
-        let (regions, prepared) = (pages(regions), pages(prepared));
-        self.prepare_native_branches(scene, r, packet, &regions, input, &mut Encoding { encoder, commands })?;
-        self.resume = None;
-        let mut root_compositions = Vec::new();
-        let resumable = !matches!(destination, Destination::Navigator);
-        let split = |region: PixelRect| page_coordinates(region).map(move |page| page_rect(page).intersect(region));
-        let mut pending: std::collections::VecDeque<_> = if self.split { regions.into_iter().flat_map(split).collect() } else { regions.into() };
-        let mut deferred = Vec::new();
-        while let Some(region) = pending.pop_front() {
-            let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
-            let queued = (commands.jobs.len(), root_compositions.len(), scene.jobs.len(), scene.source_jobs.len());
-            scene.decode_wait = false;
-            r.source_tiles.borrow_mut().begin_unit();
-            let placed = (|| -> Result<bool, GpuRasterError> {
-                let mut compositor = Evaluator { cache: &mut *self, commands, scene: &mut *scene, packet, r: &mut *r, encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: root.required(region.into(), input).bounds() == region, approximate: false, preview: matches!(destination, Destination::Preview) };
-                let root = compositor.cache.graph.root.clone().expect("prepared composition graph");
-                let output = compositor.evaluate_root(&root, matches!(destination, Destination::View))?;
-                let presentation = match &output {
-                    Value::Placed(value) if finer.is_none() => {
-                        let coarse_level = source_coarse_level(value.plan);
-                        for level in [value.plan.level + 1, coarse_level] {
-                            compositor.scene.scale_sources.ensure_level(compositor.commands, compositor.r, compositor.encoder, value.id,
-                                display_mips::Plan::window(value.plan.extent, level, value.plan.bounds))?;
+            let mut completed = Vec::<ReadyUnit>::new();
+            let native = root.native_capture(packet.scene, self.plan.level);
+            let mut accepted=accepted.into_iter();
+            for (region,handle,mut sources,evaluated) in accepted.by_ref() {
+                if native {
+                    let jobs = std::mem::take(&mut scene.jobs);
+                    let source_jobs = std::mem::take(&mut scene.source_jobs);
+                    let output = DocRect::from(region).aligned(PAGE_SIZE.max(side)).intersect(input.doc_bounds).in_frame(packet.document_extent);
+                    let window = scene.cached_capture_window(packet.scene, output);
+                    let result=scene.prepare_region_in_frame(r,packet,(output,window),PixelRect::EMPTY,false,encoder);
+                    scene.discard_unencoded_jobs();
+                    scene.jobs = jobs;scene.source_jobs = source_jobs;
+                    scene.placement_display = true;
+                    if let Err(error) = result {
+                        if matches!(error,GpuRasterError::NotReady) {
+                            blocks.push((region,blocking(scene,r)));
+                            if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
+                            continue;
                         }
-                        let next = compositor.scene.scale_sources.image(value.id, value.plan.level + 1).image.view.clone();
-                        let coarse = compositor.scene.scale_sources.image(value.id, coarse_level).image.view.clone();
-                        Some(Presentation::Placed(Placement { value: value.clone(), next, coarse, coarse_level }))
-                    }
-                    Value::Transform(source) if finer.is_none() => Some(Presentation::Mapped(compositor.r.transforms.as_ref().unwrap()
-                        .presentation(source.id, source.placement, compositor.r.target_extent(source.id), source.opacity, source.backdrop, source.encode)?)),
-                    _ => None,
-                };
-                compositor.cache.placed = presentation;
-                if compositor.cache.placed.is_some() { return Ok(true); }
-                let output = compositor.materialize(output, None)?;
-                if objects {
-                    for coordinate in page_coordinates(region) {
-                        if compositor.approximate { compositor.cache.approximate.insert(coordinate); }
-                        else { compositor.cache.approximate.remove(&coordinate); }
+                        if matches!(error,GpuRasterError::SourceWorkingSetExceeded) {self.pages.lock().unwrap().finish_inputs(&handle);continue;}
+                        scene.discard_unencoded_jobs();return Err(error);
                     }
                 }
-                assert!(matches!(output.slot(), Some(Slot::Root)));
-                if compositor.scene.object_results.needs_retirement() {
-                    compositor.commands.flush(compositor.r, compositor.encoder)?;
-                    compositor.scene.object_results.flush_retired(compositor.encoder);
-                }
-                Ok(false)
-            })();
-            let overflowed = r.source_tiles.borrow_mut().end_unit();
-            match placed {
-                Ok(false) => {}
-                Err(GpuRasterError::DeferredObjectWork) if resumable => {
-                    commands.jobs.truncate(queued.0);
-                    root_compositions.truncate(queued.1);
-                    scene.jobs.truncate(queued.2);
-                    scene.source_jobs.truncate(queued.3);
-                    if overflowed && !self.split {
-                        self.split = true;
-                        let rest: Vec<_> = pending.drain(..).collect();
-                        pending.extend(rest.into_iter().flat_map(split));
+                let start = scene.jobs.len();
+                let mut unit = Unit::default();
+                let input = unit_plan(input, packet.scene, region, tiled, Some(self.graph.objects()));
+                let result = (|| -> Result<(), GpuRasterError> {
+                    #[cfg(test)]
+                    let _record=crate::scene::sources::record_reads(&sources);
+                    let mut compositor = Evaluator { cache: &mut *self, scene: &mut *scene, packet, r: &mut *r, encoder,
+                        region: region.into(), input, tiled, unit: &mut unit, accepted:&mut sources,
+                        previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained:*retained,
+                        approximate: false, preview, class: evaluated };
+                    compositor.evaluate_root(&root, target)?;
+                    if !compositor.unit.ready(compositor.scene, compositor.r, compositor.encoder, start, class(region))? {
+                        return Err(GpuRasterError::NotReady);
                     }
-                    if scene.decode_wait && split(region).nth(1).is_some() {
-                        for piece in split(region).collect::<Vec<_>>().into_iter().rev() { pending.push_front(piece); }
-                    } else { deferred.push(region); }
-                    if !(scene.decode_wait && r.decode_queue_has_room()) { deferred.extend(pending.drain(..)); }
-                    continue;
-                }
-                Err(error) => return Err(error),
-                Ok(true) => {
-                    self.output.clear(); self.used.clear(); self.refined.clear();
-                    let changed = if matches!(self.placed, Some(Presentation::Mapped(_))) {
-                        self.valid.extend(page_coordinates(self.plan.bounds));
-                        changed
-                    } else { self.valid.clear(); self.plan.bounds };
-                    if matches!(self.pixels, hierarchy::Pixels::Window { .. }) { self.pixels = Default::default(); }
-                    self.ready = true;
-                    return Ok(changed);
+                    Ok(())
+                })();
+                unit.sources.extend(sources)?;unit.sources.check_unit(handle.input_unit())?;
+                match result {
+                    Ok(()) => {
+                        let work=scene.planned_work(start);
+                        if !budget.fits(class(region),!completed.is_empty(),work) {
+                            self.pages.lock().unwrap().finish_inputs(&handle);
+                            scene.discard_jobs_from(start);
+                            break;
+                        }
+                        budget.spend(work);unit.work=work;
+                        completed.push(ReadyUnit {unit,handle,publish:true});
+                    },
+                    Err(GpuRasterError::NotReady) => {
+                        blocks.push((region,blocking(scene,r)));
+                        if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,std::mem::take(&mut unit.sources))?;}
+                        else {self.pages.lock().unwrap().finish_inputs(&handle);}
+                        scene.discard_jobs_from(start);
+                    }
+                    Err(GpuRasterError::SourceWorkingSetExceeded) => {
+                        self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);
+                    }
+                    Err(error) => {scene.discard_unencoded_jobs();return Err(error);}
                 }
             }
-            self.valid.extend(page_coordinates(region));
-            written = written.union(PixelRect::new(x, y, x + width, y + height));
-            written_pixels += u64::from(width) * u64::from(height);
-            written_regions += 1;
-            r.metrics.composited_pixels += u64::from(width) * u64::from(height);
-            r.metrics.frame_composited_pages.extend(page_coordinates(region).map(|coordinate| (self.plan.level, coordinate)));
+            for (region,handle,sources,_) in accepted {
+                if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
+            }
+            if self.graph.prepared.is_some() {
+                for region in prepared {
+                    if !budget.fits(Class::Prefetch,!completed.is_empty(),object_cache::PASS_TAPS) {self.preparing=true;break;}
+                    let requests=self.region_sources(scene,r,packet,region,tiled);
+                    for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,Class::Prefetch,budget)?;}
+                    if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {self.preparing=true;continue;}
+                    let Some(handle)=self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,&halves,Root::Store,preview,Class::Prefetch,Class::Prefetch,encoder)? else {self.preparing=true;continue;};
+                    #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
+                    budget.spend(object_cache::PASS_TAPS);
+                    let start = scene.jobs.len();
+                    let mut unit = Unit::default();
+                    let mut sources=self.pages.lock().unwrap().take_inputs(&handle)?;
+                    let input = unit_plan(input, packet.scene, region, tiled, Some(self.graph.objects()));
+                    let result = (|| {
+                        #[cfg(test)]
+                        let _record=crate::scene::sources::record_reads(&sources);
+                        let mut compositor = Evaluator { cache: self, scene, packet, r, encoder, region: region.into(), input, tiled,
+                            unit: &mut unit, accepted:&mut sources,
+                            previous_motion: completed.iter().rev().find_map(|ready| ready.unit.motion.as_ref()),retained:*retained,
+                            approximate: false, preview, class: Class::Prefetch };
+                        for half in &halves { compositor.evaluate_root(half,Root::Store)?; }
+                        compositor.unit.ready(compositor.scene, compositor.r, compositor.encoder, start, Class::Prefetch)
+                    })();
+                    unit.sources.extend(sources)?;unit.sources.check_unit(handle.input_unit())?;
+                    match result {
+                        Ok(true) => {
+                            let work=scene.planned_work(start);
+                            if !budget.fits(Class::Prefetch,!completed.is_empty(),work) {scene.discard_jobs_from(start);self.preparing=true;break;}
+                            budget.spend(work);unit.work=work;
+                            completed.push(ReadyUnit {unit,handle,publish:false});
+                        },
+                        Ok(false)|Err(GpuRasterError::SourceWorkingSetExceeded) => {self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);self.preparing=true;},
+                        Err(GpuRasterError::NotReady) if !completed.is_empty() => {
+                            self.pages.lock().unwrap().finish_inputs(&handle);scene.discard_jobs_from(start);self.preparing=true;
+                        }
+                        Err(error) => {scene.discard_unencoded_jobs();return Err(error);}
+                    }
+                }
+            }
+            self.encode_units(scene, r, encoder, completed.iter_mut().map(|ready| std::mem::take(&mut ready.unit)))?;
+            for ReadyUnit {handle,publish,..} in completed {
+                self.pages.lock().unwrap().finish_inputs(&handle);
+                if publish {composed.push(handle.region());}
+            }
+            let held=target==Root::Store && {
+                let selection=self.select_cells(served,presented,&selected)?;
+                let complete=selection.complete(served);
+                copies=if complete {selection.copies}else {Vec::new()};
+                !complete
+            };
+            let copied=self.copy_cells(r,encoder,commands,copies)?;
+            for region in composed.iter().copied().filter(|_|target==Root::Window).chain((!copied.is_empty()).then_some(copied)) {
+                let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
+                self.pixels.wrote(PixelRect::new(x, y, x + width, y + height));
+                written = written.union(PixelRect::new(x, y, x + width, y + height));
+            }
+            if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
+            if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,blocking(scene,r))));}
+            for (region,input) in blocks {self.block(region,input);}
+            for (region,refusal) in refusals {self.refuse(region,&refusal);}
         }
+        if view && live && self.ends_contact(packet) {self.write_back(r,scene,encoder)?;}
+        else if view && !live && stroking {self.begin_contact(scene,r,packet,encoder,*retained)?;}
+        self.project_above(scene,r,packet,encoder,commands)?;
+        for region in &composed {
+            let [_, _, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
+            r.metrics.composited_pixels += u64::from(width) * u64::from(height);
+            r.metrics.frame_composited_pages.extend(page_coordinates(*region).map(|coordinate| (self.plan.level, coordinate)));
+        }
+        if scene.object_results.needs_retirement() { scene.object_results.flush_retired(encoder); }
         let bounds = self.plan.bounds;
         let document = |written: PixelRect| if written.is_empty() { written } else { PixelRect::new(
             output_bounds.min_x() + written.min_x() * side, output_bounds.min_y() + written.min_y() * side,
             output_bounds.min_x() + written.max_x() * side, output_bounds.min_y() + written.max_y() * side,
         ).intersect(bounds) };
-        if !deferred.is_empty() {
-            commands.flush_root(scene, r, encoder, &mut root_compositions)?;
-            commands.flush(r, encoder)?;
-            self.reduce_output(r, encoder, written, commands)?;
-            self.deferred_changed = self.deferred_changed.union(document(written));
-            self.resume = Some(deferred);
-            return Err(GpuRasterError::DeferredObjectWork);
-        }
-        if let Some(halves) = self.graph.prepared.clone() {
-            let halves: Vec<_> = halves.into_iter().filter(|half| self.graph.caches(half)).collect();
-            for region in prepared {
-                    let mut compositor = Evaluator { cache: self, commands, scene, packet, r, encoder, region: region.into(), input, tiled, source_plans: &mut source_plans, root_compositions: &mut root_compositions, defer_root: false, approximate: false, preview: matches!(destination, Destination::Preview) };
-                for half in &halves { compositor.evaluate(half)?; }
-            }
-            commands.flush(r, encoder)?;
-        }
-        commands.flush_root(scene, r, encoder, &mut root_compositions)?;
-        if let Some((finer, changed)) = finer {
-            let region = if self.ready { changed } else { covered };
-            if !region.is_empty() {
-                if self.pixels.shares_levels(&finer.pixels) {
-                    self.ready = true;
-                } else {
-                    self.pixels.ensure(r, self.plan);
-                    let [x, y, width, height] = paint_transform::texel_rect(region.window_local(output_bounds), side);
-                    let input_level = finer.plan.level + 1;
-                    let mut values = [0; 20];
-                    let finer_plan = finer.output_plan();
-                    values[..8].copy_from_slice(&[x, y, width, height, finer_plan.bounds.width(), finer_plan.bounds.height(),
-                        1 << (self.plan.level - input_level), (input_level << 8) | 8]);
-                    values[14] = ((finer_plan.bounds.min_x() >> input_level) as f32).to_bits();
-                    values[15] = ((finer_plan.bounds.min_y() >> input_level) as f32).to_bits();
-                    let binding = Commands::binding(r, finer.next_view(), &r.empty_view, self.view());
-                    commands.reduce(r, encoder, values, &binding, "derive overview from completed detail")?;
-                    written = written.union(PixelRect::new(x, y, x + width, y + height));
-                    written_pixels += u64::from(width) * u64::from(height);
-                    written_regions += 1;
-                }
-                self.valid.extend(page_coordinates(region));
-                self.refined.extend(finer.refined.iter().copied().filter(|c| page_rect(*c).intersect(region) == page_rect(*c).intersect(self.plan.bounds)));
-            }
-        }
-        if self.plan.level == 0 && self.transform.is_none() {
-            self.refined = self.valid.difference(&self.approximate).copied().collect();
-        }
         if matches!(destination, Destination::View) {
             crate::performance_trace::counter(c"Capy main mip box pixels", written.area());
-            crate::performance_trace::counter(c"Capy main mip changed pixels", written_pixels);
-            crate::performance_trace::counter(c"Capy main mip regions", written_regions);
+            crate::performance_trace::counter(c"Capy main mip regions", composed.len() as u64);
         }
         if !matches!(destination, Destination::Navigator) {
-            let phase = if finer.is_some() { 12 } else { 11 };
-            if crate::performance_trace::enabled() { commands.flush(r, encoder)?; }
-            r.telemetry.phase_begin(phase, &r.device, &r.queue, encoder);
-            self.reduce_output(r, encoder, written, commands)?;
-            r.telemetry.phase_end(phase, encoder);
-        }
-        self.resume = Some(Vec::new());
-        self.ready = true;
-        Ok(document(written).union(std::mem::take(&mut self.deferred_changed)))
-    }
-
-    fn copy_shifted(&mut self, r: &WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> PixelRect {
-        let bounds = self.plan.bounds;
-        let mut changed = PixelRect::EMPTY;
-        if let Some(old) = self.shifted.take() {
-            let overlap = bounds.intersect(old.plan.bounds);
-            if !overlap.is_empty() {
-                self.pixels.ensure(r, self.plan);
-                let side = 1 << self.plan.level;
-                let [sx, sy, width, height] = paint_transform::texel_rect(overlap.window_local(old.output_plan().bounds), side);
-                let [x, y, _, _] = paint_transform::texel_rect(overlap.window_local(self.output_plan().bounds), side);
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x: sx, y: sy, z: 0 },
-                        ..old.texture().as_image_copy() },
-                    wgpu::TexelCopyTextureInfo { origin: wgpu::Origin3d { x, y, z: 0 },
-                        ..self.texture().as_image_copy() },
-                    wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                );
-                self.valid.extend(old.valid.iter().copied().filter(|c| !page_rect(*c).intersect(overlap).is_empty()));
-                self.refined.extend(old.refined.iter().copied().filter(|c| !page_rect(*c).intersect(overlap).is_empty()));
-                self.approximate.extend(old.approximate.iter().copied().filter(|c| !page_rect(*c).intersect(overlap).is_empty()));
-                changed = overlap;
+            r.telemetry.phase_begin(11, &r.device, &r.queue, encoder);
+            if let Some((finer,changed))=finer {
+                let [x,y,width,height]=paint_transform::texel_rect(self.derive(scene,r,encoder,commands,finer,changed)?.window_local(output_bounds),side);
+                written=written.union(PixelRect::new(x,y,x+width,y+height));
             }
+            self.reduce_output(scene,r,encoder,commands)?;
+            r.telemetry.phase_end(11, encoder);
         }
-        changed
+        Ok(document(written))
+    }
+    fn encode_units(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder,
+        units: impl IntoIterator<Item = Unit>,
+    ) -> Result<(), GpuRasterError> {
+        if let Err(error) = scene.encode_jobs_inner(r, encoder, None) {
+            scene.discard_unencoded_jobs();return Err(error);
+        }
+        for mut unit in units {
+            std::mem::take(&mut unit.sources).track(encoder);
+            unit.commit(self, scene, encoder);
+        }
+        Ok(())
     }
 
-    /// Show the pages of a new display level or window of vector layers that no
-    /// copy holds at once: from the level it replaces where that holds them,
-    /// otherwise from an overview, resampled, until frames render them exactly.
-    fn seed_level(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, encoder: &mut crate::submission::CommandEncoder) -> PixelRect {
-        if self.ready || !matches!(self.pixels, hierarchy::Pixels::Window { .. })
-            || !packet.scene.order().iter().any(|owner| packet.scene.visible(*owner) && packet.scene.vector_layer(*owner).is_some()) { return PixelRect::EMPTY; }
-        let old = self.spare.as_deref().filter(|old| old.plan.level != self.plan.level);
-        let overviews = [self.overview.as_deref(), old.and_then(|old| old.overview.as_deref())].map(|overview| overview.filter(|_| self.zoomed));
-        let sources: Vec<&Cache> = [old].into_iter().chain(overviews).flatten()
-            .filter(|cache| cache.placed.is_none() && cache.pixels.root().is_some()).collect();
-        let bounds = self.plan.bounds;
-        let seeds: Vec<([u32; 2], &Cache)> = page_coordinates(bounds).filter(|page| !self.valid.contains(page)).filter_map(|page| {
-            let rect = page_rect(page).intersect(bounds);
-            sources.iter().copied().find(|cache| cache.valid.contains(&page) && rect.intersect(cache.plan.bounds) == rect).map(|cache| (page, cache))
-        }).collect();
-        if seeds.is_empty() { return PixelRect::EMPTY; }
-        self.pixels.ensure(r, self.plan);
-        let side = 1u32 << self.plan.level;
-        let output_bounds = self.output_plan().bounds;
-        let mut seeded = PixelRect::EMPTY;
-        for &(page, cache) in &seeds {
-            let rect = page_rect(page).intersect(bounds);
-            let [x, y, width, height] = paint_transform::texel_rect(rect.window_local(output_bounds), side);
-            let origin = [i64::from(output_bounds.min_x() + x * side), i64::from(output_bounds.min_y() + y * side)];
-            let source_bounds = cache.output_plan().bounds;
-            r.scene_pipelines.vector.resample(&r.device, encoder,
-                crate::vector::Placed { view: &cache.pixels.root().unwrap().view, origin: [i64::from(source_bounds.min_x()), i64::from(source_bounds.min_y())], side: 1 << cache.plan.level },
-                crate::vector::Placed { view: self.view(), origin, side }, PixelRect::new(x, y, x + width, y + height), Default::default());
-            seeded = seeded.union(rect);
-        }
-        self.valid.extend(seeds.iter().map(|(page, _)| *page));
-        self.approximate.extend(seeds.iter().map(|(page, _)| *page));
-        seeded
+    fn copy_level(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
+        if !self.ensure_window(r,scene,encoder) {return Err(GpuRasterError::NotReady);}
+        let selection=self.select_cells(self.plan.bounds,pages::Accuracy::Display,&|_|Class::Visible)?;
+        if selection.transition && !selection.complete(self.plan.bounds) {return Ok(PixelRect::EMPTY);}
+        let copied=self.copy_cells(r,encoder,commands,selection.copies)?;
+        if !copied.is_empty() {self.commit_window(r,encoder)?;}
+        self.reduce_output(scene,r,encoder,commands)?;
+        Ok(copied)
     }
-    /// Render a few pages that still show a coarser level exactly this frame,
-    /// nearest the view first, once their paths are derived.
-    fn refine_approximate(&mut self, scene: &mut Scene, r: &WgpuRasterizer, packet: FramePacket<'_>) {
-        if self.approximate.is_empty() { return; }
-        let mut pages: Vec<_> = self.approximate.iter().copied().collect();
-        nearest_first(&mut pages, packet.view);
-        let vectors: Vec<_> = packet.scene.order().iter().copied().filter(|owner| packet.scene.visible(*owner) && packet.scene.vector_layer(*owner).is_some()).collect();
-        let objects = packet.scene.order().iter().any(|owner| packet.scene.object_layer(*owner).is_some());
-        let palette = Scene::vector_palette(r, packet);
-        let side = 1u32 << self.plan.level;
-        let mut refined = 0;
-        for page in pages {
-            if refined == APPROXIMATE_PAGES { break; }
-            let rect = page_rect(page).intersect(self.plan.bounds);
-            let origin = [i64::from(rect.min_x()), i64::from(rect.min_y())];
-            let size = [rect.width().div_ceil(side), rect.height().div_ceil(side)];
-            let derived = vectors.iter().all(|owner| scene.vectors.window_ready(packet.scene, *owner, origin, self.plan.level, size, packet.document_extent, palette));
-            if derived {
-                self.valid.remove(&page);
-                if !objects { self.approximate.remove(&page); }
-                refined += 1;
-            } else if !scene.vectors.deriving() { break; }
-        }
+
+    fn derive(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
+        finer:&Cache,changed:PixelRect,
+    )->Result<PixelRect,GpuRasterError> {
+        let region=self.cells.lock().unwrap().derivations(self.plan,changed);
+        let Some(input)=finer.pixels.committed_next().or(finer.pixels.committed_root()).map(pages::CommittedImage::image) else {return Ok(PixelRect::EMPTY);};
+        let region=region.intersect(input.plan.bounds);
+        let Some(written)=self.reduce_from(scene,r,encoder,commands,input,region)? else {return Ok(PixelRect::EMPTY);};
+        self.cells.lock().unwrap().reduced(self.plan,region);
+        self.pixels.derived(written,encoder.submission());
+        Ok(region)
     }
-    fn reduce_output(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, region: PixelRect, commands: &mut Commands) -> Result<(), GpuRasterError> {
-        if region.is_empty() { return Ok(()); }
-        self.pixels.ensure(r, self.plan);
-        let levels: Vec<_> = match &self.pixels {
-            hierarchy::Pixels::Window { root, next } => vec![root.as_ref().unwrap().clone(), next.as_ref().unwrap().clone()],
-            hierarchy::Pixels::Resident { levels, level } => levels[*level as usize..].to_vec(),
-        };
-        let stale = self.half_stale.get_mut().unwrap();
-        *stale = stale.union(region);
+    fn reduce_from(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,
+        input:&Image,region:PixelRect,
+    )->Result<Option<PixelRect>,GpuRasterError> {
+        if region.is_empty() {return Ok(None);}
+        let format=self.precision.format();
+        if self.pixels.root().is_none_or(|image|image.texture.format()!=format) {
+            let bytes=self.plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(format.block_copy_size(None).unwrap());
+            let Some(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(None);};
+            let charge=reservation.charge(bytes);
+            let retired=self.pixels.take();
+            let bytes=retired.iter().map(Image::bytes).sum();
+            encoder.retire(crate::DisplayRetirement {_charge:r.retired_display_bytes.charge(bytes),
+                #[cfg(not(target_arch="wasm32"))] _scratch:(Vec::new(),retired)});
+            self.pixels.ensure_root(r,self.plan,format,"composition window",charge);
+        }
+        let output=self.pixels.root().unwrap();
+        let [x,y,width,height]=paint_transform::texel_rect(region.window_local(output.plan.bounds),1<<self.plan.level);
+        let level=input.plan.level;
+        let mut values=[0;20];
+        values[..8].copy_from_slice(&[x,y,width,height,input.plan.bounds.width(),input.plan.bounds.height(),1<<(self.plan.level-level),(level<<8)|8]);
+        values[14]=((input.plan.bounds.min_x()>>level) as f32).to_bits();
+        values[15]=((input.plan.bounds.min_y()>>level) as f32).to_bits();
+        let binding=RegionRecords::binding(r,&input.view,&r.empty_view,&output.view);
+        commands.reduce(r,encoder,values,&binding,"reduce a finer window",format)?;
+        Ok(Some(PixelRect::new(x,y,x+width,y+height)))
+    }
+    fn reduce_output(&mut self,scene:&Scene, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, commands: &mut RegionRecords) -> Result<(), GpuRasterError> {
+        let region=self.pixels.unreduced();
+        if region.is_empty() || self.pixels.committed_root().is_none() { return Ok(()); }
+        if !self.coverage_complete() {return self.write_projection_scales(r,encoder);}
+        if self.pixels.next().is_none() {
+            let bytes=self.owed_window_bytes();
+            let Some(reservation)=self.reserve_window(r,scene,bytes) else {return self.write_projection_scales(r,encoder);};
+            self.pixels.ensure(r,self.plan,self.precision.format(),reservation.charge(bytes));
+        }
+        let levels = [self.pixels.root().unwrap().clone(), self.pixels.next().unwrap().clone()];
         let mut changed = region;
         let mut jobs = Vec::with_capacity(levels.len() - 1);
         for pair in levels.windows(2) {
@@ -1644,7 +1266,7 @@ impl Cache {
             let next_origin = [changed.min_x() / 2, changed.min_y() / 2];
             let next_end = [changed.max_x().div_ceil(2), changed.max_y().div_ceil(2)];
             let next_size = [0, 1].map(|i| next_end[i] - next_origin[i]);
-            let binding = Commands::binding(r, &input.view, &r.empty_view, &output.view);
+            let binding = RegionRecords::binding(r, &input.view, &r.empty_view, &output.view);
             let mut values = [0; 20];
             values[..8].copy_from_slice(&[
                 next_origin[0], next_origin[1], next_size[0], next_size[1],
@@ -1657,38 +1279,23 @@ impl Cache {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("reduce composed display levels"), timestamp_writes: None,
         });
-        pass.set_pipeline(&r.scene_pipelines.scale.reduce_pair);
+        pass.set_pipeline(&r.scene_pipelines.scale.output(levels[1].texture.format()).reduce_pair);
         for (binding, offset, size) in &jobs {
             pass.set_bind_group(0, &commands.record_binding, &[*offset]);
             pass.set_bind_group(1, binding, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
-        self.ready = true;
+        drop(pass);
+        self.pixels.commit_next(encoder.submission());
+        self.write_projection_scales(r,encoder)?;
         Ok(())
     }
 }
 
-#[expect(clippy::large_enum_variant, reason = "Per-frame presentation retains GPU views and geometry inline without boxing")]
-enum Presentation {
-    Placed(Placement),
-    Mapped(scene::resample::Mapped),
-}
-impl Presentation {
-    fn view(&self) -> &wgpu::TextureView { match self { Self::Placed(p) => &p.value.view, Self::Mapped(p) => &p.view } }
-    fn next(&self) -> &wgpu::TextureView { match self { Self::Placed(p) => &p.next, Self::Mapped(p) => &p.view } }
-    fn coarse(&self) -> &wgpu::TextureView { match self { Self::Placed(p) => &p.coarse, Self::Mapped(p) => &p.view } }
-}
-struct Placement {
-    value: Placed,
-    next: wgpu::TextureView,
-    coarse: wgpu::TextureView,
-    coarse_level: u32,
-}
-
 #[derive(Clone)]
 struct Placed {
-    id: SourceTarget,
     view: wgpu::TextureView,
+    slot: Option<Slot>,
     transform: layer_core::ImageTransform,
     shift: [i64; 2],
     plan: display_mips::Plan,
@@ -1740,7 +1347,7 @@ impl Value {
         if let Self::Image { encode, .. } = &mut self { *encode = value; }
         self
     }
-    fn slot(&self) -> Option<Slot> { if let Self::Image { slot, .. } = self { slot.clone() } else { None } }
+    fn slot(&self) -> Option<Slot> { match self {Self::Image {slot,..}=>slot.clone(),Self::Placed(placed)=>placed.slot.clone(),_=>None} }
     fn view(&self) -> Option<&wgpu::TextureView> { if let Self::Image { view, .. } = self { Some(view) } else { None } }
     fn preview(&self) -> Option<&wgpu::TextureView> { if let Self::Image { preview, .. } = self { preview.as_ref() } else { None } }
     fn color(&self) -> [f32; 4] { if let Self::Color(color) = self { *color } else { [0.; 4] } }
@@ -1755,9 +1362,42 @@ impl Value {
         self
     }
 }
+struct ReadyUnit {
+    unit: Unit,
+    handle: pages::Accepted,
+    publish: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Root {Window, Store}
+
+#[derive(Default)]
+struct Unit {
+    window: Vec<pages::Write>,
+    waiting: bool,
+    updates: Vec<(SourceTarget, usize)>,
+    motion: Option<super::vectors::MotionImage>,
+    sources: crate::scene::sources::AcceptedInputs,
+    pages: Vec<pages::Write>,
+    reads: Vec<pages::Held>,
+    work: u64,
+}
+impl Unit {
+    fn ready(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, start: usize, class: Class) -> Result<bool, GpuRasterError> {
+        let ready=scene.prepare_jobs(r,encoder,start,class)?;
+        if self.waiting || !ready {return Ok(false);}
+        Ok(true)
+    }
+    fn commit(self, cache: &mut Cache, scene: &mut Scene, encoder:&mut submission::CommandEncoder) {
+        for image in self.reads {image.track(encoder);}
+        for write in self.pages {cache.pages.lock().unwrap().commit(write,self.work,encoder);}
+        for write in self.window {cache.show(write,encoder.submission());}
+        for (id, pages) in self.updates { scene.scale_sources.entries.get_mut(&id).unwrap().updates += pages as u64; }
+        if let Some(motion) = self.motion { scene.vectors.replace_motion(motion); }
+    }
+}
 struct Evaluator<'a> {
     cache: &'a mut Cache,
-    commands: &'a mut Commands,
     scene: &'a mut Scene,
     packet: FramePacket<'a>,
     r: &'a mut WgpuRasterizer,
@@ -1765,11 +1405,13 @@ struct Evaluator<'a> {
     region: DocRect,
     input: display_mips::Plan,
     tiled: bool,
-    source_plans: &'a mut std::collections::HashMap<SourceTarget,(SourceFrame,[u32;2],display_mips::Plan)>,
-    root_compositions: &'a mut Vec<RootComposition>,
-    defer_root: bool,
+    unit: &'a mut Unit,
+    accepted:&'a mut crate::scene::sources::AcceptedInputs,
+    previous_motion: Option<&'a super::vectors::MotionImage>,
+    retained:u64,
     approximate: bool,
     preview: bool,
+    class: Class,
 }
 fn mapped_material(r: &WgpuRasterizer, packet: FramePacket<'_>, id: SourceTarget) -> bool {
     r.watercolor_style(id, packet.dab_batches).is_some() && r.moving_layer == packet.scene.source_owner(id)
@@ -1807,14 +1449,14 @@ impl Evaluator<'_> {
         let value = self.source_pixels(id, frame, extent, outside)?;
         if self.cache.plan.level == 0 || !mapped_material(self.r, self.packet, id)
             || self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) { return Ok(value); }
-        let origin = frame.origin();
+        let placement=self.accepted.placement(id)?;
+        let origin = placement.offset;
         let (bounds, radius) = self.scene.material_coverage(self.r, id, origin, self.packet.dab_batches);
         if bounds.is_empty() { return Ok(value); }
         let material = bounds.expand(radius + 2 * (1 << self.cache.plan.level)).aligned(PAGE_SIZE);
         let region = self.region.aligned(PAGE_SIZE).intersect(material).intersect(self.input.doc_bounds);
         if region.is_empty() { return Ok(value); }
         let value = self.materialize(value, None)?;
-        self.commands.flush(self.r, self.encoder)?;
         let handle = self.packet.scene.source_owner(id).unwrap();
         let size = region.size()?;
         let local = PixelRect::full(size);
@@ -1824,15 +1466,15 @@ impl Evaluator<'_> {
         let slot = self.cache.allocate(self.r, plan)?;
         let view = self.cache.output[slot.index].view.clone();
         let packet = FramePacket { scene: self.packet.scene.with_offset64(region.min.map(|n| -(n as f64))), document_extent: size, ..self.packet };
-        let placement = [origin[0] - region.min[0], origin[1] - region.min[1]];
+        let placement=placement.material_view(region.min);
         let local_plan = display_mips::Plan::window(size, self.cache.plan.level, local);
-        self.scene.reduce_color_pages(self.commands, self.r, packet, self.encoder,
-            handle, local_plan, &view, &pages, Some(placement), [0; 2], &BTreeMap::new())?;
+        self.scene.reduce_color_pages(self.r, packet,
+            handle, local_plan, &view, &pages, Some(&placement), [0; 2], &BTreeMap::new(), self.accepted)?;
+        self.unit.updates.push((id, pages.len()));
         let material = Target { view, slot: Some(Slot::Cache(slot)), plan }.value();
         self.draw(material, value, layer_core::LayerBlend::Normal, 128, None)
     }
     fn vector(&mut self, owner: OccurrenceHandle, moving: Option<&super::vectors::Moving>, output: Option<Target>, append: bool) -> Result<Value, GpuRasterError> {
-        self.commands.flush(self.r, self.encoder)?;
         let mut target = self.target()?;
         let side = 1u32 << target.plan.level;
         let bounds = self.region.intersect(target.plan.doc_bounds).aligned(side);
@@ -1840,18 +1482,21 @@ impl Evaluator<'_> {
         target.plan.doc_bounds = bounds; target.plan.size = size.map(|v| v.div_ceil(side)); target.plan.bounds = PixelRect::full(size);
         let plan = target.plan;
         let palette = Scene::vector_palette(self.r, self.packet);
-        let base = output.as_ref().filter(|output| append && output.plan.level == plan.level).map(|output| {
-            let texels = paint_transform::texel_rect(output.plan.doc_bounds.local(bounds), side);
-            (output.view.clone(), [texels[0] as i32, texels[1] as i32])
-        });
+        let origin = |input: display_mips::Plan| paint_transform::texel_rect(input.doc_bounds.local(bounds), side);
+        let base = output.as_ref().filter(|output| append && output.plan.level == plan.level).map(|output| (output.view.clone(), output.plan));
         let (scene, extent) = (self.packet.scene, self.packet.document_extent);
+        if !self.scene.vectors.window_ready(scene,owner,bounds.min,plan.level,plan.size,extent,palette) {
+            self.unit.waiting=true;
+            return self.materialize(Value::Color([0.;4]),output);
+        }
         let excluded = moving.map(|moving| &*moving.0);
-        let unmoved = excluded.and_then(|_| {
-            let node = Arc::new(graph::Expression::Vector { owner, offset: scene.occurrence_offset64(owner).map(f64::to_bits), moving: None });
-            let pages: Vec<_> = page_coordinates(bounds.in_frame(extent)).collect();
-            let (view, image) = self.cache.graph.branch_image(&node, &pages).filter(|(_, image)| image.level == plan.level)?;
-            let texels = paint_transform::texel_rect(image.doc_bounds.local(bounds), side);
-            Some((view.clone(), [texels[0] as i32, texels[1] as i32]))
+        let unmoved=excluded.and_then(|_| {
+            let node=Arc::new(graph::Expression::Vector {owner,offset:scene.occurrence_offset64(owner).map(f64::to_bits),moving:None});
+            let key=self.cache.page_key(node,bounds.in_frame(extent));
+            if key.level!=plan.level {return None;}
+            let image=self.cache.pages.lock().unwrap().get(&key,bounds.in_frame(extent),pages::Accuracy::Display,self.cache.required_input_level(),self.class)?;
+            let source=(image.view.clone(),image.plan);self.unit.reads.push(image);
+            Some(source)
         });
         let appended = base.as_ref().and_then(|_| self.scene.vectors.append_batch(scene, owner, excluded, bounds.min, plan.level, plan.size, extent, palette));
         let (batch, base, kept) = match appended {
@@ -1864,15 +1509,18 @@ impl Evaluator<'_> {
                 },
             },
         };
-        if let Some((source, texels)) = &kept {
-            self.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo { texture: source.texture(), mip_level: 0, origin: wgpu::Origin3d { x: texels[0] as u32, y: texels[1] as u32, z: 0 }, aspect: wgpu::TextureAspect::All },
-                wgpu::TexelCopyTextureInfo { texture: target.view.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-                wgpu::Extent3d { width: plan.size[0], height: plan.size[1], depth_or_array_layers: 1 });
-        } else { self.r.encode_clear(self.encoder, &target.view, "vector layer"); }
+        match kept {
+            Some((source, input)) if source.texture().format() == target.view.texture().format() => {
+                let [x, y, ..] = origin(input);
+                self.scene.jobs.push(Job::Copy { source: source.texture().clone(), source_origin: [x, y],
+                    destination: target.view.texture().clone(), origin: [0;2], width: plan.size[0], height: plan.size[1] });
+            },
+            Some((view, plan)) => { self.materialize(Value::Image { view, slot: None, opacity: 1., plan, preview: None, encode: false }, Some(target.clone()))?; },
+            None => self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT)),
+        }
         if batch.tile_count() > 0 {
+            let base = base.map(|(view, input)| { let [x, y, ..] = origin(input); (view, [x as i32, y as i32]) });
             self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone(), base })));
-            self.encode_scene_jobs()?;
         }
         self.materialize(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }, output)
     }
@@ -1887,11 +1535,12 @@ impl Evaluator<'_> {
         let needed = super::moved_bounds(inverse, window).expand(side).intersect(moving).in_frame(self.packet.document_extent);
         if needed.is_empty() { return self.materialize(Value::Color([0.; 4]), output); }
         let needed = DocRect::from(needed).aligned(side);
-        self.commands.flush(self.r, self.encoder)?;
         let paths = self.r.vector_motion_paths_drawn.clone();
         let key = (owner, super::vectors::Moving(motion.items.clone()), level, self.packet.scene.occurrence_offset64(owner).map(|v| v as i64), super::vectors::Replaced(paths.clone()));
-        let covered = self.scene.vectors.motion.as_ref().is_some_and(|m| m.key == key && m.window.intersect(needed) == needed);
-        if !covered {
+        let source = self.unit.motion.iter().chain(self.previous_motion).chain(self.scene.vectors.motion.iter())
+            .find(|image| image.key == key && image.window.intersect(needed) == needed)
+            .map(|image| (image.image.view.clone(), image.window.min));
+        let (source, origin) = if let Some(source) = source { source } else {
             let budget = DocRect { min: needed.min.map(|v| v - 512 * i64::from(side)), max: needed.max.map(|v| v + 512 * i64::from(side)) };
             let area = moving.intersect(budget).in_frame(self.packet.document_extent);
             let plan = display_mips::Plan::window(self.packet.document_extent, level, area);
@@ -1901,27 +1550,26 @@ impl Evaluator<'_> {
                 Some(paths) => self.scene.vectors.replacement_batch(paths, self.packet.scene.occurrence_offset64(owner), plan.doc_bounds.min, level, plan.size, self.packet.document_extent, palette),
                 None => self.scene.vectors.motion_batch(self.packet.scene, owner, &motion.items, plan.doc_bounds.min, level, plan.size, self.packet.document_extent, palette),
             };
-            self.r.encode_clear(self.encoder, &image.view, "vector motion");
+            self.scene.jobs.push(Job::Clear(image.view.clone(), wgpu::Color::TRANSPARENT));
             if batch.tile_count() > 0 {
                 self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: image.view.clone(), base: None })));
-                self.encode_scene_jobs()?;
             }
-            self.scene.vectors.replace_motion(super::vectors::MotionImage { key, window: plan.doc_bounds, image, revision: 0 });
-        }
+            let source = (image.view.clone(), plan.doc_bounds.min);
+            self.unit.motion = Some(super::vectors::MotionImage { key, window: plan.doc_bounds, image, revision: 0 });
+            source
+        };
         let mut target = self.target()?;
         let size = window.size().map_err(|_| GpuRasterError::ExtentUnsupported)?;
         target.plan.doc_bounds = window; target.plan.size = size.map(|v| v.div_ceil(side)); target.plan.bounds = PixelRect::full(size);
-        self.r.encode_clear(self.encoder, &target.view, "vector motion");
-        let source = self.scene.vectors.motion.as_ref().unwrap();
-        self.r.scene_pipelines.vector.resample(&self.r.device, self.encoder, crate::vector::Placed { view: &source.image.view, origin: source.window.min, side },
-            crate::vector::Placed { view: &target.view, origin: window.min, side }, PixelRect::full(target.plan.size), inverse);
+        self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT));
+        self.scene.jobs.push(Job::VectorResample { source, origin,
+            target: target.view.clone(), target_origin: window.min, side, size: target.plan.size, inverse });
         let plan = target.plan;
         self.materialize(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }, output)
     }
     fn vector_preview(&mut self, owner: OccurrenceHandle, output: Option<Target>) -> Result<Value, GpuRasterError> {
         let Some((_, path, bounds)) = self.scene.scale_sources.vector_preview.clone().filter(|(o, ..)| *o == owner) else { return self.materialize(Value::Color([0.; 4]), output) };
         if bounds.intersect(self.region).is_empty() { return self.materialize(Value::Color([0.; 4]), output); }
-        self.commands.flush(self.r, self.encoder)?;
         let mut target = self.target()?;
         let side = 1u32 << target.plan.level;
         let window = self.region.intersect(target.plan.doc_bounds).aligned(side);
@@ -1930,15 +1578,13 @@ impl Evaluator<'_> {
         let plan = target.plan;
         let offset = self.packet.scene.occurrence_offset64(owner);
         let batch = self.scene.vectors.preview_batch(&path, offset, window.min, plan.level, plan.size, self.packet.document_extent, Scene::vector_palette(self.r, self.packet));
-        self.r.encode_clear(self.encoder, &target.view, "vector preview");
+        self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT));
         if batch.tile_count() > 0 {
             self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone(), base: None })));
-            self.encode_scene_jobs()?;
         }
         self.materialize(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }, output)
     }
     fn objects(&mut self,content:&object_spatial::Content,moving:bool,output:Option<Target>)->Result<Value,GpuRasterError> {
-        self.commands.flush(self.r,self.encoder)?;
         let mut target=self.target()?;let side=1u32<<target.plan.level;
         let bounds=self.region.intersect(target.plan.doc_bounds).aligned(side);
         let size=bounds.size().map_err(|_|GpuRasterError::ExtentUnsupported)?;
@@ -1949,61 +1595,51 @@ impl Evaluator<'_> {
         request.live=true;request.display=true;
         if request.keys.is_empty() {self.release(target.slot);return self.materialize(Value::Color([0.;4]),output);}
         let moving = moving || self.r.moving_layer.is_some() || self.preview;
-        let preview = if moving {self.scene.collection_preview(self.r,&request)?} else {None};
-        if (!moving || preview.is_none()) && let Some(pieces)=self.scene.canonical_cover(self.r,self.packet,content,&request)? {
+        let fallback = self.accepted.objects_fall_back();
+        let preview = if moving || fallback {self.scene.collection_preview(self.r,&request)?} else {None};
+        if preview.is_none() && !fallback && let Some(pieces)=self.scene.canonical_cover(self.r,self.packet,content,&request,self.accepted,self.class)? {
             let window=request.bounds();
-            self.r.encode_clear(self.encoder,&target.view,"canonical object pieces");
+            self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT));
             for (view,piece) in pieces {
                 let shared=piece.intersect(window);
                 let texels=|rect:DocRect,origin:[i64;2]|std::array::from_fn::<u32,2,_>(|i|((rect.min[i]-origin[i])/i64::from(side)) as u32);
                 let [width,height]=shared.size()?.map(|v|v/side);
                 let [x,y]=texels(shared,piece.min);
                 let [dx,dy]=texels(shared,window.min);
-                self.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {texture:view.texture(),mip_level:0,origin:wgpu::Origin3d {x,y,z:0},aspect:wgpu::TextureAspect::All},
-                    wgpu::TexelCopyTextureInfo {texture:target.view.texture(),mip_level:0,origin:wgpu::Origin3d {x:dx,y:dy,z:0},aspect:wgpu::TextureAspect::All},
-                    wgpu::Extent3d {width,height,depth_or_array_layers:1});
+                self.scene.jobs.push(Job::Copy { source: view.texture().clone(), source_origin: [x,y],
+                    destination: target.view.texture().clone(), origin: [dx,dy], width, height });
             }
             return self.materialize(Value::Image {view:target.view,slot:target.slot,opacity:1.,plan,preview:None,encode:false},output);
         }
-        let Some((sources,objects))=preview else {self.release(target.slot);return Err(GpuRasterError::DeferredObjectWork);};
+        let preview=match preview {None if !moving && !fallback=>self.scene.collection_preview(self.r,&request)?,preview=>preview};
+        let Some((sources,objects))=preview else {self.release(target.slot);return Err(GpuRasterError::NotReady);};
         self.approximate = true;
         let scratch=(crate::object_sampling::CollectionPreview::passes(&objects)>1).then(||self.target()).transpose()?;
         self.scene.jobs.push(Job::Collection(Box::new(crate::object_sampling::CollectionPreview {sources,objects,size:plan.size,output:target.view.clone(),
             scratch:scratch.as_ref().map(|scratch|scratch.view.clone()),encode:self.packet.blend_space==layer_core::BlendSpace::Perceptual})));
-        self.encode_scene_jobs()?;
         if let Some(scratch)=scratch {self.release(scratch.slot);}
         self.materialize(Value::Image {view:target.view,slot:target.slot,opacity:1.,plan,preview:None,encode:false},output)
     }
     fn source_pixels(&mut self, id: SourceTarget, frame: SourceFrame, extent: [u32; 2], outside: f32) -> Result<Value, GpuRasterError> {
         let encode = self.packet.blend_space == layer_core::BlendSpace::Perceptual
             && matches!(id, SourceTarget::Paint(_));
-        let origin = frame.origin();
+        let placement=self.accepted.placement(id)?;
+        debug_assert_eq!(frame,placement.frame,"accepted source frame differs from its expression");
+        if frame!=placement.frame {return Err(GpuRasterError::Invariant("accepted source frame differs from its expression"));}
+        let frame=placement.frame;
+        let origin = placement.offset;
         if self.r.transforms.as_ref().is_some_and(|t| t.display_source(id)) {
             return Ok(Value::Transform(TransformSource { id, placement: layer_core::Affine::translation(layer_core::offsets::point(origin)), opacity: 1., backdrop: [0.; 4], encode }));
         }
         let moving = self.r.moving_layer == self.packet.scene.source_owner(id);
-        let plan = if let Some((cached, domain, plan)) = self.source_plans.get(&id) && *cached == frame && *domain == extent { *plan } else {
-            let plan = source_plan(self.input, frame, extent, moving);
-            self.source_plans.insert(id, (frame, extent, plan));
-            plan
-        };
-        if self.cache.plan.level == 0 && plan.level == 0 {
+        let level=source_level(self.input.level,frame,moving,preview_input_level(&self.cache.pages,id));
+        let plan=display_mips::Plan::at(frame.extent(extent),level);
+        if self.tiled && self.cache.plan.level == 0 && plan.level == 0 {
             let tile = [self.region.in_frame(self.packet.document_extent).min_x() / PAGE_SIZE, self.region.in_frame(self.packet.document_extent).min_y() / PAGE_SIZE];
             let slot = if let SourceTarget::Paint(_) = id {
                 let handle = self.packet.scene.source_owner(id).unwrap();
-                let stored = self.r.paint_layers.iter().find(|stored| stored.id == id);
                 if origin == [0; 2] && self.r.watercolor_style(id, self.packet.dab_batches).is_none() {
-                    let preview = self.r.preview_layer_id == Some(id);
-                    let inputs = match self.scene.color_inputs(self.r, self.packet.scene, id, stored, tile, preview) {
-                        Err(GpuRasterError::SourceWorkingSetExceeded) => {
-                            self.commands.flush(self.r, self.encoder)?;
-                            let stored = self.r.paint_layers.iter().find(|stored| stored.id == id);
-                            self.scene.color_inputs(self.r, self.packet.scene, id, stored, tile, preview)?
-                        }
-                        result => result?,
-                    };
-                    self.encode_scene_jobs()?;
+                    let inputs = self.scene.color_inputs(self.r,self.packet.scene,id,tile,self.accepted)?;
                     let (base, preview) = match inputs {
                         [Some(base), preview] => (base, preview.map(|preview| preview.view)),
                         [None, Some(preview)] => (preview, None),
@@ -2011,60 +1647,61 @@ impl Evaluator<'_> {
                     };
                     return Ok(Value::Image { view: base.view, slot: base.lease.map(Slot::Decoded), opacity: 1., plan: self.working_plan(), preview, encode });
                 }
-                self.commands.flush(self.r, self.encoder)?;
                 if self.r.watercolor_style(id, self.packet.dab_batches).is_none() {
-                    let (color, flow) = self.scene.placed_color(self.r, self.packet.scene, id, origin, tile)?;
+                    let (color, flow) = self.scene.placed_color(self.r, self.packet.scene, id, &placement, tile, self.accepted)?;
                     let color = self.scene.own(color);
                     let flow = flow.map(|flow| self.scene.own(flow));
-                    self.encode_scene_jobs()?;
                     let view = self.scene.pool[color.index].view.clone();
                     let preview = flow.as_ref().map(|flow| self.scene.pool[flow.index].view.clone());
                     let slot = match flow {Some(flow) => Slot::Scenes([color, flow]),None => Slot::Scene(color)};
                     return Ok(Value::Image { view, slot: Some(slot), opacity: 1., plan: self.working_plan(), preview, encode });
                 }
-                self.scene.paint_tile(self.r, self.packet, handle, tile)?
+                self.scene.paint_tile(self.r, self.packet, handle, &placement, tile, self.accepted)?
             } else {
                 let handle = self.packet.scene.source_owner(id).unwrap();
                 let (mask, source) = self.packet.scene.mask(handle).unwrap();
-                self.scene.mask_at(self.r, mask, source, origin, tile)?
+                self.scene.mask_at(self.r, mask, source, origin, tile, self.accepted)?
             };
             let slot = self.scene.own(slot);
-            self.encode_scene_jobs()?;
             return Ok(Target { view: self.scene.pool[slot.index].view.clone(), slot: Some(Slot::Scene(slot)), plan: self.working_plan() }.value().with_encoding(encode));
         }
-        if plan.bounds.is_empty() { return Ok(Value::Color([outside; 4])); }
         let encode = encode && self.scene.scale_sources.entries[&id].blend_space == layer_core::BlendSpace::Linear;
-        if self.cache.streamed_sources && frame.aligned() {
-            let source = &self.scene.scale_sources.entries[&id];
-            let local = frame.local(self.region, extent);
-            let cached = source.levels.get(&plan.level).filter(|level|
-                source.accepts(level) && self.region.intersect(frame.document(level.image.plan.bounds)) == self.region
-                    && page_coordinates(local).all(|c| level.valid.contains(&c)));
-            if let Some(level) = cached {
-                return Ok(Value::Image { view: level.image.view.clone(), slot: None, opacity: 1., plan: frame.placed(level.image.plan), preview: None, encode });
-            }
-            self.commands.flush(self.r, self.encoder)?;
-            let target = self.target()?;
-            let mut missing = page_coordinates(local).collect();
-            if frame.shift == [0; 2] {
-                self.scene.scale_sources.entries[&id].derive_pages(self.commands, self.r, self.encoder, target.plan, &target.view, &mut missing)?;
-            }
-            let pages: Vec<_> = missing.into_iter().collect();
-            let handle = self.packet.scene.source_owner(id).unwrap();
-            if matches!(id, SourceTarget::Paint(_)) {
-                self.scene.reduce_color_pages(self.commands, self.r, self.packet, self.encoder, handle, target.plan, &target.view, &pages, None, frame.shift, &BTreeMap::new())?;
-            } else {
-                let (mask, source) = self.packet.scene.mask(handle).unwrap();
-                self.scene.reduce_mask_pages(self.commands, self.r, self.encoder, mask, source, target.plan, &target.view, &pages, frame.shift)?;
-            }
-            return Ok(target.value().with_encoding(encode));
+        let needed=frame.local(self.region,extent);
+        let needed=if frame.aligned() && !moving {needed}else {needed.expand(1<<plan.level,plan.extent)};
+        let source=&self.scene.scale_sources.entries[&id];
+        let needed=needed.intersect(PixelRect::full(source.valid_extent(plan.level)));
+        if needed.is_empty() {return Ok(Value::Color([outside;4]));}
+        let mut inputs=Vec::new();
+        for coordinate in pages::coordinates(needed,plan.level) {
+            let key=source.key(self.r,id,plan.level,coordinate);
+            let region=key.plan().bounds.intersect(needed);
+            let image=match &self.cache.gesture {
+                Some(contact)=>contact.pages.get(&key).cloned(),
+                None=>self.cache.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,self.class),
+            }.ok_or(GpuRasterError::NotReady)?;
+            inputs.push((key,image,region));
         }
-        let image = &self.scene.scale_sources.image(id, plan.level).image;
-        let plan = image.plan;
-        let view = image.view.clone();
+        let (view,plan,slot)=if inputs.len()==1 {
+            let (_,image,_)=inputs.pop().unwrap();
+            self.unit.reads.push(image.clone());
+            (image.view.clone(),image.plan,Some(Slot::Root))
+        } else {
+            let side=1<<plan.level;
+            let bounds=paint_transform::aligned(needed,side,plan.extent);
+            let plan=display_mips::Plan::window(plan.extent,plan.level,bounds);
+            let slot=self.cache.allocate(self.r,plan)?;
+            let view=self.cache.output[slot.index].view.clone();
+            for (_,input,region) in inputs {
+                let [sx,sy,width,height]=paint_transform::texel_rect(region.window_local(input.plan.bounds),side);
+                let [x,y,_,_]=paint_transform::texel_rect(region.window_local(plan.bounds),side);
+                self.scene.jobs.push(Job::Copy {source:input.texture.clone(),source_origin:[sx,sy],destination:view.texture().clone(),origin:[x,y],width,height});
+                self.unit.reads.push(input);
+            }
+            (view,plan,Some(Slot::Cache(slot)))
+        };
         if frame.aligned() && !moving && plan.level == self.cache.plan.level
             && (outside == 0. || self.region.intersect(frame.document(plan.bounds)) == self.region) {
-            return Ok(Value::Image { view, slot: None, opacity: 1., plan: frame.placed(plan), preview: None, encode });
+            return Ok(Value::Image {view,slot,opacity:1.,plan:frame.placed(plan),preview:None,encode});
         }
         let from_texels = layer_core::Projective::from_affine(layer_core::Affine([(1u32 << plan.level) as f32,0.,0.,(1u32 << plan.level) as f32,
             plan.bounds.min_x() as f32,plan.bounds.min_y() as f32]));
@@ -2073,41 +1710,40 @@ impl Evaluator<'_> {
         transform.placement = transform.placement.post(layer_core::Projective([1./side,0.,0.,0.,1./side,0.,0.,0.,1.]))
             .ok_or(GpuRasterError::InvalidTransform("Invalid source placement"))?;
         transform.source_from_owner = Some(from_texels.inverse().ok_or(GpuRasterError::InvalidTransform("Invalid source plan"))?);
-        Ok(Value::Placed(Placed { id, view, transform, shift: frame.shift, plan, outside, opacity: 1., backdrop: [0.; 4], encode }))
-    }
-    fn encode_scene_jobs(&mut self) -> Result<(), GpuRasterError> {
-        if self.scene.jobs.is_empty() { return Ok(()); }
-        self.commands.flush(self.r, self.encoder)?;
-        self.scene.encode_jobs(self.r, self.encoder)
+        Ok(Value::Placed(Placed { view,slot,transform, shift: frame.shift, plan, outside, opacity: 1., backdrop: [0.; 4], encode }))
     }
     fn transform(&mut self, source: TransformSource, output: Option<Target>) -> Result<Value, GpuRasterError> {
-        if output.as_ref().is_some_and(|target|matches!(target.slot,Some(Slot::Root))) { self.commands.flush_root(self.scene,self.r,self.encoder,self.root_compositions)?; }
-        self.commands.flush(self.r, self.encoder)?;
         let Target { view, slot, plan } = match output { Some(target) => target, None => self.target()? };
         let side = 1 << self.cache.plan.level;
         let region = self.region;
         let display = pixel_transform::DisplayLevel { side, extent: self.cache.plan.extent, opacity: source.opacity, backdrop: source.backdrop, encode: source.encode };
-        let fine_budget=self.cache.fine_output_budget(self.r,self.packet,self.scene,self.commands);
+        if self.accepted.declaring() { return Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false }); }
+        let fine_budget=self.cache.fine_output_budget(self.r,self.scene,self.retained);
         let mut transforms = self.r.transforms.take().unwrap();
-        let result = transforms.render_region(self.r, self.encoder, source.id, source.placement, &view, display, plan, region,fine_budget);
+        let result = transforms.prepare_region(self.r, self.encoder, source.id, source.placement, &view, display, plan, region,fine_budget);
         self.r.transforms = Some(transforms);
-        result?;
+        self.scene.jobs.push(Job::Transform(Box::new(result?)));
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn resample(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {
         if let Value::Transform(source) = value { return self.transform(source, output); }
         let Value::Placed(placed) = value else { return Ok(value); };
-        if output.as_ref().is_some_and(|target|matches!(target.slot,Some(Slot::Root))) { self.commands.flush_root(self.scene,self.r,self.encoder,self.root_compositions)?; }
         let Target { view, slot, plan } = match output { Some(target) => target, None => self.target()? };
         let texels = self.texels(plan);
         let values = placed.record(plan, texels)?;
-        self.commands.push(self.r, self.encoder, DisplayJob::Resample {
+        if texels[2] != 0 && texels[3] != 0 { self.scene.jobs.push(Job::Resample {
             values, views: [placed.view, view.clone()], size: [texels[2], texels[3]],
-        })?;
+        }); }
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
     fn materialize(&mut self, value: Value, output: Option<Target>) -> Result<Value, GpuRasterError> {
-        if matches!(value, Value::Transform(_) | Value::Placed(_)) { return self.resample(value, output); }
+        if matches!(value,Value::Transform(_) | Value::Placed(_)) {
+            if output.as_ref().is_some_and(|target|target.view.texture().format()==wgpu::TextureFormat::Rgba16Float) {
+                let value=self.resample(value,None)?;
+                return self.materialize(value,output);
+            }
+            return self.resample(value,output);
+        }
         if !value.needs_encode() && value.preview().is_none() && value.opacity() == 1. && output.as_ref().map_or_else(|| value.slot().is_some(), |target| value.view() == Some(&target.view)) { return Ok(value); }
         let (front, back) = if matches!(value, Value::Color(_)) { (Value::Color([0.; 4]), value) } else { (value, Value::Color([0.; 4])) };
         self.draw(front, back, layer_core::LayerBlend::Normal, 0, output)
@@ -2132,22 +1768,6 @@ impl Evaluator<'_> {
         let back = self.resample(back, None)?;
         let Target { view, slot, plan } = match output { Some(target) => target, None => self.target()? };
         let [x, y, width, height] = self.texels(plan);
-        let deferred = if matches!(slot, Some(Slot::Root)) {
-            let retained = |input: &Value| matches!(input,
-                Value::Image { view: source, slot: None, opacity: 1., plan: source_plan, preview: None, encode: false }
-                if *source_plan == plan && plan.doc_bounds == DocRect::from(PixelRect::full(plan.extent)) && source.texture() != view.texture()
-                    && source.texture().width() == plan.size[0] && source.texture().height() == plan.size[1]
-                    && (self.cache.initialized_pages(&Target {view:source.clone(),slot:None,plan}).is_some()
-                        || self.scene.scale_sources.entries.values().any(|s|s.levels.values().any(|l|l.image.view==*source))));
-            let clip = PixelRect::new(x, y, x + width, y + height);
-            let deferred = self.defer_root && blend == layer_core::LayerBlend::Normal && flags == 0
-                && retained(&front) && retained(&back) && clip != PixelRect::full(plan.size);
-            if !deferred || self.root_compositions.len() == 32 || self.root_compositions.iter().any(|job| {
-                let [x,y,width,height]=job.composition.values[..4].try_into().unwrap();
-                job.target != view || !PixelRect::new(x,y,x+width,y+height).intersect(clip).is_empty()
-            }) { self.commands.flush_root(self.scene, self.r, self.encoder, self.root_compositions)?; }
-            deferred
-        } else { false };
         let mut values = [0; 20];
         values[..8].copy_from_slice(&[
             x, y, width, height, 0, 0,
@@ -2167,14 +1787,11 @@ impl Evaluator<'_> {
             values[offset] = ((target.doc_bounds.min[0] - source.doc_bounds.min[0]) / i64::from(side)) as u32;
             values[offset + 1] = ((target.doc_bounds.min[1] - source.doc_bounds.min[1]) / i64::from(side)) as u32;
         }
-        let binding = Commands::inputs(self.r, [front.view(), back.view(), front.preview(), back.preview()]
-            .map(|view| view.unwrap_or(&self.r.empty_view)), &view);
+        let sources = [front.view(), back.view(), front.preview(), back.preview()].map(|source| source.unwrap_or(&self.r.empty_view).clone());
         let leases = [front.slot(), back.slot()].into_iter().filter_map(|slot| match slot {
             Some(Slot::Decoded(lease)) => Some(lease), _ => None,
         }).collect();
-        let composition = Composition { values, binding, leases };
-        if deferred { self.root_compositions.push(RootComposition {target:view.clone(),composition}); }
-        else { self.commands.push(self.r, self.encoder, DisplayJob::Compose(composition))?; }
+        if width != 0 && height != 0 { self.scene.jobs.push(Job::Compose { values, output: view.clone(), sources, _leases: leases, format:view.texture().format() }); }
         for slot in [front.slot(), back.slot()] { self.release(slot); }
         Ok(Value::Image { view, slot, opacity: 1., plan, preview: None, encode: false })
     }
@@ -2182,3 +1799,10 @@ impl Evaluator<'_> {
 
 #[cfg(test)]
 mod signed_region_tests;
+
+#[cfg(test)]
+pub(crate) use pages::query_tests::{assert_regional_object_overview,regional_object_overview_footprint};
+
+#[cfg(test)]
+pub(crate) use pages::query_tests::assert_display_grant_decrease_reconciles_retention;
+

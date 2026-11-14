@@ -42,8 +42,8 @@ fn dither_only_picks_up_texels_inside_the_actual_contact() {
         }).collect();
         let mut canvas = canvas();
         canvas.fill(canvas.base, BLUE);
-        let page = canvas.r.paint_layers.iter().find(|l| l.id == canvas.base).unwrap().pages.first().unwrap();
-        crate::test_support::upload_page(&canvas.r, &page.active().texture, &bytes);
+        let coordinate = canvas.r.paint_layers.iter().find(|l| l.id == canvas.base).unwrap().pages.first().unwrap().coordinate;
+        canvas.upload(canvas.base, coordinate, &bytes);
         canvas.stroke(100, &brush, &vec![dab; 24], 6, false);
         for (i, (actual, expected)) in canvas.composite().iter().zip(&expected).enumerate() {
             assert_eq!(actual, expected, "outside paint entered pixel={i} radii={radii:?} rotation={rotation} hardness={hardness} center={center:?}");
@@ -692,7 +692,8 @@ fn color_mixer_color_is_independent_of_uniform_coverage_scale() {
             let rgb = if i % PAGE_SIZE < 66 { [0.05, 0.2, 0.6] } else { [0.8, 0.05, 0.02] };
             [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha].into_iter().flat_map(f32::to_le_bytes)
         }).collect();
-        crate::test_support::upload_page(&canvas.r, &canvas.r.paint_layers[0].pages[0].active().texture, &bytes);
+        let coordinate = canvas.r.paint_layers[0].pages[0].coordinate;
+        canvas.upload(canvas.base, coordinate, &bytes);
         let seeded = canvas.composite();
         assert!((pixel(&seeded, 30, 64)[2] / f64::from(alpha) - 0.6).abs() < 1e-6);
         let mut brush = brush(P::ColorMixer, 40.);
@@ -723,7 +724,8 @@ fn painterly_blends_high_contrast_hdr_without_a_variance_ceiling() {
             let value = if hash & 1 == 0 { 0. } else { scale };
             [value, value, value, 1.].into_iter().flat_map(f32::to_le_bytes)
         }).collect();
-        crate::test_support::upload_page(&canvas.r, &canvas.r.paint_layers[0].pages[0].active().texture, &bytes);
+        let coordinate = canvas.r.paint_layers[0].pages[0].coordinate;
+        canvas.upload(canvas.base, coordinate, &bytes);
         let mut brush = brush(P::PainterlyBlender, 20.);
         brush.wet_mix.mix_space = layer_core::ColorMixSpace::LinearRgb;
         let dabs = contacts(&brush, &line([30., 64.], [98., 64.]));
@@ -748,14 +750,14 @@ fn dither_cell_pattern(canvas: &mut Canvas, color: impl Fn(u32, u32) -> [f32; 4]
     let mut dab = test_dab([128.; 2], [1.; 4], 1.);
     dab.radii = [10000.; 2];
     canvas.paint(canvas.base, test_style(BrushExecution::Dry), dab);
-    let layer = canvas.r.paint_layers.iter().find(|l| l.id == canvas.base).unwrap();
-    for page in &layer.pages {
+    let coordinates: Vec<_> = canvas.r.paint_layers.iter().find(|l| l.id == canvas.base).unwrap().pages.iter().map(|page| page.coordinate).collect();
+    for coordinate in coordinates {
         let bytes: Vec<_> = (0..PAGE_SIZE).flat_map(|y| (0..PAGE_SIZE).flat_map({
             let color = &color;
-            move |x| color(page.coordinate[0] * PAGE_SIZE + x, page.coordinate[1] * PAGE_SIZE + y)
+            move |x| color(coordinate[0] * PAGE_SIZE + x, coordinate[1] * PAGE_SIZE + y)
                 .into_iter().flat_map(f32::to_le_bytes)
         })).collect();
-        crate::test_support::upload_page(&canvas.r, &page.active().texture, &bytes);
+        canvas.upload(canvas.base, coordinate, &bytes);
     }
 }
 

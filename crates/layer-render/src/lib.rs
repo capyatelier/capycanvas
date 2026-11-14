@@ -26,6 +26,8 @@ pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{FrameRate, FrameRateSource, PresentationRate, RendererTelemetry, TimingSamples,
     GpuAdapter, GpuMemory, GpuMemoryKind, MemoryPeak, MemoryPool, MemorySnapshot, MemoryBudgetSummary, ProcessMemory, ProcessMemoryKind};
 
+pub struct ReadySubmission(());
+
 #[derive(Clone, Debug)]
 #[expect(clippy::large_enum_variant, reason = "Snapshot handoffs move captured plans without per-request boxing")]
 pub enum SnapshotRequest {
@@ -221,6 +223,20 @@ pub struct ViewState {
     pub height_px: u32,
     /// Affine document-to-surface transform `[a, b, c, d, tx, ty]`.
     pub document_to_surface: [f32; 6],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameDemand { Animate, Work, WaitUntil(web_time::Instant), Wait }
+impl FrameDemand {
+    pub fn sooner(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Animate, _) | (_, Self::Animate) => Self::Animate,
+            (Self::Work, _) | (_, Self::Work) => Self::Work,
+            (Self::WaitUntil(a), Self::WaitUntil(b)) => Self::WaitUntil(a.min(b)),
+            (Self::Wait, demand) | (demand, Self::Wait) => demand,
+        }
+    }
+    pub fn after(delay: std::time::Duration) -> Self { Self::WaitUntil(web_time::Instant::now() + delay) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -880,6 +896,9 @@ pub struct PreparationContext {
 /// into GPU resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Classifies internal preparation state for the shared submission invariant.
+    fn is_preparation_pending(_error: &Self::Error) -> bool { false }
+    fn adopt_committed_pages(&mut self, _previous: &mut Self) where Self:Sized {}
     /// Input postpones optional shader work. Shared editor state separately
     /// holds admission during a stroke/gesture or unfinished document edit.
     fn shader_input(&mut self) {}
@@ -937,6 +956,8 @@ pub trait CanvasRenderer {
     fn seed_evaluation_context(&mut self,_context:EvaluationContext) {}
     fn poll_pending(&mut self, _view: ViewState) -> Result<(), Self::Error> { Ok(()) }
     fn has_pending_submission(&self) -> bool { false }
+    fn next_frame(&self) -> FrameDemand { FrameDemand::Wait }
+    fn waits_for_frame_slot(&self) -> bool { false }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true
@@ -953,11 +974,6 @@ pub trait CanvasRenderer {
     }
     fn paint_ready(&self, _document: &layer_core::Document, _brush: &layer_core::BrushSnapshot, _transform: bool) -> bool {
         true
-    }
-    /// Work that later frames finish without new input, such as the
-    /// full-resolution result of a preview first drawn at display resolution.
-    fn has_pending_work(&self) -> bool {
-        false
     }
     /// The layer a placement or transform that just began may move. The
     /// renderer may prepare what drawing its drag needs while idle. None
@@ -1050,6 +1066,20 @@ pub trait CanvasRenderer {
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error>;
     fn release_asset(&mut self, asset: &AssetId);
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error>;
+    fn ready_submission(&mut self, packet: FramePacket<'_>, preview: Option<&TransformPreview>) -> Option<ReadySubmission> {
+        self.raster_dependencies_ready(packet, preview).then_some(ReadySubmission(()))
+    }
+    fn submit_ready(&mut self, _ready: ReadySubmission, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        let result = self.submit(packet);
+        debug_assert!(!result.as_ref().is_err_and(Self::is_preparation_pending),
+            "a ready frame must not defer preparation during submission");
+        result
+    }
+    fn submit_when_ready(&mut self, packet: FramePacket<'_>, preview: Option<&TransformPreview>)
+        -> std::task::Poll<Result<(), Self::Error>> {
+        self.ready_submission(packet, preview).map_or(std::task::Poll::Pending, |ready| std::task::Poll::Ready(self.submit_ready(ready, packet)))
+    }
+
     /// Small asynchronous UI previews, never full-resolution paint readback.
     fn request_thumbnail(&mut self, _request_id: u64, _target: ThumbnailTarget) -> Result<(), Self::Error> {
         Ok(())
@@ -1253,4 +1283,57 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Dab, contact), 96);
         assert_eq!(std::mem::offset_of!(Dab, previous_contact), 112);
     }
+    mod submission_contract {
+        use super::*;
+        use std::task::Poll;
+
+        #[derive(Default)]
+        struct Renderer { ready: bool, submissions: usize, fail: Option<&'static str> }
+        impl CanvasRenderer for Renderer {
+            type Error = BackendError;
+            fn is_preparation_pending(error: &Self::Error) -> bool { error.0 == "preparation pending" }
+            fn raster_dependencies_ready(&mut self, _: FramePacket<'_>, _: Option<&TransformPreview>) -> bool { self.ready }
+            fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> { Ok(()) }
+            fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> { Ok(()) }
+            fn release_asset(&mut self, _: &AssetId) {}
+            fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
+                self.submissions += 1;
+                self.fail.map_or(Ok(()), |error| Err(BackendError(error)))
+            }
+        }
+        fn document() -> layer_core::Document {
+            layer_core::Document::new(layer_core::authored::PortableId::random(), 32, 24,
+                layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() })
+        }
+        fn packet(document: &layer_core::Document) -> FramePacket<'_> {
+            FramePacket { restore_rasters: &[], time_seconds: 0.,
+                view: ViewState { width_px: 32, height_px: 24, document_to_surface: [1., 0., 0., 1., 0., 0.] },
+                document_extent: [32, 24], scene: document.scene(), inspect_mask: None, selection_overlays: None,
+                dabs: &[], dab_batches: &[], reset_layers: false, commit_rasters: true, composite_all: false,
+                blend_space: document.composition().blend }
+        }
+        #[test]
+        fn a_pending_frame_is_not_submitted_until_its_preparation_is_ready() {
+            let document = document();let packet = packet(&document);let mut renderer = Renderer::default();
+            assert_eq!(renderer.submit_when_ready(packet, None), Poll::Pending);
+            assert_eq!(renderer.submissions, 0);
+            renderer.ready = true;
+            assert_eq!(renderer.submit_when_ready(packet, None), Poll::Ready(Ok(())));
+            assert_eq!(renderer.submissions, 1);
+        }
+        #[test]
+        fn a_ready_submission_error_is_preserved() {
+            let document = document();let mut renderer = Renderer { ready: true, fail: Some("device lost"), ..Default::default() };
+            assert_eq!(renderer.submit_when_ready(packet(&document), None), Poll::Ready(Err(BackendError("device lost"))));
+            assert_eq!(renderer.submissions, 1);
+        }
+        #[test]
+        #[cfg(debug_assertions)]
+        #[should_panic(expected = "a ready frame must not defer preparation during submission")]
+        fn a_ready_frame_cannot_report_preparation_pending() {
+            let document = document();let mut renderer = Renderer { ready: true, fail: Some("preparation pending"), ..Default::default() };
+            let _ = renderer.submit_when_ready(packet(&document), None);
+        }
+    }
+
 }

@@ -33,6 +33,7 @@ frame-trace Shared/Bridge/FrameTrace.swift
 drawing-workload-plan Shared/Bridge/DrawingWorkloadPlan.swift
 native-input-gate Shared/Bridge/NativeInputGate.swift
 frame-driver Shared/Bridge/CanvasFrameDriver.swift
+process-termination Shared/Bridge/ProcessTermination.swift
 numeric-edit Shared/Editor/NumericEditState.swift
 slider-input Shared/Bridge/LatestOwnerInput.swift Shared/Bridge/RenderOwnerQueue.swift
 native-menu-titles macOS/Platform/NativeMenuTitles.swift

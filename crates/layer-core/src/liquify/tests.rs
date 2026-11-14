@@ -4,6 +4,7 @@ use crate::{authored::{PaintBase, SourceTarget}, raster::RasterRevision, Documen
 #[derive(Debug)]
 struct TestField;
 impl Field for TestField {
+    fn content_version(&self)->crate::raster::ContentVersion {crate::raster::ContentVersion::derive(0,&[])}
     fn tiles(&self) -> Vec<[u32; 2]> { vec![[0, 0]] }
     fn as_any(&self) -> &dyn Any { self }
     fn resources(&self, visit: &mut dyn FnMut(u64, usize)) { visit(71, 4096); }
@@ -119,6 +120,7 @@ fn context_retains_its_source_without_retaining_unrelated_layers() {
 #[derive(Debug)]
 struct Resources(Vec<(u64, usize)>);
 impl Field for Resources {
+    fn content_version(&self)->crate::raster::ContentVersion {crate::raster::ContentVersion::derive(1,&[])}
     fn tiles(&self) -> Vec<[u32; 2]> { vec![[0, 0]] }
     fn as_any(&self) -> &dyn Any { self }
     fn resources(&self, visit: &mut dyn FnMut(u64, usize)) {

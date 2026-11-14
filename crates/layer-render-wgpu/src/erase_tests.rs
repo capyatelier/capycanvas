@@ -183,6 +183,32 @@ fn a_whole_layer_erase_settles_watercolor_before_erasing() {
 }
 
 #[test]
+fn a_whole_layer_erase_settles_watercolor_pages_in_any_order() {
+    let settled = |reverse: bool| {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut layer = paint_document(EXTENT, "watercolor erase order");
+        let mut stroke = batch(target(&layer));
+        stroke.style = preset_style(layer_core::DefaultBrushPreset::WatercolorWash);
+        stroke.damage = Rect { min: Point { x: 156., y: 40. }, max: Point { x: 356., y: 240. } };
+        let mut ink = dab([0.2, 0.3, 0.8, 0.8]);
+        ink.center = Point { x: 256., y: 140. };
+        ink.radii = [100.; 2];
+        ink.material = [0.5, 0.8, 1., 0.8];
+        paint_mut(&mut layer).raster = RasterRevision::pending();
+        frame(&mut r, layer.scene(), &[ink], &[stroke], &[]);
+        paint_mut(&mut layer).raster.wait_data().unwrap();
+        if reverse { r.paint_layers[0].pages.reverse(); }
+        let full = Rect { min: Point::default(), max: Point { x: 600., y: 300. } };
+        run(&mut r, &mut layer, erase_operation(rectangle([560., 260., 600., 300.]), false), full, &[]);
+        assert!(r.paint_layers[0].watercolor.is_none());
+        image(&mut r)
+    };
+    let (forward, backward) = (settled(false), settled(true));
+    let differing = (0..600).flat_map(|x| (0..300).map(move |y| [x, y])).filter(|&point| at(&forward, point) != at(&backward, point)).collect::<Vec<_>>();
+    assert!(differing.is_empty(), "{} pixels depend on page order, first {:?}", differing.len(), differing.first());
+}
+
+#[test]
 fn an_inserted_copy_starts_from_its_restore_source() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = painted(&mut r);
@@ -312,7 +338,7 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
     }
     frame(&mut r, document.scene(), &[], &[], &[(mask_target, live)]);
     let live_source = document.artwork.coverage.get(mask).unwrap().clone();
-    let live_pixels = page_bytes(&r, &r.layer_masks.pages[&(mask_target, [0; 2])].texture);
+    let live_pixels = crate::test_support::mask_page_bytes(&r,mask_target,[0;2]);
     document.artwork.occurrences.get_mut(owner).unwrap().visible = false;
     let mut outputs = Vec::new();
     let mut batches = Vec::new();
@@ -350,6 +376,6 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
         assert_eq!(at(&pixels, [400, 60])[3], [0, 255][index], "bake {index} has a distinct captured context");
     }
     assert_eq!(document.artwork.coverage.get(mask).unwrap(), &live_source);
-    assert_eq!(page_bytes(&r, &r.layer_masks.pages[&(mask_target, [0; 2])].texture), live_pixels);
+    assert_eq!(crate::test_support::mask_page_bytes(&r,mask_target,[0;2]), live_pixels);
     assert!(r.layer_masks.snapshots.is_empty(), "completed bakes release their private mask pages");
 }

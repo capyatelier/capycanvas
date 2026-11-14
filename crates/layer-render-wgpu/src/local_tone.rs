@@ -8,15 +8,22 @@ use std::sync::Arc;
 
 /// A completed document-space illumination guide on its originating device.
 /// Presentation shares this buffer; it never uploads or reads image pixels.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GpuToneGuide {
     pub extent: [u32; 2],
     pub document_extent: [u32; 2],
     pub space: RgbSpace,
     pub peak: f32,
-    pub(crate) device: wgpu::Device,
+    pub(crate) device: PipelineDevice,
     pub(crate) buffer: wgpu::Buffer,
     pub(crate) analysis_lease: Option<Arc<crate::effect_analysis::Lease>>,
+}
+impl std::fmt::Debug for GpuToneGuide {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+        f.debug_struct("GpuToneGuide").field("extent",&self.extent).field("document_extent",&self.document_extent)
+            .field("space",&self.space).field("peak",&self.peak).field("device",&*self.device)
+            .field("buffer",&self.buffer).field("analysis_lease",&self.analysis_lease).finish()
+    }
 }
 impl GpuToneGuide {
     #[cfg(test)]
@@ -35,7 +42,7 @@ impl GpuToneGuide {
             document_extent: guide.document_extent,
             space: renderer.document_color.space,
             peak: guide.peak,
-            device: (*renderer.device).clone(),
+            device: renderer.device.for_resource(),
             buffer,
             analysis_lease: None,
         }
@@ -399,21 +406,21 @@ impl Builder {
             document_extent: self.document,
             space: self.space,
             peak,
-            device: (*self.device).clone(),
+            device: self.device.for_resource(),
             buffer: output,
         })
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn wait(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
+pub(crate) fn wait(device: &PipelineDevice, queue: &wgpu::Queue) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    queue.on_submitted_work_done(move || {
+    device.on_queue_done(queue,move || {
         let _ = tx.send(Ok(()));
     });
     crate::raster::wait_mapping(device, &rx)
 }
 pub(crate) async fn read_buffer_async(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     queue: &wgpu::Queue,
     source: &wgpu::Buffer,
 ) -> Result<Vec<u8>, String> {
@@ -425,14 +432,15 @@ pub(crate) async fn read_buffer_async(
     });
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_buffer_to_buffer(source, 0, &output, 0, source.size());
-    queue.submit([encoder.finish()]);
+    device.submit(queue,[encoder.finish()]);
     #[cfg(not(target_arch = "wasm32"))]
     let (tx, rx) = std::sync::mpsc::channel();
     #[cfg(target_arch = "wasm32")]
     let (tx, rx) = futures_channel::oneshot::channel();
-    output.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+    output.slice(..).map_async(wgpu::MapMode::Read, {let callback=move |r:Result<(),wgpu::BufferAsyncError>| {
         let _ = tx.send(r.map_err(|e| e.to_string()));
-    });
+    }; #[cfg(not(target_arch="wasm32"))] let callback=device.callback(callback);callback});
+    device.request_poll();
     #[cfg(not(target_arch = "wasm32"))]
     crate::raster::wait_mapping(device, &rx)?;
     #[cfg(target_arch = "wasm32")]
@@ -446,7 +454,7 @@ pub(crate) async fn read_buffer_async(
     Ok(bytes)
 }
 pub(crate) async fn range_async(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     queue: &wgpu::Queue,
     source: &wgpu::Buffer,
 ) -> Result<(f32, f32, u32, f32), String> {
@@ -473,7 +481,7 @@ pub(crate) async fn range_async(
     ))
 }
 
-pub(crate) async fn wait_async(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
+pub(crate) async fn wait_async(device: &PipelineDevice, queue: &wgpu::Queue) -> Result<(), String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         wait(device, queue)
@@ -482,7 +490,7 @@ pub(crate) async fn wait_async(device: &wgpu::Device, queue: &wgpu::Queue) -> Re
     {
         let _ = device;
         let (tx, rx) = futures_channel::oneshot::channel();
-        queue.on_submitted_work_done(move || {
+        device.on_queue_done(queue,move || {
             let _ = tx.send(());
         });
         rx.await.map_err(|e| e.to_string())
@@ -490,7 +498,7 @@ pub(crate) async fn wait_async(device: &wgpu::Device, queue: &wgpu::Queue) -> Re
 }
 #[cfg(test)]
 fn range(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     queue: &wgpu::Queue,
     source: &wgpu::Buffer,
 ) -> Result<(f32, f32, u32, f32), String> {

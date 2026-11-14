@@ -12,6 +12,7 @@ pub(super) struct SelectionPainter {
     pending: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<SelectionPaintResult, GpuRasterError>>,
     rx: mpsc::Receiver<Result<SelectionPaintResult, GpuRasterError>>,
+    charge: crate::residency::Charge,
 }
 pub(super) struct Pipelines {
     layout: wgpu::BindGroupLayout,
@@ -35,9 +36,13 @@ impl SelectionPainter {
                 p.before.size() + p.output.size() + p.pages.values().map(|b| b.size()).sum::<u64>()
             })
     }
-    pub fn from_pipelines(recipes: Arc<Pipelines>) -> Self {
+    fn account(&mut self) {
+        let bytes = self.storage_bytes();
+        self.charge.resize(bytes);
+    }
+    pub fn from_pipelines(recipes: Arc<Pipelines>, tier: &Arc<crate::residency::Tier>) -> Self {
         let (tx, rx) = mpsc::channel();
-        Self { recipes, active: None, pending: None, tx, rx }
+        Self { recipes, active: None, pending: None, tx, rx, charge: tier.charge(0) }
     }
 }
 impl Pipelines {
@@ -389,9 +394,10 @@ impl SelectionPainter {
             self.pending = Some(readback);
         }
         r.uploads.finish(&encoder);
-        r.last_submission = Some(encoder.submit(&r.queue));
+        r.last_submission = encoder.submit(&r.queue);
         if let Some(readback) = &self.pending {
             selection_readback::capture_selection(
+            &r.device,
                 selection_readback::Capture {buffer:readback.clone(),size:size+32,coverage_size:size,underfill_offset:None,seal_records:0,seed_offset:None},
                 extent,true,update.id,false,
                 self.tx.clone(),
@@ -450,8 +456,9 @@ impl WgpuRasterizer {
         let mut painter = self
             .selection_painter
             .take()
-            .unwrap_or_else(|| SelectionPainter::from_pipelines(self.recipes.selection_paint.clone()));
+            .unwrap_or_else(|| SelectionPainter::from_pipelines(self.recipes.selection_paint.clone(), &self.raster_tiers.paint));
         let result = painter.update(self, update);
+        painter.account();
         if matches!(&result, Ok(true)) {
             self.pending_display_selection = None;
             self.selection_paint_revision = self.selection_paint_revision.wrapping_add(1);
@@ -473,7 +480,6 @@ impl WgpuRasterizer {
         &mut self,
     ) -> Option<Result<SelectionPaintResult, GpuRasterError>> {
         let painter = self.selection_painter.as_mut()?;
-        let _ = self.device.poll(wgpu::PollType::Poll);
         let result = painter.rx.try_recv().ok()?;
         painter.pending = None;
         if let Ok(reply) = &result {
@@ -483,6 +489,7 @@ impl WgpuRasterizer {
             );
         }
         painter.active = None;
+        painter.account();
         Some(result)
     }
 }

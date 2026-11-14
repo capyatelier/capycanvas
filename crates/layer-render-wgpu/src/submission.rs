@@ -23,11 +23,18 @@ impl CacheWrite {
     pub fn validity(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
         self.valid.clone()
     }
-    pub fn track(&self, encoder: &wgpu::CommandEncoder) {
-        use std::sync::atomic::Ordering;
-        assert!(!self.tracked.swap(true, Ordering::Relaxed));
-        let guard = DiscardedCacheWrite(Some(self.valid.clone()));
+    pub fn recorded(&self)->bool {self.tracked.load(std::sync::atomic::Ordering::Acquire)}
+    fn guard(&self)->DiscardedCacheWrite {
+        assert!(!self.tracked.swap(true,std::sync::atomic::Ordering::Relaxed));
+        DiscardedCacheWrite(Some(self.valid.clone()))
+    }
+    pub fn track(&self, encoder: &CommandEncoder) {
+        let guard=self.guard();
         encoder.on_submitted_work_done(move || guard.complete());
+    }
+    pub fn track_raw(&self,device:&crate::PipelineDevice,encoder:&wgpu::CommandEncoder) {
+        let guard=self.guard();
+        device.on_encoder_done(encoder,move||guard.complete());
     }
 }
 impl Drop for CacheWrite {
@@ -54,14 +61,21 @@ impl Drop for DiscardedCacheWrite {
 
 #[derive(Clone)]
 pub(crate) struct Submission(std::sync::Arc<std::sync::atomic::AtomicU8>);
+#[repr(u8)]
+enum SubmissionState { Encoding, Submitted, Discarded, Complete }
 impl Submission {
-    pub fn submitted(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==1}
-    pub fn discarded(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==2}
+    pub fn same(&self, other: &Self) -> bool { std::sync::Arc::ptr_eq(&self.0, &other.0) }
+    #[cfg(test)]
+    pub(crate) fn observation_id(&self)->usize {std::sync::Arc::as_ptr(&self.0) as usize}
+    pub fn submitted(&self)->bool {matches!(self.0.load(std::sync::atomic::Ordering::Acquire),value if value==SubmissionState::Submitted as u8 || value==SubmissionState::Complete as u8)}
+    pub fn discarded(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)==SubmissionState::Discarded as u8}
+    pub fn pending(&self)->bool {self.0.load(std::sync::atomic::Ordering::Acquire)<SubmissionState::Discarded as u8}
 }
 struct PendingSubmission(Submission);
 impl Drop for PendingSubmission {
     fn drop(&mut self) {
-        let _=self.0.0.compare_exchange(0,2,std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire);
+        let _=self.0.0.try_update(std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire,|state|
+            (state==SubmissionState::Encoding as u8 || state==SubmissionState::Submitted as u8).then_some(SubmissionState::Discarded as u8));
     }
 }
 
@@ -75,6 +89,9 @@ pub(crate) struct CommandEncoder {
     passes: usize,
     total_passes: u64,
     resource_work: bool,
+    held: std::cell::RefCell<Vec<Box<dyn Send>>>,
+    #[cfg(not(target_arch="wasm32"))]
+    poll: crate::device_poll::Binding,
 }
 
 impl CommandEncoder {
@@ -84,21 +101,24 @@ impl CommandEncoder {
     /// size keep reusing their pools.
     pub(crate) const PASSES_PER_SUBMISSION: usize = 56;
 
-    pub fn new(device: &wgpu::Device, descriptor: &wgpu::CommandEncoderDescriptor<'_>) -> Self {
+    pub fn new(device: &crate::PipelineDevice, descriptor: &wgpu::CommandEncoderDescriptor<'_>) -> Self {
         Self {
             submission: None,
             compute: None,
-            device: device.clone(),
+            device: (**device).clone(),
+            #[cfg(not(target_arch="wasm32"))]
+            poll: device.poll_binding(),
             prologue: None,
             current: device.create_command_encoder(descriptor),
             earlier: Vec::new(),
             passes: 0,
             total_passes: 0,
             resource_work: false,
+            held: Default::default(),
         }
     }
     pub fn submission(&mut self)->Submission {
-        self.submission.get_or_insert_with(||PendingSubmission(Submission(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0))))).0.clone()
+        self.submission.get_or_insert_with(||PendingSubmission(Submission(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(SubmissionState::Encoding as u8))))).0.clone()
     }
     fn begin_pass(&mut self) {
         self.reserve_passes(1);
@@ -156,7 +176,7 @@ impl CommandEncoder {
         }
         self.compute.as_mut().unwrap()
     }
-    /// Commands that run before every other command of this encoder, such as
+    /// RegionRecords that run before every other command of this encoder, such as
     /// uploads to storage that nothing earlier in it reads.
     pub fn prologue(&mut self) -> &mut wgpu::CommandEncoder {
         self.resource_work = true;
@@ -172,16 +192,47 @@ impl CommandEncoder {
     }
     /// Finish staging uploads before calling this. Their completion callbacks
     /// belong to the final encoder, after every earlier chunk on this queue.
-    pub fn submit(mut self, queue: &wgpu::Queue) -> wgpu::SubmissionIndex {
-        self.compute = None;
-        let mut chunks = self.earlier.into_iter().chain([self.current]);
-        let mut index = submit_traced(queue, self.prologue.take().into_iter().chain(chunks.next()), !self.resource_work);
-        for encoder in chunks {
-            index = submit_traced(queue, [encoder], !self.resource_work);
-        }
-        if let Some(pending)=self.submission.take() {pending.0.0.store(1,std::sync::atomic::Ordering::Release);}
+    pub fn submit(mut self, queue: &wgpu::Queue) -> Option<wgpu::SubmissionIndex> {
+        self.compute=None;
+        let pending=self.submission.take();let receipt=pending.as_ref().map(|pending|pending.0.clone());
+        self.on_submitted_work_done(move|| {if let Some(pending)=pending {pending.0.0.store(SubmissionState::Complete as u8,std::sync::atomic::Ordering::Release);}});
+        #[cfg(not(target_arch="wasm32"))]
+        let poll=self.poll.clone();
+        #[cfg(not(target_arch="wasm32"))]
+        let device=self.device.clone();
+        let work=|| {
+            let mut chunks=self.earlier.into_iter().chain([self.current]);
+            let mut index=submit_traced(queue,self.prologue.take().into_iter().chain(chunks.next()),!self.resource_work);
+            for encoder in chunks {index=submit_traced(queue,[encoder],!self.resource_work);}
+            index
+        };
+        #[cfg(not(target_arch="wasm32"))]
+        let index=poll.submit(work);
+        #[cfg(target_arch="wasm32")]
+        let index=Some(work());
+        if index.is_some() && let Some(receipt)=receipt {let _=receipt.0.compare_exchange(SubmissionState::Encoding as u8,SubmissionState::Submitted as u8,std::sync::atomic::Ordering::AcqRel,std::sync::atomic::Ordering::Acquire);}
+        #[cfg(not(target_arch="wasm32"))]
+        poll.request(&device);
         index
     }
+    pub fn on_submitted_work_done(&self,callback:impl FnOnce()+Send+'static) {
+        #[cfg(test)] crate::test_support::PassCounts {completion_callbacks:1,..Default::default()}.record();
+        let held=self.held.take();let callback=move|| {drop(held);callback();};
+        #[cfg(not(target_arch="wasm32"))]
+        let callback=self.poll.callback(&self.device,move|()|callback());
+        #[cfg(not(target_arch="wasm32"))]
+        self.current.on_submitted_work_done(move||callback(()));
+        #[cfg(target_arch="wasm32")]
+        self.current.on_submitted_work_done(callback);
+    }
+    pub fn hold(&self,value:impl Send+'static) {self.held.borrow_mut().push(Box::new(value));}
+    pub fn retire(&self,value:impl Send+'static) {
+        #[cfg(not(target_arch="wasm32"))]
+        {let value=self.poll.handle(&self.device).retirement(value);self.on_submitted_work_done(move||value.complete());}
+        #[cfg(target_arch="wasm32")]
+        self.hold(value);
+    }
+
 }
 
 // Copies, upload callbacks and query commands do not start render/compute
@@ -233,12 +284,33 @@ impl ColorPass for CommandEncoder {
 }
 
 #[cfg(test)]
+#[path = "resident_tests.rs"]
+mod resident_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::*;
     use crate::test_support::{dab_batch, packet};
     use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_submitted_receipt_is_discarded_when_its_unfired_completion_is_retired() {
+        let r=renderer();
+        let receipt=Submission(Arc::new(std::sync::atomic::AtomicU8::new(SubmissionState::Submitted as u8)));
+        let pending=PendingSubmission(receipt.clone());
+        let callback=r.device.callback(move|()| {
+            let completed=pending;
+            completed.0.0.store(SubmissionState::Complete as u8,Ordering::Release);
+        });
+        assert!(receipt.submitted() && receipt.pending());
+        r.renderer_factory().retire_device_services().unwrap();
+        crate::finish_shader_compiler_shutdown();
+        assert!(receipt.discarded(),"retirement must abandon an unfired submitted completion");
+        assert!(!receipt.pending());
+        drop(callback);
+    }
     #[test]
     fn submission_acknowledges_only_its_own_encoder() {
         let r=renderer();let mut held=encoder(&r);let owner=held.submission();
@@ -252,6 +324,43 @@ mod tests {
     fn dropped_encoder_discards_its_submission() {
         let r=renderer();let mut held=encoder(&r);let owner=held.submission();drop(held);
         assert!(owner.discarded());assert!(!owner.submitted());
+    }
+    #[test]
+    fn submission_completes_while_the_host_waits() {
+        let mut r=renderer();
+        let mut commands=encoder(&r);
+        let receipt=commands.submission();
+        let (send,completed)=std::sync::mpsc::channel();
+        commands.on_submitted_work_done(move|| {let _=send.send(());});
+        r.last_submission=commands.submit(&r.queue);
+        let completion=completed.recv_timeout(std::time::Duration::from_secs(10));
+        r.wait_idle().unwrap();
+        assert!(completion.is_ok(),"GPU completion required another host poll: {completion:?}");
+        assert!(!receipt.pending());
+        assert!(receipt.submitted());
+    }
+    #[test]
+    fn bare_submit_and_destroy_do_not_wait_on_the_poll_owner() {
+        let r=renderer();
+        let (outstanding,duration,_raw)=crate::test_support::bounded_outstanding_gpu_work(&r);
+        let victim=r.device.create_buffer(&wgpu::BufferDescriptor {label:None,size:4,
+            usage:wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        let upload_buffer=r.device.create_buffer(&wgpu::BufferDescriptor {label:None,size:4,
+            usage:wgpu::BufferUsages::COPY_DST,mapped_at_creation:false});
+        let mut upload=r.device.create_command_encoder(&Default::default());
+        upload.clear_buffer(&upload_buffer,0,None);
+        outstanding.submit(&r.queue);
+        let start=std::time::Instant::now();
+        victim.destroy();
+        let destroy=start.elapsed();
+        let start=std::time::Instant::now();
+        let _submitted=r.queue.submit([upload.finish()]);
+        let submit=start.elapsed();
+        r.device.request_poll();
+        let actual=duration();
+        assert!((40. ..=75.).contains(&actual),"actual bounded GPU duration {actual} ms");
+        assert!(destroy<=std::time::Duration::from_millis(1),"destroy waited: {destroy:?}");
+        assert!(submit<=std::time::Duration::from_millis(1),"bare submit waited: {submit:?}");
     }
     fn renderer() -> WgpuRasterizer {
         let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();

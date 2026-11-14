@@ -242,12 +242,12 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
         submit(&mut r, EXTENT, &document, 0., false, true, None);
         let pages = EXTENT[0].div_ceil(PAGE_SIZE) * EXTENT[1].div_ceil(PAGE_SIZE);
         for step in 0..=pages + 1 {
-            if !r.has_pending_work() { break; }
+            if r.next_frame()!=layer_render::FrameDemand::Work { break; }
             assert!(step < pages + 1, "{} refinement must finish within one visit per native page", id.id());
             r.wait_idle().unwrap();
             submit(&mut r, EXTENT, &document, 0., false, false, None);
         }
-        assert!(!r.has_pending_work(), "{} must settle before testing frozen work", id.id());
+        assert!(r.next_frame()!=layer_render::FrameDemand::Work, "{} must settle before testing frozen work", id.id());
         r.wait_idle().unwrap();
         let output = image(&mut r);
         assert_ne!(

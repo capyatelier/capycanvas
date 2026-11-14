@@ -94,9 +94,9 @@ impl BrushStamps {
             pass.dispatch_workgroups(1,192,1);
         }
         encoder.copy_buffer_to_buffer(&output,0,&readback,0,size);
-        r.last_submission=Some(encoder.submit(&r.queue));
+        r.last_submission=encoder.submit(&r.queue);
         let tx=self.tx.clone();
-        raster::map_then(None,&readback,size,move|data|Ok(ReadbackImage {request_id:id,width:192,height:192,stride:192,bytes:data.to_vec()}),
+        raster::map_then(&r.device,None,&readback,size,move|data|Ok(ReadbackImage {request_id:id,width:192,height:192,stride:192,bytes:data.to_vec()}),
             move|result|{let _=tx.send(result);});
         self.pending=Some(readback);
         Ok(true)
@@ -108,9 +108,9 @@ impl WgpuRasterizer {
         let mut stamps=self.brush_stamps.take().unwrap_or_else(||BrushStamps::new(self));
         let result=stamps.request(self,id,request);self.brush_stamps=Some(stamps);result
     }
+    pub(super) fn brush_stamp_pending(&self)->bool {self.brush_stamps.as_ref().is_some_and(|stamps|stamps.pending.is_some())}
     pub(super) fn poll_brush_stamp(&mut self)->Option<Result<ReadbackImage,GpuRasterError>> {
         let stamps=self.brush_stamps.as_mut()?;
-        let _=self.device.poll(wgpu::PollType::Poll);
         let result=stamps.rx.try_recv().ok()?;stamps.pending=None;Some(result)
     }
 }

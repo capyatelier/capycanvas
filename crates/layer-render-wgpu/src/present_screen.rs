@@ -137,7 +137,7 @@ impl ScreenCounter {
 
     pub(crate) fn start(
         &mut self,
-        device: &wgpu::Device,
+        device: &crate::PipelineDevice,
         queue: &wgpu::Queue,
         viewport: &wgpu::BindGroup,
         extent: [u32; 2],
@@ -162,12 +162,14 @@ impl ScreenCounter {
             );
         }
         encoder.copy_buffer_to_buffer(&self.counts, 0, &self.readback, 0, COUNTS_SIZE);
-        queue.submit([encoder.finish()]);
+        device.submit(queue,[encoder.finish()]);
         self.state.store(MAPPING, Ordering::Release);
         let state = self.state.clone();
-        self.readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-            state.store(if result.is_ok() { MAPPED } else { FAILED }, Ordering::Release);
-        });
+        let abandoned=MappingCompletion(state.clone());
+        self.readback.slice(..).map_async(wgpu::MapMode::Read, {let callback=move |result:Result<(),wgpu::BufferAsyncError>| {
+            state.store(if result.is_ok() { MAPPED } else { FAILED }, Ordering::Release);drop(abandoned);
+        }; #[cfg(not(target_arch="wasm32"))] let callback=device.callback(callback);callback});
+        device.request_poll();
         self.pending = Some(signature);
     }
 
@@ -194,3 +196,6 @@ impl ScreenCounter {
         }
     }
 }
+
+struct MappingCompletion(Arc<AtomicU8>);
+impl Drop for MappingCompletion {fn drop(&mut self) {let _=self.0.compare_exchange(MAPPING,FAILED,Ordering::AcqRel,Ordering::Acquire);}}

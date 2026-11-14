@@ -291,23 +291,23 @@ fn region_cache_prewarm_pauses_for_contact_resumes_idle_and_promotes_demand() {
     r.shader_idle(false,false);
     r.prepare_regions(Some(&RegionPreparation {source:source.clone(),reference_count:None,paper:None,tolerance:0.,refinement:Default::default(),enclosed:false}));
     assert!(r.regions.as_ref().unwrap().background_pending());
-    assert!(!r.has_pending_work());
+    assert!(r.next_frame()!=layer_render::FrameDemand::Work);
     let frame=r.artwork_frame.clone().unwrap();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     r.prefetch_regions(&frame,&mut encoder).unwrap();
     assert_eq!(encoder.pass_count(),0);
     assert!(r.regions.as_ref().unwrap().raw.mask().is_none());
     r.shader_idle(true,true);
-    assert!(r.has_pending_work());
+    assert!(r.next_frame()==layer_render::FrameDemand::Work);
     r.prefetch_regions(&frame,&mut encoder).unwrap();
     r.shader_idle(false,false);
-    assert!(!r.has_pending_work());
+    assert!(r.next_frame()!=layer_render::FrameDemand::Work);
     let mut query=request(source,rectangle([0,0,1,1]),exact(),0.);
     query.enclosure=None;query.position=[32,32];
     check(&receive_request(&mut r,query),&rectangles(extent,&[[13,13,51,51]]),extent);
     assert!(crate::region_requests::tests::cache_ready(&r));
     assert!(r.regions.as_ref().unwrap().background_pending());
-    assert!(!r.has_pending_work());
+    assert!(r.next_frame()!=layer_render::FrameDemand::Work);
     r.shader_idle(true,true);
     submit_settled(&mut r,packet(document.scene(),extent));
     assert!(!r.regions.as_ref().unwrap().background_pending());
@@ -351,7 +351,7 @@ fn region_cache_prewarm_completes_reuses_and_schedules_changed_preparation() {
         preparation.tolerance = 0.25;
         r.prepare_regions(Some(&preparation));
         assert!(r.regions.as_ref().unwrap().background_pending(), "changed preparation must schedule work immediately");
-        assert!(r.has_pending_work());
+        assert!(r.next_frame()==layer_render::FrameDemand::Work);
         submit_settled(&mut r, packet(document.scene(), extent));
         assert!(!r.regions.as_ref().unwrap().background_pending());
         query.tolerance = preparation.tolerance;
@@ -728,7 +728,7 @@ fn fill_drag_with_different_auto_reaches_commits_and_reopens_the_second_seal_in_
             let now=clock.elapsed().as_nanos() as u64;
             s.frame(now,now).unwrap();
             crate::test_support::complete(s.renderer_mut());
-            if s.paint_ready() && !s.holding_input() && !s.engine().has_pending_input() && s.require_document_idle().is_ok() && !s.engine().raster_backing_pending() && !s.engine().has_pending_document_edits() && !s.renderer_mut().has_pending_work() {break;}
+            if s.paint_ready() && !s.holding_input() && !s.engine().has_pending_input() && s.require_document_idle().is_ok() && !s.engine().raster_backing_pending() && !s.engine().has_pending_document_edits() && s.renderer_mut().next_frame()!=layer_render::FrameDemand::Work {break;}
             assert!(std::time::Instant::now()<deadline,"fill must settle");
             std::thread::yield_now();
         }

@@ -307,7 +307,7 @@ fn live_at(r: &mut WgpuRasterizer, scene: SceneView<'_>, level: u32, blend_space
     } else {
         crate::test_support::submit_ready(r, frame).unwrap();
     }
-    assert!(!settled || !layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
+    assert!(!settled || layer_render::CanvasRenderer::next_frame(r)!=layer_render::FrameDemand::Work, "the composite settles");
     let texture = if level == 0 {
         crate::test_support::document_texture(r)
     } else {
@@ -486,10 +486,10 @@ fn brush_blend_modes_use_the_layer_formulas() {
         artwork.compositions.get_mut(artwork.root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth };
         let (_, target) = crate::test_support::add_paint(&mut artwork, "Paint", extent);
         let document = Document::from_artwork(artwork).unwrap();
-        let center = 64 * 128 + 64;
         let read = |r: &mut WgpuRasterizer| -> Rgba {
-            let p = crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r));
-            std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[center * 16 + c * 4..][..4].try_into().unwrap())))
+            crate::test_support::color_sample(r, layer_render::ColorSampleRequest {request_id:1,
+                source:layer_render::ColorSampleSource::Composite,position:[64,64],
+                area:layer_render::ColorSampleArea::Point}).rgba.map(f64::from)
         };
         for mode in [
             layer_core::BrushBlendMode::Normal,

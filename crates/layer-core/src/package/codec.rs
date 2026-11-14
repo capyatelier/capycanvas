@@ -161,7 +161,7 @@ fn failed(source:ImmutableBacking,preview:Option<Preview>,error:super::values::D
     let cause = match &error {
         super::values::DecodeError::Unsupported(_) => Some(PackageCause::Unsupported),
         super::values::DecodeError::Invalid(_) => Some(PackageCause::Damaged),
-        super::values::DecodeError::Io(_) | super::values::DecodeError::MemoryBudgetExceeded => None,
+        super::values::DecodeError::Io(_) | super::values::DecodeError::MemoryBudgetExceeded | super::values::DecodeError::Uncovered => None,
     };
     let reason = error.to_string();
     match preview {Some(preview)=>OpenOutcome::RecoveredView {source,preview,reason,cause},None=>OpenOutcome::Failure {source,reason,cause}}
@@ -199,7 +199,7 @@ pub fn open_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,canc
     {pollster::block_on(open_async_with_budget(source,limits,cancelled,budget))}
     #[cfg(target_arch="wasm32")]
     {
-        let mut future=std::pin::pin!(open_async_with_budget(source,limits,cancelled,budget));
+        let mut future=std::pin::pin!(open_decoded(source,limits,cancelled,budget,false));
         match future.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())) {
             std::task::Poll::Ready(result)=>result,std::task::Poll::Pending=>Err("Use asynchronous package metadata opening for pending sources".into()),
         }
@@ -209,6 +209,9 @@ pub async fn open_async(source:ImmutableBacking,limits:crate::ProjectLimits,canc
     open_async_with_budget(source,limits,cancelled,crate::MemoryBudget::process()).await
 }
 pub async fn open_async_with_budget(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget)->Result<OpenOutcome,String> {
+    open_decoded(source,limits,cancelled,budget,true).await
+}
+async fn open_decoded(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool,budget:crate::MemoryBudget,waits:bool)->Result<OpenOutcome,String> {
     active(cancelled)?;
     let directory=match Directory::read_async(&source,cancelled,262_144,limits.metadata_bytes).await {
         Ok(directory)=>directory,
@@ -232,8 +235,10 @@ pub async fn open_async_with_budget(source:ImmutableBacking,limits:crate::Projec
     if directory.members.iter().enumerate().any(|(index,member)|member.name.starts_with("data/") && !indexed.contains(&index)) {
         return Ok(failed(source,preview,"Unindexed data member".into()));
     }
-    let mut resources=resources::ResourceReader::with_budget(&manifest,&source,cancelled,limits,budget.clone());
-    let decoded=match resources.prepare_metadata().await {Ok(())=>super::artwork_records::decode(&manifest,&mut resources),Err(error)=>Err(error)};
+    let mut resources=resources::ResourceReader::with_budget(&manifest,&source,cancelled,limits,budget.clone());resources.waits=waits;
+    let decoded=match resources.prepare_metadata().await {Ok(())=>loop {
+        match super::artwork_records::decode(&manifest,&mut resources) {Err(super::values::DecodeError::Uncovered)=>resources.covering().await,decoded=>break decoded}
+    },Err(error)=>Err(error)};
     active(cancelled)?;
     match decoded {
         Ok(mut artwork)=>{
@@ -247,7 +252,7 @@ pub async fn open_async_with_budget(source:ImmutableBacking,limits:crate::Projec
             let memory=crate::DocumentMemory::new(budget,resources.admission.clone());
             Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview),memory})
         }
-        Err(super::values::DecodeError::MemoryBudgetExceeded)=>Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
+        Err(super::values::DecodeError::MemoryBudgetExceeded | super::values::DecodeError::Uncovered)=>Err(crate::MEMORY_BUDGET_EXCEEDED.into()),
         Err(super::values::DecodeError::Unsupported(reason))=>Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason}),
         Err(error)=>Ok(failed(source,preview,error)),
     }
@@ -259,7 +264,7 @@ pub fn copy_original(source:&ImmutableBacking,output:&mut impl Write,cancelled:&
     while offset<source.byte_len() {
         active(cancelled)?;
         let count=(source.byte_len()-offset).min(64*1024) as usize;
-        let super::RangeState::Ready(bytes)=source.poll_original(offset,count)? else {return Err("Package bytes are pending".into());};
+        let super::RangeState::Ready(bytes)=source.poll_original_on_worker(offset,count)? else {return Err("Package bytes are pending".into());};
         output.write_all(&bytes).map_err(|e|e.to_string())?;
         offset+=count as u64;
     }

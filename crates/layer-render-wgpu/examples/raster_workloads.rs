@@ -150,12 +150,12 @@ impl Canvas {
         loop {
             self.engine.backend_mut().wait_idle()?;
             if self.engine.has_pending_document_edits() || self.engine.has_pending_input()
-                || self.engine.backend().has_pending_work() || !self.engine.backend().has_presentable_frame()
+                || self.engine.backend().next_frame()==layer_render::FrameDemand::Work || !self.engine.backend().has_presentable_frame()
             {
                 self.engine.render_frame()?;
             }
             if self.engine.backend().raster_ready()
-                && !self.engine.backend().has_pending_work()
+                && self.engine.backend().next_frame()!=layer_render::FrameDemand::Work
                 && self.engine.backend().has_presentable_frame()
                 && !self.engine.has_pending_document_edits()
                 && !self.engine.has_pending_input()

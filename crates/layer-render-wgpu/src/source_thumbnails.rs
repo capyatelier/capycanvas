@@ -327,7 +327,7 @@ impl SourceThumbnails {
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
         if !self.prepare(r,layer,encoder,usize::MAX)? {
-            return Err(GpuRasterError::DeferredObjectWork);
+            return Err(GpuRasterError::NotReady);
         }
         let pixels = self.prepared.back().unwrap().pixels.clone();
         self.display(r, &pixels, encoder)
@@ -357,6 +357,7 @@ impl SourceThumbnails {
             [32, 32],
             r.device.working_format(),
             "photo layer thumbnail",
+            &r.raster_tiers.paint,
         );
         {
             let mut pass = encoder.color_pass(

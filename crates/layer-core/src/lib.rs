@@ -2610,8 +2610,7 @@ impl Editor {
         let inventory=if added_assets && admission {
             let current = self.retained_tiles();
             let prospective = self.retained_tiles_for(&candidate, true);
-            let bytes = prospective.resident_bytes().saturating_add(prospective.metadata_bytes)
-                .saturating_sub(current.resident_bytes().saturating_add(current.metadata_bytes));
+            let bytes = prospective.total_bytes().saturating_sub(current.total_bytes());
             if !candidate.memory.reserve(bytes as u64) {
                 return Err(DocumentError::MemoryBudgetExceeded);
             }

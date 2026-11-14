@@ -129,6 +129,23 @@ fn preparation_waits_without_ready_work_and_prioritizes_queued_commands() {
 }
 
 #[test]
+fn a_settled_worker_sleeps_on_its_receiver_until_a_wake_and_work_never_blocks() {
+    let (commands, receiver) = mpsc::channel();
+    let soon = std::time::Instant::now() + Duration::from_millis(5);
+    assert_eq!(FrameDemand::Wait.sooner(FrameDemand::Wait), FrameDemand::Wait);
+    assert_eq!(FrameDemand::WaitUntil(soon + Duration::from_secs(1)).sooner(FrameDemand::WaitUntil(soon)), FrameDemand::WaitUntil(soon));
+    assert_eq!(FrameDemand::WaitUntil(soon).sooner(FrameDemand::Work), FrameDemand::Work);
+    assert!(matches!(receive::<u8>(&receiver, FrameDemand::Work), Err(mpsc::RecvTimeoutError::Timeout)));
+    assert!(matches!(receive::<u8>(&receiver, FrameDemand::WaitUntil(soon)), Err(mpsc::RecvTimeoutError::Timeout)));
+    let started = std::time::Instant::now();
+    let wake = std::thread::spawn(move || { std::thread::sleep(Duration::from_millis(300)); commands.send(7u8).unwrap(); });
+    assert_eq!(receive(&receiver, FrameDemand::Wait).unwrap(), 7);
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    wake.join().unwrap();
+    assert!(matches!(receive::<u8>(&receiver, FrameDemand::Wait), Err(mpsc::RecvTimeoutError::Disconnected)));
+}
+
+#[test]
 fn preparation_notifications_coalesce_until_the_next_completion() {
     let (commands, receiver) = mpsc::channel();
     let signal = PreparationSignal {
@@ -467,29 +484,27 @@ fn waiting_frame_queues_once_and_is_admitted_when_ready() {
 
 #[test]
 fn chrome_progress_keeps_unready_frames_pending_and_ready_frames_first() {
-    for readiness in [FrameReadiness::Waiting, FrameReadiness::Dependencies] {
-        let mut pending = VecDeque::new();
-        assert_eq!(admit_frame(Some(2), &mut pending, |_| Ok::<_, ()>(readiness.ready())).unwrap(), 0);
-        let mut requests = ChromeRequests::default();
-        requests.considered(0);
-        requests.request(chrome_request(7), 0);
-        let mut chrome = visible_chrome();
-        let request = requests.take_ready().unwrap();
-        assert!(chrome.request(request.revision, request.hold));
-        assert_eq!(chrome.publish(), Some(7));
-        let mut presents = vec![(1, chrome.published)];
-        assert_eq!(pending, [2]);
-        assert_eq!(admit_frame(None, &mut pending, |camera| {
-            assert!(!chrome.release_unheld());
-            assert_eq!(chrome.publish(), None);
-            presents.push((*camera, chrome.published));
-            Ok::<_, ()>(true)
-        }).unwrap(), 1);
-        assert_eq!(presents, [(1, 7), (2, 7)]);
-        assert!(pending.is_empty());
-        assert!(requests.take_ready().is_none());
-        assert_eq!(chrome.synchronized, Some(7));
-    }
+    let mut pending = VecDeque::new();
+    assert_eq!(admit_frame(Some(2), &mut pending, |_| Ok::<_, ()>(false)).unwrap(), 0);
+    let mut requests = ChromeRequests::default();
+    requests.considered(0);
+    requests.request(chrome_request(7), 0);
+    let mut chrome = visible_chrome();
+    let request = requests.take_ready().unwrap();
+    assert!(chrome.request(request.revision, request.hold));
+    assert_eq!(chrome.publish(), Some(7));
+    let mut presents = vec![(1, chrome.published)];
+    assert_eq!(pending, [2]);
+    assert_eq!(admit_frame(None, &mut pending, |camera| {
+        assert!(!chrome.release_unheld());
+        assert_eq!(chrome.publish(), None);
+        presents.push((*camera, chrome.published));
+        Ok::<_, ()>(true)
+    }).unwrap(), 1);
+    assert_eq!(presents, [(1, 7), (2, 7)]);
+    assert!(pending.is_empty());
+    assert!(requests.take_ready().is_none());
+    assert_eq!(chrome.synchronized, Some(7));
 }
 
 #[test]
@@ -879,6 +894,75 @@ fn native_late_shader_failure_after_startup() {
 }
 
 #[test]
+fn a_worker_reply_wakes_the_canvas_that_waits_for_it() {
+    let status = Arc::new(ChromeStatus::new(0));
+    let (sender, replies) = mpsc::channel();
+    let mailbox = Replies { sender, area: gtk::glib::WeakRef::<gtk::Picture>::new().into(), status: status.clone() };
+    let seen = status.wakes();
+    let mut waiting = std::pin::pin!(status.clone().wake_after(seen));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(waiting.as_mut().poll(&mut context).is_pending());
+    mailbox.send(Reply::ThumbnailCancelled(3)).unwrap();
+    assert!(matches!(replies.try_recv(), Ok(Reply::ThumbnailCancelled(3))));
+    assert!(waiting.as_mut().poll(&mut context).is_ready(), "the reply wakes the waiting canvas");
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_effect_validation_reply_wakes_its_canvas() {
+    let (_app, window, parent, area) = native_worker_window("art.capycanvas.EffectValidationWake");
+    let (commands, receiver) = mpsc::channel();
+    let (reply, replies) = mpsc::channel();
+    let (prepared, ready) = mpsc::channel();
+    let status = Arc::new(ChromeStatus::new(0));
+    let worker_status = status.clone();
+    let worker = std::thread::spawn(move || -> Result<(), String> {
+        let mut worker = Worker::new(parent, area, Arc::default(), worker_status, Default::default(), &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
+        let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))?;
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        worker.renderer.prepare_startup(&document, &brush, false).map_err(error)?;
+        worker.renderer.finish_startup_catalog();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !worker.renderer.poll_startup().map_err(error)?.complete {
+            if std::time::Instant::now() >= deadline { return Err("Renderer startup did not complete".into()); }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        prepared.send(()).map_err(error)?;
+        worker.run(&receiver, &mpsc::channel().1, &reply, &Default::default(), &AtomicUsize::new(0),
+            &Default::default(), Arc::default())
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    while ready.try_recv().is_err() {
+        assert!(!worker.is_finished() && std::time::Instant::now() < deadline, "the worker prepares its startup");
+        pump_worker_window();
+    }
+    let (mut seen, mut since) = (status.wakes(), std::time::Instant::now());
+    while since.elapsed() < Duration::from_secs(1) {
+        assert!(std::time::Instant::now() < deadline, "the idle worker stops waking its canvas");
+        pump_worker_window();
+        if status.wakes() != seen { (seen, since) = (status.wakes(), std::time::Instant::now()); }
+    }
+    let program = layer_core::bundled_effect_catalog().get("gaussian_blur").expect("bundled blur").program();
+    commands.send(Command::EffectValidation(layer_render::EffectValidationRequest {
+        request_id: 7, retained_programs: vec![program.clone()], programs: vec![program] })).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let validated = loop {
+        if let Ok(Reply::EffectValidation(result)) = replies.try_recv() { break Some(result); }
+        if worker.is_finished() || std::time::Instant::now() >= deadline { break None; }
+        pump_worker_window();
+    };
+    let answered = std::time::Instant::now();
+    while status.wakes() == seen && answered.elapsed() < Duration::from_secs(1) { pump_worker_window(); }
+    let woken = status.wakes() != seen;
+    let _ = commands.send(Command::Stop);
+    let result = worker.join();
+    window.destroy();
+    assert!(result.is_ok(), "GPU owner panicked");
+    assert_eq!(validated.map(|result| result.request_id), Some(7), "the worker answers the validation request");
+    assert!(woken, "a validation reply must wake the canvas that waits for it");
+}
+
+#[test]
 fn switch_transition_failure_is_ready_before_its_wake() {
     let transition = CanvasTransition::default();
     let (commands, receiver) = mpsc::channel();
@@ -1065,3 +1149,158 @@ fn launch_receipt_waits_for_the_new_view_even_when_its_frame_dependencies_are_co
     assert_eq!(launch.take_presented().unwrap().frame, 7);
     assert!(Command::LaunchFrame(None).ready_after_frames(true));
 }
+
+#[test]
+fn shared_preparation_keeps_the_gpu_worker_frame_queued_without_submitting() {
+    #[derive(Default)]
+    struct PreparedRenderer { ready: bool, submissions: usize }
+    impl CanvasRenderer for PreparedRenderer {
+        type Error = BackendError;
+        fn raster_dependencies_ready(&mut self, _: FramePacket<'_>, _: Option<&layer_render::TransformPreview>) -> bool { self.ready }
+        fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> { Ok(()) }
+        fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> { Ok(()) }
+        fn release_asset(&mut self, _: &AssetId) {}
+        fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+            assert_eq!(packet.time_seconds, 7.);
+            assert!(!packet.restore_rasters.is_empty());
+            self.submissions += 1;
+            Ok(())
+        }
+    }
+    let (mut worker, commands, _chrome, _reply) = RenderWorker::channels(Default::default());
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    overlay_packet(&mut worker, &document).unwrap();
+    let mut frame = queued_frame(&commands);frame.time_seconds = 7.;
+    frame.restore_rasters = document.scene().targets().filter_map(|target|document.scene().raster(target).map(|root|(target, root.clone()))).collect();
+    let scene = frame.scene.clone();let mut renderer = PreparedRenderer::default();let mut pending = VecDeque::new();
+    let draw = |renderer: &mut PreparedRenderer, frame: &mut Box<Frame>| match renderer.submit_when_ready(frame.packet(), frame.transform_preview.as_ref()) {
+        std::task::Poll::Pending => Ok(false),
+        std::task::Poll::Ready(result) => result.map(|_|true),
+    };
+    assert_eq!(admit_frame(Some(frame), &mut pending, |frame|draw(&mut renderer, frame)).unwrap(), 0);
+    assert_eq!(renderer.submissions, 0);assert_eq!(pending.len(), 1);
+    assert!(Arc::ptr_eq(&pending.front().unwrap().scene, &scene));
+    renderer.ready = true;
+    assert_eq!(admit_frame(None, &mut pending, |frame|draw(&mut renderer, frame)).unwrap(), 1);
+    assert_eq!(renderer.submissions, 1);assert!(pending.is_empty());
+}
+
+
+#[derive(Default)]
+struct TimedRenderer { ready: bool, readiness: Duration, work: Duration, submissions: usize }
+impl CanvasRenderer for TimedRenderer {
+    type Error = BackendError;
+    fn raster_dependencies_ready(&mut self, _: FramePacket<'_>, _: Option<&layer_render::TransformPreview>) -> bool {
+        std::thread::sleep(self.readiness);
+        self.ready
+    }
+    fn resize_surface(&mut self, _: u32, _: u32) -> Result<(), Self::Error> { Ok(()) }
+    fn prepare_asset(&mut self, _: &AssetId, _: HostImage<'_>) -> Result<(), Self::Error> { Ok(()) }
+    fn release_asset(&mut self, _: &AssetId) {}
+    fn submit(&mut self, _: FramePacket<'_>) -> Result<(), Self::Error> {
+        std::thread::sleep(self.work);
+        self.submissions += 1;
+        Ok(())
+    }
+}
+fn timed_packet(document: &layer_core::Document) -> FramePacket<'_> {
+    FramePacket {
+        time_seconds: 0., view: ViewState { width_px: 32, height_px: 24, document_to_surface: [1., 0., 0., 1., 0., 0.] },
+        document_extent: [32, 24], scene: document.scene(), inspect_mask: None, selection_overlays: None,
+        dabs: &[], dab_batches: &[], restore_rasters: &[], reset_layers: false, commit_rasters: true,
+        composite_all: false, blend_space: Default::default(),
+    }
+}
+
+#[test]
+fn a_ready_frame_observes_its_submission_but_not_its_readiness() {
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let mut renderer = TimedRenderer { ready: true, readiness: Duration::from_millis(40), work: Duration::from_millis(5), ..Default::default() };
+    let mut draw_start = std::time::Instant::now();
+    assert_eq!(submit_ready_frame(&mut renderer, timed_packet(&document), None, &mut draw_start), std::task::Poll::Ready(Ok(())));
+    let observed = draw_start.elapsed();
+    assert_eq!(renderer.submissions, 1);
+    assert!(observed >= Duration::from_millis(5) && observed < Duration::from_millis(40), "observed draw work {observed:?}");
+}
+
+#[test]
+fn a_pending_frame_submits_nothing_and_keeps_its_draw_start() {
+    let document = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let mut renderer = TimedRenderer { readiness: Duration::from_millis(5), ..Default::default() };
+    let started = std::time::Instant::now();
+    let mut draw_start = started;
+    assert_eq!(submit_ready_frame(&mut renderer, timed_packet(&document), None, &mut draw_start), std::task::Poll::Pending);
+    assert_eq!(renderer.submissions, 0);
+    assert_eq!(draw_start, started);
+}
+
+
+fn first_preview_at_the_gpu_worker_boundary(pattern: bool, fit: bool) {
+    let extent = [1100, 700];
+    let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames {paint:"First stroke".into(),paper:"Paper".into()});
+    let target = document.working.target.unwrap();
+    if pattern {
+        let SourceTarget::Paint(handle) = target else {unreachable!()};
+        document.artwork.paint.get_mut(handle).unwrap().base = Some(layer_core::authored::PaintBase::new(
+            layer_core::color::source::rgba8_source(extent, |x,y| [
+                if (x/5+y/7)%2==0 {40}else {220}, if (x/13+y/17)%2==0 {40}else {220},
+                if (x/2+y/3)%2==0 {40}else {220}, 255]).into()));
+    }
+    let view = if fit {ViewState {width_px:330,height_px:210,document_to_surface:[0.2976,0.,0.,0.2976,1.,1.]}}
+        else {ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]}};
+    let (mut worker, commands, _chrome, _reply) = RenderWorker::channels(document.composition().color);
+    let in_flight=worker.in_flight.clone();
+    let mut next_frame=|reset| {
+        overlay_packet(&mut worker,&document).unwrap();
+        let mut frame=queued_frame(&commands);frame.extent=extent;frame.view=view;frame.reset=reset;frame.composite=reset;frame
+    };
+    let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    renderer.resize_surface(view.width_px,view.height_px).unwrap();
+    let execute = |renderer:&mut WgpuRasterizer, frame:Box<Frame>| {
+        let deadline=std::time::Instant::now()+layer_core::raster::CAPTURE_TIMEOUT;
+        let mut frame=Some(frame);let mut pending=VecDeque::new();
+        loop {
+            renderer.poll_pending(view).unwrap();
+            let admitted=admit_frame(frame.take(),&mut pending,|frame| {
+                if !renderer.can_submit() {return Ok(false);}
+                match renderer.submit_when_ready(frame.packet(),frame.transform_preview.as_ref()) {
+                    std::task::Poll::Pending=>Ok(false),
+                    std::task::Poll::Ready(result)=>result.map(|_|true),
+                }
+            }).unwrap();
+            if admitted!=0 {in_flight.fetch_sub(admitted,Ordering::Release);}
+            renderer.wait_idle().unwrap();
+            if pending.is_empty() {return;}
+            assert!(std::time::Instant::now()<deadline,"GPU worker frame dependencies must become ready");
+            std::thread::yield_now();
+        }
+    };
+    execute(&mut renderer,next_frame(true));
+    let deadline=std::time::Instant::now()+layer_core::raster::CAPTURE_TIMEOUT;
+    while !renderer.settled() {
+        execute(&mut renderer,next_frame(false));
+        assert!(std::time::Instant::now()<deadline,"initial worker picture must settle");
+    }
+    let before=renderer.readback_srgb_rgba8().unwrap();
+    let dab=Dab {center:layer_core::Point {x:200.,y:300.},radii:[60.;2],rotation:[1.,0.],motion:[0.;2],
+        color_rgba_linear:[0.9,0.02,0.1,0.8],flow:1.,hardness:1.,texture_sign:[1.;2],material:[0.,0.,1.,0.],
+        previous:[0.;4],contact:[0.;4],previous_contact:[0.;4]};
+    let style=layer_render::DabStyle::for_brush(&layer_core::default_brush(layer_core::DefaultBrushPreset::GPen),layer_core::StrokeTool::Brush);
+    for kind in [layer_render::DabBatchKind::Preview,layer_render::DabBatchKind::Persistent] {
+        let mut frame=next_frame(false);frame.dabs=vec![dab];
+        frame.batches=vec![DabBatch {preview_end:None,material_update:0,stroke_id:layer_core::StrokeId(1),target,kind,
+            stroke_start:true,stroke_end:true,first_dab:0,dab_count:1,style:style.clone(),damage:dab.bounds()}];
+        execute(&mut renderer,frame);
+    }
+    assert_ne!(renderer.readback_srgb_rgba8().unwrap(),before,"the admitted first stroke must change the worker's artwork");
+}
+
+#[test]
+fn gpu_worker_first_preview_stroke_blank_native() {first_preview_at_the_gpu_worker_boundary(false,false);}
+#[test]
+fn gpu_worker_first_preview_stroke_blank_fit() {first_preview_at_the_gpu_worker_boundary(false,true);}
+#[test]
+fn gpu_worker_first_preview_stroke_pattern_native() {first_preview_at_the_gpu_worker_boundary(true,false);}
+#[test]
+fn gpu_worker_first_preview_stroke_pattern_fit() {first_preview_at_the_gpu_worker_boundary(true,true);}

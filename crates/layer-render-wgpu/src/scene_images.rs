@@ -20,6 +20,7 @@ struct CachedStage {
     valid: bool,
     dependencies: Vec<OccurrenceHandle>,
     input_gather: Option<InputGather>,
+    charges: [crate::residency::Charge; 2],
 }
 struct InputGather {
     revision: u64,
@@ -31,9 +32,12 @@ struct InputGather {
     transform: Option<layer_render::TransformPreview>,
     transform_damage: Vec<(SourceTarget,PixelRect)>,
     pages: std::collections::BTreeSet<[u32; 2]>,
+    sources:Option<sources::AcceptedInputs>,
 }
 #[derive(Default)]
 pub(super) struct ImageStages {
+    tiers: [Arc<crate::residency::Tier>; 2],
+    scratch_charge: Option<crate::residency::Charge>,
     extent: [u32; 2],
     pub(super) doc_bounds: DocRect,
     stages: Vec<CachedStage>,
@@ -53,6 +57,7 @@ impl ImageStages {
     pub(super) fn release_window_pixels(&mut self) {
         self.stages.clear();
         self.scratch.clear();
+        self.scratch_charge = None;
 
     }
     pub fn output(&self, id: OccurrenceHandle) -> Option<Image> {
@@ -67,6 +72,19 @@ impl ImageStages {
         ]).flatten().chain(&self.scratch)
             .map(|image| image.view.clone()).collect()
     }
+    pub(super) fn charged(gpu: &Arc<crate::residency::Tier>, ram: &Arc<crate::residency::Tier>) -> Self {
+        Self { tiers: [gpu.clone(), ram.clone()], ..Default::default() }
+    }
+    fn push(&mut self, mut stage: CachedStage) {
+        stage.charges[0].resize(u64::from(stage.input_owned) * stage.input.bytes() + stage.output.bytes() + stage.mask.as_ref().map_or(0, Image::bytes));
+        stage.charges[1].resize(stage.input_gather.as_ref().and_then(|gather| gather.sources.as_ref()).map_or(0, |sources| sources.cpu_bytes()));
+        self.stages.push(stage);
+    }
+    fn account_scratch(&mut self) {
+        self.scratch_charge = Some(self.tiers[0].charge(self.scratch.iter().map(Image::bytes).sum()));
+    }
+    #[cfg(test)]
+    pub(super) fn metadata_bytes(&self)->u64 {self.stages.iter().filter_map(|stage|stage.input_gather.as_ref()).map(|gather|gather.sources.as_ref().map_or(0,|sources|sources.cpu_bytes())).sum()}
     pub fn storage_bytes(&self) -> u64 {
         self.stages
             .iter()
@@ -345,8 +363,10 @@ impl Scene {
         dirty: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PixelRect, GpuRasterError> {
+        #[cfg(test)]
+        crate::scene::sources::assert_reading("image stage update");
         if !has_images(packet.scene) {
-            self.retire_images(|scene| scene.images = ImageStages::default());
+            self.retire_images(|scene| scene.images = ImageStages::charged(&scene.tiers.gpu, &scene.tiers.ram));
             return Ok(dirty);
         }
         let output = self.image_output.unwrap_or(PixelRect::full(packet.document_extent));
@@ -389,7 +409,7 @@ impl Scene {
                 input_updates: self.images.input_updates,
                 pass_updates: self.images.pass_updates,
                 pass_pixels: self.images.pass_pixels,
-                ..Default::default()
+                ..ImageStages::charged(&self.tiers.gpu, &self.tiers.ram)
             };
         }
         let dirty = dirty.intersect(bounds);
@@ -418,10 +438,7 @@ impl Scene {
             let damage = if reset||changed.contains(&h){bounds.into()}else if painting&&(unidentified_paint
                 ||self.images.preview_layer.is_some_and(changed_target)||r.preview_layer_id.is_some_and(changed_target)
                 ||r.transform_damage.iter().any(|(t,_)|changed_target(*t))||packet.dab_batches.iter().any(|b|changed_target(b.target))) {
-                let sources = scale::Damage::from_regions(target.into_iter().chain(mask).flat_map(|target| {
-                    self.scale_sources.document_damage(scene, target).map_or_else(|| sparse.regions.clone(), |damage| damage.map(|region| region.in_frame(extent)).collect())
-                }));
-                sources.intersect(bounds)
+                sparse.clone()
             }else{scale::Damage::default()};
             (h,damage)
         }).collect();
@@ -446,7 +463,7 @@ impl Scene {
             let prepared = (0..effect.program.passes.len().max(1)).map(|pass|
                 self.effects.prepare(r, scene, &[handle], effects::Execution::Image(pass), packet.time_seconds,
                     output_grid.level, packet.blend_space)).collect::<Result<Vec<_>,_>>()?;
-            if !self.effects.enqueue(&r.compilation,startup::DOCUMENT) { return Err(GpuRasterError::DeferredObjectWork); }
+            if !self.effects.enqueue(&r.compilation,startup::DOCUMENT) { return Err(GpuRasterError::NotReady); }
             let input=Convert::filter_input(packet,effect.program.space);
             let previous = if let Some(owner) = scene.effect_owner(handle) {
                 scene.attached_effects(owner).iter().copied().take_while(|h|*h!=handle).filter(|h|scene.visible(*h)).last()
@@ -473,6 +490,7 @@ impl Scene {
                         valid: false,
                         dependencies: Vec::new(),
                         input_gather: None,
+                        charges: self.images.tiers.clone().map(|tier| tier.charge(0)),
                     }
                 };
             if cached.output.plan != output_grid { cached.output = Image::new(r, output_grid, "effect result cache"); cached.mask=None; cached.mask_offset=None; cached.valid=false; }
@@ -498,8 +516,7 @@ impl Scene {
                     result.intersect(output_bounds)
                 };
             if cached.input_owned && !input_dirty.is_empty() {
-                self.jobs.clear();
-                self.used.iter_mut().for_each(scratch::Usage::reset);
+                self.discard_unencoded_jobs();
                 self.stop_before = Some(handle);
                 if effect.program.kind == layer_core::EffectKind::Generator {
                     self.jobs.push(Job::Clear(
@@ -519,38 +536,52 @@ impl Scene {
                             moving: r.moving_layer, preview: r.preview_layer_id,
                             inputs:dependencies.iter().map(|handle|(*handle,metadata[handle].clone(),raster_roots(*handle))).collect(),
                             transform:r.transform_preview.clone(),transform_damage:r.transform_damage.clone(),
-                            pages: input_dirty.pages().into_iter().collect() });
+                            sources:None,pages: input_dirty.pages().into_iter().collect() });
                     }
                     cached.valid = false;
                     let mut next = cached.input_gather.as_ref().unwrap().pages.first().copied();
                     let mut waiting = false;
+                    let mut declaration = None;
                     while let Some(tile) = next {
-                        self.decode_wait = false;
+                        let unit=sources::InputUnit::tile(tile);
+                        let mut accepted=sources::AcceptedInputs::take_for(&mut cached.input_gather.as_mut().unwrap().sources,unit);
                         let result = (|| {
-                            let pixels = self.group(r, packet, layer_core::composite_input_scope(scene, handle), tile)?;
+                            let input_scope=layer_core::composite_input_scope(scene, handle);
+                            if accepted.is_none() {
+                                let declaration=match &declaration {Some(declaration)=>declaration,None=>declaration.insert(self.capture_declaration(r,packet)?)};
+                                accepted=Some(self.accept_capture(r,packet,Some(scene::Output::EffectInput(handle)),declaration,|this,r,accepted|this.group(r,packet,input_scope,tile,accepted).map(drop))?.for_unit(unit)?);
+                            }
+                            let accepted=accepted.as_mut().unwrap();accepted.check_unit(unit)?;
+                            #[cfg(test)]
+                            let _record=sources::record_reads(accepted);
+                            accepted.clone().track(encoder);
+                            let pixels = self.group(r, packet, input_scope, tile, accepted)?;
                             self.capture_tile(r, pixels, &cached.input, tile, input)?;
                             self.encode_jobs(r, encoder)
                         })();
+                        if result.is_ok() {accepted.unwrap().track(encoder);}else {cached.input_gather.as_mut().unwrap().sources=accepted;}
                         let pages = &mut cached.input_gather.as_mut().unwrap().pages;
                         next = pages.range((std::ops::Bound::Excluded(tile), std::ops::Bound::Unbounded)).next().copied();
                         let failure = match result {
                             Ok(()) => { pages.remove(&tile); None }
-                            Err(GpuRasterError::DeferredObjectWork) if self.decode_wait && next.is_some() && r.decode_queue_has_room() => {
+                            Err(error) if error.is_preparation_pending() && next.is_some() && r.decode_queue_has_room() => {
+                                self.discard_unencoded_jobs();
+                                cached.input_gather.as_mut().unwrap().sources=None;
                                 self.object_results.reset_used(); self.exact_object_results.reset_used();
                                 waiting = true;
                                 None
                             }
                             Err(error) => Some(error),
-                        }.or_else(|| (waiting && next.is_none()).then_some(GpuRasterError::DeferredObjectWork));
+                        }.or_else(|| (waiting && next.is_none()).then_some(GpuRasterError::NotReady));
                         if let Some(error) = failure {
                             self.stop_before = None;
                             self.object_results.reset_used(); self.exact_object_results.reset_used();
-                            if matches!(error, GpuRasterError::DeferredObjectWork) {
+                            if error.is_preparation_pending() {
                                 for stage in &mut self.images.stages {
                                     if scene.position(stage.id).unwrap() < scene.position(handle).unwrap() { stage.valid = false; }
                                 }
                                 cached.dependencies = dependencies;
-                                self.images.stages.push(cached);
+                                self.images.push(cached);
                                 self.images.metadata = metadata;
                                 self.images.blend_space = packet.blend_space;
                                 self.images.preview_layer = r.preview_layer_id;
@@ -597,9 +628,15 @@ impl Scene {
                         .mask
                         .get_or_insert_with(|| Image::new(r, output_grid, "effect mask cache"));
                     if !mask_dirty.is_empty() {
+                        let declaration=self.capture_declaration(r,packet)?;
                         for tile in mask_dirty.pages() {
-                            let m = self.mask_tile(r, mask,coverage, mask_offset, tile)?;
+                            let mut accepted=self.accept_capture(r,packet,None,&declaration,|this,r,accepted|this.mask_tile(r,mask,coverage,mask_offset,tile,accepted).map(drop))?;
+                            #[cfg(test)]
+                            let _record=sources::record_reads(&accepted);
+                            accepted.clone().track(encoder);
+                            let m = self.mask_tile(r, mask,coverage, mask_offset, tile, &mut accepted)?;
                             self.copy_window_tile(m, image, tile);
+                            self.encode_jobs(r,encoder)?;accepted.track(encoder);
                         }
                         self.encode_jobs(r, encoder)?;
                     }
@@ -617,6 +654,7 @@ impl Scene {
                     if index == self.images.scratch.len() { self.images.scratch.push(Image::new(r,plan,"reusable effect intermediate")); }
                     else if self.images.scratch[index].plan != plan { self.images.scratch[index]=Image::new(r,plan,"reusable effect intermediate"); }
                 }
+                self.images.account_scratch();
                 for regions in regions {
                 let mut previous = cached.input.clone();
                 for pass in 0..count {
@@ -667,10 +705,11 @@ impl Scene {
             }
             changes.insert(handle,output_dirty);
             cached.dependencies = dependencies;
-            self.images.stages.push(cached);
+            self.images.push(cached);
         }
         if self.images.stages.is_empty() {
             self.images.scratch.clear();
+            self.images.scratch_charge = None;
         }
         self.images.metadata = metadata;
         self.images.blend_space = packet.blend_space;

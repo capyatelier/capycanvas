@@ -1,16 +1,18 @@
 use super::*;
 use crate::{package::session_store::{OwnerLock,SessionStore},tile_io::{ReadCache,ReadCompletion}};
 
-struct Observed {inner:Arc<dyn FileTransport>,observe:Arc<dyn Fn()+Send+Sync>}
-struct ObservedFile {inner:Arc<dyn StoreFile>,observe:Arc<dyn Fn()+Send+Sync>}
+type Observe=Arc<dyn Fn(u64,usize)+Send+Sync>;
+struct Observed {inner:Arc<dyn FileTransport>,observe:Observe}
+struct ObservedFile {inner:Arc<dyn StoreFile>,observe:Observe}
 impl Observed {
     fn wrap<'a>(&'a self,file:FileFuture<'a,Arc<dyn StoreFile>>)->FileFuture<'a,Arc<dyn StoreFile>> {
         Box::pin(async move {Ok(Arc::new(ObservedFile {inner:file.await?,observe:self.observe.clone()}) as Arc<dyn StoreFile>)})
     }
 }
 impl RangeReader for ObservedFile {
+    fn allocation_bytes(&self,offset:u64,length:usize)->usize {self.inner.allocation_bytes(offset,length)}
     fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
-        (self.observe)();self.inner.read(offset,length,crc,completion);
+        (self.observe)(offset,length);self.inner.read(offset,length,crc,completion);
     }
 }
 impl StoreFile for ObservedFile {
@@ -28,7 +30,7 @@ impl FileTransport for Observed {
     fn list<'a>(&'a self,name:&'a str)->FileFuture<'a,Vec<DirectoryEntry>> {self.inner.list(name)}
     fn remove<'a>(&'a self,name:&'a str)->FileFuture<'a,Removal> {self.inner.remove(name)}
 }
-pub async fn open_observed(path:&std::path::Path,cache:ReadCache,observe:Arc<dyn Fn()+Send+Sync>)->Result<SessionStore,String> {
+pub async fn open_observed(path:&std::path::Path,cache:ReadCache,observe:Observe)->Result<SessionStore,String> {
     std::fs::create_dir_all(path).map_err(|error|error.to_string())?;
     let path=std::fs::canonicalize(path).map_err(|error|error.to_string())?;
     let lease=Arc::new(OwnerLock::claim(&path.join(".lock"))?.ok_or("Recovery drawing is already open")?);

@@ -86,7 +86,6 @@ impl MetalHost {
             let (Some(surface), Some(gpu)) = (self.surface.as_mut(), host.session.engine().backend().0.as_deref()) else {
                 return false;
             };
-            let _ = gpu.device().poll(wgpu::PollType::Poll);
             match surface.presenter.screen_check_result() {
                 Some(result) => result.ok(),
                 None => {
@@ -157,12 +156,7 @@ impl MetalHost {
         Ok(())
     }
 
-    pub(crate) fn observe_failure(&mut self, host: &mut NativeHost, poll: bool) {
-        if poll && let Some(gpu) = &host.session.engine().backend().0
-            && let Err(error) = gpu.device().poll(wgpu::PollType::Poll)
-        {
-            self.watch.report_error(error.to_string());
-        }
+    pub(crate) fn observe_failure(&mut self, host: &mut NativeHost) {
         if host.session.engine().backend().0.is_some()
             && let Some(message) = self.watch.failure()
         {
@@ -305,7 +299,6 @@ impl MetalHost {
             return Ok((0, GpuFrameTimingStats::default()));
         };
         if let Some(gpu) = &host.session.renderer_mut().0 {
-            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
             timing.poll(gpu.device(), gpu.queue());
         }
         Ok((timing.take_into(samples), timing.stats()))
@@ -321,13 +314,13 @@ impl MetalHost {
     ) -> Result<(bool, [u64; 5]), String> {
         *launch_frame = 0;
         host.poll_preparation();
-        self.observe_failure(host, true);
+        self.observe_failure(host);
         self.poll_color(host)?;
         #[cfg(target_abi = "sim")]
         self.poll_launch(host);
-        if !host.dirty && host.startup.complete { self.poll_presentation(host)?; }
+        if host.frame_demand() == layer_render::FrameDemand::Wait && host.startup.complete { self.poll_presentation(host)?; }
         if host.session.rendering_suspended() { return Ok((false, [0; 5])); }
-        if (!host.dirty && host.startup.complete && host.launch_frame().is_none()) || self.surface.is_none() {
+        if (host.frame_demand() == layer_render::FrameDemand::Wait && host.startup.complete && host.launch_frame().is_none()) || self.surface.is_none() {
             return Ok((false, [0; 5]));
         }
         // Own the timer locally so a panic cannot strand an active query in the
@@ -433,7 +426,7 @@ impl MetalHost {
         gpu.queue().present(target);
         #[cfg(target_abi = "sim")]
         if let Some(completed) = surface.launch.submit(ready_frame) {
-            gpu.queue().on_submitted_work_done(move || {
+            gpu.on_gpu_done(move || {
                 completed.store(true, Ordering::Release);
                 launch_wake();
             });
@@ -443,7 +436,6 @@ impl MetalHost {
         self.blank_presented = true;
         self.screen_presented = Some(Instant::now());
         costs[3] = clock.elapsed().as_nanos() as u64 - costs[..3].iter().sum::<u64>();
-        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         costs[4] = clock.elapsed().as_nanos() as u64 - costs[..4].iter().sum::<u64>();
         host.session.renderer_mut().0.as_mut().unwrap().after_present();
         let revision = Some(self.glass.panel_revision());
@@ -451,7 +443,7 @@ impl MetalHost {
             self.presented_panel_revision = revision;
             host.invalidate_snapshot();
         }
-        Ok((host.dirty, costs))
+        Ok((host.frame_demand() != layer_render::FrameDemand::Wait, costs))
     }
 }
 

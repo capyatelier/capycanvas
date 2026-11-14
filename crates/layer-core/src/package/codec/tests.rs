@@ -730,3 +730,52 @@ fn leased_save_keeps_only_its_current_resource_pinned() {
     }
     let mut output=Sink {budget,maximum,saw_pin:false};pollster::block_on(prepared.write_async(&mut output,&cancel)).unwrap();assert!(output.saw_pin);
 }
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn cold_original_copy_uses_worker_reads_without_revalidating_the_package() {
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    struct Source {bytes:Arc<[u8]>,reads:AtomicUsize}
+    impl super::super::ByteSource for Source {
+        fn byte_len(&self)->u64 {self.bytes.len() as u64}
+        fn poll(&self,_:u64,_:usize)->Result<super::super::RangeState,String> {Ok(super::super::RangeState::Pending)}
+        fn poll_on_worker(&self,offset:u64,length:usize)->Result<super::super::RangeState,String> {
+            self.reads.fetch_add(1,Ordering::Relaxed);
+            Ok(super::super::RangeState::Ready(super::super::ByteRange::new(self.bytes.clone(),offset as usize..offset as usize+length)?))
+        }
+    }
+    let input=Arc::new(Source {bytes:(0..65_537).map(|index|index as u8).collect::<Vec<_>>().into(),reads:AtomicUsize::new(0)});
+    let source=ImmutableBacking::new(input.clone()).unwrap();
+    let failure=source.fail("Invalid artwork must still be copied".into());
+    let mut copied=Vec::new();
+    copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();
+    assert_eq!(copied.as_slice(),input.bytes.as_ref());
+    assert_eq!(input.reads.load(Ordering::Relaxed),2);
+    assert_eq!(source.poll(0,1).unwrap_err(),failure);
+    let mut cancelled=Vec::new();
+    assert!(copy_original(&source,&mut cancelled,&AtomicBool::new(true)).is_err());
+    assert!(cancelled.is_empty());
+    assert_eq!(input.reads.load(Ordering::Relaxed),2);
+}
+
+#[test]
+fn an_opened_package_decodes_only_into_room_another_owner_has_released() {
+    use std::{future::Future,task::{Context,Poll,Waker}};
+    let mut artwork=crate::Document::new(identity(70),64,64,crate::DocumentNames {paint:"Paint".into(),paper:"Paper".into()}).artwork;
+    artwork.metadata=Arc::new(PhotoMetadata {xmp:Some(Resource::from(vec![7;8*1024*1024])),..Default::default()});
+    let bytes=serialize(&prepare(&artwork,false));
+    let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+    let limit=budget.ram_limit_bytes();
+    let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);
+    cache.report(crate::MemoryReport {ram_bytes:limit-MAX_RANGE_BYTES as u64,demand_ram_bytes:limit,..Default::default()});
+    let cancelled=AtomicBool::new(false);
+    let mut opening=Box::pin(open_async_with_budget(backing(bytes),Default::default(),&cancelled,budget.clone()));
+    let mut context=Context::from_waker(Waker::noop());
+    assert!(opening.as_mut().poll(&mut context).is_pending(),"the open decoded into room another owner still holds");
+    cache.report(crate::MemoryReport {ram_bytes:cache.grant().ram_bytes,demand_ram_bytes:limit,..Default::default()});
+    let Poll::Ready(Ok(OpenOutcome::Candidate {artwork:opened,memory,..}))=opening.as_mut().poll(&mut context) else {panic!("the release lets the open finish")};
+    assert_eq!(opened.metadata,artwork.metadata);
+    let snapshot=budget.snapshot();
+    assert!(snapshot.ram_physical_bytes+snapshot.reserved_bytes<=limit,"physical {} reserved {} limit {limit}",snapshot.ram_physical_bytes,snapshot.reserved_bytes);
+    drop(memory);
+}

@@ -733,7 +733,7 @@ fn worker_color_roundtrip_interns_mixed_immutable_image_closure() {
         let capture=Editor::new(Document::from_artwork(artwork).unwrap()).capture(0,Default::default()).unwrap();
         let prepared=PreparedTransfer::capture(&capture,&cancelled).unwrap();
         let descriptor=serde_json::from_slice(&serde_json::to_vec(prepared.descriptor()).unwrap()).unwrap();
-        let mut receiver=TransferReceiver::new(descriptor,Default::default()).unwrap();
+        let mut receiver=pollster::block_on(TransferReceiver::new(descriptor,Default::default())).unwrap();
         for index in 0..prepared.payload_count() {
             let mut offset=0;let length=prepared.payload_len(index).unwrap();
             while offset<length {

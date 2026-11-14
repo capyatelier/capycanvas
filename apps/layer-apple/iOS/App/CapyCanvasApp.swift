@@ -12,6 +12,12 @@ import SwiftUI
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
         EditorStore.discardSceneSessions(Set(sceneSessions.map(\.persistentIdentifier)))
     }
+    func applicationWillTerminate(_ application: UIApplication) {
+        let attempt = ProcessTermination(deadline: ProcessInfo.processInfo.systemUptime + 3)
+        attempt.start(flush: { ready in EditorStore.flushAll(ready) },
+            detach: { ready in EditorStore.detachWorkspaceOwners(ready) }, finishGPU: ProcessTermination.finishGPU)
+        ProcessTermination.exitIfIncomplete(attempt.wait())
+    }
 }
 
 private struct IPadEditorScene: View {

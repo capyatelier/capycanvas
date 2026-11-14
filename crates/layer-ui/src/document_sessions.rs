@@ -356,10 +356,12 @@ impl<T> DocumentSessions<T> {
     /// Freeze admission inputs before asynchronous decoding. Recheck against the
     /// live collection before publication if the host permits concurrent opens.
     pub fn admission(&self, active: &RetainedTiles) -> DocumentAdmission {
+        let mut owners=std::collections::HashMap::new();let mut existing=0usize;
+        for tiles in std::iter::once(active).chain(self.parked.values().map(|parked|&parked.tiles)) {
+            existing=existing.saturating_add(tiles.metadata_bytes);tiles.metadata_owners(&mut owners);
+        }
         DocumentAdmission {
-            existing: self.parked.values().fold(active.metadata_bytes, |n, p| {
-                n.saturating_add(p.tiles.metadata_bytes)
-            }),
+            existing, owners,
             limit: self.budget.metadata,
             storage_error:self.storage_error(),
         }
@@ -441,6 +443,7 @@ pub fn document_recovery_unavailable(localization: &Localizer, detail: &str) -> 
 
 pub struct DocumentAdmission {
     existing: usize,
+    owners: std::collections::HashMap<u64,usize>,
     limit: usize,
     storage_error: Option<String>,
 }
@@ -449,11 +452,14 @@ impl DocumentAdmission {
         if let Some(error) = &self.storage_error {
             return Err(DocumentSessionError::StorageUnavailable { detail: error.clone() });
         }
-        let mut metadata = self.existing;
+        let mut metadata = self.existing;let mut owners=self.owners.clone();
         for editor in editors {
-            metadata = metadata.saturating_add(editor.retained_tiles().metadata_bytes).saturating_add(2 * 1024 * 1024);
+            let tiles=editor.retained_tiles();tiles.metadata_owners(&mut owners);
+            metadata = metadata.saturating_add(tiles.metadata_bytes).saturating_add(2 * 1024 * 1024);
             if metadata > self.limit { return Err(DocumentSessionError::MetadataBudgetExceeded); }
         }
+        metadata=owners.values().fold(metadata,|bytes,size|bytes.saturating_add(*size));
+        if metadata > self.limit { return Err(DocumentSessionError::MetadataBudgetExceeded); }
         Ok(())
     }
     pub fn admit(&self, candidate: &Document) -> Result<(), DocumentSessionError> {
@@ -649,9 +655,32 @@ mod tests {
         let document = Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
         let editor = layer_core::Editor::new(document);
         let bytes = editor.retained_tiles().metadata_bytes + 2 * 1024 * 1024;
-        let admission = DocumentAdmission {existing:0,limit:bytes * 2 - 1,storage_error:None};
+        let admission = DocumentAdmission {existing:0,owners:Default::default(),limit:bytes * 2 - 1,storage_error:None};
         assert!(admission.admit_sessions([&editor]).is_ok());
         assert_eq!(admission.admit_sessions([&editor, &editor]), Err(DocumentSessionError::MetadataBudgetExceeded));
+    }
+    #[test]
+    fn admission_deduplicates_content_trees_across_parked_active_and_candidate_drawings() {
+        use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey,TILE_SIZE};
+        let memory=test_budget(16<<20);
+        let mut document=Document::new(layer_core::PortableId::random(),256,256,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()})
+            .with_memory(layer_core::DocumentMemory::new(memory.clone(),None));
+        let target=document.working.target.unwrap();
+        let descriptor=RasterPlane::Color.descriptor(Default::default());
+        *document.target_raster_mut(target).unwrap()=RasterRevision::backed(RasterData {
+            tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed(TileBlob::encode(descriptor,&[31,63,127,255].repeat((TILE_SIZE*TILE_SIZE) as usize)).unwrap()))].into(),
+            ..Default::default()
+        });
+        let editor=layer_core::Editor::new(document);let retained=editor.retained_tiles();
+        let mut owners=std::collections::HashMap::new();retained.metadata_owners(&mut owners);
+        let trees=owners.values().sum::<usize>();
+        assert!(trees>0);
+        let mut documents=DocumentSessions::with_memory_budget(&english(),memory);
+        documents.append((),retained.clone(),&english());documents.append((),retained.clone(),&english());
+        documents.budget.metadata=5*retained.metadata_bytes+4*1024*1024+trees;
+        assert!(documents.admission(&retained).admit_sessions([&editor,&editor]).is_ok(),"shared tree allocations count once across the entire admission");
+        documents.budget.metadata-=1;
+        assert_eq!(documents.admission(&retained).admit_sessions([&editor,&editor]),Err(DocumentSessionError::MetadataBudgetExceeded),"tree metadata remains inside the admission bound");
     }
     #[test]
     fn prepared_empty_collection_retains_allocator_and_original_until_commit() {

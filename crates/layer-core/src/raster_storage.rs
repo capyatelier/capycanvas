@@ -110,6 +110,10 @@ impl Bytes {
     pub(crate) fn memory(&self) -> Result<Option<Arc<[u8]>>,String> {
         Ok(match self.snapshot()? {Value::Memory(bytes)=>Some(bytes),_=>None})
     }
+    pub(crate) fn read_interest(&self)->Result<Option<crate::tile_io::ReadWait>,String> {
+        self.healthy()?;
+        match self.snapshot()? {Value::Memory(_)=>Ok(None),Value::Store(location)=>location.read_interest().map(Some),Value::Package(range)=>range.read_interest().map(Some)}
+    }
     pub(crate) fn location(&self)->Result<Option<Arc<crate::package::session_store::StoreLocation>>,String> {
         Ok(match self.snapshot()? {Value::Store(location)=>Some(location),_=>None})
     }
@@ -163,6 +167,7 @@ pub struct RetainedTiles {
     pub(crate) authored_backings: HashSet<u64>,
     pub(crate) authored_metadata: usize,
 }
+pub const CONTENT_TREE_METADATA: u8 = 5;
 impl Editor {
     pub fn retained_images(&self) -> Vec<crate::Image> {
         let mut roots=crate::RootInventory::default();roots.document(&self.document);
@@ -306,8 +311,20 @@ impl RetainedTiles {
     }
     /// Conservative nonblocking accounting; pending captures reserve their limit.
     pub fn resident_bytes(&self) -> usize {
+        resident_tile_bytes([self])
+    }
+    pub fn total_bytes(&self) -> usize {
         let mut owners=std::collections::HashMap::new();self.resident_owners(&mut owners);
-        owners.values().fold(0usize,|bytes,(size,_)|bytes.saturating_add(*size))
+        owners.values().fold(self.metadata_bytes,|bytes,(size,_)|bytes.saturating_add(*size))
+    }
+    pub fn metadata_owners(&self, owners:&mut std::collections::HashMap<u64,usize>) {
+        for raster in &self.rasters {
+            if let Some(Ok(data))=raster.try_data() {
+                for (identity,bytes) in data.tiles.metadata_owners() {
+                    owners.entry(identity).and_modify(|size|*size=(*size).max(bytes)).or_insert(bytes);
+                }
+            }
+        }
     }
     pub(crate) fn resident_owners(&self, owners:&mut std::collections::HashMap<(u8,u64),(usize,bool)>) {
         fn charge(owners:&mut std::collections::HashMap<(u8,u64),(usize,bool)>,key:(u8,u64),size:usize,current:bool) {
@@ -321,7 +338,8 @@ impl RetainedTiles {
         for raster in &self.rasters {
             let current=self.authored_rasters.contains(&raster.identity());
             match raster.try_data() {
-                Some(Ok(data))=>{let mut pending=0usize;for tile in data.tiles.values() {
+                Some(Ok(data))=>{for (identity,bytes) in data.tiles.metadata_owners() {charge(owners,(CONTENT_TREE_METADATA,identity),bytes,current);}
+                    let mut pending=0usize;for tile in data.tiles.values() {
                     if let Some(Ok(backing))=tile.try_backing() {blob(owners,&backing,current);}
                     else {pending=pending.saturating_add(crate::raster::MAX_COMPRESSED_TILE_BYTES);}
                 }charge(owners,(3,raster.identity()),pending,current);},
@@ -338,7 +356,7 @@ impl RetainedTiles {
 pub fn resident_tile_bytes<'a>(inventories: impl IntoIterator<Item = &'a RetainedTiles>) -> usize {
     let mut owners=std::collections::HashMap::new();
     for tiles in inventories {tiles.resident_owners(&mut owners);}
-    owners.values().fold(0usize,|bytes,(size,_)|bytes.saturating_add(*size))
+    owners.iter().filter(|((kind,_),_)|*kind!=CONTENT_TREE_METADATA).fold(0usize,|bytes,(_,(size,_))|bytes.saturating_add(*size))
 }
 
 #[cfg(all(test, any(unix, windows)))]

@@ -20,15 +20,19 @@ fn capture(r:&mut WgpuRasterizer,frame:FramePacket<'_>,handles:[OccurrenceHandle
     let [owner,filter,photo]=handles;
     let mut scene=r.scene.take().unwrap_or_else(||Scene::new(r).unwrap());
     scene.begin_frame();scene.used.iter_mut().for_each(super::scratch::Usage::reset);scene.jobs.clear();scene.source_jobs.clear();
+    let declaration=scene.capture_declaration(r,frame).unwrap();let mut accepted=scene.accept_capture(r,frame,Some(crate::scene::Output::Artwork(None)),&declaration,|scene,r,accepted| {
+        if colors.is_none() {scene.layer(r,frame,photo,tile,accepted)?;scene.layer(r,frame,owner,tile,accepted)?;}
+        let input=scene.alloc(r,wgpu::Color::TRANSPARENT)?;scene.effect(r,frame,&[filter],tile,input,accepted).map(drop)
+    }).unwrap();
     let (front,back)=if let Some([ink,photo])=colors {
         let color=|[red,green,blue,alpha]:[f32;4]|wgpu::Color {r:f64::from(red),g:f64::from(green),b:f64::from(blue),a:f64::from(alpha)};
         let back=scene.alloc(r,color(photo)).unwrap();
         (scene.alloc(r,color(ink)).unwrap(),back)
     } else {
-        let back=scene.layer(r,frame,photo,tile).unwrap();
-        (scene.layer(r,frame,owner,tile).unwrap(),back)
+        let back=scene.layer(r,frame,photo,tile,&mut accepted).unwrap();
+        (scene.layer(r,frame,owner,tile,&mut accepted).unwrap(),back)
     };
-    let front=scene.effect(r,frame,&[filter],tile,front).unwrap();
+    let front=scene.effect(r,frame,&[filter],tile,front,&mut accepted).unwrap();
     if !eligible {
         let Job::Effect {prepared,..}=scene.jobs.last_mut().unwrap() else {panic!("final effect")};
         prepared.original_independent=false;
@@ -44,7 +48,8 @@ fn capture(r:&mut WgpuRasterizer,frame:FramePacket<'_>,handles:[OccurrenceHandle
     scene.copy_window_tile(output,&destination,tile);
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     pollster::block_on(scene.prepare_capture_work_async(r)).unwrap();
-    scene.encode_jobs(r,&mut encoder).unwrap();r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    crate::test_support::query_ready(r,&mut encoder,|r,encoder|if scene.prepare_jobs(r,encoder,0,Class::Visible)? {Ok(())}else {Err(GpuRasterError::NotReady)});
+    accepted.clone().track(&mut encoder);scene.encode_jobs(r,&mut encoder).unwrap();r.uploads.finish(&encoder);encoder.submit(&r.queue);
     r.scene=Some(scene);
     (pixels(r,&texture),work)
 }

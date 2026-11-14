@@ -88,10 +88,10 @@ fn reference_transfers_hold_the_pack_range_accepted_before_compaction() {
     let transfer=PreparedTransfer::capture_referenced(&capture.artwork,&None,&cancel,&crate::MemoryBudget::process()).wait().unwrap();
     assert_eq!(transfer.payload_count(),0);assert_eq!(transfer.descriptor().backings().len(),1);
     let old=sparse_dead_tail(&mut store);
-    let received=TransferReceiver::with_sources(transfer.descriptor().clone(),ProjectLimits::default(),|reference| {
+    let received=pollster::block_on(TransferReceiver::with_sources(transfer.descriptor().clone(),ProjectLimits::default(),|reference| {
         let backing=transfer.backings().iter().find(|backing|backing.transfer_reference().as_ref()==Some(reference)).unwrap();
         Ok(Arc::new(backing.read_source().unwrap()) as Arc<dyn ByteSource>)
-    }).unwrap().finish().unwrap();
+    })).unwrap().finish().unwrap();
     let adopted=received.adopt_verified(ProjectLimits::default(),&cancel).unwrap();drop(received);drop(transfer);
     assert!(!finish(&mut store).is_empty());assert!(store.pack_path(old).exists());
     let editor=crate::Editor::new(adopted.into_document().unwrap());

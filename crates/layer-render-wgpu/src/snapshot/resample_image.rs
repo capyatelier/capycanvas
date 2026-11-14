@@ -81,7 +81,7 @@ impl SnapshotGpu {
         let mut snapshot = SnapshotRenderer::construct(plan.scene.clone(), SceneScope::Raw(target), control.clone(), self).map_err(|e| e.to_string())?;
         snapshot.extent = extent;
         snapshot.set_raw_plan(plan.clone());
-        let planes = snapshot.raw_planes.clone();
+        let placements = snapshot.raw_plan.as_ref().unwrap().sources.clone();
         snapshot.renderer.ensure_document_metadata(extent, snapshot.scene.view().with_scope(&snapshot.scope)).map_err(|e| e.to_string())?;
         let interpretation = SourceInterpretation { channels: with_alpha(source.interpretation.channels), ..source.interpretation.clone() };
         let encoder = layer_color::WorkingEncoder::new(space, &interpretation, Default::default())?;
@@ -96,10 +96,21 @@ impl SnapshotGpu {
                 control.check().map_err(|e| e.to_string())?;
                 let coordinate = [column, row];
                 let region = page_rect(coordinate).intersect(PixelRect::full(extent));
+                let unit=scene::sources::InputUnit::tile(coordinate);
+                let mut accepted:Option<scene::sources::AcceptedInputs>=None;
                 let (tiles, capture) = snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
                     |r, packet, _, encoder| {
                         let mut scene = r.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(r))?;
-                        let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &planes, encoder);
+                        let result=(|| {
+                            if accepted.as_ref().is_some_and(|inputs|inputs.unit()!=Some(unit)) {scene.discard_unencoded_jobs();}
+                            accepted=scene::sources::AcceptedInputs::take_for(&mut accepted,unit);
+                            if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,target,&placements,coordinate)?.for_unit(unit)?.accept_query(r,Some(&scene))?);}
+                            let inputs=accepted.as_mut().ok_or(GpuRasterError::Invariant("accepted raw capture sources are missing"))?;
+                            inputs.check_unit(unit)?;inputs.clone().track(encoder);
+                            let result=scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,inputs);
+                            if result.is_ok() {accepted.take().unwrap().track(encoder);}
+                            result
+                        })();
                         r.scene = Some(scene);
                         result
                     }).await.map_err(|e| e.to_string())?;

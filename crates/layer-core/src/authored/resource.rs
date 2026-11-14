@@ -55,17 +55,19 @@ impl IntegrityCache {
         })
     }
 }
-struct Owner<T: ?Sized> { value: Arc<T>, encoded: OnceLock<EncodedBytes>, integrity: IntegrityCache }
+struct Owner<T: ?Sized> { value: Arc<T>, encoded: OnceLock<EncodedBytes>, integrity: IntegrityCache, content: crate::raster::ContentName }
 pub struct Resource<T: ?Sized> { id: PortableId, owner: Arc<Owner<T>> }
 impl<T: ?Sized> Resource<T> {
     pub fn new(value: Arc<T>) -> Self { Self::with_id(PortableId::random(), value) }
     pub fn with_id(id: PortableId, value: Arc<T>) -> Self {
-        Self { id, owner: Arc::new(Owner { value, encoded: OnceLock::new(), integrity: IntegrityCache::default() }) }
+        Self { id, owner: Arc::new(Owner { value, encoded: OnceLock::new(), integrity: IntegrityCache::default(), content: crate::raster::ContentName::fresh() }) }
     }
     pub fn with_id_and_encoded(id: PortableId, value: Arc<T>, encoded: EncodedBytes) -> Self {
-        Self { id, owner: Arc::new(Owner { value, encoded: OnceLock::from(encoded), integrity: IntegrityCache::default() }) }
+        Self { id, owner: Arc::new(Owner { value, encoded: OnceLock::from(encoded), integrity: IntegrityCache::default(), content: crate::raster::ContentName::fresh() }) }
     }
     pub fn id(&self) -> PortableId { self.id }
+    pub(crate) fn content_name(&self) -> crate::raster::ContentName { self.owner.content }
+    pub fn content_version(&self) -> crate::raster::ContentVersion { self.owner.content.into() }
     pub(crate) fn alias(&self, id:PortableId) -> Self { Self {id,owner:self.owner.clone()} }
     pub(crate) fn encoded_integrity(&self, cancelled:&AtomicBool, bytes:impl FnOnce()->Result<Arc<[u8]>,String>) -> Result<EncodedIntegrity,String> {
         self.owner.integrity.get_or_compute(cancelled,bytes)
@@ -175,6 +177,8 @@ mod tests {
         let bytes:Arc<[u8]>=Arc::from([7,3,19,255]);let weak=Arc::downgrade(&bytes);
         let resource=Resource::<[u8]>::new(bytes.clone());let alias=resource.alias(PortableId::random());
         assert_ne!(resource.id(),alias.id());assert!(resource.same_owner(&alias));
+        assert_eq!(resource.content_name(),alias.content_name());
+        assert_eq!(resource.content_name(),resource.clone().content_name());
         assert!(resource.encoded_integrity_if_ready().is_none());
         let crc=resource.encoded_integrity(&cancelled,||Ok(bytes.clone())).unwrap();
         assert_eq!(crc,EncodedIntegrity {bytes:4,crc32:crc32fast::hash(&bytes)});
@@ -184,6 +188,8 @@ mod tests {
         assert_eq!(alias.encoded_digest(&cancelled,||panic!("repeated digest read")).unwrap(),digest);
         let edited=Resource::<[u8]>::new(Arc::from([7,3,19,254]));
         assert!(edited.encoded_integrity_if_ready().is_none());assert!(!edited.same_owner(&resource));
+        assert_ne!(edited.content_name(),resource.content_name());
+        assert_ne!(Resource::with_id(resource.id(),resource.storage().clone()).content_name(),resource.content_name());
         drop(resource);drop(bytes);assert!(weak.upgrade().is_some());
         drop(alias);assert!(weak.upgrade().is_none());
     }

@@ -10,6 +10,22 @@ use crate::native_tiles::{
 };
 use layer_core::color::DocumentColor;
 
+pub(crate) fn native_capture_candidates(
+    contents:&super::contents::Contents, planned:impl IntoIterator<Item=TileKey>,
+    mut descriptor:impl FnMut(TileKey)->layer_core::color::PixelDescriptor,
+)->BTreeSet<TileKey> {
+    let mut keys:BTreeSet<_>=planned.into_iter().collect();
+    for coordinate in contents.modified_coordinates() {
+        keys.extend([RasterPlane::Color,RasterPlane::Mask,RasterPlane::WatercolorWetness]
+            .map(|plane|TileKey {plane,coordinate}));
+    }
+    keys.retain(|key| {
+        let expected=descriptor(*key);
+        contents.version(*key).matches(&contents.selected_version(*key))!=Some(true)
+            || contents.data().tiles.get(key).is_some_and(|tile|tile.descriptor()!=expected)
+    });keys
+}
+
 pub(crate) struct Recipes {
     in_place: bool,
     color: Arc<NativeTileEncoder>,
@@ -33,10 +49,6 @@ impl Recipes {
 
 pub(crate) struct NativeEdit {
     pub(super) backing: BTreeMap<SourceTarget, Arc<RasterData>>,
-    pub(crate) color_cache_bytes: u64,
-    pub(crate) color_cache_pinned_bytes: u64,
-    pub(crate) display_complete_bytes: u64,
-    pub(crate) composition_bytes: u64,
     #[cfg(test)]
     pub image_pixel_bytes: Option<u64>,
     transfer: NativeTransfer,
@@ -65,15 +77,9 @@ impl NativeEdit {
         let scalars = (0..scratch_count)
             .map(|_| Self::scratch_texture(&r.device, wgpu::TextureFormat::R32Float))
             .collect();
-        let display_complete_bytes = r.memory_limit(layer_core::MemoryOwnerKind::Scene);
         let recipes = Recipes::shared(&r.device, in_place);
         Self {
             backing: BTreeMap::new(),
-            color_cache_bytes: r.memory.color_limit(r.memory_limit(layer_core::MemoryOwnerKind::RasterPool),
-                r.raster_buffers.bytes.load(std::sync::atomic::Ordering::Acquire)),
-            color_cache_pinned_bytes: r.memory.color_pinned(),
-            display_complete_bytes,
-            composition_bytes: display_complete_bytes,
             #[cfg(test)]
             image_pixel_bytes: None,
             transfer,
@@ -136,14 +142,6 @@ impl NativeEdit {
             + self.preview_scalars.iter().map(wgpu::Buffer::size).sum::<u64>()
         // Transfer storage is owned/accounted by the shared scene decoder cache.
     }
-    pub(crate) fn image_pixel_allowance(&self)->u64 {
-        self.composition_bytes
-    }
-    pub(crate) fn image_pixel_budget(&self, resident: u64) -> u64 {
-        #[cfg(test)]
-        if let Some(bytes) = self.image_pixel_bytes { return bytes; }
-        self.image_pixel_allowance().saturating_sub(resident)
-    }
 
 }
 
@@ -157,11 +155,43 @@ pub(crate) struct NativeFrame {
     publications: Vec<Publication>,
     pub(crate) canonical_pages: Vec<(SourceTarget, [u32; 2])>,
 }
+enum NativeAccess<'a> {
+    Write(crate::resident::RasterWrite<'a,source_access::RawTile>),
+    Read(crate::resident::Read<'a,source_access::RawTile>),
+    Private(&'a wgpu::Texture),
+}
+impl NativeAccess<'_> {
+    fn texture(&self)->&wgpu::Texture {match self {Self::Write(write)=>crate::resident::TextureStorage::texture(write.value()),Self::Read(read)=>crate::resident::TextureStorage::texture(read.value()),Self::Private(texture)=>texture}}
+    fn encoded(self,name:layer_core::raster::ContentVersion)->Option<crate::resident::Encoding> {
+        match self {Self::Write(write)=>Some(write.encoded(name)),_=>None,}
+    }
+}
+pub(crate) struct NativeAdmission {
+    allocation:crate::residency::Reservation,
+    comparisons:Option<crate::native_tiles::comparison::CanonicalComparisons>,
+    capacity:usize,
+    bytes:u64,
+    readback:u64,
+}
+impl NativeAdmission {
+    fn whole(&self)->bool {self.allocation.bytes()>=self.bytes.saturating_add(self.readback)}
+}
+fn tile_output_bytes(tile:&RasterTile)->u64 {tile.descriptor().byte_len([PAGE_SIZE;2]).unwrap() as u64}
+fn capture_readback(bytes:u64,largest:u64,admitted:u64)->u64 {
+    let minimum=(largest+crate::native_tiles::comparison::RESULT_BYTES).next_power_of_two();
+    let full=bytes.min(CAPTURE_CHUNK).next_power_of_two().max(minimum);
+    if admitted>=full.saturating_add(bytes) {return full;}
+    full.min(1<<(admitted.saturating_sub(largest)/8).max(minimum).ilog2())
+}
 pub(crate) struct NativeJob {
     pub frame: NativeFrame,
     inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>,
     views: crate::native_tiles::PublicationViews,
     changes: Vec<Option<wgpu::Buffer>>,
+    comparisons:Option<crate::native_tiles::comparison::CanonicalComparisons>,
+    canonical:Vec<Option<Arc<layer_core::raster::CanonicalName>>>,
+    intents:Vec<Option<crate::raster::contents::Intent>>,
+    working_inputs:Vec<Option<crate::resident::Resident<source_access::RawTile>>>,
     encoded: usize,
     started: bool,
 }
@@ -186,77 +216,59 @@ impl Drop for NativeFrame {
 
 impl WgpuRasterizer {
     pub(crate) fn canonicalize_preview_watercolor(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        let depth = self.document_color().depth.coverage();
-        let Some(native) = self.native_edit.as_mut() else { return Ok(()); };
-        let textures = self.preview_watercolor_wetness_pages.iter()
-            .filter(|page| !self.preview_damage.intersect(page_rect(page.coordinate)).is_empty())
-            .map(|page| &page.active().texture).collect::<Vec<_>>();
-        if textures.is_empty() { return Ok(()); }
-        let buffers = &mut native.preview_scalars;
-        while buffers.len() < textures.len().min(MAX_BATCH_TILES) {
-            buffers.push(self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("watercolor preview native coverage"),
-                size: u64::from(PAGE_SIZE).pow(2) * depth.bytes() as u64,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            }));
+        let depth=self.document_color().depth.coverage();
+        if self.native_edit.is_none() {return Ok(());}
+        let target=self.preview_declaration.as_ref().ok_or(GpuRasterError::Invariant("prepared canonicalize preview watercolor state is inconsistent"))?.target();
+        let coordinates=self.preview_watercolor_wetness_pages.iter().filter(|page|!self.preview_damage.intersect(page_rect(page.coordinate)).is_empty())
+            .map(|page|page.coordinate).collect::<Vec<_>>();
+        let mut outputs=Vec::with_capacity(coordinates.len());
+        for coordinate in coordinates {
+            let ticket=self.preview_version(target,RasterPlane::WatercolorWetness,coordinate,crate::scene::PreviewStage::Final)?;
+            let receipt=encoder.submission();
+            let page=self.preview_watercolor_wetness_pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap();
+            let active=page.active_secondary;
+            let write=page.surface_mut(active).revise(ticket.version(),&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+            let texture=write.value().texture.clone();
+            outputs.push((coordinate,texture,ticket.clone(),write.encoded(ticket.version())));
         }
-        let mut views = Default::default();
-        for chunk in textures.chunks(MAX_BATCH_TILES) {
-            let requests = chunk.iter().enumerate().map(|(index, &texture)| NativeScalarRequest {
-                working: texture, encoded: &buffers[index], canonical: native.scalars.get(index).unwrap_or(texture),
-                depth, region: [0, 0, PAGE_SIZE, PAGE_SIZE],
+        if outputs.is_empty() {return Ok(());}
+        let native=self.native_edit.as_mut().unwrap();let buffers=&mut native.preview_scalars;
+        while buffers.len()<outputs.len().min(MAX_BATCH_TILES) {
+            buffers.push(self.device.create_buffer(&wgpu::BufferDescriptor {label:Some("watercolor preview native coverage"),
+                size:u64::from(PAGE_SIZE).pow(2)*depth.bytes() as u64,usage:wgpu::BufferUsages::STORAGE,mapped_at_creation:false}));
+        }
+        let mut views=Default::default();
+        for chunk in outputs.chunks(MAX_BATCH_TILES) {
+            let requests=chunk.iter().enumerate().map(|(index,(_,texture,_,_))|NativeScalarRequest {
+                working:texture,encoded:&buffers[index],canonical:native.scalars.get(index).unwrap_or(texture),depth,region:[0,0,PAGE_SIZE,PAGE_SIZE],
             }).collect::<Vec<_>>();
-            let scalar = native.scalar.prepare(&self.device, &requests, &mut views)?;
-            let promotions = requests.iter().map(|request| NativePromotion {
-                canonical: request.canonical, working: request.working, region: request.region,
-            }).collect::<Vec<_>>();
-            let promotions = native.promoter.as_ref().map(|promoter|
-                promoter.prepare(&self.device, &promotions, &mut views)).transpose()?;
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                native.scalar.encode(&mut pass, &scalar);
+            let scalar=native.scalar.prepare(&self.device,&requests,&mut views)?;
+            let promotions=requests.iter().map(|request|NativePromotion {canonical:request.canonical,working:request.working,region:request.region}).collect::<Vec<_>>();
+            let promotions=native.promoter.as_ref().map(|promoter|promoter.prepare(&self.device,&promotions,&mut views)).transpose()?;
+            {let mut pass=encoder.begin_compute_pass(&Default::default());native.scalar.encode(&mut pass,&scalar);}
+            if let (Some(promoter),Some(promotions))=(&native.promoter,promotions) {
+                encoder.reserve_passes(promotions.pass_count());promoter.encode(encoder,&promotions);
             }
-            if let (Some(promoter), Some(promotions)) = (&native.promoter, promotions) {
-                encoder.reserve_passes(promotions.pass_count());
-                promoter.encode(encoder, &promotions);
-            }
+        }
+        let actual=encoder.submission();
+        for (coordinate,_,ticket,encoding) in outputs {
+            encoding.publish(&actual);
+            self.preview_watercolor_wetness_pages.iter_mut().find(|page|page.coordinate==coordinate).unwrap().derived=Some(ticket);
         }
         Ok(())
     }
 
     /// Admitted display, decoded-source and in-flight upload ceilings in bytes.
     pub fn display_memory_limits(&self) -> [u64; 3] {
-        let display = self.native_edit.as_ref().map_or(0, |n| n.display_complete_bytes);
-        let [sources, uploads] = self.source_tiles.borrow().admitted_bytes();
-        [display, sources, uploads]
+        [self.memory.display_grant(), self.scene_tiers.display.limit(), self.source_tiles.borrow().upload_limit()]
     }
-
+    pub(crate) fn image_pixel_budget(&self, resident: u64) -> u64 {
+        #[cfg(test)]
+        if let Some(bytes) = self.native_edit.as_ref().and_then(|native| native.image_pixel_bytes) { return bytes; }
+        self.memory.display_grant().saturating_sub(resident)
+    }
     pub(crate) fn preparation_memory_limits(&self) -> [u64; 2] {
-        [self.memory_limit(layer_core::MemoryOwnerKind::Scene),
-            crate::memory::retained_limit(self.memory_limit(layer_core::MemoryOwnerKind::RasterPool), self.raster_buffers.memory_bytes()[1])]
-    }
-    pub(crate) fn refresh_memory_limits(&mut self) {
-        let [scene, raster] = self.preparation_memory_limits();
-        let other = self.memory_limit(layer_core::MemoryOwnerKind::Other);
-        let ram = self.ram_limit(layer_core::MemoryOwnerKind::DecodedSamples);
-        let decoded = self.memory_limit(layer_core::MemoryOwnerKind::DecodedSamples);
-        let uploads = self.memory_limit(layer_core::MemoryOwnerKind::Staging);
-        let mips = self.memory_limit(layer_core::MemoryOwnerKind::Mips);
-        let color = self.memory.color_limit(self.memory_limit(layer_core::MemoryOwnerKind::RasterPool),
-            self.raster_buffers.bytes.load(std::sync::atomic::Ordering::Acquire));
-        if let Some(native) = &mut self.native_edit {
-            native.color_cache_bytes = color;
-            native.color_cache_pinned_bytes = self.memory.color_pinned();
-        }
-        if !self.memory.apply_limits([scene, raster, other, ram, decoded, uploads, mips]) { return; }
-        if let Some(native) = &mut self.native_edit {
-            native.display_complete_bytes = scene;
-            native.composition_bytes = scene;
-        }
-        self.device.resource_limit.store(other, std::sync::atomic::Ordering::Release);
-        self.device.source_samples.set_limit(ram.min(usize::MAX as u64) as usize);
-        self.source_tiles.get_mut().admit_limits(decoded, uploads, mips);
+        [self.memory.display_grant(), crate::memory::retained_limit(self.memory.raster_grant(), self.raster_buffers.memory_bytes()[1])]
     }
 
     /// A private candidate shares immutable source samples with the current
@@ -341,10 +353,9 @@ impl WgpuRasterizer {
         let mut renderer=Self::from_factory_inner(self.factory.clone(),self.device.clone(),Initialization::Snapshot)?;
         renderer.initialize_native_from(self.document_color(),self.native_edit.as_ref())?;
         renderer.snapshot_worker=false;
-        renderer.source_tiles=std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(self.document_color().space));
+        renderer.source_tiles=std::cell::RefCell::new(crate::scene::sources::DecodedTiles::within(&renderer.scene_tiers.display,self.document_color().space));
         renderer.memory.invalidate_limits();
         renderer.refresh_memory_limits();
-        if let Some(native)=&mut renderer.native_edit {native.color_cache_bytes=0;}
         renderer.compilation=self.compilation.clone();
         #[cfg(not(target_arch="wasm32"))]
         if let Some(wake)=&self.preparation_wake {renderer.set_preparation_wake(wake.clone());}
@@ -368,7 +379,7 @@ impl WgpuRasterizer {
         self.device = self.device.clone().with_depth(color.depth);
         self.ui_rendition = color.depth.is_float().then_some(Default::default());
         self.scene = None;
-        self.source_tiles = std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(color.space));
+        self.source_tiles = std::cell::RefCell::new(crate::scene::sources::DecodedTiles::within(&self.scene_tiers.display,color.space));
         let transfer=if let Some(source)=source {source.transfer.clone()}else {self.prepare_native_transfer(color.space)?};
         self.native_edit = Some(NativeEdit::new(self,transfer));
         self.memory.invalidate_limits();
@@ -377,7 +388,9 @@ impl WgpuRasterizer {
     }
 
     pub(crate) fn encode_native_rasters(&mut self, scene: SceneView<'_>, encoder: &mut submission::CommandEncoder) -> Result<Option<NativeFrame>, GpuRasterError> {
-        let Some(mut job) = self.prepare_native_rasters(scene)? else { return Ok(None); };
+        if self.restore_preflight.as_ref().and_then(|restore|restore.native.as_ref()).is_some_and(|admission|!admission.whole()) {return Err(GpuRasterError::NotReady);}
+        let submission=encoder.submission();
+        let Some(mut job) = self.prepare_native_rasters(scene,Some(&submission))? else { return Ok(None); };
         let timed = if crate::performance_trace::enabled() {
             let passes = job.pass_count(self.native_edit.as_ref().unwrap());
             let timed = encoder.can_fit_passes(passes + NativeJob::TIMING_PASSES)
@@ -401,10 +414,49 @@ impl WgpuRasterizer {
         Ok(Some(job.frame))
     }
 
-    pub(crate) fn prepare_native_rasters(&mut self, scene: SceneView<'_>) -> Result<Option<NativeJob>, GpuRasterError> {
+    fn native_capture_keys(&self,scene:SceneView<'_>,target:SourceTarget,planned:impl IntoIterator<Item=TileKey>)->BTreeSet<TileKey> {
+        let Some(current)=self.raster.as_ref().and_then(|runtime|runtime.targets.get(&target)) else {return BTreeSet::new();};
+        native_capture_candidates(&current.contents,planned,|key| {
+            key.plane.descriptor_for(self.document_color(),scene.color_mode(target))
+        })
+    }
+
+    pub(crate) fn prepare_native_admission(&mut self,scene:SceneView<'_>,outputs:&[(SourceTarget,RasterOutput)])
+        ->Result<NativeAdmission,GpuRasterError> {
+        let pending:BTreeSet<_>=source_access::placed_targets(scene).filter(|target|scene.raster(*target).is_some_and(|root|root.try_data().is_none())).collect();
+        if !pending.is_empty() {
+            let runtime=self.raster.get_or_insert_with(Default::default);
+            runtime.ensure_worker()?;
+            if runtime.worker.as_ref().is_some_and(|worker|!worker.ready()) {return Err(GpuRasterError::NotReady);}
+        }
+        let mut keys=BTreeSet::new();
+        for &(target,ref output) in outputs {
+            if !pending.contains(&target) {continue;}
+            if let Some(key)=output.native_key() {keys.insert((target,key));}
+        }
+        for &target in &pending {keys.extend(self.native_capture_keys(scene,target,std::iter::empty()).into_iter().map(|key|(target,key)));}
+        let mut bytes=0u64;let mut largest=0;
+        for &(target,key) in &keys {
+            let size=key.plane.descriptor_for(self.document_color(),scene.color_mode(target)).byte_len([PAGE_SIZE;2]).unwrap() as u64;
+            bytes=bytes.checked_add(size).ok_or(GpuRasterError::SizeOverflow)?;largest=largest.max(size);
+        }
+        if bytes>layer_core::raster::MAX_PUBLICATION_BYTES {return Err(GpuRasterError::SourceWorkingSetExceeded);}
+        let capacity=keys.len();
+        let [readback,least]=if capacity==0 {[0;2]}else {[capture_readback(bytes,largest,u64::MAX),capture_readback(largest,largest,0)]};
+        let status=if capacity==0 {0}else {crate::native_tiles::comparison::CanonicalComparisons::bytes(capacity)?};
+        let total=bytes.checked_add(readback).and_then(|n|n.checked_add(status)).ok_or(GpuRasterError::SizeOverflow)?;
+        let allocation=self.admit_raster_window(least.saturating_add(status).saturating_add(largest),total,self.projected_restore_bytes());self.note_restore_admission(&allocation);
+        let mut allocation=allocation.map_err(|_|GpuRasterError::NotReady)?;
+        let comparisons=if capacity==0 {None}else {Some(crate::native_tiles::comparison::CanonicalComparisons::reserved(self,capacity,&mut allocation)?)};
+        let readback=if capacity==0 {0}else {capture_readback(bytes,largest,allocation.bytes())};
+        Ok(NativeAdmission {allocation,comparisons,capacity,bytes,readback})
+    }
+
+    pub(crate) fn prepare_native_rasters(&mut self, scene: SceneView<'_>, submission:Option<&submission::Submission>) -> Result<Option<NativeJob>, GpuRasterError> {
         if self.native_edit.is_none()
             || !source_access::placed_targets(scene).any(|target| scene.raster(target).is_some_and(|r| r.try_data().is_none()))
         {
+            if let Some(restore)=&mut self.restore_preflight {restore.native=None;}
             return Ok(None);
         }
         let mut frame = NativeFrame {
@@ -419,9 +471,10 @@ impl WgpuRasterizer {
                 "Raster backing queue is full".into(),
             ));
         }
-        runtime.ensure_worker(&self.device, &self.raster_buffers)?;
+        runtime.ensure_worker()?;
         let runtime = self.raster.as_ref().unwrap();
         let mut inputs = Vec::new();
+        let mut canonical=Vec::new();let mut intents=Vec::new();let mut working_inputs=Vec::new();
         for target in source_access::placed_targets(scene).filter(|t| scene.raster(*t).is_some()) {
             for (id, revision) in std::iter::once((target, scene.raster(target).unwrap()))
             {
@@ -431,28 +484,26 @@ impl WgpuRasterizer {
                 let Some(current) = runtime.targets.get(&id) else {
                     continue;
                 };
-                let (textures, watercolor) = self.raster_textures(id);
+                if current.revision!=*revision {frame.publications.clear();return Err(GpuRasterError::Invariant("prepared prepare native rasters state is inconsistent"));}
+                let planned=self.restore_preflight.as_ref().map_or(&[][..],|restore|restore.outputs());
+                let needed=self.native_capture_keys(scene,id,planned.iter().filter_map(|(target,output)|(*target==id).then(||output.native_key()).flatten()));
+                let (physical,watercolor)=self.raster_inputs(id,submission,|key|needed.contains(&key))?;
+                if physical.len()!=needed.len() {frame.publications.clear();return Err(GpuRasterError::Invariant("prepared prepare native rasters state is inconsistent"));}
                 let mut data = RasterData {
                     // Cold, losslessly backed tiles remain part of every new
                     // revision even when they own no working GPU surface.
-                    tiles: current.data.tiles.clone(),
+                    tiles: current.contents.data().tiles.clone(),
                     watercolor,
                 };
-                for (key, texture) in textures {
-                    let tile = if let Some(tile) = current
-                        .data
-                        .tiles
-                        .get(&key)
-                        .filter(|_| !current.changed.contains(&key.coordinate))
-                    {
-                        tile.clone()
-                    } else {
-                        let tile = RasterTile::pending(key.plane.descriptor_for(self.document_color(), scene.color_mode(id)));
-                        inputs.push((texture.clone(), tile.clone(), scene.color_mode(id)));
-                        frame.canonical_pages.push((id, key.coordinate));
-                        tile
-                    };
-                    data.tiles.insert(key, tile);
+                for (key,pixels) in physical {
+                    let intent=current.contents.intent(key);
+                    let read=pixels.read(intent.version(),submission).ok_or(GpuRasterError::Invariant("accepted input is not readable"))?;
+                    let texture=crate::resident::TextureStorage::texture(read.value()).clone();
+                    let (tile,name)=RasterTile::pending_from_live(key.plane.descriptor_for(self.document_color(),scene.color_mode(id)),intent.version().clone());
+                    canonical.push(Some(name));intents.push(Some(intent));working_inputs.push(Some(pixels));
+                    inputs.push((texture,tile.clone(),scene.color_mode(id)));
+                    frame.canonical_pages.push((id,key.coordinate));
+                    data.tiles.insert(key,tile);
                 }
                 frame.publications.push(Publication {
                     id,
@@ -464,10 +515,12 @@ impl WgpuRasterizer {
         if frame.publications.is_empty() {
             return Ok(None);
         }
-        self.native_capture_job(frame, inputs).map(Some)
+        self.native_capture_job(frame, inputs,canonical,intents,working_inputs).map(Some)
     }
 
-    fn native_capture_job(&mut self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>) -> Result<NativeJob, GpuRasterError> {
+    fn native_capture_job(&mut self, mut frame: NativeFrame, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>,
+        canonical:Vec<Option<Arc<layer_core::raster::CanonicalName>>>,intents:Vec<Option<crate::raster::contents::Intent>>,
+        working_inputs:Vec<Option<crate::resident::Resident<source_access::RawTile>>>) -> Result<NativeJob, GpuRasterError> {
         let output_bytes: u64 = inputs
             .iter()
             .map(|(_, tile, _)| tile.descriptor().byte_len([PAGE_SIZE; 2]).unwrap() as u64)
@@ -477,6 +530,18 @@ impl WgpuRasterizer {
                 "Raster frame exceeds the 1 GiB native output budget".into(),
             ));
         }
+        validate_working_inputs(&inputs)?;
+        let live=!frame.publications.is_empty();
+        let (allocation,comparisons,readback)=if live {
+            let admission=self.restore_preflight.as_mut().and_then(|restore|restore.native.take());
+            let Some(admission)=admission else {frame.publications.clear();return Err(GpuRasterError::Invariant("prepared native capture job state is inconsistent"));};
+            if inputs.len()>admission.capacity || output_bytes>admission.bytes {frame.publications.clear();return Err(GpuRasterError::Invariant("prepared native capture job state is inconsistent"));}
+            (admission.allocation,admission.comparisons,admission.readback)
+        }else {
+            let readback=if output_bytes==0 {0}else {output_bytes.min(CAPTURE_CHUNK).next_power_of_two()};
+            let Ok(allocation)=self.admit_raster_working(output_bytes.saturating_add(readback)) else {return Err(GpuRasterError::NotReady);};
+            (allocation,None,readback)
+        };
         for publication in &frame.publications {
             let pending_bytes = publication.data.tiles.values()
                 .filter(|tile| tile.try_backing().is_none())
@@ -487,19 +552,26 @@ impl WgpuRasterizer {
         frame.capture = Some(NativeCapture {
             outputs: Vec::with_capacity(inputs.len()),
             pool: self.raster_buffers.clone(),
-            device: (*self.device).clone(),
+            device: self.device.for_resource(),
             queue: self.queue.clone(),
+            readback:None,
+            allocation,
+            owner:self.memory.raster_owner(),
         });
-        validate_working_inputs(&inputs)?;
+        frame.capture.as_mut().unwrap().prepare_readback(readback);
+        drop(frame.capture.as_mut().unwrap().allocation.split(readback).ok_or(GpuRasterError::Invariant("native readback exceeds its working reservation"))?);
         self.native_edit.as_mut().unwrap().reserve_scratch(&self.device, &inputs);
         let changes=frame.canonical_pages.iter().map(|&(id,coordinate)|self.changed_cells.as_ref().and_then(|c|c.buffer(id,coordinate)).cloned()).collect();
-        Ok(NativeJob { frame, inputs, views: Default::default(), changes, encoded: 0, started: false })
+        Ok(NativeJob {frame,inputs,views:Default::default(),changes,comparisons,canonical,intents,working_inputs,encoded:0,started:false})
     }
 
     pub(crate) fn encode_private_tiles(&mut self, inputs: Vec<(wgpu::Texture, RasterTile, layer_core::color::LayerColorMode)>, encoder: &mut submission::CommandEncoder)
         -> Result<NativeCapture, GpuRasterError> {
+        #[cfg(test)]
+        crate::scene::sources::assert_reading("private tile capture");
         let frame = NativeFrame { capture: None, publications: Vec::new(), canonical_pages: Vec::new() };
-        let mut job = self.native_capture_job(frame, inputs)?;
+        let count=inputs.len();
+        let mut job = self.native_capture_job(frame, inputs,vec![None;count],vec![None;count],vec![None;count])?;
         while self.step_native_rasters(&mut job, encoder)? {}
         Ok(job.frame.capture.take().unwrap())
     }
@@ -508,32 +580,68 @@ impl WgpuRasterizer {
         self.raster.as_ref().unwrap().worker.as_ref().unwrap().submit_batch(capture)
     }
 
+    pub(crate) fn admit_native_window(&mut self, job: &mut NativeJob) -> Result<(), GpuRasterError> {
+        let capture=job.frame.capture.as_mut().ok_or(GpuRasterError::Invariant("a native job holds its capture"))?;
+        if job.inputs.get(job.encoded).is_none_or(|(_,tile,_)|tile_output_bytes(tile)<=capture.allocation.bytes()) {return Ok(());}
+        if !capture.outputs.is_empty() {
+            let worker=self.raster.as_ref().and_then(|runtime|runtime.worker.as_ref()).ok_or(GpuRasterError::Invariant("a native capture has a backing worker"))?;
+            if !worker.ready() {return Err(GpuRasterError::NotReady);}
+            worker.submit_batch(capture.take_window())?;
+        }
+        let (bytes,largest)=job.inputs[job.encoded..].iter().map(|(_,tile,_)|tile_output_bytes(tile)).fold((0u64,0u64),|(bytes,largest),size|(bytes.saturating_add(size),largest.max(size)));
+        let allocation=self.admit_raster_window(capture_readback(largest,largest,0).saturating_add(largest),capture_readback(bytes,largest,u64::MAX).saturating_add(bytes),0).map_err(|_|GpuRasterError::NotReady)?;
+        let readback=capture_readback(bytes,largest,allocation.bytes());
+        let capture=job.frame.capture.as_mut().unwrap();
+        capture.allocation=allocation;capture.prepare_readback(readback);
+        drop(capture.allocation.split(readback).ok_or(GpuRasterError::Invariant("native readback exceeds its working reservation"))?);
+        Ok(())
+    }
+
     pub(crate) fn step_native_rasters(&mut self, job: &mut NativeJob, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         let native = self.native_edit.as_ref().unwrap();
         let capture = job.frame.capture.as_mut().unwrap();
         if !job.started { job.started = true; }
         else if job.encoded == job.inputs.len() { return Ok(false); }
         let views = &mut job.views;
-        let end = (job.encoded + MAX_BATCH_TILES).min(job.inputs.len());
+        let mut room = capture.allocation.bytes();
+        let end = job.encoded + job.inputs[job.encoded..(job.encoded + MAX_BATCH_TILES).min(job.inputs.len())].iter()
+            .take_while(|(_, tile, _)| room.checked_sub(tile_output_bytes(tile)).inspect(|left| room = *left).is_some()).count();
+        if end == job.encoded && end < job.inputs.len() { return Err(GpuRasterError::Invariant("native outputs exceed their working reservation")); }
         let chunk = &job.inputs[job.encoded..end];
+        let submission=encoder.submission();
+        let mut owned_inputs=job.working_inputs[job.encoded..end].to_vec();
+        let mutate=!self.snapshot_worker || native.promoter.is_none();
+        let access=owned_inputs.iter_mut().zip(chunk).enumerate().map(|(index,(pixels,(texture,_,_)))| {
+            match pixels {
+                Some(pixels)=> {
+                    let intent=job.intents[job.encoded+index].as_ref().ok_or(GpuRasterError::Invariant("prepared step native rasters state is inconsistent"))?;
+                    let target=job.frame.canonical_pages[job.encoded+index].0;self.validate_raster_intent(target,intent)?;
+                    if !pixels.holds_texture(texture) {return Err(GpuRasterError::Invariant("prepared step native rasters state is inconsistent"));}
+                    if mutate {pixels.write(intent,&submission).map(NativeAccess::Write).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))}
+                    else {pixels.read(intent.version(),Some(&submission)).map(NativeAccess::Read).ok_or(GpuRasterError::Invariant("accepted input is not readable"))}
+                },
+                None if job.intents[job.encoded+index].is_none()=>Ok(NativeAccess::Private(texture)),
+                None=>Err(GpuRasterError::Invariant("prepared step native rasters state is inconsistent")),
+            }
+        }).collect::<Result<Vec<_>,GpuRasterError>>()?;
         if !chunk.is_empty() {
             let first = capture.outputs.len();
-            capture.outputs.extend(chunk.iter().map(|(_, tile, _)| {
-                NativeOutput {
-                    resource: self
-                        .raster_buffers
-                        .take_native(&self.device, tile.descriptor()),
-                    tile: tile.clone(),
-                }
+            capture.outputs.extend(chunk.iter().map(|(_,tile,_)| {
+                let resource=self.raster_buffers.take_native(&self.device,tile.descriptor());
+                let charge=self.raster_buffers.charge(resource.bytes());
+                NativeOutput::new(resource,tile.clone(),charge)
             }));
+            let writes = capture.outputs[first..].iter_mut().map(|output| output.initialize(&submission)
+                .ok_or(GpuRasterError::Invariant("prepared step native rasters state is inconsistent"))).collect::<Result<Vec<_>, _>>()?;
             let mut color = Vec::new();
             let mut scalar = Vec::new();
             let mut color_changes=Vec::new();
             let mut promotions = Vec::new();
-            for (index,((texture, tile, mode), output)) in chunk.iter().zip(&capture.outputs[first..]).enumerate() {
+            for (index,((_, tile, mode), output)) in chunk.iter().zip(&writes).enumerate() {
+                let texture=access[index].texture();
                 let canonical = if tile.descriptor().channels != 1 {
                     let canonical = native.colors.get(color.len()).unwrap_or(texture);
-                    let encoded = match &output.resource { pool::Resource::Texture(t) => t.into(), pool::Resource::Buffer(b) => b.into() };
+                    let encoded = match output.value() { pool::Resource::Texture(t) => t.into(), pool::Resource::Buffer(b) => b.into() };
                     color_changes.push(job.changes.get(job.encoded+index).and_then(Option::as_ref));
                     color.push(NativeTileRequest {
                         mode: *mode, space: self.document_color().space,
@@ -548,7 +656,7 @@ impl WgpuRasterizer {
                     canonical
                 } else {
                     let canonical = native.scalars.get(scalar.len()).unwrap_or(texture);
-                    let pool::Resource::Buffer(encoded) = &output.resource else {
+                    let pool::Resource::Buffer(encoded) = output.value() else {
                         unreachable!()
                     };
                     scalar.push(NativeScalarRequest {
@@ -566,13 +674,14 @@ impl WgpuRasterizer {
                     region: [0, 0, 256, 256],
                 });
             }
-            let color=if color_changes.iter().any(Option::is_some) {
-                native.color.prepare_tracked(&self.device,&color,views,&color_changes)?
-            } else {native.color.prepare(&self.device,&color,views)?};
-            let scalar =
-                native
-                    .scalar
-                    .prepare(&self.device, &scalar, views)?;
+            let color_comparisons=job.comparisons.as_ref().filter(|_|!color.is_empty()).map(|c|c.window(job.encoded,color.len()));
+            let scalar_comparisons=job.comparisons.as_ref().filter(|_|!scalar.is_empty()).map(|c|c.window(job.encoded+color.len(),scalar.len()));
+            let color_count=color.len();
+            let color=if color_comparisons.is_none() && color_changes.iter().all(Option::is_none) {
+                native.color.prepare(&self.device,&color,views)?
+            }else {native.color.prepare_compared(&self.device,&color,views,&color_changes,color_comparisons.as_ref())?};
+            let scalar=if scalar_comparisons.is_none() {native.scalar.prepare(&self.device,&scalar,views)?}
+                else {native.scalar.prepare_compared(&self.device,&scalar,views,scalar_comparisons.as_ref())?};
             let promotions = native
                 .promoter
                 .as_ref()
@@ -581,17 +690,38 @@ impl WgpuRasterizer {
                     promoter.prepare(&self.device, &promotions, views)
                 })
                 .transpose()?;
+            let output_encodings=writes.into_iter().zip(chunk).map(|(write,(_,tile,_))|write.encoded(tile.capture_name())).collect::<Vec<_>>();
+            let working_encodings=access.into_iter().zip(chunk).map(|(pixels,(_,tile,_))|pixels.encoded(tile.content_version())).collect::<Vec<_>>();
             {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 native.color.encode(&mut pass, &color);
                 native.scalar.encode(&mut pass, &scalar);
             }
+            let encoded_submission=encoder.submission();
+            for encoding in output_encodings {encoding.publish(&encoded_submission);}
             if let (Some(promoter), Some(promotions)) = (&native.promoter, promotions) {
                 encoder.reserve_passes(promotions.pass_count());
                 promoter.encode(encoder, &promotions);
             }
+            let mut color_index=0;let mut scalar_index=0;
+            for (index,(_,tile,_)) in chunk.iter().enumerate() {
+                let slot=if tile.descriptor().channels==1 {let n=color_count+scalar_index;scalar_index+=1;n}else {let n=color_index;color_index+=1;n};
+                if let (Some(comparisons),Some(name))=(&job.comparisons,&job.canonical[job.encoded+index]) {
+                    capture.outputs[first+index].comparison=Some(comparisons.result(job.encoded+slot,name.clone()));
+                }
+            }
+
+            let working_submission=encoder.submission();
+            for (index,encoding) in working_encodings.into_iter().enumerate() {
+                if let Some(encoding)=encoding {
+                    let target=job.frame.canonical_pages[job.encoded+index].0;
+                    self.record_raster_write(target,encoding.publish(&working_submission))?;
+                }
+            }
         }
-        job.encoded = end;
+        job.encoded=end;
+        let bytes=job.inputs[end-chunk.len()..end].iter().map(|(_,tile,_)|tile_output_bytes(tile)).sum();
+        drop(capture.allocation.split(bytes).ok_or(GpuRasterError::Invariant("native outputs exceed their working reservation"))?);
         Ok(true)
     }
 
@@ -618,14 +748,12 @@ impl WgpuRasterizer {
             };
             let current = runtime.targets.get_mut(&publication.id).unwrap();
             current.revision = publication.revision;
-            current.data = data;
+            current.contents.published(data);
             self.native_edit
                 .as_mut()
                 .unwrap()
                 .backing
-                .insert(publication.id, current.data.clone());
-            if commit && let Some(scene)=&mut self.scene {scene.raster_published(publication.id,current.data.clone());}
-            current.changed.clear();
+                .insert(publication.id, current.contents.data().clone());
         }
         Ok(())
     }

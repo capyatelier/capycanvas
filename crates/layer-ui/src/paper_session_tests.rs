@@ -200,7 +200,7 @@ fn paper_relief_shows_while_scaling_and_briefly_after_a_choice() {
     s.frame(1_000_000_000, 1_000_000_000).unwrap();
     assert_eq!(opacity(&mut s), None);
     s.dispatch(UiAction::Effect { action: EffectAction::Set { layer, key: "texture".into(), value: layer_core::EffectValue::Choice(3) } }).unwrap();
-    assert!(s.wants_continuous_frames());
+    assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
     s.frame(2_000_000_000, 2_000_000_000).unwrap();
     assert_eq!(opacity(&mut s), Some(1.));
     assert_eq!(s.renderer_mut().paper_overlay.as_ref().unwrap().paper.surface.texture, layer_core::paper::built_in_paper("rough").unwrap().texture.clone().unwrap());
@@ -208,7 +208,7 @@ fn paper_relief_shows_while_scaling_and_briefly_after_a_choice() {
     assert!(opacity(&mut s).is_some_and(|o| (o - 0.5).abs() < 1e-3), "fades out");
     s.frame(3_300_000_000, 3_300_000_000).unwrap();
     assert_eq!(opacity(&mut s), None);
-    assert!(!s.wants_continuous_frames());
+    assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
     let gesture = |phase, value| UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Number {
         layer, key: "scale".into(), operation: NumericOperation::Value { value } }) } };
     s.dispatch(gesture(ContactPhase::Down, 1.5)).unwrap();
@@ -291,11 +291,11 @@ fn paper_relief_waits_for_preparation_and_survives_renderer_replacement() {
     for now in [1_000_000_000, 4_000_000_000] {
         s.frame(now, now).unwrap();
         assert_eq!(s.renderer_mut().paper_overlay.as_ref().map(|o| o.opacity), Some(1.));
-        assert!(s.wants_continuous_frames());
+        assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
     }
     let color = s.engine.backend().document_color();
     s.replace_renderer(Recorder { color, paper_overlay_pending: true, ..Default::default() }).unwrap();
-    assert!(s.wants_continuous_frames());
+    assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
     s.frame(8_000_000_000, 8_000_000_000).unwrap();
     assert_eq!(s.renderer_mut().paper_overlay.as_ref().map(|o| o.opacity), Some(1.));
     s.renderer_mut().paper_overlay_pending = false;
@@ -305,7 +305,7 @@ fn paper_relief_waits_for_preparation_and_survives_renderer_replacement() {
     assert!((s.renderer_mut().paper_overlay.as_ref().unwrap().opacity - 0.5).abs() < 1e-3);
     s.frame(13_300_000_000, 13_300_000_000).unwrap();
     assert!(s.renderer_mut().paper_overlay.is_none());
-    assert!(!s.wants_continuous_frames());
+    assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
 }
 
 fn gray_paper(value: u8) -> layer_core::color::source::SourceImage {

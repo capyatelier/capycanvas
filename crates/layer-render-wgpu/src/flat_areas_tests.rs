@@ -120,7 +120,9 @@ fn flat_areas_match_closed_components_exclude_exterior_and_thin_pockets() {
     for width in [1,10] {
         let extent=[129,97];let left=64-width/2;let ink=|x,y|border([12,12,117,85],x,y)||((left..left+width).contains(&x)&&(12..85).contains(&y))||border([20,20,23,23],x,y)||border([38,49,50,61],x,y);
         let document=source(extent,ink);let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();frame(&mut r,&document,extent);
-        let first=pixels(&receive(&mut r,&document),extent);assert_eq!(first,pixels(&receive(&mut r,&document),extent),"same input has identical stored colours");
+        let idle=r.raster_tiers.paint.used();
+        let first=pixels(&receive(&mut r,&document),extent);
+        assert_eq!(r.raster_tiers.paint.used()-idle,r.regions.as_ref().unwrap().storage_bytes(),"region buffers are charged to the paint tier");assert_eq!(first,pixels(&receive(&mut r,&document),extent),"same input has identical stored colours");
         let oracle=partition(extent,|_,_|true,|at|!ink(at as u32%extent[0],at as u32/extent[0]));
         let mut colours=std::collections::BTreeMap::new();
         for (at,&token) in oracle.iter().enumerate() {

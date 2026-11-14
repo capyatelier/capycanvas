@@ -71,13 +71,40 @@ fn assert_pixels(actual: &[u8], expected: &[u8], context: &str) {
     assert!(changed == 0, "{context}: {changed} differing pixels, maximum channel error {error}");
 }
 
-fn live_planes(r: &WgpuRasterizer) -> std::collections::BTreeMap<TileKey, Vec<u8>> {
-    let layer = &r.paint_layers[0];
-    layer.pages.iter().map(|p| (TileKey { plane: RasterPlane::Color, coordinate: p.coordinate },
-        page_bytes(r, &p.active().texture)))
-        .chain(layer.watercolor_wetness_pages.iter().map(|p| (TileKey { plane: RasterPlane::WatercolorWetness, coordinate: p.coordinate },
-            page_bytes(r, &p.active().texture))))
-        .collect()
+fn raw_planes(r: &mut WgpuRasterizer, document: &Document) -> Planes {
+    let target = target(document);
+    let versions = r.raster_versions(document.scene(), target).unwrap();
+    let mut planes = Planes::new();
+    for coordinate in page_coordinates(PixelRect::full(EXTENT)) {
+        for plane in PLANES {
+            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+            let tile = crate::test_support::query_ready(r, &mut encoder, |r, encoder| {
+                let read = |r: &WgpuRasterizer, inputs: &mut crate::scene::sources::AcceptedInputs| {
+                    if plane == RasterPlane::Color { inputs.raw_color(r, target, coordinate).map(|[base, _]| base) }
+                    else { inputs.raw_scalar(r, target, plane, coordinate) }
+                };
+                let declaration = crate::scene::sources::Declaration::raw(None, Some(versions.clone()), Some(encoder.submission()));
+                let mut inputs = crate::scene::sources::declare(Default::default(), declaration, |inputs| read(r, inputs).map(drop))?.accept_query(r, None)?;
+                if !inputs.prepare(r)? { return Err(GpuRasterError::NotReady); }
+                let source = read(r, &mut inputs)?;
+                inputs.track(encoder);
+                if let Some(source) = &source && !source.encode(r, encoder, crate::residency::Class::Authored)? {
+                    return Err(GpuRasterError::NotReady);
+                }
+                Ok(source.map(|source| source.tile))
+            });
+            r.uploads.finish(&encoder);
+            encoder.submit(&r.queue);
+            if let Some(tile) = tile {
+                let bytes = page_bytes(r, &tile.texture);
+                let bytes = if plane == RasterPlane::WatercolorWetness && tile.texture.format() == wgpu::TextureFormat::Rgba32Float {
+                    bytes.chunks_exact(16).flat_map(|pixel| pixel[..4].iter().copied()).collect()
+                } else { bytes };
+                planes.insert(TileKey { plane, coordinate }, bytes);
+            }
+        }
+    }
+    planes
 }
 
 fn maps() -> [Affine; 2] {
@@ -111,8 +138,8 @@ fn affine_material_transform_maps_raw_planes_before_edges_and_keeps_tile_neighbo
             };
             Arc::make_mut(&mut paint_mut(&mut source).operations).push(operation);
             let actual = render(&mut transformed, &source, &[operation_batch], false);
-            let actual_planes = live_planes(&transformed);
-            for (key, bytes) in live_planes(&expected) {
+            let actual_planes = raw_planes(&mut transformed, &source);
+            for (key, bytes) in raw_planes(&mut expected, &destination) {
                 assert!(actual_planes.get(&key) == Some(&bytes), "{map:?} width={width} {key:?}: mapped raw plane differs");
             }
             for (key, bytes) in &actual_planes {
@@ -134,7 +161,6 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
     let mut source = layer(fixture(Affine::IDENTITY, 4.));
     let immutable = paint(&source).raster.clone();
     render(&mut transformed, &source, &[], true);
-    assert!(!transformed.paint_layers[0].watercolor_wetness_pages.is_empty());
     transformed.paint_layers[0].watercolor_wetness_pages.clear();
     assert!(transformed.native_plane_tile(target(&source), RasterPlane::WatercolorWetness, [1, 0]).unwrap().is_some());
     let destination = layer(fixture(map, 4.));
@@ -149,8 +175,8 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
         damage: operation.bounds(EXTENT), ..crate::test_support::dab_batch(target(&source), crate::tests::test_style(BrushExecution::Dry), Rect::from_extent(EXTENT)) };
     Arc::make_mut(&mut paint_mut(&mut source).operations).push(operation);
     let actual = render(&mut transformed, &source, &[operation_batch], false);
-    let actual_planes = live_planes(&transformed);
-    for (key, bytes) in live_planes(&expected) {
+    let actual_planes = raw_planes(&mut transformed, &source);
+    for (key, bytes) in raw_planes(&mut expected, &destination) {
         let mapped = actual_planes.get(&key).unwrap_or_else(|| panic!("missing cold mapped {key:?}"));
         if key.plane == RasterPlane::Color {
             assert!(mapped == &bytes, "cold mapped pigment must match independent raw planes");
@@ -181,7 +207,7 @@ fn semitransparent_material_over_nontransparent_backdrop_matches_premultiplied_o
     }
     paint_mut(&mut background).raster = RasterRevision::backed(data);
     let mut pixels = |doc: &Document| {
-        crate::test_support::submit_published(&mut renderer, FramePacket { reset_layers: true, ..packet(doc.scene(), EXTENT) });
+        crate::test_support::submit_settled(&mut renderer, FramePacket { reset_layers: true, ..packet(doc.scene(), EXTENT) });
         crate::scene::scale::tests::display_pixels(&renderer)
     };
     let source = pixels(&front);
@@ -543,7 +569,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
             ..packet(scene, extent)
         };
         crate::test_support::submit_published(&mut moving, frame(original.scene()));
-        let (texture, updates, level) = moving.scene.as_ref().unwrap().placement_cache(target(&original)).unwrap();
+        let (texture, updates, level) = crate::scene::scale::tests::source_cache_info(&moving,target(&original),None).unwrap();
         if let Some((first_texture, previous_updates, first_level)) = &mut prepared {
             assert_eq!(&texture, first_texture, "crossing identity keeps the raw photo LOD allocation");
             assert_eq!(level, *first_level);
@@ -604,23 +630,23 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     cached.prepare_moving_layer(Some(occurrence_id(&photo)));
     submit(&mut cached, &photo);
     let raw_level = 2;
-    let (raw_texture, _, _) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
-    let raw_pixels = crate::test_support::float_pixels(&cached, &raw_texture);
+    let (raw_texture, _, _) = crate::scene::scale::tests::source_cache_info(&cached,target(&photo),Some(raw_level)).unwrap();
+    let raw_pixels = raw_texture.iter().map(|texture|crate::test_support::float_pixels(&cached,texture)).collect::<Vec<_>>();
     cached.prepare_moving_layer(None);
     submit(&mut cached, &photo);
-    let (accepted_texture, _, accepted_level) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
+    let (accepted_texture, _, accepted_level) = crate::scene::scale::tests::source_cache_info(&cached,target(&photo),Some(raw_level)).unwrap();
     assert_eq!(accepted_level, raw_level);
     assert_eq!(accepted_texture, raw_texture);
-    assert_eq!(crate::test_support::float_pixels(&cached, &raw_texture), raw_pixels,
+    assert_eq!(raw_texture.iter().map(|texture|crate::test_support::float_pixels(&cached,texture)).collect::<Vec<_>>(), raw_pixels,
         "accepting a photo must preserve its prepared raw finer pixels");
     parity(&cached, &photo, false);
     paint_mut(&mut photo).raster = RasterRevision::backed(fixture(Affine::IDENTITY, 16.));
     submit(&mut cached, &photo);
     parity(&cached, &photo, false);
-    let (_, before_reopen, _) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
+    let (_, before_reopen, _) = crate::scene::scale::tests::source_cache_info(&cached,target(&photo),Some(raw_level)).unwrap();
     cached.prepare_moving_layer(Some(occurrence_id(&photo)));
     submit(&mut cached, &photo);
-    let (reopened_texture, updates, level) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
+    let (reopened_texture, updates, level) = crate::scene::scale::tests::source_cache_info(&cached,target(&photo),Some(raw_level)).unwrap();
     assert_eq!(reopened_texture, raw_texture);
     assert_eq!(level, raw_level);
     assert!(updates - before_reopen <= 16,
@@ -631,13 +657,13 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     parity(&cached, &photo, false);
     let wet = paint(&photo).raster.clone();
     let mut dry = (*wet.wait_data().unwrap()).clone();
-    for (key, tile) in &mut dry.tiles {
-        if key.plane != RasterPlane::WatercolorWetness { continue; }
+    dry.tiles = dry.tiles.into_iter().map(|(key,tile)| {
+        if key.plane != RasterPlane::WatercolorWetness { return (key,tile); }
         let blob = tile.wait_backing().unwrap();
         let mut bytes = blob.decode_on_worker().unwrap();
         bytes.fill(0);
-        *tile = RasterTile::backed(TileBlob::encode(blob.descriptor, &bytes).unwrap());
-    }
+        (key,RasterTile::backed(TileBlob::encode(blob.descriptor, &bytes).unwrap()))
+    }).collect();
     paint_mut(&mut photo).raster = RasterRevision::backed(dry);
     submit(&mut cached, &photo);
     parity(&cached, &photo, false);
@@ -668,13 +694,13 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     frame.blend_space = layer_core::BlendSpace::Linear;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
     crate::test_support::submit_published(&mut appearance, frame);
-    let (_, _, appearance_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
-    assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, appearance_level).is_none(),
+    let (_, _, appearance_level) = crate::scene::scale::tests::source_cache_info(&appearance,target(&photo),None).unwrap();
+    assert!(!crate::scene::scale::tests::source_copy_ready(&appearance,photo.scene(),target(&photo),extent,appearance_level),
         "linear watercolor appearance must never become the transform's original raw pigment");
     appearance.prepare_moving_layer(Some(occurrence_id(&photo)));
     crate::test_support::submit_published(&mut appearance, frame);
-    let (_, _, pigment_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
-    assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, pigment_level).is_some(),
+    let (_, _, pigment_level) = crate::scene::scale::tests::source_cache_info(&appearance,target(&photo),None).unwrap();
+    assert!(crate::scene::scale::tests::source_copy_ready(&appearance,photo.scene(),target(&photo),extent,pigment_level),
         "a complete raw pigment LOD remains eligible for reduced transforms");
 }
 
@@ -856,7 +882,7 @@ fn nonlinear_material_transform_maps_raw_planes_with_preview_commit_and_destinat
             let immutable = paint(&source).raster.clone();
             let digests: Vec<_> = immutable.wait_data().unwrap().tiles.values().map(|t| t.wait_backing().unwrap().content_digest().unwrap()).collect();
             render(&mut transformed, &source, &[], true);
-            let source_planes = live_planes(&transformed);
+            let source_planes = raw_planes(&mut transformed, &source);
             let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..map.clone() }, ..Default::default() };
             transformed.set_transform_preview(Some(&layer_render::TransformPreview {
                 transaction: 1, target: target(&source), moving: false, selection: None, transform: transform.clone(),
@@ -872,7 +898,7 @@ fn nonlinear_material_transform_maps_raw_planes_with_preview_commit_and_destinat
                 damage: operation.bounds(EXTENT), ..crate::test_support::dab_batch(target(&source), crate::tests::test_style(BrushExecution::Dry), Rect::from_extent(EXTENT)) };
             Arc::make_mut(&mut paint_mut(&mut source).operations).push(operation);
             let actual = render(&mut transformed, &source, &[operation_batch], false);
-            let samples = check_raw_mapping(&source_planes, &live_planes(&transformed), &positions, &context);
+            let samples = check_raw_mapping(&source_planes, &raw_planes(&mut transformed, &source), &positions, &context);
             let destination = layer(destination_fixture(&samples, width, &data));
             let expected_pixels = render(&mut expected, &destination, &[], true);
             assert_eq!(transformed.paint_layers[0].watercolor, expected.paint_layers[0].watercolor, "{label} width={width}");
@@ -1082,7 +1108,7 @@ fn selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
         ..crate::test_support::dab_batch(copied,crate::tests::test_style(BrushExecution::Dry),damage)};
     occurrence_mut(&mut owner).visible =false;
     let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(owner.scene(),EXTENT)};
-    crate::test_support::submit_ready(&mut r, packet).unwrap();
+    crate::test_support::submit_settled(&mut r, packet);
     let actual=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
     let mut occupied=0;
     for (i,(actual,source)) in actual.iter().zip(&original).enumerate() {

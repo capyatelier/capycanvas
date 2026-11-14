@@ -49,7 +49,7 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
             assert_eq!(cache.plan.level, level);
             assert!(cache.plan.bounds.min_x() > 0 || cache.plan.bounds.min_y() > 0);
             assert!(cache.evaluation == if resolution == EffectResolution::Display { Evaluation::Display } else { Evaluation::Native });
-            let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
+            let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
             assert!(error[0] < 0.002 && error[1] < 0.015, "state={state} level={level} {resolution:?} error={error:?}");
             crate::test_support::assert_same_canonical(&mut window, &mut exact);
             let updates = window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates;
@@ -143,7 +143,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     submit_published(&mut window, frame); submit_published(&mut exact, frame);
                     let cache = window.scale_display.as_ref().unwrap();
                     assert_eq!(cache.plan.level, level); assert!(cache.evaluation == Evaluation::Display);
-                    let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan);
+                    let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
                     for i in 0..2 { worst[i] = worst[i].max(error[i]); }
                     println!("{name} {space:?} source={source} state={state} level={level} error={error:?}");
                     assert!(error.iter().all(|v| v.is_finite()));
@@ -257,11 +257,11 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         cached.begin_frame_memory(loaded);
         submit_published(&mut cached, loaded);
         for _ in 0..32 {
-            if !cached.has_pending_work() { break; }
+            if cached.next_frame()!=layer_render::FrameDemand::Work { break; }
             cached.wait_idle().unwrap();
             crate::test_support::submit_ready(&mut cached, FramePacket { composite_all: false, reset_layers: false, ..loaded }).unwrap();
         }
-        assert!(cached.scale_display.as_ref().unwrap().hierarchy.is_some(), "the loaded source must earn resident hierarchy admission");
+        assert!(!retained_root_pages(cached.scale_display.as_ref().unwrap()).is_empty(),"the loaded source must retain committed pages");
     }
     insert_occurrence(&mut doc, effect, 0);
     let mut source_bytes = None;
@@ -283,22 +283,23 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, -(extent[0] as f32-305.) * 0.25, -410. * 0.25];
         }
         let command_passes = cached.metrics.command_passes;
-        if admitted { cached.begin_frame_memory(frame); }
-        else { crate::memory::memory_tests::scene_frame_with_budget(&mut cached, frame, 64 << 20); }
+        let _budget = if admitted { cached.begin_frame_memory(frame); None }
+            else { Some(crate::memory::memory_tests::display_frame_with_budget(&mut cached, frame, 64 << 20)) };
         submit_published(&mut cached, frame);
         let command_passes = cached.metrics.command_passes - command_passes;
         submit_published(&mut exact, packet(doc.scene(), extent));
         let cache = cached.scale_display.as_ref().unwrap();
-        assert_eq!(cache.hierarchy.is_some(), admitted);
-        assert_eq!(matches!(cache.pixels, hierarchy::Pixels::Resident { .. }), admitted);
+        assert!(cache.retained_ready());
+        assert!(cache.pages.lock().unwrap().bytes()<=cached.memory.display_owner().grant().gpu_bytes);
         assert!(!cache.has_pending_work(&cached), "full exact native updates must leave no unnecessary refinement: preload={preload} admitted={admitted} state={state} plan={:?}", cache.plan);
         let reference = pixels(&exact, crate::test_support::document_texture(&exact));
-        let error = quality(&display_pixels(&cached), &reference, cache.plan);
+        let error = quality(&display_pixels(&cached), &reference, cache.plan, cache.texture().format());
         assert!(error[2] < 2e-5, "state={state} resident output error={error:?}");
         if state == 3 {
             assert!(frame.view.document_to_surface[4] < 0. && frame.view.document_to_surface[5] < 0.);
             assert_presentation_mip(&cached);
         }
+        let mut independent_expected=None;
         if state < 2 {
             let independent: Vec<_> = (0..extent[0] * extent[1]).map(|i| {
                 let x = i % extent[0]; let y = i / extent[0];
@@ -308,11 +309,9 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
                 let value = if luminance >= f64::from(threshold) { 1. } else { 0. };
                 [value, value, value, 1.]
             }).collect();
-            if let Some(hierarchy) = &cache.hierarchy {
-                assert_eq!(pixels(&cached, &hierarchy.root().texture), independent);
-            }
-            let error = quality(&display_pixels(&cached), &independent, cache.plan);
+            let error = quality(&display_pixels(&cached), &independent, cache.plan, cache.texture().format());
             assert!(error[2] < 2e-5, "preload={preload} admitted={admitted} state={state} independent error={error:?}");
+            independent_expected=Some(independent);
         }
         if state == 1 || (state == 0 && !preload && admitted) {
             let pages = extent.map(|n| n.div_ceil(PAGE_SIZE)).into_iter().product::<u32>();
@@ -333,11 +332,16 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             assert_eq!(cache.exact_tile.as_ref().unwrap().texture.size().height,PAGE_SIZE);}
         let bytes = cached.source_tiles.borrow().gpu_bytes();
         if let Some(expected) = source_bytes { assert_eq!(bytes, expected); } else { source_bytes = Some(bytes); }
+        if let Some(independent)=independent_expected {
+            let mut capture=cached.snapshot_gpu().capture_scene(doc.snapshot(),layer_core::SceneScope::All,Default::default()).unwrap();
+            assert_eq!(capture.read_region([0,0,extent[0],extent[1]]).unwrap(),independent,
+                "full Float32 Threshold pixels match the independent oracle exactly");
+        }
     }
     if !admitted {
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
         frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
-        crate::memory::memory_tests::scene_frame_with_budget(&mut cached, frame, 64 << 20);
+        let _budget = crate::memory::memory_tests::display_frame_with_budget(&mut cached, frame, 64 << 20);
         submit_published(&mut cached, frame);submit_published(&mut exact, frame);
         let strip=cached.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap().texture.clone();
         for positions in [[[73.,67.],[4117.,613.]],[[4117.,613.],[73.,67.]]] {
@@ -346,13 +350,11 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             batch.dab_count=2;
             let stroke=FramePacket{dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame};
             let work=cached.metrics.composited_pixels;
-            let reverse=cached.scene.as_ref().unwrap().native_reverse;
             crate::test_support::submit_ready(&mut cached, stroke).unwrap();crate::test_support::submit_ready(&mut exact, stroke).unwrap();
-            assert_ne!(cached.scene.as_ref().unwrap().native_reverse,reverse);
             let cache=cached.scale_display.as_ref().unwrap();
-            assert!(cache.hierarchy.is_none());assert!(!cache.has_pending_work(&cached));
+            assert!(cache.pages.lock().unwrap().bytes()<=cached.memory.display_owner().grant().gpu_bytes);assert!(!cache.has_pending_work(&cached));
             assert_eq!(cache.exact_tile.as_ref().unwrap().texture,strip);
-            let error=quality(&display_pixels(&cached),&pixels(&exact,crate::test_support::document_texture(&exact)),cache.plan);
+            let error=quality(&display_pixels(&cached),&pixels(&exact,crate::test_support::document_texture(&exact)),cache.plan, cache.texture().format());
             assert!(error[2]<2e-5,"sparse disjoint working-strip contacts {positions:?}: {error:?}");
             assert!(cached.metrics.composited_pixels-work<=4*u64::from(PAGE_SIZE).pow(2),"sparse contacts recompose only affected native pages");
         }

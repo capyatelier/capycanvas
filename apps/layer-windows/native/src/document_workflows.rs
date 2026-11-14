@@ -1053,10 +1053,10 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             host.prepare_canvas_frame(0, 0, true).unwrap();
-            if host.startup.complete && !host.session.wants_continuous_frames() {
+            if host.startup.complete && host.session.frame_demand() == layer_render::FrameDemand::Wait {
                 break;
             }
-            assert!(Instant::now() < deadline, "canvas did not settle: startup={:?}, previews_idle={}, continuous={}", host.startup, host.session.filter_previews_idle(), host.session.wants_continuous_frames());
+            assert!(Instant::now() < deadline, "canvas did not settle: startup={:?}, previews_idle={}, continuous={}", host.startup, host.session.filter_previews_idle(), host.session.frame_demand() != layer_render::FrameDemand::Wait);
             std::thread::sleep(Duration::from_millis(2));
         }
     }

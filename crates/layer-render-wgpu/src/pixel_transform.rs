@@ -157,6 +157,7 @@ pub struct PixelTransform {
     binding_frame: u64,
     uniforms: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     capacity: u64,
+    charge: crate::residency::Charge,
     records: Vec<u8>,
     next_record: u64,
     key: Key,
@@ -222,10 +223,14 @@ impl PixelTransform {
     }
     pub(super) fn from_kernels(kernels: std::sync::Arc<Kernels>) -> Self {
         Self { kernels, display_target: Default::default(), bindings: Default::default(),
-            binding_frame: 0, uniforms: None, capacity: 0, records: Vec::new(), next_record: 0, key: Key::new(&Default::default(), 1) }
+            binding_frame: 0, uniforms: None, capacity: 0, charge: std::sync::Arc::<crate::residency::Tier>::default().charge(48), records: Vec::new(), next_record: 0, key: Key::new(&Default::default(), 1) }
     }
     pub(super) fn fork(&self) -> Self {
         Self::from_kernels(self.kernels.clone())
+    }
+    pub(crate) fn charged(mut self, tier: &std::sync::Arc<crate::residency::Tier>) -> Self {
+        self.charge = tier.charge(self.charge.bytes());
+        self
     }
     pub(super) fn render_pipeline(&self, transform: &ImageTransform, taps: u32) -> Deferred<wgpu::RenderPipeline> {
         self.kernels.render(Key::new(transform, taps))
@@ -336,6 +341,7 @@ impl PixelTransform {
                 .min(device.limits().max_buffer_size)
                 .min(u64::from(u32::MAX))
                 & !3;
+            self.charge.resize(self.capacity + 48);
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("transform records"),
                 size: self.capacity,

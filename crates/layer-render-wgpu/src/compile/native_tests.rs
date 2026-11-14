@@ -138,7 +138,7 @@ fn final_shutdown_joins_pools_created_while_another_pool_is_finishing() {
 fn submit_unowned(coordinator: &native::Coordinator, work: impl FnOnce() -> Result<(), String> + Send + 'static) {
     coordinator.with_queue(|queue| {
         let id = queue.next();
-        queue.submit(Key::Job(id), Demand { owner: 0, generation: None, class: DOCUMENT }, false, || (Box::new(work) as platform::Work, None));
+        queue.submit(Key::Job(id), Demand { owner: 0, generation: None, class: DOCUMENT }, false, || Box::new(work) as platform::Work);
     });
     coordinator.notify();
 }
@@ -788,4 +788,153 @@ fn final_shutdown_waits_for_canceled_snapshot_workers_to_release_their_gpu() {
         1,
         "the canceled snapshot worker released its GPU before final shutdown returned"
     );
+}
+
+#[test]
+fn shader_workers_keep_the_device_service_root_until_their_join() {
+    let poll = crate::device_poll::Binding::default();
+    let recipe_poll = poll.recipe();
+    let released_poll = recipe_poll.clone();
+    let coordinator = native::Coordinator::with_binding(1, &poll).unwrap();
+    let scope = coordinator.scope().unwrap();
+    drop(poll);
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let recipe = Deferred::new(move || {
+        entered.send(()).unwrap();
+        resume.recv_timeout(Duration::from_secs(10)).unwrap();
+        drop(recipe_poll.owned());
+    });
+    scope.require([&recipe], DOCUMENT);
+    started.recv_timeout(Duration::from_secs(10)).unwrap();
+    drop(recipe);
+    let (finished, done) = mpsc::channel();
+    let teardown = std::thread::spawn(move || {
+        drop(scope);
+        drop(coordinator);
+        finished.send(()).unwrap();
+    });
+    assert!(matches!(done.recv_timeout(Duration::from_millis(25)), Err(mpsc::RecvTimeoutError::Timeout)));
+    release.send(()).unwrap();
+    done.recv_timeout(Duration::from_secs(10)).unwrap();
+    teardown.join().unwrap();
+    assert!(released_poll.is_retired());
+}
+
+#[test]
+fn lost_device_retirement_closes_its_workers_without_waiting_for_consumers() {
+    struct Root(mpsc::Sender<std::thread::ThreadId>);
+    impl Drop for Root {
+        fn drop(&mut self) { self.0.send(std::thread::current().id()).unwrap(); }
+    }
+    let lost = crate::device_poll::Binding::default();
+    let consumer = lost.owned();
+    let old = native::Coordinator::with_binding(1, &lost).unwrap();
+    let old_scope = old.scope().unwrap();
+    let healthy = crate::device_poll::Binding::default();
+    let sibling = native::Coordinator::with_binding(1, &healthy).unwrap();
+    let sibling_scope = sibling.scope().unwrap();
+    let (released, release) = mpsc::channel();
+    native::retire_device_services(lost.owned(), Root(released)).unwrap();
+    let closing_thread = release.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_ne!(closing_thread, std::thread::current().id());
+    assert!(old.scope().is_none());
+    assert!(native::Coordinator::with_binding(1, &consumer).is_err());
+    assert!(sibling.scope().is_some());
+    assert!(native::Coordinator::with_binding(1, &healthy).is_ok());
+    drop((old_scope, sibling_scope, consumer));
+    finish_shader_compiler_shutdown();
+}
+
+#[test]
+fn process_finalization_joins_a_pending_device_retirement() {
+    let poll = crate::device_poll::Binding::default();
+    let coordinator = native::Coordinator::with_binding(1, &poll).unwrap();
+    let scope = coordinator.scope().unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let recipe = Deferred::new(move || {
+        entered.send(()).unwrap();
+        resume.recv_timeout(Duration::from_secs(10)).unwrap();
+    });
+    scope.require([&recipe], DOCUMENT);
+    started.recv_timeout(Duration::from_secs(10)).unwrap();
+    native::retire_device_services(poll, ()).unwrap();
+    let (finished, done) = mpsc::channel();
+    let finalizer = std::thread::spawn(move || {
+        finish_shader_compiler_shutdown();
+        finished.send(()).unwrap();
+    });
+    assert!(matches!(done.recv_timeout(Duration::from_millis(25)), Err(mpsc::RecvTimeoutError::Timeout)));
+    release.send(()).unwrap();
+    done.recv_timeout(Duration::from_secs(10)).unwrap();
+    finalizer.join().unwrap();
+    assert!(coordinator.scope().is_none());
+    drop((scope, recipe));
+}
+
+#[test]
+fn concurrent_device_finalizers_both_join_the_shader_workers() {
+    let coordinator = native::Coordinator::with_workers(1, None).unwrap();
+    let scope = coordinator.scope().unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let recipe = Deferred::new(move || {
+        entered.send(()).unwrap();
+        resume.recv_timeout(Duration::from_secs(10)).unwrap();
+    });
+    scope.require([&recipe], DOCUMENT);
+    started.recv_timeout(Duration::from_secs(10)).unwrap();
+    coordinator.stop(true);
+    let (joining, joins) = mpsc::channel();
+    let (finished, done) = mpsc::channel();
+    let mut finalizers = Vec::new();
+    for _ in 0..2 {
+        let coordinator = coordinator.clone();
+        let joining = joining.clone();
+        let finished = finished.clone();
+        finalizers.push(std::thread::spawn(move || {
+            joining.send(()).unwrap();
+            coordinator.join();
+            finished.send(()).unwrap();
+        }));
+    }
+    joins.recv_timeout(Duration::from_secs(10)).unwrap();
+    joins.recv_timeout(Duration::from_secs(10)).unwrap();
+    let early = done.recv_timeout(Duration::from_millis(50));
+    release.send(()).unwrap();
+    for finalizer in finalizers { finalizer.join().unwrap(); }
+    assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)), "a device finalizer returned before the shader worker exited");
+}
+
+#[test]
+fn retired_scope_rejects_late_work_and_wakes_existing_owners() {
+    struct Root(mpsc::Sender<()>);
+    impl Drop for Root { fn drop(&mut self) { self.0.send(()).unwrap(); } }
+    let binding=crate::device_poll::Binding::default();
+    let coordinator=native::Coordinator::with_binding(1,&binding).unwrap();
+    let scope=coordinator.scope().unwrap();
+    let ready=Deferred::new(||());
+    pollster::block_on(scope.prepare_all([&ready])).unwrap();
+    let _batch=scope.batch();
+    scope.enqueue(DOCUMENT,||Ok(()));
+    let (wake,woken)=mpsc::channel();
+    let weak=Arc::downgrade(&scope.0);
+    scope.set_wake(Arc::new(move|| {
+        let failed=weak.upgrade().is_some_and(|lease|Scope(lease).check().is_err());
+        let _=wake.send(failed);
+    }));
+    while woken.try_recv().is_ok() {}
+    let (released,release)=mpsc::channel();
+    native::retire_device_services(binding.owned(),Root(released)).unwrap();
+    release.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(scope.check().is_err(),"retirement must durably fail retained owners");
+    assert!(woken.recv_timeout(Duration::from_secs(10)).unwrap(),"terminal wake must observe failure outside the queue lock");
+    scope.enqueue(DOCUMENT,||panic!("retired work must not run"));
+    let recipe=Deferred::pipeline(|_|Compilation::Ready(()));
+    scope.require([&recipe],DOCUMENT);
+    assert!(coordinator.with_queue(|queue|queue.entries.is_empty()),"retired scopes must not enqueue work without workers");
+    assert!(scope.check().is_err());
+    assert!(pollster::block_on(scope.prepare_all([&ready])).is_err());
+    assert!(pollster::block_on(scope.prepare_all([&recipe])).is_err());
 }

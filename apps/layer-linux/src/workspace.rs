@@ -1065,6 +1065,7 @@ pub struct Workspace {
     refreshing: Cell<bool>,
     frame_timer: RefCell<Option<crate::canvas::FrameTimer>>,
     frame_deadline: Cell<u64>,
+    frame_wait: RefCell<Option<glib::SourceId>>,
     navigation_input: Cell<u64>,
 }
 impl Drop for Workspace {
@@ -1470,6 +1471,7 @@ impl Workspace {
             refreshing: Cell::new(false),
             frame_timer: RefCell::new(None),
             frame_deadline: Cell::new(0),
+            frame_wait: RefCell::new(None),
             navigation_input: Cell::new(0),
             input: Rc::default(),
             tooltips: Rc::default(),
@@ -2646,6 +2648,14 @@ impl Workspace {
     pub(crate) fn wake_stroke_end(self: &Rc<Self>) {
         self.wake_frame(true, false);
     }
+    fn wake_frame_at(self: &Rc<Self>, deadline: std::time::Instant) {
+        if let Some(source) = self.frame_wait.take() { source.remove(); }
+        let delay = deadline.saturating_duration_since(std::time::Instant::now()).as_micros().div_ceil(1000) as u64;
+        let this = Rc::downgrade(self);
+        self.frame_wait.replace(Some(glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
+            if let Some(this) = this.upgrade() { this.frame_wait.take(); this.wake(); }
+        })));
+    }
     fn wake_frame(self: &Rc<Self>, immediate: bool, navigation: bool) {
         self.wake_frame_after(immediate, navigation, 0);
     }
@@ -2706,7 +2716,10 @@ impl Workspace {
                     #[cfg(test)]
                     let frame_start = std::time::Instant::now();
                     let area = &this.area;
-                    if this.documents.paused.get() || !area.is_mapped() {
+                    let hidden = this.window.surface().and_downcast::<gdk::Toplevel>()
+                        .is_some_and(|toplevel| toplevel.state().contains(gdk::ToplevelState::SUSPENDED));
+                    if let Some(g) = this.gpu.borrow_mut().as_mut() { g.set_hidden(hidden || !area.is_mapped()); }
+                    if this.documents.paused.get() || !area.is_mapped() || hidden {
                         this.frame_timer.borrow_mut().take();
                         return glib::ControlFlow::Break;
                     }
@@ -2756,10 +2769,9 @@ impl Workspace {
                     let last_navigation = this.navigation_input.get();
                     let navigating = last_navigation != 0
                         && now.saturating_sub(last_navigation) < period * 2;
-                    let active = navigating
-                        || this.gpu.borrow().as_ref().is_some_and(|g| {
-                            g.session.wants_continuous_frames() || g.needs_present || g.session.holding_input()
-                        });
+                    let demand = if navigating { layer_render::FrameDemand::Animate }
+                        else { this.gpu.borrow().as_ref().map_or(layer_render::FrameDemand::Wait, crate::canvas::GpuCanvas::frame_demand) };
+                    let active = matches!(demand, layer_render::FrameDemand::Animate | layer_render::FrameDemand::Work);
                     #[cfg(test)]
                     if let Some(gpu) = this.gpu.borrow().as_ref() {
                         gpu.session
@@ -2801,6 +2813,7 @@ impl Workspace {
                         glib::ControlFlow::Continue
                     } else {
                         this.frame_timer.borrow_mut().take();
+                        if let layer_render::FrameDemand::WaitUntil(deadline) = demand { this.wake_frame_at(deadline); }
                         glib::ControlFlow::Break
                     }
                 }
@@ -2820,6 +2833,7 @@ impl Workspace {
                     has_monitor.set(true);
                     if this.area.is_realized() { this.initialize_canvas(&this.area); }
                 }));
+                surface.connect_notify_local(Some("state"), glib::clone!(#[weak] this, move |_, _| this.wake()));
             }
         }));
         let actions = gtk::gio::SimpleActionGroup::new();

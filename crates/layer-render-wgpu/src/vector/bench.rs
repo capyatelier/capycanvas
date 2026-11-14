@@ -85,7 +85,7 @@ fn run(r: &crate::WgpuRasterizer, kernel: &Kernel, uploads: &mut crate::Uploads,
         encoder.copy_buffer_to_buffer(&t.resolved, 0, &t.readback, 0, 16);
     }
     uploads.finish(&encoder);
-    let submission = encoder.submit(&r.queue);
+    let submission = encoder.submit(&r.queue).expect("live test submission");
     r.device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(std::time::Duration::from_secs(60)) }).unwrap();
     let wall = start.elapsed().as_secs_f64() * 1e3;
     let gpu = timer.as_ref().map_or(f64::NAN, |t| {

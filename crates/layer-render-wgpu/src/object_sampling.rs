@@ -241,6 +241,7 @@ pub(crate) fn preflight_object_affine(scene: layer_core::SceneView<'_>, object: 
 
 impl ObjectAccumulator {
     pub(crate) fn gpu_bytes(&self) -> u64 { self.buffer.size() + self.uniform.size() + self.coordinates.as_ref().map_or(0, wgpu::Buffer::size) }
+    pub(crate) fn owned_gpu_bytes(&self) -> u64 { self.gpu_bytes() - self.uniform.size() }
     pub(crate) fn cpu_bytes(&self) -> u64 { self.contribution.borrow().as_ref().map_or(0, |schedule| schedule.windows.capacity() as u64 * std::mem::size_of::<ContributionWindow>() as u64) }
     pub(crate) fn nearest_coordinates_ready(&self)->bool {!self.nearest || u64::from(self.coordinates_uploaded.get())==u64::from(self.size[0])*u64::from(self.size[1])}
 }
@@ -399,7 +400,7 @@ impl ObjectSampler {
         Ok(())
     }
     pub(crate) fn encode_step(&self,device:&PipelineDevice,encoder:&mut crate::submission::CommandEncoder,uploads:&mut crate::Uploads,acc:&ObjectAccumulator,phase:&SamplingPhase<'_>,step:u64)->Result<Option<u64>,GpuRasterError> {
-        if acc.nearest && !acc.nearest_coordinates_ready() {return Err(GpuRasterError::DeferredObjectWork);}
+        if acc.nearest && !acc.nearest_coordinates_ready() {return Err(GpuRasterError::NotReady);}
         let (source,origin,extent,kind,pipeline)=match phase {
             SamplingPhase::Denominator {extent}=>(&acc.empty,[0;2],*extent,0,&self.denominator),
             SamplingPhase::Contribute {source,origin,extent}=>(*source,*origin,*extent,1,&self.contribute),
@@ -526,6 +527,8 @@ mod tests {
         let acc=sampler.create(&r.device,SamplingRequest {inverse,size,nearest:false},&view,&r.empty_view,&uniform).unwrap();
         assert_eq!(acc.uniform,uniform);
         assert_eq!(uniform.size(),112);
+        assert_eq!(acc.owned_gpu_bytes(),acc.buffer.size()+acc.coordinates.as_ref().map_or(0,wgpu::Buffer::size));
+        assert_eq!(acc.gpu_bytes(),acc.owned_gpu_bytes()+uniform.size());
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         sampler.initialize(&mut encoder,&acc);
         let mut encoded=0;let mut peak_parameters=None::<usize>;
@@ -546,7 +549,7 @@ mod tests {
             if encoded%8==0 {
                 assert!(encoder.pass_count()<=8);
                 uploads.finish(&encoder);
-                let submission=encoder.submit(&r.queue);
+                let submission=encoder.submit(&r.queue).expect("live test submission");
                 r.device.poll(wgpu::PollType::Wait {submission_index:Some(submission),timeout:Some(std::time::Duration::from_secs(10))}).unwrap();
                 encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             }

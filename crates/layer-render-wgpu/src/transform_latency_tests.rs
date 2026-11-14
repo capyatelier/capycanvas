@@ -172,7 +172,7 @@ fn frames(r: &mut WgpuRasterizer, work: &Workload<'_>, preview: &layer_render::T
         submit(r, work, false);
         r.wait_idle().unwrap();
         times.push(start.elapsed().as_secs_f64() * 1000.);
-        if !r.has_pending_work() || times.len() >= limit {
+        if r.next_frame()!=layer_render::FrameDemand::Work || times.len() >= limit {
             return times;
         }
     }

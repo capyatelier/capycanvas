@@ -16,7 +16,11 @@ impl Read for BackingReader<'_> {
         if self.cancelled.load(Ordering::Relaxed) { return Err(io::Error::other("Package operation cancelled")); }
         let length = buffer.len().min(MAX_RANGE_BYTES).min(self.backing.byte_len().saturating_sub(self.position).min(usize::MAX as u64) as usize);
         if length == 0 { return Ok(0); }
-        match self.backing.poll(self.position, length).map_err(io::Error::other)? {
+        #[cfg(not(target_arch="wasm32"))]
+        let state=RangeState::Ready(self.backing.read_on_worker(self.position,length).map_err(io::Error::other)?);
+        #[cfg(target_arch="wasm32")]
+        let state=self.backing.poll(self.position,length).map_err(io::Error::other)?;
+        match state {
             RangeState::Pending => Err(io::Error::new(io::ErrorKind::WouldBlock, "Package bytes are pending")),
             RangeState::Ready(bytes) => {
                 buffer[..length].copy_from_slice(&bytes);
@@ -72,22 +76,7 @@ impl ByteSource for ChunkedBytes {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
-    use std::{fs::File, io::Write, path::Path, sync::Mutex};
-    struct PrivateFile { file: Mutex<File>, length: u64 }
-    impl ByteSource for PrivateFile {
-        fn byte_len(&self) -> u64 { self.length }
-        fn resident_bytes(&self) -> usize { 0 }
-        fn poll(&self, offset: u64, length: usize) -> Result<RangeState, String> {
-            if length > MAX_RANGE_BYTES || offset.checked_add(length as u64).is_none_or(|end| end > self.length) {
-                return Err("Package file range exceeds backing".into());
-            }
-            let mut file = self.file.lock().map_err(|_| "Package file lock failed")?;
-            file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
-            let mut bytes = vec![0; length];
-            file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
-            Ok(RangeState::Ready(ByteRange::new(bytes.into(), 0..length)?))
-        }
-    }
+    use std::{io::Write, path::Path};
     pub fn spool(input: &mut impl Read, directory: &Path, limit: u64, cancelled: &AtomicBool) -> Result<ImmutableBacking, String> {
         let mut file = crate::temp_files::anonymous(directory, "package").map_err(|e| e.to_string())?;
         let mut length = 0u64;
@@ -99,7 +88,7 @@ mod native {
             length = length.checked_add(count as u64).filter(|length| *length <= limit).ok_or("Package stream exceeds admission limit")?;
             file.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
         }
-        ImmutableBacking::new(Arc::new(PrivateFile { file: Mutex::new(file), length })).map_err(String::from)
+        ImmutableBacking::new(Arc::new(crate::tile_io::ReadSource::file(Arc::new(file),length))).map_err(String::from)
     }
 }
 #[cfg(not(target_arch = "wasm32"))]

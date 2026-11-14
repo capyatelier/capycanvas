@@ -291,8 +291,16 @@ impl WebApp {
         }
     }
     pub fn canvas_work_pending(&self) -> bool {
-        self.session.engine().wants_continuous_frames()
+        self.session.engine().frame_demand() != layer_render::FrameDemand::Wait
     }
+    pub fn next_frame_ms(&self) -> f64 {
+        match self.session.frame_demand() {
+            layer_render::FrameDemand::Animate | layer_render::FrameDemand::Work => 0.,
+            layer_render::FrameDemand::WaitUntil(deadline) => (deadline.saturating_duration_since(web_time::Instant::now()).as_secs_f64() * 1000.).max(1.),
+            layer_render::FrameDemand::Wait => -1.,
+        }
+    }
+    pub fn set_window_hidden(&mut self, hidden: bool) { self.session.set_window_hidden(hidden); }
     pub fn take_layer_thumbnail(&mut self) -> Result<JsValue, JsValue> {
         self.submit_thumbnail(None)?;
         let Some(result) = self.session.renderer_mut().take_thumbnail() else {
@@ -1338,7 +1346,7 @@ impl WebApp {
             label: Some("publish retained Web canvas"),
         });
         encoder.copy_texture_to_texture(retained.as_image_copy(), target.texture.as_image_copy(), retained.size());
-        gpu.queue().submit([encoder.finish()]);
+        gpu.submit_commands([encoder.finish()]);
         gpu.queue().present(target);
         surface.submitted_frames.observe(surface.submission_time_ns());
         surface.blank_presented = true;
@@ -1384,8 +1392,9 @@ async fn request_device(instance: &wgpu::Instance, surface: Option<&wgpu::Surfac
             let kind = match error { wgpu::Error::OutOfMemory { .. } => "out_of_memory",
                 wgpu::Error::Validation { .. } => "validation", _ => "internal" };
             gpu_diagnostics::report(role, kind, &error);
-            if matches!(error, wgpu::Error::OutOfMemory { .. }) && let Some(failure) = &failure {
-                *failure.lock().unwrap() = Some(error.to_string());
+            if matches!(error, wgpu::Error::OutOfMemory { .. }) {
+                layer_core::MemoryBudget::process().out_of_memory();
+                if let Some(failure) = &failure { *failure.lock().unwrap() = Some(error.to_string()); }
             }
             web_sys::console::error_1(&js(error));
         }));

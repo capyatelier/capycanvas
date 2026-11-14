@@ -31,6 +31,9 @@ bool capy_apple_language_prepared(CapyApple app, CapyLanguageTask task);
 int32_t capy_apple_language_publish(CapyApple app, bool input_busy);
 void capy_language_free(CapyLanguageTask task);
 void capy_apple_destroy(CapyApple app);
+bool capy_apple_finish_process_gpu(uint64_t timeout_ms);
+bool capy_apple_termination_requires_exit(bool storage_ready, bool gpu_complete);
+void capy_apple_termination_incomplete(void);
 CapyText capy_apple_error(CapyApple app); /* owned text; free with capy_apple_string_free */
 void capy_apple_string_free(CapyText text);
 size_t capy_apple_string_length(CapyText text);

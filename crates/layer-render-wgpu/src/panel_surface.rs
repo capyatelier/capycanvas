@@ -195,7 +195,7 @@ impl PanelSurfaces {
         !self.surfaces.is_empty() && !self.mask_valid.load(Ordering::Acquire)
     }
 
-    pub fn prepare(&mut self, device: &wgpu::Device, uploads: &mut Uploads, encoder: &mut wgpu::CommandEncoder,
+    pub fn prepare(&mut self, device: &crate::PipelineDevice, uploads: &mut Uploads, encoder: &mut wgpu::CommandEncoder,
         blur: Option<(&wgpu::Texture,layer_core::Affine)>, extent: [u32; 2], turns: u32) -> Result<(),GpuRasterError> {
         if self.surfaces.is_empty() { self.masks.clear();return Ok(()); }
         if self.mask_view!=Some((extent,turns)) {
@@ -221,7 +221,7 @@ impl PanelSurfaces {
             }
             uploads.write(encoder,&self.buffer,bytes)?;
             self.uploaded.store(true,Ordering::Release);
-            crate::submission::CacheWrite::shared(self.uploaded.clone()).track(encoder);
+            crate::submission::CacheWrite::shared(self.uploaded.clone()).track_raw(device,encoder);
         }
         let texture=blur.map_or(&self.empty,|(texture,_)| texture);
         if &self.blur!=texture {
@@ -270,7 +270,7 @@ impl PanelSurfaces {
                 pass.draw(0..6,i as u32..i as u32+1);
             }
             self.mask_valid.store(true,Ordering::Release);
-            crate::submission::CacheWrite::shared(self.mask_valid.clone()).track(encoder);
+            crate::submission::CacheWrite::shared(self.mask_valid.clone()).track_raw(device,encoder);
         }
         Ok(())
     }

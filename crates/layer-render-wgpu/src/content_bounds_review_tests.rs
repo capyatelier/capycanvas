@@ -295,13 +295,28 @@ fn transferred_bounds_request_keeps_accumulated_alpha_animation_phase_after_paus
 }
 
 
-fn target_bytes(renderer: &WgpuRasterizer, target: SourceTarget) -> Vec<u8> {
-    if let Some(page) = renderer.layer_masks.pages.get(&(target, [0, 0])) {
-        return crate::layer_tests::page_bytes(renderer, &page.texture);
+fn target_bytes(renderer: &mut WgpuRasterizer, scene: layer_core::SceneView<'_>, target: SourceTarget,
+    desired: Option<&layer_render::TransformPreview>) -> Vec<u8> {
+    if desired.is_none() {
+        if target.is_coverage() {return crate::test_support::mask_page_bytes(renderer,target,[0;2]);}
+        let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
+        let tile=crate::test_support::query_ready(renderer,&mut encoder,|r,encoder|r.raw_layer_tile(target,[0;2],encoder)).unwrap();
+        renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);
+        return crate::layer_tests::page_bytes(renderer,&tile.texture);
+    }
+    let desired=desired.unwrap();
+    let plane = if target.is_coverage() { RasterPlane::Mask } else { RasterPlane::Color };
+    assert_eq!(desired.target, target);
+    let transforms = renderer.transforms.as_ref().unwrap();
+    let capture = transforms.declared_capture(renderer, scene, desired).unwrap();
+    let expected=transforms.requested_version_for_capture(renderer, &capture, plane, [0, 0]).unwrap();
+    if target.is_coverage() {
+        let page=&renderer.layer_masks.previews[&(target,[0;2])].page;
+        return crate::layer_tests::page_bytes(renderer, &page.read(expected, None).unwrap().value().texture);
     }
     let page = renderer.paint_layers.iter().find(|l| l.id == target).unwrap().pages.iter()
         .find(|p| p.coordinate == [0, 0]).unwrap();
-    crate::layer_tests::page_bytes(renderer, &page.active().texture)
+    crate::layer_tests::page_bytes(renderer, &page.active().read(expected, None).unwrap().value().texture)
 }
 
 #[test]
@@ -339,8 +354,8 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
             renderer.readback_srgb_rgba8().unwrap();
         };
         frame(&mut renderer, true);
-        let original = target_bytes(&renderer, companion);
-        let original_primary = target_bytes(&renderer, primary);
+        let original = target_bytes(&mut renderer, document.scene(), companion, None);
+        let original_primary = target_bytes(&mut renderer, document.scene(), primary, None);
         let preview = layer_render::TransformPreview {
             transaction: 1, moving: false, target: primary, selection: None,
             transform: layer_core::ImageTransform { placement: layer_core::LayerPlacement { interpolation: layer_core::Interpolation::Nearest, ..layer_core::LayerPlacement { mesh: Some(Arc::new(layer_core::MeshMap::identity(prepared, [3, 3]).unwrap())), ..Default::default() } },
@@ -351,12 +366,12 @@ fn identity_warp_preserves_linked_companion_pixels_outside_primary_tight_bounds(
         assert_eq!(linked.target, companion);
         renderer.set_transform_preview(Some(&preview)).unwrap();
         frame(&mut renderer, false);
-        let warped = target_bytes(&renderer, companion);
-        let warped_primary = target_bytes(&renderer, primary);
+        let warped = target_bytes(&mut renderer, document.scene(), companion, Some(&linked));
+        let warped_primary = target_bytes(&mut renderer, document.scene(), primary, Some(&preview));
         renderer.set_transform_preview(None).unwrap();
         frame(&mut renderer, false);
-        assert!(target_bytes(&renderer, companion) == original, "Cancel restores exact companion pixels");
-        assert!(target_bytes(&renderer, primary) == original_primary, "Cancel restores exact primary pixels");
+        assert!(target_bytes(&mut renderer, document.scene(), companion, None) == original, "Cancel restores exact companion pixels");
+        assert!(target_bytes(&mut renderer, document.scene(), primary, None) == original_primary, "Cancel restores exact primary pixels");
         let at = if primary_mask { 30 } else { 90 };
         let stride = if primary_mask { 16 } else { 4 };
         let offset = (at * 256 + at) * stride;

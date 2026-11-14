@@ -13,6 +13,7 @@ pub struct GpuCanvas {
     view_color: crate::display_color::ViewColor,
     pub needs_present: bool,
     pending_regions: u32,
+    waiting_for_worker: bool,
 }
 impl GpuCanvas {
     pub fn reattach(&mut self, area: &gtk::Picture) -> Result<(), String> {
@@ -103,6 +104,7 @@ impl GpuCanvas {
             view_color: Default::default(),
             needs_present: true,
             pending_regions: 0,
+            waiting_for_worker: false,
         };
         canvas.prepare_startup()?;
         Ok(canvas)
@@ -138,6 +140,8 @@ impl GpuCanvas {
         loop {
             if cancelled() { return Err("Opening cancelled".into()); }
             let renderer = self.session.renderer_mut();
+            let status = renderer.chrome_status().clone();
+            let seen = status.wakes();
             renderer.ready()?;
             if validating && let Some(result) = renderer.take_effect_validation() {
                 result.result?;
@@ -145,7 +149,11 @@ impl GpuCanvas {
             }
             if !validating && renderer.startup.canvas_ready && renderer.startup.brush_ready { return Ok(()); }
             if std::time::Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
-            gtk::glib::timeout_future(std::time::Duration::from_millis(2)).await;
+            let mut woken = std::pin::pin!(status.wake_after(seen));
+            let mut expired = std::pin::pin!(gtk::glib::timeout_future(deadline.saturating_duration_since(std::time::Instant::now())));
+            std::future::poll_fn(|context| if woken.as_mut().poll(context).is_ready() || expired.as_mut().poll(context).is_ready() {
+                std::task::Poll::Ready(())
+            } else { std::task::Poll::Pending }).await;
         }
     }
     pub(crate) fn launch_view(&mut self, interaction: bool) -> Result<layer_ui::LaunchView, String> {
@@ -173,6 +181,15 @@ impl GpuCanvas {
         self.pending_regions |= change.regions;
         Ok(change)
     }
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.session.set_window_hidden(hidden);
+        self.session.renderer_mut().set_hidden(hidden);
+    }
+    pub fn frame_demand(&self) -> layer_render::FrameDemand {
+        if self.waiting_for_worker { return layer_render::FrameDemand::Wait; }
+        let demand = self.session.frame_demand();
+        if self.needs_present || self.session.holding_input() { demand.sooner(layer_render::FrameDemand::Work) } else { demand }
+    }
     pub fn stroke_pacing(&self) -> bool {
         let engine = self.session.engine();
         engine.backend().startup.complete
@@ -188,10 +205,9 @@ impl GpuCanvas {
         self.session.engine().backend().resize_transition(extent(area));
         self.prepare_startup()?;
         let renderer = self.session.renderer_mut();
-        if !renderer.ready()? {
+        self.waiting_for_worker = !renderer.ready()?;
+        if self.waiting_for_worker {
             renderer.present_chrome().map_err(|error| error.to_string())?;
-            // Preserve queued pen samples; never stall GTK or drop paint.
-            self.needs_present = true;
             return Ok(UiChange::default());
         }
         renderer.present_frames=true;
@@ -229,7 +245,7 @@ impl GpuCanvas {
                 | layer_ui::regions::SETTINGS
                 | layer_ui::regions::DOCUMENT;
         }
-        self.needs_present = !self.session.engine().backend().startup.complete;
+        self.needs_present = false;
         #[cfg(test)]
         {
             self.session

@@ -180,7 +180,7 @@ pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
                 after.dabs-before.dabs, after.composited_pixels-before.composited_pixels,
                 after.source_tile_misses-before.source_tile_misses,
                 after.display_composition_submissions-before.display_composition_submissions,
-                after.composite_storage_bytes)?;
+                engine.backend().display_bytes())?;
             Ok(())
             })?;
             elapsed_samples += samples;

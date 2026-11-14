@@ -131,8 +131,12 @@ mod native {
         }
     }
     impl RangeReader for NativeFile {
-        fn read(&self,offset:u64,length:usize,crc:Option<u32>,completion:ReadCompletion) {
-            completion.complete(self.read(offset,length).and_then(|bytes|verify_crc(&bytes,crc).map(|()|bytes)));
+        fn allocation_bytes(&self,_:u64,length:usize)->usize {crate::tile_io::buffer_class(length)}
+        fn read(&self,offset:u64,length:usize,crc:Option<u32>,mut completion:ReadCompletion) {
+            let mut bytes=completion.buffer(length);
+            let result=check_range(offset,length).and_then(|_|read_exact_at(&self.file,offset,&mut Arc::get_mut(&mut bytes).unwrap()[..length]))
+                .and_then(|_|verify_crc(&bytes[..length],crc)).and_then(|_|super::super::ByteRange::new(bytes,0..length).map_err(str::to_string));
+            completion.complete_range(result);
         }
     }
     impl StoreFile for NativeFile {

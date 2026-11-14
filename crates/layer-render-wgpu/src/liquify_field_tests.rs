@@ -2,6 +2,24 @@ use super::*;
 use crate::layer_tests::{dab, preset_style, placement};
 use layer_core::{DefaultBrushPreset, Document, Point, Selection, raster::RasterRevision};
 
+fn map_texture(tile:&Tile)->wgpu::Texture {
+    tile.pixels.read(&tile.capture,None).unwrap().value().texture.clone()
+}
+
+fn seed_map(r:&WgpuRasterizer,tile:&Tile,bytes:&[u8]) {
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let receipt=encoder.submission();
+    let mut pixels=tile.pixels.clone();
+    let write=pixels.overwrite(&receipt).unwrap();
+    let texture=&write.value().texture;
+    r.queue.write_texture(texture.as_image_copy(),bytes,wgpu::TexelCopyBufferLayout {
+        offset:0,bytes_per_row:Some(4096),rows_per_image:Some(256)},texture.size());
+    let encoded=write.encoded(tile.capture.clone());
+    encoder.submit(&r.queue);
+    encoded.publish(&receipt);
+}
+
+
 #[test]
 fn crystals_third_published_shift_copies_black_across_integer_map_slope() {
     fn hash(mut value:u32)->u32 {
@@ -35,7 +53,7 @@ fn crystals_third_published_shift_copies_black_across_integer_map_slope() {
         let displacement: f32=match x {63=>-4.,64=>-2.,_=>0.};
         for word in [displacement.to_bits(),0,0x00003f80,0x3f800000] {bytes.extend(word.to_ne_bytes());}
     }}
-    r.queue.write_texture(tile.texture.as_image_copy(),&bytes,wgpu::TexelCopyBufferLayout{offset:0,bytes_per_row:Some(256*16),rows_per_image:Some(256)},tile.texture.size());
+    seed_map(&r,&tile,&bytes);
     let seed=(0..65536u32).find(|&random| {
         let cell=hash(15^hash(16)^random^hash(0));
         [2654435769,2246822507].map(|salt| (24.*0.6*((hash(cell^salt)>>8) as f32/16777216.-0.5)+0.5).floor() as i32)==[2,0]
@@ -55,10 +73,10 @@ fn seeded_context(r:&WgpuRasterizer,doc:&Document,map:impl Fn(u32,u32)->([f32;2]
         let pack=|a:f32,b:f32| (a.to_bits()>>16)|(b.to_bits()&0xffff0000);
         for word in [displacement[0].to_bits(),displacement[1].to_bits(),pack(j[0],j[1]),pack(j[2],j[3])] {bytes.extend(word.to_ne_bytes());}
     }}
-    r.queue.write_texture(tile.texture.as_image_copy(),&bytes,wgpu::TexelCopyBufferLayout{offset:0,bytes_per_row:Some(4096),rows_per_image:Some(256)},tile.texture.size());
+    seed_map(r,&tile,&bytes);
     let source=Arc::new(placement::paint(doc).clone());
-    layer_core::liquify::Context {current:source.clone(),original:source,amount:None,field:Some(Arc::new(Field{
-        device:(*r.device).clone(),tiles:BTreeMap::from([([0,0],tile)]),originals:Arc::new(Mutex::new(Originals::default())),
+    layer_core::liquify::Context {current:source.clone(),original:source,amount:None,field:Some(Arc::new(Field{content:layer_core::raster::ContentName::fresh(),
+        device:(*r.device).clone(),tiles:BTreeMap::from([([0,0],tile)]),originals:Arc::new(Mutex::new(Originals::new(r.raster_versions(doc.scene(),placement::target(doc)).unwrap()))),
     }))}
 }
 
@@ -135,16 +153,18 @@ fn liquify_sparse_original_atlas_chunks_match_unfragmented_source() {
             let base = &originals.atlases[0];
             let texture = base.texture.clone();
             let view = base.view.clone();
+            let tier = base._charge.tier().clone();
             for _ in 1..12 {
                 originals.atlases.push(OriginalAtlas {
                     id: NEXT_RESOURCE.fetch_add(1, Ordering::Relaxed),
-                    texture: texture.clone(), view: view.clone(),
+                    texture: texture.clone(), view: view.clone(), _charge: tier.charge(0),
                 });
             }
             let distant = originals.tiles[&[1, 0]].clone();
             originals.tiles.insert([1, 0], Arc::new(OriginalTile {
+                capture:distant.capture.clone(),
                 index: 11 * ORIGINAL_LAYERS + 1,
-                view: distant.view.clone(),
+                surface:distant.surface.clone(),
             }));
         }
         drop(originals);
@@ -184,7 +204,7 @@ fn liquify_filtered_and_manual_source_sampling_agree_inside_and_across_tiles() {
         crate::test_support::submit_ready(&mut r, FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
         let before=r.readback_srgb_rgba8().unwrap();
         let source_pages=r.paint_layers.iter().find(|layer|layer.id==placement::target(&doc)).unwrap()
-            .pages.iter().map(|page|(page.coordinate,crate::layer_tests::page_bytes(&r,&page.active().texture)))
+            .pages.iter().map(|page|(page.coordinate,crate::layer_tests::page_bytes(&r,&r.read_color_page(placement::target(&doc),page,false,None).unwrap().value().texture)))
             .collect::<BTreeMap<_,_>>();
         let mut context=seeded_context(&r,&doc,|x,_| {
             if x>=224 {return ([300.5-(x as f32+0.5),0.],[1.,0.,0.,1.]);}
@@ -196,7 +216,7 @@ fn liquify_filtered_and_manual_source_sampling_agree_inside_and_across_tiles() {
         let target=placement::target(&doc);
         let page=r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
             .find(|page|page.coordinate==[0,0]).unwrap();
-        let linear=crate::test_support::float_pixels(&r,&page.active().texture);
+        let linear=crate::test_support::float_pixels(&r,&r.read_color_page(placement::target(&doc),page,false,None).unwrap().value().texture);
         (r.device.float32_filterable(),before,source_pages,pixels,linear)
     };
     let (filterable,before,source_pages,filtered,filtered_linear)=render(wgpu::Features::empty());
@@ -244,7 +264,7 @@ fn local_liquify_keeps_previously_deformed_untouched_pixels_in_preview_and_commi
     let before=render_seeded(&mut r,&mut doc,context,90);
     let prior=placement::paint(&doc).raster.liquify().unwrap();
     let prior_field=prior.field.as_any().downcast_ref::<Field>().unwrap();
-    let map_before=crate::layer_tests::page_bytes(&r,&prior_field.tiles[&[0,0]].texture);
+    let map_before=crate::layer_tests::page_bytes(&r,&map_texture(&prior_field.tiles[&[0,0]]));
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
     style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
     let mut contact=dab([0.;4]);
@@ -274,7 +294,7 @@ fn local_liquify_keeps_previously_deformed_untouched_pixels_in_preview_and_commi
     let committed=r.readback_srgb_rgba8().unwrap();
     let current=placement::paint(&doc).raster.liquify().unwrap();
     let current_field=current.field.as_any().downcast_ref::<Field>().unwrap();
-    let map_after=crate::layer_tests::page_bytes(&r,&current_field.tiles[&[0,0]].texture);
+    let map_after=crate::layer_tests::page_bytes(&r,&map_texture(&current_field.tiles[&[0,0]]));
     for y in 100..150 { for x in 32..96 {
         let at=(y*256+x)*4;
         assert_eq!(&committed[at..at+4],&before[at..at+4],"untouched committed pixel {x},{y}");
@@ -307,7 +327,7 @@ fn fit_persistent_preview_preserves_untouched_prior_compression_in_same_tile() {
     let raw_before={
         let page=r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
             .find(|page|page.coordinate==[0,0]).unwrap();
-        crate::layer_tests::page_bytes(&r,&page.active().texture)
+        crate::layer_tests::page_bytes(&r,&r.read_color_page(placement::target(&doc),page,false,None).unwrap().value().texture)
     };
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
     style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
@@ -343,8 +363,8 @@ fn fit_persistent_preview_preserves_untouched_prior_compression_in_same_tile() {
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     assert_eq!(r.preview_level,2,"the persistent tail must use the reduced Fit preview");
     let stroke=r.liquify.as_ref().unwrap().strokes.get(&target).unwrap();
-    let colored=crate::layer_tests::page_bytes(&r,&stroke.colored_tiles[&[0,0]].texture);
-    let updated=crate::layer_tests::page_bytes(&r,&stroke.field.tiles[&[0,0]].texture);
+    let colored=crate::layer_tests::page_bytes(&r,&map_texture(&stroke.colored_tiles[&[0,0]]));
+    let updated=crate::layer_tests::page_bytes(&r,&map_texture(&stroke.field.tiles[&[0,0]]));
     let map_changes=(96..160).flat_map(|y|(160..224).map(move |x|(x,y)))
         .filter(|&(x,y)| {let at=(y*256+x)*16;colored[at..at+16]!=updated[at..at+16]}).count();
     assert!(map_changes>0,"the persistent chunk must update the map near the dab");
@@ -353,18 +373,10 @@ fn fit_persistent_preview_preserves_untouched_prior_compression_in_same_tile() {
     assert_eq!(old_map_changes,0,"the prior compressed region must retain exact packed map values");
     assert_ne!(stroke.colored_tiles[&[0,0]].id,stroke.field.tiles[&[0,0]].id,
         "the unresolved field map must differ from the last color-resolved map");
-    let accounted=r.liquify.as_ref().unwrap().storage_bytes();
-    assert!(r.metrics().paint_state_storage_bytes>=accounted,
-        "paint-state metrics must include retained resolved maps");
-    let old=r.liquify.as_mut().unwrap().strokes.get_mut(&target).unwrap().colored_tiles.remove(&[0,0]).unwrap();
-    let without_old=r.liquify.as_ref().unwrap().storage_bytes();
-    assert_eq!(accounted-without_old,texture_bytes(&old.texture),
-        "storage accounting must include the retained resolved map while color is deferred");
-    r.liquify.as_mut().unwrap().strokes.get_mut(&target).unwrap().colored_tiles.insert([0,0],old);
     let raw_after={
         let page=r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
             .find(|page|page.coordinate==[0,0]).unwrap();
-        crate::layer_tests::page_bytes(&r,&page.active().texture)
+        crate::layer_tests::page_bytes(&r,&r.read_color_page(placement::target(&doc),page,false,None).unwrap().value().texture)
     };
     assert!(raw_before==raw_after,"persistent full-resolution color must wait for the Fit preview");
     let display=crate::scene::scale::tests::display_pixels(&r);
@@ -405,7 +417,7 @@ fn tiny_footprint_is_bit_exact_where_local_dab_has_no_influence() {
     let before=render_seeded(&mut r,&mut doc,context,220);
     let prior=placement::paint(&doc).raster.liquify().unwrap();
     let prior_field=prior.field.as_any().downcast_ref::<Field>().unwrap();
-    let map_before=crate::layer_tests::page_bytes(&r,&prior_field.tiles[&[0,0]].texture);
+    let map_before=crate::layer_tests::page_bytes(&r,&map_texture(&prior_field.tiles[&[0,0]]));
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
     style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
     let mut contact=dab([0.;4]);
@@ -421,7 +433,7 @@ fn tiny_footprint_is_bit_exact_where_local_dab_has_no_influence() {
     let after=r.readback_srgb_rgba8().unwrap();
     let current=placement::paint(&doc).raster.liquify().unwrap();
     let field=current.field.as_any().downcast_ref::<Field>().unwrap();
-    let map_after=crate::layer_tests::page_bytes(&r,&field.tiles[&[0,0]].texture);
+    let map_after=crate::layer_tests::page_bytes(&r,&map_texture(&field.tiles[&[0,0]]));
     for [x,y] in [[40,128],[171,108],[213,108],[171,148]] {
         let color=(y*256+x)*4;
         let map=(y*256+x)*16;
@@ -446,9 +458,9 @@ fn untouched_own_map_survives_when_it_is_in_a_later_source_chunk() {
     }));
     crate::test_support::submit_ready(&mut r, FramePacket{reset_layers:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let seed=seeded_context(&r,&doc,|_,_|([0.375,0.],[1e-5,0.,0.,1.]));
-    let bytes={
+    let (bytes,originals)={
         let field=seed.field.as_ref().unwrap().as_any().downcast_ref::<Field>().unwrap();
-        crate::layer_tests::page_bytes(&r,&field.tiles[&[0,0]].texture)
+        (crate::layer_tests::page_bytes(&r,&map_texture(&field.tiles[&[0,0]])),field.originals.clone())
     };
     let tile_bytes=|x:u32| {
         let mut tile_bytes=bytes.clone();
@@ -459,12 +471,11 @@ fn untouched_own_map_survives_when_it_is_in_a_later_source_chunk() {
     };
     let tiles=(0..14).map(|x| {
         let tile=Arc::new(Tile::new(&r,PixelRect::new(x*256,0,(x+1)*256,256)));
-        r.queue.write_texture(tile.texture.as_image_copy(),&tile_bytes(x),
-            wgpu::TexelCopyBufferLayout{offset:0,bytes_per_row:Some(4096),rows_per_image:Some(256)},tile.texture.size());
+        seed_map(&r,&tile,&tile_bytes(x));
         ([x,0],tile)
     }).collect();
-    let context=layer_core::liquify::Context{field:Some(Arc::new(Field{
-        device:(*r.device).clone(),tiles,originals:Arc::new(Mutex::new(Originals::default())),
+    let context=layer_core::liquify::Context{field:Some(Arc::new(Field{content:layer_core::raster::ContentName::fresh(),
+        device:(*r.device).clone(),tiles,originals,
     })),..seed};
     let mut style=preset_style(preset);
     style.liquify=Some(Arc::new(context));
@@ -507,7 +518,7 @@ fn untouched_own_map_survives_when_it_is_in_a_later_source_chunk() {
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let current=placement::paint(&doc).raster.liquify().unwrap();
     let field=current.field.as_any().downcast_ref::<Field>().unwrap();
-    let after=crate::layer_tests::page_bytes(&r,&field.tiles[&[13,0]].texture);
+    let after=crate::layer_tests::page_bytes(&r,&map_texture(&field.tiles[&[13,0]]));
     let untouched=(20*256+20)*16;
     let own_bytes=tile_bytes(13);
     assert_eq!(&after[untouched..untouched+16],&own_bytes[untouched..untouched+16],
@@ -620,7 +631,7 @@ fn fit_view_liquify_preview_matches_committed_display_and_cancel_restores_it() {
     batch.kind=DabBatchKind::Preview;
     crate::test_support::submit_ready(&mut preview, FramePacket{dabs:&[contact],dab_batches:std::slice::from_ref(&batch),..fit}).unwrap();
     assert_eq!(preview.preview_level,2,"Fit view must select 4-by-4 map and color preview blocks");
-    assert!(preview.preview_pages.iter().all(|page|page.active().texture.width()==64));
+    assert!(preview.preview_pages.iter().all(|page|page.active().size().width==64));
     let predicted=crate::scene::scale::tests::display_pixels(&preview);
     crate::test_support::submit_ready(&mut preview, fit).unwrap();
     assert!(crate::scene::scale::tests::display_pixels(&preview)==before,"cancel restores the exact display");
@@ -696,7 +707,7 @@ fn grouped_liquify_chunks_match_split_frames_in_pixels_and_map() {
         let state=placement::paint(&doc).raster.liquify().unwrap();
         let field=state.field.as_any().downcast_ref::<Field>().unwrap();
         let map=field.tiles.iter().map(|(coordinate,tile)|(*coordinate,
-            crate::layer_tests::page_bytes(&r,&tile.texture))).collect::<BTreeMap<_,_>>();
+            crate::layer_tests::page_bytes(&r,&map_texture(tile)))).collect::<BTreeMap<_,_>>();
         (pixels,map,passes)
     };
     let (grouped_pixels,grouped_map,grouped_passes)=render(false);
@@ -721,7 +732,7 @@ fn strong_pinch_keeps_opaque_source_when_footprint_exceeds_trace_tile() {
         let raw_center = |r: &WgpuRasterizer| {
             let page = r.paint_layers.iter().find(|layer| layer.id == target).unwrap()
                 .pages.iter().find(|page| page.coordinate == [2, 2]).unwrap();
-            crate::test_support::float_pixels(r, &page.active().texture)[88 * 256 + 88]
+            crate::test_support::float_pixels(r, &r.read_color_page(target,page,false,None).unwrap().value().texture)[88 * 256 + 88]
         };
         let original = [83, 149, 211, 255].map(|code| {
             layer_core::color::RgbSpace::Srgb.decode(f64::from(code) / 255.) as f32
@@ -757,7 +768,7 @@ fn strong_pinch_keeps_opaque_source_when_footprint_exceeds_trace_tile() {
                 if published { "published" } else { "one stroke" });
         }
         drop(originals);
-        let map = crate::layer_tests::page_bytes(&r, &field.tiles[&[2, 2]].texture);
+        let map = crate::layer_tests::page_bytes(&r, &map_texture(&field.tiles[&[2, 2]]));
         let at = (88 * 256 + 88) * 16;
         let packed = u32::from_ne_bytes(map[at + 8..at + 12].try_into().unwrap());
         let center_j = f32::from_bits((packed & 0xffff) << 16);
@@ -806,14 +817,14 @@ fn pinch_minification_keeps_transparency_at_physical_canvas_edge() {
     }
     let field = placement::paint(&doc).raster.liquify().unwrap().field.clone();
     let field = field.as_any().downcast_ref::<Field>().unwrap();
-    let map = crate::layer_tests::page_bytes(&r, &field.tiles[&[0, 0]].texture);
+    let map = crate::layer_tests::page_bytes(&r, &map_texture(&field.tiles[&[0, 0]]));
     let at = (128 * 256) * 16;
     let packed = u32::from_ne_bytes(map[at + 8..at + 12].try_into().unwrap());
     let edge_j = f32::from_bits((packed & 0xffff) << 16);
     assert!((32. ..64.).contains(&edge_j), "edge Pinch must create a minifying footprint: {edge_j}");
     let page = r.paint_layers.iter().find(|layer| layer.id == target).unwrap().pages.iter()
         .find(|page| page.coordinate == [0, 0]).unwrap();
-    let pixels = crate::test_support::float_pixels(&r, &page.active().texture);
+    let pixels = crate::test_support::float_pixels(&r, &r.read_color_page(placement::target(&doc),page,false,None).unwrap().value().texture);
     let edge = pixels[128 * 256];
     let interior = pixels[128 * 256 + 128];
     assert!((0.49..=0.68).contains(&edge[3]),
@@ -844,7 +855,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
         crate::test_support::submit_settled(&mut r, FramePacket{view,reset_layers:true,..crate::test_support::packet(doc.scene(),extent)});
         let target=placement::target(&doc);
         let colors=|r:&WgpuRasterizer|r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
-            .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&page.active().texture)))
+            .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&r.read_color_page(target,page,false,None).unwrap().value().texture)))
             .collect::<BTreeMap<_,_>>();
         let original_colors=colors(&r);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
@@ -912,7 +923,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
                     assert!(stroke.preview_tiles.contains_key(&[0,0]),
                         "the prior tile must be cached before a later disjoint preview");
                     let page=r.preview_pages.iter().find(|page|page.coordinate==[0,0]).unwrap();
-                    Some(crate::layer_tests::page_bytes(&r,&page.active().texture))
+                    Some(crate::layer_tests::page_bytes(&r,&r.read_color_page(placement::target(&doc),page,true,None).unwrap().value().texture))
                 } else {None};
                 let dabs=[real,predicted];
                 let batches=[persistent,preview];
@@ -958,7 +969,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
                 }
                 if let Some(pixels)=cached {
                     let page=r.preview_pages.iter().find(|page|page.coordinate==[0,0]).unwrap();
-                    assert!(crate::layer_tests::page_bytes(&r,&page.active().texture)==pixels,
+                    assert!(crate::layer_tests::page_bytes(&r,&r.read_color_page(placement::target(&doc),page,true,None).unwrap().value().texture)==pixels,
                         "a later frame must preserve unchanged preview tile pixels");
                 }
             } else {
@@ -989,7 +1000,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
         let state=placement::paint(&doc).raster.liquify().unwrap();
         let field=state.field.as_any().downcast_ref::<Field>().unwrap();
         let maps=field.tiles.iter().map(|(coordinate,tile)|(*coordinate,
-            crate::layer_tests::page_bytes(&r,&tile.texture))).collect::<BTreeMap<_,_>>();
+            crate::layer_tests::page_bytes(&r,&map_texture(tile)))).collect::<BTreeMap<_,_>>();
         Some((final_colors,maps))
     };
     let (fit_colors,fit_maps)=render(true,false).unwrap();
@@ -1067,7 +1078,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     let before=crate::scene::scale::tests::display_pixels(&fit);
     let target=placement::target(&doc);
     let colors=|r:&WgpuRasterizer|r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
-        .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&page.active().texture)))
+        .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&r.read_color_page(target,page,false,None).unwrap().value().texture)))
         .collect::<BTreeMap<_,_>>();
     let authored=colors(&fit);
     let anchor=seeded_context(&fit,&doc,|_,_|([16.,0.],[1.,0.,0.,1.]));
@@ -1142,7 +1153,7 @@ fn liquify_edge_and_reconstruct_transport_the_seeded_map_and_footprint() {
         let mut batch=crate::test_support::dab_batch(placement::target(&doc),style,layer_core::Rect::from_extent([128;2]));batch.stroke_id=StrokeId(80+i as u64);
         crate::test_support::submit_ready(&mut r, FramePacket{dabs:&[contact],dab_batches:&[batch],..crate::test_support::packet(doc.scene(),extent)}).unwrap();
         let state=placement::paint(&doc).raster.liquify().unwrap();let field=state.field.as_any().downcast_ref::<Field>().unwrap();
-        let bytes=crate::layer_tests::page_bytes(&r,&field.tiles[&[0,0]].texture);
+        let bytes=crate::layer_tests::page_bytes(&r,&map_texture(&field.tiles[&[0,0]]));
         let at=(72*256+64)*16;
         let words:Vec<_>=bytes[at..at+16].as_chunks::<4>().0.iter().map(|b|u32::from_ne_bytes(*b)).collect();
         let displacement=[f32::from_bits(words[0]),f32::from_bits(words[1])];
@@ -1248,7 +1259,7 @@ fn smooth_liquify_gpu_map_and_footprint_match_numerical_reference() {
             ..crate::test_support::packet(doc.scene(), [128; 2]) }).unwrap();
         let state = placement::paint(&doc).raster.liquify().unwrap();
         let field = state.field.as_any().downcast_ref::<Field>().unwrap();
-        let bytes = crate::layer_tests::page_bytes(&renderer, &field.tiles[&[0, 0]].texture);
+        let bytes = crate::layer_tests::page_bytes(&renderer, &map_texture(&field.tiles[&[0, 0]]));
         for p in points {
             let (gpu_u, gpu_j) = unpack(&bytes, p);
             let target = expected(mode, p);
@@ -1292,7 +1303,7 @@ fn smooth_liquify_gpu_map_and_footprint_match_numerical_reference() {
         ..crate::test_support::packet(doc.scene(), [128; 2]) }).unwrap();
     let state = placement::paint(&doc).raster.liquify().unwrap();
     let field = state.field.as_any().downcast_ref::<Field>().unwrap();
-    let composed = crate::layer_tests::page_bytes(&renderer, &field.tiles[&[0, 0]].texture);
+    let composed = crate::layer_tests::page_bytes(&renderer, &map_texture(&field.tiles[&[0, 0]]));
     for p in points {
         let s = influence(p);
         let g = [p[0] - 4. * s, p[1] + 2. * s];
@@ -1358,7 +1369,7 @@ fn sustained_pinch_preview_keeps_opaque_center_at_finite_footprint() {
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let field=placement::paint(&doc).raster.liquify().unwrap().field.clone();
     let field=field.as_any().downcast_ref::<Field>().unwrap();
-    let map=crate::layer_tests::page_bytes(&r,&field.tiles[&[0,0]].texture);
+    let map=crate::layer_tests::page_bytes(&r,&map_texture(&field.tiles[&[0,0]]));
     let at=(126*256+126)*16+8;
     let packed=u32::from_ne_bytes(map[at..at+4].try_into().unwrap());
     let center_j=f32::from_bits((packed&0xffff)<<16);
@@ -1374,7 +1385,7 @@ fn sustained_pinch_preview_keeps_opaque_center_at_finite_footprint() {
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     assert_eq!(r.preview_level,2,"Fit preview must use a four-pixel map block");
     let page=r.preview_pages.iter().find(|page|page.coordinate==[0,0]).unwrap();
-    let center=crate::test_support::float_pixels(&r,&page.active().texture)[31*64+31];
+    let center=crate::test_support::float_pixels(&r,&r.read_color_page(placement::target(&doc),page,true,None).unwrap().value().texture)[31*64+31];
     let original=[83,149,211,255].map(|code|
         layer_core::color::RgbSpace::Srgb.decode(f64::from(code)/255.) as f32);
     for component in 0..4 {
@@ -1388,7 +1399,7 @@ fn a_new_stroke_prepares_the_displaced_footprint_of_its_saved_field() {
     let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent=[2048;2];let document=placement::paint_document(extent,"saved field bounds");
     let source=Arc::new(placement::paint(&document).clone());
-    let field=Field {device:(*r.device).clone(),tiles:[([0;2],Arc::new(Tile::new(&r,PixelRect::new(0,0,1536,1536))))].into(),originals:Default::default()};
+    let field=Field {content:layer_core::raster::ContentName::fresh(),device:(*r.device).clone(),tiles:[([0;2],Arc::new(Tile::new(&r,PixelRect::new(0,0,1536,1536))))].into(),originals:Arc::new(Mutex::new(Originals::new(r.raster_versions(document.scene(),placement::target(&document)).unwrap())))};
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
     style.liquify=Some(Arc::new(layer_core::liquify::Context {current:source.clone(),original:source,amount:Some(0.5),field:Some(Arc::new(field))}));
     let mut batch=crate::test_support::dab_batch(placement::target(&document),style,layer_core::Rect::from_extent([256;2]));

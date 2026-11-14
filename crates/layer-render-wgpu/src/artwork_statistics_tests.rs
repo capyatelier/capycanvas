@@ -215,7 +215,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
     let mut r = crate::WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let view = crate::test_support::view(extent);
     r.submit(layer_render::FramePacket { blend_space:doc.composition().blend, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
-    while r.has_pending_work() {r.wait_idle().unwrap();r.submit(layer_render::FramePacket { blend_space:doc.composition().blend, composite_all:false, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();}
+    while r.next_frame()==layer_render::FrameDemand::Work {r.wait_idle().unwrap();r.submit(layer_render::FramePacket { blend_space:doc.composition().blend, composite_all:false, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();}
     let mut presenter = crate::test_support::float_presenter(&r);
     let (texture,target) = crate::create_target(&r.device,extent,wgpu::TextureFormat::Rgba32Float,"clipping regression");
     presenter.present(&r,&target,view,[0.;4]).unwrap();
@@ -253,6 +253,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
     attached.set_clipping_preview(false,false);
     attached.submit(layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let r=attached.0.as_mut().unwrap();
+    crate::test_support::submit_published(r,layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,composite_all:false,..crate::test_support::packet(doc.scene(),extent)});
     presenter.present(r,&target,view,[0.;4]).unwrap();
     let tinted=crate::test_support::float_pixels(r,&texture);
     assert!(tinted.iter().zip(&baseline).any(|(a,b)|a.iter().zip(b).any(|(a,b)|(a-b).abs()>0.01)));
@@ -260,6 +261,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
         attached.set_clipping_preview(shadows,highlights);
         attached.submit(layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
         let r=attached.0.as_mut().unwrap();
+        crate::test_support::submit_published(r,layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,composite_all:false,..crate::test_support::packet(doc.scene(),extent)});
         presenter.present(r,&target,view,[0.;4]).unwrap();
         let actual=crate::test_support::float_pixels(r,&texture);
         assert!(actual.iter().zip(expected).all(|(a,b)|a.iter().zip(b).all(|(a,b)|(a-b).abs()<2e-5)),"mask tint changed clipping {shadows}/{highlights}");
@@ -555,7 +557,7 @@ mod waveform {
 }
 
 #[test]
-fn half_float_fit_levels_keep_each_lane_clipped_or_in_range() {
+fn float_fit_levels_keep_each_lane_clipped_or_in_range() {
     use layer_render::CanvasRenderer;
     let extent = [64, 64];
     let view = layer_render::ViewState { width_px: 16, height_px: 16, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.] };
@@ -564,8 +566,8 @@ fn half_float_fit_levels_keep_each_lane_clipped_or_in_range() {
         let mut r = crate::WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let frame = layer_render::FramePacket { view, blend_space: doc.composition().blend, ..crate::test_support::packet(doc.scene(), extent) };
         r.submit(frame).unwrap();
-        while r.has_pending_work() { r.wait_idle().unwrap(); r.submit(layer_render::FramePacket { composite_all: false, ..frame }).unwrap(); }
-        assert!(r.presentation_views().unwrap()[0].texture().format() == wgpu::TextureFormat::Rgba16Float);
+        while r.next_frame()==layer_render::FrameDemand::Work { r.wait_idle().unwrap(); r.submit(layer_render::FramePacket { composite_all: false, ..frame }).unwrap(); }
+        assert_eq!(r.presentation_views().unwrap()[0].texture().format(),wgpu::TextureFormat::Rgba32Float);
         let mut presenter = crate::test_support::float_presenter(&r);
         let (texture, target) = crate::create_target(&r.device, [16, 16], wgpu::TextureFormat::Rgba32Float, "half-float clipping");
         presenter.present(&r, &target, view, [0.; 4]).unwrap();

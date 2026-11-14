@@ -21,7 +21,7 @@ use layer_render::{
     CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, RetouchPreparation,
     ViewState,
 };
-use std::{collections::VecDeque, fmt, sync::Arc};
+use std::{collections::VecDeque, fmt, sync::Arc, task::Poll};
 
 #[path = "corrections.rs"]
 mod corrections;
@@ -379,7 +379,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 "The replacement renderer is not configured for this document's color space and precision",
             )));
         }
-        if self.pending_frame.is_some() {
+        if self.pending_frame.is_some() && (self.backend.has_pending_submission()
+            || self.batches.iter().any(|batch| batch.kind!=DabBatchKind::Preview)) {
             return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
                 "Raster restoration is busy; retry renderer replacement",
             )));
@@ -398,6 +399,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.rebuild_all = true;
         self.composite_all = true;
         self.prepared_retouch = None;
+        backend.adopt_committed_pages(&mut self.backend);
+        self.pending_frame=None;
         Ok(std::mem::replace(&mut self.backend, backend))
     }
 
@@ -947,8 +950,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// Readbacks must follow the frame that applies document edits, not capture
     /// old GPU pixels under the new document revision.
     pub fn has_pending_document_edits(&self) -> bool {
+        self.backend.has_pending_submission() || self.document_edits_queued()
+    }
+    fn document_edits_queued(&self) -> bool {
         self.pending_up.is_some() || self.pending_frame.is_some()
-            || self.backend.has_pending_submission()
             || self.rebuild_all
             || self.rebuild_completed
             || self.composite_all
@@ -958,13 +963,17 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 .iter()
                 .any(raster_edit_batch)
     }
-    pub fn wants_continuous_frames(&self) -> bool {
-        self.has_pending_input()
-            || self.has_active_stroke()
-            || self.has_pending_document_edits()
-            || self.editor.document().has_animated_effects()
-            || self.backend.has_pending_work()
-            || (self.can_park() && self.editor.memory_report_pending())
+    pub fn frame_demand(&self) -> layer_render::FrameDemand {
+        use layer_render::FrameDemand;
+        if self.backend.waits_for_frame_slot() { return self.backend.next_frame(); }
+        let engine = if self.has_pending_input() || self.has_active_stroke() || self.editor.document().has_animated_effects() {
+            FrameDemand::Animate
+        } else if self.document_edits_queued() || (self.can_park() && self.editor.memory_report_pending()) {
+            FrameDemand::Work
+        } else {
+            FrameDemand::Wait
+        };
+        engine.sooner(self.backend.next_frame())
     }
     pub fn has_pending_input(&self) -> bool {
         !self.input.is_empty()
@@ -1652,10 +1661,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             composite_all: self.composite_all,
             blend_space: self.editor.document().composition().blend,
         };
-        if !self.backend.raster_dependencies_ready(packet, self.transform_preview.as_ref()) {
-            self.pending_frame = Some(frame);
-            return Ok(());
-        }
         let selection = self.display_selection().map(|s| s.into_owned());
         self.backend.set_vector_selection(self.editor.document().working.vector_items.as_ref());
         let result = self
@@ -1664,9 +1669,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .and_then(|_| {
                 self.backend
                     .set_transform_preview(self.transform_preview.as_ref())
-            })
-            .and_then(|_| self.backend.submit(packet))
-            .map_err(EngineError::Backend);
+            });
+        let result = match result {
+            Ok(()) => self.backend.submit_when_ready(packet, self.transform_preview.as_ref()),
+            Err(error) => Poll::Ready(Err(error)),
+        };
+        let result = match result {
+            Poll::Pending => { self.pending_frame = Some(frame); return Ok(()); }
+            Poll::Ready(result) => result.map_err(EngineError::Backend),
+        };
 
         self.metrics.frames = self.metrics.frames.saturating_add(1);
         if result.is_ok() && !commit_rasters {
@@ -2984,6 +2995,19 @@ mod tests {
     }
 
     #[test]
+    fn queued_input_behind_a_full_frame_slot_waits_for_its_wake() {
+        let (mut input, mut engine) = engine("Frame slot", 64, 64);
+        engine.render_frame().unwrap();
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Wait);
+        engine.backend_mut().slot_full = true;
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        assert!(engine.has_pending_input());
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Wait, "input behind a full frame slot must not poll frames");
+        engine.backend_mut().slot_full = false;
+        assert_eq!(engine.frame_demand(), layer_render::FrameDemand::Animate);
+    }
+
+    #[test]
     fn inventory_reports_wake_an_idle_frame_and_yield_to_active_input() {
         let (mut input, mut engine) = engine("Inventory idle", 64, 64);
         engine.render_frame().unwrap();
@@ -2998,10 +3022,10 @@ mod tests {
         rename(&mut engine, "Idle rename");
         assert!(engine.editor.memory_report_pending());
         assert!(engine.can_park());
-        assert!(engine.wants_continuous_frames());
+        assert!(engine.frame_demand() != layer_render::FrameDemand::Wait);
         engine.render_frame().unwrap();
         assert!(!engine.editor.memory_report_pending());
-        assert!(!engine.wants_continuous_frames());
+        assert!(engine.frame_demand() == layer_render::FrameDemand::Wait);
 
         input.push(event(1, PenPhase::Down, 16.)).unwrap();
         engine.render_frame().unwrap();
@@ -3095,6 +3119,7 @@ mod tests {
     #[derive(Debug)]
     struct PreviewField;
     impl layer_core::liquify::Field for PreviewField {
+    fn content_version(&self)->layer_core::raster::ContentVersion {layer_core::raster::ContentVersion::derive(0,&[])}
         fn as_any(&self) -> &dyn std::any::Any { self }
         fn resources(&self, _: &mut dyn FnMut(u64, usize)) {}
         fn tiles(&self) -> Vec<[u32; 2]> { vec![[0, 0]] }
@@ -3373,10 +3398,12 @@ mod tests {
         color_adoptions: usize,
         capture_blocked: bool,
         restore_blocked: bool,
+        slot_full: bool,
         unrelated_submission: bool,
         time_seconds: f32,
         phases: Vec<(layer_core::authored::EffectHandle, f32)>,
         fail_submit: bool,
+        pending_preparation: bool,
         fail_resize: bool,
         size: [u32; 2],
         persistent_dabs: usize,
@@ -3423,8 +3450,10 @@ mod tests {
             Ok(())
         }
         fn has_pending_submission(&self) -> bool { self.unrelated_submission }
+        fn can_submit(&self) -> bool { !self.slot_full }
+        fn waits_for_frame_slot(&self) -> bool { self.slot_full }
         fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> bool {
-            !self.restore_blocked
+            !std::mem::take(&mut self.pending_preparation) && !self.restore_blocked
         }
         fn can_capture_raster(&self) -> bool {
             !self.capture_blocked
@@ -3938,6 +3967,68 @@ mod tests {
             );
             assert_eq!(canvas.checkpoint(), checkpoint);
         }
+    }
+
+    #[test]
+    fn backend_replacement_reprepares_a_waiting_display_without_losing_queued_input() {
+        for queued in [false,true] {
+            let (mut input,mut canvas)=engine("waiting display",128,128);
+            canvas.backend_mut().restore_blocked=true;
+            canvas.render_frame_at(16_000_000).unwrap();
+            assert!(canvas.pending_frame.is_some());
+            assert!(canvas.dabs.is_empty() && canvas.batches.is_empty());
+            let document=canvas.document().clone();let checkpoint=canvas.checkpoint();
+            if queued {
+                input.push(event(1,PenPhase::Down,20.)).unwrap();
+                input.push(event(2,PenPhase::Up,80.)).unwrap();
+            }
+            canvas.backend_mut().unrelated_submission=true;
+            assert!(canvas.replace_backend(RecordingRenderer::default()).is_err(),"unfinished submission retains its renderer");
+            assert!(canvas.pending_frame.is_some());
+            canvas.backend_mut().unrelated_submission=false;
+            let previous=canvas.replace_backend(RecordingRenderer::default()).unwrap();
+            assert!(previous.restore_blocked);
+            assert!(canvas.pending_frame.is_none());
+            assert_eq!(canvas.document(),&document);
+            assert_eq!(canvas.checkpoint(),checkpoint);
+            assert_eq!(canvas.metrics().input_events,0);
+            assert_eq!(canvas.has_pending_input(),queued);
+            canvas.render_frame_at(32_000_000).unwrap();
+            assert!(canvas.backend().saw_reset,"the new renderer prepares its own reset frame");
+            assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits());
+            assert_eq!(canvas.metrics().frames,1);
+            assert_eq!(canvas.metrics().committed_strokes,u64::from(queued));
+            if queued {
+                assert!(canvas.backend().persistent_dabs>0);
+                assert!(canvas.undo().unwrap());
+                assert!(active_paint(canvas.document()).raster.is_empty());
+                assert!(!canvas.undo().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn failed_backend_replacement_keeps_a_waiting_display_and_queued_input() {
+        let (mut input,mut canvas)=engine("failed waiting display",128,128);
+        canvas.backend_mut().restore_blocked=true;
+        canvas.render_frame().unwrap();
+        input.push(event(1,PenPhase::Down,20.)).unwrap();
+        input.push(event(2,PenPhase::Up,80.)).unwrap();
+        match canvas.replace_backend(RecordingRenderer {fail_resize:true,..Default::default()}) {
+            Err(error)=>assert!(error.to_string().contains("replacement resize failed"),"{error}"),
+            Ok(_)=>panic!("the replacement resize must fail"),
+        }
+        assert!(canvas.pending_frame.is_some() && canvas.backend().restore_blocked);
+        assert_eq!(canvas.metrics().input_events,0);
+        canvas.backend_mut().restore_blocked=false;
+        canvas.render_frame().unwrap();
+        assert!(canvas.backend().saw_reset);
+        assert!(canvas.has_pending_input());
+        assert_eq!(canvas.metrics().input_events,0);
+        canvas.render_frame().unwrap();
+        assert!(!canvas.has_pending_input() && !canvas.has_pending_document_edits());
+        assert_eq!(canvas.metrics().committed_strokes,1);
+        assert!(canvas.backend().persistent_dabs>0);
     }
 
     #[test]
@@ -5366,6 +5457,35 @@ mod tests {
         assert!(engine.prepare_color_transition(ColorTransition::Apply {
             edit: Box::new(color_edit(engine.document(), target)),
         }).is_err());
+    }
+
+    #[test]
+    fn preparation_pending_retains_the_prepared_stroke_and_up_until_one_submission() {
+        let (mut input, mut engine) = engine("pending submission", 64, 64);
+        engine.render_frame().unwrap();
+        let frames = engine.metrics().frames;
+        engine.backend_mut().pending_preparation = true;
+        input.push(event(1, PenPhase::Down, 8.)).unwrap();
+        input.push(event(2, PenPhase::Up, 24.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.pending_frame.is_some());
+        assert!(!engine.dabs.is_empty() && !engine.batches.is_empty());
+        assert_eq!(engine.backend().persistent_dabs, 0);
+        assert_eq!(engine.metrics().frames, frames);
+        assert!(active_paint(engine.document()).raster.try_data().is_none());
+        let dabs = engine.dabs.clone();
+        let batches = engine.batches.len();
+        input.push(event(3, PenPhase::Down, 32.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.pending_frame.is_none());
+        assert!(engine.dabs.is_empty() && engine.batches.is_empty());
+        assert_eq!(engine.metrics().input_events, 2);
+        assert_eq!(engine.metrics().frames, frames + 1);
+        assert_eq!(engine.backend().persistent, dabs);
+        assert_eq!(engine.backend().persistent_batches.len(), batches);
+        assert!(active_paint(engine.document()).raster.host_backed());
+        assert!(!engine.has_active_stroke());
+        assert_eq!(engine.metrics().committed_strokes, 1);
     }
 
     #[test]
@@ -7301,7 +7421,7 @@ mod tests {
             kind: RasterOperationKind::Erase { alpha_locked: false } };
         engine.insert_with_operations(insertion, vec![(output_id, bake), (source_id, erase)], None).unwrap();
         let mut frames = 0;
-        while engine.wants_continuous_frames() {
+        while engine.frame_demand() != layer_render::FrameDemand::Wait {
             engine.render_frame().unwrap();
             frames += 1;
             assert!(frames <= 8, "only the bounded bake pieces and one erase are submitted");

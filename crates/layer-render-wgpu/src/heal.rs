@@ -549,6 +549,7 @@ impl RetouchSources {
         };
         let parameters = bindings::group(&device, "spot healing parameters", &k.parameters, [uniform()]);
         self.heal.job = Some(Box::new(Job {
+            intents:pages.iter().map(|coordinate|r.raster_intent(batch.target,layer_core::raster::RasterPlane::Color,*coordinate)).collect::<Result<_,_>>()?,
             batch: batch.clone(), pages, windows, offsets, boxes, seeds, plane_group, apply_group, parameters,
             choice, choice_at, scores_at, found, copied, work, scale: pyramid.scale, spot,
             storage_bytes: layout_buffer.size() + params.size(),
@@ -561,7 +562,7 @@ impl RetouchSources {
     pub(crate) fn step_heal(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         let Some(mut job) = self.heal.job.take() else { return Ok(false); };
         let work = job.work.pop_front().unwrap();
-        job.encode(self, r, encoder, work)?;
+        if let Err(error)=job.encode(self,r,encoder,work.clone()) {job.work.push_front(work);self.heal.job=Some(job);return Err(error);}
         if job.work.is_empty() {
             self.counts.heals += 1;
             if self.heal.planes.as_ref().is_some_and(|p| p.bytes() > RETAINED_BYTES) { self.heal.planes = None; }
@@ -572,6 +573,7 @@ impl RetouchSources {
 
 #[derive(Clone, Copy)]
 enum PlanePass { Pull, Push, Relax, Judge }
+#[derive(Clone)]
 enum Work {
     Candidate(usize, CandidatePass, std::ops::Range<usize>),
     Seed(std::ops::Range<usize>),
@@ -579,6 +581,7 @@ enum Work {
     Apply(std::ops::Range<usize>),
 }
 struct Job {
+    intents:Vec<crate::raster::contents::Intent>,
     batch: DabBatch,
     pages: Vec<[u32; 2]>,
     windows: Vec<PixelRect>,
@@ -602,16 +605,20 @@ impl Job {
     fn gather(&self, i: usize, scale: [f32; 2], offset: [f32; 2]) -> Gather {
         Gather { region: self.windows[i], scale, offset, stroke: Some((self.batch.stroke_id, self.batch.target, self.batch.style.retouch.clone().unwrap())) }
     }
-    fn coverage(&self, r: &WgpuRasterizer, i: usize) -> wgpu::TextureView {
-        r.paint_layers.iter().find(|l| l.id == self.batch.target)
-            .and_then(|l| l.coverage_pages.iter().find(|p| p.coordinate == self.pages[i] && p.owner == Some(self.batch.stroke_id)))
-            .map_or_else(|| r.empty_scalar_view.clone(), |p| p.active().view.clone())
+    fn coverage(&self,r:&WgpuRasterizer,i:usize,receipt:&crate::submission::Submission)->Result<wgpu::TextureView,GpuRasterError> {
+        let intent=r.raster_intent(self.batch.target,layer_core::raster::RasterPlane::Color,self.pages[i])?;
+        let Some(page)=r.paint_layers.iter().find(|l|l.id==self.batch.target)
+            .and_then(|l|l.coverage_pages.iter().find(|p|p.coordinate==self.pages[i] && p.owner==Some(self.batch.stroke_id))) else {return Ok(r.empty_scalar_view.clone());};
+        let state=page.state.as_ref().filter(|state|state.matches(self.batch.stroke_id,&intent)).ok_or(GpuRasterError::Invariant("prepared coverage state is inconsistent"))?;
+        page.active().read(&state.version,Some(receipt)).map(|read|read.value().view.clone()).ok_or(GpuRasterError::Invariant("accepted input is not readable"))
     }
-    fn page_group(&self, r: &WgpuRasterizer, k: &Pipelines, i: usize) -> wgpu::BindGroup {
-        bindings::group(&r.device, "heal page fields", &k.pages,
-            [&self.found[i], &self.copied[i], &self.coverage(r, i)].map(wgpu::BindingResource::TextureView))
+    fn page_group(&self,r:&WgpuRasterizer,k:&Pipelines,i:usize,receipt:&crate::submission::Submission)->Result<wgpu::BindGroup,GpuRasterError> {
+        Ok(bindings::group(&r.device,"heal page fields",&k.pages,
+            [&self.found[i],&self.copied[i],&self.coverage(r,i,receipt)?].map(wgpu::BindingResource::TextureView)))
     }
     fn encode(&mut self, sources: &mut RetouchSources, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, work: Work) -> Result<(), GpuRasterError> {
+        for intent in &self.intents {r.validate_raster_intent(self.batch.target,intent)?;}
+        let receipt=encoder.submission();
         let k = sources.pipelines.heal.clone();
         let device = r.device.clone();
         let phase = match &work { Work::Candidate(..) | Work::Plane(PlanePass::Judge, ..) => 3, Work::Seed(..) => 4, Work::Apply(..) => 5, Work::Plane(PlanePass::Relax, ..) => 7, _ => 6 };
@@ -623,11 +630,6 @@ impl Job {
                 for page in pages.clone() {
                     let i = if kind == CandidatePass::Pick { self.pages.len() - 1 - page } else { page };
                     if self.windows[i].is_empty() { continue; }
-                    if kind == CandidatePass::Gather {
-                        self.found[i] = Page::new(r, "spot healing destination").view;
-                        self.copied[i] = create_target(&device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "spot healing source").1;
-                        self.storage_bytes += u64::from(PAGE_SIZE * PAGE_SIZE) * 32;
-                    }
                     let offset = self.offsets.get(c).map_or([0.; 2], |(o, _)| o.map(|v| v as f32));
                     let mapping = sources.mapping(r, &self.gather(i, [1.; 2], offset))?;
                     let origin = self.pages[i].map(|v| ((v * PAGE_SIZE) as f32).to_bits());
@@ -655,13 +657,18 @@ impl Job {
                             }
                         }
                     };
+                    let reads = mappings.iter().map(|(_, _, mapping)| sources.pages(r, mapping, encoder)).collect::<Result<Vec<_>, _>>()?;
                     let mut jobs = Vec::new();
-                    for (i, slot, mapping) in mappings {
-                        if !sources.resident(r, &mapping) { flush(encoder, &mut jobs); }
-                        let views = sources.pages(r, &mapping, encoder)?.0.map(|view| view.unwrap_or_else(|| r.empty_view.clone()));
+                    for ((i, slot, _), (views, _)) in mappings.into_iter().zip(reads) {
+                        if kind == CandidatePass::Gather {
+                            self.found[i] = create_color_target(&r.device,[PAGE_SIZE;2],"spot healing destination").1;
+                            self.copied[i] = create_target(&device, [PAGE_SIZE; 2], wgpu::TextureFormat::Rgba32Float, "spot healing source").1;
+                            self.storage_bytes += u64::from(PAGE_SIZE * PAGE_SIZE) * 32;
+                        }
+                        let views = views.map(|view| view.unwrap_or_else(|| r.empty_view.clone()));
                         let uniform = wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms, offset: 0, size: NonZeroU64::new(CANDIDATE_BYTES) });
                         let candidate = bindings::group(&device, "spot healing candidate", &k.candidate, views.iter().map(wgpu::BindingResource::TextureView).chain([uniform]));
-                        let page = if kind == CandidatePass::Score { self.page_group(r, &k, i) }
+                        let page = if kind == CandidatePass::Score { self.page_group(r, &k, i, &receipt)? }
                             else { bindings::group(&device, "spot healing chosen source", &k.chosen, [wgpu::BindingResource::TextureView(if kind == CandidatePass::Gather { &self.found[i] } else { &self.copied[i] })]) };
                         jobs.push((i, slot, candidate, page));
                     }
@@ -672,16 +679,17 @@ impl Job {
                 }
             }
             Work::Seed(pages) => {
-                let seed = |r: &WgpuRasterizer, pass: &mut wgpu::ComputePass<'_>, i: usize| {
+                let seed = |r: &WgpuRasterizer, pass: &mut wgpu::ComputePass<'_>, i: usize| -> Result<(),GpuRasterError> {
                     pass.set_pipeline(&k.seed);
                     pass.set_bind_group(0, &self.plane_group, &[self.seeds[i]]);
-                    pass.set_bind_group(1, &self.page_group(r, &k, i), &[]);
+                    pass.set_bind_group(1, &self.page_group(r, &k, i, &receipt)?, &[]);
                     let groups = (PAGE_SIZE / self.scale).div_ceil(16);
                     pass.dispatch_workgroups(groups, groups, 1);
+                    Ok(())
                 };
                 if self.spot {
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("heal seed"), timestamp_writes: None });
-                    for i in pages { seed(r, &mut pass, i); }
+                    for i in pages { seed(r, &mut pass, i)?; }
                 } else { for i in pages {
                     if !self.windows[i].is_empty() {
                         let retouch = self.batch.style.retouch.as_ref().unwrap();
@@ -689,7 +697,7 @@ impl Job {
                         sources.encode_gather(r, &self.copied[i], self.gather(i, retouch.flip.map(|f| if f { -1. } else { 1. }), retouch.offset), encoder)?;
                     }
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("heal seed"), timestamp_writes: None });
-                    seed(r, &mut pass, i);
+                    seed(r, &mut pass, i)?;
                 } }
             }
             Work::Plane(kind, slot, groups) => {
@@ -700,29 +708,40 @@ impl Job {
             }
             Work::Apply(pages) => {
                 let layer = r.paint_layers.iter().position(|l| l.id == self.batch.target).ok_or(GpuRasterError::MissingPaintLayer(self.batch.target))?;
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("heal apply"), timestamp_writes: None });
-                pass.set_pipeline(&k.apply);
+                let mut publications=Vec::new();
+                let mut groups=Vec::new();
                 for i in pages.filter(|i| !self.windows[*i].is_empty()) {
                     let page = self.pages[i];
                     let start = match sources.stroke.as_ref().filter(|s| s.id == self.batch.stroke_id).and_then(|s| s.pages.get(&page)) {
-                        Some(Some(slot)) => sources.pool[*slot].view.clone(), _ => r.empty_view.clone(),
+                        Some(Some((slot,expected))) => sources.pool[*slot].read(expected,Some(&receipt))?.value().view.clone(), _ => r.empty_view.clone(),
                     };
                     let Some(index) = r.paint_layers[layer].pages.iter().position(|p| p.coordinate == page) else { continue; };
                     if r.paint_layers[layer].pages[index].secondary.is_none() {
-                        r.paint_layers[layer].pages[index].secondary = Some(r.create_page_surface("layer sparse destination companion"));
+                        r.paint_layers[layer].pages[index].secondary = Some(resident::Resident::unwritten(r.create_page_surface(&r.raster_tiers.paint,"layer sparse destination companion")));
                     }
-                    let painted = &r.paint_layers[layer].pages[index];
-                    let secondary = !painted.active_secondary;
-                    let coverage = self.coverage(r, i);
-                    let mut entries: Vec<_> = (1..).zip([&self.copied[i], &coverage, &painted.active().view, &start])
+                    let intent=r.raster_intent(self.batch.target,layer_core::raster::RasterPlane::Color,page)?;
+                    let input=r.read_color_page(self.batch.target,&r.paint_layers[layer].pages[index],false,Some(&receipt))?.value().view.clone();
+                    let secondary=!r.paint_layers[layer].pages[index].active_secondary;
+                    let coverage=self.coverage(r,i,&receipt)?;
+                    let painted=&mut r.paint_layers[layer].pages[index];
+                    let write=painted.write(secondary,&intent,&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                    let mut entries: Vec<_> = (1..).zip([&self.copied[i], &coverage, &input, &start])
                         .map(|(binding, view)| wgpu::BindGroupEntry { binding, resource: wgpu::BindingResource::TextureView(view) }).collect();
-                    entries.push(wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&painted.surface(secondary).view) });
+                    entries.push(wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&write.value().view) });
                     let group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("heal page"), layout: &k.apply_pages, entries: &entries });
-                    pass.set_bind_group(0, &self.apply_group, &[self.seeds[i]]);
-                    pass.set_bind_group(1, &group, &[]);
-                    pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8), PAGE_SIZE.div_ceil(8), 1);
-                    r.paint_layers[layer].pages[index].active_secondary = secondary;
+                    groups.push((self.seeds[i],group,index,secondary));
+                    publications.push(write.encoded(layer_core::raster::ContentName::fresh()));
                 }
+                let mut pass=encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {label:Some("heal apply"),timestamp_writes:None});
+                pass.set_pipeline(&k.apply);
+                for (seed,group,_,_) in &groups {
+                    pass.set_bind_group(0,&self.apply_group,&[*seed]);pass.set_bind_group(1,group,&[]);
+                    pass.dispatch_workgroups(PAGE_SIZE.div_ceil(8),PAGE_SIZE.div_ceil(8),1);
+                }
+                drop(pass);
+                for (_,_,index,secondary) in groups {r.paint_layers[layer].pages[index].active_secondary=secondary;}
+                for publication in publications {r.record_raster_write(self.batch.target,publication.publish(&encoder.submission()))?;}
+                for (i,coordinate) in self.pages.iter().enumerate() {self.intents[i]=r.raster_intent(self.batch.target,layer_core::raster::RasterPlane::Color,*coordinate)?;}
             }
         }
         r.telemetry.phase_end(phase, encoder);

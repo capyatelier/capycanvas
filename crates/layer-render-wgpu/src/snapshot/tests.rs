@@ -20,6 +20,29 @@ fn capture(document: Document) -> Result<SnapshotRenderer, GpuRasterError> {
 }
 
 #[test]
+fn terminal_raw_capture_errors_discard_their_unsubmitted_prefix() {
+    for pending in [false,true] {
+        let document=Document::new(PortableId::random(),16,16,
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let target=document.active_target().unwrap();
+        let control=CaptureControl::default();
+        let mut snapshot=gpu().capture_scene(document.snapshot(),SceneScope::Raw(target),control.clone()).unwrap();
+        let result:Result<(),GpuRasterError>=pollster::block_on(snapshot.with_region_gpu([0,0,16,16],0,|r,_,_,_| {
+            let mut scene=r.scene.take().map(Ok).unwrap_or_else(||scene::Scene::new(r))?;
+            scene::scale::tests::queue_unencoded_clear(&mut scene,r)?;
+            r.scene=Some(scene);
+            if pending {control.cancel();Err(GpuRasterError::NotReady)}
+            else {Err(GpuRasterError::Invariant("raw capture rejected its plan"))}
+        }));
+        if pending {assert!(matches!(result,Err(GpuRasterError::Color(ref message)) if message=="Snapshot capture cancelled"));}
+        else {assert!(matches!(result,Err(GpuRasterError::Invariant("raw capture rejected its plan"))));}
+        let scene=snapshot.renderer.scene.as_ref().unwrap();
+        assert_eq!(scene::scale::tests::unencoded_job_counts(scene),[0;2],
+            "terminal pending={pending} retained raw jobs after the caller's accepted record ended");
+    }
+}
+
+#[test]
 fn cold_raster_snapshots_prepare_the_normalizer_for_their_stored_depth() {
     for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         let color=DocumentColor {depth,..Default::default()};
@@ -194,7 +217,7 @@ fn layered_painting(extent: [u32; 2], layers: u32, mixed: bool) -> Document {
         if kind == 2 {
             tiles.extend(page_coordinates(PixelRect::full(extent)).map(|c| (TileKey {plane:RasterPlane::WatercolorWetness,coordinate:c}, scalar(if (c[0] + c[1] + layer).is_multiple_of(3) { 2 } else { 177 }))));
         }
-        document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(RasterData {tiles,watercolor});
+        document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(RasterData {tiles:tiles.into(),watercolor});
         if kind == 1 {
             let coverage = document.artwork.coverage.next_handle();
             let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, extent, if layer % 8 == 1 { [0, 0] } else { [13, -7] });
@@ -253,11 +276,10 @@ fn snapshot_regions_plan_and_hold_the_same_memory_for_any_layer_count() {
         let mut y = 0;
         while y < extent[1] { y += capture.read_band(y).unwrap().0; }
         let r = &capture.renderer;
-        let sources = r.source_tiles.borrow();
-        assert!(sources.gpu_bytes() <= sources.admitted_bytes().iter().sum::<u64>());
+        assert!(r.scene_tiers.display.used() <= r.scene_tiers.display.limit());
         assert_eq!(r.paint_layers.iter().map(|layer| layer.pages.len() + layer.watercolor_wetness_pages.len()).sum::<usize>() + r.layer_masks.pages.len(), 0);
         let scene = r.scene.as_ref().unwrap();
-        (required, scene.pool_bytes(), scene.scratch_bytes())
+        (required, scene.pool_bytes(), {let usage=scene.usage();usage.working+scene.object_gpu()[0]+usage.ram})
     };
     let ((required, pool, scratch), (many_required, many_pool, many_scratch)) = (measure(8), measure(48));
     assert_eq!(required, many_required);
@@ -1067,7 +1089,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
                     }
                 }
                 assert!(reader.renderer.scale_display.is_none());
-                assert_eq!(reader.renderer.metrics().composite_storage_bytes, 0);
+                assert_eq!(reader.renderer.scene.as_ref().map_or(0, |scene| scene.retained_scale_bytes()[0]), 0);
                 assert!(reader.renderer.selection_clip.storage_bytes() < 641 * 389 / 2);
             }
         }
@@ -1454,8 +1476,8 @@ fn sparse_transform_capture_keeps_filter_edges_and_watercolor_metadata_without_e
         snapshot.extent = plan.extent;
         snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
         snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
-        assert_eq!(snapshot.raw_planes, [RasterPlane::Color]);
-        assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(color.depth, Default::default(), &snapshot.raw_planes).len(), 1);
+        assert_eq!(snapshot.raw_plan.as_ref().unwrap().planes(), [RasterPlane::Color]);
+        assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(color.depth, Default::default(), &snapshot.raw_plan.as_ref().unwrap().planes()).len(), 1);
         let coordinates = snapshot.raw_coordinates().unwrap();
         assert!(coordinates.len() < page_coordinates(PixelRect::full(plan.extent)).count() / 2, "{interpolation:?}: {coordinates:?}");
         let mut transformed = document.clone();
@@ -1465,11 +1487,16 @@ fn sparse_transform_capture_keeps_filter_edges_and_watercolor_metadata_without_e
         assert!(output.tiles.keys().all(|key| key.plane == RasterPlane::Color));
         for coordinate in page_coordinates(PixelRect::full(plan.extent)) {
             let region = page_rect(coordinate).intersect(PixelRect::full(plan.extent));
-            let planes = snapshot.raw_planes.clone();
+            let placements = snapshot.raw_plan.as_ref().unwrap().sources.clone();
+            let mut accepted=None;
             let (tiles, capture) = pollster::block_on(snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
                 |r, packet, _, encoder| {
                     let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r).unwrap());
-                    let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &planes, encoder);
+                    let result=(|| {
+                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target),&placements,coordinate)?.accept_query(r,Some(&scene))?);}
+                        accepted.as_ref().unwrap().clone().track(encoder);
+                        scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,accepted.as_mut().unwrap())
+                    })();
                     r.scene = Some(scene); result
                 })).unwrap();
             capture.finish().unwrap();
@@ -1502,15 +1529,21 @@ fn default_one_masks_keep_zero_tiles_and_skip_no_authored_coverage() {
     snapshot.extent = plan.extent;
     snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
     snapshot.renderer.ensure_document_metadata(plan.extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).unwrap();
-    assert_eq!(snapshot.raw_planes, [RasterPlane::Mask]);
+    assert_eq!(snapshot.raw_plan.as_ref().unwrap().planes(), [RasterPlane::Mask]);
     assert_eq!(snapshot.raw_coordinates().unwrap().len(), page_coordinates(PixelRect::full(plan.extent)).count());
-    assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(document.composition().color.depth, Default::default(), &snapshot.raw_planes).len(), 1);
+    assert_eq!(snapshot.renderer.native_edit.as_ref().unwrap().private_pipelines(document.composition().color.depth, Default::default(), &snapshot.raw_plan.as_ref().unwrap().planes()).len(), 1);
+    let placements=snapshot.raw_plan.as_ref().unwrap().sources.clone();
     for coordinate in [[0, 0], [2, 1]] {
+        let mut accepted=None;
         let region = page_rect(coordinate).intersect(PixelRect::full(plan.extent));
         let (tiles, capture) = pollster::block_on(snapshot.with_region_gpu([region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
             |r, packet, _, encoder| {
                 let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r).unwrap());
-                let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &[RasterPlane::Mask], encoder);
+                let result=(|| {
+                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,plan.paint.map(SourceTarget::Paint).unwrap_or(plan.target),&placements,coordinate)?.accept_query(r,Some(&scene))?);}
+                        accepted.as_ref().unwrap().clone().track(encoder);
+                        scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,accepted.as_mut().unwrap())
+                    })();
                 r.scene = Some(scene); result
             })).unwrap();
         capture.finish().unwrap();
@@ -1648,4 +1681,33 @@ fn exports_light_the_paper_like_the_canvas_and_paint_hides_what_does_not_show_th
         set_paper(&mut document, &[(THROUGH_PAINT, Number(40.))]);
         assert_canvas_matches_export(&document, &exported_green(&document), &format!("{blend:?} 40%"));
     }
+}
+
+#[test]
+fn cancelling_a_native_snapshot_wakes_its_registered_decode_future() {
+    struct Count(std::sync::atomic::AtomicUsize);
+    impl std::task::Wake for Count {fn wake(self:Arc<Self>) {self.0.fetch_add(1,Ordering::Relaxed);}}
+    let control=CaptureControl::default();let count=Arc::new(Count(Default::default()));
+    *control.decode_wake.lock().unwrap()=Some(std::task::Waker::from(count.clone()));
+    control.cancel();assert!(control.is_cancelled());
+    assert_eq!(count.0.load(Ordering::Relaxed),1);
+    control.cancel();assert_eq!(count.0.load(Ordering::Relaxed),1);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_retired_snapshot_returns_an_error_with_already_prepared_selection_pipelines() {
+    let reference=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    assert_ne!(reference.adapter().get_info().device_type,wgpu::DeviceType::Cpu);
+    let gpu=reference.snapshot_gpu();
+    let document=Document::new(PortableId::random(),16,16,
+        layer_core::DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
+    let mut snapshot=gpu.capture_scene(document.snapshot(),SceneScope::All,Default::default()).unwrap();
+    pollster::block_on(snapshot.renderer.compilation.prepare_all(snapshot.renderer.selection_clip.pipelines())).unwrap();
+    assert!(snapshot.renderer.selection_clip.pipelines().iter().all(|pipeline|pipeline.ready()));
+    let selection=Arc::new(Selection::polygon(vec![Point{x:1.,y:1.},Point{x:15.,y:1.},Point{x:1.,y:15.}]).unwrap());
+    reference.renderer_factory().retire_device_services().unwrap();
+    crate::finish_shader_compiler_shutdown();
+    let result=pollster::block_on(snapshot.selection_coverage_async(&selection,[0,0,16,16]));
+    assert!(result.is_err(),"a terminally retired snapshot must return an error");
 }

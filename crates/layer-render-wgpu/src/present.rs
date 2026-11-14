@@ -92,7 +92,9 @@ pub(super) struct Recipes {
     overviews: [std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>; 2],
 }
 
+const SURFACE_IMAGES: u64 = 3;
 pub struct ViewportPresenter {
+    surface_memory: Option<(layer_core::MemoryOwner, u64)>,
     recipes: std::sync::Arc<Recipes>,
     timing: Option<crate::frame_timing::GpuFrameTimer>,
     pipeline: [crate::Deferred<wgpu::RenderPipeline>; 3],
@@ -253,7 +255,7 @@ impl Recipes {
                 wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: true },
                 false,
-                std::num::NonZeroU64::new(32),
+                std::num::NonZeroU64::new(48),
             ),
             crate::bindings::float_texture(6, wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE, device),
             crate::bindings::float_texture(13, wgpu::ShaderStages::FRAGMENT, device),
@@ -348,7 +350,7 @@ impl ViewportPresenter {
         guide: Option<std::sync::Arc<crate::local_tone::GpuToneGuide>>,
     ) -> Result<(), GpuRasterError> {
         if let Some(g) = &guide
-            && (g.device != *renderer.device || g.space != renderer.document_color.space) {
+            && (*g.device != *renderer.device || g.space != renderer.document_color.space) {
                 return Err(GpuRasterError::Color("Local tone guide belongs to a different device or color space".into()));
             }
         if match (&self.gpu_local_guide, &guide) {
@@ -597,7 +599,7 @@ impl ViewportPresenter {
         if let Some(panels) = &self.panels {
             renderer.compilation.prepare_all([&panels.pipeline,&panels.mask_pipeline]).await.map_err(GpuRasterError::Effect)?;
         }
-        renderer.compilation.prepare_all(renderer.scene_pipelines.scale_pipelines())
+        renderer.compilation.prepare_all(renderer.scene_pipelines.scale_pipelines(wgpu::TextureFormat::Rgba32Float))
             .await.map_err(GpuRasterError::Effect)?;
         self.pipelines_ready(renderer);
         Ok(())
@@ -626,11 +628,11 @@ impl ViewportPresenter {
             buffer:&buffer,
             layout:wgpu::TexelCopyBufferLayout {offset:0,bytes_per_row:Some(stride),rows_per_image:None},
         },texture.size());
-        renderer.queue.submit([encoder.finish()]);
+        renderer.submit_commands([encoder.finish()]);
         let (done,ready)=std::sync::mpsc::channel();
-        buffer.map_async(wgpu::MapMode::Read,..,move|result| {
+        buffer.map_async(wgpu::MapMode::Read,..,{let callback=move|result:Result<(),wgpu::BufferAsyncError>| {
             let _=done.send(result.map_err(|error|error.to_string()));
-        });
+        }; #[cfg(not(target_arch="wasm32"))] let callback=renderer.device.callback(callback);callback});
         crate::raster::wait_mapping(&renderer.device,&ready).map_err(GpuRasterError::MapFailed)?;
         let bytes=buffer.get_mapped_range(..)
             .map_err(|error|GpuRasterError::MapFailed(error.to_string()))?.to_vec();
@@ -652,15 +654,14 @@ impl ViewportPresenter {
         })
     }
 
-    fn bound_viewport(&self, renderer: &WgpuRasterizer) -> ([f32; 20], bool, &crate::Deferred<wgpu::RenderPipeline>) {
-        let placement = if renderer.has_presentable_frame() { renderer.display_placement() } else { [0.; 20] };
-        let source = placement[13] as usize;
+    fn bound_viewport(&self, renderer: &WgpuRasterizer) -> (usize, bool, &crate::Deferred<wgpu::RenderPipeline>) {
+        let source = 0;
         let showing = renderer.presentation.showing && !self.standalone_overview;
         let lit = showing && (renderer.paper_lighting.is_some() || renderer.paper_overlay.is_some());
         let pipeline = if !showing { &self.surround_pipeline }
             else if lit { &self.paper_pipelines(renderer)[source] }
             else { &self.pipeline[source] };
-        (placement, lit, pipeline)
+        (source, lit, pipeline)
     }
 
     pub fn prepare_color_picker(&self, renderer: &WgpuRasterizer) -> bool {
@@ -699,6 +700,7 @@ impl ViewportPresenter {
     fn for_output(renderer: &WgpuRasterizer, format: wgpu::TextureFormat, color: SdrSurfaceColor, standalone_overview: bool) -> Result<Self, GpuRasterError> {
         color.shader_encoding(format)?;
         let mut presenter = Self::with_device(renderer, format, color, standalone_overview);
+        presenter.surface_memory = Some((renderer.factory.memory_owner_in(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned), 0));
         presenter.set_hdr_view(
             renderer,
             renderer
@@ -745,12 +747,13 @@ impl ViewportPresenter {
         });
         let disabled_local_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("disabled local tone guide"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
         let picker = crate::present_picker::Picker::new(device, &shader, &pipeline_layout, format, &recipes.picker);
         let mut presenter = Self {
+            surface_memory: None,
             recipes,
             pipeline,
             presented_paper: None,
@@ -820,7 +823,7 @@ impl ViewportPresenter {
             history: Default::default(),
             presented_drawing: None,
             last_artwork_pipeline: None,
-            transition_device: device.for_recipe(),
+            transition_device: device.for_resource(),
             held: None,
             held_draw: None,
             held_alpha: Default::default(),
@@ -964,6 +967,8 @@ impl ViewportPresenter {
     }
 
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
+    #[cfg(test)]
+    pub(crate) fn presented_camera(&self)->Option<ViewState> {self.presented_view.map(|(view,..)|view)}
     pub fn canvas_revision(&self) -> Option<u64> {
         self.presented_drawing.filter(|drawing| drawing.showing).and_then(|_| self.history.valid.then_some(self.history.artwork_revision))
     }
@@ -1008,12 +1013,12 @@ impl ViewportPresenter {
     }
 
     pub fn needs_present(&self, renderer: &WgpuRasterizer, view: ViewState, surround_linear: [f32; 4]) -> bool {
-        let [composite,coarse,next] = match renderer.presentation_views() {
-            Some(views) => views,
-            None if renderer.presentation.showing => return false,
+        let page=renderer.presentation_page();
+        let [composite,coarse,next] = match &page {
+            Some(page) => page.views(),
             None => [&renderer.empty_view; 3],
         };
-        let geometry=renderer.display_geometry().unwrap_or(&self.disabled_local_buffer);
+        let geometry=page.as_ref().map_or(&self.disabled_local_buffer,|page|page.geometry());
         let previous = &self.history;
         !previous.valid
             || (self.held_alpha != self.transition_alpha(renderer))
@@ -1022,8 +1027,7 @@ impl ViewportPresenter {
             || self.presented_selection_overlay != renderer.selection_overlay
             || self.presented_motion != renderer.display_motion().map(|(_, values, moved, revision)| (values, moved, revision))
             || (renderer.presentation.showing && self.presented_paper != Some(self.bound_viewport(renderer).1))
-            || (previous.revision != renderer.composite_revision
-                && (previous.artwork_revision != renderer.artwork_revision || renderer.scale_display.as_ref().is_none_or(|cache|!cache.has_pending_work(renderer))))
+            || previous.revision != renderer.composite_revision
             || previous.selection_revision != renderer.selection_paint_revision
             || previous.outline_revision != renderer.display_selection_revision
             || previous.hdr != self.hdr_options
@@ -1064,7 +1068,8 @@ impl ViewportPresenter {
                 label: Some("viewport presentation"),
             });
         self.encode(renderer, &mut encoder, target, view, surround_linear)?;
-        let submitted = renderer.queue.submit_for_present([encoder.finish()]);
+        let submitted = renderer.device.submit_for_present(&renderer.queue,[encoder.finish()])
+            .ok_or_else(||GpuRasterError::WaitFailed("GPU device service retired".into()))?;
         if let Some(timer) = &mut self.timing {
             timer.submitted(renderer.queue());
         }
@@ -1132,14 +1137,14 @@ impl ViewportPresenter {
             Some(scratch)
         } else {None};
         let held=crate::HeldCanvas::new(&self.transition_device,size,self.format,self.color,canvas,navigator);
-        held.retain_until_complete(encoder);
+        held.retain_until_complete(&self.transition_device,encoder);
         Some(held)
     }
     pub fn capture_held(&mut self, device:&wgpu::Device, queue:&wgpu::Queue)->Option<crate::HeldCanvas> {
         if *self.transition_device!=*device {return None;}
         let mut encoder=device.create_command_encoder(&Default::default());
         let held=self.capture_into(&mut encoder);
-        queue.submit([encoder.finish()]);held
+        self.transition_device.submit(queue,[encoder.finish()]);held
     }
     pub fn adopt_held(&mut self, held:Option<crate::HeldCanvas>) {
         self.held=held.filter(|held|held.device==*self.transition_device && held.format==self.format && held.encoding==self.color);
@@ -1191,7 +1196,8 @@ impl ViewportPresenter {
             [0.; 4],
             true,
         )?;
-        renderer.queue.submit_for_present([encoder.finish()]);
+        renderer.device.submit_for_present(&renderer.queue,[encoder.finish()])
+            .ok_or_else(||GpuRasterError::WaitFailed("GPU device service retired".into()))?;
         if let Some(timer) = &mut self.timing {
             timer.submitted(renderer.queue());
         }
@@ -1208,6 +1214,15 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
+        if let Some((memory, charged)) = &mut self.surface_memory {
+            let images = target.texture();
+            let bytes = u64::from(images.width()) * u64::from(images.height())
+                * u64::from(images.format().block_copy_size(None).unwrap_or(8)) * SURFACE_IMAGES;
+            if bytes != *charged {
+                memory.report(layer_core::MemoryReport { gpu_bytes: bytes, pinned_gpu_bytes: bytes, ..Default::default() });
+                *charged = bytes;
+            }
+        }
         let result=self.encode_content_frame(renderer,encoder,target,view,surround_linear,overview_only);
         self.uploads.finish(encoder);
         result
@@ -1223,8 +1238,7 @@ impl ViewportPresenter {
         surround_linear: [f32; 4],
         overview_only: bool,
     ) -> Result<(), GpuRasterError> {
-        let (placement, lit, pipeline) = self.bound_viewport(renderer);
-        let source = placement[13] as usize;
+        let (source, lit, pipeline) = self.bound_viewport(renderer);
         if !self.pipelines_ready_for(renderer, pipeline, lit) { return Ok(()); }
         let pipeline = pipeline.clone();
         let size = [target.texture().width(),target.texture().height()];
@@ -1247,23 +1261,22 @@ impl ViewportPresenter {
         if let Some(held)=&self.held {
             let draw=self.held_draw.get_or_insert_with(||crate::present_transition::TransitionDraw::new(&renderer.device,&self.recipes.transition,held));
             draw.update(&mut self.uploads,encoder,fade)?;
-            held.retain_until_complete(encoder);
+            held.retain_until_complete(&renderer.device,encoder);
         }
         if self.fill_before.as_ref().is_some_and(|(id,image)|renderer.fill_reveal.is_none_or(|reveal|reveal.transaction!=*id)
             || [image.texture().width(),image.texture().height()]!=if self.quarter_turns.is_multiple_of(2) {[view.width_px,view.height_px]}else{[view.height_px,view.width_px]}) {
             self.fill_before=None;self.bind_group=None;
         }
         let showing = renderer.presentation.showing;
-        let [composite,coarse,next] = match renderer.presentation_views() {
-            Some(views) => views,
-            None if showing => return Ok(()),
+        let page=renderer.presentation_page();
+        let [composite,coarse,next] = match &page {
+            Some(page) => page.views(),
             None => [&renderer.empty_view; 3],
         };
-        if showing && renderer.display_backup.is_none() && let Some(cache) = renderer.selected_display_cache() { cache.refresh_half(renderer, encoder, &mut self.uploads)?; }
         let navigator = renderer.navigator.view().unwrap_or(&renderer.empty_view);
         let motion = renderer.display_motion();
         let motion_views = motion.map_or([&renderer.empty_view; 2], |(views, ..)| views);
-        let geometry = renderer.display_geometry().unwrap_or(&self.disabled_local_buffer);
+        let geometry = page.as_ref().map_or(&self.disabled_local_buffer,|page|page.geometry());
         let levels = [composite, next].map(|view| if view.texture().format() == wgpu::TextureFormat::Rgba16Float { view } else { &self.empty_level });
         let device = &renderer.device;
         let selection = renderer.display_selection.as_ref();
@@ -1376,12 +1389,6 @@ impl ViewportPresenter {
             ca, cb, cc, cd,
             cx, cy, crop.map_or(0., |c| c.dim.clamp(0., 1.)), f32::from(crop.is_some()),
         ]);
-        data[40..60].copy_from_slice(&placement);
-        if renderer.has_presentable_frame() {
-            for (value, bytes) in data[64..].iter_mut().zip(renderer.display_resample().as_chunks::<4>().0.iter()) {
-                *value = f32::from_le_bytes(*bytes);
-            }
-        }
         data[60] = f32::from(renderer.blend_space == layer_core::BlendSpace::Perceptual);
         data[61] = renderer.navigator.scale();
         data[62..64].copy_from_slice(&renderer.clipping_preview.map(f32::from));
@@ -1611,7 +1618,7 @@ impl ViewportPresenter {
             }
         }
         if !overview_only && let Some(panels)=self.panels.as_mut() {
-            panels.prepare(renderer.device(),&mut self.uploads,encoder,self.backdrop.as_ref().and_then(|b|b.cached()),[view.width_px,view.height_px],self.quarter_turns)?;
+            panels.prepare(&renderer.device,&mut self.uploads,encoder,self.backdrop.as_ref().and_then(|b|b.cached()),[view.width_px,view.height_px],self.quarter_turns)?;
         }
         let (regions, full) = if self.retained || overview_only {
             (regions, full)
@@ -1969,7 +1976,7 @@ mod tests {
         }
         assert!(presenter.held.is_none());
         renderer.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        assert_eq!(renderer.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
+        assert_eq!(renderer.device.transient_display.used(),0);
     }
     #[test]
     fn held_transition_uploads_finish_when_showing_has_no_views() {
@@ -1990,7 +1997,7 @@ mod tests {
         let held=presenter.capture_held(renderer.device(),renderer.queue()).unwrap();
         presenter.adopt_held(Some(held));
         renderer.set_canvas_transition(layer_render::CanvasFade::WAITING);
-        let cache=renderer.scale_display.take();let backup=renderer.display_backup.take();
+        let cache=renderer.scale_display.take();
         assert!(renderer.presentation.showing && renderer.presentation_views().is_none());
         let presented=presenter.presented_drawing;
         let scope=renderer.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -2000,7 +2007,7 @@ mod tests {
         assert!(pollster::block_on(scope.pop()).is_none());
         assert!(presenter.held_draw.is_some());
         assert!(presenter.presented_drawing==presented);
-        renderer.scale_display=cache;renderer.display_backup=backup;
+        renderer.scale_display=cache;
         renderer.set_canvas_transition(Default::default());
         set_source(&mut document,layer_core::color::source::rgba8_source(extent,|_,_|[0,0,255,255]));
         crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
@@ -2071,14 +2078,14 @@ mod tests {
             assert_eq!(pixel(&present(&mut presenter,&r),40),[0,0,255,255]);
             assert!(presenter.held.is_none());
             r.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            assert_eq!(r.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
+            assert_eq!(r.device.transient_display.used(),0);
             let held=presenter.capture_held(r.device(),r.queue());
             presenter.adopt_held(held);
             presenter.set_overviews(&r,&[]);
             present(&mut presenter,&r);
             r.device().poll(wgpu::PollType::wait_indefinitely()).unwrap();
             assert!(presenter.held.is_none());
-            assert_eq!(r.device.transient_display.load(std::sync::atomic::Ordering::Acquire),0);
+            assert_eq!(r.device.transient_display.used(),0);
         }
     }
 
@@ -2100,7 +2107,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             engine.render_frame().unwrap();
-            if !engine.has_pending_document_edits() && !engine.backend().has_pending_work() { break; }
+            if !engine.has_pending_document_edits() && engine.backend().next_frame()!=layer_render::FrameDemand::Work { break; }
             assert!(Instant::now() < deadline, "native fill must finish");
             std::thread::yield_now();
         }
@@ -2180,7 +2187,7 @@ mod tests {
             let deadline=Instant::now()+Duration::from_secs(30);
             loop {
                 renderer.wait_idle().unwrap();
-                if !renderer.has_pending_work() {break;}
+                if renderer.next_frame()!=layer_render::FrameDemand::Work {break;}
                 assert!(Instant::now()<deadline,"Object-only display settles");
                 std::thread::sleep(Duration::from_millis(1));
                 renderer.submit(layer_render::FramePacket {composite_all:false,reset_layers:false,..packet}).unwrap();

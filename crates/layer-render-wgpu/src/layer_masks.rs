@@ -5,8 +5,19 @@ use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
 pub(super) struct MaskPage {
+    pixels: crate::resident::Resident<MaskPixels>,
+}
+#[derive(Clone)]
+pub(super) struct MaskPixels {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+}
+impl crate::resident::Storage for MaskPixels {
+    fn storage_bytes(&self)->u64 {texture_bytes(&self.texture)}
+}
+impl crate::resident::TextureStorage for MaskPixels {
+    fn texture(&self)->&wgpu::Texture {&self.texture}
+    fn view(&self)->&wgpu::TextureView {&self.view}
 }
 impl MaskPage {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -31,7 +42,30 @@ impl MaskPage {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        Self { texture, view }
+        Self { pixels: crate::resident::Resident::unwritten(MaskPixels {texture,view}) }
+    }
+    pub fn read(&self,name:impl Into<layer_core::raster::ContentVersion>,submission:Option<&submission::Submission>)
+        ->Result<crate::resident::Read<'_,MaskPixels>,GpuRasterError> {
+        self.pixels.read(name,submission).ok_or(GpuRasterError::NotReady)
+    }
+    pub fn initialize<'a>(&'a mut self,submission:&'a submission::Submission)->Result<crate::resident::RasterWrite<'a,MaskPixels>,GpuRasterError> {
+        self.pixels.initialize(submission).ok_or(GpuRasterError::Invariant("prepared output was already initialized"))
+    }
+    pub fn write<'a>(&'a mut self,intent:&crate::raster::contents::Intent,submission:&'a submission::Submission)
+        ->Result<crate::resident::RasterWrite<'a,MaskPixels>,GpuRasterError> {
+        self.pixels.write(intent,submission).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))
+    }
+    pub fn storage_bytes(&self)->u64 {self.pixels.storage_bytes()}
+    pub fn allocation_identity(&self)->usize {self.pixels.allocation_identity()}
+    pub fn has_name(&self,name:&layer_core::raster::ContentVersion)->bool {self.pixels.has_name(name)}
+    pub fn revise<'a>(&'a mut self,name:&layer_core::raster::ContentVersion,submission:&'a submission::Submission)
+        ->Result<crate::resident::RasterWrite<'a,MaskPixels>,GpuRasterError> {
+        self.pixels.revise(name,submission).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))
+    }
+    pub fn clear(&mut self,encoder:&mut submission::CommandEncoder,value:f64,name:impl Into<layer_core::raster::ContentVersion>)->Result<(),GpuRasterError> {
+        let receipt=encoder.submission();let write=self.pixels.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+        drop(encoder.color_pass("mask materialization",&write.value().view,wgpu::LoadOp::Clear(wgpu::Color {r:value,g:value,b:value,a:value})));
+        write.publish(name);Ok(())
     }
 }
 pub(super) type CommandCoverage = (SourceTarget, u32, bool);
@@ -44,18 +78,46 @@ pub(super) fn underfill_coverage(operation: &layer_core::RasterOperation) -> Opt
     Some(coverage)
 }
 
+pub(super) fn command_page_needed(coverage:&layer_core::CoverageSnapshot,underfill:bool,coordinate:[u32;2])->bool {
+    let Some(selection)=&coverage.selection else {return false;};
+    let page=page_rect(coordinate);
+    if page.intersect(pixel_rect(selection.bounds(),coverage.source.domain)).is_empty() {return false;}
+    if underfill && coverage.source.default_coverage==0. && coverage.use_.offset==[0;2] && !coverage.use_.inverted
+        && !selection.inverted && selection.affine==layer_core::Affine::IDENTITY
+        && let layer_core::SelectionShape::Pixels(pixels)=&selection.shape {
+        return pixels.coverage_bounds_in([page.min_x(),page.min_y(),page.max_x(),page.max_y()])!=[0;4];
+    }
+    true
+}
+
 #[derive(Clone, Default)]
 pub(super) struct SnapshotMasks {
     pub definitions: BTreeMap<SourceTarget, layer_core::CoverageSource>,
     pub pages: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
+    previews:BTreeMap<(SourceTarget,[u32;2]),MaskPreview>,
     pub(crate) _lease: Option<Arc<effect_analysis::Lease>>,
+}
+
+#[derive(Clone)]
+pub(super) struct MaskPreview {
+    pub page:MaskPage,
+    pub base:layer_core::raster::ContentVersion,
+    pub version:layer_core::raster::ContentVersion,
+}
+impl MaskPreview {
+    pub fn matches(&self,selected:&layer_core::raster::ContentVersion)->bool {
+        match self.base.matches(selected) {
+            Some(equal)=>equal,
+            None=>self.base.authored()==selected.authored(),
+        }
+    }
 }
 
 pub(super) struct MaskRenderer {
     pub definitions: BTreeMap<SourceTarget, layer_core::authored::CoverageSource>,
     pub pages: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
     pub command_pages: BTreeMap<(CommandCoverage, [u32; 2]), MaskPage>,
-    pub(super) preview_bases: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
+    pub(super) previews: BTreeMap<(SourceTarget, [u32; 2]), MaskPreview>,
     command_definitions: BTreeMap<CommandCoverage, layer_core::CoverageSnapshot>,
     pub snapshots: BTreeMap<CommandCoverage, SnapshotMasks>,
     pipelines: Arc<Pipelines>,
@@ -74,7 +136,7 @@ impl MaskRenderer {
     }
     pub fn from_pipelines(pipelines: Arc<Pipelines>) -> Self {
         Self { definitions: BTreeMap::new(), pages: BTreeMap::new(), command_pages: BTreeMap::new(),
-            preview_bases: BTreeMap::new(), command_definitions: BTreeMap::new(), snapshots: BTreeMap::new(), pipelines }
+            previews: BTreeMap::new(), command_definitions: BTreeMap::new(), snapshots: BTreeMap::new(), pipelines }
     }
 }
 impl std::ops::Deref for MaskRenderer {
@@ -220,6 +282,7 @@ impl MaskRenderer {
         Some(SnapshotMasks {
             definitions: std::mem::replace(&mut self.definitions, std::mem::take(&mut snapshot.definitions)),
             pages: std::mem::replace(&mut self.pages, std::mem::take(&mut snapshot.pages)),
+            previews:std::mem::replace(&mut self.previews,std::mem::take(&mut snapshot.previews)),
             _lease: None,
         })
     }
@@ -227,6 +290,7 @@ impl MaskRenderer {
         let snapshot = self.snapshots.get_mut(&command).expect("prepared bake mask inventory");
         snapshot.definitions = std::mem::replace(&mut self.definitions, live.definitions);
         snapshot.pages = std::mem::replace(&mut self.pages, live.pages);
+        snapshot.previews=std::mem::replace(&mut self.previews,live.previews);
     }
     pub fn is_mask(_scene: SceneView<'_>, target: SourceTarget) -> bool { matches!(target, SourceTarget::Coverage(_)) }
     pub fn prepare(
@@ -254,8 +318,8 @@ impl MaskRenderer {
         regions: Option<&std::collections::HashMap<SourceTarget, PixelRect>>,
     ) -> Result<(), GpuRasterError> {
         let (scene,batches,fill)=inputs;
-        self.pages.extend(mem::take(&mut self.preview_bases));
         if reset {
+            self.previews.clear();
             self.pages.clear();
             self.command_pages.clear();
         }
@@ -281,12 +345,7 @@ impl MaskRenderer {
             }
             let mut needed:std::collections::BTreeSet<_> = coverage.selection.as_ref().map_or_else(Default::default,
                 |selection| page_coordinates(pixel_rect(selection.bounds(), source.domain)).collect());
-            if key.2 && source.default_coverage==0. && coverage.use_.offset==[0;2] && !coverage.use_.inverted
-                && let Some(selection)=&coverage.selection && !selection.inverted && selection.affine==layer_core::Affine::IDENTITY
-                && let layer_core::SelectionShape::Pixels(pixels)=&selection.shape {
-                needed.retain(|coordinate| {let page=page_rect(*coordinate);
-                    pixels.coverage_bounds_in([page.min_x(),page.min_y(),page.max_x(),page.max_y()])!=[0;4]});
-            }
+            needed.retain(|coordinate|command_page_needed(coverage,key.2,*coordinate));
             initialize_pages(&mut self.command_pages, *key, source, coverage.selection.as_ref(), needed, regions.is_some(),
                 device, encoder, selections, &self.pipelines.initialize, &self.pipelines.init_layout, &self.pipelines.empty_selection)?;
         }
@@ -380,7 +439,9 @@ fn initialize_pages<K: Copy + Ord>(
         empty_selection
     };
     for coordinate in missing {
-        let MaskPage { texture, view } = MaskPage::new(device);
+        let mut page=MaskPage::new(device);
+        let receipt=encoder.submission();
+        let write=page.initialize(&receipt)?;
         let data = [
             coordinate[0] as f32 * PAGE_SIZE as f32,
             coordinate[1] as f32 * PAGE_SIZE as f32,
@@ -399,15 +460,17 @@ fn initialize_pages<K: Copy + Ord>(
         ]);
         let mut pass = encoder.color_pass(
             "mask initialize page",
-            &view,
+            &write.value().view,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         pass.set_pipeline(initialize);
         pass.set_bind_group(0, &binding, &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
-        pages
-            .insert((target, coordinate), MaskPage { texture, view });
+        let name=if selection.is_some() {crate::raster::contents::command_mask(source,selection,coordinate)?}
+            else {crate::raster::contents::mask_default(source.domain,source.default_coverage,coordinate)};
+        write.publish(name);
+        pages.insert((target, coordinate), page);
     }
     Ok(())
 }
@@ -453,8 +516,9 @@ mod tests {
             assert_eq!(r.layer_masks.command_pages.keys().filter(|(key,_)|key.2).count(),8);
             assert!(!r.layer_masks.command_pages.contains_key(&((target,0,true),[1,1])));
             if explicit_zero {
-                let page=MaskPage::new(&r.device);
-                drop(encoder.color_pass("explicit empty underfill",&page.view,wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)));
+                let mut page=MaskPage::new(&r.device);
+                let coverage=underfill_coverage(&document.scene().operations(target).unwrap()[0]).unwrap();
+                page.clear(&mut encoder,0.,crate::raster::contents::command_mask(&coverage.source,coverage.selection.as_ref(),[1,1]).unwrap()).unwrap();
                 r.layer_masks.command_pages.insert(((target,0,true),[1,1]),page);
             }
             r.uploads.finish(&encoder);encoder.submit(&r.queue);
@@ -472,18 +536,31 @@ mod tests {
 }
 
 impl WgpuRasterizer {
+    #[cfg(not(target_arch="wasm32"))]
+    pub(crate) fn restore_mask_page(&mut self,blob:&Arc<layer_core::raster::TileBlob>,name:layer_core::raster::ContentVersion)->Result<MaskPage,GpuRasterError> {
+        let mut page=MaskPage::new(&self.device);
+        self.submit_restore(|r,scene,encoder| {
+            if r.source_tiles.borrow().uploads_full(crate::residency::Class::Authored) {scene::Scene::submit_source_uploads(r,encoder,crate::residency::Class::Authored)?;}
+            let receipt=encoder.submission();let write=page.initialize(&receipt)?;
+            scene.restore_native_scalars(r,&[crate::native_tiles::scalar::NativeScalarRestore {blob,working:&write.value().texture}],encoder)?;
+            write.publish(name);Ok(())
+        })?;
+        Ok(page)
+    }
+
     pub(super) fn encode_mask_dabs(
         &mut self,
         encoder: &mut crate::submission::CommandEncoder,
         packet: FramePacket<'_>,
         batches: &[DabBatch],
         committed: &[(SourceTarget, u32)],
+        prediction:bool,
     ) -> Result<(), GpuRasterError> {
         let scene = packet.scene;
         for (index, batch) in batches
             .iter()
             .enumerate()
-            .filter(|(_, b)| MaskRenderer::is_mask(scene, b.target))
+            .filter(|(_, b)| MaskRenderer::is_mask(scene, b.target) && (b.kind==DabBatchKind::Preview)==prediction)
         {
             if let DabBatchKind::RasterOperation(op) = batch.kind {
                 if !committed.contains(&(batch.target, op)) {
@@ -493,7 +570,11 @@ impl WgpuRasterizer {
                     if operation.kind == layer_core::RasterOperationKind::Coverage {
                         for coordinate in page_coordinates(batch_pixel_rect(batch, self.target_extent(batch.target))) {
                             if let Some(page) = self.layer_masks.command_pages.get(&((batch.target, op, false), coordinate)).cloned() {
+                                let receipt=encoder.submission();let intent=self.raster_intent(batch.target,layer_core::raster::RasterPlane::Mask,coordinate)?;
+                                let name=crate::raster::contents::command_mask(&operation.coverage.source,operation.coverage.selection.as_ref(),coordinate)?;
+                                let written=page.read(name,Some(&receipt))?.replace(&intent,&receipt);
                                 self.layer_masks.pages.insert((batch.target, coordinate), page);
+                                self.record_raster_write(batch.target,written)?;
                             }
                         }
                         continue;
@@ -511,6 +592,7 @@ impl WgpuRasterizer {
                         self,
                         encoder,
                         batch.target,
+                        op,
                         operation,
                     );
                     self.transforms = Some(transforms);
@@ -524,27 +606,38 @@ impl WgpuRasterizer {
             self.prepare_target_selection(encoder, &batch.style, self.target_extent(batch.target))?;
             let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
             for coordinate in page_coordinates(damage) {
+                let default=self.layer_masks.definitions.get(&batch.target).map_or(1.,|mask|mask.default_coverage);
+                self.accepted_raster_output(batch.target,RasterOutput::Mask(coordinate,default.to_bits()))?;
                 let key = (batch.target, coordinate);
-                if batch.kind == DabBatchKind::Preview && !self.layer_masks.preview_bases.contains_key(&key)
-                    && let Some(base) = self.layer_masks.pages.get(&key).cloned()
-                {
-                    let preview = MaskPage::new(&self.device);
-                    encoder.copy_texture_to_texture(base.texture.as_image_copy(), preview.texture.as_image_copy(),
+                let receipt=encoder.submission();let intent=self.raster_intent(batch.target,layer_core::raster::RasterPlane::Mask,coordinate)?;
+                let predicted=batch.kind==DabBatchKind::Preview;
+                let mut version=if predicted {self.preview_expected(batch.target,layer_core::raster::RasterPlane::Mask,coordinate,scene::PreviewStage::BeforeBatch(index))?}
+                    else {intent.version().clone()};
+                if predicted && !self.layer_masks.previews.get(&key).is_some_and(|preview|preview.page.read(&version,Some(&receipt)).is_ok()) {
+                    let seed=self.preview_expected(batch.target,layer_core::raster::RasterPlane::Mask,coordinate,scene::PreviewStage::Seed)?;
+                    if version.matches(&seed)!=Some(true) {return Err(GpuRasterError::Invariant("prepared encode mask dabs state is inconsistent"));}
+                    let base=self.layer_masks.pages.get(&key).ok_or(GpuRasterError::Invariant("prepared encode mask dabs state is inconsistent"))?;
+                    let read=base.read(intent.version(),Some(&receipt))?;
+                    let mut preview=self.layer_masks.previews.get(&key).map_or_else(||MaskPage::new(&self.device),|preview|preview.page.clone());
+                    let write=preview.pixels.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                    encoder.copy_texture_to_texture(read.value().texture.as_image_copy(), write.value().texture.as_image_copy(),
                         wgpu::Extent3d { width: PAGE_SIZE, height: PAGE_SIZE, depth_or_array_layers: 1 });
-                    self.layer_masks.preview_bases.insert(key, base);
-                    self.layer_masks.pages.insert(key, preview);
+                    write.encoded(&seed).publish(&encoder.submission());
+                    self.layer_masks.previews.insert(key,MaskPreview {page:preview,base:intent.version().clone(),version:seed});
                 }
-                let Some(page) = self.layer_masks.pages.get(&(batch.target, coordinate)) else {
-                    continue;
-                };
+                let mut page=if predicted {self.layer_masks.previews.remove(&key).map(|preview|preview.page)}else {self.layer_masks.pages.remove(&key)}
+                    .ok_or(GpuRasterError::Invariant("prepared encode mask dabs state is inconsistent"))?;
+                let result=(|| {
+                let write=if predicted {page.revise(&version,&receipt)?}else {page.write(&intent,&receipt)?};
+                let pixels=write.value();
                 let dry = batch.style.contact.is_some_and(|c| c.dry.is_some());
                 let pipeline = &self.layer_masks.brush[MaskRenderer::brush_index(&batch.style)];
-                let source = self.device.portable_blend().then(|| self.portable_blend.source(&self.device,&page.view,wgpu::TextureFormat::Rgba32Float));
+                let source = self.device.portable_blend().then(|| self.portable_blend.source(&self.device,&pixels.view,wgpu::TextureFormat::Rgba32Float));
                 let count = if source.is_some() { batch.dab_count } else { 1 };
                 for dab in 0..count {
                 let mut pass = encoder.color_pass(
                     "incremental visibility mask brush",
-                    source.as_ref().unwrap_or(&page.view),
+                    source.as_ref().unwrap_or(&pixels.view),
                     if source.is_some() { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
                 );
                 let local = damage
@@ -579,9 +672,21 @@ impl WgpuRasterizer {
                 pass.draw(0..4, if source.is_some() { dab..dab+1 } else { 0..batch.dab_count });
                 drop(pass);
                 if let Some(source) = &source {
-                    self.portable_blend.apply(&self.device,encoder,source,&page.view,local,u32::from(batch.style.mode == DabMode::Erase));
+                    self.portable_blend.apply(&self.device,encoder,source,&pixels.view,local,u32::from(batch.style.mode == DabMode::Erase));
                 }
                 }
+                version=if predicted {self.preview_expected(batch.target,layer_core::raster::RasterPlane::Mask,coordinate,scene::PreviewStage::AfterBatch(index))?}
+                    else {layer_core::raster::ContentName::fresh().into()};
+                let written=write.encoded(&version).publish(&encoder.submission());
+                if !predicted {self.record_raster_write(batch.target,written)?;}
+                Ok::<(),GpuRasterError>(())
+                })();
+                if predicted {self.layer_masks.previews.insert(key,MaskPreview {page,base:intent.version().clone(),version});}
+                else {
+                    self.layer_masks.pages.insert(key,page);
+                    if result.is_ok() {self.layer_masks.previews.remove(&key);}
+                }
+                result?;
             }
         }
         Ok(())

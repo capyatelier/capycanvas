@@ -39,6 +39,7 @@ impl LayerTouches {
         self.claimed && !self.failed && !self.finished && !self.moved && self.lift_ns.is_none()
             && self.pair.is_some_and(|pair| pair[0].row == pair[1].row)
     }
+    pub(super) fn hold_deadline(&self) -> Option<u64> { self.hold_ns }
     pub(super) fn cancel(&mut self) { self.failed = true; self.hold_ns = None; }
     pub(super) fn advance(&mut self, now_ns: u64, policy: TouchPolicy) -> Option<LayerGesture> {
         if !self.pending() { return None; }

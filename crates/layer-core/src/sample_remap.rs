@@ -220,7 +220,7 @@ pub fn remap_raster(data: &RasterData, map: GridMap, extent: [u32; 2], keep: [[i
         fill_tile(&mut output, bpp, coordinate, keep, [i64::MAX; 2], map, &mut decoded)?;
         tiles.insert(TileKey { plane, coordinate }, RasterTile::backed(TileBlob::encode(descriptor, &output)?));
     }
-    Ok(RasterData { tiles, watercolor: data.watercolor })
+    Ok(RasterData { tiles:tiles.into(), watercolor: data.watercolor })
 }
 
 #[cfg(test)]

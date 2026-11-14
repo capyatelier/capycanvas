@@ -478,7 +478,7 @@ fn native_local_adjustments_analysis_history_and_recreation() {
             pump(20);let view=state(w);
             assert!(view.host_error.is_none(),"analysis host error {:?}",view.host_error);
             assert_ne!(view.layer_properties.description,"Could not update this adjustment.");
-            if view.layer_properties.description!="Updating…" && !ui_session(w).wants_continuous_frames() {break;}
+            if view.layer_properties.description!="Updating…" && ui_session(w).frame_demand() == layer_render::FrameDemand::Wait {break;}
             assert!(Instant::now()<deadline,"local analysis timeout: {}",view.layer_properties.description);
         }
         ready(w);until(||ui_session(w).engine().backend().frames_idle() && w.frame_timer.borrow().is_none(),"published local-analysis canvas frames");pump(100);

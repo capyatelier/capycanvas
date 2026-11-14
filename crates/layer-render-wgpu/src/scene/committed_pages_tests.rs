@@ -4,7 +4,7 @@ use layer_core::{Document,EffectInstance,EffectValue,authored::*};
 use layer_core::color::{RgbSpace,source::*};
 
 #[test]
-fn cold_late_object_window_preserves_accepted_pixels_and_pose_until_complete() {
+fn cold_late_object_window_publishes_only_coherent_committed_pages() {
     let extent=[1024,256];
     let mut artwork=Artwork::new(extent).unwrap();
     let mut builder=SourceBuilder::new([1024;2],SourceInterpretation {channels:SourceChannels::Rgba,
@@ -30,45 +30,42 @@ fn cold_late_object_window_preserves_accepted_pixels_and_pose_until_complete() {
     r.test.reference=true;r.native_edit.as_mut().unwrap().image_pixel_bytes=Some(8<<20);
     assert!(windows::Plan::new(doc.scene(),extent,8<<20,r.device.limits().max_texture_dimension_2d).unwrap().is_some());
     crate::test_support::submit_published(&mut r,packet(doc.scene(),extent));r.wait_idle().unwrap();
-    let expected=float_pixels(&r,r.display_views().unwrap()[0].texture());
-    let accepted=r.evaluated_object_revision();let windows=r.metrics.image_window_submissions;
+    let expected=float_pixels(&r,r.presentation_views().unwrap()[0].texture());
+    let windows=r.metrics.image_window_submissions;
     doc.artwork.occurrences.get_mut(owner).unwrap().visible=true;
     let application=doc.artwork.effects.get_mut(fill_handle).unwrap();
     let mut fill=EffectInstance {program:application.program.clone(),values:application.values.clone()};
     fill.set("color",EffectValue::Color(layer_core::color::RgbColor::from_linear(RgbSpace::Srgb,[0.,1.,0.,1.]).unwrap())).unwrap();
     application.values=fill.values;
+    let mut reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    reference.test.reference=true;
+    crate::test_support::submit_settled(&mut reference,packet(doc.scene(),extent));
+    let complete=float_pixels(&reference,reference.presentation_views().unwrap()[0].texture());
     r.submit(packet(doc.scene(),extent)).unwrap();r.wait_idle().unwrap();
-    assert!(r.object_deferred);
-    assert!(r.has_pending_work(),"native hosts keep scheduled work while a cold image prepares");
+    assert!(crate::scene::scale::tests::publication_pending(&r));
+    assert!(r.next_frame()==layer_render::FrameDemand::Work,"native hosts keep scheduled work while a cold image prepares");
     assert!(r.metrics.image_window_submissions>windows+1,"an earlier filter window submitted before the later cold tile");
-    assert_eq!(r.evaluated_object_revision(),accepted);
-    assert!(max_error(&expected,&float_pixels(&r,r.display_views().unwrap()[0].texture()))<3e-5);
-    assert!(r.metrics.composite_storage_bytes>=r.display_backup.as_ref().unwrap().bytes);
-    let mut preview:Option<Vec<[f32;4]>>=None;
+    assert!(max_error(&expected,&float_pixels(&r,r.presentation_views().unwrap()[0].texture()))<3e-5);
+    assert!(r.has_presentable_frame());
+    assert!(r.scene_tiers.display.used()>=r.scale_display.as_ref().unwrap().storage_bytes());
     for _ in 0..2000 {
-        if !r.object_deferred {break;}
+        if r.next_frame()!=layer_render::FrameDemand::Work {break;}
         std::thread::sleep(std::time::Duration::from_millis(1));
         r.submit(FramePacket {composite_all:false,reset_layers:false,..packet(doc.scene(),extent)}).unwrap();r.wait_idle().unwrap();
-        if r.object_deferred {
-            assert_eq!(r.evaluated_object_revision(),accepted);
-            let pixels=float_pixels(&r,r.display_views().unwrap()[0].texture());
-            if max_error(&expected,&pixels)>=3e-5 {
-                assert!(r.display_backup.is_none());
-                assert!(r.scale_display.as_ref().unwrap().deferred_presentation().is_some());
-                if let Some(previous)=&preview {
-                    assert_eq!(pixels.len(),previous.len());
-                    assert!(max_error(previous,&pixels)<3e-5,"later complete previews match the first");
-                } else {preview=Some(pixels);}
+        if r.next_frame()==layer_render::FrameDemand::Work {
+            let pixels=float_pixels(&r,r.presentation_views().unwrap()[0].texture());
+            assert_eq!(pixels.len(),complete.len());
+            assert!(r.has_presentable_frame());
+            for (index,actual) in pixels.iter().enumerate() {
+                let same=|reference:[f32;4]| actual.iter().zip(reference).all(|(actual,reference)|(*actual-reference).abs()<3e-5);
+                assert!(same(expected[index]) || same(complete[index]),"page publication exposed neither committed generation at pixel {index}: {actual:?}");
             }
         }
     }
-    assert!(!r.object_deferred,"bounded worker preparation and private sampling complete");
-    assert!(r.display_backup.is_none());
-    assert_eq!(r.evaluated_object_revision(),Some(doc.scene().revision()));
-    assert!(max_error(&expected,&float_pixels(&r,r.display_views().unwrap()[0].texture()))>0.5);
-    let completed=float_pixels(&r,r.display_views().unwrap()[0].texture());
-    if let Some(preview)=preview {
-        assert_eq!(preview.len(),completed.len());
-        assert!(max_error(&preview,&completed)<3e-5,"deferred pixels must match the complete new preview");
-    }
+    assert!(r.next_frame()!=layer_render::FrameDemand::Work,"bounded worker preparation and exact sampling complete");
+    assert!(!r.scale_display.as_ref().unwrap().approximating());
+    assert!(max_error(&expected,&float_pixels(&r,r.presentation_views().unwrap()[0].texture()))>0.5);
+    let completed=float_pixels(&r,r.presentation_views().unwrap()[0].texture());
+    assert_eq!(complete.len(),completed.len());
+    assert!(max_error(&complete,&completed)<3e-5,"settled pages match an independent complete render");
 }

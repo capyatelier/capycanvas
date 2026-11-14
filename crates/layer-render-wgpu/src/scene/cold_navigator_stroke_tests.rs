@@ -45,7 +45,7 @@ fn a_cold_navigator_jump_presents_each_photo_stroke_frame() {
         r.wait_idle().unwrap();
         let needs_present=presenter.needs_present(&r,view,[0.;4]);
         outcomes.push((frame,result.as_ref().map_err(ToString::to_string).map(|_|r.metrics.submissions>before),
-            r.has_presentable_frame(),needs_present,r.object_deferred,r.composite_revision,r.artwork_revision));
+            r.has_presentable_frame(),needs_present,crate::scene::scale::tests::publication_pending(&r),r.composite_revision,r.artwork_revision));
         if needs_present {presenter.present(&mut r,&output.1,view,[0.;4]).unwrap();}
     }
     let queued=outcomes.iter().filter(|row|row.1==Ok(true)).count();

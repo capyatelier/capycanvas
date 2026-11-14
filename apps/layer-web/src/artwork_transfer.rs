@@ -98,7 +98,7 @@ async fn unpack_with_selection(metadata:&str,buffers:js_sys::Array)->Result<(Art
     let sources=crate::store_transport::adopt_sources(envelope.offer.as_deref(),envelope.transfer.backings()).await.map_err(js)?;
     offer.0=None;
     let mut sources=sources.into_iter();
-    let mut receiver=TransferReceiver::with_sources(envelope.transfer,admitted_limits,|_|sources.next().ok_or_else(||"Missing backing owner".into())).map_err(js)?;let mut index=0;let mut total=0usize;
+    let mut receiver=TransferReceiver::with_sources(envelope.transfer,admitted_limits,|_|sources.next().ok_or_else(||"Missing backing owner".into())).await.map_err(js)?;let mut index=0;let mut total=0usize;
     for (payload,count) in envelope.chunks.into_iter().enumerate() {
         for _ in 0..count {
             let buffer=buffers.get(index).dyn_into::<js_sys::Uint8Array>().map_err(|_|js("Missing artwork transfer chunk"))?;

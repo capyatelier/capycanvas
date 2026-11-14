@@ -1367,6 +1367,13 @@ GPU tiles share 1 GiB, and decoded RAM samples get 512 MiB. Image-window work ad
 Scene planning demand without raising retention ceilings. Pins and working floors
 remain protected under pressure. Requested mips pin their roots and in-flight work.
 Idle after-present trims release unused storage against the grants.
+Each memory sample charges the allocator's reserved block capacity beyond the
+owners' bytes to the device, so free space kept in allocator blocks counts as
+the renderer's. Decoded GPU tiles hold only the working set of the frame's units:
+a recorded tile that no unit used in the current or previous frame is retired at
+the end of the frame, and an idle renderer keeps its last two frames' tiles until
+it runs again. A surface presenter charges three images of its presented size as
+pinned device memory.
 `memory::memory_tests` checks pressure, working floors and retention ceilings.
 
 Stats copies timestamped OS and driver readings from the factory's memory worker,

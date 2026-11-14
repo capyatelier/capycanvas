@@ -652,6 +652,7 @@ fn measure_scenario(
 ) -> Result<(BenchResult, Canvas), Box<dyn Error>> {
     let mut all_measurements = Vec::new();
     let mut aggregate_metrics = GpuRasterMetrics::default();
+    let mut storage_bytes = 0;
     let mut final_canvas = None;
     for repeat in 0..repeats {
         eprintln!("  repetition {}/{}", repeat + 1, repeats);
@@ -676,6 +677,7 @@ fn measure_scenario(
         run_strokes(&mut canvas, &strokes, Some(&mut measurements))?;
         let after = canvas.raster_metrics();
         merge_metrics_delta(&mut aggregate_metrics, &before, &after);
+        storage_bytes = layer_render::CanvasRenderer::telemetry(canvas.engine.backend()).resident_bytes.max(storage_bytes);
         all_measurements.extend(measurements);
         // Retain only the final repetition for the gallery export. Keeping the
         // previous full 4K canvas alive while allocating the next one needlessly
@@ -685,7 +687,7 @@ fn measure_scenario(
         }
     }
     Ok((
-        summarize(kind, repeats, &all_measurements, &aggregate_metrics),
+        summarize(kind, repeats, &all_measurements, &aggregate_metrics, storage_bytes),
         final_canvas.expect("repeats is validated as non-zero"),
     ))
 }
@@ -712,19 +714,6 @@ fn merge_metrics_delta(
     aggregate.preview_pages = aggregate.preview_pages.max(after.preview_pages);
     aggregate.coverage_pages = aggregate.coverage_pages.max(after.coverage_pages);
     aggregate.material_pages = aggregate.material_pages.max(after.material_pages);
-    aggregate.paint_storage_bytes = aggregate.paint_storage_bytes.max(after.paint_storage_bytes);
-    aggregate.preview_storage_bytes = aggregate
-        .preview_storage_bytes
-        .max(after.preview_storage_bytes);
-    aggregate.destination_storage_bytes = aggregate
-        .destination_storage_bytes
-        .max(after.destination_storage_bytes);
-    aggregate.paint_state_storage_bytes = aggregate
-        .paint_state_storage_bytes
-        .max(after.paint_state_storage_bytes);
-    aggregate.composite_storage_bytes = aggregate
-        .composite_storage_bytes
-        .max(after.composite_storage_bytes);
 }
 
 fn specs(strokes: &[Stroke], layer: OccurrenceHandle) -> Vec<StrokeSpec> {
@@ -820,6 +809,7 @@ fn summarize(
     repeats: usize,
     measurements: &[FrameMeasurement],
     metrics: &GpuRasterMetrics,
+    storage_bytes: u64,
 ) -> BenchResult {
     let move_times = times(measurements, false, |m| m.completed_micros);
     let submit_times = times(measurements, false, |m| m.submit_micros);
@@ -858,12 +848,7 @@ fn summarize(
         preview_pages: metrics.preview_pages,
         coverage_pages: metrics.coverage_pages,
         material_pages: metrics.material_pages,
-        storage_bytes: metrics
-            .paint_storage_bytes
-            .saturating_add(metrics.preview_storage_bytes)
-            .saturating_add(metrics.destination_storage_bytes)
-            .saturating_add(metrics.paint_state_storage_bytes)
-            .saturating_add(metrics.composite_storage_bytes),
+        storage_bytes,
         commit_p99_micros: quantile_sorted(&commit_times, 0.99),
     }
 }

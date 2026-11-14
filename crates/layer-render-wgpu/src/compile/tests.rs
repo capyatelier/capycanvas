@@ -125,13 +125,13 @@ fn a_panicking_wake_fails_its_owner_and_keeps_the_worker_running() {
     };
     assert!(error.to_string().contains("host wake failure"));
     assert!(healthy.check().is_ok());
-    assert!(recipe.ready());
     let (completed, done) = std::sync::mpsc::channel();
     healthy.enqueue(Class::Required, move || {
         completed.send(()).unwrap();
         Ok(())
     });
     done.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(recipe.ready());
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn a_paused_required_declaration_blocks_optional_work_from_another_owner() {
             class: Class::Required,
         },
         true,
-        || ((), None),
+        || (),
     );
     queue.submit(
         Key::Recipe(2),
@@ -184,7 +184,7 @@ fn a_paused_required_declaration_blocks_optional_work_from_another_owner() {
             class: Class::Background,
         },
         true,
-        || ((), None),
+        || (),
     );
     assert!(queue.take(Instant::now(), true).is_none());
 }

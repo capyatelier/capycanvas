@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{complete, packet, submit_settled};
+use crate::test_support::{packet, submit_settled};
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Document, CoverageSnapshot, Point, authored::{PortableId,SourceTarget}};
@@ -48,17 +48,10 @@ fn frame<'a>(doc: &'a Document) -> FramePacket<'a> {
     FramePacket { view: crate::test_support::view([640, 480]), inspect_mask: doc.working.inspect_mask, ..packet(doc.scene(), EXTENT) }
 }
 fn sample(r: &mut WgpuRasterizer, position: [u32; 2], area: ColorSampleArea) -> [f32; 4] {
-    assert!(
-        r.request_color_sample(ColorSampleRequest {
-            request_id: 1,
-            source: ColorSampleSource::Composite,
-            position,
-            area
-        })
-        .unwrap()
-    );
-    complete(r);
-    r.take_color_sample().unwrap().unwrap().rgba
+    let idle = r.raster_tiers.paint.used() - r.color_sampler.storage_bytes();
+    let rgba = crate::test_support::color_sample(r, ColorSampleRequest { request_id: 1, source: ColorSampleSource::Composite, position, area }).rgba;
+    assert_eq!(r.raster_tiers.paint.used() - idle, r.color_sampler.storage_bytes(), "the sample buffer and capture target are charged to the paint tier");
+    rgba
 }
 fn close(a: [f32; 4], b: [f32; 4]) {
     for (a, b) in a.into_iter().zip(b) {
@@ -89,7 +82,6 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
             budget_bytes: Some(4 << 30), unified: true, ..Default::default()
         }).unwrap();
         crate::memory::memory_tests::cold_color_pressure(&mut r);
-        assert_eq!(r.native_edit.as_ref().unwrap().color_cache_bytes, 0);
         submit_settled(&mut r, frame(&doc));
         let visible = r.scale_display.as_ref().unwrap().texture().clone();
         let before = crate::layer_tests::page_bytes(&r, &visible);
@@ -244,7 +236,7 @@ fn cold_object_thumbnails_and_retouch_reads_retry_until_exact_pixels_are_ready()
                 points:vec![Point {x:32.,y:32.}]}));
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             r.prefetch_retouch(&frame,false,&mut encoder).unwrap();
-            r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));
+            r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);
         }
         let before=r.device.source_samples.stats();
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
@@ -252,7 +244,7 @@ fn cold_object_thumbnails_and_retouch_reads_retry_until_exact_pixels_are_ready()
             else {r.prefetch_retouch(&frame,false,&mut encoder).unwrap();!r.retouch.as_ref().unwrap().pending()};
         assert!(!ready,"a cold exact read remains pending");
         assert_eq!(r.device.source_samples.stats(),before,"the initiating UI query cannot decompress source pixels");
-        r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));r.wait_idle().unwrap();
+        r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();
         let mut ready=false;
         for _ in 0..500 {
             if thumbnail {ready=r.prepare_thumbnail_batch(ThumbnailTarget::Occurrence(owner)).unwrap();}
@@ -260,7 +252,7 @@ fn cold_object_thumbnails_and_retouch_reads_retry_until_exact_pixels_are_ready()
                 let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
                 r.prefetch_retouch(&frame,false,&mut encoder).unwrap();
                 ready = !r.retouch.as_ref().unwrap().pending();
-                r.uploads.finish(&encoder);r.last_submission=Some(encoder.submit(&r.queue));
+                r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);
             }
             r.wait_idle().unwrap();if ready {break;}std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -324,8 +316,14 @@ fn exact_preview_after_mask_upload(execution: BrushExecution) {
     assert!(r.texture_sets.is_empty());
     let (destination, _) = create_color_target(&r.device, extent, "exact preview capture");
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    Capture::default().region_into(&mut r, packet(doc.scene(), extent), PixelRect::full(extent),
-        &destination, &mut encoder).unwrap();
+    let quality=(r.preview_level,r.preview_contribution,r.preview_requires_base);
+    let result=Capture::default().region_into(&mut r, packet(doc.scene(), extent), PixelRect::full(extent),
+        &destination, &mut encoder);
+    if result.is_err() {
+        assert_eq!((r.preview_level,r.preview_contribution,r.preview_requires_base),quality,
+            "a refused exact preview must preserve its published quality");
+    }
+    result.unwrap();
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
     r.wait_idle().unwrap();

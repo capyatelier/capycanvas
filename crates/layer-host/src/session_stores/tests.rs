@@ -86,7 +86,7 @@ fn cold_store_tiles_survive_color_job_worker_roundtrips() {
         let transfer=PreparedTransfer::capture(&capture,&cancel).unwrap();
         let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
         let chunks=(0..transfer.payload_count()).map(|index|vec![Arc::from(transfer.read_chunk(index,0,transfer.payload_len(index).unwrap() as usize).unwrap())]).collect();
-        PreparedTransfer::from_chunks(descriptor,chunks).unwrap().adopt_verified(Default::default(),&cancel).unwrap().artwork.as_ref().clone()
+        pollster::block_on(PreparedTransfer::from_chunks(descriptor,chunks)).unwrap().adopt_verified(Default::default(),&cancel).unwrap().artwork.as_ref().clone()
     };
     let worker=Document::from_artwork(roundtrip(layer_color::color_job_artwork(&original.artwork))).unwrap();
     let converted=layer_color::prepare_document_color(&worker,layer_color::DocumentColorChange::Depth {depth:SampleDepth::U8,dither:Default::default()},16*1024*1024,||false).unwrap();
@@ -593,12 +593,20 @@ fn parked_budget_source_schedules_storage_without_an_owner_poll() {
     while !fixture.queue.lock().unwrap().is_empty() { fixture.run(); }
     let (_capture, _, retained, tile) = capture();
     let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
-    documents.append((), retained, &localization);
+    let metadata=retained.metadata_bytes;
+    documents.append((), retained.clone(), &localization);
+    assert_eq!(documents.inactive_ram_budget(),0);
+    let wait=documents.trim_wait().expect("zero inactive allowance must schedule storage");
     assert!(tile.resident_bytes() > 0);
     assert!(!fixture.queue.lock().unwrap().is_empty());
     while !fixture.queue.lock().unwrap().is_empty() { fixture.run(); }
+    wait.wait_on_worker().expect("spilling inactive raster payloads must satisfy the zero allowance");
     assert_eq!(tile.resident_bytes(), 0);
     assert_eq!(fixture.stores.bindings().len(), 1);
+    assert_eq!(retained.metadata_bytes,metadata,"durability preserves drawing metadata");
+    let candidate=layer_core::Document::new(PortableId::random(),256,256,
+        layer_core::DocumentNames {paint:"New".into(),paper:"Paper".into()});
+    documents.admission(&RetainedTiles::default()).admit(&candidate).expect("a completed pressure trim must permit opening the next drawing");
 }
 
 #[test]

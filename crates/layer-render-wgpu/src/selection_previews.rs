@@ -13,10 +13,11 @@ pub(super) struct SelectionPreviews {
     pub texture: Option<wgpu::TextureView>,
     pub pending: bool,
     pipeline: Option<PreviewPipeline>,
+    charge: Option<crate::residency::Charge>,
 }
 impl SelectionPreviews {
     fn reset(&mut self) {
-        (self.key, self.texture, self.pending) = (None, None, false);
+        (self.key, self.texture, self.pending, self.charge) = (None, None, false, None);
     }
 }
 struct PreviewPipeline {
@@ -248,6 +249,7 @@ impl WgpuRasterizer {
                 );
             }
             previews.texture = Some(texture.create_view(&Default::default()));
+            previews.charge = Some(self.raster_tiers.paint.charge(texture_bytes(&texture)));
             self.uploads.finish(&encoder);
             encoder.submit(&self.queue);
             previews.key = Some(key);
@@ -309,6 +311,7 @@ impl WgpuRasterizer {
             [32, 32],
             self.device.working_format(),
             "selection layer thumbnail",
+            &self.raster_tiers.paint,
         );
         let mut pass = encoder.color_pass(
             "selection layer thumbnail",

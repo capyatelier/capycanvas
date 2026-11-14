@@ -15,6 +15,7 @@ fn a_bake_within_its_image_budget_filters_each_step_once() {
         engine.render_frame_at(0).unwrap();
     }
     engine.backend_mut().native_edit.as_mut().unwrap().image_pixel_bytes = Some(u64::MAX);
+    crate::scene::sources::Inputs::begin_accepted_reads();
     let plan = engine.document().merge_plan(layer_core::MergeKind::Down).unwrap();
     engine.insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None).unwrap();
     let mut shared = 0;
@@ -32,4 +33,7 @@ fn a_bake_within_its_image_budget_filters_each_step_once() {
         assert!(std::time::Instant::now() < bake_deadline, "baked document edits must finish");
     }
     assert!(shared > 1, "a step's filter evaluation served at most {shared} page");
+    let reads=crate::scene::sources::Inputs::take_accepted_read_results();
+    assert!(reads.iter().map(|(count,_)|count).sum::<usize>()>0,"effect-input preparation must consume decoded sources");
+    assert!(reads.iter().all(|(_,unexpected)|unexpected.is_empty()),"{reads:?}");
 }

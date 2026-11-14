@@ -21,10 +21,12 @@ struct GpuSamples {
     phases: Vec<GpuFrameTimer>,
 }
 impl GpuSamples {
-    fn drain(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    fn timers(&mut self) -> impl Iterator<Item = &mut GpuFrameTimer> {
+        self.timer.iter_mut().chain(&mut self.phases)
+    }
+    fn collect(&mut self) {
         let mut ready = [GpuFrameSample::default(); 256];
-        if let Some(timer) = &mut self.timer {
-            timer.poll(device, queue);
+        if let Some(timer) = &self.timer {
             let count = timer.take_into(&mut ready);
             for sample in &ready[..count] {
                 if sample.status == 1 {
@@ -34,8 +36,7 @@ impl GpuSamples {
                 }
             }
         }
-        for (index, timer) in self.phases.iter_mut().enumerate() {
-            timer.poll(device, queue);
+        for (index, timer) in self.phases.iter().enumerate() {
             let count = timer.take_into(&mut ready);
             for sample in &ready[..count] {
                 if sample.status == 1 {
@@ -75,7 +76,10 @@ impl Telemetry {
             return;
         }
         let gpu = self.gpu.get_mut().unwrap();
-        gpu.drain(device, queue);
+        for timer in gpu.timers() {
+            timer.resolve_completed(encoder);
+        }
+        gpu.collect();
         gpu.frame = frame;
         let timer = gpu
             .timer
@@ -112,9 +116,7 @@ impl Telemetry {
             gpu.phases = PHASE_NAMES.map(|_| GpuFrameTimer::with_device(device, queue)).into();
         }
         let frame = gpu.frame;
-        let timer = &mut gpu.phases[index];
-        timer.poll(device, queue);
-        timer.begin_encoded(encoder, frame)
+        gpu.phases[index].begin_encoded(encoder, frame)
     }
     pub fn phase_end(&mut self, index: usize, encoder: &mut wgpu::CommandEncoder) {
         if let Some(timer) = self.gpu.get_mut().unwrap().phases.get_mut(index) {
@@ -126,7 +128,10 @@ impl Telemetry {
             .gpu
             .try_lock()
             .map(|mut gpu| {
-                gpu.drain(device, queue);
+                for timer in gpu.timers() {
+                    timer.poll(device, queue);
+                }
+                gpu.collect();
                 gpu.samples.clone()
             })
             .unwrap_or_default();
@@ -138,20 +143,14 @@ impl Telemetry {
         }
     }
 
-    /// Benchmark-only synchronization; ordinary diagnostics never wait.
     #[cfg(test)]
     pub fn completed_snapshot(
         &self,
-        device: &wgpu::Device,
+        device: &crate::PipelineDevice,
         queue: &wgpu::Queue,
     ) -> RendererTelemetry {
         for _ in 0..2 {
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(crate::READBACK_TIMEOUT),
-                })
-                .unwrap();
+            crate::test_support::complete_device(device);
             self.snapshot(device, queue);
         }
         self.snapshot(device, queue)
@@ -161,6 +160,53 @@ impl Telemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_timers_resolve_inside_the_next_drawing_submission() {
+        let instance = crate::WgpuRasterizer::headless_instance();
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
+            .expect("Hardware adapter required");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::TIMESTAMP_QUERY,
+            ..Default::default()
+        })).unwrap();
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
+        let wait=||crate::test_support::complete_device(&device);
+        let mut telemetry = Telemetry::new(&device, &queue);
+        telemetry.enabled = true;
+        let gpu=telemetry.gpu.get_mut().unwrap();
+        gpu.timer=Some(GpuFrameTimer::with_device(&device,&queue));
+        gpu.phases=(0..2).map(|_|GpuFrameTimer::with_device(&device,&queue)).collect();
+        for timer in gpu.timer.iter().chain(&gpu.phases) {pollster::block_on(timer.prepare()).unwrap();}
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {label: None, size: 4096, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false});
+        let mut drawing = device.create_command_encoder(&Default::default());
+        telemetry.begin(&device, &queue, &mut drawing, 1);
+        for timer in &mut telemetry.gpu.get_mut().unwrap().phases {
+            assert!(timer.begin_encoded(&mut drawing, 1));
+            drawing.clear_buffer(&buffer, 0, None);
+            timer.end_encoded(&mut drawing);
+        }
+        telemetry.end(&mut drawing);
+        queue.submit([drawing.finish()]);
+        telemetry.submitted(&queue);
+        wait();
+        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+        let completed=|gpu:&GpuSamples|gpu.timer.iter().chain(&gpu.phases).map(GpuFrameTimer::completed).sum::<usize>();
+        while completed(telemetry.gpu.get_mut().unwrap())<3 {assert!(std::time::Instant::now()<deadline,"the first drawing completes");wait();}
+        let ready=|gpu:&GpuSamples|gpu.timer.iter().chain(&gpu.phases).map(|timer|timer.take_into(&mut [GpuFrameSample::default();4])).sum::<usize>();
+        let mut drawing = device.create_command_encoder(&Default::default());
+        telemetry.begin(&device, &queue, &mut drawing, 2);
+        wait();wait();
+        assert_eq!(ready(telemetry.gpu.get_mut().unwrap()),0,"completed timers resolve in the next drawing, not in submissions of their own");
+        telemetry.end(&mut drawing);
+        queue.submit([drawing.finish()]);
+        telemetry.submitted(&queue);
+        let mut delivered=0;
+        while delivered<3 {assert!(std::time::Instant::now()<deadline,"the drawing submission resolves the frame timer and both phases");wait();delivered+=ready(telemetry.gpu.get_mut().unwrap());}
+        assert_eq!(delivered,3);
+    }
 
     #[test]
     fn sustained_diagnostics_retire_frame_and_phase_samples_without_panel_queries() {
@@ -173,7 +219,9 @@ mod tests {
             required_features: wgpu::Features::TIMESTAMP_QUERY,
             ..Default::default()
         })).unwrap();
-        let device=crate::PipelineDevice::from(device);
+        let device=crate::PipelineDevice::from(device);device.bind_queue(&queue);
+        #[cfg(not(target_arch="wasm32"))]
+        device.initialize_poll_owner().unwrap();
         let mut telemetry = Telemetry::new(&device, &queue);
         telemetry.enabled = true;
         let gpu=telemetry.gpu.get_mut().unwrap();
@@ -197,17 +245,11 @@ mod tests {
             telemetry.end(&mut encoder);
             queue.submit([encoder.finish()]);
             telemetry.submitted(&queue);
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(crate::READBACK_TIMEOUT),
-            }).unwrap();
+            crate::test_support::complete_device(&device);
             let gpu = telemetry.gpu.get_mut().unwrap();
             gpu.timer.as_mut().unwrap().poll(&device, &queue);
             for timer in &mut gpu.phases { timer.poll(&device, &queue); }
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(crate::READBACK_TIMEOUT),
-            }).unwrap();
+            crate::test_support::complete_device(&device);
         }
         let samples = telemetry.completed_snapshot(&device, &queue);
         assert_eq!(samples.gpu.count, 300);

@@ -273,7 +273,6 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionPrepare(mut env: JNIEnv
                 prepared.frame(0, 0)?;
                 if prepared.can_park_document() && prepared.retained_document_tiles().try_blobs()?.is_some() { break; }
                 if Instant::now() >= deadline { return Err("Session canvas preparation timed out".into()); }
-                if let Some(renderer) = &prepared.engine().backend().0 { renderer.device().poll(wgpu::PollType::Poll).map_err(error)?; }
                 std::thread::sleep(Duration::from_millis(2));
             }
             candidates.push((id as u64, prepared));

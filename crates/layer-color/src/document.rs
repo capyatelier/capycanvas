@@ -252,7 +252,7 @@ impl Converter<'_> {
         let result = if changed {
             self.charge(tiles.len().saturating_mul(128).saturating_add(128))?;
             RasterRevision::backed(RasterData {
-                tiles,
+                tiles: tiles.into(),
                 watercolor: data.watercolor,
             })
         } else {

@@ -8,7 +8,7 @@ fn target(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
 fn the_crop_shield_dims_outside_the_crop_and_shows_added_canvas_as_transparency() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let document = paint_document([128; 2], "artwork");
-    submit(&mut r, document.scene(), &[dab([0.8, 0.1, 0.2, 1.])], &[batch(placement::target(&document))], true);
+    crate::test_support::submit_settled(&mut r, FramePacket {dabs:&[dab([0.8, 0.1, 0.2, 1.])],dab_batches:&[batch(placement::target(&document))],reset_layers:true,..packet(document.scene(),[128;2])});
     let camera = ViewState { document_to_surface: [0.5, 0., 0., 0.5, 32., 32.], ..view() };
     let surround = [0.2, 0.3, 0.4, 1.];
     let texture = target(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
@@ -44,7 +44,7 @@ fn the_crop_shield_dims_outside_the_crop_and_shows_added_canvas_as_transparency(
 fn the_crop_shield_darkens_encoding_and_linear_surfaces_alike() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let document = paint_document([128; 2], "artwork");
-    submit(&mut r, document.scene(), &[dab([0.8, 0.6, 0.2, 1.])], &[batch(placement::target(&document))], true);
+    crate::test_support::submit_settled(&mut r, FramePacket {dabs:&[dab([0.8, 0.6, 0.2, 1.])],dab_batches:&[batch(placement::target(&document))],reset_layers:true,..packet(document.scene(),[128;2])});
     let camera = ViewState { document_to_surface: [0.5, 0., 0., 0.5, 32., 32.], ..view() };
     let crop = Rect { min: Point { x: -32., y: -32. }, max: Point { x: 64., y: 64. } };
     let unit = layer_core::Affine([crop.max.x - crop.min.x, 0., 0., crop.max.y - crop.min.y, crop.min.x, crop.min.y]);
@@ -76,7 +76,7 @@ fn the_crop_shield_darkens_encoding_and_linear_surfaces_alike() {
 fn paper_relief_shades_only_the_canvas_and_leaves_no_trace() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let document = paint_document([128; 2], "artwork");
-    submit(&mut r, document.scene(), &[dab([0.8, 0.6, 0.2, 1.])], &[batch(placement::target(&document))], true);
+    crate::test_support::submit_settled(&mut r, FramePacket {dabs:&[dab([0.8, 0.6, 0.2, 1.])],dab_batches:&[batch(placement::target(&document))],reset_layers:true,..packet(document.scene(),[128;2])});
     let camera = ViewState { document_to_surface: [0.5, 0., 0., 0.5, 32., 32.], ..view() };
     let texture = target(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
@@ -122,7 +122,7 @@ fn staged_paper_relief_follows_a_new_scale_at_once_and_reports_only_its_own_bake
     let mut r = crate::test_support::staged_renderer(&reference, document.composition().color);
     r.prepare_startup(&document, &layer_core::default_brush(layer_core::DefaultBrushPreset::GPen), false).unwrap();
     crate::test_support::wait_startup(&mut r, Instant::now() + Duration::from_secs(60), |progress| progress.canvas_ready, format_args!("canvas"));
-    submit(&mut r, document.scene(), &[], &[], true);
+    crate::test_support::submit_settled(&mut r, FramePacket {reset_layers:true,..packet(document.scene(),[128;2])});
     let camera = ViewState { document_to_surface: [0.5, 0., 0., 0.5, 32., 32.], ..view() };
     let texture = target(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();

@@ -1386,6 +1386,7 @@ dependencies = [
  "moxcms 0.9.1",
  "oxideav-av1",
  "png 0.18.1",
+ "pollster",
  "quick-xml",
  "rav1d",
  "rav1e",

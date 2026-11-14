@@ -133,12 +133,15 @@ impl Owner {
         for capture in captures.iter().filter(|capture|committing || !capture.reservation.as_ref().is_some_and(MemoryReservation::active)) {
             capture.inventory.resident_owners(&mut resident);metadata[0]=metadata[0].saturating_add(capture.inventory.metadata_bytes as u64);
         }
-        self.captured_resident.store(resident.values().fold(0u64,|total,(bytes,_)|total.saturating_add(*bytes as u64)),Ordering::Relaxed);
+        self.captured_resident.store(resident.iter().filter(|((kind,_),_)|*kind!=crate::raster_storage::CONTENT_TREE_METADATA).fold(0u64,|total,(_,(bytes,_))|total.saturating_add(*bytes as u64)),Ordering::Relaxed);
         current.resident_owners(&mut resident);
         metadata[0]=metadata[0].saturating_add(current.authored_metadata as u64);
         metadata[1]=current.metadata_bytes.saturating_sub(current.authored_metadata) as u64;
         let mut parts=[0,0,metadata[0],metadata[1]];
-        for (bytes,authored) in resident.values() {let index=if *authored {0}else{1};parts[index]=parts[index].saturating_add(*bytes as u64);}
+        for ((kind,_),(bytes,authored)) in &resident {
+            let index=usize::from(!*authored)+if *kind==crate::raster_storage::CONTENT_TREE_METADATA {2}else{0};
+            parts[index]=parts[index].saturating_add(*bytes as u64);
+        }
         (parts,captures)
     }
     pub(crate) fn refresh(&self) {
@@ -180,7 +183,7 @@ impl crate::Document {
     pub fn reserve_import(&mut self) -> Result<(), String> {
         let editor = crate::Editor { document: self.clone(), undo: Vec::new(), redo: Vec::new(), checkpoint: 0, next_checkpoint: 1, ledger: Default::default(), memory_dirty: false };
         let inventory = editor.retained_tiles();
-        let bytes = inventory.resident_bytes().saturating_add(inventory.metadata_bytes) as u64;
+        let bytes = inventory.total_bytes() as u64;
         if self.memory.reserve(bytes) { Ok(()) } else { Err(crate::MEMORY_BUDGET_EXCEEDED.into()) }
     }
 }

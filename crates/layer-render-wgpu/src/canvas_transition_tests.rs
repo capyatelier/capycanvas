@@ -3,7 +3,7 @@ use crate::layer_tests::placement::{paint_document, paint_mut, target};
 use crate::test_support::{packet, submit_ready, submit_settled};
 
 fn refining(r: &WgpuRasterizer) -> bool {
-    r.object_deferred || r.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(r))
+    crate::scene::scale::tests::publication_pending(&r) || r.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(r))
 }
 
 #[test]
@@ -20,20 +20,20 @@ fn navigator_waits_for_a_full_refresh_before_pausing_transition_refinement() {
     assert!(revision>0);
     r.set_canvas_transition(layer_render::CanvasFade::WAITING);
     let frame=FramePacket {time_seconds:0.01,..packet(document.scene(),extent)};
+    let idle=FramePacket {composite_all:false,..frame};
     let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-    while !r.showing_drawing() {
-        submit_ready(&mut r,frame).unwrap();
+    let mut first=true;
+    while !r.showing_drawing() || !r.showing_navigator() {
+        assert!(!r.retained_transition_frame(idle,None),"a transition cannot pause before both views publish");
+        submit_ready(&mut r,if std::mem::take(&mut first) {frame}else {idle}).unwrap();
         r.wait_idle().unwrap();
-        assert!(std::time::Instant::now()<deadline,"full composition publishes while the Navigator refresh is coalesced");
+        assert!(std::time::Instant::now()<deadline,"the full Navigator composition must publish");
     }
-    assert_eq!(r.navigator.revision,revision);
-    assert!(!r.showing_navigator());
-    let idle=FramePacket {time_seconds:0.06,composite_all:false,..frame};
-    assert!(!r.retained_transition_frame(idle,None));
-    submit_ready(&mut r,idle).unwrap();
-    r.wait_idle().unwrap();
-    assert!(r.showing_navigator());
     assert!(r.navigator.revision>revision);
+    assert!(!r.navigator.pending(),"a presented Navigator must match its expected content");
+    let pixels=crate::test_support::float_pixels(&r,r.navigator.view().unwrap().texture());
+    assert!(!pixels.is_empty() && pixels.iter().all(|pixel|*pixel==[1.,0.,0.,1.]),
+        "the Navigator must contain the full current source before the transition pauses");
     assert!(r.retained_transition_frame(idle,None));
 }
 
@@ -65,7 +65,7 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
     let submissions = r.metrics.submissions;
     let preparation = r.preparation_progress();
     let damage = r.document_damage.clone();
-    let deferred = r.object_deferred;
+    let deferred = crate::scene::scale::tests::publication_pending(&r);
     for alpha in [1., 0.5, 0.125] {
         r.set_canvas_transition(layer_render::CanvasFade {drawing:Some(alpha),navigator:None});
         assert!(r.retained_transition_frame(idle, None));
@@ -74,7 +74,7 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
         assert_eq!(r.metrics.submissions, submissions);
         assert_eq!(r.preparation_progress(), preparation);
         assert_eq!(r.document_damage, damage);
-        assert_eq!(r.object_deferred, deferred);
+        assert_eq!(crate::scene::scale::tests::publication_pending(&r), deferred);
         assert!(refining(&r));
     }
 
@@ -106,4 +106,21 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
     submit_settled(&mut r, camera);
     assert!(r.metrics.submissions > submissions);
     assert!(!refining(&r));
+}
+
+#[test]
+fn a_settled_canvas_demands_no_frame_and_wakes_its_host_for_five_seconds() {
+    use std::time::{Duration,Instant};
+    let extent=[64;2];
+    let document=paint_document(extent,"Idle canvas");
+    let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let (wake,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=wake.send(());}));
+    submit_settled(&mut r,packet(document.scene(),extent));
+    r.wait_idle().unwrap();
+    let deadline=Instant::now()+Duration::from_secs(2);
+    while woken.recv_timeout(Duration::from_millis(200)).is_ok() {assert!(Instant::now()<deadline,"a settled canvas keeps waking its host");}
+    assert!(!r.has_pending_submission() && r.next_frame()!=layer_render::FrameDemand::Work);
+    assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait);
+    assert!(woken.recv_timeout(Duration::from_secs(5)).is_err(),"a settled canvas woke its host");
 }

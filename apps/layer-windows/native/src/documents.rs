@@ -1442,13 +1442,13 @@ mod tests {
         let descriptor = RasterPlane::Color.descriptor(project.composition().color);
         let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
         paint_mut(&mut project,0).raster = RasterRevision::backed(RasterData {
-            tiles: std::collections::BTreeMap::from([(
+            tiles: [(
                 TileKey {
                     plane: RasterPlane::Color,
                     coordinate: [0, 0],
                 },
                 tile,
-            )]),
+            )].into(),
             watercolor: None,
         });
         // Completed host-backed pixels stay saveable with no GPU at any point.

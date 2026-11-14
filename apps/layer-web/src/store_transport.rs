@@ -154,7 +154,7 @@ impl Drop for Lease {
         }
     }
 }
-fn wake() {if let Some(wake)=WAKE.with_borrow(Clone::clone) {let _=wake.call0(&JsValue::NULL);}}
+pub(crate) fn wake() {if let Some(wake)=WAKE.with_borrow(Clone::clone) {let _=wake.call0(&JsValue::NULL);}}
 pub(super) fn coordinator()->layer_host::session_stores::SessionStores {
     layer_host::session_stores::SessionStores::with_opener("drawings".into(),Arc::new(BrowserStoreOpener),
         Arc::new(|work|spawn_local(work.run_async())),Arc::new(wake),||js_sys::Date::now() as u64,layer_core::package::session_store::CompactionActivity::default())

@@ -57,24 +57,29 @@ fn full_pool_retries_on_its_capacity_epoch_and_drops_cancelled_queued_and_active
     let d=layer_core::color::source::rgba8_source([1;2],|_,_|[9,8,7,255]);
     let mut active=queue(&pool,RgbSpace::Srgb);let mut cancelled=queue(&pool,RgbSpace::Srgb);let mut waiting=queue(&pool,RgbSpace::Srgb);
     let cancelled_context=Arc::downgrade(&cancelled.context);let cancelled_cache=Arc::downgrade(&cancelled.context.cache);let cancelled_ready=cancelled.ready.clone();
-    assert!(active.request(PortableId::random(),a.clone(),[0;2]));ga.entered();
-    assert!(cancelled.request(PortableId::random(),b.clone(),[0;2]));
-    let dead_source=Arc::downgrade(&c);assert!(cancelled.request(PortableId::random(),c,[0;2]));
-    let coordinates=Arc::new(Mutex::new(None));
+    let (entered,seen)=std::sync::mpsc::channel();let (release,held)=std::sync::mpsc::channel();let held=Mutex::new(held);
+    active.set_wake(Arc::new(move || {let _=entered.send(());let _=held.lock().unwrap().recv();}));
+    assert!(active.request(PortableId::random(),a.clone(),[0;2]));ga.entered();ga.release();
+    seen.recv_timeout(DEADLINE).expect("the completed decode holds the worker at its notification");
+    assert!(cancelled.request(PortableId::random(),b.clone(),[0;2]));gb.entered();
+    let dead_source=Arc::downgrade(&c);assert!(cancelled.request(PortableId::random(),c,[0;2]));gc.entered();
+    let coordinates=Arc::new(Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
     for first in 0..pool.capacity-2 {assert!(cancelled.request_coordinates([1.,0.,0.,1.,0.,0.],[1;2],first as u32,1,Arc::downgrade(&coordinates)));}
     let epoch=pool.epoch.load(Ordering::Acquire);let id=PortableId::random();
     for _ in 0..32 {
         assert!(!waiting.request(id,d.clone(),[0;2]));assert!(waiting.pending());assert!(!waiting.ready());assert!(waiting.outstanding.is_empty());
         assert_eq!(waiting.waiting,Some(epoch));assert_eq!(pool.epoch.load(Ordering::Acquire),epoch);
     }
-    ga.release();gb.entered();
+    let (notified,woken)=std::sync::mpsc::channel();waiting.set_wake(Arc::new(move || {let _=notified.send(());}));
+    drop(cancelled);assert!(cancelled_context.upgrade().is_none());release.send(()).unwrap();
+    woken.recv_timeout(DEADLINE).expect("free request capacity wakes a queue without its own result");
     assert_ne!(pool.epoch.load(Ordering::Acquire),epoch);assert!(!waiting.pending());
     assert!(waiting.request(id,d.clone(),[0;2]));assert!(waiting.request(id,d.clone(),[0;2]));assert_eq!(waiting.outstanding.len(),1);
-    drop(cancelled);assert!(cancelled_context.upgrade().is_none());gb.release();
+    gb.release();gc.release();
     let (actual_id,actual_source,pixels)=image_pixels(result(&mut waiting));
     assert_eq!(actual_id,id);assert!(Arc::ptr_eq(&actual_source,&d));assert_eq!(&samples(&pixels)[..4],&[9,8,7,255]);
     assert!(!waiting.pending());assert!(!waiting.ready());assert_eq!(cancelled_ready.load(Ordering::Acquire),0);
-    assert!(cancelled_cache.upgrade().is_none());assert!(dead_source.upgrade().is_none());assert_eq!(gc.reads.load(Ordering::Acquire),0);
+    assert!(cancelled_cache.upgrade().is_none());assert!(dead_source.upgrade().is_none());assert_eq!(gc.reads.load(Ordering::Acquire),1);
     assert_eq!(ga.reads.load(Ordering::Acquire),1);assert_eq!(gb.reads.load(Ordering::Acquire),1);
     let PreparedImageWork::Image(failed)=result(&mut active) else {panic!("gated image result")};
     assert!(failed.pixels.is_err());assert!(!active.pending());

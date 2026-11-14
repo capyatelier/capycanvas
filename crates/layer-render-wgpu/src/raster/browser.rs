@@ -11,29 +11,21 @@ pub type BrowserRasterEncoder = Rc<
 >;
 
 pub(super) struct CaptureWorker {
-    sender: Option<mpsc::SyncSender<NativeCapture>>,
-    pending: Arc<AtomicUsize>,
-    pub(super) staging: Arc<AtomicU64>,
+    sender: Option<mpsc::SyncSender<(NativeCapture,[crate::residency::Charge;2])>>,
+    pending: Arc<crate::residency::Tier>,
+    pub(super) staging: Arc<crate::residency::Tier>,
     pub(super) error: Arc<std::sync::Mutex<Option<String>>>,
     wake: Rc<RefCell<Option<Waker>>>,
 }
 impl CaptureWorker {
     pub(super) fn new(
-        _device: wgpu::Device,
-        _pool: Arc<BufferPool>,
         encoder: BrowserRasterEncoder,
+        completion:Arc<PreparationWake>,
     ) -> Result<Self, GpuRasterError> {
-        let (sender, receiver) = mpsc::sync_channel::<NativeCapture>(16);
-        let pending = Arc::new(AtomicUsize::new(0));
-        let staging = Arc::new(AtomicU64::new(0));
+        let (sender, receiver) = mpsc::sync_channel::<(NativeCapture,[crate::residency::Charge;2])>(16);
         let error = Arc::new(std::sync::Mutex::new(None));
         let wake: Rc<RefCell<Option<Waker>>> = Rc::default();
-        let (count, bytes, failure, signal) = (
-            pending.clone(),
-            staging.clone(),
-            error.clone(),
-            wake.clone(),
-        );
+        let (failure, signal) = (error.clone(), wake.clone());
         wasm_bindgen_futures::spawn_local(async move {
             loop {
                 let captures = std::future::poll_fn(|cx| match receiver.try_recv() {
@@ -45,36 +37,31 @@ impl CaptureWorker {
                     }
                 })
                 .await;
-                let Some(captures) = captures else { break };
-                let size = captures.storage_bytes();
+                let Some((captures, charges)) = captures else { break };
                 if failure.lock().unwrap().is_some() {
                     drop(captures);
                 } else if let Err(message) = captures.finish_browser(&encoder).await {
                     *failure.lock().unwrap() = Some(message);
                 }
-                bytes.fetch_sub(size, Ordering::Release);
-                count.fetch_sub(1, Ordering::Release);
+                drop(charges);
+                std::task::Wake::wake_by_ref(&completion);
             }
         });
         Ok(Self {
             sender: Some(sender),
-            pending,
-            staging,
+            pending: Arc::default(),
+            staging: Arc::default(),
             error,
             wake,
         })
     }
     pub(super) fn ready(&self) -> bool {
-        self.pending.load(Ordering::Acquire) < 16
-            && self.staging.load(Ordering::Acquire) <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
+        self.pending.used() < 16
+            && self.staging.used() <= MAX_CAPTURE_BYTES - CAPTURE_CHUNK
     }
     pub(super) fn submit_batch(&self, captures: NativeCapture) -> Result<(), GpuRasterError> {
-        let size = captures.storage_bytes();
-        self.pending.fetch_add(1, Ordering::Release);
-        self.staging.fetch_add(size, Ordering::Release);
-        if self.sender.as_ref().unwrap().try_send(captures).is_err() {
-            self.pending.fetch_sub(1, Ordering::Release);
-            self.staging.fetch_sub(size, Ordering::Release);
+        let charges = [self.staging.charge(captures.storage_bytes()), self.pending.charge(1)];
+        if self.sender.as_ref().unwrap().try_send((captures, charges)).is_err() {
             return Err(GpuRasterError::Effect(
                 "Browser raster queue is full or stopped".into(),
             ));
@@ -95,7 +82,11 @@ impl Drop for CaptureWorker {
 }
 
 impl RasterCapture {
-    pub(super) async fn finish_browser(mut self, encoder: &BrowserRasterEncoder) -> Result<(), String> {
+    #[cfg(test)]
+    pub(super) async fn finish_browser(self,encoder:&BrowserRasterEncoder)->Result<(),String> {
+        let pool=self.pool.clone();self.finish_browser_recycling(encoder,move|buffer|pool.put(buffer)).await
+    }
+    pub(super) async fn finish_browser_recycling(mut self,encoder:&BrowserRasterEncoder,recycle:impl Fn(wgpu::Buffer))->Result<(),String> {
         let result: Result<(), String> = async {
             for chunk in &mut self.chunks {
                 (&mut chunk.ready)
@@ -107,11 +98,18 @@ impl RasterCapture {
                         .buffer
                         .get_mapped_range(..)
                         .map_err(|e| e.to_string())?;
-                    mapped[..size as usize].to_vec()
+                    let mut bytes=Vec::with_capacity(size as usize);
+                    let mut offset=0;
+                    for entry in &chunk.entries {
+                        if let Some((at,comparison))=&entry.comparison {comparison.resolve(&mapped[*at as usize..*at as usize+crate::native_tiles::comparison::RESULT_BYTES as usize])?;}
+                        bytes.extend_from_slice(&mapped[offset..offset+entry.size as usize]);
+                        offset+=entry.size as usize;
+                    }
+                    bytes
                 };
                 chunk.buffer.unmap();
-                self.pool.put(chunk.buffer.clone());
-                let _scratch = super::Reserved::new(&self.pool.working, size);
+                recycle(chunk.buffer.clone());
+                let _scratch = self.pool.working.charge(size);
                 let descriptors = chunk.entries.iter().map(|e| e.descriptor).collect();
                 let blobs = encoder(bytes, descriptors).await?;
                 if blobs.len() != chunk.entries.len() {

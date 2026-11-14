@@ -14,12 +14,12 @@ impl SnapshotGpu {
         snapshot.extent = extent;
         snapshot.offset = layer_core::offsets::point(plan.origin.map(|v| -v));
         snapshot.set_raw_plan(plan.clone());
-        let planes = snapshot.raw_planes.clone();
+        let placements = snapshot.raw_plan.as_ref().unwrap().sources.clone();
         snapshot.renderer.ensure_document_metadata(extent, snapshot.scene.view().with_scope(&snapshot.scope).with_offset(snapshot.offset)).map_err(|e| e.to_string())?;
         let mut color = RasterData { watercolor: snapshot.backing[&target].watercolor, ..Default::default() };
         let mut mask = RasterData::default();
         let mut empty = std::collections::BTreeMap::new();
-        for &plane in &planes {
+        for &(plane,_) in &placements {
             if plane == RasterPlane::Mask && plan.coverage.and_then(|h| plan.scene.view().coverage(h)).map_or(0., |c| c.default_coverage) != 0. { continue; }
             let descriptor = plane.descriptor_for(snapshot.color(), plan.scene.view().color_mode(target));
             let tile = layer_core::raster::TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([PAGE_SIZE; 2]).unwrap()])?;
@@ -29,11 +29,22 @@ impl SnapshotGpu {
         for coordinate in snapshot.raw_coordinates().map_err(|e| e.to_string())? {
             control.check().map_err(|e| e.to_string())?;
             let region = page_rect(coordinate).intersect(PixelRect::full(extent));
+            let unit=scene::sources::InputUnit::tile(coordinate);
+            let mut accepted:Option<scene::sources::AcceptedInputs>=None;
             let (tiles, capture) = snapshot.with_region_gpu(
                 [region.min_x(), region.min_y(), region.width(), region.height()], 8 * 1024 * 1024,
                 |r, packet, _, encoder| {
                     let mut scene = r.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(r))?;
-                    let result = scene.capture_raw_tile(r, packet, coordinate, &plan, &planes, encoder);
+                    let result=(|| {
+                        if accepted.as_ref().is_some_and(|inputs|inputs.unit()!=Some(unit)) {scene.discard_unencoded_jobs();}
+                        accepted=scene::sources::AcceptedInputs::take_for(&mut accepted,unit);
+                        if accepted.is_none() {accepted=Some(scene.declare_raw_capture(r,packet,target,&placements,coordinate)?.for_unit(unit)?.accept_query(r,Some(&scene))?);}
+                        let inputs=accepted.as_mut().ok_or(GpuRasterError::Invariant("accepted raw capture sources are missing"))?;
+                        inputs.check_unit(unit)?;inputs.clone().track(encoder);
+                        let result=scene.capture_raw_tile(r,packet,coordinate,&plan,&placements,encoder,inputs);
+                        if result.is_ok() {accepted.take().unwrap().track(encoder);}
+                        result
+                    })();
                     r.scene = Some(scene);
                     result
                 }).await.map_err(|e| e.to_string())?;

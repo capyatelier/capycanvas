@@ -132,7 +132,7 @@ fn pending_bounds_keep_frames_running_and_reject_changed_drawings() {
     let mut s = content_session([1536, 1536]);
     invoke(&mut s, CommandId::Trim);
     assert!(s.content_bounds.busy());
-    assert!(s.wants_continuous_frames());
+    assert!(s.frame_demand() != layer_render::FrameDemand::Wait);
     assert_eq!(size_of(&s), [1536, 1536]);
     s.frame(2, 2).unwrap();
     assert_eq!(s.engine.backend_mut().bounds_requests[0].scope, layer_core::ContentScope::Canvas);

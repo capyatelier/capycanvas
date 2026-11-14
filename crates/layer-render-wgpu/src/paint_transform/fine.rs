@@ -49,7 +49,7 @@ impl FineInputs {
         let bytes=texture_bytes(&texture)+directory.size()+coarse_bytes;
         Ok(Self {texture,view,directory,capacity,columns:shape[0],planes:if kept {2} else {1},
             slots:(0..capacity).map(|_|None).collect(),desired:Default::default(),all_pages:pages.clone(),pages,complete:false,
-            valid:Arc::new(AtomicBool::new(true)),allocation:Arc::new(Allocation {bytes,retired:r.retired_display_bytes.clone(),pending:AtomicBool::new(false)})})
+            valid:Arc::new(AtomicBool::new(true)),allocation:Arc::new(Allocation {bytes,retired:r.retired_display_bytes.clone(),pending:Default::default()})})
     }
     pub fn require(&mut self,coordinates:std::collections::BTreeSet<[u32;2]>)->Result<(),GpuRasterError> {
         if coordinates.len()>self.capacity {return Err(GpuRasterError::SourceWorkingSetExceeded);}
@@ -60,7 +60,7 @@ impl FineInputs {
     }
     pub fn assign(&mut self,coordinate:[u32;2])->Result<usize,GpuRasterError> {
         let index=super::region_batches::slot_for(self.slots.iter().map(|page|page.as_ref().map(|page|page.coordinate)),&self.desired,coordinate)
-            .ok_or(GpuRasterError::DeferredObjectWork)?;
+            .ok_or(GpuRasterError::NotReady)?;
         if self.slots[index].as_ref().is_some_and(|page|page.coordinate==coordinate) {return Ok(index);}
         self.slots[index]=Some(Page {coordinate,valid:Arc::new(AtomicBool::new(false))});
         Ok(index)
@@ -74,7 +74,7 @@ impl FineInputs {
     }
     pub fn storage_bytes(&self)->u64 {texture_bytes(&self.texture)+self.directory.size()}
     pub fn track(&self,encoder:&crate::submission::CommandEncoder) {
-        let allocation=self.allocation.clone();encoder.on_submitted_work_done(move||drop(allocation));
+        let allocation=self.allocation.clone();encoder.hold(allocation);
     }
     pub fn track_coarse(&self,encoder:&crate::submission::CommandEncoder) {
         crate::submission::CacheWrite::shared(self.valid.clone()).track(encoder);self.track(encoder);
@@ -85,7 +85,7 @@ impl FineInputs {
         self.track(encoder);
     }
     pub fn write_directory(&self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,phase:[u32;2])->Result<(),GpuRasterError> {
-        if self.desired.iter().any(|c|!self.resident(*c)) {return Err(GpuRasterError::DeferredObjectWork);}
+        if self.desired.iter().any(|c|!self.resident(*c)) {return Err(GpuRasterError::NotReady);}
         let count=(self.directory.size() as usize-32)/16;
         let mut table=vec![[u32::MAX;4];count];
         for (index,page) in self.slots.iter().enumerate().filter_map(|(index,page)|page.as_ref().map(|page|(index,page))) {

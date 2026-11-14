@@ -137,9 +137,6 @@ impl OpenEnvironment {
         let deadline = Instant::now() + PREPARE_DEADLINE;
         loop {
             check()?;
-            gpu.device()
-                .poll(wgpu::PollType::Poll)
-                .map_err(|e| e.to_string())?;
             if validating && let Some(result) = gpu.take_effect_validation() {
                 result.result?;
                 validating = false;
@@ -159,9 +156,7 @@ impl OpenEnvironment {
             check()?;
             candidate.frame(0, 0)?;
             if candidate.can_park_document() {break;}
-            let gpu=candidate.renderer_mut().0.as_mut().ok_or("Canvas unavailable")?;
-            gpu.device().poll(wgpu::PollType::Poll).map_err(|error|error.to_string())?;
-            gpu.poll_startup().map_err(|error|error.to_string())?;
+            candidate.renderer_mut().0.as_mut().ok_or("Canvas unavailable")?.poll_startup().map_err(|error|error.to_string())?;
             if Instant::now()>=deadline {return Err("Project canvas preparation timed out".into());}
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -225,7 +220,7 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&environment.localization, &localization));
         assert_eq!(environment.viewport, session.state().camera.viewport);
         let inventory=layer_core::Editor::new(project.clone()).retained_tiles();
-        let bytes=inventory.resident_bytes().saturating_add(inventory.metadata_bytes) as u64;
+        let bytes=inventory.total_bytes() as u64;
         let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
         let pinned=budget.register_owner(layer_core::MemoryOwnerKind::Other,layer_core::MemoryClass::Pinned,None);
         let occupied=budget.ram_limit_bytes()-bytes+1;

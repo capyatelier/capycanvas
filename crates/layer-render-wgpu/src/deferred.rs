@@ -147,7 +147,7 @@ impl<T> Deferred<T> {
     }
     fn take_factory(&self) -> Factory<T> {
         let factory = self.0.factory.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        factory.expect("resource recipe")
+        factory.unwrap_or_else(||panic!("{}",self.error().unwrap_or("resource recipe")))
     }
     /// Start inside the caller's error scopes, then await without borrowing the
     /// renderer. Only successful compilation publishes a typed pipeline handle.

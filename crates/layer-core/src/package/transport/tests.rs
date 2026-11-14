@@ -32,8 +32,12 @@ fn private_spool_survives_the_provider_without_leaving_a_file() {
     drop(input);
     let retained = backing.clone();
     drop(backing);
-    let RangeState::Ready(bytes) = retained.poll(MAX_RANGE_BYTES as u64, 1).unwrap() else { panic!() };
+    let source=retained.read_source().expect("spooled packages use positional cached reads");
+    let bytes=source.wait_on_worker(MAX_RANGE_BYTES as u64,1).unwrap();
     assert_eq!(&*bytes, &[3]);
+    let mut reader=BackingReader::new(&retained,&cancelled);let mut header=[0;8];
+    reader.read_exact(&mut header).unwrap();assert_eq!(header,[3;8]);
+    reader.seek(SeekFrom::End(-3)).unwrap();let mut tail=Vec::new();reader.read_to_end(&mut tail).unwrap();assert_eq!(tail,[3;3]);
     #[cfg(unix)]
     assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
     drop(retained);

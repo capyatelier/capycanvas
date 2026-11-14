@@ -97,7 +97,7 @@ impl Timing {
         let mut stats = self.stats.lock().unwrap();
         let metrics = renderer.metrics();
         stats.camera_work.push([self.id, metrics.composited_pixels,
-            metrics.composite_storage_bytes, metrics.source_tile_misses,
+            renderer.display_bytes(), metrics.source_tile_misses,
             metrics.source_tile_misses.saturating_sub(self.source_misses_before)]);
         stats.material_sample_bytes.push([self.id, metrics.material_sample_storage_bytes]);
         stats.renderer_phases.push((self.id, metrics.frame_cpu_ms));
@@ -255,11 +255,10 @@ impl Timing {
             let slot = &self.slots[index];
             let buffer = slot.readback.clone();
             let stats = self.stats.clone();
-            let free = slot.free.clone();
+            let free = FreeSlot(slot.free.clone());
             let period = renderer.queue().get_timestamp_period() as f64;
             let id = self.id;
-            slot.readback
-                .map_async(wgpu::MapMode::Read, .., move |result| {
+            renderer.map_read(&slot.readback, move |result:Result<(),wgpu::BufferAsyncError>| {
                     if result.is_ok() {
                         let bytes = buffer.get_mapped_range(..).unwrap();
                         let start = u64::from_le_bytes(bytes[..8].try_into().unwrap());
@@ -271,7 +270,7 @@ impl Timing {
                         drop(bytes);
                         buffer.unmap();
                     }
-                    free.store(true, Ordering::Release);
+                    drop(free);
                 });
         }
     }
@@ -290,3 +289,6 @@ impl Timing {
         }
     }
 }
+
+struct FreeSlot(Arc<AtomicBool>);
+impl Drop for FreeSlot {fn drop(&mut self) {self.0.store(true,Ordering::Release);}}

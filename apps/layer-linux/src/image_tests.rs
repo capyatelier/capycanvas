@@ -13,7 +13,7 @@ const CONTROL: u32 = 0xffe3;
 fn settled(w: &Workspace) -> bool {
     let doc = document(w);
     let published = doc.scene().targets().all(|target| doc.scene().raster(target).is_some_and(|r| r.try_data().is_some()));
-    published && !ui_session(w).wants_continuous_frames()
+    published && ui_session(w).frame_demand() == layer_render::FrameDemand::Wait
 }
 
 fn undo(input: &mut RemoteInput) {

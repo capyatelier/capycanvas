@@ -103,10 +103,10 @@ mod retouch_layer_checks {
         assert_eq!(s.state.layer_tools.frequency_separation.as_ref().unwrap().radius, 9.5);
         let (preview, handle) = previewed(&mut s, 4).unwrap();
         assert_eq!(preview.view().effect(handle).unwrap().value("sigma"), Some(&layer_core::EffectValue::Number(9.5)));
-        assert!(s.wants_continuous_frames(), "frames continue until the value rests");
+        assert!(s.frame_demand() != layer_render::FrameDemand::Wait, "frames continue until the value rests");
         let rested = s.frame(4 + selection_refine::SETTLE_NS, 4 + selection_refine::SETTLE_NS).unwrap();
         assert_ne!(rested.regions & regions::BRUSH, 0, "the rested value is published");
-        assert!(!s.wants_continuous_frames());
+        assert!(s.frame_demand() == layer_render::FrameDemand::Wait);
         assert!(separation(&mut s, FrequencySeparationAction::Radius { radius: 1000. }).is_err());
         assert_live_artwork_eq(s.engine.document(), &before);
         separation(&mut s, FrequencySeparationAction::Cancel).unwrap();

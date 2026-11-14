@@ -1,5 +1,5 @@
 use layer_render::{MemoryBudgetSummary, MemoryPeak, MemorySnapshot, ProcessMemory, ProcessMemoryKind};
-use layer_core::{MemoryBudget, MemoryDevice, MemoryFacts, DeviceMemoryFacts};
+use layer_core::{MemoryBudget, MemoryDevice, MemoryFacts, MemoryOwner, DeviceMemoryFacts};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use web_time::Instant;
@@ -32,7 +32,7 @@ pub(super) fn fixture_sampler(budget: MemoryBudget, id: MemoryDevice) -> MemoryS
     })
 }
 impl MemorySampler {
-    pub fn new(device: wgpu::Device, budget: MemoryBudget, id: MemoryDevice) -> Self {
+    pub fn new(device: wgpu::Device, budget: MemoryBudget, id: MemoryDevice, allocator: MemoryOwner) -> Self {
         let mut peak = 0;
         let refresh = budget.clone();
         Self::with_updates(move || {
@@ -49,9 +49,10 @@ impl MemorySampler {
             let facts = crate::display_memory::facts(&device, gpu);
             #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows", target_vendor = "apple")))]
             let facts = DeviceMemoryFacts::default();
+            let capacity = device.generate_allocator_report().map(|report| report.total_reserved_bytes);
             (MemorySnapshot { sampled_at: Instant::now(), process, gpu },
-                layer_core::memory_budget::system_facts(), facts)
-        }, move |reading| publish(&budget, id, reading), move |sample| {
+                layer_core::memory_budget::system_facts(), facts, capacity)
+        }, move |reading| publish(&budget, id, &allocator, reading), move |sample| {
             refresh.flush_reports();
             let snapshot=refresh.snapshot();
             sample.budget=Arc::new(MemoryBudgetSummary::new(&snapshot, id));
@@ -87,9 +88,15 @@ impl MemorySampler {
     }
 }
 
-fn publish(budget: &MemoryBudget, id: MemoryDevice, (memory, ram, gpu): (MemorySnapshot, MemoryFacts, DeviceMemoryFacts)) -> Sample {
+type Reading = (MemorySnapshot, MemoryFacts, DeviceMemoryFacts, Option<u64>);
+fn publish(budget: &MemoryBudget, id: MemoryDevice, allocator: &MemoryOwner, (memory, ram, gpu, capacity): Reading) -> Sample {
     budget.flush_reports();
     budget.update_ram(ram, MemoryBudget::now_ms());
+    if let Some(capacity) = capacity {
+        let charged = budget.snapshot().devices.into_iter().find(|device| device.device == id).map_or(0, |device| device.physical_bytes);
+        let owners = charged.saturating_sub(allocator.reported().gpu_bytes);
+        allocator.report(layer_core::MemoryReport { gpu_bytes: capacity.saturating_sub(owners), ..Default::default() });
+    }
     budget.update_device(id, gpu);
     let snapshot = budget.snapshot();
     Sample { memory, budget: Arc::new(MemoryBudgetSummary::new(&snapshot, id)) }
@@ -257,12 +264,14 @@ mod tests {
         let id = budget.register_device(Default::default());
         let observed = budget.clone();
         let (published, done) = mpsc::channel();
+        let allocator = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(id));
         let sampler = MemorySampler::with_updates(|| (
             MemorySnapshot { sampled_at: Instant::now(), process: None, gpu: None },
             MemoryFacts { total_bytes: Some(8 << 30), available_bytes: Some(6 << 30), ..Default::default() },
             DeviceMemoryFacts { budget_bytes: Some(1 << 30), ..Default::default() },
+            None,
         ), move |reading| {
-            let result = publish(&budget, id, reading);
+            let result = publish(&budget, id, &allocator, reading);
             published.send(()).unwrap();
             result
         }, |_| {});
@@ -271,5 +280,34 @@ mod tests {
         assert!(snapshot.ram_limit_bytes > 0);
         assert!(snapshot.devices.iter().any(|device| device.device == id && device.limit_bytes > 0));
         drop(sampler);
+    }
+
+    #[test]
+    fn evicting_into_allocator_slack_neither_lowers_the_device_limit_nor_frees_room() {
+        use layer_core::{MemoryClass, MemoryOwnerKind, MemoryReport};
+        const MIB: u64 = 1 << 20;
+        for reported in [true, false] {
+            let facts = |capacity: u64| DeviceMemoryFacts { budget_bytes: reported.then_some(4096 * MIB), heap_bytes: Some(8192 * MIB),
+                usage_bytes: reported.then_some(capacity + 193 * MIB), ..Default::default() };
+            let budget = MemoryBudget::new();
+            let id = budget.register_device(facts(0));
+            let scene = budget.register_owner(MemoryOwnerKind::Scene, MemoryClass::Visible, Some(id));
+            let allocator = budget.register_owner(MemoryOwnerKind::Other, MemoryClass::Pinned, Some(id));
+            let reading = |capacity| (MemorySnapshot { sampled_at: Instant::now(), process: None, gpu: None }, MemoryFacts::default(), facts(capacity), Some(capacity));
+            let limit = || budget.snapshot().devices[0].limit_bytes;
+            scene.report(MemoryReport { gpu_bytes: 1536 * MIB, demand_gpu_bytes: 8192 * MIB, ..Default::default() });
+            publish(&budget, id, &allocator, reading(1536 * MIB));
+            let before = limit();
+            scene.report(MemoryReport { gpu_bytes: 768 * MIB, demand_gpu_bytes: 8192 * MIB, ..Default::default() });
+            publish(&budget, id, &allocator, reading(1536 * MIB));
+            assert_eq!(limit(), before, "reported usage: {reported}");
+            assert_eq!(allocator.reported().gpu_bytes, 768 * MIB, "reported usage: {reported}");
+            let room = limit() - 1536 * MIB;
+            assert!(scene.grant().gpu_bytes <= 768 * MIB + room, "reported usage: {reported}: {} > {}", scene.grant().gpu_bytes >> 20, (768 * MIB + room) >> 20);
+            assert!(scene.grant().gpu_bytes >= 768 * MIB, "reported usage: {reported}");
+            scene.report(MemoryReport { gpu_bytes: 1536 * MIB, demand_gpu_bytes: 8192 * MIB, ..Default::default() });
+            publish(&budget, id, &allocator, reading(1536 * MIB));
+            assert_eq!((limit(), allocator.reported().gpu_bytes), (before, 0), "reported usage: {reported}");
+        }
     }
 }

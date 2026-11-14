@@ -338,9 +338,9 @@ fn intern_artwork(art:&mut Artwork,state:&StateRecord,objects:&[ObjectVersion],d
 pub fn open_parts(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool)->Result<OpenSession,String> {
     open_parts_with_programs(metadata,resource_pack,limits,cancel,&super::TrustedPrograms::default())
 }
-pub(crate) enum OpenFailure { Invalid(String), Unsupported(String), MemoryBudgetExceeded }
+pub(crate) enum OpenFailure { Invalid(String), Unsupported(String), MemoryBudgetExceeded, Uncovered }
 impl OpenFailure {
-    pub(crate) fn message(self)->String {match self {Self::Invalid(message)|Self::Unsupported(message)=>message,Self::MemoryBudgetExceeded=>crate::MEMORY_BUDGET_EXCEEDED.into()}}
+    pub(crate) fn message(self)->String {match self {Self::Invalid(message)|Self::Unsupported(message)=>message,Self::MemoryBudgetExceeded|Self::Uncovered=>crate::MEMORY_BUDGET_EXCEEDED.into()}}
 }
 impl From<OpenFailure> for String {fn from(error:OpenFailure)->Self {error.message()}}
 pub(crate) fn validate_format(value:&Value)->Result<(),OpenFailure> {
@@ -349,13 +349,14 @@ pub(crate) fn validate_format(value:&Value)->Result<(),OpenFailure> {
     if format!="capy.session" || version!=1 {return Err(OpenFailure::Unsupported("Unsupported session format".into()));}
     Ok(())
 }
-impl From<String> for OpenFailure {fn from(message:String)->Self {if message==crate::MEMORY_BUDGET_EXCEEDED {Self::MemoryBudgetExceeded}else{Self::Invalid(message)}}}
+impl From<String> for OpenFailure {fn from(message:String)->Self {if message==crate::MEMORY_BUDGET_EXCEEDED {Self::MemoryBudgetExceeded}else if message==super::values::MEMORY_UNCOVERED {Self::Uncovered}else{Self::Invalid(message)}}}
 impl From<&str> for OpenFailure {fn from(message:&str)->Self {Self::Invalid(message.into())}}
 impl From<super::values::DecodeError> for OpenFailure {
     fn from(error:super::values::DecodeError)->Self {match error {
         super::values::DecodeError::Invalid(message) | super::values::DecodeError::Io(message)=>Self::Invalid(message),
         super::values::DecodeError::Unsupported(message)=>Self::Unsupported(message),
         super::values::DecodeError::MemoryBudgetExceeded=>Self::MemoryBudgetExceeded,
+        super::values::DecodeError::Uncovered=>Self::Uncovered,
     }}
 }
 pub fn open_parts_with_programs(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLimits,cancel:&AtomicBool,programs:&super::TrustedPrograms)->Result<OpenSession,String> {
@@ -458,7 +459,7 @@ fn open_parts_checked_with_budget(metadata:&[u8],resource_pack:ImmutableBacking,
     for state in std::iter::once(&record.current).chain(&record.undo).chain(&record.redo) {
         active(cancel)?;let manifest=record.manifest(state,&directory,limits)?;
         let mut reader=ResourceReader::with_budget(&manifest,&resource_pack,cancel,resource_limits,budget.clone());
-        if let Some(store)=store {reader.store=Some(store);reader.admission=store.admission.clone();}
+        if let Some(store)=store {reader.store=Some(store);reader.admission=store.admission.clone();reader.waits=true;}
         reader.private=true;reader.trusted_programs=programs.clone();reader.install_cache(cache);
         if documents.is_empty() {profiles=decode_profiles(&record.metadata_profiles,&mut reader)?;}
         let mut artwork=artwork_records::decode_with_layout(&manifest,&mut reader,Some(&record.layout))?;
@@ -515,6 +516,11 @@ pub fn open_with_budget(source:ImmutableBacking,limits:ProjectLimits,cancel:&Ato
         fn poll(&self,offset:u64,length:usize)->Result<super::RangeState,String> {
             if offset.checked_add(length as u64).is_none_or(|end|end>self.length){return Err("Session resource range overflow".into());}
             self.source.poll(self.offset.checked_add(offset).ok_or("Session resource offset overflow")?,length)
+        }
+        #[cfg(not(target_arch="wasm32"))]
+        fn poll_on_worker(&self,offset:u64,length:usize)->Result<super::RangeState,String> {
+            if offset.checked_add(length as u64).is_none_or(|end|end>self.length){return Err("Session resource range overflow".into());}
+            self.source.read_on_worker(self.offset.checked_add(offset).ok_or("Session resource offset overflow")?,length).map(super::RangeState::Ready)
         }
     }
     let backing=ImmutableBacking::new(Arc::new(Pack {source:source.clone(),offset:pack.offset,length:pack.length})).map_err(str::to_string)?;

@@ -271,7 +271,7 @@ impl CanvasBarState {
 
 fn same_selection(a: &layer_core::Selection, b: &layer_core::Selection) -> bool {
     let shape = match (&a.shape, &b.shape) {
-        (layer_core::SelectionShape::Contours(a), layer_core::SelectionShape::Contours(b)) => std::sync::Arc::ptr_eq(a, b),
+        (layer_core::SelectionShape::Contours(a), layer_core::SelectionShape::Contours(b)) => a.same_owner(b),
         (layer_core::SelectionShape::Pixels(a), layer_core::SelectionShape::Pixels(b)) => std::sync::Arc::ptr_eq(a, b),
         _ => false,
     };

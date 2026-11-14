@@ -14,46 +14,36 @@ impl Resource {
         }
     }
 }
-#[derive(Default)]
+type Retained = (Resource,crate::residency::Charge,Arc<crate::residency::Lease>);
 pub(crate) struct BufferPool {
-    resources: Mutex<Vec<Resource>>,
-    pub bytes: AtomicU64,
-    pub working: AtomicU64,
-    pub transfer: AtomicU64,
-    retained_limit: AtomicU64,
+    resources: Mutex<Vec<Retained>>,
+    pub working: Arc<crate::residency::Tier>,
+    pub transfer: Arc<crate::residency::Tier>,
+    pub retained: Arc<crate::residency::Tier>,
+    evicted: Arc<std::sync::atomic::AtomicBool>,
     pub(super) priority: Arc<deferred::PresentationPriority>,
 }
 impl BufferPool {
-    pub fn set_retained_limit(&self, bytes: u64) { self.retained_limit.store(bytes.min(crate::memory::RASTER_BUFFER_BYTES), Ordering::Release); }
-    pub fn trim_unused(&self) -> u64 {
-        let limit = self.retained_limit.load(Ordering::Acquire);
-        let mut resources = self.resources.lock().unwrap();
-        let mut released = 0;
-        let mut retired = Vec::new();
-        for _ in 0..crate::native_tiles::MAX_BATCH_TILES {
-            if self.bytes.load(Ordering::Relaxed) <= limit { break; }
-            if resources.is_empty() { break; }
-            let resource = resources.remove(0);
-            let bytes = resource.bytes();
-            self.bytes.fetch_sub(bytes, Ordering::Relaxed);
-            released += bytes;
-            retired.push(resource);
-        }
-        drop(resources);
+    pub(crate) fn within(raster:&Arc<crate::residency::Tier>)->Self {
+        Self {resources:Default::default(),working:Default::default(),transfer:crate::residency::Tier::within(raster),
+            retained:crate::residency::Tier::within(raster),evicted:Default::default(),priority:Default::default()}
+    }
+    pub(crate) fn charge(&self,bytes:u64)->crate::residency::Charge {self.transfer.charge(bytes)}
+    pub fn release_evicted(&self) {
+        if !self.evicted.swap(false,Ordering::AcqRel) {return;}
+        let retired=self.resources.lock().unwrap().extract_if(..,|(_,_,lease)|lease.evicted()).collect::<Vec<_>>();
         drop(retired);
-        released
     }
     pub fn memory_bytes(&self) -> [u64; 2] {
-        let metadata = self.resources.lock().unwrap().capacity() as u64 * std::mem::size_of::<Resource>() as u64;
-        [metadata.saturating_add(self.working.load(Ordering::Acquire)),
-            self.bytes.load(Ordering::Acquire).saturating_add(self.transfer.load(Ordering::Acquire))]
+        let resources=self.resources.lock().unwrap();
+        let metadata=resources.capacity() as u64*std::mem::size_of::<Retained>() as u64;
+        let gpu=self.retained.used().saturating_add(self.transfer.used());
+        [metadata.saturating_add(self.working.used()),gpu]
     }
     fn take_matching(&self, matches: impl Fn(&Resource) -> bool) -> Option<Resource> {
         let mut resources = self.resources.lock().unwrap();
-        let index = resources.iter().position(matches)?;
-        let resource = resources.remove(index);
-        self.bytes.fetch_sub(resource.bytes(), Ordering::Relaxed);
-        Some(resource)
+        let index = resources.iter().position(|(resource, _, _)| matches(resource))?;
+        Some(resources.remove(index).0)
     }
     pub fn take(&self, device: &wgpu::Device, size: u64) -> wgpu::Buffer {
         self.take_buffer(
@@ -119,21 +109,23 @@ impl BufferPool {
             view_formats: &[],
         }))
     }
+    #[cfg(test)]
     pub fn put(&self, buffer: wgpu::Buffer) {
         self.put_resource(Resource::Buffer(buffer));
     }
-    pub(super) fn put_resource(&self, resource: Resource) {
+    pub(super) fn put_charged(&self,resource:Resource,charge:crate::residency::Charge) {drop(charge);self.retain(resource);}
+    #[cfg(test)]
+    pub(super) fn put_resource(&self,resource:Resource) {self.retain(resource);}
+    fn retain(&self,resource:Resource) {
         let mut resources = self.resources.lock().unwrap();
         let size = resource.bytes();
-        let limit = self.retained_limit.load(Ordering::Acquire);
-        while self.bytes.load(Ordering::Relaxed).saturating_add(size) > limit {
+        while self.retained.used().saturating_add(size) > crate::memory::RASTER_BUFFER_BYTES {
             if resources.is_empty() { break; }
-            let oldest = resources.remove(0);
-            self.bytes.fetch_sub(oldest.bytes(), Ordering::Relaxed);
+            drop(resources.remove(0));
         }
-        if self.bytes.load(Ordering::Relaxed).saturating_add(size) <= limit {
-            self.bytes.fetch_add(size, Ordering::Relaxed);
-            resources.push(resource);
+        if self.retained.used().saturating_add(size) <= crate::memory::RASTER_BUFFER_BYTES {
+            let lease=self.retained.heap().lease(&self.evicted);lease.offer(size,0);
+            resources.push((resource, self.retained.charge(size), lease));
         }
     }
 }

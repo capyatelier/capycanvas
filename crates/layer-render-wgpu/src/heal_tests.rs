@@ -109,18 +109,18 @@ fn spot_healing_batches_resident_candidates_across_pages() {
     draw(&mut engine, &mut input, pen(21, PenPhase::Up, [1360., 602.], SampleFlags::PRIMARY));
     let pages = &engine.backend().paint_layers.iter().find(|l| l.id == TARGET).unwrap().pages;
     assert!(pages.iter().filter(|p| p.secondary.is_some()).count() < pages.len(), "pen-up allocates every Healing destination before its batch");
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    while counts(&engine).heals == 0 {
+        engine.render_frame().unwrap();
+        assert!(std::time::Instant::now() < deadline, "the heal settles");
+        std::thread::yield_now();
+    }
+    let passes = engine.backend().metrics.command_passes - before;
     flush(&mut engine);
     assert_eq!(counts(&engine).heals, 1);
-    let pages = engine.backend().paint_layers.iter().find(|l| l.id == TARGET).unwrap().pages.len() as u64;
-    let passes = engine.backend().metrics.command_passes - before;
+    let pages = target_coordinates(engine.backend()).len() as u64;
     assert!(pages >= 12);
     assert!(passes <= 6 * pages + 80, "{passes} passes for {pages} pages");
-}
-
-/// The target's pixels, read back page by page.
-fn target(r: &WgpuRasterizer) -> impl Fn(u32, u32) -> [f32; 4] + use<> {
-    let pages: std::collections::BTreeMap<_, _> = target_pages(r).into_iter().collect();
-    move |x, y| pages.get(&[x / PAGE_SIZE, y / PAGE_SIZE]).map_or([0.; 4], |p| p[((y % PAGE_SIZE) * PAGE_SIZE + x % PAGE_SIZE) as usize])
 }
 
 fn mean(values: &[f32]) -> f32 {
@@ -172,7 +172,7 @@ fn heals_texture_and_tone(blend_space: layer_core::BlendSpace) {
     let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 64., false);
     source_at(&mut engine, 150., 256.);
     stroke(&mut engine, &mut input, 1, [600., 256.], [880., 256.]);
-    let healed = target(engine.backend());
+    let healed = pixels(engine.backend_mut(), TARGET);
     let decoded = |x: u32, y: u32| linear(encode(texture_and_gradient(x, y)));
     let offset = -450;
     let interior: Vec<(u32, u32)> = (640..840).flat_map(|x| (244..=268).map(move |y| (x, y))).collect();
@@ -210,8 +210,8 @@ fn healing_pen_up_refreshes_every_painted_display_page() {
         let r = engine.backend();
         let cache = r.scale_display.as_ref().unwrap();
         assert_eq!(cache.plan.level, 2);
-        let output = floats(&crate::layer_tests::page_bytes(r, cache.texture()));
-        let healed = target(r);
+        let (output, width) = (floats(&crate::layer_tests::page_bytes(r, cache.texture())), cache.plan.size[0]);
+        let healed = pixels(engine.backend_mut(), TARGET);
         for y in 62..66 {
             for x in 152..180 {
                 let mut expected = [0.; 4];
@@ -220,7 +220,7 @@ fn healing_pen_up_refreshes_every_painted_display_page() {
                     assert!(p[3] > 0.999);
                     for c in 0..4 { expected[c] += p[c] / 16.; }
                 }}
-                let actual = output[(y * cache.plan.size[0] + x) as usize];
+                let actual = output[(y * width + x) as usize];
                 assert!(close(actual, expected), "{preset:?} ({x},{y}): displayed {actual:?}, healed {expected:?}");
             }
         }
@@ -237,6 +237,31 @@ fn abandoning_a_heal_resolves_its_pending_revision() {
     assert!(root.try_data().is_none());
     drop(engine);
     assert!(root.try_data().is_some_and(|data| data.is_err()));
+}
+
+#[test]
+fn a_settling_heal_waits_on_its_wakes_instead_of_frames() {
+    let (mut input, mut engine) = healer(photo(|x, y| grey(texture_and_gradient(x, y))), DefaultBrushPreset::HealingBrush, 64., false);
+    let (wake, woken) = std::sync::mpsc::channel();
+    let wake = std::sync::Mutex::new(wake);
+    engine.backend_mut().set_preparation_wake(Arc::new(move || { let _ = wake.lock().unwrap().send(()); }));
+    source_at(&mut engine, 150., 256.);
+    for i in 0..9 {
+        let phase = if i == 0 { PenPhase::Down } else if i == 8 { PenPhase::Up } else { PenPhase::Move };
+        draw(&mut engine, &mut input, pen(i + 1, phase, [580. + i as f32 * 40., 256.], SampleFlags::PRIMARY));
+    }
+    assert!(engine.backend().has_pending_submission());
+    let mut frames = 0;
+    while engine.backend().has_pending_submission() {
+        assert!(engine.frame_demand() == layer_render::FrameDemand::Wait, "a settling heal asked for polling frames after {frames} frames");
+        if engine.backend().next_frame() == layer_render::FrameDemand::Wait {
+            woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the heal's GPU work wakes its owner");
+        }
+        engine.render_frame().unwrap();
+        frames += 1;
+        assert!(frames < 1000, "the heal did not settle");
+    }
+    assert!(engine.document().target_raster(TARGET).unwrap().try_data().is_some_and(|data| data.is_ok()));
 }
 
 #[test]
@@ -300,7 +325,7 @@ fn with_matching_surroundings_healing_is_the_clone() {
             let (mut input, mut engine) = healer(doc, preset, 48., false);
             source_at(&mut engine, 216., 144.);
             stroke(&mut engine, &mut input, 1, [600., 144.], [860., 300.]);
-            pages.push(target_pages(engine.backend()));
+            pages.push(target_pages(engine.backend_mut()));
         }
         assert!(pages[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "{blend_space:?}: the clone painted");
         assert_eq!(pages[0], pages[1], "{blend_space:?}: a membrane of zero leaves the clone exactly");
@@ -316,7 +341,7 @@ fn spot_healing_replaces_a_dot_with_texture_like_its_surroundings() {
         set_blend(&mut doc, blend_space);
         let (mut input, mut engine) = healer(doc, DefaultBrushPreset::SpotHealingBrush, 40., false);
         stroke(&mut engine, &mut input, 1, [516., 250.], [524., 250.]);
-        let healed = target(engine.backend());
+        let healed = pixels(engine.backend_mut(), TARGET);
         let spot: Vec<_> = (500..540).flat_map(|x| (230..270).map(move |y| (x, y))).filter(|&(x, y)| dot(x, y)).collect();
         let around: Vec<_> = (440..600).flat_map(|x| (170..330).map(move |y| (x, y))).filter(|&(x, y)| (x as f32 - 520.).hypot(y as f32 - 250.) > 40.).collect();
         let inside: Vec<f32> = spot.iter().map(|&(x, y)| healed(x, y)[1]).collect();
@@ -344,9 +369,10 @@ fn consecutive_spot_heals_each_remove_their_dot() {
         for (id, [x, y]) in dots.into_iter().enumerate() {
             stroke(&mut engine, &mut input, id as u64 * 20 + 1, [x - 4., y], [x + 4., y]);
         }
+        let pixel = pixels(engine.backend_mut(), layer);
         for [cx, cy] in dots {
             let spot: Vec<f32> = (cx as u32 - 20..cx as u32 + 20).flat_map(|x| (cy as u32 - 20..cy as u32 + 20).map(move |y| (x, y)))
-                .filter(|&(x, y)| dot(x, y)).map(|(x, y)| pixel(engine.backend(), layer, x, y)[1]).collect();
+                .filter(|&(x, y)| dot(x, y)).map(|(x, y)| pixel(x, y)[1]).collect();
             assert!(mean(&spot) > linear(encode(0.3)), "{source:?}: the dot at {cx} is healed: {}", mean(&spot));
         }
         assert_eq!(counts(&engine).heals, 2, "{source:?}");
@@ -367,7 +393,7 @@ fn healing_matches_tone_on_the_documents_values() {
         let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 64., false);
         source_at(&mut engine, 150., 256.);
         stroke(&mut engine, &mut input, 1, [600., 256.], [880., 256.]);
-        let healed = target(engine.backend());
+        let healed = pixels(engine.backend_mut(), TARGET);
         let interior: Vec<f32> = (640..840)
             .flat_map(|x| (248..264).map(move |y| (x, y)))
             .map(|(x, y)| layer_core::color::RgbSpace::Srgb.encode(f64::from(healed(x, y)[1])) as f32)
@@ -391,7 +417,7 @@ fn healing_replays_from_estimates_and_corrections_match_a_direct_stroke() {
             source_at(&mut engine, 200., 300.);
             corrected_replay(&mut engine, &mut input, &path, [760., 246.], late);
             if late { assert!(counts(&engine).heals >= 2, "{preset:?}: the correction heals again"); }
-            results.push(target_pages(engine.backend()));
+            results.push(target_pages(engine.backend_mut()));
         }
         assert!(results[0].iter().any(|(_, page)| page.iter().any(|p| p[3] > 0.)), "{preset:?} painted");
         assert_eq!(results[0], results[1], "{preset:?}: corrections replay to the direct stroke");
@@ -405,15 +431,15 @@ fn each_healing_stroke_is_one_undo_step() {
         let (mut input, mut engine) = healer(doc, preset, 40., false);
         source_at(&mut engine, 200., 300.);
         stroke(&mut engine, &mut input, 1, [600., 200.], [700., 200.]);
-        let first = target_pages(engine.backend());
+        let first = target_pages(engine.backend_mut());
         stroke(&mut engine, &mut input, 20, [600., 300.], [700., 300.]);
-        assert_ne!(target_pages(engine.backend()), first);
+        assert_ne!(target_pages(engine.backend_mut()), first);
         assert!(engine.undo().unwrap());
         flush(&mut engine);
-        assert_eq!(target_pages(engine.backend()), first, "{preset:?}: one undo removes the second heal");
+        assert_eq!(target_pages(engine.backend_mut()), first, "{preset:?}: one undo removes the second heal");
         assert!(engine.undo().unwrap());
         flush(&mut engine);
-        assert!(target_pages(engine.backend()).iter().all(|(_, page)| page.iter().all(|p| p[3] == 0.)), "{preset:?}");
+        assert!(target_pages(engine.backend_mut()).iter().all(|(_, page)| page.iter().all(|p| p[3] == 0.)), "{preset:?}");
         assert!(!engine.can_undo());
     }
 }

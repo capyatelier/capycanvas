@@ -10,6 +10,11 @@ pub fn normalize_filtered_tile(descriptor:PixelDescriptor,bytes:&[u8],crc:u32)->
 }
 struct Reader {backing:ImmutableBacking,ranges:Arc<Mutex<BTreeMap<(u64,usize),Arc<PackageIdentity>>>>}
 impl RangeReader for Reader {
+    fn allocation_bytes(&self,offset:u64,length:usize)->usize {
+        let input=self.backing.read_source().map_or(length,|source|source.allocation_bytes(offset,length));
+        let filtered=self.ranges.lock().unwrap().get(&(offset,length)).is_some_and(|range|range.filtered);
+        if filtered {input.saturating_add(*self.result_bounds(offset,length).end())}else{input}
+    }
     fn result_bounds(&self,offset:u64,length:usize)->std::ops::RangeInclusive<usize> {
         match self.ranges.lock().unwrap().get(&(offset,length)) {
             Some(range) if range.filtered=>1..=crate::raster::TileBlob::max_compressed_len(range.descriptor).unwrap(),
@@ -22,7 +27,7 @@ impl RangeReader for Reader {
         let source=self.backing.read_source();let prepared=source.is_some()&&filtered.is_some();
         let completion=completion.map(Box::new(move |bytes|bytes.and_then(|bytes| {
             let range=range.ok_or("Missing package tile descriptor")?;
-            let bytes=if prepared {bytes}else if range.filtered {normalize_filtered_tile(range.descriptor,&bytes,range.original.crc32)?}
+            let bytes=if prepared {bytes}else if range.filtered {ByteRange::whole(normalize_filtered_tile(range.descriptor,&bytes,range.original.crc32)?)}
                 else {crate::tile_io::verify_crc(&bytes,Some(range.original.crc32))?;bytes};
             let integrity=EncodedIntegrity {bytes:bytes.len() as u64,crc32:crc32fast::hash(&bytes)};
             if range.canonical.get_or_init(||integrity)!=&integrity {return Err("Package normalization changed immutable bytes".into());}
@@ -93,8 +98,9 @@ impl PackageRange {
         self.healthy()?;self.lease.0.reads.poll(self.identity.offset,self.identity.original.bytes as usize).map_err(|error|self.fail(error))
     }
     pub(crate) async fn read(&self)->Result<ByteRange,String> {
-        self.healthy()?;self.lease.0.reads.wait(self.identity.offset,self.identity.original.bytes as usize)?.await.map_err(|error|self.fail(error))
+        self.read_interest()?.await.map_err(|error|self.fail(error))
     }
+    pub(crate) fn read_interest(&self)->Result<crate::tile_io::ReadWait,String> {self.healthy()?;self.lease.0.reads.wait(self.identity.offset,self.identity.original.bytes as usize)}
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn read_on_worker(&self)->Result<ByteRange,String> {
         self.healthy()?;self.lease.0.reads.wait_on_worker(self.identity.offset,self.identity.original.bytes as usize).map_err(|error|self.fail(error))

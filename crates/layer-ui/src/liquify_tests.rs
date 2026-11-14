@@ -4,6 +4,7 @@ use crate::session::test_support::{session, invoke, event, Recorder};
 #[derive(Debug)]
 struct Field;
 impl layer_core::liquify::Field for Field {
+    fn content_version(&self)->layer_core::raster::ContentVersion {layer_core::raster::ContentVersion::derive(0,&[])}
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn resources(&self, visit: &mut dyn FnMut(u64, usize)) { visit(987, 4096); }
     fn tiles(&self) -> Vec<[u32; 2]> { vec![[0, 0]] }

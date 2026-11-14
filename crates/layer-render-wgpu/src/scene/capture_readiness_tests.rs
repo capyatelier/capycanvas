@@ -40,10 +40,10 @@ fn cold_fragment_family_defers_before_encoding_and_capture_prepares_only_that_fa
         if !ordered {
             assert!(scene.encode_query_jobs(&mut r,&mut encoder,None).is_ok(),"discarded fragment work must not block an empty batch");
             scene.jobs.push(job.clone());
-            assert!(matches!(scene.encode_query_jobs(&mut r,&mut encoder,None),Err(GpuRasterError::DeferredObjectWork)));
+            assert!(matches!(scene.encode_query_jobs(&mut r,&mut encoder,None),Err(GpuRasterError::NotReady)));
         }
         release.send(()).unwrap();
-        assert!(matches!(deferred,Err(GpuRasterError::DeferredObjectWork)),"{deferred:?}");
+        assert!(matches!(deferred,Err(GpuRasterError::NotReady)),"{deferred:?}");
         assert_eq!(passes,0);
         assert_eq!(records,0);
         assert_eq!(retained,usize::from(ordered));
@@ -156,7 +156,7 @@ fn capture_after_cold_deferral(hidden_separator: bool) {
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     let result = scene.capture_region(&mut r, packet(doc.scene(), EXTENT), &destination,
         PixelRect::full(EXTENT), output, &mut encoder);
-    assert!(matches!(result, Err(GpuRasterError::DeferredObjectWork)), "{result:?}");
+    assert!(matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
     assert_eq!(encoder.pass_count(), 0);
     assert_eq!(scene.record_count, 0);
     assert!(scene.jobs.is_empty());
@@ -192,7 +192,8 @@ fn ordered_cold_fusion_retains_all_jobs_and_source_ranges_until_prepared() {
         plan: display_mips::Plan::window(EXTENT, 0, region)};
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     scene.prepare_region(&mut r, frame, (region, region.into()), region, false, &mut encoder).unwrap();
-    let image = scene.group(&r, frame, None, [0, 0]).unwrap();
+    let declaration=scene.capture_declaration(&r,frame).unwrap();let mut accepted=scene.accept_capture(&mut r,frame,Some(Output::Artwork(None)),&declaration,|scene,r,accepted|scene.group(r,frame,None,[0,0],accepted).map(drop)).unwrap();
+    let image = scene.group(&r, frame, None, [0, 0],&mut accepted).unwrap();
     let image = scene.converted(&r, image, Convert::linear(frame)).unwrap();
     scene.copy_window_tile(image, &destination, [0, 0]);
     assert!(scene.jobs.iter().any(|job| matches!(job, Job::Effect {prepared, ..} if !prepared.pipeline.ready())));
@@ -258,7 +259,7 @@ fn native_bake_defers_cold_effects_to_its_parent_compiler_and_preserves_history(
         let deadline=Instant::now()+Duration::from_secs(30);
         loop {
             engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
-            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && !engine.backend().has_pending_work() {break;}
+            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && engine.backend().next_frame()!=layer_render::FrameDemand::Work {break;}
             assert!(Instant::now()<deadline,"native bake did not settle after compiler release");
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -334,7 +335,7 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
         let deadline=Instant::now()+Duration::from_secs(30);
         loop {
             engine.render_frame_at(0).unwrap();engine.backend_mut().wait_idle().unwrap();
-            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && !engine.backend().has_pending_work() {break;}
+            if !engine.has_pending_document_edits() && !engine.raster_backing_pending() && engine.backend().next_frame()!=layer_render::FrameDemand::Work {break;}
             assert!(Instant::now()<deadline,"masked bake did not settle");std::thread::sleep(Duration::from_millis(1));
         }
     };
@@ -350,4 +351,23 @@ fn native_bake_defers_cold_mask_restoration_to_its_parent_compiler() {
     assert_eq!(float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend())),pixels);
     assert!(engine.redo().unwrap());settle(&mut engine);assert_eq!(engine.checkpoint(),merged);
     assert_eq!(float_pixels(engine.backend(),crate::test_support::document_texture(engine.backend())),pixels);
+}
+
+#[test]
+fn a_cloned_publish_job_cannot_consume_one_encoding_twice() {
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let receipt=encoder.submission();
+    let expected=layer_core::raster::ContentName::fresh();
+    let mut physical=resident::Resident::unwritten(std::cell::Cell::new(7u32));
+    let write=physical.initialize(&receipt).unwrap();
+    write.value().set(11);
+    let job=Job::Publish {target:SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0)),
+        output:Arc::new(std::sync::Mutex::new(Some(write.encoded(expected))))};
+    let duplicate=job.clone();
+    Scene::publish_job(&mut r,&receipt,&job).unwrap();
+    assert_eq!(physical.read(expected,Some(&receipt)).unwrap().value().get(),11);
+    let error=Scene::publish_job(&mut r,&receipt,&duplicate).expect_err("a consumed publication must fail within the same frame");
+    assert!(matches!(&error,GpuRasterError::Invariant(_)),"{error:?}");
+    assert!(!error.is_preparation_pending(),"a consumed encoding is an invariant failure, not missing preparation: {error:?}");
 }

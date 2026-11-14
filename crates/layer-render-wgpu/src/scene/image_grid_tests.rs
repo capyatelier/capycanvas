@@ -49,7 +49,7 @@ fn cold_correction_gather_finishes_resident_pages_and_requests_the_next() {
         attempts += 1;
         match result {
             Ok(()) => break,
-            Err(GpuRasterError::DeferredObjectWork) => {}
+            Err(GpuRasterError::NotReady) => {}
             Err(error) => panic!("{error}"),
         }
         assert!(2 * attempts < pages, "a gather attempt must finish every page whose decode arrived and request more than one page");
@@ -58,6 +58,68 @@ fn cold_correction_gather_finishes_resident_pages_and_requests_the_next() {
         pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
     }
     assert!(attempts > 1, "the photo starts cold");
+}
+
+#[test]
+fn an_ordered_correction_resumes_each_pending_page_with_its_own_inputs() {
+    use crate::tests::native_effects::{insert_effect,refresh};
+    use layer_core::{EffectInstance,EffectValue};
+    let extent=[2*PAGE_SIZE,PAGE_SIZE];
+    let color=|x:u32,y:u32|[if x<PAGE_SIZE {19}else {203},((x*17+y*31)%251) as u8,(y*13%239) as u8,255];
+    let source=layer_core::color::source::rgba8_source(extent,color);
+    let mut doc=crate::scene::scale::tests::document_at(extent);
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color.depth=layer_core::color::SampleDepth::F32;
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=layer_core::BlendSpace::Linear;
+    let layer_core::SourceTarget::Paint(paint)=doc.active_target().unwrap() else {unreachable!()};
+    doc.artwork.paint.get_mut(paint).unwrap().base=Some(layer_core::PaintBase::new(source.clone().into()));
+    let mut filter=EffectInstance::new(crate::tests::fixture("gaussian_blur").program());
+    filter.set("sigma",EffectValue::Number(0.)).unwrap();
+    let effect=insert_effect(&mut doc,filter);
+    let root=doc.composition().result;
+    doc.artwork.stacks.get_mut(root).unwrap().entries.swap(0,1);refresh(&mut doc);
+    let gate=crate::test_support::GatedStore::new(&layer_core::Editor::new(doc.clone()).retained_tiles(),false);
+    let mut r=crate::memory::memory_tests::renderer_for_restore(&doc);
+    let frame=layer_render::FramePacket {blend_space:layer_core::BlendSpace::Linear,..crate::test_support::packet(doc.scene(),extent)};
+    crate::memory::memory_tests::declare_source_budget(&mut r,frame,8,16<<20,64<<20);
+    assert!(r.source_tiles.borrow().free_slots()>=2);
+    let mut scene=Scene::new(&r).unwrap();scene.ordered=true;
+    pollster::block_on(compile::Needs::capture_scene(&r,doc.scene(),false).prepare(&r.compilation)).unwrap();
+    pollster::block_on(r.compilation.prepare_all([r.scene_pipelines.source.for_format(wgpu::TextureFormat::Rgba8Unorm)])).unwrap();
+    for pass in 0..doc.scene().effect(effect).unwrap().program.passes.len().max(1) {
+        scene.effects.prepare(&r,doc.scene(),&[effect],effects::Execution::Image(pass),frame.time_seconds,0,frame.blend_space).unwrap();
+    }
+    pollster::block_on(scene.effects.needs().prepare(&r.compilation)).unwrap();
+    let full=PixelRect::full(extent);let window=DocRect::from(full);
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let result=scene.prepare_region(&mut r,frame,(full,window),full,false,&mut encoder);
+    assert!(matches!(result,Err(GpuRasterError::NotReady)),"both source pages begin pending: {result:?}");
+    let gather=scene.images.stages.iter().find(|stage|stage.id==effect).and_then(|stage|stage.input_gather.as_ref()).expect("the two-page effect input is being gathered");
+    assert_eq!(gather.pages.iter().copied().collect::<Vec<_>>(),vec![[0,0],[1,0]],"neither page may have committed while delivery is gated");
+    let queue=&r.moving_decode.as_ref().expect("both missing pages request decoding").1;
+    let identity=Arc::as_ptr(&source) as usize;
+    assert_eq!(queue.requested_image_tiles(),vec![(identity,[0,0]),(identity,[1,0])],"the regression requires two distinct pending input owners");
+    assert!(!queue.ready(),"delivery remains gated for both pages");
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    gate.gate.entered();gate.gate.release();crate::test_support::settle_decodes(&mut r);
+    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+    loop {
+        assert!(std::time::Instant::now()<deadline,"both delivered correction pages must finish");
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        r.drain_image_decodes(&mut encoder).unwrap();
+        let result=scene.prepare_region(&mut r,frame,(full,window),full,false,&mut encoder);
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+        match result {Ok(())=>break,Err(GpuRasterError::NotReady)=>{},Err(error)=>panic!("{error}")}
+        crate::test_support::settle_decodes(&mut r);
+    }
+    let stage=scene.images.stages.iter().find(|stage|stage.id==effect).unwrap();
+    assert!(stage.valid && stage.input_gather.is_none());
+    let pixels=crate::test_support::float_pixels(&r,&stage.output.texture);
+    assert_eq!(pixels.len(),(extent[0]*extent[1]) as usize);
+    for (index,pixel) in pixels.iter().enumerate() {
+        let rgba=color(index as u32%extent[0],index as u32/extent[0]);
+        let expected=rgba.map(|code|doc.composition().color.space.decode(f64::from(code)/255.) as f32);
+        for channel in 0..4 {assert!((pixel[channel]-expected[channel]).abs()<2e-6,"pixel {index}: {pixel:?} != {expected:?}");}
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -79,7 +141,7 @@ fn correction_progress(change: CorrectionChange) {
     assert_ne!(r.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
     let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
     crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
-    assert_eq!(r.source_tiles.borrow().admitted_bytes()[0], 64 * u64::from(PAGE_SIZE).pow(2) * 16);
+    assert!(r.source_tiles.borrow().free_slots() >= 64);
     let mut scene = Scene::new(&r).unwrap();
     let full = PixelRect::full(EXTENT);
     if matches!(change, CorrectionChange::RepeatedDamage) {
@@ -94,7 +156,7 @@ fn correction_progress(change: CorrectionChange) {
         r.drain_image_decodes(&mut encoder).unwrap();
         let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
         let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
-        assert!(result.is_ok() || matches!(result, Err(GpuRasterError::DeferredObjectWork)), "{result:?}");
+        assert!(result.is_ok() || matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
         let remaining = scene.images.stages.iter().find(|stage| stage.id == effect)
             .and_then(|stage| stage.input_gather.as_ref()).map(|gather| gather.pages.len());
         r.uploads.finish(&encoder);
@@ -150,7 +212,7 @@ fn correction_progress(change: CorrectionChange) {
         r.drain_image_decodes(&mut encoder).unwrap();
         let frame = layer_render::FramePacket { blend_space: layer_core::BlendSpace::Linear, ..crate::test_support::packet(doc.scene(), EXTENT) };
         let result = scene.prepare_region(&mut r, frame, (full, window), full, false, &mut encoder);
-        assert!(result.is_ok() || matches!(result, Err(GpuRasterError::DeferredObjectWork)), "{result:?}");
+        assert!(result.is_ok() || matches!(result, Err(GpuRasterError::NotReady)), "{result:?}");
         if let Some(gather) = scene.images.stages.iter().find(|stage| stage.id == effect).and_then(|stage| stage.input_gather.as_ref()) {
             assert_eq!(gather.revision, doc.revision);
             assert!(gather.pages.len() <= remaining, "a committed input prefix was restarted: {} > {remaining}", gather.pages.len());

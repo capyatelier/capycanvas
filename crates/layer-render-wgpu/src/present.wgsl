@@ -29,7 +29,7 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 @group(0) @binding(3) var<storage, read> selection: Selection;
 @group(0) @binding(11) var saved_selection: texture_2d<u32>;
 @group(0) @binding(4) var coarse: texture_2d<f32>;
-struct DisplayCache { scale: u32, coarse_scale: u32, next_scale: u32, padding: u32, window: vec4<u32> }
+struct DisplayCache { scale: u32, coarse_scale: u32, next_scale: u32, written_pages: u32, window: vec4<u32>, written:array<u32> }
 @group(0) @binding(5) var<storage, read> cache: DisplayCache;
 @group(0) @binding(6) var kept: texture_2d<f32>;
 @group(0) @binding(13) var navigator: texture_2d<f32>;
@@ -75,22 +75,28 @@ fn mip_coordinate(p: f32, extent: f32, scale: f32) -> f32 {
     }
     return clamp(p / scale - .5, 0., last);
 }
-fn coarse_point(p: vec2<f32>) -> vec4<f32> {
-    let extent = camera.offset_document.zw;
-    let scale = f32(cache.coarse_scale);
-    let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
-    let low = vec2<u32>(floor(q));
-    let high = min(low+1u, textureDimensions(coarse)-1u);
-    let t = fract(q);
-    return mix(mix(textureLoad(coarse, vec2<i32>(low), 0), textureLoad(coarse, vec2<i32>(i32(high.x), i32(low.y)), 0), t.x),
-        mix(textureLoad(coarse, vec2<i32>(i32(low.x), i32(high.y)), 0), textureLoad(coarse, vec2<i32>(high), 0), t.x), t.y);
-}
 fn detail_point(p: vec2<f32>) -> vec4<f32> {
     let extent = camera.offset_document.zw;
     let scale = f32(cache.scale);
-    let q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
-    if any(q < vec2<f32>(cache.window.xy)) || any(q > vec2<f32>(cache.window.zw - 1u)) { return coarse_point(p); }
+    var q = vec2(mip_coordinate(p.x, extent.x, scale), mip_coordinate(p.y, extent.y, scale));
+    if !grid_complete() {
+        let lo=floor(q)+.5;let hi=ceil(q)+.5;
+        if !grid_written(lo*scale) || !grid_written(hi*scale) || !grid_written(vec2(lo.x,hi.y)*scale) || !grid_written(vec2(hi.x,lo.y)*scale) {
+            let cell=vec2<u32>(p/scale)/256u;
+            q=clamp(q,vec2<f32>(max(cell*256u,cache.window.xy)),vec2<f32>(min((cell+1u)*256u,cache.window.zw))-1.);
+        }
+    }
     return level_sample(moved, moved_level, (q - vec2<f32>(cache.window.xy) + .5) / vec2<f32>(textureDimensions(moved)));
+}
+fn grid_complete()->bool {return cache.written_pages==((cache.window.z-cache.window.x+255u)/256u)*((cache.window.w-cache.window.y+255u)/256u);}
+fn grid_written(p:vec2<f32>)->bool {
+    let point=vec2<u32>(p/f32(cache.scale));
+    if any(point<cache.window.xy) || any(point>=cache.window.zw) {return false;}
+    if grid_complete() {return true;}
+    let local=(point-cache.window.xy)/256u;
+    let columns=(cache.window.z-cache.window.x+255u)/256u;
+    let index=local.y*columns+local.x;
+    return (cache.written[index/32u]&(1u<<(index%32u)))!=0u;
 }
 // Half-float display levels filter in hardware on every device.
 fn level_sample(image: texture_2d<f32>, filtered: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
@@ -177,6 +183,8 @@ fn moving_between(p: vec2<f32>, composite: vec4<f32>) -> vec4<f32> {
     return above + moving * (1. - above.a) + (composite - above) * (1. - moving.a);
 }
 fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    if !grid_written(p) {return vec4<f32>(0.);}
+    if !grid_complete() {return detail_point(p);}
     let scale = f32(cache.scale);
     let coarser = clamp(log2(max(length(dx), length(dy)) / scale) * 5. - 4., 0., 1.);
     if coarser == 0. { return detail_point(p); }
@@ -333,6 +341,7 @@ fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     let extent = camera.offset_document.zw;
     let cropping = camera.crop_offset.w > .5;
     if any(p < vec2<f32>(0.)) || any(p >= extent) { return surround_color(surface, p); }
+    if source==0u && !grid_written(p) {return surround_color(surface,p);}
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let dx = camera.inverse.xy * footprint;
     let dy = camera.inverse.zw * footprint;

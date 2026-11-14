@@ -93,7 +93,7 @@ pub struct SelectionPixels {
     byte_coverage: bool,
     extent: [u32; 2],
     bounds: [u32; 4],
-    words: Arc<[u32]>,
+    words: Resource<[u32]>,
     #[serde(skip)]
     package_chunks: Arc<OnceLock<SelectionChunks>>,
     #[serde(skip)]
@@ -144,7 +144,7 @@ impl SelectionPixels {
         let value = Self {
             extent,
             bounds,
-            words,
+            words: words.into(),
             byte_coverage,
             package_chunks: Arc::default(),
             package_chunk_ids: Arc::default(),
@@ -243,7 +243,7 @@ impl SelectionPixels {
         value.package_chunks.set(chunks.into()).map_err(|_| "Selection chunk cache already initialized")?;
         Ok(value)
     }
-    pub(crate) fn transfer_words(&self) -> &Arc<[u32]> { &self.words }
+    pub(crate) fn transfer_words(&self) -> &Arc<[u32]> { self.words.storage() }
     pub(crate) fn transfer_chunks(&self) -> Option<&[Resource<[u8]>]> { self.package_chunks.get().map(|chunks| chunks.as_ref()) }
     pub(crate) fn transfer_chunk_ids(&self) -> &[crate::authored::PortableId] {
         self.package_chunk_ids.get_or_init(|| {
@@ -264,7 +264,7 @@ impl SelectionPixels {
             || chunks.as_ref().is_some_and(|chunks| chunks.len() != ids.len() || chunks.iter().zip(&ids).any(|(chunk, id)| chunk.id() != *id)) {
             return Err("Invalid verified selection descriptor".into());
         }
-        let value = Self { extent, bounds, words, byte_coverage, package_chunks: Arc::default(), package_chunk_ids: Arc::new(OnceLock::from(Arc::<[crate::authored::PortableId]>::from(ids))), words_validated: Arc::new(OnceLock::from(())), package_validated: Arc::default() };
+        let value = Self { extent, bounds, words:words.into(), byte_coverage, package_chunks: Arc::default(), package_chunk_ids: Arc::new(OnceLock::from(Arc::<[crate::authored::PortableId]>::from(ids))), words_validated: Arc::new(OnceLock::from(())), package_validated: Arc::default() };
         if let Some(chunks) = chunks {
             value.package_chunks.set(chunks.into()).map_err(|_| "Selection chunk cache already initialized")?;
             value.package_validated.get_or_init(|| ());
@@ -321,7 +321,7 @@ impl SelectionPixels {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionShape {
     /// Even/odd interiors support holes and disjoint islands.
-    Contours(Arc<[Arc<[Point]>]>),
+    Contours(Resource<[Arc<[Point]>]>),
     Pixels(Arc<SelectionPixels>),
 }
 
@@ -334,6 +334,15 @@ pub struct Selection {
     pub inverted: bool,
 }
 impl Selection {
+    pub fn content_version(&self) -> crate::raster::ContentVersion {
+        let name = match &self.shape {
+            SelectionShape::Contours(paths) => paths.content_name(),
+            SelectionShape::Pixels(pixels) => pixels.words.content_name(),
+        };
+        self.affine.0.into_iter().map(f32::to_bits).chain([u32::from(self.inverted)])
+            .fold(name.into(), |version, parameter| crate::raster::ContentVersion::derive(u128::from(parameter), &[version]))
+    }
+
     pub fn coverage_at(&self, point: Point) -> f32 {
         let Some(inverse)=self.affine.inverse() else{return 0.;};
         let p=inverse.map(point);
@@ -361,7 +370,7 @@ impl Selection {
     }
     pub fn empty() -> Self {
         Self {
-            shape: SelectionShape::Contours(Arc::default()),
+            shape: SelectionShape::Contours(Vec::new().into()),
             affine: Affine::IDENTITY,
             inverted: false,
         }
@@ -510,6 +519,24 @@ impl Selection {
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+
+    #[test]
+    fn selection_input_names_share_immutable_coverage_and_include_placement() {
+        let polygon=Selection::polygon(vec![Point{x:0.,y:0.},Point{x:8.,y:0.},Point{x:0.,y:8.}]).unwrap();
+        for selection in [polygon,Selection::pixels(Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![0xff804000]).unwrap()))] {
+            let name=selection.content_version();
+            assert_eq!(selection.clone().content_version().matches(&name),Some(true));
+            let mut moved=selection.clone();moved.affine.0[4]+=1.;
+            assert_eq!(moved.content_version().matches(&name),Some(false));
+            moved.affine=selection.affine;assert_eq!(moved.content_version().matches(&name),Some(true));
+            moved.inverted=!selection.inverted;assert_eq!(moved.content_version().matches(&name),Some(false));
+            let bytes=serde_json::to_vec(&selection).unwrap();
+            let restored:Selection=serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(restored,selection);
+            assert_eq!(serde_json::to_vec(&restored).unwrap(),bytes);
+            assert_eq!(restored.content_version().matches(&name),Some(false));
+        }
+    }
 
     #[test]
     fn selection_coverage_samples_packed_values_and_transformed_contours() {

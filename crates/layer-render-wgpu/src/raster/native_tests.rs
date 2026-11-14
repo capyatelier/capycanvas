@@ -92,7 +92,7 @@ fn mixed_native_capture_is_exact_across_chunks_and_later_writes() {
             "capture changed native samples"
         );
     }
-    assert_eq!(r.raster_buffers.working.load(Ordering::Relaxed), 0);
-    assert!(r.raster_buffers.bytes.load(Ordering::Relaxed) <= 64 * 1024 * 1024);
+    assert_eq!(r.raster_buffers.working.used(), 0);
+    assert!(r.raster_buffers.retained.used() <= 64 * 1024 * 1024);
 }
 

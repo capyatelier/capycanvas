@@ -111,6 +111,7 @@ impl PreparedTransfer {
             }
         }
         let admission=if bytes==0 {None}else {Some(budget.admit_import(bytes).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?)};
+        if let Some(admission)=&admission {admission.covering().await;}
         let mut tiles=inventory.1.entries.values().filter_map(|entry|match &entry.payload {
             Payload::Tile(tile) if tile.compressed.needs_preparation() && !ranges.contains_key(&tile.resource_id())=>Some(tile),_=>None,
         });
@@ -237,8 +238,8 @@ impl PreparedTransfer {
             _=>Ok(payload.memory_chunk(offset as usize,length)),
         }
     }
-    pub fn from_chunks(descriptor:TransferDescriptor,chunks:Vec<Vec<Arc<[u8]>>>)->Result<Self,String>{
-        let mut receiver=TransferReceiver::new(descriptor,ProjectLimits::default())?;
+    pub async fn from_chunks(descriptor:TransferDescriptor,chunks:Vec<Vec<Arc<[u8]>>>)->Result<Self,String>{
+        let mut receiver=TransferReceiver::new(descriptor,ProjectLimits::default()).await?;
         if chunks.len()!=receiver.buffers.len(){return Err("Transfer payload count mismatch".into());}
         for (index,chunks) in chunks.into_iter().enumerate(){for chunk in chunks{receiver.push_chunk(index,&chunk)?;}}
         receiver.finish()
@@ -338,10 +339,13 @@ impl PreparedTransfer {
 enum PayloadBuffer {Bytes(Arc<[MaybeUninit<u8>]>),Words(Arc<[MaybeUninit<u32>]>) }
 pub struct TransferReceiver {admission:crate::MemoryReservation,descriptor:TransferDescriptor,buffers:Vec<PayloadBuffer>,positions:Vec<u64>,backings:Vec<ImmutableBacking>}
 impl TransferReceiver {
-    pub fn new(descriptor:TransferDescriptor,limits:ProjectLimits)->Result<Self,String>{
-        Self::with_sources(descriptor,limits,|_|Err("Transfer backing resolver is missing".into()))
+    pub async fn new(descriptor:TransferDescriptor,limits:ProjectLimits)->Result<Self,String>{
+        Self::with_sources(descriptor,limits,|_|Err("Transfer backing resolver is missing".into())).await
     }
-    pub fn with_sources(descriptor:TransferDescriptor,limits:ProjectLimits,mut source:impl FnMut(&BackingReference)->Result<Arc<dyn super::ByteSource>,String>)->Result<Self,String> {
+    pub async fn with_sources(descriptor:TransferDescriptor,limits:ProjectLimits,source:impl FnMut(&BackingReference)->Result<Arc<dyn super::ByteSource>,String>)->Result<Self,String> {
+        Self::receive(descriptor,limits,source,crate::MemoryBudget::process()).await
+    }
+    async fn receive(descriptor:TransferDescriptor,limits:ProjectLimits,mut source:impl FnMut(&BackingReference)->Result<Arc<dyn super::ByteSource>,String>,budget:crate::MemoryBudget)->Result<Self,String> {
         let parsed=manifest(&descriptor,limits)?;
         if !parsed.resources.keys().eq(descriptor.resources.keys()) || parsed.document!=descriptor.checkpoint.document {return Err("Transfer identity inventory mismatch".into());}
         let mut bytes=BTreeSet::new();let mut words=BTreeSet::new();
@@ -372,7 +376,8 @@ impl TransferReceiver {
         }).collect::<Result<Vec<_>,String>>()?;
         let total=descriptor.lengths.iter().try_fold(0u64,|a,b|a.checked_add(*b).ok_or("Transfer length overflow"))?;
         if total>limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_mul(2){return Err(crate::MEMORY_BUDGET_EXCEEDED.into());}
-        let admission=crate::MemoryBudget::process().admit_import(total).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
+        let admission=budget.admit_import(total).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
+        admission.covering().await;
         let buffers=descriptor.lengths.iter().enumerate().map(|(i,length)|{
             let length=usize::try_from(*length).map_err(|_|"Transfer allocation overflow")?;
             if words.contains(&i){if length%4!=0{return Err("Misaligned selection words".into());}Ok(PayloadBuffer::Words(Arc::<[u32]>::new_uninit_slice(length/4)))}
@@ -417,9 +422,30 @@ mod tests {
         document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().clone_from(&output);
         Editor::new(document).capture(7,EvaluationContext{elapsed:0.,phases:Vec::new().into()}).unwrap()
     }
+    #[test]
+    fn a_received_transfer_allocates_only_into_room_another_owner_has_released() {
+        use std::{future::Future,task::{Context,Poll,Waker}};
+        let prepared=PreparedTransfer::capture(&capture(),&AtomicBool::new(false)).unwrap();
+        let total=prepared.descriptor.lengths.iter().sum::<u64>();
+        let budget=crate::MemoryBudget::with_facts(crate::MemoryFacts {override_bytes:Some(1<<30),..Default::default()});
+        let limit=budget.ram_limit_bytes();
+        let cache=budget.register_owner(crate::MemoryOwnerKind::Other,crate::MemoryClass::Warm,None);
+        cache.report(crate::MemoryReport {ram_bytes:limit,demand_ram_bytes:limit,..Default::default()});
+        let physical=|allocated:bool|budget.snapshot().ram_physical_bytes+if allocated {total}else {0};
+        let mut receiving=Box::pin(TransferReceiver::receive(prepared.descriptor.clone(),ProjectLimits::default(),|_|Err("No backing".into()),budget.clone()));
+        let mut context=Context::from_waker(Waker::noop());
+        let first=receiving.as_mut().poll(&mut context);
+        assert!(physical(first.is_ready())<=limit,"the receiver allocated into room another owner still holds: {} > {limit}",physical(first.is_ready()));
+        cache.report(crate::MemoryReport {ram_bytes:cache.grant().ram_bytes,demand_ram_bytes:limit,..Default::default()});
+        let Poll::Ready(receiver)=receiving.as_mut().poll(&mut context) else {panic!("the release lets the receiver allocate")};
+        let mut receiver=receiver.unwrap();
+        assert!(physical(true)<=limit);
+        for index in 0..prepared.payload_count() {receiver.push_chunk(index,&prepared.read_chunk(index,0,prepared.payload_len(index).unwrap() as usize).unwrap()).unwrap();}
+        assert!(receiver.finish().is_ok());
+    }
     fn receive(prepared:&PreparedTransfer)->PreparedTransfer {
         let descriptor=serde_json::from_slice(&serde_json::to_vec(prepared.descriptor()).unwrap()).unwrap();
-        let mut receiver=TransferReceiver::new(descriptor,ProjectLimits::default()).unwrap();
+        let mut receiver=pollster::block_on(TransferReceiver::new(descriptor,ProjectLimits::default())).unwrap();
         for index in 0..prepared.payload_count(){let mut offset=0;let length=prepared.payload_len(index).unwrap();while offset<length {
             let count=(length-offset).min(MAX_RANGE_BYTES as u64) as usize;
             receiver.push_chunk(index,&prepared.read_chunk(index,offset,count).unwrap()).unwrap();offset+=count as u64;
@@ -469,7 +495,7 @@ mod tests {
     }
     fn receive_references(transfer:&PreparedTransfer,file:Arc<ExportedFile>)->Result<PreparedTransfer,String> {
         let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
-        let mut receiver=TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone()))?;
+        let mut receiver=pollster::block_on(TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone())))?;
         for index in 0..transfer.payload_count() {receiver.push_chunk(index,&transfer.read_chunk(index,0,transfer.payload_len(index)? as usize)?)?;}
         receiver.finish()
     }
@@ -492,7 +518,7 @@ mod tests {
     fn reference_transfer_rejects_missing_forged_and_overflowing_ranges_without_reads() {
         let (capture,file)=reference_fixture(false);let cancel=AtomicBool::new(false);
         let transfer=pollster::block_on(PreparedTransfer::capture_referenced(&capture,&None,&cancel,&crate::MemoryBudget::process())).unwrap();
-        assert!(TransferReceiver::new(transfer.descriptor.clone(),ProjectLimits::default()).is_err());
+        assert!(pollster::block_on(TransferReceiver::new(transfer.descriptor.clone(),ProjectLimits::default())).is_err());
         for mutation in 0..4 {
             let mut descriptor=transfer.descriptor.clone();
             match mutation {
@@ -502,11 +528,11 @@ mod tests {
                 3=>if let Some(VerifiedResource::TileRange {offset,..})=descriptor.resources.values_mut().find(|r|matches!(r,VerifiedResource::TileRange {..})) {*offset=u64::MAX;},
                 _=>unreachable!(),
             }
-            assert!(TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone())).is_err());
+            assert!(pollster::block_on(TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone()))).is_err());
         }
         let mut descriptor=transfer.descriptor.clone();
         if let Some(VerifiedResource::TileRange {identity:Some(crate::raster::TileContentIdentity::Package {descriptor,..}),..})=descriptor.resources.values_mut().find(|r|matches!(r,VerifiedResource::TileRange {..})) {descriptor[0]^=1;}else {panic!("Missing package identity");}
-        let mut receiver=TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone())).unwrap();
+        let mut receiver=pollster::block_on(TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone()))).unwrap();
         for index in 0..transfer.payload_count() {receiver.push_chunk(index,&transfer.read_chunk(index,0,transfer.payload_len(index).unwrap() as usize).unwrap()).unwrap();}
         assert!(receiver.finish().unwrap().adopt_verified(ProjectLimits::default(),&cancel).is_err());
         assert_eq!(file.reads.load(Ordering::SeqCst),0);
@@ -592,7 +618,7 @@ mod tests {
         assert_eq!(reads.load(Ordering::SeqCst),0);
         assert_eq!(transfer.payloads.iter().filter(|payload|matches!(payload,TransferPayload::Tile(_))).count(),0,"file-backed tiles must cross the worker boundary as references");
         let descriptor=serde_json::from_slice(&serde_json::to_vec(transfer.descriptor()).unwrap()).unwrap();
-        let received=TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone())).unwrap().finish().unwrap();let adopted=received.adopt_verified(ProjectLimits::default(),&cancel).unwrap();
+        let received=pollster::block_on(TransferReceiver::with_sources(descriptor,ProjectLimits::default(),|_|Ok(file.clone()))).unwrap().finish().unwrap();let adopted=received.adopt_verified(ProjectLimits::default(),&cancel).unwrap();
         let tile=adopted.artwork.paint.iter().next().unwrap().2.base.as_ref().unwrap().image.tiles[&[2,0]].clone();
         drop(parser);drop(file);drop(lease);drop(transfer);drop(received);drop(adopted);drop(image);
         assert!(alive.upgrade().is_some());assert_eq!(reads.load(Ordering::SeqCst),0);
@@ -839,7 +865,7 @@ mod tests {
     fn receiver_rejects_unindexed_and_conflicting_payload_roles_before_allocation() {
         let prepared=PreparedTransfer::capture(&capture(),&AtomicBool::new(false)).unwrap();
         let mut descriptor=prepared.descriptor().clone();descriptor.lengths.push(1);
-        assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
+        assert!(pollster::block_on(TransferReceiver::new(descriptor,ProjectLimits::default())).is_err());
         let mut descriptor=prepared.descriptor().clone();
         let payload=match descriptor.resources.values().next().unwrap() {
             VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload,..}|VerifiedResource::Lut{payload,..}|VerifiedResource::Vector{payload}|VerifiedResource::Opaque{payload}=>*payload,
@@ -847,18 +873,18 @@ mod tests {
             VerifiedResource::TileRange {..}=>unreachable!(),
         };
         descriptor.selections.push(SelectionTransfer {extent:[8,1],bounds:[0,0,8,1],bytes:false,chunks:vec![PortableId::random()],payload});
-        assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
+        assert!(pollster::block_on(TransferReceiver::new(descriptor,ProjectLimits::default())).is_err());
         let mut descriptor=prepared.descriptor().clone();let id=*descriptor.resources.keys().next().unwrap();descriptor.resources.remove(&id);
-        assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
+        assert!(pollster::block_on(TransferReceiver::new(descriptor,ProjectLimits::default())).is_err());
     }
     #[test]
     fn transfer_rejects_incomplete_chunks_missing_verification_and_foreign_layout(){
         let cancel=AtomicBool::new(false);let original=capture();let prepared=PreparedTransfer::capture(&original,&cancel).unwrap();
-        let receiver=TransferReceiver::new(prepared.descriptor.clone(),ProjectLimits::default()).unwrap();assert!(receiver.finish().is_err());
+        let receiver=pollster::block_on(TransferReceiver::new(prepared.descriptor.clone(),ProjectLimits::default())).unwrap();assert!(receiver.finish().is_err());
         let mut missing=receive(&prepared);missing.descriptor.resources.pop_first();assert!(missing.adopt_verified(ProjectLimits::default(),&cancel).is_err());
         let mut layout=receive(&prepared);layout.descriptor.layout.paint[0]=PortableId::random();assert!(layout.adopt_verified(ProjectLimits::default(),&cancel).is_err());
-        let mut receiver=TransferReceiver::new(prepared.descriptor.clone(),ProjectLimits::default()).unwrap();assert!(receiver.push_chunk(0,&vec![0;MAX_RANGE_BYTES+1]).is_err());
-        assert!(TransferReceiver::new(prepared.descriptor.clone(),ProjectLimits{raster_bytes:0,asset_bytes:0,..Default::default()}).is_err());
+        let mut receiver=pollster::block_on(TransferReceiver::new(prepared.descriptor.clone(),ProjectLimits::default())).unwrap();assert!(receiver.push_chunk(0,&vec![0;MAX_RANGE_BYTES+1]).is_err());
+        assert!(pollster::block_on(TransferReceiver::new(prepared.descriptor.clone(),ProjectLimits{raster_bytes:0,asset_bytes:0,..Default::default()})).is_err());
         let mut wrong=receive(&prepared);wrong.descriptor.checkpoint.document=PortableId::random();assert!(wrong.adopt_verified(ProjectLimits::default(),&cancel).is_err());
         cancel.store(true,Ordering::Relaxed);assert!(PreparedTransfer::capture(&original,&cancel).is_err());
     }
