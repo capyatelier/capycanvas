@@ -590,6 +590,8 @@ fn a_restore_is_refused_or_admitted_after_one_budget_rebalance() {
     }
     assert_eq!(r.memory.preparation.get(), 0);
     drop(import);
+    let first = r.admit_preparation_bytes(restore, 0);
+    assert!(first.is_ok() || matches!(first, Err(GpuRasterError::NotReady)), "the released restore must publish its need: {first:?}");
     assert!(r.admit_preparation_bytes(restore, 0).is_ok());
 }
 
