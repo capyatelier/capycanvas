@@ -49,24 +49,30 @@ pub(crate) struct Capture {
     preview: layer_render::TransformPreview,
     definition: ContentVersion,
     authored: ContentVersion,
+    cut: ContentVersion,
     taps:u32,
     mesh: Option<Arc<paint_transform::mesh::MeshGeometry>>,
 }
 impl Capture {
     pub fn new(source:SceneSnapshot,versions:raster::contents::Versions,preview:layer_render::TransformPreview,
         mesh:Option<Arc<paint_transform::mesh::MeshGeometry>>)->Self {
-        let definition=ContentVersion::derive(recipe(&(source.view().composition().color,source.view().color_mode(preview.target))),&[transform_version(&preview)]);
-        let authored=ContentVersion::derive(recipe(&(source.view().composition().color,source.view().color_mode(preview.target))),&[transform_version(&layer_render::TransformPreview {moving:false,..preview.clone()})]);
+        let context=recipe(&(source.view().composition().color,source.view().color_mode(preview.target)));
+        let definition=ContentVersion::derive(context,&[transform_version(&preview)]);
+        let authored=ContentVersion::derive(context,&[transform_version(&layer_render::TransformPreview {moving:false,..preview.clone()})]);
+        let cut=ContentVersion::derive(context,&[cut_version(&preview)]);
         let taps=crate::pixel_transform::exact_taps(&preview.drawn());
         let mesh=mesh.or_else(||preview.drawn().placement.mesh.as_ref().map(|mesh|
             Arc::new(paint_transform::mesh::MeshGeometry::new(mesh,preview.drawn().placement.outer,None))));
-        Self {source,versions,preview,definition,authored,taps,mesh}
+        Self {source,versions,preview,definition,authored,cut,taps,mesh}
     }
     pub fn with_preview(&self,preview:layer_render::TransformPreview,mesh:Option<Arc<paint_transform::mesh::MeshGeometry>>)->Self {
         Self::new(self.source.clone(),self.versions.clone(),preview,mesh).with_taps(self.taps)
     }
     pub fn with_taps(mut self,taps:u32)->Self {self.taps=taps;self}
     pub fn original(&self,plane:RasterPlane,coordinate:[u32;2])->ContentVersion {self.versions.tile(plane,coordinate)}
+    pub fn cut(&self,plane:RasterPlane,coordinate:[u32;2])->ContentVersion {
+        ContentVersion::derive(recipe(&raster::contents::index(plane)),&[self.cut.clone(),self.original(plane,coordinate)])
+    }
     pub fn matches_context(&self,scene:SceneView<'_>)->bool {
         self.source.view().composition().color==scene.composition().color
             && self.source.view().target_extent(self.preview.target)==scene.target_extent(self.preview.target)
@@ -559,17 +565,21 @@ fn path_version(path:&layer_core::authored::vector::PathItem)->ContentVersion {
     }
     ContentVersion::derive(name.0,&[path.geometry.content_version()])
 }
-fn transform_version(preview:&layer_render::TransformPreview)->ContentVersion {
+fn cut_version(preview:&layer_render::TransformPreview)->ContentVersion {
     let transform=preview.drawn();let mut name=Recipe::new();let mut inputs=Vec::new();
     name.add(&(preview.target,transform.keep_source,transform.source_from_owner.map(|map|map.0.map(f32::to_bits))));
+    if let Some(base)=&transform.source_base {let mut base_name=Recipe::new();base_name.add(&base.offset);base_name.tag(&base.policy);inputs.push(ContentVersion::derive(base_name.0,&[base.image.content_version()]));}
+    if let Some(selection)=&preview.selection {inputs.push(selection.content_version());}
+    ContentVersion::derive(name.0,&inputs)
+}
+fn transform_version(preview:&layer_render::TransformPreview)->ContentVersion {
+    let transform=preview.drawn();let mut name=Recipe::new();
     name.floats(transform.placement.outer.0);name.tag(&transform.placement.interpolation);name.add(&transform.placement.mesh.is_some());
     if let Some(mesh)=&transform.placement.mesh {
         name.floats(mesh.frame.0);for breaks in &mesh.breakpoints {name.add(&breaks.len());name.floats(breaks.iter().copied());}
         name.add(&mesh.net.len());for point in mesh.net.iter() {name.floats([point.x,point.y]);}
     }
-    if let Some(base)=&transform.source_base {let mut base_name=Recipe::new();base_name.add(&base.offset);base_name.tag(&base.policy);inputs.push(ContentVersion::derive(base_name.0,&[base.image.content_version()]));}
-    if let Some(selection)=&preview.selection {inputs.push(selection.content_version());}
-    ContentVersion::derive(name.0,&inputs)
+    ContentVersion::derive(name.0,&[cut_version(preview)])
 }
 fn preview_version(packet:FramePacket<'_>,batch:&DabBatch,captured:Option<&ContentVersion>)->Result<Option<ContentVersion>,GpuRasterError> {
     #[cfg(test)] crate::test_support::PassCounts {preview_definitions:1,..Default::default()}.record();

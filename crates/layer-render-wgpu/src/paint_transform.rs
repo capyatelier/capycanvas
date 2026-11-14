@@ -318,7 +318,7 @@ impl PaintTransforms {
                 let plane=if channel==0 {RasterPlane::Color}else {RasterPlane::WatercolorWetness};
                 let coordinates=regions[channel].into_iter().flat_map(page_coordinates).collect::<std::collections::BTreeSet<_>>();
                 for coordinate in coordinates {
-                    let version=capture.version(plane,page_rect(coordinate).into(),preview_taps(preview))?;
+                    let version=state.native_version(capture,&preview.drawn(),r.target_extent(target),plane,coordinate,preview_taps(preview))?;
                     if channel==0 {
                         let Some(page)=layer.pages.iter().find(|page|page.coordinate==coordinate) else {return Ok(None)};
                         if page.active().read(&version,None).is_none() {return Ok(None);}
@@ -1345,9 +1345,9 @@ impl ImageTransformState {
         Ok(())
     }
     fn native_version(&self,capture:&crate::scene::Capture,transform:&layer_core::ImageTransform,extent:[u32;2],plane:RasterPlane,coordinate:[u32;2],taps:u32)->Result<layer_core::raster::ContentVersion,GpuRasterError> {
-        let channel=usize::from(plane==RasterPlane::WatercolorWetness);
-        if self.plan.channel_regions(transform,extent)[channel].iter().all(|region|region.page_local(coordinate).is_empty()) {return Ok(capture.original(plane,coordinate));}
-        capture.version(plane,page_rect(coordinate).into(),taps)
+        let [cut,destination]=self.plan.channel_regions(transform,extent)[usize::from(plane==RasterPlane::WatercolorWetness)];
+        if !destination.page_local(coordinate).is_empty() {return capture.version(plane,page_rect(coordinate).into(),taps);}
+        Ok(if cut.page_local(coordinate).is_empty() {capture.original(plane,coordinate)}else {capture.cut(plane,coordinate)})
     }
     fn draw_source(
         &mut self,
