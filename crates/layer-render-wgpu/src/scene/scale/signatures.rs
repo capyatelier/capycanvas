@@ -488,6 +488,11 @@ impl Prepared {
             E::VectorPreview {owner}=>{name.add(&(4,owner,scene.visible(*owner)));inputs.push(s.vector_preview.as_ref().filter(|(preview,_)|preview.owner==*owner).map_or_else(||ContentVersion::derive(0,&[]),|(_,version)|version.clone()));},
             E::VectorMotion {owner}=>{name.add(&(5,owner,scene.visible(*owner)));if let Some((_,version))=s.vector_motion.as_ref().filter(|(motion,_)|motion.owner==*owner) {inputs.push(version.clone());inputs.push(scene.vector_layer(*owner).ok_or(GpuRasterError::StaleExpression)?.content_version());}},
             E::Opacity {input,opacity}=>{name.add(&(6,opacity));inputs.push(child(input,region,global)?);},
+            E::Combine {blend:0,flags:0,..}=>{
+                let mut operands=Vec::new();over_operands(node,&mut operands);
+                if let [operand]=operands[..] {return Ok((child(operand,region,global)?,None));}
+                name.add(&(7,0u32,0u32));for operand in operands {inputs.push(child(operand,region,global)?);}
+            },
             E::Combine {front,back,blend,flags}=>{name.add(&(7,blend,flags));inputs.push(child(front,region,global)?);inputs.push(child(back,region,global)?);},
             E::Effect {input,chain,masks,..}=>{
                 name.add(&8);let mut footprint=region;let mut entire=global;
@@ -1209,6 +1214,21 @@ pub(super) mod tests {
         let moving=vector_node(owner,Some(101));
         assert_eq!(page_name(document,&moving,left).matches(&page_name(document,&whole,left)),Some(true),"moving paths that do not reach a page keep its name");
         assert_eq!(page_name(document,&moving,right).matches(&page_name(document,&whole,right)),Some(false),"moving paths that reach a page rename it");
+    }
+
+    #[test]
+    fn a_normal_over_chain_names_its_operands_whatever_their_grouping() {
+        let (editor,owner)=left_and_right_chunks();let [left,right]=sides();
+        let document=editor.document();
+        let over=|front:graph::Node,back:graph::Node|->graph::Node {Arc::new(graph::Expression::Combine {front,back,blend:0,flags:0})};
+        let clear=||Arc::new(graph::Expression::Color([0;4]));
+        let tint=||Arc::new(graph::Expression::Color([1,2,3,4]));
+        let (whole,moving)=(vector_node(owner,None),vector_node(owner,Some(101)));
+        let flat=over(tint(),whole.clone());
+        let split=over(over(tint(),clear()),over(moving.clone(),clear()));
+        assert_eq!(page_name(document,&split,left).matches(&page_name(document,&flat,left)),Some(true),"a split chain names the same content where no moving path reaches");
+        assert_eq!(page_name(document,&split,right).matches(&page_name(document,&flat,right)),Some(false),"a split chain renames the pages moving paths leave");
+        assert_eq!(page_name(document,&over(moving,clear()),left).matches(&page_name(document,&whole,left)),Some(true),"a half over a clear colour names its content");
     }
 
     #[test]
