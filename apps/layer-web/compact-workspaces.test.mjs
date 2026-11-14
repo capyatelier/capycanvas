@@ -75,6 +75,7 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
   assert.deepEqual(overflowOptions,(await view()).switcher_options.sections.flat().map(row=>({label:row.label,checked:row.selected==null?null:String(row.selected)})));
   for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
   await settle();
+  assert.equal(await evaluate("document.querySelector('#header-overflow-0').open"),true,'Escape closes the context menu and keeps its parent overflow menu open');
   assert.equal(await evaluate(`document.activeElement.matches('${overflowChoice}')`),true);
   await click(overflowChoice);
   const current=await view(),target=current.switcher_display.find(row=>row.id!==current.id);

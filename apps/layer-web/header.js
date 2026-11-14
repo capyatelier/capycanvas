@@ -442,7 +442,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     }
   },{capture:true});
   window.addEventListener('keydown',e=>{
-    if(composingKey(e))return;
+    if(e.defaultPrevented||composingKey(e))return;
     if(e.key==='Escape') {
       const open=root.querySelector('details[open]');
       if(open){open.open=false;open.querySelector('summary').focus({preventScroll:true});updateZen();e.preventDefault();e.stopImmediatePropagation();return;}
