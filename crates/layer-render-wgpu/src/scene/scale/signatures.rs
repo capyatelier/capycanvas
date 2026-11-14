@@ -14,6 +14,7 @@ pub(crate) struct Declared {
     pub quality: PreviewQuality,
     pub vector_preview: Option<layer_render::VectorPreview>,
     pub vector_motion: Option<layer_render::VectorMotion>,
+    pub vector_motion_paths: Option<Arc<[layer_core::authored::vector::PathItem]>>,
 }
 #[derive(Clone)]
 pub(crate) struct Input { pub source:SceneSnapshot, pub version:ContentVersion }
@@ -259,7 +260,10 @@ impl Prepared {
         }
         declared.fill=declared.fill.or_else(||r.fill_preview.clone());
         declared.vector_preview=declared.vector_preview.or_else(||r.vector_preview.clone());
-        declared.vector_motion=declared.vector_motion.or_else(||r.composed_vector_motion().map(|(motion,_)|motion.clone()));
+        if declared.vector_motion.is_none() {
+            declared.vector_motion=r.composed_vector_motion().map(|(motion,_)|motion.clone());
+            declared.vector_motion_paths=r.vector_motion_paths_drawn.clone().filter(|_|declared.vector_motion.is_some());
+        }
         let mut scene=packet.scene.snapshot();
         scene.context.phases=Arc::new(packet.scene.order().iter().filter_map(|handle|packet.scene.effect_handle(*handle)
             .map(|effect|(effect,crate::effects::Gpu::effect_time(r,packet.scene,*handle,packet.time_seconds)))).collect());
@@ -305,7 +309,10 @@ impl Prepared {
             Ok((handle,Definition {version,global:effect.program.analysis().is_some() || effect.program.passes.iter().any(|pass|matches!(pass.sampling,layer_core::EffectSampling::Document))}))
         }).collect::<Result<_,GpuRasterError>>()?;
         let vector_preview=declared.vector_preview.map(|preview| {let version=path_version(&preview.path);(preview,version)});
-        let vector_motion=declared.vector_motion.map(|motion| {let selected=ContentVersion::derive(recipe(&motion.items),&[]);let version=ContentVersion::derive(recipe(&motion.transform.0.map(f64::to_bits)),&[selected]);(motion,version)});
+        let vector_motion=declared.vector_motion.map(|motion| {
+            let inputs:Vec<_>=std::iter::once(ContentVersion::derive(recipe(&motion.items),&[])).chain(declared.vector_motion_paths.iter().flat_map(|paths|paths.iter().map(path_version))).collect();
+            (motion.clone(),ContentVersion::derive(recipe(&motion.transform.0.map(f64::to_bits)),&inputs))
+        });
         let mut prepared=Self::from_snapshot(Arc::new(Snapshot {scene:packet.scene.snapshot(),rasters:declared.rasters,captures:declared.captures,
             preview,vector_preview,vector_motion,effects,moving:None,watercolor,context:context.0}));
         prepared.name_wake=declared.name_wake;Ok(prepared)

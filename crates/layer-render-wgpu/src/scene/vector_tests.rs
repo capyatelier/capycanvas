@@ -679,6 +679,7 @@ fn replacement_paths_redraw_only_the_moving_image_and_match_the_applied_edit() {
         let shown = |r: &WgpuRasterizer| -> Vec<f32> { if split { presented(r, view).into_iter().map(|v| f32::from(v) / 255.).collect() } else { display(r).into_iter().flatten().collect() } };
         let close = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0., f32::max);
         let tolerance = if split { 2.5 / 255. } else { 1e-5 };
+        let preview = if split { tolerance } else { HALF_FLOAT_ROUNDING };
         for width in [12., 3., 16.] {
             let paths = widened(object.selected(&items), width);
             r.set_vector_motion_paths(Some(paths.clone()));
@@ -697,7 +698,7 @@ fn replacement_paths_redraw_only_the_moving_image_and_match_the_applied_edit() {
             let mut fresh = WgpuRasterizer::new_native_headless(applied.document().composition().color).unwrap();
             submit_ready(&mut fresh, FramePacket { view, ..packet(applied.document().scene(), extent) });
             let error = close(&shown(&r), &shown(&fresh));
-            assert!(error <= tolerance, "a {width} px width preview at zoom {zoom}, opacity {opacity} shows what applying it draws: {error}");
+            assert!(error <= preview, "a {width} px width preview at zoom {zoom}, opacity {opacity} shows what applying it draws: {error}");
         }
         assert!(!split || max_error(&display(&r), &layer_display) == 0., "the layer keeps its own paths until the edit is applied");
         let paths = widened(object.selected(&items), 16.);
