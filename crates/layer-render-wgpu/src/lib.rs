@@ -4478,7 +4478,7 @@ impl WgpuRasterizer {
         let mut work = scene::Scene::begin_work(self.motion(packet));
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
-            scene.restart_vector_uploads();
+            scene.begin_vector_frame();
         }
         let original_batches = packet.dab_batches;
         let filtered: std::borrow::Cow<'_, [DabBatch]> = if original_batches

@@ -1305,6 +1305,16 @@ fn crowded_vector_layer_zoom_frames() {
 }
 
 #[test]
+fn a_navigator_finer_than_the_display_derives_its_paths_in_frames_that_compose_nothing_else() {
+    let extent = [4096u32, 4096u32];
+    let (editor, _) = crowded(extent, 3000);
+    let view = layer_render::ViewState { width_px: 128, height_px: 128, document_to_surface: [1. / 32., 0., 0., 1. / 32., 0., 0.] };
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    crate::test_support::submit_settled(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    assert!(r.navigator.view().is_some() && !r.navigator.pending(), "the Navigator must present the paths it derives");
+}
+
+#[test]
 fn filling_outside_paths_classifies_captured_pages_in_batches() {
     let extent = [4096u32, 4096u32];
     let (editor, layer) = crowded(extent, 3000);

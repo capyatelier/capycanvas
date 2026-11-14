@@ -331,7 +331,7 @@ pub(super) struct MotionImage { pub key: (OccurrenceHandle, Moving, u32, [i64; 2
 pub(super) struct VectorJob { pub batch: Batch, pub output: wgpu::TextureView, pub base: Option<(wgpu::TextureView, [i32; 2])> }
 
 impl Scene {
-    pub(crate) fn restart_vector_uploads(&mut self) { self.vectors.restart(); }
+    pub(crate) fn begin_vector_frame(&mut self) { self.vectors.begin_frame(); }
     pub(super) fn vectors_deferred(&self) -> bool { self.vectors.deferred }
     pub(super) fn vector_palette(r: &WgpuRasterizer, packet: FramePacket<'_>) -> (layer_core::color::RgbSpace, layer_core::BlendSpace) {
         (r.device.working_space(), packet.blend_space)
@@ -353,7 +353,7 @@ impl Scene {
         Ok(target)
     }
     pub(super) fn vector_damage(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>) {
-        self.vectors.begin_frame();
+        self.vectors.deferred = false;
         self.vectors.retain(packet.scene);
         let palette = Self::vector_palette(r, packet);
         let complete = self.vectors.advance(packet.scene, palette);
@@ -506,7 +506,7 @@ impl Vectors {
             let item = layer.items[slot as usize].as_mut().unwrap();
             if item.derived(level, integer).is_some() { continue; }
             let now = web_time::Instant::now();
-            if self.deadline.is_some_and(|deadline| now > deadline) { return false; }
+            if self.deadline.is_some_and(|deadline| now > deadline) { self.deferred = true; return false; }
             self.deadline.get_or_insert(now + DERIVE_TIME);
             let at = item.derived_at(level, integer, &frame, &mut layer.derived_bytes, &mut layer.derived_paths);
             item.derived[at].used = frame_number;
@@ -516,7 +516,8 @@ impl Vectors {
     pub fn begin_frame(&mut self) {
         self.frame += 1;
         self.deadline = None;
-        self.deferred = false;
+        self.batches.restart();
+        if let Some(pool) = &mut self.pool { pool.restart(); }
     }
     pub fn retain(&mut self, scene: SceneView<'_>) {
         let frame = self.frame;
@@ -858,10 +859,6 @@ impl Vectors {
         let pool = self.pool.get_or_insert_with(|| Pool::charged(POOL_BYTES, &self.tier));
         let buffer = pool.flush(&r.device, encoder, &mut r.uploads)?;
         r.scene_pipelines.vector.encode(&r.device, encoder, &mut r.uploads, &mut self.batches, &job.batch, &buffer, job.base.as_ref().map(|(view, origin)| (view, *origin)), &r.empty_view, &job.output)
-    }
-    pub fn restart(&mut self) {
-        self.batches.restart();
-        if let Some(pool) = &mut self.pool { pool.restart(); }
     }
     pub fn trim(&mut self) {
         let total: usize = self.layers.values().map(|layer| layer.derived_bytes).sum();
