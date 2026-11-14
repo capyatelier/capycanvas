@@ -473,6 +473,9 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 }
 
 impl ToolbarControl {
+    pub fn opens_menu(self) -> bool {
+        self == Self::Command { command: CommandId::OneFingerDrag }
+    }
     pub fn double_click_command(self) -> Option<CommandId> {
         match self {
             Self::Command { command: CommandId::Hand } => Some(CommandId::FitCanvas),
@@ -702,8 +705,7 @@ impl Serialize for ContextMenuItem {
 pub(crate) fn menu_keeps_open(action: &UiAction) -> bool {
     matches!(action, UiAction::Bubble { action: BubbleAction::Option { .. } | BubbleAction::ToggleSliders { .. } | BubbleAction::ToggleRingSetting { .. } }
         | UiAction::WorkspaceManager { command: crate::WorkspaceCommand::ShowInSwitcher { .. } }
-        | UiAction::Phone { action: crate::PhoneAction::SwapSides }
-        | UiAction::Preferences { action: crate::PreferenceAction::Edit { id: crate::PreferenceId::FingerDrawing, .. } })
+        | UiAction::Phone { action: crate::PhoneAction::SwapSides | crate::PhoneAction::MenuOpen { .. } })
 }
 impl ContextMenuItem {
     pub fn keep_open(&self) -> bool {
@@ -1213,7 +1215,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::Zoom | CommandId::CenterZoomClicks | CommandId::RotateView | CommandId::FitWidth | CommandId::FillView
                 | CommandId::ZoomSelection | CommandId::ResetRotation | CommandId::ResetView | CommandId::PreviousView
                 | CommandId::SaveView | CommandId::RestoreView | CommandId::NextDrawing | CommandId::PreviousDrawing
-                | CommandId::ScaleOutlineWidths | CommandId::PutBackBubbles
+                | CommandId::ScaleOutlineWidths | CommandId::PutBackBubbles | CommandId::OneFingerDrag
                 | CommandId::FlatAllAreas | CommandId::FillConnected | CommandId::FillEverywhere | CommandId::SmoothRegionEdges | CommandId::StopAtColors | CommandId::CloseGapsAuto | CommandId::CloseGapsOff | CommandId::EdgesLineMiddle | CommandId::EdgesExact | CommandId::EdgesGrowShrink => label.to_string(),
                 CommandId::EraseTouchedPart => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ERASE_TOUCHED_PART).to_string(),
                 CommandId::EraseWholePaths => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ERASE_WHOLE_PATHS).to_string(),
@@ -1628,6 +1630,7 @@ pub struct PanelControlView {
 #[derive(Clone, Debug, Serialize)]
 pub struct TileView {
     pub slider_style: crate::ToolbarSliderStyle,
+    pub menu: bool,
     pub double_click: bool,
     pub has_variants: bool,
     pub tears_bubble: bool,
@@ -1731,6 +1734,7 @@ pub(crate) fn control_view(state: &UiState, control: ToolbarControl, id: Option<
     };
     TileView {
         slider_style,
+        menu: resolved_control.opens_menu(),
         double_click: resolved_control.double_click_command().is_some(),
         tears_bubble: crate::BubbleSource::tears_without_hold(control),
         has_variants: control.has_variants(),

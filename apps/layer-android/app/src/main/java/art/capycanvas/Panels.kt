@@ -72,7 +72,7 @@ import kotlin.math.roundToInt
                     .then(activation.modifier).combinedClickable(enabled = enabled || reason != null,
                         onDoubleClick = if (enabled && tile.optBoolean("double_click")) ({ host.dispatch(obj("type" to "double_click_tool", "control" to tile.getJSONObject("resolved_control"))) }) else null,
                         onLongClick = if (enabled) {{ dock.holdContext(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }} else {{ reveal += 1 }},
-                        onClick = if (enabled) activation.click else {{ reveal += 1 }}).semantics { if (!enabled) disabled() },
+                        onClick = if (!enabled) {{ reveal += 1 }} else if (tile.optBoolean("menu")) {{ dock.context(anchor, obj("kind" to "tool_variants", "anchor" to anchor)) }} else activation.click).semantics { if (!enabled) disabled() },
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
                         val glyph = Modifier.size(geometry.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")

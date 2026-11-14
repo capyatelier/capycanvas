@@ -119,7 +119,12 @@ fn apple_header_keeps_capy_separate_from_adjacent_icon_bars() {
         assert_eq!(view["zen_button"], item["bounds"]);
         assert_eq!(groups.len(), 2);
         assert_eq!(groups.last().unwrap(), &["tool"; 6]);
-        let menu = if platform == 0 { vec!["menu"] } else { vec![] };
+        let menu = if platform == 0 { vec!["menu", "tool"] } else { vec![] };
         assert_eq!(groups[0], [menu, vec!["tool"; 3]].concat());
+        if platform == 0 {
+            let finger = bars[0]["items"][1].as_u64().unwrap() as u32;
+            assert_eq!(app.with(|native| native.host.session.state().workspace.layout.header.entry(finger).unwrap().item),
+                layer_ui::HeaderItem::Tool { control: layer_ui::ToolbarControl::Command { command: layer_ui::CommandId::OneFingerDrag } });
+        }
     }
 }

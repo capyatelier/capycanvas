@@ -76,10 +76,7 @@ extension EditorLaunchTests {
                 XCTAssertTrue(phoneDrawer(in: app).waitForNonExistence(timeout: 10))
                 phoneDrawerPencil(in: app)
                 _ = phoneMenuRoot(in: app)
-                let finger = app.buttons["phone-finger"]
-                if !finger.isSelected { workspaceActivate(finger) }
-                expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: finger)
-                waitForExpectations(timeout: 10)
+                phoneChooseFingerMode("Draw", in: app)
                 workspaceActivate(app.buttons["phone-capy"])
                 XCTAssertTrue(app.descendants(matching: .any)["phone-menu"].firstMatch.waitForNonExistence(timeout: 10))
                 phoneDrawerStroke(in: app)

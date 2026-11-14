@@ -150,6 +150,10 @@ pub(super) fn tile_button(
                         .anchor
                         .set([b.x() + b.width() * 0.5, b.y() + b.height()]);
                 }
+                if control.opens_menu() && matches!(anchor, DrawerAnchor::Tile { .. }) {
+                    w.show_context(button.upcast_ref(), ContextTarget::ToolVariants { anchor }, button.width() as f64 * 0.5, button.height() as f64);
+                    return;
+                }
                 w.dispatch(if double.replace(false) { UiAction::DoubleClickTool { control } }
                     else { match anchor {
                         DrawerAnchor::Tile { panel, tile } => UiAction::ActivateTile { panel, tile },

@@ -686,8 +686,12 @@ impl Header {
                     b.connect_clicked(glib::clone!(
                         #[weak]
                         w,
-                        move |_| {
-                            if !w.header.editing.get() {
+                        move |button| {
+                            if w.header.editing.get() { return; }
+                            if double.as_ref().is_some_and(|(control, _)| control.opens_menu()) {
+                                w.show_context(button.upcast_ref(), ContextTarget::ToolVariants { anchor: layer_ui::DrawerAnchor::Header { id } },
+                                    button.width() as f64 * 0.5, button.height() as f64);
+                            } else {
                                 w.dispatch(if let Some((control, click)) = &double && click.replace(false) {
                                     UiAction::DoubleClickTool { control: *control }
                                 } else if let Some(command) = command {

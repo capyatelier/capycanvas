@@ -394,6 +394,55 @@ class AndroidVectorLayerTest {
     private val mouse = android.view.MotionEvent.TOOL_TYPE_MOUSE
     private val finger = android.view.MotionEvent.TOOL_TYPE_FINGER
 
+    @Test fun oneFingerDragDrawOffAndMoveCanvasRespectTheChosenMode() {
+        fun mode(index: Int) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "finger_drawing", "value" to index)))
+        for (theme in listOf("light", "dark")) {
+            freshVector(theme)
+            mode(1)
+            stroke(finger, Offset(.3f, .4f), Offset(.7f, .4f))
+            awaitInk("one-finger-$theme-draw", Offset(.5f, .4f), true)
+            mode(3)
+            val still = camera()
+            stroke(finger, Offset(.3f, .6f), Offset(.7f, .6f))
+            awaitInk("one-finger-$theme-off", Offset(.5f, .6f), false)
+            assertEquals("Off preserves the view", still, camera())
+            for ((index, name) in listOf(3 to "off", 2 to "move-canvas")) {
+                mode(index)
+                motion(android.view.MotionEvent.ACTION_DOWN, listOf(finger to Offset(.5f, .4f)))
+                awaitState("$name keeps touch-and-hold picking") { it.getJSONObject("layer_tools").getString("tool").startsWith("pick_") }
+                awaitCanvasPresentation(host)
+                val center = state().getJSONObject("color_picker").getJSONArray("loupe_point")
+                val viewport = state().getJSONObject("camera").getJSONArray("viewport")
+                val magnified = Offset((center.getDouble(0).toFloat() / viewport.getDouble(0).toFloat() - paper[0]) / paper[2],
+                    (center.getDouble(1).toFloat() / viewport.getDouble(1).toFloat() - paper[1]) / paper[3])
+                awaitState("$name-$theme-visible-loupe") { ink(magnified) }
+                assertTrue("$name picker remains active through presentation", state().getJSONObject("layer_tools").getString("tool").startsWith("pick_"))
+                screenshot("validation/one-finger-drag/picker-$name-$theme.png")
+                motion(android.view.MotionEvent.ACTION_UP, listOf(finger to Offset(.5f, .4f)))
+                awaitState("Lifting the picker returns to drawing") { !it.getJSONObject("layer_tools").getString("tool").startsWith("pick_") }
+            }
+            for (command in listOf("pen", "zoom", "move")) {
+                fitPaper(); action(obj("type" to "invoke", "command" to command))
+                val before = JSONObject(camera())
+                stroke(finger, Offset(.3f, .6f), Offset(.7f, .6f))
+                compose.waitUntil(10_000) { state().getJSONObject("camera").getJSONArray("translation").toString() != before.getJSONArray("translation").toString() }
+                assertEquals("Move canvas keeps zoom with $command", before.getDouble("zoom"), state().getJSONObject("camera").getDouble("zoom"), .0001)
+                screenshot("validation/one-finger-drag/move-$command-$theme.png")
+            }
+            fitPaper(); action(obj("type" to "invoke", "command" to "pen"))
+            val before = camera()
+            stroke(stylus, Offset(.3f, .7f), Offset(.7f, .7f), 24, 10 to {
+                motion(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+                    listOf(stylus to Offset(.47f, .7f), finger to Offset(.8f, .2f)))
+                motion(android.view.MotionEvent.ACTION_MOVE, listOf(stylus to Offset(.48f, .7f), finger to Offset(.9f, .3f)))
+                motion(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+                    listOf(stylus to Offset(.48f, .7f), finger to Offset(.9f, .3f)))
+            })
+            awaitInk("one-finger-$theme-pen-wins", Offset(.6f, .7f), true)
+            assertEquals("The pen owns the canvas while a finger moves", before, camera())
+        }
+    }
+
     @Test fun vectorEdgeInputCursorsGesturesAndBackground() {
         val findings = mutableListOf<String>()
         val rows = listOf(.35f, .45f, .55f)

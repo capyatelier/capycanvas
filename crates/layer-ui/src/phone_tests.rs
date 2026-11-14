@@ -229,6 +229,39 @@ fn phone_menu_projected_activation_closes_for_effects_and_rejects_stale_pages() 
 }
 
 #[test]
+fn phone_finger_page_lists_one_finger_drag_choices_and_returns_to_the_main_page() {
+    let mut s = phone_session([412, 891]);
+    let labels = [DocumentTabLabel { id: 1, title: "Study".into(), location: String::new(), uri: None, export_uri: None, modified: false }];
+    let selector = DrawingSelector::new(&labels, 1, &s.command(CommandId::NewDocument), s.localization());
+    let finger = PhoneMenuRoute { page: Some(MenuPageId::OneFingerDrag), path: Vec::new() };
+    for (index, mode) in FingerDrawing::ALL.into_iter().enumerate().rev() {
+        let menu = s.phone_menu().unwrap();
+        s.dispatch(menu.strip[2].action.clone().unwrap()).unwrap();
+        assert!(s.state.phone.menu);
+        assert_eq!(s.state.phone.menu_navigation.current(), finger);
+        let view = s.phone_menu().unwrap().view(&selector, s.state.platform, s.localization());
+        let page = view.pages.iter().find(|page| page.id == finger).unwrap();
+        assert_eq!((page.parent.clone(), page.checks), (Some(PhoneMenuRoute::default()), true));
+        assert_eq!(page.title, "One-finger drag");
+        let rows = page.sections.concat();
+        assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["Auto", "Draw", "Move canvas", "Off"]);
+        s.dispatch(rows[index].action.clone().unwrap()).unwrap();
+        assert_eq!(s.state.settings.finger_drawing, mode);
+        assert!(s.state.phone.menu && s.state.phone.menu_navigation.is_root(), "{mode:?}");
+        assert_eq!(s.phone_menu().unwrap().strip[2].icon.as_deref(),
+            Some(format!("layer-{}-symbolic", mode.effective(DeviceClass::Desktop, false).icon()).as_str()));
+        s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route: PhoneMenuRoute::default() } }).unwrap();
+        assert!(!s.state.phone.menu);
+    }
+    s.state.workspace.layout.phone.as_mut().unwrap().push(ToolbarTile { id: 900, control: ToolbarControl::Command { command: CommandId::OneFingerDrag }, slider_style: Default::default() });
+    s.refresh_chrome();
+    assert!(s.state.phone_tools().iter().find(|tile| tile.id == Some(900)).unwrap().menu);
+    s.dispatch(UiAction::Phone { action: PhoneAction::Tool { tile: 900 } }).unwrap();
+    assert!(s.state.phone.menu);
+    assert_eq!(s.state.phone.menu_navigation.current(), finger);
+}
+
+#[test]
 fn phone_menu_route_stack_is_session_owned_validated_and_cleared() {
     let mut s = phone_session([412, 891]);
     s.configure_workspace_manager(ManagedWorkspace { id: "paint".into(), name: "Paint".into(),
@@ -1038,10 +1071,8 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
         assert_eq!(s.main_menu_extras(), [true, true]);
         let primary = s.application_menu(ApplicationMenu::Primary);
         assert!(matches!(primary.sections[0][0].action, Some(UiAction::Invoke { command: CommandId::SearchCommands })));
-        assert!(matches!(primary.sections[1][0].action, Some(UiAction::Preferences { action: PreferenceAction::Edit {
-            id: PreferenceId::FingerDrawing, value: PreferenceValue::Choice(1),
-        } })));
-        assert_eq!(primary.sections[1][0].selected, Some(false));
+        assert!(matches!(primary.sections[1][0].action, Some(UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::OneFingerDrag } })));
+        assert_eq!(primary.sections[1][0].selected, None);
         assert!(matches!(primary.sections[1][1].action, Some(UiAction::Invoke { command: CommandId::ZenMode })));
         assert!(matches!(primary.sections[1][2].action, Some(UiAction::Phone { action: PhoneAction::SwapSides })));
         assert_eq!(primary.sections[2].iter().map(|item| item.label.as_str()).collect::<Vec<_>>(),
@@ -1050,7 +1081,7 @@ fn phone_main_menu_extras_follow_header_and_title_bar_edit_is_refused() {
             Some(UiAction::Invoke { command: CommandId::Settings }))));
         let menu = s.phone_menu().unwrap();
         assert_eq!(menu.strip.len(), 5);
-        assert_eq!(menu.strip.iter().map(|item| item.selected).collect::<Vec<_>>(), [None, None, Some(false), None, Some(false)]);
+        assert_eq!(menu.strip.iter().map(|item| item.selected).collect::<Vec<_>>(), [None, None, None, None, Some(false)]);
         assert!(matches!(menu.strip[0].action, Some(UiAction::Invoke { command: CommandId::Settings })));
         assert_eq!(menu.strip[1..].iter().map(|item| &item.action).collect::<Vec<_>>(), primary.sections[..2].iter().flatten().map(|item| &item.action).collect::<Vec<_>>());
         assert_eq!(menu.list.sections, primary.sections[2..]);
@@ -1143,7 +1174,7 @@ fn phone_presentation_waits_for_each_hosts_capability() {
                 assert_eq!(resolved.groups.len(), desktop.groups.len());
             }
             let rows = s.state.settings.pages(platform).into_iter().flat_map(|page| page.groups).flat_map(|group| group.rows);
-            assert_eq!(rows.into_iter().any(|row| row.id == PreferenceId::FingerDrawing), matches!(platform, Platform::Gtk | Platform::Web | Platform::Android | Platform::Ios));
+            assert_eq!(rows.into_iter().any(|row| row.id == PreferenceId::FingerDrawing), platform != Platform::Mac);
             assert!(s.state.workspace.layout.phone.is_some());
         }
     }

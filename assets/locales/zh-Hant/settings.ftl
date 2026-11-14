@@ -182,5 +182,7 @@ settings-rotate-with-two-fingers = 雙指旋轉
 settings-quick-pinch-fit = 快速捏合以符合視窗
 settings-quick-pinch-restore = 反向捏合以還原檢視
 
-settings-draw-with-finger = 用手指繪畫
+settings-one-finger-drag = 單指拖曳
+settings-finger-draw = 繪畫
+settings-finger-move-canvas = 移動畫布
 settings-auto = 自動

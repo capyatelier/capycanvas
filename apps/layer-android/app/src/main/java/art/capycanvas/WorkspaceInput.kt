@@ -331,7 +331,7 @@ internal class DockInteraction(val host: CanvasHost) {
         focused = value
         if (!value && contextMenu == null) closeContext()
     }
-    fun context(target: JSONObject) {
+    fun context(target: JSONObject, model: JSONObject = target) {
         if (dragging || !focused || !enabled) return
         val key = anchorKey(target)
         if (contactHeld && retiredContext == key) return
@@ -339,13 +339,13 @@ internal class DockInteraction(val host: CanvasHost) {
             ?: anchors.entries.filter { it.value.target == key }.minByOrNull { it.value.bounds.width * it.value.bounds.height }?.key ?: return
         val presentation = if (phone != null) JSONObject(Native.dialogUi(obj("kind" to "menu_presentation",
             "target" to obj("kind" to "customization","target" to target)).toString())) else null
-        val anchor = if(presentation?.optString("anchor") == "widget")anchors.getValue(owner).bounds
+        val anchor = if(model !== target || presentation?.optString("anchor") == "widget")anchors.getValue(owner).bounds
             else contactPosition?.let { Rect(it, it) } ?: anchors.getValue(owner).bounds
         if (contextTarget == key) return
         contextTarget = key
         contextOwner = owner
         val request = ++contextGeneration
-        val query = obj("type" to "context", "target" to target)
+        val query = obj("type" to "context", "target" to model)
         host.query(query) {
             if (request != contextGeneration) return@query
             if (dragging || !focused || !enabled || anchors[owner]?.target != key) { closeContext(); return@query }

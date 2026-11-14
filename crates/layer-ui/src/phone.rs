@@ -801,6 +801,7 @@ impl PhoneMenuRoute {
             None => "main".into(),
             Some(crate::MenuPageId::Drawings) => "drawings".into(),
             Some(crate::MenuPageId::Workspaces) => "workspaces".into(),
+            Some(crate::MenuPageId::OneFingerDrag) => "one-finger-drag".into(),
             Some(crate::MenuPageId::Application(menu)) => format!("application-{menu:?}").to_ascii_lowercase(),
         };
         self.path.iter().flatten().fold(root, |name, index| format!("{name}-{index}"))
@@ -847,7 +848,9 @@ impl PhoneMenuNavigation {
     pub(crate) fn back(&mut self) -> bool { self.stack.pop().is_some() }
     pub(crate) fn select_menu(&mut self, menu: &PhoneMenu, route: &PhoneMenuRoute) -> bool {
         let mut pages = Self::pages(&menu.list).into_iter().map(|page| (page.route, page.parent)).collect::<Vec<_>>();
-        pages.push((PhoneMenuRoute { page: Some(crate::MenuPageId::Drawings), path: Vec::new() }, Some(PhoneMenuRoute::default())));
+        for page in [crate::MenuPageId::Drawings, crate::MenuPageId::OneFingerDrag] {
+            pages.push((PhoneMenuRoute { page: Some(page), path: Vec::new() }, Some(PhoneMenuRoute::default())));
+        }
         self.select_routes(pages.iter().map(|(route, parent)| (route, parent.as_ref())), route)
     }
     pub(crate) fn retain(&mut self, menu: Option<&PhoneMenu>) -> bool {
@@ -924,6 +927,7 @@ pub enum PhoneMenuSwipe { Pending, Scroll, Back(f32) }
 pub struct PhoneMenu {
     pub strip: Vec<crate::ContextMenuItem>,
     pub list: crate::ContextMenu,
+    pub finger: crate::ContextMenu,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -964,7 +968,10 @@ impl PhoneMenu {
     pub fn view(&self, drawings: &crate::DrawingSelector, platform: crate::Platform, localization: &crate::Localizer) -> PhoneMenuView {
         let mut menu = self.list.clone();
         menu.sections.insert(0, vec![drawings.page.clone()]);
-        let pages = PhoneMenuNavigation::pages(&menu).into_iter().map(|page| {
+        let mut pages = PhoneMenuNavigation::pages(&menu);
+        pages.push(PhoneMenuPage { route: PhoneMenuRoute { page: Some(crate::MenuPageId::OneFingerDrag), path: Vec::new() },
+            parent: Some(PhoneMenuRoute::default()), menu: self.finger.clone() });
+        let pages = pages.into_iter().map(|page| {
             let sections = page.menu.sections.into_iter().enumerate().map(|(s, section)| section.into_iter().enumerate().map(|(i, mut item)| {
                 let target = (item.action.is_none() && item.enabled && !item.sections.is_empty()).then(|| page.route.child([s, i], &item));
                 let close = match item.action {
@@ -1005,11 +1012,12 @@ impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
             ..crate::ContextMenuItem::command(settings.label.to_string(), crate::UiAction::Invoke { command: crate::CommandId::Settings }) }];
         strip.extend(primary.sections.into_iter().flatten());
         let zen = format!("layer-{}-symbolic", self.state().settings.zen_icon.icon());
-        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", "layer-finger-draw-symbolic", &zen, "layer-swap-orientation-symbolic"]).enumerate() {
+        let finger = format!("layer-{}-symbolic", self.finger_mode().icon());
+        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", &finger, &zen, "layer-swap-orientation-symbolic"]).enumerate() {
             item.icon = Some(icon.into());
-            if !matches!(index, 2 | 4) { item.selected = None; }
+            if index != 4 { item.selected = None; }
         }
-        Some(PhoneMenu { strip, list })
+        Some(PhoneMenu { strip, list, finger: self.one_finger_drag_menu() })
     }
 }
 
@@ -1033,7 +1041,7 @@ mod menu_tests {
     }
     #[test]
     fn menu_navigation_preserves_ancestors_and_rejects_missing_pages() {
-        let menu = PhoneMenu { strip: Vec::new(), list: menu() };
+        let menu = PhoneMenu { strip: Vec::new(), list: menu(), finger: ContextMenu::default() };
         let pages = PhoneMenuNavigation::pages(&menu.list);
         assert_eq!(pages.iter().map(|page| page.route.name()).collect::<Vec<_>>(),
             ["main", "application-file", "application-file-0-0", "application-window", "workspaces"]);
@@ -1051,7 +1059,7 @@ mod menu_tests {
     fn workspace_route_keeps_window_as_back_destination_in_each_language() {
         for language in UiLanguage::ALL {
             let localization = Localizer::shared(language);
-            let mut menu = PhoneMenu { strip: Vec::new(), list: menu() };
+            let mut menu = PhoneMenu { strip: Vec::new(), list: menu(), finger: ContextMenu::default() };
             menu.list.sections[0][1].label = ApplicationMenu::Window.localized_label(&localization).to_string();
             menu.list.sections[0][1].sections[0][0].label = localization.text(crate::MessageId::WORKSPACE_WORKSPACES).to_string();
             let mut navigation = PhoneMenuNavigation::default();

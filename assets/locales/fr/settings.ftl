@@ -182,5 +182,7 @@ settings-rotate-with-two-fingers = Tourner avec deux doigts
 settings-quick-pinch-fit = Pincer rapidement pour ajuster
 settings-quick-pinch-restore = Écarter les doigts pour rétablir la vue
 
-settings-draw-with-finger = Dessiner avec le doigt
+settings-one-finger-drag = Glisser à un doigt
+settings-finger-draw = Dessiner
+settings-finger-move-canvas = Déplacer la toile
 settings-auto = Automatique

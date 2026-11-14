@@ -33,8 +33,12 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
         val transparency = args.getString("transparency")?.let { listOf("off", "low", "medium", "high").indexOf(it) }
         val languageSwitches = args.getString("languageSwitches")?.split(',').orEmpty()
         val motion = args.getString("motion", "stroke")!!
+        val fingers = args.getString("fingers", "2")!!.toInt()
+        val fingerMode = args.getString("fingerMode")
+        val navigationTool = args.getString("navigationTool")
         val blending = args.getString("blending")
         check(motion in listOf("stroke", "hover", "pan", "pinch", "rotate", "smooth_zoom"))
+        check(fingers in 1..2 && (fingers == 2 || motion == "pan"))
         val smoothZoom = motion == "smooth_zoom"
         val zoomDirection = args.getString("zoomDirection", "horizontal")!!
         check(zoomDirection in listOf("horizontal", "vertical"))
@@ -91,8 +95,11 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 host.dispatch(obj("type" to "set_brush_size", "value" to brushSize))
                 host.preference(obj("type" to "edit", "id" to "feedback", "value" to prediction))
                 host.preference(obj("type" to "edit", "id" to "platform_prediction", "value" to false))
-                cursor?.let { mode -> host.dispatch(obj("type" to "restore_settings", "settings" to
-                    JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("settings").toString()).put("cursor", mode))) }
+                if (cursor != null || fingerMode != null) {
+                    val settings = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("settings").toString())
+                    cursor?.let { settings.put("cursor", it) }; fingerMode?.let { settings.put("finger_drawing", it) }
+                    host.dispatch(obj("type" to "restore_settings", "settings" to settings))
+                }
                 host.dispatch(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to navigator)))
                 transparency?.let { host.preference(obj("type" to "edit", "id" to "transparency", "value" to it)) }
                 if (passThrough) {
@@ -174,18 +181,18 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 }
             }
             fun gesture(milliseconds: Int) {
-                val properties = Array(2) { index -> android.view.MotionEvent.PointerProperties().apply {
+                val properties = Array(fingers) { index -> android.view.MotionEvent.PointerProperties().apply {
                     id = index + 11; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
                 } }
-                val coords = Array(2) { android.view.MotionEvent.PointerCoords().apply { this.pressure = 1f; this.size = .1f } }
+                val coords = Array(fingers) { android.view.MotionEvent.PointerCoords().apply { this.pressure = 1f; this.size = .1f } }
                 val down = SystemClock.uptimeMillis()
                 fun send(action: Int, count: Int, t: Double) {
                     val phase = t / 2 * 2 * PI
                     val (x, y, spread) = if (motion == "pan") Triple(cx + radius * .8 * sin(phase), cy + radius * .5 * sin(2 * phase), 150.0)
                         else Triple(cx, cy, if (motion == "pinch") 150 * exp(.4 * sin(phase)) else 150.0)
                     val angle = if (motion == "rotate") .4 * sin(phase) else 0.0
-                    for (i in 0..1) {
-                        val direction = if (i == 0) -1 else 1
+                    for (i in properties.indices) {
+                        val direction = if (fingers == 1) 0 else if (i == 0) -1 else 1
                         coords[i].x = (x + direction * spread * cos(angle)).toFloat() + host.surfaceOrigin.x
                         coords[i].y = (y + direction * spread * sin(angle)).toFloat() + host.surfaceOrigin.y
                     }
@@ -196,18 +203,18 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 val pointer = android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT
                 val began = System.nanoTime()
                 send(android.view.MotionEvent.ACTION_DOWN, 1, 0.0)
-                send(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl pointer), 2, 0.0)
+                if (fingers == 2) send(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl pointer), 2, 0.0)
                 val count = (milliseconds / interval).toInt()
                 for (i in 1..count) {
                     val left = began + (i * interval * 1e6).toLong() - System.nanoTime()
                     if (left > 0) java.util.concurrent.locks.LockSupport.parkNanos(left)
-                    send(android.view.MotionEvent.ACTION_MOVE, 2, i * interval / 1000.0 * speed)
+                    send(android.view.MotionEvent.ACTION_MOVE, fingers, i * interval / 1000.0 * speed)
                     if (i % 120 == 119 && activePresent != null) native {
                         activePresent!!.put(JSONArray(Native.presentationTimings(it, true)))
                     }
                 }
                 val end = count * interval / 1000.0 * speed
-                send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl pointer), 2, end)
+                if (fingers == 2) send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl pointer), 2, end)
                 send(android.view.MotionEvent.ACTION_UP, 1, end)
             }
             fun restoreNavigationCamera() {
@@ -220,6 +227,7 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
             stroke(0, 1500)
             waitFor { !native { Native.renderingPending(it) } }
             host.drain(obj("type" to "invoke", "command" to "undo"))
+            navigationTool?.let { host.drain(obj("type" to "invoke", "command" to it)) }
             SystemClock.sleep(800)
             if (smoothZoom) {
                 val settings = JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("settings").toString())
@@ -242,7 +250,8 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 "startup" to obj("gpu_ready" to readiness.optBoolean("gpu_ready"), "canvas_ready" to readiness.optBoolean("canvas_ready"), "brush_ready" to readiness.optBoolean("brush_ready"), "shaders_ready" to readiness.optBoolean("shaders_ready")),
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             info.put("thermal_status",activity.getSystemService(android.os.PowerManager::class.java).currentThermalStatus)
-            if (smoothZoom) info.put("state", host.snapshot!!.getJSONObject("state"))
+            info.put("fingers", fingers).put("finger_mode", fingerMode).put("navigation_tool", navigationTool)
+            if (smoothZoom || navigationTool != null) info.put("state", host.snapshot!!.getJSONObject("state"))
             File(output, "$label-info.json").writeText(info.toString(2))
             val ink = info.getJSONObject("display").getString("ink_present_mode")
             assertEquals(if (retainedMotion) ink else "Fifo", info.getJSONObject("display").getString("present_mode"))
@@ -259,6 +268,7 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 val queryPool = java.util.concurrent.Executors.newSingleThreadExecutor()
                 val queryResults = JSONArray()
                 val beforeRevision = host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("revision")
+                val cameraRevision = host.snapshot!!.getJSONObject("state").getJSONObject("camera").getLong("revision")
                 minimumZoomPercent = Int.MAX_VALUE
                 maximumZoomPercent = 0
                 host.measurementReport(true)
@@ -314,8 +324,11 @@ internal class ViewportFrameTiming(private val instrumentation: Instrumentation,
                 assertNull(host.actionError)
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 if (motion == "hover") assertEquals("Hover never paints", beforeRevision, afterRevision)
+                if (!retainedMotion) {
+                    assertEquals("Navigation never changes the document", beforeRevision, afterRevision)
+                    assertTrue("Navigation moves the camera", host.snapshot!!.getJSONObject("state").getJSONObject("camera").getLong("revision") > cameraRevision)
+                }
                 if (smoothZoom) {
-                    assertEquals("Zoom never changes the document", beforeRevision, afterRevision)
                     assertTrue("Zoom moves the camera", maximumZoomPercent > minimumZoomPercent)
                 }
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)

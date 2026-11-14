@@ -103,21 +103,6 @@ class AndroidPhoneAuditTest {
         }
     }
 
-    private fun awaitCanvasPresentation(host: CanvasHost) {
-        val deadline = SystemClock.uptimeMillis() + 30_000
-        var presented = false
-        do {
-            presented = runBlocking { host.withNative {
-                val display = JSONObject(Native.displayStatus(it))
-            !Native.renderingPending(it) && display.optLong("completed_frames") == display.optLong("submitted_frames") &&
-                !display.isNull("presented_canvas_revision") &&
-                    display.getLong("canvas_revision") == display.getLong("presented_canvas_revision")
-            } }
-            if (!presented) SystemClock.sleep(16)
-        } while (!presented && SystemClock.uptimeMillis() < deadline)
-        assertTrue("Current document composition is presented", presented)
-    }
-
     private fun collect(node: SemanticsNode, allocations: JSONObject) {
         node.config.getOrNull(SemanticsProperties.TestTag)?.let { tag ->
             val bounds = node.boundsInRoot
@@ -3365,13 +3350,30 @@ class AndroidPhoneAuditTest {
         open()
         val feedbackBounds = bounds()
         state("feedback-root-two", {})
-        for (tag in listOf("phone-finger","phone-swap")) {
-            fun checked() = checkNotNull(findTag(tag)).second.config.getOrNull(SemanticsProperties.Selected)
-            val before = checked()
-            for (value in listOf(before != true,before == true)) {
-                tap(tag)
-                host.awaitFrame("Strip toggle $tag remains in the menu") { phone().getBoolean("menu") && checked() == value }
+        for (swapped in listOf(false, true)) {
+            if (phone().getBoolean("swapped") != swapped) tap("phone-swap")
+            val suffix = if (swapped) "-swapped" else ""
+            tap("phone-finger")
+            host.awaitFrame("Finger strip opens its page") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "one_finger_drag" }
+            state("menu-one-finger-drag$suffix", {})
+            for ((index, mode) in listOf("auto", "on", "move_canvas", "off").withIndex()) {
+                tap("phone-menu-row-0-$index")
+                host.awaitFrame("Finger choice returns to the open main menu") { phone().getBoolean("menu") && phone().getJSONObject("menu_route").isNull("page") }
+                state("menu-finger-$mode$suffix", {})
+                tap("phone-finger")
+                host.awaitFrame("Finger strip reopens its page") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "one_finger_drag" &&
+                    findTag("phone-menu-row-0-$index") != null }
+                assertEquals("Finger page marks its selected choice", true,
+                    checkNotNull(findTag("phone-menu-row-0-$index")).second.config.getOrNull(SemanticsProperties.Selected))
             }
+            tap("phone-menu-back")
+        }
+        tap("phone-swap")
+        fun swapChecked() = checkNotNull(findTag("phone-swap")).second.config.getOrNull(SemanticsProperties.Selected)
+        val swapBefore = swapChecked()
+        for (value in listOf(swapBefore != true,swapBefore == true)) {
+            tap("phone-swap")
+            host.awaitFrame("Swap Sides remains in the menu") { phone().getBoolean("menu") && swapChecked() == value }
         }
         tap("phone-drawing")
         host.awaitFrame("Two drawings page") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "drawings" }

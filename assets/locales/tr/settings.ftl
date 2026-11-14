@@ -182,5 +182,7 @@ settings-rotate-with-two-fingers = İki parmakla döndür
 settings-quick-pinch-fit = Hızlı sıkıştırarak sığdır
 settings-quick-pinch-restore = Ters sıkıştırmayla görünümü geri yükle
 
-settings-draw-with-finger = Parmakla çiz
+settings-one-finger-drag = Tek parmakla sürükleme
+settings-finger-draw = Çiz
+settings-finger-move-canvas = Tuvali kaydır
 settings-auto = Otomatik

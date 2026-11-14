@@ -447,6 +447,8 @@ Use `fixtures --runners N <areas>` for matrices across the reserved
 [CPU runner pool](windows-vm.md#cpu-runner-pool).
 Run changed UI in both themes, and input changes with each device.
 
+`fixtures one-finger-drag` checks Settings, title-bar and toolbar choice menus, tile sizes, and injected finger actions in both themes.
+
 `fixtures edge-reach:SweepOnly` runs eight scenario/theme rows covering Photo,
 open and closed Photo columns, and Paint in both themes. Direct
 `exercise-edge-reach.ps1 -SweepOnly -SweepScenario photo -Theme dark` selects one

@@ -333,9 +333,11 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     } else {
       const activate = () => {
         const r = root.getBoundingClientRect(); anchor = [r.x, r.bottom + 6];
+        if (root.tileView.menu) { openMenu(node); return; }
         dispatch({ type: "activate_tile", panel, tile: tile.id });
       };
       const node = button("", pickerButtonAction(() => root.tileView.resolved_control ?? tile.control,{kind:'tile',panel,tile:tile.id},dispatch,activate));
+      node.menuModel = () => app.context_menu({ kind: "tool_variants", anchor: { kind: "tile", panel, tile: tile.id } });
       node.addEventListener('dblclick', event => {
         if (!root.tileView.double_click) return;
         event.preventDefault(); event.stopPropagation();

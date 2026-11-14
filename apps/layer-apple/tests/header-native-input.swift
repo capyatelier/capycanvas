@@ -168,11 +168,30 @@ import SwiftUI
             store.canvasSubmitted && store.snapshot["canvas_ready"].bool && !store.recovery.restoring
         }
         try await edit(["type":"move", "id":header.geometry["capy_item"].uint, "zone":"center"])
+        let fingerID: UInt64?
+        if platform == 0 {
+            try await edit(["type":"add", "zone":"left", "item":["kind":"tool", "control":["kind":"command", "command":"one_finger_drag"]]])
+            fingerID = store.snapshot["header"]["model"]["zones"].array.flatMap(\.array).filter {
+                $0["item"]["control"]["command"].string == "one_finger_drag"
+            }.map { $0["id"].uint }.max()
+        } else { fingerID = nil }
         for theme in ["light", "dark"] {
             try await action(["type":"set_theme", "theme":theme])
             for size in ["small", "medium", "large"] {
                 try await edit(["type":"set_size", "size":size])
                 try await drain(0.3)
+                if let fingerID {
+                    let finger = header.geometry["items"].array.first { $0["id"].uint == fingerID }!["bounds"].rect
+                    try require(!header.enabled && header.sources.isEmpty, "Ordinary title-bar tools must not depend on editing sources")
+                    try event(.leftMouseDown, at: CGPoint(x: finger.midX, y: finger.midY), marker: editor, number: 1999)
+                    try event(.leftMouseUp, at: CGPoint(x: finger.midX, y: finger.midY), marker: editor, number: 2000)
+                    try await wait("Primary title-bar choices outside customization") { !header.menu.isNull }
+                    try require(header.menuAnchor == finger && header.menu["sections"][0].array.map { $0["label"].string }
+                        == ["Auto", "Draw", "Move canvas", "Off"], "Anchor all four choices below the ordinary title-bar tile")
+                    try require(header.menu["sections"][0].array.filter { $0["selected"].bool }.count == 1,
+                        "The ordinary title-bar menu checks exactly the saved mode")
+                    header.closeMenu(); try await drain()
+                }
                 let bounds = header.geometry["zen_button"].rect
                 let point = CGPoint(x: bounds.midX, y: bounds.midY)
                 for pen in [false, true] {
@@ -198,6 +217,24 @@ import SwiftUI
                 window.makeKeyAndOrderFront(nil)
                 note("PASS platform \(platform), \(theme), \(size): normal/Zen native mouse/pen Capy activation, stable bounds and focus-loss retirement")
             }
+        }
+        if let fingerID {
+            try await edit(["type":"set_size", "size":"large"])
+            window.setContentSize(CGSize(width: 480, height: 870))
+            store.native?.resize(width: 480, height: 870, scale: 1)
+            try await wait("One-finger drag in ordinary title-bar overflow") {
+                header.geometry["hidden"].array.contains { $0.array.contains { $0.uint == fingerID } }
+            }
+            let zone = header.geometry["hidden"].array.firstIndex { $0.array.contains { $0.uint == fingerID } }!
+            let menu: AppleContextMenu = await withCheckedContinuation { done in
+                EditorHeader(store: store, status: status).overflow(zone, completion: { done.resume(returning: $0) })
+            }
+            let modes = menu.sections.flatMap { $0 }.first { $0.label == "One-finger drag" }!.sections.flatMap { $0 }
+            try require(modes.map(\.label) == ["Auto", "Draw", "Move canvas", "Off"],
+                "A hidden title-bar tile must load the shared four-choice submenu")
+            modes[2].action?()
+            try await wait("Overflow choice applies without Settings") { store.state["settings"]["finger_drawing"].string == "move_canvas" }
+            try require(store.snapshot["preferences"].isNull, "Choosing the overflow mode must not reveal Settings")
         }
         try require(store.failure == nil, store.failure ?? "")
     }

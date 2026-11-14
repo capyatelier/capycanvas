@@ -1192,10 +1192,25 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       await undo();await clear();const blank=await pixels();
       await stroke();const auto=await pixels();assert.ok(auto.white<blank.white-20,'Coarse phone Auto paints real pixels');
       await snapshot('input-auto-stroke');await undo();assert.deepEqual(await pixels(),blank);
-      await click('#zen-capy');await wait('layerApp.state().phone.menu');await click('#phone-finger');
-      assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'off');assert.equal(await evaluate('document.querySelector("#phone-finger").getAttribute("aria-pressed")'),'false');
-      await close();await stroke();await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank,'Off contact leaves the artwork unchanged');
-      await snapshot('input-off');await click('#zen-capy');await click('#phone-finger');
+      const chooseFinger=async index=>{
+        await click('#phone-finger');await wait('layerApp.state().phone.menu_route.page?.kind==="one_finger_drag"');
+        await click(`.menu-page:not([hidden]):not([inert]) [data-position="[0,${index}]"]`);
+        await wait('layerApp.state().phone.menu_route.page==null');
+      };
+      await click('#zen-capy');await wait('layerApp.state().phone.menu');await chooseFinger(3);
+      assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'off');assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),'layer-finger-touch-symbolic');
+      await close();const offPan=await evaluate('layerApp.state().camera.translation');await stroke();
+      assert.deepEqual(await evaluate('layerApp.state().camera.translation'),offPan,'Off contact leaves the canvas view unchanged');
+      await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank,'Off contact leaves the artwork unchanged');
+      await snapshot('input-off');await click('#zen-capy');await chooseFinger(2);await close();
+      const singlePan=await evaluate('layerApp.state().camera.translation');await stroke();
+      assert.notDeepEqual(await evaluate('layerApp.state().camera.translation'),singlePan,'Move canvas pans with one real browser contact');
+      await send({type:'invoke',command:'zoom'});const zoomPan=await evaluate('({translation:layerApp.state().camera.translation,zoom:layerApp.state().camera.zoom})');await stroke();
+      assert.notDeepEqual(await evaluate('layerApp.state().camera.translation'),zoomPan.translation,'Move canvas overrides the active Zoom tool');
+      assert.equal(await evaluate('layerApp.state().camera.zoom'),zoomPan.zoom,'One-finger Move canvas never performs the Zoom tool drag');
+      await send({type:'invoke',command:'drawing_brush'});
+      await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank,'Move canvas leaves the artwork unchanged');
+      await click('#zen-capy');await chooseFinger(1);
       assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'on');await close();
       await stroke();assert.ok((await pixels()).white<blank.white-20,'Capy On paints');await snapshot('touch-stroke');
       await tap(2);await wait('layerApp.app.document_park_ready()');assert.deepEqual(await pixels(),blank,'Two fingers undo the prior stroke');
@@ -1366,7 +1381,7 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       continue;
     }
     if(mode==='menus'){
-      await send({type:'preferences',action:{type:'edit',id:'finger_drawing',value:2}});
+      await send({type:'preferences',action:{type:'edit',id:'finger_drawing',value:3}});
       const route=()=>evaluate('JSON.stringify(layerApp.state().phone.menu_route)');
       const rootRoute=await route();
       const open=async()=>{if(!await evaluate('layerApp.state().phone.menu'))await click('#zen-capy');await wait('layerApp.state().phone.menu&&document.querySelector("#phone-menu-scroll")?.clientHeight>0');};
@@ -1466,13 +1481,26 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       assert.equal(await route(),JSON.stringify(longest.id),'Touch scrolling never activates a row');
       assert.equal(await evaluate('!!document.querySelector("dialog[open]")'),false);
       await key('Escape',27);assert.equal(await route(),rootRoute);
-      for(const name of ['finger','swap']){
-        const before=await evaluate(`document.querySelector('#phone-${name}').getAttribute('aria-pressed')`);
-        await click(`#phone-${name}`);assert.equal(await evaluate('layerApp.state().phone.menu'),true);
-        assert.notEqual(await evaluate(`document.querySelector('#phone-${name}').getAttribute('aria-pressed')`),before);
-        initial=await bounds();await captureMenu(`menu-${name}-checked`);
-        await click(`#phone-${name}`);initial=await bounds();
+      for(const swapped of [false,true]){
+        if(swapped)await click('#phone-swap');
+        for(const [index,value,icon] of [[0,'auto',test.mobile?'finger-draw':'finger-touch'],[1,'on','finger-draw'],[2,'move_canvas','hand'],[3,'off','finger-touch']]){
+          await click('#phone-finger');await wait('layerApp.state().phone.menu_route.page?.kind==="one_finger_drag"');
+          initial=await bounds();await captureMenu(phoneAuditMenuID({page:{kind:'one_finger_drag'},path:[]},swapped).state);
+          assert.deepEqual(await evaluate(`[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) [data-position]')].map(n=>n.textContent.trim())`),['Auto','Draw','Move canvas','Off']);
+          await click(`.menu-page:not([hidden]):not([inert]) [data-position="[0,${index}]"]`);
+          assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),value);
+          assert.equal(await evaluate('layerApp.state().phone.menu_route.page??null'),null);
+          assert.equal(await evaluate('layerApp.state().phone.menu'),true);
+          assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),`layer-${icon}-symbolic`);
+          initial=await bounds();await captureMenu(`menu-finger-${value}${swapped?'-swapped':''}`);
+        }
       }
+      await click('#phone-swap');
+      const beforeSwap=await evaluate(`document.querySelector('#phone-swap').getAttribute('aria-pressed')`);
+      await click('#phone-swap');assert.equal(await evaluate('layerApp.state().phone.menu'),true);
+      assert.notEqual(await evaluate(`document.querySelector('#phone-swap').getAttribute('aria-pressed')`),beforeSwap);
+      initial=await bounds();await captureMenu('menu-swap-checked');
+      await click('#phone-swap');initial=await bounds();
       await click('#phone-search');await wait('!layerApp.state().phone.menu&&document.querySelector("#command-bar").open');
       await evaluate(`(()=>{const input=document.querySelector('#command-search');input.value='pencil';input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});

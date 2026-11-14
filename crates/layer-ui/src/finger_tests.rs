@@ -67,15 +67,17 @@ fn drawing_activation_keeps_the_windows_device_class_without_contacts() {
 
 #[test]
 fn finger_on_starts_immediately_and_finishes_once_while_off_keeps_gestures() {
-    for mode in [FingerDrawing::On, FingerDrawing::Off] {
+    for mode in [FingerDrawing::On, FingerDrawing::Off, FingerDrawing::MoveCanvas] {
         let mut s = finger_session();
         s.state.settings.finger_drawing = mode;
         let before = s.engine.checkpoint();
+        let camera = s.state.camera.clone();
         let down = finger_sample(&mut s, 1, ContactPhase::Down, [250., 300.], 10);
         finger_frames(&mut s, 12);
         assert_eq!(down.paint, mode == FingerDrawing::On);
         assert_eq!(s.engine.has_active_stroke(), mode == FingerDrawing::On);
         finger_sample(&mut s, 1, ContactPhase::Move, [450., 300.], 30);
+        assert_eq!(s.state.camera != camera, mode == FingerDrawing::MoveCanvas, "{mode:?}");
         finger_sample(&mut s, 1, ContactPhase::Up, [450., 300.], 40);
         finger_frames(&mut s, 42);
         assert_eq!(s.engine.metrics().committed_strokes, u64::from(mode == FingerDrawing::On));
@@ -115,19 +117,23 @@ fn finger_second_contact_withdraws_before_navigation_without_touching_history() 
 fn finger_hold_withdraws_the_stroke_before_starting_the_picker() {
     for ready in [false, true] {
         for rendered in [false, true] {
-            let mut s = finger_session();
-            s.renderer_mut().painting_unready = !ready;
-            let checkpoint = s.engine.checkpoint();
-            finger_sample(&mut s, 1, ContactPhase::Down, [250., 300.], 10);
-            if rendered { finger_frames(&mut s, 12); }
-            let reply = s.input(UiInput::ColorPickerHold { id: 1, position: [250., 300.], offset: 44. }).unwrap();
-            assert!(reply.handled && reply.cancel_paint, "ready={ready}, rendered={rendered}");
-            assert!(s.color_picker_overlay().is_some(), "ready={ready}, rendered={rendered}");
-            finger_sample(&mut s, 1, ContactPhase::Up, [250., 300.], 600);
-            s.renderer_mut().painting_unready = false;
-            finger_frames(&mut s, 602);
-            assert_eq!(s.engine.checkpoint(), checkpoint);
-            assert_eq!(s.engine.metrics().committed_strokes, 0);
+            for mode in [FingerDrawing::On, FingerDrawing::Off, FingerDrawing::MoveCanvas] {
+                let mut s = finger_session();
+                s.state.settings.finger_drawing = mode;
+                s.renderer_mut().painting_unready = !ready;
+                let checkpoint = s.engine.checkpoint();
+                finger_sample(&mut s, 1, ContactPhase::Down, [250., 300.], 10);
+                if rendered { finger_frames(&mut s, 12); }
+                let reply = s.input(UiInput::ColorPickerHold { id: 1, position: [250., 300.], offset: 44. }).unwrap();
+                assert!(reply.handled, "{mode:?}, ready={ready}, rendered={rendered}");
+                assert_eq!(reply.cancel_paint, mode == FingerDrawing::On, "{mode:?}, ready={ready}, rendered={rendered}");
+                assert!(s.color_picker_overlay().is_some(), "{mode:?}, ready={ready}, rendered={rendered}");
+                finger_sample(&mut s, 1, ContactPhase::Up, [250., 300.], 600);
+                s.renderer_mut().painting_unready = false;
+                finger_frames(&mut s, 602);
+                assert_eq!(s.engine.checkpoint(), checkpoint);
+                assert_eq!(s.engine.metrics().committed_strokes, 0);
+            }
         }
     }
 }
@@ -478,5 +484,93 @@ fn pen_detection_excludes_locked_vector_drawing_contacts() {
         finger_frames(&mut s, 40);
         assert!(!s.state.settings.pen_seen, "{tool:?}");
         assert_eq!(s.engine.checkpoint(), checkpoint);
+    }
+}
+
+#[test]
+fn one_finger_drag_resolves_auto_and_reads_saved_modes() {
+    for (device, seen, effective) in [(DeviceClass::Tablet, false, FingerDrawing::On), (DeviceClass::Tablet, true, FingerDrawing::Off),
+        (DeviceClass::Phone, false, FingerDrawing::On), (DeviceClass::Desktop, false, FingerDrawing::Off)] {
+        assert_eq!(FingerDrawing::Auto.effective(device, seen), effective);
+        for mode in [FingerDrawing::On, FingerDrawing::MoveCanvas, FingerDrawing::Off] { assert_eq!(mode.effective(device, seen), mode); }
+    }
+    for (saved, mode) in [("auto", FingerDrawing::Auto), ("on", FingerDrawing::On), ("off", FingerDrawing::Off), ("move_canvas", FingerDrawing::MoveCanvas)] {
+        assert_eq!(Settings::restore(&format!(r#"{{"finger_drawing":"{saved}","pan_speed":1.5}}"#)).finger_drawing, mode);
+    }
+    let unknown = Settings::restore(r#"{"finger_drawing":"sideways","pan_speed":1.5}"#);
+    assert_eq!((unknown.finger_drawing, unknown.pan_speed), (FingerDrawing::Auto, 1.5));
+}
+
+#[test]
+fn move_canvas_keeps_finger_drags_out_of_the_selected_tool() {
+    for command in [CommandId::Pencil, CommandId::Fill, CommandId::Zoom, CommandId::RotateView, CommandId::Crop] {
+        let mut s = crop_session();
+        s.state.settings.finger_drawing = FingerDrawing::MoveCanvas;
+        invoke(&mut s, command);
+        let start = if command == CommandId::Crop {
+            let corner = on_surface(&s, crop_frame(&s).corners()[2]);
+            [corner.x, corner.y]
+        } else { [350., 300.] };
+        let camera = s.state.camera.clone();
+        let checkpoint = s.engine.checkpoint();
+        let artwork = s.engine.document().artwork.clone();
+        for (phase, position, ms) in [(ContactPhase::Down, start, 10),
+            (ContactPhase::Move, [start[0] + 80., start[1] + 40.], 30),
+            (ContactPhase::Up, [start[0] + 80., start[1] + 40.], 50)] {
+            assert!(!finger_sample(&mut s, 1, phase, position, ms).paint, "{command:?}/{phase:?}");
+        }
+        finger_frames(&mut s, 52);
+        for (axis, delta) in [80., 40.].into_iter().enumerate() {
+            assert!((s.state.camera.translation[axis] - camera.translation[axis] - delta).abs() < 0.001, "{command:?}/{axis}");
+        }
+        assert_eq!((s.state.camera.zoom, s.state.camera.rotation), (camera.zoom, camera.rotation), "{command:?}");
+        assert_eq!(s.engine.checkpoint(), checkpoint, "{command:?}");
+        assert_eq!(s.engine.document().artwork, artwork, "{command:?}");
+        assert!(!s.operation.dragging(), "{command:?}");
+    }
+}
+
+#[test]
+fn one_finger_drag_tile_opens_its_choices_and_reveals_the_preference_when_invoked() {
+    let mut s = session(Platform::Gtk);
+    let control = ToolbarControl::Command { command: CommandId::OneFingerDrag };
+    s.state.workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Tool { control }]).unwrap();
+    s.refresh_chrome();
+    let header = s.header_view();
+    let entry = header.items.iter().find(|item| item.resolved_control == Some(control)).unwrap();
+    assert!(entry.menu && !entry.has_variants);
+    assert_eq!(entry.icon, "finger-touch");
+    assert!(header.items.iter().filter(|item| item.resolved_control != Some(control)).all(|item| !item.menu));
+    let anchor = DrawerAnchor::Header { id: entry.id };
+    for (index, mode) in FingerDrawing::ALL.into_iter().enumerate() {
+        let menu = s.context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+        let items = menu.sections.concat();
+        assert_eq!(items.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), ["Auto", "Draw", "Move canvas", "Off"]);
+        s.dispatch(items[index].action.clone().unwrap()).unwrap();
+        assert_eq!(s.state.settings.finger_drawing, mode);
+        let items = s.context_menu(ContextTarget::ToolVariants { anchor }).unwrap().sections.concat();
+        assert_eq!(items.iter().map(|item| item.selected).collect::<Vec<_>>(), (0..4).map(|i| Some(i == index)).collect::<Vec<_>>());
+        assert!(items.iter().all(|item| !item.keep_open()));
+        let icon = s.header_view().items.into_iter().find(|item| item.id == entry.id).unwrap().icon;
+        assert_eq!(icon, mode.effective(DeviceClass::Desktop, false).icon());
+    }
+    let context = s.context_menu(ContextTarget::Header { id: Some(entry.id) }).unwrap();
+    assert_eq!(context.sections[0].len(), 4);
+    assert!(!s.state.settings_open);
+    s.dispatch(UiAction::ActivateHeaderItem { id: entry.id }).unwrap();
+    assert!(s.state.settings_open);
+    assert_eq!(s.state.preferences.page, SettingsPage::Input);
+}
+
+#[test]
+fn tablet_sketch_title_bar_places_one_finger_drag_after_the_main_menu() {
+    for platform in Platform::ALL {
+        let header = WorkspacePreset::Painter.layout(platform).header;
+        let left = header.entries().filter(|entry| header.location(entry.id).is_some_and(|(zone, _)| zone == HeaderZone::Left))
+            .map(|entry| entry.item).collect::<Vec<_>>();
+        let tile = HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::OneFingerDrag } };
+        let tablet = matches!(platform, Platform::Android | Platform::Ios);
+        assert_eq!(left.iter().filter(|item| **item == tile).count(), usize::from(tablet), "{platform:?}");
+        if tablet { assert_eq!(left.iter().position(|item| *item == tile), left.iter().position(|item| *item == HeaderItem::Menu).map(|menu| menu + 1)); }
     }
 }

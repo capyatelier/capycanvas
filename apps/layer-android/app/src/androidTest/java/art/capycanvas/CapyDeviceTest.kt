@@ -303,6 +303,21 @@ fun CanvasHost.importStripes(width: Int, height: Int) {
     importImage(stripes)
 }
 
+fun awaitCanvasPresentation(host: CanvasHost) {
+    val deadline = SystemClock.uptimeMillis() + 30_000
+    var presented = false
+    do {
+        presented = runBlocking { host.withNative {
+            val display = JSONObject(Native.displayStatus(it))
+            !Native.renderingPending(it) && display.optLong("completed_frames") == display.optLong("submitted_frames") &&
+            !display.isNull("presented_canvas_revision") &&
+                display.getLong("canvas_revision") == display.getLong("presented_canvas_revision")
+        } }
+        if (!presented) SystemClock.sleep(16)
+    } while (!presented && SystemClock.uptimeMillis() < deadline)
+    assertTrue("Current document composition is presented", presented)
+}
+
 fun screenshot(path: String, inspect: ((Bitmap) -> Unit)? = null) {
     val file = File(instrumentation.targetContext.getExternalFilesDir(null), path).apply { parentFile!!.mkdirs() }
     val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return

@@ -190,5 +190,7 @@ settings-rotate-with-two-fingers = Вращать двумя пальцами
 settings-quick-pinch-fit = Быстро свести пальцы, чтобы вписать холст
 settings-quick-pinch-restore = Развести пальцы, чтобы вернуть вид
 
-settings-draw-with-finger = Рисовать пальцем
+settings-one-finger-drag = Перетаскивание одним пальцем
+settings-finger-draw = Рисовать
+settings-finger-move-canvas = Перемещать холст
 settings-auto = Авто

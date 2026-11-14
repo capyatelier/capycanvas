@@ -143,7 +143,7 @@ impl Menu {
         separator.set_parent(&root);
         root.imp().children.borrow_mut().push(separator.clone().upcast());
         let buttons = std::array::from_fn(|index| {
-            let button: gtk::Button = if matches!(index, 2 | 4) { gtk::ToggleButton::new().upcast() } else { gtk::Button::new() };
+            let button: gtk::Button = if index == 4 { gtk::ToggleButton::new().upcast() } else { gtk::Button::new() };
             button.set_widget_name(["phone-preferences", "phone-search", "phone-finger", "phone-zen", "phone-swap"][index]);
             button.add_css_class("flat"); button.add_css_class("header-tool");
             button.set_child(Some(&gtk::Image::new()));

@@ -182,5 +182,7 @@ settings-rotate-with-two-fingers = Rotate with two fingers
 settings-quick-pinch-fit = Quick pinch to fit
 settings-quick-pinch-restore = Reverse pinch to restore view
 
-settings-draw-with-finger = Draw with Finger
+settings-one-finger-drag = One-finger drag
+settings-finger-draw = Draw
+settings-finger-move-canvas = Move canvas
 settings-auto = Auto

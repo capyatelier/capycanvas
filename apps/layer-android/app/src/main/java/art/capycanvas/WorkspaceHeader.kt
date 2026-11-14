@@ -281,6 +281,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
     }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
     var menuLabel by remember { mutableStateOf<String?>(null) }
+    var menuRequest by remember { mutableStateOf<JSONObject?>(null) }
     var hoveredMenu by remember { mutableStateOf<String?>(null) }
     val menuFocus = remember { FocusRequester() }
     var menuBounds by remember { mutableStateOf(Rect.Zero) }
@@ -369,9 +370,12 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     onDoubleClick = if (spec.optBoolean("double_click")) ({ host.dispatch(obj("type" to "double_click_tool", "control" to spec.getJSONObject("resolved_control"))) }) else null,
                     onClick = {
                         when (kind) {
-                            "menu", "menu_labels" -> { menuLabel = null; host.primaryMenu { menu = it } }
+                            "menu", "menu_labels" -> { menuLabel = null; menuRequest = null; host.primaryMenu { menu = it } }
                             "workspaces" -> { menuLabel = "workspaces"; menu = workspaceSwitcherMenu(host.workspaceManager) }
-                            else -> activate()
+                            else -> if (spec.optBoolean("menu")) {
+                                val request = obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))
+                                menuLabel = null; menuRequest = request; host.query(request) { menu = it as? JSONObject }
+                            } else activate()
                         }
                     }) {
                     LiveIcon(host, icon, label, Modifier.size(size.number("icon").dp))
@@ -388,7 +392,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                         WorkspaceMenu(host, snapshot.array("application_menus").objects().first { it.getString("id") == menuLabel }.getJSONObject("model"), focusable = false,
                             maxHeight = ((windowHeight - anchor.bottom) / density - 48).coerceAtLeast(1f).dp) { menu = null }
                     }
-                    else WorkspaceMenu(host, opened, copy = { host.menuCopy(obj("type" to "application_menu", "menu" to "primary")) }) { menu = null }
+                    else WorkspaceMenu(host, opened, copy = { host.menuCopy(menuRequest ?: obj("type" to "application_menu", "menu" to "primary")) }) { menu = null }
                 }
             }
         }

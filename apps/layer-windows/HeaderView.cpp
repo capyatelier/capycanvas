@@ -474,6 +474,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         auto kind=str(object(it->second.entry,L"item"),L"kind");
         if(kind==L"capy"||kind==L"settings"){data->dispatch(invoke(kind==L"capy"?L"zen_mode":L"settings"));return;}
         if(kind==L"document_title"){showDrawings(anchor);return;}
+        if(kind==L"tool"&&flag(findId(array(view,L"items"),id),L"menu")){input->Choices(id,anchor?anchor:it->second.frame.as<FrameworkElement>());return;}
         if(kind==L"tool"){data->dispatch(O({{L"type",S(L"activate_header_item")},{L"id",N(id)}}));return;}
         if(kind==L"menu"||kind==L"menu_labels"||kind==L"workspaces"){
             auto flyout=kind==L"workspaces"?workspaceOverflow.Flyout():primary.Flyout();

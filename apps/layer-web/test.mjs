@@ -18,6 +18,7 @@ import {runJourney} from "./journeys.mjs";
 import {checkPointwiseEffects,checkLookupTransport} from './pointwise-effects.test.mjs';
 import {checkTonalSelections} from './tonal-selection.test.mjs';
 import {checkColorPicker} from './color-picker.test.mjs';
+import {checkOneFingerDrag} from './one-finger-drag.test.mjs';
 import {checkInputDevices} from './input-devices.test.mjs';
 import {checkTouchScrub} from './touch-scrub-journey.test.mjs';
 import {checkLayerTouchGestures} from './layer-touch-gestures-journey.test.mjs';
@@ -374,6 +375,7 @@ try {
     [process.argv.includes("--workspace-motion"), () => checkWorkspaceMotion({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--long-press-drag"), () => checkLongPressDragging({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--drag-cursors"), () => checkDragCursors({ call, evaluate, settle }), checkErrors],
+    [process.argv.includes('--one-finger-drag'), () => checkOneFingerDrag({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-windows"), () => checkWorkspaceWindows({call,evaluate}), checkErrors],
     [process.argv.includes("--workspace-focus"), () => checkWorkspaceFocus({evaluate,settle}), checkErrors],
     [process.argv.includes("--workspace-options-refresh"), () => checkWorkspaceMenuRefresh({call,evaluate,settle}), checkErrors],

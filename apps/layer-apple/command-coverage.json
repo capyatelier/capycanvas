@@ -3,7 +3,7 @@
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": ["fullscreen"],
-    "mac": []
+    "mac": ["one_finger_drag"]
   },
   "workspace_commands": {
     "commands": ["manage", "new", "reset_brushes", "reset_layout", "layout_history", "switch", "manage_toolbars", "save_toolbar", "new_toolbar"],

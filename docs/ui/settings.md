@@ -90,13 +90,16 @@ calibration utility so painters can test the curve on the canvas. Apply saves
 the preview; Cancel and Close discard it. GTK places **[Pen tilt](pen-tilt.md)**
 next, with a per-pen response curve and direction correction in the same utility.
 
-**Draw with Finger**, in Input's Pointer group, offers Auto (default), On and
-Off. Auto draws on phones and tablets until a pen first draws; desktops keep
-fingers for gestures. GTK is a desktop regardless of window size: choose On here
-or with the switch in the phone layout's Capy menu to paint with touch. The switch
-shows the effective state and selects On or Off. Pen detection persists across
-windows and restarts; hover, refused drawing and cancelled held contacts do not
-count. Existing preferences retain their values when these fields are absent.
+**One-finger drag**, in Input's Pointer group on touch platforms (all but macOS),
+offers Auto (default), Draw, Move canvas and Off. Auto draws on phones and
+tablets until a pen first draws, then behaves as Off; desktops keep fingers for
+gestures. Move canvas pans with one finger the way the Hand tool does. GTK and
+Windows are desktops regardless of window size. The One-finger drag tile
+(Add Tools…) and the finger icon in the phone layout's Capy menu open the same
+four choices; their icon shows what one finger does now. Pen detection persists
+across windows and restarts; hover, refused drawing and cancelled held contacts
+do not count. Existing preferences retain their values when these fields are
+absent.
 
 ## Keyboard shortcuts
 

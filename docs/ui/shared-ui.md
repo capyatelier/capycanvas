@@ -552,15 +552,17 @@ The host calls `frame(now_ns, presentation_ns)` at display time and presents the
 renderer-owned composite through the GPU viewport presenter. Only explicit
 exports and visual tests read pixels back. Camera movement uses the same
 forward/inverse transform for drawing and display. Shared `TouchGesture`
-interprets two fingers as anchored pan/zoom/rotation. With Draw with Finger Off,
-one finger only drags what Move or Edit Points would take under a pen: images,
-paths, transform handles and anchors; a segment tap adds an anchor. On admits
+interprets two fingers as anchored pan/zoom/rotation. In Off, including Auto when
+it resolves to Off, one finger drags what Move or Edit Points would take under a
+pen: images, paths, transform handles and anchors; a segment tap adds an anchor. Draw admits
 full-pressure finger contacts through the drawing tools. A second finger within
 the tap window, or a picker hold, withdraws the provisional contact without an
 Undo step. Pen contact wins; rejected fingers stay ignored until they lift.
-GTK presents Auto/On/Off in Settings → Input and a switch in the phone Capy menu;
-Auto remains Off on this desktop host. Other hosts still need their native input
-integration and qualification.
+Move canvas always pans with one finger like the Hand tool, including over
+objects and handles and with Zoom or Rotate selected. Holding still picks a
+color in Off and Move canvas too. Settings → Input,
+the One-finger drag tile and the phone Capy menu choose the mode on every touch
+host.
 Mouse and stylus event collectors remain native.
 Wheel input follows Canvas → Mouse wheel (Pan by default, or Zoom).
 Shift-wheel pans horizontally; Ctrl-wheel always zooms around the cursor. Hosts normalize native wheel units and Rust applies the camera gesture.

@@ -819,6 +819,12 @@ void WorkspaceGestures::Present(J const& drag){impl->present(drag);}
 void WorkspaceGestures::ChromeChanged(){impl->chrome(O({{L"kind",S(L"refresh")}}));}
 bool WorkspaceGestures::Cancel(){return impl->cancelAll();}
 bool WorkspaceGestures::SuppressClick()const{return impl->ignoreClick;}
+void WorkspaceGestures::Menu(J const& target,FrameworkElement const& anchor){
+    if(impl->dragging||impl->finishing||impl->held||(impl->edge&&impl->edge->claimed))return;
+    impl->clear();
+    auto at=anchor.TransformToVisual(impl->root).TransformPoint({float(anchor.ActualWidth()/2),float(anchor.ActualHeight())});
+    impl->context(target,at,false,anchor);
+}
 bool WorkspaceGestures::Moving()const{return impl->dragging||impl->finishing||(impl->edge&&impl->edge->claimed);}
 bool WorkspaceGestures::DeferRemoval(UIElement const& element,std::shared_ptr<void> owner){return impl->deferRemoval(element,std::move(owner));}
 bool WorkspaceGestures::Retains(UIElement const& element)const{

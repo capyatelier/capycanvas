@@ -225,7 +225,7 @@ fn menu(d: &mut Driver) {
         assert_eq!(button.is_sensitive(), item.enabled);
     }
     assert_eq!(d.named("phone-swap").property::<bool>("active"), state(&d.w).phone.swapped);
-    assert_eq!(d.named("phone-finger").property::<bool>("active"), ui_session(&d.w).finger_drawing());
+    assert!(d.named("phone-finger").downcast_ref::<gtk::ToggleButton>().is_none());
     let scroll = d.named("phone-menu-scroll").downcast::<gtk::ScrolledWindow>().unwrap();
     scroll_overflow(d);
     scroll.vadjustment().set_value(0.);
@@ -1268,7 +1268,7 @@ fn native_phone_menu_live_measurement() {
 }
 
 #[test]
-#[ignore = "private compositor: --native-test=native_phone_menu_feedback --native-storage; viewport/theme external"]
+#[ignore = "private compositor: --native-test=native_phone_menu_feedback --native-storage; GTK_A11Y=test, viewport/theme external"]
 fn native_phone_menu_feedback() {
     let mut d = setup("art.capycanvas.PhoneMenuFeedback");
     let first = d.w.documents.selected();
@@ -1297,14 +1297,19 @@ fn native_phone_menu_feedback() {
     };
     assert!((text_start(&caption) - text_start(&file)).abs() <= 1., "the drawing label keeps the native page inset and check gutter");
     capture(&mut d, "feedback-root-two");
-    for name in ["phone-finger", "phone-swap"] {
-        let row = d.named(name); let before = row.property::<bool>("active");
-        for selected in [!before, before] {
-            click(&mut d, name);
-            until(|| state(&d.w).phone.menu && d.named(name).property::<bool>("active") == selected, "the toggle updates without closing");
-            assert_eq!(row, d.named(name), "the native check row is updated in place");
-        }
+    let row = d.named("phone-swap"); let before = row.property::<bool>("active");
+    for selected in [!before, before] {
+        click(&mut d, "phone-swap");
+        until(|| state(&d.w).phone.menu && d.named("phone-swap").property::<bool>("active") == selected, "the toggle updates without closing");
+        assert_eq!(row, d.named("phone-swap"), "the native check row is updated in place");
     }
+    let finger = d.named("phone-finger");
+    click(&mut d, "phone-finger");
+    until(|| state(&d.w).phone.menu_navigation.current().page == Some(MenuPageId::OneFingerDrag), "the finger button opens its choices");
+    d.click_label("Move canvas");
+    until(|| state(&d.w).phone.menu && state(&d.w).phone.menu_navigation.is_root()
+        && state(&d.w).settings.finger_drawing == FingerDrawing::MoveCanvas, "a finger choice returns to the open menu");
+    assert_eq!(finger, d.named("phone-finger"));
     click(&mut d, "phone-drawing");
     let stack = d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap();
     until(|| drawings_ready(&d), "Drawings slides into the navigation pane");
@@ -1334,7 +1339,7 @@ fn native_phone_menu_feedback() {
     assert!(d.named(&format!("phone-drawing-{first}")).state_flags().contains(gtk::StateFlags::CHECKED));
     capture(&mut d, "feedback-drawings-current");
     d.w.dispatch(UiAction::Phone { action: PhoneAction::Drawing { id: second, close: false } });
-    let choice = if ui_session(&d.w).finger_drawing() { 2 } else { 1 };
+    let choice = if ui_session(&d.w).finger_drawing() { 3 } else { 1 };
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, value: PreferenceValue::Choice(choice) } });
     until(|| d.w.documents.selected() == second && !d.w.documents.changing.get() && !d.w.servicing.get(), "selection survives queued settings persistence");
     new_photo::ready(&d.w);

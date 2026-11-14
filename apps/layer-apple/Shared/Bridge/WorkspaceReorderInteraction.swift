@@ -46,13 +46,21 @@ import SwiftUI
             tiles: store?.state["workspace"]["layout"]["phone"] ?? JSON([]))
     }
     func phoneContext(_ target: JSON, at point: CGPoint) {
-        guard enabled, let store, !phone.layout.isNull else { return }
+        guard !phone.layout.isNull else { return }
+        present(target, at: point, phoneLayout: phone.layout.stableKey)
+    }
+    func showChoices(_ model: JSON, for context: JSON) {
+        guard let bounds = workspace?.sourceInstances.values.first(where: { $0.context == context.stableKey })?.bounds else { return }
+        present(model, at: CGPoint(x: bounds.midX, y: bounds.maxY))
+    }
+    private func present(_ target: JSON, at point: CGPoint, phoneLayout: String? = nil) {
+        guard enabled, let store else { return }
         let generation = UUID(); request = generation
         menuSource = nil; menuTarget = nil; menuPoint = point
-        phoneMenuLayout = phone.layout.stableKey
+        phoneMenuLayout = phoneLayout
         store.query(["type": "context", "target": target.raw]) { [weak self] result in
             guard let self, request == generation, enabled,
-                phoneMenuLayout == phone.layout.stableKey else { return }
+                phoneLayout.map({ $0 == phone.layout.stableKey }) ?? true else { return }
             menu = result
         }
     }

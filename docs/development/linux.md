@@ -250,13 +250,15 @@ After changing the tablet proxy, run its tests with
 
 | Journey | Needs |
 | --- | --- |
+| `native_one_finger_drag_tiles` | `--native-storage`, desktop viewport, light/dark; `LAYER_NATIVE_CAPTURE_DIR` captures title bar and toolbar choices at all three sizes. |
 | `native_session_restart`, `native_session_restart_saved_origins`, `native_document_files`, `native_object_only_shared_images`, `native_document_tabs_blocked_writer_keeps_canvas_live` | `--native-recovery` |
 | `native_dialog_lines_match_the_palette` | `--native-storage` |
 | `native_released_workspaces_open_without_asking`, `native_damaged_workspace_store_installs_its_newest_copy` | `--native-storage`, `CAPY_NATIVE_TEST_THEME=light` and `dark`; set `LAYER_NATIVE_CAPTURE_DIR` for captures. |
 | `native_phone_editor_pages` | `--native-storage`, `LAYER_MOTION_VIEWPORT=412x891`, `CAPY_NATIVE_TEST_THEME=light`, `GTK_A11Y=test`; set `LAYER_NATIVE_CAPTURE_DIR` for the editor-page inventory and open Capy menu. |
 | `native_phone_page_bounds` | `--native-storage`, `GTK_A11Y=test` and captures; `280x280`, `280x560` and `320x568`, light/dark. Opens every editor inventory page and checks actual body minimums, window/header bounds and GTK size warnings. |
 | `native_phone_motion` | `--native-storage`, `LAYER_NATIVE_EVENT_MS=4`, a phone `LAYER_MOTION_VIEWPORT`, and `LAYER_PHONE_MOTION_REPORT` under the test artifacts directory. |
-| `native_phone_frame`, `native_phone_drawers` | `--native-storage`, `LAYER_MOTION_VIEWPORT=412x891` (also `891x412`, `320x568` and `280x560`); both `CAPY_NATIVE_TEST_THEME=light` and `dark`. Set `LAYER_NATIVE_CAPTURE_DIR` for composed captures; it is required by `native_phone_drawers` to compare selected tile and drawer-row pixels in light/dark and opaque/glass states. `LAYER_PHONE_DECORATION_LAYOUT` selects a GTK button layout for native-control checks; `LAYER_PHONE_TEXT_PT=18` checks larger UI text. |
+| `native_phone_frame`, `native_phone_drawers` | `--native-storage`, `GTK_A11Y=test`, `LAYER_MOTION_VIEWPORT=412x891` (also `891x412`, `320x568` and `280x560`); both `CAPY_NATIVE_TEST_THEME=light` and `dark`. Set `LAYER_NATIVE_CAPTURE_DIR` for composed captures; it is required by `native_phone_drawers` to compare selected tile and drawer-row pixels in light/dark and opaque/glass states. `LAYER_PHONE_DECORATION_LAYOUT` selects a GTK button layout for native-control checks; `LAYER_PHONE_TEXT_PT=18` checks larger UI text. |
+| `native_phone_menu_feedback` | `--native-storage`, `GTK_A11Y=test`, phone viewport and light/dark. |
 | `native_phone_inventory`, focused context menus | Set `LAYER_PHONE_INVENTORY_CONTEXTS=1` to capture the Painter layer-row and palette-swatch menus through the existing inventory journey. |
 | `native_phone_inventory`, Transform drawer | Set `LAYER_PHONE_INVENTORY_CONTEXTS=transform` to check the Painter Transform tile and its drawer with an owned image. |
 | `native_phone_dialogs`, focused Settings captures | Set `LAYER_DIALOG_BATCH=w6a-capture` to visit Preferences and shortcut sheets without optional choice and context popovers. |

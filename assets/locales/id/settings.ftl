@@ -330,5 +330,7 @@ settings-rotate-with-two-fingers = Putar dengan dua jari
 settings-quick-pinch-fit = Cubit cepat untuk menyesuaikan
 settings-quick-pinch-restore = Renggangkan untuk memulihkan tampilan
 
-settings-draw-with-finger = Menggambar dengan Jari
+settings-one-finger-drag = Seret satu jari
+settings-finger-draw = Menggambar
+settings-finger-move-canvas = Geser kanvas
 settings-auto = Otomatis

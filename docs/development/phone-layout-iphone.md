@@ -18,7 +18,7 @@ process and pitfalls that kept the Web and Android ports correct.
   frame, contacts, the Capy menu routes and rows, and the menu geometry.
   `dialog_presentation.rs` covers pages, alerts, canvas panels, the header and
   escape. Drawer placement, colour fit and presented rows live in `drawers.rs`
-  and `drawer_geometry.rs`; notices in `notice_placement.rs`; Draw with Finger in
+  and `drawer_geometry.rs`; notices in `notice_placement.rs`; One-finger drag in
   `finger_input.rs`.
 - **The native transport is in `crates/layer-host`. Apple uses it already:**
   - **Snapshot fields:** `layout.phone`, `state.phone`, `phone_tools`,
@@ -118,7 +118,7 @@ Android visitors:
   - every route `PhoneMenuNavigation` enumerates, both swapped and not;
   - the Drawings page with several drawings, the current check, unsaved dots,
     close buttons and New drawing;
-  - the strip toggles: Preferences, Search, Draw with Finger, Zen and Swap;
+  - the strip buttons: Preferences, Search, One-finger drag (its page), Zen and Swap;
   - back swipe cancelled, halfway and completed;
   - a scroll that cancels a row press;
   - a release that activates exactly one row.
@@ -190,7 +190,7 @@ Then run journeys, with assertions rather than full sheet pairing:
 ### Behaviour that images cannot show
 
 Assert these in Rust or XCTest:
-- **Draw with Finger:**
+- **One-finger drag:**
   - provisional finger strokes withdrawn by a second finger and by a hold,
     leaving no undo step;
   - Auto paints with a finger until a pen draws, survives a restart, and

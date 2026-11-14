@@ -178,5 +178,7 @@ settings-rotate-with-two-fingers = Xoay bằng hai ngón tay
 settings-quick-pinch-fit = Chụm nhanh để vừa khung
 settings-quick-pinch-restore = Mở hai ngón tay để khôi phục góc nhìn
 
-settings-draw-with-finger = Vẽ bằng ngón tay
+settings-one-finger-drag = Kéo một ngón
+settings-finger-draw = Vẽ
+settings-finger-move-canvas = Di chuyển khung vẽ
 settings-auto = Tự động

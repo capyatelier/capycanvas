@@ -499,7 +499,7 @@ private final class NativeRotation: UIRotationGestureRecognizer {
             passed("PASS: UIKit \(theme) shared finger withdrawal, rejection until lift, fresh finger and one-step pixel history")
         }
         try await action(["type": "preferences", "action": ["type": "edit", "id": "finger_drawing",
-            "value": ["auto", "on", "off"].firstIndex(of: fingerMode)!]])
+            "value": ["auto", "on", "move_canvas", "off"].firstIndex(of: fingerMode)!]])
         try await newDocument()
         let scroll = Scroll(), scrollEvent = ContactEvent(); scrollEvent.nativeType = .scroll
         func sameCamera(_ before: JSON) -> Bool {

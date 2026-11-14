@@ -205,7 +205,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
         options.ShowMode(holding?Primitives::FlyoutShowMode::Transient:Primitives::FlyoutShowMode::Standard);
         ticket.Show(root,options);
     }
-    void context(uint32_t id,Point at,bool holding=false,FrameworkElement invoking=nullptr){
+    void context(uint32_t id,Point at,bool holding=false,FrameworkElement invoking=nullptr,J const& model={}){
         owner=GetAncestor(GetForegroundWindow(),GA_ROOTOWNER);
         if(!invoking)invoking=originElement.get();if(!invoking)invoking=root;
         auto ticket=beginMenu(invoking,workspace(id));
@@ -214,7 +214,7 @@ struct HeaderInput::Impl:std::enable_shared_from_this<Impl>{
             showMenu(object(object(data->model,L"windows_workspace"),L"switcher_options"),at,holding,ticket);return;
         }
         evidence();
-        if(!QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",capy?O({{L"kind",S(L"zen_mode")}}):O({{L"kind",S(L"header")},
+        if(!QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",model.Size()?model:capy?O({{L"kind",S(L"zen_mode")}}):O({{L"kind",S(L"header")},
             {L"id",id?N(id):JsonValue::CreateNullValue()}})}}),
             [weak=weak_from_this(),ticket,at,holding](J reply){
                 auto self=weak.lock();if(!self||!ticket.Current())return;
@@ -335,6 +335,12 @@ void HeaderInput::Context(uint32_t id,FrameworkElement const& invoking){
     if(impl->active())return;
     impl->hideMenu();auto box=visibleBounds(invoking,impl->root);
     impl->selected=id;impl->notify();impl->context(id,{box.X,box.Y+box.Height},false,invoking);
+}
+void HeaderInput::Choices(uint32_t id,FrameworkElement const& invoking){
+    if(impl->editable()||impl->held||impl->dragging||impl->ending)return;
+    impl->clear();
+    impl->hideMenu();auto box=visibleBounds(invoking,impl->root);
+    impl->context(id,{box.X,box.Y+box.Height},false,invoking,O({{L"kind",S(L"tool_variants")},{L"anchor",O({{L"kind",S(L"header")},{L"id",N(id)}})}}));
 }
 void HeaderInput::Configure(J const& model,bool editing,J const& request){
     auto identity=model.Stringify()+request.Stringify();

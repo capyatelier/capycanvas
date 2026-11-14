@@ -73,8 +73,15 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 }
                 bool picker=pickerControl(object(tile,L"control"));
                 auto presses=std::make_shared<DoublePress>();
-                auto pick=button(data,str(tile,L"label"),[data=data,id,panelId,presses,weak=std::weak_ptr<WorkspaceGestures>(gestures)]{
+                auto menuAnchor=std::make_shared<winrt::weak_ref<FrameworkElement>>();
+                auto pick=button(data,str(tile,L"label"),[data=data,id,panelId,presses,menuAnchor,weak=std::weak_ptr<WorkspaceGestures>(gestures)]{
                     if(auto gestures=weak.lock();gestures&&gestures->SuppressClick()){presses->reset();return;}
+                    if(flag(findId(find(data->model,L"panels",L"id",panelId),L"tiles",id),L"menu")){
+                        presses->reset();
+                        if(auto gestures=weak.lock();gestures&&menuAnchor->get())gestures->Menu(O({{L"kind",S(L"tool_variants")},
+                            {L"anchor",O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}})}}),menuAnchor->get());
+                        return;
+                    }
                     if(presses->second()){
                         auto current=findId(find(data->model,L"panels",L"id",panelId),L"tiles",id);
                         auto control=object(current,L"resolved_control");
@@ -88,7 +95,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     }
                     data->dispatch(O({{L"type",S(L"activate_tile")},{L"panel",S(panelId)},{L"tile",N(id)}}));
                 });
-                presses->listen(pick);
+                presses->listen(pick);*menuAnchor=winrt::make_weak(pick.as<FrameworkElement>());
                 // A disabled command remains disabled and accessible as such;
                 // its surrounding tile still accepts customization gestures.
                 Border slot;slot.Background(clear());auto tileContent=explainable(pick);

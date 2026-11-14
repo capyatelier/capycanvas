@@ -603,6 +603,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)
                 .to_string());
         };
+        if control.opens_menu() { return Ok(self.one_finger_drag_menu()); }
         let Some(group) = control.tool_group().filter(|_| control.has_variants()) else { return Err(self.localization().text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string()); };
         let remembered = self.group_variant(group);
         let items = self.group_choices(group, Some(anchor)).into_iter()

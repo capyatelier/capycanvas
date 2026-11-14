@@ -500,7 +500,8 @@ mod tests {
                     assert_eq!(
                         layout.header.zones[zone.index()]
                             .iter()
-                            .filter(|e| e.item != HeaderItem::Fullscreen)
+                            .filter(|e| !matches!(e.item, HeaderItem::Fullscreen
+                                | HeaderItem::Tool { control: ToolbarControl::Command { command: crate::CommandId::OneFingerDrag } }))
                             .map(|e| e.item)
                             .collect::<Vec<_>>(),
                         native.zones[zone.index()]

@@ -220,6 +220,8 @@ Desktop browser journeys, including those that record frame callbacks, don't
 qualify a performance tier; use the reference hardware, canvas and
 completed-update rules in [performance measuring](../performance/measuring.md).
 
+`--one-finger-drag` checks command search to Settings, title-bar and toolbar menus, phone tool insertion, mode icons, touch holds and tile sizes in both themes.
+
 `--layer-bubble-sizing` checks Layers card reopening after row additions and Properties in both themes.
 
 `--export-presets` and `--profile-library` check delivery controls independently of `--shared-workflows`.

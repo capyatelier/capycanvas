@@ -186,5 +186,7 @@ settings-rotate-with-two-fingers = Girar com dois dedos
 settings-quick-pinch-fit = Pinçar rápido para ajustar
 settings-quick-pinch-restore = Afastar os dedos para restaurar a vista
 
-settings-draw-with-finger = Desenhar com o dedo
+settings-one-finger-drag = Arrastar com um dedo
+settings-finger-draw = Desenhar
+settings-finger-move-canvas = Mover a tela
 settings-auto = Automático

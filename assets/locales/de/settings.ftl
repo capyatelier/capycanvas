@@ -182,5 +182,7 @@ settings-rotate-with-two-fingers = Mit zwei Fingern drehen
 settings-quick-pinch-fit = Schnell zusammenziehen zum Einpassen
 settings-quick-pinch-restore = Aufziehen zum Wiederherstellen der Ansicht
 
-settings-draw-with-finger = Mit dem Finger zeichnen
+settings-one-finger-drag = Mit einem Finger ziehen
+settings-finger-draw = Zeichnen
+settings-finger-move-canvas = Leinwand verschieben
 settings-auto = Automatisch

@@ -209,7 +209,7 @@ An authored Blend tile keeps its Blend, Paint mixing and Effects choices.
 
 Capy's menu has one list and an icon strip parallel to the Capy bar, on the
 menu's edge nearest that bar. The strip runs from Capy's end: Preferences,
-Search Commands, Draw with Finger, Zen mode, Swap Sides. Square tiles match the
+Search Commands, One-finger drag, Zen mode, Swap Sides. Square tiles match the
 measured native File–Window row height, with the Medium tile's icon ratio and
 standard hover, active and selected treatment. They pack from the left in
 portrait (right when swapped), or from the top in landscape, with a 2-unit gap.
@@ -234,10 +234,11 @@ Portrait                         Landscape
   ↑ 8 from Capy's end; 8 above/below the strip tiles
 ```
 
-Swapping sides mirrors the strip beside the Capy bar. Draw with Finger and Swap
-Sides show the selected-tile highlight and accessible checked state and keep the
-menu open. Preferences and Search open their existing page or bar and close the
-menu. Zen closes it and hides the bars.
+Swapping sides mirrors the strip beside the Capy bar. Swap Sides shows the
+selected-tile highlight and accessible checked state and keeps the menu open.
+One-finger drag shows the current mode's icon and opens its page of four
+choices; choosing one returns to the main page. Preferences and Search open
+their existing page or bar and close the menu. Zen closes it and hides the bars.
 
 The list starts with the current drawing's unsaved dot and name, a dim count
 when several drawings are open, and the submenu caret. It opens **Drawings** in
@@ -299,23 +300,24 @@ Main Menu gains the drawing row. Paint and Photo show both and are unchanged. A
 title bar with Menu Labels and no Main Menu keeps reaching the selector through
 its overflow, as today.
 
-## Draw with Finger
+## One-finger drag
 
-Shared Rust and GTK implement the modes below. Off retains gesture-only drawing
-contacts: color-picker holds, handle/object/path drags and Hand navigation. Two
-fingers navigate, and two to four fingers tap. Other hosts still need their own
-native input integration and qualification.
+Shared Rust implements the modes below on every touch host. Off retains
+gesture-only drawing contacts: color-picker holds, handle/object/path drags and
+Hand navigation. Two fingers navigate, and two to four fingers tap.
 
 | Mode | One finger |
 | --- | --- |
 | **Auto** (default) | On phones and tablets, paints until a pen first draws on this installation, then behaves as Off. On desktops, behaves as Off. |
-| **On** | Does what a pen does, with every tool. |
+| **Draw** | Does what a pen does, with every tool. |
+| **Move canvas** | Always pans the canvas like the Hand tool, including over objects and handles and with Zoom or Rotate selected. Holding still picks a color. |
 | **Off** | Gesture-only behavior. |
 
-Every platform starts in Auto. The switch in Capy's menu shows what the current
-mode does now; choosing it sets On or Off. Settings → Input offers all three.
-GTK counts as Desktop at every window size, so Auto stays Off. Choose On in
-Settings → Input or the phone layout's Capy menu to test finger painting.
+Every platform starts in Auto. The finger icon in Capy's menu shows what one
+finger does now and opens a page of the four choices; the One-finger drag tile
+opens the same choices as a menu. Settings → Input offers them too. GTK counts
+as Desktop at every window size, so Auto stays Off. Choose Draw to test finger
+painting.
 
 ### When a finger paints
 

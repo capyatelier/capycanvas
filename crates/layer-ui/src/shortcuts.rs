@@ -730,7 +730,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask | C::EditLayerContent | C::MergeDown | C::MergeGroup
         | C::MergeVisible | C::FlattenImage | C::StampVisible | C::NewDodgeBurnLayer | C::FrequencySeparation => ShortcutSection::Layer,
         C::FitWidth | C::FillView | C::ZoomSelection | C::ResetRotation | C::ResetView | C::PreviousView | C::SaveView | C::RestoreView | C::FitCanvas | C::ActualPixels | C::ZoomIn | C::ZoomOut | C::RotateLeft | C::RotateRight | C::FlipHorizontal | C::FlipVertical
-        | C::ZenMode | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
+        | C::ZenMode | C::OneFingerDrag | C::Fullscreen | C::ShowRulers | C::SnapRulers | C::DeleteRuler | C::ShowCanvasActionBar
         | C::ToggleTheme => ShortcutSection::View,
         C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram
         | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth | C::BlendPerceptual | C::BlendLinear => ShortcutSection::Color,

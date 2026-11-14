@@ -45,11 +45,30 @@ pub enum DeviceClass { #[default] Desktop, Phone, Tablet }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FingerDrawing { #[default] Auto, On, Off }
+pub enum FingerDrawing { #[default] Auto, On, Off, MoveCanvas }
 impl FingerDrawing {
-    pub const ALL: [Self; 3] = [Self::Auto, Self::On, Self::Off];
-    pub fn enabled(self, device: DeviceClass, pen_seen: bool) -> bool {
-        self == Self::On || (self == Self::Auto && device != DeviceClass::Desktop && !pen_seen)
+    pub const ALL: [Self; 4] = [Self::Auto, Self::On, Self::MoveCanvas, Self::Off];
+    pub fn effective(self, device: DeviceClass, pen_seen: bool) -> Self {
+        match self {
+            Self::Auto if device != DeviceClass::Desktop && !pen_seen => Self::On,
+            Self::Auto => Self::Off,
+            mode => mode,
+        }
+    }
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::On => "finger-draw",
+            Self::MoveCanvas => "hand",
+            Self::Auto | Self::Off => "finger-touch",
+        }
+    }
+    pub fn localized_label(self, localizer: &Localizer) -> std::sync::Arc<str> {
+        localizer.text(match self {
+            Self::Auto => MessageId::SETTINGS_AUTO,
+            Self::On => MessageId::SETTINGS_FINGER_DRAW,
+            Self::MoveCanvas => MessageId::SETTINGS_FINGER_MOVE_CANVAS,
+            Self::Off => MessageId::SETTINGS_OFF,
+        })
     }
 }
 
@@ -1263,10 +1282,9 @@ impl Settings {
                 PreferenceGroup {
                     title: localizer.text(MessageId::SETTINGS_POINTER).to_string(),
                     rows: vec![
-                        row(FingerDrawing, &localizer.text(MessageId::SETTINGS_DRAW_WITH_FINGER), "", PreferenceKind::Choice {
+                        row(FingerDrawing, &localizer.text(MessageId::SETTINGS_ONE_FINGER_DRAG), "", PreferenceKind::Choice {
                             presentation: ChoicePresentation::Dropdown,
-                            options: [MessageId::SETTINGS_AUTO, MessageId::SETTINGS_ON, MessageId::SETTINGS_OFF]
-                                .into_iter().map(|id| localizer.text(id).to_string()).collect(),
+                            options: crate::FingerDrawing::ALL.iter().map(|mode| mode.localized_label(localizer).to_string()).collect(),
                             icons: Vec::new(),
                             selected: crate::FingerDrawing::ALL.iter().position(|mode| *mode == self.finger_drawing).unwrap() as u32,
                         }),
@@ -1432,7 +1450,7 @@ impl Settings {
             .into_iter()
             .zip(groups)
             .map(|(id, mut groups)| {
-                if !platform.presents_phone_layout() {
+                if !platform.touch_gestures() {
                     for group in &mut groups { group.rows.retain(|row| row.id != PreferenceId::FingerDrawing); }
                 }
                 PreferencePage { id, title: id.localized_title(localizer), icon: id.icon().into(), groups }

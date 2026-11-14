@@ -29,9 +29,10 @@ import SwiftUI
     private var drag: Drag?
     init(store: EditorStore) { self.store = store }
     var edgeReach: EdgeReachCoordinator? { store?.edgeReach }
-    var enabled: Bool {
+    var enabled: Bool { store?.snapshot["header"]["editing"].bool == true && available }
+    private var available: Bool {
         guard let store else { return false }
-        return store.snapshot["header"]["editing"].bool && !store.snapshot["chrome_hidden"].bool && store.failure == nil
+        return !store.snapshot["chrome_hidden"].bool && store.failure == nil
             && store.workspaces?.presented != true && !store.workspace.hasPopover(excluding: popup)
             && ["picker", "toolbar_prompt", "toolbar_manager", "preferences"].allSatisfy { store.snapshot[$0].isNull }
     }
@@ -99,13 +100,19 @@ import SwiftUI
         guard acceptsContext(at: point), let source = sources.values.first(where: { $0.bounds.contains(point) }) else { return }
         showMenu(source, at: point)
     }
-    func showMenu(_ source: HeaderSource, at point: CGPoint? = nil) {
+    func showChoices(_ id: UInt64) {
+        guard available, let item = geometry["items"].array.first(where: { $0["id"].uint == id }) else { return }
+        let source = HeaderSource(source: JSON(["kind": "item", "value": id]).stableKey, bounds: item["bounds"].rect)
+        showMenu(source, model: JSON(["kind": "tool_variants", "anchor": ["kind": "header", "id": id]]))
+    }
+    func showMenu(_ source: HeaderSource, at point: CGPoint? = nil, model: JSON? = nil) {
         guard source.value["kind"].string == "item", let store else { return }
         let id = source.value["value"].uint
-        selected = id; menuAnchor = point.map { CGRect(origin: $0, size: CGSize(width: 1, height: 1)) } ?? source.bounds
+        if model == nil { selected = id }
+        menuAnchor = point.map { CGRect(origin: $0, size: CGSize(width: 1, height: 1)) } ?? source.bounds
         let token = UUID(); menuRequest = token
-        store.query(["type":"context", "target":["kind":"header", "id":id]]) { [weak self] value in
-            guard let self, self.menuRequest == token, self.enabled else { return }
+        store.query(["type":"context", "target":model?.raw ?? ["kind":"header", "id":id]]) { [weak self] value in
+            guard let self, self.menuRequest == token, model == nil ? self.enabled : self.available else { return }
             self.menu = value
         }
     }

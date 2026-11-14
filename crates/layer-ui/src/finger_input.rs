@@ -41,8 +41,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.finger.device = device;
         self.changed(regions::CUSTOMIZATION | regions::SETTINGS, false)
     }
-    pub fn finger_drawing(&self) -> bool {
-        self.state.settings.finger_drawing.enabled(self.finger.device, self.state.settings.pen_seen)
+    pub fn finger_mode(&self) -> FingerDrawing {
+        self.state.settings.finger_drawing.effective(self.finger.device, self.state.settings.pen_seen)
+    }
+    pub fn finger_drawing(&self) -> bool { self.finger_mode() == FingerDrawing::On }
+    pub(crate) fn one_finger_drag_menu(&self) -> ContextMenu {
+        let localization = self.localization();
+        let items = FingerDrawing::ALL.iter().enumerate().map(|(index, mode)| {
+            let mut item = ContextMenuItem::command(mode.localized_label(localization).to_string(), UiAction::Preferences {
+                action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, value: PreferenceValue::Choice(index as u32) } });
+            item.selected = Some(*mode == self.state.settings.finger_drawing);
+            item
+        }).collect();
+        ContextMenu { title: localization.text(MessageId::SETTINGS_ONE_FINGER_DRAG).to_string(), sections: vec![items] }
     }
     pub(super) fn capture_finger_draft(&mut self, event: &PenEvent) {
         if event.tool != layer_engine::ToolKind::Finger || event.phase != PenPhase::Down

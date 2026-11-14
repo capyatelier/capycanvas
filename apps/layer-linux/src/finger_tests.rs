@@ -49,10 +49,7 @@ fn capture(d: &mut Driver, name: &str) {
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
         let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
         let capture_name = format!("finger-{}x{}-{theme}-{name}", d.w.surface.width(), d.w.surface.height());
-        d.input.perform(serde_json::json!([{ "capture_window": {
-            "name": &capture_name,
-            "maximized": d.w.window.is_maximized(),
-        } }]));
+        d.input.perform(serde_json::json!([{ "capture": &capture_name }]));
         super::phone_motion::export_allocations(&d.w, name, &capture_name);
     }
 }
@@ -77,18 +74,18 @@ fn drawing(d: &mut Driver) {
     assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint);
     assert_eq!(pixels(d, line), before, "Auto Off touch navigation does not paint");
     d.click(&d.named("zen-capy"));
-    let finger = d.named("phone-finger");
-    assert!(!finger.property::<bool>("active"));
-    d.click(&finger);
-    until(|| ui_session(&d.w).finger_drawing(), "native Capy row enables finger drawing");
+    d.click(&d.named("phone-finger"));
+    until(|| state(&d.w).phone.menu_navigation.current().page == Some(layer_ui::MenuPageId::OneFingerDrag)
+        && !d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().is_transition_running(), "the Capy finger button opens One-finger drag");
+    capture(d, "finger-page");
+    d.click_label("Draw");
+    until(|| ui_session(&d.w).finger_drawing(), "the Draw row enables finger drawing");
     assert_eq!(state(&d.w).settings.finger_drawing, layer_ui::FingerDrawing::On);
-    if state(&d.w).phone.menu {
-        assert!(d.named("phone-finger").property::<bool>("active"));
-        super::phone_motion::settle_presentation(&d.w);
-        capture(d, "menu-on");
-        d.input.key(0xff1b);
-        until(|| !state(&d.w).phone.menu, "Escape closes the finger menu before drawing");
-    }
+    until(|| state(&d.w).phone.menu && state(&d.w).phone.menu_navigation.is_root(), "choosing returns to the main Capy page");
+    super::phone_motion::settle_presentation(&d.w);
+    capture(d, "menu-on");
+    d.input.key(0xff1b);
+    until(|| !state(&d.w).phone.menu, "Escape closes the Capy menu before drawing");
     stroke(d, line);
     until(|| ui_session(&d.w).engine().checkpoint() != checkpoint && !ui_session(&d.w).engine().has_pending_document_edits(), "finger stroke commits");
     let painted = pixels(d, line);
@@ -127,6 +124,37 @@ fn drawing(d: &mut Driver) {
     assert_eq!(active_raster(ui_session(&d.w).engine().document()), &ink, "hold restores the authored ink");
     super::phone::clear_canvas_pointer(d);
     assert_eq!(pixels(d, line), before);
+    for swapped in [false, true] {
+        d.click(&d.named("zen-capy"));
+        if state(&d.w).phone.swapped != swapped { d.click(&d.named("phone-swap")); }
+        for (label, mode) in [("Off", layer_ui::FingerDrawing::Off), ("Move canvas", layer_ui::FingerDrawing::MoveCanvas),
+            ("Auto", layer_ui::FingerDrawing::Auto), ("Draw", layer_ui::FingerDrawing::On)] {
+            d.click(&d.named("phone-finger"));
+            until(|| state(&d.w).phone.menu_navigation.current().page == Some(layer_ui::MenuPageId::OneFingerDrag)
+                && !d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().is_transition_running(), "finger choices finish opening");
+            capture(d, &format!("page-{mode:?}-{swapped}").to_lowercase());
+            d.click_label(label);
+            until(|| state(&d.w).phone.menu && state(&d.w).phone.menu_navigation.is_root()
+                && state(&d.w).settings.finger_drawing == mode, "finger choice returns to the open root menu");
+            super::phone_motion::settle_presentation(&d.w);
+            capture(d, &format!("strip-{mode:?}-{swapped}").to_lowercase());
+            if matches!(mode, layer_ui::FingerDrawing::Off | layer_ui::FingerDrawing::MoveCanvas) {
+                d.input.key(0xff1b);
+                if mode == layer_ui::FingerDrawing::MoveCanvas { d.w.dispatch(UiAction::Invoke { command: CommandId::Zoom }); }
+                let zoom = ui_session(&d.w).camera().zoom;
+                let translation = ui_session(&d.w).camera().translation;
+                stroke(d, line);
+                let moved = ui_session(&d.w).camera().translation != translation;
+                assert_eq!(moved, mode == layer_ui::FingerDrawing::MoveCanvas, "{mode:?} one-finger navigation");
+                assert_eq!(ui_session(&d.w).camera().zoom, zoom, "one-finger mode wins over the active Zoom tool");
+                assert_eq!(ui_session(&d.w).engine().checkpoint(), checkpoint, "navigation does not paint");
+                d.w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
+                d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+                d.click(&d.named("zen-capy"));
+            }
+        }
+        d.input.key(0xff1b);
+    }
     d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     let page = crate::page_dialog::parent(&d.w.preferences.dialog);
     let choice = named::<adw::ComboRow>(&page, "setting-finger-drawing");
@@ -136,13 +164,14 @@ fn drawing(d: &mut Driver) {
         && b.x() >= 0. && b.x() + b.width() <= d.w.window.width() as f32
         && b.y() >= 0. && b.y() + b.height() <= d.w.window.height() as f32), "the native finger choice is inside the visible window");
     assert_eq!(choice.selected(), 1);
-    for (index, mode) in [(2, layer_ui::FingerDrawing::Off), (0, layer_ui::FingerDrawing::Auto), (1, layer_ui::FingerDrawing::On)] {
+    for (index, mode) in [(3, layer_ui::FingerDrawing::Off), (2, layer_ui::FingerDrawing::MoveCanvas), (0, layer_ui::FingerDrawing::Auto), (1, layer_ui::FingerDrawing::On)] {
         d.click_label(choice.title().as_str());
         let point = d.point(choice.upcast_ref());
         let picked = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
         until(|| descendants::<gtk::Popover>(d.w.window.upcast_ref()).iter().any(|p| p.is_mapped()),
             &format!("native choice dropdown opens: point={point:?}, pick={picked:?}, row={:?}, focused={}",
                 choice.compute_bounds(&d.w.window), choice.has_focus()));
+        if index == 3 { capture(d, "settings-dropdown"); }
         d.input.key(0xff50);
         for _ in 0..index { d.input.key(0xff54); }
         d.input.key(0xff0d);

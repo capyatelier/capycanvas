@@ -1750,14 +1750,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.interaction.pointer = None;
                     self.touch(pointer.id, PenPhase::Down, pointer.position);
                 }
-                let navigation_contact = kind == PointerKind::Touch
+                let finger_pan = kind == PointerKind::Touch && self.finger_mode() == FingerDrawing::MoveCanvas;
+                let navigation_contact = kind == PointerKind::Touch && !finger_pan
                     && phase == ContactPhase::Down && self.interaction.pointer.is_none() && !self.touch.is_active()
                     && (matches!(self.navigation_mode(), Some(NavigationMode::Zoom | NavigationMode::ZoomOut | NavigationMode::Rotate))
                         || (self.finger_drawing() && self.navigation_mode().is_some()));
                 let transform_contact = kind == PointerKind::Touch
                     && (self.interaction.pointer.is_some_and(|contact| contact.id == id && contact.kind == kind)
                         || (phase == ContactPhase::Down && self.interaction.pointer.is_none()
-                            && !self.touch.is_active() && self.object_touch_hit(position)));
+                            && !self.touch.is_active() && !finger_pan && self.object_touch_hit(position)));
                 let finger_contact = kind == PointerKind::Touch && self.finger.owns(id);
                 if kind == PointerKind::Touch && !transform_contact && !navigation_contact && !finger_contact {
                     if self.interaction.gestures.scrubbed {
@@ -2551,6 +2552,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match id {
             CommandId::Select => self.selection_tools.options.tool.command().icon(),
             CommandId::ZenMode => Some(self.state.settings.zen_icon.icon()),
+            CommandId::OneFingerDrag => Some(self.finger_mode().icon()),
             CommandId::Fullscreen if self.state.fullscreen => Some("fullscreen-exit"),
             _ => self.tools.command_preset_in(id, &self.state.brush, self.layer_interaction.tool).map(tools::icon).or_else(||id.icon()),
         }
@@ -3051,6 +3053,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn dispatch_inner(&mut self, action: UiAction) -> Result<UiChange, String> {
         if let UiAction::Phone { action: PhoneAction::MenuActivate { route, action } } = action {
             if !self.state.phone.menu || self.state.phone.menu_navigation.current() != route { return Ok(UiChange::default()); }
+            if route.page == Some(MenuPageId::OneFingerDrag) {
+                let change = self.dispatch(*action)?;
+                return Ok(merge_change(change, self.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } })?));
+            }
             let keep_open = crate::customization::menu_keeps_open(&action);
             let change = self.dispatch(*action)?;
             if keep_open || !self.state.phone.menu { return Ok(change); }
@@ -4836,12 +4842,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             return self.changed(0, false);
         }
         if !self.touch.is_active() && phase == PenPhase::Down { self.remember_view(); }
+        let single_pan = self.layer_interaction.tool == LayerCanvasTool::Hand || self.finger_mode() == FingerDrawing::MoveCanvas;
         if self.touch.update(
             &mut self.state.camera,
             id,
             phase,
             position,
-            self.layer_interaction.tool == LayerCanvasTool::Hand,
+            single_pan,
             &self.state.settings,
         ) {
             self.finish_fill_reveal();
@@ -6007,6 +6014,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.pressure_calibration.open(&self.state.settings.pressure_curve);
                 self.refresh_pressure_calibration();
                 Ok((SETTINGS | PRESSURE_CALIBRATION | TILT_CALIBRATION, false))
+            }
+            CommandId::OneFingerDrag => {
+                let change = self.dispatch(UiAction::Preferences { action: PreferenceAction::Reveal { id: PreferenceId::FingerDrawing } })?;
+                Ok((change.regions, change.canvas_wake))
             }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
                 let canceled = self

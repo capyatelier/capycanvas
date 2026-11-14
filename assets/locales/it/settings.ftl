@@ -178,5 +178,7 @@ settings-rotate-with-two-fingers = Ruota con due dita
 settings-quick-pinch-fit = Pizzica rapidamente per adattare
 settings-quick-pinch-restore = Allarga le dita per ripristinare la vista
 
-settings-draw-with-finger = Disegna con il dito
+settings-one-finger-drag = Trascinamento con un dito
+settings-finger-draw = Disegna
+settings-finger-move-canvas = Sposta la tela
 settings-auto = Automatico

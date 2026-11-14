@@ -59,7 +59,7 @@ pub enum ApplicationMenu {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "menu", rename_all = "snake_case")]
-pub enum MenuPageId { Application(ApplicationMenu), Drawings, Workspaces }
+pub enum MenuPageId { Application(ApplicationMenu), Drawings, Workspaces, OneFingerDrag }
 impl ApplicationMenu {
     pub const ALL: [Self; 8] = [
         Self::File,
@@ -266,10 +266,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             model.sections.pop();
             let mut swap = ContextMenuItem::command(self.localization().text(MessageId::WORKSPACE_PHONE_SWAP_SIDES).to_string(), UiAction::Phone { action: PhoneAction::SwapSides });
             swap.selected = Some(self.state.settings.phone_swap_sides);
-            let mut finger = ContextMenuItem::command(self.localization().text(MessageId::SETTINGS_DRAW_WITH_FINGER).to_string(),
-                UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing,
-                    value: PreferenceValue::Choice(if self.finger_drawing() { 2 } else { 1 }) } });
-            finger.selected = Some(self.finger_drawing());
+            let finger = ContextMenuItem::command(self.localization().text(MessageId::SETTINGS_ONE_FINGER_DRAG).to_string(),
+                UiAction::Phone { action: PhoneAction::MenuOpen { page: MenuPageId::OneFingerDrag } });
             model.sections.insert(0, vec![command(CommandId::SearchCommands)]);
             model.sections.insert(1, vec![finger, command(CommandId::ZenMode), swap]);
         }

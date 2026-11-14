@@ -136,7 +136,8 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     const kind=entry.item.kind;
     if(kind==='capy') {r.preview=icon(view.capy.icon);content.classList.add('header-tool');content.append(r.preview);}
     else if(['settings','fullscreen','tool'].includes(kind)) {
-      const b=button('',pickerButtonAction(()=>r.spec?.resolved_control??entry.item.control,{kind:'header',id:entry.id},dispatch,()=>activate(entry)),'header-tool'); r.button=b;
+      const b=button('',pickerButtonAction(()=>r.spec?.resolved_control??entry.item.control,{kind:'header',id:entry.id},dispatch,()=>r.spec?.menu?customization.openMenu(b):activate(entry)),'header-tool'); r.button=b;
+      b.menuModel=()=>app.context_menu({kind:'tool_variants',anchor:{kind:'header',id:entry.id}});
       b.addEventListener('dblclick',event=>{
         if(!r.spec?.double_click)return;
         event.preventDefault();event.stopPropagation();

@@ -625,6 +625,7 @@ command_ids! {
     ResetLayout,
     PutBackBubbles,
     ZenMode,
+    OneFingerDrag,
     Fullscreen,
     NewWindow,
     KeyboardShortcuts,
@@ -761,6 +762,7 @@ impl CommandId {
         match self {
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
+            Self::OneFingerDrag => platform.touch_gestures(),
             _ => true,
         }
     }
@@ -931,6 +933,7 @@ impl CommandId {
             Self::FlipHorizontal => "flip-horizontal",
             Self::FlipVertical => "flip-vertical",
             Self::ZenMode => ZenIcon::LookingUp.icon(),
+            Self::OneFingerDrag => FingerDrawing::On.icon(),
             Self::Fullscreen => "fullscreen-enter",
             Self::Settings => "settings",
             Self::ToggleTheme => "appearance",
@@ -1250,6 +1253,7 @@ impl CommandId {
             Self::ResetLayout => MessageId::COMMAND_RESET_LAYOUT,
             Self::PutBackBubbles => MessageId::COMMAND_PUT_BACK_BUBBLES,
             Self::ZenMode => MessageId::COMMAND_ZEN_MODE,
+            Self::OneFingerDrag => MessageId::SETTINGS_ONE_FINGER_DRAG,
             Self::Fullscreen => MessageId::COMMAND_FULLSCREEN,
             Self::NewWindow => MessageId::COMMAND_NEW_WINDOW,
             Self::Drawings => MessageId::COMMAND_DRAWINGS,

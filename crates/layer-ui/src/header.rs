@@ -278,6 +278,12 @@ impl HeaderLayout {
     }
 
     fn with_platform_controls(mut self, platform: Platform) -> Self {
+        if matches!(platform, Platform::Android | Platform::Ios) {
+            let left = &self.zones[HeaderZone::Left.index()];
+            let before = left.iter().position(|entry| entry.item == HeaderItem::Menu).and_then(|index| left.get(index + 1)).map(|entry| entry.id);
+            self.add(HeaderZone::Left, before, &[HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::OneFingerDrag } }])
+                .unwrap();
+        }
         if platform == Platform::Web {
             let settings = self.zones[2]
                 .iter()
@@ -680,6 +686,7 @@ pub struct HeaderView {
 }
 #[derive(Serialize)]
 pub struct HeaderItemView {
+    pub menu: bool,
     pub double_click: bool,
     pub has_variants: bool,
     pub tears_bubble: bool,
@@ -743,6 +750,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     _=>(self.header_item_label(entry.item),enabled,selected,icon,None,false),
                 };
                 HeaderItemView {
+                    menu: resolved_control.is_some_and(ToolbarControl::opens_menu),
                     double_click: resolved_control.and_then(ToolbarControl::double_click_command).is_some(),
                     tears_bubble: matches!(entry.item, HeaderItem::Tool { control } if crate::BubbleSource::tears_without_hold(control)),
                     has_variants,resolved_control,
@@ -1081,6 +1089,9 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
         if let Some(group)=control.tool_group() {return self.activate_tool_group(group,anchor);}
         if control == ToolbarControl::Divider {
             return Ok(UiChange::default());
+        }
+        if control.opens_menu() && matches!(anchor, DrawerAnchor::Phone { .. }) {
+            return self.dispatch(UiAction::Phone { action: crate::PhoneAction::MenuOpen { page: crate::MenuPageId::OneFingerDrag } });
         }
         if control == ToolbarControl::ColorPicker {
             return self.dispatch(control.action().unwrap());

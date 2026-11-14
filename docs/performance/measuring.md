@@ -484,6 +484,7 @@ completion, including warm-up, pen-up, undo and deferred captures.
   100 frames or fewer; use `--duration-ms 8000` where the tier presents near
   20/s. `--extra transparency=off,navigator=false` passes further test
   arguments.
+- One-finger pan uses `--motions pan --extra fingers=1,fingerMode=move_canvas,navigationTool=pencil`; the Hand control uses `fingerMode=off,navigationTool=hand`.
 - The optimized benchmark APK can run the same viewport helper without a
   separate JUnit APK: add `--viewport-runner self`. The JUnit entry point and
   self runner share fixture setup, gesture input and assertions. Add

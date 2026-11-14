@@ -171,7 +171,8 @@ test('menu routes and their expected titles come from the shared capture registr
   assert.equal(row.state,'menu-application-image-3-0-swapped');
   assert.equal(row.menu.title,'Color Management');
   assert.equal(phoneAuditMenuID({path:[]}).state,'menu-main');
-  const messages=(await Promise.all(['commands','common','workspace','resources','toolbar'].map(name=>
+  assert.equal(phoneAuditMenuID({page:{kind:'one_finger_drag'},path:[]},true).state,'menu-one-finger-drag-swapped');
+  const messages=(await Promise.all(['commands','common','workspace','resources','toolbar','settings'].map(name=>
     readFile(new URL(`../../assets/locales/en/${name}.ftl`,import.meta.url),'utf8')))).join('\n');
   for(const {menu} of phoneCaptureIDs.states.filter(entry=>entry.menu)){
     const line=messages.split('\n').find(line=>line.startsWith(menu.title_message+' = '));

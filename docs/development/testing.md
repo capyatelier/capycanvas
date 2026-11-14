@@ -43,6 +43,8 @@ crates that a given machine may not be able to run.
 
 ## Windows validation scope
 
+Direct Windows library tests on Linux require a fresh absolute `CAPY_STORAGE_DIR` and `-- --test-threads=1`; `test-without-gpu.ps1` supplies these for Windows runs.
+
 Select fixtures by the behavior and consumers a change affects, including callers
 outside the edited feature. Run every affected variant, with both themes and
 each affected input device. A single passing variant does not cover its family.

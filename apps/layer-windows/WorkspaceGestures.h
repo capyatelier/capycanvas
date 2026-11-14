@@ -22,6 +22,7 @@ public:
     void ChromeChanged();
     bool Cancel();
     bool SuppressClick()const;
+    void Menu(CapyUi::J const& target,winrt::Microsoft::UI::Xaml::FrameworkElement const& anchor);
     bool Moving()const;
     bool Retains(winrt::Microsoft::UI::Xaml::UIElement const& element)const;
     bool DeferRemoval(winrt::Microsoft::UI::Xaml::UIElement const& element,std::shared_ptr<void> owner={});

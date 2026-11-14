@@ -83,12 +83,8 @@ extension EditorLaunchTests {
                     thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: (region.minX + region.width * 0.6 - bounds.minX) / bounds.width, dy: sample.y)),
                     withVelocity: .fast, thenHoldForDuration: 0)
             }
-            func toggleFinger(_ selected: Bool) {
-                _ = phoneMenuRoot(in: app)
-                let finger = app.buttons["phone-finger"]
-                workspaceActivate(finger)
-                expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: selected)), evaluatedWith: finger)
-                waitForExpectations(timeout: 10)
+            func chooseFinger(_ mode: String) {
+                phoneChooseFingerMode(mode, in: app)
                 workspaceActivate(app.buttons["phone-capy"])
                 XCTAssertTrue(app.descendants(matching: .any)["phone-menu"].firstMatch.waitForNonExistence(timeout: 10))
             }
@@ -98,10 +94,10 @@ extension EditorLaunchTests {
             waitForExpectations(timeout: 15)
             capture("input-auto-stroke")
             phoneAlertCommand("Edit", label: "Undo", in: app); expect(blank)
-            toggleFinger(false); stroke()
+            chooseFinger("Off"); stroke()
             phoneAlertCommand("View", label: "Fit canvas", in: app)
             expect(blank); capture("input-off")
-            toggleFinger(true); stroke()
+            chooseFinger("Draw"); stroke()
             expectation(for: NSPredicate { _, _ in pixels() != blank }, evaluatedWith: app)
             waitForExpectations(timeout: 15)
             let painted = pixels(); capture("touch-stroke")
@@ -141,11 +137,28 @@ extension EditorLaunchTests {
             }
             _ = phoneMenuRoot(in: app)
             let finger = app.buttons["phone-finger"]
-            if finger.isSelected { workspaceActivate(finger) }
-            expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: finger); waitForExpectations(timeout: 10)
+            phoneChooseFingerMode("Off", in: app)
             workspaceActivate(app.buttons["phone-capy"]); capture("rest")
             _ = phoneMenuRoot(in: app)
-            for (id, state) in [("phone-finger", "menu-finger-checked"), ("phone-swap", "menu-swap-checked")] {
+            for swapped in [false, true] {
+                if swapped { workspaceActivate(app.buttons["phone-swap"]) }
+                let suffix = swapped ? "-swapped" : ""
+                for (index, mode) in ["Auto", "Draw", "Move canvas", "Off"].enumerated() {
+                    phoneChooseFingerMode(mode, in: app)
+                    let key = ["auto", "on", "move_canvas", "off"][index]
+                    let fixture: [[String: Any]] = [["type": "preferences", "action": ["type": "edit", "id": "finger_drawing", "value": index]]]
+                    capture("menu-finger-" + key + suffix, fixture)
+                    if mode == "Off" {
+                        workspaceActivate(finger)
+                        phoneWaitForMenuTitle("One-finger drag", in: app)
+                        capture("menu-one-finger-drag" + suffix, fixture)
+                        workspaceActivate(app.buttons["phone-menu-back"])
+                        phoneWaitForMenuTitle(app.buttons["phone-capy"].label, in: app)
+                    }
+                }
+            }
+            workspaceActivate(app.buttons["phone-swap"])
+            for (id, state) in [("phone-swap", "menu-swap-checked")] {
                 let button = app.buttons[id]
                 XCTAssertFalse(button.isSelected); workspaceActivate(button)
                 expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: button); waitForExpectations(timeout: 10)
@@ -323,9 +336,7 @@ extension EditorLaunchTests {
             XCTAssertTrue(element.isHittable)
         }
         open()
-        let finger = app.buttons["phone-finger"]
-        if finger.isSelected { workspaceActivate(finger) }
-        expectation(for: NSPredicate(format: "selected == NO"), evaluatedWith: finger); waitForExpectations(timeout: 10)
+        phoneChooseFingerMode("Off", in: app)
         workspaceActivate(app.buttons["phone-capy"])
         if group != .search {
             var visited = Set<String>()
@@ -405,11 +416,8 @@ extension EditorLaunchTests {
             XCTAssertGreaterThan(bridge.frame.width, 0)
             XCTAssertGreaterThan(bridge.frame.height, 0)
             workspacePoint(bridge)?.tap()
-            let original = finger.isSelected
-            for selected in [!original, original] {
-                workspaceActivate(finger)
-                expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: selected)), evaluatedWith: finger)
-                waitForExpectations(timeout: 10)
+            for mode in ["Draw", "Off"] {
+                phoneChooseFingerMode(mode, in: app)
                 XCTAssertTrue(menu.exists)
             }
             if group == .fileToLayer {

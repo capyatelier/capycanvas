@@ -55,7 +55,7 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     assert.ok(defaults.includes(original));
     assert.ok(defaults.includes((await view(other)).id),'A second window reuses an available default');
     assert.deepEqual([...(await view(other)).order].sort(),[...defaults].sort(),'Opening a second window does not create a workspace');
-    for(const [run,peer,value,mode]of [[evaluate,other,1,'on'],[other,evaluate,2,'off'],[evaluate,other,0,'auto']]){
+    for(const [run,peer,value,mode]of [[evaluate,other,1,'on'],[other,evaluate,2,'move_canvas'],[evaluate,other,3,'off'],[other,evaluate,0,'auto']]){
       await run(`layerApp.dispatch({type:'preferences',action:{type:'edit',id:'finger_drawing',value:${value}}});null`);
       await wait(peer,`layerApp.state().settings.finger_drawing===${JSON.stringify(mode)}`);
     }
@@ -111,8 +111,8 @@ export async function checkWorkspaceWindows({call,evaluate}) {
     await input(evaluate,{type:'resume'});
     await wait(evaluate,'!!JSON.parse(layerApp.app.workspace_view()).error');
     assert.deepEqual((await capture(evaluate)).working,ownCapture.working,'Ownership loss preserves outgoing edits');
-    await wait(evaluate,`[...document.querySelectorAll('dialog.workspace-form[open]')].some(dialog=>!dialog.querySelector('input')&&dialog.textContent.includes(JSON.parse(layerApp.app.workspace_view()).error))`);
-    await evaluate('document.querySelector("dialog.workspace-form[open] .suggested-action").click()');
+    await wait(evaluate,`document.querySelector('.workspace-status').textContent.includes(JSON.parse(layerApp.app.workspace_view()).error)&&document.querySelector('.workspace-recovery').checkVisibility()`);
+    await evaluate('document.querySelector(".workspace-recovery").click()');
     await wait(evaluate,'JSON.parse(layerApp.app.workspace_view()).prompt_action?.type === "save_as_new"');
     await wait(evaluate,'!!document.querySelector(".workspace-form[open] input") && document.querySelector(".workspace-form[open] .suggested-action")?.disabled === false');
     await evaluate('document.querySelector(".workspace-form[open] input").value="Recovered browser window";document.querySelector(".workspace-form[open] .suggested-action").click()');
