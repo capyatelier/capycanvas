@@ -1024,8 +1024,9 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
         val nativeEnd = if (measuredPublications != null) System.nanoTime() else 0L
         val previousModel = modelSnapshot
         if (tracing) android.os.Trace.beginSection("capy.publish.parse")
+        val packet: JSONObject
         val next = try {
-            val packet = JSONObject(serialized)
+            packet = JSONObject(serialized)
             if (!packet.has("model_update")) {
                 if (packet.has("state") && previousModel != null) shareModel(previousModel, packet) as JSONObject else packet
             } else applyModelUpdate(checkNotNull(previousModel), packet)
@@ -1121,7 +1122,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             lastStartupStage = stage
             Log.i("CapyStartup", "stage=$stage boot_ns=$now")
         }
-        val localization = next.objectOrNull("bootstrap")
+        val localization = packet.objectOrNull("bootstrap")
         if (localization != null) bootstrapForOwner = localization
         val state = next.getJSONObject("state")
         val plots = Native.takeScopes(handle)?.let { scopePlots(it, scopePublication).also { scopePublication = it } }
@@ -1149,7 +1150,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
             vectorSurfaces?.let(::applyPanelVectors)
             plots?.let { scopes = it }
             localization?.let { bootstrap = it }
-            next.objectOrNull("catalog")?.let { catalog = it }
+            packet.objectOrNull("catalog")?.let { catalog = it }
             colorPreview = next.objectOrNull("color_preview")
             commandSearch = state.objectOrNull("command_search")
             (snapshot as? ObservedModel ?: ObservedModel(listOf("layout", "state", "state.workspace", "state.workspace.layout", "state.document_file", "state.layer_tools", "state.brush",

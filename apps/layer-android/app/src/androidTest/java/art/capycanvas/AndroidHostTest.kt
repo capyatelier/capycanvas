@@ -3324,6 +3324,10 @@ class AndroidHostTest {
                 for ((index, name) in listOf("looking-up", "facing-forward", "bathing", "sleeping").withIndex()) {
                     compose.onNodeWithTag("image-choice-$index").performClick()
                     waitState { it.array("commands").objects().first { it.getString("id") == "zen_mode" }.getString("icon") == "zen-$name" }
+                    compose.waitUntil(10_000) {
+                        host.bootstrap!!.getJSONObject("launch_mark").getString("icon") == "zen-$name" && (android.os.Build.VERSION.SDK_INT < 31 ||
+                            compose.activity.getSharedPreferences("capy-launch-splash", 0).getString("icon", null) == "zen-$name")
+                    }
                     compose.onNodeWithTag("image-choice-$index").assertIsSelected()
                     capture("zen-icons-$theme-$index")
                 }
