@@ -1180,7 +1180,7 @@ mod tests {
 }
 
 pub(super) struct Projection {
-    region: PixelRect,
+    pub(super) region: PixelRect,
     image: Held,
     key: Key,
     versions:Vec<Recorded>,
@@ -1193,7 +1193,7 @@ impl Selection {
     }
 }
 #[derive(Default)]
-struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,name:Option<ContentVersion>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool}
+struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:u64,name:Option<ContentVersion>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool}
 impl Cell {
     fn queue(&mut self) {if !self.derived {self.queued=true;}}
     fn invalidate(&mut self) {if !self.derived {self.current=false;self.queued=true;}}
@@ -1208,6 +1208,7 @@ impl Cell {
         if self.refused() {return Some(crate::frame_demand::Input::Residency);}
         self.blocked.filter(|input|match input {
             crate::frame_demand::Input::Name=>self.naming(),
+            crate::frame_demand::Input::Residency=>r.arrivals()==self.arrivals,
             input=>r.waits_on(*input),
         })
     }
@@ -1582,7 +1583,6 @@ impl Cache {
     pub(super) fn output_complete(&self)->bool {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.current && cell.shown.as_ref().is_some_and(|shown|shown.exact)))
     }
-    pub(crate) fn cell_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {self.cells_demand(r,true)}
     pub(super) fn cells_demand(&self,r:&WgpuRasterizer,refining:bool)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::{Blocked,Runnable};
         let (cells,_store,_)=self.cells()?;
@@ -1595,11 +1595,11 @@ impl Cache {
         }
         blocked
     }
-    pub(super) fn block(&self,region:PixelRect,input:Option<crate::frame_demand::Input>) {
+    pub(super) fn block(&self,r:&WgpuRasterizer,region:PixelRect,input:Option<crate::frame_demand::Input>) {
         let Some((mut cells,_store,_))=self.cells() else {return;};
         for index in Cells::reached(self.plan,region) {
             let cell=&mut cells.cells[index];
-            if cell.pending() {cell.blocked=input;cell.queued=true;}
+            if cell.pending() {cell.blocked=input;cell.arrivals=r.arrivals();cell.queued=true;}
         }
     }
     pub(super) fn forget_refusals(&self) {
@@ -1931,7 +1931,7 @@ pub(super) mod query_tests {
                 if absent {cell.shown=None;}
             }
             cache.refuse(area,&refused);
-            assert_eq!(cache.cell_demand(&r),Some(Runnable),"a refinement refusal cannot stop required visible work: absent={absent}");
+            assert_eq!(cache.cells_demand(&r,true),Some(Runnable),"a refinement refusal cannot stop required visible work: absent={absent}");
             assert_eq!(r.next_frame(),layer_render::FrameDemand::Work,"required visible work requests a frame: absent={absent}");
             for _ in 0..2 {
                 crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
@@ -1981,8 +1981,8 @@ pub(super) mod query_tests {
             assert_eq!(main.outstanding(&r),None,"refused optional exactness is parked, not outstanding");
             let (required,waiting)=if main_required {(main,overview)}else {(overview,main)};
             table(required).cells[0].invalidate();
-            assert_eq!(waiting.cell_demand(&r),None,"the other window's refused exactness stays parked: main_required={main_required}");
-            assert_eq!(required.cell_demand(&r),Some(Runnable),"required cells ignore an optional refinement refusal: main_required={main_required}");
+            assert_eq!(waiting.cells_demand(&r,true),None,"the other window's refused exactness stays parked: main_required={main_required}");
+            assert_eq!(required.cells_demand(&r,true),Some(Runnable),"required cells ignore an optional refinement refusal: main_required={main_required}");
             assert_eq!(main.outstanding(&r),Some(Runnable),"main and overview preserve runnable work in either direction: main_required={main_required}");
         }
     }
@@ -3059,7 +3059,7 @@ pub(super) mod query_tests {
             let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
             cache.prepare_graph(&r,frame,&scene).unwrap();
             match update {
-                "block"=>cache.block(cache.plan.bounds,None),
+                "block"=>cache.block(&r,cache.plan.bounds,None),
                 "refuse"=>cache.refuse(cache.plan.bounds,&refused),
                 "hide"=>cache.hide(cache.plan.bounds),
                 "shown"=>assert!(cache.shown_pages(cache.plan.bounds).is_empty()),
@@ -3067,7 +3067,7 @@ pub(super) mod query_tests {
                 _=>unreachable!(),
             }
             let expected=if update=="refuse" {Outstanding::Blocked(Input::Residency)}else {Outstanding::Runnable};
-            assert_eq!(cache.cell_demand(&r),Some(expected),"{update} preserves the current visible demand");
+            assert_eq!(cache.cells_demand(&r,true),Some(expected),"{update} preserves the current visible demand");
         }
     }
 

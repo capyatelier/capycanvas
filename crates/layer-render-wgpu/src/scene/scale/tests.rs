@@ -2770,3 +2770,73 @@ fn a_large_display_prefetch_refusal_never_shrinks_the_raster_grant() {
     r.frame_room(frame);
     assert!(r.memory.raster_grant()>=before,"a display prefetch refusal took the raster's room: {} -> {}",before,r.memory.raster_grant());
 }
+
+fn settle_to_wait(r:&mut WgpuRasterizer,frame:FramePacket<'_>)->usize {
+    let mut submitted=0;
+    for _ in 0..64 {
+        r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
+        if r.can_submit() && let std::task::Poll::Ready(result)=r.submit_when_ready(if submitted==0 {frame}else {FramePacket {composite_all:false,..frame}},None) {
+            result.unwrap();submitted+=1;
+        }
+        r.wait_idle().unwrap();
+        if submitted>0 && r.next_frame()!=layer_render::FrameDemand::Work {break;}
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    submitted
+}
+
+fn pending_color_tile(doc:&mut Document,coordinate:[u32;2])->layer_core::raster::RasterTile {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileKey};
+    let tile=RasterTile::pending(doc.composition().color.paint_descriptor());
+    let mut data=RasterData::default();
+    data.tiles.insert(TileKey {plane:RasterPlane::Color,coordinate},tile.clone());
+    paint_mut(doc,0).raster=RasterRevision::backed(data);
+    tile
+}
+
+fn publish_clear(r:&WgpuRasterizer,doc:&Document,tile:&layer_core::raster::RasterTile) {
+    let descriptor=doc.composition().color.paint_descriptor();
+    tile.publish(Ok(layer_core::raster::TileBlob::encode(descriptor,&vec![0;256*256*descriptor.bytes_per_pixel().unwrap()]).unwrap())).unwrap();
+    r.raster_name_waker().unwrap().wake_by_ref();
+}
+
+#[test]
+fn display_units_reading_an_unpublished_page_wait_for_its_wake_instead_of_spinning() {
+    use crate::frame_demand::{Input,Outstanding};
+    let extent=[512,512];
+    let mut doc=document_at(extent);
+    let tile=pending_color_tile(&mut doc,[0,0]);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.set_preparation_wake(Arc::new(||{}));
+    let mut frame=packet(doc.scene(),extent);
+    frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];
+    let submitted=settle_to_wait(&mut r,frame);
+    assert!(submitted>0 && r.next_frame()!=layer_render::FrameDemand::Work,"units whose page is unpublished must wait, not demand frames: {:?}",r.outstanding_terms());
+    assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Residency))));
+    assert!(publication_pending(&r));
+    publish_clear(&r,&doc,&tile);
+    assert!(r.next_frame()==layer_render::FrameDemand::Work,"the page's publication resumes its units");
+    submit_published(&mut r,FramePacket {composite_all:false,..frame});
+}
+
+#[test]
+fn a_transition_held_for_an_unpublished_page_waits_for_it_instead_of_spinning() {
+    use crate::frame_demand::{Input,Outstanding};
+    let extent=[1024,512];
+    let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.set_preparation_wake(Arc::new(||{}));
+    let view=[0.5,0.,0.,0.5,0.,0.];
+    let mut frame=packet(doc.scene(),extent);frame.view.document_to_surface=view;
+    submit_published(&mut r,frame);
+    let mut changed=doc.clone();
+    occurrence_mut(&mut changed,0).opacity=0.5;
+    let tile=pending_color_tile(&mut changed,[0,0]);
+    let mut frame=packet(changed.scene(),extent);frame.view.document_to_surface=view;
+    let submitted=settle_to_wait(&mut r,frame);
+    assert!(submitted>0 && r.next_frame()!=layer_render::FrameDemand::Work,"a transition held for an unpublished page must wait, not demand frames: {:?}",r.outstanding_terms());
+    assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Residency))));
+    publish_clear(&r,&changed,&tile);
+    assert!(r.next_frame()==layer_render::FrameDemand::Work,"the page's publication resumes the transition");
+    submit_published(&mut r,FramePacket {composite_all:false,..frame});
+}

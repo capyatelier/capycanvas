@@ -164,12 +164,12 @@ impl Cache {
     #[expect(clippy::too_many_arguments,reason="A parent unit accepts the declaration of the roots it evaluates")]
     pub(super) fn accept_parent(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,region:PixelRect,
         requests:&[(SourceTarget,SourceRequest)],retained:u64,tiled:bool,roots:&[graph::Node],target:Root,preview:bool,class:Class,objects:Class,encoder:&mut submission::CommandEncoder,
-    )->Result<Option<pages::Accepted>,GpuRasterError> {
+    )->Result<Result<pages::Accepted,Option<crate::residency::Blocked>>,GpuRasterError> {
         let root=self.graph.root.clone().unwrap();let interest=self.parent_interest(region);let parent=interest.key.clone();
         let input=unit_plan(input_plan(self.plan,packet.scene,Some(self.graph.objects())),packet.scene,region,tiled,Some(self.graph.objects()));
         let native=match self.declare_unit(scene,r,packet,region,input,tiled,preview,retained,class,encoder,
             |compositor|roots.iter().try_for_each(|root|compositor.evaluate_root(root,Root::Store).map(drop))) {
-            Err(GpuRasterError::SourceWorkingSetExceeded)=>return Ok(None),
+            Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady)=>return Ok(Err(None)),
             native=>native?,
         };
         let mut areas=if target==Root::Store {vec![(parent,region)]}else {Vec::new()};
@@ -182,7 +182,7 @@ impl Cache {
             }}
         }
         let cost=root.cost();let scratch=if cost.0==0 {0}else {cost.1 as usize+1};
-        self.accept_working(scene,r,interest,areas,native,[scratch,0],input,tiled,class,objects,encoder).map(Result::ok)
+        self.accept_working(scene,r,interest,areas,native,[scratch,0],input,tiled,class,objects,encoder)
     }
     #[expect(clippy::too_many_arguments,reason="Accepted output, inputs and scratch share one working reservation")]
     pub(super) fn accept_working(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,interest:pages::Interest,areas:Vec<(pages::Key,PixelRect)>,
@@ -282,10 +282,10 @@ impl Cache {
             if derived.is_none() {
                 let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
                 let declaration=super::super::sources::Declaration::scene(expected,Some(encoder.submission()));
-                native=scene.declare(r,native,declaration,|scene,r,accepted| {
+                native=match scene.declare(r,native,declaration,|scene,r,accepted| {
                     let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
                     scene.reduce_source(r,packet,id,key.plan(),&output,coordinate,accepted)
-                })?;
+                }) {Err(GpuRasterError::NotReady)=>continue,native=>native?};
             }
             let mut areas=vec![(key.clone(),region)];
             if let Some((input,_))=&derived {areas.push((input.clone(),region));}

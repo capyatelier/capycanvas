@@ -131,7 +131,7 @@ fn a_ready_display_page_commits_during_continuous_input_without_an_idle_frame() 
             let previous=pages::bounds([x,0],0,extent);
             let requests=attempt.cache.region_sources(&attempt.scene,&attempt.r,initial,previous,false);
             let root=attempt.cache.graph.root.clone().unwrap();
-            assert!(attempt.cache.accept_parent(&mut attempt.scene,&mut attempt.r,initial,previous,&requests,0,false,std::slice::from_ref(&root),Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,&mut encoder).unwrap().is_some());
+            assert!(attempt.cache.accept_parent(&mut attempt.scene,&mut attempt.r,initial,previous,&requests,0,false,std::slice::from_ref(&root),Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,&mut encoder).unwrap().is_ok());
         }
         let root=attempt.cache.graph.root.clone().unwrap();let key=attempt.cache.page_key(root,PixelRect::full(extent));
         let accepted=attempt.cache.pages.lock().unwrap().accepted_coordinates(&key,0).collect::<std::collections::HashSet<_>>();
@@ -631,7 +631,7 @@ fn accepted_native_inputs_reuse_their_existing_normalization_workspace() {
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let requests=cache.region_sources(&scene,&r,frame(&doc,0),region,true);
     let roots=[cache.graph.root.clone().unwrap()];
-    assert!(cache.accept_parent(&mut scene,&mut r,frame(&doc,0),region,&requests,0,true,&roots,Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,&mut encoder).unwrap().is_some(),"ample Core working capacity must admit the whole native unit");
+    assert!(cache.accept_parent(&mut scene,&mut r,frame(&doc,0),region,&requests,0,true,&roots,Root::Store,false,crate::residency::Class::Visible,crate::residency::Class::Visible,&mut encoder).unwrap().is_ok(),"ample Core working capacity must admit the whole native unit");
     let inputs=cache.pages.lock().unwrap().take_fixture_inputs(&key,region,0);
     for &owner in doc.scene().order().iter().filter(|owner|doc.scene().paint_source(**owner).is_some()) {
         let base=doc.scene().paint_source(owner).unwrap().base.as_ref().unwrap();

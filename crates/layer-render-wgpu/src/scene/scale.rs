@@ -978,6 +978,7 @@ impl Cache {
         let pages::Selection {mut copies,mut composes,..}=selection;
         let blocking=|scene:&Scene,r:&WgpuRasterizer|if scene.compiling() {Some(crate::frame_demand::Input::Compile)}
             else {r.image_decode_waiting().then_some(crate::frame_demand::Input::Decode)};
+        let unready=|scene:&Scene,r:&WgpuRasterizer|blocking(scene,r).unwrap_or(crate::frame_demand::Input::Residency);
         let mut blocks=Vec::new();let mut refusals=Vec::new();
         let class=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else if transition {Class::Authored}else {Class::Visible};
         let side=1<<self.plan.level;
@@ -993,7 +994,7 @@ impl Cache {
                 written = written.union(PixelRect::new(x, y, x + width, y + height));
             }
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
-            for region in blocked {self.hide(region);self.block(region,blocking(scene,r));}
+            for region in blocked {self.hide(region);self.block(r,region,Some(unready(scene,r)));}
             composed=done;
         } else if !composes.is_empty() || !copies.is_empty() || self.graph.prepared.is_some() {
             let root = self.graph.root.clone().expect("prepared composition graph");
@@ -1013,12 +1014,17 @@ impl Cache {
             for region in composes {
                 if !budget.fits(class(region),!accepted.is_empty(),object_cache::PASS_TAPS) {break;}
                 let requests=self.region_sources(scene,r,packet,region,tiled);
-                for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?;}
+                let mut progressed=false;
+                for (id,request) in requests.iter().cloned() {progressed|=!self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?.is_empty();}
                 if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
                     #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
-                    blocks.push((region,blocking(scene,r)));continue;
+                    blocks.push((region,if progressed {blocking(scene,r)}else {Some(unready(scene,r))}));continue;
                 }
-                let Some(handle)=self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},encoder)? else {continue;};
+                let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},encoder)? {
+                    Ok(handle)=>handle,
+                    Err(Some(refusal))=>{refusals.push((region,refusal));continue;},
+                    Err(None)=>{blocks.push((region,Some(unready(scene,r))));continue;},
+                };
                 r.image_decode_queue(r.device.working_space())?.prioritize(packet.view,region);
                 budget.spend(object_cache::PASS_TAPS);
                 let sources=self.pages.lock().unwrap().take_inputs(&handle)?;
@@ -1048,7 +1054,7 @@ impl Cache {
                     scene.placement_display = true;
                     if let Err(error) = result {
                         if matches!(error,GpuRasterError::NotReady) {
-                            blocks.push((region,blocking(scene,r)));
+                            blocks.push((region,Some(unready(scene,r))));
                             if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
                             continue;
                         }
@@ -1085,7 +1091,7 @@ impl Cache {
                         completed.push(ReadyUnit {unit,handle,publish:true});
                     },
                     Err(GpuRasterError::NotReady) => {
-                        blocks.push((region,blocking(scene,r)));
+                        blocks.push((region,Some(unready(scene,r))));
                         if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,std::mem::take(&mut unit.sources))?;}
                         else {self.pages.lock().unwrap().finish_inputs(&handle);}
                         scene.discard_jobs_from(start);
@@ -1105,7 +1111,7 @@ impl Cache {
                     let requests=self.region_sources(scene,r,packet,region,tiled);
                     for (id,request) in requests.iter().cloned() {self.prepare_source(scene,r,packet,encoder,id,request,Class::Prefetch,budget)?;}
                     if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {self.preparing=true;continue;}
-                    let Some(handle)=self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,&halves,Root::Store,preview,Class::Prefetch,Class::Prefetch,encoder)? else {self.preparing=true;continue;};
+                    let Ok(handle)=self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,&halves,Root::Store,preview,Class::Prefetch,Class::Prefetch,encoder)? else {self.preparing=true;continue;};
                     #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
                     budget.spend(object_cache::PASS_TAPS);
                     let start = scene.jobs.len();
@@ -1146,6 +1152,7 @@ impl Cache {
             let held=target==Root::Store && {
                 let selection=self.select_cells(served,presented,&selected)?;
                 let complete=selection.complete(served);
+                if !complete {blocks.extend(selection.copies.iter().map(|(_,copy,_)|(copy.region,Some(unready(scene,r)))));}
                 copies=if complete {selection.copies}else {Vec::new()};
                 !complete
             };
@@ -1157,7 +1164,7 @@ impl Cache {
             }
             if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,blocking(scene,r))));}
-            for (region,input) in blocks {self.block(region,input);}
+            for (region,input) in blocks {self.block(r,region,input);}
             for (region,refusal) in refusals {self.refuse(region,&refusal);}
         }
         if view && live && self.ends_contact(packet) {self.write_back(r,scene,encoder)?;}

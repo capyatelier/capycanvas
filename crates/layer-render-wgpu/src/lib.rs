@@ -1106,6 +1106,7 @@ pub struct WgpuRasterizer {
     moving_decode: Option<(layer_core::color::RgbSpace, object_image_mips::MipDecodeQueue)>,
     preparation_progress: u64,
     preparation_wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    arrivals: Arc<std::sync::atomic::AtomicU64>,
     observed_completions: std::sync::atomic::AtomicU64,
     failed_image_tiles: Vec<moving_projection::FailedImageTile>,
     failed_raster_tiles: Vec<(std::sync::Weak<layer_core::raster::TileBlob>,layer_core::color::RgbSpace,layer_core::color::RgbSpace,String)>,
@@ -1527,6 +1528,7 @@ impl WgpuRasterizer {
             moving_decode: None,
             preparation_progress: 0,
             preparation_wake: None,
+            arrivals: Default::default(),
             observed_completions: Default::default(),
             failed_image_tiles: Vec::new(),
             failed_raster_tiles: Vec::new(),
@@ -3547,20 +3549,24 @@ impl WgpuRasterizer {
     }
     pub fn set_preparation_wake(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
         self.compilation.set_wake(wake.clone());
-        self.set_raster_preparation_wake(wake.clone());
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.papers.set_wake(wake.clone());
-            self.device.retirement_handle().on_retired(wake.clone());
-            if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
-        }
+        self.device.retirement_handle().on_retired(wake.clone());
         if let Some(job)=&self.analysis_job {job.set_wake(wake.clone());}
         if let Some(job)=&self.snapshot_job {job.set_wake(wake.clone());}
         for task in &self.bake_analyses {task.set_wake(wake.clone());}
         self.memory.set_wake(wake.clone());
+        let arrivals=self.arrivals.clone();
+        let wake:Arc<dyn Fn() + Send + Sync>=Arc::new(move||{arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);wake();});
+        self.set_raster_preparation_wake(wake.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.papers.set_wake(wake.clone());
+            if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
+        }
         self.preparation_wake=Some(wake);
     }
     pub fn preparation_progress(&self) -> u64 { self.preparation_progress }
+    pub(crate) fn arrivals(&self) -> u64 { self.arrivals.load(std::sync::atomic::Ordering::Acquire) }
     fn gpu_results_pending(&self) -> bool { self.frame_results_pending() || self.thumbnails_pending() }
     fn frame_results_pending(&self) -> bool {
         self.settling.is_some() || !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
