@@ -136,8 +136,8 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
     let metrics = ui_session(&w).renderer_stats();
     let captions: Vec<_> = stat_rows().iter().filter_map(caption).collect();
     assert_eq!(&captions[..metrics.rows.len()], metrics.rows.iter().map(|row| row.label.clone()).collect::<Vec<_>>());
-    assert_eq!(metrics.memory.rows.first().map(|row| (row.label.as_str(), row.meter.is_some())), Some(("RAM", true)), "{:?}", metrics.memory);
-    until(|| descendants::<crate::meter::Meter>(w.effects.stats.upcast_ref()).iter().any(|meter| meter.is_mapped() && meter.width() > 0), "the RAM bar is drawn");
+    assert!(metrics.memory.rows.first().is_some_and(|row| ["RAM", "Memory"].contains(&row.label.as_str()) && row.meter.is_some()), "{:?}", metrics.memory);
+    until(|| descendants::<crate::meter::Meter>(w.effects.stats.upcast_ref()).iter().any(|meter| meter.is_mapped() && meter.width() > 0), "the memory bar is drawn");
     assert_eq!(displayed_fps(), Some(0.));
     assert_eq!(ui_session(&w).engine().backend().stats.lock().unwrap().cpu.len(), idle_frames, "Diagnostics does not keep the canvas rendering");
     assert!(w.frame_timer.borrow().is_none());
@@ -164,7 +164,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         pump(620);
         let tip = find_named(w.window.upcast_ref(), "pen-tooltip").and_downcast::<gtk::Popover>().expect("Diagnostics tooltip");
         let text: Vec<_> = descendants::<gtk::Label>(tip.upcast_ref()).iter().map(|label| label.text().to_string()).collect();
-        let expected = if row == heading { Some("Rest of app") } else if row.is_ancestor(&section) { Some("Drawing") }
+        let expected = if row == heading { Some("Rest of app") } else if row.is_ancestor(&section) { Some("In use") }
             else if caption(&row).as_deref() == Some("CPU · ms") { Some("Typical") } else { None };
         assert!(text.iter().any(|line| !line.is_empty() && expected.is_none_or(|expected| line == expected)), "{:?} tooltip: {text:?}", caption(&row));
         if let Some(output) = &artifacts {

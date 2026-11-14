@@ -67,75 +67,71 @@ fn memory(t: &RendererTelemetry, l: &Localizer) -> MeterSection {
     let text = |id| l.text(id).to_string();
     let title = text(MessageId::DIAGNOSTICS_MEMORY_TITLE);
     let key = Tip::text(String::new())
-        .line(text(MessageId::DIAGNOSTICS_MEMORY_DRAWING), text(MessageId::DIAGNOSTICS_MEMORY_KEY_DRAWING))
+        .line(text(MessageId::DIAGNOSTICS_MEMORY_IN_USE), text(MessageId::DIAGNOSTICS_MEMORY_KEY_IN_USE))
         .line(text(MessageId::DIAGNOSTICS_MEMORY_CACHE), text(MessageId::DIAGNOSTICS_MEMORY_KEY_CACHE))
         .line(text(MessageId::DIAGNOSTICS_MEMORY_REST), text(MessageId::DIAGNOSTICS_MEMORY_KEY_REST))
         .line(text(MessageId::DIAGNOSTICS_MEMORY_ALLOWANCE), text(MessageId::DIAGNOSTICS_MEMORY_KEY_ALLOWANCE));
     let Some(budget) = t.memory_budget.as_deref() else { return MeterSection { title, tip: key, ..Default::default() } };
     let pool_row = |label: String, pool: MemoryPool, whole: Option<u64>, tip: Tip| {
-        let (held, tracked) = (pool.pinned_bytes, pool.physical_bytes);
-        let mut tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_DRAWING), byte_size(held, l))
-            .line(text(MessageId::DIAGNOSTICS_MEMORY_CACHE), byte_size(tracked.saturating_sub(held), l));
+        let (held, tracked, limit) = (pool.in_use_bytes(), pool.physical_bytes, pool.limit());
+        let mut tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_IN_USE), byte_size(held, l))
+            .line(text(MessageId::DIAGNOSTICS_MEMORY_CACHE), byte_size(tracked - held, l));
         let actual = whole.map(|whole| whole.max(tracked)).zip(pool.total_bytes.filter(|total| *total > 0));
-        if let Some((whole, _)) = actual { tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_REST), byte_size(whole.saturating_sub(tracked), l)); }
-        if pool.limit_bytes > 0 { tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_ALLOWANCE), byte_size(pool.limit_bytes, l)); }
+        if let Some((whole, _)) = actual { tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_REST), byte_size(whole - tracked, l)); }
+        if let Some(limit) = limit { tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_ALLOWANCE), byte_size(limit, l)); }
         let (value, meter) = match actual {
-            Some((whole, total)) => (byte_share(whole, total, l), Some(Meter::usage(total, if pool.limit_bytes > 0 { pool.limit_bytes } else { total }, held, tracked, whole))),
-            None if pool.limit_bytes > 0 => (byte_share(tracked, pool.limit_bytes, l), Some(Meter::usage(pool.limit_bytes, pool.limit_bytes, held, tracked, 0))),
-            None => (byte_size(tracked, l), None),
+            Some((whole, total)) => (byte_share(whole, total, l), Meter::usage(total, limit, held, tracked, whole)),
+            None => (limit.map_or_else(|| byte_size(tracked, l), |limit| byte_share(tracked, limit, l)), Meter::usage(limit.unwrap_or(0), limit, held, tracked, 0)),
         };
-        MeterRow { label, chip: None, value, warning: pool.over_bytes() > 0, meter, tip }
+        MeterRow { label, chip: None, value, warning: pool.over_bytes() > 0, meter: Some(meter), tip }
     };
     let process = t.memory.and_then(|sample| sample.process);
     let reading = t.memory.and_then(|sample| sample.gpu);
     let adapter = t.adapter.as_deref();
     let gpu_label = adapter.map(|adapter| gpu_name(&adapter.name)).filter(|name| !name.is_empty())
         .unwrap_or_else(|| text(MessageId::DIAGNOSTICS_MEMORY_GPU_FALLBACK));
-    let shares = budget.gpu.is_some() && budget.gpu_shares_ram;
+    let unified = budget.gpu.filter(|_| budget.gpu_shares_ram);
     let graphics_outside = process.is_some_and(|process| process.kind != ProcessMemoryKind::PhysicalFootprint);
-    let whole = process.map(|process| process.bytes + if shares && graphics_outside { reading.map_or(0, |reading| reading.bytes) } else { 0 });
-    let lead = if whole.is_none() || budget.ram.total_bytes.is_none_or(|total| total == 0) {
-        text(MessageId::DIAGNOSTICS_MEMORY_TRACKED_ONLY)
-    } else if shares {
+    let whole = process.map(|process| process.bytes + if unified.is_some() && graphics_outside { reading.map_or(0, |reading| reading.bytes) } else { 0 });
+    let place = unified.map(|_| if cfg!(target_arch = "wasm32") { text(MessageId::DIAGNOSTICS_MEMORY_BROWSER_GPU) } else {
         let mut args = FluentArgs::new();
         args.set("gpu", gpu_label.as_str());
         l.format(MessageId::DIAGNOSTICS_MEMORY_SHARED_WITH, &args)
-    } else { String::new() };
-    let mut ram = pool_row(text(MessageId::DIAGNOSTICS_MEMORY_RAM_LABEL), budget.ram, whole, Tip::figures(lead));
+    });
+    let tracked_only = (whole.is_none() || budget.ram.total_bytes.is_none_or(|total| total == 0)).then(|| text(MessageId::DIAGNOSTICS_MEMORY_TRACKED_ONLY));
+    let lead = place.into_iter().chain(tracked_only).collect::<Vec<_>>().join("\n");
+    let label = text(if unified.is_some() { MessageId::DIAGNOSTICS_MEMORY_TITLE } else { MessageId::DIAGNOSTICS_MEMORY_RAM_LABEL });
+    let mut ram = pool_row(label, budget.ram, whole, Tip::figures(lead));
+    let mut over = budget.ram.over_bytes();
+    if let Some(pool) = unified {
+        over = over.max(pool.over_bytes());
+        ram.warning = over > 0;
+        let graphics = byte_size(pool.physical_bytes, l);
+        ram.tip = ram.tip.line(text(MessageId::DIAGNOSTICS_MEMORY_GRAPHICS), match reading {
+            Some(reading) => {
+                let mut args = FluentArgs::new();
+                args.set("used", graphics);
+                args.set("total", byte_size(reading.bytes.max(pool.physical_bytes), l));
+                l.format(MessageId::DIAGNOSTICS_MEMORY_OF, &args)
+            }
+            None => graphics,
+        });
+    }
     if let Some(process) = process {
         let (MemoryPeak::Lifetime(peak) | MemoryPeak::Sampled(peak)) = process.peak;
         ram.tip = ram.tip.line(text(MessageId::DIAGNOSTICS_MEMORY_PEAK_LABEL), byte_size(peak, l));
     }
     if budget.refusals > 0 { ram.tip = ram.tip.line(text(MessageId::DIAGNOSTICS_MEMORY_REFUSED), budget.refusals.to_string()); }
     let mut rows = vec![ram];
-    let mut over = budget.ram.over_bytes();
-    if let Some(pool) = budget.gpu {
+    if let Some(pool) = budget.gpu.filter(|_| unified.is_none()) {
+        over += pool.over_bytes();
         let identity = adapter.map(|adapter| [adapter.name.trim(), adapter.api, adapter.driver.as_str()].into_iter()
             .filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ")).unwrap_or_default();
-        rows.push(if shares {
-            over = over.max(pool.over_bytes());
-            let place = text(if cfg!(target_arch = "wasm32") { MessageId::DIAGNOSTICS_MEMORY_BROWSER_GPU } else { MessageId::DIAGNOSTICS_MEMORY_IN_RAM });
-            let lead = [identity, place].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n");
-            let mut tip = Tip::figures(lead).line(text(MessageId::DIAGNOSTICS_MEMORY_DRAWING), byte_size(pool.pinned_bytes, l))
-                .line(text(MessageId::DIAGNOSTICS_MEMORY_CACHE), byte_size(pool.physical_bytes.saturating_sub(pool.pinned_bytes), l));
-            if let Some(reading) = reading {
-                let mut args = FluentArgs::new();
-                args.set("used", byte_size(reading.bytes, l));
-                args.set("total", reading.budget.map_or_else(|| "—".into(), |total| byte_size(total, l)));
-                tip = tip.line(text(MessageId::DIAGNOSTICS_MEMORY_DRIVER), l.format(MessageId::DIAGNOSTICS_MEMORY_OF, &args));
-            }
-            MeterRow {
-                label: gpu_label, value: byte_size(pool.physical_bytes, l), warning: pool.over_bytes() > 0, meter: None, tip,
-                chip: (!cfg!(target_arch = "wasm32")).then(|| Chip { label: l.text(MessageId::DIAGNOSTICS_MEMORY_SHARED_CHIP), warning: false }),
-            }
-        } else {
-            over += pool.over_bytes();
-            let mut row = pool_row(gpu_label, pool, reading.map(|reading| reading.bytes), Tip::figures(identity));
-            if let Some(available) = reading.and_then(|reading| reading.budget) {
-                row.tip = row.tip.line(text(MessageId::DIAGNOSTICS_MEMORY_AVAILABLE), byte_size(available, l));
-            }
-            row
-        });
+        let mut row = pool_row(gpu_label, pool, reading.map(|reading| reading.bytes), Tip::figures(identity));
+        if let Some(available) = reading.and_then(|reading| reading.budget) {
+            row.tip = row.tip.line(text(MessageId::DIAGNOSTICS_MEMORY_AVAILABLE), byte_size(available, l));
+        }
+        rows.push(row);
     }
     let mut warnings = Vec::new();
     if over > 0 {
@@ -211,7 +207,7 @@ mod tests {
         assert_eq!(view.chart_label, "CPU time for the last 120 frames. The dashed line is the 8.3 ms budget.");
         assert_eq!(view.memory.title, "Memory");
         assert!(view.memory.rows.is_empty());
-        assert_eq!(lines(&view.memory.tip).iter().map(|line| line.0).collect::<Vec<_>>(), ["Drawing", "Cache", "Rest of app", "Allowance"]);
+        assert_eq!(lines(&view.memory.tip).iter().map(|line| line.0).collect::<Vec<_>>(), ["In use", "Cache", "Rest of app", "Allowance"]);
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!((json["chart_after_rows"].as_u64(), json["frames"].as_u64()), (Some(2), Some(12)));
     }
@@ -275,28 +271,55 @@ mod tests {
         assert_eq!((memory.chip.as_ref(), memory.note.as_str(), memory.tip.text.as_str()), (None, "", ""));
         let [ram, gpu] = &memory.rows[..] else { panic!("{memory:?}") };
         assert_eq!((ram.label.as_str(), ram.value.as_str(), ram.warning, ram.tip.text.as_str()), ("RAM", "2.1 / 32 GB", false, ""));
-        assert_eq!(lines(&ram.tip), [("Drawing", "880 MB"), ("Cache", "550 MB"), ("Rest of app", "720 MB"), ("Allowance", "6 GB"), ("Peak", "2.5 GB")]);
-        assert_eq!(ram.meter, Some(Meter::usage(32_768 * MB, 6144 * MB, 880 * MB, 1430 * MB, 2150 * MB)));
+        assert_eq!(lines(&ram.tip), [("In use", "880 MB"), ("Cache", "550 MB"), ("Rest of app", "720 MB"), ("Allowance", "6 GB"), ("Peak", "2.5 GB")]);
+        assert_eq!(ram.meter, Some(Meter::usage(32_768 * MB, Some(6144 * MB), 880 * MB, 1430 * MB, 2150 * MB)));
         assert_eq!((gpu.label.as_str(), gpu.value.as_str(), gpu.chip.as_ref()), ("NVIDIA GeForce RTX 4070", "2.9 / 12 GB", None));
         assert_eq!(gpu.tip.text, "NVIDIA GeForce RTX 4070 · Vulkan · NVIDIA 580.95.05");
-        assert_eq!(lines(&gpu.tip), [("Drawing", "1.1 GB"), ("Cache", "1.2 GB"), ("Rest of app", "670 MB"), ("Allowance", "8 GB"), ("Available to Capy", "11 GB")]);
-        assert_eq!(gpu.meter, Some(Meter::usage(12_288 * MB, 8192 * MB, 1100 * MB, 2350 * MB, 3020 * MB)));
+        assert_eq!(lines(&gpu.tip), [("In use", "1.1 GB"), ("Cache", "1.2 GB"), ("Rest of app", "670 MB"), ("Allowance", "8 GB"), ("Available to Capy", "11 GB")]);
+        assert_eq!(gpu.meter, Some(Meter::usage(12_288 * MB, Some(8192 * MB), 1100 * MB, 2350 * MB, 3020 * MB)));
     }
 
     #[test]
-    fn shared_memory_draws_one_bar_that_counts_graphics_once() {
+    fn unified_memory_draws_one_memory_bar_with_a_graphics_line() {
         let memory = view(telemetry(pool(Some(32_768), 8192, 2600, 1200), Some(pool(None, 8192, 1500, 700)), true, "Intel(R) Iris(R) Xe Graphics"), &english()).memory;
-        let [ram, gpu] = &memory.rows[..] else { panic!("{memory:?}") };
-        assert_eq!((ram.value.as_str(), ram.tip.text.as_str()), ("5 / 32 GB", "Shared with Intel Iris Xe Graphics."));
-        assert_eq!(ram.meter, Some(Meter::usage(32_768 * MB, 8192 * MB, 1200 * MB, 2600 * MB, 5170 * MB)));
-        assert_eq!((gpu.label.as_str(), gpu.value.as_str(), gpu.meter.as_ref()), ("Intel Iris Xe Graphics", "1.5 GB", None));
-        assert_eq!(gpu.chip, Some(Chip { label: "shared".into(), warning: false }));
-        assert_eq!(gpu.tip.text, "Intel(R) Iris(R) Xe Graphics · Vulkan · NVIDIA 580.95.05\nUses RAM, so it’s counted in the RAM bar.");
-        assert_eq!(lines(&gpu.tip), [("Drawing", "700 MB"), ("Cache", "800 MB"), ("Driver", "2.9 GB of 11 GB")]);
+        let [bar] = &memory.rows[..] else { panic!("{memory:?}") };
+        assert_eq!((bar.label.as_str(), bar.value.as_str(), bar.chip.as_ref(), bar.tip.text.as_str()), ("Memory", "5 / 32 GB", None, "Shared with Intel Iris Xe Graphics."));
+        assert_eq!(bar.meter, Some(Meter::usage(32_768 * MB, Some(8192 * MB), 1200 * MB, 2600 * MB, 5170 * MB)));
+        assert_eq!(lines(&bar.tip), [("In use", "1.2 GB"), ("Cache", "1.4 GB"), ("Rest of app", "2.5 GB"), ("Allowance", "8 GB"), ("Graphics", "1.5 GB of 2.9 GB"), ("Peak", "2.5 GB")]);
         let mut apple = telemetry(pool(Some(32_768), 8192, 2600, 1200), Some(pool(None, 8192, 1500, 700)), true, "Apple M2 Pro");
         apple.memory.as_mut().unwrap().process.as_mut().unwrap().kind = ProcessMemoryKind::PhysicalFootprint;
-        let ram = &view(apple, &english()).memory.rows[0];
-        assert_eq!(ram.value, "2.5 / 32 GB", "the footprint already holds graphics, and the bar never shows less than Capy tracks");
+        let bar = &view(apple, &english()).memory.rows[0];
+        assert_eq!(bar.value, "2.5 / 32 GB", "the footprint already holds graphics, and the bar never shows less than Capy tracks");
+    }
+
+    #[test]
+    fn pinned_reservations_above_physical_are_all_in_use_and_warn_only_past_the_allowance() {
+        let memory = |physical| view(telemetry(pool(Some(8192), 2048, physical, 3000), None, false, ""), &english()).memory;
+        let within = memory(1500);
+        assert_eq!((within.chip.as_ref(), within.rows[0].warning), (None, false));
+        assert_eq!(lines(&within.rows[0].tip)[..2], [("In use", "1.5 GB"), ("Cache", "0 MB")]);
+        let past = memory(2300);
+        assert_eq!((past.chip, past.rows[0].warning), (Some(Chip { label: "Over by 252 MB".into(), warning: true }), true));
+        assert_eq!(lines(&past.rows[0].tip)[..2], [("In use", "2.2 GB"), ("Cache", "0 MB")]);
+        assert_eq!(past.rows[0].meter, Some(Meter::usage(8192 * MB, Some(2048 * MB), 2300 * MB, 2300 * MB, 2300 * MB)));
+    }
+
+    #[test]
+    fn unknown_limits_draw_no_notch_or_allowance_and_keep_a_finite_scale() {
+        let gpu = |total: Option<u64>, limit| view(telemetry(pool(Some(32_768), 6144, 1430, 880),
+            Some(MemoryPool { total_bytes: total.map(|total| total * MB), limit_bytes: limit, ..pool(None, 0, 2350, 1100) }), false, "NVIDIA GeForce RTX 4070"), &english()).memory;
+        for limit in [u64::MAX, 0] {
+            let memory = gpu(None, limit);
+            assert_eq!((memory.chip.as_ref(), memory.rows[1].value.as_str(), memory.rows[1].warning), (None, "2.3 GB", false));
+            assert_eq!(lines(&memory.rows[1].tip), [("In use", "1.1 GB"), ("Cache", "1.2 GB"), ("Available to Capy", "11 GB")]);
+            let meter = memory.rows[1].meter.clone().unwrap();
+            assert_eq!((meter.limit, meter.segments.last().map(|segment| segment.to)), (1., Some(1.)));
+            let memory = gpu(Some(12_288), limit);
+            assert_eq!(memory.rows[1].value, "2.9 / 12 GB");
+            assert_eq!(lines(&memory.rows[1].tip)[2], ("Rest of app", "670 MB"));
+            assert_eq!(memory.rows[1].meter, Some(Meter::usage(12_288 * MB, None, 1100 * MB, 2350 * MB, 3020 * MB)));
+            assert_eq!(memory.rows[1].meter.as_ref().map(|meter| meter.limit), Some(1.));
+        }
     }
 
     #[test]
@@ -307,12 +330,13 @@ mod tests {
         budget.refusals = 2;
         telemetry.memory_budget = Some(Arc::new(budget));
         let memory = view(telemetry, &english()).memory;
-        assert_eq!(memory.chip, Some(Chip { label: "Over by 114 MB".into(), warning: true }));
-        assert_eq!(memory.tip.text, "Over by 114 MB · Low memory");
+        assert_eq!(memory.chip, Some(Chip { label: "Over by 184 MB".into(), warning: true }));
+        assert_eq!(memory.tip.text, "Over by 184 MB · Low memory");
         assert_eq!(memory.tip.lines.len(), 4);
-        assert!(memory.rows[0].warning);
-        assert_eq!(memory.rows[0].tip.lines.last().map(|line| (line.label.as_str(), line.value.as_str())), Some(("Imports refused", "2")));
-        assert_eq!(memory.rows[1].label, "Adreno 650");
+        let [bar] = &memory.rows[..] else { panic!("{memory:?}") };
+        assert!(bar.warning);
+        assert_eq!(bar.tip.text, "Shared with Adreno 650.");
+        assert_eq!(bar.tip.lines.last().map(|line| (line.label.as_str(), line.value.as_str())), Some(("Imports refused", "2")));
         let healthy = view(self::telemetry(pool(Some(6144), 1536, 900, 600), None, true, ""), &english()).memory;
         assert_eq!((healthy.chip, healthy.tip.text.as_str(), healthy.rows.len()), (None, "", 1));
     }
@@ -323,12 +347,10 @@ mod tests {
         telemetry.memory = None;
         telemetry.adapter = Some(Arc::new(GpuAdapter { name: String::new(), api: "WebGPU", driver: String::new() }));
         let memory = view(telemetry, &english()).memory;
-        assert_eq!((memory.rows[0].value.as_str(), memory.rows[0].tip.text.as_str()), ("960 MB / 2 GB", "The system total isn’t available, so the bar shows Capy’s own use."));
-        assert_eq!(memory.rows[0].meter, Some(Meter::usage(2048 * MB, 2048 * MB, 540 * MB, 960 * MB, 0)));
-        assert_eq!(lines(&memory.rows[0].tip), [("Drawing", "540 MB"), ("Cache", "420 MB"), ("Allowance", "2 GB")]);
-        assert_eq!((memory.rows[1].label.as_str(), memory.rows[1].tip.text.as_str()), ("GPU", "WebGPU\nUses RAM, so it’s counted in the RAM bar."));
-        let unknown = view(self::telemetry(pool(Some(8192), 2048, 900, 500), Some(pool(None, 0, 300, 100)), false, "GPU"), &english()).memory;
-        assert_eq!((unknown.rows[1].value.as_str(), unknown.rows[1].meter.as_ref()), ("300 MB", None));
+        let [bar] = &memory.rows[..] else { panic!("{memory:?}") };
+        assert_eq!((bar.value.as_str(), bar.tip.text.as_str()), ("960 MB / 2 GB", "Shared with GPU.\nThe system total isn’t available, so the bar shows Capy’s own use."));
+        assert_eq!(bar.meter, Some(Meter::usage(2048 * MB, Some(2048 * MB), 540 * MB, 960 * MB, 0)));
+        assert_eq!(lines(&bar.tip), [("In use", "540 MB"), ("Cache", "420 MB"), ("Allowance", "2 GB"), ("Graphics", "610 MB")]);
     }
 
     #[test]

@@ -220,13 +220,14 @@ decided later from the memory diagnostics below.
 ### Memory diagnostics
 
 The Stats panel (`crates/layer-ui/src/stats.rs`) shows a Memory section shared by
-every host: a meter for RAM and, when the GPU has its own memory, one for the
-GPU. Each fills to the OS or driver reading against the computer's RAM or the
-card's memory, split into held memory (Drawing), cache and the rest of the app,
-with the allowance as a notch. A warning chip appears when held memory passes
-the allowance or the system is low on memory. The parts, the process peak and
-refused imports are in the tooltips. They are copied snapshots of what the budget manager already
-keeps, never read on the frame path.
+every host: one Memory meter when the GPU shares the computer's memory, or a RAM
+meter and a GPU meter when the GPU has its own. Each fills to the OS or driver
+reading against the computer's RAM or the card's memory, split into memory in use
+(pinned, up to what Capy holds), cache and the rest of the app, with a known
+allowance as a notch. A warning chip appears when the memory Capy holds passes
+the allowance or the system is low on memory. The parts, the graphics share, the
+process peak and refused imports are in the tooltips. They are copied snapshots
+of what the budget manager already keeps, never read on the frame path.
 
 Low memory normally shows only as slower sharpening. Messages appear only when
 new work can't be admitted (see below) or when the store can't grow: then Capy

@@ -30,9 +30,9 @@ No project-file changes are needed.
   values stay on one line, use tabular digits and remain right-aligned. Check
   semibold headings and badges, theme colors, separators and the ordinary filled
   recording button. Start and stop a recording through the existing flow.
-- Apple Silicon shows one RAM bar and a GPU line with the **shared** chip, with
-  no second bar. The GPU name, values, warnings and chips come from the model.
-- On Mac, hover CPU, GPU, FPS, RAM, the GPU memory line and the Memory heading.
+- Apple Silicon shows one **Memory** bar whose tooltip names the GPU and has a
+  Graphics line; there is no GPU row. Values and warnings come from the model.
+- On Mac, hover CPU, GPU, FPS, the Memory bar and the Memory heading.
   Multi-line `.help` shows their plain descriptions. iPad has no hover help;
   check the descriptions with VoiceOver and the normal touch journey.
 - Inspect `renderer-memory`, `renderer-memory-heading`,

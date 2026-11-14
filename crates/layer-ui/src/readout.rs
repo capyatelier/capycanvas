@@ -73,9 +73,10 @@ pub struct Meter {
 }
 
 impl Meter {
-    pub fn usage(capacity: u64, allowance: u64, held: u64, tracked: u64, whole: u64) -> Self {
-        let scale = [capacity, allowance, held, tracked, whole].into_iter().fold(1, u64::max) as f64;
-        let at = |value: u64| (value as f64 / scale) as f32;
+    pub fn usage(capacity: u64, allowance: Option<u64>, held: u64, tracked: u64, whole: u64) -> Self {
+        let scale = [capacity, allowance.unwrap_or(0), held, tracked, whole].into_iter().fold(1, u64::max);
+        let allowance = allowance.unwrap_or(scale);
+        let at = |value: u64| (value as f64 / scale as f64) as f32;
         let segments = [
             MeterSegment { from: 0., to: at(held.min(allowance)), tone: MeterTone::Fill },
             MeterSegment { from: at(allowance), to: at(held), tone: MeterTone::Over },
@@ -143,26 +144,30 @@ mod tests {
     }
 
     #[test]
-    fn usage_meter_stacks_drawing_cache_and_the_rest_on_the_capacity() {
-        let fits = Meter::usage(8000, 6000, 800, 1200, 2000);
+    fn usage_meter_stacks_use_cache_and_the_rest_on_the_capacity() {
+        let fits = Meter::usage(8000, Some(6000), 800, 1200, 2000);
         assert_eq!(fits.limit, 0.75);
         assert_eq!(fits.segments, [
             MeterSegment { from: 0., to: 0.1, tone: MeterTone::Fill },
             MeterSegment { from: 0.1, to: 0.15, tone: MeterTone::Soft },
             MeterSegment { from: 0.15, to: 0.25, tone: MeterTone::Rest },
         ]);
-        let over = Meter::usage(2000, 1500, 1650, 1800, 1700);
+        let over = Meter::usage(2000, Some(1500), 1650, 1800, 1700);
         assert_eq!(over.segments.iter().map(|segment| (segment.tone, segment.to)).collect::<Vec<_>>(),
             [(MeterTone::Fill, 0.75), (MeterTone::Over, 0.825), (MeterTone::Soft, 0.9)]);
-        let fallback = Meter::usage(1500, 1500, 600, 900, 0);
+        let fallback = Meter::usage(1500, Some(1500), 600, 900, 0);
         assert_eq!((fallback.limit, fallback.segments.len()), (1., 2));
-        assert!(Meter::usage(0, 0, 0, 0, 0).segments.is_empty());
+        let unbounded = Meter::usage(8000, None, 800, 1200, 2000);
+        assert_eq!((unbounded.limit, unbounded.segments.iter().map(|segment| segment.tone).collect::<Vec<_>>()), (1., vec![MeterTone::Fill, MeterTone::Soft, MeterTone::Rest]));
+        assert_eq!(Meter::usage(0, None, 300, 900, 0).segments.iter().map(|segment| (segment.tone, segment.to)).collect::<Vec<_>>(),
+            [(MeterTone::Fill, 1. / 3.), (MeterTone::Soft, 1.)]);
+        assert!(Meter::usage(0, None, 0, 0, 0).segments.is_empty());
     }
 
     #[test]
     fn plain_tip_reads_text_then_lines() {
-        let tip = Tip::figures("Apple M2 Pro · Metal").line("Drawing", "700 MB");
-        assert_eq!(tip.plain(), "Apple M2 Pro · Metal\nDrawing: 700 MB");
+        let tip = Tip::figures("Apple M2 Pro · Metal").line("In use", "700 MB");
+        assert_eq!(tip.plain(), "Apple M2 Pro · Metal\nIn use: 700 MB");
         assert!(Tip::default().is_empty());
     }
 }

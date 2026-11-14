@@ -103,7 +103,9 @@ pub struct MemoryPool {
     pub pinned_bytes: u64,
 }
 impl MemoryPool {
-    pub fn over_bytes(&self) -> u64 { self.pinned_bytes.saturating_sub(self.limit_bytes) }
+    pub fn limit(&self) -> Option<u64> { Some(self.limit_bytes).filter(|limit| (1..u64::MAX).contains(limit)) }
+    pub fn in_use_bytes(&self) -> u64 { self.pinned_bytes.min(self.physical_bytes) }
+    pub fn over_bytes(&self) -> u64 { self.limit().map_or(0, |limit| self.physical_bytes.saturating_sub(limit)) }
 }
 
 #[derive(Clone, Copy, Debug)]

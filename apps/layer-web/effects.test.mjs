@@ -252,8 +252,8 @@ export async function checkDiagnostics({call,evaluate,settle}) {
     await send({type:'set_theme',theme});await settle();
     assert.equal(await evaluate("document.querySelectorAll('.meter-rows .meter-row').length"),stats.memory.rows.length);
     assert.ok(await evaluate("document.querySelector('.meter-rows .meter-bar:not([hidden])')!==null"));
-    for(const [index,selector] of ['.renderer-stats > .meter-row:nth-child(1)','.renderer-stats > .meter-row:nth-child(2)','.renderer-stats > .meter-row:nth-child(4)','[data-control="renderer-memory-row-0"]','[data-control="renderer-memory-row-1"]','[data-control="renderer-memory-heading"]'].entries()) {
-      const expected=await evaluate(`(()=>{const tip=layerApp.app.renderer_stats(),source=${index}<3?tip.rows[${index}].tip:${index}<5?tip.memory.rows[${index}-3].tip:tip.memory.tip;return [source.text,...source.lines.map(line=>line.label)].filter(Boolean);})()`);
+    for(const [index,selector] of ['.renderer-stats > .meter-row:nth-child(1)','.renderer-stats > .meter-row:nth-child(2)','.renderer-stats > .meter-row:nth-child(4)',...stats.memory.rows.map((_,row)=>`[data-control="renderer-memory-row-${row}"]`),'[data-control="renderer-memory-heading"]'].entries()) {
+      const expected=await evaluate(`(()=>{const tip=layerApp.app.renderer_stats(),source=${index}<3?tip.rows[${index}].tip:${index}<${3+stats.memory.rows.length}?tip.memory.rows[${index}-3].tip:tip.memory.tip;return [source.text,...source.lines.map(line=>line.label)].filter(Boolean);})()`);
       const point=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
       await call('Input.dispatchMouseEvent',{type:'mouseMoved',...point});
       await wait(`(()=>{const tip=document.querySelector('#hover-tooltip:popover-open');return tip&&${JSON.stringify(expected)}.every(text=>tip.textContent.includes(text));})()`);
@@ -264,7 +264,7 @@ export async function checkDiagnostics({call,evaluate,settle}) {
     await capture(`stats-${theme}`);
     await writeFile(`${directory}/stats-${theme}.json`,JSON.stringify(await evaluate("(()=>{const rect=n=>{const r=n.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}};return{panel:rect(document.querySelector('.renderer-stats').closest('.panel')),stats:rect(document.querySelector('.renderer-stats')),children:[...document.querySelector('.renderer-stats').children].map(rect)}})()"),null,2));
   }
-  console.log("PASS: Diagnostics rows, meters and six tooltips in both themes");
+  console.log("PASS: Diagnostics rows, meters and every tooltip in both themes");
 }
 
 export async function checkCurves({call,evaluate,settle}) {
