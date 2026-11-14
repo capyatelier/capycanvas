@@ -1736,6 +1736,7 @@ impl Cache {
     }
     pub(super) fn inherit(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords,source:WindowSource)->Result<(),GpuRasterError> {
         if self.reduce_from(scene,r,encoder,commands,&source.image,self.plan.bounds)?.is_none() {return Err(GpuRasterError::NotReady);}
+        for cell in &mut self.cells.lock().unwrap().cells {cell.shown=None;cell.invalidate();}
         self.pixels.commit_root(encoder.submission(),Vec::new(),source.versions,source.current,source.authored);
         Ok(())
     }

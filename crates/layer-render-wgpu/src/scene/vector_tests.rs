@@ -374,6 +374,22 @@ fn recolor(editor: &mut layer_core::Editor, layer: OccurrenceHandle, target: Ite
 }
 
 #[test]
+fn a_navigator_that_took_its_window_from_the_display_composes_again_after_undo_and_redo() {
+    let (mut editor, layer, extent, columns) = grid(10_000);
+    let view = layer_render::ViewState { width_px: 800, height_px: 600, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    fn frame(editor: &layer_core::Editor, view: layer_render::ViewState, extent: [u32; 2]) -> FramePacket<'_> { FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) } }
+    submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    recolor(&mut editor, layer, ItemId(5 * columns + 6));
+    submit_ready(&mut r, frame(&editor, view, extent));
+    editor.undo().unwrap();
+    submit_ready(&mut r, frame(&editor, view, extent));
+    editor.redo().unwrap();
+    submit_ready(&mut r, frame(&editor, view, extent));
+    assert!(!r.navigator.pending(), "the Navigator shows the redone edit");
+}
+
+#[test]
 fn frame_work_after_small_edits_and_drags_stays_flat_from_ten_to_fifty_thousand_paths() {
     use std::collections::BTreeSet;
     let view = layer_render::ViewState { width_px: 800, height_px: 600, document_to_surface: [1., 0., 0., 1., 0., 0.] };
