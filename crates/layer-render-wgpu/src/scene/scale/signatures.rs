@@ -476,8 +476,14 @@ impl Prepared {
                 for key in keys {name.add(&(key.handle,key.affine,key.nearest));inputs.push(scene.object(key.handle).ok_or(GpuRasterError::StaleExpression)?.image.content_version());}
             },
             E::Vector {owner,offset,moving}=>{
-                name.add(&(3,owner,offset,scene.visible(*owner)));inputs.push(scene.vector_layer(*owner).ok_or(GpuRasterError::StaleExpression)?.content_version());
-                if let Some(moving)=moving {inputs.push(ContentVersion::derive(recipe(&moving.0),&[]));}
+                #[cfg(test)] crate::test_support::PassCounts {vector_names:1,..Default::default()}.record();
+                use layer_core::authored::vector::{Record,overlaps};
+                let reach=vector_reach(region,*offset,level,global);
+                let chunks:Vec<_>=scene.vector_layer(*owner).ok_or(GpuRasterError::StaleExpression)?.chunks_reaching(reach).collect();
+                name.add(&(3,owner,offset,scene.visible(*owner)));inputs.extend(chunks.iter().map(|chunk|chunk.content_version()));
+                let excluded:Vec<_>=moving.iter().flat_map(|moving|chunks.iter().flat_map(|chunk|chunk.records()).filter_map(Record::path)
+                    .filter(|path|!path.hidden && moving.0.contains(&path.id) && overlaps(path.bounds(),reach)).map(|path|path.id)).collect();
+                if !excluded.is_empty() {inputs.push(ContentVersion::derive(recipe(&excluded),&[]));}
             },
             E::VectorPreview {owner}=>{name.add(&(4,owner,scene.visible(*owner)));inputs.push(s.vector_preview.as_ref().filter(|(preview,_)|preview.owner==*owner).map_or_else(||ContentVersion::derive(0,&[]),|(_,version)|version.clone()));},
             E::VectorMotion {owner}=>{name.add(&(5,owner,scene.visible(*owner)));if let Some((_,version))=s.vector_motion.as_ref().filter(|(motion,_)|motion.owner==*owner) {inputs.push(version.clone());inputs.push(scene.vector_layer(*owner).ok_or(GpuRasterError::StaleExpression)?.content_version());}},
@@ -534,6 +540,11 @@ impl Prepared {
         }
         let entry=Authored {version:ContentVersion::derive(name.0,&inputs),reads};self.authored.lock().unwrap().insert(key,entry.clone());Ok(entry)
     }
+}
+fn vector_reach(region:DocRect,offset:[u64;2],level:u32,global:bool)->[f64;4] {
+    if global {return [f64::NEG_INFINITY,f64::NEG_INFINITY,f64::INFINITY,f64::INFINITY];}
+    let [x,y]=offset.map(f64::from_bits);let pad=f64::from(1u32<<level);
+    [region.min[0] as f64-x-pad,region.min[1] as f64-y-pad,region.max[0] as f64-x+pad,region.max[1] as f64-y+pad]
 }
 fn over_operands<'a>(node:&'a graph::Node,operands:&mut Vec<&'a graph::Node>) {
     match node.as_ref() {
@@ -1166,6 +1177,38 @@ pub(super) mod tests {
         let mut hidden=document.scene().occurrence(middle).unwrap().clone();hidden.visible=false;
         editor.perform(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&editor.document().artwork.occurrences,middle,Some(hidden)).unwrap())).unwrap();
         assert_ne!(prepared(editor.document()).authored_revision(&split).unwrap(),still,"hiding a layer is an authored change");
+    }
+
+    fn left_and_right_chunks()->(layer_core::Editor,OccurrenceHandle) {
+        use layer_core::authored::vector::*;
+        let line=|id:u64,x:f64|Record::Path(PathItem::new(ItemId(id),Arc::new(PathGeometry::new(vec![Subpath::new(&[[x,10.],[x+4.,40.]].map(Anchor::corner),false)]).unwrap()),Arc::new(Style::default())));
+        let records=(1..=64).map(|id|line(id,20.)).chain((65..=128).map(|id|line(id,900.))).collect();
+        let mut editor=layer_core::Editor::new(document().0);
+        let (owner,edit)=editor.document().create_vector_layer_edit("Vector",VectorObject::from_records(records),None,0).unwrap();editor.perform(edit).unwrap();
+        (editor,owner)
+    }
+    fn vector_node(owner:OccurrenceHandle,moving:Option<u64>)->graph::Node {
+        use crate::scene::vectors::Moving;
+        Arc::new(graph::Expression::Vector {owner,offset:[0;2],moving:moving.map(|id|Moving(Arc::new([layer_core::authored::vector::ItemId(id)].into())))})
+    }
+    fn page_name(document:&Document,node:&graph::Node,region:PixelRect)->ContentVersion {prepared(document).expected(node,region.into(),0,0).unwrap()}
+    fn sides()->[PixelRect;2] {[PixelRect::new(0,0,256,256),PixelRect::new(768,0,1024,256)]}
+
+    #[test]
+    fn a_vector_page_names_only_the_chunks_and_moving_paths_that_reach_it() {
+        use layer_core::authored::vector::*;
+        let (mut editor,owner)=left_and_right_chunks();let [left,right]=sides();
+        let whole=vector_node(owner,None);
+        let before=[left,right].map(|region|page_name(editor.document(),&whole,region));
+        let object=editor.document().scene().vector_layer(owner).unwrap().clone();let position=object.find(ItemId(100)).unwrap();
+        let Some(Record::Path(path))=object.record(position).cloned() else {unreachable!()};
+        editor.perform(editor.document().vector_object_edit(owner,object.replace([(position,Some(Record::Path(PathItem {hidden:true,..path})))])).unwrap()).unwrap();
+        let document=editor.document();
+        assert_eq!(before[0].matches(&page_name(document,&whole,left)),Some(true),"hiding a path on the right keeps the left page's name");
+        assert_eq!(before[1].matches(&page_name(document,&whole,right)),Some(false),"hiding a path on the right renames the right page");
+        let moving=vector_node(owner,Some(101));
+        assert_eq!(page_name(document,&moving,left).matches(&page_name(document,&whole,left)),Some(true),"moving paths that do not reach a page keep its name");
+        assert_eq!(page_name(document,&moving,right).matches(&page_name(document,&whole,right)),Some(false),"moving paths that reach a page rename it");
     }
 
     #[test]

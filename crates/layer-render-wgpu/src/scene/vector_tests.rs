@@ -355,17 +355,30 @@ fn crossing_a_level_shows_the_previous_one_resampled_and_refines_a_few_pages_a_f
     }
 }
 
+fn grid_at(columns: u64, i: u64) -> [f64; 2] { [(i % columns) as f64 * 12. + 4., (i / columns) as f64 * 12. + 4.] }
+fn grid(count: u64) -> (layer_core::Editor, OccurrenceHandle, [u32; 2], u64) {
+    let columns = (count as f64).sqrt().ceil() as u64;
+    let records = (0..count).map(|i| { let [x, y] = grid_at(columns, i); stroke(i + 1, &[[x, y], [x + 7., y + 9.]], 2., [0.1, 0.1, 0.1, 1.]) }).collect();
+    let side = (columns * 12 + 16) as u32;
+    let (editor, layer) = document([side, side], records);
+    (editor, layer, [side, side], columns)
+}
+fn recolor(editor: &mut layer_core::Editor, layer: OccurrenceHandle, target: ItemId) {
+    let object = editor.document().scene().vector_layer(layer).unwrap().clone();
+    let position = object.find(target).unwrap();
+    let Some(Record::Path(path)) = object.record(position).cloned() else { unreachable!() };
+    let mut ink = Stroke::new(paint([0.9, 0.1, 0.1, 1.]), 2.);
+    (ink.cap, ink.join) = (Cap::Round, Join::Round);
+    let recolored = path.with_style(Arc::new(Style::new(vec![PaintEntry::Stroke(ink)])));
+    editor.perform(editor.document().vector_object_edit(layer, object.replace([(position, Some(Record::Path(recolored)))])).unwrap()).unwrap();
+}
+
 #[test]
 fn frame_work_after_small_edits_and_drags_stays_flat_from_ten_to_fifty_thousand_paths() {
     use std::collections::BTreeSet;
     let view = layer_render::ViewState { width_px: 800, height_px: 600, document_to_surface: [1., 0., 0., 1., 0., 0.] };
     let rows: Vec<Vec<(&str, usize, usize)>> = [10_000u64, 50_000].into_iter().map(|count| {
-        let columns = (count as f64).sqrt().ceil() as u64;
-        let at = |i: u64| [(i % columns) as f64 * 12. + 4., (i / columns) as f64 * 12. + 4.];
-        let records = (0..count).map(|i| { let [x, y] = at(i); stroke(i + 1, &[[x, y], [x + 7., y + 9.]], 2., [0.1, 0.1, 0.1, 1.]) }).collect();
-        let side = (columns * 12 + 16) as u32;
-        let extent = [side, side];
-        let (mut editor, layer) = document(extent, records);
+        let (mut editor, layer, extent, columns) = grid(count);
         let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
         submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
         let mut known = HashSet::new();
@@ -378,20 +391,14 @@ fn frame_work_after_small_edits_and_drags_stays_flat_from_ten_to_fifty_thousand_
             rows.push((name, derived, batched));
         };
         step(&mut r, &editor, "idle frame");
-        let object = editor.document().scene().vector_layer(layer).unwrap().clone();
         let target = ItemId(5 * columns + 6);
-        let position = object.find(target).unwrap();
-        let Some(Record::Path(path)) = object.record(position).cloned() else { unreachable!() };
-        let mut ink = Stroke::new(paint([0.9, 0.1, 0.1, 1.]), 2.);
-        (ink.cap, ink.join) = (Cap::Round, Join::Round);
-        let recolored = path.with_style(Arc::new(Style::new(vec![PaintEntry::Stroke(ink)])));
-        editor.perform(editor.document().vector_object_edit(layer, object.replace([(position, Some(Record::Path(recolored)))])).unwrap()).unwrap();
+        recolor(&mut editor, layer, target);
         step(&mut r, &editor, "recolor one path");
         editor.undo().unwrap();
         step(&mut r, &editor, "undo");
         editor.redo().unwrap();
         step(&mut r, &editor, "redo");
-        let near: Vec<ItemId> = (0..count).filter(|i| { let [x, y] = at(*i); x < 400. && y < 300. }).map(|i| ItemId(i + 1)).collect();
+        let near: Vec<ItemId> = (0..count).filter(|i| { let [x, y] = grid_at(columns, *i); x < 400. && y < 300. }).map(|i| ItemId(i + 1)).collect();
         for (name, moving) in [("drag one path", vec![target]), ("drag 500 paths", near[..500].to_vec())] {
             let items: Arc<BTreeSet<ItemId>> = Arc::new(moving.into_iter().collect());
             for offset in [[3., 4.], [9., 7.]] {
@@ -1021,6 +1028,17 @@ fn split_drags_redraw_neither_the_overview_nor_the_navigator() {
     r.submit(FramePacket { composite_all: true, ..frame(&editor, view, extent, 1.) }).unwrap();
     r.wait_idle().unwrap();
     assert_ne!(r.navigator.revision, navigator, "the committed move refreshes the Navigator");
+}
+
+#[test]
+fn a_settled_frame_names_no_vector_page_again() {
+    let (editor, _, extent, _) = grid(10_000);
+    let view = layer_render::ViewState { width_px: 800, height_px: 600, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    let before = crate::test_support::PassCounts::snapshot();
+    submit_ready(&mut r, FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) });
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).vector_names, 0, "an unchanged frame reads the paths reaching no page again");
 }
 
 #[test]

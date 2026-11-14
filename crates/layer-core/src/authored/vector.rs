@@ -660,6 +660,7 @@ impl PathItem {
 pub fn union(a: Option<[f64; 4]>, b: [f64; 4]) -> [f64; 4] {
     a.map_or(b, |a| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
 }
+pub fn overlaps(a: [f64; 4], b: [f64; 4]) -> bool { a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3] }
 
 const DUPLICATE: &str = "Duplicate item identity";
 const UNBALANCED: &str = "Unbalanced end marker";
@@ -784,6 +785,9 @@ impl VectorObject {
     pub fn shares_slots(&self, other: &Self) -> bool { self.slots().is_empty() || Arc::ptr_eq(self.slots(), other.slots()) }
     pub fn from_records(records: Vec<Record>) -> Self { Self::from_chunks(pack(records)) }
     pub fn chunks(&self) -> &[Resource<VectorChunk>] { &self.root.chunks }
+    pub fn chunks_reaching(&self, rect: [f64; 4]) -> impl Iterator<Item = &Resource<VectorChunk>> {
+        self.chunks().iter().filter(move |chunk| chunk.summary().bounds.is_some_and(|bounds| overlaps(bounds, rect)))
+    }
     pub fn same_root(&self, other: &Self) -> bool { Arc::ptr_eq(&self.root, &other.root) }
     pub(crate) fn identity(&self) -> usize { Arc::as_ptr(&self.root) as usize }
     pub(crate) fn downgrade(&self) -> WeakVectorObject { WeakVectorObject(Arc::downgrade(&self.root)) }
