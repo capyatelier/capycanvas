@@ -1,5 +1,6 @@
-﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light','palette','palette-light','atomic')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('mouse','pen','touch')][string]$Device='mouse',[ValidateSet('paint','sketch','sketch-light','photo')][string]$Workspace='paint',[switch]$Catalog,[ValidateSet('dark','light')][string]$Theme='dark',[ValidateSet('full','catalog-only','catalog-only-light','background','options','options-light','options-pen','options-touch','menus','menus-light','zen','zen-workspace','parity','parity-light','palette','palette-light','atomic')][string]$Journey='full',[switch]$FullscreenOnly,[switch]$FullscreenBaseline)
 $ErrorActionPreference='Stop'
+if($Workspace -eq 'sketch-light'){$Workspace='sketch';$Theme='light'}
 if($FullscreenBaseline){$FullscreenOnly=$true}
 $catalogJourney=$Journey -in @('catalog-only','catalog-only-light')
 if($Journey -eq 'catalog-only-light'){$Theme='light'}
@@ -1145,11 +1146,22 @@ try {
     Wait-Until {!(Model).header.editing -and (HeaderJson) -eq $initial} 'Cancel did not restore the initial header'
     if((Model).state.workspace.layout.canvas_info.visible -ne $footer){throw 'Cancel changed footer visibility'}
     Capture-HeaderParity
-    Edit-Header;Drop-Component;Check-ClockCaption;$tools=Add-Tools;Capture 'customized'
-    Invoke 'header-edit-done'
-    Wait-Until {!(Model).header.editing} 'Done did not close titlebar editing'
-    $saved=HeaderJson
-    Check-Geometry;Check-Drawer $tools;Check-Fullscreen
+    $pattern=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
+    $state=$pattern.Current.WindowVisualState
+    try{
+        Maximize-DrawingWindow
+        Edit-Header;Drop-Component;Check-ClockCaption;$tools=Add-Tools;Capture 'customized'
+        Invoke 'header-edit-done'
+        Wait-Until {!(Model).header.editing} 'Done did not close titlebar editing'
+        $saved=HeaderJson
+        Check-Geometry;Check-Drawer $tools
+    }finally{
+        $pattern.SetWindowVisualState($state)
+        Wait-Until {$pattern.Current.WindowVisualState -eq $state} 'Header component window did not restore its presentation state'
+        Wait-CanvasViewport (Owned-DrawingWindow $review $drawingWindow.ToInt64()) $review (State-File)
+        Check-Geometry
+    }
+    Check-Fullscreen
     WindowCommand 'undo_workspace'
     Wait-Until {(HeaderJson) -eq $initial} 'One workspace Undo did not restore the initial header'
     WindowCommand 'redo_workspace'

@@ -557,6 +557,7 @@ reports retain async trace windows. Raw `host_metrics` frame/input rows carry fi
 names and monotonic timestamps; separate contact work from post-contact settling.
 App-window presents alone do not map a particular fresh geometry revision to a
 displayed buffer. Keep input, publication and changed-bound counts alongside them.
+Title-bar item drag uses `--workspace-workload panel --workspace-runner self --extra headerDrag=true` with the same collector and an explicit Large header fixture.
 
 **Brushes (Windows).** Build `cargo build --locked --release -p layer-render-wgpu
 --example brush_frames`, list adapters with `brush_frames.exe --adapters`, then

@@ -135,7 +135,8 @@ grouped tools keep their decorative markers and secondary-click menus. GTK
 reserves scrollbar width in scrolling overflow lists and dismisses the overflow
 popup before opening a tool menu. Overflow lists own input above docked panels
 and their resize handles. Resizing does not change the stored arrangement.
-Workspace choices compact to a menu when needed. Clock and battery items occupy space only in fullscreen,
+The centre region compacts before either side overflows its tools; workspace
+choices then become a menu. Clock and battery items occupy space only in fullscreen,
 even when included in the saved bar. Both have editable placeholders in the
 builder while windowed; battery also has a placeholder on devices without one.
 Fullscreen is a Web-only title-bar component. GTK keeps F11 and View → Full screen,

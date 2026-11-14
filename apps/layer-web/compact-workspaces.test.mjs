@@ -27,6 +27,8 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
   let next=1;
   const entry=kind=>({id:next++,item:{kind}});
   fixture.layout.header={size:'small',zones:[['capy','menu','settings',...Array(8).fill('space')].map(entry),[entry('workspaces')],Array.from({length:8},()=>entry('space'))],next_id:next};
+  fixture.layout.header.zones[0].splice(3,0,{id:next++,item:{kind:'tool',control:{kind:'command',command:'one_finger_drag'}}});
+  fixture.layout.header.next_id=next;
   const workspaceId=fixture.layout.header.zones[1][0].id;
   for(const theme of ['dark','light'])for(const [index,size] of ['small','medium','large'].entries()) {
     const device=['mouse','touch','pen'][index];
@@ -37,6 +39,10 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
     const dimensions=await evaluate(`Array.from(document.querySelectorAll('.header-overflow:not([hidden]) > summary > svg'),n=>{const r=n.getBoundingClientRect(),p=n.parentElement.getBoundingClientRect();return{width:r.width,height:r.height,dx:r.x+r.width/2-p.x-p.width/2,dy:r.y+r.height/2-p.y-p.height/2}})`);
     assert.ok(dimensions.length);
     for(const r of dimensions){assert.equal(r.width,[20,28,36][index]);assert.equal(r.height,r.width);assert.ok(Math.abs(r.dx)<1&&Math.abs(r.dy)<1);}
+    assert.equal(await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone'),false,'The narrow header remains in desktop presentation');
+    const center=await evaluate(`(()=>{const r=document.querySelector('#header-item-${workspaceId}').getBoundingClientRect();return r.x+r.width/2-innerWidth/2})()`);
+    assert.ok(Math.abs(center)<.5,`The compact workspace selector stays at the window center: ${center}`);
+    await shot(`${theme}-${size}-closed`);
     const contextPoint=await evaluate("(()=>{const r=document.querySelector('#header-workspace-selector > summary').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()");
     for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...contextPoint,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1,pointerType:'mouse'});
     await settle();
@@ -62,6 +68,21 @@ export async function checkCompactWorkspaces({call,evaluate,settle}) {
     await click(`${menu} button:nth-child(${choices.indexOf(target)+1})`,device);
     assert.equal((await view()).id,target.id);
     assert.equal(await evaluate("document.querySelector('#header-workspace-selector')?.open || false"),false);
+  }
+  const tight=structuredClone(saved),tool=command=>({id:next++,item:{kind:'tool',control:{kind:'command',command}}});
+  tight.layout.header={size:'medium',zones:[[entry('capy'),entry('menu'),tool('one_finger_drag'),entry('settings')],
+    [entry('workspaces')],['drawing_brush','sculpt','eraser','fill'].map(tool)],next_id:next};
+  const centered=tight.layout.header.zones[1][0].id;
+  for(const theme of ['light','dark']){
+    await call('Emulation.setDeviceMetricsOverride',{width:600,height:1000,deviceScaleFactor:1,mobile:false});
+    await send({type:'restore_workspace',workspace:tight});await send({type:'set_theme',theme});
+    assert.equal(await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone'),false);
+    assert.equal(await evaluate("document.querySelectorAll('#header .header-overflow:not([hidden])').length"),0,'Compacting the center keeps both side bars visible');
+    assert.equal(await evaluate("document.querySelectorAll('#header .header-item:not([hidden])').length"),9);
+    assert.equal(await evaluate("document.querySelector('#header-workspace-selector').checkVisibility()"),true);
+    const offset=await evaluate(`(()=>{const r=document.querySelector('#header-item-${centered}').getBoundingClientRect();return r.x+r.width/2-innerWidth/2})()`);
+    assert.ok(Math.abs(offset)<.5,`The compact center stays at 300 px with One-finger drag beside the menu: ${offset}`);
+    await shot(`${theme}-one-finger-tight-center`);
   }
   // The same selector remains usable when its whole item is in overflow.
   fixture.layout.header.zones[0].push(fixture.layout.header.zones[1].pop());

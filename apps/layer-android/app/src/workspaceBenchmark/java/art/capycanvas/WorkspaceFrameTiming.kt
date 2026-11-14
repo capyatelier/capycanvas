@@ -36,7 +36,9 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
         val scenario = WorkspaceBenchmarkActivity(instrumentation, activity)
         val tierPhoto = args.getString("tierPhoto") == "true"
         val columnDrag = bridge && !resize && args.getString("columnDrag") == "true"
+        val headerDrag = bridge && !resize && args.getString("headerDrag") == "true"
         var draggedColumn: Int? = null
+        var draggedHeader: Int? = null
         val repeats = if (bridge || tierPhoto) args.getString("repeats", "3")!!.toInt() else 1
         val measuredDuration = if (bridge || tierPhoto) args.getString("durationMs", "6000")!!.toLong() else 5000L
         val label = args.getString("label", "column-bridge")!!
@@ -111,6 +113,18 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                 host.snapshot!!.getJSONObject("state").getJSONObject("settings").getString("transparency")) }
             val transparency = args.getString("workspaceTransparency")?.toInt() ?: savedTransparency
             val fixture = JSONObject(saved.toString())
+            if (headerDrag) {
+                fun item(id: Int, kind: String, control: JSONObject? = null) = obj("id" to id, "item" to obj("kind" to kind).apply { control?.let { put("control", it) } })
+                fun tool(id: Int, command: String) = item(id, "tool", obj("kind" to "command", "command" to command))
+                fixture.getJSONObject("layout").put("header", obj("size" to "large", "next_id" to 14, "zones" to JSONArray(listOf(
+                    JSONArray(listOf(item(1, "capy"), item(2, "menu"), tool(13, "hand"),
+                        item(3, "tool", obj("kind" to "panel", "panel" to "adjustments")), tool(4, "select"), tool(5, "scale_rotate"))),
+                    JSONArray(listOf(item(6, "workspaces"))),
+                    JSONArray(listOf(tool(7, "drawing_brush"), tool(8, "sculpt"), tool(9, "eraser"),
+                        item(10, "tool", obj("kind" to "tool_slot", "slot" to "fill")),
+                        item(11, "tool", obj("kind" to "panel", "panel" to "layers")), item(12, "tool", obj("kind" to "color"))))))))
+                draggedHeader = 1
+            }
             if (bridge && bridgeContent != "default") {
                 val hidden = if (bridgeContent == "empty-both") setOf("brushes", "navigator") else setOf("navigator")
                 fixture.getJSONObject("layout").getJSONArray("panels").objects().filter { it.getString("id") in hidden }
@@ -234,7 +248,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                     if (modelIdentityTrace) modelDraws.add(ModelDraw(System.nanoTime(), host.workspaceRevision.takeIf { it >= 0 }, modelValues()))
                     if (colorWheel) host.snapshot?.objectOrNull("paint_pair")?.array("rgba")?.toString()?.let { drawnPaints.add(it) }
                     val geometry = host.workspaceGeometry
-                    val tag = if (columnDrag) "workspace-drop-hint" else if (colorWheel) null else geometry?.tab?.let { "tab-${it.panel}" }
+                    val tag = if (headerDrag) "header-item-$draggedHeader" else if (columnDrag) "workspace-drop-hint" else if (colorWheel) null else geometry?.tab?.let { "tab-${it.panel}" }
                         ?: geometry?.group?.let { "group-$it" } ?: if (resize) "group-${if (bridge) 43 else 41}" else draggedColumn?.let { "column-grip-$it" }
                     if (tag != motionTag) {
                         motionTag = tag
@@ -259,7 +273,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
                 awaitBenchmarkRefreshPolicy(args, output, instrumentation, host, owner.view)
                 val selectedMode = args.getString("benchmarkMode")
-                val modes = (if (bridge) listOf(if (resize) "bridge-gap" else if (columnDrag) "bridge-column" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")).filter { selectedMode == null || it == selectedMode }
+                val modes = (if (bridge) listOf(if (resize) "bridge-gap" else if (headerDrag) "bridge-header" else if (columnDrag) "bridge-column" else "bridge-panel") else if (colorWheel) listOf(wheel) else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")).filter { selectedMode == null || it == selectedMode }
                 for (mouse in if (bridge) listOf(true) else listOf(true, false)) for (mode in modes) for (run in if (bridge || tierPhoto) -1 until repeats else 0 until repeats) {
                     if (resize && !bridge) fixture.getJSONObject("layout").getJSONArray("bands").apply {
                         getJSONObject(0).put("root", tabs(41, mode))
@@ -267,7 +281,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                     }
                     action(obj("type" to "restore_workspace", "workspace" to fixture))
                     waitFor { bridge || !resize || host.snapshot!!.getJSONObject("layout").array("groups").objects().any { it.getInt("id") == 41 && it.getString("active") == mode } }
-                    if (bridge) {
+                    if (bridge && !headerDrag) {
                         click("column-icon-brushes")
                         waitFor { owner.find(hasTag("group-43")) != null && owner.find(hasTag("divider-45")) != null }
                     }
@@ -283,6 +297,18 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         }
                     }
                     if (tierPhoto && !bridge) host.drain(obj("type" to "invoke", "command" to "fit_canvas"))
+                    var headerBefore = ""
+                    if (headerDrag) {
+                        action(obj("type" to "invoke", "command" to "customize_workspace_ui"))
+                        waitFor {
+                            val view = host.snapshot!!.getJSONObject("header")
+                            val tile = view.array("sizes").objects().first { it.getString("id") == "large" }.number("tile")
+                            view.optBoolean("editing") && owner.find(hasTag("header-item-$draggedHeader"))?.boundsInRoot?.width?.let {
+                                kotlin.math.abs(it - (tile + 20f) * owner.view.resources.displayMetrics.density) <= 1f
+                            } == true
+                        }
+                        headerBefore = host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").getJSONObject("header").toString()
+                    }
                     if (colorWheel) {
                         action(obj("type" to "color", "action" to obj("op" to "shape", "shape" to "circle")))
                         action(obj("type" to "color", "action" to obj("op" to "select", "slot" to "foreground")))
@@ -304,13 +330,13 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             column.array("groups").objects().any { it.getInt("group") == 43 }
                         }.getInt("id")
                     }
-                    val source = bounds(if (bridge) { if (resize) "divider-45" else if (columnDrag) "column-grip-$draggedColumn" else "group-grip-43" } else if (colorWheel) wheel else if (colorOverlap) "group-grip-43" else if (resize) "divider-40" else when (mode) {
+                    val source = bounds(if (headerDrag) "header-item-$draggedHeader" else if (bridge) { if (resize) "divider-45" else if (columnDrag) "column-grip-$draggedColumn" else "group-grip-43" } else if (colorWheel) wheel else if (colorOverlap) "group-grip-43" else if (resize) "divider-40" else when (mode) {
                         "attached" -> "tab-tool_settings"
                         "floating" -> "group-grip-41"
                         else -> "tab-layers"
                     }).center
                     val density = owner.view.resources.displayMetrics.density
-                    val anchor = if (bridge) bounds("column-icon-navigator") else workspace
+                    val anchor = if (bridge && !headerDrag) bounds("column-icon-navigator") else workspace
                     val columnTarget = if (columnDrag) host.snapshot!!.getJSONObject("layout").array("collapsed").objects()
                         .first { it.getInt("id") != draggedColumn && it.array("groups").objects().any { group -> group.getInt("group") == 42 } }
                         .getJSONObject("bounds").let { rect ->
@@ -319,9 +345,10 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                                 workspace.left + (rect.number("x") + rect.number("width")) * density,
                                 workspace.top + (rect.number("y") + rect.number("height")) * density)
                         } else null
-                    val first = if (columnTarget != null) Offset(columnTarget.center.x, columnTarget.top + columnTarget.height * .25f) else if (bridge) { if (resize) Offset(source.x, anchor.top - 3 * density) else workspace.center - Offset(80 * density, 0f) }
+                    val headerBounds = if (headerDrag) bounds("title-bar") else workspace
+                    val first = if (headerDrag) Offset(headerBounds.left + headerBounds.width * .2f, headerBounds.center.y) else if (columnTarget != null) Offset(columnTarget.center.x, columnTarget.top + columnTarget.height * .25f) else if (bridge) { if (resize) Offset(source.x, anchor.top - 3 * density) else workspace.center - Offset(80 * density, 0f) }
                         else if (colorWheel) source - Offset(bounds(wheel).width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x - it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(60f, 0f) else bounds("tab-brushes").center
-                    val last = if (columnTarget != null) Offset(columnTarget.center.x, columnTarget.top + columnTarget.height * .75f) else if (bridge) { if (resize) Offset(source.x, anchor.bottom + 21 * density) else workspace.center + Offset(80 * density, 0f) }
+                    val last = if (headerDrag) Offset(headerBounds.left + headerBounds.width * .8f, headerBounds.center.y) else if (columnTarget != null) Offset(columnTarget.center.x, columnTarget.top + columnTarget.height * .75f) else if (bridge) { if (resize) Offset(source.x, anchor.bottom + 21 * density) else workspace.center + Offset(80 * density, 0f) }
                         else if (colorWheel) source + Offset(bounds(wheel).width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x + it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(220f, 0f) else bounds("tab-sizes").center
                     val duration = measuredDuration
                     val down = SystemClock.uptimeMillis()
@@ -336,10 +363,26 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                         owner.view.dispatchTouchEvent(motion); motion.recycle()
                     }
                     fun event(action: Int, point: Offset) = scenario.onActivity { eventOnMain(action, point) }
+                    if (headerDrag && run == 0) {
+                        var headerFixture = JSONObject()
+                        scenario.onActivity {
+                            val view = host.snapshot!!.getJSONObject("header")
+                            val configuration = owner.view.resources.configuration
+                            val items = view.array("items").objects().map { entry -> obj("id" to entry.getInt("id"),
+                                "label" to entry.getString("label"), "icon" to entry.getString("icon"),
+                                "bounds" to owner.find(hasTag("header-item-${entry.getInt("id")}"))?.boundsInRoot?.headerBounds()) }
+                            headerFixture = obj("model" to JSONObject(headerBefore), "sizes" to view.array("sizes"), "items" to JSONArray(items),
+                                "density" to density, "font_scale" to configuration.fontScale,
+                                "screen" to JSONArray(listOf(configuration.screenWidthDp, configuration.screenHeightDp)),
+                                "workspace_display" to host.workspaceManager?.optJSONArray("switcher_display"))
+                        }
+                        java.io.File(output, "$label-header-fixture.json").writeText(headerFixture.toString())
+                    }
                     event(MotionEvent.ACTION_DOWN, source)
                     try {
                         event(MotionEvent.ACTION_MOVE, if (resize || bridge || colorOverlap || colorWheel || mode == "attached") first else workspace.center)
                         SystemClock.sleep(750)
+                        if (headerDrag) assertTrue("Native title-bar preview moves the held item", bounds("header-item-$draggedHeader").center != source)
                         if (bridge && resize && run < 0) {
                             val keys = JSONArray()
                             for (gap in listOf(anchor.top - 6 * density, anchor.top - 3 * density, anchor.top,
@@ -403,7 +446,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             modelDraws.clear()
                             compositionDirty.clear()
                             synchronized(snapshotChanges) { snapshotChanges.clear() }
-                            motionTag = if (resize) "group-${if (bridge) 43 else 41}" else null
+                            motionTag = if (headerDrag) "header-item-$draggedHeader" else if (resize) "group-${if (bridge) 43 else 41}" else null
                             resizeNode = motionTag?.let { owner.find(hasTag(it)) }
                             lastDrawnBounds = resizeNode?.boundsInRoot
                             while (feedbackWindows.length() > 0) feedbackWindows.remove(feedbackWindows.length() - 1)
@@ -521,7 +564,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             "bridge_content" to bridgeContent,
                             "transparency" to transparency,
                             "display_hz" to refreshRate, "debuggable" to BuildConfig.DEBUG,
-                            "trajectory" to if (resize) "triangle" else "sine",
+                            "trajectory" to if (resize || bridge) "triangle" else "sine",
                             "frames" to rows.size, "distinct_vsyncs" to vsyncs.size, "drawn_revisions" to drawn,
                             "frame_rate" to (vsyncs.size * 1000.0 / elapsed), "drawn_update_rate" to (drawn * 1000.0 / elapsed),
                             "changed_bounds" to changes, "changed_bounds_rate" to (changes * 1000.0 / elapsed),
@@ -597,6 +640,7 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                             java.io.File(output, filename).writeText(result.toString())
                         }
                         Log.i(if (resize) "CapyResizePerf" else "CapyDragPerf", result.toString())
+                        if (headerDrag) assertTrue("Native title-bar preview keeps moving during the contact", changes > 30)
                         if (columnDrag) {
                             assertTrue("Column docking feedback changes during native motion", changedBounds >= 4 && feedbackWindows.length() >= 3)
                             assertTrue("Native release docks the whole column", columnWitness!!.getBoolean("release_changed_layout"))
@@ -609,6 +653,12 @@ internal class WorkspaceFrameTiming(private val instrumentation: Instrumentation
                     } finally {
                         measuring.set(false)
                         event(MotionEvent.ACTION_CANCEL, source)
+                        if (headerDrag) {
+                            host.drain()
+                            assertEquals("Cancelling title-bar motion preserves authored items", headerBefore,
+                                host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").getJSONObject("header").toString())
+                            action(obj("type" to "customize", "action" to obj("type" to "header", "action" to obj("type" to "cancel"))))
+                        }
                     }
                     if (editColor) { click("color-cancel"); waitFor { owner.find(hasTag(wheel)) == null } }
                     action(obj("type" to "close_settings"))
