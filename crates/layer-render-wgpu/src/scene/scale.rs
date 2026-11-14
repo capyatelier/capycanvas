@@ -749,6 +749,7 @@ impl Cache {
         Ok(())
     }
 
+    pub(super) fn held(&self,r:&WgpuRasterizer)->bool {r.vector_motion_split.is_some() && self.pixels.committed_root().is_some()}
     pub(crate) fn presentable(&self) -> Option<&Self> {
         if self.pixels.committed_root().is_some() {Some(self)}
         else {self.overview.as_deref().and_then(Self::presentable)}
@@ -935,7 +936,7 @@ impl Cache {
         let result=self.render_graph(scene,r,packet,dirty,encoding,Destination::View,tiles);
         let view=rendered(scene,result)?;
         changed=changed.union(view);
-        if !first && let Some(overview)=overview {
+        if !first && let Some(overview)=overview.filter(|overview|!overview.held(r)) {
             encoding.retained=with(self.window_memory());
             let result=overview.render_graph(scene,r,packet,dirty,encoding,Destination::Overview(self,view),tiles);
             changed=changed.union(rendered(scene,result)?);

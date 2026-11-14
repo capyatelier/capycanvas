@@ -27,7 +27,7 @@ impl Cache {
         use crate::frame_demand::Outstanding::Runnable;
         if self.contact {return Some(Runnable);}
         let own=self.cells_demand(r,self.refining(r)).or_else(||self.pixels.committed_root().is_none().then_some(Runnable));
-        let overview=self.overview.as_ref().and_then(|overview|overview.outstanding(r));
+        let overview=self.overview.as_ref().filter(|overview|!overview.held(r)).and_then(|overview|overview.outstanding(r));
         if own==Some(Runnable) || overview==Some(Runnable) {Some(Runnable)}else {own.or(overview)}
     }
 
