@@ -538,6 +538,7 @@ pub(in crate::scene) struct Store {
     version_slots: u64,
     pinned: Arc<crate::residency::Tier>,
     expected:Option<Arc<SignatureFrame>>,
+    moving:Vec<crate::scene::vectors::Moving>,
     #[cfg(not(target_arch="wasm32"))]
     retirement:Option<Retirement>,
 }
@@ -564,6 +565,12 @@ impl Store {
         });
     }
     pub(in crate::scene) fn expected(&self)->Option<&Arc<SignatureFrame>> {self.expected.as_ref()}
+    pub(in crate::scene) fn release_moved<'a>(&mut self,live:impl Iterator<Item=&'a crate::scene::vectors::Moving>+Clone) {
+        if self.moving.iter().eq(live.clone()) {return;}
+        self.moving=live.cloned().collect();
+        let dead:Vec<Key>=self.pages.iter().filter(|(key,page)|!page.pinned() && graph::Expression::moves_other_than(&key.expression,&self.moving)).map(|(key,_)|key.clone()).collect();
+        for key in dead {let image=self.remove(&key).image;self.retire(image);}
+    }
     pub(in crate::scene) fn advance_epoch(&mut self) {self.victims.epoch+=1;}
     fn capture(&self,key:&Key,region:PixelRect,input_level:u32)->Result<Accepted,GpuRasterError> {
         let frame=self.expected.as_ref().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?.clone();
@@ -1763,6 +1770,24 @@ pub(super) mod query_tests {
     use super::super::tests::paint_mut;
     use crate::test_support::packet;
 
+    #[test]
+    fn deselecting_paths_releases_the_store_pages_that_name_them() {
+        use layer_core::authored::vector::*;
+        let extent=[1024u32,512];
+        let records=crate::vector::bench::scene_b([1024.,512.],200).into_iter().map(Record::Path).collect();
+        let mut editor=layer_core::Editor::new(layer_core::Document::from_artwork(layer_core::authored::Artwork::new(extent).unwrap()).unwrap());
+        let (layer,edit)=editor.document().create_vector_layer_edit("Ink",VectorObject::from_records(records),None,0).unwrap();editor.perform(edit).unwrap();
+        let mut r=WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+        let frame=packet(editor.document().scene(),extent);
+        crate::test_support::submit_settled(&mut r,frame);
+        let naming=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().pages.lock().unwrap().retained_pages().iter().filter(|page|graph::Expression::moves_other_than(&page.key.expression,&[])).count();
+        r.set_vector_selection(Some(&layer_core::authored::VectorItemSelection {layer,items:Arc::new((1..=20).map(ItemId).collect())}));
+        crate::test_support::submit_settled(&mut r,FramePacket {composite_all:false,..frame});
+        assert!(naming(&r)>0,"selecting paths prepares pages that name them");
+        r.set_vector_selection(None);
+        crate::test_support::submit_settled(&mut r,FramePacket {composite_all:false,..frame});
+        assert_eq!(naming(&r),0,"deselecting releases every page that names the paths");
+    }
     #[test]
     fn a_stroke_frame_rederives_only_the_cells_its_dabs_touch_whatever_the_view_size_and_level_count() {
         let mut rederived=Vec::new();

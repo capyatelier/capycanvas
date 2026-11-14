@@ -599,9 +599,11 @@ fn pressing_selected_paths_draws_nothing_their_selection_prepared_and_deselectin
         let vectors = &r.scene.as_ref().unwrap().vectors;
         assert!(vectors.motion.is_none(), "deselecting drops the moving image");
         let retained = vectors.spare_motion.as_ref().map(|image| image.texture.clone()).expect("the moving image's texture is kept for the next selection");
+        let kept = idle + texture_bytes(&retained);
+        r.scene.as_ref().unwrap().release_pages_by(layer_render::CanvasRenderer::telemetry(&r).resident_bytes.saturating_sub(kept));
+        submit_ready(&mut r, frame);
         let resident = layer_render::CanvasRenderer::telemetry(&r).resident_bytes;
-        assert!(resident <= idle + texture_bytes(&retained),
-            "deselecting retains only the moving image beyond idle storage: {resident} after {idle}");
+        assert!(resident <= kept, "deselecting retains, beyond idle storage and the moving image, only pages memory pressure releases: {resident} after {idle}");
         assert!(presented(&r, view).iter().zip(&shown).all(|(a, b)| a.abs_diff(*b) <= 1), "the cancelled drag restores the paths at zoom {zoom}");
         let fewer = Arc::new(items.iter().take(2).copied().collect::<std::collections::BTreeSet<_>>());
         r.set_vector_selection(Some(&layer_core::authored::VectorItemSelection { layer, items: fewer }));

@@ -2341,6 +2341,7 @@ impl Scene {
         self.scale_sources.exclusion_damage = r.vector_exclusion_damage.clone();
         self.scale_sources.moving = r.vector_motion_drawn.as_ref().map(|(motion, _)| (motion.owner, vectors::Moving(motion.items.clone())));
         self.scale_sources.prepared = r.vector_prepared.as_ref().map(|(prepared, ..)| prepared.clone());
+        self.scale_pages.lock().unwrap().release_moved(self.scale_sources.moving.iter().chain(self.scale_sources.prepared.iter().map(|(_, moving, _)| moving)).map(|(_, moving)| moving));
         self.object_spatial.prepare(packet.scene);
         self.scale_sources.prepare(r,packet,batch_tiles);
     }

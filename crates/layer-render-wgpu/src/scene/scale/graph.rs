@@ -154,6 +154,15 @@ impl Expression {
             _ => false,
         }
     }
+    pub(super) fn moves_other_than(node: &Node, live: &[Moving]) -> bool {
+        match node.as_ref() {
+            Self::Vector { moving: Some(moving), .. } => !live.contains(moving),
+            Self::Opacity { input, .. } => Self::moves_other_than(input, live),
+            Self::Combine { front, back, .. } => Self::moves_other_than(front, live) || Self::moves_other_than(back, live),
+            Self::Effect { input, masks, .. } => Self::moves_other_than(input, live) || masks.iter().flatten().any(|mask| Self::moves_other_than(mask, live)),
+            _ => false,
+        }
+    }
     fn visit(node: &Node, all: &mut HashSet<Node>) {
         if !all.insert(node.clone()) { return; }
         match node.as_ref() {
