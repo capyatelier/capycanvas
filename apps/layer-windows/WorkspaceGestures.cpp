@@ -331,7 +331,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             auto parent=VisualTreeHelper::GetParent(element).try_as<Panel>();if(!parent)return false;
             auto key=ChromeFrames::Id(element);if(data->chromeFrames->retiring.contains(key))return true;
             if(!navigation)navigation=std::make_shared<RetiredNavigation>();
-            element.IsHitTestVisible(false);retireNavigation(element,navigation->restore.empty()?&navigation->restore:nullptr);element.Opacity(0);
+            auto restore=navigation->restore.empty()?&navigation->restore:nullptr;
+            if(retains(element))retireVisual(element,restore);
+            else{element.IsHitTestVisible(false);retireNavigation(element,restore);element.Opacity(0);}
             data->chromeFrames->retiring.emplace(key,[weak=weak_from_this(),parent,element,navigation,retainedOwner=std::move(retainedOwner)]{
                 if(auto self=weak.lock();self&&self->deferRemoval(element,retainedOwner,navigation))return;
                 uint32_t index;if(parent.Children().IndexOf(element,index))parent.Children().RemoveAt(index);

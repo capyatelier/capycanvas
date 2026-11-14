@@ -730,6 +730,16 @@ function Check-ClosedStrip([string]$Theme){
         if((Gesture).last_edge.claimed -ne $true){throw "${Theme}: the closed strip opened without an edge claim"}
         if(((Model).state.workspace.layout|ConvertTo-Json -Depth 90 -Compress) -cne $before){throw "${Theme}: canceling the $($from.kind) swipe did not restore the closed strip"}
     }
+    $from=$points|Where-Object kind -eq 'empty'|Select-Object -First 1
+    Swipe $from @{x=$from.x+$outward;y=$from.y} -During {
+        Wait-Until {$g=Gesture;!$g.edge -or ($g.edge_reply.serial -eq $g.edge.serial -and $g.edge_reply.time -ge $g.edge_input.time)} "${Theme}: the held closed-strip swipe was not acknowledged"
+        Start-Sleep -Milliseconds 400
+        $held=Gesture;$column=Column $strip.id
+        if(!$held.edge.claimed -or ($column -and !$column.open)){throw "${Theme}: the held closed-strip swipe lost its edge: $($held|ConvertTo-Json -Compress -Depth 5)"}
+    }
+    $released=Gesture;$column=Column $strip.id
+    if($released.last_edge.phase -ne 'up' -or !$released.last_edge.claimed -or ($column -and !$column.open)){throw "${Theme}: the released closed strip did not stay open: $($released|ConvertTo-Json -Compress -Depth 5)"}
+    WindowCommand 'undo_workspace' -ExpectedLayout $before
 }
 try {
     Enter-CapyEnvironment
