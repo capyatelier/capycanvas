@@ -1047,6 +1047,37 @@ fn split_drags_redraw_neither_the_overview_nor_the_navigator() {
 }
 
 #[test]
+fn a_split_recomposes_only_the_cells_its_moving_paths_leave() {
+    use std::collections::BTreeSet;
+    let extent = [2400u32, 1800u32];
+    let view = layer_render::ViewState { width_px: 600, height_px: 450, document_to_surface: [1., 0., 0., 1., 0., 0.] };
+    let mut records: Vec<Record> = (0..4).map(|i| stroke(9000 + i, &[[60. + i as f64 * 20., 60.], [120. + i as f64 * 20., 160.]], 6., [0.9, 0.2, 0.1, 0.8])).collect();
+    records.extend((0..4).map(|i| stroke(9100 + i, &[[2200. + i as f64 * 20., 1600.], [2260. + i as f64 * 20., 1700.]], 6., [0.2, 0.2, 0.9, 0.8])));
+    records.extend(crate::vector::bench::scene_b([2400., 1800.], 1500).into_iter().map(Record::Path));
+    let (editor, layer) = document(extent, records);
+    let frame = FramePacket { view, composite_all: false, ..packet(editor.document().scene(), extent) };
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    submit_ready(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    for (first, reached) in [(9000u64, true), (9100, false)] {
+        let items: Arc<BTreeSet<ItemId>> = Arc::new((first..first + 4).map(ItemId).collect());
+        let leaving = super::motion_bounds(editor.document().scene(), layer, &items).in_frame(extent);
+        r.set_vector_motion(Some(layer_render::VectorMotion { owner: layer, items, transform: translation([3., -2.]) }));
+        let mut composed = Vec::new();
+        for _ in 0..200 {
+            r.submit(frame).unwrap();
+            r.wait_idle().unwrap();
+            let level = r.scale_display.as_ref().unwrap().plan.level;
+            composed.extend(r.metrics.frame_composited_pages.iter().copied().filter(|(composed, _)| *composed == level));
+            if r.next_frame() != layer_render::FrameDemand::Work { break; }
+        }
+        assert!(composed.iter().all(|(_, page)| !page_rect(*page).intersect(leaving).is_empty()), "a split recomposes only the view cells its moving paths leave: {composed:?} outside {leaving:?}");
+        assert!(!reached || !composed.is_empty(), "a split recomposes the visible cells its moving paths leave");
+        r.set_vector_motion(None);
+        submit_ready(&mut r, frame);
+    }
+}
+
+#[test]
 fn a_settled_frame_names_no_vector_page_again() {
     let (editor, _, extent, _) = grid(10_000);
     let view = layer_render::ViewState { width_px: 800, height_px: 600, document_to_surface: [1., 0., 0., 1., 0., 0.] };

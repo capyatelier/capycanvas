@@ -266,9 +266,11 @@ impl Recorded {
         let written=self.written.intersect(area);
         (!written.is_empty()).then(||Self {written,..self.clone()})
     }
-    fn matches(&self,frame:&SignatureFrame,required_input_level:u32)->Option<bool> {
+    fn matches(&self,frame:&SignatureFrame,required_input_level:u32)->Option<bool> {self.matches_as(frame,&self.key.expression,required_input_level)}
+    fn matches_as(&self,frame:&SignatureFrame,expression:&graph::Node,required_input_level:u32)->Option<bool> {
         if self.input_level>required_input_level {return Some(false);}
-        let expected=match frame.expected_key(&self.key,self.region,self.input_level) {Ok(expected)=>expected,Err(_)=>return Some(false)};
+        let key=Key {expression:expression.clone(),..self.key.clone()};
+        let expected=match frame.expected_key(&key,self.region,self.input_level) {Ok(expected)=>expected,Err(_)=>return Some(false)};
         if self.version.authored()!=expected.version().authored() {return Some(false);}
         frame.matches(&self.version,&expected)
     }
@@ -1236,8 +1238,8 @@ impl Cells {
     fn sync(&mut self,store:&mut Store,template:&Key,plan:display_mips::Plan,input_level:u32) {
         store.confirm();
         let count=coordinates(plan.bounds,plan.level).count();
-        let events=store.changes.since(self.position).filter(|_|self.cells.len()==count && self.template.as_ref()==Some(template)
-            && self.input_level==input_level);
+        let regrouped=self.template.as_ref().filter(|held|Key {expression:template.expression.clone(),..(*held).clone()}==*template).map(|held|held.expression!=template.expression);
+        let events=store.changes.since(self.position).filter(|_|self.cells.len()==count && regrouped.is_some() && self.input_level==input_level);
         match events {
             None=> {
                 if self.cells.len()!=count {self.cells.clear();self.cells.resize_with(count,Cell::default);self.unconfirmed.clear();}
@@ -1256,6 +1258,7 @@ impl Cells {
                 }
             },
         }
+        if regrouped==Some(true) {for cell in &mut self.cells {cell.queue();}}
         for (submission,index,previous) in self.unconfirmed.iter_mut().rev() {
             let cell=&mut self.cells[*index];
             if submission.discarded() && cell.shown.as_ref().is_some_and(|shown|shown.submission.same(submission)) {
@@ -1371,7 +1374,7 @@ impl Cache {
         let Some(region)=r.vector_motion_region(packet.document_extent).map(|region|paint_transform::aligned(region,1<<self.plan.level,self.plan.extent)
             .intersect(self.plan.bounds)).filter(|region|!region.is_empty()) else {return Ok(());};
         let plan=display_mips::Plan::window(self.plan.extent,self.plan.level,region);
-        let mut copies=Vec::new();let mut revision=0;
+        let mut copies=Vec::new();let mut revision=0;let mut missing=Vec::new();
         {
             let mut store=self.pages.lock().unwrap();
             for coordinate in coordinates(region,self.plan.level) {
@@ -1379,11 +1382,16 @@ impl Cache {
                 let area=key.plan().bounds.intersect(region);
                 let image=if let Some(image)=store.get(&key,area,Accuracy::Display,required_input_level,Class::Visible) {image}else {
                     key.format=wgpu::TextureFormat::Rgba32Float;
-                    let Some(image)=store.get(&key,area,Accuracy::Exact,0,Class::Visible) else {return Ok(());};image
+                    let Some(image)=store.get(&key,area,Accuracy::Exact,0,Class::Visible) else {missing.push(coordinate);continue;};image
                 };
                 revision=revision.max(store.pages[&key].written_at);
                 copies.push(store.selected(&key,area,image));
             }
+        }
+        if !missing.is_empty() {
+            let mut cells=self.cells.lock().unwrap();
+            for coordinate in missing {if let Some(cell)=cells.cells.get_mut(Cells::index(self.plan,coordinate)) {cell.shown=None;cell.invalidate();}}
+            return Ok(());
         }
         if self.above_revision.as_ref()==Some(&(above.clone(),revision))
             && self.above.committed_root().is_some_and(|root|root.image.plan==plan) {return Ok(());}
@@ -1427,8 +1435,8 @@ impl Cache {
                 Err(GpuRasterError::NotReady)=>{cell.blocked=Some(crate::frame_demand::Input::Name);cell.name=None;selection.waiting|=!region.intersect(visible).is_empty();continue;},
                 Err(error)=>return Err(error),
             }
-            let current=cell.shown.as_ref().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|recorded.key==Key {format:recorded.key.format,..key.clone()}
-                && recorded.matches(&frame,input_level)==Some(true))).map(|shown|shown.exact);
+            let current=cell.shown.as_ref().filter(|shown|shown.recorded.as_ref().is_some_and(|recorded|Key {expression:key.expression.clone(),format:key.format,..recorded.key.clone()}==key
+                && recorded.matches_as(&frame,&key.expression,input_level)==Some(true))).map(|shown|shown.exact);
             let exact_key=if store.pages.get(&key).is_some_and(|page|Coverage::covers(&page.coverage.exact,region)) {key.clone()}
                 else {Key {format:wgpu::TextureFormat::Rgba32Float,..key.clone()}};
             let exact=(current!=Some(true)).then(||store.get(&exact_key,region,Accuracy::Exact,exact_input_level,class(region)).map(|image|(exact_key.clone(),image,true))).flatten();
