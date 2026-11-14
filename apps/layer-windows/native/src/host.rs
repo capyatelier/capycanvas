@@ -130,6 +130,7 @@ pub struct CapyHost {
     surface_handle: OwnedHandle,
     config: Option<wgpu::SurfaceConfiguration>,
     surface_invalid: bool,
+    display_reconfigure: bool,
     presenter: Option<ViewportPresenter>,
     held_canvas: Option<HeldCanvas>,
     native: NativeHost,
@@ -316,6 +317,7 @@ impl CapyHost {
             surface_handle,
             config: None,
             surface_invalid: false,
+            display_reconfigure: false,
             presenter: None,
             held_canvas: None,
             native,
@@ -383,6 +385,7 @@ impl CapyHost {
             let display = self.test_display.clone().unwrap_or_else(|| self.display_probe.poll(self.window).clone());
             if display != self.display {
                 self.display = display;
+                self.display_reconfigure = true;
                 self.native.dirty = true;
                 self.native.invalidate_snapshot();
             }
@@ -811,7 +814,7 @@ pub unsafe extern "C" fn capy_start_services(
 /// Exclusive render-owner access to a live host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_needs_frame(host: u64) -> i32 {
-    guard(host, |host| Ok(i32::from(host.native.poll_preparation())))
+    guard(host, |host| Ok(i32::from(host.native.poll_preparation() || host.display_reconfigure)))
 }
 
 /// # Safety
@@ -824,7 +827,7 @@ pub unsafe extern "C" fn capy_poll_services(host: u64) -> i32 {
             host.native.poll_canvas_presentation(presenter)?;
         }
         host.poll_surface()?;
-        Ok(i32::from(host.native.dirty))
+        Ok(i32::from(host.native.dirty || host.display_reconfigure))
     })
 }
 /// # Safety
@@ -1224,12 +1227,13 @@ pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
             return Err("The GPU device was lost".into());
         }
         host.gpu.check()?;
+        if host.target.is_some() {
+            return Ok(1);
+        }
+        host.display_reconfigure = false;
         if host.native.session.engine().backend().0.is_none() { return Ok(3); }
         if host.config.is_none() {
             return Ok(2);
-        }
-        if host.target.is_some() {
-            return Ok(1);
         }
         if let Some(config) = &mut host.config
             && host.display.hdr != (config.format == wgpu::TextureFormat::Rgba16Float) {
