@@ -25,7 +25,7 @@ impl Cache {
     }
     pub(crate) fn outstanding(&self, r: &WgpuRasterizer) -> Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::Runnable;
-        if self.contact {return Some(Runnable);}
+        if self.contact || self.preparing {return Some(Runnable);}
         let own=self.cells_demand(r,self.refining(r)).or_else(||self.pixels.committed_root().is_none().then_some(Runnable));
         let overview=self.overview.as_ref().filter(|overview|!overview.held(r)).and_then(|overview|overview.outstanding(r));
         if own==Some(Runnable) || overview==Some(Runnable) {Some(Runnable)}else {own.or(overview)}
