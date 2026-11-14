@@ -3946,6 +3946,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn next_frame(&self) -> layer_render::FrameDemand { self.frame_demand() }
     fn waits_for_frame_slot(&self) -> bool { self.frame_slot_blocked() }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
+        self.refresh_memory_limits();
         if let Some(selection) = self.pending_display_selection.clone() { self.set_selection_outline(Some(&selection))?; }
         let Some(mut pending) = self.settling.take() else { return Ok(()); };
         let moving = pending.view != view;

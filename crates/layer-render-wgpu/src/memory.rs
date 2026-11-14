@@ -82,6 +82,7 @@ pub(super) struct Memory {
     target: std::cell::Cell<u64>,
     refused: std::cell::Cell<u64>,
     trimmed: std::cell::Cell<Option<[u64; 2]>>,
+    retired: std::cell::Cell<Option<[u64; 2]>>,
     wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     resources: Arc<std::sync::atomic::AtomicU64>,
     overdraft: std::cell::RefCell<Vec<layer_core::MemoryReservation>>,
@@ -136,7 +137,7 @@ impl Memory {
                 |handle| { let report = handle.reported(); Owner { handle, published: std::cell::Cell::new(report) } }),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
-            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), trimmed: Default::default(), wake, resources, overdraft: Default::default(),
+            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(),
             idle: std::sync::atomic::AtomicBool::new(true),
         };
         memory.applied_limits.set(Some(memory.grants()));
@@ -157,6 +158,7 @@ impl Memory {
         match kind {Kind::Scene=>&self.display,Kind::RasterPool=>&self.raster,Kind::Staging=>&self.staging,_=>unreachable!("renderer memory owner")}
     }
     pub(super) fn sync_report(&self,kind:Kind,report:MemoryReport) {
+        #[cfg(test)] crate::test_support::PassCounts {report_syncs:1,..Default::default()}.record();
         let owner=self.owner(kind);let before=owner.published.replace(report);
         if before.pinned_gpu_bytes!=report.pinned_gpu_bytes || before.demand_gpu_bytes!=report.demand_gpu_bytes || before.optional_gpu_bytes!=report.optional_gpu_bytes {self.invalidate_limits();}
         owner.handle.publish(report);owner.handle.report(report);
@@ -220,6 +222,7 @@ impl Memory {
     pub fn working_limit(&self) -> u64 { self.demand.get().floor }
     pub(crate) fn unit(&self) -> u64 { self.demand.get().unit() }
     pub fn invalidate_limits(&self) { self.limits_dirty.set(true); }
+    fn limits_changed(&self) -> bool { self.limits_dirty.get() || self.applied_limits.get() != Some(self.grants()) }
     pub fn apply_limits(&self, limits: [u64; 4]) -> bool {
         let changed = self.applied_limits.replace(Some(limits)) != Some(limits);
         self.limits_dirty.replace(false) || changed
@@ -287,6 +290,8 @@ impl WgpuRasterizer {
         {drop(pages);encoder.retire((retirement,leases));}
     }
     pub(crate) fn refresh_memory_limits(&mut self) {
+        if !self.memory_pass_due() {return;}
+        #[cfg(test)] crate::test_support::PassCounts {grant_encoders:1,..Default::default()}.record();
         let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
         self.apply_frame_grants(&mut encoder);
         if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
@@ -328,8 +333,14 @@ impl WgpuRasterizer {
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
         self.memory.carry_overdraft(self.scene_tiers.display.used());
     }
+    fn memory_pass_due(&self)->bool {
+        let display=&self.scene_tiers.display;
+        display.heap().pending()!=0 || self.memory.retired.get()!=Some([display.heap().epoch(),display.floor()])
+            || self.memory.limits_changed() || self.memory.overdrawn() || self.retention_above_grant()
+    }
     fn retire_victims(&mut self,scene:Option<&mut scene::Scene>,encoder:&mut submission::CommandEncoder) {
         let floor=self.scene_tiers.display.floor();
+        self.memory.retired.set(Some([self.scene_tiers.display.heap().epoch(),floor]));
         let sources=self.source_tiles.get_mut();
         sources.release_unused(floor);
         let decoded=sources.retire_evicted();sources.flush_retired(encoder);
@@ -344,6 +355,7 @@ impl WgpuRasterizer {
     pub(crate) fn frame_room(&mut self, packet: FramePacket<'_>) {
         self.set_display_room(packet);
         self.trim_display_to_grant(self.scene.as_deref());
+        self.refresh_memory_limits();
         self.trim_raster_to_grant();
     }
     fn trim_raster_to_grant(&mut self) {

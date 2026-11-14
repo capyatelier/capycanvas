@@ -1284,28 +1284,40 @@ fn resident_presented_cells_leave_the_floor_to_refinement() {
     assert!(display.admit(crate::residency::Class::Refinement, MIB).is_ok(), "the floor reserved the resident presented cells a second time");
 }
 
-#[test]
-fn retained_display_pages_above_the_display_grant_are_trimmed_by_the_next_frame() {
+fn retained_photo_display() -> (layer_core::Document, WgpuRasterizer, layer_render::ViewState) {
     let mut doc = crate::tests::native_effects::empty_document([4096; 2], Default::default());
     crate::tests::native_effects::insert_source(&mut doc, "Photo", layer_core::color::source::rgba8_source([4096; 2], |x, y| [(x % 251) as u8, (y % 241) as u8, 96, 255]));
     let mut r = legacy_scene_renderer(doc.composition().color);
-    let mut first = packet(doc.scene(), [4096; 2]);
-    first.view = crate::test_support::view([256, 256]);
-    submit_settled(&mut r, first);
-    let mut moved = first;
-    for translation in [[-2048., -2048.], [0., -2048.]] {
-        moved.view.document_to_surface = [1., 0., 0., 1., translation[0], translation[1]];
-        submit_settled(&mut r, moved);
+    let mut frame = packet(doc.scene(), [4096; 2]);
+    frame.view = crate::test_support::view([256, 256]);
+    for translation in [[0., 0.], [-2048., -2048.], [0., -2048.]] {
+        frame.view.document_to_surface = [1., 0., 0., 1., translation[0], translation[1]];
+        submit_settled(&mut r, frame);
     }
     complete(&r);
-    let [stored, pinned] = r.scene.as_ref().unwrap().retained_scale_bytes();
-    assert!(stored > pinned, "the first view's pages stay retained beside the presented and held ones");
-    let budget = r.factory.memory_budget().clone();
+    let view = frame.view;
+    (doc, r, view)
+}
+
+fn pin_the_free_device(r: &WgpuRasterizer) -> MemoryOwner {
+    let budget = r.factory.memory_budget();
     let snapshot = budget.snapshot();
     let other = budget.register_owner(Kind::Other, MemoryClass::Pinned, Some(snapshot.devices[0].device));
     let held = snapshot.devices[0].limit_bytes.saturating_sub(snapshot.devices[0].pinned_bytes);
     other.report(MemoryReport { gpu_bytes: held, pinned_gpu_bytes: held, ..Default::default() });
-    budget.flush_reports();
+    other
+}
+
+fn display_resident(r: &WgpuRasterizer) -> u64 { r.scene_tiers.display.used().saturating_sub(r.scene_tiers.retiring.used()) }
+
+#[test]
+fn retained_display_pages_above_the_display_grant_are_trimmed_by_the_next_frame() {
+    let (doc, mut r, view) = retained_photo_display();
+    let moved = FramePacket { view, ..packet(doc.scene(), [4096; 2]) };
+    let [stored, pinned] = r.scene.as_ref().unwrap().retained_scale_bytes();
+    assert!(stored > pinned, "the first view's pages stay retained beside the presented and held ones");
+    let other = pin_the_free_device(&r);
+    r.factory.memory_budget().flush_reports();
     let grant = r.memory.display.handle.grant().gpu_bytes;
     let used = r.scene_tiers.display.used();
     assert!(used > grant, "the competing pin leaves the display grant below its retained charges");
@@ -1327,27 +1339,14 @@ fn retained_display_pages_above_the_display_grant_are_trimmed_by_the_next_frame(
 
 #[test]
 fn an_idle_display_above_a_lowered_grant_wakes_and_releases_its_retention() {
-    let mut doc = crate::tests::native_effects::empty_document([4096; 2], Default::default());
-    crate::tests::native_effects::insert_source(&mut doc, "Photo", layer_core::color::source::rgba8_source([4096; 2], |x, y| [(x % 251) as u8, (y % 241) as u8, 96, 255]));
-    let mut r = legacy_scene_renderer(doc.composition().color);
-    let mut frame = packet(doc.scene(), [4096; 2]);
-    frame.view = crate::test_support::view([256, 256]);
-    submit_settled(&mut r, frame);
-    for translation in [[-2048., -2048.], [0., -2048.]] {
-        frame.view.document_to_surface = [1., 0., 0., 1., translation[0], translation[1]];
-        submit_settled(&mut r, frame);
-    }
-    complete(&r);
+    let (doc, mut r, view) = retained_photo_display();
+    let frame = FramePacket { view, ..packet(doc.scene(), [4096; 2]) };
     let [stored, _] = r.scene.as_ref().unwrap().retained_scale_bytes();
     let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = woken.clone();
     r.set_preparation_wake(Arc::new(move || { count.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }));
     assert_ne!(r.next_frame(), layer_render::FrameDemand::Work);
-    let budget = r.factory.memory_budget().clone();
-    let snapshot = budget.snapshot();
-    let other = budget.register_owner(Kind::Other, MemoryClass::Pinned, Some(snapshot.devices[0].device));
-    let held = snapshot.devices[0].limit_bytes.saturating_sub(snapshot.devices[0].pinned_bytes);
-    other.report(MemoryReport { gpu_bytes: held, pinned_gpu_bytes: held, ..Default::default() });
+    let other = pin_the_free_device(&r);
     assert!(r.scene_tiers.display.used() > r.memory.retention_grant(), "the competing pin leaves the display above its grant");
     assert!(woken.load(std::sync::atomic::Ordering::SeqCst) > 0, "a lowered grant wakes the idle renderer");
     assert_eq!(r.next_frame(), layer_render::FrameDemand::Work, "retention above the grant is outstanding work");
@@ -1360,6 +1359,30 @@ fn an_idle_display_above_a_lowered_grant_wakes_and_releases_its_retention() {
     assert!(kept < stored, "the idle display released its retention: stored {stored} kept {kept}");
     assert_ne!(r.next_frame(), layer_render::FrameDemand::Work, "an idle display does not spin on bytes it cannot release");
     drop(other);
+}
+
+#[test]
+fn a_frame_that_cannot_submit_still_brings_the_display_under_a_lowered_grant() {
+    let (_doc, mut r, view) = retained_photo_display();
+    let other = pin_the_free_device(&r);
+    assert!(display_resident(&r) > r.memory.retention_grant(), "the competing pin leaves the display above its grant");
+    r.background_refinement = false;
+    r.background_ready.store(false, std::sync::atomic::Ordering::Release);
+    assert!(!r.can_submit(), "the frame cannot submit");
+    r.poll_pending(view).unwrap();
+    assert!(display_resident(&r) <= r.memory.retention_grant(), "a frame that cannot submit kept the display above its grant: resident {} grant {}",
+        display_resident(&r), r.memory.retention_grant());
+    drop(other);
+}
+
+#[test]
+fn an_unchanged_idle_frame_creates_no_grant_encoder_and_syncs_no_report() {
+    let (_doc, mut r, view) = retained_photo_display();
+    r.poll_pending(view).unwrap();
+    let before = crate::test_support::PassCounts::snapshot();
+    for _ in 0..3 { r.poll_pending(view).unwrap(); }
+    let counts = crate::test_support::PassCounts::snapshot().delta(before);
+    assert_eq!([counts.grant_encoders, counts.report_syncs], [0, 0], "unchanged idle frames ran the grant pass");
 }
 
 #[test]
@@ -1498,11 +1521,27 @@ fn a_demanded_decoded_slot_survives_a_grant_shrink_while_undemanded_ones_go_firs
     r.memory.display.handle.report(MemoryReport { demand_gpu_bytes: 1, ..Default::default() });
     r.factory.memory_budget().flush_reports();
     r.begin_frame_memory(frame);
-    r.refresh_memory_limits();
     complete(&r);
     r.device.retirement_handle().flush().unwrap();
     assert!(resident(&r, &source, 0), "the slot a Visible unit demanded this frame survives the shrink");
     assert!((1..24).all(|x| !resident(&r, &source, x)), "the shrunk grant takes every slot no current demand at Fallback protects");
+}
+
+#[test]
+fn the_end_of_a_frame_releases_the_decodes_its_trim_takes_from_a_lowered_grant() {
+    let doc = document();
+    let source = decoded_source(96);
+    let mut r = decoded_renderer(&source);
+    let frame = packet(doc.scene(), doc.composition().size);
+    r.begin_frame_memory(frame);
+    for x in 0..96 { decode_at(&mut r, &source, x, crate::residency::Class::Visible); }
+    r.end_frame_memory();
+    let other = pin_the_free_device(&r);
+    assert!(display_resident(&r) > r.memory.retention_grant(), "the competing pin leaves the decodes above the display grant");
+    r.frame_room(frame);
+    assert!(display_resident(&r) <= r.memory.retention_grant(), "the frame ended with its trimmed decodes still resident: resident {} grant {}",
+        display_resident(&r), r.memory.retention_grant());
+    drop(other);
 }
 
 #[test]
