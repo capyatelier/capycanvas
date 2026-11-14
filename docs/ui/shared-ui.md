@@ -407,8 +407,11 @@ selectable 64px tiles with centered 48px previews and accessible labels. There
 is no import control. Right-clicking or touch-holding the Capy button opens
 **Change icon…**, generated from the same preference row, which reveals the
 row through `PreferenceAction::Reveal { id }`. All four theme-tinted SVGs live
-in the shared icon bank; app, launcher and PWA icons derive from Looking up at
-build time.
+in the shared icon bank. The Android launcher icon and the iPad Home Screen icon
+follow the chosen pose; other app icons and the PWA icons use Looking up. A new
+pose needs its launcher alias in `AndroidManifest.xml` and an
+`iOS/AppIcon-<icon>.png` rendered like the others. iPad switches only when the
+choice changes, so iOS never shows its icon-change alert at launch.
 
 Fading does not change allocation, camera or viewport. Zen is the sole global
 controls-visibility toggle; the Window menu still manages individual panels.

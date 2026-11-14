@@ -68,11 +68,16 @@ for prefix, folder in (("preview", "brush-previews"), ("filter", "filter-preview
         shutil.copy2(source, dest / source.name)
         write_json(dest / "Contents.json", {"data": [{"filename": source.name, "idiom": "universal", "universal-type-identifier": "org.webmproject.webp"}],
             "info": {"version": 1, "author": "xcode"}})
-app_icon = CATALOG / "AppIcon.appiconset"
-app_icon.mkdir(exist_ok=True)
-shutil.copy2(APP / "iOS/AppIcon.png", app_icon / "AppIcon.png")
-write_json(app_icon / "Contents.json", {"images": [{"filename": "AppIcon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
-    "info": {"version": 1, "author": "xcode"}})
+app_icons = sorted((APP / "iOS").glob("AppIcon*.png"))
+for stale in CATALOG.glob("AppIcon*.appiconset"):
+    if stale.stem not in {source.stem for source in app_icons}:
+        shutil.rmtree(stale)
+for source in app_icons:
+    app_icon = CATALOG / f"{source.stem}.appiconset"
+    app_icon.mkdir(exist_ok=True)
+    shutil.copy2(source, app_icon / source.name)
+    write_json(app_icon / "Contents.json", {"images": [{"filename": source.name, "idiom": "universal", "platform": "ios", "size": "1024x1024"}],
+        "info": {"version": 1, "author": "xcode"}})
 notices = GENERATED / "licenses"
 notices.mkdir(exist_ok=True)
 for name in ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"]:

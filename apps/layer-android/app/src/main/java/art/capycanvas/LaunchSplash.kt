@@ -355,7 +355,7 @@ internal fun CanvasHost.launchHolding(reveal: LaunchReveal?): Boolean {
     val bootstrap = host.bootstrap
     val mark = bootstrap?.objectOrNull("launch_mark")
     val markIcon = mark?.getString("icon")
-    LaunchedEffect(window, markIcon) { markIcon?.let(window::choose) }
+    LaunchedEffect(window, markIcon) { markIcon?.let { host.homeScreenIcon.show(it); window.choose(it) } }
     val density = LocalDensity.current
     val reveal = bootstrap?.getLong("launch_reveal_ms")
     val gap = bootstrap?.getDouble("launch_caption_gap")?.toFloat() ?: 0f

@@ -98,7 +98,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
             "CAPY_RUST_TARGET[sdk=iphonesimulator*]": "aarch64-apple-ios-sim",
             "CAPY_RUST_BUILD_ROOT": "$(SRCROOT)/../../target/ios-$(IPHONEOS_DEPLOYMENT_TARGET)",
             "TARGETED_DEVICE_FAMILY": "1,2", "IPHONEOS_DEPLOYMENT_TARGET": "17.5",
-            "INFOPLIST_FILE": "iOS/App/Info.plist", "SUPPORTS_MACCATALYST": "NO", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon"})
+            "INFOPLIST_FILE": "iOS/App/Info.plist", "SUPPORTS_MACCATALYST": "NO", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+            "ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES": " ".join(sorted(icon.stem for icon in (APP / "iOS").glob("AppIcon-*.png")))})
     else:
         settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0", "INFOPLIST_FILE": "macOS/App/Info.plist",
             "CODE_SIGN_ENTITLEMENTS": "macOS/App/CapyCanvas.entitlements", "ENABLE_HARDENED_RUNTIME": "YES"})

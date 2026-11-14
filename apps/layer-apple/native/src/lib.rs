@@ -51,7 +51,7 @@ pub struct CapyApple {
     workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
     workspace_wake: Option<layer_host::PreparationWake>,
     language: layer_ui::LanguageTransition,
-    published_language: Option<u64>,
+    published_bootstrap: Option<(u64, layer_ui::ZenIcon)>,
     scopes: scopes::Cache,
 }
 impl AsMut<NativeHost> for CapyApple {
@@ -203,7 +203,7 @@ fn apple_launch_prepared(platform: u32, prepared: &CapyAppleLaunch) -> Result<u6
     let window = document_tabs::Window::localized(host.session.localization());
     handles::store_app(CapyApple {
         language: layer_ui::LanguageTransition::new(host.session.localization().clone()),
-        published_language: None,
+        published_bootstrap: None,
         scopes: Default::default(),
         host,
         window,
@@ -564,15 +564,17 @@ pub unsafe extern "C" fn capy_apple_request(
                         &a.host.session.state().document_file, a.host.session.localization()).menu_item(a.window.documents.order().len()),
                 },
             });
-            let generation = a.host.localization_generation();
-            if a.published_language != Some(generation) {
-                extension["language_generation"] = generation.into();
+            let current = a.host.bootstrap_key();
+            if a.published_bootstrap != Some(current) {
+                extension["language_generation"] = current.0.into();
                 extension["bootstrap"] = serde_json::to_value(a.host.bootstrap_view()).map_err(|e| e.to_string())?;
-                extension["catalog"] = a.host.query(serde_json::json!({"type":"catalog"}))?;
-                if let Some(workspaces) = &a.workspaces {
-                    extension["workspace_view"] = serde_json::to_value(&workspaces.view).map_err(|e| e.to_string())?;
+                if a.published_bootstrap.is_none_or(|(generation, _)| generation != current.0) {
+                    extension["catalog"] = a.host.query(serde_json::json!({"type":"catalog"}))?;
+                    if let Some(workspaces) = &a.workspaces {
+                        extension["workspace_view"] = serde_json::to_value(&workspaces.view).map_err(|e| e.to_string())?;
+                    }
                 }
-                a.published_language = Some(generation);
+                a.published_bootstrap = Some(current);
             }
             let extension = serde_json::to_vec(&extension)
             .map_err(|e| e.to_string())?;

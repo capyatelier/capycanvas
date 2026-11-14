@@ -144,6 +144,45 @@ class AndroidFirstUiTest {
         }
     }
 
+    @Test fun homeScreenShowsTheSavedCapy() {
+        val context = instrumentation.targetContext
+        val packages = context.packageManager
+        val icons = launchMarks().map { it.first }
+        for (icon in icons) {
+            val info = packages.getActivityInfo(HomeScreenIcon.launcher(context, icon), android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS)
+            assertEquals(LauncherActivity::class.java.name, info.targetActivity)
+            assertEquals(context.resources.getIdentifier("capy_launcher_${icon.replace('-', '_')}", "mipmap", context.packageName), info.icon)
+            assertEquals("Only the default capy starts on the home screen", icon == "zen-looking-up", info.enabled)
+        }
+        startupTheme()
+        val saved = context.getSharedPreferences(CanvasHost.preferencesName, 0)
+        assertTrue(saved.edit().putString("settings", JSONObject(saved.getString("settings", null)!!).put("zen_icon", "bathing").toString()).commit())
+        try {
+            launchCapy(compose = compose).use { compose.waitUntil(10_000) { homeScreenShows("zen-bathing") } }
+        } finally {
+            for (icon in icons) packages.setComponentEnabledSetting(HomeScreenIcon.launcher(context, icon),
+                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT, android.content.pm.PackageManager.DONT_KILL_APP)
+        }
+        assertTrue(homeScreenShows("zen-looking-up"))
+    }
+
+    @Test fun launcherOpensTheWindowInItsOwnTask() {
+        val context = instrumentation.targetContext
+        startupTheme()
+        val monitor = instrumentation.addMonitor(MainActivity::class.java.name, null, false)
+        context.startActivity(checkNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        val activity = instrumentation.waitForMonitorWithTimeout(monitor, 20_000) as MainActivity
+        instrumentation.removeMonitor(monitor)
+        try {
+            val task = context.getSystemService(android.app.ActivityManager::class.java).appTasks.mapNotNull { it.taskInfo }.single { it.taskId == activity.taskId }
+            assertEquals("Switching home screen icons never removes the window's task", MainActivity::class.java.name, task.baseIntent.component?.className)
+        } finally {
+            instrumentation.runOnMainSync { activity.finish() }
+            compose.waitUntil(10_000) { activity.isDestroyed }
+        }
+    }
+
     @Test fun splashMarkFitsSystemSafeCircle() {
         val context = instrumentation.targetContext
         val size = 288

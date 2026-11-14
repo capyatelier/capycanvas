@@ -3328,6 +3328,7 @@ class AndroidHostTest {
                         host.bootstrap!!.getJSONObject("launch_mark").getString("icon") == "zen-$name" && (android.os.Build.VERSION.SDK_INT < 31 ||
                             compose.activity.getSharedPreferences("capy-launch-splash", 0).getString("icon", null) == "zen-$name")
                     }
+                    compose.waitUntil(10_000) { homeScreenShows("zen-$name") }
                     compose.onNodeWithTag("image-choice-$index").assertIsSelected()
                     capture("zen-icons-$theme-$index")
                 }

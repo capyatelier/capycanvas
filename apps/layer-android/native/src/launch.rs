@@ -68,7 +68,7 @@ pub(crate) struct PublishedBootstrap(Option<(u64, layer_ui::ZenIcon)>);
 #[cfg(any(target_os = "android", test))]
 impl PublishedBootstrap {
     pub(crate) fn update(&mut self, host: &mut layer_host::NativeHost) -> Result<Option<serde_json::Value>, String> {
-        let current = (host.localization_generation(), host.session.state().settings.zen_icon);
+        let current = host.bootstrap_key();
         if self.0 == Some(current) { return Ok(None); }
         let mut update = serde_json::json!({
             "bootstrap": serde_json::to_value(host.bootstrap_view()).map_err(|e| e.to_string())?,

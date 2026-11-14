@@ -41,6 +41,12 @@ internal fun startupTheme(): String {
     return theme
 }
 
+internal fun homeScreenShows(icon: String) = instrumentation.targetContext.let { context ->
+    context.packageManager.queryIntentActivities(android.content.Intent(android.content.Intent.ACTION_MAIN)
+        .addCategory(android.content.Intent.CATEGORY_LAUNCHER).setPackage(context.packageName), 0)
+        .map { it.activityInfo.name } == listOf(HomeScreenIcon.launcher(context, icon).className)
+}
+
 fun jsonValue(value: Any?): Any? = when (value) {
     is JSONObject -> value.keys().asSequence().associateWith { jsonValue(value.get(it)) }
     is JSONArray -> (0 until value.length()).map { jsonValue(value.get(it)) }

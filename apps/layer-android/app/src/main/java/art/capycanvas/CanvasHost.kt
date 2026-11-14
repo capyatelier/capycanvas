@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ArrayBlockingQueue
@@ -430,6 +431,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
     internal var systemSplash: String? = null
         private set
     internal fun recordSystemSplash(icon: String) = systemSplashRecord.edit().putString("icon", icon).apply()
+    internal val homeScreenIcon = HomeScreenIcon(application, viewModelScope)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache(this)
     internal val layerThumbnails = LayerThumbnails(this)

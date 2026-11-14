@@ -1247,6 +1247,12 @@
 			"path" = "iOS/Platform/EditorAppearance.swift";
 			"sourceTree" = "<group>";
 		};
+		"D4543D74F3E7C9D5CC181482" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Platform/HomeScreenIcon.swift";
+			"sourceTree" = "<group>";
+		};
 		"7D3C19804A2CEF03987177C6" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -2222,6 +2228,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E1BA7907CD2F7A44A043BAAB";
 		};
+		"AAA8241054BDF8636B52CECC" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "D4543D74F3E7C9D5CC181482";
+		};
 		"F5DF90D4AA235922CE2A945A" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7D3C19804A2CEF03987177C6";
@@ -2466,6 +2476,7 @@
 				"3EB0013C828C28A7D5C3D95D",
 				"A54EA1B42FDE69B923E0A57F",
 				"04A395B2EF830CA5FD8DDB22",
+				"AAA8241054BDF8636B52CECC",
 				"F5DF90D4AA235922CE2A945A",
 				"784DF5E7518C7F88871FE103",
 				"ABD0D5ECA27C81A9AE5F5E9C",
@@ -2528,6 +2539,7 @@
 				"INFOPLIST_FILE" = "iOS/App/Info.plist";
 				"SUPPORTS_MACCATALYST" = "NO";
 				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+				"ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES" = "AppIcon-zen-bathing AppIcon-zen-facing-forward AppIcon-zen-sleeping";
 				"CAPY_RUST_PROFILE" = "debug";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
@@ -2575,6 +2587,7 @@
 				"INFOPLIST_FILE" = "iOS/App/Info.plist";
 				"SUPPORTS_MACCATALYST" = "NO";
 				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+				"ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES" = "AppIcon-zen-bathing AppIcon-zen-facing-forward AppIcon-zen-sleeping";
 				"CAPY_RUST_PROFILE" = "release";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";
@@ -4686,6 +4699,7 @@
 				"7C875E8D7840E1DB9E96AD8D",
 				"25EC3074B1CBAC53FDB152BF",
 				"E1BA7907CD2F7A44A043BAAB",
+				"D4543D74F3E7C9D5CC181482",
 				"7D3C19804A2CEF03987177C6",
 				"5DD976DC9A32119C714E5268",
 				"208B16FF60C91B23D7EB1593",

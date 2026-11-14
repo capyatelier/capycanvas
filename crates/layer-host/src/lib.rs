@@ -315,6 +315,9 @@ impl NativeHost {
     pub fn bootstrap_view(&self) -> layer_ui::BootstrapView {
         layer_ui::launch_bootstrap_view(self.session.localization(), self.session.state().settings.zen_icon)
     }
+    pub fn bootstrap_key(&self) -> (u64, layer_ui::ZenIcon) {
+        (self.localization_generation, self.session.state().settings.zen_icon)
+    }
     pub fn set_device_class(&mut self, device: layer_ui::DeviceClass) {
         self.session.set_device_class(device);
         self.invalidate_snapshot();

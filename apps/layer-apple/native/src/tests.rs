@@ -2119,6 +2119,24 @@ fn apple_launch_bootstrap_carries_the_saved_capy_before_the_session_publishes() 
 }
 
 #[test]
+fn apple_snapshot_republishes_the_bootstrap_when_the_capy_changes() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let first = app.full_snapshot();
+        assert!(first["catalog"].is_object());
+        for (index, (icon, _)) in layer_ui::ZenIcon::CHOICES.into_iter().enumerate().rev() {
+            app.borrow().host.dispatch(layer_ui::UiAction::Preferences { action: layer_ui::PreferenceAction::Edit {
+                id: layer_ui::PreferenceId::ZenIcon, value: layer_ui::PreferenceValue::Choice(index as u32),
+            } }).unwrap();
+            let snapshot = app.request(7, Value::Null).unwrap();
+            assert_eq!(snapshot["bootstrap"]["launch_mark"], serde_json::to_value(icon.launch_mark()).unwrap());
+            assert_eq!(snapshot["language_generation"], first["language_generation"]);
+            assert!(snapshot.get("catalog").is_none());
+        }
+    }
+}
+
+#[test]
 fn apple_launch_rejects_invalid_transport_without_a_session() {
     let malformed = CString::new("{}").unwrap();
     let valid = CString::new(r#"{"saved":"","preferred_languages":[]}"#).unwrap();

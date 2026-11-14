@@ -143,6 +143,10 @@ exports it as `$CAPY_APPLICATION_ID`. The commands below write
   `UiSession::document_request` before validating its kind. A prepared
   drawing-close job stays allocated until `documentReleasePreparedClose`, which
   the controller calls in its non-cancellable cleanup.
+- **Launcher entries.** Each Zen pose has a `.Launcher<Pose>` alias of the
+  invisible `LauncherActivity`, which opens `MainActivity` in its own task;
+  `HomeScreenIcon` enables the chosen alias. Never root a task at an alias:
+  disabling it removes the task.
 - **Languages.** `res/xml/locales_config.xml` advertises only the shared shipped
   languages; `native/src/launch_tests.rs` fails when they drift. Follow the
   [localization guide](../ui/localization.md) to add one.

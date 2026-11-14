@@ -146,25 +146,31 @@ val generateBrand by tasks.registering {
             return path to Regex("""viewBox="([^"]+)"""").find(svg)!!.groupValues[1].split(" ").map(String::toFloat)
         }
         output.deleteRecursively()
-        output.resolve("drawable").mkdirs()
-        output.resolve("values").mkdirs()
-        val (path, viewBox) = artwork("zen-looking-up")
-        // The launcher displays the center 72dp of the 108dp adaptive layer.
-        // Match the favicon's 440/512 artwork within that visible square.
-        val scale = (216f * 440f / 512f) / maxOf(viewBox[2], viewBox[3])
-        val x = (324 - viewBox[2] * scale) / 2 - viewBox[0] * scale
-        val y = (324 - viewBox[3] * scale) / 2 - viewBox[1] * scale
-        output.resolve("drawable/capy_mark.xml").writeText("""
-            <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="324" android:viewportHeight="324">
-              <group android:translateX="$x" android:translateY="$y" android:scaleX="$scale" android:scaleY="$scale">
-                <path android:fillColor="#f6f5f4" android:fillType="evenOdd" android:pathData="$path" />
-              </group>
-            </vector>
-        """.trimIndent())
+        for (directory in listOf("drawable", "values", "mipmap-anydpi", "mipmap-anydpi-v33")) output.resolve(directory).mkdirs()
         val poses = launchMarksFile.readLines().filter(String::isNotBlank).map { it.split(" ") }
         for ((icon, centerX, centerY, radius) in poses) {
             val name = icon.replace('-', '_')
             val (pose, box) = artwork(icon)
+            // The launcher displays the center 72dp of the 108dp adaptive layer.
+            // Match the favicon's 440/512 artwork within that visible square.
+            val scale = (216f * 440f / 512f) / maxOf(box[2], box[3])
+            val x = (324 - box[2] * scale) / 2 - box[0] * scale
+            val y = (324 - box[3] * scale) / 2 - box[1] * scale
+            output.resolve("drawable/capy_mark_$name.xml").writeText("""
+                <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="324" android:viewportHeight="324">
+                  <group android:translateX="$x" android:translateY="$y" android:scaleX="$scale" android:scaleY="$scale">
+                    <path android:fillColor="#f6f5f4" android:fillType="evenOdd" android:pathData="$pose" />
+                  </group>
+                </vector>
+            """.trimIndent())
+            for ((directory, monochrome) in listOf("mipmap-anydpi" to "", "mipmap-anydpi-v33" to """<monochrome android:drawable="@drawable/capy_mark_$name" />"""))
+                output.resolve("$directory/capy_launcher_$name.xml").writeText("""
+                    <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+                      <background android:drawable="@color/capy_brand_background" />
+                      <foreground android:drawable="@drawable/capy_mark_$name" />
+                      $monochrome
+                    </adaptive-icon>
+                """.trimIndent())
             output.resolve("drawable/capy_launch_mark_$name.xml").writeText("""
                 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="96dp" android:height="96dp" android:viewportWidth="${box[2]}" android:viewportHeight="${box[3]}">
                   <group android:translateX="${-box[0]}" android:translateY="${-box[1]}">

@@ -34,6 +34,9 @@ private struct IPadEditorScene: View {
             .statusBarHidden()
             .modifier(PhoneSystemOverlays())
             .defersSystemGestures(on: deferredEdges)
+            .onChange(of: store.bootstrap["launch_mark"]["icon"].string) { previous, icon in
+                if !previous.isEmpty && !icon.isEmpty { HomeScreenIcon.show(icon) }
+            }
             .onChange(of: phase) { _, next in
                 if next != .active {
                     store.input(["type": "blur"])
