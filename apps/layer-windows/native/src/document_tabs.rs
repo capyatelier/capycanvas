@@ -286,9 +286,11 @@ impl DocumentService {
                     .and_then(|drag| drag.preview(point))
                     .filter(|slide| slide.attached)
                     .map(|slide| slide.before);
-                if let Some(before) = before {
-                    self.window
-                        .request(host, TabRequest::Reorder { id, before })?;
+                let next = hits.iter().position(|hit| hit.id == id).and_then(|index| hits.get(index + 1)).map(|hit| hit.id);
+                match before {
+                    Some(before) if before == next => return self.tab_action(host, Action::Select { id }),
+                    Some(before) => { self.window.request(host, TabRequest::Reorder { id, before })?; }
+                    None => {}
                 }
             }
             Action::Reorder { id, before } => {

@@ -294,6 +294,13 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     let slide = |order, point| Action::Slide { id: 1, hits: hits(order), clip, press: [40., 17.], point };
     service.tab_action(&mut host, slide([1, 2], [500., 50.])).unwrap();
     assert_eq!(service.window.documents.order(), [1, 2]);
+    assert_eq!(service.window.documents.selected(), 2);
+    service.tab_action(&mut host, slide([1, 2], [49., 20.])).unwrap();
+    settle(&mut service, &mut host);
+    assert_eq!(service.window.documents.order(), [1, 2]);
+    assert_eq!(service.window.documents.selected(), 1, "a slide that keeps its slot selects the drawing like a tap");
+    service.tab_action(&mut host, Action::Select { id: 2 }).unwrap();
+    settle(&mut service, &mut host);
     service.tab_action(&mut host, slide([2, 1], [500., 17.])).unwrap();
     assert_eq!(service.window.documents.order(), [1, 2]);
     service.tab_action(&mut host, slide([1, 2], [500., 17.])).unwrap();
