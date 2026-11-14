@@ -13,15 +13,18 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
   };
   const histogram=histogramJourney({evaluate,settle}).exact;
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
-  await evaluate(`window.photoPaint={open:window.showOpenFilePicker,save:window.showSaveFilePicker,files:new Map()};`);
+  await evaluate(`window.photoPaint={open:window.showOpenFilePicker,save:window.showSaveFilePicker};`);
   try {
     await evaluate(`(async()=>{
       layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
       let blob;
       if(${JSON.stringify(photoUrl)}){const response=await fetch(${JSON.stringify(photoUrl)});if(!response.ok)throw Error('Photo fixture unavailable');blob=await response.blob();}
       else{const c=new OffscreenCanvas(4353,769),x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='rgb(70,140,210)';x.fillRect(0,0,c.width,c.height);blob=await c.convertToBlob({type:'image/png'});}
-      window.showOpenFilePicker=async()=>[{name:'photo-paint.png',async getFile(){return new File([blob],'photo-paint.png')}}];
-      window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){photoPaint.files.set(options.suggestedName,bytes)},async abort(){}}}});
+      const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('photo-paint',{create:true});
+      const photo=await directory.getFileHandle('photo-paint.png',{create:true}),stream=await photo.createWritable();
+      await stream.write(blob);await stream.close();
+      window.showOpenFilePicker=async()=>[photo];
+      window.showSaveFilePicker=async options=>photoPaint.saved=await directory.getFileHandle(options.suggestedName,{create:true});
     })()`);
     await invoke('open_document');
     await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Discard Changes')?.click()`);
@@ -52,14 +55,15 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
     const save = async () => {
       await invoke('save_document_as');
       await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-      return readPackage(evaluate, '[...photoPaint.files.values()].at(-1)');
+      return readPackage(evaluate, 'new Uint8Array(await(await photoPaint.saved.getFile()).arrayBuffer())');
     };
     const saved = await save();
     assert.ok(packageResourceIdentity(saved).length > 0);
-    await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-paint.capy',async getFile(){return new File([[...photoPaint.files.values()].at(-1)],'photo-paint.capy')}}];`);
+    await evaluate(`photoPaint.reopened=photoPaint.saved;window.showOpenFilePicker=async()=>[photoPaint.reopened];`);
     await invoke('open_document'); await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
     assert.deepEqual(opaque(await histogram()), painted);
     const reopened = await save();
+    assert.equal(await evaluate('photoPaint.saved.isSameEntry(photoPaint.reopened)'),true,'Reopened save overwrites its live source entry');
     assert.deepEqual(packageResourceIdentity(reopened), packageResourceIdentity(saved), 'Native paint backing survives reopening exactly');
     console.log('Native save/reopen passed; replacing GPU');
     await evaluate('layerApp.restartGpu()');
