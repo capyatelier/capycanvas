@@ -21,7 +21,6 @@ struct NumberState {
     hstring identity;
     hstring measuredText;double measuredWidth=-1,measuredHeight=0;
     std::function<J(J const&,double,J const&)> resolve;
-    hstring pendingText;CompositionTarget::Rendering_revoker textFrame;
 };
 struct DialRange {
     std::function<double()> value;std::function<hstring()> text;std::function<void(J const&)> apply;
@@ -250,14 +249,7 @@ StackPanel number(std::shared_ptr<WorkspaceData> const& data,ControlSurface surf
                     peer.RaisePropertyChangedEvent(Automation::RangeValuePatternIdentifiers::ValueProperty(),box_value(shown*scale),box_value(local->value*scale));
         }
         if(auto control=weak.get()){
-            if(readout.get()&&control.FocusState()==FocusState::Unfocused&&!local->editing){
-                local->pendingText=value;
-                if(!local->textFrame)local->textFrame=CompositionTarget::Rendering(auto_revoke,[local,weak](auto&&,auto&&){
-                    local->textFrame.revoke();
-                    auto control=weak.get();if(!control||control.FocusState()!=FocusState::Unfocused||local->editing)return;
-                    bool previous=std::exchange(local->formatting,true);updateText(control,local->pendingText);local->formatting=previous;
-                });
-            }else{local->textFrame.revoke();updateText(control,value);}
+            updateText(control,value);
             if(auto display=readout.get()){
                 bool reading=control.FocusState()==FocusState::Unfocused&&!local->editing;
                 if(auto box=panelValueBox.get())box.Width(reading?measureText(value)+12:68);
