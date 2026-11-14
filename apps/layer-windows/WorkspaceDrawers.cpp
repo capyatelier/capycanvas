@@ -72,7 +72,6 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
     }
     void apply(J const& current,hstring const& layout,NativeLayoutInput input,float width,float height){
         if(disposed)return;
-        bool inputChanged=layoutInput.get()!=input.get()||viewportWidth!=width||viewportHeight!=height;
         layoutInput=std::move(input);viewportWidth=width;viewportHeight=height;
         auto next=current.Size()?current.Stringify():hstring{};
         bool changedModel=next!=modelKey;
@@ -90,7 +89,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
                 animating=false;
             }
         }
-        if(layout!=layoutKey||inputChanged){layoutKey=layout;wake();}
+        if(layout!=layoutKey){layoutKey=layout;wake();}
 
         for(auto value:array(data->model,L"panels")){auto panel=value.GetObject();panels[std::wstring(str(panel,L"id"))]=panel;}
         rebuild();
