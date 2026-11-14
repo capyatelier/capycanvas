@@ -45,6 +45,21 @@ test('launch cover delays its existing localized caption and fades only a finish
   h.transition();assert.equal(h.container.hidden,true);
 });
 
+test('launch cover releases controls moved into the phone layout before reveal',()=>{
+  const h=launchCoverHarness();
+  h.container.parentElement.children=[h.container];
+  h.cover.update({visible:false,finished:true},launchCopy());
+  assert.equal(h.controls.inert,false);
+});
+
+test('launch cover preserves independently inert controls added during startup',()=>{
+  const h=launchCoverHarness(),independent={inert:true};
+  h.container.parentElement.children.push(independent);
+  h.cover.update({visible:true,finished:false},launchCopy());
+  h.cover.update({visible:false,finished:true},launchCopy());
+  assert.equal(independent.inert,true);
+});
+
 test('interactive launch bypass is immediate and diagnostics survive later shared updates',()=>{
   const h=launchCoverHarness(),copy=launchCopy();
   h.cover.update({visible:false,finished:false},copy);

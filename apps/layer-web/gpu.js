@@ -136,9 +136,12 @@ export function createLaunchCover({ container, asset, now = () => performance.no
   const content = container.querySelector('.launch-splash');
   const mark = content.querySelector('.launch-capy');
   const caption = content.querySelector('.launch-caption');
+  const blockedControls = new Set([...container.parentElement.children].filter(node=>node!==container));
   const controls = blocked => {
-    for (const node of container.parentElement.children)
-      if (node !== container && node.inert !== blocked) node.inert = blocked;
+    if(blocked)for(const node of container.parentElement.children)
+      if(node!==container&&!node.inert)blockedControls.add(node);
+    for(const node of blockedControls)if(node.inert!==blocked)node.inert=blocked;
+    if(!blocked)blockedControls.clear();
   };
   controls(true);
   container.addEventListener('transitionend', event => {
