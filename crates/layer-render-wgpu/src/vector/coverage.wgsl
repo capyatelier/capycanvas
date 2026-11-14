@@ -1,4 +1,4 @@
-struct Params { size: vec2<u32>, tiles: u32, columns: u32, base: u32, pad: u32, origin: vec2<i32>, base_origin: vec2<i32>, pad2: vec2<u32> }
+struct Params { size: vec2<u32>, tiles: u32, columns: u32, origin: vec2<i32>, pad: vec2<u32> }
 struct Tile { origin: vec2<i32>, start: u32, end: u32 }
 struct Command { header: u32, start: u32, backdrop: i32, color: u32 }
 
@@ -7,8 +7,7 @@ struct Command { header: u32, start: u32, backdrop: i32, color: u32 }
 @group(0) @binding(2) var<storage, read> commands: array<Command>;
 @group(0) @binding(3) var<storage, read> colors: array<vec4<f32>>;
 @group(0) @binding(4) var<storage, read> pool: array<u32>;
-@group(0) @binding(5) var base: texture_2d<f32>;
-@group(0) @binding(6) var output: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(5) var output: texture_storage_2d<rgba32float, write>;
 
 const UNIT: f32 = 1.0 / 2048.0;
 const LANES: vec4<f32> = vec4<f32>(0.0, 1.0, 2.0, 3.0);
@@ -105,12 +104,6 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_id) l
     var c1 = vec4<f32>(0.0);
     var c2 = vec4<f32>(0.0);
     var c3 = vec4<f32>(0.0);
-    if params.base != 0u {
-        if texel_inside(texel) { c0 = textureLoad(base, texel + params.base_origin, 0); }
-        if texel_inside(texel + vec2<i32>(1, 0)) { c1 = textureLoad(base, texel + vec2<i32>(1, 0) + params.base_origin, 0); }
-        if texel_inside(texel + vec2<i32>(2, 0)) { c2 = textureLoad(base, texel + vec2<i32>(2, 0) + params.base_origin, 0); }
-        if texel_inside(texel + vec2<i32>(3, 0)) { c3 = textureLoad(base, texel + vec2<i32>(3, 0) + params.base_origin, 0); }
-    }
     var coverage = vec4<f32>(0.0);
     for (var i = tile.start; i < tile.end; i++) {
         let command = commands[i];

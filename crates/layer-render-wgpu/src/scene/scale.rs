@@ -1492,29 +1492,29 @@ impl Evaluator<'_> {
         let palette = Scene::vector_palette(self.r, self.packet);
         let origin = |input: display_mips::Plan| paint_transform::texel_rect(input.doc_bounds.local(bounds), side);
         let base = output.as_ref().filter(|output| append && output.plan.level == plan.level).map(|output| (output.view.clone(), output.plan));
+        if self.accepted.declaring() { return Ok(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }); }
         let (scene, extent) = (self.packet.scene, self.packet.document_extent);
-        if !self.scene.vectors.window_ready(scene,owner,bounds.min,plan.level,plan.size,extent,palette) {
-            self.unit.waiting=true;
-            return self.materialize(Value::Color([0.;4]),output);
-        }
         let excluded = moving.map(|moving| &*moving.0);
-        let unmoved=excluded.and_then(|_| {
-            let node=Arc::new(graph::Expression::Vector {owner,offset:scene.occurrence_offset64(owner).map(f64::to_bits),moving:None});
-            let key=self.cache.page_key(node,bounds.in_frame(extent));
-            if key.level!=plan.level {return None;}
-            let image=self.cache.pages.lock().unwrap().get(&key,bounds.in_frame(extent),pages::Accuracy::Display,self.cache.required_input_level(),self.class)?;
-            let source=(image.view.clone(),image.plan);self.unit.reads.push(image);
-            Some(source)
-        });
-        let appended = base.as_ref().and_then(|_| self.scene.vectors.append_batch(scene, owner, excluded, bounds.min, plan.level, plan.size, extent, palette));
-        let (batch, base, kept) = match appended {
-            Some(batch) => (batch, base.clone(), base),
-            None => match base.as_ref().and_then(|_| self.scene.vectors.repaint_batch(scene, owner, excluded, None, bounds.min, plan.level, plan.size, extent, palette)) {
-                Some(batch) => (batch, None, base),
-                None => match unmoved.as_ref().and_then(|_| self.scene.vectors.repaint_batch(scene, owner, excluded, excluded, bounds.min, plan.level, plan.size, extent, palette)) {
-                    Some(batch) => (batch, None, unmoved),
-                    None => (self.scene.vectors.batch(scene, owner, excluded, bounds.min, plan.level, plan.size, extent, palette), None, None),
-                },
+        let patched = base.as_ref().and_then(|_| self.scene.vectors.repaint_batch(scene, owner, excluded, None, bounds.min, plan.level, plan.size, extent, palette)).map(|batch| (batch, base.clone()));
+        let (batch, kept) = match patched {
+            Some(patched) => patched,
+            None => {
+                if !self.scene.vectors.window_ready(scene,owner,bounds.min,plan.level,plan.size,extent,palette) {
+                    self.unit.waiting=true;
+                    return self.materialize(Value::Color([0.;4]),output);
+                }
+                let unmoved=excluded.and_then(|_| {
+                    let node=Arc::new(graph::Expression::Vector {owner,offset:scene.occurrence_offset64(owner).map(f64::to_bits),moving:None});
+                    let key=self.cache.page_key(node,bounds.in_frame(extent));
+                    if key.level!=plan.level {return None;}
+                    let image=self.cache.pages.lock().unwrap().get(&key,bounds.in_frame(extent),pages::Accuracy::Display,self.cache.required_input_level(),self.class)?;
+                    let source=(image.view.clone(),image.plan);self.unit.reads.push(image);
+                    Some(source)
+                });
+                match unmoved.as_ref().and_then(|_| self.scene.vectors.repaint_batch(scene, owner, excluded, excluded, bounds.min, plan.level, plan.size, extent, palette)) {
+                    Some(batch) => (batch, unmoved),
+                    None => (self.scene.vectors.batch(scene, owner, excluded, bounds.min, plan.level, plan.size, extent, palette), None),
+                }
             },
         };
         match kept {
@@ -1527,8 +1527,7 @@ impl Evaluator<'_> {
             None => self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT)),
         }
         if batch.tile_count() > 0 {
-            let base = base.map(|(view, input)| { let [x, y, ..] = origin(input); (view, [x as i32, y as i32]) });
-            self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone(), base })));
+            self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone() })));
         }
         self.materialize(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }, output)
     }
@@ -1560,7 +1559,7 @@ impl Evaluator<'_> {
             };
             self.scene.jobs.push(Job::Clear(image.view.clone(), wgpu::Color::TRANSPARENT));
             if batch.tile_count() > 0 {
-                self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: image.view.clone(), base: None })));
+                self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: image.view.clone() })));
             }
             let source = (image.view.clone(), plan.doc_bounds.min);
             self.unit.motion = Some(super::vectors::MotionImage { key, window: plan.doc_bounds, image, revision: 0 });
@@ -1588,7 +1587,7 @@ impl Evaluator<'_> {
         let batch = self.scene.vectors.preview_batch(&path, offset, window.min, plan.level, plan.size, self.packet.document_extent, Scene::vector_palette(self.r, self.packet));
         self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT));
         if batch.tile_count() > 0 {
-            self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone(), base: None })));
+            self.scene.jobs.push(super::Job::Vector(Box::new(super::vectors::VectorJob { batch, output: target.view.clone() })));
         }
         self.materialize(Value::Image { view: target.view, slot: target.slot, opacity: 1., plan, preview: None, encode: false }, output)
     }

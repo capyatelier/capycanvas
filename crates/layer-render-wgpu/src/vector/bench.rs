@@ -78,7 +78,7 @@ fn run(r: &crate::WgpuRasterizer, kernel: &Kernel, uploads: &mut crate::Uploads,
     let start = Instant::now();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     if let Some(t) = timer { t.marker.write(&mut encoder, &t.query, 0); }
-    kernel.encode(&r.device, &mut encoder, uploads, &mut arena, batch, pool, None, &r.empty_view, view).unwrap();
+    kernel.encode(&r.device, &mut encoder, uploads, &mut arena, batch, pool, view).unwrap();
     if let Some(t) = timer {
         t.marker.write(&mut encoder, &t.query, 1);
         encoder.resolve_query_set(&t.query, 0..2, &t.resolved, 0);

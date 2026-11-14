@@ -335,7 +335,7 @@ fn gpu_kernel_matches_its_emulation() {
         let view = output.create_view(&Default::default());
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let buffer = pool.flush(&r.device, &mut encoder, &mut uploads).unwrap();
-        kernel.encode(&r.device, &mut encoder, &mut uploads, &mut arena, &batch, &buffer, None, &r.empty_view, &view).unwrap();
+        kernel.encode(&r.device, &mut encoder, &mut uploads, &mut arena, &batch, &buffer, &view).unwrap();
         uploads.finish(&encoder);
         encoder.submit(&r.queue);
         let gpu = crate::test_support::float_pixels(&r, &output);

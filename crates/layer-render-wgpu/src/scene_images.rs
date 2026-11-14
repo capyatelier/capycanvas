@@ -314,7 +314,7 @@ impl Scene {
                 && [bounds.min_x(), bounds.min_y()] == [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE]
                 && destination.texture.usage().contains(wgpu::TextureUsages::STORAGE_BINDING);
             let drawn = match &self.jobs[n.saturating_sub(2)..] {
-                [Job::Clear(cleared, _), Job::Vector(job)] => cleared == view && job.output == *view && job.base.is_none(),
+                [Job::Clear(cleared, _), Job::Vector(job)] => cleared == view && job.output == *view,
                 [.., Job::Clear(cleared, _)] => cleared == view,
                 _ => false,
             };

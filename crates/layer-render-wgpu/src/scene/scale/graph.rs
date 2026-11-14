@@ -522,7 +522,7 @@ impl Evaluator<'_> {
         }
         let mut write=self.cache.pages.lock().unwrap().prepare_write(key.clone(),region,pages::Accuracy::Display,required_input_level)?;
         let output=Target {view:image.view.clone(),slot:Some(Slot::Root),plan:image.plan};
-        let direct=(image.texture.format()==wgpu::TextureFormat::Rgba32Float).then(||output.clone());
+        let direct=(image.texture.format()==wgpu::TextureFormat::Rgba32Float || matches!(node.as_ref(),Expression::Vector {..})).then(||output.clone());
         let outer=std::mem::replace(&mut self.approximate,false);
         let value=self.evaluate_uncached(node,direct)?;
         if exact_at_view && !self.approximate {write.accuracy=pages::Accuracy::Exact;}
@@ -553,12 +553,21 @@ impl Evaluator<'_> {
             && let Some(value)=self.evaluate_page(node,self.class.max(Class::Prefetch))? {return Ok(value);}
         self.evaluate_uncached(node,output)
     }
+    fn repaints(&mut self,node:&Node,owner:OccurrenceHandle,output:&Target)->bool {
+        let region=self.region.in_frame(self.cache.plan.extent);
+        let key=self.cache.page_key(node.clone(),region);
+        let store=self.cache.pages.lock().unwrap();
+        let Some((previous,exact))=store.superseded(&key,&output.view,region,self.cache.required_input_level()) else {return false;};
+        let continues=previous.scene().vector_layer(owner).is_some_and(|previous|self.scene.vectors.changes_from(self.packet.scene,owner,previous));
+        self.approximate|=continues && !exact;
+        continues
+    }
     fn evaluate_uncached(&mut self,node:&Node,output:Option<Target>)->Result<Value,GpuRasterError> {
         let outer_approximate=std::mem::replace(&mut self.approximate,false);
         let result=match node.as_ref() {
             Expression::Color(c)=>Ok(Value::Color(c.map(f32::from_bits))),
             Expression::Objects {content,preview}=>self.objects(content,*preview,output),
-            Expression::Vector {owner,moving,..}=>self.vector(*owner,moving.as_ref(),output,false),
+            Expression::Vector {owner,moving,..}=>{let append=output.as_ref().is_some_and(|output|self.repaints(node,*owner,output));self.vector(*owner,moving.as_ref(),output,append)},
             Expression::VectorPreview {owner}=>self.vector_preview(*owner,output),
             Expression::VectorMotion {owner}=>self.vector_motion(*owner,output),
             Expression::Source {id,frame,extent,outside}=>self.source(*id,*frame,*extent,f32::from_bits(*outside)),

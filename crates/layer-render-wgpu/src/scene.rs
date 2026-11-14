@@ -1361,7 +1361,7 @@ impl Scene {
         let at = self.jobs.iter().rposition(|job| matches!(job, Job::Clear(target, color) if target == view && *color == wgpu::Color::TRANSPARENT))?;
         self.jobs[at + 1..].iter().all(|job| match job {
             Job::Clear(target, _) => target != view,
-            Job::Vector(job) => job.output != *view && job.base.as_ref().is_none_or(|(base, _)| base != view),
+            Job::Vector(job) => job.output != *view,
             Job::Draw { target, sources, .. } => target != view && !sources.contains(view),
             _ => false,
         }).then_some(at)

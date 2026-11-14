@@ -50,9 +50,8 @@ struct LayerCache {
     derived_paths: u64,
 }
 #[derive(Default)]
-struct Change { damage: Vec<[f64; 4]>, appended: Vec<u32>, touched: Vec<u32>, removed: Vec<Item>, mixed: bool, full: bool }
+struct Change { damage: Vec<[f64; 4]>, touched: Vec<u32>, removed: Vec<Item>, full: bool, from: VectorObject, to: VectorObject }
 impl Change {
-    fn appended(&self) -> Option<&[u32]> { (!self.full && !self.mixed && !self.appended.is_empty()).then_some(&self.appended) }
     fn damage(&self) -> Option<&[[f64; 4]]> { (!self.full && !self.damage.is_empty()).then_some(&self.damage) }
 }
 
@@ -110,7 +109,6 @@ impl LayerCache {
         if self.root.same_root(object) && self.palette == Some(palette) { return; }
         let first = self.root.chunks().is_empty() && self.items.iter().all(Option::is_none);
         let mut added = Vec::new();
-        let mut other = !first && self.palette.is_some() && self.palette != Some(palette);
         let mut damage = Vec::new();
         if self.palette != Some(palette) {
             self.palette = Some(palette);
@@ -138,7 +136,6 @@ impl LayerCache {
                         common.push((*rank, slot));
                     }
                     (_, Some(slot)) => {
-                        other = true;
                         let removed = self.remove(slot, pool);
                         damage.push(removed.bounds);
                         self.pending.removed.push(removed);
@@ -151,7 +148,6 @@ impl LayerCache {
         }
         for id in previous.keys().filter(|id| !seen.contains(*id)) {
             if let Some(slot) = self.ids.get(id).copied() {
-                other = true;
                 let removed = self.remove(slot, pool);
                 damage.push(removed.bounds);
                 self.pending.removed.push(removed);
@@ -159,18 +155,14 @@ impl LayerCache {
         }
         let mut ranks: Vec<usize> = common.iter().map(|(rank, _)| *rank).collect();
         if !ranks.is_sorted() {
-            other = true;
             ranks.sort_unstable();
             for ((rank, slot), expected) in common.iter().zip(ranks) {
                 if *rank != expected { damage.push(self.items[*slot as usize].as_ref().unwrap().bounds); self.pending.touched.push(*slot); }
             }
         }
-        let set: HashSet<ItemId> = added.iter().copied().collect();
-        let leading = object.records().take_while(|(_, record)| record.id().is_some_and(|id| set.contains(&id))).count();
         let slots: Vec<u32> = added.iter().filter_map(|id| self.ids.get(id).copied()).collect();
         let pending = &mut self.pending;
         pending.full |= first;
-        if !other && !added.is_empty() && leading == added.len() { pending.appended.extend(&slots); } else { pending.mixed = true; }
         pending.touched.extend(slots);
         pending.damage.extend(damage);
         self.root = object.clone();
@@ -328,7 +320,7 @@ pub(crate) struct Replaced(pub Option<Arc<[PathItem]>>);
 impl PartialEq for Replaced { fn eq(&self, other: &Self) -> bool { self.0.as_ref().map(Arc::as_ptr) == other.0.as_ref().map(Arc::as_ptr) } }
 pub(super) struct MotionImage { pub key: (OccurrenceHandle, Moving, u32, [i64; 2], Replaced), pub window: DocRect, pub image: super::Image, pub revision: u64 }
 #[derive(Clone)]
-pub(super) struct VectorJob { pub batch: Batch, pub output: wgpu::TextureView, pub base: Option<(wgpu::TextureView, [i32; 2])> }
+pub(super) struct VectorJob { pub batch: Batch, pub output: wgpu::TextureView }
 
 impl Scene {
     pub(crate) fn begin_vector_frame(&mut self) { self.vectors.begin_frame(); }
@@ -341,7 +333,7 @@ impl Scene {
         let preview = r.vector_preview.as_ref().filter(|p| self.object_display && p.owner == owner).map(|p| p.path.clone());
         let batch = self.vectors.batch_with(packet.scene, owner, None, origin, 0, [PAGE_SIZE; 2], packet.document_extent, Self::vector_palette(r, packet), preview.as_ref(), false);
         let output = self.alloc(r, wgpu::Color::TRANSPARENT)?;
-        if batch.tile_count() > 0 { self.jobs.push(Job::Vector(Box::new(VectorJob { batch, output: self.pool[output].view.clone(), base: None }))); }
+        if batch.tile_count() > 0 { self.jobs.push(Job::Vector(Box::new(VectorJob { batch, output: self.pool[output].view.clone() }))); }
         Ok(output)
     }
     pub(super) fn vector_thumbnail(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, owner: OccurrenceHandle, grid: display_mips::Plan,
@@ -349,7 +341,7 @@ impl Scene {
         let target = create_color_target(&r.device, [PAGE_SIZE; 2], "vector layer thumbnail");
         r.encode_clear(encoder, &target.1, "vector layer thumbnail");
         let batch = self.vectors.batch_with(packet.scene, owner, None, [0, 0], grid.level, grid.size, packet.document_extent, (r.device.working_space(), layer_core::BlendSpace::Linear), None, false);
-        if batch.tile_count() > 0 { self.vectors.encode(r, encoder, &VectorJob { batch, output: target.1.clone(), base: None })?; }
+        if batch.tile_count() > 0 { self.vectors.encode(r, encoder, &VectorJob { batch, output: target.1.clone() })?; }
         Ok(target)
     }
     pub(super) fn vector_damage(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>) {
@@ -401,7 +393,7 @@ impl Scene {
             None => self.vectors.motion_batch(packet.scene, owner, &key.1.0, plan.doc_bounds.min, level, plan.size, extent, palette),
         };
         r.encode_clear(encoder, &image.view, "vector motion");
-        if batch.tile_count() > 0 { self.vectors.encode(r, encoder, &VectorJob { batch, output: image.view.clone(), base: None })?; }
+        if batch.tile_count() > 0 { self.vectors.encode(r, encoder, &VectorJob { batch, output: image.view.clone() })?; }
         self.vectors.replace_motion(MotionImage { key, window: plan.doc_bounds, image, revision: 0 });
         Ok(())
     }
@@ -594,11 +586,17 @@ impl Vectors {
         let pool = self.pool.get_or_insert_with(|| Pool::charged(POOL_BYTES, &self.tier));
         let layer = self.layers.entry(handle).or_default();
         layer.update(object, palette, pool);
-        layer.change = std::mem::take(&mut layer.pending);
+        if layer.change.to.same_root(&layer.root) && layer.pending.damage.is_empty() && !layer.pending.full { return Vec::new(); }
+        let from = std::mem::take(&mut layer.change.to);
+        layer.change = Change { from, to: layer.root.clone(), ..std::mem::take(&mut layer.pending) };
         layer.change.damage.iter().map(|[x0, y0, x1, y1]| DocRect {
             min: [(x0 + offset[0]).floor() as i64 - 16, (y0 + offset[1]).floor() as i64 - 16],
             max: [(x1 + offset[0]).ceil() as i64 + 16, (y1 + offset[1]).ceil() as i64 + 16],
         }).collect()
+    }
+    pub fn changes_from(&self, scene: SceneView<'_>, owner: OccurrenceHandle, previous: &VectorObject) -> bool {
+        let (Some(handle), Some(object)) = (scene.vector_handle(owner), scene.vector_layer(owner)) else { return false };
+        self.layers.get(&handle).is_some_and(|layer| layer.change.from.same_root(previous) && layer.change.to.same_root(object))
     }
     pub fn bounds(scene: SceneView<'_>, owner: OccurrenceHandle) -> DocRect {
         let Some(object) = scene.vector_layer(owner) else { return DocRect::default() };
@@ -611,21 +609,6 @@ impl Vectors {
     #[expect(clippy::too_many_arguments, reason = "A window names its layer, the paths it leaves out, placement, level, extent and color domain")]
     pub fn batch(&mut self, scene: SceneView<'_>, owner: OccurrenceHandle, excluded: Option<&BTreeSet<ItemId>>, origin: [i64; 2], level: u32, size: [u32; 2], extent: [u32; 2], palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) -> Batch {
         self.batch_with(scene, owner, excluded, origin, level, size, extent, palette, None, true)
-    }
-    #[expect(clippy::too_many_arguments, reason = "A window names its layer, the paths it leaves out, placement, level, extent and color domain")]
-    pub fn append_batch(&mut self, scene: SceneView<'_>, owner: OccurrenceHandle, excluded: Option<&BTreeSet<ItemId>>, origin: [i64; 2], level: u32, size: [u32; 2], extent: [u32; 2], palette: (layer_core::color::RgbSpace, layer_core::BlendSpace)) -> Option<Batch> {
-        let handle = scene.vector_handle(owner)?;
-        let object = scene.vector(handle)?;
-        let pool = self.pool.get_or_insert_with(|| Pool::charged(POOL_BYTES, &self.tier));
-        let layer = self.layers.get_mut(&handle)?;
-        layer.update(object, palette, pool);
-        let slots: Vec<u32> = layer.change.appended()?.iter().copied().filter(|slot| layer.items[*slot as usize].as_ref().is_some_and(|item| excluded.is_none_or(|excluded| !excluded.contains(&item.path.id)))).collect();
-        let (entries, _) = self.entries(handle, slots, scene.occurrence_offset64(owner), level, extent, false);
-        let layers: Vec<Layer> = entries.iter().map(|(geometry, base, colors)| Layer { geometry, base: *base, colors }).collect();
-        let mut batch = Batch::default();
-        let side = 1i64 << level;
-        batch.build(&layers, [origin[0].div_euclid(side), origin[1].div_euclid(side)], size);
-        Some(batch)
     }
     /// Redraw only the tiles of a window that the layer's changes cover, or
     /// with `leaving` the tiles those paths cover, over a copy of the window.
@@ -858,7 +841,7 @@ impl Vectors {
         r.metrics.vector_tiles += job.batch.tile_count() as u64;
         let pool = self.pool.get_or_insert_with(|| Pool::charged(POOL_BYTES, &self.tier));
         let buffer = pool.flush(&r.device, encoder, &mut r.uploads)?;
-        r.scene_pipelines.vector.encode(&r.device, encoder, &mut r.uploads, &mut self.batches, &job.batch, &buffer, job.base.as_ref().map(|(view, origin)| (view, *origin)), &r.empty_view, &job.output)
+        r.scene_pipelines.vector.encode(&r.device, encoder, &mut r.uploads, &mut self.batches, &job.batch, &buffer, &job.output)
     }
     pub fn trim(&mut self) {
         let total: usize = self.layers.values().map(|layer| layer.derived_bytes).sum();

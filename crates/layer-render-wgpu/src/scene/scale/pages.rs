@@ -538,6 +538,7 @@ pub(in crate::scene) struct Store {
     version_slots: u64,
     pinned: Arc<crate::residency::Tier>,
     expected:Option<Arc<SignatureFrame>>,
+    previous:Option<Arc<SignatureFrame>>,
     moving:Vec<crate::scene::vectors::Moving>,
     #[cfg(not(target_arch="wasm32"))]
     retirement:Option<Retirement>,
@@ -550,7 +551,7 @@ impl Store {
             self.confirm();
             match self.expected.as_ref().and_then(|previous|frame.carry(previous)) {
                 Some(regions)=>for (level,region) in regions {self.changes.push(Change::Keys(level,region));},
-                None=>self.changes.push(Change::Reset),
+                None=>{self.changes.push(Change::Reset);self.previous=self.expected.take();},
             }
             self.frames+=1;
         }
@@ -570,6 +571,10 @@ impl Store {
         self.moving=live.cloned().collect();
         let dead:Vec<Key>=self.pages.iter().filter(|(key,page)|!page.pinned() && graph::Expression::moves_other_than(&key.expression,&self.moving)).map(|(key,_)|key.clone()).collect();
         for key in dead {let image=self.remove(&key).image;self.retire(image);}
+    }
+    pub(super) fn superseded(&self,key:&Key,view:&wgpu::TextureView,region:PixelRect,input_level:u32)->Option<(&SignatureFrame,bool)> {
+        let (page,previous)=(self.pages.get(key)?,self.previous.as_deref()?);
+        (page.image.view==*view && page.matches(Some(previous),region,input_level)==Some(true)).then(||(previous,Coverage::covers(&page.coverage.exact,region)))
     }
     pub(in crate::scene) fn advance_epoch(&mut self) {self.victims.epoch+=1;}
     fn capture(&self,key:&Key,region:PixelRect,input_level:u32)->Result<Accepted,GpuRasterError> {
