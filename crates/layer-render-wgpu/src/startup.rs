@@ -433,6 +433,12 @@ impl Startup {
     }
 }
 impl WgpuRasterizer {
+    pub(crate) fn startup_outstanding(&self) -> Option<frame_demand::Outstanding> {
+        let startup = self.startup.as_ref()
+            .filter(|s| s.brush.is_some() && !s.finished && !(s.brush_ready && s.compiler.pending() == 0))?;
+        Some(if startup.papers.iter().any(|(_, id)| self.papers.work_pending(id)) { frame_demand::Outstanding::Runnable }
+            else { frame_demand::Outstanding::Blocked(frame_demand::Input::Compile) })
+    }
     fn scene_scale_pipelines(&self,scene:SceneView<'_>)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
         let format=self.display_precision(scene).format();
         self.scene_pipelines.scale_pipelines(format).into_iter()
@@ -1898,6 +1904,36 @@ mod gpu_tests {
         assert!(evicted>0,"the fixture must evict the startup paper");
         assert!(!r.startup_needs_update(&doc,&brush,false));
         assert!(progress.brush_ready,"an evicted startup paper bake must not hold the brush gate");
+        drop(r);drop(reference);finish_shader_compiler_shutdown();
+    }
+
+    #[test]
+    fn an_idle_host_finishes_a_paper_brush_startup_from_wakes() {
+        let color=Default::default();
+        let reference=WgpuRasterizer::new_native_headless(color).unwrap();
+        let mut r=crate::test_support::staged_renderer(&reference,color);
+        let (wake,woken)=mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=wake.send(());}));
+        let mut doc=Document::new(layer_core::authored::PortableId::random(),64,64,layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let brush=layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);
+        let deadline=std::time::Instant::now()+Duration::from_secs(60);
+        for paper in [None,Some("rough")] {
+            if let Some(paper)=paper {doc.set_paper_texture(layer_core::paper::built_in_paper(paper).unwrap().texture.clone());}
+            assert!(r.startup_needs_update(&doc,&brush,false),"{paper:?} bakes another paper tile");
+            r.prepare_startup(&doc,&brush,false).unwrap();
+            assert!(!r.startup.as_ref().unwrap().papers.is_empty(),"Pencil bakes its paper before pen-down");
+            loop {
+                let progress=r.poll_startup().unwrap();
+                if progress.complete {break;}
+                if r.frame_demand()!=layer_render::FrameDemand::Wait {std::thread::sleep(Duration::from_millis(1));continue;}
+                loop {
+                    woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap_or_else(|_| panic!(
+                        "unfinished startup on {paper:?} waited without a wake: {progress:?}, terms: {:?}, pending jobs: {}",
+                        r.outstanding_terms(),r.startup.as_ref().unwrap().compiler.pending()));
+                    if r.frame_preparation_pending() {break;}
+                }
+            }
+        }
         drop(r);drop(reference);finish_shader_compiler_shutdown();
     }
 

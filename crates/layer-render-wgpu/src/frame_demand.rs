@@ -15,11 +15,11 @@ impl WgpuRasterizer {
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {
         self.outstanding().into_iter().filter_map(|(term, state)| state.map(|state| (term, state))).collect()
     }
-    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 25] {
+    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 26] {
         let restoring = self.restore_preparation().is_some();
         self.terms().map(|(term, state)| (term, state.filter(|_| !restoring || matches!(term, "restore preparation" | "display selection" | "settling"))))
     }
-    fn terms(&self) -> [(&'static str, Option<Outstanding>); 25] {
+    fn terms(&self) -> [(&'static str, Option<Outstanding>); 26] {
         use Outstanding::{Blocked, Runnable};
         let decode = self.image_decode_waiting();
         let gated = |pending: bool| pending.then_some(if decode { Blocked(Input::Decode) } else { Runnable });
@@ -55,6 +55,7 @@ impl WgpuRasterizer {
             ("display", self.scale_display.as_ref().and_then(|cache| cache.outstanding(self))),
             ("display retention", self.retention_above_grant().then_some(Runnable)),
             ("paper shade", self.paper_shade_work_pending().then_some(Runnable)),
+            ("startup", self.startup_outstanding()),
             ("region preparation", self.region_prewarm_runnable().then_some(Runnable)),
         ]
     }

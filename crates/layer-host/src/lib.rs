@@ -1588,7 +1588,13 @@ mod tests {
         while !done(host) {
             match host.poll_preparation() {
                 layer_render::FrameDemand::Wait => woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-                    .unwrap_or_else(|_| panic!("the host waited without a wake: {}", host.session.rendering_diagnostics())),
+                    .unwrap_or_else(|_| {
+                        let (startup, dirty, demand) = (host.startup, host.dirty, host.session.frame_demand());
+                        let gpu = host.session.renderer_mut().0.as_mut().unwrap();
+                        let preparation = gpu.frame_preparation_pending();
+                        panic!("the host waited without a wake: startup={startup:?}, polled now={:?}, dirty={dirty}, session demand={demand:?}, renderer preparation pending={preparation}, {}",
+                            gpu.poll_startup(), host.session.rendering_diagnostics())
+                    }),
                 layer_render::FrameDemand::WaitUntil(at) => { let _ = woken.recv_timeout(at.saturating_duration_since(std::time::Instant::now())); }
                 _ => frame_step(host, clock, deadline),
             }
