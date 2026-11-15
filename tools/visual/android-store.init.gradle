@@ -1,0 +1,14 @@
+gradle.beforeProject { project ->
+    def buildRoot = gradle.startParameter.projectProperties['capyStoreBuild']
+    if (buildRoot) {
+        def directory = project.path == ':' ? 'root' : project.path.substring(1).replace(':', '/')
+        project.layout.buildDirectory.set(new File(buildRoot, directory))
+    }
+    project.pluginManager.withPlugin('com.android.application') {
+        def assets = gradle.startParameter.projectProperties['capyStoreAssets']
+        if (!assets || !new File(assets, 'store-recipe.json').isFile()) {
+            throw new GradleException('Pass -PcapyStoreAssets=<staged native showcase assets>')
+        }
+        project.android.sourceSets.androidTest.assets.srcDir(assets)
+    }
+}

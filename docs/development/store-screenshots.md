@@ -1,11 +1,86 @@
-# GTK store screenshots
+# Native store screenshots
 
 [Developer guide](README.md) · [Linux](linux.md) · [Releasing](releasing.md)
 
 `capycanvas-web` owns showcase artwork, scene recipes, the generation script and
-published images. This repository supplies the native GTK capture helper. Run it
+published images. This repository supplies native capture helpers. The GTK helper runs
 locally on a hardware Vulkan GPU when refreshing the images; release runners do
 not need to render or download them.
+
+Store metadata generation, Windows CSV imports, Play listing uploads and Apple
+preparation live beside the Flatpak orchestration in
+[`capycanvas-web/site/scripts/store`](https://github.com/babymastodon/capycanvas-web/tree/main/site/scripts/store).
+AppStream remains the shared source of translated listing text. Store overrides
+live in that repository's `store/locales.json`. Keep native capture code here;
+keep artwork and scene values in the website's showcase recipe.
+
+## Android captures
+
+Stage the native assets with the website's `native.mjs prepare` command. Reserve
+the device under [Test devices](devices.md), then build both APKs with that owner's
+application ID. The optional init script adds the staged artwork to the test APK:
+
+```bash
+CAPY_CAPTURE_ID=$(python3 tools/devices/devices.py appid)
+apps/layer-android/gradlew -p apps/layer-android \
+  -I "$PWD/tools/visual/android-store.init.gradle" \
+  -PcapyStoreAssets=/path/to/staged-assets -PcapyAbi=arm64-v8a \
+  -PcapyApplicationId="$CAPY_CAPTURE_ID" \
+  :app:assembleDebug :app:assembleDebugAndroidTest
+python3 tools/visual/android-store-capture.py \
+  --device RESERVED_DEVICE --application-id "$CAPY_CAPTURE_ID" \
+  --build-tools "$ANDROID_HOME/build-tools/37.0.0" \
+  --apk apps/layer-android/app/build/outputs/apk/debug/app-debug.apk \
+  --test-apk apps/layer-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+  --kind tablet --languages ja,fr --output artifacts/store/android
+```
+
+`-PcapyStoreBuild=/path/to/owned-build` moves the Gradle output tree. The runner
+checks both APK identities before installation and requires instrumentation's
+`OK (1 test)` result. `AndroidStoreShowcaseTest` consumes the staged scene actions,
+checks native previews, exact scopes and font coverage, and captures the native
+display in both themes with private application storage. `--kind phone` uses
+portrait orientation and the native Layers or Properties drawer. For tall phone
+displays, `--size 1080x2160` sets a viewport within Play's 2:1 image limit. The
+runner restores the original display override even when a capture fails. This
+qualifies that viewport, not another physical device. Remove only your own test installs and release the device when finished.
+
+## Windows captures
+
+Build with `apps/layer-windows/scripts/build.ps1`, stage the same website recipe
+and artwork on Windows, then run:
+
+```powershell
+./tools/visual/windows-store-capture.ps1 `
+  -Recipe C:/capture-inputs/store-recipe.json `
+  -Executable ./artifacts/windows/Release/CapyCanvas.exe `
+  -Output ./artifacts/store/windows -Locales ja,fr
+```
+
+The coordinator calls `scripts/test-desktop.ps1` for each variant. Its native
+adapter imports through the file picker, uses UI Automation and acknowledged
+pointer input, and takes composed GPU captures. It supports the three showcase
+scenes and their native framing; extending the showcase's brush preset requires
+extending that adapter. Use the [Windows VM helper](windows-vm.md) from Linux,
+with an owned hardware GPU VM. Store captures do not measure performance.
+
+## Apple captures
+
+Use the same staged inputs on an Apple Silicon Mac. The native Apple showcase
+adapter is pending: extend the existing Swift fixtures and `tools/visual/mac-capture.swift`,
+using private storage and an owned bundle ID. Build both Mac and iPad targets;
+capture actual native controls and Metal content. Do not substitute GTK images.
+The website's Apple tool validates a capture handoff and explicitly reports that
+upload qualification remains incomplete. Its metadata command can independently
+prepare or save selected draft localizations without submitting for review.
+
+Mac App Store delivery also needs an App Store distribution/archive export path
+in [`release.sh`](../../apps/layer-apple/scripts/release.sh). Its current `mac`
+path produces a Developer ID DMG, and its `publish` action accepts only `ipad`.
+Keep that packaging work in this repository and qualify it on a Mac before
+selecting processed production builds in App Store Connect.
+
+## GTK captures
 
 The helper starts one scene in a fresh private home, application storage, D-Bus
 session and headless Mutter display. It imports through the native file-launch
@@ -126,7 +201,7 @@ and [Flathub screenshot guidance](https://docs.flathub.org/docs/for-app-authors/
 ## Checks
 
 ```bash
-python3 -m unittest discover -s tools/visual -p 'test_gtk_store_capture.py'
+python3 -m unittest discover -s tools/visual -p 'test_*store_capture.py'
 node apps/layer-linux/bench/window-capture.test.mjs
 cargo test --locked -p layer-linux
 ```
