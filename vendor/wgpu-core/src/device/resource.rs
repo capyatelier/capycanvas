@@ -796,8 +796,10 @@ impl Device {
         &self,
         poll_type: wgt::PollType<crate::SubmissionIndex>,
     ) -> (UserClosures, Result<wgt::PollStatus, WaitIdleError>) {
-        let snatch_guard = self.snatchable_lock.read();
-        let maintain_result = self.maintain(poll_type, snatch_guard);
+        let maintain_result = match self.wait_for_submission(poll_type) {
+            Ok(wait_submission_index) => self.maintain(wait_submission_index, self.snatchable_lock.read()),
+            Err(error) => (UserClosures::default(), Err(error)),
+        };
 
         self.lose_if_oom();
 
@@ -808,11 +810,47 @@ impl Device {
         maintain_result
     }
 
+    fn wait_for_submission(
+        &self,
+        poll_type: wgt::PollType<crate::SubmissionIndex>,
+    ) -> Result<Option<crate::SubmissionIndex>, WaitIdleError> {
+        let (submission_index, wait_timeout) = match poll_type {
+            wgt::PollType::Wait {
+                submission_index,
+                timeout,
+            } => (submission_index, timeout),
+            wgt::PollType::Poll => return Ok(None),
+        };
+        let last_successful_submission_index = self
+            .last_successful_submission_index
+            .load(Ordering::Acquire);
+        let target_submission_index = match submission_index {
+            Some(submission_index) if submission_index > last_successful_submission_index => {
+                return Err(WaitIdleError::WrongSubmissionIndex(
+                    submission_index,
+                    last_successful_submission_index,
+                ));
+            }
+            Some(submission_index) => submission_index,
+            None => last_successful_submission_index,
+        };
+
+        log::trace!("Device::maintain: waiting for submission index {target_submission_index}");
+
+        // This error match is only about `DeviceErrors`. At this stage we do not care if
+        // the wait succeeded or not, and the `Ok(bool)`` variant is ignored.
+        unsafe {
+            self.raw()
+                .wait(self.fence.as_ref(), target_submission_index, wait_timeout)
+        }
+        .map_err(|e| self.handle_hal_error(e))?;
+        Ok(Some(target_submission_index))
+    }
+
     /// Check the current status of the GPU and process any submissions that have
     /// finished.
     ///
-    /// The `poll_type` argument tells if this function should wait for a particular
-    /// submission index to complete, or if it should just poll the current status.
+    /// `wait_submission_index` is the submission a poll already waited for, if any.
     ///
     /// This will process _all_ completed submissions, even if the caller only asked
     /// us to poll to a given submission index.
@@ -827,67 +865,12 @@ impl Device {
     ///   if there was a timeout or a validation error.
     pub(crate) fn maintain<'this>(
         &'this self,
-        poll_type: wgt::PollType<crate::SubmissionIndex>,
+        wait_submission_index: Option<crate::SubmissionIndex>,
         snatch_guard: SnatchGuard,
     ) -> (UserClosures, Result<wgt::PollStatus, WaitIdleError>) {
         profiling::scope!("Device::maintain");
 
         let mut user_closures = UserClosures::default();
-
-        // If a wait was requested, determine which submission index to wait for.
-        let wait_submission_index = match poll_type {
-            wgt::PollType::Wait {
-                submission_index: Some(submission_index),
-                ..
-            } => {
-                let last_successful_submission_index = self
-                    .last_successful_submission_index
-                    .load(Ordering::Acquire);
-
-                if submission_index > last_successful_submission_index {
-                    let result = Err(WaitIdleError::WrongSubmissionIndex(
-                        submission_index,
-                        last_successful_submission_index,
-                    ));
-
-                    return (user_closures, result);
-                }
-
-                Some(submission_index)
-            }
-            wgt::PollType::Wait {
-                submission_index: None,
-                ..
-            } => Some(
-                self.last_successful_submission_index
-                    .load(Ordering::Acquire),
-            ),
-            wgt::PollType::Poll => None,
-        };
-
-        // Wait for the submission index if requested.
-        if let Some(target_submission_index) = wait_submission_index {
-            log::trace!("Device::maintain: waiting for submission index {target_submission_index}");
-
-            let wait_timeout = match poll_type {
-                wgt::PollType::Wait { timeout, .. } => timeout,
-                wgt::PollType::Poll => unreachable!(
-                    "`wait_submission_index` index for poll type `Poll` should be None"
-                ),
-            };
-
-            let wait_result = unsafe {
-                self.raw()
-                    .wait(self.fence.as_ref(), target_submission_index, wait_timeout)
-            };
-
-            // This error match is only about `DeviceErrors`. At this stage we do not care if
-            // the wait succeeded or not, and the `Ok(bool)`` variant is ignored.
-            if let Err(e) = wait_result {
-                let hal_error: WaitIdleError = self.handle_hal_error(e).into();
-                return (user_closures, Err(hal_error));
-            }
-        }
 
         // Prevent new commands from being submitted as we want to act on `queue_empty`.
         let command_indices = self.command_indices.read();
@@ -5383,7 +5366,7 @@ impl Device {
             Some(error)
         };
         drop(previous_presentation);
-        let (callbacks, result) = self.maintain(wgt::PollType::Poll, self.snatchable_lock.read());
+        let (callbacks, result) = self.maintain(None, self.snatchable_lock.read());
         user_callbacks.extend(callbacks);
         user_callbacks.fire();
         configuration_error.or_else(|| result.err().map(Into::into))

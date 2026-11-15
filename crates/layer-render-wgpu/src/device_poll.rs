@@ -1,6 +1,7 @@
 use std::sync::{Arc,Mutex,OnceLock,Weak,atomic::{AtomicBool,Ordering::SeqCst},mpsc};
 
 type Action=Box<dyn FnOnce()+Send>;
+const MAILBOX_PERIOD:std::time::Duration=std::time::Duration::from_millis(16);
 type Notify=Arc<dyn Fn()+Send+Sync>;
 trait Conditional:Send {fn ready(&self)->bool;}
 struct Waiting<T,R> {value:T,ready:R}
@@ -17,9 +18,11 @@ struct Mailbox {
     waiters:Mutex<Vec<(crate::residency::Blocked,Notify)>>,
     armed:AtomicBool,
     released:AtomicBool,
+    woken:AtomicBool,
     terminal:Mutex<Vec<Notify>>,
     completion:Mutex<Vec<Notify>>,
     completions:std::sync::atomic::AtomicU64,
+    submissions:Mutex<std::collections::VecDeque<wgpu::SubmissionIndex>>,
     thread:OnceLock<std::thread::Thread>,
 }
 #[derive(Clone)]
@@ -27,9 +30,20 @@ pub(crate) struct RetirementHandle(Arc<Mailbox>);
 impl RetirementHandle {
     fn channel()->(Self,mpsc::Receiver<Message>) {
         let (sender,receiver)=mpsc::channel();
-        (Self(Arc::new(Mailbox {sink:Mutex::new(Sink::Open(sender)),retired:Default::default(),tickets:Mutex::new(Some(Vec::new())),waiters:Default::default(),armed:AtomicBool::new(false),released:AtomicBool::new(false),terminal:Default::default(),completion:Default::default(),completions:Default::default(),thread:OnceLock::new()})),receiver)
+        (Self(Arc::new(Mailbox {sink:Mutex::new(Sink::Open(sender)),retired:Default::default(),tickets:Mutex::new(Some(Vec::new())),waiters:Default::default(),armed:AtomicBool::new(false),released:AtomicBool::new(false),woken:AtomicBool::new(false),terminal:Default::default(),completion:Default::default(),completions:Default::default(),submissions:Default::default(),thread:OnceLock::new()})),receiver)
     }
-    fn wake(&self) {if let Some(thread)=self.0.thread.get() {thread.unpark();}}
+    fn wake(&self) {self.0.woken.store(true,SeqCst);if let Some(thread)=self.0.thread.get() {thread.unpark();}}
+    fn submitted(&self,index:wgpu::SubmissionIndex) {self.0.submissions.lock().unwrap().push_back(index);}
+    fn wait_for_progress(&self,device:&wgpu::Device)->Result<bool,String> {
+        let (target,earlier)={let submissions=self.0.submissions.lock().unwrap();(submissions.front().cloned(),submissions.len())};
+        let status=device.poll(wgpu::PollType::Wait {submission_index:target.clone(),timeout:Some(MAILBOX_PERIOD)});
+        let mut submissions=self.0.submissions.lock().unwrap();
+        match status {
+            Ok(wgpu::PollStatus::QueueEmpty)=>{submissions.drain(..earlier);Ok(false)},
+            Err(wgpu::PollError::Timeout)=>Ok(true),
+            Ok(_)|Err(wgpu::PollError::WrongSubmissionIndex(..))=>{if target.is_some() {submissions.pop_front();}Ok(true)},
+        }
+    }
     fn send(&self,message:Message)->Result<(),Message> {
         let result={let sink=self.0.sink.lock().unwrap();match &*sink {
             Sink::Open(sender)|Sink::Closing {sender,..}=>sender.send(message).map_err(|error|error.0),
@@ -203,8 +217,8 @@ impl Binding {
         let mut state=root.state.lock().unwrap();let handle=Self::state_handle(&state);
         if matches!(*state,State::New {..}) && !handle.closed() {
             let State::New {receiver,..}=std::mem::replace(&mut *state,State::Retired(handle.clone())) else {unreachable!()};
-            let device=device.clone();
-            match Owner::start(move||device.poll(wgpu::PollType::Poll).map(|status|!status.is_queue_empty()).map_err(|error|error.to_string()),handle.clone(),receiver,root.queue.clone()) {
+            let (device,waiting)=(device.clone(),handle.clone());
+            match Owner::start(move||waiting.wait_for_progress(&device),handle.clone(),receiver,root.queue.clone()) {
                 Ok(owner)=>*state=State::Running(owner),
                 Err(error)=>{handle.close();panic!("Device poll owner failed: {error}");},
             }
@@ -229,9 +243,10 @@ impl Binding {
             State::Retired(_)=>{},
         }
     }
-    pub fn submit<T>(&self,work:impl FnOnce()->T)->Option<T> {
+    pub fn submit(&self,work:impl FnOnce()->wgpu::SubmissionIndex)->Option<wgpu::SubmissionIndex> {
         let Some(root)=self.root() else {drop(work);return None;};let state=root.state.lock().unwrap();
-        if !Self::live(&state) {drop(state);drop(work);None}else {Some(work())}
+        if !Self::live(&state) {drop(state);drop(work);return None;}
+        let index=work();Self::state_handle(&state).submitted(index.clone());Some(index)
     }
 }
 fn receive(handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>,queue:Option<&wgpu::Queue>)->Vec<mpsc::Sender<()>> {
@@ -265,6 +280,7 @@ fn drain_idle(handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>) {finis
 fn run(poll:&mut impl FnMut()->Result<bool,String>,handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>,queue:&OnceLock<wgpu::Queue>,failure:&mut Option<Box<dyn std::any::Any+Send>>) {
     let mut closing=None;
     loop {
+        handle.0.woken.store(false,SeqCst);
         let step=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||->Result<(bool,bool),String> {
             if handle.closed() && closing.is_none() {
                 let (send,ready)=mpsc::channel();closing=Some(ready);
@@ -284,7 +300,7 @@ fn run(poll:&mut impl FnMut()->Result<bool,String>,handle:&RetirementHandle,rece
             Ok(Ok((active,false)))=>active,
             Err(panic)=>{failure.get_or_insert(panic);handle.close();continue;},
         };
-        if active || handle.closed() {std::thread::park_timeout(std::time::Duration::from_millis(1));}else {std::thread::park();}
+        if !active {while !handle.0.woken.swap(false,SeqCst) {std::thread::park();}}
     }
 }
 
@@ -362,6 +378,34 @@ mod tests {
         assert_eq!(tier.used(),0);
     }
     #[test]
+    fn the_poll_owner_sleeps_until_its_submission_completes() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        let r=crate::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        assert_ne!(r.adapter.get_info().device_type,wgpu::DeviceType::Cpu);
+        let (unused,_duration,raw)=crate::test_support::bounded_outstanding_gpu_work(&r);drop(unused);
+        let (handle,receiver)=RetirementHandle::channel();
+        let polls=Arc::new(AtomicUsize::new(0));
+        let (device,waiting,counted)=((*r.device).clone(),handle.clone(),polls.clone());
+        let mut owner=Owner::start(move|| {counted.fetch_add(1,Ordering::AcqRel);waiting.wait_for_progress(&device)},
+            handle.clone(),receiver,Arc::new(OnceLock::from(r.queue.clone()))).unwrap();
+        let (idle,quiet)=mpsc::channel::<()>();
+        let before_idle=polls.load(Ordering::Acquire);let _=quiet.recv_timeout(Duration::from_millis(50));
+        let idle_polls=polls.load(Ordering::Acquire)-before_idle;
+        let (done,completed)=mpsc::channel();
+        let before_work=polls.load(Ordering::Acquire);let start=std::time::Instant::now();
+        handle.submitted(r.queue.submit([raw(1)]));handle.wake();
+        r.queue.on_submitted_work_done(move||{let _=done.send(());});
+        let completion=completed.recv_timeout(Duration::from_secs(2));
+        let (work_polls,elapsed)=(polls.load(Ordering::Acquire)-before_work,start.elapsed());
+        let retired=handle.closed();
+        owner.shutdown();drop(idle);
+        assert!(completion.is_ok(),"the poll owner never observed its submission complete");
+        assert!(!retired,"a submission that outlasted one bounded wait retired the poll owner");
+        let bound=2+(elapsed.as_millis()/MAILBOX_PERIOD.as_millis()) as usize;
+        assert!(work_polls<=bound,"the poll owner polled {work_polls} times while one submission was in flight for {elapsed:?}");
+        assert!(idle_polls<=2,"an idle poll owner polled {idle_polls} times in 50 ms");
+    }
+    #[test]
     fn close_joins_its_inflight_fence_while_a_raw_straggler_keeps_submitting() {
         use std::sync::atomic::{AtomicBool,AtomicUsize,Ordering};
         use std::time::Instant;
@@ -392,7 +436,7 @@ mod tests {
                 }));
             }
             if joined_at.is_none() {joined_at=join_done.try_recv().ok();}
-            if joined_at.is_some() {r.device.poll(wgpu::PollType::Poll).unwrap();}
+            r.device.poll(wgpu::PollType::Poll).unwrap();
             match completion.recv_timeout(Duration::from_millis(1)) {
                 Ok(())=>{submit();sent+=1;},
                 Err(mpsc::RecvTimeoutError::Timeout)=>{},

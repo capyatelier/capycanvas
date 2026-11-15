@@ -1548,7 +1548,7 @@ impl Queue {
             // This will schedule destruction of all resources that are no longer needed
             // by the user but used in the command stream, among other things.
             // `device.maintain` consumes and will release the snatch guard.
-            let (closures, result) = self.device.maintain(wgt::PollType::Poll, snatch_guard);
+            let (closures, result) = self.device.maintain(None, snatch_guard);
             match result {
                 Ok(status) => {
                     debug_assert!(matches!(

@@ -311,6 +311,7 @@ struct PresentationProbe {
     fail_submission: AtomicBool,
     fail_present: AtomicBool,
     fence_sample: std::sync::Mutex<Option<polling::FenceSample>>,
+    fence_wait: std::sync::Mutex<Option<polling::FenceSample>>,
     before_submit: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     presents: core::sync::atomic::AtomicUsize,
     discards: core::sync::atomic::AtomicUsize,
@@ -401,18 +402,23 @@ mod polling {
         fn check_if_oom(&self) -> Result<(), DeviceError> { self.inner.check_if_oom() }
         unsafe fn get_fence_value(&self, fence: &dyn DynFence) -> Result<FenceValue, DeviceError> {
             let value = unsafe { self.inner.get_fence_value(fence) }?;
-            let sample = {
-                let mut armed = self.probe.fence_sample.lock().unwrap();
-                if armed.as_ref().is_some_and(|sample| sample.caller == std::thread::current().id()) { armed.take() } else { None }
-            };
-            if let Some(sample) = sample {
-                let _ = sample.sampled.send(value);
-                let _ = sample.resume.recv_timeout(Duration::from_secs(2));
-            }
+            hold(&self.probe.fence_sample, value);
             Ok(value)
         }
         unsafe fn wait(&self, fence: &dyn DynFence, value: FenceValue, _timeout: Option<Duration>) -> Result<bool, DeviceError> {
+            hold(&self.probe.fence_wait, value);
             Ok(unsafe { self.inner.get_fence_value(fence) }? >= value)
+        }
+    }
+
+    fn hold(armed: &std::sync::Mutex<Option<FenceSample>>, value: FenceValue) {
+        let sample = {
+            let mut armed = armed.lock().unwrap();
+            if armed.as_ref().is_some_and(|sample| sample.caller == std::thread::current().id()) { armed.take() } else { None }
+        };
+        if let Some(sample) = sample {
+            let _ = sample.sampled.send(value);
+            let _ = sample.resume.recv_timeout(Duration::from_secs(2));
         }
     }
 }
@@ -794,6 +800,34 @@ fn concurrent_waits_sample_completion_with_the_lifetime_tracker() {
         f.assert_retained();
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
+fn presentation_does_not_wait_for_a_poll_that_waits_on_the_gpu() {
+    use std::sync::mpsc;
+    let f = PresentationFixture::new();
+    let target = f.queue.submit(&[]).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (resume_tx, resume_rx) = mpsc::channel();
+    let device = f.device.clone();
+    let probe = f.probe.clone();
+    let waiter = std::thread::spawn(move || {
+        *probe.fence_wait.lock().unwrap() = Some(polling::FenceSample {
+            caller: std::thread::current().id(), sampled: entered_tx, resume: resume_rx,
+        });
+        device.poll(wgt::PollType::Wait { submission_index: Some(target), timeout: Some(Duration::from_secs(1)) })
+    });
+    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+    let start = std::time::Instant::now();
+    let presented = f.queue.try_present(&f.surface);
+    let blocked = start.elapsed();
+    let _ = resume_tx.send(());
+    let polled = waiter.join();
+    assert_eq!(entered, Ok(target), "the poll never reached its fence wait");
+    assert!(blocked < Duration::from_secs(1), "presentation waited {blocked:?} for a poll's GPU wait");
+    assert!(matches!(presented, Ok(Some(wgt::SurfaceStatus::Good))), "completed artwork must present: {presented:?}");
+    assert_eq!(f.probe.presents.load(Ordering::Acquire), 1);
+    assert!(matches!(polled, Ok(Ok(_))), "the waiting poll failed: {polled:?}");
 }
 
 #[test]
