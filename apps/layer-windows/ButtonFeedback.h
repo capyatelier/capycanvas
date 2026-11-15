@@ -21,12 +21,13 @@ struct Contacts {
     void end(PointerRoutedEventArgs const& event,PointerCompletion completion);
 };
 struct RoutedTaps {
-    struct Press {weak_ref<Primitives::ButtonBase> button;std::optional<winrt::Windows::Foundation::Point> away;};
+    struct Press {weak_ref<Primitives::ButtonBase> button;uint64_t down=0;std::optional<winrt::Windows::Foundation::Point> away;};
     std::map<uint32_t,Press> presses;
     void lift(Microsoft::UI::Input::PointerPoint const& point){
         auto found=presses.find(point.PointerId());if(found==presses.end())return;
         auto press=std::move(found->second);presses.erase(found);
         auto owner=press.button.get();auto button=owner?owner.try_as<Button>():nullptr;if(!button||!button.IsEnabled()||!press.away||!button.XamlRoot())return;
+        if(point.Timestamp()-press.down>uint64_t(GetDoubleClickTime())*1000)return;
         auto at=point.Position();float slop=2.f*GetSystemMetricsForDpi(SM_CXDRAG,96);
         if(std::abs(at.X-press.away->X)>slop||std::abs(at.Y-press.away->Y)>slop)return;
         auto bounds=button.TransformToVisual(nullptr).TransformBounds({0,0,float(button.ActualWidth()),float(button.ActualHeight())});
@@ -135,7 +136,7 @@ inline std::shared_ptr<State> state(Primitives::ButtonBase const& button){
         auto button=state->owner.get();if(!button||!button.IsEnabled())return;auto point=e.GetCurrentPoint(button);
         if(!PointerGesture::PrimaryContact(point))return;
         if(state->pointer)state->end(true);state->pointer=point.PointerId();state->inside=state->hit(e);state->hoverAllowed=point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;
-        if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse&&(state->taps=routedTaps(button.XamlRoot())))state->taps->presses[point.PointerId()]={make_weak(button)};
+        if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse&&(state->taps=routedTaps(button.XamlRoot())))state->taps->presses[point.PointerId()]={make_weak(button),point.Timestamp()};
         if(state->input)state->input->owners[*state->pointer]=state;state->present();
     })),true);
     for(auto const& event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent(),UIElement::PointerExitedEvent()})
