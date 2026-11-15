@@ -1160,7 +1160,7 @@ fn same_encoder_preview_pages_are_accepted_without_waiting_for_submission() {
     assert!(page.active().read(&name,None).is_none());
     assert!(page.active().read(&name,Some(&receipt)).is_some());
     r.preview_pages.push(page);r.preview_layer_id=Some(target);r.preview_requires_base=true;
-    r.preview_damage=batch_pixel_rect(&batch,[256;2]);
+    r.preview_damage=batch_pixel_rect(&batch,[256;2]);r.preview_footprint=[[0;2]].into();
     assert!(r.preview_page([0;2]).is_some());
     let inputs=declare(&r,Some(receipt.clone())).unwrap();
     assert!(inputs.tiles.is_empty());

@@ -1184,7 +1184,7 @@ pub struct WgpuRasterizer {
     live_stroke: Option<StrokeId>,
     preview_watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     preview_damage: PixelRect,
-    preview_contact_tiles: Option<std::collections::BTreeSet<[u32; 2]>>,
+    preview_footprint: std::collections::BTreeSet<[u32; 2]>,
     preview_layer_id: Option<SourceTarget>,
     preview_requires_base: bool,
     preview_contribution: bool,
@@ -1614,7 +1614,7 @@ impl WgpuRasterizer {
             live_stroke: None,
             preview_watercolor_wetness_pages: Vec::with_capacity(8),
             preview_damage: PixelRect::EMPTY,
-            preview_contact_tiles: None,
+            preview_footprint: std::collections::BTreeSet::new(),
             preview_layer_id: None,
             preview_requires_base: false,
             preview_contribution: false,
@@ -2175,7 +2175,6 @@ impl WgpuRasterizer {
             self.clear_preview_pages();
             self.scale_display = None;
             self.preview_damage = PixelRect::EMPTY;
-            self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_contribution = false;
@@ -2266,6 +2265,12 @@ impl WgpuRasterizer {
     fn brush_work_planned(batch: &DabBatch, tiles: &[BrushTile], extent: [u32; 2]) -> bool {
         if batch.style.execution == BrushExecution::Liquify { !tiles.is_empty() }
         else { batch.dab_count != 0 && !batch_pixel_rect(batch, extent).is_empty() }
+    }
+
+    fn preview_pages(batches: &[DabBatch], batch: &DabBatch, tiles: &[BrushTile], extent: [u32; 2]) -> std::collections::BTreeSet<[u32; 2]> {
+        if batch.kind != DabBatchKind::Preview || batch.target.is_coverage() || tiles.is_empty() { return Default::default(); }
+        if Self::sparse_preview(batches) { tiles.iter().map(|tile| tile.coordinate).collect() }
+        else { page_coordinates(Self::brush_display_damage(batch, tiles, extent)).collect() }
     }
 
     fn brush_display_damage(batch: &DabBatch, tiles: &[BrushTile], extent: [u32; 2]) -> PixelRect {
@@ -4566,7 +4571,6 @@ impl WgpuRasterizer {
             }
             self.clear_preview_pages();
             self.preview_damage = PixelRect::EMPTY;
-            self.preview_contact_tiles = None;
             self.preview_layer_id = None;
             self.preview_requires_base = false;
             self.preview_contribution = false;
@@ -4615,8 +4619,8 @@ impl WgpuRasterizer {
         let fill_preview=self.fill_preview.clone();
         let fill_changed=fill_preview.as_ref().map(layer_render::FillPreview::key)!=self.fill_preview_shown;
         let old_preview_damage = self.preview_damage;
-        let old_preview_contact_tiles = if packet.commit_rasters {self.preview_contact_tiles.take()} else {None};
-        let mut new_preview_contact_tiles = Self::sparse_preview(packet.dab_batches).then(std::collections::BTreeSet::new);
+        let old_preview_footprint = if packet.commit_rasters {std::mem::take(&mut self.preview_footprint)} else {Default::default()};
+        let mut new_preview_footprint = std::collections::BTreeSet::new();
         let old_preview_layer = self.preview_layer_id;
         let old_preview_level = self.preview_level;
         let old_preview_contribution = self.preview_contribution;
@@ -4641,9 +4645,7 @@ impl WgpuRasterizer {
                 continue;
             }
             if batch.kind == DabBatchKind::Preview {
-                if let Some(sparse) = &mut new_preview_contact_tiles {
-                    sparse.extend(tiles.iter().map(|tile| tile.coordinate));
-                }
+                new_preview_footprint.extend(Self::preview_pages(packet.dab_batches, batch, tiles, self.target_extent(batch.target)));
                 if new_preview_layer.is_some_and(|id| id != batch.target) {
                     return Err(GpuRasterError::MultiplePreviewLayers);
                 }
@@ -4673,7 +4675,7 @@ impl WgpuRasterizer {
             new_preview_damage=page_coordinates(damage).fold(PixelRect::EMPTY,|bounds,page|bounds.union(page_rect(page)))
                 .intersect(PixelRect::full(packet.scene.target_extent(fill.target)));
             new_preview_requires_base=true;
-            new_preview_contact_tiles=None;
+            new_preview_footprint=page_coordinates(damage).collect();
             if fill_changed {dirty=dirty.union(new_preview_damage);}
         }
         let new_preview_from_persistent = self.preview_from_persistent(packet.dab_batches);
@@ -4750,9 +4752,9 @@ impl WgpuRasterizer {
                 preview_cells.prepare_preview(
                     self,
                 changed_cells::Preview {id:old_preview_layer,level:old_preview_level,contribution:old_preview_contribution,
-                    damage:old_preview_damage,tiles:old_preview_contact_tiles.as_ref()},
+                    tiles:&old_preview_footprint},
                 changed_cells::Preview {id:new_preview_layer,level:preview_level,contribution:preview_contribution,
-                    damage:new_preview_damage,tiles:new_preview_contact_tiles.as_ref()});}
+                    tiles:&new_preview_footprint});}
             self.changed_cells=Some(preview_cells);
             if self.preview_level != preview_level {
                 self.preview_pages.clear();
@@ -5006,7 +5008,7 @@ impl WgpuRasterizer {
         self.telemetry.phase_begin(1, &self.device, &self.queue, encoder.diagnostics());
 
         self.preview_damage = new_preview_damage;
-        self.preview_contact_tiles = new_preview_contact_tiles;
+        self.preview_footprint = new_preview_footprint;
         self.preview_layer_id = new_preview_layer;
         self.preview_requires_base = new_preview_requires_base;
         let preview_packet=FramePacket {dab_batches:original_batches,..packet};
@@ -5030,8 +5032,8 @@ impl WgpuRasterizer {
             }
             let copied = new_preview_damage;
             let receipt=encoder.submission();
-            if !copied.is_empty() && !new_preview_from_persistent {
-                for coordinate in page_coordinates(copied).filter(|c|self.preview_contact_tiles.as_ref().is_none_or(|set|set.contains(c))).collect::<Vec<_>>() {
+            if !new_preview_from_persistent {
+                for coordinate in self.preview_footprint.clone() {
                     self.accepted_raster_output(layer_id,RasterOutput::PreviewColor(coordinate))?;
                     let intent=self.raster_intent(layer_id,RasterPlane::Color,coordinate)?;
                     let source=if new_preview_requires_base {
@@ -5054,13 +5056,12 @@ impl WgpuRasterizer {
                 self.scene = Some(scene);
                 result?;
             }
-            for index in 0..self.preview_coverage_pages.len() {
-                let coverage=&self.preview_coverage_pages[index];
-                let coordinate=coverage.coordinate;
-                let Some(batch)=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview && batch.target==layer_id
-                    && BrushPassPlan::for_device(&batch.style,&self.device).state.coverage && coverage.matches(coordinate,&batch.style)
-                    && !batch_pixel_rect(batch,self.target_extent(batch.target)).intersect(page_rect(coordinate)).is_empty()) else {continue;};
-                self.accepted_raster_output(layer_id,RasterOutput::PreviewCoverage(coordinate,stroke_coverage_slabs(&batch.style),stable_blender(&batch.style)))?;
+            for output in self.accepted_previews(layer_id) {
+                let RasterOutput::PreviewCoverage(coordinate,slabs,rgba)=output else {continue;};
+                let batch=prepared_raster_output(packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview && batch.target==layer_id
+                    && BrushPassPlan::for_device(&batch.style,&self.device).state.coverage && stroke_coverage_slabs(&batch.style)==slabs && stable_blender(&batch.style)==rgba
+                    && !batch_pixel_rect(batch,self.target_extent(batch.target)).intersect(page_rect(coordinate)).is_empty()))?;
+                let index=prepared_raster_output(self.preview_coverage_pages.iter().position(|page|page.matches(coordinate,&batch.style)))?;
                 let intent=self.raster_intent(layer_id,RasterPlane::Color,coordinate)?;
                 let committed=self.paint_layers.iter().find(|layer|layer.id==layer_id).ok_or(GpuRasterError::MissingPaintLayer(layer_id))?
                     .coverage_pages.iter().find(|page|page.matches(coordinate,&batch.style) && page.owner==Some(batch.stroke_id));
@@ -5079,25 +5080,18 @@ impl WgpuRasterizer {
                 let written=write.publish(ticket.version());
                 coverage.state=Some(MaterialState {stroke:batch.stroke_id,input:intent,version:written.version().clone()});
             }
-            if preview_is_watercolor {
-                let mask_halo=packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && batch.target==layer_id
-                    && BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness)
-                    .map(|batch|WatercolorLayerStyle::from_dab_style(&batch.style).radius()).max().unwrap_or(0);
-                let damage=new_preview_damage.expand(mask_halo,self.target_extent(layer_id));
-                for index in 0..self.preview_watercolor_wetness_pages.len() {
-                    let coordinate=self.preview_watercolor_wetness_pages[index].coordinate;
-                    if damage.intersect(page_rect(coordinate)).is_empty() {continue;}
-                    self.accepted_raster_output(layer_id,RasterOutput::PreviewWetness(coordinate))?;
-                    let source=self.paint_layers.iter().find(|layer|layer.id==layer_id).ok_or(GpuRasterError::MissingPaintLayer(layer_id))?
-                        .watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)
-                        .map(|page|self.read_wetness(layer_id,page,Some(&receipt)).map(|read|(read.value().texture.clone(),read.version().clone()))).transpose()?;
-                    let ticket=self.preview_version(layer_id,RasterPlane::WatercolorWetness,coordinate,scene::PreviewStage::Seed)?;
-                    let page=&mut self.preview_watercolor_wetness_pages[index];
-                    let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
-                    if let Some((texture,_))=source {write.value().copy_from(&texture,texture.size(),&mut encoder);}
-                    else {write.value().clear(&self.zero_pages,&mut encoder);}
-                    write.publish(ticket.version());page.derived=Some(ticket);
-                }
+            for output in self.accepted_previews(layer_id) {
+                let RasterOutput::PreviewWetness(coordinate)=output else {continue;};
+                let index=prepared_raster_output(self.preview_watercolor_wetness_pages.iter().position(|page|page.coordinate==coordinate))?;
+                let source=self.paint_layers.iter().find(|layer|layer.id==layer_id).ok_or(GpuRasterError::MissingPaintLayer(layer_id))?
+                    .watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)
+                    .map(|page|self.read_wetness(layer_id,page,Some(&receipt)).map(|read|(read.value().texture.clone(),read.version().clone()))).transpose()?;
+                let ticket=self.preview_version(layer_id,RasterPlane::WatercolorWetness,coordinate,scene::PreviewStage::Seed)?;
+                let page=&mut self.preview_watercolor_wetness_pages[index];
+                let write=page.primary.overwrite(&receipt).ok_or(GpuRasterError::Invariant("accepted destination is not writable"))?;
+                if let Some((texture,_))=source {write.value().copy_from(&texture,texture.size(),&mut encoder);}
+                else {write.value().clear(&self.zero_pages,&mut encoder);}
+                write.publish(ticket.version());page.derived=Some(ticket);
             }
             for (index, batch) in packet
                 .dab_batches
@@ -5200,11 +5194,9 @@ impl WgpuRasterizer {
                 tiles.extend(page_coordinates(bounds));
             };
             if let Some(id) = old_preview_layer.filter(|_| !reuse_preview) {
-                if let Some(sparse) = &old_preview_contact_tiles {
-                    for &coordinate in sparse {
-                        if !self.liquify.as_ref().is_some_and(|l| l.preview_unchanged(id, coordinate)) { include(id, page_rect(coordinate)); }
-                    }
-                } else { include(id, old_preview_damage); }
+                for &coordinate in &old_preview_footprint {
+                    if !self.liquify.as_ref().is_some_and(|l| l.preview_unchanged(id, coordinate)) { include(id, page_rect(coordinate)); }
+                }
             }
             for (batch, planned) in original_batches.iter().zip(&batch_tiles) {
                 if reuse_preview && batch.kind == DabBatchKind::Preview {

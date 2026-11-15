@@ -6,11 +6,11 @@ const LIMIT:u64=32*1024*1024;
 type Key=(SourceTarget,[u32;2]);
 
 pub(super) struct Preview<'a> {
-    pub id:Option<SourceTarget>, pub level:u32, pub contribution:bool, pub damage:PixelRect,
-    pub tiles:Option<&'a BTreeSet<[u32;2]>>,
+    pub id:Option<SourceTarget>, pub level:u32, pub contribution:bool,
+    pub tiles:&'a BTreeSet<[u32;2]>,
 }
 impl Preview<'_> {
-    fn contains(&self,c:[u32;2])->bool { !page_rect(c).intersect(self.damage).is_empty() && self.tiles.is_none_or(|s|s.contains(&c)) }
+    fn contains(&self,c:[u32;2])->bool { self.tiles.contains(&c) }
 }
 
 pub(super) struct ChangedCells {
@@ -88,7 +88,7 @@ impl ChangedCells {
             .chain(tiles.iter().zip(packet.dab_batches).filter(|(_,b)|allowed && cache.native_preview_input(packet,b.target)
                 && packet.scene.target_offset(b.target)==[0; 2]).flat_map(|(t,b)|t.iter().map(|t|(b.target,t.coordinate))))
             .chain(r.preview_layer_id.into_iter().filter(|id|!packet.commit_rasters && allowed && r.preview_contribution && cache.native_preview_input(packet,*id))
-                .flat_map(|id|r.preview_pages.iter().filter(|p|r.preview_contact_tiles.as_ref().is_none_or(|s|s.contains(&p.coordinate)))
+                .flat_map(|id|r.preview_pages.iter().filter(|p|r.preview_footprint.contains(&p.coordinate))
                     .map(move |p|(id,p.coordinate)))).collect();
         let bytes=16+u64::from((PAGE_SIZE/side).pow(2))*4;
         let required=self.disabled.size()+wanted.len() as u64*bytes;
@@ -134,7 +134,7 @@ impl ChangedCells {
         }
         for state in [&old,&new] {
             let Some(id)=state.id else {continue;};
-            for coordinate in page_coordinates(state.damage).filter(|c|state.contains(*c)) {
+            for &coordinate in state.tiles {
                 if !r.preview_pages.iter().any(|p|p.coordinate==coordinate && p.primary.preview()==Some((id,coordinate))) {
                     self.forced.insert((id,coordinate));
                 }

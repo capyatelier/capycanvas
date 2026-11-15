@@ -636,6 +636,50 @@ fn a_palette_knife_preview_over_painted_pages_accepts_its_transport_inputs() {
 }
 
 #[test]
+fn wet_preview_microbatches_seed_only_the_pages_their_plan_accepted() {
+    let extent = [768, 768];
+    let document = paint_document(extent, "diagonal wet preview");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut ink = dab([0.1, 0.3, 0.8, 1.]);
+    ink.center = Point { x: 384., y: 384. };
+    ink.radii = [380.; 2];
+    let paint = DabBatch { damage: ink.bounds(), ..batch(target(&document)) };
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[paint], ..packet(document.scene(), extent) })
+        .expect("the paint under the wet brush commits");
+    let dabs = [([128., 128.], 20.), ([256., 256.], 200.), ([512., 512.], 200.)].map(|([x, y], radius)| Dab { center: Point { x, y }, radii: [radius; 2], ..ink });
+    let batches: Vec<_> = dabs.iter().enumerate().map(|(index, dab)| DabBatch {
+        style: preset_style(layer_core::DefaultBrushPreset::WetRound), stroke_id: StrokeId(2), stroke_start: index == 0, stroke_end: false,
+        kind: if index == 0 { DabBatchKind::Persistent } else { DabBatchKind::Preview }, first_dab: index as u32, damage: dab.bounds(), ..batch(target(&document))
+    }).collect();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &batches, composite_all: false, ..packet(document.scene(), extent) })
+        .expect("a Wet Preview whose microbatches cover {0,1}² and {1,2}² pages submits");
+    let accepted: std::collections::BTreeSet<_> = [[0, 0], [1, 0], [0, 1], [1, 1], [2, 1], [1, 2], [2, 2]].into();
+    let visible: std::collections::BTreeSet<_> = r.preview_pages.iter().map(|page| page.coordinate).filter(|c| r.preview_page(*c).is_some()).collect();
+    assert_eq!(visible, accepted);
+    assert!(r.preview_page([2, 0]).is_none() && r.preview_page([0, 2]).is_none(), "pages outside every microbatch read the layer");
+}
+
+#[test]
+fn a_stable_blender_preview_whose_contacts_miss_the_canvas_predicts_nothing() {
+    for preset in [layer_core::DefaultBrushPreset::DitherBlender, layer_core::DefaultBrushPreset::ScatterBlender] {
+        let extent = [256, 256];
+        let document = paint_document(extent, "stable blender beyond the corner");
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let dabs = [[-25., 0.], [0., -25.]].map(|[x, y]| Dab { center: Point { x, y }, radii: [20.; 2], ..dab([0.1, 0.3, 0.8, 1.]) });
+        let mut preview = batch(target(&document));
+        preview.style = DabStyle { contact: None, ..preset_style(preset) };
+        assert!(stable_blender(&preview.style) && !preview.style.rendering.edge_after_stroke);
+        preview.kind = DabBatchKind::Preview;
+        preview.stroke_end = false;
+        preview.dab_count = 2;
+        preview.damage = dabs[0].bounds().union(dabs[1].bounds());
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &[preview], composite_all: false, ..packet(document.scene(), extent) })
+            .unwrap_or_else(|error| panic!("{preset:?}: a Preview whose contacts all miss the canvas submits: {error}"));
+        assert!(r.preview_layer_id.is_none(), "{preset:?}: no contact reaches the canvas, so nothing is predicted");
+    }
+}
+
+#[test]
 fn a_first_two_page_wet_watercolor_preview_accepts_transport_inputs_before_tickets() {
     let extent = [512, 256];
     let document = paint_document(extent, "two-page wet watercolor preview");

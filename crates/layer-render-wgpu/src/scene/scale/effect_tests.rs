@@ -339,7 +339,7 @@ fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds(
             preview.style.blend_space = blend; preview.kind = DabBatchKind::Preview; preview.stroke_end = false;
             let prediction = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&preview), ..frame };
             let work = incremental.metrics.composited_pixels;
-            let old_contacts=incremental.preview_contact_tiles.clone().unwrap_or_default();
+            let old_contacts=incremental.preview_footprint.clone();
             crate::test_support::submit_ready(&mut incremental, prediction).unwrap();
             crate::test_support::submit_ready(&mut rebuilt, FramePacket { composite_all: true, ..prediction }).unwrap();
             let work = incremental.metrics.composited_pixels - work;
@@ -351,7 +351,7 @@ fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds(
             assert!(crate::test_support::max_error(&actual, &expected) < 2e-5,
                 "{name} {blend:?} replacement at {position:?} must restore the previous prediction: {difference:?}, plans {:?}/{:?}, preview levels {}/{}, work {work}", incremental.scale_display.as_ref().unwrap().plan, rebuilt.scale_display.as_ref().unwrap().plan, incremental.preview_level, rebuilt.preview_level);
             assert!(work > 0 && work < u64::from(PAGE_SIZE >> level).pow(2) / 2, "{name} {blend:?} at {position:?}: warm prediction work={work}");
-            let current_contacts=incremental.preview_contact_tiles.as_ref().unwrap();
+            let current_contacts=&incremental.preview_footprint;
             for &coordinate in old_contacts.symmetric_difference(current_contacts) {
                 assert!(incremental.changed_cells.as_ref().unwrap().reusable(paint,coordinate).is_none(),
                     "{name} {blend:?}: cold/removed prediction page {coordinate:?} must force full native-effect evaluation");
@@ -359,7 +359,7 @@ fn native_pointwise_warm_prediction_replacement_and_removal_match_full_rebuilds(
             assert_presentation_mip(&incremental);
         }
         let work = incremental.metrics.composited_pixels;
-        let old_contacts=incremental.preview_contact_tiles.clone().unwrap();
+        let old_contacts=incremental.preview_footprint.clone();
         crate::test_support::submit_ready(&mut incremental, frame).unwrap();
         assert!(incremental.metrics.composited_pixels - work < u64::from(PAGE_SIZE >> level).pow(2) / 2);
         let removed = display_pixels(&incremental);

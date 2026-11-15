@@ -384,12 +384,17 @@ impl WgpuRasterizer {
         });
         prepared_raster_output(accepted.then_some(()))
     }
+    pub(crate) fn accepted_previews(&self,target:SourceTarget)->Vec<Output> {
+        self.restore_preflight.as_ref().map_or_else(Vec::new,|restore|match &restore.key {
+            Key::Frame {outputs,..}=>outputs.iter().filter(|(at,output)|*at==target && output.preview()).map(|(_,output)|*output).collect(),_=>Vec::new(),
+        })
+    }
     pub(crate) fn accepted_transform_plan(&self,target:SourceTarget,operation:u32)->Result<paint_transform::Plan,GpuRasterError> {
         prepared_raster_output(self.restore_preflight.as_ref().and_then(|restore|restore.transforms.iter().find(|(at,_)|*at==(target,operation))).map(|(_,plan)|*plan))
     }
     pub(crate) fn accepted_material_tiles<'a>(&self,batch:&DabBatch,context:BrushEncodingContext<'a>)->Result<std::borrow::Cow<'a,[BrushTile]>,GpuRasterError> {
         let preview=context.target.is_preview();
-        let rectangular=context.target==(BrushEncodingTarget::Preview {from_persistent:true}) && self.preview_contact_tiles.is_none();
+        let rectangular=context.target==(BrushEncodingTarget::Preview {from_persistent:true}) && !Self::sparse_preview(context.batches);
         let tiles=if rectangular {
             let Some(restore)=&self.restore_preflight else {return prepared_raster_output(None);};
             let Key::Frame {outputs,..}=&restore.key else {return prepared_raster_output(None);};
@@ -407,7 +412,7 @@ impl WgpuRasterizer {
         Ok(tiles)
     }
     pub(crate) fn clear_preview_pages(&mut self) {
-        self.preview_pages.clear();self.preview_coverage_pages.clear();self.preview_watercolor_wetness_pages.clear();self.preview_working=None;
+        self.preview_pages.clear();self.preview_coverage_pages.clear();self.preview_watercolor_wetness_pages.clear();self.preview_working=None;self.preview_footprint.clear();
     }
     pub(crate) fn prepare_preview_outputs(&mut self,level:u32)->Result<(),GpuRasterError> {
         let reserved=self.restore_preflight.as_mut().and_then(|restore|restore.preview.take());
@@ -466,7 +471,8 @@ impl WgpuRasterizer {
         let mut outputs=BTreeSet::new();let mut transforms=Vec::new();
         let from_persistent=self.preview_from_persistent(packet.dab_batches);
         let rectangular=from_persistent && !Self::sparse_preview(packet.dab_batches);
-        for (batch,tiles) in packet.dab_batches.iter().zip(plans) {
+        let previews:Vec<_>=packet.dab_batches.iter().zip(plans).map(|(batch,tiles)|Self::preview_pages(packet.dab_batches,batch,tiles,packet.scene.target_extent(batch.target))).collect();
+        for ((batch,tiles),coordinates) in packet.dab_batches.iter().zip(plans).zip(&previews) {
             let target=batch.target;
             let coverage=target.is_coverage().then(||packet.scene.mask(packet.scene.source_owner(target).unwrap()).unwrap().1);
             if let DabBatchKind::RasterOperation(index)=batch.kind && let Some(operation)=packet.scene.operations(target).and_then(|operations|operations.get(index as usize))
@@ -493,23 +499,22 @@ impl WgpuRasterizer {
                     if pass.state.watercolor_wetness {outputs.insert((target,Output::Wetness(c)));}
                 }
             }
-            if batch.kind==DabBatchKind::Preview && Self::brush_work_planned(batch,tiles,packet.scene.target_extent(target)) {
-                let damage=Self::brush_display_damage(batch,tiles,packet.scene.target_extent(target));
-                let coordinates=if Self::sparse_preview(packet.dab_batches) {tiles.iter().map(|tile|tile.coordinate).collect::<BTreeSet<_>>()}
-                    else {page_coordinates(damage).collect()};
-                for coordinate in &coordinates {
-                    outputs.insert((target,Output::PreviewColor(*coordinate)));
-                    if pass.state.watercolor_wetness {outputs.insert((target,Output::PreviewWetness(*coordinate)));}
-                }
-                if !from_persistent {
-                    for coordinate in page_coordinates(batch_pixel_rect(batch,packet.scene.target_extent(target))).filter(|coordinate|coordinates.contains(coordinate)) {
-                        if pass.state.coverage {outputs.insert((target,Output::PreviewCoverage(coordinate,stroke_coverage_slabs(&batch.style),stable_blender(&batch.style))));}
-                        if batch.style.execution!=BrushExecution::Liquify && pass.requires_destination() {outputs.insert((target,Output::PreviewCompanion(coordinate)));}
-                    }
+            for coordinate in coordinates {
+                outputs.insert((target,Output::PreviewColor(*coordinate)));
+                if pass.state.watercolor_wetness {outputs.insert((target,Output::PreviewWetness(*coordinate)));}
+            }
+            if !from_persistent {
+                for coordinate in page_coordinates(batch_pixel_rect(batch,packet.scene.target_extent(target))).filter(|coordinate|coordinates.contains(coordinate)) {
+                    if pass.state.coverage {outputs.insert((target,Output::PreviewCoverage(coordinate,stroke_coverage_slabs(&batch.style),stable_blender(&batch.style))));}
+                    if batch.style.execution!=BrushExecution::Liquify && pass.requires_destination() {outputs.insert((target,Output::PreviewCompanion(coordinate)));}
                 }
             }
-            if matches!(batch.kind,DabBatchKind::Persistent|DabBatchKind::Preview) && Self::brush_work_planned(batch,tiles,packet.scene.target_extent(target))
-                && Self::tracks_stroke_start(batch) {
+            let planned=match batch.kind {
+                DabBatchKind::Persistent=>Self::brush_work_planned(batch,tiles,packet.scene.target_extent(target)),
+                DabBatchKind::Preview=>!coordinates.is_empty(),
+                _=>false,
+            };
+            if planned && Self::tracks_stroke_start(batch) {
                 let source=if batch.kind==DabBatchKind::Preview {BrushEncodingTarget::Preview {from_persistent}}else {BrushEncodingTarget::Persistent};
                 for tile in destinations.iter() {outputs.insert((target,Output::StrokeStart(tile.coordinate,batch.stroke_id,source.material_source().is_preview())));}
             }
@@ -536,11 +541,11 @@ impl WgpuRasterizer {
             let damage=pixel_rect(fill.operation.bounds(packet.scene.target_extent(fill.target)),packet.scene.target_extent(fill.target));
             for coordinate in page_coordinates(damage) {outputs.insert((fill.target,Output::PreviewColor(coordinate)));}
         }
-        for batch in packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview
-            && !batch.target.is_coverage() && BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness) {
+        for (batch,_) in packet.dab_batches.iter().zip(&previews).filter(|(batch,coordinates)|!coordinates.is_empty()
+            && BrushPassPlan::for_device(&batch.style,&self.device).state.watercolor_wetness) {
             let extent=packet.scene.target_extent(batch.target);
-            let damage=packet.dab_batches.iter().zip(plans).filter(|(other,_)|other.kind==DabBatchKind::Preview && other.target==batch.target)
-                .fold(PixelRect::EMPTY,|damage,(other,tiles)|damage.union(Self::brush_display_damage(other,tiles,extent)));
+            let damage=packet.dab_batches.iter().zip(plans).zip(&previews).filter(|((other,_),coordinates)|!coordinates.is_empty() && other.target==batch.target)
+                .fold(PixelRect::EMPTY,|damage,((other,tiles),_)|damage.union(Self::brush_display_damage(other,tiles,extent)));
             for coordinate in page_coordinates(damage.expand(WatercolorLayerStyle::from_dab_style(&batch.style).radius(),extent)) {
                 outputs.insert((batch.target,Output::PreviewWetness(coordinate)));
             }

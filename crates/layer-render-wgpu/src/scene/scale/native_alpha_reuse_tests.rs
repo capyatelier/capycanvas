@@ -816,11 +816,11 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
             batch.damage=dab.bounds();
             if step==1 {
                 let old=prediction_color(&r,target,[0,0]).value().view.clone();
-                let stamp=prediction_color(&r,target,[0,0]).value().preview.get();let contacts=r.preview_contact_tiles.clone();
+                let stamp=prediction_color(&r,target,[0,0]).value().preview.get();let contacts=r.preview_footprint.clone();
                 crate::test_support::submit_ready(&mut r, FramePacket {commit_rasters:false,..frame}).unwrap();
                 assert_eq!(prediction_color(&r,target,[0,0]).value().view,old);
                 assert_eq!(prediction_color(&r,target,[0,0]).value().preview.get(),stamp);
-                assert_eq!(r.preview_contact_tiles,contacts);assert_eq!(r.preview_layer_id,Some(target));assert!(r.preview_contribution);
+                assert_eq!(r.preview_footprint,contacts);assert_eq!(r.preview_layer_id,Some(target));assert!(r.preview_contribution);
             }
             let current=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
             crate::test_support::submit_ready(&mut r, current).unwrap();crate::test_support::submit_ready(&mut reference, FramePacket {composite_all:true,..current}).unwrap();r.wait_idle().unwrap();reference.wait_idle().unwrap();
@@ -932,7 +932,7 @@ fn source_only_dry_updates_reach_the_next_prediction_and_display() {
             r.wait_idle().unwrap();reference.wait_idle().unwrap();
             assert_eq!(r.preview_level==0,opacity<1.,"only partial opacity keeps a full-native prediction");assert!(!r.preview_contribution);
             for page in &r.preview_pages {
-                if !r.preview_contact_tiles.as_ref().unwrap().contains(&page.coordinate) {continue;}
+                if !r.preview_footprint.contains(&page.coordinate) {continue;}
                 let prediction=prediction_color(&r,target,page.coordinate);let oracle=prediction_color(&reference,target,page.coordinate);
                 assert_eq!(crate::layer_tests::page_bytes(&r,&prediction.value().texture),crate::layer_tests::page_bytes(&reference,&oracle.value().texture),"{preset:?} {mode:?} readonly={readonly} step{step} page{:?}",page.coordinate);
             }

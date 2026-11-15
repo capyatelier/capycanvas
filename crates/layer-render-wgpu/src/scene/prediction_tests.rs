@@ -187,7 +187,7 @@ fn prediction_covers_normal_and_fallback_fragment_bindings() {
                 r.preview_layer_id = Some(target);
                 r.preview_requires_base = false;
                 r.preview_damage = PixelRect::full([256; 2]);
-                r.preview_contact_tiles = None;
+                r.preview_footprint = [[0; 2]].into();
                 r.preview_pages = vec![page];
             }
             if case == "future masked Flow" {
