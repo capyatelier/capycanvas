@@ -1171,6 +1171,7 @@ fn assert_crossing_shows_no_surround_until_it_completes(kind: Crossed) {
         let frame = |view| FramePacket { view, blend_space: space, ..packet(doc.scene(), extent) };
         settle_at(&mut r, frame(crossing_view(from)));
         let level = r.scale_display.as_ref().unwrap().plan.level;
+        crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, crossing_view(from));
         let mut presenter = crate::test_support::float_presenter(&r);
         let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
         for step in 0.. {
@@ -1181,6 +1182,7 @@ fn assert_crossing_shows_no_surround_until_it_completes(kind: Crossed) {
             let shown = surround_inside_document(&r, &mut presenter, crossing_view(to), extent);
             assert_eq!(shown, 0, "{kind:?} {space:?} {from}->{to} frame {step} shows the surround at {shown} document pixels");
             assert_eq!(cache.previous.is_some(), !cache.complete, "{kind:?} {space:?} {from}->{to} frame {step} keeps the previous level exactly until the window completes");
+            if cache.complete { assert_eq!(presenter.bound_viewport(&r).0, 0, "{kind:?} {space:?} {from}->{to} frame {step} presents a complete window through fs_main"); }
             if cache.complete && r.next_frame() == layer_render::FrameDemand::Wait { break; }
             assert!(std::time::Instant::now() < deadline, "{kind:?} {space:?} {from}->{to} settles");
             if r.next_frame() != layer_render::FrameDemand::Work { std::thread::sleep(std::time::Duration::from_millis(1)); }
@@ -1194,6 +1196,41 @@ fn crossing_a_raster_level_shows_no_surround_inside_the_document_until_it_comple
 fn crossing_a_vector_level_shows_no_surround_inside_the_document_until_it_completes() { assert_crossing_shows_no_surround_until_it_completes(Crossed::Vector); }
 #[test]
 fn crossing_an_object_level_shows_no_surround_inside_the_document_until_it_completes() { assert_crossing_shows_no_surround_until_it_completes(Crossed::Object); }
+
+#[test]
+fn a_crossing_presents_the_surround_through_fs_main_until_the_stand_in_entry_compiles() {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(Crossed::Vector));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.shader_idle(false, false);
+    let frame = |view| FramePacket { view, ..packet(doc.scene(), extent) };
+    settle_at(&mut r, frame(crossing_view(0.4)));
+    let mut presenter = crate::test_support::float_presenter(&r);
+    present(&r, &mut presenter, crossing_view(0.4));
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        r.submit(FramePacket { composite_all: false, ..frame(crossing_view(0.6)) }).unwrap();
+        r.wait_idle().unwrap();
+        if r.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.) { break; }
+        assert!(!r.scale_display.as_ref().unwrap().complete && std::time::Instant::now() < deadline, "the crossing presents an incomplete window with a stand-in");
+    }
+    let shown = surround_inside_document(&r, &mut presenter, crossing_view(0.6), extent);
+    assert_eq!(presenter.bound_viewport(&r).0, 0, "a cold stand-in entry leaves the frame on fs_main");
+    assert!(shown > 0, "fs_main draws the surround, not the stand-in, where the window is unwritten");
+}
+
+#[test]
+fn a_complete_window_presents_through_fs_main_beside_a_complete_overview() {
+    let (extent, doc) = (CROSSING_EXTENT, crossing_document(Crossed::Raster));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    settle_at(&mut r, FramePacket { view: crossing_view(2.), ..packet(doc.scene(), extent) });
+    let cache = r.scale_display.as_ref().unwrap();
+    assert!(cache.complete && cache.overview.as_deref().is_some_and(|overview| overview.picture().is_some()), "a zoomed-in window has a complete overview");
+    crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba32Float, crate::SdrSurfaceColor::ExtendedLinearSrgb, crossing_view(2.));
+    let mut presenter = crate::test_support::float_presenter(&r);
+    assert_eq!(surround_inside_document(&r, &mut presenter, crossing_view(2.), extent), 0);
+    assert_eq!(r.presentation_page().unwrap().stand_in_scale(), 0.);
+    assert_eq!(presenter.bound_viewport(&r).0, 0, "a complete window presents through fs_main");
+}
 
 #[test]
 fn a_crossing_at_the_pinned_grant_keeps_the_previous_level_until_required_work_needs_its_memory() {

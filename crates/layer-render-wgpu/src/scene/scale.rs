@@ -770,7 +770,7 @@ impl Cache {
     pub fn presentation(&self)->Option<PresentedPage<'_>> {
         let root=self.pixels.committed_root()?;
         let next=self.pixels.committed_next().unwrap_or(root);
-        let stand_in=self.stand_in();
+        let stand_in=self.stand_in().filter(|_|!self.complete);
         Some(PresentedPage {views:[root,stand_in.unwrap_or(root),next],stand_in:stand_in.is_some(),geometry:&self.geometry})
     }
     #[cfg(test)]

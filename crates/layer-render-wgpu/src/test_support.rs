@@ -863,6 +863,19 @@ pub(crate) fn prepare_scene_effects(r:&mut WgpuRasterizer,frame:FramePacket<'_>)
     r.scene=Some(scene);
 }
 
+pub(crate) fn warm_presentation(r: &WgpuRasterizer, format: wgpu::TextureFormat, color: SdrSurfaceColor, view: ViewState) {
+    let mut presenter=ViewportPresenter::for_surface(r, format, color).unwrap();
+    pollster::block_on(presenter.prepare(r)).unwrap();
+    let (_texture, target)=create_target(&r.device, [view.width_px, view.height_px], format, "warm presentation");
+    presenter.present(r, &target, view, [0.; 4]).unwrap();
+    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+    while crate::compile::tests::queued_recipes(&r.compilation)!=0 {
+        r.compilation.check().unwrap();
+        assert!(std::time::Instant::now()<deadline, "presentation recipes finish warming");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 pub(crate) fn float_presenter(r: &WgpuRasterizer) -> ViewportPresenter {
     let mut presenter=ViewportPresenter::for_surface(r, wgpu::TextureFormat::Rgba32Float, SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
     pollster::block_on(presenter.prepare(r)).unwrap();

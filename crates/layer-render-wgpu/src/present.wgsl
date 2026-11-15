@@ -173,14 +173,14 @@ fn paper_composite(composite: vec4<f32>, p: vec2<f32>, dx: vec2<f32>, dy: vec2<f
 fn source_at(source: u32, p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, linear: bool) -> vec4<f32> {
     if source == 2u { return mapped_at(p, dx, dy, linear); }
     if source == 1u { return placed_at(p, dx, dy, linear); }
-    let grid = moving_between(p, grid_artwork_at(p, dx, dy));
+    let grid = moving_between(p, grid_artwork_at(p, dx, dy, source == 3u));
     if linear { return canvas_linear(grid); }
     return grid;
 }
 fn artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
     if camera.placed_options.y==2. {return mapped_at(p,dx,dy,false);}
     if camera.placed_options.y!=0. { return placed_at(p,dx,dy,false); }
-    return grid_artwork_at(p,dx,dy);
+    return grid_artwork_at(p,dx,dy,camera.levels.y!=0.);
 }
 fn moving_between(p: vec2<f32>, composite: vec4<f32>) -> vec4<f32> {
     if camera.split.w == 0. || any(p < camera.split_region.xy) || any(p >= camera.split_region.zw) { return composite; }
@@ -192,10 +192,10 @@ fn moving_between(p: vec2<f32>, composite: vec4<f32>) -> vec4<f32> {
     let above = sample_float(above_paths, linear_sampler, (p - camera.split.xy) / camera.split.z / camera.split_size.xy, 0.);
     return above + moving * (1. - above.a) + (composite - above) * (1. - moving.a);
 }
-fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+fn grid_artwork_at(p: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, stand_in: bool) -> vec4<f32> {
     if !grid_written(p) {
-        if camera.levels.y==0. {return vec4<f32>(0.);}
-        return coarse_point(p);
+        if stand_in {return coarse_point(p);}
+        return vec4<f32>(0.);
     }
     if !grid_complete() {return detail_point(p);}
     let scale = f32(cache.scale);
@@ -331,6 +331,7 @@ fn window_coverage(surface: vec2<f32>) -> f32 {
 @fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,0u);}
 @fragment fn fs_placed(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,1u);}
 @fragment fn fs_mapped(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,2u);}
+@fragment fn fs_stand_in(vertex: Vertex) -> @location(0) vec4<f32> {return surface_color(vertex,3u);}
 @fragment fn fs_surround(vertex: Vertex) -> @location(0) vec4<f32> {
     let surface = logical_surface(vertex.position.xy * camera.rotation.w);
     return surround_color(surface, vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy);
@@ -354,7 +355,7 @@ fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     let extent = camera.offset_document.zw;
     let cropping = camera.crop_offset.w > .5;
     if any(p < vec2<f32>(0.)) || any(p >= extent) { return surround_color(surface, p); }
-    if source==0u && camera.levels.y==0. && !grid_written(p) {return surround_color(surface,p);}
+    if source==0u && !grid_written(p) {return surround_color(surface,p);}
     // Explicit LOD keeps sampling valid across the finite-canvas boundary.
     let dx = camera.inverse.xy * footprint;
     let dy = camera.inverse.zw * footprint;

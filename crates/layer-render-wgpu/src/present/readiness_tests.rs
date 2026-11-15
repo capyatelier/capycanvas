@@ -27,9 +27,11 @@ fn first_ready_frame_requires_only_its_viewport_variant() {
     presenter.encode(&r, &mut encoder, &target, crate::test_support::view(extent), [0.; 4]).unwrap();
     assert!(presenter.recipes.paper.get().is_none(), "an unlit frame must not request lit viewport recipes");
     let encoded = presenter.history.valid;
-    let anticipated = presenter.pipeline[1..].iter().all(|pipeline|
+    let anticipated = presenter.pipeline[1..3].iter().all(|pipeline|
         crate::compile::tests::requested(&r.compilation, pipeline, crate::startup::VALIDATION)
             && !crate::compile::tests::requested(&r.compilation, pipeline, crate::startup::DOCUMENT));
+    let stand_in = crate::compile::tests::requested(&r.compilation, &presenter.pipeline[3], crate::startup::BACKGROUND)
+        && !crate::compile::tests::requested(&r.compilation, &presenter.pipeline[3], crate::startup::OTHER);
     drop(encoder);
     drop(presenter);
     drop(batch);
@@ -38,6 +40,7 @@ fn first_ready_frame_requires_only_its_viewport_variant() {
     assert!(!unused_required, "unused viewport variants do not enter the first frame gate");
     assert!(ready && encoded, "the ready source draws while the other variants remain cold");
     assert!(anticipated, "after the first ready frame, remaining variants run without idle admission");
+    assert!(stand_in, "the stand-in entry waits for background admission");
 }
 
 #[test]
@@ -87,9 +90,11 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
     presenter.encode(&renderer, &mut encoder, &target, crate::test_support::view([128; 2]), [0.; 4]).unwrap();
     assert!(presenter.paper_lighting_drawn());
     assert_eq!(presenter.last_artwork_pipeline.as_ref(), Some(paper[0].compile()));
-    assert!(paper[1..].iter().all(|pipeline|
+    assert!(paper[1..3].iter().all(|pipeline|
         crate::compile::tests::requested(&renderer.compilation, pipeline, crate::startup::VALIDATION)
             && !crate::compile::tests::requested(&renderer.compilation, pipeline, crate::startup::DOCUMENT)));
+    assert!(crate::compile::tests::requested(&renderer.compilation, &paper[3], crate::startup::BACKGROUND)
+        && !crate::compile::tests::requested(&renderer.compilation, &paper[3], crate::startup::OTHER));
     assert!(renderer.poll_startup().unwrap().complete, "unused warming must not reopen startup readiness");
     assert!(!crate::compile::tests::ordered_demands(&renderer.compilation, crate::startup::OTHER).is_empty());
     renderer.queue.submit([encoder.finish()]);

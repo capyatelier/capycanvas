@@ -331,6 +331,7 @@ fn crossing_a_level_shows_the_previous_one_resampled_and_refines_a_few_pages_a_f
     for (from, to) in [(0.4f32, 0.6f32), (0.9, 0.45)] {
         let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
         submit_ready(&mut r, FramePacket { view: at(from), ..packet(editor.document().scene(), extent) });
+        crate::test_support::warm_presentation(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb, at(from));
         let level = r.scale_display.as_ref().unwrap().plan.level;
         let mut fresh = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
         submit_ready(&mut fresh, FramePacket { view: at(to), ..packet(editor.document().scene(), extent) });
