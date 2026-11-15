@@ -46,12 +46,12 @@ import SwiftUI
             }
         }
         send(["type": "start", "directory": directory.path, "scene": UUID(uuidString: scene)?.uuidString ?? "default"])
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+        RunLoop.main.add(Timer(timeInterval: 0.1, repeats: true) { [weak self] timer in
             Task { @MainActor [weak self] in
                 guard let self, !self.view["closed"].bool else { timer.invalidate(); return }
                 self.tick()
             }
-        }
+        }, forMode: .common)
     }
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }

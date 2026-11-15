@@ -39,7 +39,12 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "label == %@ AND value == %@", "Saved", "dark"), evaluatedWith: status)
             waitForExpectations(timeout: 15)
             XCTAssertFalse(app.alerts.firstMatch.exists, "Valid saved state must restore without errors")
+            #if os(macOS)
+            app.typeKey("q", modifierFlags: .command)
+            XCTAssertTrue(app.wait(for: .notRunning, timeout: 20), "Quit must save, release the GPU and exit")
+            #else
             app.terminate()
+            #endif
         }
     }
 }
