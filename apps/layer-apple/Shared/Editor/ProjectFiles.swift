@@ -243,12 +243,12 @@ import UIKit
             submitExternalOpen()
         }
     }
-    func confirmClose(_ completion: @escaping (Bool) -> Void) {
+    func confirmClose(otherWindows: Int = 0, closeDrawings: @escaping () -> Void = {}, _ completion: @escaping (Bool) -> Void) {
         guard !busy, externalOpen == nil, closeCompletion == nil, let store else { completion(false); return }
         busy = true; blocksEditor = true; closeCompletion = completion
-        store.query(["type": "document_tabs", "op": "session_close"]) { [weak self] result in
+        store.query(["type": "document_tabs", "op": "session_close", "other_windows": otherWindows]) { [weak self] result in
             guard let self, closeCompletion != nil else { return }
-            finishClose(result.bool)
+            if result.string == "close_drawings" { finishClose(false); closeDrawings() } else { finishClose(result.bool) }
         }
     }
     func confirmCurrentClose(_ completion: @escaping (Bool) -> Void) {

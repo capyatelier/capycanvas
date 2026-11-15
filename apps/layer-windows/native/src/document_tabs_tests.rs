@@ -79,7 +79,7 @@ fn window_close_waits_for_the_pending_canvas_operation() {
     assert!(service.idle());
     assert!(!host.session.can_park_document());
     assert!(host.session.request_session_close().is_err());
-    service.dispatch(&mut host, DocumentAction::Close).unwrap();
+    service.dispatch(&mut host, DocumentAction::Close { other_windows: 0 }).unwrap();
     let polled = service.poll(&mut host);
     assert!(service.close_window);
     assert!(service.quit_pending);
@@ -135,7 +135,7 @@ fn window_close_cancels_unfinished_header_editing() {
     assert_ne!(host.session.state().workspace.layout.header, header);
     assert_ne!(host.session.state().workspace.layout.canvas_info, canvas_info);
     assert!(!host.session.can_park_document());
-    service.dispatch(&mut host, DocumentAction::Close).unwrap();
+    service.dispatch(&mut host, DocumentAction::Close { other_windows: 0 }).unwrap();
     host.session.suspend_renderer().unwrap();
     settle(&mut service, &mut host);
     assert!(host.session.state().document_file.close_ready);

@@ -57,6 +57,13 @@ impl Workspace {
                     return if w.workspaces.request_close(&w) { glib::Propagation::Stop } else { glib::Propagation::Proceed };
                 }
                 if w.documents.exit_flushing.get() { return glib::Propagation::Stop; }
+                if layer_ui::session_recovery::WindowClose::with_other_windows(crate::page_dialog::other_windows(&w)) == layer_ui::session_recovery::WindowClose::CloseDrawings {
+                    let result=w.gpu.borrow_mut().as_mut().map(|gpu|gpu.session.request_document_close());
+                    let Some(result)=result else {return glib::Propagation::Proceed;};
+                    if result.is_ok() {w.documents.closing_tab.set(true);} else {w.documents.closing_window.set(false);}
+                    w.changed(result);
+                    return glib::Propagation::Stop;
+                }
                 let prepare=w.gpu.borrow_mut().as_mut().map(|gpu|gpu.session.request_session_close());
                 match prepare {
                     Some(Err(error))=>{w.documents.closing_window.set(false);w.changed(Err(error));return glib::Propagation::Stop;}

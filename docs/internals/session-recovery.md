@@ -3,7 +3,10 @@
 [Technical documentation](../README.md)
 
 Restart restores open drawings without a recovery prompt. Quitting retains clean,
-modified and untitled drawings. Explicitly closing a drawing still uses
+modified and untitled drawings in every open window, and so does closing the last
+window. Closing a window while another stays open closes its drawings one by one,
+as closing their tabs would; Cancel stops and leaves the window open
+(`WindowClose::with_other_windows`). Explicitly closing a drawing still uses
 Save/Discard/Cancel and removes it from the next session. A successful manual save
 changes the saved checkpoint; it does not remove the drawing from the session.
 

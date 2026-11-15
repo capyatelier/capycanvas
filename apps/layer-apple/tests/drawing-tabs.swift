@@ -245,7 +245,16 @@ import QuartzCore
             store.projectFiles.confirmClose { windowAllowed = $0 }
             try await wait("session close after rollback") { windowAllowed != nil }
             precondition(windowAllowed == true && !store.projectFiles.confirming && store.drawingTabs.rows.count == 3)
-            print("Apple \(platform): device pickup matrix, independent history/save destinations, per-tab recovery, close/cancel, ordered multi-open and session checkpoint close without per-drawing prompts passed")
+            await withCheckedContinuation { done in store.cancelPreparedClose { done.resume() } }
+            windowAllowed = nil
+            store.projectFiles.confirmClose(otherWindows: 1, closeDrawings: { store.drawingTabs.closeWindowDrawings() }) { windowAllowed = $0 }
+            try await wait("closing one of two windows asks about its drawings") { windowAllowed == false && store.projectFiles.confirming }
+            store.projectFiles.choose("discard")
+            try await wait("next drawing of the closing window asks") { store.drawingTabs.rows.count == 2 && store.projectFiles.confirming }
+            store.projectFiles.choose("cancel")
+            try await wait("window close stops at cancel") { !store.projectFiles.busy && !store.drawingTabs.busy }
+            precondition(store.drawingTabs.rows.count == 2 && !store.drawingTabs.closingWindow)
+            print("Apple \(platform): device pickup matrix, independent history/save destinations, per-tab recovery, close/cancel, ordered multi-open, session checkpoint close without per-drawing prompts and per-drawing window close passed")
         }
         for platform: UInt32 in [0, 1] {
             let store = EditorStore(platform: platform, persistence: EditorPersistence(root: root.appendingPathComponent("crop-switch-\(platform)")), managedWorkspaces: false)

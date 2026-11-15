@@ -111,9 +111,9 @@ void CapyLifecycle(char const* event) {
         << GetCurrentProcessId() << " " << Now() << " " << event << "\n";
 }
 CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,
-    std::function<void(uint64_t)> preferencesChanged,std::function<void()> deviceLoss)
+    std::function<void(uint64_t)> preferencesChanged,std::function<void()> deviceLoss,std::function<size_t(uint64_t)> others)
     :windowId(window.AppWindow().Id().Value),
-     createWindow(std::move(create)),testDeviceLoss(std::move(deviceLoss)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)),screenData(std::make_shared<CapyUi::WorkspaceData>()) {
+     createWindow(std::move(create)),testDeviceLoss(std::move(deviceLoss)),onClosed(std::move(close)),workspacePreferencesChanged(std::move(preferencesChanged)),otherWindows(std::move(others)),screenData(std::make_shared<CapyUi::WorkspaceData>()) {
     // HWND/WindowId can be reused after an earlier window closes. Invalidate
     // its old diagnostic model before publishing the new live-window manifest.
     if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
@@ -1647,7 +1647,7 @@ void CanvasWindow::RequestClose() {
     for(auto const& dialog:{&canvasSize,&imageSize})if(*dialog)(*dialog)->CancelAll();
     if(workspaceManager)workspaceManager->CancelAll();
     CapyLifecycle("close_requested");
-    Send(R"({"operation":"close"})",CanvasCommandKind::Document);
+    Send(R"({"operation":"close","other_windows":)"+std::to_string(otherWindows(windowId))+"}",CanvasCommandKind::Document);
 }
 void CanvasWindow::Stop() {
     {std::lock_guard lock(mutex);if(closing)return;}

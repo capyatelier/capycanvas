@@ -201,7 +201,9 @@ fn apple_session_close_keeps_unsaved_drawings_without_document_prompts() {
         let app = App::new(platform);
         app.invoke("add_layer");
         let before = tabs(&app);
-        assert_eq!(app.request(2, json!({"type":"document_tabs","op":"session_close"})).unwrap(), json!(true));
+        assert_eq!(app.request(2, json!({"type":"document_tabs","op":"session_close","other_windows":1})).unwrap(), json!("close_drawings"));
+        assert!(!app.state()["document_file"]["close_ready"].as_bool().unwrap());
+        assert_eq!(app.request(2, json!({"type":"document_tabs","op":"session_close","other_windows":0})).unwrap(), json!(true));
         assert!(app.state()["document_file"]["close_ready"].as_bool().unwrap());
         assert!(app.state()["requests"].as_array().unwrap().iter().all(|r| r["kind"]["request"]["type"] != "confirm_close"));
         assert_eq!(tabs(&app)["tabs"], before["tabs"]);

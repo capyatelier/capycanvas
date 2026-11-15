@@ -973,6 +973,45 @@ fn native_session_restart() {
 
 #[test]
 #[ignore = "isolated Wayland and private session directory"]
+fn native_closing_one_of_two_windows_closes_its_drawings() {
+    let (app,windows)=crate::application("art.capycanvas.WindowClose");
+    let app=NativeTestApp(app);app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    let localization=layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    crate::open_workspace(&app,&windows,Some((new_drawing(256,256,&localization).unwrap(),None)));
+    until(||windows.borrow().first().is_some_and(|w|w.window.is_mapped()),"first window mapped");
+    crate::open_workspace(&app,&windows,Some((new_drawing(128,96,&localization).unwrap(),None)));
+    until(||windows.borrow().len()==2&&windows.borrow()[1].window.is_mapped(),"second window mapped");
+    let (first,second)=(windows.borrow()[0].clone(),windows.borrow()[1].clone());
+    new_photo::ready(&first);new_photo::ready(&second);apply_fixture_theme(&first);
+    new_photo::invoke(&first,CommandId::AddLayer);
+    glib::MainContext::default().block_on(first.documents.open(&first,(new_drawing(64,64,&first.localization()).unwrap(),None))).unwrap();
+    new_photo::ready(&first);
+    first.window.close();
+    until(||first.window.visible_dialog().is_some(),"closing one of two windows asks about its changed drawing");
+    assert_eq!(first.documents.len(),1,"the unchanged drawing closes without asking");
+    new_photo::response(&first,"cancel");until(||!first.servicing.get(),"cancel acknowledged");
+    assert!(first.window.is_visible());assert_eq!(first.documents.len(),1);
+    first.window.close();
+    until(||first.window.visible_dialog().is_some(),"closing again asks again");
+    new_photo::response(&first,"discard");
+    until(||!first.window.is_visible()&&windows.borrow().len()==1,"discarded window closes");
+    second.window.close();
+    until(||!second.window.is_visible()&&windows.borrow().is_empty(),"last window keeps its drawing");
+    assert!(second.window.visible_dialog().is_none());
+    drop(first);drop(second);pump(100);
+    crate::open_workspace(&app,&windows,None);
+    until(||windows.borrow().first().is_some_and(|w|!w.restart.is_restoring()&&!w.documents.changing.get()),"last window restored");
+    pump(500);
+    assert_eq!(windows.borrow().len(),1,"a window closed while another stayed open does not reopen");
+    let w=windows.borrow()[0].clone();new_photo::ready(&w);
+    assert_eq!(w.documents.len(),1);
+    assert_eq!(ui_session(&w).engine().document().composition().size,[128,96]);
+    w.window.close();
+    until(||windows.borrow().is_empty(),"restored window closes");
+}
+
+#[test]
+#[ignore = "isolated Wayland and private session directory"]
 fn native_session_restart_saved_origins() {
     let (app,windows)=crate::application("art.capycanvas.SessionSavedOrigins");
     let app=NativeTestApp(app);app.register(None::<&gtk::gio::Cancellable>).unwrap();

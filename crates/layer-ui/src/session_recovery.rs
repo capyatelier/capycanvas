@@ -9,6 +9,17 @@ pub const MAX_SESSION_DRAWINGS: usize = 1024;
 pub const MAX_SESSION_DRAWING_ID: u64 = (1u64<<53)-1;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowClose {
+    KeepDrawings,
+    CloseDrawings,
+}
+impl WindowClose {
+    pub fn with_other_windows(other_windows: usize) -> Self {
+        if other_windows == 0 { Self::KeepDrawings } else { Self::CloseDrawings }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionCamera {
     pub center: [f32; 2],
@@ -722,6 +733,11 @@ pub(crate) mod tests {
         session.request_session_close().unwrap();assert!(session.state.document_file.close_ready);assert!(session.state.document_file.modified);assert!(session.state.requests.is_empty());
         session.reset_document_close();assert!(!session.state.document_file.close_ready);
         session.request_document_close().unwrap();assert!(session.state.requests.iter().any(|request|matches!(request.kind,HostRequestKind::Document{request:DocumentRequest::ConfirmClose{..}})));
+    }
+    #[test]
+    fn only_the_last_window_keeps_its_drawings_for_the_next_launch() {
+        assert_eq!(WindowClose::with_other_windows(0),WindowClose::KeepDrawings);
+        for others in [1,2,64] {assert_eq!(WindowClose::with_other_windows(others),WindowClose::CloseDrawings);}
     }
     #[test]
     fn membership_changes_are_explicit_and_identities_cannot_be_rebound() {

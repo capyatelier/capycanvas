@@ -91,6 +91,7 @@ import AppKit
         }
         guard !asking else { return false }
         guard let store else { return downstream?.windowShouldClose?(sender) ?? true }
+        if store.drawingTabs.closingWindow && (store.drawingTabs.busy || store.projectFiles.busy || store.drawingTabs.closedForWindow != nil) { return false }
         asking = true
         let confirm: (Bool) -> Void = { [weak self, weak sender] allowed in
             guard let self else { return }
@@ -110,7 +111,9 @@ import AppKit
                 }
             }
         }
-        store.projectFiles.confirmClose(confirm)
+        let otherWindows = store.drawingTabs.closingWindow ? 0 : store.otherWindows
+        store.drawingTabs.endWindowClose()
+        store.projectFiles.confirmClose(otherWindows: otherWindows, closeDrawings: { [weak store] in store?.drawingTabs.closeWindowDrawings() }, confirm)
         return false
     }
     @MainActor func windowWillClose(_ notification: Notification) {

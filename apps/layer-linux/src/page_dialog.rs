@@ -244,6 +244,10 @@ impl Pages {
     }
 }
 
+pub fn other_windows(w: &Rc<Workspace>) -> usize {
+    WINDOWS.with_borrow(|windows| windows.iter().filter_map(Weak::upgrade).filter(|other| !Rc::ptr_eq(other, w) && other.window.is_visible()).count())
+}
+
 fn owner(widget: &gtk::Widget) -> Option<Rc<Workspace>> {
     WINDOWS.with_borrow(|windows| windows.iter().filter_map(Weak::upgrade).find(|w|
         widget.root().as_ref() == Some(w.window.upcast_ref()) || w.pages.contains(widget)))

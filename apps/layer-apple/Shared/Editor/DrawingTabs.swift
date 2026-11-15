@@ -9,6 +9,8 @@ import UniformTypeIdentifiers
     var common: JSON { store?.bootstrap["common"] ?? JSON() }
     var copy: JSON { store?.catalog["native_copy"]["header"] ?? JSON() }
     private var request: UInt64?
+    private(set) var closingWindow = false
+    private(set) var closedForWindow: UInt64?
     private var closeCaptions: [UInt64: String] = [:]
     private var captionLanguage = ""
     private var closeTitles: [UInt64: String] = [:]
@@ -40,6 +42,10 @@ import UniformTypeIdentifiers
                     : NativeTextContext.caption(["type": "close_drawing", "title": title], language: store.interfaceLanguage)
             }
             closeTitles = titles; closeCaptions = captions
+        }
+        if let closed = closedForWindow, !busy, !store.projectFiles.busy, !rows.isEmpty, !rows.contains(where: { $0["id"].uint == closed }) {
+            closedForWindow = nil
+            closeCurrent()
         }
         guard let command = store.state["requests"].array.first(where: { ["drawings", "adjacent_drawing", "select_drawing"].contains($0["kind"]["type"].string) }) else { request = nil; return }
         guard request != command["id"].uint else { return }
@@ -90,14 +96,28 @@ import UniformTypeIdentifiers
             store.projectFiles.confirmCurrentClose { [weak self] allowed in if allowed { self?.closeApproved() } }
         }
     }
+    func closeWindowDrawings() {
+        presented = false
+        closingWindow = true
+        closeCurrent()
+    }
+    func endWindowClose() { closingWindow = false; closedForWindow = nil }
+    private func closeCurrent() {
+        guard let store else { closingWindow = false; return }
+        store.projectFiles.confirmCurrentClose { [weak self] allowed in
+            guard let self else { return }
+            if allowed { closeApproved() } else { closingWindow = false }
+        }
+    }
     func closeApproved() {
-        guard let store, !busy else { return }
+        guard let store, !busy else { closingWindow = false; return }
         if rows.count <= 1 {
             busy = true
             store.recovery.retire { [weak self] saved in
                 self?.busy = false
-                if saved { store.projectFiles.closeWindow?() }
+                if saved { self?.closingWindow = true; store.projectFiles.closeWindow?() }
                 else {
+                    self?.closingWindow = false
                     store.cancelPreparedClose()
                     store.projectFiles.error = store.recovery.failure ?? store.bootstrap["recovery"]["close_save_failed"].string
                 }
@@ -111,8 +131,11 @@ import UniformTypeIdentifiers
         } }) { [weak self] error in DispatchQueue.main.async {
                 guard let self else { return }
                 self.busy = false
-                if let error { store.projectFiles.error = error }
-                else { store.projectFiles.forgetDocument(id) }
+                if let error { store.projectFiles.error = error; self.closingWindow = false }
+                else {
+                    store.projectFiles.forgetDocument(id)
+                    if self.closingWindow { self.closedForWindow = id }
+                }
                 recovery.flush { _ in }
                 store.wake?()
         } }

@@ -39,7 +39,7 @@ pub(crate) enum DocumentAction {
     Workflow { id: u32, action: crate::document_workflows::Action },
     Create { id: u32, epoch: u64, revision: u64 },
     Interpret { id: u32, profile: Option<crate::color_storage::ProfileChoice> },
-    Close,
+    Close { other_windows: usize },
     RespondClose {
         id: u32,
         epoch: u64,
@@ -382,6 +382,7 @@ pub(crate) struct DocumentService {
     incoming_drop: Option<IncomingDrop>,
     pending_tab: Option<tabs::Action>,
     close_window: bool,
+    closing_drawings: bool,
     quit_pending:bool,
     close_next: bool,
     prepared_close:Option<layer_host::window::PreparedClose>,
@@ -440,6 +441,7 @@ impl DocumentService {
             incoming_drop: None,
             pending_tab: None,
             close_window: false,
+            closing_drawings: false,
             quit_pending:false,
             close_next: false,
             prepared_close:None,
@@ -747,9 +749,15 @@ impl DocumentService {
             host.invalidate_snapshot();
             return Ok(());
         }
-        if let DocumentAction::Close = action {
+        if let DocumentAction::Close { other_windows } = action {
+            if self.closing_drawings { return Ok(()); }
             if host.session.state().customization.header_editing {
                 host.dispatch(layer_ui::HeaderAction::Cancel.action())?;
+            }
+            if layer_ui::session_recovery::WindowClose::with_other_windows(other_windows) == layer_ui::session_recovery::WindowClose::CloseDrawings {
+                self.closing_drawings = true;
+                self.close_next = true;
+                return Ok(());
             }
             self.close_window = true;
             self.quit_pending=host.session.state().document_file.busy||self.active.is_some()||self.activating||!host.session.can_park_document();
@@ -1345,13 +1353,28 @@ mod tests {
     #[test]
     fn window_quit_preserves_unsaved_work_without_a_discard_prompt() {
         let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();let checkpoint=f.host.session.engine().checkpoint();
-        f.host.suspend_renderer().unwrap();f.act(DocumentAction::Close);f.service.poll(&mut f.host).unwrap();
+        f.host.suspend_renderer().unwrap();f.act(DocumentAction::Close { other_windows: 0 });f.service.poll(&mut f.host).unwrap();
         assert!(f.host.session.state().document_file.close_ready);assert!(f.host.session.state().document_file.modified);assert_eq!(f.host.session.engine().checkpoint(),checkpoint);assert!(f.host.session.engine().can_undo());assert!(f.host.session.state().requests.is_empty());
+    }
+    #[test]
+    fn closing_one_of_several_windows_asks_about_its_unsaved_drawing_instead_of_keeping_it() {
+        let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();f.host.suspend_renderer().unwrap();
+        let respond=|f:&mut Fixture,decision|{
+            f.act(DocumentAction::Close{other_windows:1});f.service.poll(&mut f.host).unwrap();
+            assert!(!f.service.close_window);assert!(!f.host.session.state().document_file.close_ready);assert!(!f.service.window_close_ready(&f.host));
+            let id=f.host.session.state().requests.iter().find_map(|request|matches!(request.kind,HostRequestKind::Document{request:DocumentRequest::ConfirmClose{..}}).then_some(request.id)).unwrap();
+            let file=f.host.session.state().document_file.clone();
+            f.act(DocumentAction::RespondClose{id,epoch:file.epoch,revision:file.revision,decision});f.service.poll(&mut f.host).unwrap();
+        };
+        respond(&mut f,CloseDecision::Cancel);
+        assert!(!f.service.closing_drawings);assert!(!f.service.window_close_ready(&f.host));
+        respond(&mut f,CloseDecision::Discard);
+        assert!(f.host.session.state().document_file.close_ready);assert!(f.service.window_close_ready(&f.host));
     }
     #[test]
     fn window_quit_waits_for_an_accepted_save_and_preserves_later_edits() {
         let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();f.invoke(CommandId::SaveDocumentAs);let path=f.path("accepted-save.capy");f.act(DocumentAction::Save{id:f.request(),path:path.clone()});
-        f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let checkpoint=f.host.session.engine().checkpoint();f.act(DocumentAction::Close);
+        f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let checkpoint=f.host.session.engine().checkpoint();f.act(DocumentAction::Close { other_windows: 0 });
         assert!(f.service.quit_pending);assert!(!f.host.session.state().document_file.close_ready);f.finish();f.host.suspend_renderer().unwrap();f.service.poll(&mut f.host).unwrap();
         assert!(std::path::Path::new(&path).is_file());assert!(f.host.session.state().document_file.close_ready);assert!(f.host.session.state().document_file.modified);assert_eq!(f.host.session.engine().checkpoint(),checkpoint);
     }

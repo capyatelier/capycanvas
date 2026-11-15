@@ -80,7 +80,7 @@ if($Action -eq 'Close') {
             if($epoch -ne $lastEpoch){$lastEpoch=$epoch;$watch.Restart()}
             $discard=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
                 [System.Windows.Automation.AndCondition]::new(
-                    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Discard Changes'),
+                    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,[string]$snapshot.model.document_options.discard_label),
                     [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
             if($discard -and $discard.Current.IsEnabled -and $lastDecision -ne $epoch){
                 $discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();$lastDecision=$epoch;$watch.Restart()

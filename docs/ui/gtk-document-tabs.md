@@ -52,9 +52,10 @@ layout undo is separate from drawing undo. Compact list rows have explicit grab
 handles if reorder is exposed there; otherwise they only select/close.
 
 Closing a tab uses the existing shared Save/Discard/Cancel decision. Cancelling
-save or a failed write leaves that drawing open. Closing a window visits tabs
-sequentially, stopping at cancellation/failure; already approved closes stay
-closed. Closing the last tab closes the window. Background close selects
+save or a failed write leaves that drawing open. Closing a window while another
+stays open visits tabs sequentially, stopping at cancellation/failure; already
+approved closes stay closed. Closing the last window keeps its drawings for the
+next launch without asking. Closing the last tab closes the window. Background close selects
 the drawing so the user sees what is being saved/discarded, even when its canvas
 is unavailable. Select the right neighbor after close, or the left neighbor
 when closing the last tab in order. Duplicate names show locations in the selector;

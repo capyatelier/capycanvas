@@ -103,7 +103,8 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
             [weak=get_weak()](uint64_t id){if(auto self=weak.get()){self->windows.erase(id);self->TraceWindows();}},
             [weak=get_weak()](uint64_t source){if(auto self=weak.get())for(auto const& [id,window]:self->windows)
                 if(id!=source)window->RefreshWorkspaceSwitcher();},
-            [weak=get_weak()]{if(auto self=weak.get())self->TestDeviceLoss();});
+            [weak=get_weak()]{if(auto self=weak.get())self->TestDeviceLoss();},
+            [weak=get_weak()](uint64_t source){size_t others=0;if(auto self=weak.get())for(auto const& [id,window]:self->windows)others+=id!=source&&!window->Closing();return others;});
         windows.emplace(next->Id(),next);
         TraceWindows();
         if(!files.empty())next->OpenFiles(std::move(files));

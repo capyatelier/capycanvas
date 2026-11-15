@@ -26,6 +26,10 @@ impl CapyApple {
     }
     pub(crate) fn tabs_request(&mut self, value: Value) -> Result<Value, String> {
         if value["op"] == "session_close" {
+            let other_windows = value["other_windows"].as_u64().unwrap_or(0) as usize;
+            if layer_ui::session_recovery::WindowClose::with_other_windows(other_windows) == layer_ui::session_recovery::WindowClose::CloseDrawings {
+                return Ok(json!("close_drawings"));
+            }
             let previous = self.host.session.state().revision;
             let change = self.host.session.request_session_close()?;
             self.host.apply_change(previous, change);

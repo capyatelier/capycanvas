@@ -71,6 +71,7 @@ impl DocumentService {
         let mut view = self.window.view(host, 0.);
         view["available"] = (self.idle()
             && !self.close_window
+            && !self.closing_drawings
             && !host.session.state().document_file.close_ready
             && host.session.can_switch_document())
         .into();
@@ -241,7 +242,7 @@ impl DocumentService {
         host: &mut NativeHost,
         action: Action,
     ) -> Result<(), String> {
-        if !self.idle() || self.close_window || host.session.state().document_file.close_ready
+        if !self.idle() || self.close_window || self.closing_drawings || host.session.state().document_file.close_ready
             || self.window.documents.trim_in_flight() && matches!(&action, Action::Close { .. }) {
             return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
@@ -358,6 +359,10 @@ impl DocumentService {
                 command: layer_ui::CommandId::CloseDocument,
             })?;
         }
+        if self.closing_drawings && !self.close_next && self.idle() && !self.window.documents.trim_in_flight()
+            && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
+            self.closing_drawings = false;
+        }
         if self.close_window && !self.window.documents.trim_in_flight() && self.idle() && host.session.can_park_document() && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
             if self.quit_pending {
                 let previous=host.session.state().revision;let change=host.session.request_session_close()?;self.quit_pending=false;host.apply_change(previous,change);
@@ -372,7 +377,7 @@ impl DocumentService {
             let prepared=self.prepared_close.take().ok_or("The drawing close is not prepared")?;
             let (activation,closed)=self.window.commit_close(host,prepared,|_|{})?;
             self.document_retired(host, true)?;if let Some(closed)=closed{self.worker.retire(closed.session);}self.activate(host,activation)?;
-            self.close_next = false;
+            self.close_next = self.closing_drawings;
         }
         Ok(())
     }

@@ -73,6 +73,11 @@ import UIKit
     }
     var acceptsGamepad: (() -> Bool)?
     static var gamepadTarget: EditorStore? { instances.allObjects.first { $0.acceptsGamepad?() == true } }
+    #if os(macOS)
+    var otherWindows: Int {
+        Self.instances.allObjects.filter { $0 !== self && $0.projectFiles.presentationWindow?.isVisible == true }.count
+    }
+    #endif
     /// Measured native window controls; editor geometry otherwise comes from Rust.
     @Published var headerLeadingInset: CGFloat?
     var cameraRevision: UInt64 = 0

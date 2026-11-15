@@ -45,7 +45,7 @@ struct OrderedTraceFile;
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
     CanvasWindow(std::function<void()> createWindow,std::function<void(uint64_t)> onClosed,
-        std::function<void(uint64_t)> preferencesChanged,std::function<void()> testDeviceLoss);
+        std::function<void(uint64_t)> preferencesChanged,std::function<void()> testDeviceLoss,std::function<size_t(uint64_t)> otherWindows);
     void TestDeviceLoss(std::string group){Send(std::move(group),CanvasCommandKind::DeviceLoss);}
     void RefreshWorkspaceSwitcher();
     uint64_t Id()const{return windowId;}
@@ -70,6 +70,7 @@ private:
     HWND nativeWindow=nullptr;
     std::function<void()> createWindow,testDeviceLoss;
     std::function<void(uint64_t)> onClosed,workspacePreferencesChanged;
+    std::function<size_t(uint64_t)> otherWindows;
     std::optional<uint64_t> workspacePreferencesRevision;
     bool sessionWindowsOpened=false,discoveryReady=false;
     void TraceState(char const* kind,std::string const& value)const;

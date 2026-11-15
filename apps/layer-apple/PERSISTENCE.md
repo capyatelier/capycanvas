@@ -6,8 +6,10 @@ Settings use the versioned Rust model and atomic JSON files; workspaces use the
 shared SQLite library. Both apps expose New, Open, Save and Save As with the
 shared [Capy package](../../docs/reference/capy-package.md), profiled image
 export, and private checkpoints for open drawing sessions. Closing a drawing
-uses the shared unsaved-change decision. Window close and app termination
-preserve the open session.
+uses the shared unsaved-change decision. App termination and closing the last
+macOS window preserve the open session; closing a macOS window while another
+stays open closes its drawings with that decision. Swiping an iPad window away
+preserves its session.
 
 **File → New Window** opens another editor on both platforms. Each scene owns its
 document, camera and Undo history, and closing one leaves the others open. An
@@ -116,8 +118,9 @@ iPad without multiple-window support reports that limitation.
   `SessionCapture` values; one file worker encodes and publishes them.
 - A window whose own session has no drawings adopts the newest unlocked session
   that has drawings and renames it to its own. Artwork from windows the system
-  did not restore (Close windows when quitting, Option-Quit, cleared saved
-  state, iPad windows swiped away) therefore reopens in the next new window. On
+  did not restore (the last macOS window closed, Close windows when quitting,
+  Option-Quit, cleared saved state, iPad windows swiped away) therefore reopens
+  in the next new window. On
   iPad a window adopts only while every open scene session is connected, so a
   background window can still reconnect to its own session.
 - The private shared session codec preserves authored artwork, working selection,
