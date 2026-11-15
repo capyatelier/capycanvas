@@ -852,20 +852,17 @@ impl HeaderLayout {
                 width.clamp(1., 4096.)
             }
         };
-        let spans = self.zones.each_ref().map(|zone| {
-            let entries: Vec<_> = zone.iter().filter(visible).collect();
-            let gaps = entries.windows(2).map(|p| spacing(p[0], p[1])).sum::<f32>();
-            [false, true].map(|compact| entries.iter().map(|e| metric(e, compact)).sum::<f32>() + gaps)
-        });
+        let span = |zone: usize, compact: bool| {
+            let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
+            entries.iter().map(|e| metric(e, compact)).sum::<f32>()
+                + entries.windows(2).map(|p| spacing(p[0], p[1])).sum::<f32>()
+        };
         let center_limit = ((right - left) / 3.)
             .min(2. * (mid - left).min(right - mid))
             .max(0.);
-        let center_budget = 2. * (mid - left - gap - spans[0][1])
-            .min(right - mid - gap - spans[2][1]).floor().max(0.);
-        let center_width = spans[1][0]
+        let center_width = span(1, false)
             .min(center_limit)
-            .min(center_budget)
-            .max(spans[1][1].min(center_limit));
+            .max(span(1, true).min(center_limit));
         let center_left = (mid - center_width / 2.).floor().max(left);
         let center_right = (center_left + center_width).min(right);
         let y = item_gap;
@@ -913,10 +910,9 @@ impl HeaderLayout {
         for zone in 0..3 {
             let bounds = result.zones[zone];
             let entries: Vec<_> = self.zones[zone].iter().filter(visible).collect();
-            let [natural, compact] = spans[zone];
-            let compacting = natural > bounds.width;
+            let compacting = span(zone, false) > bounds.width;
             let widths: Vec<_> = entries.iter().map(|e| metric(e, compacting)).collect();
-            let overflow = (if compacting { compact } else { natural }) > bounds.width;
+            let overflow = span(zone, compacting) > bounds.width;
             let overflow_width = tile.min(bounds.width);
             let available = (bounds.width
                 - if overflow {
@@ -1461,46 +1457,6 @@ mod tests {
             .unwrap();
         assert!(h.entries().any(|e| e.item == HeaderItem::MenuLabels));
     }
-    #[test]
-    fn center_compacts_before_side_tools_overflow() {
-        let tool = HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::Brush } };
-        for size in HeaderSize::ALL {
-            let h = HeaderLayout::from_items(size, [vec![tool; 4], vec![HeaderItem::Workspaces], vec![tool; 4]]);
-            let center = h.zones[1][0].id;
-            let tile = size.tile();
-            let metrics = h.entries().map(|entry| HeaderMetric { id: entry.id,
-                width: if entry.id == center { 5. * tile } else { 1.5 * tile },
-                compact: if entry.id == center { 2. * tile } else { tile } }).collect::<Vec<_>>();
-            for insets in [[0.; 2], [0., 2. * tile / 3.], [2. * tile / 3., 0.]] {
-                for editing in [false, true] {
-                    let wide = h.resolve(20. * tile, insets, &metrics, editing);
-                    assert_eq!(wide.items.iter().find(|item| item.id == center).unwrap().bounds.width, 5. * tile);
-                    let width = 40. * tile / 3.;
-                    let g = h.resolve(width, insets, &metrics, editing);
-                    assert!(g.hidden.iter().all(Vec::is_empty), "{size:?} {insets:?} editing={editing}: {:?}", g.hidden);
-                    assert!(g.overflow.iter().all(Option::is_none));
-                    assert_eq!(g.items.len(), h.entries().count());
-                    let bounds = g.items.iter().find(|item| item.id == center).unwrap().bounds;
-                    assert!(bounds.width >= 2. * tile && bounds.width < 5. * tile);
-                    assert!((bounds.x + bounds.width / 2. - width / 2.).abs() <= 0.5);
-                    let narrow = h.resolve(8. * tile, insets, &metrics, editing);
-                    assert!(narrow.hidden.iter().any(|items| !items.is_empty()));
-                    assert!(narrow.overflow.iter().any(Option::is_some));
-                    assert_eq!(narrow.items.iter().find(|item| item.id == center).unwrap().bounds.width, 2. * tile);
-                }
-            }
-        }
-        let h = WorkspacePreset::Painter.layout(Platform::Android).header;
-        let metrics = h.entries().map(|entry| HeaderMetric { id: entry.id,
-            width: if entry.item == HeaderItem::Workspaces { 180. } else { 48. }, compact: 48. }).collect::<Vec<_>>();
-        let g = h.resolve(822.8571, [0.; 2], &metrics, false);
-        assert!(g.hidden.iter().all(Vec::is_empty));
-        assert!(g.overflow.iter().all(Option::is_none));
-        assert_eq!(g.items.len(), h.entries().count());
-        let center = g.items.iter().find(|item| item.id == h.zones[1][0].id).unwrap().bounds;
-        assert!((center.x + center.width / 2. - 822.8571 / 2.).abs() <= 0.5);
-    }
-
     #[test]
     fn every_item_has_one_visible_or_overflow_destination_at_every_size() {
         for size in HeaderSize::ALL {
