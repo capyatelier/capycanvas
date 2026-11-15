@@ -662,7 +662,7 @@ impl DecodeKey {
     }
 }
 struct Outstanding {
-    key:Option<DecodeKey>,region:PixelRect,class:Class,
+    sequence:u64,key:Option<DecodeKey>,region:PixelRect,class:Class,
     #[cfg(not(target_arch="wasm32"))]
     input:Arc<DecodeInput>,
 }
@@ -676,25 +676,26 @@ pub(crate) struct MipDecodeQueue {
     #[cfg(not(target_arch="wasm32"))]
     waiting:Option<u64>,
     #[cfg(not(target_arch="wasm32"))]
-    results:std::sync::mpsc::Receiver<PreparedImageWork>,
+    results:std::sync::mpsc::Receiver<(u64,PreparedImageWork)>,
     #[cfg(target_arch="wasm32")]
-    external:Option<MipDecodeRequest>,
+    external:Option<(u64,MipDecodeRequest)>,
     #[cfg(target_arch="wasm32")]
-    completed:Option<PreparedImageWork>,
+    completed:Option<(u64,PreparedImageWork)>,
     ready:Arc<std::sync::atomic::AtomicUsize>,
     outstanding:Vec<Outstanding>,
+    next_sequence:u64,
     capacity:usize,
     priority:Option<(layer_render::ViewState,PixelRect)>,
 }
 #[cfg(not(target_arch="wasm32"))]
 struct DecodeContext {
     cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace,
-    send:std::sync::mpsc::SyncSender<PreparedImageWork>,ready:Arc<std::sync::atomic::AtomicUsize>,
+    send:std::sync::mpsc::SyncSender<(u64,PreparedImageWork)>,ready:Arc<std::sync::atomic::AtomicUsize>,
     wake: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     waiter: std::sync::Mutex<Option<std::task::Waker>>,
 }
 #[cfg(not(target_arch="wasm32"))]
-struct DecodeJob {request:MipDecodeRequest,context:Weak<DecodeContext>,input:Weak<DecodeInput>}
+struct DecodeJob {sequence:u64,request:MipDecodeRequest,context:Weak<DecodeContext>,input:Weak<DecodeInput>}
 #[cfg(not(target_arch="wasm32"))]
 struct DecodePool {requests:std::sync::mpsc::SyncSender<DecodeJob>,capacity:usize,epoch:Arc<std::sync::atomic::AtomicU64>,
     capacity_waiters:Arc<std::sync::Mutex<Vec<Weak<DecodeContext>>>>,resumed:std::sync::Mutex<VecDeque<DecodeJob>>}
@@ -735,7 +736,7 @@ impl DecodeJob {
             Err(error)=>(self,Err(error.clone())),
         };
         let result=prepare_request(job.request,destination,&cache,decoders,input.samples.clone(),bytes);
-        if let Some(context)=job.context.upgrade() && context.send.send(result).is_ok() {
+        if let Some(context)=job.context.upgrade() && context.send.send((job.sequence,result)).is_ok() {
             context.ready.fetch_add(1,Ordering::AcqRel);
             context.notify();
         }
@@ -865,7 +866,7 @@ impl MipDecodeQueue {
         #[cfg(not(target_arch="wasm32"))]
         {Self::native(device.source_samples.clone(),device.working_space())}
         #[cfg(target_arch="wasm32")]
-        {let _=device;Ok(Self {external:None,completed:None,ready:Default::default(),outstanding:Vec::new(),capacity:1,priority:None})}
+        {let _=device;Ok(Self {external:None,completed:None,ready:Default::default(),outstanding:Vec::new(),next_sequence:0,capacity:1,priority:None})}
     }
     #[cfg(not(target_arch="wasm32"))]
     fn native(cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace)->Result<Self,GpuRasterError> {
@@ -874,7 +875,7 @@ impl MipDecodeQueue {
         let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (send,results)=std::sync::mpsc::sync_channel(capacity);
         let context=Arc::new(DecodeContext {cache,destination,send,ready:ready.clone(),wake:Default::default(),waiter:Default::default()});
-        Ok(Self {pool,context,waiting:None,results,ready,outstanding:Vec::new(),capacity,priority:None})
+        Ok(Self {pool,context,waiting:None,results,ready,outstanding:Vec::new(),next_sequence:0,capacity,priority:None})
     }
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
@@ -924,6 +925,7 @@ impl MipDecodeQueue {
             return true;
         }
         if self.outstanding.len()>=self.capacity {return false;}
+        let sequence=self.next_sequence;
         #[cfg(not(target_arch="wasm32"))]
         {
             let blob=match &request {MipDecodeRequest::Image(request)=>request.source.tiles.get(&request.coordinate),MipDecodeRequest::Raster(request)=>Some(&request.blob),MipDecodeRequest::Paper {blob,..}=>Some(blob),MipDecodeRequest::Coordinates(_)=>None};
@@ -932,33 +934,23 @@ impl MipDecodeQueue {
             let input=Arc::new(DecodeInput {samples:samples.ok().flatten(),read});
             if let Some((view,region))=self.priority && let Ok(Some(read))=&input.read {read.prioritize(Self::distance(view,region));}
             let epoch=self.pool.epoch.load(Ordering::Acquire);
-            if self.pool.requests.try_send(DecodeJob {request,context:Arc::downgrade(&self.context),input:Arc::downgrade(&input)}).is_err() {self.waiting=Some(epoch);self.pool.subscribe(&self.context,epoch);return false;}
+            if self.pool.requests.try_send(DecodeJob {sequence,request,context:Arc::downgrade(&self.context),input:Arc::downgrade(&input)}).is_err() {self.waiting=Some(epoch);self.pool.subscribe(&self.context,epoch);return false;}
             if let Ok(Some(read))=&input.read {read.start();}
-            self.waiting=None;self.outstanding.push(Outstanding {key,region:self.priority.map_or(PixelRect::EMPTY,|(_,region)|region),class,input});
+            self.waiting=None;self.outstanding.push(Outstanding {sequence,key,region:self.priority.map_or(PixelRect::EMPTY,|(_,region)|region),class,input});
         }
         #[cfg(target_arch="wasm32")]
-        {self.external=Some(request);self.outstanding.push(Outstanding {key,region:self.priority.map_or(PixelRect::EMPTY,|(_,region)|region),class});}
+        {self.external=Some((sequence,request));self.outstanding.push(Outstanding {sequence,key,region:self.priority.map_or(PixelRect::EMPTY,|(_,region)|region),class});}
+        self.next_sequence+=1;
         true
     }
     pub(crate) fn poll(&mut self)->Option<PreparedImageWork> {
         if !self.ready() {return None;}
         #[cfg(not(target_arch="wasm32"))]
-        let mut result=self.results.try_recv().ok()?;
+        let (sequence,mut result)=self.results.try_recv().ok()?;
         #[cfg(target_arch="wasm32")]
-        let mut result=self.completed.take()?;
+        let (sequence,mut result)=self.completed.take()?;
         self.ready.fetch_sub(1,Ordering::AcqRel);
-        let key=match &result {
-            PreparedImageWork::Image(tile)=>Some(DecodeKey::Image(Arc::downgrade(&tile.source),tile.coordinate)),
-            PreparedImageWork::Raster(tile)=>Some(DecodeKey::Raster(Arc::downgrade(&tile.blob),tile.space,tile.destination,tile.scalar)),
-            PreparedImageWork::Paper {blob,coordinate,..}=>Some(DecodeKey::Paper(Arc::downgrade(blob),*coordinate)),
-            PreparedImageWork::Coordinates {..}=>None,
-        };
-        let index=self.outstanding.iter().position(|stored|match (&stored.key,&key) {
-            (Some(stored),Some(key))=>stored.matches(key),
-            (None,None)=>true,
-            _=>false,
-        });
-        if let Some(index)=index {result.raise(self.outstanding.swap_remove(index).class);}
+        if let Some(index)=self.outstanding.iter().position(|stored|stored.sequence==sequence) {result.raise(self.outstanding.swap_remove(index).class);}
         Some(result)
     }
     pub(crate) fn pending(&self)->bool {
@@ -970,9 +962,9 @@ impl MipDecodeQueue {
     #[cfg(test)]
     pub(crate) fn outstanding_classes(&self)->Vec<Class> {self.outstanding.iter().map(|outstanding|outstanding.class).collect()}
     #[cfg(target_arch="wasm32")]
-    pub(crate) fn take_external(&mut self)->Option<MipDecodeRequest> {self.external.take()}
+    pub(crate) fn take_external(&mut self)->Option<(u64,MipDecodeRequest)> {self.external.take()}
     #[cfg(target_arch="wasm32")]
-    pub(crate) fn complete_external(&mut self,result:PreparedImageWork) {self.completed=Some(result);self.ready.store(1,Ordering::Release);}
+    pub(crate) fn complete_external(&mut self,sequence:u64,result:PreparedImageWork) {self.completed=Some((sequence,result));self.ready.store(1,Ordering::Release);}
 }
 
 #[cfg(test)]
@@ -980,11 +972,12 @@ pub(crate) mod tests {
     use super::*;
     use crate::test_support::{page_texture,upload_page};
     #[cfg(not(target_arch="wasm32"))]
-    fn queued(requests:std::sync::mpsc::SyncSender<DecodeJob>,results:std::sync::mpsc::Receiver<PreparedImageWork>,
+    fn queued(requests:std::sync::mpsc::SyncSender<DecodeJob>,results:std::sync::mpsc::Receiver<(u64,PreparedImageWork)>,
         ready:Arc<std::sync::atomic::AtomicUsize>,outstanding:Vec<Option<DecodeKey>>,capacity:usize)->MipDecodeQueue {
         let (send,_)=std::sync::mpsc::sync_channel(capacity);
         let context=Arc::new(DecodeContext {cache:Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination:RgbSpace::Srgb,send,ready:ready.clone(),wake:Default::default(),waiter:Default::default()});
-        MipDecodeQueue {pool:Arc::new(DecodePool {requests,capacity,epoch:Default::default(),capacity_waiters:Default::default(),resumed:Default::default()}),context,waiting:None,results,ready,outstanding:outstanding.into_iter().map(|key|Outstanding {key,region:PixelRect::EMPTY,class:Class::Visible,input:Arc::new(DecodeInput {samples:None,read:Ok(None)})}).collect(),capacity,priority:None}
+        MipDecodeQueue {pool:Arc::new(DecodePool {requests,capacity,epoch:Default::default(),capacity_waiters:Default::default(),resumed:Default::default()}),context,waiting:None,results,ready,next_sequence:outstanding.len() as u64,
+            outstanding:outstanding.into_iter().zip(0..).map(|(key,sequence)|Outstanding {sequence,key,region:PixelRect::EMPTY,class:Class::Visible,input:Arc::new(DecodeInput {samples:None,read:Ok(None)})}).collect(),capacity,priority:None}
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]
@@ -1014,7 +1007,7 @@ pub(crate) mod tests {
                 let blob=Arc::new(layer_core::raster::TileBlob::encode(layer_core::color::PixelDescriptor::COVERAGE8,&pixels).unwrap());
                 PreparedImageWork::Paper {blob,coordinate:[0;2],pixels:Ok(pixels)}
             }else {PreparedImageWork::Coordinates {destination:Arc::downgrade(&target),pixels:Ok(Arc::new(vec![7]))}};
-            send.send(result).unwrap();let calls=Arc::new(AtomicUsize::new(0));let count=calls.clone();
+            send.send((0,result)).unwrap();let calls=Arc::new(AtomicUsize::new(0));let count=calls.clone();
             queue.set_wake(Arc::new(move || {count.fetch_add(1,Ordering::Relaxed);}));
             assert_eq!(calls.load(Ordering::Relaxed),1,"late registration must observe the durable result (paper={paper})");
             assert!(queue.poll().is_some());assert!(!queue.ready());
@@ -1122,17 +1115,17 @@ pub(crate) mod tests {
         let blob=Arc::new(layer_core::raster::TileBlob::encode(layer_core::color::PixelDescriptor::COVERAGE8,&pixels).unwrap());
         assert!(queue.request_paper(blob.clone(),[0,0]));assert!(queue.request_paper(blob.clone(),[1,0]));
         assert!(queue.request_paper(blob.clone(),[0,0]));assert!(!queue.request_paper(blob.clone(),[2,0]));
-        for coordinate in [[0,0],[1,0]] {
-            assert!(matches!(receive.try_recv(),Ok(DecodeJob {request:MipDecodeRequest::Paper {coordinate:at,..},..}) if at==coordinate));
+        for (sequence,coordinate) in [[0,0],[1,0]].into_iter().enumerate() {
+            assert!(matches!(receive.try_recv(),Ok(DecodeJob {sequence:job,request:MipDecodeRequest::Paper {coordinate:at,..},..}) if at==coordinate && job==sequence as u64));
         }
         assert!(receive.try_recv().is_err());
-        send.send(PreparedImageWork::Paper {blob:blob.clone(),coordinate:[1,0],pixels:Ok(pixels.clone())}).unwrap();ready.fetch_add(1,Ordering::AcqRel);
+        send.send((1,PreparedImageWork::Paper {blob:blob.clone(),coordinate:[1,0],pixels:Ok(pixels.clone())})).unwrap();ready.fetch_add(1,Ordering::AcqRel);
         assert!(matches!(queue.poll(),Some(PreparedImageWork::Paper {coordinate:[1,0],..})));
         assert!(queue.request_paper(blob.clone(),[0,0]));assert!(receive.try_recv().is_err());
         assert!(queue.request_paper(blob.clone(),[2,0]));
-        assert!(matches!(receive.try_recv(),Ok(DecodeJob {request:MipDecodeRequest::Paper {coordinate:[2,0],..},..})));
-        for coordinate in [[2,0],[0,0]] {
-            send.send(PreparedImageWork::Paper {blob:blob.clone(),coordinate,pixels:Ok(pixels.clone())}).unwrap();ready.fetch_add(1,Ordering::AcqRel);
+        assert!(matches!(receive.try_recv(),Ok(DecodeJob {sequence:2,request:MipDecodeRequest::Paper {coordinate:[2,0],..},..})));
+        for (sequence,coordinate) in [(2,[2,0]),(0,[0,0])] {
+            send.send((sequence,PreparedImageWork::Paper {blob:blob.clone(),coordinate,pixels:Ok(pixels.clone())})).unwrap();ready.fetch_add(1,Ordering::AcqRel);
             assert!(matches!(queue.poll(),Some(PreparedImageWork::Paper {coordinate:at,..}) if at==coordinate));
         }
         assert!(!queue.pending());
@@ -1177,7 +1170,7 @@ pub(crate) mod tests {
         queue.set_wake(Arc::new(move|| {let _=&callback_owner;notified.fetch_add(1,Ordering::Relaxed);}));
         let target=Arc::new(Mutex::new(CoordinateSlot::new(&Default::default())));let ready=queue.ready.clone();
         let input=Arc::new(DecodeInput {samples:None,read:Ok(None)});
-        let job=DecodeJob {context:Arc::downgrade(&queue.context),input:Arc::downgrade(&input),request:MipDecodeRequest::Coordinates(CoordinateRequest {
+        let job=DecodeJob {sequence:0,context:Arc::downgrade(&queue.context),input:Arc::downgrade(&input),request:MipDecodeRequest::Coordinates(CoordinateRequest {
             inverse:[1.,0.,0.,1.,0.,0.],size:[256;2],first:0,count:1,destination:Arc::downgrade(&target)})};
         drop(queue);assert!(callback_lifetime.upgrade().is_none());
         job.run(&mut Decoders::new(),&Weak::new());
@@ -1213,7 +1206,7 @@ pub(crate) mod tests {
         let (ra,rb)=(pending(&r,&a),pending(&r,&b));
         let result=|id,source:&Arc<SourceImage>|PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Display,id,source:source.clone(),coordinate:[0;2],
             pixels:prepare_image_tile(source,[0;2],space,&r.device.source_samples,None)});
-        let (send,results)=std::sync::mpsc::sync_channel(2);assert!(send.send(result(bid,&b)).is_ok());assert!(send.send(result(aid,&a)).is_ok());
+        let (send,results)=std::sync::mpsc::sync_channel(2);assert!(send.send((1,result(bid,&b))).is_ok());assert!(send.send((0,result(aid,&a))).is_ok());
         let (requests,receive)=std::sync::mpsc::sync_channel(2);
         r.moving_decode=Some((space,queued(requests,results,Arc::new(std::sync::atomic::AtomicUsize::new(2)),
             vec![Some(DecodeKey::Image(Arc::downgrade(&a),[0;2])),Some(DecodeKey::Image(Arc::downgrade(&b),[0;2]))],2)));
@@ -1242,13 +1235,30 @@ pub(crate) mod tests {
         let mut queue=queued(requests,results,ready.clone(),vec![None],1);
         let target=Arc::new(std::sync::Mutex::new(CoordinateSlot::new(&Default::default())));
         let destination=Arc::downgrade(&target);
-        assert!(sender.send(PreparedImageWork::Coordinates {destination:destination.clone(),pixels:Ok(Arc::new(vec![7]))}).is_ok());
+        assert!(sender.send((0,PreparedImageWork::Coordinates {destination:destination.clone(),pixels:Ok(Arc::new(vec![7]))})).is_ok());
         assert!(queue.poll().is_none());
         assert!(!queue.ready());assert!(queue.pending());
         ready.fetch_add(1,Ordering::AcqRel);
         let PreparedImageWork::Coordinates {destination:completed,pixels}=queue.poll().unwrap() else {panic!("Prepared coordinates retain their identity");};
         assert!(completed.ptr_eq(&destination));assert_eq!(pixels.unwrap().as_slice(),[7]);
         assert!(!queue.ready());assert!(!queue.pending());
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn out_of_order_keyless_results_complete_the_requests_that_produced_them() {
+        let mut queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),RgbSpace::Srgb).unwrap();
+        let (requests,receive)=std::sync::mpsc::sync_channel(3);
+        queue.pool=Arc::new(DecodePool {requests,capacity:3,epoch:Default::default(),capacity_waiters:Default::default(),resumed:Default::default()});
+        let targets:Vec<_>=(0..3).map(|_|Arc::new(std::sync::Mutex::new(CoordinateSlot::new(&Default::default())))).collect();
+        for (first,target) in targets.iter().enumerate() {assert!(queue.request_coordinates([1.,0.,0.,1.,0.,0.],[256;2],first as u32,1,Arc::downgrade(target)));}
+        let jobs:Vec<_>=receive.try_iter().collect();assert_eq!(jobs.len(),3);
+        for (first,job) in jobs.into_iter().enumerate().rev() {
+            job.run(&mut Decoders::new(),&Weak::new());
+            let Some(PreparedImageWork::Coordinates {destination,pixels})=queue.poll() else {panic!("request {first} must deliver its own result");};
+            assert!(destination.ptr_eq(&Arc::downgrade(&targets[first])));
+            assert_eq!(pixels.unwrap().as_slice(),[first as i32,0].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>());
+        }
+        assert!(!queue.pending());assert!(!queue.ready());
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]

@@ -1046,7 +1046,7 @@ fn held_native_window_samples_do_not_starve_exact_queries_without_a_frame() {
     r.set_preparation_wake(Arc::new(|| {}));
     let id=PortableId::random();
     assert!(r.request_exact_image_decode(id,exact.clone(),[0;2],crate::residency::Class::Visible).unwrap());
-    assert!(matches!(receive.try_recv(),Ok(DecodeJob {request:MipDecodeRequest::Image(_),..})));
+    let Ok(DecodeJob {sequence,request:MipDecodeRequest::Image(_),..})=receive.try_recv() else {panic!("the exact request reaches a worker");};
     assert!(r.image_decode_waiting());
     assert!(!r.held_result_ready());
     assert!(r.moving_images.pending());
@@ -1059,8 +1059,8 @@ fn held_native_window_samples_do_not_starve_exact_queries_without_a_frame() {
     r.source_receipt=None;
     drop(pending);
     assert!(r.moving_images_pending());
-    send.send(PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:SourceUse::Exact,id,source:exact.clone(),coordinate:[0;2],
-        pixels:prepare_image_tile(&exact,[0;2],r.device.working_space(),&r.device.source_samples,None)})).unwrap();
+    send.send((sequence,PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:SourceUse::Exact,id,source:exact.clone(),coordinate:[0;2],
+        pixels:prepare_image_tile(&exact,[0;2],r.device.working_space(),&r.device.source_samples,None)}))).unwrap();
     ready.fetch_add(1,Ordering::AcqRel);
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
     loop {

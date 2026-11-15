@@ -1122,7 +1122,7 @@ pub struct WgpuRasterizer {
     #[cfg(target_arch = "wasm32")]
     browser_nearest_coordinate_decoder: Option<BrowserNearestCoordinateDecoder>,
     #[cfg(target_arch = "wasm32")]
-    browser_image_result: std::rc::Rc<std::cell::RefCell<Option<object_image_mips::PreparedImageWork>>>,
+    browser_image_result: std::rc::Rc<std::cell::RefCell<Option<(u64,object_image_mips::PreparedImageWork)>>>,
     #[cfg(target_arch = "wasm32")]
     browser_image_wake: std::rc::Rc<std::cell::RefCell<Option<std::task::Waker>>>,
     snapshot_decode_wake: Option<Arc<std::sync::Mutex<Option<std::task::Waker>>>>,
@@ -3446,8 +3446,8 @@ impl WgpuRasterizer {
     }
     pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<PreparedImageUpload>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
-        if let Some(result) = self.browser_image_result.borrow_mut().take() {
-            if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(result); }
+        if let Some((sequence,result)) = self.browser_image_result.borrow_mut().take() {
+            if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(sequence,result); }
         }
         if self.source_tiles.borrow().uploads_full(residency::Class::Visible) { return Ok(None); }
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
@@ -3680,7 +3680,7 @@ impl WgpuRasterizer {
     }
     #[cfg(target_arch = "wasm32")]
     fn dispatch_browser_image_decode(&mut self) -> Result<(), GpuRasterError> {
-        if let Some(request) = self.moving_decode.as_mut().and_then(|(_,queue)| queue.take_external()) {
+        if let Some((sequence,request)) = self.moving_decode.as_mut().and_then(|(_,queue)| queue.take_external()) {
             let result = self.browser_image_result.clone();
             let wake = self.browser_image_wake.clone();
             let future: std::pin::Pin<Box<dyn std::future::Future<Output=object_image_mips::PreparedImageWork>>> = match request {
@@ -3717,7 +3717,7 @@ impl WgpuRasterizer {
             };
             wasm_bindgen_futures::spawn_local(async move {
                 let prepared=future.await;
-                *result.borrow_mut() = Some(prepared);
+                *result.borrow_mut() = Some((sequence,prepared));
                 let signal = wake.borrow_mut().take();
                 if let Some(waker) = signal { waker.wake(); }
             });
