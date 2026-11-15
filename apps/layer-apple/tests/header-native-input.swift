@@ -12,6 +12,7 @@ import SwiftUI
     @MainActor static func run(_ platform: UInt32) async throws {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil))
         try await wait("Initial models") { !store.snapshot["header"].isNull }
+        try await uncover(store)
         store.native?.resize(width: 1200, height: 870, scale: 1)
         let window = NSWindow(contentRect: CGRect(x: 60, y: 80, width: 1200, height: 870),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -168,13 +169,11 @@ import SwiftUI
             store.canvasSubmitted && store.snapshot["canvas_ready"].bool && !store.recovery.restoring
         }
         try await edit(["type":"move", "id":header.geometry["capy_item"].uint, "zone":"center"])
-        let fingerID: UInt64?
-        if platform == 0 {
-            try await edit(["type":"add", "zone":"left", "item":["kind":"tool", "control":["kind":"command", "command":"one_finger_drag"]]])
-            fingerID = store.snapshot["header"]["model"]["zones"].array.flatMap(\.array).filter {
-                $0["item"]["control"]["command"].string == "one_finger_drag"
-            }.map { $0["id"].uint }.max()
-        } else { fingerID = nil }
+        let fingers = store.snapshot["header"]["model"]["zones"].array.flatMap(\.array).filter {
+            $0["item"]["control"]["command"].string == "one_finger_drag"
+        }.map { $0["id"].uint }
+        try require(fingers.count == (platform == 0 ? 1 : 0), "Only iPadOS title bars carry One-finger drag")
+        let fingerID = fingers.first
         for theme in ["light", "dark"] {
             try await action(["type":"set_theme", "theme":theme])
             for size in ["small", "medium", "large"] {

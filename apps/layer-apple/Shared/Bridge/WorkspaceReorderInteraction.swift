@@ -60,7 +60,7 @@ import SwiftUI
         phoneMenuLayout = phoneLayout
         store.query(["type": "context", "target": target.raw]) { [weak self] result in
             guard let self, request == generation, enabled,
-                phoneLayout.map({ $0 == phone.layout.stableKey }) ?? true else { return }
+                phoneLayout == nil || phoneLayout == phone.layout.stableKey else { return }
             menu = result
         }
     }

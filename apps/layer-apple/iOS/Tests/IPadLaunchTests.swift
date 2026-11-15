@@ -300,6 +300,68 @@ extension EditorLaunchTests {
         attachEditor(in: app, name: "two-finger-view-restored")
     }
 
+    @MainActor func testOneFingerDragTitleBar() throws { try checkOneFingerDragTitleBar(theme: "light") }
+    @MainActor func testOneFingerDragTitleBarDark() throws { try checkOneFingerDragTitleBar(theme: "dark") }
+
+    @MainActor private func checkOneFingerDragTitleBar(theme: String) throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = editorCaptureApplication()
+        let actions: [[String: Any]] = [["type": "set_theme", "theme": theme], ["type": "invoke", "command": "drawing_brush"],
+            ["type": "set_brush_size", "value": 40], ["type": "set_color", "rgba": [0, 0, 0, 1]]]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
+        app.launch()
+        defer { app.terminate() }
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        let tile = app.buttons["One-finger drag"].firstMatch
+        XCTAssertTrue(tile.waitForExistence(timeout: 10), "The iPad title bar must offer One-finger drag")
+        let modes = ["Auto", "Draw", "Move canvas", "Off"]
+        func choose(_ mode: String) {
+            workspaceActivate(tile)
+            let choices = modes.map { app.buttons["menu-action-" + $0] }
+            for choice in choices { XCTAssertTrue(choice.waitForExistence(timeout: 5), "Missing \(choice)") }
+            XCTAssertEqual(choices.filter(\.isSelected).count, 1, "Exactly one finger mode must be checked")
+            attachEditor(in: app, name: "one-finger-drag-menu-\(mode)-\(theme)")
+            workspaceActivate(app.buttons["menu-action-" + mode])
+            XCTAssertTrue(choices[0].waitForNonExistence(timeout: 5), "A choice must close the title-bar menu")
+        }
+        func drag(from: CGVector, to: CGVector) {
+            canvas.coordinate(withNormalizedOffset: from).press(forDuration: 0,
+                thenDragTo: canvas.coordinate(withNormalizedOffset: to), withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        let sample = CGPoint(x: 0.495, y: 0.495)
+        func inked() -> Bool {
+            let pixels = [UInt8](editorPixels(in: app, at: sample, size: 32))
+            return stride(from: 0, to: pixels.count, by: 4).contains { pixels[$0] < 80 && pixels[$0 + 1] < 80 && pixels[$0 + 2] < 80 }
+        }
+        func expectInk(_ ink: Bool, _ message: String) {
+            expectation(for: NSPredicate { _, _ in inked() == ink }, evaluatedWith: app)
+            waitForExpectations(timeout: 15)
+            XCTAssertEqual(inked(), ink, message)
+        }
+        XCTAssertFalse(inked())
+
+        choose("Draw"); drag(from: CGVector(dx: 0.4, dy: 0.5), to: CGVector(dx: 0.6, dy: 0.5))
+        expectInk(true, "Draw must paint with one finger")
+        attachEditor(in: app, name: "one-finger-drag-draw-\(theme)")
+
+        choose("Move canvas"); drag(from: CGVector(dx: 0.5, dy: 0.5), to: CGVector(dx: 0.5, dy: 0.7))
+        expectInk(false, "Move canvas must carry the stroke away")
+        attachEditor(in: app, name: "one-finger-drag-moved-\(theme)")
+        editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
+        expectInk(true, "Fit canvas must bring the stroke back")
+        let fitted = settledEditorPixels(in: app, at: sample, size: 32)
+
+        choose("Off"); drag(from: CGVector(dx: 0.3, dy: 0.3), to: CGVector(dx: 0.3, dy: 0.6))
+        XCTAssertEqual(settledEditorPixels(in: app, at: sample, size: 32), fitted, "Off must not move the canvas")
+        editorMenu(in: app, menu: "Edit", id: "undo", label: "Undo")
+        expectInk(false, "Move canvas and Off must not paint, so one undo removes the only stroke")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
     @MainActor func testNativeWorkspaceContextAction() { checkNativeWorkspaceContextAction() }
 
     @MainActor func testLayerGripAndChildActions() {
