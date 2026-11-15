@@ -348,7 +348,7 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
                 if w.gpu
                     .borrow()
                     .as_ref()
-                    .is_some_and(|g| g.session.state().settings != settings)
+                    .is_none_or(|g| g.session.state().settings != settings)
                 {
                     w.dispatch(layer_ui::UiAction::RestoreSettings {
                         settings: Box::new(settings.clone()),

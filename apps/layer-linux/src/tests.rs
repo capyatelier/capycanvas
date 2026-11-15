@@ -8319,6 +8319,18 @@ fn native_preferences_and_shortcuts() {
     let app = native_test_app("dev.layer.PreferencesTest");
     let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
     crate::install_actions(&app, &windows);
+    let initializing = Workspace::new(&app);
+    windows.borrow_mut().push(initializing.clone());
+    let settings = layer_ui::Settings { theme: Some(Theme::Dark), ..Default::default() };
+    app.activate_action("settings-changed", Some(&serde_json::to_string(&settings).unwrap().to_variant()));
+    assert!(initializing.gpu.borrow().is_none());
+    initializing.window.present();
+    new_photo::ready(&initializing);
+    assert_eq!(state(&initializing).settings, settings, "a settings broadcast reaches a window before its canvas initializes");
+    initializing.window.destroy();
+    windows.borrow_mut().clear();
+    drop(initializing);
+    crate::application_localization(&app).borrow_mut().settings = None;
     app.activate_action("new-window", None);
     until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "preferences window mapped");
     let w = windows.borrow()[0].clone();
