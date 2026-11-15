@@ -67,6 +67,8 @@ extension EditorLaunchTests {
             let apply = app.buttons["document-color-apply"]
             XCTAssertTrue(apply.waitForExistence(timeout: 30))
             if state == "repair-source-profile" {
+                let ready = expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: apply)
+                await fulfillment(of: [ready], timeout: 90)
                 activate("photo-profile-space")
                 workspaceActivate(app.buttons["sRGB"].firstMatch)
             }

@@ -949,9 +949,10 @@ struct ProjectProgressNotice: View {
     @ObservedObject var files: ProjectFiles
     @Environment(\.capyCommonCopy) private var common
     let copy: JSON
+    let minTextWidth: CGFloat
     var body: some View {
         if files.busy && files.activeOperationVisible {
-            EditorNotice(message: files.copyProgress ?? copy["loading"].string, working: true) {
+            EditorNotice(message: files.copyProgress ?? copy["loading"].string, minTextWidth: minTextWidth, working: true) {
                 Button(common["cancel"].string) { files.cancel() }.disabled(files.cancelling)
             }
         }

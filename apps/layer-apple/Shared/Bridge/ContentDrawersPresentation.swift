@@ -62,7 +62,7 @@ import SwiftUI
             for panel in store.snapshot["panels"].array { bodies[panel["id"].string] = panel }
         }
         let measured = model["columns"].array.indices.map { heights[$0] ?? 0 }
-        let nextKey = JSON([next.raw, store.snapshot["layout"].raw,
+        let nextKey = JSON([next.raw, store.snapshot["layout"].raw, store.contentDrawers.pixelScale,
             measured, layerSizes.raw, wheelHeight, store.snapshot["color_panel"]["hdr"].raw, id == "tool" ? store.contentDrawers.tileRevision : 0]).stableKey
         guard key != nextKey else { return }; key = nextKey
         let pageTo: CGFloat = model["layer_properties"].bool ? 1 : 0
@@ -72,16 +72,22 @@ import SwiftUI
         start()
     }
     func present(_ next: JSON, placement: JSON) {
+        guard let store else { return }
         let closing = next.isNull
         if interactive != !closing { interactive = !closing }
         if !closing, model.stableKey != next.stableKey { model = next }
         let target = closing ? geometry["placement"] : placement
-        guard !target.isNull else { if closing { store?.contentDrawers.remove(id) }; return }
-        let nextKey = JSON([closing ? JSON().raw : target.raw, closing]).stableKey
+        guard !target.isNull else { if closing { store.contentDrawers.remove(id) }; return }
+        let nextKey = JSON([closing ? JSON().raw : target.raw, closing, store.contentDrawers.pixelScale]).stableKey
         guard key != nextKey else { return }; key = nextKey
         latest = Request(from: geometry["placement"], placement: target, heights: [], closing: closing,
             animate: true, pageFrom: nil, pageTo: 0)
         start()
+    }
+    func refreshScale() {
+        guard latest != nil else { return }
+        if let placement = latest?.placement { present(interactive ? model : JSON(), placement: placement) }
+        else { refresh(current) }
     }
     private func start() {
         guard let store else { return }
@@ -121,7 +127,7 @@ import SwiftUI
                                 query["color"] = ["column": column, "fixed_height": max(0, heights[column] - self.wheelHeight),
                                     "hdr": store.snapshot["color_panel"]["hdr"].bool]
                             }
-                            let frame = Self.frame(query)
+                            let frame = Self.frame(query, pixelScale: store.contentDrawers.pixelScale)
                             self.colorFit = frame["color_fit"]
                             target = frame["placement"]
                         }
@@ -147,7 +153,8 @@ import SwiftUI
                     let progress = request.animate && !self.reduceMotion ? min(1, (ProcessInfo.processInfo.systemUptime - start) / duration) : 1
                     let eased = CGFloat(1 - pow(1 - progress, 3))
                     let position = request.pageFrom.map { $0 + (request.pageTo - $0) * eased } ?? request.pageTo
-                    let result = Self.frame(["from": request.from.raw, "to": target.raw, "progress": eased, "closing": request.closing, "clip_contents": phone])
+                    let result = Self.frame(["from": request.from.raw, "to": target.raw, "progress": eased, "closing": request.closing, "clip_contents": phone],
+                        pixelScale: store.contentDrawers.pixelScale)
                     self.geometry = result; self.pagePosition = position; store.workspace.refreshChrome()
                     store.contentDrawers.source(self.id, geometry: result, anchor: self.model["anchor"])
                     if progress == 1 {
@@ -163,8 +170,10 @@ import SwiftUI
             }
         }
     }
-    static func frame(_ request: [String: Any]) -> JSON {
+    static func frame(_ request: [String: Any], pixelScale: CGFloat) -> JSON {
         do {
+            var request = request
+            request["pixel_scale"] = pixelScale
             let text = try JSON(request).encoded()
             guard let response = text.withCString({ takeNativeText(capy_apple_drawer_frame($0)) }) else { return JSON() }
 
@@ -217,12 +226,18 @@ import SwiftUI
     @Published private(set) var items: [String: ContentDrawerPresentation] = [:]
     @Published private(set) var sources: [String: DrawerSource] = [:]
     let menu: ContentDrawerPresentation
+    private(set) var pixelScale: CGFloat = 1
     private weak var store: EditorStore?
     private var tilesKey = ""
     private var columnsKey = ""
     private var columns: [UInt64: CGRect] = [:]
     private(set) var tileRevision = 0
     init(store: EditorStore) { self.store = store; menu = ContentDrawerPresentation(id: "menu", store: store) }
+    func updateScale(_ scale: CGFloat) {
+        guard pixelScale != scale else { return }
+        pixelScale = scale
+        for drawer in Array(items.values) + [menu] { drawer.refreshScale() }
+    }
     func refresh() {
         guard let store else { return }
         var models: [String: JSON] = [:]

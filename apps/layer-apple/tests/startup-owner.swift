@@ -389,7 +389,7 @@ private final class StartupErrors: @unchecked Sendable {
             let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 640, height: 220),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: WorkspaceStartupNotice(workspaces: workspaces)
+            let host = NSHostingView(rootView: WorkspaceStartupNotice(workspaces: workspaces, minTextWidth: store.noticePlacement()["min_text_width"].number)
                 .environment(\.editorPopupStore, store).environment(\.capyCommonCopy, store.bootstrap["common"])
                 .environment(\.capyNativeCopy, store.catalog["native_copy"]).environment(\.colorScheme, theme)
                 .frame(width: 640, height: 220))

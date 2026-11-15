@@ -63,6 +63,7 @@ struct WorkspacePanels: View {
                 style: "swiftui:\(dynamicTypeSize):\(store.languageGeneration):\(store.catalog["text_size_pt"].number)"))
             .compositingGroup()
             .modifier(WorkspaceRootDrag(workspace: workspace))
+            .onChange(of: displayScale, initial: true) { _, scale in store.contentDrawers.updateScale(scale) }
             .onPreferenceChange(NavigatorPlacements.self) { placements in
                 let ordered = placements.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.json }
                 store.native?.navigatorPlacements(JSON(ordered))

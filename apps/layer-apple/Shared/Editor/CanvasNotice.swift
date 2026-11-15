@@ -28,6 +28,13 @@ import SwiftUI
     }
 }
 
+extension EditorStore {
+    func noticePlacement(above bar: CGRect? = nil, bubble: CGRect? = nil) -> JSON {
+        DialogUI.resolve(["kind": "notice_above", "notice": snapshot["layout"]["notice"].raw,
+            "bar": bar?.json as Any? ?? NSNull(), "bubble": bubble?.json as Any? ?? NSNull()])
+    }
+}
+
 struct CanvasFloorLayer: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var presence: CanvasNoticePresence
@@ -39,10 +46,6 @@ struct CanvasFloorLayer: View {
     @State private var previewHeight: CGFloat = 0
     @State private var previewKey = ""
     private static let previewWidth: CGFloat = 360
-    private func placement(above bar: CGRect?, bubble: CGRect? = nil) -> JSON {
-        DialogUI.resolve(["kind": "notice_above", "notice": store.snapshot["layout"]["notice"].raw,
-            "bar": bar?.json as Any? ?? NSNull(), "bubble": bubble?.json as Any? ?? NSNull()])
-    }
     var body: some View {
         let tools = store.state["layer_tools"]
         let preview: (view: JSON, operations: CanvasPreviewPanel.Operations)? = !tools["selection_resize"].isNull ? (tools["selection_resize"], .refine)
@@ -56,7 +59,7 @@ struct CanvasFloorLayer: View {
                 Color.clear.frame(width: 0, height: 0)
                 if !presence.notice.isNull || preview != nil {
                     let below = preview == nil ? bar.bounds : previewBar
-                    let placement = placement(above: below)
+                    let placement = store.noticePlacement(above: below)
                     let width = CGFloat(placement["max_width"].number)
                     let palette = EditorPalette(source: store.state["palette"])
                     if !presence.notice.isNull {
@@ -67,7 +70,7 @@ struct CanvasFloorLayer: View {
                             .offset(x: placement["x"].number - width / 2)
                     }
                     if let preview, previewPresentation["kind"].string == "floating" {
-                        let status = self.placement(above: below, bubble: presence.notice.isNull ? nil : noticeBounds)
+                        let status = store.noticePlacement(above: below, bubble: presence.notice.isNull ? nil : noticeBounds)
                         CanvasPreviewPanel(store: store, view: preview.view, operations: preview.operations, palette: palette)
                             .frame(width: min(Self.previewWidth, width))
                             .frame(width: width, height: max(0, status["y"].number), alignment: .bottom)

@@ -16,6 +16,7 @@ struct WorkspaceManagerPresentation: ViewModifier {
 
 struct WorkspaceStartupNotice: View {
     @ObservedObject var workspaces: WorkspaceController
+    let minTextWidth: CGFloat
     @Environment(\.capyCommonCopy) private var common
     @Environment(\.capyNativeCopy) private var copy
     var body: some View {
@@ -27,7 +28,7 @@ struct WorkspaceStartupNotice: View {
                     : workspaces.readOnly ? (workspaces.store?.bootstrap["recovery"]["saving_workspace"].string ?? "")
                     : workspaces.ready ? status["text"].string
                     : (workspaces.store?.bootstrap["recovery"]["opening_workspace"].string ?? "")),
-                working: workspaces.busy || workspaces.error == nil && !workspaces.ready) {
+                minTextWidth: minTextWidth, working: workspaces.busy || workspaces.error == nil && !workspaces.ready) {
                 if status["retry"].bool {
                     Button(copy["header"]["retry"].string) { workspaces.send(["type": "retry"]) }.disabled(workspaces.busy)
                 }
