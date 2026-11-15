@@ -488,8 +488,8 @@ fn toolbar_components_have_atomic_bounds_and_fill_remaining_width() {
                 let layout = toolbar_tile_layout(width, height, axis, &tiles, true, style);
                 assert_eq!(layout.tiles.len(), tiles.len());
                 assert_eq!(layout.insertion.len(), tiles.len() + 1);
-                for b in &layout.tiles {
-                    assert!(b.width > 0. && b.height >= 0. && b.x.is_finite() && b.y.is_finite());
+                for (tile, b) in tiles.iter().zip(&layout.tiles) {
+                    assert!((b.width > 0. || tile.control == ToolbarControl::Divider) && b.height >= 0. && b.x.is_finite() && b.y.is_finite());
                     if axis == Axis::Vertical { assert!(b.y + b.height <= height); }
                     for other in &layout.tiles {
                         if b != other {

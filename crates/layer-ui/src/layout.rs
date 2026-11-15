@@ -428,13 +428,19 @@ pub fn toolbar_tile_layout(
         .max(pad);
     let mut bounds = vec![Bounds::default(); tiles.len()];
     for (lane, items) in rows.iter().enumerate() {
-        let spare =
-            (capacity - items.iter().map(|&i| spans[i].min + gap).sum::<f32>() + gap).max(0.);
+        let shown = |position: usize| tiles[items[position]].control != ToolbarControl::Divider
+            || !((position == 0 && lane > 0) || (position + 1 == items.len() && lane + 1 < rows.len()));
+        let spare = (capacity - items.iter().enumerate().filter(|&(p, _)| shown(p))
+            .map(|(_, &i)| spans[i].min + gap).sum::<f32>() + gap).max(0.);
         let fills = items.iter().filter(|&&i| spans[i].fill).count();
         let share = (spare / fills.max(1) as f32).floor();
         let mut remaining = fills;
         let mut x = pad;
-        for &i in items {
+        for (position, &i) in items.iter().enumerate() {
+            if !shown(position) {
+                bounds[i] = Bounds { x, y: inset + lane as f32 * (across + gap), width: 0., height: across };
+                continue;
+            }
             let width = spans[i].min
                 + if spans[i].fill {
                     remaining -= 1;
@@ -549,7 +555,7 @@ impl TileLayout {
             .iter()
             .enumerate()
             .filter_map(|(index, line)| {
-                if let Some(tile) = self.tiles.get(index).or_else(|| self.tiles.last()) {
+                if let Some(tile) = self.tiles.get(index).or_else(|| self.tiles.last()).filter(|tile| tile.width > 0. && tile.height > 0.) {
                     tile.intersection(clip)?;
                 }
                 Some((index, line.intersection(clip)?))
@@ -5318,6 +5324,31 @@ mod tests {
     }
 
     #[test]
+    fn dividers_at_wrapped_row_edges_take_no_space() {
+        let style = TileStyle::Medium;
+        let [along, across] = style.size();
+        let gap = style.gap();
+        let tile = |id, control| ToolbarTile { slider_style: Default::default(), id, control };
+        let command = ToolbarControl::Command { command: crate::CommandId::Undo };
+        let width = 4. * (along + gap) + TOOLBAR_GRIP_SIZE + gap;
+        for (tiles, hidden) in [
+            ((0..4).map(|id| tile(id, command)).chain([tile(4, ToolbarControl::Divider), tile(5, command)]).collect::<Vec<_>>(), 4),
+            ((0..3).map(|id| tile(id, command)).chain([tile(3, ToolbarControl::Divider), tile(4, command), tile(5, command)]).collect(), 3),
+        ] {
+            let layout = toolbar_tile_layout(width, 2. * (across + gap), Axis::Horizontal, &tiles, true, style);
+            for (index, bounds) in layout.tiles.iter().enumerate() {
+                let divider = tiles[index].control == ToolbarControl::Divider;
+                assert_eq!(bounds.width == 0., divider && index == hidden, "{index}: {bounds:?}");
+            }
+            let second = layout.tiles.iter().filter(|b| b.width > 0. && b.y > 0.).map(|b| b.x).fold(f32::INFINITY, f32::min);
+            assert_eq!(second, 0., "the wrapped row starts with a tile");
+        }
+        let middle = [tile(0, command), tile(1, ToolbarControl::Divider), tile(2, command)];
+        let layout = toolbar_tile_layout(width, across, Axis::Horizontal, &middle, true, style);
+        assert_eq!(layout.tiles[1].width, TOOLBAR_DIVIDER_SIZE);
+    }
+
+    #[test]
     fn compact_dividers_share_wrap_geometry_and_stable_drop_slots() {
         let tiles: Vec<_> = (0..9)
             .map(|id| ToolbarTile { slider_style: Default::default(),
@@ -5343,6 +5374,7 @@ mod tests {
                     let layout = toolbar_tile_layout(width, height, axis, &tiles, true, style);
                     assert_eq!(layout.tiles.len(), tiles.len());
                     assert_eq!(layout.insertion.len(), tiles.len() + 1);
+                    let hidden = |index: usize| tiles[index].control == ToolbarControl::Divider && layout.tiles[index].width == 0.;
                     for (index, (tile, b)) in tiles.iter().zip(&layout.tiles).enumerate() {
                         assert_tile_fits(*b, [width, height]);
                         assert!(b.intersection(layout.grip.unwrap()).is_none());
@@ -5352,11 +5384,12 @@ mod tests {
                             } else {
                                 b.height
                             },
-                            toolbar_item_span(tile, along, style.gap(), axis, f32::INFINITY).preferred
+                            if hidden(index) { 0. } else { toolbar_item_span(tile, along, style.gap(), axis, f32::INFINITY).preferred }
                         );
                         let line = layout.insertion[index];
                         let point = [line.x + line.width * 0.5, line.y + line.height * 0.5];
-                        assert_eq!(layout.drop_slot(point, width, height).unwrap().0, index);
+                        let slot = layout.drop_slot(point, width, height).unwrap().0;
+                        assert!(slot == index || (index > 0 && hidden(index - 1) && slot == index - 1), "{index}: {slot}");
                     }
                 }
             }

@@ -56,7 +56,8 @@ saved list stays empty, and the tablet arrangement is independent.
   last subtool. Both panels fit three standard tiles at their minimum width;
   Layers keeps a six-tile minimum.
 - **Dividers** are real toolbar items with stable identities, compact geometry,
-  drag support and context menus, not disabled commands or blank tiles.
+  drag support and context menus, not disabled commands or blank tiles. A
+  divider that would start or end a wrapped row is hidden.
 - **Approval.** A new design is implemented and validated on GTK and approved by
   the user before other hosts port it.
 
