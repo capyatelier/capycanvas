@@ -388,6 +388,14 @@ impl NativeHost {
         let ready = self.prepare_canvas_presentation(presenter);
         Ok(SceneComposition {staged, ready})
     }
+    /// `None` when the composed frame presents. A frame with no picture keeps
+    /// only the host's own demand, so a renderer waiting on an input sleeps
+    /// until that input's wake.
+    pub fn withheld_frame(&self, composition: &SceneComposition) -> Option<layer_render::FrameDemand> {
+        let presentable = self.session.engine().backend().0.as_ref()
+            .is_some_and(|gpu| gpu.has_presentable_frame());
+        (!composition.ready || !presentable).then(|| self.frame_demand())
+    }
 }
 
 #[cfg(test)]

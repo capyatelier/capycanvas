@@ -264,8 +264,13 @@ impl NativeHost {
         }
         self.frame_demand()
     }
+    /// Only demand this host can serve: the session frames once the canvas is
+    /// ready, so until then the renderer's own work and wakes drive frames.
     pub fn frame_demand(&self)->layer_render::FrameDemand {
-        if self.dirty {layer_render::FrameDemand::Work} else {self.session.frame_demand()}
+        use layer_render::CanvasRenderer;
+        if self.dirty {layer_render::FrameDemand::Work}
+        else if self.startup.canvas_ready {self.session.frame_demand()}
+        else {self.session.engine().backend().next_frame()}
     }
     pub fn close_wake(&mut self) {self.preparation.close();}
 
@@ -1745,6 +1750,59 @@ mod tests {
             assert!(host.compose_scene(&mut presenter, &mut Default::default(), &navigators, &[], None,
                 SceneDisplay { scale: 2., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap().staged);
         }
+    }
+
+    #[test]
+    fn a_starting_canvas_without_a_picture_sleeps_until_its_renderer_wakes() {
+        use layer_render::{CanvasRenderer, FrameDemand};
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use std::time::{Duration, Instant};
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [640, 480]);
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let woken = wakes.clone();
+        host.set_wake(Arc::new(move || { woken.fetch_add(1, Ordering::AcqRel); }));
+        let gpu = host.session.engine().backend().0.as_ref().unwrap();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu, format, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
+        let target = gpu.device().create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 640, height: 480, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        let navigators = scene::Navigators::new(scene::SlotUnits::Physical);
+        let start = Instant::now();
+        let (mut work, mut seen, mut frames, mut waiting, mut spins, mut unservable) = (true, 0, 0, 0, 0, 0);
+        while !host.session.engine().backend().showing_drawing() || work {
+            assert!(start.elapsed() < Duration::from_secs(60), "the canvas never showed after {frames} frames");
+            if !work {
+                let observed = wakes.load(Ordering::Acquire);
+                if observed == seen { std::thread::sleep(Duration::from_millis(1)); continue; }
+                seen = observed;
+                work = host.poll_preparation() != FrameDemand::Wait;
+                continue;
+            }
+            frames += 1;
+            let now = start.elapsed().as_nanos() as u64 + 1;
+            host.prepare_canvas_frame(now, now, true).unwrap();
+            let renderer_waits = host.session.engine().backend().next_frame() == FrameDemand::Wait;
+            unservable += usize::from(!host.startup.canvas_ready && !host.dirty && renderer_waits && host.frame_demand() != FrameDemand::Wait);
+            let composition = host.compose_scene(&mut presenter, &mut Default::default(), &navigators, &[], None,
+                scene::SceneDisplay { scale: 1., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap();
+            let gpu = host.session.engine().backend().0.as_ref().unwrap();
+            let blocked = composition.ready && gpu.next_frame() == FrameDemand::Wait;
+            work = match host.withheld_frame(&composition) {
+                Some(demand) => {
+                    waiting += usize::from(blocked);
+                    spins += usize::from(blocked && demand != FrameDemand::Wait);
+                    demand != FrameDemand::Wait
+                }
+                None => {
+                    presenter.present(gpu, &target.create_view(&Default::default()), host.session.state().camera.view(), [0.2; 4]).unwrap();
+                    host.session.renderer_mut().0.as_mut().unwrap().after_present();
+                    host.frame_demand() != FrameDemand::Wait
+                }
+            };
+        }
+        assert!(waiting > 0, "the canvas was presentable before its renderer waited on an input");
+        assert_eq!(unservable, 0, "the host demanded session work on {unservable} frames before the canvas could run it");
+        assert_eq!(spins, 0, "{spins} of {waiting} frames without a picture requested another frame while the renderer waited");
     }
 
     #[test]
