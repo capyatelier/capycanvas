@@ -1,7 +1,6 @@
 use std::sync::{Arc,Mutex,OnceLock,Weak,atomic::{AtomicBool,Ordering::SeqCst},mpsc};
 
 type Action=Box<dyn FnOnce()+Send>;
-const MAILBOX_PERIOD:std::time::Duration=std::time::Duration::from_millis(16);
 type Notify=Arc<dyn Fn()+Send+Sync>;
 trait Conditional:Send {fn ready(&self)->bool;}
 struct Waiting<T,R> {value:T,ready:R}
@@ -34,14 +33,13 @@ impl RetirementHandle {
     }
     fn wake(&self) {self.0.woken.store(true,SeqCst);if let Some(thread)=self.0.thread.get() {thread.unpark();}}
     fn submitted(&self,index:wgpu::SubmissionIndex) {self.0.submissions.lock().unwrap().push_back(index);}
-    fn wait_for_progress(&self,device:&wgpu::Device)->Result<bool,String> {
+    fn wait_for_progress(&self,poll:impl FnOnce(wgpu::PollType)->Result<wgpu::PollStatus,wgpu::PollError>)->Result<bool,String> {
         let (target,earlier)={let submissions=self.0.submissions.lock().unwrap();(submissions.front().cloned(),submissions.len())};
-        let status=device.poll(wgpu::PollType::Wait {submission_index:target.clone(),timeout:Some(MAILBOX_PERIOD)});
+        let status=poll(wgpu::PollType::Wait {submission_index:target.clone(),timeout:None});
         let mut submissions=self.0.submissions.lock().unwrap();
         match status {
             Ok(wgpu::PollStatus::QueueEmpty)=>{submissions.drain(..earlier);Ok(false)},
-            Err(wgpu::PollError::Timeout)=>Ok(true),
-            Ok(_)|Err(wgpu::PollError::WrongSubmissionIndex(..))=>{if target.is_some() {submissions.pop_front();}Ok(true)},
+            Ok(_)|Err(_)=>{if target.is_some() {submissions.pop_front();}Ok(true)},
         }
     }
     fn send(&self,message:Message)->Result<(),Message> {
@@ -218,7 +216,7 @@ impl Binding {
         if matches!(*state,State::New {..}) && !handle.closed() {
             let State::New {receiver,..}=std::mem::replace(&mut *state,State::Retired(handle.clone())) else {unreachable!()};
             let (device,waiting)=(device.clone(),handle.clone());
-            match Owner::start(move||waiting.wait_for_progress(&device),handle.clone(),receiver,root.queue.clone()) {
+            match Owner::start(move||waiting.wait_for_progress(|kind|device.poll(kind)),handle.clone(),receiver,root.queue.clone()) {
                 Ok(owner)=>*state=State::Running(owner),
                 Err(error)=>{handle.close();panic!("Device poll owner failed: {error}");},
             }
@@ -386,7 +384,7 @@ mod tests {
         let (handle,receiver)=RetirementHandle::channel();
         let polls=Arc::new(AtomicUsize::new(0));
         let (device,waiting,counted)=((*r.device).clone(),handle.clone(),polls.clone());
-        let mut owner=Owner::start(move|| {counted.fetch_add(1,Ordering::AcqRel);waiting.wait_for_progress(&device)},
+        let mut owner=Owner::start(move|| {counted.fetch_add(1,Ordering::AcqRel);waiting.wait_for_progress(|kind|device.poll(kind))},
             handle.clone(),receiver,Arc::new(OnceLock::from(r.queue.clone()))).unwrap();
         let (idle,quiet)=mpsc::channel::<()>();
         let before_idle=polls.load(Ordering::Acquire);let _=quiet.recv_timeout(Duration::from_millis(50));
@@ -400,10 +398,22 @@ mod tests {
         let retired=handle.closed();
         owner.shutdown();drop(idle);
         assert!(completion.is_ok(),"the poll owner never observed its submission complete");
-        assert!(!retired,"a submission that outlasted one bounded wait retired the poll owner");
-        let bound=2+(elapsed.as_millis()/MAILBOX_PERIOD.as_millis()) as usize;
-        assert!(work_polls<=bound,"the poll owner polled {work_polls} times while one submission was in flight for {elapsed:?}");
+        assert!(!retired,"a submission that outlasted one wait retired the poll owner");
+        assert!(work_polls<=2,"the poll owner polled {work_polls} times while one submission was in flight for {elapsed:?}");
         assert!(idle_polls<=2,"an idle poll owner polled {idle_polls} times in 50 ms");
+    }
+    #[test]
+    fn the_poll_owner_never_bounds_a_gpu_wait_with_a_timeout() {
+        let (handle,receiver)=RetirementHandle::channel();
+        let (sent,timeouts)=mpsc::channel();let waiting=handle.clone();
+        let mut owner=Owner::start(move||waiting.wait_for_progress(|kind| {
+            let wgpu::PollType::Wait {timeout,..}=kind else {panic!("the poll owner polled without waiting for progress");};
+            let _=sent.send(timeout);Ok(wgpu::PollStatus::QueueEmpty)
+        }),handle.clone(),receiver,Default::default()).unwrap();
+        handle.flush().unwrap();owner.shutdown();
+        let timeouts:Vec<_>=timeouts.try_iter().collect();
+        assert!(!timeouts.is_empty(),"the poll owner never waited");
+        assert!(timeouts.iter().all(Option::is_none),"the poll owner bounded a GPU wait: {timeouts:?}");
     }
     #[test]
     fn close_joins_its_inflight_fence_while_a_raw_straggler_keeps_submitting() {
