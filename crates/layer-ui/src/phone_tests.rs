@@ -244,12 +244,11 @@ fn phone_finger_page_lists_one_finger_drag_choices_and_returns_to_the_main_page(
         assert_eq!((page.parent.clone(), page.checks), (Some(PhoneMenuRoute::default()), true));
         assert_eq!(page.title, "One-finger drag");
         let rows = page.sections.concat();
-        assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["Auto", "Draw", "Move canvas", "Off"]);
+        assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["Auto", "Draw", "Move canvas", "Off", "More Touch Settings…"]);
         s.dispatch(rows[index].action.clone().unwrap()).unwrap();
         assert_eq!(s.state.settings.finger_drawing, mode);
         assert!(s.state.phone.menu && s.state.phone.menu_navigation.is_root(), "{mode:?}");
-        assert_eq!(s.phone_menu().unwrap().strip[2].icon.as_deref(),
-            Some(format!("layer-{}-symbolic", mode.effective(DeviceClass::Desktop, false).icon()).as_str()));
+        assert_eq!(s.phone_menu().unwrap().strip[2].icon.as_deref(), Some("layer-finger-draw-symbolic"));
         s.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route: PhoneMenuRoute::default() } }).unwrap();
         assert!(!s.state.phone.menu);
     }

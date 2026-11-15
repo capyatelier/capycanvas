@@ -335,7 +335,7 @@ native-shortcuts-reassign = Réattribuer
 
 native-shortcuts-pen-touch = Stylet et tactile
 
-native-shortcuts-pen-page-help = Modifier ces réglages sur la page Stylet et saisie.
+native-shortcuts-pen-page-help = Modifiez-les sur la page { settings-page-touch } ou { settings-page-input }.
 
 native-shortcuts-updated = Mis à jour depuis votre choix
 

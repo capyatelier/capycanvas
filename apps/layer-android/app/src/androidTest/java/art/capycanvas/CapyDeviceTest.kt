@@ -318,6 +318,37 @@ fun awaitCanvasPresentation(host: CanvasHost) {
     assertTrue("Current document composition is presented", presented)
 }
 
+private fun awaitNativeCaptureFrame(owner: () -> View) {
+    android.app.UiAutomation::class.java.getMethod("syncInputTransactions").invoke(instrumentation.uiAutomation)
+    val view = owner()
+    val committed = CountDownLatch(1)
+    instrumentation.runOnMainSync {
+        assertTrue("The private root owns its capture", view.isAttachedToWindow && view.hasWindowFocus())
+        assertEquals(instrumentation.targetContext.packageName, view.context.packageName)
+        view.viewTreeObserver.registerFrameCommitCallback { committed.countDown() }
+        view.invalidate()
+    }
+    assertTrue("The focused native capture frame commits", committed.await(5, TimeUnit.SECONDS))
+}
+
+internal fun awaitNativeCaptureFrame(owner: View) = awaitNativeCaptureFrame { owner }
+
+internal fun awaitNativeCaptureFrame(activity: MainActivity, compose: ComposeTestRule? = null) = awaitNativeCaptureFrame {
+    val decor = activity.window.decorView
+    var owner: View? = null
+    activity.host.awaitMain("Capture uses the native viewport", 10_000, { "" }, compose) {
+        val viewport = activity.host.snapshot!!.getJSONObject("layout").getJSONArray("viewport")
+        val density = activity.resources.displayMetrics.density
+        owner = WindowInspector.getGlobalWindowViews().lastOrNull {
+            it.isAttachedToWindow && it.hasWindowFocus() && it.context.packageName == instrumentation.targetContext.packageName
+        }
+        (activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) == (decor.width > decor.height) &&
+            kotlin.math.abs(viewport.getDouble(0) - decor.width / density) < .01 &&
+            kotlin.math.abs(viewport.getDouble(1) - decor.height / density) < .01 && owner != null
+    }
+    checkNotNull(owner)
+}
+
 fun screenshot(path: String, inspect: ((Bitmap) -> Unit)? = null) {
     val file = File(instrumentation.targetContext.getExternalFilesDir(null), path).apply { parentFile!!.mkdirs() }
     val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return

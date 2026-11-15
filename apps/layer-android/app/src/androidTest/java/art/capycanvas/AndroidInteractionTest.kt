@@ -4197,7 +4197,7 @@ class AndroidInteractionTest {
         tool = MotionEvent.TOOL_TYPE_MOUSE
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            action(obj("type" to "open_settings", "page" to "canvas"))
+            action(obj("type" to "open_settings", "page" to "input"))
             waitFor("navigation preferences are visible") { shown("setting-choice-wheel_behavior") }
             for (value in listOf(1, 0)) {
                 tap(bounds("setting-choice-wheel_behavior").center)
@@ -4205,6 +4205,9 @@ class AndroidInteractionTest {
                 try { tap(bounds("setting-choice-option-wheel_behavior-$value").center) } finally { popupInput = false }
                 waitFor("wheel preference changes") { state().getJSONObject("settings").getBoolean("wheel_zoom") == (value == 1) }
             }
+            captureCanvasBar("navigation-pointer-preferences-$theme", "navigation-controls")
+            action(obj("type" to "open_settings", "page" to "touch"))
+            waitFor("touch navigation preferences are visible") { shown("preference-rotate_with_two_fingers") }
             val rotates = state().getJSONObject("settings").getBoolean("rotate_with_two_fingers")
             tap(bounds("preference-rotate_with_two_fingers").center)
             waitFor("two finger rotation changes") { state().getJSONObject("settings").getBoolean("rotate_with_two_fingers") != rotates }
@@ -4788,7 +4791,7 @@ class AndroidInteractionTest {
             waitFor("the mouse opens the fill's blend menu", 5_000) { popupCount() == 1 && menuText("Normal") != null }
             assertNull("only groups offer Pass Through", menuText("Pass Through"))
             back()
-            action(obj("type" to "open_settings", "page" to "canvas"))
+            action(obj("type" to "open_settings", "page" to "color"))
             waitFor("the Layers preferences show", 5_000) { shown("preference-pass_through_groups") }
             captureCanvasBar("preferences-opened", "pass-through")
             tool = MotionEvent.TOOL_TYPE_FINGER

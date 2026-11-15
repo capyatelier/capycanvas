@@ -14,11 +14,11 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         let painted = editorPixels(in: app)
         let trigger = app.buttons["trigger-touch.tap.2"]
-        func openInputSettings() {
+        func openSettings(_ page: String) {
             workspaceActivate(app.buttons["settings-button"])
-            workspaceActivate(app.buttons["settings-page-input"])
+            workspaceActivate(app.buttons["settings-page-" + page])
             #if os(iOS)
-            let list = app.collectionViews.containing(.button, identifier: "preference-cursor").firstMatch
+            let list = app.collectionViews.containing(.button, identifier: "preference-finger_drawing").firstMatch
             XCTAssertTrue(list.waitForExistence(timeout: 10))
             for _ in 0..<6 where !trigger.exists { list.swipeUp() }
             #endif
@@ -34,8 +34,9 @@ extension XCTestCase {
         expectPixels(painted, in: app)
         attachEditor(in: app, name: "touch-taps")
 
-        openInputSettings()
-        XCTAssertTrue(trigger.waitForExistence(timeout: 10), "Pen & Input lists finger taps")
+        openSettings("touch")
+        XCTAssertTrue(trigger.waitForExistence(timeout: 10), "Touch lists finger taps")
+        XCTAssertFalse(app.buttons["trigger-pen.button.primary"].exists)
         workspaceActivate(trigger)
         let nothing = app.buttons["action-nothing"]
         XCTAssertTrue(nothing.waitForExistence(timeout: 10))
@@ -48,7 +49,7 @@ extension XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         expectPixels(painted, in: app)
 
-        openInputSettings()
+        openSettings("touch")
         workspaceActivate(trigger)
         let reset = app.buttons["action-picker-reset"]
         XCTAssertTrue(reset.waitForExistence(timeout: 10), "A changed tap offers Reset")
@@ -58,11 +59,11 @@ extension XCTestCase {
         withHiddenChrome(in: app) { canvas.twoFingerTap() }
         expectPixels(paper, in: app)
         #else
-        openInputSettings()
+        openSettings("input")
         let lower = app.buttons["trigger-pen.button.primary"]
         let list = app.scrollViews.containing(.any, identifier: "preference-cursor").firstMatch
         for _ in 0..<12 where !lower.isHittable { list.scroll(byDeltaX: 0, deltaY: -200) }
-        XCTAssertTrue(lower.waitForExistence(timeout: 10), "Pen & Input lists tablet side buttons on macOS")
+        XCTAssertTrue(lower.waitForExistence(timeout: 10), "Pen & Mouse lists tablet side buttons on macOS")
         XCTAssertFalse(trigger.exists, "macOS delivers no finger taps")
         workspaceActivate(lower)
         let all = app.buttons["pen-button-action-all"]

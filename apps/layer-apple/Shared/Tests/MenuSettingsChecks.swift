@@ -201,7 +201,7 @@ extension XCTestCase {
             workspaceActivate(app.buttons["settings-done"])
             XCTAssertTrue(app.buttons["settings-done"].waitForNonExistence(timeout: 5))
             workspaceActivate(app.buttons["settings-button"])
-            workspaceActivate(app.staticTexts["settings-page-canvas"])
+            workspaceActivate(app.staticTexts["settings-page-input"])
             XCTAssertTrue(value.waitForExistence(timeout: 10))
             XCTAssertEqual(value.value as? String, defaultDisplay,
                 "Done/reopen must retain Reset instead of restoring the discarded draft")
@@ -321,7 +321,7 @@ extension XCTestCase {
     }
 
     @MainActor func checkNumericSettingsDone(in app: XCUIApplication, theme: String = "light") {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"canvas"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"invoke","command":"settings"},{"type":"preferences","action":{"type":"page","page":"input"}}]"#
         app.launch()
         let value = app.buttons["number-value-Scroll pan speed"]
         let entry = app.textFields["number-entry-Scroll pan speed"]
@@ -358,8 +358,8 @@ extension XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         #endif
         if phonePage { search.typeKey("a", modifierFlags: .command); search.typeText(XCUIKeyboardKey.delete.rawValue) }
-        let canvasPage = app.buttons["settings-page-canvas"]
-        XCTAssertTrue(canvasPage.waitForExistence(timeout: 5)); workspaceActivate(canvasPage)
+        let inputPage = app.buttons["settings-page-input"]
+        XCTAssertTrue(inputPage.waitForExistence(timeout: 5)); workspaceActivate(inputPage)
         XCTAssertTrue(app.buttons["number-value-Scroll pan speed"].waitForExistence(timeout: 5))
         #if os(iOS)
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Opening a sidebar page must dismiss the keyboard")

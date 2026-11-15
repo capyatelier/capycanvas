@@ -335,7 +335,7 @@ native-shortcuts-reassign = Yeniden ata
 
 native-shortcuts-pen-touch = Kalem ve dokunma
 
-native-shortcuts-pen-page-help = Bunları Kalem ve giriş sayfasından değiştirin.
+native-shortcuts-pen-page-help = Bunları { settings-page-touch } veya { settings-page-input } sayfasından değiştirin.
 
 native-shortcuts-updated = Seçiminizden sonra güncellendi
 

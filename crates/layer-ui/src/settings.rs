@@ -55,13 +55,6 @@ impl FingerDrawing {
             mode => mode,
         }
     }
-    pub const fn icon(self) -> &'static str {
-        match self {
-            Self::On => "finger-draw",
-            Self::MoveCanvas => "hand",
-            Self::Auto | Self::Off => "finger-touch",
-        }
-    }
     pub fn localized_label(self, localizer: &Localizer) -> std::sync::Arc<str> {
         localizer.text(match self {
             Self::Auto => MessageId::SETTINGS_AUTO,
@@ -351,8 +344,8 @@ impl Settings {
 pub enum SettingsPage {
     #[default]
     Appearance,
-    Canvas,
     Color,
+    Touch,
     Input,
     Shortcuts,
     About,
@@ -360,8 +353,8 @@ pub enum SettingsPage {
 impl SettingsPage {
     pub const ALL: [Self; 6] = [
         Self::Appearance,
-        Self::Canvas,
         Self::Color,
+        Self::Touch,
         Self::Input,
         Self::Shortcuts,
         Self::About,
@@ -369,7 +362,7 @@ impl SettingsPage {
     pub fn key(self) -> &'static str {
         match self {
             Self::Appearance => "appearance",
-            Self::Canvas => "canvas",
+            Self::Touch => "touch",
             Self::Color => "color",
             Self::Input => "input",
             Self::Shortcuts => "shortcuts",
@@ -379,9 +372,9 @@ impl SettingsPage {
     pub fn title(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
-            Self::Canvas => "Canvas",
+            Self::Touch => "Touch",
             Self::Color => "Color",
-            Self::Input => "Pen & Input",
+            Self::Input => "Pen & Mouse",
             Self::Shortcuts => "Keyboard Shortcuts",
             Self::About => "About",
         }
@@ -389,7 +382,7 @@ impl SettingsPage {
     pub fn localized_title(self, localizer: &Localizer) -> String {
         localizer.text(match self {
             Self::Appearance => MessageId::SETTINGS_PAGE_APPEARANCE,
-            Self::Canvas => MessageId::SETTINGS_PAGE_CANVAS,
+            Self::Touch => MessageId::SETTINGS_PAGE_TOUCH,
             Self::Color => MessageId::SETTINGS_PAGE_COLOR,
             Self::Input => MessageId::SETTINGS_PAGE_INPUT,
             Self::Shortcuts => MessageId::SETTINGS_PAGE_SHORTCUTS,
@@ -399,7 +392,7 @@ impl SettingsPage {
     pub fn icon(self) -> &'static str {
         match self {
             Self::Appearance => "appearance",
-            Self::Canvas => "fit",
+            Self::Touch => "finger-draw",
             Self::Color => "color",
             Self::Input => "brush",
             Self::Shortcuts => "keyboard",
@@ -1241,53 +1234,28 @@ impl Settings {
                     self.accent_row(platform, localizer),
                 ],
             }],
-            vec![
-                PreferenceGroup {
-                    title: localizer.text(MessageId::SETTINGS_NAVIGATION).to_string(),
-                    rows: vec![
-                        row(WheelBehavior, &localizer.text(MessageId::SETTINGS_MOUSE_WHEEL), "", PreferenceKind::Choice {
-                            options: [MessageId::SETTINGS_WHEEL_PAN, MessageId::SETTINGS_WHEEL_ZOOM].into_iter().map(|id| localizer.text(id).to_string()).collect(),
-                            selected: u32::from(self.wheel_zoom), icons: Vec::new(), presentation: ChoicePresentation::Dropdown,
-                        }),
-                        row(RotateWithTwoFingers, &localizer.text(MessageId::SETTINGS_ROTATE_WITH_TWO_FINGERS), "", PreferenceKind::Switch { active: self.rotate_with_two_fingers }),
-                        row(QuickPinchFit, &localizer.text(MessageId::SETTINGS_QUICK_PINCH_FIT), "", PreferenceKind::Switch { active: self.quick_pinch_fit }),
-                        row(QuickPinchRestore, &localizer.text(MessageId::SETTINGS_QUICK_PINCH_RESTORE), "", PreferenceKind::Switch { active: self.quick_pinch_restore }),
-                        number(
-                            PanSpeed,
-                            &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED),
-                            "",
-                            self,
-                        ),
-                        number(
-                            ZoomSpeed,
-                            &localizer.text(MessageId::SETTINGS_SCROLL_ZOOM_SPEED),
-                            "",
-                            self,
-                        ),
-                    ],
-                },
-                PreferenceGroup {
-                    title: localizer.text(MessageId::SETTINGS_LAYERS).to_string(),
-                    rows: vec![row(
-                        PassThroughGroups,
-                        &localizer.text(MessageId::SETTINGS_USE_PASS_THROUGH_FOR_NEW_GROUPS),
-                        &localizer.text(MessageId::SETTINGS_GROUPED_LAYERS_BLEND_WITH_THE_LAYERS_BELOW_THE_GROUP),
-                        PreferenceKind::Switch {
-                            active: self.pass_through_groups,
-                        },
-                    )],
-                },
-            ],
+            vec![PreferenceGroup {
+                title: localizer.text(MessageId::SHORTCUT_TOUCH_GESTURES).to_string(),
+                rows: vec![
+                    row(FingerDrawing, &localizer.text(MessageId::SETTINGS_ONE_FINGER_DRAG), "", PreferenceKind::Choice {
+                        presentation: ChoicePresentation::Dropdown,
+                        options: crate::FingerDrawing::ALL.iter().map(|mode| mode.localized_label(localizer).to_string()).collect(),
+                        icons: Vec::new(),
+                        selected: crate::FingerDrawing::ALL.iter().position(|mode| *mode == self.finger_drawing).unwrap() as u32,
+                    }),
+                ],
+            }, PreferenceGroup {
+                title: localizer.text(MessageId::SETTINGS_NAVIGATION).to_string(),
+                rows: vec![
+                    row(RotateWithTwoFingers, &localizer.text(MessageId::SETTINGS_ROTATE_WITH_TWO_FINGERS), "", PreferenceKind::Switch { active: self.rotate_with_two_fingers }),
+                    row(QuickPinchFit, &localizer.text(MessageId::SETTINGS_QUICK_PINCH_FIT), "", PreferenceKind::Switch { active: self.quick_pinch_fit }),
+                    row(QuickPinchRestore, &localizer.text(MessageId::SETTINGS_QUICK_PINCH_RESTORE), "", PreferenceKind::Switch { active: self.quick_pinch_restore }),
+                ],
+            }],
             vec![
                 PreferenceGroup {
                     title: localizer.text(MessageId::SETTINGS_POINTER).to_string(),
                     rows: vec![
-                        row(FingerDrawing, &localizer.text(MessageId::SETTINGS_ONE_FINGER_DRAG), "", PreferenceKind::Choice {
-                            presentation: ChoicePresentation::Dropdown,
-                            options: crate::FingerDrawing::ALL.iter().map(|mode| mode.localized_label(localizer).to_string()).collect(),
-                            icons: Vec::new(),
-                            selected: crate::FingerDrawing::ALL.iter().position(|mode| *mode == self.finger_drawing).unwrap() as u32,
-                        }),
                         row(
                             Cursor,
                             &localizer.text(MessageId::SETTINGS_CURSOR_SHAPE),
@@ -1313,6 +1281,12 @@ impl Settings {
                                 active: self.hide_cursor_while_drawing,
                             },
                         ),
+                        row(WheelBehavior, &localizer.text(MessageId::SETTINGS_MOUSE_WHEEL), "", PreferenceKind::Choice {
+                            options: [MessageId::SETTINGS_WHEEL_PAN, MessageId::SETTINGS_WHEEL_ZOOM].into_iter().map(|id| localizer.text(id).to_string()).collect(),
+                            selected: u32::from(self.wheel_zoom), icons: Vec::new(), presentation: ChoicePresentation::Dropdown,
+                        }),
+                        number(PanSpeed, &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED), "", self),
+                        number(ZoomSpeed, &localizer.text(MessageId::SETTINGS_SCROLL_ZOOM_SPEED), "", self),
                     ],
                 },
                 PreferenceGroup {
@@ -1445,13 +1419,24 @@ impl Settings {
                 ),
             ],
         });
-        groups.insert(2, self.color_groups(localizer));
+        let mut color = self.color_groups(localizer);
+        color.push(PreferenceGroup {
+            title: localizer.text(MessageId::SETTINGS_LAYERS).to_string(),
+            rows: vec![row(
+                PassThroughGroups,
+                &localizer.text(MessageId::SETTINGS_USE_PASS_THROUGH_FOR_NEW_GROUPS),
+                &localizer.text(MessageId::SETTINGS_GROUPED_LAYERS_BLEND_WITH_THE_LAYERS_BELOW_THE_GROUP),
+                PreferenceKind::Switch { active: self.pass_through_groups },
+            )],
+        });
+        groups.insert(1, color);
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
             .map(|(id, mut groups)| {
                 if !platform.touch_gestures() {
                     for group in &mut groups { group.rows.retain(|row| row.id != PreferenceId::FingerDrawing); }
+                    groups.retain(|group| !group.rows.is_empty());
                 }
                 PreferencePage { id, title: id.localized_title(localizer), icon: id.icon().into(), groups }
             })
@@ -1760,8 +1745,8 @@ impl PreferencesState {
                 SettingsPage::Shortcuts.title(), canonical.label, canonical.action, canonical.detail)).contains(&query) {
                 search_results.push(PreferenceSearchResult {
                     title: trigger.label.clone(),
-                    description: SettingsPage::Input.localized_title(localizer),
-                    action: PreferenceAction::Page { page: SettingsPage::Input },
+                    description: trigger.page.localized_title(localizer),
+                    action: PreferenceAction::Page { page: trigger.page },
                 });
             }
         }
@@ -2552,7 +2537,7 @@ mod copy_tests {
             let ids = [PreferenceId::QuickPinchFit, PreferenceId::QuickPinchRestore];
             for id in ids {
                 let page = settings.pages(platform).into_iter().find(|page| page.groups.iter().any(|group| group.rows.iter().any(|row| row.id == id))).unwrap();
-                assert_eq!(page.id, SettingsPage::Canvas);
+                assert_eq!(page.id, SettingsPage::Touch);
                 assert!(matches!(settings.field(id, platform).unwrap().kind, PreferenceKind::Switch { active: true }));
                 assert!(settings.edit(id, PreferenceValue::Number(0.), platform).is_err());
                 settings.edit(id, PreferenceValue::Bool(false), platform).unwrap();
@@ -2648,10 +2633,10 @@ mod copy_tests {
     }
 
     #[test]
-    fn the_new_group_preference_sits_with_layers_on_the_canvas_page_and_resets() {
+    fn the_new_group_preference_sits_with_layers_on_the_color_page_and_resets() {
         for platform in Platform::ALL {
             let mut settings = Settings::default();
-            let page = settings.pages(platform).into_iter().find(|p| p.id == SettingsPage::Canvas).unwrap();
+            let page = settings.pages(platform).into_iter().find(|p| p.id == SettingsPage::Color).unwrap();
             let group = page.groups.iter().find(|g| g.title == "Layers").unwrap();
             assert_eq!(group.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [PreferenceId::PassThroughGroups]);
             assert_eq!(group.rows[0].title, "Use Pass Through for new groups");
@@ -3166,7 +3151,7 @@ mod localization_tests {
             let view = state.view(&settings, Platform::Gtk, true, None, &localizer);
             assert!(view.search_results.iter().any(|result| result.action == PreferenceAction::EditShortcut { id: crate::CommandId::Undo.shortcut_id() }));
             let trigger = view.shortcut_page.triggers.iter().find(|trigger| trigger.id == "touch.tap.2").unwrap();
-            assert!(view.search_results.iter().any(|result| result.title == trigger.label && result.action == PreferenceAction::Page { page: SettingsPage::Input }));
+            assert!(view.search_results.iter().any(|result| result.title == trigger.label && result.action == PreferenceAction::Page { page: SettingsPage::Touch }));
         }
         for query in ["Sample color", "色を取得"] {
             let state = PreferencesState { query: query.into(), ..Default::default() };

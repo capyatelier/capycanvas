@@ -17,8 +17,8 @@ function Open-Preferences {
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
  Invoke-Id 'settings'
  Wait-Until {(Model).preferences} 'Preferences did not open'
- Wait-Until {(Find 'Pen & Input' -Name)} 'Input preferences tab did not appear'
- (Find 'Pen & Input' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+ Wait-Until {(Find 'Pen & Mouse' -Name)} 'Input preferences tab did not appear'
+ (Find 'Pen & Mouse' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {(Switch 'Use Windows stroke prediction')} 'Windows prediction switch not found'
 }
 function Close-Preferences {

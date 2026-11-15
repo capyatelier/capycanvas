@@ -539,21 +539,25 @@ fn one_finger_drag_tile_opens_its_choices_and_the_command_reveals_the_preference
     let header = s.header_view();
     let entry = header.items.iter().find(|item| item.resolved_control == Some(control)).unwrap();
     assert!(entry.menu && !entry.has_variants);
-    assert_eq!(entry.icon, "finger-touch");
+    assert_eq!(entry.icon, "finger-draw");
     assert!(header.items.iter().filter(|item| item.resolved_control != Some(control)).all(|item| !item.menu));
     let anchor = DrawerAnchor::Header { id: entry.id };
     for (index, mode) in FingerDrawing::ALL.into_iter().enumerate() {
         let menu = s.context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
-        let items = menu.sections.concat();
-        assert_eq!(items.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), ["Auto", "Draw", "Move canvas", "Off"]);
-        s.dispatch(items[index].action.clone().unwrap()).unwrap();
+        assert_eq!(menu.sections.iter().map(|section| section.iter().map(|item| item.label.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+            [vec!["Auto", "Draw", "Move canvas", "Off"], vec!["More Touch Settings…"]]);
+        s.dispatch(menu.sections[0][index].action.clone().unwrap()).unwrap();
         assert_eq!(s.state.settings.finger_drawing, mode);
         let items = s.context_menu(ContextTarget::ToolVariants { anchor }).unwrap().sections.concat();
-        assert_eq!(items.iter().map(|item| item.selected).collect::<Vec<_>>(), (0..4).map(|i| Some(i == index)).collect::<Vec<_>>());
+        assert_eq!(items[..4].iter().map(|item| item.selected).collect::<Vec<_>>(), (0..4).map(|i| Some(i == index)).collect::<Vec<_>>());
         assert!(items.iter().all(|item| !item.keep_open()));
-        let icon = s.header_view().items.into_iter().find(|item| item.id == entry.id).unwrap().icon;
-        assert_eq!(icon, mode.effective(DeviceClass::Desktop, false).icon());
+        assert_eq!(s.header_view().items.into_iter().find(|item| item.id == entry.id).unwrap().icon, "finger-draw");
     }
+    let more = s.context_menu(ContextTarget::ToolVariants { anchor }).unwrap().sections[1][0].action.clone().unwrap();
+    s.dispatch(more).unwrap();
+    assert!(s.state.settings_open);
+    assert_eq!(s.state.preferences.page, SettingsPage::Touch);
+    s.dispatch(UiAction::CloseSettings).unwrap();
     let context = s.context_menu(ContextTarget::Header { id: Some(entry.id) }).unwrap();
     assert!(context.sections.iter().flatten().all(|item| !matches!(item.action,
         Some(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, .. } }))));
@@ -565,18 +569,18 @@ fn one_finger_drag_tile_opens_its_choices_and_the_command_reveals_the_preference
     assert!(!s.state.settings_open);
     s.dispatch(UiAction::ActivateHeaderItem { id: entry.id }).unwrap();
     assert!(s.state.settings_open);
-    assert_eq!(s.state.preferences.page, SettingsPage::Input);
+    assert_eq!(s.state.preferences.page, SettingsPage::Touch);
 }
 
 #[test]
-fn tablet_paint_commands_end_with_one_finger_drag() {
+fn paint_commands_start_with_one_finger_drag_on_touch_platforms() {
     for platform in Platform::ALL {
         let layout = WorkspacePreset::Illustrator.layout(platform);
         let controls = layout.panel(Panel::Commands).unwrap().tiles().iter().map(|tile| tile.control).collect::<Vec<_>>();
         let tile = ToolbarControl::Command { command: CommandId::OneFingerDrag };
-        let tablet = matches!(platform, Platform::Android | Platform::Ios);
-        assert_eq!(controls.ends_with(&[ToolbarControl::Divider, tile]), tablet, "{platform:?}");
-        assert_eq!(controls.iter().filter(|control| **control == tile).count(), usize::from(tablet), "{platform:?}");
+        let touch = platform != Platform::Mac;
+        assert_eq!(controls.starts_with(&[tile, ToolbarControl::Divider]), touch, "{platform:?}");
+        assert_eq!(controls.iter().filter(|control| **control == tile).count(), usize::from(touch), "{platform:?}");
         for preset in [WorkspacePreset::Painter, WorkspacePreset::Photographer] {
             let layout = preset.layout(platform);
             assert!(layout.header.entries().all(|entry| entry.item != HeaderItem::Tool { control: tile }), "{preset:?}/{platform:?}");

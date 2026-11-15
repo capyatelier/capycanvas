@@ -240,8 +240,8 @@ fn native_canvas_quick_pinch_and_held_history() {
         ]));
     };
     let preferences = |d: &mut Driver, fit: bool, restore: bool| {
-        d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
-        until(|| d.w.preferences.dialog.is_mapped(), "Canvas preferences open");
+        d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Touch });
+        until(|| d.w.preferences.dialog.is_mapped(), "Touch preferences open");
         pump(200);
         for (name, expected) in [("setting-quick-pinch-fit", fit), ("setting-quick-pinch-restore", restore)] {
             let row = named::<adw::SwitchRow>(d.w.preferences.dialog.upcast_ref(), name);
@@ -439,13 +439,58 @@ fn native_shortcut_page() {
         d.w.dispatch(UiAction::CloseSettings);
         pump(100);
     }
+    d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Appearance });
+    assert_eq!(ui_session(&d.w).preferences().unwrap().pages.iter().map(|page| page.title.as_str()).collect::<Vec<_>>(),
+        ["Appearance", "Color", "Touch", "Pen & Mouse", "Keyboard Shortcuts", "About"]);
+    for (query, title, expected) in [("pinch", "Quick pinch to fit", SettingsPage::Touch),
+        ("two-finger tap", "Two-finger tap", SettingsPage::Touch), ("pan speed", "Scroll pan speed", SettingsPage::Input),
+        ("pass through", "Use Pass Through for new groups", SettingsPage::Color)] {
+        d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ToggleSearch { open: true } });
+        named(&d, "settings-search").downcast::<gtk::SearchEntry>().unwrap().set_text(query);
+        until(|| ui_session(&d.w).preferences().is_some_and(|view| view.search_results.iter().any(|result| result.title == title)), "the native settings search publishes its result");
+        let sidebar = named(&d, "preferences-sidebar");
+        idle_paint(&sidebar);
+        let result = mapped_label(&sidebar, title).unwrap();
+        assert!(result.width() > 0 && result.height() > 0, "the painted search result has an allocation");
+        d.click(&result);
+        until(|| ui_session(&d.w).preferences().is_some_and(|view| view.page == expected && view.page_requested && view.query.is_empty()), "the native settings result opens its owning page");
+    }
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::ToggleSearch { open: false } });
+    let pass = named(&d, "setting-pass-through-groups");
+    pass.grab_focus();
+    shot(&d, "color-layers");
+    let layers = pass.ancestor(adw::PreferencesGroup::static_type()).unwrap().compute_bounds(&root(&d)).unwrap();
+    let profiles = named(&d, "color-profile-library").ancestor(adw::PreferencesGroup::static_type()).unwrap().compute_bounds(&root(&d)).unwrap();
+    assert!(profiles.y() + profiles.height() <= layers.y(), "Color ends with Layers: profiles={profiles:?}, layers={layers:?}");
+    d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Page { page: SettingsPage::Touch } });
+    until(|| named(&d, "setting-finger-drawing").is_mapped(), "Touch settings is mapped");
+    idle_paint(&d.w.window);
+    assert!(!named(&d, "trigger-pen.button.primary").is_mapped());
+    let touch_group = named(&d, "triggers-touch-gestures").downcast::<adw::PreferencesGroup>().unwrap();
+    let navigation = named(&d, "setting-rotate-with-two-fingers").ancestor(adw::PreferencesGroup::static_type()).and_downcast::<adw::PreferencesGroup>().unwrap();
+    assert_eq!((touch_group.title().as_str(), navigation.title().as_str()), ("Touch gestures", "Navigation"));
+    let touch_page = touch_group.ancestor(adw::PreferencesPage::static_type()).unwrap();
+    assert_eq!(descendants::<adw::PreferencesGroup>(&touch_page).len(), 2, "Touch has exactly the two shared sections");
+    let mut previous = f32::NEG_INFINITY;
+    for (index, name) in ["setting-finger-drawing", "trigger-touch.tap.2", "trigger-touch.tap.3", "trigger-touch.tap.4",
+        "setting-rotate-with-two-fingers", "setting-quick-pinch-fit", "setting-quick-pinch-restore"].into_iter().enumerate() {
+        let row = named(&d, name);
+        assert_eq!(row.ancestor(adw::PreferencesGroup::static_type()).unwrap(), if index < 4 { touch_group.clone().upcast::<gtk::Widget>() } else { navigation.clone().upcast::<gtk::Widget>() }, "{name} belongs to its shared section");
+        let bounds = row.compute_bounds(&root(&d)).unwrap();
+        assert!(bounds.y() > previous, "Touch gestures precede Navigation in native row order");
+        previous = bounds.y();
+    }
+    shot(&d, "touch-settings");
+    named(&d, "trigger-touch.tap.4").grab_focus();
+    shot(&d, "touch-gestures");
     d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts });
     pump(500);
+    let requested_theme = state(&d.w).settings.theme;
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         shot(&d, &format!("categories-{theme:?}").to_lowercase());
     }
-    d.w.dispatch(UiAction::SetTheme { theme: Some(Theme::Light) });
+    d.w.dispatch(UiAction::SetTheme { theme: requested_theme });
     let filters = named(&d, "shortcut-filters");
     let search = named(&d, "shortcuts-search").downcast::<gtk::SearchEntry>().unwrap();
     let line = filters.compute_bounds(&root(&d)).unwrap();
@@ -666,16 +711,14 @@ fn native_shortcut_page() {
     context.set_selected(0);
     pump(200);
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Page { page: SettingsPage::Input } });
-    pump(400);
+    until(|| named(&d, "trigger-pen.button.primary").is_mapped(), "Pen & Mouse settings is mapped");
     let pen = named(&d, "trigger-pen.button.primary");
-    assert!(pen.is_mapped(), "touch and pen buttons live on Pen & Input");
+    assert!(!named(&d, "trigger-touch.tap.2").is_mapped());
     assert!(named(&d, "trigger-pen.button.tertiary").is_mapped() && named(&d, "setting-eraser-tool").is_mapped());
-    let pen_group = named(&d, "triggers-pen-buttons").compute_bounds(&root(&d)).unwrap();
-    let touch_group = named(&d, "triggers-touch-gestures").compute_bounds(&root(&d)).unwrap();
-    assert!(pen_group.y() != touch_group.y(), "pen buttons and touch gestures are separate groups");
-    shot(&d, "pen-and-input");
-    named(&d, "trigger-touch.tap.4").grab_focus();
-    shot(&d, "pen-and-input-buttons");
+    assert!(named(&d, "setting-wheel-behavior").is_mapped() && named(&d, "setting-pan-speed").is_mapped() && named(&d, "setting-zoom-speed").is_mapped());
+    shot(&d, "pen-and-mouse");
+    pen.grab_focus();
+    shot(&d, "pen-and-mouse-buttons");
     let eraser = named(&d, "setting-eraser-tool").downcast::<adw::ComboRow>().unwrap();
     eraser.set_selected(1);
     pump(300);
@@ -684,7 +727,7 @@ fn native_shortcut_page() {
     eraser.set_selected(0);
     pump(300);
     named(&d, "setting-eraser-tool").grab_focus();
-    shot(&d, "pen-and-input-eraser");
+    shot(&d, "pen-and-mouse-eraser");
     pen.emit_by_name::<()>("activated", &[]);
     pump(500);
     let input = named(&d, "input-navigation").downcast::<adw::NavigationView>().unwrap();
@@ -717,7 +760,7 @@ fn native_shortcut_page() {
     let action = named(&d, "trigger-pen.button.primary").downcast::<adw::ActionRow>().unwrap();
     assert!(descendants::<gtk::Label>(action.upcast_ref()).iter().any(|l| l.text() == "Depends on the tool"));
     named(&d, "trigger-pen.button.primary").grab_focus();
-    shot(&d, "pen-and-input-pencil");
+    shot(&d, "pen-and-mouse-pencil");
     assert!(find_named(&root(&d), "action-picker").is_none_or(|w| !w.is_mapped()));
     d.w.dispatch(UiAction::Preferences { action: PreferenceAction::Page { page: SettingsPage::Shortcuts } });
     let combo = named(&d, "keymap-preset").downcast::<adw::ComboRow>().unwrap();

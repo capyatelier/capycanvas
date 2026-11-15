@@ -41,6 +41,15 @@ function Menu-Choices([string]$Name){
   if($toggle.Current.ToggleState -ne $expected){throw "Wrong native checkmark for $($labels[$i])"}
   if($i -gt 0 -and $rows[$i].Current.BoundingRectangle.Top -lt $rows[$i-1].Current.BoundingRectangle.Bottom){throw 'One-finger menu rows overlap or change order'}
  }
+ $more=Control 'More Touch Settings…' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+ $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$menu=$walker.GetParent($more)
+ while($menu -and $menu.Current.ControlType -ne [System.Windows.Automation.ControlType]::Menu){$menu=$walker.GetParent($menu)}
+ if(!$menu){throw 'One-finger choices have no native menu owner'}
+ $items=@($menu.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)))
+ if($items.Count -ne 5 -or ($items.Current.Name -join '|') -ne (($labels+@('More Touch Settings…')) -join '|')){throw 'One-finger menu must contain four choices and More Touch Settings in order'}
+ $ordinaryGap=0
+ for($i=1;$i -lt $rows.Count;$i++){$ordinaryGap=[Math]::Max($ordinaryGap,$rows[$i].Current.BoundingRectangle.Top-$rows[$i-1].Current.BoundingRectangle.Bottom)}
+ if($more.Current.BoundingRectangle.Top-$rows[-1].Current.BoundingRectangle.Bottom -le $ordinaryGap+1){throw 'One-finger choices lack their native section divider before More Touch Settings'}
  Capture $Name -WithModel -Composed
 }
 function Customization-Menu([string]$Name){
@@ -58,7 +67,7 @@ function Check-Tile([string]$Id,[string]$Name){
   }
   Invoke $labels[$i] -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
   Wait-Until {(Model).state.settings.finger_drawing -eq $values[$i] -and !(Find 'Auto' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'Tile choice did not update and close'
-  $expected=@('finger-touch','finger-draw','hand','finger-touch')[$i]
+  $expected='finger-draw'
   $view=if($Name -eq 'header'){@((Model).header.items|Where-Object id -eq $script:fingerHeader)}else{Finger-Tile}
   if(@($view).Count -ne 1 -or $view.icon -ne $expected){throw "One-finger tile has the wrong icon for $($labels[$i]): $($view.icon)"}
   Park;Capture "$Name-icon-$i" -Composed
@@ -73,12 +82,16 @@ function Check-Tile([string]$Id,[string]$Name){
  try{Customization-Menu "$Name-hold"}finally{[CapyRowPointer]::Up()}
  $null=Control $(if($Name -eq 'header'){'Customize Title Bar…'}else{'Insert Tools…'}) -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
  Dismiss
+ Click $Id;Invoke 'More Touch Settings…' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)
+ Wait-Until {(Model).preferences.page -eq 'touch' -and (Find 'preference-choice-finger_drawing' -Visible)} 'More Touch Settings did not open Touch'
+ Capture "$Name-more-touch-settings" -WithModel -Composed
+ Close-Preferences
 }
 function Open-Preferences{
  (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0xBC)
- Wait-Until {(Model).preferences -and (Find 'preference-page-input' -Visible)} 'Preferences did not open'
- Invoke 'preference-page-input'
- Wait-Until {(Model).preferences.page -eq 'input' -and (Find 'preference-choice-finger_drawing' -Visible)} 'One-finger drag did not appear in Input'
+ Wait-Until {(Model).preferences -and (Find 'preference-page-touch' -Visible)} 'Preferences did not open'
+ Invoke 'preference-page-touch'
+ Wait-Until {(Model).preferences.page -eq 'touch' -and (Find 'preference-choice-finger_drawing' -Visible)} 'One-finger drag did not appear in Touch'
 }
 function Preference-Choice([int]$Index){
  $combo=Control 'preference-choice-finger_drawing' -Arranged
@@ -117,6 +130,9 @@ try{
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  [CapyRowPointer]::SetForegroundWindow($handle)|Out-Null
  Wait-Until {[CapyRowPointer]::GetForegroundWindow() -eq $handle} 'The owned one-finger window did not take foreground'
+ $commands=@((Model).panels|Where-Object id -eq 'commands')[0].tiles
+ if($commands.Count -lt 2 -or $commands[0].control.command -ne 'one_finger_drag' -or $commands[0].icon -ne 'finger-draw' -or $commands[1].control.kind -ne 'divider'){throw 'Fresh Paint Commands must start with One-finger drag and a divider'}
+ Park;Capture 'paint-default' -WithModel -Composed
  Open-Preferences
  $row=@((Model).preferences.pages.groups.rows|Where-Object id -eq 'finger_drawing')[0]
  if($row.title -ne 'One-finger drag' -or ($row.kind.options -join '|') -ne ($labels -join '|')){throw 'Windows exposes the wrong one-finger choices'}
@@ -128,7 +144,7 @@ try{
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('One-finger drag')
  Wait-Until {(Control 'command-result-0').Current.Name -match 'One-finger drag'} 'Command search did not find One-finger drag'
  [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
- Wait-Until {(Model).preferences.page -eq 'input' -and (Find 'preference-choice-finger_drawing' -Visible)} 'One-finger command did not reveal its Settings row'
+ Wait-Until {(Model).preferences.page -eq 'touch' -and (Find 'preference-choice-finger_drawing' -Visible)} 'One-finger command did not reveal its Settings row'
  Capture 'command-settings-row' -WithModel -Composed
  Close-Preferences
  Window-Command 'customize_workspace_ui'

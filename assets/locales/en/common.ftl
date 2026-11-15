@@ -337,7 +337,7 @@ native-shortcuts-reassign = Reassign
 
 native-shortcuts-pen-touch = Pen and Touch
 
-native-shortcuts-pen-page-help = Change these on the Pen & Input page.
+native-shortcuts-pen-page-help = Change these on the { settings-page-touch } or { settings-page-input } page.
 
 native-shortcuts-updated = Updated since you chose it
 

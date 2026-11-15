@@ -13,9 +13,9 @@ export async function checkCanvasTouchGestures({call,evaluate,settle}) {
     await settle();
   };
   const preferences=async(fit,restore)=>{
-    await send({type:'open_settings',page:'canvas'});
-    assert.ok(await evaluate("document.querySelector('#settings').open"),'Canvas Preferences opens');
-    assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"),'canvas');
+    await send({type:'open_settings',page:'touch'});
+    assert.ok(await evaluate("document.querySelector('#settings').open"),'Touch Preferences opens');
+    assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"),'touch');
     for(const [name,value] of [['fit',fit],['restore',restore]]) {
       const selector=`#setting-quick-pinch-${name}`,key=`quick_pinch_${name}`;
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).type`),'checkbox');
@@ -67,7 +67,7 @@ export async function checkCanvasTouchGestures({call,evaluate,settle}) {
       if(await evaluate(`performance.timeOrigin!==${origin}&&!!window.layerApp&&document.body.dataset.gpu==='ready'&&layerApp.app.brush_ready()`).catch(()=>false))break;
       assert.ok(Date.now()<deadline,`${theme}: preferences reload reaches hardware canvas readiness`);
     }
-    await wait("layerApp.startupTimes.complete!==null&&!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy");
+    await wait("layerApp.startupTimes.complete!==null&&document.querySelector('#gpu-notice').hidden&&!layerApp.documents.busy()&&!layerApp.state().document_file.busy&&JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy");
     assert.deepEqual(await evaluate('[layerApp.state().settings.quick_pinch_fit,layerApp.state().settings.quick_pinch_restore]'),[false,false],`${theme}: both disabled preferences persist across reload`);
     await preferences(false,false);
     await preferences(true,true);

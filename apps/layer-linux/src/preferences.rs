@@ -643,6 +643,23 @@ impl Preferences {
         for page in &view.pages {
             let content = adw::PreferencesPage::new();
             for (index, group) in page.groups.iter().enumerate() {
+                if page.id == SettingsPage::Color && index + 1 == page.groups.len() {
+                    let group = adw::PreferencesGroup::new();
+                    let copy = layer_ui::color_feature_copy::ProfileCopy::new(&w.localization());
+                    let row = text_row(copy.library_title.as_ref(), copy.menu_help.as_ref());
+                    let button = gtk::Button::with_label(copy.manage.as_ref());
+                    button.set_widget_name("color-profile-library");
+                    button.set_valign(gtk::Align::Center);
+                    button.connect_clicked(glib::clone!(#[weak] w, move |_| {
+                        glib::MainContext::default().spawn_local(glib::clone!(#[strong] w, async move {
+                            if let Err(error) = crate::files::profile::manage(&w).await { w.changed(Err(error)); }
+                        }));
+                    }));
+                    row.add_suffix(&button);
+                    row.set_activatable_widget(Some(&button));
+                    group.add(&row);
+                    content.add(&group);
+                }
                 let native = adw::PreferencesGroup::builder().title(&group.title).build();
                 for row in &group.rows {
                     let id = row.id;
@@ -976,25 +993,13 @@ impl Preferences {
                     self.shortcut_page.build(w, &content, &self.shortcut_search, &self.content_page).upcast()
                 }
                 SettingsPage::Input => self.shortcut_page.build_triggers(w, &content).upcast(),
+                SettingsPage::Touch => {
+                    let groups = self.groups.borrow().iter().filter(|(id, _, _)| *id == page.id).map(|(_, _, group)| group.clone()).collect();
+                    self.shortcut_page.set_touch_page(&content, groups);
+                    content.clone().upcast()
+                }
                 _ => content.clone().upcast(),
             };
-            if page.id == SettingsPage::Color {
-                let group = adw::PreferencesGroup::new();
-                let copy = layer_ui::color_feature_copy::ProfileCopy::new(&w.localization());
-                let row = text_row(copy.library_title.as_ref(), copy.menu_help.as_ref());
-                let button = gtk::Button::with_label(copy.manage.as_ref());
-                button.set_widget_name("color-profile-library");
-                button.set_valign(gtk::Align::Center);
-                button.connect_clicked(glib::clone!(#[weak] w, move |_| {
-                    glib::MainContext::default().spawn_local(glib::clone!(#[strong] w, async move {
-                        if let Err(error) = crate::files::profile::manage(&w).await { w.changed(Err(error)); }
-                    }));
-                }));
-                row.add_suffix(&button);
-                row.set_activatable_widget(Some(&button));
-                group.add(&row);
-                content.add(&group);
-            }
             self.stack.add_titled_with_icon(
                 &child,
                 Some(page.id.key()),

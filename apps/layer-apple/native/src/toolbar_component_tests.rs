@@ -144,6 +144,107 @@ fn apple_device_class_admits_phone_and_tablet_finger_input() {
 }
 
 #[test]
+fn apple_preferences_publish_trigger_pages_with_touch_and_pen_settings() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        for theme in ["light", "dark"] {
+            app.action(json!({"type":"set_theme","theme":theme}));
+            app.invoke("settings");
+            let preferences = app.full_snapshot()["preferences"].clone();
+            let pages = preferences["pages"].as_array().unwrap();
+            assert_eq!(pages.iter().map(|page| page["id"].as_str().unwrap()).collect::<Vec<_>>(),
+                ["appearance", "color", "touch", "input", "shortcuts", "about"]);
+            let touch = pages.iter().find(|page| page["id"] == "touch").unwrap();
+            assert_eq!(touch["title"], "Touch");
+            let groups = touch["groups"].as_array().unwrap();
+            assert_eq!(groups.iter().map(|group| group["title"].as_str().unwrap()).collect::<Vec<_>>(),
+                if platform == 0 { vec!["Touch gestures", "Navigation"] } else { vec!["Navigation"] });
+            let rows = groups.iter().flat_map(|group| group["rows"].as_array().unwrap()).collect::<Vec<_>>();
+            assert!(rows.iter().all(|row| row["visible"] == true));
+            let mut expected = vec!["rotate_with_two_fingers", "quick_pinch_fit", "quick_pinch_restore"];
+            if platform == 0 { expected.insert(0, "finger_drawing"); }
+            assert_eq!(rows.iter().map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>(), expected);
+            let input = pages.iter().find(|page| page["id"] == "input").unwrap();
+            assert_eq!(input["title"], "Pen & Mouse");
+            assert!(input["groups"].as_array().unwrap().iter().flat_map(|group| group["rows"].as_array().unwrap())
+                .all(|row| row["id"] != "finger_drawing"));
+            assert_eq!(input["groups"][0]["title"], "Pointer");
+            assert_eq!(input["groups"][0]["rows"].as_array().unwrap().iter()
+                .map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>(),
+                ["cursor", "hide_cursor_while_drawing", "wheel_behavior", "pan_speed", "zoom_speed"]);
+            let color = pages.iter().find(|page| page["id"] == "color").unwrap();
+            let layers = color["groups"].as_array().unwrap().last().unwrap();
+            assert_eq!(layers["title"], "Layers");
+            assert_eq!(layers["rows"][0]["id"], "pass_through_groups");
+            let triggers = preferences["shortcut_page"]["triggers"].as_array().unwrap();
+            let fingers = triggers.iter().filter(|row| row["id"].as_str().unwrap().starts_with("touch.")).collect::<Vec<_>>();
+            let pen = triggers.iter().filter(|row| row["id"].as_str().unwrap().starts_with("pen.button.")).collect::<Vec<_>>();
+            assert_eq!(fingers.len(), if platform == 0 { 3 } else { 0 });
+            assert_eq!(pen.len(), if platform == 1 { 2 } else { 0 });
+            assert!(fingers.iter().all(|row| row["page"] == "touch"));
+            assert!(pen.iter().all(|row| row["page"] == "input"));
+            assert!(fingers.iter().all(|row| row["section"] == groups[0]["title"]));
+            assert_eq!(fingers.iter().map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>(),
+                if platform == 0 { vec!["touch.tap.2", "touch.tap.3", "touch.tap.4"] } else { vec![] });
+            assert!(pen.iter().all(|row| row["section"] == "Pen buttons"));
+            let mut searches = vec![("pinch", "Quick pinch to fit", "touch"),
+                ("pan speed", "Scroll pan speed", "input"), ("pass through", "Use Pass Through for new groups", "color")];
+            if platform == 0 { searches.push(("two-finger tap", "Two-finger tap", "touch")); }
+            for (query, title, page) in searches {
+                app.action(json!({"type":"preferences","action":{"type":"search","query":query}}));
+                let results = app.full_snapshot()["preferences"]["search_results"].clone();
+                let results = results.as_array().unwrap();
+                let result = results.iter().find(|row| row["title"] == title).unwrap_or_else(|| panic!("{platform}/{query}: {results:?}"));
+                assert_eq!(result["action"], json!({"type":"page","page":page}), "{platform}/{query}");
+                app.action(json!({"type":"preferences","action":result["action"]}));
+                assert_eq!(app.full_snapshot()["preferences"]["page"], page);
+            }
+            if platform == 1 {
+                app.action(json!({"type":"preferences","action":{"type":"search","query":"two-finger tap"}}));
+                assert!(app.full_snapshot()["preferences"]["search_results"].as_array().unwrap().iter()
+                    .all(|row| row["title"] != "Two-finger tap"));
+            }
+            app.action(json!({"type":"close_settings"}));
+        }
+    }
+}
+
+#[test]
+fn apple_phone_one_finger_choices_keep_the_static_icon_and_open_touch_settings() {
+    for theme in ["light", "dark"] {
+        for mode in 0..4 {
+            let app = App::new(0);
+            app.action(json!({"type":"set_theme","theme":theme}));
+            app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
+                layout:layer_ui::WorkspacePreset::Illustrator.layout(layer_ui::Platform::Ios),..Default::default()
+            }}));
+            app.action(json!({"type":"preferences","action":{"type":"edit","id":"finger_drawing","value":mode}}));
+            let snapshot = app.full_snapshot();
+            let commands = snapshot["panels"].as_array().unwrap().iter().find(|panel| panel["id"] == "commands").unwrap();
+            assert_eq!(commands["tiles"][0]["icon"], "finger-draw");
+            assert_eq!(unsafe { capy_apple_resize(app.0, 412, 891, 1.) }, 0);
+            assert_eq!(unsafe { capy_apple_device_class(app.0, true) }, 0);
+            app.action(json!({"type":"phone","action":{"kind":"capy"}}));
+            let menu = app.request(2, json!({"type":"document_tabs","op":"phone_menu"})).unwrap();
+            assert_eq!(menu["strip"][2]["icon"], "layer-finger-draw-symbolic");
+            let finger = menu["pages"].as_array().unwrap().iter().find(|page| page["id"]["page"]["kind"] == "one_finger_drag").unwrap();
+            assert_eq!(finger["sections"].as_array().unwrap().len(), 2);
+            let choices = finger["sections"][0].as_array().unwrap();
+            let labels = ["Auto", "Draw", "Move canvas", "Off"];
+            assert_eq!(choices.iter().map(|row| row["label"].as_str().unwrap()).collect::<Vec<_>>(), labels);
+            assert_eq!(choices.iter().filter(|row| row["selected"] == true).count(), 1);
+            assert_eq!(choices[mode]["selected"], true);
+            let more = finger["sections"][1].as_array().unwrap();
+            assert_eq!(more.len(), 1);
+            assert_eq!(more[0]["label"], "More Touch Settings…");
+            app.action(json!({"type":"phone","action":{"kind":"menu_select","route":finger["id"]}}));
+            app.action(more[0]["action"].clone());
+            assert_eq!(app.full_snapshot()["preferences"]["page"], "touch");
+        }
+    }
+}
+
+#[test]
 fn apple_enclose_fill_flat_choices_and_source_use_native_transport() {
     for platform in [0, 1] {
         for theme in ["light", "dark"] {

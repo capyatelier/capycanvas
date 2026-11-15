@@ -2273,14 +2273,7 @@ class AndroidHostTest {
     }
     private fun capture(name: String): Bitmap {
         compose.waitForIdle()
-        // Compose can be idle before SurfaceFlinger presents its last frame.
-        // Allow two vsyncs for theme/visibility changes to reach the compositor.
-        val presented = CountDownLatch(1)
-        compose.runOnIdle {
-            val view = compose.activity.window.decorView
-            view.postOnAnimation { view.postOnAnimation { presented.countDown() } }
-        }
-        assertTrue(presented.await(5, TimeUnit.SECONDS))
+        awaitNativeCaptureFrame(compose.activity, compose)
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         val directory = File(compose.activity.getExternalFilesDir(null), "validation").apply { mkdirs() }
         File(directory, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -3365,24 +3358,67 @@ class AndroidHostTest {
     }
 
     @Test fun preferencesSearchAndThemeAreCoreDriven() {
-        openSettings()
-        capture("04-preferences-light")
-        compose.onNodeWithText("Search settings").performTextInput("prediction")
-        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").array("search_results").length() > 0 }
-        capture("05-settings-search")
-        compose.onNodeWithContentDescription("Clear search").performClick()
-        compose.waitUntil(10_000) { preferences().getString("query").isEmpty() && !preferences().getBoolean("searching") }
-        compose.onNodeWithText("Search settings").assertExists()
-        compose.onNodeWithText("Pen & Input").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").getString("page") == "input" }
-        capture("06-pen-input")
-        compose.onNodeWithTag("settings-done").performClick()
-        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
-        compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
-        waitState { it.getString("theme") == "dark" }
-        capture("07-workspace-dark")
-        openSettings()
-        capture("08-preferences-dark")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            openSettings()
+            val pages = preferences().array("pages").objects()
+            assertEquals(listOf("appearance", "color", "touch", "input", "shortcuts", "about"), pages.map { it.getString("id") })
+            assertEquals(listOf("Appearance", "Color", "Touch", "Pen & Mouse", "Keyboard Shortcuts", "About"), pages.map { it.getString("title") })
+            fun groups(id: String) = pages.first { it.getString("id") == id }.array("groups").objects()
+            fun rows(id: String) = groups(id).flatMap { it.array("rows").objects() }.filter { it.getBoolean("visible") }.map { it.getString("id") }
+            assertEquals(listOf("finger_drawing", "rotate_with_two_fingers", "quick_pinch_fit", "quick_pinch_restore"), rows("touch"))
+            assertEquals(listOf("Touch gestures", "Navigation"), groups("touch").map { it.getString("title") })
+            assertEquals(listOf(listOf("finger_drawing"), listOf("rotate_with_two_fingers", "quick_pinch_fit", "quick_pinch_restore")),
+                groups("touch").map { it.array("rows").objects().map { row -> row.getString("id") } })
+            assertEquals(listOf("cursor", "hide_cursor_while_drawing", "wheel_behavior", "pan_speed", "zoom_speed"),
+                groups("input").first().array("rows").objects().map { it.getString("id") })
+            assertFalse(rows("input").contains("finger_drawing"))
+            assertEquals("Layers", groups("color").last().getString("title"))
+            assertEquals(listOf("pass_through_groups"), groups("color").last().array("rows").objects().map { it.getString("id") })
+            compose.onNodeWithTag("settings-category-touch").performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == "touch" }
+            for (id in rows("touch")) compose.onNodeWithTag("preference-$id").performScrollTo().assertIsDisplayed()
+            val taps = preferences().getJSONObject("shortcut_page").array("triggers").objects().filter { it.getString("page") == "touch" }
+            assertEquals(listOf("touch.tap.2", "touch.tap.3", "touch.tap.4"), taps.map { it.getString("id") })
+            assertTrue(taps.all { it.getString("section") == groups("touch").first().getString("title") })
+            for (tap in taps) compose.onNodeWithTag("trigger-" + tap.getString("id")).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithTag("trigger-pen.button.primary").assertDoesNotExist()
+            compose.onNodeWithTag("preference-finger_drawing").performScrollTo()
+            compose.onAllNodesWithText("Touch gestures").assertCountEquals(1)
+            compose.onAllNodesWithText("Navigation").assertCountEquals(1)
+            val gestureRows = (listOf("preference-finger_drawing") + taps.map { "trigger-" + it.getString("id") } + "settings-group-title-Navigation").map(::bounds)
+            assertTrue("One-finger drag and taps precede Navigation", gestureRows.zipWithNext().all { (before, after) -> before.bottom <= after.top })
+            capture("settings-touch-gestures-$theme")
+            capture("settings-touch-$theme")
+            compose.onNodeWithTag("settings-category-input").performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+            compose.onNodeWithTag("trigger-touch.tap.2").assertDoesNotExist()
+            compose.onNodeWithTag("trigger-pen.button.primary").performScrollTo().assertIsDisplayed()
+            capture("settings-pen-buttons-$theme")
+            compose.onNodeWithTag("settings-group-title-" + groups("input").first().getString("title")).performScrollTo()
+            capture("settings-pen-mouse-$theme")
+            compose.onNodeWithTag("settings-category-color").performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == "color" }
+            compose.onNodeWithTag("preference-pass_through_groups").performScrollTo().assertIsDisplayed()
+            capture("settings-color-layers-$theme")
+            compose.onNodeWithTag("settings-manage-profiles").performScrollTo().assertIsDisplayed()
+            capture("settings-color-bottom-$theme")
+            val finalGroup = "settings-group-title-" + groups("color").last().getString("title")
+            compose.onNodeWithTag(finalGroup).assertIsDisplayed()
+            assertTrue("Native profile controls precede the final shared Color group",
+                bounds("settings-profile-library").bottom <= bounds(finalGroup).top)
+            for ((query, page) in listOf("pinch" to "touch", "two-finger tap" to "touch", "pan speed" to "input", "pass through" to "color")) {
+                compose.onNodeWithText("Search settings").performTextReplacement(query)
+                compose.waitUntil(10_000) { preferences().optString("query") == query && preferences().array("search_results").objects().any { it.getJSONObject("action").optString("page") == page } }
+                val result = preferences().array("search_results").objects().first { it.getJSONObject("action").optString("page") == page }
+                compose.onNode(hasText(result.getString("title")) and hasClickAction() and hasAnyAncestor(hasTestTag("settings-sidebar"))).performScrollTo().performClick()
+                compose.waitUntil(10_000) { preferences().getString("page") == page && !preferences().getBoolean("searching") }
+                compose.onNodeWithTag("settings-content-$page-root").assertIsDisplayed()
+                capture("settings-search-${query.replace(' ', '-') }-$theme")
+            }
+            compose.onNodeWithTag("settings-done").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+        }
     }
     @Test fun settingsAndDetailsSlideWithinOneSurface() {
         compose.mainClock.autoAdvance = false
@@ -3444,8 +3480,8 @@ class AndroidHostTest {
         compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
         openSettings()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        compose.onNodeWithTag("settings-category-canvas").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         val value = compose.onNodeWithTag("number-value-pan_speed", useUnmergedTree = true)
         value.performScrollTo()
         val before = state().getJSONObject("settings").number("pan_speed")
@@ -3456,8 +3492,8 @@ class AndroidHostTest {
         compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
         assertFalse("Hidden settings release text input ownership", host.editingText)
         openSettings()
-        compose.onNodeWithTag("settings-category-canvas").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithTag("number-value-pan_speed", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         assertEquals(before, state().getJSONObject("settings").number("pan_speed"))
         compose.onNodeWithTag("settings-done").performClick()
@@ -4131,10 +4167,10 @@ class AndroidHostTest {
 
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         openSettings()
-        compose.onNodeWithTag("settings-category-canvas").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithTag("preference-pan_speed", useUnmergedTree = true).performScrollTo()
-        compose.onNodeWithTag("settings-content-canvas-root", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("settings-content-input-root", useUnmergedTree = true).assertIsDisplayed()
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         val slider = compose.onNodeWithTag("setting-slider-zoom_speed", useUnmergedTree = true).performScrollTo().assertTouchHeightIsEqualTo(48.dp)
@@ -4162,6 +4198,12 @@ class AndroidHostTest {
         compose.onNode(hasText("2", substring = true) and hasAnyAncestor(hasTestTag("number-value-pan_speed")),
             useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("About").performClick()
+        host.awaitMain("About owns the native content", 10_000, { preferences().toString() }, compose) {
+            val about = findTag("settings-content-about-root")?.second
+            preferences().getString("page") == "about" && about?.layoutInfo?.isPlaced == true &&
+                about.boundsInRoot.width > 0 && about.boundsInRoot.height > 0 && findTag("settings-content-input-root") == null
+        }
+        awaitNativeCaptureFrame(compose.activity, compose)
         val collected = CountDownLatch(1)
         host.measurements(true) { collected.countDown() }
         assertTrue(collected.await(10, TimeUnit.SECONDS))
@@ -4176,8 +4218,8 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         assertEquals(2f, state().getJSONObject("settings").number("pan_speed"))
         openSettings()
-        compose.onNodeWithTag("settings-category-canvas").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNode(hasText("2", substring = true) and hasAnyAncestor(hasTestTag("number-value-pan_speed")),
             useUnmergedTree = true).performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
@@ -4212,7 +4254,7 @@ class AndroidHostTest {
         assertEquals("#335577", state().getJSONObject("settings").getString("dark_base"))
         text.performImeAction()
         waitState { it.getJSONObject("settings").getString("dark_base") == "#333333" }
-        compose.onNodeWithText("Pen & Input").performClick()
+        compose.onNodeWithText("Pen & Mouse").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithTag("number-value-prediction_horizon").performScrollTo().performClick()
         val number = compose.onNodeWithTag("setting-number-prediction_horizon")
@@ -5669,7 +5711,7 @@ class AndroidHostTest {
             capture("16-workspace-portrait")
             compose.onNodeWithContentDescription(settingsLabel).performClick()
             capture("17-settings-portrait")
-            compose.onNodeWithText("Pen & Input").performClick()
+            compose.onNodeWithText("Pen & Mouse").performClick()
             compose.waitUntil(10_000) { preferences().getString("page") == "input" }
             compose.onNodeWithText("Prediction amount").assertExists()
             capture("29-settings-portrait-detail")
@@ -5692,11 +5734,11 @@ class AndroidHostTest {
         compose.onNodeWithText("Fit canvas").performClick()
         compose.onNodeWithText("Fit canvas").assertDoesNotExist()
         openSettings()
-        compose.onNodeWithText("Pen & Input").performClick()
+        compose.onNodeWithText("Pen & Mouse").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         capture("19-input-settings")
         val row = preferences().array("pages").objects().first { it.getString("id") == "input" }
-            .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getJSONObject("kind").getString("type") == "choice" }
+            .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == "cursor" }
         val kind = row.getJSONObject("kind")
         compose.onNodeWithTag("setting-choice-${row.getString("id")}").performScrollTo().performClick()
         capture("20-cursor-choices")

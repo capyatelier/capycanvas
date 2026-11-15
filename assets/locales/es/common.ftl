@@ -335,7 +335,7 @@ native-shortcuts-reassign = Reasignar
 
 native-shortcuts-pen-touch = Lápiz y entrada táctil
 
-native-shortcuts-pen-page-help = Cámbialos en la página Lápiz y entrada.
+native-shortcuts-pen-page-help = Cámbialos en la página { settings-page-touch } o { settings-page-input }.
 
 native-shortcuts-updated = Actualizado desde que lo elegiste
 

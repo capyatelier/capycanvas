@@ -53,7 +53,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             item.selected = Some(*mode == self.state.settings.finger_drawing);
             item
         }).collect();
-        ContextMenu { title: localization.text(MessageId::SETTINGS_ONE_FINGER_DRAG).to_string(), sections: vec![items] }
+        let settings = ContextMenuItem::command(localization.text(MessageId::SETTINGS_MORE_TOUCH_SETTINGS).to_string(),
+            UiAction::OpenSettings { page: SettingsPage::Touch });
+        ContextMenu { title: localization.text(MessageId::SETTINGS_ONE_FINGER_DRAG).to_string(), sections: vec![items, vec![settings]] }
     }
     pub(super) fn capture_finger_draft(&mut self, event: &PenEvent) {
         if event.tool != layer_engine::ToolKind::Finger || event.phase != PenPhase::Down

@@ -96,7 +96,7 @@ extension EditorLaunchTests {
         tap("cancel-keymap-import")
         XCTAssertTrue(app.buttons["confirm-keymap-import"].waitForNonExistence(timeout: 10))
         XCTAssertEqual(editorText(keymap), preset, "Cancelling the native keymap preview retains the current preset")
-        tap("settings-done"); settings("input")
+        tap("settings-done"); settings("touch")
         XCTAssertFalse(app.buttons["trigger-pen.button.primary"].exists)
         tap("trigger-touch.tap.2")
         XCTAssertTrue(app.textFields["action-picker-search"].waitForExistence(timeout: 10)); try shot("choose-action")

@@ -194,6 +194,10 @@ import SwiftUI
                         == ["Auto", "Draw", "Move canvas", "Off"], "Anchor all four choices below the ordinary title-bar tile")
                     try require(header.menu["sections"][0].array.filter { $0["selected"].bool }.count == 1,
                         "The ordinary title-bar menu checks exactly the saved mode")
+                    try require(header.menu["sections"].array.count == 2
+                        && header.menu["sections"][1].array.map { $0["label"].string } == ["More Touch Settings…"]
+                        && header.menu["sections"][1][0]["action"]["page"].string == "touch",
+                        "The second menu section opens Touch settings")
                     header.closeMenu(); try await drain()
                 }
                 let bounds = header.geometry["zen_button"].rect

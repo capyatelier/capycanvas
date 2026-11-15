@@ -390,7 +390,7 @@ native-shortcuts-reassign = Tetapkan Ulang
 
 native-shortcuts-pen-touch = Pena dan Sentuh
 
-native-shortcuts-pen-page-help = Ubah ini di halaman Pena & Masukan.
+native-shortcuts-pen-page-help = Ubah ini di halaman { settings-page-touch } atau { settings-page-input }.
 
 native-shortcuts-updated = Diperbarui sejak Anda memilihnya
 

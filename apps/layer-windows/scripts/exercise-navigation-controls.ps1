@@ -54,10 +54,10 @@ function Wheel([int]$Modifier=0){
  }finally{if($Modifier){[CapyRowPointer]::Hold($Modifier,$false)}}
 }
 function Preference([string]$Id){@((Model).preferences.pages.groups.rows|Where-Object id -eq $Id)[0]}
-function Open-CanvasPreferences{
+function Open-TouchPreferences{
  if(!(Model).preferences){if(Find 'settings-button' -Visible){Invoke-Id 'settings-button'}else{Menu-Command 'edit' 'settings'}}
- Invoke-Id 'preference-page-canvas'
- Wait-Until {(Model).preferences.page -eq 'canvas'} 'Canvas preferences did not open'
+ Invoke-Id 'preference-page-touch'
+ Wait-Until {(Model).preferences.page -eq 'touch'} 'Touch preferences did not open'
 }
 function Preference-Switch([string]$Id){
  $row=Preference $Id;if(!$row -or $row.kind.type -ne 'switch'){throw "Missing shared switch preference: $Id"}
@@ -83,7 +83,7 @@ function Close-Preferences([string]$Message){
  Invoke-Id 'CloseButton';Wait-Until {$canvas=Find 'drawing-canvas' -Visible;!(Model).preferences -and !(Find 'CloseButton' -Visible) -and $canvas -and $canvas.Current.ProcessId -eq $review.Id -and $canvas.Current.IsEnabled} $Message
 }
 function Set-PinchPreferences([bool]$Fit,[bool]$Restore){
- Open-CanvasPreferences
+ Open-TouchPreferences
  foreach($pair in @(@('quick_pinch_fit',$Fit),@('quick_pinch_restore',$Restore))){
   $id=$pair[0];$value=$pair[1];$switch=Preference-Switch $id
   if((Model).state.settings.$id -ne $value){$switch.pattern.Toggle()}
@@ -205,14 +205,15 @@ try{
  Capture "zoom-settings-$Theme" -WithModel -Composed
  $checks.zoom_controls='passed';$checks.zoom_pointer_journeys=@('mouse','pen','touch');$checks.smooth_and_area='passed'
  if(Find 'settings-button' -Visible){Invoke-Id 'settings-button'}else{Menu-Command 'edit' 'settings'}
- Invoke-Id 'preference-page-canvas'
- Wait-Until {(Model).preferences.page -eq 'canvas'} 'Canvas preferences did not open'
+ Invoke-Id 'preference-page-input'
+ Wait-Until {(Model).preferences.page -eq 'input'} 'Pen & Mouse preferences did not open'
  $wheel=Preference 'wheel_behavior'
  if($wheel.kind.options.Count -ne 2){throw 'Mouse wheel preference is not a two-choice dropdown'}
  $combo=Control 'preference-choice-wheel_behavior' -Arranged
  $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  (Control $wheel.kind.options[1] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
  Wait-Until {(Model).state.settings.wheel_zoom} 'Wheel Zoom preference did not reach shared settings'
+ Open-TouchPreferences
  $rotation=Preference 'rotate_with_two_fingers'
  $switch=@{pattern=$null}
  Wait-Until {
@@ -222,7 +223,7 @@ try{
  } 'Two-finger rotation switch did not arrange'
  $switch.pattern.Toggle()
  Wait-Until {!(Model).state.settings.rotate_with_two_fingers} 'Two-finger rotation preference did not reach shared settings'
- Capture "canvas-preferences-$Theme" -WithModel -Composed
+ Capture "touch-preferences-$Theme" -WithModel -Composed
  Close-Preferences 'Preferences did not close'
  Reset-Zoom
  $before=(Model).state.camera.zoom;Wheel
@@ -238,7 +239,7 @@ try{
  Wait-Until {[Math]::Abs((Model).state.camera.translation[0]-$before.translation[0]) -gt .001} 'Shift+wheel did not pan horizontally'
  if([Math]::Abs((Model).state.camera.zoom-$before.zoom) -gt .001){throw 'Shift+wheel changed zoom'}
  if(Find 'settings-button' -Visible){Invoke-Id 'settings-button'}else{Menu-Command 'edit' 'settings'}
- Invoke-Id 'preference-page-canvas';Wait-Until {(Model).preferences.page -eq 'canvas'} 'Canvas preferences did not reopen'
+ Invoke-Id 'preference-page-input';Wait-Until {(Model).preferences.page -eq 'input'} 'Pen & Mouse preferences did not reopen'
  $wheel=Preference 'wheel_behavior'
  (Control 'preference-choice-wheel_behavior').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  (Control $wheel.kind.options[0] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -253,12 +254,12 @@ try{
  $checks.navigation_preferences='passed'
  if((Model).state.settings.quick_pinch_fit -ne $true -or (Model).state.settings.quick_pinch_restore -ne $true){throw 'Quick pinch preferences did not default to enabled'}
  Set-PinchPreferences $false $false
- Open-CanvasPreferences;Reset-PinchPreference 'quick_pinch_fit'
+ Open-TouchPreferences;Reset-PinchPreference 'quick_pinch_fit'
  if((Model).state.settings.quick_pinch_restore -ne $false){throw 'Fit Reset changed the disabled Restore preference'}
  Capture "pinch-fit-reset-$Theme" -WithModel -Composed
  Close-Preferences 'Fit Reset preferences did not close'
  Set-PinchPreferences $false $false
- Open-CanvasPreferences;Reset-PinchPreference 'quick_pinch_restore'
+ Open-TouchPreferences;Reset-PinchPreference 'quick_pinch_restore'
  if((Model).state.settings.quick_pinch_fit -ne $false){throw 'Restore Reset changed the disabled Fit preference'}
  Capture "pinch-restore-reset-$Theme" -WithModel -Composed
  Close-Preferences 'Restore Reset preferences did not close'

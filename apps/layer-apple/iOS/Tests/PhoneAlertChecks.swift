@@ -150,7 +150,7 @@ extension XCTestCase {
         if !app.descendants(matching: .any)["phone-menu"].firstMatch.exists { _ = phoneMenuRoot(in: app) }
         workspaceActivate(app.buttons["phone-finger"])
         phoneWaitForMenuTitle("One-finger drag", in: app)
-        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "phone-menu-row-")).count, 4)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "phone-menu-row-")).count, 5)
         workspaceActivate(phoneMenuRow(mode, in: app))
         phoneWaitForMenuTitle(app.buttons["phone-capy"].label, in: app)
         XCTAssertFalse(app.buttons["phone-menu-back"].exists)

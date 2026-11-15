@@ -676,7 +676,7 @@ try {
       true,
     );
     await click('[data-command="settings"]');
-    await click('[data-settings-page="canvas"]');
+    await click('[data-settings-page="input"]');
     await evaluate(
       `(() => { document.querySelector('#setting-pan-speed .number-value').click(); const input=document.querySelector('#setting-pan-speed .number-entry'); input.value='1.5'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); })()`,
     );

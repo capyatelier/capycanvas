@@ -335,7 +335,7 @@ native-shortcuts-reassign = Переназначить
 
 native-shortcuts-pen-touch = Перо и касания
 
-native-shortcuts-pen-page-help = Измените это на странице «Перо и ввод».
+native-shortcuts-pen-page-help = Измените это на странице «{ settings-page-touch }» или «{ settings-page-input }».
 
 native-shortcuts-updated = Обновлено после выбора
 

@@ -22,10 +22,11 @@ import SwiftUI
             let commands = editor.panel("commands")["tiles"].array
             precondition(commands.count == (platform == 0 ? 14 : 12), "Only iPad Paint adds the divider and one-finger tile")
             if platform == 0 {
-                precondition(commands.suffix(3).map { $0["control"]["command"].string.isEmpty
+                precondition(commands.prefix(2).map { $0["control"]["command"].string.isEmpty
                     ? $0["control"]["kind"].string : $0["control"]["command"].string }
-                    == ["flip_horizontal", "divider", "one_finger_drag"])
+                    == ["one_finger_drag", "divider"])
             }
+            precondition(commands.last?["control"]["command"].string == "flip_horizontal")
             let defaultBrush = editor.state["brush"].stableKey
             try await editor.apply(["type": "workspace_manager", "command": ["type": "manage"]])
             try await wait("manager request acknowledgement") {

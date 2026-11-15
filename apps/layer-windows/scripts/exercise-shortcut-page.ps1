@@ -118,6 +118,10 @@ try {
  $checks.russian_canvas_shortcuts='Undo/Redo once and B selects Paint'
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Prefs) -and (Shown 'CloseButton')} 'Ctrl+, did not open Preferences'
+ if(((Prefs).pages.id -join '|') -ne 'appearance|color|touch|input|shortcuts|about' -or ((Prefs).pages.title -join '|') -ne 'Appearance|Color|Touch|Pen & Mouse|Keyboard Shortcuts|About'){throw 'Preferences pages have the wrong order or titles'}
+ $touch=@((Prefs).pages|Where-Object id -eq 'touch')[0];$pointerPage=@((Prefs).pages|Where-Object id -eq 'input')[0]
+ if(($touch.groups.title -join '|') -ne 'Touch gestures|Navigation' -or ($touch.groups.rows.id -join '|') -ne 'finger_drawing|rotate_with_two_fingers|quick_pinch_fit|quick_pinch_restore'){throw 'Touch has the wrong preference groups or rows'}
+ if(($pointerPage.groups.title -join '|') -ne 'Pointer|Pen response|Eraser end' -or ($pointerPage.groups[0].rows.id -join '|') -ne 'cursor|hide_cursor_while_drawing|wheel_behavior|pan_speed|zoom_speed'){throw 'Pen & Mouse has the wrong preference groups or pointer rows'}
  $originalTransparency=(Model).state.settings.transparency
  foreach($glass in @(@{name='off';index=0},@{name='low';index=1})){
   Set-CapyTransparency $glass.name
@@ -132,6 +136,16 @@ try {
    }
    Capture $name -WithModel -Composed
    if($page.id -eq 'color'){
+    $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+    $null=Reveal 'manage-color-profiles'
+    Capture ($name+'-native-order') -WithModel -Composed
+    $native=@($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition));$layerIndex=$profileIndex=-1
+    for($i=0;$i -lt $native.Count;$i++){
+     $item=$native[$i].Current
+     if($item.Name -eq 'Layers' -and $item.ControlType -eq [System.Windows.Automation.ControlType]::Text){if($layerIndex -ge 0){throw 'Color has duplicate Layers headings'};$layerIndex=$i}
+     if($item.AutomationId -eq 'manage-color-profiles'){if($profileIndex -ge 0){throw 'Color has duplicate profile managers'};$profileIndex=$i}
+    }
+    if($page.groups[-1].title -ne 'Layers' -or $profileIndex -lt 0 -or $layerIndex -le $profileIndex){throw 'Color must end with Layers after native Color Profile Library controls'}
     Visit-ProfileManager ($name+'-profile-manager')
    }
    if($page.id -eq 'appearance'){
@@ -173,6 +187,15 @@ try {
  Set-CapyTransparency $originalTransparency
  if(!$compactSwitchChecks){throw 'Preferences did not expose an arranged compact switch'}
  $checks.preferences_pages_and_glass_captures='passed'
+ foreach($route in @(@{query='pinch';page='touch'},@{query='two-finger tap';page='touch'},@{query='pan speed';page='input'},@{query='pass through';page='color'})){
+  Invoke-Id 'preference-search-toggle';Type-Into 'settings-search' $route.query
+  Wait-Until {(Prefs).query -eq $route.query -and @((Prefs).search_results|Where-Object {$_.action.type -eq 'page' -and $_.action.page -eq $route.page}).Count -gt 0} 'Preference search did not publish the expected destination'
+  $result=@((Prefs).search_results|Where-Object {$_.action.type -eq 'page' -and $_.action.page -eq $route.page})[0]
+  Invoke $result.title -Name -Type ([System.Windows.Automation.ControlType]::Button) -Within (Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))
+  Wait-Until {(Prefs).page -eq $route.page -and !(Prefs).query} 'Preference search opened the wrong page'
+  Capture ('settings-search-'+$route.query.Replace(' ','-')+'-'+$Theme) -WithModel -Composed
+ }
+ $checks.preference_search_routes='passed'
  Invoke 'Keyboard Shortcuts' -Name
  Wait-Until {(Prefs).page -eq 'shortcuts' -and (Shown 'shortcut-category-Modifier keys') -and (Shown 'keymap-preset')} 'Keyboard Shortcuts did not list its categories before any search'
  if((Page).filtering){throw 'The shortcut page opened filtered'}
@@ -262,11 +285,33 @@ try {
  Press 0x1B;Wait-Until {!(Page).category -and (Prefs)} 'Escape did not return to the root page'
  $checks.modifier_key_picker_reset='passed'
 
- Invoke 'Pen & Input' -Name
- Wait-Until {(Prefs).page -eq 'input' -and (Find 'trigger-touch.tap.2') -and (Find 'trigger-pen.button.primary')} 'Pen & Input did not list finger taps and the pen button'
- if(Find 'trigger-pen.button.secondary'){throw 'Windows listed an upper pen button that Windows Ink cannot report'}
- $eraser=@(((Prefs).pages|Where-Object id -eq 'input').groups.rows|Where-Object {$_.id -match 'eraser' -and $_.visible -ne $false})
- if($eraser.Count -lt 2){throw 'The eraser end rows are hidden'}
+ Invoke-Id 'preference-page-touch'
+ Wait-Until {(Prefs).page -eq 'touch' -and (Find 'trigger-touch.tap.2')} 'Touch did not list finger taps'
+ $null=Reveal 'trigger-touch.tap.2'
+ Capture "preferences-touch-triggers-$Theme" -WithModel -Composed
+ $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+ $section=Control 'triggers-touch-gestures' -Within $dialog -Arranged
+ $native=@($dialog.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition));$headings=@{}
+ foreach($name in @('Touch gestures','Navigation')){
+  $indices=@(for($i=0;$i -lt $native.Count;$i++){$item=$native[$i].Current;if(!$item.IsOffscreen -and $item.ControlType -eq [System.Windows.Automation.ControlType]::Text -and $item.Name -eq $name){$i}})
+  if($indices.Count -ne 1){throw "Touch must expose exactly one $name heading"}
+  $headings[$name]=$indices[0]
+ }
+ $first=$headings['Touch gestures'];$last=$headings['Navigation'];$previous=$first
+ $bottom=(Control 'Touch gestures' -Name -Type ([System.Windows.Automation.ControlType]::Text) -Within $dialog -Arranged).Current.BoundingRectangle.Bottom
+ $limit=(Control 'Navigation' -Name -Type ([System.Windows.Automation.ControlType]::Text) -Within $dialog -Arranged).Current.BoundingRectangle.Top
+ $ids=@('preference-choice-finger_drawing')+@((Page).triggers|Where-Object page -eq 'touch'|ForEach-Object {'trigger-'+$_.id})
+ foreach($id in $ids){
+  $indices=@(for($i=0;$i -lt $native.Count;$i++){if($native[$i].Current.AutomationId -eq $id){$i}})
+  if($indices.Count -ne 1 -or $indices[0] -le $previous -or $indices[0] -ge $last){throw "Touch gestures has a missing, repeated or misplaced row: $id"}
+  $type=if($id -eq 'preference-choice-finger_drawing'){[System.Windows.Automation.ControlType]::ComboBox}else{[System.Windows.Automation.ControlType]::Button}
+  $bounds=(Control $id -Within $section -Type $type -Arranged).Current.BoundingRectangle
+  if($bounds.Top -lt $bottom -or $bounds.Bottom -gt $limit){throw "Touch gestures row overlaps or leaves its section: $id"}
+  $previous=$indices[0];$bottom=$bounds.Bottom
+ }
+ $taps=@(for($i=$first+1;$i -lt $last;$i++){$item=$native[$i].Current;if($item.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $item.AutomationId -like 'trigger-touch.tap.*'){$item}})
+ if($taps.Count -ne 3){throw 'Touch gestures must contain all three finger taps after One-finger drag'}
+ if(Shown 'trigger-pen.button.primary'){throw 'Touch lists a pen button'}
  Invoke-Id 'trigger-touch.tap.2'
  Wait-Until {(Page).picker.trigger -eq 'touch.tap.2' -and (Shown 'action-nothing')} 'The two-finger tap picker did not open'
  Invoke-Id 'action-nothing'
@@ -279,11 +324,19 @@ try {
  Invoke-Id 'action-picker-reset'
  Wait-Until {!(Model).state.settings.gestures -or $null -eq (Model).state.settings.gestures.'touch.tap.2'} 'Reset did not restore the two-finger tap'
  Wait-Until {!(Page).picker -and (Prefs)} 'Reset did not close the picker'
+ Invoke-Id 'preference-page-input'
+ Wait-Until {(Prefs).page -eq 'input' -and (Find 'trigger-pen.button.primary')} 'Pen & Mouse did not list the pen button'
+ $null=Reveal 'trigger-pen.button.primary'
+ Capture "preferences-input-bottom-$Theme" -WithModel -Composed
+ if(Shown 'trigger-touch.tap.2'){throw 'Pen & Mouse lists finger taps'}
+ if(Find 'trigger-pen.button.secondary'){throw 'Windows listed an upper pen button that Windows Ink cannot report'}
+ $eraser=@(((Prefs).pages|Where-Object id -eq 'input').groups.rows|Where-Object {$_.id -match 'eraser' -and $_.visible -ne $false})
+ if($eraser.Count -lt 2){throw 'The eraser end rows are hidden'}
  Invoke-Id 'trigger-pen.button.primary'
  Wait-Until {(Prefs).pen_button_editor -and (Shown 'pen-button-same')} 'The pen button page did not open'
  Capture "pen-button-$Theme"
  Press 0x1B;Wait-Until {!(Prefs).pen_button_editor -and (Prefs)} 'Escape did not return from the pen button page'
- $checks.pen_and_input_triggers='passed'
+ $checks.touch_and_pen_triggers='passed'
 
  Invoke 'Color' -Name -Within (Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))
  Wait-Until {(Prefs).page -eq 'color' -and (Shown 'manage-color-profiles')} 'The Color page did not offer Manage Color Profiles'

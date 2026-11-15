@@ -21,7 +21,7 @@ export async function checkPassThrough({call,evaluate,settle}) {
   const tap=async(p,kind)=>{touchId++;await pointer('mousePressed',p,kind);await pointer('mouseReleased',p,kind);await settle();await pause(60);};
   const blend=()=>evaluate('layerApp.state().layer_tools.editing_layer.blend_label');
   const active=()=>evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
-  const groups=()=>evaluate(`(()=>{const out=[[]];for(const n of document.querySelector('${menu}').children){if(n.tagName==='HR')out.push([]);else out.at(-1).push(n.querySelector('.menu-label')?.textContent);}return out;})()`);
+  const groups=()=>evaluate(`(()=>{const out=[[]];for(const n of document.querySelector('${menu} .context-menu-body').children){if(n.tagName==='HR')out.push([]);else out.at(-1).push(n.querySelector('.menu-label')?.textContent);}return out;})()`);
   const peaks=async()=>{
     await wait('!layerApp.documents.busy()');
     const h=await histogramJourney({evaluate,settle}).exact();
@@ -147,7 +147,7 @@ export async function checkPassThrough({call,evaluate,settle}) {
       assert.equal(await evaluate('layerApp.state().layer_tools.attachment.checked'),false);
     }
 
-    await send({type:'open_settings',page:'canvas'});
+    await send({type:'open_settings',page:'color'});
     await wait(`!!document.querySelector('#setting-pass-through-groups')`);
     assert.equal(await evaluate(`document.querySelector('#setting-pass-through-groups').getAttribute('aria-label')`),'Use Pass Through for new groups');
     if(await evaluate('layerApp.state().settings.pass_through_groups'))await send({type:'preferences',action:{type:'reset',id:'pass_through_groups'}});

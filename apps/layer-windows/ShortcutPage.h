@@ -10,6 +10,7 @@ public:
     ShortcutPage(std::shared_ptr<WorkspaceData> data,Grid overlay);
     ~ShortcutPage();
     StackPanel Container(hstring const& page,StackPanel const& node);
+    void RegisterGroup(hstring const& page,PreferenceGroup const& group);
     void Apply(J const& snapshot);
     hstring Title()const;
     void Back();

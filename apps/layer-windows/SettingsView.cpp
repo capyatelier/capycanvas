@@ -212,7 +212,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             auto container=shortcutPage->Container(id,node);
             uint32_t sectionIndex=0;
             for(auto groupValue:array(page,L"groups")){
-                auto group=groupValue.GetObject();auto cardGroup=preferenceGroup(data,str(group,L"title"));auto section=cardGroup.section;auto heading=cardGroup.title;
+                auto group=groupValue.GetObject();auto cardGroup=preferenceGroup(data,str(group,L"title"));shortcutPage->RegisterGroup(id,cardGroup);auto section=cardGroup.section;auto heading=cardGroup.title;
                 bindings.emplace_back([data=data,pageId=id,groupIndex=sectionIndex++,heading]{auto page=find(array(preferences(data),L"pages"),L"id",pageId);heading.Text(str(array(page,L"groups").GetObjectAt(groupIndex),L"title"));});
                 auto list=cardGroup.list;container.Children().Append(section);
                 A ids;
@@ -236,7 +236,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                 ColumnDefinition words;words.Width({1,GridUnitType::Star});ColumnDefinition suffix;suffix.Width({1,GridUnitType::Auto});row.ColumnDefinitions().Append(words);row.ColumnDefinitions().Append(suffix);
                 StackPanel text;text.Spacing(3);text.VerticalAlignment(VerticalAlignment::Center);text.Children().Append(label(data,data->copyCaption(L"color",L"profile_library_title")));
                 auto detail=label(data,data->copyCaption(L"color",L"profile_menu_help"));detail.TextWrapping(TextWrapping::Wrap);detail.Opacity(.55);detail.FontSize(data->textSize()/1.2);opticalText(detail,detail.FontSize());text.Children().Append(detail);row.Children().Append(text);
-                Grid::SetColumn(profiles,1);profiles.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(profiles);group.list.Children().Append(row);container.Children().Append(group.section);
+                Grid::SetColumn(profiles,1);profiles.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(profiles);group.list.Children().Append(row);container.Children().InsertAt(container.Children().Size()?container.Children().Size()-1:0,group.section);
             }
         }
         frame.Children().Append(body);frame.Children().Append(overlay);

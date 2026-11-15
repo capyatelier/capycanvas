@@ -147,8 +147,8 @@ try {
  (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Model).preferences} 'Ctrl+, did not open Preferences'
- Invoke 'Pen & Input' -Name
- Wait-Until {Find 'trigger-pen.button.primary'} 'Pen & Input did not list the lower pen button'
+ Invoke 'Pen & Mouse' -Name
+ Wait-Until {Find 'trigger-pen.button.primary'} 'Pen & Mouse did not list the lower pen button'
  if(Find 'trigger-pen.button.secondary'){throw 'Windows listed an upper pen button that Windows Ink cannot report'}
  Invoke-Id 'trigger-pen.button.primary'
  Wait-Until {(Model).preferences.pen_button_editor -and (Find 'pen-button-action-all')} 'The lower pen button page did not open'
@@ -191,7 +191,7 @@ try {
  (Find 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
  Wait-Until {(Model).preferences} 'Ctrl+, did not open Preferences'
- Invoke 'Pen & Input' -Name
+ Invoke 'Pen & Mouse' -Name
  (Control 'Paint with transparency' -Name -Type ([System.Windows.Automation.ControlType]::Button)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
  Wait-Until {(Model).state.settings.eraser_end.erase -eq $false} 'Paint with transparency did not turn off'
  Invoke-Id 'CloseButton'

@@ -856,7 +856,7 @@ Invalid edits preserve the last accepted value and report an inline error.
 Hosts render this small settings-specific model,
 not an arbitrary widget tree or a second business-logic layer.
 
-Five pages cover Appearance/Zen, Canvas/navigation, Pen & Input, Keyboard
+Six pages cover Appearance/Zen, Color, Touch, Pen & Mouse, Keyboard
 Shortcuts and About. `Platform` selects native-window commands, predicted-sample
 controls and renderer information. Core validation checks field availability,
 dependencies, value ranges, shortcut collisions and persisted versions.

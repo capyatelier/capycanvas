@@ -933,7 +933,7 @@ impl CommandId {
             Self::FlipHorizontal => "flip-horizontal",
             Self::FlipVertical => "flip-vertical",
             Self::ZenMode => ZenIcon::LookingUp.icon(),
-            Self::OneFingerDrag => FingerDrawing::On.icon(),
+            Self::OneFingerDrag => "finger-draw",
             Self::Fullscreen => "fullscreen-enter",
             Self::Settings => "settings",
             Self::ToggleTheme => "appearance",

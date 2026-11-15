@@ -7879,6 +7879,7 @@ fn native_web_parity_reference() {
                 .set_color_scheme(adw::ColorScheme::Default);
             let w = fixture_workspace(&app);
             w.window.present();
+            new_photo::ready(&w);
             assert!(w.gpu.borrow().is_some());
             if modal {
                 w.dispatch(UiAction::Invoke {
@@ -8650,7 +8651,7 @@ fn native_preferences_and_shortcuts() {
     w.dispatch(UiAction::Preferences {
         action: results[0].action.clone(),
     });
-    assert_eq!(ui_session(&w).preferences().unwrap().page, SettingsPage::Canvas);
+    assert_eq!(ui_session(&w).preferences().unwrap().page, SettingsPage::Input);
     search.set_text("");
     pump(300);
     w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
@@ -8810,7 +8811,7 @@ fn native_preferences_and_shortcuts() {
         w.window.present();
     }
     w.dispatch(UiAction::OpenSettings {
-        page: SettingsPage::Canvas,
+        page: SettingsPage::Input,
     });
     w.window.set_default_size(640, 600);
     pump(500);
@@ -12792,7 +12793,7 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::Settings));
     assert!(state(&w).settings_open);
     assert!(w.preferences.dialog.root().is_some());
-    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     let pressure: crate::number_control::NumberControl =
         find_named(w.preferences.dialog.upcast_ref(), "setting-pan-speed")
             .unwrap()
@@ -12805,7 +12806,7 @@ fn native_workspace_controls_docking_and_ink() {
     assert!(!state(&w).settings_open);
     assert_eq!(state(&w).settings.pan_speed, 1.45);
     click(&command(&w, CommandId::Settings));
-    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
     edit_number(&pressure, "1.5");
     let close = find_css(
         &find_named(w.preferences.dialog.upcast_ref(), "preferences-content").unwrap(),

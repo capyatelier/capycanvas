@@ -598,14 +598,16 @@ fn native_zoom_settings_and_canvas_preferences() {
         assert_eq!(state(&w).layers.iter().map(|l| l.paint_revision).collect::<Vec<_>>(), revisions);
         capture_reference(&w, &format!("{dir}/zoom-settings-{theme:?}.png"), 1.);
         center.set_active(false);
-        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
-        until(|| w.preferences.dialog.is_mapped(), "Canvas preferences open");
+        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
+        until(|| w.preferences.dialog.is_mapped(), "Pen & Mouse preferences open");
         let wheel = named::<adw::ComboRow>(w.preferences.dialog.upcast_ref(), "setting-wheel-behavior");
         assert_eq!(wheel.model().unwrap().n_items(), 2);
         wheel.set_selected(1);
         pump(100);
         assert!(state(&w).settings.wheel_zoom);
+        w.dispatch(UiAction::OpenSettings { page: SettingsPage::Touch });
         let rotation = named::<adw::SwitchRow>(w.preferences.dialog.upcast_ref(), "setting-rotate-with-two-fingers");
+        until(|| rotation.is_mapped(), "Touch navigation preference mapped");
         rotation.set_active(false);
         pump(100);
         assert!(!state(&w).settings.rotate_with_two_fingers);

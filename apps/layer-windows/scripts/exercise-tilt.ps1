@@ -150,7 +150,7 @@ function Open-Tilt{
     }
     Wait-Until {(Model).state.settings_open} 'Preferences action was not acknowledged'
     Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)|Out-Null
-    Invoke 'Pen & Input' -Name
+    Invoke 'Pen & Mouse' -Name
     $adjust=Control 'setting-action-pen_tilt';$scroll=$null
     if($adjust.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}
     Invoke 'setting-action-pen_tilt'

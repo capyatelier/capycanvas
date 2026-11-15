@@ -163,10 +163,10 @@ function launchFrameHarness(numbers = false) {
     launch_frame:()=>finished||!ready||!submitted||modal?null:[ticket,owner],
     wait_for_canvas:()=>new Promise(resolve=>waits.push(resolve)),
     launch_presented:(frame,surface,_chrome,interaction)=>{assert.equal(typeof frame,'bigint');assert.equal(typeof surface,'bigint');interactions.push(['presented',interaction]);acknowledgments.push([frame,surface]);if(surface===BigInt(owner)&&frame===BigInt(ticket)&&ready&&!interaction)finished=true;},
-    language_pending:()=>false,dispatch(action){ready=action.type==='close_settings';if(!ready)submitted=false;return{regions:0,canvas_wake:false};},
+    next_frame_ms:()=>0,language_pending:()=>false,dispatch(action){ready=action.type==='close_settings';if(!ready)submitted=false;return{regions:0,canvas_wake:false};},
   },bootstrap:{},layout:{},workspaceLayoutReady:()=>true,workspacePresentation:null,
     compilerFailed:false,compilerEpoch:0,gpuReady:true,launchPresentation:null,
-    document:{body:{dataset:{gpu:'ready'}}},launchCover:{blocking:true,pending:true,update:view=>views.push(view)},
+    document:Object.assign(new EventTarget(),{body:{dataset:{gpu:'ready'}}}),clearTimeout,setTimeout,launchCover:{blocking:true,pending:true,update:view=>views.push(view)},
     startupTimes:{canvas:null,document:null,brush:null,complete:null},statusError:null,
     $:()=>({textContent:''}),performance:{now:()=>0,mark(){}},requestAnimationFrame:callback=>frames.push(callback),wake(){wakes++;},stopGpu:assert.fail,
     documents:null,workspaceGesture:null,message:assert.fail,hasModalDialog:()=>modal};
@@ -384,7 +384,7 @@ test('phone inset and keyboard reports apply while busy and deduplicate against 
 
 test('retained workspace placement keeps bubble presentation without scheduling GPU work',()=>{
   let refreshes=0,wakes=0,model=1;
-  const context={launchPresentation:null,launchCover:{blocking:false},app:{language_pending:()=>false,workspace_update:()=>({model_revision:model,content_revision:1}),state_update:assert.fail},
+  const context={document:new EventTarget(),clearTimeout,setTimeout,launchPresentation:null,launchCover:{blocking:false},app:{next_frame_ms:()=>0,language_pending:()=>false,workspace_update:()=>({model_revision:model,content_revision:1}),state_update:assert.fail},
     bubbles:{refresh(){refreshes++;wakes++;}},canvasBar:null,workspaceManager:{observe(){}},editor:{refreshColorPreview(){}},
     fillGesture:null,phone:null,workspaceModelRevision:1,workspaceContentRevision:1,workspaceGesture:{started:true},
     queueWorkspacePresentation(){},queueWorkspaceLayout(){},refreshColorEditors(){},refreshTextureDialogs(){},wake(){wakes++;}};
@@ -400,7 +400,7 @@ test('retained workspace placement keeps bubble presentation without scheduling 
 
 test('fill gesture publishes through the color preview fast path without a workspace patch',()=>{
   const received=[],gesture={transaction:7,pill:{label:'Shared label',value:'Shared value'}};
-  const context={launchPresentation:null,launchCover:{blocking:false},app:{language_pending:()=>false,color_preview:()=>({fill_gesture:gesture}),state_update:assert.fail},
+  const context={document:new EventTarget(),clearTimeout,setTimeout,launchPresentation:null,launchCover:{blocking:false},app:{next_frame_ms:()=>0,language_pending:()=>false,color_preview:()=>({fill_gesture:gesture}),state_update:assert.fail},
     fillGesture:{refresh:value=>received.push(value)},phone:null,editor:null,refreshColorEditors(){},bubbles:null,wake(){}};
   runInNewContext(source.slice(source.indexOf('function applyChange(change)'),source.indexOf('let canvasCursorActive')),context);
   context.applyChange({regions:256,canvas_wake:false});

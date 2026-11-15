@@ -163,8 +163,8 @@ fn native_pass_through_group_and_new_group_preference() {
     input.key(0xff1b);
     until(|| !popover.is_visible(), "Escape closes the blend menu");
 
-    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Canvas });
-    until(|| w.preferences.dialog.is_mapped(), "Preferences open on the Canvas page");
+    w.dispatch(UiAction::OpenSettings { page: SettingsPage::Color });
+    until(|| w.preferences.dialog.is_mapped(), "Preferences open on the Color page");
     pump(300);
     let row = find_named(w.preferences.dialog.upcast_ref(), "setting-pass-through-groups")
         .and_downcast::<adw::SwitchRow>()

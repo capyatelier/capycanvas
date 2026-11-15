@@ -1334,6 +1334,25 @@ fn native_one_finger_drag_tiles() {
     let mut d = Driver::new("art.capycanvas.OneFingerDragTiles");
     restore(&d, WorkspacePreset::Illustrator);
     let control = ToolbarControl::Command { command: CommandId::OneFingerDrag };
+    let commands = state(&d.w).workspace.layout.panel(Panel::Commands).unwrap().tiles().to_vec();
+    assert_eq!(commands[..2].iter().map(|tile| tile.control).collect::<Vec<_>>(), [control, ToolbarControl::Divider]);
+    let paint = DrawerAnchor::Tile { panel: Panel::Commands, tile: commands[0].id };
+    let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap_or_else(|_| "light".into());
+    idle_paint(&d.w.window);
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        d.input.perform(serde_json::json!([{ "capture": format!("paint-topbar-{theme}") }]));
+    }
+    d.click(&anchor_widget(&d, paint));
+    until(|| variant_context(&d).is_mapped(), "the factory Paint tile opens its menu");
+    idle_paint(&variant_context(&d));
+    if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+        d.input.perform(serde_json::json!([{ "capture": format!("paint-finger-menu-{theme}") }]));
+    }
+    d.click_label("More Touch Settings…");
+    until(|| ui_session(&d.w).preferences().is_some_and(|view| view.page == SettingsPage::Touch)
+        && d.w.preferences.dialog.is_mapped(), "the Paint tile link opens Touch settings");
+    d.w.dispatch(UiAction::CloseSettings);
+    until(|| !d.w.preferences.dialog.is_mapped(), "Touch settings closes before customizing the title bar");
     d.edit();
     d.drop_component("tools", HeaderZone::Left);
     let add = |d: &mut Driver| {
@@ -1350,11 +1369,12 @@ fn native_one_finger_drag_tiles() {
     secondary_group_click(&mut d, &button);
     d.click_label("Insert Tools…");
     add(&mut d);
-    let toolbar = control_anchor(&d, control);
+    let tile = state(&d.w).workspace.layout.panel(Panel::Toolbar).unwrap().tiles().iter().find(|tile| tile.control == control).unwrap().id;
+    let toolbar = DrawerAnchor::Tile { panel: Panel::Toolbar, tile };
     let customization_only = |d: &Driver, name: &str| {
         let popup = variant_context(d);
         idle_paint(&popup);
-        for label in ["Auto", "Draw", "Move canvas", "Off"] {
+        for label in ["Auto", "Draw", "Move canvas", "Off", "More Touch Settings…"] {
             assert!(find_menu_item(popup.upcast_ref(), label).is_none(), "{name} customization omits {label}");
         }
         assert!(find_menu_item(popup.upcast_ref(), if name == "header" { "Customize Title Bar…" } else { "Remove Tool" }).is_some());
@@ -1374,11 +1394,13 @@ fn native_one_finger_drag_tiles() {
                 assert!(first.is_mapped() && first.width() > 0 && first.height() > 0, "the painted menu row has an allocation");
                 assert!(screen_point(&first, &d.w.window, [0.5, 0.])[1] >= screen_point(&widget, &d.w.window, [0.5, 1.])[1], "primary menu rows open beneath their tile");
                 let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+                assert_eq!(menu.sections.iter().map(|section| section.iter().map(|item| item.label.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+                    [vec!["Auto", "Draw", "Move canvas", "Off"], vec!["More Touch Settings…"]]);
                 assert_eq!(menu.sections[0].iter().filter(|item| item.selected == Some(true)).count(), 1);
                 choose_variant(&mut d, anchor, index);
                 assert_eq!(state(&d.w).settings.finger_drawing, mode);
-                let icon = mode.effective(layer_ui::DeviceClass::Desktop, state(&d.w).settings.pen_seen).icon();
-                assert!(find_named(&anchor_widget(&d, anchor), &format!("layer-{icon}-symbolic")).is_some(), "{name} follows {mode:?}");
+                assert!(find_named(&anchor_widget(&d, anchor), "layer-finger-draw-symbolic").is_some(), "{name} keeps one icon in {mode:?}");
+                assert!(find_named(&anchor_widget(&d, paint), "layer-finger-draw-symbolic").is_some(), "the factory Paint tile keeps one icon in {mode:?}");
                 d.click(&anchor_widget(&d, anchor));
                 until(|| variant_context(&d).is_mapped(), "the chosen mode reopens checked");
                 idle_paint(&variant_context(&d));

@@ -74,7 +74,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await action({type:'close_settings'});await action({type:'open_settings',page:'shortcuts'});
   await evaluate(`{const node=document.querySelector('#shortcuts-search');node.value='z';node.dispatchEvent(new Event('input',{bubbles:true}));}`);await settle();
   await checkSearchField({call,evaluate,settle},'#shortcuts-search','shortcuts-search');
-  await preference({type:'page',page:'input'});await click('[data-trigger="touch.tap.4"]');
+  await preference({type:'page',page:'touch'});await click('[data-trigger="touch.tap.4"]');
   await evaluate(`{const node=document.querySelector('#action-picker-search');node.value='undo';node.dispatchEvent(new Event('input',{bubbles:true}));}`);await settle();
   await checkSearchField({call,evaluate,settle},'#action-picker-search','action-picker-search');
   await escape();await action({type:'close_settings'});await call('Input.setIgnoreInputEvents',{ignore:false});
@@ -243,8 +243,8 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
     assert.equal(await evaluate("document.querySelector('#settings').getBoundingClientRect().width"), 1000);
     assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), title=document.querySelector('.preferences-sidebar h2').getBoundingClientRect(); return Math.abs(title.left+title.width/2-sidebar.left-sidebar.width/2)<1; })()`), "sidebar title centers independently of the search button");
     assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), content=document.querySelector('.preferences-content').getBoundingClientRect(); return Math.abs(sidebar.bottom-content.bottom)<1; })()`), "sidebar extends alongside the content footer");
-    assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "color", "input", "shortcuts", "about"]);
-    for (const page of ["appearance", "canvas", "color", "input", "shortcuts", "about"]) {
+    assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "color", "touch", "input", "shortcuts", "about"]);
+    for (const page of ["appearance", "color", "touch", "input", "shortcuts", "about"]) {
       await click(`[data-settings-page="${page}"]`);
       assert.ok(await evaluate(`(() => [...document.querySelectorAll('.preferences-page:not([hidden]) input.number-slider')].every(slider => {
         const row=slider.closest('.number-control'), header=row.querySelector('.number-header').getBoundingClientRect(), track=row.querySelector('.number-track').getBoundingClientRect();
@@ -255,6 +255,13 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
           && getComputedStyle(title).whiteSpace==='nowrap' && getComputedStyle(title).textOverflow==='ellipsis' && title.title===title.textContent;
       }))()`), 'sliders span the capped row; right-aligned values center against the complete label block');
       await capture(`${page}-${theme}`);
+      if(page==='color'){
+        await evaluate('document.querySelector(".preferences-page[data-page=color]").lastElementChild.scrollIntoView({block:"end"})');await settle();
+        await capture(`color-end-${theme}`);
+        const order=await evaluate('[...document.querySelectorAll(".preferences-page[data-page=color] > .settings-group")].map(group=>({title:group.querySelector("h3")?.textContent??"",rows:[...group.querySelectorAll("[data-preference]")].map(row=>row.dataset.preference),library:!!group.querySelector("#color-profile-library")}))');
+        assert.ok(order.some(group=>group.library),'Color includes its native profile library');
+        assert.ok(order.at(-1).rows.includes('pass_through_groups'),`Color ends with Layers after native sections: ${JSON.stringify(order)}`);
+      }
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
       assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3}/(n.matches('.preference-text p,.number-description')?1.2:1))<.02)`), "settings titles use the shared size; subtitles follow Adwaita's smaller font");
@@ -436,7 +443,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('#setting-feedback');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-slider').disabled"), true);
   await click('#setting-feedback');
-  await click('[data-settings-page="canvas"]');
+  await click('[data-settings-page="input"]');
   await click('#setting-pan-speed .number-value');
   assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pan-speed .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && Math.abs(parseFloat(css.borderRadius)-13*parseFloat(css.getPropertyValue('--corner-fit')))<.02; })()`), 'settings editors use full-size Adwaita spacing with the fitted 13px control radius');
   await evaluate("document.querySelector('#setting-pan-speed .number-entry').value='1.5'");
@@ -579,8 +586,9 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
 
   await preference({ type: "page", page: "input" });
   assert.deepEqual(await evaluate("[...document.querySelectorAll('#triggers-pen-buttons [data-trigger]')].map(r=>r.dataset.trigger)"), await prefs("view.shortcut_page.triggers.filter(t=>t.id.startsWith('pen.button.')).map(t=>t.id)"));
-  assert.ok(await visible('#triggers-touch-gestures') && await visible('.preference-row:has(#setting-eraser-tool)'));
-  await capture("pen-and-input");
+  assert.equal(await visible('#triggers-touch-gestures'),false);
+  assert.ok(await visible('.preference-row:has(#setting-eraser-tool)'));
+  await capture("pen-and-mouse");
   await click('[data-trigger="pen.button.primary"]');
   assert.equal(await evaluate("document.querySelector('#settings-title').textContent"), "Lower side button");
   await click('#pen-button-same');
@@ -592,6 +600,8 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await click('#settings [data-dialog-part=start]');
   assert.equal(await evaluate(`document.querySelector('[data-trigger="pen.button.primary"] .shortcut-hint').textContent`), "Undo");
   assert.equal(await evaluate(`document.querySelector('[data-trigger="pen.button.primary"] p').textContent`), "With selection tools");
+  await preference({ type: "page", page: "touch" });
+  assert.ok(await visible('#triggers-touch-gestures'));
   await click('[data-trigger="touch.tap.4"]');
   assert.equal(await evaluate("document.querySelector('#action-picker').open"), true, "touch gestures open the picker directly");
   await escape();
@@ -639,7 +649,7 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
   await preference({ type: "reset_all_shortcuts" });
   await action({ type: "close_settings" });
   assert.deepEqual(await evaluate("layerApp.state().settings.shortcuts"), {}, "confirmed reset is saved without a global Apply");
-  await action({ type: "open_settings", page: "canvas" });
+  await action({ type: "open_settings", page: "touch" });
   await call("Emulation.setDeviceMetricsOverride", { width: 640, height: 600, deviceScaleFactor: 1, mobile: false });
   await settle();
   assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.preferences-sidebar')).display"), "none", 'Measured desktop panes fit at 640 pixels');

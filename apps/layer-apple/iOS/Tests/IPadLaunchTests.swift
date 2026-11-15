@@ -22,13 +22,14 @@ extension EditorLaunchTests {
             XCTAssertEqual(finger.frame.width, flip.frame.width, accuracy: 1)
             XCTAssertEqual(finger.frame.height, flip.frame.height, accuracy: 1)
             XCTAssertTrue(viewport.frame.contains(finger.frame))
-            XCTAssertTrue(finger.frame.minY > flip.frame.minY + 1 || finger.frame.minX > flip.frame.maxX)
+            XCTAssertTrue(finger.frame.minY < flip.frame.minY - 1 || finger.frame.maxX < flip.frame.minX)
             workspaceActivate(finger)
             let menu = app.descendants(matching: .any)["workspace-context-menu"].firstMatch
             XCTAssertTrue(menu.waitForExistence(timeout: 10))
             for label in ["Auto", "Draw", "Move canvas", "Off"] {
                 XCTAssertTrue(menu.buttons["menu-action-" + label].exists)
             }
+            XCTAssertTrue(menu.buttons["menu-action-More Touch Settings…"].exists)
             attachEditor(in: app, name: "paint-one-finger-\(orientation == .portrait ? "portrait" : "landscape")-\(theme)")
             app.terminate()
         }

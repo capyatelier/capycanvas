@@ -2557,7 +2557,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         match id {
             CommandId::Select => self.selection_tools.options.tool.command().icon(),
             CommandId::ZenMode => Some(self.state.settings.zen_icon.icon()),
-            CommandId::OneFingerDrag => Some(self.finger_mode().icon()),
             CommandId::Fullscreen if self.state.fullscreen => Some("fullscreen-exit"),
             _ => self.tools.command_preset_in(id, &self.state.brush, self.layer_interaction.tool).map(tools::icon).or_else(||id.icon()),
         }
@@ -3058,7 +3057,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn dispatch_inner(&mut self, action: UiAction) -> Result<UiChange, String> {
         if let UiAction::Phone { action: PhoneAction::MenuActivate { route, action } } = action {
             if !self.state.phone.menu || self.state.phone.menu_navigation.current() != route { return Ok(UiChange::default()); }
-            if route.page == Some(MenuPageId::OneFingerDrag) {
+            if route.page == Some(MenuPageId::OneFingerDrag)
+                && matches!(*action, UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, .. } }) {
                 let change = self.dispatch(*action)?;
                 return Ok(merge_change(change, self.dispatch(UiAction::Phone { action: PhoneAction::MenuBack { route } })?));
             }
@@ -18134,16 +18134,16 @@ mod tests {
                 assert_eq!(view.page, SettingsPage::Appearance, "{platform:?}");
                 assert!(!view.page_requested, "{platform:?}");
             }
-            preference(&mut s, PreferenceAction::Page { page: SettingsPage::Canvas });
-            assert_eq!(s.preferences().unwrap().page, SettingsPage::Canvas);
+            preference(&mut s, PreferenceAction::Page { page: SettingsPage::Touch });
+            assert_eq!(s.preferences().unwrap().page, SettingsPage::Touch);
             assert!(s.preferences().unwrap().page_requested);
             invoke(&mut s, CommandId::Settings);
-            preference(&mut s, PreferenceAction::Search { query: "canvas".into() });
+            preference(&mut s, PreferenceAction::Search { query: "pinch".into() });
             assert!(!s.preferences().unwrap().page_requested);
             let action = s.preferences().unwrap().search_results.into_iter().find(|result|
-                result.action == PreferenceAction::Page { page: SettingsPage::Canvas }).unwrap().action;
+                result.action == PreferenceAction::Page { page: SettingsPage::Touch }).unwrap().action;
             preference(&mut s, action);
-            assert_eq!(s.preferences().unwrap().page, SettingsPage::Canvas);
+            assert_eq!(s.preferences().unwrap().page, SettingsPage::Touch);
             assert!(s.preferences().unwrap().page_requested);
             invoke(&mut s, CommandId::Settings);
             preference(&mut s, PreferenceAction::Search { query: "keyboard shortcuts".into() });
@@ -18289,7 +18289,7 @@ mod tests {
             preference(
                 &mut s,
                 PreferenceAction::Page {
-                    page: SettingsPage::Canvas,
+                    page: SettingsPage::Touch,
                 },
             );
             assert!(s.preferences().unwrap().shortcut_editor.is_none());
@@ -18560,7 +18560,7 @@ mod tests {
         assert_eq!(view.search_results.len(), 1);
         assert_eq!(view.search_results[0].title, "Scroll pan speed");
         preference(&mut s, view.search_results[0].action.clone());
-        assert_eq!(s.preferences().unwrap().page, SettingsPage::Canvas);
+        assert_eq!(s.preferences().unwrap().page, SettingsPage::Input);
         preference(
             &mut s,
             PreferenceAction::Search {

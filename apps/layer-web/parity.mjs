@@ -16,7 +16,7 @@ export async function checkParity({ call, evaluate, settle }) {
   ] } };
   const restoreFixture = async (zen_mode = false) => { await evaluate(`layerApp.dispatch({type:'restore_workspace',workspace:${JSON.stringify({ ...fixture, zen_mode })}})`); await settle(); };
   await restoreFixture();
-  const catalog = await evaluate("layerApp.app.catalog()");
+  const catalog = await evaluate("(({brush_size,opacity})=>({brush_size,opacity}))(layerApp.app.catalog())");
   const settings = await evaluate("layerApp.state().settings");
   assert.deepEqual(
     await evaluate(`(() => {
@@ -426,7 +426,7 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(await evaluate("layerApp.state().layers.length"), 3);
   await evaluate("layerApp.dispatch({type:'layer',action:{op:'delete_selected'}})");
   await click('[data-command="settings"]');
-  await click('[data-settings-page="canvas"]');
+  await click('[data-settings-page="input"]');
   await click('#setting-pan-speed .number-value');
   await evaluate("document.querySelector('#setting-pan-speed .number-entry').value='1.5'");
   assert.equal(
@@ -442,7 +442,7 @@ export async function checkParity({ call, evaluate, settle }) {
   await click('#close-settings');
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 1.5);
   await click('[data-command="settings"]');
-  await click('[data-settings-page="canvas"]');
+  await click('[data-settings-page="input"]');
   await click('#setting-pan-speed [aria-label="Increase Scroll pan speed"]');
   await click("#close-settings");
   assert.ok(

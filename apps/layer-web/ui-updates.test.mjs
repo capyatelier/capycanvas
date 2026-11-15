@@ -20,7 +20,7 @@ export async function checkUiUpdates({evaluate}) {
       if(typeof retained.revision!=='bigint')throw Error('Revision lost BigInt type');
       if(Object.keys(app.state_update()).length)throw Error('Unchanged state was republished');
       const actions=[{type:'invoke',command:'settings'},
-        {type:'preferences',action:{type:'page',page:'canvas'}},
+        {type:'preferences',action:{type:'page',page:'input'}},
         {type:'preferences',action:{type:'search',query:'pan'}},
         {type:'set_theme',theme:'dark'},{type:'set_theme',theme:'light'},
         {type:'close_settings'},{type:'set_brush_size',value:32},
@@ -52,7 +52,7 @@ export async function checkSettingsUpdates({evaluate, settle}) {
   const preference = action => send({type:'preferences',action});
   try {
     await send({type:'invoke',command:'settings'});
-    await preference({type:'page',page:'canvas'});
+    await preference({type:'page',page:'input'});
     await checkRangeCommitGuards({evaluate});
     const control = await evaluate("layerApp.app.preferences().pages.flatMap(p=>p.groups.flatMap(g=>g.rows)).find(r=>r.id==='pan_speed').kind.control");
     for (const value of [control.min, control.max]) {
@@ -72,7 +72,7 @@ export async function checkSettingsUpdates({evaluate, settle}) {
       await settle();
       assert.equal(await evaluate("document.querySelector('#settings').open"),false);
       await send({type:'invoke',command:'settings'});
-      await preference({type:'page',page:'canvas'});
+      await preference({type:'page',page:'input'});
       await settle();
       assert.deepEqual(await evaluate("[...document.querySelectorAll('#setting-pan-speed .number-step')].map(b=>b.disabled)"),actual.steps);
     }

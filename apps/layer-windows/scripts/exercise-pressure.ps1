@@ -24,7 +24,7 @@ function Open-Pressure{
     Wait-Until {(Model).state.settings_open} 'Preferences action was not acknowledged'
     Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)|Out-Null
     Status-Checkpoint "open-$pressureLaunch-preferences"
-    Invoke 'Pen & Input' -Name
+    Invoke 'Pen & Mouse' -Name
     $adjust=Control 'setting-action-pen_pressure'
     $scroll=$null
     if($adjust.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern,[ref]$scroll)){$scroll.ScrollIntoView()}

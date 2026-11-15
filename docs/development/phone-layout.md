@@ -313,9 +313,9 @@ Hand navigation. Two fingers navigate, and two to four fingers tap.
 | **Move canvas** | Always pans the canvas like the Hand tool, including over objects and handles and with Zoom or Rotate selected. Holding still picks a color. |
 | **Off** | Gesture-only behavior. |
 
-Every platform starts in Auto. The finger icon in Capy's menu shows what one
-finger does now and opens a page of the four choices; the One-finger drag tile
-opens the same choices as a menu. Settings → Input offers them too. GTK counts
+Every platform starts in Auto. The finger icon in Capy's menu opens a page of
+the four choices and More Touch Settings…; the One-finger drag tile opens the
+same choices as a menu. Settings → Touch offers them too. GTK counts
 as Desktop at every window size, so Auto stays Off. Choose Draw to test finger
 painting.
 

@@ -242,7 +242,7 @@ $originalIcon=(Read-Model).state.settings.zen_icon
 Toggle-Control $choice
 Wait-Until {(Read-Model).state.settings.zen_icon -ne $originalIcon} 'Tile did not update the shared icon'
 # A round trip through shared page state distinguishes a native toggle from a model edit.
-Invoke-Control 'Canvas'
+Invoke-Control 'Touch'
 Invoke-Control 'Appearance'
 Wait-Until {(Toggle-State $choice) -eq [System.Windows.Automation.ToggleState]::On} 'Icon selection did not reach shared preferences'
 if((Toggle-State $selected) -ne [System.Windows.Automation.ToggleState]::Off){throw 'Icon selection was not exclusive'}

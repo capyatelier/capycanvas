@@ -6,7 +6,7 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
   const kit=createPageKit({element,icon});
   const panes = new Map(), active = new Map(), rows = new Map();
   let keymapChoice, keymapOutdated, contextChoice, showChoice, shortcutSearch, categoryList, emptyStatus;
-  let rootResults, categoryResults, modifierMain, modifierCategory, inputRoot;
+  let rootResults, categoryResults, modifierMain, modifierCategory, inputRoot, touchRoot;
   let categorySignature = "", resultsSignature = "", modifierSignature = "", triggerSignature = "";
   const categoryRows = new Map(), triggerRows = new Map(), triggerGroups = new Map(), savedScroll = new Map();
   const chevron = () => { const glyph = icon("go-next"); glyph.classList.add("row-chevron"); return glyph; };
@@ -302,17 +302,21 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
   }
 
   function refreshTriggers(model) {
-    if (!inputRoot) return;
+    if (!inputRoot || !touchRoot) return;
     const triggers = model.shortcut_page.triggers;
-    const signature = JSON.stringify(triggers.map(t => [t.id, t.section]));
+    const signature = JSON.stringify(triggers.map(t => [t.id, t.page, t.section]));
     if (signature !== triggerSignature) {
       triggerSignature = signature;
-      for (const section of triggerGroups.values()) section.section.remove();
+      for (const row of triggerRows.values()) row.remove();
+      for (const section of triggerGroups.values()) if (!section.shared) section.section.remove();
       triggerGroups.clear(); triggerRows.clear();
       for (const trigger of triggers) {
         if (!triggerGroups.has(trigger.section)) {
-          const section = group(trigger.section); section.section.id = `triggers-${trigger.section.toLowerCase().replaceAll(" ", "-")}`;
-          triggerGroups.set(trigger.section, section); inputRoot.append(section.section);
+          const root = trigger.page === "touch" ? touchRoot : inputRoot;
+          const existing = [...root.querySelectorAll(":scope > .settings-group")].find(node => node.querySelector(":scope > h3")?.textContent === trigger.section);
+          const section = existing ? { section: existing, list: existing.querySelector(":scope > .preference-group"), shared: true } : group(trigger.section);
+          section.section.id = `triggers-${trigger.section.toLowerCase().replaceAll(" ", "-")}`;
+          triggerGroups.set(trigger.section, section); if (!existing) root.append(section.section);
         }
         const pen = trigger.id.startsWith("pen.button.");
         const row = navRow(trigger.label, trigger.detail, trigger.action, () => send(pen ? { type: "edit_pen_button", trigger: trigger.id } : { type: "open_action_picker", trigger: trigger.id }));
@@ -452,11 +456,12 @@ export function createShortcutPage({ onKey, app, element, button, icon, send, vi
     container(pageId, node) {
       if (pageId === "shortcuts") return buildShortcuts(node);
       if (pageId === "input") return buildInput(node);
+      if (pageId === "touch") touchRoot = node;
       return node;
     },
     refresh(model) {
       if (!keymapChoice) return;
-      if (!['shortcuts','input'].includes(model.page)) return;
+      if (!['shortcuts','input','touch'].includes(model.page)) return;
       refreshKeymap(model);
       refreshFilters(model);
       refreshCategories(model);

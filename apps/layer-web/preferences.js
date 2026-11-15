@@ -319,7 +319,7 @@ export function createPreferences({ onKey, app, element, button, icon, dropdown:
         manage.id="color-profile-library";
         const row=preferenceRow({title:()=>profileCopy.library_title,description:()=>profileCopy.menu_help,suffix:manage});
         row.label.htmlFor=manage.id;row.line.addEventListener("click",event=>{if(!manage.contains(event.target)){event.preventDefault();manage.click();}});
-        library.list.append(row.line);container.append(library.section);
+        library.list.append(row.line);container.insertBefore(library.section,container.lastElementChild);
       }
     }
   }

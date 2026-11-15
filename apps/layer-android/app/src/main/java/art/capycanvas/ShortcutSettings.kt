@@ -387,22 +387,27 @@ private fun subtitle(row: JSONObject): String =
     }
 }
 
-@Composable internal fun TriggerGroups(host: CanvasHost, view: JSONObject) {
-    val sections = view.getJSONObject("shortcut_page").array("triggers").objects().groupBy { it.getString("section") }
+internal fun JSONObject.pageTriggers(page: String) =
+    getJSONObject("shortcut_page").array("triggers").objects().filter { it.getString("page") == page }
+
+internal fun triggerRows(host: CanvasHost, triggers: List<JSONObject>): List<@Composable () -> Unit> = triggers.map { trigger ->
+    @Composable {
+        val id = trigger.getString("id")
+        SettingRow(trigger.getString("label"), "trigger-$id", trigger.optString("detail"), onClick = {
+            host.preference(if (id.startsWith("pen.")) obj("type" to "edit_pen_button", "trigger" to id)
+                else obj("type" to "open_action_picker", "trigger" to id))
+        }) {
+            Value(trigger.getString("action"), "trigger-action-$id")
+            Chevron()
+        }
+    }
+}
+
+@Composable internal fun TriggerGroups(host: CanvasHost, view: JSONObject, page: String, shared: Set<String>) {
+    val sections = view.pageTriggers(page).filter { it.getString("section") !in shared }.groupBy { it.getString("section") }
     for ((section, triggers) in sections) Column(Modifier.testTag("triggers-$section"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         GroupTitle(section)
-        SettingsCard(rows = triggers.map { trigger ->
-            @Composable {
-                val id = trigger.getString("id")
-                SettingRow(trigger.getString("label"), "trigger-$id", trigger.optString("detail"), onClick = {
-                    host.preference(if (id.startsWith("pen.")) obj("type" to "edit_pen_button", "trigger" to id)
-                        else obj("type" to "open_action_picker", "trigger" to id))
-                }) {
-                    Value(trigger.getString("action"), "trigger-action-$id")
-                    Chevron()
-                }
-            }
-        })
+        SettingsCard(rows = triggerRows(host, triggers))
     }
 }
 

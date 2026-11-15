@@ -335,7 +335,7 @@ native-shortcuts-reassign = Reatribuir
 
 native-shortcuts-pen-touch = Caneta e toque
 
-native-shortcuts-pen-page-help = Altere estas opções na página Caneta e entrada.
+native-shortcuts-pen-page-help = Altere estas opções na página { settings-page-touch } ou { settings-page-input }.
 
 native-shortcuts-updated = Atualizado desde a escolha
 

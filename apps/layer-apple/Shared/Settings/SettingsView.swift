@@ -17,6 +17,7 @@ struct SettingsView: View {
     private var keymap: JSON { model["keymap"] }
     private var color: JSON { store.catalog["native_copy"]["color"] }
     private var page: JSON { model["pages"].array.first { $0["id"].string == model["page"].string } ?? JSON() }
+    private var triggerRows: [JSON] { model["shortcut_page"]["triggers"].array.filter { $0["page"].string == page["id"].string } }
     var body: some View {
         Group {
             if pagePresented {
@@ -185,6 +186,21 @@ struct SettingsView: View {
                 Form {
                     ForEach(page["groups"].array.indices, id: \.self) { index in
                         let group = page["groups"][index]
+                        if model["page"].string == "color" && index == page["groups"].array.count - 1 {
+                            Section(color["screen_details"].string) {
+                                LabeledContent(color["display_previews"].string,
+                                    value: color[store.snapshot["color_panel"]["hdr"].bool ? "display_previews_hdr" : "display_previews_sdr"].string)
+                                if store.snapshot["color_panel"]["hdr"].bool { Text(headroomCaption) }
+                                LabeledContent(color["screen"].string, value: store.displayDetails.screen.isEmpty ? store.bootstrap["starting_canvas"].string : store.displayDetails.screen)
+                                LabeledContent(color["display_conversion"].string,
+                                    value: store.displayDetails.destination.isEmpty ? store.catalog["native_copy"]["search"]["unavailable"].string : store.displayDetails.destination)
+                                Text(color["display_help"].string).font(.caption).foregroundStyle(.secondary)
+                            }.onChange(of: [store.interfaceLanguage, String(store.displayHeadroom)], initial: true) { _, _ in
+                                headroomCaption = NativeTextContext.caption(["type": "screen_headroom", "headroom": store.displayHeadroom], language: store.interfaceLanguage)
+                            }
+                            Button(color["manage_profiles"].string) { profiles = true }
+                                .accessibilityIdentifier("settings-color-profiles")
+                        }
                         Section(group["title"].string) {
                             ForEach(group["rows"].array.indices, id: \.self) { rowIndex in
                                 let row = group["rows"][rowIndex]
@@ -193,26 +209,12 @@ struct SettingsView: View {
                                         .background(NativePenScroll().frame(width: 0, height: 0))
                                 }
                             }
+                            GestureTriggerRows(store: store, rows: triggerRows.filter { $0["section"].string == group["title"].string })
                         }
                     }
-                    if model["page"].string == "input" {
-                        GestureTriggerSections(store: store)
-                    }
-                    if model["page"].string == "color" {
-                        Section(color["screen_details"].string) {
-                            LabeledContent(color["display_previews"].string,
-                                value: color[store.snapshot["color_panel"]["hdr"].bool ? "display_previews_hdr" : "display_previews_sdr"].string)
-                            if store.snapshot["color_panel"]["hdr"].bool { Text(headroomCaption) }
-                            LabeledContent(color["screen"].string, value: store.displayDetails.screen.isEmpty ? store.bootstrap["starting_canvas"].string : store.displayDetails.screen)
-                            LabeledContent(color["display_conversion"].string,
-                                value: store.displayDetails.destination.isEmpty ? store.catalog["native_copy"]["search"]["unavailable"].string : store.displayDetails.destination)
-                            Text(color["display_help"].string).font(.caption).foregroundStyle(.secondary)
-                        }.onChange(of: [store.interfaceLanguage, String(store.displayHeadroom)], initial: true) { _, _ in
-                            headroomCaption = NativeTextContext.caption(["type": "screen_headroom", "headroom": store.displayHeadroom], language: store.interfaceLanguage)
-                        }
-                        Button(color["manage_profiles"].string) { profiles = true }
-                            .accessibilityIdentifier("settings-color-profiles")
-                    }
+                    GestureTriggerSections(store: store, rows: triggerRows.filter { row in
+                        !page["groups"].array.contains { $0["title"].string == row["section"].string }
+                    })
                     if !model["error"].isNull { Text(model["error"].string).foregroundStyle(.red) }
                     if linkFailed { Text(store.bootstrap["recovery"]["link_open_failed"].string).foregroundStyle(.red) }
                 }.formStyle(.grouped)

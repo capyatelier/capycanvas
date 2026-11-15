@@ -1012,8 +1012,7 @@ impl<R: layer_render::CanvasRenderer> crate::UiSession<R> {
             ..crate::ContextMenuItem::command(settings.label.to_string(), crate::UiAction::Invoke { command: crate::CommandId::Settings }) }];
         strip.extend(primary.sections.into_iter().flatten());
         let zen = format!("layer-{}-symbolic", self.state().settings.zen_icon.icon());
-        let finger = format!("layer-{}-symbolic", self.finger_mode().icon());
-        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", &finger, &zen, "layer-swap-orientation-symbolic"]).enumerate() {
+        for (index, (item, icon)) in strip.iter_mut().zip(["layer-settings-symbolic", "layer-search-symbolic", "layer-finger-draw-symbolic", &zen, "layer-swap-orientation-symbolic"]).enumerate() {
             item.icon = Some(icon.into());
             if index != 4 { item.selected = None; }
         }

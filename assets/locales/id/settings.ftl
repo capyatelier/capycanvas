@@ -34,7 +34,6 @@ settings-dark = Gelap
 
 settings-panel-transparency = Transparansi panel
 
-settings-navigation = Navigasi
 
 settings-scroll-pan-speed = Kecepatan geser saat menggulir
 
@@ -157,11 +156,11 @@ settings-high = Tinggi
 
 settings-page-appearance = Tampilan
 
-settings-page-canvas = Kanvas
+settings-page-touch = Sentuh
 
 settings-page-color = Warna
 
-settings-page-input = Pena & Masukan
+settings-page-input = Pena & Mouse
 
 settings-page-shortcuts = Pintasan Papan Ketik
 
@@ -333,4 +332,6 @@ settings-quick-pinch-restore = Renggangkan untuk memulihkan tampilan
 settings-one-finger-drag = Seret satu jari
 settings-finger-draw = Menggambar
 settings-finger-move-canvas = Geser kanvas
+settings-navigation = Navigasi
+settings-more-touch-settings = Pengaturan sentuh lainnya…
 settings-auto = Otomatis

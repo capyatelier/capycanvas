@@ -147,6 +147,7 @@ class AndroidTitleBarTest {
         if (::scenario.isInitialized) scenario.close()
     }
     private fun shot(name: String) = screenshot("validation/title-bar/$name.png")
+    private fun captureFrame(name: String) { awaitNativeCaptureFrame(scenario.activity()); shot(name) }
     private fun tilePixel(tag: String): Int {
         var position = Offset.Zero
         instrumentation.runOnMainSync {
@@ -1002,46 +1003,68 @@ class AndroidTitleBarTest {
         assertTrue(command("color_select").getBoolean("selected"))
     }
 
-    @Test fun tabletPaintCommandsEndWithOneFingerDrag() {
+    @Test fun tabletPaintCommandsStartWithOneFingerDrag() {
         Assume.assumeTrue(snapshot().getJSONObject("layout").isNull("phone"))
         resetPreset("builtin:workspace:illustrator")
         fun commands() = snapshot().array("panels").objects().first { it.getString("id") == "commands" }.array("tiles").objects()
-        val tail = commands().takeLast(3)
-        assertEquals("flip_horizontal", tail[0].getJSONObject("control").getString("command"))
-        assertEquals("divider", tail[1].getJSONObject("control").getString("kind"))
-        assertEquals("one_finger_drag", tail[2].getJSONObject("control").getString("command"))
+        val leading = commands().take(2)
+        assertEquals("one_finger_drag", leading[0].getJSONObject("control").getString("command"))
+        assertEquals("divider", leading[1].getJSONObject("control").getString("kind"))
+        assertEquals(1, commands().count { it.getJSONObject("control").optString("command") == "one_finger_drag" })
         assertFalse(entries().any { it.getJSONObject("item").objectOrNull("control")?.optString("command") == "one_finger_drag" })
-        val tag = "tile-commands-${tail[2].getInt("id")}"
+        val tag = "tile-commands-${leading[0].getInt("id")}"
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             for (landscape in listOf(true, false)) {
                 if (landscape) device.landscape(scenario) else device.portrait(scenario)
-                idle()
+                val activity = scenario.activity()
+                waitFor("Paint native orientation") {
+                    (activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) == landscape &&
+                        (activity.window.decorView.width > activity.window.decorView.height) == landscape
+                }
                 val orientation = if (landscape) "landscape" else "portrait"
-                shot("paint-default-$orientation-$theme")
+                captureFrame("paint-default-$orientation-$theme")
                 waitFor("Default Paint finger tile is mounted") { node(tag) != null }
                 val tile = screenBounds(tag)
                 val window = screenBounds("workspace")
                 assertTrue("Default Paint finger tile fits $orientation: tile=$tile window=$window", tile.left >= window.left && tile.right <= window.right && tile.top >= window.top && tile.bottom <= window.bottom)
                 tap(tag)
                 waitFor("Default Paint finger menu") { node("workspace-menu") != null }
-                shot("paint-default-$orientation-menu-$theme")
+                captureFrame("paint-default-$orientation-menu-$theme")
                 tapMenuRow("Auto")
             }
         }
     }
 
-    @Test fun phoneOneFingerPageKeepsItsFourChoices() {
+    @Test fun phoneOneFingerPageKeepsItsChoicesAndOpensTouchSettings() {
         Assume.assumeTrue(snapshot().getJSONObject("layout").objectOrNull("phone") != null)
+        fun phone() = state().getJSONObject("phone")
+        fun menu() = JSONObject(kotlinx.coroutines.runBlocking { host.drawingTabs.query(obj("op" to "phone_menu")) })
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             tap("phone-capy")
             waitFor("Phone finger strip") { node("phone-finger") != null }
             tap("phone-finger")
-            waitFor("Phone finger page") { node("phone-menu-row-0-3") != null }
-            shot("phone-one-finger-page-$theme")
-            tap("phone-menu-row-0-0")
-            tap("phone-capy")
+            waitFor("Phone finger page") { node("phone-menu-row-0-3") != null && node("phone-menu-row-1-0") != null }
+            instrumentation.runOnMainSync {
+                val page = checkNotNull(node("phone-menu")).second
+                for (label in listOf("Auto", "Draw", "Move canvas", "Off", "More Touch Settings…"))
+                    assertNotNull(label, page.find { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true })
+            }
+            captureFrame("phone-one-finger-page-$theme")
+            for (index in 0..3) {
+                tap("phone-menu-row-0-$index")
+                waitFor("Phone finger choice returns to root") { phone().getBoolean("menu") && phone().getJSONObject("menu_route").isNull("page") }
+                assertEquals("layer-finger-draw-symbolic", menu().array("strip").getJSONObject(2).getString("icon"))
+                captureFrame("phone-one-finger-choice-$index-$theme")
+                tap("phone-finger")
+                waitFor("Phone finger choice is selected") { node("phone-menu-row-0-$index")?.second?.config?.getOrNull(SemanticsProperties.Selected) == true }
+            }
+            tap("phone-menu-row-1-0")
+            waitFor("Phone More opens Touch Settings") { snapshot().objectOrNull("preferences")?.optString("page") == "touch" && node("setting-choice-finger_drawing") != null }
+            captureFrame("phone-one-finger-touch-settings-$theme")
+            tap("settings-done")
+            if (phone().getBoolean("menu")) tap("phone-capy")
         }
     }
 
@@ -1085,32 +1108,37 @@ class AndroidTitleBarTest {
             waitFor("One-finger search result") { state().getJSONObject("command_search").array("results").objects().any { it.getString("id") == "command.one_finger_drag" } }
             val result = state().getJSONObject("command_search").array("results").objects().indexOfFirst { it.getString("id") == "command.one_finger_drag" }
             tap("command-result-$result")
-            waitFor("One-finger Settings row") { node("setting-choice-finger_drawing") != null }
-            shot("one-finger-settings-$theme")
+            waitFor("One-finger Settings row") { snapshot().objectOrNull("preferences")?.optString("page") == "touch" && node("setting-choice-finger_drawing") != null }
+            captureFrame("one-finger-settings-$theme")
             tap("setting-choice-finger_drawing")
             waitFor("One-finger Settings dropdown") { node("setting-choice-option-finger_drawing-3") != null }
-            shot("one-finger-settings-dropdown-$theme")
+            captureFrame("one-finger-settings-dropdown-$theme")
             tap("setting-choice-option-finger_drawing-0"); tap("settings-done")
             for (size in listOf("small", "medium", "large")) {
                 edit(obj("type" to "set_size", "size" to size))
                 customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to size))
-                shot("one-finger-tiles-$size-$theme")
+                captureFrame("one-finger-tiles-$size-$theme")
                 for ((tag, anchor) in anchors) {
                     val rows = variantRows(anchor)
-                    assertEquals(listOf("Auto", "Draw", "Move canvas", "Off"), rows.map { it.getString("label") })
+                    assertEquals(listOf("Auto", "Draw", "Move canvas", "Off", "More Touch Settings…"), rows.map { it.getString("label") })
                     tool = MotionEvent.TOOL_TYPE_FINGER
-                    for ((index, row) in rows.withIndex()) {
+                    for ((index, row) in rows.take(4).withIndex()) {
                         waitFor("One-finger opener owns focus") { node(tag)?.first?.view?.hasWindowFocus() == true && host.workspaceInteraction?.popupOpen == false }
                         tap(tag)
                         waitFor("One-finger primary menu $tag $size") { node("workspace-menu") != null }
-                        if (index == 0) shot("one-finger-${anchor.getString("kind")}-menu-$size-$theme")
+                        if (index == 0) captureFrame("one-finger-${anchor.getString("kind")}-menu-$size-$theme")
                         tapMenuRow(row.getString("label"))
                         waitFor("One-finger primary menu closes") { node("workspace-menu") == null }
                         assertEquals(row.getString("label"), variantRows(anchor).single { it.optBoolean("selected") }.getString("label"))
-                        val icon = listOf("finger-draw", "finger-draw", "hand", "finger-touch")[index]
-                        assertEquals(icon, header().getString("icon")); assertEquals(icon, tile().getString("icon"))
-                        shot("one-finger-${anchor.getString("kind")}-choice-$index-$size-$theme")
+                        assertEquals("finger-draw", header().getString("icon")); assertEquals("finger-draw", tile().getString("icon"))
+                        captureFrame("one-finger-${anchor.getString("kind")}-choice-$index-$size-$theme")
                     }
+                    tap(tag)
+                    waitFor("One-finger More menu") { node("workspace-menu") != null }
+                    tapMenuRow("More Touch Settings…")
+                    waitFor("One-finger More opens Touch") { snapshot().objectOrNull("preferences")?.optString("page") == "touch" && node("setting-choice-finger_drawing") != null }
+                    captureFrame("one-finger-${anchor.getString("kind")}-more-$size-$theme")
+                    tap("settings-done")
                     for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER)) {
                         tool = input; openToolContext(tag)
                         val expected = if (anchor.getString("kind") == "header") listOf("Customize Title Bar…") else listOf("Remove Tool", "Insert Tools…")
@@ -1120,7 +1148,7 @@ class AndroidTitleBarTest {
                             assertTrue("Secondary menu keeps customization items", expected.all(::shown))
                             assertFalse("Secondary menu has no finger choices", rows.any { shown(it.getString("label")) })
                         }
-                        shot("one-finger-${anchor.getString("kind")}-context-$input-$size-$theme")
+                        captureFrame("one-finger-${anchor.getString("kind")}-context-$input-$size-$theme")
                         key(KeyEvent.KEYCODE_ESCAPE)
                         waitFor("One-finger context closes") { node("workspace-menu") == null }
                         assertEquals("Secondary menu keeps the chosen mode", "Off", variantRows(anchor).single { it.optBoolean("selected") }.getString("label"))

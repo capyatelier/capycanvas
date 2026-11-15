@@ -9,7 +9,7 @@ Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $tokens=$null;$errors=$null;$preferences=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'exercise-navigation-controls.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'Navigation preference helpers did not parse'}
-foreach($name in @('Menu-Command','Preference','Open-CanvasPreferences','Preference-Switch','Close-Preferences','Set-PinchPreferences')){
+foreach($name in @('Menu-Command','Preference','Open-TouchPreferences','Preference-Switch','Close-Preferences','Set-PinchPreferences')){
  $function=@($preferences.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}.GetNewClosure(),$true))
  if($function.Count -ne 1){throw "Missing original navigation helper: $name"};. ([scriptblock]::Create($function[0].Extent.Text))
 }

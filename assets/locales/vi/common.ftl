@@ -335,7 +335,7 @@ native-shortcuts-reassign = Gán lại
 
 native-shortcuts-pen-touch = Bút và chạm
 
-native-shortcuts-pen-page-help = Đổi các mục này trên trang Bút và nhập liệu.
+native-shortcuts-pen-page-help = Đổi các mục này trên trang { settings-page-touch } hoặc { settings-page-input }.
 
 native-shortcuts-updated = Đã cập nhật từ khi bạn chọn
 

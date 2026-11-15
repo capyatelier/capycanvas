@@ -99,7 +99,9 @@ impl WorkspacePreset {
         self.group_tools(&mut layout);
         if self == Self::Illustrator {
             Self::paint_sliders(&mut layout, tablet);
-            if tablet { Self::append_commands(&mut layout, &[ToolbarControl::Divider, ToolbarControl::Command { command: crate::CommandId::OneFingerDrag }]); }
+            if crate::CommandId::OneFingerDrag.available_on(platform) {
+                Self::lead_commands(&mut layout, &[ToolbarControl::Command { command: crate::CommandId::OneFingerDrag }, ToolbarControl::Divider]);
+            }
         }
         let group = layout.panel_group(Panel::Color).unwrap();
         if self == Self::Photographer {
@@ -132,12 +134,13 @@ impl WorkspacePreset {
         layout.fit_height_groups.push(tools);
     }
 
-    fn append_commands(layout: &mut DockLayout, controls: &[ToolbarControl]) {
-        for &control in controls {
+    fn lead_commands(layout: &mut DockLayout, controls: &[ToolbarControl]) {
+        let tiles = controls.iter().map(|&control| {
             let id = layout.next_tile_id;
             layout.next_tile_id += 1;
-            layout.panel_mut(Panel::Commands).unwrap().tiles_mut().unwrap().push(ToolbarTile { slider_style: Default::default(), id, control });
-        }
+            ToolbarTile { slider_style: Default::default(), id, control }
+        }).collect::<Vec<_>>();
+        layout.panel_mut(Panel::Commands).unwrap().tiles_mut().unwrap().splice(0..0, tiles);
     }
 
     fn group_tools(self, layout: &mut DockLayout) {

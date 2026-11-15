@@ -321,7 +321,7 @@ function Numeric-Tooltip{
 function Preference-Numeric{
  Use-Window $first
  if(Find 'settings-button' -Visible){Invoke 'settings-button'}else{Menu-Command 'edit' 'settings'}
- Invoke-Id 'preference-page-canvas'
+ Invoke-Id 'preference-page-input'
  $entry=Control 'setting-number-pan_speed' -Arranged;$identity=$entry.GetRuntimeId() -join ':'
  $pan=(Read-Snapshot (Settings-File)).pan_speed
  $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation

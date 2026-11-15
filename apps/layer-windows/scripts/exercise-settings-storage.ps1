@@ -146,7 +146,7 @@ try {
     if([IO.File]::GetLastWriteTimeUtc($settingsFile) -ne $stamp){throw 'Restore echoed a save'}
     if(@((Model).state.requests | Where-Object {$_.kind.type -eq 'save_settings'}).Count){throw 'Restore queued a save request'}
     Open-Preferences
-    Invoke-Control 'Canvas'
+    Invoke-Control 'Pen & Mouse'
     Edit 'Scroll pan speed' '1.75'
     if((Model).state.settings.pan_speed -eq 1.75){throw 'Numeric draft was already committed; close-time commit was not exercised'}
     Close-App
@@ -229,7 +229,7 @@ try {
     Start-App
     $validSpeed=(Saved).pan_speed
     Open-Preferences
-    Invoke-Control 'Canvas'
+    Invoke-Control 'Pen & Mouse'
     Edit 'Scroll pan speed' '1 / 0'
     Close-App
     if((Saved).pan_speed -ne $validSpeed){throw 'An invalid numeric draft replaced the valid saved setting'}

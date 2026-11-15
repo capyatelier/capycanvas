@@ -296,9 +296,10 @@ private struct ModifierKeyPane: View {
 
 struct GestureTriggerSections: View {
     @ObservedObject var store: EditorStore
+    let rows: [JSON]
     private var sections: [(title: String, rows: [JSON])] {
         var sections: [(title: String, rows: [JSON])] = []
-        for row in store.snapshot["preferences"]["shortcut_page"]["triggers"].array {
+        for row in rows {
             let title = row["section"].string
             if sections.last?.title == title { sections[sections.count - 1].rows.append(row) } else { sections.append((title, [row])) }
         }
@@ -307,14 +308,22 @@ struct GestureTriggerSections: View {
     var body: some View {
         ForEach(sections, id: \.title) { section in
             Section(section.title) {
-                ForEach(section.rows, id: \.shortcutID) { row in
-                    ShortcutNavigationRow(label: row["label"].string, detail: row["detail"].string, value: row["action"].string) {
-                        let pen = row["id"].string.hasPrefix("pen.button.")
-                        store.dispatch(["type": "preferences", "action": pen ? ["type": "edit_pen_button", "trigger": row["id"].string]
-                            : ["type": "open_action_picker", "trigger": row["id"].string]])
-                    }.accessibilityIdentifier("trigger-" + row["id"].string)
-                }
+                GestureTriggerRows(store: store, rows: section.rows)
             }
+        }
+    }
+}
+
+struct GestureTriggerRows: View {
+    @ObservedObject var store: EditorStore
+    let rows: [JSON]
+    var body: some View {
+        ForEach(rows, id: \.shortcutID) { row in
+            ShortcutNavigationRow(label: row["label"].string, detail: row["detail"].string, value: row["action"].string) {
+                let pen = row["id"].string.hasPrefix("pen.button.")
+                store.dispatch(["type": "preferences", "action": pen ? ["type": "edit_pen_button", "trigger": row["id"].string]
+                    : ["type": "open_action_picker", "trigger": row["id"].string]])
+            }.accessibilityIdentifier("trigger-" + row["id"].string)
         }
     }
 }

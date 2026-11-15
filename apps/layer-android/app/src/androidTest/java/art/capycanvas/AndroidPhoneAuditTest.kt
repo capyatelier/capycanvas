@@ -36,6 +36,10 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -925,11 +929,7 @@ class AndroidPhoneAuditTest {
     private fun capturePhonePage(tag: String, path: String) {
         compose.waitForIdle()
         val owner = checkNotNull(findTag(tag)).first.view.rootView
-        assertTrue("The private page owns its capture",owner.isAttachedToWindow && owner.hasWindowFocus())
-        assertEquals(instrumentation.targetContext.packageName,owner.context.packageName)
-        val committed = java.util.concurrent.CountDownLatch(1)
-        instrumentation.runOnMainSync { owner.viewTreeObserver.registerFrameCommitCallback { committed.countDown() };owner.invalidate() }
-        assertTrue("The page frame commits",committed.await(5,java.util.concurrent.TimeUnit.SECONDS))
+        awaitNativeCaptureFrame(owner)
         screenshot(path)
     }
 
@@ -949,7 +949,7 @@ class AndroidPhoneAuditTest {
         }
         try {
             requestPhoneOrientation(activity,host,android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,"The private landscape window owns keyboard input")
-            host.drain(obj("type" to "open_settings","page" to "input"))
+            host.drain(obj("type" to "open_settings","page" to "touch"))
             host.awaitFrame("The two-finger action row is composed") { findTag("trigger-touch.tap.2") != null }
             compose.onNodeWithTag("trigger-touch.tap.2",useUnmergedTree=true).performScrollTo()
             awaitEditorPage(activity,host,"preferences-dialog")
@@ -1261,6 +1261,7 @@ class AndroidPhoneAuditTest {
                     assertEquals("Native surface height", surface.height, display.getJSONArray("extent").getInt(1-axis))
                 }
                 report.put("allocations", allocations)
+                awaitNativeCaptureFrame(activity, compose)
                 val screenshot = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
                 report.put("raw_size", JSONArray(listOf(screenshot.width, screenshot.height)))
                 assertTrue("App crop is inside display capture", crop[0] >= 0 && crop[1] >= 0 && crop[0] + crop[2] <= screenshot.width && crop[1] + crop[3] <= screenshot.height)
@@ -2343,8 +2344,8 @@ class AndroidPhoneAuditTest {
         fun gone(tag:String)=host.awaitFrame("D1 $tag closes"){findTag(tag)==null}
         host.drain(obj("type" to "invoke","command" to "settings"))
         wait("settings-search")
-        tap("settings-category-canvas")
-        host.awaitFrame("Preferences uses the shared page route") {host.snapshot?.objectOrNull("preferences")?.getString("page")=="canvas" && findTag("settings-main-pane")!=null}
+        tap("settings-category-touch")
+        host.awaitFrame("Preferences uses the shared page route") {host.snapshot?.objectOrNull("preferences")?.getString("page")=="touch" && findTag("settings-main-pane")!=null}
         tap("settings-done");gone("preferences-dialog")
         host.drain(obj("type" to "invoke","command" to "new_document"))
         wait("new-drawing-create")
@@ -2448,6 +2449,7 @@ class AndroidPhoneAuditTest {
             if(preferences() == null) { invoke("settings");wait("settings-search") }
             if(preferences()?.optBoolean("page_requested") == true)preference(obj("type" to "page_list"))
             host.awaitFrame("Preferences root list") { placed("settings-category-appearance") && findTag("settings-main-pane") == null }
+            assertEquals(listOf("appearance","color","touch","input","shortcuts","about"), preferences()!!.array("pages").objects().map { it.getString("id") })
         }
         fun page(id: String) {
             preferencesRoot()
@@ -2471,11 +2473,33 @@ class AndroidPhoneAuditTest {
             preference(obj("type" to "search","query" to ""));preference(obj("type" to "toggle_search","open" to false))
             if(keyboard())hideIme()
         }
-        for ((id,rows) in listOf("appearance" to listOf("language","theme"),"canvas" to listOf("wheel_behavior"),"color" to listOf("missing_profile","photo_depth"),
-            "input" to listOf("eraser_tool","finger_drawing"),"about" to emptyList())) {
+        for ((query,destination) in listOf("pinch" to "touch","two-finger tap" to "touch","pan speed" to "input","pass through" to "color")) {
+            preferencesRoot()
+            type("settings-search",query) { preferences()?.optString("query") == query && preferences()?.array("search_results")?.objects()?.any { it.getJSONObject("action").optString("page") == destination } == true }
+            val result = preferences()!!.array("search_results").objects().first { it.getJSONObject("action").optString("page") == destination }
+            compose.onNode(hasText(result.getString("title")) and hasClickAction() and hasAnyAncestor(hasTestTag("settings-sidebar"))).performScrollTo().performClick()
+            host.awaitFrame("Settings search $query opens $destination") { preferences()?.optString("page") == destination && placed("settings-main-pane") }
+        }
+        for ((id,rows) in listOf("appearance" to listOf("language","theme"),"color" to listOf("missing_profile","photo_depth","pass_through_groups"),
+            "touch" to listOf("finger_drawing"),"input" to listOf("wheel_behavior","eraser_tool"),"about" to emptyList())) {
             state("preferences-$id") {
                 page(id)
                 assertHeaderSpacing("settings-page", "settings-page-back", "settings-done")
+                if (id == "touch") {
+                    val groups = preferences()!!.array("pages").objects().first { it.getString("id") == "touch" }.array("groups").objects()
+                    assertEquals(listOf("Touch gestures", "Navigation"), groups.map { it.getString("title") })
+                    compose.onAllNodesWithText("Touch gestures").assertCountEquals(1)
+                    compose.onAllNodesWithText("Navigation").assertCountEquals(1)
+                    for (tag in listOf("preference-finger_drawing", "trigger-touch.tap.2", "trigger-touch.tap.3", "trigger-touch.tap.4")) {
+                        reveal(tag); wait(tag)
+                    }
+                    reveal("preference-finger_drawing")
+                    instrumentation.runOnMainSync {
+                        val rows = listOf("preference-finger_drawing", "trigger-touch.tap.2", "trigger-touch.tap.3", "trigger-touch.tap.4", "settings-group-title-Navigation")
+                            .map { checkNotNull(findTag(it)).second.boundsInRoot }
+                        assertTrue("Phone gesture rows stay before Navigation", rows.zipWithNext().all { (before, after) -> before.bottom <= after.top })
+                    }
+                }
                 if (id == "appearance") {
                     for (label in listOf("transparency", "dark_base", "light_base")) textLayouts("preference-label-$label").forEach { layout ->
                         assertTrue("$label keeps measured text", layout.size.width > 0)
@@ -3355,10 +3379,14 @@ class AndroidPhoneAuditTest {
             val suffix = if (swapped) "-swapped" else ""
             tap("phone-finger")
             host.awaitFrame("Finger strip opens its page") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "one_finger_drag" }
+            val finger = model().array("pages").objects().first { it.getJSONObject("id").objectOrNull("page")?.optString("kind") == "one_finger_drag" }
+            assertEquals(listOf(4,1),finger.array("sections").values().map { (it as JSONArray).length() })
+            assertEquals(listOf("Auto","Draw","Move canvas","Off","More Touch Settings…"),finger.array("sections").values().flatMap { (it as JSONArray).objects() }.map { it.getString("label") })
             state("menu-one-finger-drag$suffix", {})
             for ((index, mode) in listOf("auto", "on", "move_canvas", "off").withIndex()) {
                 tap("phone-menu-row-0-$index")
                 host.awaitFrame("Finger choice returns to the open main menu") { phone().getBoolean("menu") && phone().getJSONObject("menu_route").isNull("page") }
+                assertEquals("layer-finger-draw-symbolic",model().array("strip").getJSONObject(2).getString("icon"))
                 state("menu-finger-$mode$suffix", {})
                 tap("phone-finger")
                 host.awaitFrame("Finger strip reopens its page") { phone().getJSONObject("menu_route").objectOrNull("page")?.optString("kind") == "one_finger_drag" &&
@@ -3366,7 +3394,11 @@ class AndroidPhoneAuditTest {
                 assertEquals("Finger page marks its selected choice", true,
                     checkNotNull(findTag("phone-menu-row-0-$index")).second.config.getOrNull(SemanticsProperties.Selected))
             }
-            tap("phone-menu-back")
+            tap("phone-menu-row-1-0")
+            host.awaitFrame("Phone More opens Touch Settings") { host.snapshot?.objectOrNull("preferences")?.optString("page") == "touch" && findTag("setting-choice-finger_drawing") != null }
+            tap("settings-done")
+            host.awaitFrame("Phone More Settings closes") { host.snapshot?.objectOrNull("preferences") == null }
+            open()
         }
         tap("phone-swap")
         fun swapChecked() = checkNotNull(findTag("phone-swap")).second.config.getOrNull(SemanticsProperties.Selected)

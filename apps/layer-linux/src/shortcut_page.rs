@@ -343,6 +343,8 @@ pub(super) struct ShortcutPage {
     rows: RefCell<HashMap<String, ShortcutWidget>>,
     status: adw::StatusPage,
     input_page: RefCell<Option<adw::PreferencesPage>>,
+    touch_page: RefCell<Option<adw::PreferencesPage>>,
+    touch_groups: RefCell<Vec<adw::PreferencesGroup>>,
     trigger_groups: RefCell<Vec<(String, adw::PreferencesGroup)>>,
     trigger_rows: RefCell<Vec<(String, adw::ActionRow, gtk::Label)>>,
     picker: Sheet,
@@ -629,6 +631,8 @@ impl ShortcutPage {
             rows: RefCell::default(),
             status,
             input_page: RefCell::default(),
+            touch_page: RefCell::default(),
+            touch_groups: RefCell::default(),
             trigger_groups: RefCell::default(),
             trigger_rows: RefCell::default(),
             picker,
@@ -942,6 +946,11 @@ impl ShortcutPage {
             }
         ));
         self.navigation.clone()
+    }
+
+    pub(super) fn set_touch_page(&self, content: &adw::PreferencesPage, groups: Vec<adw::PreferencesGroup>) {
+        *self.touch_page.borrow_mut() = Some(content.clone());
+        *self.touch_groups.borrow_mut() = groups;
     }
 
     pub(super) fn build_triggers(&self, w: &Rc<Workspace>, content: &adw::PreferencesPage) -> adw::NavigationView {
@@ -1322,21 +1331,30 @@ impl ShortcutPage {
     }
 
     fn refresh_triggers(&self, w: &Rc<Workspace>, triggers: &[TriggerRow]) {
-        let Some(page) = self.input_page.borrow().clone() else {
+        let (Some(input), Some(touch)) = (self.input_page.borrow().clone(), self.touch_page.borrow().clone()) else {
             return;
         };
         if self.trigger_rows.borrow().iter().map(|t| &t.0).ne(triggers.iter().map(|t| &t.id)) {
+            for (_, row, _) in self.trigger_rows.borrow().iter() {
+                if let Some(group) = row.ancestor(adw::PreferencesGroup::static_type()).and_downcast::<adw::PreferencesGroup>() { group.remove(row); }
+            }
             for (_, group) in self.trigger_groups.borrow_mut().drain(..) {
-                page.remove(&group);
+                if self.touch_groups.borrow().contains(&group) { continue; }
+                if let Some(page) = group.ancestor(adw::PreferencesPage::static_type()).and_downcast::<adw::PreferencesPage>() { page.remove(&group); }
             }
             self.trigger_rows.borrow_mut().clear();
             for trigger in triggers {
                 let known = self.trigger_groups.borrow().iter().any(|(section, _)| *section == trigger.section);
-                if !known {
+                let shared = (trigger.page == SettingsPage::Touch).then(|| self.touch_groups.borrow().iter()
+                    .find(|group| group.title() == trigger.section).cloned()).flatten();
+                if !known && let Some(group) = shared {
+                    group.set_widget_name(&format!("triggers-{}", trigger.section.to_lowercase().replace(' ', "-")));
+                    self.trigger_groups.borrow_mut().push((trigger.section.clone(), group));
+                } else if !known {
                     let group = adw::PreferencesGroup::new();
                     group.set_title(&trigger.section);
                     group.set_widget_name(&format!("triggers-{}", trigger.section.to_lowercase().replace(' ', "-")));
-                    page.add(&group);
+                    if trigger.page == SettingsPage::Touch { touch.add(&group) } else { input.add(&group) }
                     self.trigger_groups.borrow_mut().push((trigger.section.clone(), group));
                 }
                 let row = text_row(&trigger.label, "");

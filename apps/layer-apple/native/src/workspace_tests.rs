@@ -85,7 +85,7 @@ fn config(app: &App, id: &str) -> Value {
 }
 
 #[test]
-fn apple_only_ipad_paint_commands_end_with_flip_divider_and_one_finger_drag() {
+fn apple_only_ipad_paint_commands_start_with_one_finger_drag_and_divider() {
     let finger = json!({"kind":"command","command":"one_finger_drag"});
     for platform in [0, 1] {
         let app = App::new(platform);
@@ -115,14 +115,13 @@ fn apple_only_ipad_paint_commands_end_with_flip_divider_and_one_finger_drag() {
             assert!(layout["bands"].as_array().unwrap().iter().any(|band| band["edge"] == "top"
                 && band["root"]["panels"].as_array().is_some_and(|panels| panels.contains(&json!("commands")))));
             if platform == 0 {
-                assert_eq!(&controls[controls.len() - 3..], &[json!({"kind":"command","command":"flip_horizontal"}),
-                    json!({"kind":"divider"}), finger.clone()]);
+                assert_eq!(&controls[..2], &[finger.clone(), json!({"kind":"divider"})]);
                 assert_eq!(controls.iter().filter(|control| **control == finger).count(), 1);
-                assert_eq!(tiles.last().unwrap()["menu"], true);
-                assert_eq!(tiles.last().unwrap()["has_variants"], false);
-            } else {
-                assert_eq!(controls.last().unwrap(), &json!({"kind":"command","command":"flip_horizontal"}));
+                assert_eq!(tiles.first().unwrap()["menu"], true);
+                assert_eq!(tiles.first().unwrap()["has_variants"], false);
+                assert_eq!(tiles.first().unwrap()["icon"], "finger-draw");
             }
+            assert_eq!(controls.last().unwrap(), &json!({"kind":"command","command":"flip_horizontal"}));
         }
     }
 }

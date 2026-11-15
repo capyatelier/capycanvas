@@ -776,7 +776,7 @@ export const dialogAuditRows=[
   ]),
 
   {batch:'w6a',id:'preferences-root',openaction:{type:'invoke',command:'settings'},rootselector:'#settings[open]',baseline:true},
-  ...['appearance','canvas','color','input','shortcuts','about'].map(page=>({batch:'w6a',id:page==='shortcuts'?'preferences-shortcuts-direct':`preferences-${page}`,requestedpage:page,openaction:page==='shortcuts'?shortcuts:{type:'open_settings',page},rootselector:'#settings[open]',baseline:page==='appearance'})),
+  ...['appearance','color','touch','input','shortcuts','about'].map(page=>({batch:'w6a',id:page==='shortcuts'?'preferences-shortcuts-direct':`preferences-${page}`,requestedpage:page,openaction:page==='shortcuts'?shortcuts:{type:'open_settings',page},rootselector:'#settings[open]',baseline:page==='appearance'})),
   {batch:'w6a',id:'preferences-shortcuts-category',openaction:[shortcuts,preference({type:'shortcut_category',id:'Modifier keys'})],rootselector:'#settings[open]'},
   {batch:'w6a',id:'shortcut-editor',openaction:[shortcuts,preference({type:'edit_shortcut',id:'command.Redo'})],rootselector:'#shortcut-editor[open]',variants:[
     {id:'shortcut-recording',openaction:preference({type:'begin_shortcut',id:'command.Hand'})},
@@ -788,7 +788,7 @@ export const dialogAuditRows=[
   },rootselector:'#settings[open]'},
   {batch:'w6a',id:'pen-button-per-tool',openaction:[{type:'open_settings',page:'input'},preference({type:'edit_pen_button',trigger:'pen.button.primary'}),preference({type:'pen_button_per_tool',trigger:'pen.button.primary',per_tool:true})],rootselector:'#settings[open]'},
   {batch:'w6a',id:'keymap-details',openaction:[shortcuts,preference({type:'keymap_details',open:true})],rootselector:'#keymap-details[open]'},
-  {batch:'w6a',id:'choose-action',openaction:[{type:'open_settings',page:'input'},preference({type:'open_action_picker',trigger:'touch.tap.2'})],rootselector:'#action-picker[open]'},
+  {batch:'w6a',id:'choose-action',openaction:[{type:'open_settings',page:'touch'},preference({type:'open_action_picker',trigger:'touch.tap.2'})],rootselector:'#action-picker[open]'},
   {batch:'w6a',id:'keymap-import',openaction:[shortcuts,preference({type:'import_keymap',text:JSON.stringify({format:'capycanvas-keymap',version:1,keymap:{id:'photoshop',revision:1}})})],rootselector:'#keymap-import[open]',closeaction:preference({type:'cancel_keymap_import'})},
   {batch:'w6b',id:'new-drawing',openaction:{type:'invoke',command:'new_document'},rootselector:'#new-drawing-dialog[open]',baseline:true,drawingstate:{kind:null,save:false},closeaction:async({evaluate})=>{await evaluate('document.querySelector("#new-drawing-cancel").click()');},variants:[
     {id:'new-paper',drawingstate:{kind:'paper',save:false},openaction:async({click})=>{await click('#new-drawing-texture');}},
@@ -1198,7 +1198,7 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
         await wait('layerApp.state().phone.menu_route.page==null');
       };
       await click('#zen-capy');await wait('layerApp.state().phone.menu');await chooseFinger(3);
-      assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'off');assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),'layer-finger-touch-symbolic');
+      assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'off');assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),'layer-finger-draw-symbolic');
       await close();const offPan=await evaluate('layerApp.state().camera.translation');await stroke();
       assert.deepEqual(await evaluate('layerApp.state().camera.translation'),offPan,'Off contact leaves the canvas view unchanged');
       await send({type:'invoke',command:'fit_canvas'});assert.deepEqual(await pixels(),blank,'Off contact leaves the artwork unchanged');
@@ -1483,15 +1483,15 @@ export async function checkPhoneAudit({call,evaluate,reload,settle,canvasPixels,
       await key('Escape',27);assert.equal(await route(),rootRoute);
       for(const swapped of [false,true]){
         if(swapped)await click('#phone-swap');
-        for(const [index,value,icon] of [[0,'auto',test.mobile?'finger-draw':'finger-touch'],[1,'on','finger-draw'],[2,'move_canvas','hand'],[3,'off','finger-touch']]){
+        for(const [index,value] of [[0,'auto'],[1,'on'],[2,'move_canvas'],[3,'off']]){
           await click('#phone-finger');await wait('layerApp.state().phone.menu_route.page?.kind==="one_finger_drag"');
           initial=await bounds();await captureMenu(phoneAuditMenuID({page:{kind:'one_finger_drag'},path:[]},swapped).state);
-          assert.deepEqual(await evaluate(`[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) [data-position]')].map(n=>n.textContent.trim())`),['Auto','Draw','Move canvas','Off']);
+          assert.deepEqual(await evaluate(`[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) [data-position]')].map(n=>n.textContent.trim())`),['Auto','Draw','Move canvas','Off','More Touch Settings…']);
           await click(`.menu-page:not([hidden]):not([inert]) [data-position="[0,${index}]"]`);
           assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),value);
           assert.equal(await evaluate('layerApp.state().phone.menu_route.page??null'),null);
           assert.equal(await evaluate('layerApp.state().phone.menu'),true);
-          assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),`layer-${icon}-symbolic`);
+          assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),'layer-finger-draw-symbolic');
           initial=await bounds();await captureMenu(`menu-finger-${value}${swapped?'-swapped':''}`);
         }
       }

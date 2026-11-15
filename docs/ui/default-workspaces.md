@@ -84,7 +84,7 @@ fit content measured at the allocated width, including inactive tabs.
 | Workspace | Arrangement |
 | --- | --- |
 | Sketch | Title bar with Capy, Main Menu, Filters, Select and Scale/rotate on the left, the workspace switcher in the center, and Brush, Sculpt, Eraser, Layers and Color on the right (Web adds Full Screen). A compact toolbar centered on the left edge holds the brush size and Strength sliders, the color picker, Undo and Redo. No docked panels; Medium tiles; no zoom readout. |
-| Paint | Tools toolbar on the left edge and Commands toolbar on top; Android and iPadOS end the Commands toolbar with a divider and One-finger drag, where Clip Studio Paint puts its touch buttons. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties and Layers/Filters, opened on load. |
+| Paint | Tools toolbar on the left edge and Commands toolbar on top; Every platform but macOS starts the Commands toolbar with One-finger drag and a divider. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties and Layers/Filters, opened on load. |
 | Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform, Properties and Layers/Filters, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
 On Android, iPadOS and mobile browsers, Paint's left tool grid has two Small

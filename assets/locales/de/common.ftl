@@ -335,7 +335,7 @@ native-shortcuts-reassign = Neu zuweisen
 
 native-shortcuts-pen-touch = Stift und Berührung
 
-native-shortcuts-pen-page-help = Diese Einstellungen auf der Seite Stift und Eingabe ändern.
+native-shortcuts-pen-page-help = Diese Einstellungen auf der Seite { settings-page-touch } oder { settings-page-input } ändern.
 
 native-shortcuts-updated = Seit der Auswahl aktualisiert
 

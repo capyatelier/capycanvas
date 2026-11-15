@@ -331,7 +331,7 @@
     {"family":"pages","state":"pen-button-per-tool"},
     {"family":"pages","state":"preferences-about"},
     {"family":"pages","state":"preferences-appearance"},
-    {"family":"pages","state":"preferences-canvas"},
+    {"family":"pages","state":"preferences-touch"},
     {"family":"pages","state":"preferences-color"},
     {"family":"pages","state":"preferences-empty"},
     {"family":"pages","state":"preferences-input"},

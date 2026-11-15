@@ -78,7 +78,7 @@ that brush-size outlines and their center markers stay visible for the Eraser,
 transparent color, and a pen's physical eraser. None stays invisible during contact.
 The shared Rust cursor model and GPU presenter apply this behavior on every host.
 
-**Use Pass Through for new groups**, in the Canvas page's Layers group, is off by
+**Use Pass Through for new groups**, in the Color page's Layers group, is off by
 default, so empty new groups use Normal. On, new groups use
 [Pass Through](../internals/documents.md#groups-and-pass-through). Grouping existing
 layers also uses Pass Through when their blend modes or standalone adjustments
@@ -90,13 +90,14 @@ calibration utility so painters can test the curve on the canvas. Apply saves
 the preview; Cancel and Close discard it. GTK places **[Pen tilt](pen-tilt.md)**
 next, with a per-pen response curve and direction correction in the same utility.
 
-**One-finger drag**, in Input's Pointer group on touch platforms (all but macOS),
+**One-finger drag**, in the Touch page's Fingers group on touch platforms (all but macOS),
 offers Auto (default), Draw, Move canvas and Off. Auto draws on phones and
 tablets until a pen first draws, then behaves as Off; desktops keep fingers for
 gestures. Move canvas pans with one finger the way the Hand tool does. GTK and
 Windows are desktops regardless of window size. The One-finger drag tile
-(Add Tools…) and the finger icon in the phone layout's Capy menu open the same
-four choices; their icon shows what one finger does now. Pen detection persists
+(first in Paint's top bar on every touch platform, or from Add Tools…) and the
+finger icon in the phone layout's Capy menu open the same four choices, then
+**More Touch Settings…**, which opens the Touch page. Pen detection persists
 across windows and restarts; hover, refused drawing and cancelled held contacts
 do not count. Existing preferences retain their values when these fields are
 absent.
@@ -154,8 +155,9 @@ saved in the application preferences and apply across drawings, workspaces and
 temporary Zoom use. Center on click moves the clicked point to the center of the
 view during click zoom. Wheel, pinch and smooth dragging keep their anchors.
 
-Canvas preferences contain Mouse wheel (Pan/Zoom), Rotate with two fingers,
-and the existing pan and zoom speeds. The rotation switch applies to touch and
+Pen & Mouse's Pointer group contains Mouse wheel (Pan/Zoom) and the pan and
+zoom speeds; the Touch page's Fingers group contains Rotate with two fingers
+and the pinch switches. The rotation switch applies to touch and
 trackpad gestures; it preserves panning, pinch zoom and the Rotate tool.
 The footer's zoom and rotation menu contains the saved Snap rotation preference;
 see [canvas navigation](shared-ui.md#drawing-and-navigation) for its behavior.
@@ -276,8 +278,8 @@ classes. Bluetooth support alone does not make a device compatible.
 
 ## Touch gestures and pen buttons
 
-Input settings map finger taps and pen side buttons to the same shortcut
-definitions. By default a two-finger tap undoes and a three-finger tap redoes.
+The Touch page maps finger taps and Pen & Mouse maps pen side buttons to the same
+shortcut definitions. By default a two-finger tap undoes and a three-finger tap redoes.
 Four-finger taps and the lower and upper side buttons, plus a third on Linux, do
 nothing until chosen. An unbound side button stays with the tablet driver and the host's
 previous behavior. Tap overrides are stored under `gestures`, keyed by trigger ID.
@@ -317,7 +319,7 @@ outward pinches as ordinary zoom. Both fingers must move, finish the pinch withi
 300 ms and lift within 100 ms of each other; pans, cancellation and extra contacts
 cannot reset the view. Slow pinches retain ordinary navigation.
 
-Canvas → Navigation includes separate **Quick pinch to fit** and
+Touch → Fingers includes separate **Quick pinch to fit** and
 **Reverse pinch to restore view** switches. Both start on and are saved with the
 application's input preferences. Turning either off leaves that pinch direction
 as ordinary zoom. The same switches apply to touchscreen and trackpad contacts.

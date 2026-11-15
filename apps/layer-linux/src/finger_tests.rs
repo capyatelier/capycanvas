@@ -77,6 +77,9 @@ fn drawing(d: &mut Driver) {
     d.click(&d.named("phone-finger"));
     until(|| state(&d.w).phone.menu_navigation.current().page == Some(layer_ui::MenuPageId::OneFingerDrag)
         && !d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().is_transition_running(), "the Capy finger button opens One-finger drag");
+    let finger_menu = ui_session(&d.w).phone_menu().unwrap().finger;
+    assert_eq!(finger_menu.sections.iter().map(|section| section.iter().map(|row| row.label.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        [vec!["Auto", "Draw", "Move canvas", "Off"], vec!["More Touch Settings…"]]);
     capture(d, "finger-page");
     d.click_label("Draw");
     until(|| ui_session(&d.w).finger_drawing(), "the Draw row enables finger drawing");
@@ -137,6 +140,7 @@ fn drawing(d: &mut Driver) {
             until(|| state(&d.w).phone.menu && state(&d.w).phone.menu_navigation.is_root()
                 && state(&d.w).settings.finger_drawing == mode, "finger choice returns to the open root menu");
             super::phone_motion::settle_presentation(&d.w);
+            assert!(find_named(&d.named("phone-finger"), "layer-finger-draw-symbolic").is_some(), "the strip keeps one icon in {mode:?}");
             capture(d, &format!("strip-{mode:?}-{swapped}").to_lowercase());
             if matches!(mode, layer_ui::FingerDrawing::Off | layer_ui::FingerDrawing::MoveCanvas) {
                 d.input.key(0xff1b);
@@ -155,10 +159,15 @@ fn drawing(d: &mut Driver) {
         }
         d.input.key(0xff1b);
     }
-    d.w.dispatch(UiAction::OpenSettings { page: SettingsPage::Input });
+    d.click(&d.named("zen-capy"));
+    d.click(&d.named("phone-finger"));
+    until(|| state(&d.w).phone.menu_navigation.current().page == Some(layer_ui::MenuPageId::OneFingerDrag)
+        && !d.named("phone-menu-pages").downcast::<gtk::Stack>().unwrap().is_transition_running(), "finger settings link finishes opening");
+    d.click_label("More Touch Settings…");
+    until(|| ui_session(&d.w).preferences().is_some_and(|view| view.page == SettingsPage::Touch), "the phone settings link opens Touch");
     let page = crate::page_dialog::parent(&d.w.preferences.dialog);
     let choice = named::<adw::ComboRow>(&page, "setting-finger-drawing");
-    until(|| page.is_mapped() && choice.is_mapped(), "Settings Input and its native choice are mapped");
+    until(|| page.is_mapped() && choice.is_mapped(), "Settings Touch and its native choice are mapped");
     assert!(choice.grab_focus());
     until(|| choice.compute_bounds(&d.w.window).is_some_and(|b| b.width() > 0. && b.height() > 0.
         && b.x() >= 0. && b.x() + b.width() <= d.w.window.width() as f32
@@ -177,7 +186,7 @@ fn drawing(d: &mut Driver) {
         d.input.key(0xff50);
         for _ in 0..index { d.input.key(0xff54); }
         d.input.key(0xff0d);
-        until(|| state(&d.w).settings.finger_drawing == mode, "native Input choice changes the shared policy");
+        until(|| state(&d.w).settings.finger_drawing == mode, "native Touch choice changes the shared policy");
         assert_eq!(choice.selected(), index);
         assert_eq!(ui_session(&d.w).finger_drawing(), index == 1);
     }

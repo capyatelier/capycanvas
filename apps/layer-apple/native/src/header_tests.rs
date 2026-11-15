@@ -140,7 +140,10 @@ fn apple_one_finger_drag_keeps_primary_choices_separate_from_customization_and_o
         let id = tile["id"].clone();
         let choices = app.request(2, json!({"type":"context","target":{"kind":"tool_variants",
             "anchor":{"kind":"header","id":id}}})).unwrap();
-        let choices = choices["sections"].as_array().unwrap().iter().flat_map(|section| section.as_array().unwrap()).collect::<Vec<_>>();
+        assert_eq!(choices["sections"].as_array().unwrap().len(), 2);
+        let touch = choices["sections"][1][0]["action"].clone();
+        assert_eq!(touch, json!({"type":"open_settings","page":"touch"}));
+        let choices = choices["sections"][0].as_array().unwrap();
         assert_eq!(choices.iter().map(|item| item["label"].as_str().unwrap()).collect::<Vec<_>>(),
             ["Auto", "Draw", "Move canvas", "Off"]);
         assert_eq!(choices.iter().filter(|item| item["selected"] == true).count(), 1);
@@ -162,6 +165,9 @@ fn apple_one_finger_drag_keeps_primary_choices_separate_from_customization_and_o
         assert!(app.full_snapshot()["preferences"].is_null());
         app.action(json!({"type":"activate_header_item","id":id}));
         assert!(!app.full_snapshot()["preferences"].is_null());
-        assert_eq!(app.borrow().host.session.state().preferences.page, layer_ui::SettingsPage::Input);
+        assert_eq!(app.borrow().host.session.state().preferences.page, layer_ui::SettingsPage::Touch);
+        app.action(json!({"type":"close_settings"}));
+        app.action(touch);
+        assert_eq!(app.borrow().host.session.state().preferences.page, layer_ui::SettingsPage::Touch);
     }
 }

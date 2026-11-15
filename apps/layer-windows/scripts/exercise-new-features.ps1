@@ -57,7 +57,7 @@ function Preference([string]$Title){@((Model).preferences.pages.groups.rows|Wher
 function Preference-Switch([string]$Title){Control $Title -Name -Type ([System.Windows.Automation.ControlType]::Button)}
 function Check-InputPreferences {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
-    Invoke 'Preferences' -Name;Invoke 'Pen & Input' -Name
+    Invoke 'Preferences' -Name;Invoke 'Pen & Mouse' -Name
     Wait-Until {$null -ne (Find 'Cursor shape' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox))} 'Cursor shape setting missing'
     $expected=@((Preference 'Cursor shape').kind.options)
     foreach($index in 0..($expected.Count-1)){

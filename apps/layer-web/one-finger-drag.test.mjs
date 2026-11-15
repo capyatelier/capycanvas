@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
+import {readyCanvas} from './canvas-pixels-fixture.mjs';
 
 export async function checkOneFingerDrag({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/one-finger-drag/web';
@@ -26,18 +27,48 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
     assert.deepEqual(await evaluate('layerApp.app.tool_picker().choices.map(c=>c.control)'),[{kind:'command',command:'one_finger_drag'}]);
     await click('.tool-choice input');await click('#confirm-tools');
   };
+  const searchSettings=async(query,title,page)=>{
+    if(!await evaluate('layerApp.app.preferences().searching'))await click('.preferences-search-toggle');
+    await click('#settings-search');
+    for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+    await call('Input.insertText',{text:query});await wait(`layerApp.app.preferences().query===${JSON.stringify(query)}`);
+    const index=await evaluate(`layerApp.app.preferences().search_results.findIndex(row=>row.title===${JSON.stringify(title)})`);
+    assert.ok(index>=0,`Settings search ${query} contains ${title}`);
+    await click(`.preferences-search-results > button:nth-child(${index+1})`);
+    await wait(`layerApp.app.preferences().page===${JSON.stringify(page)}&&document.querySelector('.preferences-page:not([hidden])').dataset.page===${JSON.stringify(page)}`);
+  };
+  await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"switch",id:"builtin:workspace:illustrator"}));null');
+  await wait('JSON.parse(layerApp.app.workspace_view()).id==="builtin:workspace:illustrator"&&!JSON.parse(layerApp.app.workspace_view()).busy');await settle();
   const original=await evaluate('layerApp.state().workspace');
   for(const theme of ['light','dark']) {
     await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
     await send({type:'restore_workspace',workspace:original});await send({type:'set_theme',theme});
+    const commands=await evaluate('layerApp.state().workspace.layout.panels.find(p=>p.id==="commands").content.tiles');
+    assert.deepEqual(commands.slice(0,2).map(tile=>tile.control),[{kind:'command',command:'one_finger_drag'},{kind:'divider'}]);
+    assert.equal(await evaluate('document.querySelector("[data-panel=commands] .tool-tile:not([hidden])").dataset.tile'),String(commands[0].id));
+    assert.equal(await evaluate('document.querySelector("[data-panel=commands] .tool-tile:not([hidden]) svg").dataset.asset'),'finger-draw');
+    await evaluate('document.fonts.ready.then(()=>true)');await readyCanvas({evaluate,settle});
+    await wait(`(()=>{const layout=layerApp.app.layout(innerWidth,innerHeight);return layout.measurement_requests.every(request=>request.tab_measured)&&layout.groups.every(group=>{const node=document.querySelector('.dock-group[data-group="'+group.id+'"]');if(!node)return false;const bounds=node.getBoundingClientRect();return ['x','y','width','height'].every(key=>Math.abs(bounds[key]-group.bounds[key])<=1/devicePixelRatio);});})()`);
+    await shot(`paint-top-bar-${theme}`);
     await send({type:'invoke',command:'search_commands'});await click('#command-search');
     await call('Input.insertText',{text:'One-finger drag'});await settle();
     assert.equal(await evaluate('layerApp.state().command_search.results[0].id'),'command.one_finger_drag');
     await shot(`command-search-${theme}`);
     for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
-    await wait('layerApp.app.preferences()?.page==="input"&&document.querySelector("[data-preference=finger_drawing]")!=null');
+    await wait('layerApp.app.preferences()?.page==="touch"&&document.querySelector("[data-preference=finger_drawing]")!=null');
     assert.equal(await evaluate('document.querySelector("[data-preference=finger_drawing] label").textContent'),'One-finger drag');
-    await shot(`settings-${theme}`);
+    assert.deepEqual(await evaluate('layerApp.app.preferences().pages.map(page=>[page.id,page.title])'),[['appearance','Appearance'],['color','Color'],['touch','Touch'],['input','Pen & Mouse'],['shortcuts','Keyboard Shortcuts'],['about','About']]);
+    assert.deepEqual(await evaluate('[...document.querySelectorAll(".preferences-page[data-page=touch] .settings-group > h3")].map(node=>node.textContent)'),['Touch gestures','Navigation']);
+    assert.deepEqual(await evaluate('[...document.querySelectorAll(".preferences-page[data-page=touch] [data-preference]")].map(node=>node.dataset.preference)'),['finger_drawing','rotate_with_two_fingers','quick_pinch_fit','quick_pinch_restore']);
+    assert.deepEqual(await evaluate('[...document.querySelector("#triggers-touch-gestures > .preference-group").children].map(node=>node.dataset.preference??node.dataset.trigger)'),['finger_drawing','touch.tap.2','touch.tap.3','touch.tap.4']);
+    await shot(`settings-touch-${theme}`);
+    await click('[data-settings-page=input]');
+    assert.ok(await evaluate('document.querySelector("#setting-wheel-behavior").closest("[data-preference]").checkVisibility()&&document.querySelector("#setting-pan-speed").checkVisibility()&&document.querySelector("#setting-zoom-speed").checkVisibility()'));
+    assert.deepEqual(await evaluate('layerApp.app.preferences().shortcut_page.triggers.map(trigger=>[trigger.id,trigger.page]).sort((a,b)=>a[0].localeCompare(b[0]))'),await evaluate('[...document.querySelectorAll("[data-trigger]")].map(node=>[node.dataset.trigger,node.closest(".preferences-page").dataset.page]).sort((a,b)=>a[0].localeCompare(b[0]))'));
+    await shot(`settings-pen-and-mouse-${theme}`);
+    await point('#triggers-pen-buttons');await shot(`settings-pen-and-mouse-bottom-${theme}`);
+    for(const [query,title,page] of [['pinch','Quick pinch to fit','touch'],['two-finger tap','Two-finger tap','touch'],['pan speed','Scroll pan speed','input'],['pass through','Use Pass Through for new groups','color']])await searchSettings(query,title,page);
+    await click('[data-settings-page=touch]');
     await click('[data-preference=finger_drawing] summary');
     assert.deepEqual(await evaluate('[...document.querySelectorAll("[data-preference=finger_drawing] [data-choice]")].map(n=>n.textContent)'),['Auto','Draw','Move canvas','Off']);
     await shot(`settings-dropdown-${theme}`);await click('[data-preference=finger_drawing] [data-choice="2"]');
@@ -58,14 +89,20 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
       await send({type:'customize',action:{type:'set_tile_style',panel:'toolbar',style}});
       await shot(`title-bar-${size}-${theme}`);
       for(const [owner,selector] of [['header',header],['toolbar',toolbar]]) {
-        for(const [index,value,icon] of [[0,'auto','finger-touch'],[1,'on','finger-draw'],[2,'move_canvas','hand'],[3,'off','finger-touch']]) {
-          await click(selector);assert.deepEqual(await labels(),['Auto','Draw','Move canvas','Off']);
+        for(const [index,value] of [[0,'auto'],[1,'on'],[2,'move_canvas'],[3,'off']]) {
+          await click(selector);assert.deepEqual(await labels(),[...choices,'More Touch Settings…']);
+          assert.equal(await evaluate(`document.querySelectorAll('${menu} hr').length`),1);
           const checked=await evaluate(`[...document.querySelectorAll('${menu} button')].filter(n=>n.getAttribute('aria-checked')==='true').length`);assert.equal(checked,1);
           if(index===0)await shot(`${owner}-${size}-menu-${theme}`);
           await choose(['Auto','Draw','Move canvas','Off'][index]);
           assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),value);
-          assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).querySelector('svg').dataset.asset`),icon);
+          assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).querySelector('svg').dataset.asset`),'finger-draw');
           await shot(`${owner}-${size}-${value}-${theme}`);
+        }
+        if(size==='medium'){
+          await click(selector);await choose('More Touch Settings…');
+          await wait('document.querySelector("#settings").open&&layerApp.app.preferences().page==="touch"');
+          await shot(`${owner}-more-touch-settings-${theme}`);await click('#close-settings');
         }
         await click(selector,'right');
         for(const label of choices)assert.ok(!(await labels()).includes(label),`${owner} customization omits ${label}`);
@@ -90,13 +127,22 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
     const phoneTile=await evaluate('layerApp.state().workspace.layout.phone.find(t=>t.control.command==="one_finger_drag").id');
     await shot(`phone-toolbar-${theme}`);await click(`#phone-tool-${phoneTile}`);
     await wait('layerApp.state().phone.menu&&layerApp.state().phone.menu_route.page?.kind==="one_finger_drag"');
-    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) [data-position]')].map(n=>n.textContent.trim())`),['Auto','Draw','Move canvas','Off']);
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('.menu-page:not([hidden]):not([inert]) [data-position]')].map(n=>n.textContent.trim())`),[...choices,'More Touch Settings…']);
     await shot(`phone-toolbar-page-${theme}`);
     await click('.menu-page:not([hidden]):not([inert]) [data-position="[0,2]"]');
     assert.equal(await evaluate('layerApp.state().settings.finger_drawing'),'move_canvas');
     assert.equal(await evaluate('layerApp.state().phone.menu&&layerApp.state().phone.menu_route.page==null'),true);
-    assert.equal(await evaluate(`document.querySelector('#phone-tool-${phoneTile} svg').dataset.asset`),'hand');
-    await click('#zen-capy');await call('Emulation.setTouchEmulationEnabled',{enabled:false});
+    assert.equal(await evaluate(`document.querySelector('#phone-tool-${phoneTile} svg').dataset.asset`),'finger-draw');
+    assert.equal(await evaluate('document.querySelector("#phone-finger").dataset.icon'),'layer-finger-draw-symbolic');
+    await shot(`phone-capy-strip-${theme}`);await click('#phone-finger');
+    await wait('layerApp.state().phone.menu_route.page?.kind==="one_finger_drag"');
+    assert.deepEqual(await evaluate('[...document.querySelectorAll(".menu-page:not([hidden]):not([inert]) [data-position]")].map(node=>JSON.parse(node.dataset.position))'),[[0,0],[0,1],[0,2],[0,3],[1,0]]);
+    await shot(`phone-capy-five-rows-${theme}`);
+    await click('.menu-page:not([hidden]):not([inert]) [data-position="[1,0]"]');
+    await wait('document.querySelector("#settings").open&&layerApp.app.preferences().page==="touch"');
+    await shot(`phone-more-touch-settings-${theme}`);await click('#settings [data-dialog-part=end]');
+    if(await evaluate('layerApp.state().phone.menu'))await click('#zen-capy');
+    await call('Emulation.setTouchEmulationEnabled',{enabled:false});
   }
-  console.log('PASS: One-finger drag command search reveals Settings, title-bar/toolbar primary choices and customization-only context/holds, all icons/sizes and phone toolbar/page in both themes');
+  console.log('PASS: Touch Settings pages/search, fresh Paint leading tile, five-row primary menus and More Touch Settings, fixed icons/all modes/sizes, customization-only context/holds and phone page in both themes');
 }

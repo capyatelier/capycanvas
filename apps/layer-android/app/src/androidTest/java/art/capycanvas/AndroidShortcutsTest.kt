@@ -72,13 +72,7 @@ class AndroidShortcutsTest {
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             compose.waitForIdle()
-            val presented = CountDownLatch(1)
-            compose.runOnIdle {
-                val view = compose.activity.window.decorView
-                view.postOnAnimation { view.postOnAnimation { presented.countDown() } }
-            }
-            assertTrue(presented.await(5, TimeUnit.SECONDS))
-            SystemClock.sleep(150)
+            awaitNativeCaptureFrame(compose.activity, compose)
             val bitmap = instrumentation.uiAutomation.takeScreenshot()
             val resolver = compose.activity.contentResolver
             val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
@@ -247,6 +241,7 @@ class AndroidShortcutsTest {
 
     @Test fun penButtonsChoosePerToolAndTapsUseThePicker() {
         open("input")
+        compose.onNodeWithTag("trigger-touch.tap.4").assertDoesNotExist()
         tap("trigger-pen.button.primary")
         compose.waitUntil(10_000) { preferences().objectOrNull("pen_button_editor") != null }
         compose.onNodeWithTag("settings-page-title").assertTextEquals("Lower side button")
@@ -260,8 +255,11 @@ class AndroidShortcutsTest {
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("pen_button_editor") == null }
         compose.onNodeWithTag("trigger-action-pen.button.primary", useUnmergedTree = true).assertTextEquals("Depends on the tool")
+        capture("pen-and-mouse")
+        open("touch")
+        compose.onNodeWithTag("trigger-pen.button.primary").assertDoesNotExist()
         compose.onNodeWithTag("trigger-touch.tap.4").performScrollTo()
-        capture("pen-and-input")
+        capture("touch-gestures")
         tap("trigger-touch.tap.4")
         compose.waitUntil(10_000) { page().objectOrNull("picker") != null }
         compose.onNodeWithTag("action-picker-title").assertTextEquals("Four-finger tap")

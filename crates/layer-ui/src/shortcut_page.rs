@@ -91,6 +91,7 @@ pub struct ShortcutEmpty {
 #[derive(Clone, Debug, Serialize)]
 pub struct TriggerRow {
     pub id: String,
+    pub page: crate::SettingsPage,
     pub section: String,
     pub label: String,
     pub action: String,
@@ -560,6 +561,7 @@ pub(crate) fn trigger_rows(settings: &Settings, platform: Platform, l: &Localize
             };
             TriggerRow {
                 id: trigger.id.into(),
+                page: if trigger.held { crate::SettingsPage::Input } else { crate::SettingsPage::Touch },
                 section: l.text(if trigger.held { MessageId::SHORTCUT_PEN_BUTTONS } else { MessageId::SHORTCUT_TOUCH_GESTURES }).to_string(),
                 label: trigger.localized_label(l),
                 action,

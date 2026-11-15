@@ -22,10 +22,10 @@ export async function checkPressureCalibration({call,evaluate,settle}) {
   await evaluate('layerApp.documents.startRecovery()');
   await evaluate("window.pressureSettingsCloseCount=0;document.querySelector('#settings').addEventListener('close',()=>window.pressureSettingsCloseCount++)");
   await click('[data-command="settings"]');
-  await click('[data-settings-page="canvas"]');
+  await click('[data-settings-page="input"]');
   await click('#setting-pan-speed .number-value');
   await evaluate("(()=>{const n=document.querySelector('#setting-pan-speed .number-entry');n.value='1.5';n.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))})()");await settle();
-  assert.equal(await evaluate('layerApp.state().settings.pan_speed'),1.5,'Canvas retains a generic numeric preference');
+  assert.equal(await evaluate('layerApp.state().settings.pan_speed'),1.5,'Pen & Mouse retains a generic numeric preference');
   await click('#setting-pan-speed [aria-label="Increase Scroll pan speed"]');
   assert.ok(Math.abs(await evaluate('layerApp.state().settings.pan_speed')-1.55)<.001);
   await send({type:'preferences',action:{type:'reset',id:'pan_speed'}});

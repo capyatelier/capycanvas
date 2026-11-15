@@ -212,7 +212,15 @@ private fun JSONObject.preferencesDepth() = getJSONObject("navigation").getJSONA
                                     category != null -> ShortcutCategory(host, model, category)
                                     else -> {
                                         if (model.getString("page") == "shortcuts") ShortcutsHome(host, model)
-                                        else page?.array("groups")?.objects()?.forEach { group ->
+                                        else page?.array("groups")?.objects()?.let { groups -> groups.forEachIndexed { index, group ->
+                                            if(model.getString("page")=="color" && index==groups.lastIndex) {
+                                                val profiles=host.catalog.getJSONObject("profile_copy")
+                                                SettingsCard(rows=listOf {
+                                                    SettingRow(profiles.getString("library_title"),"settings-profile-library",profiles.getString("menu_help")) {
+                                                        TextButton({ profilesOpen = true },Modifier.testTag("settings-manage-profiles")){Text(profiles.getString("manage"))}
+                                                    }
+                                                })
+                                            }
                                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                                 Text(group.getString("title"), Modifier.padding(horizontal = 4.dp).testTag("settings-group-title-" + group.getString("title")),
                                                     fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
@@ -227,20 +235,13 @@ private fun JSONObject.preferencesDepth() = getJSONObject("navigation").getJSONA
                                                         }
                                                         Box(Modifier.bringIntoViewRequester(bringIntoView)) { PreferenceRow(host, setting) }
                                                     }
-                                                } })
+                                                } } + triggerRows(host, model.pageTriggers(model.getString("page")).filter { it.getString("section") == group.getString("title") }))
                                             }
-                                        }
+                                        } }
                                     }
                                 }
-                                if (model.getString("page") == "input") TriggerGroups(host, model)
-                                if(model.getString("page")=="color") {
-                                    val profiles=host.catalog.getJSONObject("profile_copy")
-                                    SettingsCard(rows=listOf {
-                                        SettingRow(profiles.getString("library_title"),"settings-profile-library",profiles.getString("menu_help")) {
-                                            TextButton({ profilesOpen = true },Modifier.testTag("settings-manage-profiles")){Text(profiles.getString("manage"))}
-                                        }
-                                    })
-                                }
+                                if (model.getString("page") in listOf("input", "touch")) TriggerGroups(host, model, model.getString("page"),
+                                    page?.array("groups")?.objects()?.map { it.getString("title") }?.toSet().orEmpty())
                                 model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
                                     Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
                                 }

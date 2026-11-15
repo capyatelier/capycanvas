@@ -16,9 +16,18 @@ using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::Input;
 using namespace CapyUi;
 namespace Pickers=winrt::Microsoft::Windows::Storage::Pickers;
+namespace Peers=Microsoft::UI::Xaml::Automation::Peers;
 
 namespace {
 constexpr double SheetWidth=460,PickerHeight=600,GroupWidth=576;
+struct PreferenceGroupPeer:Peers::FrameworkElementAutomationPeerT<PreferenceGroupPeer>{
+    PreferenceGroupPeer(FrameworkElement const& owner):FrameworkElementAutomationPeerT<PreferenceGroupPeer>(owner){}
+    Peers::AutomationControlType GetAutomationControlTypeCore(){return Peers::AutomationControlType::Group;}
+    bool IsControlElementCore(){return true;}
+};
+struct PreferenceGroupControl:ContentControlT<PreferenceGroupControl>{
+    Peers::AutomationPeer OnCreateAutomationPeer(){return make<PreferenceGroupPeer>(*this);}
+};
 void send(std::shared_ptr<WorkspaceData> const& data,J const& action){data->dispatch(O({{L"type",S(L"preferences")},{L"action",action}}));}
 J act(wchar_t const* type,std::initializer_list<std::pair<wchar_t const*,V>> fields={}){
     auto action=O(fields);action.Insert(L"type",S(type));return action;
@@ -68,6 +77,9 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
     std::map<std::wstring,Row> categoryRows,triggerRows;
     std::map<std::wstring,J> shortcutSpecs;
     std::map<std::wstring,Group> triggerGroups;
+    std::map<std::wstring,StackPanel> triggerRoots;
+    std::map<std::wstring,std::vector<Group>> preferenceGroups;
+    std::vector<std::pair<StackPanel,uint32_t>> triggerLists;
     Sheet editor,modifierSheet,picker,details,import;
     TextBlock pickerDescription{nullptr};
     StackPanel pickerList;
@@ -212,9 +224,9 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         if(page==L"input"){
             inputRoot=StackPanel();inputRoot.Spacing(24);pen=StackPanel();pen.Spacing(24);pen.Visibility(Visibility::Collapsed);
             AutomationProperties::SetAutomationId(pen,L"pen-button-page");
-            node.Children().Append(inputRoot);node.Children().Append(pen);return inputRoot;
+            node.Children().Append(inputRoot);node.Children().Append(pen);triggerRoots.emplace(page.c_str(),inputRoot);return inputRoot;
         }
-        return node;
+        triggerRoots.emplace(page.c_str(),node);return node;
     }
     void buildShortcuts(StackPanel const& node){
         for(auto pane:{root,category,modifier}){pane.Spacing(24);node.Children().Append(pane);}
@@ -438,23 +450,42 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
         refresh(L"modifiers");
     }
     void refreshTriggers(){
-        if(!inputRoot)return;
-        auto triggers=array(page(),L"triggers");std::wstring key;hstring section;uint32_t sectionIndex=0;
-        for(auto value:triggers){auto t=value.GetObject();if(str(t,L"section")!=section){section=str(t,L"section");key+=L"#";}key+=L"\n"+std::wstring(str(t,L"id"));}
+        if(triggerRoots.empty())return;
+        auto triggers=array(page(),L"triggers");std::wstring key;hstring section,target;uint32_t sectionIndex=0;
+        for(auto value:triggers){auto t=value.GetObject();if(str(t,L"section")!=section||str(t,L"page")!=target){section=str(t,L"section");target=str(t,L"page");key+=L"#"+std::wstring(target);}key+=L"\n"+std::wstring(str(t,L"id"));}
         if(triggerSignature!=hstring(key)){
             triggerSignature=hstring(key);beginRefresh(L"triggers");
-            for(auto const& [name,group]:triggerGroups){uint32_t index;if(inputRoot.Children().IndexOf(group.section,index))inputRoot.Children().RemoveAt(index);}
-            triggerGroups.clear();triggerRows.clear();section=L"";
+            for(auto const& [list,base]:triggerLists)while(list.Children().Size()>base)list.Children().RemoveAtEnd();
+            triggerLists.clear();
+            for(auto const& [name,group]:triggerGroups){auto parent=group.section.Parent().as<StackPanel>();uint32_t index;if(parent.Children().IndexOf(group.section,index))parent.Children().RemoveAt(index);}
+            triggerGroups.clear();triggerRows.clear();section=target=L"";StackPanel triggerList{nullptr};
             for(auto value:triggers){
-                auto trigger=value.GetObject();auto id=str(trigger,L"id");
-                if(str(trigger,L"section")!=section){
-                    section=str(trigger,L"section");auto g=group(section);auto groupId=to_hstring(sectionIndex++);AutomationProperties::SetAutomationId(g.section,L"triggers-"+groupId);
-                    triggerGroups.emplace(groupId.c_str(),g);inputRoot.Children().Append(g.section);
-                    remember([this,g,id]{title(g,str(find(array(page(),L"triggers"),L"id",id),L"section"));});
+                auto trigger=value.GetObject();auto id=str(trigger,L"id");auto destination=triggerRoots.find(str(trigger,L"page").c_str());if(destination==triggerRoots.end())continue;
+                if(str(trigger,L"section")!=section||str(trigger,L"page")!=target){
+                    section=str(trigger,L"section");target=str(trigger,L"page");auto groupId=to_hstring(sectionIndex++);Group const* shared=nullptr;
+                    if(auto groups=preferenceGroups.find(target.c_str());groups!=preferenceGroups.end()){
+                        auto models=array(find(array(preferences(),L"pages"),L"id",target),L"groups");
+                        for(uint32_t i=0;i<models.Size()&&i<groups->second.size();++i)if(str(models.GetObjectAt(i),L"title")==section){shared=&groups->second[i];break;}
+                    }
+                    auto g=shared?*shared:group(section);
+                    if(shared){if(target==L"touch"){
+                        auto card=g.section.Children().GetAt(g.section.Children().Size()-1).as<Border>();auto frame=card.Child().try_as<ContentControl>();
+                        if(!frame){
+                            card.Child(nullptr);frame=make<PreferenceGroupControl>();frame.IsTabStop(false);frame.Padding({0,0,0,0});
+                            frame.HorizontalContentAlignment(HorizontalAlignment::Stretch);frame.VerticalContentAlignment(VerticalAlignment::Stretch);
+                            frame.Content(g.list);card.Child(frame);
+                        }
+                        AutomationProperties::SetAutomationId(frame,L"triggers-touch-gestures");AutomationProperties::SetLabeledBy(frame,g.title);
+                    }}
+                    else{
+                        AutomationProperties::SetAutomationId(g.section,L"triggers-"+groupId);triggerGroups.emplace(groupId.c_str(),g);destination->second.Children().Append(g.section);
+                        remember([this,g,id]{title(g,str(find(array(page(),L"triggers"),L"id",id),L"section"));});
+                    }
+                    triggerList=g.list;triggerLists.emplace_back(g.list,g.list.Children().Size());
                 }
                 bool penButton=std::wstring_view(id).starts_with(L"pen.");
                 auto row=navRow(str(trigger,L"label"),str(trigger,L"detail"),str(trigger,L"action"),penButton?act(L"edit_pen_button",{{L"trigger",S(id)}}):act(L"open_action_picker",{{L"trigger",S(id)}}),L"trigger-"+id);
-                add(triggerGroups.at(to_hstring(sectionIndex-1).c_str()).list,row.button);triggerRows.emplace(id.c_str(),row);
+                add(triggerList,row.button);triggerRows.emplace(id.c_str(),row);
             }
         }
         refresh(L"triggers");
@@ -698,6 +729,7 @@ ShortcutPage::ShortcutPage(std::shared_ptr<WorkspaceData> data,Grid overlay):imp
 }
 ShortcutPage::~ShortcutPage()=default;
 StackPanel ShortcutPage::Container(hstring const& page,StackPanel const& node){return impl->Container(page,node);}
+void ShortcutPage::RegisterGroup(hstring const& page,PreferenceGroup const& group){impl->preferenceGroups[page.c_str()].push_back(group);}
 void ShortcutPage::Apply(J const& snapshot){impl->Apply(snapshot);}
 hstring ShortcutPage::Title()const{return impl->Title();}
 void ShortcutPage::Back(){impl->Back();}
