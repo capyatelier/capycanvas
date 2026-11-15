@@ -1757,7 +1757,7 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
             host.prepare_canvas_frame(now, now, false)
                 .unwrap();
             assert!(!host.startup.canvas_ready);
-            assert!(host.dirty, "Startup must keep the frame driver awake");
+            assert_ne!(host.frame_demand(), layer_render::FrameDemand::Wait, "Startup must keep the frame driver awake");
         }
         app.action(json!({"type": "set_brush_opacity", "value": 0.4}));
         assert!((app.state()["brush"]["opacity"].as_f64().unwrap() - 0.4).abs() < 0.00001);
