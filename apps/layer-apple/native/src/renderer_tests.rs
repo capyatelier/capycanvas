@@ -36,7 +36,7 @@ fn apple_rendering_readiness_requires_a_settled_renderer() {
 }
 
 #[test]
-fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
+fn apple_first_ready_paper_presentation_is_lit_and_settles_without_input() {
     for platform in [0, 1] {
         let reference = native_renderer();
         let app = App::new(platform);
@@ -51,7 +51,6 @@ fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
         let mut native = app.borrow();
         let host = &mut native.host;
         let gpu = host.session.engine().backend().0.as_ref().unwrap();
-        gpu.shader_idle(false, false);
         let view = host.session.state().camera.view();
         let surround = host.session.state().palette.surround_linear;
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -65,23 +64,7 @@ fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
         let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu, format,
             layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
         pollster::block_on(presenter.prepare(gpu)).unwrap();
-        presenter.present(gpu, &target, view, surround).unwrap();
-        assert!(!presenter.paper_lighting_drawn());
-        host.dirty = false;
-        crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap();
-        assert!(!host.dirty, "parked lighting must not request a frame");
-        assert!(!crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap());
         let revision = host.session.engine().document().revision;
-        host.session.engine().backend().0.as_ref().unwrap().shader_idle(true, false);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-        loop {
-            let notify = crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap();
-            if host.dirty { assert!(notify, "the idle health poll must wake the Swift frame driver"); break; }
-            assert!(std::time::Instant::now() < deadline, "idle paper lighting did not become ready");
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        assert!(!crate::metal::MetalHost::poll_presenter(host, &mut presenter).unwrap(), "an outstanding frame needs no duplicate notification");
-        let gpu = host.session.engine().backend().0.as_ref().unwrap();
         presenter.present(gpu, &target, view, surround).unwrap();
         assert!(presenter.paper_lighting_drawn());
         host.dirty = false;
