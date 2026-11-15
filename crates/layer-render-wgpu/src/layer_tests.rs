@@ -105,6 +105,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         ..view() };
     let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
     retained.set_target_retention(true);
+    pollster::block_on(retained.prepare(&r)).unwrap();
     for (i, (x, y, preview)) in [(85., 90., false), (365., 330., true),
         (95., 370., true), (360., 100., false)].into_iter().enumerate() {
         let mut ink = dab([0.8, 0.1, 0.2, 0.7]);
@@ -130,6 +131,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         retained.set_cursor(r.device(), &cursor, 1.);
         retained.present(&r, &target.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         let mut full = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+        pollster::block_on(full.prepare(&r)).unwrap();
         full.set_cursor(r.device(), &cursor, 1.);
         full.present(&r, &reference.create_view(&Default::default()), camera, [0.2; 4]).unwrap();
         assert_eq!(page_bytes(&r, &target), page_bytes(&r, &reference), "frame {i}");
@@ -164,6 +166,7 @@ fn oversized_surface_preserves_viewport_pixels_and_overlays_at_every_rotation() 
         let mut presenters = std::array::from_fn::<_, 2, _>(|_| {
             let mut presenter = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
             presenter.set_surface_rotation(turns);
+            pollster::block_on(presenter.prepare(&r)).unwrap();
             presenter
         });
         let mut previous = None;
