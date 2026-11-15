@@ -94,6 +94,7 @@ struct SessionJob {
     candidates: Vec<(u64, Box<layer_ui::UiSession<layer_host::Renderer>>)>,
     active: u64,
     clean_exit: bool,
+    force: bool,
     retry: bool,
     append: bool,
     stamp: layer_ui::SessionStamp,
@@ -248,8 +249,10 @@ impl SessionJob {
         manifest.publish(&disk.path.join("window.json"))?;
         disk.manifest = manifest;
         disk.published_sequence = self.sequence;
+        let mut deferred = false;
         for (id, capture,stamp) in captures {
-            if disk.stores.checkpoint_due(id,stamp.clone(),true)? {disk.stores.checkpoint(id,capture,stamp,true)?.wait_on_worker()?;}
+            if disk.stores.checkpoint_due(id,stamp.clone(),self.force)? {disk.stores.checkpoint(id,capture,stamp,self.force)?.wait_on_worker()?;}
+            else {deferred |= !disk.stores.is_current(id,&stamp);}
         }
         let mut manifest = disk.manifest.clone();
         if self.exclusion == u64::MAX {
@@ -268,7 +271,7 @@ impl SessionJob {
         } else { manifest.publish(&disk.path.join("window.json"))?; }
         disk.manifest = manifest.clone();
         disk.published_sequence = self.sequence;
-        self.committed = true;
+        self.committed = !deferred;
         if self.exclusion != 0 && self.exclusion != u64::MAX { return Ok(()); }
         for (_, binding) in disk.stores.bindings().into_iter().filter(|(id, _)| !manifest.drawings.iter().any(|drawing| drawing.id == *id)) {
             if let Ok(reply) = disk.stores.retire_copy(binding.key()) { let _ = reply.wait_on_worker(); }
@@ -294,7 +297,7 @@ pub unsafe extern "C" fn capy_apple_session_open(app: u64, sessions: *const c_ch
             a.window.documents.admission(&a.host.session.retained_document_tiles()), a.host.renderer_options())?;
         Ok(handles::store(CapySessionTask(Mutex::new(SessionJob {
             open: Some(open), disk: if retry { a.session_disk.clone() } else { None }, environment: Some(environment), captures: None,
-            candidates: Vec::new(), active: 0, clean_exit: false, retry, stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: 0, exclusion: 0, committed: false,
+            candidates: Vec::new(), active: 0, clean_exit: false, force: false, retry, stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: 0, exclusion: 0, committed: false,
             warning: None, failures: Default::default(), append: retry && a.session_disk.is_some(),
         }))))
     });
@@ -305,7 +308,7 @@ pub unsafe extern "C" fn capy_apple_session_open(app: u64, sessions: *const c_ch
 /// Serial owner after recovery preparation; exclusion 0 retains all drawings,
 /// u64::MAX removes the window, otherwise it removes one explicitly closed tab.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_session_capture(app: u64, exclusion: u64, clean_exit: bool) -> u64 {
+pub unsafe extern "C" fn capy_apple_session_capture(app: u64, exclusion: u64, clean_exit: bool, force: bool) -> u64 {
     let Some(mut lease_a)=handles::app(app) else { return 0; };
     let a=&mut *lease_a;
     a.perform(|a| {
@@ -315,7 +318,7 @@ pub unsafe extern "C" fn capy_apple_session_capture(app: u64, exclusion: u64, cl
         let active = if order.contains(&a.window.documents.selected()) { a.window.documents.selected() } else { order.first().copied().unwrap_or(0) };
         let captures = order.into_iter().map(|id| {let session=a.window.session(&a.host,id)?;Ok((id,session.capture_session()?,session.session_stamp()))}).collect::<Result<Vec<_>,String>>()?;
         Ok(handles::store(CapySessionTask(Mutex::new(SessionJob {
-            open: None, disk: Some(disk), environment: None, captures: Some(captures), candidates: Vec::new(), active, clean_exit, retry: false,
+            open: None, disk: Some(disk), environment: None, captures: Some(captures), candidates: Vec::new(), active, clean_exit, force, retry: false,
             stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: a.session_capture_sequence, exclusion, committed: false,
             warning: None, failures: Default::default(), append: false,
         }))))

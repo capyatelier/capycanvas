@@ -638,7 +638,7 @@ final class NativeOwner: @unchecked Sendable {
                 else { completion(documentDeliveryCopy["change_in_progress"].string, false) }
                 return
             }
-            guard ready == 0, let pointer = nativeHandle(capy_apple_session_capture(nativeValue(handle), exclusion, cleanExit)) else {
+            guard ready == 0, let pointer = nativeHandle(capy_apple_session_capture(nativeValue(handle), exclusion, cleanExit, waits || cleanExit || exclusion != 0)) else {
                 completion(takeNativeText(capy_apple_error(nativeValue(handle))) ?? documentDeliveryCopy["change_in_progress"].string, false); return
             }
             let task = SessionJob(pointer, failure: documentDeliveryCopy["change_in_progress"].string, access: ProjectFileAccess(state: persistence.locations?.state))

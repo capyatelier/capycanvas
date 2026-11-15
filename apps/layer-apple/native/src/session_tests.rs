@@ -166,11 +166,49 @@ fn checkpoint(app: &App, exclusion: u64, clean: bool) -> SessionJob {
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    let task = SessionJob(unsafe { capy_apple_session_capture(app.0, exclusion, clean) });
+    let task = SessionJob(unsafe { capy_apple_session_capture(app.0, exclusion, clean, true) });
     assert!(!(task.0==0), "{:?}", app.borrow().error);
     task.run();
     assert!(unsafe { capy_session_committed(task.0) });
     task
+}
+
+#[test]
+fn apple_timed_checkpoint_defers_pending_package_tiles_until_forced() {
+    use std::io::Seek;
+    for platform in [0, 1] {
+        let source = fixtures::drawing_app(platform, [96, 64]);
+        fixtures::drag(&source, 1, 1, [24., 24.], [72., 40.]);
+        let save = ProjectJob::new(&source, false);
+        let mut file = fixtures::tempfile();
+        assert_eq!(unsafe { capy_project_write(save.0, file.as_raw_fd()) }, 0, "{:?}", save.error());
+        file.rewind().unwrap();
+        let root = std::env::temp_dir().join(format!("capy-apple-pending-checkpoint-{}", layer_core::PortableId::random()));
+        let path = root.join("packed").join("scene");
+        let app = App::unbound(platform);
+        app.borrow().host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        let stores = layer_host::session_stores::SessionStores::native(path.clone(), std::sync::Arc::new(|| {}));
+        app.with(|native| stores.attach_window(&native.window, &native.host).unwrap());
+        let project = ProjectJob::new(&app, true);
+        assert_eq!(unsafe { capy_project_read(project.0, file.as_raw_fd(), c"Drawing.capy".as_ptr()) }, 0, "{:?}", project.error());
+        assert_eq!(unsafe { capy_apple_project_adopt(app.0, project.0, c"Drawing.capy".as_ptr(), c"".as_ptr()) }, 0, "{:?}", app.borrow().error);
+        let session = open(&app, &path, false);
+        session.run();
+        assert_eq!(unsafe { capy_apple_session_adopt(app.0, session.0) }, 0, "{:?}", app.borrow().error);
+        assert_eq!(unsafe { capy_session_restore_finished(session.0) }, 0);
+        assert!(app.document().memory().package_pending());
+        let timed = SessionJob(unsafe { capy_apple_session_capture(app.0, 0, false, false) });
+        assert_ne!(timed.0, 0, "{:?}", app.borrow().error);
+        timed.run();
+        assert!(!unsafe { capy_session_committed(timed.0) });
+        let forced = SessionJob(unsafe { capy_apple_session_capture(app.0, 0, false, true) });
+        assert_ne!(forced.0, 0, "{:?}", app.borrow().error);
+        forced.run();
+        assert!(unsafe { capy_session_committed(forced.0) });
+        drop((forced, timed, session, project, app, stores, save, source));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn presented_pixel(app: &App) -> [u8; 4] {
@@ -673,7 +711,7 @@ fn apple_session_failed_peer_checkpoint_keeps_closing_drawing_indexed() {
         let held = path.join(&peer.key).join("held-generations");
         std::fs::rename(&generation, &held).unwrap();
         std::fs::write(&generation, b"blocked").unwrap();
-        let task = SessionJob(unsafe { capy_apple_session_capture(app.0, closing, false) });
+        let task = SessionJob(unsafe { capy_apple_session_capture(app.0, closing, false, true) });
         assert_ne!(task.0, 0);
         assert_eq!(unsafe { capy_session_work(task.0, None, std::ptr::null_mut()) }, -1);
         assert!(!unsafe { capy_session_committed(task.0) });

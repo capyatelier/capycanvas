@@ -47,7 +47,7 @@ typedef uint64_t CapySessionTask;
 typedef uint64_t CapySessionDestination;
 typedef CapySessionDestination (*CapySessionDestinationObserver)(const char *uri, void *context);
 CapySessionTask capy_apple_session_open(CapyApple app, const char *sessions, const char *scene, bool adopt, bool retry);
-CapySessionTask capy_apple_session_capture(CapyApple app, uint64_t exclusion, bool clean_exit);
+CapySessionTask capy_apple_session_capture(CapyApple app, uint64_t exclusion, bool clean_exit, bool force);
 int32_t capy_session_work(CapySessionTask task, CapySessionDestinationObserver observe, void *context);
 CapySessionDestination capy_session_destination_read(int32_t fd);
 void capy_session_destination_free(CapySessionDestination fingerprint);
