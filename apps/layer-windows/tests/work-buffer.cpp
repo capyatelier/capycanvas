@@ -916,6 +916,8 @@ int main() {
     assert(queries.Take()->json=="menu");assert(queries.Take()->json=="thumbnail");assert(queries.Empty());
     CanvasWorkBuffer idleWork;
     assert(NextCanvasRenderStep(false,idleWork,queries)==CanvasRenderStep::Wait&&NextCanvasRenderStep(true,idleWork,queries)==CanvasRenderStep::Frame);
+    assert(CanvasAcquisitionWaitEnds(4,false,false,true)&&!CanvasAcquisitionWaitEnds(4,false,false,false));
+    assert(!CanvasAcquisitionWaitEnds(0,false,false,true)&&CanvasAcquisitionWaitEnds(0,true,false,false)&&CanvasAcquisitionWaitEnds(4,false,true,false));
     for(auto kind:{CanvasQueryKind::Filters,CanvasQueryKind::Thumbnails,CanvasQueryKind::LayerMenu,CanvasQueryKind::Workspace,CanvasQueryKind::Document,CanvasQueryKind::Papers}){
         assert(queries.Push({kind,"retry",{}}));
         assert(NextCanvasRenderStep(false,idleWork,queries)==CanvasRenderStep::Answer);

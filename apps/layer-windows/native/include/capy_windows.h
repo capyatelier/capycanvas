@@ -160,7 +160,8 @@ __declspec(dllimport) int32_t capy_scroll(CapyHost, float x, float y, float dx, 
 __declspec(dllimport) int32_t capy_chrome(CapyHost, uint32_t kind, float x, float y, bool canvas, bool popup_open);
 __declspec(dllimport) int32_t capy_suspend(CapyHost);
 __declspec(dllimport) bool capy_view(CapyHost, CapyView*);
-/* Acquisition: 0=wait, 1=image, 2=surface reconfiguration, 3=commands only while a drawing renderer is unavailable. Can wait for DXGI. Drain newly arrived input after this call. */
+/* Acquisition: 0=retry after a refresh, 1=image, 2=surface reconfiguration, 3=commands only while a drawing renderer is unavailable,
+   4=the previous frame is on the GPU and its completion calls the services wake. Can wait for DXGI. Drain newly arrived input after this call. */
 __declspec(dllimport) int32_t capy_acquire(CapyHost);
 __declspec(dllimport) int32_t capy_frame(CapyHost, uint64_t now_ns, uint64_t presentation_ns);
 __declspec(dllimport) int32_t capy_present_held(CapyHost);

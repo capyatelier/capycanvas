@@ -1422,9 +1422,10 @@ void CanvasWindow::Run() {
             auto acquiredAt=latencyTrace.enabled?Now():0;
             if(acquired<0) {if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
             if(acquired==2) {std::lock_guard lock(mutex);resize=true;continue;}
-            if(acquired==0) {
+            if(acquired==0||acquired==4) {
                 std::unique_lock lock(mutex);
-                wake.wait_for(lock,std::chrono::milliseconds(16),[&]{return closing||resize;});
+                auto ends=[&]{return CanvasAcquisitionWaitEnds(acquired,closing,resize,servicesReady);};
+                if(acquired==4)wake.wait(lock,ends);else wake.wait_for(lock,std::chrono::milliseconds(16),ends);
                 continue;
             }
             std::deque<CanvasWork> pending;

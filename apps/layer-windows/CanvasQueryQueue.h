@@ -55,6 +55,8 @@ inline CanvasRenderStep NextCanvasRenderStep(bool canvasPending,CanvasWorkBuffer
 
 inline bool CanAnswerCanvasQueryAfterFrame(bool closing){return !closing;}
 
+inline bool CanvasAcquisitionWaitEnds(int32_t acquired,bool closing,bool resize,bool servicesReady){return closing||resize||(acquired==4&&servicesReady);}
+
 class CanvasSurfacePoll {
     std::optional<std::chrono::steady_clock::time_point> due;
 public:

@@ -1248,7 +1248,7 @@ pub unsafe extern "C" fn capy_acquire(host: u64) -> i32 {
         let ready = host.pacing.ready();
         if let (Some(timing), Some(start)) = (&mut host.frame_timing, pacing_start) { timing.pacing_ns = crate::frame_timing::now() - start; }
         if !ready {
-            return Ok(0);
+            return Ok(4);
         }
         let acquisition_start = host.frame_timing.map(|_| crate::frame_timing::now());
         host.target = match host.surface.get_current_texture() {
