@@ -347,7 +347,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
                     if(!claim())return;
                     swiping=true;ignoreClick=true;suppressContext=true;hideMenu();
                     if(recognizing){recognizing=false;recognizer.CompleteGesture();}
-                }else{cancel(L"native_scroll");return;}
+                }else{if(std::max(std::abs(dx),std::abs(dy))<=2.*GetSystemMetricsForDpi(SM_CXDRAG,96))return;cancel(L"native_scroll");return;}
             }
             if(swiping){if(auto row=source.lock())row->swipe(initialSwipe>0?std::max(0.,initialSwipe-(position.X-origin.X)):initialSwipe-(position.X-origin.X),false);e.Handled(true);return;}
             auto owner=view.lock();auto row=owner?panelRow(owner->data->state,id):J{};
