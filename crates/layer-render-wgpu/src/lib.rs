@@ -2309,6 +2309,14 @@ impl WgpuRasterizer {
         destination_pages
     }
 
+    fn stroke_start_at(&self,batch:&DabBatch,coordinate:[u32;2],intent:&raster::contents::Intent,reads_preview:bool,
+        declaration:Option<&Arc<scene::PreviewDeclaration>>)->Option<(&StrokeStart,bool)> {
+        self.paint_layers.iter().find(|layer|layer.id==batch.target).and_then(|layer|layer.pages.iter().find(|page|page.coordinate==coordinate))
+            .and_then(|page|page.stroke_start.as_ref()).filter(|start|start.state.matches(batch.stroke_id,intent)).map(|start|(start,false))
+            .or_else(||reads_preview.then(||self.preview_page(coordinate)).flatten().and_then(|page|page.stroke_start.as_ref())
+                .filter(|start|start.matches(batch.stroke_id,intent,declaration)).map(|start|(start,true)))
+    }
+
     fn material_offsets(&self, batch: &DabBatch) -> [Option<[i32; 2]>; 9] {
         let stored = self.in_place_dry_material(batch) || self.compact_preview_contribution(batch);
         let center = pointwise(&batch.style);
@@ -2391,12 +2399,8 @@ impl WgpuRasterizer {
                         coordinate[1] as i32 + index as i32 / 3 - 1];
                     if x < 0 || y < 0 { continue; }
                     let at = [x as u32, y as u32];
-                    let start = layer.pages.iter().find(|p| p.coordinate == at)
-                        .and_then(|p| p.stroke_start.as_ref()).filter(|start|start.state.matches(batch.stroke_id,&intent))
-                        .or_else(|| reads_preview.then(|| self.preview_page(at)).flatten()
-                            .and_then(|p| p.stroke_start.as_ref()).filter(|start|start.matches(batch.stroke_id,&intent,declaration.as_ref())));
-                    if let Some(start)=start {
-                        let (tile,witness)=neighborhood.brush_state(batch.target,at,scene::sources::BrushState::Start(batch.stroke_id),reads_preview,&start.state.version,&receipt)?;
+                    if let Some((start,predicted))=self.stroke_start_at(batch,at,&intent,reads_preview,declaration.as_ref()) {
+                        let (tile,witness)=neighborhood.brush_state(batch.target,at,scene::sources::BrushState::Start(batch.stroke_id),predicted,&start.state.version,&receipt)?;
                         if let Some(declaration)=accepting {
                             declaration.accept_inputs(batch.target,RasterPlane::Color,at,scene::PreviewStage::Seed,scene::PreviewPass::StrokeStart,vec![witness.clone()])?;
                             history.push(witness);
@@ -2443,13 +2447,9 @@ impl WgpuRasterizer {
             } else if retained {
                 current
             } else if pointwise(&batch.style) {
-                let start = layer.pages.iter().find(|p| p.coordinate == coordinate)
-                    .and_then(|p| p.stroke_start.as_ref()).filter(|start|start.state.matches(batch.stroke_id,&intent))
-                    .or_else(|| reads_preview.then(|| self.preview_page(coordinate))
-                        .flatten().and_then(|p| p.stroke_start.as_ref()).filter(|start|start.matches(batch.stroke_id,&intent,declaration.as_ref())));
                 if batch.style.opacity<1. {
-                    if let Some(start)=start {
-                        let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Start(batch.stroke_id),reads_preview,&start.state.version,&receipt)?;
+                    if let Some((start,predicted))=self.stroke_start_at(batch,coordinate,&intent,reads_preview,declaration.as_ref()) {
+                        let (tile,witness)=neighborhood.brush_state(batch.target,coordinate,scene::sources::BrushState::Start(batch.stroke_id),predicted,&start.state.version,&receipt)?;
                         if let Some(declaration)=accepting {
                             declaration.accept_inputs(batch.target,RasterPlane::Color,coordinate,scene::PreviewStage::Seed,scene::PreviewPass::StrokeStart,vec![witness.clone()])?;
                             history.push(witness);
