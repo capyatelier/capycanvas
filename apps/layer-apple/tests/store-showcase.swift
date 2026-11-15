@@ -136,6 +136,22 @@ import UIKit
                 try await ready()
                 let text = texts(store.snapshot.json)
                 let fonts = try await Task.detached { try Self.fonts(text) }.value
+                #if os(macOS)
+                if let panel = store.snapshot["layout"]["groups"].array.first(where: { $0["active"].string == "layers" }) {
+                    let window = NSApp.keyWindow!
+                    guard let field = nativeAccessibilityElement(window.contentView!, identifier: "number-value-layer-opacity") else {
+                        throw HostFailure(message: "Native Layers opacity readout unavailable")
+                    }
+                    let value = nativeAccessibilityBounds(field).offsetBy(dx: -window.frame.minX, dy: 0)
+                    let bounds = panel["bounds"].rect
+                    let opacity = store.state["layer_tools"]["editing_layer"]["opacity"].number
+                    let formatted = try store.resolveNumber(store.catalog["layer_opacity"], value: opacity, operation: ["type": "format"])["text"].string
+                    let width = EditorTextMetrics.width(formatted, size: store.catalog["text_size_pt"].number * 4 / 3,
+                        weight: .regular, monospacedDigits: true) + 12
+                    try require(value.minX >= bounds.minX + layerEdgeInset - 0.5 && value.maxX <= bounds.maxX - layerEdgeInset + 0.5 && value.width + 0.5 >= width,
+                        "Layer opacity \(formatted) exceeds its native row: panel=\(bounds), value=\(value)")
+                }
+                #endif
                 let token = "\(language)/\(scene["id"].string)-\(theme)"
                 var report: [String: Any] = ["token": token, "device": job["device"].string, "language": language,
                     "scene": scene["id"].string, "theme": theme, "workspace": workspace, "source": scene["source"].string,

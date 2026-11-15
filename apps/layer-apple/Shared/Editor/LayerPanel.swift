@@ -24,6 +24,7 @@ struct LayerPanel: View {
         panel["controls"].array.contains { $0["control"].string == control && $0["visible_in_panel"].bool }
     }
     var body: some View {
+        GeometryReader { viewport in
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 if !simple && visible("layer_opacity") { header.modifier(PanelBodyMeasurement(panel: "layers", part: "header")) }
@@ -89,7 +90,7 @@ struct LayerPanel: View {
                     }
                 } else { Spacer(minLength: 0) }
                 if !simple && visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }
-            }
+            }.frame(width: viewport.size.width)
         }
             .onAppear { interaction.store = store; interaction.scrollPosition = scrollPosition }
             .onChange(of: drawerPagePosition) { before, next in
@@ -108,7 +109,7 @@ struct LayerPanel: View {
                 interaction.cancel(); filterMenu = JSON()
             }
             .onDisappear { interaction.cancel() }
-
+        }
     }
     @ViewBuilder private var dragPreview: some View {
         if let drag = interaction.drag,
