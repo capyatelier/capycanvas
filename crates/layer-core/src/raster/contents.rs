@@ -225,11 +225,18 @@ impl Node {
     }
 }
 
+impl Clone for Node {
+    fn clone(&self) -> Self {
+        self.owner.bytes.fetch_add(Self::BYTES, Ordering::Relaxed);
+        Self { stamp: self.stamp, kind: self.kind.clone(), owner: self.owner.clone() }
+    }
+}
+
 impl Drop for Node {
     fn drop(&mut self) { self.owner.bytes.fetch_sub(Self::BYTES, Ordering::Relaxed); }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Kind { Leaf, Canonical(Arc<CanonicalName>), Version(Arc<ContentVersion>), Branch([Option<Arc<Node>>; 4]), PendingBranch(Arc<PendingBranch>) }
 
 #[derive(Debug)]
@@ -244,9 +251,19 @@ impl PendingBranch {
     const BYTES: usize = std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>();
     fn new(children: [Option<Arc<Node>>; 4], level: u32, owner: &Arc<Metadata>) -> Arc<Self> {
         owner.bytes.fetch_add(Self::BYTES, Ordering::Relaxed);
-        let authored = branch_stamp(level, &children.each_ref().map(|child| child.as_ref().map_or_else(|| empty(level - 1), |child| child.authored_stamp())));
-        Arc::new(Self { children, authored, resolved: OnceLock::new(), owner: owner.clone() })
+        Arc::new(Self { authored: authored(level, &children), children, resolved: OnceLock::new(), owner: owner.clone() })
     }
+}
+
+impl Clone for PendingBranch {
+    fn clone(&self) -> Self {
+        self.owner.bytes.fetch_add(Self::BYTES, Ordering::Relaxed);
+        Self { children: self.children.clone(), authored: self.authored, resolved: self.resolved.clone(), owner: self.owner.clone() }
+    }
+}
+
+fn authored(level: u32, children: &[Option<Arc<Node>>; 4]) -> ContentStamp {
+    branch_stamp(level, &children.each_ref().map(|child| child.as_ref().map_or_else(|| empty(level - 1), |child| child.authored_stamp())))
 }
 
 impl Drop for PendingBranch {
@@ -296,35 +313,37 @@ fn check_coordinate(coordinate: [u32; 2]) {
     assert!(coordinate.into_iter().all(|c| c < 1 << DEPTH), "Raster content coordinate exceeds its index");
 }
 
-fn replace(node: Option<&Arc<Node>>, coordinate: [u32; 2], level: u32, name: Option<TileName>, owner: &Arc<Metadata>) -> Option<Arc<Node>> {
+fn replace(slot: &mut Option<Arc<Node>>, coordinate: [u32; 2], level: u32, name: Option<TileName>, owner: &Arc<Metadata>) {
     if level == 0 {
-        let name = name?;
-        if let Some(node) = node && node.stamp == name.identity() { return Some(node.clone()); }
-        let stamp = name.identity();
-        let kind = match name {
-            TileName::Known(_) => Kind::Leaf,
-            TileName::Version(version) => match &version.pending {
-                None => Kind::Leaf,
-                Some(PendingVersion::Canonical(name)) => Kind::Canonical(name.clone()),
-                _ => Kind::Version(Arc::new(version)),
-            },
-        };
-        return Some(Node::new(stamp, kind, owner));
+        if slot.as_ref().map(|node| node.stamp) != name.as_ref().map(TileName::identity) { *slot = name.map(|name| leaf(name, owner)); }
+        return;
     }
-    let mut children = match node.map(|node| &node.kind) {
-        Some(Kind::Branch(children)) => children.clone(),
-        Some(Kind::PendingBranch(branch)) => branch.children.clone(),
-        _ => Default::default(),
+    if slot.is_none() && name.is_none() { return; }
+    let node = Arc::make_mut(slot.get_or_insert_with(|| Node::new(empty(level), Kind::Branch(Default::default()), owner)));
+    let children = match &mut node.kind { Kind::PendingBranch(branch) => &mut Arc::make_mut(branch).children, Kind::Branch(children) => children, _ => return };
+    replace(&mut children[child(coordinate, level - 1)], coordinate, level - 1, name, owner);
+    if children.iter().all(Option::is_none) { *slot = None; return; }
+    node.stamp = branch_stamp(level, &children.each_ref().map(|child| stamp(child.as_ref(), level - 1)));
+    let pending = children.iter().flatten().any(|child| child.pending());
+    match &mut node.kind {
+        Kind::PendingBranch(branch) if pending => { let branch = Arc::make_mut(branch); branch.authored = authored(level, &branch.children); branch.resolved = OnceLock::new(); },
+        Kind::Branch(children) if pending => { node.kind = Kind::PendingBranch(PendingBranch::new(std::mem::take(children), level, owner)); },
+        Kind::PendingBranch(branch) => { node.kind = Kind::Branch(std::mem::take(&mut Arc::make_mut(branch).children)); },
+        _ => {},
+    }
+}
+
+fn leaf(name: TileName, owner: &Arc<Metadata>) -> Arc<Node> {
+    let stamp = name.identity();
+    let kind = match name {
+        TileName::Known(_) => Kind::Leaf,
+        TileName::Version(version) => match &version.pending {
+            None => Kind::Leaf,
+            Some(PendingVersion::Canonical(name)) => Kind::Canonical(name.clone()),
+            _ => Kind::Version(Arc::new(version)),
+        },
     };
-    let index = child(coordinate, level - 1);
-    let next = replace(children[index].as_ref(), coordinate, level - 1, name, owner);
-    if children[index].as_ref().zip(next.as_ref()).is_some_and(|(a, b)| Arc::ptr_eq(a, b))
-        || children[index].is_none() && next.is_none() { return node.cloned(); }
-    children[index] = next;
-    if children.iter().all(Option::is_none) { return None; }
-    let stamp = branch_stamp(level, &children.each_ref().map(|node| stamp(node.as_ref(), level - 1)));
-    let kind = if children.iter().flatten().any(|node| node.pending()) { Kind::PendingBranch(PendingBranch::new(children, level, owner)) } else { Kind::Branch(children) };
-    Some(Node::new(stamp, kind, owner))
+    Node::new(stamp, kind, owner)
 }
 
 fn children(node: Option<&Arc<Node>>) -> [Option<&Arc<Node>>; 4] {
@@ -352,7 +371,7 @@ fn differences(before: Option<&Arc<Node>>, after: Option<&Arc<Node>>, coordinate
 impl ContentTree {
     pub fn set(&mut self, coordinate: [u32; 2], name: Option<ContentName>) {
         check_coordinate(coordinate);
-        self.root = replace(self.root.as_ref(), coordinate, DEPTH, name.map(TileName::Known), &self.owner);
+        replace(&mut self.root, coordinate, DEPTH, name.map(TileName::Known), &self.owner);
     }
 
     pub fn root(&self) -> ContentStamp { stamp(self.root.as_ref(), DEPTH) }
@@ -429,7 +448,7 @@ impl ContentTree {
 
     pub fn set_version(&mut self, coordinate: [u32; 2], version: ContentVersion) {
         check_coordinate(coordinate);
-        self.root = replace(self.root.as_ref(), coordinate, DEPTH, Some(TileName::Version(version)), &self.owner);
+        replace(&mut self.root, coordinate, DEPTH, Some(TileName::Version(version)), &self.owner);
     }
 
     pub fn metadata_bytes(&self) -> usize {
@@ -578,6 +597,20 @@ mod tests {
         }
         assert!(tree.cell([1, 0], DEPTH).is_none());
         assert!(tree.cell([u32::MAX, 0], 1).is_none());
+    }
+
+    #[test]
+    fn writes_update_the_nodes_no_snapshot_shares_in_place() {
+        let mut tree = ContentTree::default();
+        tree.set([0, 0], Some(ContentName::fresh()));
+        let snapshot = tree.clone();
+        let held = snapshot.root();
+        tree.set([1, 0], Some(ContentName::fresh()));
+        let root = tree.root.as_ref().map(Arc::as_ptr);
+        tree.set([0, 1], Some(ContentName::fresh()));
+        assert_eq!(tree.root.as_ref().map(Arc::as_ptr), root, "a write copied ancestors that no snapshot shares");
+        assert_eq!(snapshot.root(), held);
+        assert!(snapshot.cell([1, 0], 0).is_some_and(|stamp| stamp == empty(0)));
     }
 
     #[test]
