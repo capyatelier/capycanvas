@@ -49,9 +49,10 @@ toolbar panels use the same existing phone drawer path.
 - The supported minimum short side is 320: Android's smallest phone width, an
   iPhone SE with Display Zoom (320 × 568 pt) and narrow iPad windows. Narrower
   windows (browsers, freely resized windows; the first Galaxy Fold's cover screen
-  is 280 CSS px wide) get the 320 layout scaled down to fit. Hosts that can set a
-  minimum window size (Android split screen and freeform, GTK, macOS, Windows)
-  set 280 × 280. Fold cover screens can be about 280 dp or CSS px wide, and a
+  is 280 CSS px wide) get the 320 layout scaled down to fit. Hosts that present the
+  phone layout and can set a minimum window size (Android split screen and
+  freeform, GTK) set 280 × 280; macOS and Windows keep their desktop layout
+  and minimum window size until the phone layout is ported there. Fold cover screens can be about 280 dp or CSS px wide, and a
   360 × 640 phone in split screen can have a window about 280 tall.
 - Linux phone shells see the app through its AppStream minimum display length
   and the Phosh and Plasma Mobile desktop FormFactor declarations.
