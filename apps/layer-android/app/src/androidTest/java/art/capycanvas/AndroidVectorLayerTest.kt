@@ -20,6 +20,8 @@ class AndroidVectorLayerTest {
         wakeDevice()
         compose.activity.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         host.awaitReady(compose = compose)
+        val tags = host.bootstrap!!.array("shipped_tags").values().map { it.toString() }
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "language", "value" to tags.indexOf("en") + 1)))
     }
     private fun action(value: JSONObject) {
         val done = CountDownLatch(1)

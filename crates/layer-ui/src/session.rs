@@ -861,7 +861,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ContextTarget::Tile {panel,tile}=>Some(DrawerAnchor::Tile {panel,tile}),
                 ContextTarget::Header {id:Some(id)}=>Some(DrawerAnchor::Header {id}), _=>None,
             };
-            if let Some(variants)=anchor.and_then(|a|self.tool_variants_menu(a).ok()) {
+            if let Some(variants)=anchor.filter(|a| !self.state.workspace.layout.anchor_control(*a).is_some_and(ToolbarControl::opens_menu))
+                .and_then(|a|self.tool_variants_menu(a).ok()) {
                 menu.title=variants.title;
                 menu.sections.splice(0..0,variants.sections);
             }

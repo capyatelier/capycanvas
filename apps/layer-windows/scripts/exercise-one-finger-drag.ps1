@@ -19,7 +19,7 @@ function At([string]$Id){$b=(Control $Id -Arranged).Current.BoundingRectangle;@(
 function Click([string]$Id){$p=At $Id;[CapyRowPointer]::Down('mouse',$p[0],$p[1]);[CapyRowPointer]::Up()}
 function Park{$p=At 'drawing-canvas';[CapyRowPointer]::Hover($p[0],$p[1])}
 function Context([string]$Id){$p=At $Id;[CapyRowPointer]::RightClick($p[0],$p[1])}
-function Dismiss{[CapyRowPointer]::Key([uint32]$review.Id,0x1b);Wait-Until {!(Find 'Auto' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible)} 'One-finger menu did not dismiss'}
+function Dismiss{[CapyRowPointer]::Key([uint32]$review.Id,0x1b);Wait-Until {@(@('Auto','Customize Title Bar…','Insert Tools…')|Where-Object {Find $_ -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible}).Count -eq 0} 'One-finger menu did not dismiss'}
 function Header{(Model).header.model}
 function Entries{@((Header).zones|ForEach-Object {$_})}
 function Finger-Tile{@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.command -eq 'one_finger_drag'}}
@@ -32,7 +32,7 @@ function Add-Finger{
  Invoke ((Model).picker.confirm_label) -Name -Within (Control 'tool-picker') -Type ([System.Windows.Automation.ControlType]::Button)
  Wait-Until {!(Model).picker -and !(Find 'tool-picker' -Visible) -and (Control 'drawing-canvas').Current.IsEnabled} 'Add Tools picker did not close and release the canvas'
 }
-function Menu-Choices([string]$Name,[switch]$Customization){
+function Menu-Choices([string]$Name){
  $rows=@($labels|ForEach-Object {Control $_ -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged})
  $selected=$values.IndexOf((Model).state.settings.finger_drawing)
  for($i=0;$i -lt 4;$i++){
@@ -41,10 +41,11 @@ function Menu-Choices([string]$Name,[switch]$Customization){
   if($toggle.Current.ToggleState -ne $expected){throw "Wrong native checkmark for $($labels[$i])"}
   if($i -gt 0 -and $rows[$i].Current.BoundingRectangle.Top -lt $rows[$i-1].Current.BoundingRectangle.Bottom){throw 'One-finger menu rows overlap or change order'}
  }
- if($Customization){
-  $custom=Control $(if($Name.StartsWith('header')){'Customize Title Bar…'}else{'Insert Tools…'}) -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
-  if($custom.Current.BoundingRectangle.Top -lt $rows[3].Current.BoundingRectangle.Bottom){throw 'Customization precedes one-finger choices'}
- }
+ Capture $Name -WithModel -Composed
+}
+function Customization-Menu([string]$Name){
+ $null=Control $(if($Name.StartsWith('header')){'Customize Title Bar…'}else{'Insert Tools…'}) -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+ foreach($label in $labels){if(Find $label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Visible){throw "Customization menu contains the primary choice: $label"}}
  Capture $Name -WithModel -Composed
 }
 function Check-Tile([string]$Id,[string]$Name){
@@ -67,10 +68,10 @@ function Check-Tile([string]$Id,[string]$Name){
  $button.SetFocus();Wait-Until {$button.Current.HasKeyboardFocus} 'One-finger tile did not receive native focus'
  [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
  Menu-Choices "$Name-keyboard";Dismiss
- Context $Id;Menu-Choices "$Name-secondary" -Customization;Dismiss
+ Context $Id;Customization-Menu "$Name-secondary";Dismiss
  $p=At $Id;[CapyRowPointer]::Down('touch',$p[0],$p[1]);Start-Sleep -Milliseconds 900
- try{Menu-Choices "$Name-hold" -Customization}finally{[CapyRowPointer]::Up()}
- $null=Control 'Auto' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
+ try{Customization-Menu "$Name-hold"}finally{[CapyRowPointer]::Up()}
+ $null=Control $(if($Name -eq 'header'){'Customize Title Bar…'}else{'Insert Tools…'}) -Name -Type ([System.Windows.Automation.ControlType]::MenuItem) -Arranged
  Dismiss
 }
 function Open-Preferences{

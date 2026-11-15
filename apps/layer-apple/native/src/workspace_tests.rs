@@ -85,6 +85,49 @@ fn config(app: &App, id: &str) -> Value {
 }
 
 #[test]
+fn apple_only_ipad_paint_commands_end_with_flip_divider_and_one_finger_drag() {
+    let finger = json!({"kind":"command","command":"one_finger_drag"});
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let policy = app.borrow().host.session.state().platform;
+        for preset in layer_ui::WorkspacePreset::ALL {
+            app.action(json!({"type":"restore_workspace","workspace":layer_ui::WorkspaceState {
+                layout: preset.layout(policy), ..Default::default()
+            }}));
+            let state = app.state();
+            let layout = &state["workspace"]["layout"];
+            assert!(layout["header"]["zones"].as_array().unwrap().iter()
+                .flat_map(|zone| zone.as_array().unwrap()).all(|entry| entry["item"]["control"] != finger));
+            let owners = layout["panels"].as_array().unwrap().iter().filter(|panel|
+                panel["content"]["tiles"].as_array().is_some_and(|tiles|
+                    tiles.iter().any(|tile| tile["control"] == finger)))
+                .map(|panel| panel["id"].as_str().unwrap()).collect::<Vec<_>>();
+            let paint = preset == layer_ui::WorkspacePreset::Illustrator;
+            assert_eq!(owners, if platform == 0 && paint { vec!["commands"] } else { vec![] }, "{platform}/{preset:?}");
+            if !paint { continue; }
+            let snapshot = app.full_snapshot();
+            let commands = snapshot["panels"].as_array().unwrap().iter().find(|panel| panel["id"] == "commands").unwrap();
+            let tiles = commands["tiles"].as_array().unwrap();
+            let controls = tiles.iter().map(|tile| tile["control"].clone()).collect::<Vec<_>>();
+            assert_eq!(controls.len(), if platform == 0 { 14 } else { 12 });
+            assert_eq!(controls, config(&app, "commands")["content"]["tiles"].as_array().unwrap().iter()
+                .map(|tile| tile["control"].clone()).collect::<Vec<_>>());
+            assert!(layout["bands"].as_array().unwrap().iter().any(|band| band["edge"] == "top"
+                && band["root"]["panels"].as_array().is_some_and(|panels| panels.contains(&json!("commands")))));
+            if platform == 0 {
+                assert_eq!(&controls[controls.len() - 3..], &[json!({"kind":"command","command":"flip_horizontal"}),
+                    json!({"kind":"divider"}), finger.clone()]);
+                assert_eq!(controls.iter().filter(|control| **control == finger).count(), 1);
+                assert_eq!(tiles.last().unwrap()["menu"], true);
+                assert_eq!(tiles.last().unwrap()["has_variants"], false);
+            } else {
+                assert_eq!(controls.last().unwrap(), &json!({"kind":"command","command":"flip_horizontal"}));
+            }
+        }
+    }
+}
+
+#[test]
 fn apple_tab_preview_request_and_release_commit_the_same_slot() {
     for platform in [0, 1] {
         let app = App::new(platform);

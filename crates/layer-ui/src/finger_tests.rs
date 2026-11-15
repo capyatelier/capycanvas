@@ -531,7 +531,7 @@ fn move_canvas_keeps_finger_drags_out_of_the_selected_tool() {
 }
 
 #[test]
-fn one_finger_drag_tile_opens_its_choices_and_reveals_the_preference_when_invoked() {
+fn one_finger_drag_tile_opens_its_choices_and_the_command_reveals_the_preference() {
     let mut s = session(Platform::Gtk);
     let control = ToolbarControl::Command { command: CommandId::OneFingerDrag };
     s.state.workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Tool { control }]).unwrap();
@@ -555,7 +555,13 @@ fn one_finger_drag_tile_opens_its_choices_and_reveals_the_preference_when_invoke
         assert_eq!(icon, mode.effective(DeviceClass::Desktop, false).icon());
     }
     let context = s.context_menu(ContextTarget::Header { id: Some(entry.id) }).unwrap();
-    assert_eq!(context.sections[0].len(), 4);
+    assert!(context.sections.iter().flatten().all(|item| !matches!(item.action,
+        Some(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::FingerDrawing, .. } }))));
+    assert!(crate::shortcuts::definitions(Platform::Gtk).iter().any(|(definition, _)| definition.id == CommandId::OneFingerDrag.shortcut_id()));
+    s.dispatch(UiAction::Invoke { command: CommandId::SearchCommands }).unwrap();
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Query { text: "One-finger".into() } }).unwrap();
+    assert!(s.state.command_search.as_ref().unwrap().results.iter().any(|entry| entry.label == "One-finger drag"));
+    s.dispatch(UiAction::CommandSearch { action: CommandSearchAction::Close }).unwrap();
     assert!(!s.state.settings_open);
     s.dispatch(UiAction::ActivateHeaderItem { id: entry.id }).unwrap();
     assert!(s.state.settings_open);
@@ -563,14 +569,18 @@ fn one_finger_drag_tile_opens_its_choices_and_reveals_the_preference_when_invoke
 }
 
 #[test]
-fn tablet_sketch_title_bar_places_one_finger_drag_after_the_main_menu() {
+fn tablet_paint_commands_end_with_one_finger_drag() {
     for platform in Platform::ALL {
-        let header = WorkspacePreset::Painter.layout(platform).header;
-        let left = header.entries().filter(|entry| header.location(entry.id).is_some_and(|(zone, _)| zone == HeaderZone::Left))
-            .map(|entry| entry.item).collect::<Vec<_>>();
-        let tile = HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::OneFingerDrag } };
+        let layout = WorkspacePreset::Illustrator.layout(platform);
+        let controls = layout.panel(Panel::Commands).unwrap().tiles().iter().map(|tile| tile.control).collect::<Vec<_>>();
+        let tile = ToolbarControl::Command { command: CommandId::OneFingerDrag };
         let tablet = matches!(platform, Platform::Android | Platform::Ios);
-        assert_eq!(left.iter().filter(|item| **item == tile).count(), usize::from(tablet), "{platform:?}");
-        if tablet { assert_eq!(left.iter().position(|item| *item == tile), left.iter().position(|item| *item == HeaderItem::Menu).map(|menu| menu + 1)); }
+        assert_eq!(controls.ends_with(&[ToolbarControl::Divider, tile]), tablet, "{platform:?}");
+        assert_eq!(controls.iter().filter(|control| **control == tile).count(), usize::from(tablet), "{platform:?}");
+        for preset in [WorkspacePreset::Painter, WorkspacePreset::Photographer] {
+            let layout = preset.layout(platform);
+            assert!(layout.header.entries().all(|entry| entry.item != HeaderItem::Tool { control: tile }), "{preset:?}/{platform:?}");
+            assert!(layout.panels.iter().all(|panel| panel.tiles().iter().all(|t| t.control != tile)), "{preset:?}/{platform:?}");
+        }
     }
 }

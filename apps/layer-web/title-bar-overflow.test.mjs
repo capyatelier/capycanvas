@@ -26,6 +26,8 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
   const clean=async()=>assert.equal(await evaluate('!!document.querySelector(".header-drag-preview")||document.querySelector("#workspace").hasAttribute("data-header-dragging")'),false);
   const workspace=await evaluate('layerApp.app.workspace_persistence()');
   try {
+    const desktop=structuredClone(workspace);desktop.layout.phone=null;
+    await send({type:'restore_workspace',workspace:desktop});
     // Even the compact menu and its neighbors overflow at extreme widths.
     // Setup uses shared edits; all pickups are native.
     for(const e of (await model()).zones.flat())await edit({type:'remove',id:e.id});
@@ -41,6 +43,7 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
       assert.ok(await evaluate('!!document.querySelector(".header-drag-preview")'));
       await escape();await pointer('up');await clean();assert.deepEqual(await model(),baseline);
       await resize(narrow);
+      assert.equal(await evaluate('!!layerApp.app.layout(innerWidth,innerHeight).phone'),false,'The overflow fixture remains in desktop presentation');
       assert.equal(await evaluate(`document.querySelector('${body}').hidden`),true);
       await click('#header-overflow-0 > summary');
       const row=`[data-header-overflow-item="${menu}"]`,from=center(await rect(row));
@@ -59,7 +62,8 @@ export async function checkTitleBarOverflow({call,evaluate,settle}) {
       if(size==='medium')for(const cancellation of ['capture','resize','source']) {
         await click('#header-overflow-0 > summary');await pointer('down',center(await rect(row)));
         await pointer('move',{x:300,y:260});
-        assert.ok(await evaluate('!!document.querySelector(".header-drag-preview")'));
+        assert.ok(await evaluate('!!document.querySelector(".header-drag-preview")'),
+          `${size}/${device}/${cancellation}: overflow pickup before cancellation`);
         if(cancellation==='capture')await evaluate('document.querySelector("#workspace").releasePointerCapture(__overflowEvents.filter(e=>e.type==="pointerdown").at(-1).id)');
         if(cancellation==='resize')await resize(narrow-40);
         if(cancellation==='source')await evaluate(`document.querySelector('${row}').remove()`);

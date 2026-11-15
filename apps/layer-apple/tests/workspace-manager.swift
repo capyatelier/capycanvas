@@ -19,6 +19,13 @@ import SwiftUI
             try await workspaces.perform(["type": "switch", "id": defaults[1]["id"].string])
             let original = workspaces.view["id"].string
             precondition(original == defaults[1]["id"].string)
+            let commands = editor.panel("commands")["tiles"].array
+            precondition(commands.count == (platform == 0 ? 14 : 12), "Only iPad Paint adds the divider and one-finger tile")
+            if platform == 0 {
+                precondition(commands.suffix(3).map { $0["control"]["command"].string.isEmpty
+                    ? $0["control"]["kind"].string : $0["control"]["command"].string }
+                    == ["flip_horizontal", "divider", "one_finger_drag"])
+            }
             let defaultBrush = editor.state["brush"].stableKey
             try await editor.apply(["type": "workspace_manager", "command": ["type": "manage"]])
             try await wait("manager request acknowledgement") {

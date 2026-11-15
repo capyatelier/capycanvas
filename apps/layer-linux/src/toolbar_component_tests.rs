@@ -1351,6 +1351,14 @@ fn native_one_finger_drag_tiles() {
     d.click_label("Insert Tools…");
     add(&mut d);
     let toolbar = control_anchor(&d, control);
+    let customization_only = |d: &Driver, name: &str| {
+        let popup = variant_context(d);
+        idle_paint(&popup);
+        for label in ["Auto", "Draw", "Move canvas", "Off"] {
+            assert!(find_menu_item(popup.upcast_ref(), label).is_none(), "{name} customization omits {label}");
+        }
+        assert!(find_menu_item(popup.upcast_ref(), if name == "header" { "Customize Title Bar…" } else { "Remove Tool" }).is_some());
+    };
     for (size, style) in [(HeaderSize::Small, TileStyle::Small), (HeaderSize::Medium, TileStyle::Medium), (HeaderSize::Large, TileStyle::Large)] {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
         d.w.dispatch(UiAction::Customize { action: CustomizationAction::SetTileStyle { panel: Panel::Toolbar, style } });
@@ -1361,7 +1369,9 @@ fn native_one_finger_drag_tiles() {
                 d.click(&widget);
                 until(|| variant_context(&d).is_mapped(), "primary press opens the finger menu");
                 let popup = variant_context(&d);
+                idle_paint(&popup);
                 let first = find_menu_item(popup.upcast_ref(), "Auto").unwrap();
+                assert!(first.is_mapped() && first.width() > 0 && first.height() > 0, "the painted menu row has an allocation");
                 assert!(screen_point(&first, &d.w.window, [0.5, 0.])[1] >= screen_point(&widget, &d.w.window, [0.5, 1.])[1], "primary menu rows open beneath their tile");
                 let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
                 assert_eq!(menu.sections[0].iter().filter(|item| item.selected == Some(true)).count(), 1);
@@ -1371,6 +1381,7 @@ fn native_one_finger_drag_tiles() {
                 assert!(find_named(&anchor_widget(&d, anchor), &format!("layer-{icon}-symbolic")).is_some(), "{name} follows {mode:?}");
                 d.click(&anchor_widget(&d, anchor));
                 until(|| variant_context(&d).is_mapped(), "the chosen mode reopens checked");
+                idle_paint(&variant_context(&d));
                 if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
                     let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
                     d.input.perform(serde_json::json!([{ "capture": format!("finger-tiles-{theme}-{size:?}-{name}-{mode:?}").to_lowercase() }]));
@@ -1379,8 +1390,7 @@ fn native_one_finger_drag_tiles() {
             }
             let widget = anchor_widget(&d, anchor);
             secondary_group_click(&mut d, &widget);
-            assert!(find_menu_item(variant_context(&d).upcast_ref(), "Off").is_some());
-            assert!(find_menu_item(variant_context(&d).upcast_ref(), if name == "header" { "Customize Title Bar…" } else { "Remove Tool" }).is_some());
+            customization_only(&d, name);
             if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
                 let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
                 d.input.perform(serde_json::json!([{ "capture": format!("finger-context-{theme}-{size:?}-{name}").to_lowercase() }]));
@@ -1389,10 +1399,17 @@ fn native_one_finger_drag_tiles() {
             let point = d.point(&widget);
             let hold = gtk::Settings::default().unwrap().gtk_long_press_time() + 100;
             d.input.perform(serde_json::json!([{"touch":"down","point":point},{"wait_ms":hold},{"touch":"up"}]));
-            until(|| variant_context(&d).is_mapped(), "touch hold opens finger choices and customization");
-            assert!(find_menu_item(variant_context(&d).upcast_ref(), "Off").is_some());
-            assert!(find_menu_item(variant_context(&d).upcast_ref(), if name == "header" { "Customize Title Bar…" } else { "Remove Tool" }).is_some());
+            until(|| variant_context(&d).is_mapped(), "touch hold opens customization");
+            customization_only(&d, name);
+            if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+                let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
+                d.input.perform(serde_json::json!([{ "capture": format!("finger-held-context-{theme}-{size:?}-{name}").to_lowercase() }]));
+            }
             d.input.key(0xff1b);
+        }
+        if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+            let theme = std::env::var("CAPY_NATIVE_TEST_THEME").unwrap();
+            d.input.perform(serde_json::json!([{ "capture": format!("finger-titlebar-{theme}-{size:?}").to_lowercase() }]));
         }
     }
     d.finish();

@@ -169,11 +169,16 @@ import SwiftUI
             store.canvasSubmitted && store.snapshot["canvas_ready"].bool && !store.recovery.restoring
         }
         try await edit(["type":"move", "id":header.geometry["capy_item"].uint, "zone":"center"])
-        let fingers = store.snapshot["header"]["model"]["zones"].array.flatMap(\.array).filter {
-            $0["item"]["control"]["command"].string == "one_finger_drag"
-        }.map { $0["id"].uint }
-        try require(fingers.count == (platform == 0 ? 1 : 0), "Only iPadOS title bars carry One-finger drag")
-        let fingerID = fingers.first
+        func fingers() -> [UInt64] {
+            store.snapshot["header"]["model"]["zones"].array.flatMap(\.array).filter {
+                $0["item"]["control"]["command"].string == "one_finger_drag"
+            }.map { $0["id"].uint }
+        }
+        try require(fingers().isEmpty, "No built-in title bar carries One-finger drag")
+        if platform == 0 {
+            try await edit(["type":"add", "zone":"left", "item":["kind":"tool", "control":["kind":"command", "command":"one_finger_drag"]]])
+        }
+        let fingerID = fingers().max()
         for theme in ["light", "dark"] {
             try await action(["type":"set_theme", "theme":theme])
             for size in ["small", "medium", "large"] {
@@ -216,24 +221,6 @@ import SwiftUI
                 window.makeKeyAndOrderFront(nil)
                 note("PASS platform \(platform), \(theme), \(size): normal/Zen native mouse/pen Capy activation, stable bounds and focus-loss retirement")
             }
-        }
-        if let fingerID {
-            try await edit(["type":"set_size", "size":"large"])
-            window.setContentSize(CGSize(width: 480, height: 870))
-            store.native?.resize(width: 480, height: 870, scale: 1)
-            try await wait("One-finger drag in ordinary title-bar overflow") {
-                header.geometry["hidden"].array.contains { $0.array.contains { $0.uint == fingerID } }
-            }
-            let zone = header.geometry["hidden"].array.firstIndex { $0.array.contains { $0.uint == fingerID } }!
-            let menu: AppleContextMenu = await withCheckedContinuation { done in
-                EditorHeader(store: store, status: status).overflow(zone, completion: { done.resume(returning: $0) })
-            }
-            let modes = menu.sections.flatMap { $0 }.first { $0.label == "One-finger drag" }!.sections.flatMap { $0 }
-            try require(modes.map(\.label) == ["Auto", "Draw", "Move canvas", "Off"],
-                "A hidden title-bar tile must load the shared four-choice submenu")
-            modes[2].action?()
-            try await wait("Overflow choice applies without Settings") { store.state["settings"]["finger_drawing"].string == "move_canvas" }
-            try require(store.snapshot["preferences"].isNull, "Choosing the overflow mode must not reveal Settings")
         }
         try require(store.failure == nil, store.failure ?? "")
     }

@@ -97,7 +97,10 @@ impl WorkspacePreset {
             }
         }
         self.group_tools(&mut layout);
-        if self == Self::Illustrator { Self::paint_sliders(&mut layout, tablet); }
+        if self == Self::Illustrator {
+            Self::paint_sliders(&mut layout, tablet);
+            if tablet { Self::append_commands(&mut layout, &[ToolbarControl::Divider, ToolbarControl::Command { command: crate::CommandId::OneFingerDrag }]); }
+        }
         let group = layout.panel_group(Panel::Color).unwrap();
         if self == Self::Photographer {
             if let Some(DockNode::Tabs {panels,active,..})=layout.node_mut(group) {
@@ -127,6 +130,14 @@ impl WorkspacePreset {
         layout.bands.iter_mut().find(|band| band.root.group_for(Panel::Toolbar).is_some()).unwrap().extent
             = 2. * TILE_SIZE + TileStyle::Small.gap() + WORKSPACE_SPACING;
         layout.fit_height_groups.push(tools);
+    }
+
+    fn append_commands(layout: &mut DockLayout, controls: &[ToolbarControl]) {
+        for &control in controls {
+            let id = layout.next_tile_id;
+            layout.next_tile_id += 1;
+            layout.panel_mut(Panel::Commands).unwrap().tiles_mut().unwrap().push(ToolbarTile { slider_style: Default::default(), id, control });
+        }
     }
 
     fn group_tools(self, layout: &mut DockLayout) {
@@ -500,8 +511,7 @@ mod tests {
                     assert_eq!(
                         layout.header.zones[zone.index()]
                             .iter()
-                            .filter(|e| !matches!(e.item, HeaderItem::Fullscreen
-                                | HeaderItem::Tool { control: ToolbarControl::Command { command: crate::CommandId::OneFingerDrag } }))
+                            .filter(|e| e.item != HeaderItem::Fullscreen)
                             .map(|e| e.item)
                             .collect::<Vec<_>>(),
                         native.zones[zone.index()]

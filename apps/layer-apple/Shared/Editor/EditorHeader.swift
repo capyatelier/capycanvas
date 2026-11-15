@@ -107,7 +107,7 @@ import SwiftUI
                                 .editorPopover(isPresented: Binding(get: { header.overflowZone == zone },
                                     set: { if !$0 { header.closeOverflow() } }), owner: header.popup) { overflowEditor(zone) }
                         } else {
-                            EditorMenuButton(menu: { overflow(zone, completion: $0) }, identifier: "header-overflow-menu") { overflowIcon }
+                            EditorMenuButton(menu: { overflow(zone) }, identifier: "header-overflow-menu") { overflowIcon }
                         }
                     }.buttonStyle(HeaderButtonStyle(inBar: !editing && overflowInBar(zone), radius: radius))
                         .accessibilityLabel(store.catalog["native_copy"]["header"]["more_items"].string)
@@ -256,9 +256,8 @@ import SwiftUI
                 width: max(0, width - (editing ? 20 : 0)), editing: editing, inBar: inBar)
         }.frame(width: width, height: size["tile"].number)
     }
-    func overflow(_ zone: Int, completion: @escaping @MainActor (AppleContextMenu) -> Void) {
-        let hidden = geometry["hidden"][zone].array
-        var rows = hidden.compactMap { id -> [String: Any]? in
+    private func overflow(_ zone: Int) -> AppleContextMenu {
+        let rows = geometry["hidden"][zone].array.compactMap { id -> Any? in
             guard let entry = entries.first(where: { $0["id"].uint == id.uint }) else { return nil }
             var row: [String: Any] = ["label":metadata(entry)["label"].raw, "enabled":true,
                 "action":["type":"apple_header_item", "id":id.raw]]
@@ -275,30 +274,14 @@ import SwiftUI
             }
             return row
         }
-        let choices = rows.indices.filter { index in
-            !editing && view["items"].array.contains {
-                $0["id"].uint == JSON(rows[index])["action"]["id"].uint && $0["menu"].bool
+        return AppleContextMenu(JSON(["sections":[rows]])) { action in
+            switch action["type"].string {
+            case "apple_header_item":
+                if editing { header.selected = action["id"].uint; focused = true }
+                else { activateHeaderItem(store, entry: entries.first { $0["id"].uint == action["id"].uint } ?? JSON()) }
+            default: store.dispatch(action)
             }
         }
-        func load(_ index: Int) {
-            guard choices.indices.contains(index) else {
-                completion(AppleContextMenu(JSON(["sections":[rows]])) { action in
-                    switch action["type"].string {
-                    case "apple_header_item":
-                        if editing { header.selected = action["id"].uint; focused = true }
-                        else { activateHeaderItem(store, entry: entries.first { $0["id"].uint == action["id"].uint } ?? JSON()) }
-                    default: store.dispatch(action)
-                    }
-                })
-                return
-            }
-            let row = choices[index], id = JSON(rows[row])["action"]["id"].uint
-            store.query(["type":"context", "target":["kind":"tool_variants", "anchor":["kind":"header", "id":id]]]) { menu in
-                rows[row]["sections"] = menu["sections"].raw
-                load(index + 1)
-            }
-        }
-        load(0)
     }
 }
 

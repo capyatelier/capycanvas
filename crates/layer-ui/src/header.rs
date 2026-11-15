@@ -278,12 +278,6 @@ impl HeaderLayout {
     }
 
     fn with_platform_controls(mut self, platform: Platform) -> Self {
-        if matches!(platform, Platform::Android | Platform::Ios) {
-            let left = &self.zones[HeaderZone::Left.index()];
-            let before = left.iter().position(|entry| entry.item == HeaderItem::Menu).and_then(|index| left.get(index + 1)).map(|entry| entry.id);
-            self.add(HeaderZone::Left, before, &[HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::OneFingerDrag } }])
-                .unwrap();
-        }
         if platform == Platform::Web {
             let settings = self.zones[2]
                 .iter()

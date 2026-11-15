@@ -119,12 +119,49 @@ fn apple_header_keeps_capy_separate_from_adjacent_icon_bars() {
         assert_eq!(view["zen_button"], item["bounds"]);
         assert_eq!(groups.len(), 2);
         assert_eq!(groups.last().unwrap(), &["tool"; 6]);
-        let menu = if platform == 0 { vec!["menu", "tool"] } else { vec![] };
+        let menu = if platform == 0 { vec!["menu"] } else { vec![] };
         assert_eq!(groups[0], [menu, vec!["tool"; 3]].concat());
-        if platform == 0 {
-            let finger = bars[0]["items"][1].as_u64().unwrap() as u32;
-            assert_eq!(app.with(|native| native.host.session.state().workspace.layout.header.entry(finger).unwrap().item),
-                layer_ui::HeaderItem::Tool { control: layer_ui::ToolbarControl::Command { command: layer_ui::CommandId::OneFingerDrag } });
+        assert!(app.with(|native| native.host.session.state().workspace.layout.header.entries().all(|entry|
+            entry.item != (layer_ui::HeaderItem::Tool { control: layer_ui::ToolbarControl::Command {
+                command: layer_ui::CommandId::OneFingerDrag } }))));
+    }
+}
+
+#[test]
+fn apple_one_finger_drag_keeps_primary_choices_separate_from_customization_and_overflow() {
+    for theme in ["light", "dark"] {
+        let app = App::new(0);
+        app.action(json!({"type":"set_theme","theme":theme}));
+        app.action(json!({"type":"customize","action":{"type":"header","action":{"type":"add","zone":"left",
+            "item":{"kind":"tool","control":{"kind":"command","command":"one_finger_drag"}}}}}));
+        let header = app.full_snapshot()["header"].clone();
+        let tile = header["items"].as_array().unwrap().iter().find(|item| item["menu"] == true).unwrap();
+        assert_eq!(tile["has_variants"], false);
+        let id = tile["id"].clone();
+        let choices = app.request(2, json!({"type":"context","target":{"kind":"tool_variants",
+            "anchor":{"kind":"header","id":id}}})).unwrap();
+        let choices = choices["sections"].as_array().unwrap().iter().flat_map(|section| section.as_array().unwrap()).collect::<Vec<_>>();
+        assert_eq!(choices.iter().map(|item| item["label"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["Auto", "Draw", "Move canvas", "Off"]);
+        assert_eq!(choices.iter().filter(|item| item["selected"] == true).count(), 1);
+        assert!(app.full_snapshot()["preferences"].is_null());
+        for editing in [false, true] {
+            app.action(json!({"type":"customize","action":{"type":"header","action":{"type":"edit","editing":editing}}}));
+            let menu = app.request(2, json!({"type":"context","target":{"kind":"header","id":id}})).unwrap();
+            let items = menu["sections"].as_array().unwrap().iter().flat_map(|section| section.as_array().unwrap()).collect::<Vec<_>>();
+            assert!(!items.is_empty());
+            assert!(items.iter().all(|item| !["Auto", "Draw", "Move canvas", "Off"].contains(&item["label"].as_str().unwrap())));
+            if editing {
+                assert!(items.iter().all(|item| item["action"]["type"] == "customize"));
+            } else {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0]["action"], json!({"type":"invoke","command":"customize_workspace_ui"}));
+            }
         }
+        app.action(json!({"type":"customize","action":{"type":"header","action":{"type":"edit","editing":false}}}));
+        assert!(app.full_snapshot()["preferences"].is_null());
+        app.action(json!({"type":"activate_header_item","id":id}));
+        assert!(!app.full_snapshot()["preferences"].is_null());
+        assert_eq!(app.borrow().host.session.state().preferences.page, layer_ui::SettingsPage::Input);
     }
 }

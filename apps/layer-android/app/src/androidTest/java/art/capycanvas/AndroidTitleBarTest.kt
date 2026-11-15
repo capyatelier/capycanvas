@@ -104,7 +104,7 @@ class AndroidTitleBarTest {
         val value = JSONObject(fixture.toString())
         value.getJSONObject("layout").getJSONObject("header").put("size", size)
         action(obj("type" to "restore_workspace", "workspace" to value))
-        waitFor("bar settled") { node("zen-button") != null && !editing() }
+        waitFor("bar settled") { (node("zen-button") != null || node("phone-capy") != null) && !editing() }
         idle()
     }
     private fun resetPreset(id: String) {
@@ -122,7 +122,11 @@ class AndroidTitleBarTest {
         idle()
     }
     @Before fun ready() {
+        startupTheme()
         launch()
+        val tags = host.bootstrap!!.array("shipped_tags").values().map { it.toString() }
+        action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "language", "value" to tags.indexOf("en") + 1)))
+        waitFor("English title-bar fixture") { host.languageTag == "en" }
         startingWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         fixture = JSONObject(startingWorkspace.toString())
         fixture.put("zen_mode", false)
@@ -872,7 +876,7 @@ class AndroidTitleBarTest {
         assertTrue("Compact brush sliders: $sliders", "brush_size_slider" in sliders && "brush_strength_slider" in sliders)
         assertFalse(workspace.getJSONObject("layout").getJSONObject("canvas_info").getBoolean("visible"))
         val tools = entries().filter { it.getJSONObject("item").getString("kind") == "tool" }
-        assertEquals(10, tools.size)
+        assertEquals(9, tools.size)
         val gap = snapshot().getJSONObject("header").array("sizes").objects().first { it.getString("id") == model().getString("size") }.number("gap")
         val (first, second) = model().array("zones").values().flatMap { (it as JSONArray).objects().zipWithNext() }
             .first { pair -> pair.toList().all { it.getJSONObject("item").getString("kind") == "tool" } }.toList()
@@ -880,7 +884,7 @@ class AndroidTitleBarTest {
         assertEquals("Joined tiles use the toolbar tile gap", gap, (second.left - first.right) / density, .5f)
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for (entry in tools.filter { it.getJSONObject("item").getJSONObject("control").optString("command") !in listOf("scale_rotate", "one_finger_drag") }) {
+            for (entry in tools.filter { it.getJSONObject("item").getJSONObject("control").optString("command") != "scale_rotate" }) {
                 val id = entry.getInt("id")
                 tap("header-control-$id")
                 // Selecting an inactive tool takes one click; its next click opens
@@ -998,20 +1002,46 @@ class AndroidTitleBarTest {
         assertTrue(command("color_select").getBoolean("selected"))
     }
 
-    @Test fun sketchOneFingerDragFitsBothTabletOrientations() {
-        for (landscape in listOf(false, true)) {
-            if (landscape) device.landscape(scenario) else device.portrait(scenario)
-            idle(); resetPreset("builtin:workspace:painter")
-            val tools = entries().filter { it.getJSONObject("item").getString("kind") == "tool" }
-            val left = model().array("zones").getJSONArray(0).objects()
-            val menu = left.indexOfFirst { it.getJSONObject("item").getString("kind") == "menu" }
-            assertEquals("One-finger drag follows Main Menu", "one_finger_drag",
-                left[menu + 1].getJSONObject("item").getJSONObject("control").getString("command"))
-            for (theme in listOf("light", "dark")) {
-                action(obj("type" to "set_theme", "theme" to theme))
-                waitFor("Fresh Sketch keeps every tool visible") { tools.all { node("header-control-${it.getInt("id")}") != null } }
-                shot("sketch-default-${if (landscape) "landscape" else "portrait"}-$theme")
+    @Test fun tabletPaintCommandsEndWithOneFingerDrag() {
+        Assume.assumeTrue(snapshot().getJSONObject("layout").isNull("phone"))
+        resetPreset("builtin:workspace:illustrator")
+        fun commands() = snapshot().array("panels").objects().first { it.getString("id") == "commands" }.array("tiles").objects()
+        val tail = commands().takeLast(3)
+        assertEquals("flip_horizontal", tail[0].getJSONObject("control").getString("command"))
+        assertEquals("divider", tail[1].getJSONObject("control").getString("kind"))
+        assertEquals("one_finger_drag", tail[2].getJSONObject("control").getString("command"))
+        assertFalse(entries().any { it.getJSONObject("item").objectOrNull("control")?.optString("command") == "one_finger_drag" })
+        val tag = "tile-commands-${tail[2].getInt("id")}"
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (landscape in listOf(true, false)) {
+                if (landscape) device.landscape(scenario) else device.portrait(scenario)
+                idle()
+                val orientation = if (landscape) "landscape" else "portrait"
+                shot("paint-default-$orientation-$theme")
+                waitFor("Default Paint finger tile is mounted") { node(tag) != null }
+                val tile = screenBounds(tag)
+                val window = screenBounds("workspace")
+                assertTrue("Default Paint finger tile fits $orientation: tile=$tile window=$window", tile.left >= window.left && tile.right <= window.right && tile.top >= window.top && tile.bottom <= window.bottom)
+                tap(tag)
+                waitFor("Default Paint finger menu") { node("workspace-menu") != null }
+                shot("paint-default-$orientation-menu-$theme")
+                tapMenuRow("Auto")
             }
+        }
+    }
+
+    @Test fun phoneOneFingerPageKeepsItsFourChoices() {
+        Assume.assumeTrue(snapshot().getJSONObject("layout").objectOrNull("phone") != null)
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            tap("phone-capy")
+            waitFor("Phone finger strip") { node("phone-finger") != null }
+            tap("phone-finger")
+            waitFor("Phone finger page") { node("phone-menu-row-0-3") != null }
+            shot("phone-one-finger-page-$theme")
+            tap("phone-menu-row-0-0")
+            tap("phone-capy")
         }
     }
 
@@ -1030,21 +1060,11 @@ class AndroidTitleBarTest {
             tap("tool-picker-choice-One-finger drag"); tap("tool-picker-confirm")
             waitFor("One-finger picker closes") { node("tool-picker-search") == null }
         }
-        resetPreset("builtin:workspace:painter")
-        val sketch = entries().map { it.getJSONObject("item") }
-        val menu = sketch.indexOfFirst { it.optString("kind") == "menu" }
-        assertTrue("Sketch places One-finger drag after Main Menu", menu >= 0 &&
-            sketch[menu + 1].objectOrNull("control")?.optString("command") == "one_finger_drag")
-        for (theme in listOf("light", "dark")) {
-            action(obj("type" to "set_theme", "theme" to theme)); shot("one-finger-sketch-$theme")
-        }
         resetPreset("builtin:workspace:illustrator")
         for (entry in tiles().filter { it.getJSONObject("control").optString("command") !in listOf("pen", "pencil", "hand", "zoom") &&
             it.getJSONObject("control").optString("kind") != "color" })
             customize(obj("type" to "remove_tool", "panel" to "toolbar", "tile" to entry.getInt("id")))
         startEditor()
-        for (entry in entries().filter { it.getJSONObject("item").objectOrNull("control")?.optString("command") == "one_finger_drag" })
-            edit(obj("type" to "remove", "id" to entry.getInt("id")))
         drag("header-component-tools", center()); selectTool()
         tap("header-edit-done")
         waitFor("One-finger header") { node("header-control-${header().getInt("id")}") != null }
@@ -1057,7 +1077,14 @@ class AndroidTitleBarTest {
             "tile-toolbar-$tileId" to obj("kind" to "tile", "panel" to "toolbar", "tile" to tileId))
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            action(obj("type" to "invoke", "command" to "one_finger_drag"))
+            key(KeyEvent.KEYCODE_K, KeyEvent.META_CTRL_ON)
+            waitFor("One-finger command search") { node("command-search") != null }
+            instrumentation.runOnMainSync {
+                assertTrue(checkNotNull(node("command-search")).second.config[SemanticsActions.SetText].action!!.invoke(androidx.compose.ui.text.AnnotatedString("One-finger drag")))
+            }
+            waitFor("One-finger search result") { state().getJSONObject("command_search").array("results").objects().any { it.getString("id") == "command.one_finger_drag" } }
+            val result = state().getJSONObject("command_search").array("results").objects().indexOfFirst { it.getString("id") == "command.one_finger_drag" }
+            tap("command-result-$result")
             waitFor("One-finger Settings row") { node("setting-choice-finger_drawing") != null }
             shot("one-finger-settings-$theme")
             tap("setting-choice-finger_drawing")
@@ -1086,9 +1113,17 @@ class AndroidTitleBarTest {
                     }
                     for (input in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER)) {
                         tool = input; openToolContext(tag)
+                        val expected = if (anchor.getString("kind") == "header") listOf("Customize Title Bar…") else listOf("Remove Tool", "Insert Tools…")
+                        instrumentation.runOnMainSync {
+                            val menu = checkNotNull(node("workspace-menu")).second
+                            fun shown(label: String) = menu.find { it.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true } != null
+                            assertTrue("Secondary menu keeps customization items", expected.all(::shown))
+                            assertFalse("Secondary menu has no finger choices", rows.any { shown(it.getString("label")) })
+                        }
                         shot("one-finger-${anchor.getString("kind")}-context-$input-$size-$theme")
-                        tapMenuRow("Auto")
+                        key(KeyEvent.KEYCODE_ESCAPE)
                         waitFor("One-finger context closes") { node("workspace-menu") == null }
+                        assertEquals("Secondary menu keeps the chosen mode", "Off", variantRows(anchor).single { it.optBoolean("selected") }.getString("label"))
                     }
                 }
             }

@@ -11,6 +11,7 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
     const p=await point(selector);
     for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button,buttons:type==='mousePressed'?(button==='left'?1:2):0,clickCount:1});await settle();
   };
+  const choices=['Auto','Draw','Move canvas','Off'];
   const menu='.panel-context-menu:popover-open';
   const labels=()=>evaluate(`[...document.querySelectorAll('${menu} button')].map(n=>n.menuItem?.label??n.textContent.trim())`);
   const choose=async label=>{
@@ -32,6 +33,7 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
     await send({type:'invoke',command:'search_commands'});await click('#command-search');
     await call('Input.insertText',{text:'One-finger drag'});await settle();
     assert.equal(await evaluate('layerApp.state().command_search.results[0].id'),'command.one_finger_drag');
+    await shot(`command-search-${theme}`);
     for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13});await settle();
     await wait('layerApp.app.preferences()?.page==="input"&&document.querySelector("[data-preference=finger_drawing]")!=null');
     assert.equal(await evaluate('document.querySelector("[data-preference=finger_drawing] label").textContent'),'One-finger drag');
@@ -54,6 +56,7 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
     for(const [size,style] of [['small','small'],['medium','medium'],['large','large']]) {
       await send({type:'customize',action:{type:'header',action:{type:'set_size',size}}});
       await send({type:'customize',action:{type:'set_tile_style',panel:'toolbar',style}});
+      await shot(`title-bar-${size}-${theme}`);
       for(const [owner,selector] of [['header',header],['toolbar',toolbar]]) {
         for(const [index,value,icon] of [[0,'auto','finger-touch'],[1,'on','finger-draw'],[2,'move_canvas','hand'],[3,'off','finger-touch']]) {
           await click(selector);assert.deepEqual(await labels(),['Auto','Draw','Move canvas','Off']);
@@ -64,12 +67,15 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
           assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).querySelector('svg').dataset.asset`),icon);
           await shot(`${owner}-${size}-${value}-${theme}`);
         }
-        await click(selector,'right');assert.deepEqual((await labels()).slice(0,4),['Auto','Draw','Move canvas','Off']);
+        await click(selector,'right');
+        for(const label of choices)assert.ok(!(await labels()).includes(label),`${owner} customization omits ${label}`);
         assert.ok((await labels()).includes(owner==='header'?'Customize Title Bar…':'Remove Tool'));await shot(`${owner}-${size}-context-${theme}`);await escape();
         if(size==='medium'){
           const p=await point(selector);await call('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:3,...p}]});
           await wait(`!!document.querySelector('${menu}')`);await call('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await settle();
-          assert.deepEqual((await labels()).slice(0,4),['Auto','Draw','Move canvas','Off']);await escape();
+          for(const label of choices)assert.ok(!(await labels()).includes(label),`${owner} hold customization omits ${label}`);
+          assert.ok((await labels()).includes(owner==='header'?'Customize Title Bar…':'Remove Tool'));
+          await shot(`${owner}-${size}-hold-${theme}`);await escape();
         }
       }
     }
@@ -92,5 +98,5 @@ export async function checkOneFingerDrag({call,evaluate,settle}) {
     assert.equal(await evaluate(`document.querySelector('#phone-tool-${phoneTile} svg').dataset.asset`),'hand');
     await click('#zen-capy');await call('Emulation.setTouchEmulationEnabled',{enabled:false});
   }
-  console.log('PASS: One-finger drag command search to Settings, native title-bar Add Tools drag, toolbar picker, primary and secondary menus, all choices/icons/sizes, holds and phone toolbar Add Tools/page in both themes');
+  console.log('PASS: One-finger drag command search reveals Settings, title-bar/toolbar primary choices and customization-only context/holds, all icons/sizes and phone toolbar/page in both themes');
 }

@@ -171,6 +171,8 @@ fn drawing(d: &mut Driver) {
         until(|| descendants::<gtk::Popover>(d.w.window.upcast_ref()).iter().any(|p| p.is_mapped()),
             &format!("native choice dropdown opens: point={point:?}, pick={picked:?}, row={:?}, focused={}",
                 choice.compute_bounds(&d.w.window), choice.has_focus()));
+        let popup = descendants::<gtk::Popover>(d.w.window.upcast_ref()).into_iter().find(|p| p.is_mapped()).unwrap();
+        idle_paint(&popup);
         if index == 3 { capture(d, "settings-dropdown"); }
         d.input.key(0xff50);
         for _ in 0..index { d.input.key(0xff54); }

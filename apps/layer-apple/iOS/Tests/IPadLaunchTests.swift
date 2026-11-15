@@ -1,6 +1,39 @@
 import XCTest
+import UIKit
 
 extension EditorLaunchTests {
+    @MainActor func testPaintOneFingerDragCommandsLight() { checkPaintOneFingerDragCommands(theme: "light") }
+    @MainActor func testPaintOneFingerDragCommandsDark() { checkPaintOneFingerDragCommands(theme: "dark") }
+
+    @MainActor private func checkPaintOneFingerDragCommands(theme: String) {
+        for orientation in [UIDeviceOrientation.landscapeLeft, .portrait] {
+            XCUIDevice.shared.orientation = orientation
+            let app = editorCaptureApplication()
+            app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"\#(theme)"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}}]"#
+            app.launch(); waitForEditorInteraction(in: app)
+            let viewport = workspaceViewport(in: app)
+            XCTAssertEqual(viewport.frame.width < viewport.frame.height, orientation == .portrait)
+            let commands = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolbar-tile-commands-"))
+            let finger = commands.matching(NSPredicate(format: "label == %@", "One-finger drag")).firstMatch
+            let flip = commands.matching(NSPredicate(format: "label == %@", "Flip view horizontally")).firstMatch
+            XCTAssertTrue(finger.waitForExistence(timeout: 10) && flip.exists)
+            XCTAssertEqual(commands.count, 10, "Paint has ten actions and four divider tiles")
+            XCTAssertFalse(app.buttons["header-tool-one_finger_drag"].exists)
+            XCTAssertEqual(finger.frame.width, flip.frame.width, accuracy: 1)
+            XCTAssertEqual(finger.frame.height, flip.frame.height, accuracy: 1)
+            XCTAssertTrue(viewport.frame.contains(finger.frame))
+            XCTAssertTrue(finger.frame.minY > flip.frame.minY + 1 || finger.frame.minX > flip.frame.maxX)
+            workspaceActivate(finger)
+            let menu = app.descendants(matching: .any)["workspace-context-menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 10))
+            for label in ["Auto", "Draw", "Move canvas", "Off"] {
+                XCTAssertTrue(menu.buttons["menu-action-" + label].exists)
+            }
+            attachEditor(in: app, name: "paint-one-finger-\(orientation == .portrait ? "portrait" : "landscape")-\(theme)")
+            app.terminate()
+        }
+    }
+
     @MainActor func testIPadCompatibilityJourneys() throws {
         continueAfterFailure = true
         try checkIPadJourneys([
@@ -300,13 +333,15 @@ extension EditorLaunchTests {
         attachEditor(in: app, name: "two-finger-view-restored")
     }
 
-    @MainActor func testOneFingerDragTitleBar() throws { try checkOneFingerDragTitleBar(theme: "light") }
-    @MainActor func testOneFingerDragTitleBarDark() throws { try checkOneFingerDragTitleBar(theme: "dark") }
+    @MainActor func testOneFingerDragPaintCommands() throws { try checkOneFingerDragPaintCommands(theme: "light") }
+    @MainActor func testOneFingerDragPaintCommandsDark() throws { try checkOneFingerDragPaintCommands(theme: "dark") }
 
-    @MainActor private func checkOneFingerDragTitleBar(theme: String) throws {
+    @MainActor private func checkOneFingerDragPaintCommands(theme: String) throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorCaptureApplication()
-        let actions: [[String: Any]] = [["type": "set_theme", "theme": theme], ["type": "invoke", "command": "drawing_brush"],
+        let actions: [[String: Any]] = [["type": "set_theme", "theme": theme],
+            ["type": "workspace_manager", "command": ["type": "switch", "id": "builtin:workspace:illustrator"]],
+            ["type": "invoke", "command": "drawing_brush"],
             ["type": "set_brush_size", "value": 40], ["type": "set_color", "rgba": [0, 0, 0, 1]]]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = String(data: try JSONSerialization.data(withJSONObject: actions), encoding: .utf8)
         app.launch()
@@ -317,7 +352,7 @@ extension EditorLaunchTests {
         waitForExpectations(timeout: 30)
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         let tile = app.buttons["One-finger drag"].firstMatch
-        XCTAssertTrue(tile.waitForExistence(timeout: 10), "The iPad title bar must offer One-finger drag")
+        XCTAssertTrue(tile.waitForExistence(timeout: 10), "iPad Paint's Commands toolbar must offer One-finger drag")
         let modes = ["Auto", "Draw", "Move canvas", "Off"]
         func choose(_ mode: String) {
             workspaceActivate(tile)
@@ -326,7 +361,7 @@ extension EditorLaunchTests {
             XCTAssertEqual(choices.filter(\.isSelected).count, 1, "Exactly one finger mode must be checked")
             attachEditor(in: app, name: "one-finger-drag-menu-\(mode)-\(theme)")
             workspaceActivate(app.buttons["menu-action-" + mode])
-            XCTAssertTrue(choices[0].waitForNonExistence(timeout: 5), "A choice must close the title-bar menu")
+            XCTAssertTrue(choices[0].waitForNonExistence(timeout: 5), "A choice must close the One-finger drag menu")
         }
         func drag(from: CGVector, to: CGVector) {
             canvas.coordinate(withNormalizedOffset: from).press(forDuration: 0,
