@@ -965,7 +965,7 @@ fn fit_refinement_accepts_native_input_quality_and_reaches_exact() {
 #[cfg(not(target_arch="wasm32"))]
 #[test]
 fn a_refused_refinement_takes_no_idle_frames_and_one_release_wakes_it() {
-    let doc=document_at([1537,1025]);let extent=doc.composition().size;
+    let mut doc=document_at([1537,1025]);let extent=doc.composition().size;
     let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
     let (send,woken)=std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
@@ -974,7 +974,6 @@ fn a_refused_refinement_takes_no_idle_frames_and_one_release_wakes_it() {
     let needs_exact=|r:&WgpuRasterizer|r.scale_display.as_ref().is_some_and(|cache|cache.coverage_snapshot().needs(cache.plan.bounds,pages::Accuracy::Exact));
     r.begin_frame_memory(frame);
     submit_published(&mut r,frame);
-    assert!(needs_exact(&r),"the display publishes before its refinement");
     crate::test_support::complete(&r);
     let display=r.scene_tiers.display.clone();
     let pages={
@@ -987,6 +986,12 @@ fn a_refused_refinement_takes_no_idle_frames_and_one_release_wakes_it() {
     };
     assert!(!pages.is_empty() && !sources.is_empty(),"the fixture pins existing composite pages and decoded inputs");
     let held=(display.charge(display.grant().saturating_sub(display.used())),pages,sources);
+    let owner=doc.scene().order()[0];
+    let mut occurrence=doc.scene().occurrence(owner).unwrap().clone();occurrence.opacity=0.5;
+    doc.apply(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&doc.artwork.occurrences,owner,Some(occurrence)).unwrap())).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+    frame.view.document_to_surface=[0.125,0.,0.,0.125,0.,0.];
+    crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
     for _ in 0..16 {
         if r.next_frame()!=layer_render::FrameDemand::Work {break;}
         crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);

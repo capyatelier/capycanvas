@@ -22,7 +22,9 @@ impl Navigator {
     fn held(&self,r:&WgpuRasterizer)->bool {self.view().is_some() && self.cache.as_ref().is_some_and(|cache|cache.held(r))}
     pub(crate) fn outstanding(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         if self.held(r) || !self.pending() {return None;}
-        Some(self.cache.as_ref()?.cells_demand(r,false).unwrap_or(crate::frame_demand::Outstanding::Runnable))
+        use crate::frame_demand::{Input,Outstanding};
+        let cache=self.cache.as_ref()?;
+        Some(cache.cells_demand(r,false).unwrap_or(if cache.parked() {Outstanding::Blocked(Input::Residency)}else {Outstanding::Runnable}))
     }
     pub fn waiting_for_name(&self)->bool {
         self.cache.as_ref().is_some_and(|cache|cache.presented_matches_expected().is_none())
