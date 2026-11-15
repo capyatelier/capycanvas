@@ -2327,16 +2327,18 @@ mod handle_tests {
         };
         settle();
         let before = device.generate_allocator_report().unwrap();
+        let wgpu::MemoryHints::Manual { suballocated_device_memory_block_size } = layer_render_wgpu::memory_hints() else { panic!("expected the renderer allocation policy"); };
+        let allocation_block = suballocated_device_memory_block_size.start;
         let churn = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Navigator document allocation churn"), size: 96 << 20,
+            label: Some("Navigator document allocation churn"), size: allocation_block * 3 / 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let during = device.generate_allocator_report().unwrap();
         let block = during.blocks.iter().find(|block| during.allocations[block.allocations.clone()]
             .iter().any(|allocation| allocation.name == "Navigator document allocation churn")).unwrap();
-        assert_eq!(block.size, 128 << 20);
+        assert_eq!(block.size, allocation_block);
         assert_eq!(block.allocations.len(), 1, "churn must own its new allocation block");
-        assert_eq!(during.total_reserved_bytes, before.total_reserved_bytes + (128 << 20));
+        assert_eq!(during.total_reserved_bytes, before.total_reserved_bytes + allocation_block);
         let gpu = host.native.session.engine().backend().0.as_deref().unwrap();
         let config = host.config.as_ref().unwrap();
         let mut presenter = host.navigators.presenters.take(gpu, config.format, host.display.encoding(config.format)).unwrap();

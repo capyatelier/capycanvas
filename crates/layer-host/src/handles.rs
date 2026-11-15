@@ -177,7 +177,6 @@ mod tests {
     struct Reenter(Arc<AtomicBool>);
     impl Drop for Reenter {
         fn drop(&mut self) {
-            if table().try_lock().is_err() {return;}
             let completed=insert(19u8).and_then(release::<u8>).is_ok();
             self.0.store(completed,Ordering::SeqCst);
         }

@@ -33,7 +33,8 @@ fn private_spool_survives_the_provider_without_leaving_a_file() {
     let retained = backing.clone();
     drop(backing);
     let source=retained.read_source().expect("spooled packages use positional cached reads");
-    let bytes=source.wait_on_worker(MAX_RANGE_BYTES as u64,1).unwrap();
+    let bytes=source.wait_on_worker(MAX_RANGE_BYTES as u64,1).unwrap().into_arc();
+    drop(source);
     assert_eq!(&*bytes, &[3]);
     let mut reader=BackingReader::new(&retained,&cancelled);let mut header=[0;8];
     reader.read_exact(&mut header).unwrap();assert_eq!(header,[3;8]);
