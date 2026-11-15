@@ -1106,6 +1106,8 @@ pub struct WgpuRasterizer {
     moving_decode: Option<(layer_core::color::RgbSpace, object_image_mips::MipDecodeQueue)>,
     preparation_progress: u64,
     preparation_wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    decode_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     arrivals: Arc<std::sync::atomic::AtomicU64>,
     observed_completions: std::sync::atomic::AtomicU64,
     failed_image_tiles: Vec<moving_projection::FailedImageTile>,
@@ -1528,6 +1530,8 @@ impl WgpuRasterizer {
             moving_decode: None,
             preparation_progress: 0,
             preparation_wake: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            decode_wake: None,
             arrivals: Default::default(),
             observed_completions: Default::default(),
             failed_image_tiles: Vec::new(),
@@ -3445,7 +3449,7 @@ impl WgpuRasterizer {
             .or_else(||self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll())) else {return Ok(None);};
         let prepared=match prepared {
             object_image_mips::PreparedImageWork::Raster(prepared) if prepared.scalar=>{
-                self.preparation_progress=self.preparation_progress.saturating_add(1);
+                self.decode_consumed();
                 self.hold_restore_scalar(prepared);return Ok(None);
             },
             prepared=>prepared,
@@ -3489,8 +3493,12 @@ impl WgpuRasterizer {
             self.source_results.push_front((space,prepared));
             return Ok(None);
         }
-        self.preparation_progress=self.preparation_progress.saturating_add(1);
+        self.decode_consumed();
         result
+    }
+    fn decode_consumed(&mut self) {
+        self.preparation_progress=self.preparation_progress.saturating_add(1);
+        self.arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
     }
     pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
         loop {
@@ -3542,7 +3550,7 @@ impl WgpuRasterizer {
         if self.moving_decode.is_none() {
             let queue=object_image_mips::MipDecodeQueue::new(&self.device)?;
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(wake)=&self.preparation_wake {queue.set_wake(wake.clone());}
+            if let Some(wake)=&self.decode_wake {queue.set_wake(wake.clone());}
             self.moving_decode=Some((space,queue));
         }
         Ok(&mut self.moving_decode.as_mut().unwrap().1)
@@ -3555,18 +3563,20 @@ impl WgpuRasterizer {
         if let Some(job)=&self.snapshot_job {job.set_wake(wake.clone());}
         for task in &self.bake_analyses {task.set_wake(wake.clone());}
         self.memory.set_wake(wake.clone());
-        let arrivals=self.arrivals.clone();
-        let wake:Arc<dyn Fn() + Send + Sync>=Arc::new(move||{arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);wake();});
-        self.set_raster_preparation_wake(wake.clone());
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.papers.set_wake(wake.clone());
             if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
+            self.decode_wake=Some(wake.clone());
         }
+        let arrivals=self.arrivals.clone();
+        let wake:Arc<dyn Fn() + Send + Sync>=Arc::new(move||{arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);wake();});
+        self.set_raster_preparation_wake(wake.clone());
         self.preparation_wake=Some(wake);
     }
     pub fn preparation_progress(&self) -> u64 { self.preparation_progress }
-    pub(crate) fn arrivals(&self) -> u64 { self.arrivals.load(std::sync::atomic::Ordering::Acquire) }
+    pub(crate) fn arrival_token(&self) -> frame_demand::ArrivalToken { frame_demand::ArrivalToken(self.arrivals.load(std::sync::atomic::Ordering::Acquire)) }
+    pub(crate) fn arrived_since(&self, token: frame_demand::ArrivalToken) -> bool { self.arrivals.load(std::sync::atomic::Ordering::Acquire)!=token.0 }
     fn gpu_results_pending(&self) -> bool { self.frame_results_pending() || self.thumbnails_pending() }
     fn frame_results_pending(&self) -> bool {
         self.settling.is_some() || !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
@@ -3866,7 +3876,8 @@ impl CanvasRenderer for WgpuRasterizer {
             #[cfg(not(target_arch="wasm32"))]
             if let Some((_,queue))=&self.moving_decode {
                 if self.preparation_wake.is_none() {self.preparation_wake=previous.preparation_wake.clone();}
-                if let Some(wake)=&self.preparation_wake {queue.set_wake(wake.clone());}
+                if self.decode_wake.is_none() {self.decode_wake=previous.decode_wake.clone();}
+                if let Some(wake)=&self.decode_wake {queue.set_wake(wake.clone());}
             }
             #[cfg(target_arch="wasm32")]
             {

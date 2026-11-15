@@ -1209,7 +1209,7 @@ impl Selection {
     }
 }
 #[derive(Default)]
-struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:u64,name:Option<ContentVersion>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool}
+struct Cell {shown:Option<Shown>,current:bool,blocked:Option<crate::frame_demand::Input>,arrivals:crate::frame_demand::ArrivalToken,name:Option<ContentVersion>,refusal:Option<crate::residency::Blocked>,queued:bool,derived:bool,reduced:bool}
 impl Cell {
     fn queue(&mut self) {if !self.derived {self.queued=true;}}
     fn invalidate(&mut self) {if !self.derived {self.current=false;self.queued=true;}}
@@ -1224,7 +1224,7 @@ impl Cell {
         if self.refused() {return Some(crate::frame_demand::Input::Residency);}
         self.blocked.filter(|input|match input {
             crate::frame_demand::Input::Name=>self.naming(),
-            crate::frame_demand::Input::Residency=>r.arrivals()==self.arrivals,
+            crate::frame_demand::Input::Residency=>!r.arrived_since(self.arrivals),
             input=>r.waits_on(*input),
         })
     }
@@ -1619,11 +1619,11 @@ impl Cache {
         }
         blocked
     }
-    pub(super) fn block(&self,r:&WgpuRasterizer,region:PixelRect,input:Option<crate::frame_demand::Input>) {
+    pub(super) fn block(&self,since:crate::frame_demand::ArrivalToken,region:PixelRect,input:Option<crate::frame_demand::Input>) {
         let Some((mut cells,_store,_))=self.cells() else {return;};
         for index in Cells::reached(self.plan,region) {
             let cell=&mut cells.cells[index];
-            if cell.pending() {cell.blocked=input;cell.arrivals=r.arrivals();cell.queued=true;}
+            if cell.pending() {cell.blocked=input;cell.arrivals=since;cell.queued=true;}
         }
     }
     pub(super) fn forget_refusals(&self) {
@@ -3102,7 +3102,7 @@ pub(super) mod query_tests {
             let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
             cache.prepare_graph(&r,frame,&scene).unwrap();
             match update {
-                "block"=>cache.block(&r,cache.plan.bounds,None),
+                "block"=>cache.block(r.arrival_token(),cache.plan.bounds,None),
                 "refuse"=>cache.refuse(cache.plan.bounds,&refused),
                 "hide"=>cache.hide(cache.plan.bounds),
                 "shown"=>assert!(cache.shown_pages(cache.plan.bounds).is_empty()),
@@ -3112,6 +3112,34 @@ pub(super) mod query_tests {
             let expected=if update=="refuse" {Outstanding::Blocked(Input::Residency)}else {Outstanding::Runnable};
             assert_eq!(cache.cells_demand(&r,true),Some(expected),"{update} preserves the current visible demand");
         }
+    }
+
+    #[test]
+    fn a_residency_cell_blocked_before_its_decode_is_drained_wakes_when_the_drain_lands() {
+        use crate::frame_demand::{Input,Outstanding};
+        let extent=[1024,512];let document=super::super::tests::document_at(extent);
+        let mut r=crate::memory::memory_tests::legacy_scene_renderer(document.composition().color);
+        r.ensure_document_metadata(extent,document.scene()).unwrap();
+        let frame=display_frame(&document,0);
+        crate::memory::memory_tests::legacy_scene_frame(&mut r,frame);
+        let mut scene=Scene::new(&r).unwrap();scene.scale_sources.prepare(&r,frame,&[]);
+        crate::scene::scale::tests::prepare_fixture_frame(&r,frame,&scene);
+        let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
+        cache.prepare_graph(&r,frame,&scene).unwrap();
+        let slot=Arc::new(std::sync::Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
+        let decoded=|r:&mut WgpuRasterizer|r.source_results.push_back((r.device.working_space(),crate::object_image_mips::PreparedImageWork::Coordinates {
+            destination:Arc::downgrade(&slot),pixels:Ok(Arc::new(vec![0;8]))}));
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        decoded(&mut r);
+        cache.block(r.arrival_token(),cache.plan.bounds,Some(Input::Residency));
+        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Blocked(Input::Residency)),"the undrained decode leaves the cell waiting");
+        r.drain_image_decodes(&mut encoder).unwrap();
+        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Runnable),"draining the decoded input left the cell parked on an arrival it had already counted");
+        let pass=r.arrival_token();
+        decoded(&mut r);
+        r.drain_image_decodes(&mut encoder).unwrap();
+        cache.block(pass,cache.plan.bounds,Some(Input::Residency));
+        assert_eq!(cache.cells_demand(&r,true),Some(Outstanding::Runnable),"an input that arrived after the pass began must wake the cell the pass blocks");
     }
 
     #[test]

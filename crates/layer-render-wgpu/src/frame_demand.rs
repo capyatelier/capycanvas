@@ -7,6 +7,9 @@ pub(crate) enum Input { FrameSlot, Decode, Compile, Gpu, Name, Residency }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outstanding { Runnable, Blocked(Input) }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ArrivalToken(pub(super) u64);
+
 impl WgpuRasterizer {
     #[cfg(test)]
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {

@@ -975,6 +975,7 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         _dirty: PixelRect, encoding: &mut Encoding<'_>, destination: Destination<'_>, _tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
+        let arrivals=r.arrival_token();
         let Encoding { encoder, commands, retained, budget } = encoding;
         scene.placement_display=true;
         let finer=match destination {Destination::Overview(finer,changed)=>Some((finer,changed)),_=>None};
@@ -1022,7 +1023,7 @@ impl Cache {
                 written = written.union(PixelRect::new(x, y, x + width, y + height));
             }
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
-            for region in blocked {self.hide(region);self.block(r,region,Some(unready(scene,r)));}
+            for region in blocked {self.hide(region);self.block(arrivals,region,Some(unready(scene,r)));}
             composed=done;
         } else if !composes.is_empty() || !copies.is_empty() || self.graph.prepared.is_some() {
             let root = self.graph.root.clone().expect("prepared composition graph");
@@ -1192,7 +1193,7 @@ impl Cache {
             }
             if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,blocking(scene,r))));}
-            for (region,input) in blocks {self.block(r,region,input);}
+            for (region,input) in blocks {self.block(arrivals,region,input);}
             for (region,refusal) in refusals {self.refuse(region,&refusal);}
         }
         if view && live && self.ends_contact(packet) {self.write_back(r,scene,encoder)?;}
