@@ -119,10 +119,11 @@ confined decoder described in the [architecture](../architecture.md#files-and-ot
 its temporary input, output and diagnostics are anonymous files in the existing
 temp folder. Managed paper reloads continue to use their local PNG reader.
 
-The native process GPU loads and saves its pipeline cache in `shaders/`, one
-checked file per backend, GPU and driver, kept across app updates and rewritten
+On adapters with pipeline-cache support, the native process GPU loads and saves
+its pipeline cache in `shaders/`, one checked file per backend, GPU and driver, kept across app updates and rewritten
 after idle. Entries are reused for unchanged shaders and compilers; unreadable
-or foreign data is discarded.
+or foreign data is discarded. Metal has no pipeline cache in wgpu, so Apple
+relies on the system shader cache and writes no file there.
 
 The paper library keeps each imported paper as `<id>.png`, a gray PNG named by
 the SHA-256 of its samples, with its picker preview in `<id>.preview` and names
