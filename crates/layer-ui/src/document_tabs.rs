@@ -226,6 +226,7 @@ pub struct DocumentTabSlide {
     pub offsets: Vec<f32>,
     pub attached: bool,
     pub before: Option<u64>,
+    pub in_place: bool,
 }
 
 impl DocumentTabDrag {
@@ -276,6 +277,7 @@ impl DocumentTabDrag {
                 offsets: vec![0.; self.order.len()],
                 attached: false,
                 before: None,
+                in_place: false,
             });
         }
         let source = self.order.iter().position(|v| *v == self.id)?;
@@ -294,6 +296,7 @@ impl DocumentTabDrag {
                 .filter(|v| **v != self.id)
                 .nth(slot)
                 .copied(),
+            in_place: slot == source,
         })
     }
 }
@@ -379,11 +382,13 @@ mod tests {
             height: 32.,
         };
         let drag = tabs.drag(1, [40., 17.], &hits, clip).unwrap();
-        let still = drag.preview([40., 17.]).unwrap();
+        let still = drag.preview([49., 20.]).unwrap();
+        assert!(still.attached && still.in_place);
         assert_eq!(still.offsets, [0., 0., 0.]);
         assert_eq!(still.before, Some(b));
         assert!(!tabs.reorder(1, still.before));
         let over = drag.preview([40. + 57., 30.]).unwrap();
+        assert!(!over.in_place);
         assert_eq!(over.offsets, [0., -106., 0.]);
         assert_eq!(over.bounds.x, 67.);
         assert_eq!(over.before, Some(c));
@@ -395,6 +400,7 @@ mod tests {
         assert!(drag.preview([500., 33. + 16.]).unwrap().attached);
         let away = drag.preview([500., 33. + 17.]).unwrap();
         assert!(!away.attached);
+        assert!(!away.in_place);
         assert_eq!(away.offsets, [0., 0., 0.]);
         assert_eq!(away.bounds, hits[0].bounds);
         assert!(drag.is_current(tabs.order()));

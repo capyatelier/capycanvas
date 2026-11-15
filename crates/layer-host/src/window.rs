@@ -305,7 +305,7 @@ impl<P: Parked> DocumentWindow<P> {
             }
             TabRequest::Slide { id, commit, hits, clip, press, point } => {
                 let preview = self.documents.drag(id, press, &hits, clip).and_then(|drag| drag.preview(point));
-                if commit && let Some(preview) = preview.as_ref().filter(|p| p.attached) {
+                if commit && let Some(preview) = preview.as_ref().filter(|p| p.attached && !p.in_place) {
                     self.arrange(host, |d| { d.reorder(id, preview.before); })?;
                 }
                 json!(preview)
@@ -1365,6 +1365,17 @@ mod tests {
             window.request(&mut host, serde_json::from_value(request).unwrap()).unwrap();
             assert_eq!(window.documents.order(), [2, 1]);
             assert_eq!(window.documents.selected(), 2);
+            if !vertical {
+                let reply = window.request(&mut host, serde_json::from_value(json!({
+                    "op":"slide","id":1,"commit":true,
+                    "hits":[{"id":2,"bounds":{"x":0,"y":0,"width":140,"height":48}},
+                        {"id":1,"bounds":{"x":140,"y":0,"width":140,"height":48}}],
+                    "clip":{"x":0,"y":0,"width":280,"height":48},
+                    "press":[200,20],"point":[209,20]
+                })).unwrap()).unwrap();
+                assert_eq!(window.documents.order(), [2, 1]);
+                assert_eq!(reply["in_place"], true);
+            }
             invoke(&mut host, CommandId::NextDrawing);
             assert!(!host.session.state().requests.is_empty());
             assert_eq!(window.documents.order(), [2, 1]);

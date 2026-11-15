@@ -209,6 +209,7 @@ private struct DrawingMeasure: ViewModifier {
                     controller?.slide(id: id, hits: orderedHits, clip: strip, press: press, point: p, commit: true) { [weak self] preview in
                         guard let self else { return }
                         guard preview["attached"].bool else { dragged = nil; slide = nil; return }
+                        if preview["in_place"].bool { controller?.select(id) }
                         slide = preview
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.settle() }
                     }

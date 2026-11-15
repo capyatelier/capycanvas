@@ -280,17 +280,15 @@ impl DocumentService {
                 if hits.len() > 1024 {
                     return Err("Too many drawing targets".into());
                 }
-                let before = self
+                match self
                     .window
                     .documents
                     .drag(id, press, &hits, clip)
                     .and_then(|drag| drag.preview(point))
                     .filter(|slide| slide.attached)
-                    .map(|slide| slide.before);
-                let next = hits.iter().position(|hit| hit.id == id).and_then(|index| hits.get(index + 1)).map(|hit| hit.id);
-                match before {
-                    Some(before) if before == next => return self.tab_action(host, Action::Select { id }),
-                    Some(before) => { self.window.request(host, TabRequest::Reorder { id, before })?; }
+                {
+                    Some(slide) if slide.in_place => return self.tab_action(host, Action::Select { id }),
+                    Some(slide) => { self.window.request(host, TabRequest::Reorder { id, before: slide.before })?; }
                     None => {}
                 }
             }
