@@ -1,6 +1,9 @@
 #pragma once
 #include "pch.h"
 #include "PointerGesture.h"
+#include <winrt/Microsoft.UI.Content.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Provider.h>
 #include <map>
 #include <memory>
 #include <optional>
@@ -17,6 +20,35 @@ struct Contacts {
     std::map<uint32_t,std::weak_ptr<State>> owners;
     void end(PointerRoutedEventArgs const& event,PointerCompletion completion);
 };
+struct RoutedTaps {
+    struct Press {weak_ref<Primitives::ButtonBase> button;std::optional<winrt::Windows::Foundation::Point> away;};
+    std::map<uint32_t,Press> presses;
+    void lift(Microsoft::UI::Input::PointerPoint const& point){
+        auto found=presses.find(point.PointerId());if(found==presses.end())return;
+        auto press=std::move(found->second);presses.erase(found);
+        auto owner=press.button.get();auto button=owner?owner.try_as<Button>():nullptr;if(!button||!button.IsEnabled()||!press.away||!button.XamlRoot())return;
+        auto at=point.Position();float slop=2.f*GetSystemMetricsForDpi(SM_CXDRAG,96);
+        if(std::abs(at.X-press.away->X)>slop||std::abs(at.Y-press.away->Y)>slop)return;
+        auto bounds=button.TransformToVisual(nullptr).TransformBounds({0,0,float(button.ActualWidth()),float(button.ActualHeight())});
+        if(at.X<bounds.X||at.Y<bounds.Y||at.X>bounds.X+bounds.Width||at.Y>bounds.Y+bounds.Height)return;
+        Automation::Peers::ButtonAutomationPeer(button).GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
+    }
+};
+inline std::shared_ptr<RoutedTaps> routedTaps(XamlRoot const& xaml){
+    if(!xaml||!xaml.ContentIsland())return nullptr;
+    auto island=xaml.ContentIsland();
+    static thread_local std::map<void*,std::weak_ptr<RoutedTaps>> values;
+    auto key=get_abi(island);auto found=values.find(key);
+    if(found!=values.end())if(auto value=found->second.lock())return value;
+    std::erase_if(values,[](auto const& pair){return pair.second.expired();});
+    auto value=std::make_shared<RoutedTaps>();values[key]=value;std::weak_ptr<RoutedTaps> weak=value;
+    auto source=Microsoft::UI::Input::InputPointerSource::GetForIsland(island);
+    source.PointerRoutedAway([weak](auto&&,Microsoft::UI::Input::PointerEventArgs const& args){
+        auto point=args.CurrentPoint();if(auto taps=weak.lock())if(auto found=taps->presses.find(point.PointerId());found!=taps->presses.end())found->second.away=point.Position();});
+    source.PointerRoutedTo([weak](auto&&,Microsoft::UI::Input::PointerEventArgs const& args){if(auto taps=weak.lock())taps->presses.erase(args.CurrentPoint().PointerId());});
+    source.PointerRoutedReleased([weak](auto&&,Microsoft::UI::Input::PointerEventArgs const& args){if(auto taps=weak.lock())taps->lift(args.CurrentPoint());});
+    return value;
+}
 inline std::shared_ptr<Contacts> contacts(UIElement const& root){
     if(!root)return nullptr;
     static thread_local std::map<void*,std::weak_ptr<Contacts>> values;
@@ -38,6 +70,7 @@ struct State:std::enable_shared_from_this<State> {
     SolidColorBrush overlay;
     SolidColorBrush ink{nullptr};int64_t inkChanged=0;
     std::shared_ptr<Contacts> input;
+    std::shared_ptr<RoutedTaps> taps;
     std::optional<uint32_t> pointer;
     bool inside=false,hoverAllowed=true,ignoreNativePress=false;
     uint8_t hover=20,press=41;double disabledContentOpacity=92./255.;
@@ -59,6 +92,7 @@ struct State:std::enable_shared_from_this<State> {
         if(auto button=owner.get())ignoreNativePress=button.IsPressed();present();
     }
     void complete(PointerRoutedEventArgs const& event,PointerCompletion completion){
+        if(taps&&completion!=PointerCompletion::CaptureLost)taps->presses.erase(event.Pointer().PointerId());
         if(pointer!=event.Pointer().PointerId())return;
         auto point=event.GetCurrentPoint(nullptr);
         end(CanceledCompletion(completion,point.Properties().IsCanceled(),point.IsInContact(),PointerCaptureLoss::CompleteLift)
@@ -101,6 +135,7 @@ inline std::shared_ptr<State> state(Primitives::ButtonBase const& button){
         auto button=state->owner.get();if(!button||!button.IsEnabled())return;auto point=e.GetCurrentPoint(button);
         if(!PointerGesture::PrimaryContact(point))return;
         if(state->pointer)state->end(true);state->pointer=point.PointerId();state->inside=state->hit(e);state->hoverAllowed=point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;
+        if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse&&(state->taps=routedTaps(button.XamlRoot())))state->taps->presses[point.PointerId()]={make_weak(button)};
         if(state->input)state->input->owners[*state->pointer]=state;state->present();
     })),true);
     for(auto const& event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent(),UIElement::PointerExitedEvent()})
@@ -113,7 +148,7 @@ inline std::shared_ptr<State> state(Primitives::ButtonBase const& button){
         button.AddHandler(event,box_value(PointerEventHandler([state,completion](auto&&,PointerRoutedEventArgs const& e){state->complete(e,completion);})),true);
     button.LostFocus([state](auto&&,auto&&){if(state->pointer)state->end(true);});
     button.Loaded([state](auto&&,auto&&){if(auto owner=state->owner.get();owner&&owner.XamlRoot())state->input=contacts(owner.XamlRoot().Content());state->present();});
-    button.Unloaded([state](auto&&,auto&&){state->end(true);auto color=state->overlay.Color();color.A=0;state->overlay.Color(color);state->input.reset();});
+    button.Unloaded([state](auto&&,auto&&){state->end(true);state->taps.reset();auto color=state->overlay.Color();color.A=0;state->overlay.Color(color);state->input.reset();});
     if(button.IsLoaded()&&button.XamlRoot())state->input=contacts(button.XamlRoot().Content());
     return state;
 }
