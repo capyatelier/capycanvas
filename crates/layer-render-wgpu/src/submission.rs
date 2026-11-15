@@ -558,7 +558,7 @@ mod tests {
         let mut r = renderer();
         let doc = document([64, 128]);
         let view = crate::test_support::view([128; 2]);
-        r.submit(FramePacket { view, ..packet(doc.scene(), [64, 128]) }).unwrap();
+        crate::test_support::submit_settled(&mut r, FramePacket { view, ..packet(doc.scene(), [64, 128]) });
         let surface = crate::create_target(r.device(), [128; 2], wgpu::TextureFormat::Rgba8Unorm, "discarded backdrop fixture").0;
         let target = surface.create_view(&Default::default());
         let mut retained = ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm);
@@ -567,6 +567,7 @@ mod tests {
         let surround = [0., 0., 0., 1.];
         for presenter in [&mut retained, &mut reference] {
             presenter.set_backdrop(&r, &[region], Default::default(), false);
+            pollster::block_on(presenter.prepare(&r)).unwrap();
             presenter.present(&r, &target, view, surround).unwrap();
         }
         let before = crate::layer_tests::page_bytes(&r, &surface);
