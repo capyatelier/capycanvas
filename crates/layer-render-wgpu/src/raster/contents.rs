@@ -1,15 +1,21 @@
 use super::*;
 use layer_core::raster::{ContentTree, ContentVersion};
+use std::collections::{BTreeMap, BTreeSet};
 
 struct Fork {
     pages: [ContentTree; 3],
     before: [ContentTree; 3],
+    prior: BTreeMap<[u32; 2], Option<Edit>>,
     submission: submission::Submission,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Edit { Modified, Pending, Unchanged }
 
 pub(crate) struct Contents {
     selected: Arc<RasterData>,
     fork: Option<Fork>,
+    edits: BTreeMap<[u32; 2], Edit>,
     selection: Arc<()>,
     defaults: [ContentVersion; 3],
     generation: [u64; 2],
@@ -262,12 +268,12 @@ pub(crate) fn declared_coverage_versions(source:&layer_core::authored::CoverageS
 
 impl Contents {
     pub fn new(selected: Arc<RasterData>) -> Self {
-        Self { selected, fork: None, selection: Arc::new(()), defaults: std::array::from_fn(|plane| ContentVersion::derive(plane as u128, &[])), generation: [0; 2] }
+        Self { selected, fork: None, edits: BTreeMap::new(), selection: Arc::new(()), defaults: std::array::from_fn(|plane| ContentVersion::derive(plane as u128, &[])), generation: [0; 2] }
     }
     pub fn data(&self) -> &Arc<RasterData> { &self.selected }
     pub fn generation(&self) -> [u64; 2] { self.generation }
     pub fn select(&mut self, selected: Arc<RasterData>) { self.published(selected); self.selection = Arc::new(()); }
-    pub fn published(&mut self, selected: Arc<RasterData>) { self.selected = selected; self.fork = None; self.generation[0] += 1; }
+    pub fn published(&mut self, selected: Arc<RasterData>) { self.selected = selected; self.fork = None; self.edits.clear(); self.generation[0] += 1; }
     pub fn versions(&self) -> Versions { Versions { pages: self.pages(), defaults: self.defaults.clone() } }
 
     pub fn configure(&mut self, scene: SceneView<'_>, target: SourceTarget) {
@@ -276,6 +282,11 @@ impl Contents {
             self.defaults = defaults;
             self.selection = Arc::new(());
             self.generation[0] += 1;
+            let Some(fork) = &self.fork else { return; };
+            let edits = self.edits.keys().map(|coordinate| (*coordinate, self.compare(&fork.pages, *coordinate))).collect();
+            let prior = fork.prior.iter().map(|(coordinate, prior)| (*coordinate, prior.map(|_| self.compare(&fork.before, *coordinate)))).collect();
+            self.edits = edits;
+            self.fork.as_mut().unwrap().prior = prior;
         }
     }
 
@@ -290,44 +301,70 @@ impl Contents {
                 tree.changes(&ContentTree::default(), |coordinate| { if !keep(coordinate) { removed.push(coordinate); } });
                 for coordinate in removed { tree.set(coordinate, None); }
             }
+            fork.prior.retain(|coordinate, _| keep(*coordinate));
         }
+        self.edits.retain(|coordinate, _| keep(*coordinate));
+    }
+
+    fn current(&self) -> Option<&[ContentTree; 3]> {
+        self.fork.as_ref().map(|fork| if fork.submission.discarded() { &fork.before } else { &fork.pages })
     }
 
     fn pages(&self) -> [ContentTree; 3] {
-        match &self.fork {
-            Some(fork) if fork.submission.discarded() => fork.before.clone(),
-            Some(fork) => fork.pages.clone(),
-            None => planes().map(|plane| self.selected.tiles.content(plane).clone()),
-        }
+        self.current().cloned().unwrap_or_else(|| planes().map(|plane| self.selected.tiles.content(plane).clone()))
     }
 
     pub fn version(&self, key: TileKey) -> ContentVersion {
-        match &self.fork {
-            Some(fork) => if fork.submission.discarded() { &fork.before[index(key.plane)] } else { &fork.pages[index(key.plane)] },
-            None => self.selected.tiles.content(key.plane),
-        }.tile_version(key.coordinate).unwrap_or_else(|| {
-            fallback(&self.defaults[index(key.plane)],key.coordinate)
-        })
+        self.current().map_or_else(|| self.selected.tiles.content(key.plane), |pages| &pages[index(key.plane)])
+            .tile_version(key.coordinate).unwrap_or_else(|| fallback(&self.defaults[index(key.plane)],key.coordinate))
+    }
+
+    fn compare(&self, pages: &[ContentTree; 3], coordinate: [u32; 2]) -> Edit {
+        #[cfg(test)] crate::test_support::PassCounts {paint_page_visits:1,..Default::default()}.record();
+        let mut pending = false;
+        for plane in planes() {
+            let key = TileKey {plane,coordinate};
+            let version = pages[index(plane)].tile_version(coordinate).unwrap_or_else(|| fallback(&self.defaults[index(plane)],coordinate));
+            match version.matches(&self.selected_version(key)) { Some(true) => {}, Some(false) => return Edit::Modified, None => pending = true }
+        }
+        if pending { Edit::Pending } else { Edit::Unchanged }
+    }
+
+    fn edit(&self, coordinate: [u32; 2]) -> Option<Edit> {
+        let fork = self.fork.as_ref()?;
+        match fork.prior.get(&coordinate) {
+            Some(prior) if fork.submission.discarded() => *prior,
+            _ => self.edits.get(&coordinate).copied(),
+        }
     }
 
     pub fn modified(&self, coordinate:[u32;2])->bool {
-        #[cfg(test)] crate::test_support::PassCounts {paint_page_visits:1,..Default::default()}.record();
-        planes().into_iter().any(|plane| {
-            let key=TileKey {plane,coordinate};
-            self.version(key).matches(&self.selected_version(key))!=Some(true)
-        })
+        match self.edit(coordinate) {
+            Some(Edit::Modified) => true,
+            Some(Edit::Pending) => self.current().is_some_and(|pages| self.compare(pages, coordinate) != Edit::Unchanged),
+            Some(Edit::Unchanged) | None => false,
+        }
     }
 
     pub fn selected_version(&self,key:TileKey)->ContentVersion {
         self.selected.tiles.get(&key).map_or_else(||fallback(&self.defaults[index(key.plane)],key.coordinate),RasterTile::content_version)
     }
 
-    pub fn modified_coordinates(&self)->std::collections::BTreeSet<[u32;2]> {
-        let pages=self.pages();let mut coordinates=std::collections::BTreeSet::new();
-        for plane in planes() {
-            self.selected.tiles.content(plane).changes(&pages[index(plane)],|coordinate| {coordinates.insert(coordinate);});
+    pub fn modified_coordinates(&self)->BTreeSet<[u32;2]> {
+        let Some(fork) = &self.fork else { return BTreeSet::new(); };
+        let discarded = fork.submission.discarded();
+        self.edits.keys().chain(fork.prior.keys().filter(|_| discarded)).copied().filter(|coordinate| self.modified(*coordinate)).collect()
+    }
+
+    fn settle(&mut self) {
+        if let Some(fork) = self.fork.as_mut().filter(|fork| fork.submission.discarded()) {
+            for (coordinate, prior) in std::mem::take(&mut fork.prior) {
+                match prior { Some(edit) => { self.edits.insert(coordinate, edit); }, None => { self.edits.remove(&coordinate); } }
+            }
         }
-        coordinates.retain(|coordinate|self.modified(*coordinate));coordinates
+        let Some(pages) = self.current() else { return; };
+        let settled: Vec<_> = self.edits.iter().filter(|(_, edit)| **edit == Edit::Pending).map(|(coordinate, _)| (*coordinate, self.compare(pages, *coordinate))).collect();
+        self.edits.extend(settled);
     }
 
     pub fn restorable_data(&self)->RasterData {
@@ -362,10 +399,16 @@ impl Contents {
         if !self.accepts(intent) || written.submission().discarded() {return false;}
         let submission = written.submission();
         if !self.fork.as_ref().is_some_and(|fork| fork.submission.same(submission)) {
+            self.settle();
             let pages = self.pages();
-            self.fork = Some(Fork { before: pages.clone(), pages, submission: submission.clone() });
+            self.fork = Some(Fork { before: pages.clone(), pages, prior: BTreeMap::new(), submission: submission.clone() });
         }
-        self.fork.as_mut().unwrap().pages[index(intent.key.plane)].set_version(intent.key.coordinate, written.version().clone());
+        let coordinate = intent.key.coordinate;
+        let fork = self.fork.as_mut().unwrap();
+        fork.pages[index(intent.key.plane)].set_version(coordinate, written.version().clone());
+        fork.prior.entry(coordinate).or_insert(self.edits.get(&coordinate).copied());
+        let edit = self.compare(&self.fork.as_ref().unwrap().pages, coordinate);
+        self.edits.insert(coordinate, edit);
         self.generation = self.generation.map(|count| count + 1);
         true
     }

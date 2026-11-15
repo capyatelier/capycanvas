@@ -159,6 +159,23 @@ fn unresolved_packing_keeps_the_authored_input_snapshot_without_an_edit() {
 }
 
 #[test]
+fn page_edits_follow_canonical_resolution_and_discarded_writes() {
+    let mut owner=contents();let selected=owner.version(key());
+    let first=receipt(SubmissionState::Submitted);let mut physical=Resident::unwritten(31u32);
+    physical.initialize(&first).unwrap().publish(&selected);
+    let canonical=layer_core::raster::CanonicalName::new(&selected);
+    assert!(owner.written(physical.write(&owner.intent(key()),&first).unwrap().publish(canonical.version())));
+    assert!(owner.modified([0;2]));assert_eq!(owner.modified_coordinates(),[[0;2]].into());
+    canonical.resolve(false).unwrap();
+    assert!(!owner.modified([0;2]));assert!(owner.modified_coordinates().is_empty());
+    let second=receipt(SubmissionState::Encoding);
+    assert!(owner.written(physical.write(&owner.intent(key()),&second).unwrap().publish(ContentName::fresh())));
+    assert!(owner.modified([0;2]));assert!(!owner.modified([1,0]));
+    second.0.store(SubmissionState::Discarded as u8,Ordering::Release);
+    assert!(!owner.modified([0;2]));assert!(owner.modified_coordinates().is_empty());
+}
+
+#[test]
 fn discarding_multiple_writes_in_one_encoder_restores_the_prior_content_name() {
     let mut owner = contents();
     let a = owner.version(key());

@@ -964,6 +964,28 @@ fn durable_color_accounting_compares_only_changed_pages() {
 }
 
 #[test]
+fn stroke_frames_compare_only_the_pages_they_write() {
+    let extent=[PAGE_SIZE*16,PAGE_SIZE];
+    let doc=crate::scene::scale::tests::document_at(extent);
+    let target=doc.active_target().unwrap();
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+    submit_settled(&mut r,frame);
+    let style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen);
+    let mut visits=Vec::new();
+    for step in 0..16 {
+        let mut dab=crate::tests::test_dab([(step*PAGE_SIZE+PAGE_SIZE/2) as f32,(PAGE_SIZE/2) as f32],[0.9,0.1,0.3,1.],0.8);dab.radii=[40.;2];
+        let batch=layer_render::DabBatch {stroke_start:step==0,..dab_batch(target,style.clone(),dab.bounds())};
+        let before=crate::test_support::PassCounts::snapshot();
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        complete(&r);
+        visits.push(crate::test_support::PassCounts::snapshot().delta(before).paint_page_visits);
+    }
+    let late=visits[8..].iter().copied().max().unwrap();let early=visits[..4].iter().copied().max().unwrap();
+    assert!(late<=early,"a stroke writing one page a frame compared {late} pages a frame after 8 frames and {early} at its start: {visits:?}");
+}
+
+#[test]
 fn a_raster_above_its_grant_sheds_by_the_next_frame_start() {
     let (doc,mut r,_data)=durable_color_renderer();
     let resident=|r:&WgpuRasterizer|r.raster_tiers.raster.used().saturating_sub(r.raster_buffers.transfer.used());

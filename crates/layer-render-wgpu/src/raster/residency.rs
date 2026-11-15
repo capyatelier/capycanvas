@@ -16,11 +16,11 @@ impl WgpuRasterizer {
         if self.transform_preview.is_some() || self.transforms.as_ref().is_some_and(|transform| transform.has_preview()) { return 0; }
         let required = self.restore_preflight.as_ref().map_or(&[][..], |restore| restore.dependencies());
         self.paint_layers.iter().map(|layer| {
-            let modified = self.raster.as_ref().and_then(|raster| raster.targets.get(&layer.id)).map(|target| target.contents.modified_coordinates()).unwrap_or_default();
+            let contents = self.raster.as_ref().and_then(|raster| raster.targets.get(&layer.id)).map(|target| &target.contents);
             let held = |coordinate: [u32; 2]| required.iter().any(|(target, coordinates)| *target == layer.id && coordinates.binary_search(&coordinate).is_ok());
             layer.pages.iter().filter(|page| {
                 page.stroke_start.is_none()
-                    && !modified.contains(&page.coordinate)
+                    && !contents.is_some_and(|contents| contents.modified(page.coordinate))
                     && !held(page.coordinate)
                     && native.backing.get(&layer.id).and_then(|data| data.tiles.get(&TileKey { plane: RasterPlane::Color, coordinate: page.coordinate }))
                         .is_some_and(|tile| matches!(tile.try_backing(), Some(Ok(_))))
