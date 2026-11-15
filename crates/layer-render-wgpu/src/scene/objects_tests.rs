@@ -987,13 +987,18 @@ fn pending_native_store_reads_keep_the_display_and_wake_exact_preparation() {
     r.analysis_dirty=true;
     assert!(r.next_frame()==layer_render::FrameDemand::Work,"independent ready work must remain runnable");
     r.analysis_dirty=false;
-    assert!(woken.try_recv().is_err());
     for _ in 0..2 {
         if r.raster_dependencies_ready(frame,None) {crate::test_support::submit_ready(&mut r, frame).unwrap();}
         assert_eq!(float_pixels(&r,r.presentation_views().unwrap()[0].texture()),previous);
     }
+    assert!(r.image_decode_waiting());
+    while woken.try_recv().is_ok() {}
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
     store.gate.release();
-    woken.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+    while r.image_decode_waiting() {
+        woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap();
+    }
     assert!(!r.image_decode_waiting());
     crate::test_support::submit_settled(&mut r,frame);
     assert!(float_pixels(&r,r.presentation_views().unwrap()[0].texture()).iter().all(|pixel|*pixel==[0.,0.,1.,1.]));

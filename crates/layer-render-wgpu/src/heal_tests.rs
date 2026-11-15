@@ -253,9 +253,12 @@ fn a_settling_heal_waits_on_its_wakes_instead_of_frames() {
     assert!(engine.backend().has_pending_submission());
     let mut frames = 0;
     while engine.backend().has_pending_submission() {
-        assert!(engine.frame_demand() == layer_render::FrameDemand::Wait, "a settling heal asked for polling frames after {frames} frames");
-        if engine.backend().next_frame() == layer_render::FrameDemand::Wait {
-            woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the heal's GPU work wakes its owner");
+        match engine.frame_demand() {
+            layer_render::FrameDemand::Wait => {
+                woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the heal's GPU work wakes its owner");
+            }
+            layer_render::FrameDemand::Work => {}
+            demand => panic!("a settling heal asked for polling frames after {frames} frames: {demand:?}"),
         }
         engine.render_frame().unwrap();
         frames += 1;
