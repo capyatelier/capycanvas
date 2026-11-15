@@ -311,6 +311,7 @@ impl Contents {
     }
 
     pub fn modified(&self, coordinate:[u32;2])->bool {
+        #[cfg(test)] crate::test_support::PassCounts {paint_page_visits:1,..Default::default()}.record();
         planes().into_iter().any(|plane| {
             let key=TileKey {plane,coordinate};
             self.version(key).matches(&self.selected_version(key))!=Some(true)

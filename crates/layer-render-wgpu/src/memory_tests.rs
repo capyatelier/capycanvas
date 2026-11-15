@@ -954,6 +954,16 @@ fn durable_color_renderer() -> (layer_core::Document, WgpuRasterizer, Arc<layer_
 }
 
 #[test]
+fn durable_color_accounting_compares_only_changed_pages() {
+    let (_doc,r,_data)=durable_color_renderer();
+    let before=crate::test_support::PassCounts::snapshot();
+    let pinned=r.pinned_paint_bytes();
+    let visits=crate::test_support::PassCounts::snapshot().delta(before).paint_page_visits;
+    assert_eq!(pinned,r.paint_memory_bytes()-64*MIB);
+    assert_eq!(visits,0,"durable color accounting compared {visits} unchanged pages one by one");
+}
+
+#[test]
 fn a_raster_above_its_grant_sheds_by_the_next_frame_start() {
     let (doc,mut r,_data)=durable_color_renderer();
     let resident=|r:&WgpuRasterizer|r.raster_tiers.raster.used().saturating_sub(r.raster_buffers.transfer.used());
