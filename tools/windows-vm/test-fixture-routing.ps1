@@ -1465,4 +1465,49 @@ public static class CapyReviewOwnershipTest {
     }finally{Remove-Item -LiteralPath $directory -Recurse -Force}
 }
 
+& {
+    $fixture=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/exercise-multiwindow.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $node=$fixture.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Wait-Reopened'},$false)
+    if(!$node){throw 'Missing actual multiwindow reopen path'}
+    . ([scriptblock]::Create($node.Extent.Text))
+    $helper=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../../apps/layer-windows/scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    foreach($name in 'Read-Snapshot','Read-CapyFixtureContext','Update-CapyFixtureContext','Exit-CapyEnvironment'){
+        $node=$helper.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$false)
+        if(!$node){throw "Missing actual fixture context helper: $name"}
+        . ([scriptblock]::Create($node.Extent.Text))
+    }
+    $directory=Join-Path ([IO.Path]::GetTempPath()) ('capy-reopened-identity-'+[guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($directory)|Out-Null
+    $prior=$env:CAPY_FIXTURE_CONTEXT;$priorEnvironment=$script:CapyEnvironment;$run=$directory;$script:CapyEnvironment=@{CAPY_STORAGE_DIR=$null}
+    function Restore-CapyEnvironmentValue($Name,$Value){if($Name -cne 'CAPY_STORAGE_DIR' -or $null -ne $Value){throw 'Unexpected reopen environment restoration'}}
+    function Windows{$reopenedWindows}
+    function Model($Window){@{windows_recovery=@{busy=$false;restoring=$false};state=@{document_file=@{modified=$true}}}}
+    function Review-Ready($Model,$Window){$true}
+    function Wait-Until($Condition,$Message,$Seconds){if($Seconds -ne 60 -or !(& $Condition)){throw $Message}}
+    function Register-CapyFixtureWindow($Process,$WindowHandle,$TraceDirectory){
+        if($Process.HasExited -or $TraceDirectory -cne $directory -or $WindowHandle -notin @($reopenedWindows.hwnd)){throw 'Reopened census did not receive its live owned window'}
+        $entry=@{process_id=$Process.Id;process_start_utc=$Process.StartTime.ToUniversalTime().ToString('o');hwnd=$WindowHandle}
+        Update-CapyFixtureContext {param($context);$context.windows=@($context.windows)+@($entry)}
+    }
+    try{
+        $env:CAPY_FIXTURE_CONTEXT=Join-Path $directory 'row-context.json'
+        Update-CapyFixtureContext {param($context);$context.windows=@(@{process_id=31;process_start_utc='2026-11-15T10:00:00.0000000Z';hwnd=310})}
+        foreach($generation in 1,2){
+            $review=[pscustomobject]@{Id=70+$generation;HasExited=$false;StartTime=[DateTime]::Parse('2026-11-15T10:01:00.1234567Z').AddMinutes($generation)}
+            $reopenedWindows=@(foreach($index in 1..(3-$generation)){@{id=$index;hwnd=$review.Id*10+$index}})
+            $expectedBirth=$review.StartTime.ToUniversalTime().ToString('o')
+            Wait-Reopened (3-$generation) 'Reopened drawing did not become ready'
+            $review.HasExited=$true
+        }
+        Exit-CapyEnvironment
+        $context=Read-CapyFixtureContext
+        if($context.process_id -ne 72 -or $context.process_start_utc -cne $expectedBirth){throw 'Final reopened review lost its recorded start time'}
+        $actual=@($context.windows|Where-Object process_id -eq 72)
+        if($actual.Count -ne 1 -or $actual[0].hwnd -ne 721 -or $actual[0].process_start_utc -cne $expectedBirth -or @($context.windows|Where-Object process_id -eq 71).Count -ne 2 -or @($context.windows|Where-Object process_id -eq 31).Count -ne 1){throw 'Reopened census lost an actual window or an earlier review identity'}
+    }finally{if($null -eq $prior){Remove-Item Env:CAPY_FIXTURE_CONTEXT -ErrorAction SilentlyContinue}else{$env:CAPY_FIXTURE_CONTEXT=$prior};$script:CapyEnvironment=$priorEnvironment;Remove-Item -LiteralPath $directory -Recurse -Force}
+    'Every reopened review records its live window identity before the final clean exit'
+}
+
 & (Join-Path $PSScriptRoot 'test-session-graphics.ps1')

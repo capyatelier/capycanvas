@@ -281,7 +281,10 @@ try {
     }
     function Wait-Reopened([int]$Count,[string]$Message) {
         Wait-Until {@(Windows).Count -eq $Count} $Message 60
-        foreach($window in @(Windows)){Wait-Until {$m=Model $window;(Review-Ready $m $window.hwnd) -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} "Window $($window.id) did not finish reopening" 60}
+        foreach($window in @(Windows)){
+            Wait-Until {$m=Model $window;(Review-Ready $m $window.hwnd) -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} "Window $($window.id) did not finish reopening" 60
+            Register-CapyFixtureWindow $review $window.hwnd $directory
+        }
         if(@(Windows).Count -ne $Count){throw $Message}
         if(@(Windows|Where-Object {(Model $_).state.document_file.modified}).Count -ne $Count){throw "$Message with its unsaved drawing"}
     }
