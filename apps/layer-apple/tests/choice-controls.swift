@@ -5,23 +5,6 @@ import SwiftUI
 
 /// Shared choices in invisible hosts and production properties in owned windows.
 @main final class ChoiceCaptures: NativeWorkspaceInputFixture {
-    @MainActor private static func element(_ root: NSObject, identifier: String, depth: Int = 0) -> NSObject? {
-        guard depth < 32 else { return nil }
-        let id = NSSelectorFromString("accessibilityIdentifier")
-        if root.responds(to: id), root.perform(id)?.takeUnretainedValue() as? String == identifier { return root }
-        let children = NSSelectorFromString("accessibilityChildren")
-        guard root.responds(to: children) else { return nil }
-        for child in root.perform(children)?.takeUnretainedValue() as? [NSObject] ?? [] {
-            if let found = element(child, identifier: identifier, depth: depth + 1) { return found }
-        }
-        return nil
-    }
-    @MainActor private static func bounds(_ element: NSObject) -> CGRect {
-        let selector = NSSelectorFromString("accessibilityFrame")
-        guard element.responds(to: selector) else { return .zero }
-        let invoke = unsafeBitCast(element.method(for: selector), to: (@convention(c) (AnyObject, Selector) -> CGRect).self)
-        return invoke(element, selector)
-    }
     @MainActor private static func addFilter(platform: UInt32, theme: String,
         width: CGFloat, directory: URL) async throws -> JSON {
         let store = EditorStore(platform: platform, persistence: EditorPersistence(root: nil), managedWorkspaces: false)
@@ -50,12 +33,12 @@ import SwiftUI
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         try await drain(0.3)
         try await wait("Visible production Add Filter", seconds: 5, failure: { store.failure }) {
-            window.isVisible && window.isKeyWindow && element(host, identifier: "properties-add-filter") != nil
+            window.isVisible && window.isKeyWindow && nativeAccessibilityElement(host, identifier: "properties-add-filter") != nil
         }
-        guard let button = element(host, identifier: "properties-add-filter") else {
+        guard let button = nativeAccessibilityElement(host, identifier: "properties-add-filter") else {
             throw HostFailure(message: "Mounted production Add Filter button must expose its bounds")
         }
-        let frame = bounds(button), caption = store.state["layer_properties"]["add_filter"]["title"].string
+        let frame = nativeAccessibilityBounds(button), caption = store.state["layer_properties"]["add_filter"]["title"].string
         try require(!caption.isEmpty && frame.width > 0 && frame.height > 0, "Production Add Filter must expose caption and nonzero bounds")
         let advance = EditorTextMetrics.width(caption, size: textSize, weight: .bold)
         let natural = advance + 2 * 16 + 2 * store.panelMetrics.spacing + 2 * 6

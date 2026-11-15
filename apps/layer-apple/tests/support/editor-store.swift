@@ -1,6 +1,27 @@
 import Foundation
 import QuartzCore
 import ImageIO
+#if os(macOS)
+import AppKit
+
+@MainActor func nativeAccessibilityElement(_ root: NSObject, identifier: String, depth: Int = 0) -> NSObject? {
+    guard depth < 32 else { return nil }
+    let id = NSSelectorFromString("accessibilityIdentifier")
+    if root.responds(to: id), root.perform(id)?.takeUnretainedValue() as? String == identifier { return root }
+    let children = NSSelectorFromString("accessibilityChildren")
+    guard root.responds(to: children) else { return nil }
+    for child in root.perform(children)?.takeUnretainedValue() as? [NSObject] ?? [] {
+        if let found = nativeAccessibilityElement(child, identifier: identifier, depth: depth + 1) { return found }
+    }
+    return nil
+}
+@MainActor func nativeAccessibilityBounds(_ element: NSObject) -> CGRect {
+    let selector = NSSelectorFromString("accessibilityFrame")
+    guard element.responds(to: selector) else { return .zero }
+    let invoke = unsafeBitCast(element.method(for: selector), to: (@convention(c) (AnyObject, Selector) -> CGRect).self)
+    return invoke(element, selector)
+}
+#endif
 func decodedExportPixels(_ url: URL) throws -> Data {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
         let image = CGImageSourceCreateImageAtIndex(source, 0, nil), let pixels = image.dataProvider?.data else {
