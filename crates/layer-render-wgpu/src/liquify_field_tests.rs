@@ -838,6 +838,17 @@ fn pinch_minification_keeps_transparency_at_physical_canvas_edge() {
         "pixels away from the real canvas edge must remain opaque: {interior:?}");
 }
 
+fn source_color_pages(r: &mut WgpuRasterizer, target: layer_core::SourceTarget, extent: [u32; 2]) -> BTreeMap<[u32; 2], Vec<u8>> {
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let tiles: Vec<_> = page_coordinates(PixelRect::full(extent)).map(|coordinate| {
+        let tile = crate::test_support::query_ready(r, &mut encoder, |r, encoder| r.raw_layer_tile(target, coordinate, encoder)).unwrap();
+        (coordinate, tile.texture)
+    }).collect();
+    r.uploads.finish(&encoder);
+    encoder.submit(&r.queue);
+    tiles.into_iter().map(|(coordinate, texture)| (coordinate, crate::layer_tests::page_bytes(r, &texture))).collect()
+}
+
 #[test]
 fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
     let extent=[512,256];
@@ -858,15 +869,7 @@ fn fit_preview_defers_persistent_color_until_zero_dab_end_across_tiles() {
             .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&r.read_color_page(target,page,false,None).unwrap().value().texture)))
             .collect::<BTreeMap<_,_>>();
         let original_colors=colors(&r);
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let source_tiles=[0,1].map(|x| {
-            let tile=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.raw_layer_tile(target,[x,0],encoder)).unwrap();
-            ([x,0],tile.texture)
-        });
-        r.uploads.finish(&encoder);
-        encoder.submit(&r.queue);
-        let source_colors=source_tiles.into_iter().map(|(coordinate,texture)|
-            (coordinate,crate::layer_tests::page_bytes(&r,&texture))).collect::<BTreeMap<_,_>>();
+        let source_colors=source_color_pages(&mut r,target,extent);
         let original_display=crate::scene::scale::tests::display_pixels(&r);
         let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
         style.liquify=Some(Arc::new(layer_core::liquify::Context::for_source(placement::paint(&doc),false)));
@@ -1080,7 +1083,8 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     let colors=|r:&WgpuRasterizer|r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
         .map(|page|(page.coordinate,crate::layer_tests::page_bytes(r,&r.read_color_page(target,page,false,None).unwrap().value().texture)))
         .collect::<BTreeMap<_,_>>();
-    let authored=colors(&fit);
+    let authored=fit.raster_versions(doc.scene(),target).unwrap().root(layer_core::raster::RasterPlane::Color);
+    let source_colors=source_color_pages(&mut fit,target,extent);
     let anchor=seeded_context(&fit,&doc,|_,_|([16.,0.],[1.,0.,0.,1.]));
     for (index,amount) in [0.,0.5,1.].into_iter().enumerate() {
         let mut context=anchor.clone();context.amount=Some(amount);
@@ -1096,7 +1100,10 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
         assert_eq!(fit.preview_level,2,"Amount {amount} must use a reduced Fit preview");
         assert!(fit.liquify.as_ref().unwrap().strokes.get(&target).is_some_and(|stroke|stroke.preview_only),
             "Amount {amount} preview must have a preview-only stroke");
-        assert!(colors(&fit)==authored,"Amount {amount} preview must leave authored color untouched");
+        assert_eq!(fit.raster_versions(doc.scene(),target).unwrap().root(layer_core::raster::RasterPlane::Color).matches(&authored),Some(true),
+            "Amount {amount} preview must preserve the authored color name");
+        assert!(colors(&fit).iter().all(|(coordinate,pixels)|source_colors.get(coordinate)==Some(pixels)),
+            "Amount {amount} preview must leave original color pixels untouched");
         let display=crate::scene::scale::tests::display_pixels(&fit);
         let changes=display.iter().zip(&before).filter(|(a,b)|a!=b).count();
         if amount==0. {assert_eq!(changes,0,"zero Amount preview must restore the original display");}
@@ -1106,7 +1113,9 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
             "a no-batch frame must discard the canceled Amount {amount} preview stroke");
         assert!(crate::scene::scale::tests::display_pixels(&fit)==before,
             "cancel must restore Amount {amount} display");
-        assert!(colors(&fit)==authored,"cancel must preserve authored color");
+        assert_eq!(fit.raster_versions(doc.scene(),target).unwrap().root(layer_core::raster::RasterPlane::Color).matches(&authored),Some(true),
+            "cancel must preserve the authored color name");
+        assert!(colors(&fit).iter().all(|(coordinate,pixels)|source_colors.get(coordinate)==Some(pixels)),"cancel must preserve original color pixels");
     }
     let mut context=anchor;context.amount=Some(0.5);
     let mut style=preset_style(DefaultBrushPreset::LiquifyPush);
@@ -1118,7 +1127,7 @@ fn fit_amount_preview_keeps_authored_color_and_matches_full_resolution_commit() 
     crate::test_support::submit_ready(&mut fit,FramePacket{view,dab_batches:&[commit],
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let fit_colors=colors(&fit);
-    assert!(fit_colors!=authored,"committing Amount must publish full-resolution authored color");
+    assert!(fit_colors!=source_colors,"committing Amount must publish full-resolution authored color");
 
     let mut exact=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut reference=placement::paint_document(extent,"liquify Amount full resolution reference");

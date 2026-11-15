@@ -919,7 +919,7 @@ pub(crate) fn assert_same_canonical(actual: &mut WgpuRasterizer, expected: &mut 
     assert!(actual.len() == expected.len() && differing == 0, "{differing} canonical samples differ, first at {first:?}");
 }
 
-fn canonical_pixels(r: &mut WgpuRasterizer) -> Vec<[f32; 4]> {
+pub(crate) fn canonical_pixels(r: &mut WgpuRasterizer) -> Vec<[f32; 4]> {
     let frame = r.artwork_frame.clone().unwrap();
     let extent = r.document_extent;
     let mut capture = crate::artwork::Capture::default();

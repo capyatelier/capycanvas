@@ -365,6 +365,9 @@ fn assert_clone_promotes_resident_codes_once(depth: layer_core::color::SampleDep
     let (mut input, mut engine, source) = resident_code_cloner(depth);
     let original = prepared_photo_view(engine.backend(), &source, [1, 1]);
     let untouched = prepared_photo_view(engine.backend(), &source, [3, 0]);
+    let untouched_codes=source.tiles[&[3,0]].decode_on_worker().unwrap();
+    let untouched_key=layer_core::raster::TileKey {plane:layer_core::raster::RasterPlane::Color,coordinate:[3,0]};
+    let untouched_tile=engine.document().target_raster(PHOTO).unwrap().wait_data().unwrap().tiles.get(&untouched_key).cloned();
     assert_eq!(original.texture().format(), resident_code_format(depth));
     assert_eq!(untouched.texture().format(), resident_code_format(depth));
     let lease = engine.backend().source_tiles.borrow().lease(&original).unwrap();
@@ -392,7 +395,12 @@ fn assert_clone_promotes_resident_codes_once(depth: layer_core::color::SampleDep
     draw(&mut engine, &mut input, pen(5, PenPhase::Up, [80., 64.], SampleFlags::PRIMARY));
     flush(&mut engine);
     assert_eq!(prepared_photo_view(engine.backend(), &source, [1, 1]), exact);
-    assert_eq!(prepared_photo_view(engine.backend(), &source, [3, 0]).texture().format(), resident_code_format(depth));
+    let selected=engine.document().target_raster(PHOTO).unwrap().wait_data().unwrap();
+    assert_eq!(selected.tiles.get(&untouched_key).map(|tile|tile.wait_backing().unwrap().decode_on_worker().unwrap()),
+        untouched_tile.as_ref().map(|tile|tile.wait_backing().unwrap().decode_on_worker().unwrap()));
+    let SourceTarget::Paint(photo)=PHOTO else {unreachable!()};
+    let base=engine.document().artwork.paint.get(photo).unwrap().base.as_ref().unwrap();
+    assert_eq!(base.image.storage().tiles[&[3,0]].decode_on_worker().unwrap(),untouched_codes);
     let maximum = depth.maximum() as f32;
     let pixel = pixels(engine.backend_mut(), PHOTO);
     for (x, y) in [(68, 64), (72, 64)] {

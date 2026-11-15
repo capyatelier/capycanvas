@@ -208,7 +208,11 @@ fn semitransparent_material_over_nontransparent_backdrop_matches_premultiplied_o
     paint_mut(&mut background).raster = RasterRevision::backed(data);
     let mut pixels = |doc: &Document| {
         crate::test_support::submit_settled(&mut renderer, FramePacket { reset_layers: true, ..packet(doc.scene(), EXTENT) });
-        crate::scene::scale::tests::display_pixels(&renderer)
+        let mut capture = renderer.snapshot_gpu().capture_scene(doc.snapshot_with_context(renderer.evaluation_context()),
+            layer_core::SceneScope::All, Default::default()).unwrap();
+        let pixels = capture.read_region([0, 0, EXTENT[0], EXTENT[1]]).unwrap();
+        assert_eq!(pixels.len(), (EXTENT[0] * EXTENT[1]) as usize);
+        pixels
     };
     let source = pixels(&front);
     let base = pixels(&background);
@@ -1088,7 +1092,7 @@ fn selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     crate::test_support::materialize_mask(&mut mask.source, layer_core::Selection::polygon(vec![Point {x:160.,y:80.},Point {x:290.,y:80.},
         Point {x:280.,y:180.},Point {x:170.,y:180.}]).unwrap(), Default::default());set_mask(&mut owner, mask);
     crate::test_support::submit_settled(&mut r, FramePacket {reset_layers:true,..packet(owner.scene(),EXTENT)});
-    let original=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
+    let original=crate::test_support::canonical_pixels(&mut r);
     let occupied:Vec<_>=original.iter().enumerate().filter(|(_,p)|p[3]>0.).map(|(i,_)|[i%512,i/512]).collect();
     let bounds=[occupied.iter().map(|p|p[0]).min().unwrap(),occupied.iter().map(|p|p[1]).min().unwrap(),
         occupied.iter().map(|p|p[0]).max().unwrap()+1,occupied.iter().map(|p|p[1]).max().unwrap()+1];
@@ -1109,7 +1113,7 @@ fn selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     occurrence_mut(&mut owner).visible =false;
     let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(owner.scene(),EXTENT)};
     crate::test_support::submit_settled(&mut r, packet);
-    let actual=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
+    let actual=crate::test_support::canonical_pixels(&mut r);
     let mut occupied=0;
     for (i,(actual,source)) in actual.iter().zip(&original).enumerate() {
         let x=i%512;let y=i/512;

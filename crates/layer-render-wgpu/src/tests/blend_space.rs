@@ -153,7 +153,9 @@ fn settle(r: &mut WgpuRasterizer, packet: FramePacket<'_>) {
 }
 
 fn composite(r: &WgpuRasterizer) -> Vec<u8> {
-    crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
+    let pixels = crate::test_support::float_pixels(r, crate::test_support::document_texture(r));
+    assert_eq!(pixels.len(), (EXTENT[0] * EXTENT[1]) as usize);
+    pixels.into_iter().flatten().flat_map(f32::to_le_bytes).collect()
 }
 
 fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<u8> {
@@ -161,12 +163,9 @@ fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<u8> {
         .snapshot_gpu()
         .capture(layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap(), Default::default())
         .unwrap();
-    capture
-        .read_region([0, 0, EXTENT[0], EXTENT[1]])
-        .unwrap()
-        .into_iter()
-        .flat_map(|p| p.into_iter().flat_map(f32::to_le_bytes))
-        .collect()
+    let pixels = capture.read_region([0, 0, EXTENT[0], EXTENT[1]]).unwrap();
+    assert_eq!(pixels.len(), (EXTENT[0] * EXTENT[1]) as usize);
+    pixels.into_iter().flatten().flat_map(f32::to_le_bytes).collect()
 }
 
 fn floats(bytes: &[u8]) -> Vec<f32> {
@@ -306,8 +305,7 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
             let occurrences:Vec<_>=artwork.occurrences.iter().filter_map(|(candidate,_,_)|(candidate!=handle).then_some(candidate)).collect();
             for occurrence in occurrences { artwork.occurrences.remove(occurrence).unwrap(); }
             let isolated = Document::from_artwork(artwork).unwrap();
-            settle(&mut r, FramePacket { view, reset_layers: true, ..packet(isolated.scene(), EXTENT) });
-            rgba(&composite(&r))
+            rgba(&exported(&r, &isolated))
         };
         let [top, clipped, base, under] = [top, clipped, base, under].map(&mut alone);
         settle(&mut r, FramePacket { view, reset_layers: true, blend_space: perceptual, ..packet(document.scene(), EXTENT) });
