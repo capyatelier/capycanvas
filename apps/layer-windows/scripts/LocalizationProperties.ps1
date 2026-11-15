@@ -322,12 +322,12 @@ function Preference-Numeric{
  Use-Window $first
  if(Find 'settings-button' -Visible){Invoke 'settings-button'}else{Menu-Command 'edit' 'settings'}
  Invoke-Id 'preference-page-input'
- $entry=Control 'setting-number-pan_speed' -Arranged;$identity=$entry.GetRuntimeId() -join ':'
+ $entry=Reveal 'setting-number-pan_speed';$identity=$entry.GetRuntimeId() -join ':'
  $pan=(Read-Snapshot (Settings-File)).pan_speed
  $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
  Select-Draft $entry $numericDraft;Key 13;Select-Draft $entry $numericDraft
  Surface-Languages 'retained-numeric-validation' {
-  $view=Fresh-Model $first $choice.tag;$control=Control 'setting-number-pan_speed' -Arranged
+  $view=Fresh-Model $first $choice.tag;$control=Reveal 'setting-number-pan_speed'
   if(($control.GetRuntimeId() -join ':') -ne $identity -or !$control.Current.HasKeyboardFocus -or (Value $control) -ne $numericDraft -or (Selection $control) -ne $numericDraft -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or (Read-Snapshot (Settings-File)).pan_speed -ne $pan){throw 'Native invalid numeric draft changed its editor, selected literal, focus, setting or document/GPU ownership'}
   if($control.Current.HelpText -ne (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')){throw 'Retained typed numeric error accessibility help stayed in an earlier language'}
   $title=Control 'number-caption-setting-number-pan_speed' -Arranged
