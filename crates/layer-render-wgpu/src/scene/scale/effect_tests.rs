@@ -234,23 +234,27 @@ fn native_pointwise_captures_reuse_source_bindings_across_strips() {
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     crate::test_support::submit_settled(&mut r, frame);
-    {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(&cache,&[cache.plan.bounds]);cache.evict_window(cache.plan.bounds);}
-    assert!(r.can_submit());
-    assert!(r.raster_dependencies_ready(frame, None));
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
-    #[expect(clippy::mutable_key_type,reason="Texture view keys use stable resource identities")]
-    let bindings = r.scene.as_ref().unwrap().source_bindings.entries.clone();
-    assert!(bindings.len() > 4);
     let expected = display_pixels(&r);
-    {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(&cache,&[cache.plan.bounds]);}
-    assert!(r.can_submit());
-    assert!(r.raster_dependencies_ready(frame, None));
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    let target = doc.scene().order().iter().find_map(|handle| doc.scene().source_target(*handle)).unwrap();
+    let mut dab = crate::tests::test_dab([extent[0] as f32 / 2., extent[1] as f32 / 2.], [0.; 4], 1.); dab.radii = [extent[0] as f32; 2];
+    let held = layer_render::DabBatch { stroke_start: true, ..dab_batch(target, crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds()) };
     #[expect(clippy::mutable_key_type,reason="Texture view keys use stable resource identities")]
-    let current = &r.scene.as_ref().unwrap().source_bindings.entries;
-    for (key, (_, binding)) in bindings {
-        assert_eq!(&current[&key].1, &binding);
+    let mut frames = Vec::new();
+    for _ in 0..8 {
+        crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&held), composite_all: false, ..frame }).unwrap();
+        frames.push(r.scene.as_ref().unwrap().source_bindings.entries.clone());
+        r.wait_idle().unwrap();
     }
+    let ended = layer_render::DabBatch { stroke_end: true, ..held };
+    crate::test_support::submit_published(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&ended), composite_all: false, ..frame });
+    crate::test_support::submit_settled(&mut r, frame);
+    #[expect(clippy::mutable_key_type,reason="Texture view keys use stable resource identities")]
+    let sources = frames.iter().flat_map(|entries| entries.keys().flat_map(|(_, views)| views.iter().cloned())).collect::<std::collections::HashSet<_>>();
+    #[expect(clippy::mutable_key_type,reason="Bind group keys use stable resource identities")]
+    let created = frames.iter().flat_map(|entries| entries.values().map(|(_, binding)| binding.clone())).collect::<std::collections::HashSet<_>>();
+    let reused = frames.windows(2).map(|pair| pair[0].iter().filter(|(key, (_, binding))| pair[1].get(*key).is_some_and(|(_, next)| next == binding)).count()).sum::<usize>();
+    assert!(!created.is_empty() && created.len() <= sources.len(), "the streamed captures bind each source set once: {} bindings over {} sources", created.len(), sources.len());
+    assert!(reused >= 1, "live captures reuse a source binding across frames");
     assert_eq!(display_pixels(&r), expected);
 }
 

@@ -441,8 +441,9 @@ impl WgpuRasterizer {
     }
     fn scene_scale_pipelines(&self,scene:SceneView<'_>)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
         let format=self.display_precision(scene).format();
+        let scale=&self.scene_pipelines.scale;
         self.scene_pipelines.scale_pipelines(format).into_iter()
-            .chain((format!=wgpu::TextureFormat::Rgba32Float).then_some(&self.scene_pipelines.scale.full.reduce))
+            .chain((format!=wgpu::TextureFormat::Rgba32Float).then_some([&scale.full.reduce,&scale.output(format).project]).into_iter().flatten())
     }
     pub(super) fn scene_scale_ready(&self,scene:SceneView<'_>) -> bool {
         self.compilation.require(self.scene_scale_pipelines(scene).chain([

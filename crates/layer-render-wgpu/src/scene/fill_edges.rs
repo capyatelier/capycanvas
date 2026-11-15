@@ -352,7 +352,7 @@ impl WgpuRasterizer {
         if state.pending() {
             let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
             let result=self.drain_image_decodes(&mut encoder).and_then(|()|state.advance(self,packet,&mut encoder));
-            if let Err(error)=result && !matches!(error,GpuRasterError::NotReady) {state.failure=Some(error);}
+            if let Err(error)=result && !matches!(error,GpuRasterError::NotReady|GpuRasterError::NotPublished) {state.failure=Some(error);}
             if encoder.has_work() {self.uploads.finish(&encoder);self.last_submission=encoder.submit(&self.queue);}
         }
         let ready=!state.pending();self.fill_edges_preflight=Some(state);ready

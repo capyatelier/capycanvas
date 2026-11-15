@@ -153,7 +153,7 @@ impl Evaluator<'_> {
                 let covered = regions.iter().fold(PixelRect::EMPTY, |bounds, region| bounds.union(page_rect(tile).intersect(*region))).intersect(plan.bounds);
                 if covered.is_empty() { continue; }
                 match self.scene.capture_prepared_tile_jobs(self.r, packet, &destination, tile, covered, scene::Output::EffectComposite(handle), initialized.as_ref(), self.accepted) {
-                    Err(GpuRasterError::NotReady) => self.unit.waiting = true,
+                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => self.unit.waiting = true,
                     result => result?,
                 }
             }

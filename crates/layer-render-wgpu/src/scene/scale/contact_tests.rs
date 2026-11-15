@@ -12,7 +12,10 @@ fn view_at(extent:[u32;2],divisor:u32)->layer_render::ViewState {
     let mut view=crate::test_support::view([extent[0]/divisor,extent[1]/divisor]);
     view.document_to_surface=[1./divisor as f32,0.,0.,1./divisor as f32,0.,0.];view
 }
-fn renderer(doc:&layer_core::Document)->WgpuRasterizer {WgpuRasterizer::new_native_headless(doc.composition().color).unwrap()}
+fn renderer(doc:&layer_core::Document)->WgpuRasterizer {
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);r
+}
 
 #[expect(clippy::too_many_arguments,reason="Each contact case names its document, view, brush, dabs and renderer")]
 fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:layer_render::ViewState,level:u32,preset:DefaultBrushPreset,dabs:&[layer_render::Dab],
@@ -20,7 +23,7 @@ fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:la
 ) {
     let extent=doc.composition().size;let target=doc.active_target().unwrap();let style=crate::layer_tests::preset_style(preset);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view;
-    let mut r=renderer(doc);
+    let mut r=renderer(doc);layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);
     crate::test_support::submit_settled(&mut r,frame);
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level,level);
     let batch=|dabs:&[layer_render::Dab],start:bool|layer_render::DabBatch {stroke_start:start,stroke_end:false,dab_count:dabs.len() as u32,
@@ -33,7 +36,7 @@ fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:la
         crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs[step..=step],dab_batches:std::slice::from_ref(&next),time_seconds:time,..frame}).unwrap();
         let counts=crate::test_support::PassCounts::snapshot().delta(counts);
         if contact.contains(&step) {assert_eq!([counts.unit_acceptances,counts.declarations],[0;2],"frame {step} composes in contact");}
-        let mut fresh=renderer(doc);
+        let mut fresh=renderer(doc);layer_render::CanvasRenderer::set_working_layer(&mut fresh,doc.working.occurrence);
         crate::test_support::submit_settled(&mut fresh,frame);
         let whole=batch(&dabs[..=step],true);
         crate::test_support::submit_ready(&mut fresh,FramePacket {dabs:&dabs[..=step],dab_batches:std::slice::from_ref(&whole),time_seconds:time,..frame}).unwrap();
@@ -393,6 +396,60 @@ fn a_contact_frame_after_the_first_accepts_no_brush_inputs_and_computes_no_previ
         let counts=&counts[*step];
         assert_eq!([counts.brush_acceptances,counts.preview_computations],[0;2],"contact frame {step} reuses the contact's brush inputs and preview stamps: {counts:?}");
     }
+}
+
+#[test]
+fn a_stroke_started_before_its_halves_exist_enters_contact_within_its_half_units_and_keeps_its_ink() {
+    let extent=[2048,1024];let mut doc=document_at(extent);
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/9) as u8,(y/5) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    let target=doc.active_target().unwrap();
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Paintbrush);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
+    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let cache=r.scale_display.as_ref().unwrap();
+    let cell=pages::bounds([0,0],cache.plan.level,extent);
+    assert!(cache.pivot_missing(cell),"the stroke starts before its cell has halves");
+    let bound=cache.pivot_halves().len()*pages::coordinates(cell,0).count()+2;
+    let mut entered=None;
+    for step in 0..bound+4 {
+        let x=300.+2.*step as f32;let dabs=[material_dab(x,300.,&style),material_dab(x+2.,300.,&style)];
+        let time=0.01*(step+1) as f32;
+        let counts=predicted_frame(&mut r,frame,target,&style,1,&dabs,step==0,time);
+        let batches=predicted_batches(target,&style,1,&dabs,step==0);
+        crate::test_support::submit_ready(&mut twin,FramePacket {dabs:&dabs,dab_batches:&batches,time_seconds:time,composite_all:true,..frame}).unwrap();
+        if in_contact(&counts) {entered=Some(step);break;}
+    }
+    assert!(entered.is_some_and(|step|step<=bound),"under continuous predicted frames the stroke enters contact within {bound} frames: {entered:?}");
+    let last=material_dab(400.,300.,&style);let end=stroke_batch(target,&last,false,true);
+    for r in [&mut r,&mut twin] {
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&end),time_seconds:1.,..frame}).unwrap();
+        crate::test_support::submit_settled(r,frame);
+    }
+    let error=max_error(&display_pixels(&r),&display_pixels(&twin));
+    assert!(error<1e-4,"the frames before contact keep every dab's ink: {error}");
+}
+
+#[test]
+fn a_stroke_after_a_settled_selection_enters_contact_on_its_first_frame() {
+    let extent=[2048,1024];let mut doc=document_at(extent);
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/9) as u8,(y/5) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Paintbrush);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(below));
+    crate::test_support::submit_settled(&mut r,frame);
+    let target=doc.scene().source_target(below).unwrap();
+    let dabs=|x:f32|[material_dab(x,300.,&style),material_dab(x+2.,300.,&style)];
+    predicted_frame(&mut r,frame,target,&style,1,&dabs(300.),true,0.01);
+    assert!(r.scale_display.as_ref().unwrap().gesture.is_some(),"a settled selection leaves its first stroke frame everything contact needs");
+    let counts=predicted_frame(&mut r,frame,target,&style,1,&dabs(302.),false,0.02);
+    assert!(in_contact(&counts),"the second frame accepts no units: acceptances {} declarations {}",counts.unit_acceptances,counts.declarations);
 }
 
 #[test]
@@ -809,4 +866,36 @@ fn watercolor_contact_frames_name_read_and_bind_each_transported_tile_once() {
     }
     assert!(checked>=3,"the wash stays in contact");
     assert!(repeated_transport>=1,"the wash transports the same tiles on consecutive contact frames");
+}
+
+#[test]
+fn a_stroke_crossing_into_a_cell_without_its_halves_keeps_every_dab_and_shows_the_crossing_within_the_stroke() {
+    let extent=[2048,1024];
+    let mut doc=document_at(extent);
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/9) as u8,(y/5) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    let target=doc.active_target().unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
+    let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
+    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let unready=PixelRect::new(1024,0,2048,1024);
+    {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(cache,&[unready]);assert!(cache.pivot_missing(unready));}
+    let xs=[700.,800.,900.,1000.,1100.,1200.,1300.,1400.,1400.,1400.,1400.,1400.];
+    let original=display_pixels(&r);let level_side=4;
+    let ink=|pixels:&[[f32;4]],x:f32|{let index=(500/level_side*(extent[0]/level_side)+x as u32/level_side) as usize;max_error(&pixels[index..=index],&original[index..=index])};
+    let mut crossed=None;
+    for (step,x) in xs.iter().enumerate() {
+        let dab=stroke_dab(*x,500.);let batch=stroke_batch(target,&dab,step==0,step+1==xs.len());
+        let next=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame};
+        crate::test_support::submit_ready(&mut r,next).unwrap();
+        crate::test_support::submit_ready(&mut twin,FramePacket {composite_all:true,..next}).unwrap();
+        if *x>=1400. && crossed.is_none() && ink(&display_pixels(&r),1400.)>0.1 {crossed=Some(step);}
+        let reduced=crate::scene::scale::layer_pages(&r);
+        assert!(reduced.iter().all(|source|*source==target),"the stroke reduces only its own layer: {reduced:?}");
+    }
+    assert!(crossed.is_some_and(|step|step+1<xs.len()),"the dab in the cell without halves shows within the stroke: {crossed:?}");
+    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let error=max_error(&display_pixels(&r),&display_pixels(&twin));
+    assert!(error<1e-4,"every dab keeps its ink across the crossing: {error}");
 }

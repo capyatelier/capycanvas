@@ -112,7 +112,10 @@ impl Cache {
         let previous=std::mem::replace(&mut self.stroked,frame.clone());
         self.gesture.is_some() || stroke(packet).zip(previous.zip(frame)).is_some_and(|((_,target),(previous,frame))|frame.contact_continues(&previous,target).is_some())
     }
-    pub(super) fn begin_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64)->Result<(),GpuRasterError> {
+    #[expect(clippy::too_many_arguments,reason="A contact begins from the frame's composed cells, encoding and budget")]
+    pub(super) fn begin_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,
+        touched:&[PixelRect],
+    )->Result<(),GpuRasterError> {
         let Some((stroke,target))=stroke(packet).filter(|(_,target)|!target.is_coverage() && !packet.dab_batches.iter().any(|batch|batch.stroke_end)) else {return Ok(());};
         let Some(root)=self.graph.root.clone() else {return Ok(());};
         let tier=self.pages.lock().unwrap().tier();
@@ -123,13 +126,21 @@ impl Cache {
         let preview_level=std::sync::OnceLock::new();
         let (Some(guard),Some(composed),Some(generation))=(Guard::capture(r,packet,target,&preview_level),frame.target_versions(target),r.raster_generation(target)) else {return Ok(());};
         let tiled=self.tiled(r,packet,scene,&root);let bounds=self.plan.bounds;
-        let requests=self.region_sources(scene,r,packet,bounds,tiled);
+        let halves=self.held_halves(bounds);
+        let ready=pages::coordinates(bounds,self.plan.level).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent))
+            .filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
+        if touched.iter().any(|region|pages::coordinates(*region,self.plan.level).any(|coordinate|!ready.contains(&pages::bounds(coordinate,self.plan.level,self.plan.extent)))) {return Ok(());}
+        let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
+        let mut requests=self.region_sources(scene,r,packet,bounds,tiled);
+        requests.retain(|(id,_)|!inside.contains(id));
+        for (id,request) in requests.iter().filter(|(id,request)|!self.source_ready(scene,r,*id,request)).cloned().collect::<Vec<_>>() {
+            self.prepare_source(scene,r,packet,encoder,id,request,Class::Visible,budget)?;
+        }
         if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {return Ok(());}
         let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
         let wet=frame.watercolor(target);
         let mut cells=Vec::new();
-        for coordinate in pages::coordinates(bounds,self.plan.level) {
-            let cell=pages::bounds(coordinate,self.plan.level,self.plan.extent);
+        for cell in ready {
             let unit=unit_plan(input,packet.scene,cell,tiled,Some(self.graph.objects()));
             let declared=self.declare_unit(scene,r,packet,cell,unit,tiled,false,retained,Class::Visible,encoder,|compositor| {
                 compositor.evaluate_root(&root,Root::Store)?;
@@ -154,6 +165,7 @@ impl Cache {
             }}
         }
         let mut held=IdMap::default();
+        for (key,_,page) in halves {held.insert(key,page);}
         {
             let mut store=self.pages.lock().unwrap();
             for (key,(region,level)) in areas {
@@ -213,11 +225,13 @@ impl Cache {
         let persistent=changed.clone();
         changed.extend(contact.predicted.iter().chain(&predicted).copied());
         let previewed=r.preview_input_tiles(target);
+        let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
+            .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
+        let all=pages::coordinates(contact.plan.bounds,contact.plan.level).collect::<Vec<_>>();
+        if stale.iter().any(|index|!contact.cells.iter().any(|(cell,_)|*cell==pages::bounds(all[*index],contact.plan.level,contact.plan.extent))) {return false;}
         let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
         let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
         if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return false;}
-        let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
-            .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
         for region in scene.scale_sources.entries.get(&target).into_iter().flat_map(|source|&source.damage.regions) {for tile in page_coordinates(*region) {
             let rect=contact.stale.entry(tile).or_insert(PixelRect::EMPTY);*rect=rect.union(region.intersect(page_rect(tile)));
         }}
@@ -286,7 +300,7 @@ impl Cache {
                 })();
                 match result {
                     Ok(())=>{unit.work=scene.planned_work(start);units.push(unit);composed.push(region);},
-                    Err(GpuRasterError::NotReady|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
+                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
                     Err(error)=>return Err(error),
                 }
             }

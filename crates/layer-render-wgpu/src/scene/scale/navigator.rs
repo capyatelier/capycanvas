@@ -50,6 +50,7 @@ impl Navigator {
         cache.pages=pages;
         cache.prepare_graph(r,packet,scene)
     }
+    pub(super) fn cache(&self)->Option<&Cache> {self.cache.as_ref()}
     pub(in crate::scene) fn follows(&self,display:&Cache)->bool {self.contact.is_some() && self.contact==display.contact_id()}
     pub(super) fn append_wanted_work(&self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,windows:&mut Vec<pages::Interest>) {
         if let Some(cache)=&self.cache {cache.append_wanted_work(r,packet,scene,windows);}
@@ -92,6 +93,7 @@ impl Navigator {
         r.telemetry.phase_begin(13, &r.device, &r.queue, encoder);
         let result=(|| {
             if let Some((source,_))=source {
+                cache.release_streaming(encoder);
                 cache.inherit(&scene,r,encoder,&mut commands,source)?;
             }else {
                 #[cfg(test)]
@@ -105,7 +107,7 @@ impl Navigator {
         scene.scale_commands = Some(commands);
         r.scene = Some(scene);
         match result {
-            Err(GpuRasterError::NotReady|GpuRasterError::SourceWorkingSetExceeded)=> {
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=> {
                 scene_write.track(encoder);
                 return Ok(());
             },
@@ -682,6 +684,7 @@ mod tests {
     fn contact_pictures(prepared:Option<&Document>,start:&Document,later:&Document)->Vec<Vec<(&'static str,display_mips::Plan,Vec<[f32;4]>)>> {
         let extent=start.composition().size;
         let mut r=WgpuRasterizer::new_native_headless(start.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,start.working.occurrence);
         let mut frame=packet(start.scene(),extent);frame.composite_all=false;
         frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];
         if let Some(prepared)=prepared {submit_settled(&mut r,FramePacket {scene:prepared.scene(),..frame});}
@@ -703,23 +706,26 @@ mod tests {
     }
 
     #[test]
-    fn every_contact_frame_after_a_scene_change_matches_the_same_change_made_before_contact() {
+    fn every_contact_frame_after_a_scene_change_matches_the_same_change_made_before_contact_once_it_lands() {
         let (base,working,above)=masked_stack();
-        let changes:[(&str,OccurrenceHandle,fn(&mut layer_core::authored::Occurrence));3]=[
-            ("opacity of the stroked layer",working,|occurrence|occurrence.opacity=0.4),
-            ("visibility of the layer above",above,|occurrence|occurrence.visible=false),
-            ("mask of the stroked layer",working,|occurrence|occurrence.mask.as_mut().unwrap().enabled=true)];
-        for (label,id,change) in changes {
+        type Change=fn(&mut layer_core::authored::Occurrence);
+        let changes:[(&str,OccurrenceHandle,Change,bool);3]=[
+            ("opacity of the stroked layer",working,|occurrence|occurrence.opacity=0.4,true),
+            ("visibility of the layer above",above,|occurrence|occurrence.visible=false,false),
+            ("mask of the stroked layer",working,|occurrence|occurrence.mask.as_mut().unwrap().enabled=true,false)];
+        for (label,id,change,held) in changes {
             let mut changed=base.clone();change(changed.artwork.occurrences.get_mut(id).unwrap());
             let during=contact_pictures(Some(&changed),&base,&changed);let before=contact_pictures(None,&changed,&changed);
-            for (step,(during,before)) in during.iter().zip(&before).enumerate().skip(1) {
-                assert_eq!(during.len(),before.len(),"{label}: frame {} has the same pictures",step+1);
-                for ((name,plan,actual),(_,expected_plan,expected)) in during.iter().zip(before) {
-                    assert_eq!(plan,expected_plan);
-                    let error=picture_error(actual,expected);
-                    assert!(error<5e-6,"{label}: contact frame {} {name} differs from the change made before contact by {error}",step+1);
-                }
+            let mut landed=None;
+            for (step,(frame,expected)) in during.iter().zip(&before).enumerate().skip(1) {
+                assert_eq!(frame.len(),expected.len(),"{label}: frame {} has the same pictures",step+1);
+                let errors=frame.iter().zip(expected).map(|((_,plan,actual),(_,expected_plan,expected))| {assert_eq!(plan,expected_plan);picture_error(actual,expected)}).collect::<Vec<_>>();
+                if errors.iter().all(|error|*error<5e-6) {landed.get_or_insert(step);continue;}
+                assert!(landed.is_none() && !held,"{label}: contact frame {} differs from the change made before contact by {errors:?}",step+1);
+                let previous=picture_error(&frame[0].2,&during[step-1][0].2);
+                assert!(previous<5e-6,"{label}: contact frame {} shows neither the held picture nor the change: {previous}",step+1);
             }
+            assert!(landed.is_some(),"{label}: the change lands before the stroke ends");
         }
     }
 
@@ -844,6 +850,8 @@ mod tests {
             frame(engine);
             while engine.has_pending_input() || engine.has_pending_document_edits() {frame(engine);}
         };
+        settle(&mut engine);
+        for (step,phase) in [PenPhase::Down,PenPhase::Up].into_iter().enumerate() {pen(&mut engine,step as u64+10,phase,1800.,fit);}
         settle(&mut engine);
         let fit_plan=engine.backend().scale_display.as_ref().unwrap().plan;
         for (step,x) in [300.,340.,380.].into_iter().enumerate() {pen(&mut engine,step as u64+1,if step==0 {PenPhase::Down}else {PenPhase::Move},x,fit);}

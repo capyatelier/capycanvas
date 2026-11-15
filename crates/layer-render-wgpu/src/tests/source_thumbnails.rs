@@ -107,7 +107,7 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
         let ready = loop {
             match gpu.prepare(r, id, &mut encoder, 1) {
                 Ok(ready) => break ready,
-                Err(GpuRasterError::NotReady) => {},
+                Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {},
                 Err(error) => panic!("{error}"),
             }
             let mut worker = crate::submission::CommandEncoder::new(&r.device, &Default::default());

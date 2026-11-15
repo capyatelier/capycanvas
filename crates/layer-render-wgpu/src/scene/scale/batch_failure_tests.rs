@@ -11,6 +11,7 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
     set_root_entries(&mut doc,vec![owners[2],group]);
     let frame=FramePacket {blend_space:layer_core::BlendSpace::Linear,composite_all:false,..packet(doc.scene(),extent)};
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(owners[2]));
     r.ensure_document_metadata(extent,doc.scene()).unwrap();working_scene_frame(&mut r,frame);
     let mut required=crate::compile::Needs::capture_scene(&r,doc.scene(),false);
     required.render.extend(crate::startup::SourceKinds::for_scene(doc.scene()).pipelines(&r.scene_pipelines.source).cloned());
@@ -88,7 +89,7 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
     }
     assert!(units.iter().any(|unit|unit.pages.iter().any(|page|page.key.source.is_none()
         && page.key.expression!=root && Some(&page.key.expression)!=cache.graph.content.as_ref())),
-        "the ready graph must stage retained branch page coverage");
+        "the ready graph must stage the working layer's retained half page coverage");
     let prepared_passes=encoder.pass_count();
     let result=cache.encode_units(&mut scene,&mut r,&mut encoder,units);
     assert!(matches!(&result,Err(GpuRasterError::Invariant("a source upload reached its batch unrecorded"))),"{result:?}");

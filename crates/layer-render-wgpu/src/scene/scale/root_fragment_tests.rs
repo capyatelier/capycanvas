@@ -6,6 +6,7 @@ fn inputs(r:&mut WgpuRasterizer,doc:&Document,blend:layer_core::BlendSpace)->(Bo
     frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     frame.blend_space=blend;
     crate::test_support::submit_settled(r, frame);
+    prepare_layer_pages(r,frame);
     let scene=r.scene.take().unwrap();let cache=r.scale_display.take().unwrap();
     let images=doc.scene().order().iter().map(|h|{let id=doc.scene().source_target(*h).unwrap();source_image(r,&cache,&scene.scale_sources.entries[&id],id,cache.plan)}).collect();
     (scene,cache,images)
@@ -97,6 +98,7 @@ fn root_deferred_native_alpha_over_photo_matches_full_composition() {
                 let mut dab=crate::tests::test_dab(position,[0.2,0.1,0.3,0.37],0.9);dab.radii=[11.75,9.25];
                 let mut batch=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());batch.style.blend_space=blend;
                 crate::test_support::submit_ready(&mut r, FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+                crate::test_support::submit_settled(&mut r, frame);
                 let incremental=display_pixels(&r);
                 r.scale_display.as_ref().unwrap().pages.lock().unwrap().remove_composites();
                 r.scale_display=None;submit_published(&mut r, FramePacket {composite_all:true,..frame});

@@ -144,7 +144,7 @@ fn deferred_fine_objects_keep_committed_coarse_pages_without_backup() {
 }
 
 #[test]
-fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish() {
+fn reduced_photo_larger_than_decoded_cache_publishes_only_after_its_exact_cells_finish() {
     let doc = photo(0);
     let mut previous = doc.clone();
     paint_mut(&mut previous, 0).base = Some(PaintBase::new(rgba8_source([2048; 2], |x, y| color(x, y, 27)).into()));
@@ -161,40 +161,33 @@ fn reduced_photo_larger_than_decoded_cache_publishes_only_after_prefixes_finish(
     let presented_storage = |r: &WgpuRasterizer| r.presentation_views().map(|views|
         views.map(|view| (view.texture().format(), view.texture().size(), view.texture().mip_level_count())));
     let previous_storage = presented_storage(&r);
-    let target = source_at(&doc, 0);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut prefix = 0;
+    let mut composed = BTreeSet::new();
     let mut partial = false;
+    let cells = page_coordinates(PixelRect::full(EXTENT)).count();
     let mut settled = false;
     let mut presentation_change = None;
     for step in 0..256 {
-        assert!(std::time::Instant::now() < deadline, "photo progress timed out at {prefix}/80 pages");
+        assert!(std::time::Instant::now() < deadline, "photo progress timed out at {}/{cells} cells", composed.len());
         r.poll_pending(view).unwrap();
         let frame = FramePacket { view, composite_all: step == 0, blend_space: layer_core::BlendSpace::Linear, ..packet(doc.scene().with_owner(doc.owner, 1), EXTENT) };
         crate::memory::memory_tests::declare_source_budget(&mut r, frame, 64, 16 << 20, 44 << 20);
         if r.can_submit() && r.raster_dependencies_ready(frame, None) { crate::test_support::submit_ready(&mut r, frame).unwrap(); }
         r.wait_idle().unwrap();
-        if let Some(cache) = r.scale_display.as_ref() {
-            let completed = source_levels(cache,target).values().map(BTreeSet::len).max().unwrap_or(0);
-            assert!(completed >= prefix, "completed source pages regressed");
-            prefix = completed;
-            partial |= prefix > 0 && prefix < 80;
-        }
+        composed.extend(r.metrics.frame_composited_pages.iter().filter(|(level,_)|*level==0).map(|(_,coordinate)|*coordinate));
+        partial |= !composed.is_empty() && composed.len() < cells;
         if crate::scene::scale::tests::publication_pending(&r) {
             let shown = present(&r, &mut presenter, view);
             assert_eq!(shown.len(), published.len());
             if presentation_change.is_none() && let Some((index, (actual, expected))) = shown.iter().zip(&published).enumerate().find(|(_, (a, b))| a != b) {
                 eprintln!("retained presentation storage: before={previous_storage:?} pending={:?}", presented_storage(&r));
-                presentation_change = Some((step, prefix, index, *actual, *expected));
+                presentation_change = Some((step, composed.len(), index, *actual, *expected));
             }
         }
         if r.next_frame()!=layer_render::FrameDemand::Work && !r.has_pending_submission() { settled = true; break; }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    let levels = r.scale_display.as_ref().map(|cache|source_levels(cache,target).into_iter().map(|(level,chunks)|(level,chunks.len())).collect::<Vec<_>>());
-    eprintln!("progress display level={:?} size={:?} source_levels={levels:?}", r.scale_display.as_ref().map(|cache| cache.plan.level), r.scale_display.as_ref().map(|cache| cache.plan.size));
-    assert!(settled && partial && prefix == 80, "source prefixes must finish: settled={settled} partial={partial} pages={prefix}");
-    eprintln!("source progress: settled={settled} partial={partial} pages={prefix} pending_presentation_change={presentation_change:?}");
+    assert!(settled && partial && composed.len() == cells, "the replaced photo's exact cells must finish: settled={settled} partial={partial} cells={}", composed.len());
     let actual = display_pixels(&r);
     let plan = r.scale_display.as_ref().unwrap().plan;
     assert_eq!((plan.level, plan.size), (3, [320, 256]));

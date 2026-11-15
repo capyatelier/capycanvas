@@ -134,7 +134,7 @@ impl WgpuRasterizer {
             );
             self.color_sampler.capture = capture;
                         self.color_sampler.account();
-            if matches!(result, Err(GpuRasterError::NotReady)) {
+            if matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)) {
                 self.uploads.finish(&encoder);
                 encoder.submit(&self.queue);
                 self.color_sampler.waiting = Some((request, Some(frame)));
@@ -157,7 +157,7 @@ impl WgpuRasterizer {
                         let result=match &frame {Some(frame)=>capture.layer_tile_at(self,frame,id,[tx,ty],&mut encoder),None=>Err(GpuRasterError::InvalidExtent)};
                         self.color_sampler.capture = capture;
                         self.color_sampler.account();
-                        if matches!(result, Err(GpuRasterError::NotReady)) {
+                        if matches!(result, Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)) {
                             self.uploads.finish(&encoder);
                             encoder.submit(&self.queue);
                             self.color_sampler.waiting = Some((request, frame));

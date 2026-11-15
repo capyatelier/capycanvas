@@ -206,7 +206,7 @@ pub(crate) fn declare(inputs:Inputs,declaration:Declaration,traverse:impl FnOnce
         let _pass=DeclarePass(DECLARING.with(|flag|flag.replace(true)));
         traverse(&mut accepted)
     };
-    match result {Ok(())|Err(GpuRasterError::NotReady)=>accepted.declared(),Err(error)=>Err(error)}
+    match result {Ok(())|Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>accepted.declared(),Err(error)=>Err(error)}
 }
 #[cfg(test)]
 pub(crate) fn assert_reading(entry:&str) {assert!(!DECLARING.with(std::cell::Cell::get),"{entry} is reachable in declare mode");}
@@ -269,6 +269,7 @@ impl Inputs {
     }
     pub(in crate::scene) fn objects(&self)->&[super::objects::CollectionJob] {&self.objects}
     pub(in crate::scene) fn resident(&self)->bool {self.tiles.is_empty() && self.bases.is_empty() && self.objects.is_empty()}
+    pub(in crate::scene) fn reads(&self)->u64 {(self.tiles.len()+self.bases.len()) as u64}
     pub(in crate::scene) fn placed(placements:PlacementSet)->Self {Self {placements,..Default::default()}}
     pub(in crate::scene) fn source_placement(&mut self,id:SourceTarget,placement:Arc<super::placement::Placement>)->Result<(),GpuRasterError> {self.placements.insert(id,placement)}
     pub(crate) fn accept<C,T,R:Admitted>(&self,r:&mut WgpuRasterizer,context:&mut C,
@@ -398,7 +399,7 @@ impl Inputs {
             let data=r.mask_data(id,source)?;
             if let Some(tile)=data.tiles.get(&layer_core::raster::TileKey {plane:RasterPlane::Mask,coordinate}) {
                 if tile.content_version().matches(&r.mask_version(id,source,coordinate)?)!=Some(true) {return Err(GpuRasterError::NotReady);}
-                let blob=tile.try_backing().ok_or(GpuRasterError::NotReady)?.map_err(GpuRasterError::Effect)?;
+                let blob=tile.try_backing().ok_or(GpuRasterError::NotPublished)?.map_err(GpuRasterError::Effect)?;
                 let space=r.document_color().space;let key=Key::raster(&blob,space,space);self.raster(blob,space,space);Some(Selected::Decoded(key))
             }else {None}
         };

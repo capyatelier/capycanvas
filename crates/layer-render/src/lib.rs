@@ -1042,6 +1042,7 @@ pub trait CanvasRenderer {
     /// The paths a drag can move next. The renderer prepares their motion while
     /// they stay selected and releases it when the selection clears.
     fn set_vector_selection(&mut self, _selection: Option<&layer_core::authored::VectorItemSelection>) {}
+    fn set_working_layer(&mut self, _layer: Option<OccurrenceHandle>) {}
     fn set_clipping_preview(&mut self, _shadows: bool, _highlights: bool) {}
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {

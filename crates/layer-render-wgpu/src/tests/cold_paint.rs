@@ -646,16 +646,22 @@ fn a_stroke_frame_refused_raster_room_waits_for_a_release() {
     r.evict_raster(u64::MAX, &[], &[], &mut encoder);
     encoder.submit(&r.queue);
     complete(&r);
-    let room = r.raster_tiers.raster.limit() - r.raster_tiers.raster.used();
-    let held = r.admit_raster_working(room).expect("the test holds the raster's room");
     let (dab, batch) = stroke(2, 2860.);
     paint_mut(&mut document).raster = RasterRevision::pending();
     let frame = FramePacket { dabs: &[dab], dab_batches: std::slice::from_ref(&batch), ..packet(&document, false) };
+    let mut held = Vec::new();
+    loop {
+        r.begin_frame_memory(frame);
+        held.push(r.admit_raster_working(0).expect("an empty claim refreshes the raster's limit"));
+        let room = r.raster_tiers.raster.limit() - r.raster_tiers.raster.used();
+        if room == 0 { break; }
+        held.push(r.admit_raster_working(room).expect("the test holds the raster's room and the room display retention yields to it"));
+    }
     assert!(!r.raster_dependencies_ready(frame, None), "the held room refuses the stroke frame");
     complete(&r);
     let _ = r.frame_demand();
     assert_eq!(r.frame_demand(), layer_render::FrameDemand::Wait, "a refused stroke frame waits for a release instead of spinning");
-    r.commit_raster_working(held);
+    for reservation in held { r.commit_raster_working(reservation); }
     assert_eq!(r.frame_demand(), layer_render::FrameDemand::Work, "the released room makes the refused frame runnable");
     assert!((0..64).any(|_| { let ready = r.raster_dependencies_ready(frame, None); complete(&r); ready }), "the released room admits the stroke frame");
 }

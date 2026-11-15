@@ -179,6 +179,7 @@ struct Attempt {
     cache:Cache,
     commands:RegionRecords,
     cold:Vec<(usize,[u32;2])>,
+    live:bool,
 }
 impl Attempt {
     fn new(effect:bool)->Self {
@@ -243,12 +244,14 @@ impl Attempt {
         let commands=RegionRecords::new(&r);
         let mut cold:Vec<_>=sources[warm..].iter().flat_map(|source|page_coordinates(PixelRect::full(extent))
             .map(move|coordinate|(Arc::as_ptr(source) as usize,coordinate))).collect();cold.sort();
-        Self {store,r,doc,scene,cache,commands,cold}
+        Self {store,r,doc,scene,cache,commands,cold,live:false}
     }
     fn attempt(&mut self)->(Result<PixelRect,GpuRasterError>,PassCounts) {
-        let Self {r,doc,scene,cache,commands,..}=self;
+        let Self {r,doc,scene,cache,commands,live,..}=self;
         let extent=doc.composition().size;
-        let frame=frame(doc,cache.plan.level);
+        let dab=crate::tests::test_dab([1.,1.],[0.;4],1.);
+        let stroke=layer_render::DabBatch {stroke_start:true,stroke_end:true,..dab_batch(source_at(doc,0),crate::tests::test_style(layer_core::BrushExecution::Dry),dab.bounds())};
+        let frame=if *live {FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&stroke),..frame(doc,cache.plan.level)}}else {frame(doc,cache.plan.level)};
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         scene.begin_frame();commands.begin();scene.scale_sources.prepare(r,frame,&[]);
         let before=PassCounts::snapshot();
@@ -290,6 +293,19 @@ impl Attempt {
         assert!(committed_composite_pages(&self.cache).is_empty());
         assert!(self.cache.commit_state().is_empty());
         assert!(self.cache.pages.lock().unwrap().retained_pages().iter().filter(|page|page.key.source.is_some()).all(|page|page.current.is_empty()));
+    }
+    fn stream(&mut self)->Result<PixelRect,GpuRasterError> {
+        let Self {r,doc,scene,cache,commands,..}=self;
+        let frame=frame(doc,cache.plan.level);
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        scene.begin_frame();commands.begin();scene.scale_sources.prepare(r,frame,&[]);
+        crate::scene::scale::tests::prepare_fixture_frame(r,frame,scene);
+        let result=cache.prepare_graph(r,frame,scene).and_then(|()|cache.render_graph(scene,r,frame,PixelRect::full(doc.composition().size),
+            &mut Encoding {encoder:&mut encoder,commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None));
+        cache.unchanged=true;
+        if result.is_ok() {scene.encode_jobs(r,&mut encoder).unwrap();} else {scene.discard_unencoded_jobs();}
+        r.uploads.finish(&encoder);if encoder.has_work() {encoder.submit(&r.queue);crate::test_support::complete(r);}
+        result
     }
     fn finish(&mut self) {
         self.store.gate.release();
@@ -417,8 +433,30 @@ fn twenty_four_delayed_display_layers_commit_with_bounded_attempts_uploads_and_c
 }
 
 #[test]
+fn a_region_larger_than_the_source_allowance_streams_its_exact_cells_within_the_allowance() {
+    let mut attempt=Attempt::inputs(0,1,[4*PAGE_SIZE,PAGE_SIZE],1,false,false,None);
+    let mut required=crate::compile::Needs::capture_scene(&attempt.r,attempt.doc.scene(),false);
+    required.render.extend(crate::startup::SourceKinds::for_scene(attempt.doc.scene()).pipelines(&attempt.r.scene_pipelines.source).cloned());
+    for format in [wgpu::TextureFormat::Rgba32Float,attempt.r.display_precision(attempt.doc.scene()).format()] {required.compute.extend(attempt.r.scene_pipelines.scale_pipelines(format).into_iter().cloned());}
+    pollster::block_on(required.prepare(&attempt.r.compilation)).unwrap();
+    attempt.store.gate.release();
+    let free=attempt.r.source_tiles.borrow().free_slots();let before=attempt.r.source_tiles.borrow().allocated_slots();
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+    while !attempt.cache.output_complete() {
+        let result=attempt.stream();
+        assert!(result.is_ok() || matches!(&result,Err(error) if error.is_preparation_pending()),"{result:?}");
+        let used=attempt.r.source_tiles.borrow().allocated_slots()-before;
+        assert!(used<=free,"the exact stream decodes within the source allowance: {used} slots of {free}");
+        assert!(std::time::Instant::now()<deadline,"the exact stream completes every cell");
+        crate::test_support::settle_decodes(&mut attempt.r);
+    }
+    assert!(attempt.cache.coverage_complete());
+}
+
+#[test]
 fn a_region_larger_than_the_source_allowance_finishes_in_page_units() {
     let mut attempt=Attempt::inputs(0,1,[4*PAGE_SIZE,PAGE_SIZE],1,false,false,None);
+    attempt.live=true;
     let dummy=rgba8_source([PAGE_SIZE;2],|_,_|[31,67,113,193]);
     let prepared=crate::prepare_image_tile(&dummy,[0;2],attempt.r.device.working_space(),&attempt.r.device.source_samples,None).unwrap();
     let mut encoder=crate::submission::CommandEncoder::new(&attempt.r.device,&Default::default());

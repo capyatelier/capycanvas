@@ -446,6 +446,7 @@ pub enum GpuRasterError {
     CaptureBudget { required: u64, limit: u64 },
     SourceWorkingSetExceeded,
     NotReady,
+    NotPublished,
     Invariant(&'static str),
     StaleExpression,
     AdapterUnavailable,
@@ -476,6 +477,7 @@ impl fmt::Display for GpuRasterError {
         match self {
             Self::Color(message) => write!(formatter, "color: {message}"),
             Self::NotReady => formatter.write_str("Canvas inputs are not ready"),
+            Self::NotPublished => formatter.write_str("Canvas pixels are not published yet"),
             Self::Invariant(message) => write!(formatter, "Renderer invariant failed: {message}"),
             Self::StaleExpression => formatter.write_str("Composite expression no longer exists"),
             Self::SourceWorkingSetExceeded => formatter.write_str("Source working set exceeds the decoded tile budget"),
@@ -524,7 +526,7 @@ impl fmt::Display for GpuRasterError {
 }
 
 impl GpuRasterError {
-    pub(crate) fn is_preparation_pending(&self)->bool {matches!(self,Self::NotReady|Self::SourceWorkingSetExceeded)}
+    pub(crate) fn is_preparation_pending(&self)->bool {matches!(self,Self::NotReady|Self::NotPublished|Self::SourceWorkingSetExceeded)}
 }
 impl std::error::Error for GpuRasterError {}
 
@@ -1090,6 +1092,7 @@ pub struct WgpuRasterizer {
     vector_exclusion_damage: Vec<DocRect>,
     vector_motion_split: Option<scene::MotionSplit>,
     vector_selection: Option<layer_core::authored::VectorItemSelection>,
+    pivot: Option<layer_core::OccurrenceHandle>,
     vector_selection_changed: bool,
     vector_prepared: Option<(scene::Prepared, layer_core::authored::vector::VectorObject, [f64; 2])>,
     clipping_preview: [bool; 2],
@@ -1514,6 +1517,7 @@ impl WgpuRasterizer {
             vector_exclusion_damage: Vec::new(),
             vector_motion_split: None,
             vector_selection: None,
+            pivot: None,
             vector_selection_changed: false,
             vector_prepared: None,
             clipping_preview: [false; 2],
@@ -4128,6 +4132,9 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn set_vector_motion(&mut self, motion: Option<layer_render::VectorMotion>) {
         self.vector_motion = motion;
+    }
+    fn set_working_layer(&mut self, layer: Option<layer_core::OccurrenceHandle>) {
+        self.pivot = layer;
     }
     fn set_vector_motion_paths(&mut self, paths: Option<Arc<[layer_core::authored::vector::PathItem]>>) {
         self.vector_motion_paths = paths;

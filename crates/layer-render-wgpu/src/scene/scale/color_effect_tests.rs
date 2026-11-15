@@ -141,9 +141,20 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     frame.view.width_px = 43; frame.view.height_px = 25;
                     frame.view.document_to_surface = [scale, 0., 0., scale, -610. * scale, -270. * scale];
                     submit_published(&mut window, frame); submit_published(&mut exact, frame);
+                    let visible = PixelRect::new(610, 270, 610 + (43 << level), 270 + (25 << level)).intersect(PixelRect::full(extent));
+                    let side = (1u32 << level) as f32;
+                    let mut dab = crate::tests::test_dab([610. + 21.5 * side, 270. + 12.5 * side], [0.; 4], 1.); dab.radii = [43. * side; 2];
+                    let stroke = |end: bool| layer_render::DabBatch { stroke_end: end, ..dab_batch(SourceTarget::Paint(paint), crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds()) };
+                    let [held, ended] = [stroke(false), stroke(true)];
+                    for _ in 0..64 {
+                        for renderer in [&mut window, &mut exact] { crate::test_support::submit_ready(renderer, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&held), composite_all: false, ..frame }).unwrap(); }
+                        if window.scale_display.as_ref().unwrap().shows_reduced(visible) { break; }
+                    }
                     let cache = window.scale_display.as_ref().unwrap();
+                    assert!(cache.shows_reduced(visible), "{name} level {level}: the live frame presents the reduced composition");
                     assert_eq!(cache.plan.level, level); assert!(cache.evaluation == Evaluation::Display);
                     let error = quality(&display_pixels(&window), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
+                    for renderer in [&mut window, &mut exact] { submit_published(renderer, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&ended), composite_all: false, ..frame }); }
                     for i in 0..2 { worst[i] = worst[i].max(error[i]); }
                     println!("{name} {space:?} source={source} state={state} level={level} error={error:?}");
                     assert!(error.iter().all(|v| v.is_finite()));

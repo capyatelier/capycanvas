@@ -129,6 +129,12 @@ pub(crate) struct Snapshot {
 }
 impl Snapshot {
     fn preview_level(&self,id:SourceTarget)->u32 {self.preview.as_ref().filter(|preview|preview.target==id).map_or(0,|preview|preview.quality.level)}
+    fn source_level(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:Option<DocRect>,input_level:u32,moving:bool)->u32 {
+        let level=source_level(input_level,frame,moving,0);
+        let halo=if frame.aligned() && !moving {0}else {1<<level};
+        let footprint=region.map_or(PixelRect::full(extent),|region|source_footprint(region,frame,extent,level,halo+self.watercolor.get(&id).map_or(0,|style|style.radius())));
+        self.preview.as_ref().filter(|preview|preview.target==id && preview.quality.level>level && preview.affects(footprint)).map_or(level,|preview|preview.quality.level)
+    }
     fn changed_targets(&self,before:&Self)->std::collections::BTreeSet<SourceTarget> {
         let mut changed=before.rasters.keys().chain(self.rasters.keys()).filter(|id|match (before.rasters.get(id),self.rasters.get(id)) {
             (Some(before),Some(after))=>[source_plane(**id),RasterPlane::WatercolorWetness].into_iter().any(|plane|before.root(plane).identity()!=after.root(plane).identity()),
@@ -403,7 +409,9 @@ impl Prepared {
     pub fn preview_for(&self,target:SourceTarget)->Option<&PreviewDeclaration> {self.snapshot.preview.as_deref().filter(|preview|preview.target()==target)}
     fn expected(&self,node:&graph::Node,region:DocRect,level:u32,input_level:u32)->Result<ContentVersion,GpuRasterError> {self.evaluate(Request::new(node,region,level,input_level,false,false),None)}
     fn expected_source(&self,node:&graph::Node,region:DocRect,level:u32,input_level:u32)->Result<ContentVersion,GpuRasterError> {self.evaluate(Request::new(node,region,level,input_level,false,true),None)}
-    pub(super) fn preview_level(&self,id:SourceTarget)->u32 {self.snapshot.preview_level(id)}
+    pub(super) fn source_level(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:DocRect,input_level:u32,moving:bool)->u32 {
+        self.snapshot.source_level(id,frame,extent,Some(region),input_level,moving)
+    }
     pub(super) fn expected_key(&self,key:&pages::Key,region:PixelRect,input_level:u32)->Result<ExpectedKey,GpuRasterError> {
         #[cfg(test)]
         crate::test_support::PassCounts {expected_keys:1,..Default::default()}.record();
@@ -436,7 +444,7 @@ impl Prepared {
     }
     fn source_version(&self,id:SourceTarget,frame:SourceFrame,extent:[u32;2],region:DocRect,input_level:u32,global:bool)->Result<(ContentVersion,PixelRect),GpuRasterError> {
         let s=&self.snapshot;let scene=s.scene.view();let mut inputs=Vec::new();let mut name=Recipe::new();name.add(&(id,frame,extent,scene.color_mode(id)));
-        let moving=s.moving==scene.source_owner(id);let level=source_level(input_level,frame,moving,s.preview_level(id));name.add(&level);
+        let moving=s.moving==scene.source_owner(id);let level=s.source_level(id,frame,extent,(!global).then_some(region),input_level,moving);name.add(&level);
         let halo=if frame.aligned() && !moving {0}else {1<<level};let watercolor=s.watercolor.get(&id).copied();name.watercolor(watercolor);
         let local=if global {PixelRect::full(extent)}else {source_footprint(region,frame,extent,level,halo+watercolor.map_or(0,|style|style.radius()))};
         if let Some(capture)=s.captures.get(&id) {inputs.push(capture.content(region,global)?);}

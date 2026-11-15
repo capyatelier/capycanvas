@@ -338,7 +338,7 @@ impl RegionRequests {
                     & (!enclosed || r.compilation.require(r.selection_clip.pipelines(),startup::OTHER));
                 Ok(())
             },
-            Err(GpuRasterError::NotReady)=>Ok(()),Err(error)=>Err(error),
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(()),Err(error)=>Err(error),
         }
     }
     fn start(
@@ -474,7 +474,7 @@ impl RegionRequests {
             r.drain_image_decodes(&mut encoder)?;
             if lines {self.cache_request=Some(request.clone());}
             let classified = match self.sample_fill_seed(r,&mut encoder).and_then(|()|if lines {self.classify_lines(r,&request,&mut encoder)} else {self.raw.encode(r,&request,&mut encoder)}) {
-                Err(GpuRasterError::NotReady) => {
+                Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {
                     r.uploads.finish(&encoder);
                     encoder.submit(&r.queue);
                     if let Some(refiner)=&mut self.refiner {refiner.timed(&r.queue,self.chunk_timing.take());}

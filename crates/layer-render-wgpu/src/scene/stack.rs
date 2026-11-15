@@ -227,7 +227,7 @@ impl Compositor for Tile<'_> {
 impl Tile<'_> {
     fn ready<T>(&mut self, result: Result<T, GpuRasterError>) -> Result<Option<T>, GpuRasterError> {
         match result {
-            Err(GpuRasterError::NotReady) => {self.waiting=true;Ok(None)},
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {self.waiting=true;Ok(None)},
             result=>result.map(Some),
         }
     }

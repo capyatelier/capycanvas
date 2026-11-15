@@ -27,14 +27,14 @@ impl AreasJob {
         let result=self.encode(r,regions,&mut encoder);
         r.uploads.finish(&encoder);
         r.metrics.command_passes+=encoder.pass_count();
-        if !encoder.has_work() {return match result {Err(GpuRasterError::NotReady)=>Ok(None),other=>other};}
+        if !encoder.has_work() {return match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(None),other=>other};}
         self.submission=Some(encoder.submission());
         self.in_flight.fetch_add(1,Ordering::AcqRel);
         let done=crate::InFlightCompletion(self.in_flight.clone());
         encoder.hold(done);
         encoder.submit(&r.queue);
         if let Some(refiner)=&mut regions.refiner {refiner.timed(&r.queue,regions.chunk_timing.take());}
-        match result {Err(GpuRasterError::NotReady)=>Ok(None),other=>other}
+        match result {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(None),other=>other}
     }
     fn encode(&mut self,r:&mut WgpuRasterizer,regions:&mut RegionRequests,encoder:&mut crate::submission::CommandEncoder)->Result<Option<RegionOutput>,GpuRasterError> {
         r.compilation.check()?;

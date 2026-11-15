@@ -128,7 +128,7 @@ impl BakePreflight {
                 }
                 Ok(())
             })();
-            match prepared {Err(GpuRasterError::NotReady)=>Ok(()),result=>result,}
+            match prepared {Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>Ok(()),result=>result,}
         })();
         let finished=self.windowed && self.pages.len()>completed && self.steps.get(self.coordinate).is_none_or(|next|next.1!=output);
         if finished {

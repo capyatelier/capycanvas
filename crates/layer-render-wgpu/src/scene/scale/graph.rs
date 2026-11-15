@@ -251,10 +251,13 @@ impl Inputs {
     }
 }
 
+pub(super) struct Parts {pub(super) nodes:[Node;3],pub(super) scopes:crate::scene::vectors::ActiveSplit}
+
 #[derive(Default)]
 pub(super) struct Graph {
     pub root: Option<Node>,
     pub content: Option<Node>,
+    pub parts: Option<Parts>,
     pub motion: Option<[Node; 2]>,
     pub prepared: Option<[Node; 2]>,
     pub split_changed: bool,
@@ -271,12 +274,12 @@ impl Graph {
     pub fn objects(&self)->&object_spatial::SpatialIndex {&self.objects}
     pub fn blend_space(&self)->layer_core::BlendSpace {self.blend_space}
     pub fn without_pixels(&self) -> Self {
-        Self { root: self.root.clone(), content:self.content.clone(), motion: None, prepared: None, split_changed: false, cached: HashSet::new(), interned: self.interned.clone(), effects: self.effects.clone(),
+        Self { root: self.root.clone(), content:self.content.clone(), parts: self.parts.as_ref().map(|parts|Parts {nodes:parts.nodes.clone(),scopes:parts.scopes.clone()}), motion: None, prepared: None, split_changed: false, cached: HashSet::new(), interned: self.interned.clone(), effects: self.effects.clone(),
             revision: self.revision, blend_space: self.blend_space, objects:self.objects.clone(), active: self.active, inputs: None }
     }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, held: bool) -> Result<(), GpuRasterError> {
         let mut stroked = packet.dab_batches.iter().map(|batch| packet.scene.source_owner(batch.target));
-        let active = match stroked.next() { Some(Some(owner)) if stroked.all(|other| other == Some(owner)) => Some(owner), _ => self.active };
+        let active = match stroked.next() { Some(Some(owner)) if stroked.all(|other| other == Some(owner)) => Some(owner), _ => r.pivot.or(self.active) };
         let inputs = Inputs::new(packet, sources, plan, active);
         if held && self.inputs.as_ref() == Some(&inputs) { return Ok(()); }
         #[cfg(test)] crate::test_support::PassCounts {graph_prepares:1,..Default::default()}.record();
@@ -302,12 +305,16 @@ impl Graph {
         self.prepared = sources.prepared.as_ref().filter(|_| self.motion.is_none()).map(|(split, moving, _)| halves(split, moving)).transpose()?;
         self.split_changed = before != self.motion;
         self.active = active;
-        let root = match &self.motion {
-            Some([above, below]) => Expression::combine(above.clone(), below.clone(), layer_core::LayerBlend::Normal, 0),
+        let (root, parts) = match &self.motion {
+            Some([above, below]) => (Expression::combine(above.clone(), below.clone(), layer_core::LayerBlend::Normal, 0), None),
             None => split_root(packet, Some(sources), Some(&self.effects), plan.level, r.device.working_space(), Some(&mut self.objects), sources.moving.as_ref(), self.active)?,
         };
         let root = Expression::intern(&root, &mut self.interned);
-        let content = if self.root.as_ref() == Some(&root) { self.content.clone() } else { Some(Expression::intern(&Expression::content(&root), &mut self.interned)) };
+        let parts = parts.map(|parts| Parts { nodes: parts.nodes.map(|node| Expression::intern(&node, &mut self.interned)), ..parts });
+        let content = if self.root.as_ref() == Some(&root) { self.content.clone() } else {
+            let whole = if parts.is_some() { compose(packet, Some(sources), Some(&self.effects), plan.level, r.device.working_space(), Some(&mut self.objects), sources.moving.as_ref())? } else { root.clone() };
+            Some(Expression::intern(&Expression::content(&whole), &mut self.interned))
+        };
         let mut all = HashSet::new();
         Expression::visit(&root, &mut all);
         for node in self.prepared.iter().flatten() { Expression::visit(node, &mut all); }
@@ -318,15 +325,18 @@ impl Graph {
         all.extend(unmoved);
         self.interned = all.clone();
         for node in self.motion.iter().flatten().chain(&content) { Expression::visit(node, &mut self.interned); }
+        let halves: HashSet<&Node> = parts.iter().flat_map(|parts| [&parts.nodes[0], &parts.nodes[2]]).chain(self.motion.iter().flatten()).chain(self.prepared.iter().flatten()).collect();
         self.cached = all.into_iter().filter(|n| !Arc::ptr_eq(n, &root)
-            && matches!(n.as_ref(), Expression::Objects {..} | Expression::Vector { .. } | Expression::Combine { .. } | Expression::Effect { .. })
+            && (matches!(n.as_ref(), Expression::Objects {..} | Expression::Vector { .. } | Expression::Effect { .. }) || halves.contains(n))
             && !matches!(n.as_ref(), Expression::Combine { front, .. } if matches!(front.as_ref(), Expression::VectorPreview { .. } | Expression::VectorMotion { .. }))).collect();
         self.content = content;
         self.root = Some(root);
+        self.parts = parts.filter(|_| !super::refinement::exact_at_view_level(packet.scene));
         self.inputs = Some(inputs);
         Ok(())
     }
     pub fn caches(&self, node: &Node) -> bool { self.cached.contains(node) }
+    pub fn active(&self) -> Option<OccurrenceHandle> { self.parts.as_ref().and(self.active) }
     pub fn storage_bytes(&self) -> u64 { self.objects.storage_bytes() }
 
 }
@@ -337,13 +347,15 @@ pub(super) fn split_root(
     packet: FramePacket<'_>, sources: Option<&Sources>, effects: Option<&HashMap<OccurrenceHandle, (metadata::Metadata, u64)>>,
     level: u32, space: layer_core::color::RgbSpace, mut objects: Option<&mut object_spatial::SpatialIndex>, moving: Option<&(OccurrenceHandle, Moving)>,
     active: Option<OccurrenceHandle>,
-) -> Result<Node, GpuRasterError> {
-    let Some(split) = active.filter(|_| packet.inspect_mask.is_none()).and_then(|owner| crate::scene::active_split(packet.scene, owner)) else {
-        return compose(packet, sources, effects, level, space, objects, moving);
+) -> Result<(Node, Option<Parts>), GpuRasterError> {
+    let Some(split_scopes) = active.filter(|_| packet.inspect_mask.is_none()).and_then(|owner| crate::scene::active_split(packet.scene, owner)) else {
+        return compose(packet, sources, effects, level, space, objects, moving).map(|root| (root, None));
     };
     let mut part = |scope| compose(FramePacket { scene: packet.scene.with_scope(scope), ..packet }, sources, effects, level, space, objects.as_deref_mut(), moving);
-    let [above, active, below] = [part(&split[0])?, part(&split[1])?, part(&split[2])?];
-    Ok(Expression::combine(above, Expression::combine(active, below, layer_core::LayerBlend::Normal, 0), layer_core::LayerBlend::Normal, 0))
+    let nodes = [part(&split_scopes[0])?, part(&split_scopes[1])?, part(&split_scopes[2])?];
+    let root = Expression::combine(nodes[0].clone(), Expression::combine(nodes[1].clone(), nodes[2].clone(), layer_core::LayerBlend::Normal, 0), layer_core::LayerBlend::Normal, 0);
+    let pivot = !Expression::is_clear(&nodes[1]);
+    Ok((root, pivot.then_some(Parts { nodes, scopes: split_scopes })))
 }
 
 pub(super) fn compose(
@@ -578,7 +590,7 @@ impl Evaluator<'_> {
         };
         self.approximate|=outer_approximate;
         match result {
-            Err(GpuRasterError::NotReady)=>{self.unit.waiting=true;Ok(Value::Color([0.;4]))},
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{self.unit.waiting=true;Ok(Value::Color([0.;4]))},
             result=>result,
         }
     }
@@ -604,7 +616,7 @@ mod reuse_tests {
     }
 
     #[test]
-    fn fill_edits_reuse_branch_textures_without_reusing_old_pixels() {
+    fn fill_edits_recompose_without_reusing_old_pixels() {
         let mut doc = document_at([517, 259]);
         let paint = doc.scene().order()[0];
         doc.artwork.occurrences.get_mut(paint).unwrap().opacity = 0.37;
@@ -621,30 +633,13 @@ mod reuse_tests {
         let mut renderer = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let extent = doc.composition().size;
         let mut previous_pixels: Option<Vec<[f32; 4]>> = None;
-        let mut previous_pages:Vec<(pages::Key,std::sync::Weak<Image>)>=Vec::new();
         for (red, alpha) in [(0.13, 0.43), (0.83, 0.71), (0.31, 0.19)] {
             let value = RgbColor::from_linear(doc.composition().color.space, [red, 0.27, 0.61, alpha]).unwrap();
             set_effect_value(&mut doc, fill, "color", EffectValue::Color(value));
             let mut frame = crate::test_support::packet(doc.scene(), extent);
             frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
             submit_published(&mut renderer, frame);
-            let cache = renderer.scale_display.as_ref().unwrap();
-            let pages=retained_branch_pages(cache);
-            assert!(!pages.is_empty(),"fixture must commit optional branch pages");
-            assert!(cache.storage_bytes()<=crate::memory::CACHE_BYTES);
-            let mut store=cache.pages.lock().unwrap();
-            for (key,before) in &previous_pages {
-                let current=store.get(key,key.plan().bounds,pages::Accuracy::Display,key.level,crate::residency::Class::Visible).expect("an unchanged sub-expression stays current");
-                assert!(Arc::ptr_eq(&before.upgrade().expect("an unchanged sub-expression stays retained"),current.image()),
-                    "same-key unchanged branch pages must retain their image");
-            }
-            previous_pages=pages.iter().filter(|page|matches!(page.key.expression.as_ref(),Expression::Effect {chain,..}
-                if chain.iter().any(|(handle,..)|*handle==unchanged))).map(|page| {
-                    let image=store.get(&page.key,page.key.plan().bounds,pages::Accuracy::Display,page.key.level,crate::residency::Class::Visible).unwrap();
-                    (page.key.clone(),Arc::downgrade(image.image()))
-                }).collect();
-            assert!(!previous_pages.is_empty(),"fixture must commit the unchanged sub-expression");
-            drop(store);
+            assert!(renderer.scale_display.as_ref().unwrap().storage_bytes()<=crate::memory::CACHE_BYTES);
             let actual = display_pixels(&renderer);
             let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
             submit_published(&mut fresh, frame);

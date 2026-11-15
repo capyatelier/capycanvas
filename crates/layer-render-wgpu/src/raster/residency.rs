@@ -50,7 +50,7 @@ impl WgpuRasterizer {
                 return Ok(None);
             };
             if tile.content_version().matches(&self.mask_version(id,source,coordinate)?)!=Some(true) {return Err(GpuRasterError::NotReady);}
-            return tile.try_backing().ok_or(GpuRasterError::NotReady)?.map(Some).map_err(GpuRasterError::Effect);
+            return tile.try_backing().ok_or(GpuRasterError::NotPublished)?.map(Some).map_err(GpuRasterError::Effect);
         }
         let selected=self.raster.as_ref().and_then(|runtime|runtime.targets.get(&id));
         let data=selected.map(|target|target.contents.data()).or_else(||self.native_backing(id));
@@ -62,10 +62,7 @@ impl WgpuRasterizer {
         if let Some(selected)=selected && tile.content_version().matches(&selected.contents.version(TileKey {plane,coordinate}))!=Some(true) {
             return Err(GpuRasterError::NotReady);
         }
-        tile.try_backing()
-            .ok_or_else(|| GpuRasterError::Effect("Native raster backing is not ready".into()))?
-            .map(Some)
-            .map_err(GpuRasterError::Effect)
+        tile.try_backing().ok_or(GpuRasterError::NotPublished)?.map(Some).map_err(GpuRasterError::Effect)
     }
 
     pub(crate) fn native_color_coordinates(

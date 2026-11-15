@@ -1663,6 +1663,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         };
         let selection = self.display_selection().map(|s| s.into_owned());
         self.backend.set_vector_selection(self.editor.document().working.vector_items.as_ref());
+        self.backend.set_working_layer(self.editor.document().working.occurrence);
         let result = self
             .backend
             .set_selection_outline(selection.as_ref())

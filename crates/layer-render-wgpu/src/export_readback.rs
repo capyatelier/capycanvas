@@ -29,7 +29,7 @@ impl WgpuRasterizer {
                 self.drain_image_decodes(encoder)?;
                 match capture.region(self, frame.packet(self.document_extent), region, [PAGE_SIZE;2], encoder) {
                     Ok(source) => break source,
-                    Err(GpuRasterError::NotReady) => {
+                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {
                         #[cfg(target_arch = "wasm32")]
                         return Err(GpuRasterError::NotReady);
                         #[cfg(not(target_arch = "wasm32"))]

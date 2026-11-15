@@ -1431,8 +1431,12 @@ fn telemetry_counts_each_composition_window_and_strip_once() {
     frame.view.height_px = 25;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, -152.5, -67.5];
     submit_published(&mut r, frame);
+    let target = doc.scene().order().iter().find_map(|handle| doc.scene().source_target(*handle)).unwrap();
+    let dab = crate::tests::test_dab([160., 70.], [0.9, 0.2, 0.1, 1.], 1.);
+    let batch = layer_render::DabBatch { stroke_start: true, stroke_end: true, ..dab_batch(target, crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen), dab.bounds()) };
+    submit_published(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame });
     r.wait_idle().unwrap();
-    assert!(r.scale_display.as_ref().unwrap().charged_scratch_bytes() > 0, "the unbundled effect composes through scratch and the exact strip");
+    assert!(r.scale_display.as_ref().unwrap().charged_scratch_bytes() > 0, "a stroke composes the unbundled effect through scratch and the exact strip");
     let resident = |r: &mut WgpuRasterizer| { r.refresh_storage_metrics(); layer_render::CanvasRenderer::telemetry(r).resident_bytes };
     let [telemetry, display] = [resident(&mut r), r.scene_tiers.display.used()];
     drop(r.scale_display.take());
@@ -1695,21 +1699,26 @@ fn the_display_report_and_grant_pass_walk_no_composition_window() {
     assert_eq!(crate::test_support::PassCounts::snapshot().delta(counts).display_walks, 0, "the report reads window counters, not windows");
 }
 
-#[test]
-fn a_settled_reduced_view_keeps_no_decoded_layer_tiles_after_its_units_commit() {
+fn layered_raster_document(layers:u8,tiles:u32)->layer_core::Document {
     use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
-    let extent=[PAGE_SIZE*4;2];
+    let extent=[PAGE_SIZE*tiles;2];
     let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
         layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
-    for layer in 0..8u8 {
+    for layer in 0..layers {
         let (_,layer_core::SourceTarget::Paint(paint))=crate::test_support::add_paint(&mut doc.artwork,format!("Layer {layer}"),extent) else {unreachable!()};
-        let data=RasterData {tiles:(0..4).flat_map(|y|(0..4).map(move|x|[x,y])).map(|[x,y]| {
-            let bytes=[layer*29+x as u8*7,y as u8*13+layer,(x+y) as u8*5+layer,128].repeat(PAGE_SIZE.pow(2) as usize);
+        let data=RasterData {tiles:(0..tiles).flat_map(|y|(0..tiles).map(move|x|[x,y])).map(|[x,y]| {
+            let bytes=[layer.wrapping_mul(29).wrapping_add((x as u8).wrapping_mul(7)),(y as u8).wrapping_mul(13).wrapping_add(layer),((x+y) as u8).wrapping_mul(5).wrapping_add(layer),128].repeat(PAGE_SIZE.pow(2) as usize);
             (TileKey {plane:RasterPlane::Color,coordinate:[x,y]},RasterTile::backed(TileBlob::encode(doc.composition().color.paint_descriptor(),&bytes).unwrap()))
         }).collect(),watercolor:None};
         doc.artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(data);
     }
-    let doc=layer_core::Document::from_artwork(doc.artwork).unwrap();
+    layer_core::Document::from_artwork(doc.artwork).unwrap()
+}
+
+#[test]
+fn a_settled_reduced_view_keeps_no_decoded_layer_tiles_after_its_units_commit() {
+    let doc=layered_raster_document(8,4);
+    let extent=doc.composition().size;
     let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
     let mut frame=packet(doc.scene(),extent);frame.view.width_px=256;frame.view.height_px=256;
     frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
@@ -1719,6 +1728,26 @@ fn a_settled_reduced_view_keeps_no_decoded_layer_tiles_after_its_units_commit() 
     let decoded=sources.gpu_bytes()-sources.non_slot_bytes();
     assert!(sources.misses>=8*16,"every layer tile was decoded once: {}",sources.misses);
     assert!(decoded<=r.scene_tiers.display.floor(),"{} MiB of decoded layer tiles stay above the view floor after their units committed",decoded>>20);
+}
+
+fn settle_observing(r:&mut WgpuRasterizer,frame:FramePacket<'_>,mut observe:impl FnMut(&WgpuRasterizer)) {
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(120);
+    let mut submitted=false;
+    loop {
+        r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
+        let next=if !submitted {frame}else {FramePacket {composite_all:false,..frame}};
+        let preview=r.transform_preview.clone();
+        if r.can_submit() && let std::task::Poll::Ready(result)=r.submit_when_ready(next,preview.as_ref()) {result.unwrap();submitted=true;observe(r);}
+        r.wait_idle().unwrap();
+        if submitted && r.next_frame()!=layer_render::FrameDemand::Work && r.settled() {return;}
+        assert!(std::time::Instant::now()<deadline,"the view must settle");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+fn reduced_32_layer_view(doc:&layer_core::Document)->FramePacket<'_> {
+    let mut frame=packet(doc.scene(),doc.composition().size);frame.view.width_px=512;frame.view.height_px=512;
+    frame.view.document_to_surface=[1./3.,0.,0.,1./3.,0.,0.];frame
 }
 
 #[test]
@@ -1734,4 +1763,201 @@ fn a_surface_presenter_charges_its_presented_images_to_the_device() {
     assert_eq!(pinned(&budget)-before,800*600*4*3,"three presented surface images stay pinned on the device");
     drop(presenter);
     assert_eq!(pinned(&budget),before);
+}
+
+#[test]
+fn refinement_leases_decoded_inputs_only_for_the_cells_one_frame_composes() {
+    const LAYERS:u8=32;
+    let doc=layered_raster_document(LAYERS,6);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    submit_settled(&mut r,reduced_32_layer_view(&doc));complete(&r);
+    let mut artwork=doc.artwork.clone();
+    let layer=doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()=="Layer 0").unwrap();
+    artwork.occurrences.get_mut(layer).unwrap().opacity=0.5;
+    let changed=layer_core::Document::from_artwork(artwork).unwrap();
+    let mut leased=0;
+    settle_observing(&mut r,reduced_32_layer_view(&changed),|r|leased=leased.max(r.source_tiles.borrow().leased_bytes()));
+    let unit=u64::from(LAYERS)*scene::sources::NORMALIZED_PAGE_BYTES;
+    assert!(leased<=8*unit,"refinement leased {} MiB of decoded inputs at once, {} cells of {LAYERS} layers; one frame composes a few",leased>>20,leased/unit);
+}
+
+#[test]
+fn a_cold_32_layer_open_decodes_each_present_tile_once_and_reduces_no_layer() {
+    let doc=layered_raster_document(32,6);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let (mut layer_pages,mut leased)=(std::collections::BTreeSet::new(),0);
+    settle_observing(&mut r,reduced_32_layer_view(&doc),|r| {
+        layer_pages.extend(crate::scene::scale::layer_pages(r));leased=leased.max(r.source_tiles.borrow().leased_bytes());
+    });
+    let present=32*36;
+    assert!(layer_pages.is_empty(),"a cold exact open reduces no layer on its own: {layer_pages:?}");
+    assert_eq!(r.source_tiles.borrow().misses,present,"each present tile is decoded once");
+    let unit=32*scene::sources::NORMALIZED_PAGE_BYTES;
+    let frame_budget=(8<<20)/(u64::from(PAGE_SIZE).pow(2)*32)+1;
+    assert!(leased<=frame_budget*unit,"the open leased {} MiB of decoded inputs at once, {} cells of 32 layers",leased>>20,leased/unit);
+}
+
+fn working_layer(doc:&layer_core::Document)->layer_core::OccurrenceHandle {
+    doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()=="Layer 3").unwrap()
+}
+
+#[test]
+fn an_open_with_a_working_layer_builds_no_halves_and_commits_what_a_flat_open_commits() {
+    let doc=layered_raster_document(8,4);
+    let open=|working:Option<layer_core::OccurrenceHandle>| {
+        let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,working);
+        let before=crate::test_support::PassCounts::snapshot();
+        settle_observing(&mut r,reduced_32_layer_view(&doc),|_|{});
+        (crate::test_support::PassCounts::snapshot().delta(before).composite_commits,r.scale_display.as_ref().unwrap().cached_branches())
+    };
+    let (flat,_)=open(None);
+    let (working,halves)=open(Some(working_layer(&doc)));
+    assert_eq!(halves,0,"an open builds no halves around the working layer");
+    assert_eq!(working,flat,"an open with a working layer commits what a flat open commits");
+}
+
+#[test]
+fn selecting_another_layer_builds_its_halves_only_in_idle_frames() {
+    let doc=layered_raster_document(8,4);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let frame=FramePacket {composite_all:false,..reduced_32_layer_view(&doc)};
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(working_layer(&doc)));
+    settle_observing(&mut r,frame,|_|{});
+    let other=doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()=="Layer 6").unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(other));
+    let mut panned=frame;
+    for step in 1..=4 {
+        panned.view.document_to_surface[4]=step as f32;
+        let (misses,before)=(r.source_tiles.borrow().misses,crate::test_support::PassCounts::snapshot());
+        crate::test_support::submit_ready(&mut r,panned).unwrap();
+        crate::test_support::complete(&r);
+        let work=crate::test_support::PassCounts::snapshot().delta(before);
+        assert_eq!((r.source_tiles.borrow().misses-misses,work.unit_acceptances,work.composite_commits),(0,0,0),"a selection does no work in panning frame {step}");
+    }
+    assert_eq!(r.scale_display.as_ref().unwrap().cached_branches(),0,"no halves exist before an idle frame");
+    settle_observing(&mut r,panned,|_|{});
+    assert!(r.scale_display.as_ref().unwrap().cached_branches()>0,"idle frames build the selected layer's halves");
+}
+
+#[test]
+fn stroke_frames_build_halves_only_within_their_dab_reach_and_their_budget() {
+    let doc=layered_raster_document(8,8);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let layer=working_layer(&doc);
+    let target=doc.scene().source_target(layer).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(layer));
+    let mut frame=packet(doc.scene(),doc.composition().size);frame.composite_all=false;
+    frame.view.width_px=512;frame.view.height_px=512;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    settle_observing(&mut r,frame,|_|{});
+    let cell=PixelRect::new(0,0,1024,1024);
+    let units=1+(1<<20)/(3*u64::from(PAGE_SIZE).pow(2)) as usize;
+    let mut built=0;
+    for step in 0..8 {
+        let dab=crate::tests::test_dab([200.+8.*step as f32,200.],[0.9,0.1,0.3,1.],0.8);
+        let batch=crate::test_support::dab_batch(target,crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::GPen),dab.bounds());
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+        crate::test_support::complete(&r);
+        let halves=r.scale_display.as_ref().unwrap().half_pages();
+        assert!(halves.iter().all(|(_,region)|region.intersect(cell)==*region),"stroke frame {step} built halves outside its dab reach: {halves:?}");
+        let level_zero=halves.iter().filter(|(level,_)|*level==0).count();
+        assert!(level_zero-built<=units,"stroke frame {step} built {} level-0 half units; its budget admits {units}",level_zero-built);
+        built=level_zero;
+    }
+    assert!(built>0,"the stroke builds halves for the cell it reaches");
+}
+
+#[test]
+fn opacity_edits_on_the_working_layer_read_only_that_layer_after_the_first() {
+    let doc=layered_raster_document(8,4);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let layer=working_layer(&doc);
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(layer));
+    settle_observing(&mut r,reduced_32_layer_view(&doc),|_|{});
+    let mut artwork=doc.artwork.clone();
+    for (opacity,bound) in [(0.5,2*8*16),(0.25,16)] {
+        r.source_tiles.borrow().release_unused(0);r.source_tiles.borrow_mut().retire_evicted();
+        artwork.occurrences.get_mut(layer).unwrap().opacity=opacity;
+        let changed=layer_core::Document::from_artwork(artwork.clone()).unwrap();
+        let before=r.source_tiles.borrow().misses;
+        settle_observing(&mut r,reduced_32_layer_view(&changed),|_|{});
+        let read=r.source_tiles.borrow().misses-before;
+        assert!(read<=bound,"an opacity edit of {opacity} on the working layer read {read} tiles; the bound is {bound}");
+    }
+}
+
+fn tablet_renderer(color:layer_core::color::DocumentColor)->WgpuRasterizer {
+    renderer_in_budget(color,layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),unified:true,..Default::default()},
+        MemoryBudget::with_facts(MemoryFacts {host_default_bytes:Some(1<<30),override_bytes:Some(1<<30),..Default::default()})).unwrap()
+}
+
+fn tablet_open(doc:&layer_core::Document,size:[u32;2],scale:f32)->(WgpuRasterizer,u64) {
+    let extent=doc.composition().size;
+    let mut r=tablet_renderer(doc.composition().color);
+    let mut frame=packet(doc.scene(),extent);frame.view.width_px=size[0];frame.view.height_px=size[1];
+    frame.view.document_to_surface=[scale,0.,0.,scale,size[0] as f32/2.-scale*extent[0] as f32/2.,size[1] as f32/2.-scale*extent[1] as f32/2.];
+    let counts=crate::test_support::PassCounts::snapshot();
+    settle_observing(&mut r,frame,|_|{});
+    let attempts=crate::test_support::PassCounts::snapshot().delta(counts).unit_acceptances;
+    (r,attempts)
+}
+
+#[test]
+fn a_tablet_budget_cold_open_admits_each_exact_unit_once_and_decodes_each_present_tile_once() {
+    let doc=layered_raster_document(28,16);
+    let (r,attempts)=tablet_open(&doc,[1366;2],1./3.);
+    let (units,present)=(16*16,28*16*16);
+    assert!(attempts<=units+8,"{attempts} acceptance attempts for {units} exact units; an admitted unit keeps its inputs and a refused one waits for room");
+    let decodes=r.source_tiles.borrow().misses;
+    assert!(decodes<=present+present/50,"{decodes} decodes of {present} present tiles");
+}
+
+#[test]
+fn a_tablet_budget_zoomed_cold_open_decodes_a_tile_at_most_once_for_the_overview_and_once_for_the_view() {
+    let doc=layered_raster_document(28,12);
+    let (r,_)=tablet_open(&doc,[1920,1200],1.);
+    let view=PixelRect::new(1536-960,1536-600,1536+960,1536+600);
+    let visible=28*page_coordinates(view).count() as u64;
+    let decodes=r.source_tiles.borrow().misses;
+    assert!(decodes<=28*12*12+visible,"{decodes} decodes: the overview reads each of {} present tiles and the view its {visible} visible tiles at most once more",28*12*12);
+}
+
+fn single_layer_document(tiles:u32)->layer_core::Document {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+    let extent=[PAGE_SIZE*tiles;2];
+    let mut artwork=layer_core::authored::Artwork::new(extent).unwrap();
+    let descriptor=layer_core::color::DocumentColor::default().paint_descriptor();
+    let (_,layer_core::SourceTarget::Paint(paint))=crate::test_support::add_paint(&mut artwork,"Photo",extent) else {unreachable!()};
+    let data=RasterData {tiles:(0..tiles).flat_map(|y|(0..tiles).map(move|x|[x,y])).map(|[x,y]| {
+        let bytes=[(x*29) as u8,(y*13) as u8,((x+y)*5) as u8,255].repeat(PAGE_SIZE.pow(2) as usize);
+        (TileKey {plane:RasterPlane::Color,coordinate:[x,y]},RasterTile::backed(TileBlob::encode(descriptor,&bytes).unwrap()))
+    }).collect(),watercolor:None};
+    artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(data);
+    layer_core::Document::from_artwork(artwork).unwrap()
+}
+
+fn fit_view(doc:&layer_core::Document,side:u32)->FramePacket<'_> {
+    let extent=doc.composition().size;
+    let mut frame=packet(doc.scene(),extent);frame.view.width_px=side;frame.view.height_px=side;
+    let scale=side as f32/extent[0].max(extent[1]) as f32;
+    frame.view.document_to_surface=[scale,0.,0.,scale,0.,0.];frame
+}
+
+#[test]
+fn a_single_layer_photo_settles_with_no_retained_level_zero_exact_pages() {
+    let doc=single_layer_document(8);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    settle_observing(&mut r,fit_view(&doc,512),|_|{});
+    assert!(crate::scene::scale::composite_pages_at(&r,1)>0,"the photo settles exact at the reduced levels");
+    assert_eq!(crate::scene::scale::composite_pages_at(&r,0),0,"a single-layer photo keeps no level-0 exact pages once its cells reduce");
+}
+
+#[test]
+fn a_unified_device_settles_with_its_retention_within_the_display_grant() {
+    let doc=layered_raster_document(3,32);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {unified:true,budget_bytes:Some(4<<30),..Default::default()}).unwrap();
+    settle_observing(&mut r,fit_view(&doc,512),|_|{});
+    let (used,grant)=(r.scene_tiers.display.used(),r.memory.display_grant());
+    assert!(grant<r.memory.retention_grant(),"the view's target bounds the display grant below the ledger grant");
+    assert!(used<=grant.saturating_add(r.scene_tiers.retiring.used()),"display retention {} MiB exceeds the display grant {} MiB",used>>20,grant>>20);
 }

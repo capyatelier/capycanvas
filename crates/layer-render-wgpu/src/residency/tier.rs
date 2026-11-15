@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::{AtomicU64, Ordering::SeqCst, fence}};
+use std::sync::{Arc, atomic::{AtomicU32, AtomicU64, Ordering::SeqCst, fence}};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::device_poll::RetirementHandle;
 
@@ -12,6 +12,7 @@ impl Class {
 
 pub(crate) struct Tier {
     used: AtomicU64,
+    yielding: AtomicU64,
     limit: AtomicU64,
     floor: AtomicU64,
     grant: AtomicU64,
@@ -25,7 +26,7 @@ pub(crate) struct Tier {
 }
 impl Default for Tier {
     fn default() -> Self {
-        Self { used: AtomicU64::new(0), limit: AtomicU64::new(0), floor: AtomicU64::new(0), grant: AtomicU64::new(u64::MAX), frame: AtomicU64::new(u64::MAX), refusals: Default::default(), retiring: None, parent: None, heap: Default::default(),
+        Self { used: AtomicU64::new(0), yielding: AtomicU64::new(0), limit: AtomicU64::new(0), floor: AtomicU64::new(0), grant: AtomicU64::new(u64::MAX), frame: AtomicU64::new(u64::MAX), refusals: Default::default(), retiring: None, parent: None, heap: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] edge: Default::default() }
     }
 }
@@ -34,6 +35,17 @@ impl Tier {
     pub(crate) fn within(parent: &Arc<Self>) -> Arc<Self> { Arc::new(Self { parent: Some(parent.clone()), limit: AtomicU64::new(u64::MAX), heap: parent.heap.clone(), ..Default::default() }) }
     pub(crate) fn heap(&self) -> &Arc<super::Heap> { &self.heap }
     fn root_used(&self) -> u64 { self.parent.as_ref().map_or_else(|| self.used(), |parent| parent.root_used()) }
+    fn root_yielding(&self) -> u64 { self.parent.as_ref().map_or_else(|| self.yielding(), |parent| parent.root_yielding()) }
+    pub(crate) fn yielding(&self) -> u64 { self.yielding.load(SeqCst) }
+    fn offer(&self, bytes: u64) {
+        self.yielding.fetch_add(bytes, SeqCst);
+        self.release_edge();
+        if let Some(parent) = &self.parent { parent.offer(bytes); }
+    }
+    fn withdraw(&self, bytes: u64) {
+        self.yielding.fetch_sub(bytes, SeqCst);
+        if let Some(parent) = &self.parent { parent.withdraw(bytes); }
+    }
     fn add(&self, bytes: u64) { self.used.fetch_add(bytes, SeqCst); if let Some(parent) = &self.parent { parent.add(bytes); } }
     fn release(&self, bytes: u64) {
         self.used.fetch_sub(bytes, SeqCst);
@@ -172,7 +184,8 @@ impl Blocked {
     pub(crate) fn covering(self, bytes: u64) -> Self { Self { bytes: self.bytes.max(bytes), ..self } }
     pub(crate) fn fits(&self) -> bool {
         let bytes = self.need();
-        self.tier.fits(self.class, bytes) && self.ledger.as_ref().is_none_or(|ledger| ledger.fits_working_through(self.tier.root_used().saturating_add(bytes)))
+        self.tier.fits_after(self.tier.used().saturating_sub(self.tier.yielding()), self.class, bytes)
+            && self.ledger.as_ref().is_none_or(|ledger| ledger.fits_working_through(self.tier.root_used().saturating_sub(self.tier.root_yielding()).saturating_add(bytes)))
     }
     pub(crate) fn need(&self) -> u64 { self.bytes.saturating_add(self.ahead.load(SeqCst)) }
     pub(crate) fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.ahead, &other.ahead) }
@@ -183,6 +196,39 @@ impl Blocked {
 #[cfg(target_arch = "wasm32")]
 impl Blocked {
     pub(crate) fn overcommit(self) -> Reservation { Reservation(self.tier.charge(self.bytes), self.class) }
+}
+
+pub(crate) struct Retention { state: AtomicU32, bytes: u64, tier: Arc<Tier> }
+impl Retention {
+    const OPTIONAL: u32 = 1 << 30;
+    const REMOVED: u32 = 1 << 31;
+    fn yields(state: u32) -> bool { state == Self::OPTIONAL }
+    fn update(&self, change: impl Fn(u32) -> u32) {
+        let before = self.state.try_update(SeqCst, SeqCst, |state| Some(change(state))).unwrap();
+        match (Self::yields(before), Self::yields(change(before))) {
+            (false, true) => self.tier.offer(self.bytes),
+            (true, false) => self.tier.withdraw(self.bytes),
+            _ => {},
+        }
+    }
+}
+pub(crate) struct Retained(Arc<Retention>);
+impl Retained {
+    pub(crate) fn new(tier: &Arc<Tier>, bytes: u64) -> Self { Self(Arc::new(Retention { state: AtomicU32::new(0), bytes, tier: tier.clone() })) }
+    pub(crate) fn set_optional(&self, optional: bool) {
+        self.0.update(|state| if optional { state | Retention::OPTIONAL } else { state & !Retention::OPTIONAL });
+    }
+    pub(crate) fn pin(&self, charge: Charge) -> RetentionPin {
+        self.0.update(|state| state + 1);
+        RetentionPin { retention: self.0.clone(), _charge: charge }
+    }
+}
+impl Drop for Retained {
+    fn drop(&mut self) { self.0.update(|state| state | Retention::REMOVED); }
+}
+pub(crate) struct RetentionPin { retention: Arc<Retention>, _charge: Charge }
+impl Drop for RetentionPin {
+    fn drop(&mut self) { self.retention.update(|state| state - 1); }
 }
 
 #[cfg(test)]

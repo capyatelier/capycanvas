@@ -104,12 +104,14 @@ fn painting_a_moved_layer_updates_only_the_painted_part_of_its_reduced_levels() 
     set_root_entries(&mut doc, vec![moved, photo]);
     let target = doc.scene().source_target(moved).unwrap();
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r, Some(moved));
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for renderer in [&mut r, &mut exact] { submit_published(renderer, frame); }
+    crate::test_support::edit_working_layer(&mut r, frame, target);
     for (index, at) in [[300., 200.], [330., 260.], [700., 520.]].into_iter().enumerate() {
         let mut dab = crate::tests::test_dab(at, [0.9, 0.2, 0.1, 0.8], 1.);
         dab.radii = [70.; 2];

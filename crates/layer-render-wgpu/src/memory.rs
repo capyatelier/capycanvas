@@ -86,6 +86,7 @@ pub(super) struct Memory {
     wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     resources: Arc<std::sync::atomic::AtomicU64>,
     overdraft: std::cell::RefCell<Vec<layer_core::MemoryReservation>>,
+    unified: bool,
     pub idle: std::sync::atomic::AtomicBool,
 }
 pub(super) fn retained_limit(grant: u64, occupied: u64) -> u64 { grant.saturating_sub(occupied) }
@@ -138,7 +139,7 @@ impl Memory {
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
             demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(),
-            idle: std::sync::atomic::AtomicBool::new(true),
+            unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true),
         };
         memory.applied_limits.set(Some(memory.grants()));
         memory
@@ -148,6 +149,7 @@ impl Memory {
     pub(crate) fn display_limit(&self) -> u64 { self.display.handle.gpu_working_limit() }
     pub(crate) fn display_grant(&self) -> u64 { self.retention_grant().min(self.target.get()) }
     pub(crate) fn retention_grant(&self) -> u64 { self.display.handle.grant().gpu_bytes }
+    pub(crate) fn retention_limit(&self) -> u64 { if self.unified { self.display_grant() } else { self.retention_grant() } }
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) { *self.wake.lock().unwrap() = Some(wake); }
     pub(crate) fn raster_grant(&self) -> u64 { self.raster.handle.grant().gpu_bytes }
     pub(crate) fn staging_grant(&self) -> u64 { self.staging.handle.grant().gpu_bytes }
@@ -372,11 +374,11 @@ impl WgpuRasterizer {
         self.scene_tiers.display.set_limit(self.memory.display_limit(),display_floor(packet,presented,self.memory.unit()));
         self.publish_memory();
         self.factory.memory_budget().flush_reports();
-        self.scene_tiers.display.set_grant(self.memory.retention_grant());
+        self.scene_tiers.display.set_grant(self.memory.retention_limit());
     }
     pub(crate) fn end_frame_memory(&mut self) {self.scene_tiers.display.heap().begin_frame();self.scene_tiers.display.end_frame();}
     fn trim_display_to_grant(&self,scene:Option<&scene::Scene>) {
-        let display=&self.scene_tiers.display;let grant=self.memory.retention_grant();
+        let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
         let excess=display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used()));
         display.heap().evict(excess,crate::residency::Class::Fallback);
         let excess=excess.saturating_sub(display.heap().pending());
@@ -384,7 +386,7 @@ impl WgpuRasterizer {
         self.memory.trimmed.set(Some([grant,display.used()]));
     }
     pub(crate) fn retention_above_grant(&self)->bool {
-        let display=&self.scene_tiers.display;let grant=self.memory.retention_grant();
+        let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
         display.used()>grant.saturating_add(self.scene_tiers.retiring.used()) && self.memory.trimmed.get()!=Some([grant,display.used()])
     }
     pub(crate) fn admit_display(&self,scene:Option<&scene::Scene>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
@@ -392,7 +394,7 @@ impl WgpuRasterizer {
     }
     pub(crate) fn admit_tier(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
         let display=&self.scene_tiers.display;
-        display.set_grant(self.memory.retention_grant());
+        display.set_grant(self.memory.retention_limit());
         let scene=scene.or(self.scene.as_deref());
         let over=|| display.used().saturating_add(bytes).saturating_sub(display.grant());
         let cover=if class.floor_reserved() && over()!=0 {

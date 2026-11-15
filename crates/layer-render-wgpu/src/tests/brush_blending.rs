@@ -1310,13 +1310,16 @@ fn partial_analytic_display_averages_current_and_stroke_start_over_the_same_foot
 fn partial_gpen_scaled_prediction_cancels_and_exact_queries_match_commit() {
     for space in BlendSpace::ALL {for opacity in [0.4,0.001] {for erase in [false,true] {
         let create=||Canvas::at(DocumentColor {depth:if space==BlendSpace::Linear {SampleDepth::F32} else {SampleDepth::U8},..Default::default()},space,None,[1024;2]);
-        let mut preview=create();let mut reference=create();
-        let send=|canvas:&mut Canvas,dabs:&[Dab],batches:&[DabBatch]| {
+        let mut preview=create();let mut reference=create();let mut quiet=create();
+        let submit=|canvas:&mut Canvas,dabs:&[Dab],batches:&[DabBatch],publish:bool| {
             let mut frame=packet(canvas.document.scene(),canvas.extent);frame.composite_all=false;
             frame.view.document_to_surface=[0.125,0.,0.,0.125,0.,0.];frame.view.width_px=128;frame.view.height_px=128;
-            crate::test_support::submit_ready(&mut canvas.r, FramePacket {dabs,dab_batches:batches,blend_space:space,..frame}).unwrap();
+            let frame=FramePacket {dabs,dab_batches:batches,blend_space:space,..frame};
+            if publish {crate::test_support::submit_published(&mut canvas.r,frame);}else {crate::test_support::submit_ready(&mut canvas.r,frame).unwrap();}
         };
-        for canvas in [&mut preview,&mut reference] {
+        let send=|canvas:&mut Canvas,dabs:&[Dab],batches:&[DabBatch]|submit(canvas,dabs,batches,false);
+        let reduced=|canvas:&Canvas|canvas.r.scale_display.as_ref().unwrap().shows_reduced(PixelRect::full(canvas.extent));
+        for canvas in [&mut preview,&mut reference,&mut quiet] {
             canvas.paint(canvas.base,test_style(BrushExecution::Dry),soft([512.;2],[0.1,0.6,0.3,0.6],2000.,1.));
             canvas.paint(canvas.base,test_style(BrushExecution::Dry),soft([480.,512.],[0.8,0.1,0.2,0.4],38.,1.));
             canvas.paint(canvas.base,test_style(BrushExecution::Dry),soft([544.,512.],[0.1,0.2,0.9,0.8],27.,1.));
@@ -1327,10 +1330,15 @@ fn partial_gpen_scaled_prediction_cancels_and_exact_queries_match_commit() {
         let mut last=first;last.center.x=550.;last.flow=0.3;last.contact[0]=0.7;
         let mut batch=DabBatch {stroke_id:StrokeId(7),dab_count:1,stroke_start:true,stroke_end:false,
             ..crate::test_support::dab_batch(preview.base,style,first.bounds().union(last.bounds()))};
-        for canvas in [&mut preview,&mut reference] {send(canvas,&[first],std::slice::from_ref(&batch));}
+        for canvas in [&mut preview,&mut reference,&mut quiet] {send(canvas,&[first],std::slice::from_ref(&batch));}
         let committed=preview.r.readback_srgb_rgba8().unwrap();
-        send(&mut preview,&[],&[]);let display_before=crate::scene::scale::tests::display_pixels(&preview.r);
-        batch.stroke_start=false;batch.kind=DabBatchKind::Preview;
+        for canvas in [&mut preview,&mut quiet] {submit(canvas,&[],&[],true);}
+        batch.stroke_start=false;
+        let mut unseen=last;unseen.flow=0.;
+        send(&mut quiet,&[unseen],std::slice::from_ref(&batch));send(&mut quiet,&[],&[]);
+        assert!(reduced(&quiet),"the stroke without a prediction presents the reduced composition");
+        let display_before=crate::scene::scale::tests::display_pixels(&quiet.r);
+        batch.kind=DabBatchKind::Preview;
         send(&mut preview,&[last],std::slice::from_ref(&batch));
         assert!(preview.r.preview_level>0,"partial G-Pen uses display-sized prediction");
         assert!(!preview.r.preview_contribution,"partial Opacity prediction retains complete RGBA");
@@ -1339,6 +1347,7 @@ fn partial_gpen_scaled_prediction_cancels_and_exact_queries_match_commit() {
         assert_ne!(predicted,display_before,"prediction makes a visible continuation");
         let exact_prediction=preview.r.readback_srgb_rgba8().unwrap();assert_eq!(preview.r.preview_level,0);
         send(&mut preview,&[],&[]);assert_eq!(preview.r.readback_srgb_rgba8().unwrap(),committed,"cancel prediction keeps committed pixels");
+        assert!(reduced(&preview),"the cancelled prediction presents the reduced composition");
         assert_eq!(crate::scene::scale::tests::display_pixels(&preview.r),display_before,"cancel prediction restores scaled scene");
         batch.kind=DabBatchKind::Persistent;batch.stroke_end=true;
         for canvas in [&mut preview,&mut reference] {send(canvas,&[last],std::slice::from_ref(&batch));}

@@ -318,7 +318,7 @@ pub(crate) fn prepare_raster<T>(r:&mut WgpuRasterizer,mut operation:impl FnMut(&
     let original=retained(r);let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
     loop {
         match operation(r) {
-            Err(GpuRasterError::NotReady)=> {
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=> {
                 assert_eq!(retained(r),original,"pending preparation published live pages");
                 assert!(std::time::Instant::now()<deadline,"raster preparation did not complete");
                 r.wait_idle().unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
@@ -604,15 +604,28 @@ pub(crate) fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> Re
 
 /// Submit `frame`, then idle frames as the engine does, until it publishes.
 pub(crate) fn submit_published(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    submit_published_observing(r, frame, |_| {});
+}
+
+pub(crate) fn submit_published_observing(r: &mut WgpuRasterizer, frame: FramePacket<'_>, mut observe: impl FnMut(&WgpuRasterizer)) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let previews: Vec<_> = frame.dab_batches.iter().filter(|batch| batch.kind == DabBatchKind::Preview).cloned().collect();
     let idle = FramePacket { composite_all: false, reset_layers: false, dabs: if previews.is_empty() { &[] } else { frame.dabs }, dab_batches: &previews, restore_rasters: &[], ..frame };
     submit_ready(r, frame).unwrap();
+    observe(r);
     while crate::scene::scale::tests::publication_pending(&r) {
         assert!(std::time::Instant::now() < deadline, "deferred composition must publish");
         r.wait_idle().unwrap();
         submit_ready(r, idle).unwrap();
+        observe(r);
     }
+}
+
+pub(crate) fn edit_working_layer(r: &mut WgpuRasterizer, frame: FramePacket<'_>, target: SourceTarget) {
+    let mut still = crate::layer_tests::dab([0.; 4]);
+    still.flow = 0.;
+    let batch = DabBatch { stroke_end: true, ..dab_batch(target, crate::tests::test_style(layer_core::BrushExecution::Dry), still.bounds()) };
+    submit_settled(r, FramePacket { dabs: std::slice::from_ref(&still), dab_batches: std::slice::from_ref(&batch), composite_all: false, reset_layers: false, ..frame });
 }
 
 pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
@@ -664,7 +677,7 @@ pub(crate) fn query_ready<T>(r: &mut WgpuRasterizer, encoder: &mut crate::submis
         r.drain_image_decodes(encoder).unwrap();
         match query(r, encoder) {
             Ok(value) => return value,
-            Err(GpuRasterError::NotReady) => {},
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => {},
             Err(error) => panic!("{error}"),
         }
         scene::Scene::submit_chunk(r, encoder, "test query preparation").unwrap();

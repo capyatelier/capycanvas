@@ -155,8 +155,11 @@ fn pass_through_children_above_a_transform_keep_shared_display_composition() {
             for renderer in [&mut r, &mut exact] {
                 renderer.set_transform_preview(Some(&transform)).unwrap(); crate::test_support::submit_ready(renderer, frame).unwrap();
             }
-
-            if transform.moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r)); }
+            for _ in 0..64 {
+                if step > 1 || !r.scale_display.as_ref().unwrap().has_pending_work(&r) { break; }
+                r.wait_idle().unwrap(); crate::test_support::submit_ready(&mut r, frame).unwrap();
+            }
+            if transform.moving { assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r), "{blend:?} step={step}: a moving frame after the drag start prepared its inputs leaves no pending work"); }
             let cache = r.scale_display.as_ref().expect("group children stay on the display graph");
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
             assert!(error[0] < 0.004 && error[1] < 0.06, "{blend:?} step={step} error={error:?}");
@@ -557,13 +560,15 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     assert_eq!(captures,1); assert!(reduced>0);
     for _ in 0..2 {crate::test_support::submit_ready(&mut r, frame).unwrap();}
     assert_eq!(r.test.reduced_pages.get(),reduced);
+    let paint_pages=|r:&WgpuRasterizer|r.paint_layers.iter().map(|l|l.pages.len()).sum::<usize>();
+    let prepared=paint_pages(&r);
     for offset in [0.,64.,-32.] {
         let preview=layer_render::TransformPreview {transaction:7,target: id,moving:true,selection:Some(part.clone()),
             transform:ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})) },keep_source:true,source_from_owner:None,source_base:None}};
         for renderer in [&mut r,&mut exact] {renderer.set_transform_preview(Some(&preview)).unwrap();crate::test_support::submit_ready(renderer, frame).unwrap();}
         assert_eq!(r.test.source_captures.get(),captures);
         assert_eq!(r.test.reduced_pages.get(),reduced);
-        assert!(r.paint_layers.iter().all(|l|l.pages.is_empty()));
+        assert_eq!(paint_pages(&r),prepared,"a move preview adds no paint pages");
         assert_eq!(r.readback_srgb_rgba8().unwrap(),exact.readback_srgb_rgba8().unwrap());
     }
     r.prepare_moving_pixels(None);r.set_transform_preview(None).unwrap();crate::test_support::submit_ready(&mut r, frame).unwrap();
@@ -648,6 +653,7 @@ fn retained_committed_pages_are_independent_of_mutable_source_pixels() {
     let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     crate::test_support::submit_settled(&mut r, frame);
+    super::prepare_layer_pages(&mut r, frame);
     let retained = r.scale_display.as_ref().unwrap().pages.clone();
     let pages = retained.lock().unwrap().retained_pages().into_iter().filter(|page|page.key.source.is_none()).collect::<Vec<_>>();
     assert!(!pages.is_empty());

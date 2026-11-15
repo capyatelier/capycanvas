@@ -293,33 +293,41 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
 }
 
 fn live(r: &mut WgpuRasterizer, scene: SceneView<'_>, blend_space: BlendSpace) -> Vec<Rgba> {
-    live_at(r, scene, 0, blend_space, true)
+    live_at(r, scene, 0, blend_space, None)
 }
-fn live_at(r: &mut WgpuRasterizer, scene: SceneView<'_>, level: u32, blend_space: BlendSpace, settled: bool) -> Vec<Rgba> {
+fn live_at(r: &mut WgpuRasterizer, scene: SceneView<'_>, level: u32, blend_space: BlendSpace, moving: Option<OccurrenceHandle>) -> Vec<Rgba> {
     let scale = 1. / (1 << level) as f32;
     let view = ViewState {
         document_to_surface: [scale, 0., 0., scale, 0., 0.],
         ..crate::test_support::view(EXTENT)
     };
     let frame = FramePacket { view, reset_layers: true, blend_space, ..packet(scene, EXTENT) };
-    if settled {
-        crate::test_support::submit_settled(r, frame);
-    } else {
-        crate::test_support::submit_ready(r, frame).unwrap();
-    }
-    assert!(!settled || layer_render::CanvasRenderer::next_frame(r)!=layer_render::FrameDemand::Work, "the composite settles");
-    let texture = if level == 0 {
-        crate::test_support::document_texture(r)
-    } else {
-        let display = r.scale_display.as_ref().unwrap();
-        assert_eq!(display.plan.level, level);
-        display.texture()
+    let read = |r: &WgpuRasterizer| -> Vec<Rgba> {
+        let texture = if level == 0 {
+            crate::test_support::document_texture(r)
+        } else {
+            let display = r.scale_display.as_ref().unwrap();
+            assert_eq!(display.plan.level, level);
+            display.texture()
+        };
+        crate::layer_tests::page_bytes(r, texture)
+            .as_chunks::<16>().0.iter()
+            .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..c * 4 + 4].try_into().unwrap()))))
+            .collect()
     };
-    crate::layer_tests::page_bytes(r, texture)
-        .as_chunks::<16>().0.iter()
-        .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..c * 4 + 4].try_into().unwrap()))))
-        .collect()
+    let Some(moving) = moving else {
+        crate::test_support::submit_settled(r, frame);
+        assert!(layer_render::CanvasRenderer::next_frame(r) != layer_render::FrameDemand::Work, "the composite settles");
+        return read(r);
+    };
+    layer_render::CanvasRenderer::prepare_moving_layer(r, Some(moving));
+    crate::test_support::submit_published(r, frame);
+    assert!(r.scale_display.as_ref().unwrap().shows_reduced(PixelRect::full(EXTENT)), "level {level}: a live transform presents the reduced composition");
+    let pixels = read(r);
+    layer_render::CanvasRenderer::prepare_moving_layer(r, None);
+    pixels
 }
+
 fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<Rgba> {
     let mut capture = r
         .snapshot_gpu()
@@ -449,7 +457,7 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
                     let native_low: Vec<_> = native.iter().map(|range| range[0]).collect();
                     let native_high: Vec<_> = native.iter().map(|range| range[1]).collect();
                     for settled in [false, true] {
-                        let actual = live_at(&mut r, document.scene(), level, document.composition().blend, settled);
+                        let actual = live_at(&mut r, document.scene(), level, document.composition().blend, (!settled).then(|| *document.scene().order().last().unwrap()));
                         assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);
                         for (i, actual) in actual.iter().enumerate() {
                             let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);

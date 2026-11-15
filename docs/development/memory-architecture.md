@@ -592,11 +592,12 @@ colour space, depth, blend space and HDR encoding as well as by device.
 
 `stack::compose` builds one expression for exact and display composition.
 Unclipped Normal runs become balanced `over` trees; masks, opacity, other blend
-modes, clipping and effects are expression boundaries. The display graph caches
-branch images within the display allowance, so painting one Normal layer among
-32 at reduced zoom needs about log2(32) blends
-(`cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions` in
-`crates/layer-render-wgpu/src/scene/scale/tests.rs`).
+modes, clipping and effects are expression boundaries. The display graph splits
+the stack at the working layer into two halves, everything below it and
+everything above it, and caches only those. An edit to that layer recomposes
+each touched cell from the two halves and the layer, whatever the layer count
+(`pivot_halves_bound_edit_recomposition_independently_of_layer_count_and_preserve_untouched_regions`
+in `crates/layer-render-wgpu/src/scene/scale/tests.rs`).
 Non-Normal boundaries chain, so a target under k boundaries recomposes at least
 k nodes.
 Native evaluation and exact idle refinement get no branch budget and walk every

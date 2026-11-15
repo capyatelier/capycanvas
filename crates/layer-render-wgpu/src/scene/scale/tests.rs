@@ -47,6 +47,23 @@ fn source_textures_in(cache:&Cache,id:SourceTarget,level:Option<u32>)->Vec<wgpu:
     pages.into_iter().map(|page|page.texture).collect()
 }
 
+pub(super) fn prepare_layer_pages(r:&mut WgpuRasterizer,frame:FramePacket<'_>) {
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+    loop {
+        let (mut scene,mut cache)=(r.scene.take().unwrap(),r.scale_display.take().unwrap());
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        scene.begin_frame();
+        let requests=cache.region_sources(&scene,r,frame,cache.plan.bounds,false);
+        let ready=requests.iter().all(|(id,request)|cache.source_ready(&scene,r,*id,request));
+        for (id,request) in requests {cache.prepare_source(&mut scene,r,frame,&mut encoder,id,request,Class::Visible,&mut Scene::begin_work(false)).unwrap();}
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
+        r.scene=Some(scene);r.scale_display=Some(cache);
+        if ready {return;}
+        assert!(std::time::Instant::now()<deadline,"the reduced path's layer pages must prepare");
+        r.poll_pending(frame.view).unwrap();std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 pub(crate) fn source_cache_info(r:&WgpuRasterizer,id:SourceTarget,level:Option<u32>)->Option<(Vec<wgpu::Texture>,u64,u32)> {
     let cache=r.scale_display.as_ref()?;
     let source=r.scene.as_ref()?.scale_sources.entries.get(&id)?;
@@ -273,15 +290,7 @@ fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference:
     let revision = r.artwork_revision;
     let pages = page_coordinates(PixelRect::full(frame.document_extent)).count();
     let idle = FramePacket { composite_all: false, reset_layers: false, dabs: &[], dab_batches: &[], restore_rasters: &[], ..frame };
-    let mut visits = 0;
-    for _ in 0..pages + 3 {
-        if r.next_frame()!=layer_render::FrameDemand::Work { break; }
-        assert!(visits < pages + 1, "refinement must finish within one visit per native page");
-        r.wait_idle().unwrap();
-        let work = r.metrics.composited_pixels;
-        let navigator = r.navigator.revision;
-        crate::test_support::submit_ready(&mut r, idle).unwrap();
-        if r.navigator.revision == navigator { visits += 1; }
+    let check_work=|r:&WgpuRasterizer,work:u64| {
         let bounded = frame.scene.order().iter().any(|h|frame.scene.visible(*h)
             && frame.scene.effect(*h).is_some_and(|effect|effect.program.image_boundary()));
         let limit = if bounded {4 * u64::from(PAGE_SIZE).pow(2)} else {
@@ -292,8 +301,32 @@ fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference:
         };
         assert!(r.metrics.composited_pixels - work <= limit);
         assert_eq!(r.artwork_revision, revision, "idle refinement does not edit artwork");
+    };
+    let installed=r.preparation_wake.clone();let forward=installed.clone();
+    let (signal,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{if let Some(wake)=&forward {wake();}let _=signal.send(());}));
+    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+    let mut visits = 0;
+    'frames: for _ in 0..pages + 3 {
+        let work = r.metrics.composited_pixels;
+        let navigator = r.navigator.revision;
+        loop {
+            r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
+            match r.next_frame() {
+                layer_render::FrameDemand::Work=>break,
+                _ if r.settled()=>{check_work(r,work);break 'frames;},
+                _=>assert!(woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(),
+                    "refinement needs a registered completion edge: {:?}",r.outstanding_terms()),
+            }
+        }
+        assert!(visits < pages + 1, "refinement must finish within one visit per native page");
+        r.wait_idle().unwrap();
+        crate::test_support::submit_ready(&mut r, idle).unwrap();
+        if r.navigator.revision == navigator { visits += 1; }
+        check_work(r,work);
     }
-    assert!(r.next_frame()!=layer_render::FrameDemand::Work, "refinement and its Navigator refresh must settle");
+    assert!(r.settled() && !publication_pending(r), "refinement and its Navigator refresh must settle: {:?}",r.outstanding_terms());
+    match installed {Some(wake)=>r.set_preparation_wake(wake),None=>r.preparation_wake=None}
     let cache = r.scale_display.as_ref().unwrap();
     let error = quality(&display_pixels(r), reference, cache.plan, cache.texture().format());
     assert!(error[2] < 2e-5, "settled display {error:?}");
@@ -610,7 +643,7 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         let error = crate::test_support::max_error(&actual, &expected);
         assert!(error < 2e-5, "step={step} {space:?} {offset:?} level={level}: {error}");
         let cache = r.scale_display.as_ref().unwrap();
-        assert!(cache.graph.storage_bytes() > 0);
+        assert!(cache.pages.lock().unwrap().bytes() > 0);
         let sources = &r.scene.as_ref().unwrap().scale_sources;
         assert_eq!(sources.entries[&source_at(&doc,0)].blend_space, space);
         if space == BlendSpace::Perceptual {
@@ -686,21 +719,23 @@ fn reduced_photo_stacks_use_bounded_working_tiles() {
     frame.view.document_to_surface = [0.1578, 0., 0., 0.1578, 0., 0.];
     r.begin_frame_memory(frame);
     assert_eq!(request(&r, frame).ok().map(|q| q.plan.level), Some(2));
-    submit_published(&mut r, frame);
+    crate::test_support::submit_settled(&mut r, frame);
     let cache = r.scale_display.as_ref().unwrap();
     let scene = r.scene.as_ref().unwrap();
     assert!(cache.output.is_empty() && cache.pixels.root().is_some(), "working images stay tile-sized");
     assert!(scene.pool.iter().all(|p| p.texture.width() == PAGE_SIZE && p.texture.height() == PAGE_SIZE));
-    let bytes = resident_bytes_with_pool(cache, scene);
-    assert!(bytes <= crate::memory::CACHE_BYTES, "resident bytes={bytes}");
+    let stored = cache.pages.lock().unwrap().bytes();
+    let optional = stored - cache.pinned_page_bytes();
+    let bytes = resident_bytes_with_pool(cache, scene) - optional;
+    assert!(bytes <= crate::memory::CACHE_BYTES, "resident bytes beside {optional} optional exact bytes={bytes}");
 
 }
 
 #[test]
 fn partial_reduced_views_admit_the_visible_window() {
     let mut doc = document_at([65, 33]);
-    composition_mut(&mut doc).size[0] = 9504;
-    composition_mut(&mut doc).size[1] = 6336;
+    composition_mut(&mut doc).size[0] = 32768;
+    composition_mut(&mut doc).size[1] = 16384;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     for detail in [1, 2, 4] {
         let mut frame = packet(doc.scene(), doc.composition().size);
@@ -1382,6 +1417,7 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
     let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     submit_published(&mut r, frame);
+    prepare_layer_pages(&mut r, frame);
     let mut scene = r.scene.take().unwrap();
     let id = source_at(&doc,0);
     let mut cache=r.scale_display.take().unwrap();
@@ -1460,13 +1496,20 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
 }
 
 #[test]
-fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
+fn pivot_halves_bound_edit_recomposition_independently_of_layer_count_and_preserve_untouched_regions() {
+    assert_eq!(pivot_edit_work(8), pivot_edit_work(32), "an edit's records per frame and committed pages must not depend on the layer count");
+}
+
+fn pivot_edit_work(layers: usize) -> Vec<(Vec<u32>, u64)> {
+    const PARTS: usize = 2;
+    const WINDOW_REDUCTION: u32 = 1;
     let mut doc = document();
     let photo_source=paint_at(&doc,0).base.as_ref().unwrap().image.storage().clone();
     let paper=*doc.scene().order().last().unwrap();
-    let mut entries:Vec<_>=(0..32).map(|i| { let handle=copy_paint(&mut doc,0); doc.artwork.occurrences.get_mut(handle).unwrap().opacity=0.17+i as f32*0.02; handle }).collect();
+    let mut entries:Vec<_>=(0..layers).map(|i| { let handle=copy_paint(&mut doc,0); doc.artwork.occurrences.get_mut(handle).unwrap().opacity=0.17+i as f32*0.02; handle }).collect();
     entries.push(paper);
-    let empty=paint_occurrence(&mut doc,"empty paint target",None); entries.insert(15,empty); set_root_entries(&mut doc,entries);
+    let middle=layers/2-1;
+    let empty=paint_occurrence(&mut doc,"empty paint target",None); entries.insert(middle,empty); set_root_entries(&mut doc,entries);
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -1479,41 +1522,60 @@ fn cached_branches_recompose_logarithmic_work_and_preserve_untouched_regions() {
     }
     crate::test_support::submit_published(&mut r, frame(doc.scene(), extent));
     crate::test_support::submit_published(&mut exact, frame(doc.scene(), extent));
-    assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&source_at(&doc,15)));
-    let record_bound = page_coordinates(PixelRect::full(extent)).count() as u32
-        + doc.scene().order().len().next_power_of_two().ilog2() + 1;
-    for (step, index) in [15, 0, 32, 15, 0].into_iter().enumerate() {
-        let mut dab = crate::tests::test_dab([30. + step as f32 * 100., 97.], [0.9, 0.02, 0.1, 0.7], 1.);
+    assert!(!r.scene.as_ref().unwrap().scale_sources.entries.contains_key(&source_at(&doc,middle)));
+    let plan = r.scale_display.as_ref().unwrap().plan;
+    let pages_under = |cell: PixelRect, levels: std::ops::Range<u32>| levels.map(|level| pages::coordinates(cell, level).count()).sum::<usize>();
+    let mut work = Vec::new();
+    let mut pivot = None;
+    for (step, index) in [middle, 0, layers, middle, 0].into_iter().flat_map(|index| [index; 2]).enumerate() {
+        let switched = pivot.replace(index) != Some(index);
+        let mut dab = crate::tests::test_dab([30. + step as f32 * 47., 97. + (step % 2) as f32 * 60.], [0.9, 0.02, 0.1, 0.7], 1.);
         dab.radii = [21.; 2];
-        let batch = dab_batch(source_at(&doc,index), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        let batch = DabBatch { stroke_id: layer_core::StrokeId(step as u64 + 1),
+            ..dab_batch(source_at(&doc,index), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds()) };
+        let cells: Vec<_> = pages::coordinates(pixel_rect(dab.bounds(), extent), plan.level)
+            .map(|coordinate| pages::bounds(coordinate, plan.level, extent).intersect(plan.bounds)).collect();
+        let half_reductions = cells.iter().map(|cell| PARTS * pages_under(*cell, 0..plan.level)).sum::<usize>() as u32;
+        let half_pages = cells.iter().map(|cell| PARTS * pages_under(*cell, 0..plan.level + 1)).sum::<usize>() as u64;
         for kind in [DabBatchKind::Preview, DabBatchKind::Persistent] {
             let batch = DabBatch { kind, ..batch.clone() };
             let p = FramePacket { dabs: &[dab], dab_batches: &[batch], ..frame(doc.scene(), extent) };
-            crate::test_support::submit_published(&mut r, p);
+            let before = crate::test_support::PassCounts::snapshot();
+            let mut records = Vec::new();
+            crate::test_support::submit_published_observing(&mut r, p, |r| records.push(r.scene.as_ref().unwrap().scale_commands.as_ref().unwrap().cursor));
+            let commits = crate::test_support::PassCounts::snapshot().delta(before).composite_commits;
             crate::test_support::submit_published(&mut exact, p);
+            let building = switched && kind == DabBatchKind::Preview;
+            let (record_bound, commit_bound) = if building { (WINDOW_REDUCTION + half_reductions, cells.len() as u64 + half_pages) } else { (WINDOW_REDUCTION, cells.len() as u64) };
+            assert!(records.iter().all(|records| *records <= record_bound),
+                "{layers} layers, step={step} layer={index} {kind:?}: records per frame {records:?} exceed {record_bound} for {} touched cells (building halves: {building})", cells.len());
+            assert!(commits <= commit_bound,
+                "{layers} layers, step={step} layer={index} {kind:?}: {commits} committed pages exceed {commit_bound} for {} touched cells (building halves: {building})", cells.len());
             let scene = r.scene.as_ref().unwrap();
-            let records = scene.scale_commands.as_ref().unwrap().cursor;
-            assert!(records <= record_bound, "32 photos, first paint on an empty layer and end edits must reuse the other branches: step={step} {kind:?}, {records} > {record_bound}");
             let cache = r.scale_display.as_ref().unwrap();
+            assert_eq!(cache.graph.active(), Some(doc.scene().order()[index]), "step={step}: the edited layer is the pivot");
+            assert!(cells.iter().all(|cell| cache.half_cells(*cell) == [*cell]), "step={step} {kind:?}: the touched cells hold the pivot's halves");
             let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
-            assert!(error[0] < 0.003 && error[1] < 0.025, "step={step} kind={kind:?}: {error:?}");
+            assert!(error[0] < 0.003 && error[1] < 0.025, "{layers} layers, step={step} kind={kind:?}: {error:?}");
             assert_presentation_mip(&r);
             assert!(resident_bytes(cache, scene) <= crate::memory::CACHE_BYTES);
+            work.push((records, commits));
         }
     }
     for step in 0..4 {
         match step {
-            0 => occurrence_mut(&mut doc,15).opacity = 0.91,
+            0 => occurrence_mut(&mut doc,middle).opacity = 0.91,
             1 => occurrence_mut(&mut doc,0).visible = false,
-            2 => swap_entries(&mut doc,15,31),
-            _ => paint_mut(&mut doc,15).base = Some(layer_core::authored::PaintBase::new((Arc::new((*photo_source).clone())).into())),
+            2 => swap_entries(&mut doc,middle,layers-1),
+            _ => paint_mut(&mut doc,middle).base = Some(layer_core::authored::PaintBase::new((Arc::new((*photo_source).clone())).into())),
         }
         crate::test_support::submit_published(&mut r, frame(doc.scene(), extent));
         crate::test_support::submit_published(&mut exact, frame(doc.scene(), extent));
         let cache = r.scale_display.as_ref().unwrap();
         let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), cache.plan, cache.texture().format());
-        assert!(error[0] < 0.003 && error[1] < 0.025, "metadata step={step}: {error:?}");
+        assert!(error[0] < 0.003 && error[1] < 0.025, "{layers} layers, metadata step={step}: {error:?}");
     }
+    work
 }
 
 #[test]
@@ -1617,12 +1679,15 @@ fn offset_page_edge_edits_match_rebuilding_the_entire_display() {
     insert_occurrence(&mut doc, front, 0);
     let extent = doc.composition().size;
     let mut incremental = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut incremental, Some(doc.scene().order()[1]));
     let mut rebuilt = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut rebuilt, Some(doc.scene().order()[1]));
     let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     submit_published(&mut incremental, frame);
     submit_published(&mut rebuilt, frame);
+    for renderer in [&mut incremental, &mut rebuilt] { crate::test_support::edit_working_layer(renderer, frame, source_at(&doc,1)); }
     let original = display_pixels(&incremental);
     let mut dab = crate::tests::test_dab([254.5, 0.5], [1., 0., 0., 1.], 1.);
     dab.radii = [0.45; 2];
@@ -2812,7 +2877,7 @@ fn display_units_reading_an_unpublished_page_wait_for_its_wake_instead_of_spinni
     frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];
     let submitted=settle_to_wait(&mut r,frame);
     assert!(submitted>0 && r.next_frame()!=layer_render::FrameDemand::Work,"units whose page is unpublished must wait, not demand frames: {:?}",r.outstanding_terms());
-    assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Residency))));
+    assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Name))),"{:?}",r.outstanding_terms());
     assert!(publication_pending(&r));
     publish_clear(&r,&doc,&tile);
     assert!(r.next_frame()==layer_render::FrameDemand::Work,"the page's publication resumes its units");
@@ -2835,7 +2900,7 @@ fn a_transition_held_for_an_unpublished_page_waits_for_it_instead_of_spinning() 
     let mut frame=packet(changed.scene(),extent);frame.view.document_to_surface=view;
     let submitted=settle_to_wait(&mut r,frame);
     assert!(submitted>0 && r.next_frame()!=layer_render::FrameDemand::Work,"a transition held for an unpublished page must wait, not demand frames: {:?}",r.outstanding_terms());
-    assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Residency))));
+    assert!(r.outstanding_terms().contains(&("display",Outstanding::Blocked(Input::Name))),"{:?}",r.outstanding_terms());
     publish_clear(&r,&changed,&tile);
     assert!(r.next_frame()==layer_render::FrameDemand::Work,"the page's publication resumes the transition");
     submit_published(&mut r,FramePacket {composite_all:false,..frame});

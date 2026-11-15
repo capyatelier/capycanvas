@@ -162,7 +162,7 @@ impl WgpuRasterizer {
             return Ok(None);
         };
         if tile.content_version().matches(&self.raster_version_for(scene,target,plane,coordinate)?)!=Some(true) {return Err(GpuRasterError::NotReady);}
-        tile.try_backing().ok_or(GpuRasterError::NotReady)?.map(Some).map_err(GpuRasterError::Effect)
+        tile.try_backing().ok_or(GpuRasterError::NotPublished)?.map(Some).map_err(GpuRasterError::Effect)
     }
     fn preview_input_version(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2],wanted:Option<&scene::SignatureFrame>)->Result<ContentVersion,GpuRasterError> {
         if let Some(frame)=wanted {

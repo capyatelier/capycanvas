@@ -321,8 +321,19 @@ fn fit_persistent_preview_preserves_untouched_prior_compression_in_same_tile() {
     let target=placement::target(&doc);
     let view=layer_render::ViewState{width_px:32,height_px:32,
         document_to_surface:[0.125,0.,0.,0.125,0.,0.]};
-    crate::test_support::submit_ready(&mut r, FramePacket{view,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
+    let reduced=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().shows_reduced(PixelRect::full(extent));
+    let mut still=dab([0.;4]);
+    still.center=Point{x:64.,y:128.};
+    still.flow=0.;
+    let mut quiet=crate::test_support::dab_batch(target,crate::tests::test_style(layer_core::BrushExecution::Dry),still.bounds());
+    quiet.stroke_id=StrokeId(273);
+    quiet.stroke_end=false;
+    crate::test_support::submit_published(&mut r, FramePacket{view,dabs:&[still],dab_batches:std::slice::from_ref(&quiet),..crate::test_support::packet(doc.scene(),extent)});
+    assert!(reduced(&r),"a stroke presents the reduced composition");
     let before=crate::scene::scale::tests::display_pixels(&r);
+    quiet.stroke_start=false;
+    quiet.stroke_end=true;
+    crate::test_support::submit_published(&mut r, FramePacket{view,dabs:&[still],dab_batches:std::slice::from_ref(&quiet),..crate::test_support::packet(doc.scene(),extent)});
     let [width,height]=r.scale_display.as_ref().unwrap().plan.size.map(|n|n as usize);
     let raw_before={
         let page=r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages.iter()
@@ -345,6 +356,7 @@ fn fit_persistent_preview_preserves_untouched_prior_compression_in_same_tile() {
     crate::test_support::submit_ready(&mut r, FramePacket{view,dabs:&[predicted],dab_batches:&[isolated],
         ..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let isolated_display=crate::scene::scale::tests::display_pixels(&r);
+    assert!(reduced(&r),"the preview presents the reduced composition");
     let isolated_mismatches=(height*11/32..height*21/32).flat_map(|y|
         (width*4/32..width*12/32).map(move |x|y*width+x))
         .filter(|&at|isolated_display[at]!=before[at]).count();

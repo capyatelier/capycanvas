@@ -1,5 +1,11 @@
 use super::*;
 
+fn stroke_once(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,at:[f32;2]) {
+    let dab=crate::tests::test_dab(at,[0.2,0.7,0.4,1.],0.8);
+    let batch=layer_render::DabBatch {stroke_start:true,stroke_end:true,..dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds())};
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
+}
+
 #[test]
 fn display_level_updates_and_dirty_regions_batch_compute_passes() {
     let mut doc = document_at([2048; 2]);
@@ -186,14 +192,16 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        layer_render::CanvasRenderer::set_working_layer(&mut r,doc.working.occurrence);
         if admitted {r.begin_frame_memory(frame);}
         else {working_scene_frame(&mut r, frame);}
         submit_published(&mut r, frame);
+        stroke_once(&mut r,frame,source_at(&doc,0),[700.,500.]);
         let cache=r.scale_display.as_ref().unwrap();
         assert!(cache.evaluation==Evaluation::Display);
         assert!(!retained_root_pages(cache).is_empty());
         assert!(cache.pages.lock().unwrap().bytes()<=r.memory.display_owner().grant().gpu_bytes);
-        assert!(r.next_frame()==layer_render::FrameDemand::Work,"the published display still refines");
+        assert!(r.next_frame()==layer_render::FrameDemand::Work,"the stroked display still refines");
         let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba32Float,
             SdrSurfaceColor::ExtendedLinearSrgb).unwrap();
         let (_, target) = create_target(&r.device, [frame.view.width_px, frame.view.height_px],
@@ -334,6 +342,68 @@ fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
 }
 
 #[test]
+fn a_stroke_preview_keeps_exact_cells_it_does_not_reach() {
+    use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenPhase, SampleFlags, ViewTransform, input_queue};
+    use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::{SourceBuilder, SourceChannels, SourceInterpretation}};
+    let extent = [2048, 1024];
+    let mut photo = SourceBuilder::new(extent, SourceInterpretation {channels: SourceChannels::Rgb, depth: SampleDepth::U8,
+        profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false}, 64 << 20).unwrap();
+    for y in 0..extent[1] {photo.push_row(&(0..extent[0]).flat_map(|x| [(x / 7) as u8, (y / 3) as u8, (x ^ y) as u8]).collect::<Vec<_>>()).unwrap();}
+    let doc = layer_color::photo_project(photo.finish().unwrap(), Default::default(), "Photo".into(), SampleDepth::U8).unwrap();
+    let scale = 0.4;
+    let mut view = crate::test_support::view([820, 410]);
+    view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+    let (mut input, consumer) = input_queue(64);
+    let brush = layer_core::BrushSnapshot { diameter: 24., ..layer_core::default_brush(DefaultBrushPreset::Pencil) };
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.prepare_startup(&doc, &brush, false).unwrap();
+    r.finish_startup_catalog();
+    crate::test_support::wait_startup(&mut r, std::time::Instant::now() + READBACK_TIMEOUT, |progress| progress.complete, format_args!("startup"));
+    let mut engine = CanvasEngine::new(r, doc, consumer, view, ViewTransform { revision: 0, surface_to_document: [1. / scale, 0., 0., 1. / scale, 0., 0.] }).unwrap();
+    engine.set_instant_feedback(InstantFeedbackConfig { enabled: true, use_platform_prediction: false, prediction_horizon_micros: 16_000, ..Default::default() }).unwrap();
+    engine.set_brush(brush).unwrap();
+    let mut clock = 1_000_000_000u64;
+    let settle = |engine: &mut CanvasEngine<WgpuRasterizer>, clock: &mut u64| {
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            *clock += 16_666_667;
+            engine.render_frame_at(*clock).unwrap();
+            engine.backend_mut().wait_idle().unwrap();
+            let paints = { use layer_render::CanvasRenderer; engine.backend().paint_ready(engine.document(), engine.brush(), false) };
+            if paints && engine.backend().settled() && !crate::scene::scale::tests::publication_pending(engine.backend()) && !engine.has_pending_document_edits() { return; }
+            assert!(std::time::Instant::now() < deadline, "the canvas did not settle");
+        }
+    };
+    settle(&mut engine, &mut clock);
+    assert!(engine.backend().scale_display.as_ref().unwrap().exact_cells().iter().all(|(_, exact)| *exact), "the settled view is exact before the stroke");
+    let revision = engine.document().scene().revision();
+    engine.set_active_layer(engine.document().working.occurrence.unwrap()).unwrap();
+    assert_ne!(engine.document().scene().revision(), revision, "selecting the layer is a document edit the stroke's first frame carries");
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    let mut drawn = None;
+    for step in 0u64.. {
+        if drawn.is_none() && engine.backend().metrics().dabs > 0 {drawn = Some(step);}
+        if drawn.is_some_and(|first| step >= first + 6) {break;}
+        assert!(std::time::Instant::now() < deadline, "the stroke never drew");
+        for sample in (!engine.has_pending_input()).then_some(0..2).into_iter().flatten() {
+            clock += 8_333_333;
+            let mut event = crate::test_support::pen(step * 2 + sample + 1, if step + sample == 0 { PenPhase::Down } else { PenPhase::Move }, [20. + (step * 2 + sample).min(24) as f32, 30.], SampleFlags::PRIMARY);
+            event.timestamp_ns = clock;
+            input.push(event).unwrap();
+        }
+        clock += 8_333_333;
+        engine.render_frame_at(clock).unwrap();
+        engine.backend_mut().wait_idle().unwrap();
+    }
+    let preview = engine.backend().scene.as_ref().unwrap().scale_pages.lock().unwrap().expected().and_then(|frame| frame.preview_for(engine.document().working.target.unwrap()).map(|preview| preview.level()));
+    assert!(preview.is_some_and(|level| level > 0), "the stroke previews at a reduced level: {preview:?}");
+    let reach = PixelRect::new(0, 0, 512, 512);
+    let stale: Vec<_> = engine.backend().scale_display.as_ref().unwrap().exact_cells().into_iter()
+        .filter(|(cell, exact)| !exact && cell.intersect(reach).is_empty()).map(|(cell, _)| cell).collect();
+    assert!(stale.is_empty(), "cells the stroke and its preview do not reach lost their exact pixels: {stale:?}");
+}
+
+#[test]
 fn idle_spatial_refinement_bounds_pass_work_and_yields_between_distant_contacts() {
     let mut doc = document_at([2048;2]);
     let extent = doc.composition().size;
@@ -423,7 +493,8 @@ fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
     frame.view = crate::test_support::view([extent[0] / 4, extent[1] / 4]);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     submit_published(&mut r, frame);
-    assert!(r.next_frame()==layer_render::FrameDemand::Work, "the Fit view still needs native refinement");
+    {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(cache,&[cache.plan.bounds]);cache.evict_window(cache.plan.bounds);}
+    assert!(r.next_frame()==layer_render::FrameDemand::Work, "the evicted Fit view streams its exact cells again");
     crate::test_support::complete(&r);
     crate::memory::memory_tests::cold_color_pressure(&mut r);
     for _ in 0..(page_coordinates(PixelRect::full(extent)).count() * 4).div_ceil(SOURCE_SLOTS) + 1 {
@@ -648,8 +719,9 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     assert!(windows::Plan::new(doc.scene(), extent, r.image_pixel_budget(resident), r.device.limits().max_texture_dimension_2d).is_err());
     assert!(windows::Plan::new(doc.scene(), extent, r.image_pixel_budget(0), r.device.limits().max_texture_dimension_2d).is_ok());
     submit_published(&mut r,frame);
-    assert!(r.scale_display.as_ref().unwrap().pages.lock().unwrap().retained_pages().iter().all(|page|page.key.expression!=old_root),
-        "global work evicts optional old-content pages before refusing the drawing");
+    let kept=r.scale_display.as_ref().unwrap().pages.lock().unwrap().retained_pages().into_iter().filter(|page|page.key.expression==old_root).count();
+    let bytes=r.scale_display.as_ref().unwrap().pages.lock().unwrap().bytes();
+    assert!(bytes<=256<<20,"global work keeps {kept} old-content pages only beside the drawing within its budget: {bytes}");
     assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
     let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
@@ -956,8 +1028,9 @@ fn fit_refinement_accepts_native_input_quality_and_reaches_exact() {
     let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();exact.test.reference=true;
     submit_published(&mut exact,packet(doc.scene(),extent));
     let expected=pixels(&exact,crate::test_support::document_texture(&exact));
-    let key=cache.refinement_interest(cache.evaluation,0,PixelRect::full(extent)).key;
-    let image=cache.pages.lock().unwrap().get(&key,key.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Visible).expect("the native exact producer committed");
+    let key=cache.refinement_interest(cache.plan.level,PixelRect::full(extent)).key;
+    let image=cache.pages.lock().unwrap().get(&key,key.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Visible);
+    let image=image.expect("the native exact producer reduced to the view level");
     let actual=pixels(&r,&image.texture);let error=quality(&actual,&expected,image.plan,image.texture.format());
     assert!(error[2]<2e-5,"{error:?}: actual={:?}, expected={:?}",actual[0],expected[0]);
 }
@@ -1011,6 +1084,38 @@ fn a_refused_refinement_takes_no_idle_frames_and_one_release_wakes_it() {
     assert!(!needs_exact(&r),"the woken refinement reaches exact");
 }
 
+#[test]
+fn a_selected_layer_leaves_no_display_demand_that_its_frames_never_attempt() {
+    for objects in [false,true] {
+        let mut doc=document_at([1537,1025]);let extent=doc.composition().size;
+        let ink=doc.scene().order()[0];
+        let pixels=|x:u32,y:u32|[(y%251) as u8,90,(x%239) as u8,160];
+        let above=if objects {
+            let object=doc.artwork.objects.insert(PortableId::random(),ImageObject::new(layer_core::authored::Image::new(rgba8_source(extent,pixels)))).unwrap();
+            doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Objects(object),"Photo")).unwrap()
+        } else {paint_occurrence(&mut doc,"Above",Some(rgba8_source(extent,pixels)))};
+        set_root_entries(&mut doc,vec![ink,above]);
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(&mut r,Some(ink));
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+        frame.view=layer_render::ViewState {width_px:512,height_px:384,document_to_surface:[1.,0.,0.,1.,-256.,-128.]};
+        let mut audit=crate::frame_demand::DemandAudit::default();
+        for evicted in [false,true] {
+            if evicted {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(cache,&[cache.plan.bounds]);}
+            let mut settled=false;
+            for step in 0..256 {
+                audit.begin(&r);
+                crate::test_support::submit_ready(&mut r,FramePacket {composite_all:step==0,..frame}).unwrap();
+                crate::test_support::complete(&r);
+                audit.end(&r,format_args!("objects={objects}, evicted={evicted}, step={step}"));
+                if r.next_frame()!=layer_render::FrameDemand::Work {settled=true;break;}
+            }
+            assert!(r.scale_display.as_ref().is_some_and(|cache|cache.overview.is_some()),"the zoomed view keeps an overview");
+            assert!(settled,"objects={objects}, evicted={evicted}: the display settles with a selected layer between other layers");
+        }
+    }
+}
+
 #[cfg(not(target_arch="wasm32"))]
 #[test]
 fn exact_refinement_keeps_its_source_until_the_consuming_submission() {
@@ -1024,14 +1129,9 @@ fn exact_refinement_keeps_its_source_until_the_consuming_submission() {
     crate::test_support::submit_settled(&mut r,frame);
     crate::test_support::complete(&r);
     let cache=r.scale_display.as_ref().unwrap();
-    let key=cache.refinement_interest(cache.evaluation,0,PixelRect::full(extent)).key;
-    let expected={
-        let image=cache.pages.lock().unwrap().get(&key,key.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Visible)
-            .expect("the source fixture must settle with its exact native page");
-        pixels(&r,&image.texture)
-    };
+    let key=cache.refinement_interest(cache.plan.level,PixelRect::full(extent)).key;
     let color=[31.,71.,113.].map(|channel|layer_core::color::srgb_decode(channel/255.));
-    assert!(expected.iter().all(|pixel|crate::test_support::max_error(&[*pixel],&[[color[0],color[1],color[2],1.]])<2e-5));
+    let expected=vec![[color[0],color[1],color[2],1.];key.plan().size.into_iter().product::<u32>() as usize];
     assert!(r.source_tiles.borrow().prepared_view(&source,[0;2]).is_some());
     evict_composite_pages(cache,&[PixelRect::full(extent)]);
     let validation=r.device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1074,7 +1174,7 @@ fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
     let plan=cache.plan;(cache,_)=Cache::select(Some(cache),&r,frame,Request {plan,evaluation},false);
     prepare_fixture_frame(&r,frame,&scene);cache.prepare_graph(&r,frame,&scene).unwrap();
     let mut commands=scene.scale_commands.take().unwrap_or_else(||RegionRecords::new(&r));
-    let key=cache.refinement_interest(cache.evaluation,0,PixelRect::full(extent)).key;
+    let key=cache.refinement_interest(0,PixelRect::full(extent)).key;
     let region=key.plan().bounds;
     for _ in 0..3 {
         scene.begin_frame();commands.begin();
@@ -1097,7 +1197,9 @@ fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
         if cache.output_complete() && cache.pixels.committed_root().is_some() {Ok(())}else {Err(GpuRasterError::NotReady)}
     });
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
-    let image=cache.pages.lock().unwrap().get(&key,region,pages::Accuracy::Exact,0,crate::residency::Class::Visible).expect("the delayed native exact producer committed");
+    let shown=cache.refinement_interest(cache.plan.level,PixelRect::full(extent)).key;
+    let image=cache.pages.lock().unwrap().get(&shown,shown.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Visible);
+    let image=image.expect("the delayed native exact producer reduced to the view level");
     let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();exact.test.reference=true;
     submit_published(&mut exact,packet(doc.scene(),extent));
     let expected=pixels(&exact,crate::test_support::document_texture(&exact));

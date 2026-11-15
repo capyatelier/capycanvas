@@ -77,10 +77,12 @@ impl Drop for WorkBudget {
 }
 impl WorkBudget {
     fn required(&self,class:Class)->bool {class==Class::Authored || class==Class::Visible && !self.motion}
-    fn remaining(&self)->u64 {(if self.motion {object_cache::INTERACTIVE_TAPS}else{object_cache::IDLE_TAPS}).saturating_sub(self.used)}
+    fn capacity(&self)->u64 {if self.motion {object_cache::INTERACTIVE_TAPS}else{object_cache::IDLE_TAPS}}
+    fn remaining(&self)->u64 {self.capacity().saturating_sub(self.used)}
     fn allowance(&self,class:Class)->u64 {if self.required(class) {u64::MAX}else {self.remaining()}}
     fn fits(&self,class:Class,progressed:bool,work:u64)->bool {self.required(class) || work<=self.remaining() || !progressed && !(self.motion && class==Class::Fallback)}
     fn spend(&mut self,work:u64) {self.used=self.used.saturating_add(work);}
+    fn spent(&self)->u64 {self.used}
 }
 const FRAGMENTS: [(&str, &str); 11] = [
     ("fragment_main", "tile layer composition"),
@@ -1098,7 +1100,7 @@ impl Scene {
         let mut waiting=false;
         let prepared = match self.effects.prepare(r, packet.scene, indices, effects::Execution::Fused, packet.time_seconds, 0, packet.blend_space) {
             Ok(prepared)=>Some(prepared),
-            Err(GpuRasterError::NotReady)=>{waiting=true;None},
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{waiting=true;None},
             Err(error)=>return Err(error),
         };
         let indirect_mask=indices.len()==1 && !direct_effect_mask(packet.scene,handle);
@@ -1109,7 +1111,7 @@ impl Scene {
         } else { Ok(None) };
         let mask=match mask {
             Ok(mask)=>mask,
-            Err(GpuRasterError::NotReady)=>{waiting=true;None},
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{waiting=true;None},
             Err(error)=>return Err(error),
         };
         let _mask = mask.map(|mask| self.own(mask));
@@ -1121,7 +1123,7 @@ impl Scene {
                 if let Some((m, source)) = packet.scene.mask(*handle).filter(|(m, _)| m.enabled) {
                     let view=match self.mask_page(r,SourceTarget::Coverage(m.source),source,tile, accepted) {
                         Ok(view)=>view,
-                        Err(GpuRasterError::NotReady)=>{waiting=true;None},
+                        Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>{waiting=true;None},
                         Err(error)=>return Err(error),
                     };
                     if let Some(view)=view {
@@ -2191,7 +2193,7 @@ impl Scene {
                 let image = self.group(r, packet, layer_core::composite_input_scope(packet.scene, id), tile, accepted);
                 self.stop_before = previous;
                 let image = match image {
-                    Err(GpuRasterError::NotReady) => { waiting = true; self.alloc(r, wgpu::Color::TRANSPARENT)? }
+                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished) => { waiting = true; self.alloc(r, wgpu::Color::TRANSPARENT)? }
                     image => image?,
                 };
                 let image = if matches!(output, Output::EffectInput(_)) { image } else { self.effect(r, packet, &[id], tile, image, accepted)? };
@@ -2324,7 +2326,7 @@ impl Scene {
             let mut waiting=false;
             for (tile,covered) in scene.begin_capture(r,packet,destination,regions,output,reserved) {
                 match scene.capture_prepared_tile_jobs(r,packet,destination,tile,covered,output,initialized,accepted) {
-                    Err(GpuRasterError::NotReady)=>waiting=true,
+                    Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>waiting=true,
                     result=>result?,
                 }
             }

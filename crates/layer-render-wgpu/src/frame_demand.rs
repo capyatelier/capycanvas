@@ -45,7 +45,7 @@ impl WgpuRasterizer {
             ("retouch sources", gated(self.retouch.as_ref().is_some_and(|retouch| retouch.pending()))),
             ("navigator", self.navigator.outstanding(self).map(|state| if objects_waiting { Blocked(Input::Decode) } else { state })),
             ("canonical names", (self.navigator.waiting_for_name()
-                || self.scale_display.as_ref().is_some_and(|cache| cache.waiting_for_name())).then_some(Blocked(Input::Name))),
+                || self.scale_display.as_ref().is_some_and(|cache| cache.waiting_for_name(self))).then_some(Blocked(Input::Name))),
             ("transform sources", gated(self.transform_sources_pending && self.transform_preview.is_some())),
             ("transform standby", (self.transform_sources_pending && self.moving_pixels.is_some() && self.transform_preview.is_none())
                 .then_some(Blocked(Input::Compile))),
