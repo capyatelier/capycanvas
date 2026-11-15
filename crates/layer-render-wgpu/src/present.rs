@@ -76,7 +76,7 @@ impl OverviewPlacement {
 }
 
 pub(super) struct Recipes {
-    pipeline: [crate::Deferred<wgpu::RenderPipeline>; 4],
+    pipeline: [crate::Deferred<wgpu::RenderPipeline>; 2],
     surround: crate::Deferred<wgpu::RenderPipeline>,
     transition: crate::present_transition::TransitionRecipes,
     cursor: crate::Deferred<wgpu::RenderPipeline>,
@@ -88,7 +88,7 @@ pub(super) struct Recipes {
     screen: std::sync::OnceLock<crate::present_screen::Recipes>,
     backdrop: std::sync::OnceLock<crate::backdrop_blur::Recipes>,
     panels: std::sync::OnceLock<crate::panel_surface::Recipes>,
-    paper: std::sync::OnceLock<[crate::Deferred<wgpu::RenderPipeline>; 4]>,
+    paper: std::sync::OnceLock<[crate::Deferred<wgpu::RenderPipeline>; 2]>,
     overviews: [std::sync::OnceLock<crate::Deferred<wgpu::RenderPipeline>>; 2],
 }
 
@@ -97,7 +97,7 @@ pub struct ViewportPresenter {
     surface_memory: Option<(layer_core::MemoryOwner, u64)>,
     recipes: std::sync::Arc<Recipes>,
     timing: Option<crate::frame_timing::GpuFrameTimer>,
-    pipeline: [crate::Deferred<wgpu::RenderPipeline>; 4],
+    pipeline: [crate::Deferred<wgpu::RenderPipeline>; 2],
     presented_paper: Option<bool>,
     fill_reveal: Option<layer_render::FillReveal>,
     fill_before: Option<(u64,wgpu::TextureView)>,
@@ -302,7 +302,7 @@ impl Recipes {
             immediate_size: 0,
         });
         let shader = viewport_shader(device, format, color, false);
-        let pipeline = ["fs_main", "fs_placed", "fs_mapped", "fs_stand_in"].map(|entry|
+        let pipeline = ["fs_main", "fs_stand_in"].map(|entry|
             surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", entry], None, format, None));
         let surround_pipeline = surface_pipeline(device, "viewport surround", &pipeline_layout, &shader, ["vs_main", "fs_surround"], None, format, None);
         let cursor_icon_layout = crate::bindings::layout(device, "tool cursor icons", &[
@@ -594,7 +594,7 @@ impl ViewportPresenter {
 
     pub async fn prepare(&mut self, renderer: &WgpuRasterizer) -> Result<(), GpuRasterError> {
         self.prepare_paper_lighting(renderer);
-        renderer.compilation.prepare_all(self.pipeline[..3].iter().chain(self.recipes.paper.get().into_iter().flat_map(|paper| &paper[..3])).chain([&self.surround_pipeline, &self.cursor_pipeline, &self.recipes.transition.pipeline]).chain(self.overview_pipeline.iter()).chain(self.recipes.overviews[1].get()).chain([&self.picker.pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
+        renderer.compilation.prepare_all([&self.pipeline[0]].into_iter().chain(self.recipes.paper.get().map(|paper| &paper[0])).chain([&self.surround_pipeline, &self.cursor_pipeline, &self.recipes.transition.pipeline]).chain(self.overview_pipeline.iter()).chain(self.recipes.overviews[1].get()).chain([&self.picker.pipeline]).chain(self.backdrop.iter().flat_map(|b|b.pipelines())))
             .await.map_err(GpuRasterError::Effect)?;
         if let Some(panels) = &self.panels {
             renderer.compilation.prepare_all([&panels.pipeline,&panels.mask_pipeline]).await.map_err(GpuRasterError::Effect)?;
@@ -645,12 +645,12 @@ impl ViewportPresenter {
         lit && renderer.compilation.require([pipeline], crate::startup::DOCUMENT) && renderer.paper_shade().is_some()
     }
 
-    fn paper_pipelines(&self, renderer: &WgpuRasterizer) -> &[crate::Deferred<wgpu::RenderPipeline>; 4] {
+    fn paper_pipelines(&self, renderer: &WgpuRasterizer) -> &[crate::Deferred<wgpu::RenderPipeline>; 2] {
         let (device, format, color) = (&renderer.device, self.format, self.color);
         let layout = &self.pipeline_layout;
         self.recipes.paper.get_or_init(|| {
             let shader = viewport_shader(device, format, color, true);
-            ["fs_main", "fs_placed", "fs_mapped", "fs_stand_in"].map(|entry| surface_pipeline(device, "viewport presentation with paper lighting", layout, &shader, ["vs_main", entry], None, format, None))
+            ["fs_main", "fs_stand_in"].map(|entry| surface_pipeline(device, "viewport presentation with paper lighting", layout, &shader, ["vs_main", entry], None, format, None))
         })
     }
 
@@ -658,7 +658,7 @@ impl ViewportPresenter {
         let showing = renderer.presentation.showing && !self.standalone_overview;
         let lit = showing && (renderer.paper_lighting.is_some() || renderer.paper_overlay.is_some());
         let pipelines = if lit { self.paper_pipelines(renderer) } else { &self.pipeline };
-        let source = if pipelines[3].ready() && renderer.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.) { 3 } else { 0 };
+        let source = usize::from(pipelines[1].ready() && renderer.presentation_page().is_some_and(|page| page.stand_in_scale() != 0.));
         let pipeline = if showing { &pipelines[source] } else { &self.surround_pipeline };
         (source, lit, pipeline)
     }
@@ -1753,13 +1753,13 @@ impl ViewportPresenter {
         self.held_alpha=fade;
         self.presented_overview_buffer=self.overview_buffer.clone();
         if showing && !overview_only && self.presented_drawing.is_none_or(|drawing| !drawing.showing) {
-            for (index, pipeline) in self.pipeline.iter().enumerate().filter(|(index, _)| *index != source) {
-                renderer.compilation.warm(pipeline, if index == 3 { crate::startup::BACKGROUND } else { crate::startup::VALIDATION }, renderer.compilation.generation());
+            for pipeline in self.pipeline.iter().enumerate().filter_map(|(index, pipeline)| (index != source).then_some(pipeline)) {
+                renderer.compilation.warm(pipeline, crate::startup::BACKGROUND, renderer.compilation.generation());
             }
         }
         if lit && self.presented_paper != Some(true) {
-            for (index, pipeline) in self.paper_pipelines(renderer).iter().enumerate().filter(|(index, _)| *index != source) {
-                renderer.compilation.warm(pipeline, if index == 3 { crate::startup::BACKGROUND } else { crate::startup::VALIDATION }, renderer.compilation.generation());
+            for pipeline in self.paper_pipelines(renderer).iter().enumerate().filter_map(|(index, pipeline)| (index != source).then_some(pipeline)) {
+                renderer.compilation.warm(pipeline, crate::startup::BACKGROUND, renderer.compilation.generation());
             }
         }
         self.presented_drawing = Some(renderer.presentation);
