@@ -315,10 +315,17 @@ extension XCTestCase {
         tap((0.75, 0.23))
         expect("filled-inside", green, at: [(0.75, 0.23)], not: [(0.85, 0.75)])
         XCTAssertEqual(rows.count, beforeFill, "Filling inside an outline colors its path")
+        let fillOrder = rows.allElementsBoundByIndex.map(\.identifier), fillTarget = activeVector.firstMatch.identifier
         tap((0.85, 0.75))
-        expectCount(rows, beforeFill + 1); expectCount(activeVector, 0)
-        expect("filled-below", green, at: [(0.85, 0.75), (0.75, 0.23)])
+        expect("filled-outside", green, at: [(0.85, 0.75), (0.75, 0.23)])
+        expectCount(rows, beforeFill); expectCount(activeVector, 1)
+        XCTAssertEqual(rows.allElementsBoundByIndex.map(\.identifier), fillOrder)
+        XCTAssertEqual(activeVector.firstMatch.identifier, fillTarget)
+        XCTAssertFalse(app.descendants(matching: .any)["canvas-notice"].firstMatch.exists)
         attachEditor(in: app, name: "vector-color-\(theme)")
+        editorHistory("Undo", in: app)
+        expect("outside-fill-undone", green, at: [(0.75, 0.23)], not: [(0.85, 0.75)])
+        expectCount(rows, beforeFill); expectCount(activeVector, 1)
         #endif
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
