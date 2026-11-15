@@ -763,6 +763,7 @@ impl WgpuRasterizer {
         if ready {Ok(inputs)}else {Err(GpuRasterError::NotReady)}
     }
     pub(super) fn note_restore_admission<T>(&mut self,admitted:&Result<T,crate::residency::Blocked>) {
+        if admitted.is_err() {self.scene_tiers.display.heap().begin_frame();}
         if let Some(restore)=&mut self.restore_preflight {restore.refused=admitted.as_ref().err().cloned();}
     }
     pub(crate) fn restore_preparation(&self)->Option<crate::frame_demand::Outstanding> {
@@ -1230,6 +1231,29 @@ mod tests {
         let restore=r.restore_preflight.as_ref().unwrap().targets[0].as_ref().unwrap();
         assert_eq!(restore.next,4);
         assert_restore_pixels(&r,&data);
+    }
+
+    #[test]
+    fn a_refused_restore_may_evict_the_decodes_its_earlier_steps_consumed() {
+        let (mut r,_)=restore_window(2);
+        let color=r.document_color();
+        let consumed=RasterTile::backed(TileBlob::encode(RasterPlane::Color.descriptor(color),&restore_pixel(5).repeat(PAGE_SIZE.pow(2) as usize)).unwrap()).wait_backing().unwrap();
+        let pixels=crate::object_image_mips::prepare_raster_tile(&consumed,color.space,&r.device.source_samples).unwrap();
+        let mut requested=scene::sources::Inputs::default();requested.raster(consumed.clone(),color.space,color.space);
+        let ((),accepted)=requested.accept(&mut r,&mut (),|_,r,inputs| {
+            let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
+            r.admit_display(None,crate::residency::Class::Authored,bytes).ok()
+        },|_,_|Ok(()),|_,_,_|Ok(())).unwrap().unwrap();
+        let read=scene::sources::accepted_raster(&accepted,&consumed,color.space,color.space).unwrap();
+        for pending in &read.pending {pending.set_prepared(Some(pixels.clone()));}
+        let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+        assert!(read.encode(&mut r,&mut encoder,crate::residency::Class::Authored).unwrap());
+        accepted.track(&mut encoder);r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+        let heap=r.scene_tiers.display.heap().clone();
+        heap.evict(u64::MAX,crate::residency::Class::Authored);
+        let refused=r.scene_tiers.display.blocked(crate::residency::Class::Authored,u64::MAX).unwrap();
+        r.note_restore_admission::<()>(&Err(refused));
+        assert!(heap.evict(u64::MAX,crate::residency::Class::Authored)>0,"the refused restore cannot take the decode an earlier step consumed");
     }
 
     #[cfg(not(target_arch="wasm32"))]
