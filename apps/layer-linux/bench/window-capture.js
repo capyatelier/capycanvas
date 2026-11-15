@@ -63,12 +63,13 @@ var WindowCapture = class {
     capture(request) {
         const name = typeof request === 'object' && request ? request.name : request;
         const maximized = typeof request === 'object' && request ? request.maximized : false;
+        const monitor = typeof request === 'object' && request ? request.monitor ?? false : false;
         if (!this.directory || typeof name !== 'string' || !/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/.test(name))
             throw Error('Invalid native window capture request');
-        if (typeof maximized !== 'boolean') throw Error('Invalid native window capture mode');
+        if (typeof maximized !== 'boolean' || typeof monitor !== 'boolean') throw Error('Invalid native window capture mode');
         try {
-            if (!this.active) this.begin(name, maximized);
-            if (this.active.name !== name || this.active.maximized !== maximized)
+            if (!this.active) this.begin(name, maximized, false, monitor);
+            if (this.active.name !== name || this.active.maximized !== maximized || this.active.monitor !== monitor)
                 throw Error('Another window capture is pending');
             if (this.error) throw this.error;
             if (GLib.get_monotonic_time() >= this.active.deadline)
@@ -86,20 +87,22 @@ var WindowCapture = class {
         }
     }
 
-    begin(name, maximized, recording = false) {
+    begin(name, maximized, recording = false, monitor = false) {
         const {Gst, GstApp} = imports.gi;
         Gst.init(null);
-        this.active = {name, maximized, deadline: GLib.get_monotonic_time() + 15000000};
+        this.active = {name, maximized, monitor, deadline: GLib.get_monotonic_time() + 15000000};
         this.active.session = call('/org/gnome/Mutter/ScreenCast', destination,
             'CreateSession', '(a{sv})', [{}])[0];
-        const stream = call(this.active.session, `${destination}.Session`, 'RecordWindow', '(a{sv})',
-            [{'cursor-mode': new GLib.Variant('u', 0)}])[0];
+        const options = {'cursor-mode': new GLib.Variant('u', 0)};
+        const stream = monitor
+            ? call(this.active.session, `${destination}.Session`, 'RecordMonitor', '(sa{sv})', ['', options])[0]
+            : call(this.active.session, `${destination}.Session`, 'RecordWindow', '(a{sv})', [options])[0];
         this.active.signal = Gio.DBus.session.signal_subscribe(destination, `${destination}.Stream`,
             'PipeWireStreamAdded', stream, null, Gio.DBusSignalFlags.NONE,
             (_connection, _sender, _path, _iface, _signal, parameters) => {
                 try {
                     this.active.pipeline = Gst.parse_launch(
-                        `pipewiresrc path=${parameters.deep_unpack()[0]} ! video/x-raw,format=BGRA ! videoconvert ! video/x-raw,format=RGBA ! appsink name=frames max-buffers=${recording ? 600 : 1} drop=${!recording} sync=false`);
+                        `pipewiresrc path=${parameters.deep_unpack()[0]} ${monitor ? '' : '! video/x-raw,format=BGRA'} ! videoconvert ! video/x-raw,format=${monitor ? 'RGB' : 'RGBA'} ! appsink name=frames max-buffers=${recording ? 600 : 1} drop=${!recording} sync=false`);
                     this.active.sink = this.active.pipeline.get_by_name('frames');
                     this.active.bus = this.active.pipeline.get_bus();
                     this.active.bus.add_signal_watch();
@@ -118,25 +121,27 @@ var WindowCapture = class {
     save(sample, name) {
         const {Gst, GstVideo, GdkPixbuf} = imports.gi;
         const info = GstVideo.VideoInfo.new_from_caps(sample.get_caps());
-        if (sample.get_caps().get_structure(0).get_string('format') !== 'RGBA')
-            throw Error('Window capture did not negotiate RGBA');
+        if (sample.get_caps().get_structure(0).get_string('format') !== (this.active.monitor ? 'RGB' : 'RGBA'))
+            throw Error(`Capture did not negotiate ${this.active.monitor ? 'RGB' : 'RGBA'}`);
         const buffer = sample.get_buffer();
         const [ok, map] = buffer.map(Gst.MapFlags.READ);
         if (!ok) throw Error('Cannot map compositor window capture');
         let result;
         try {
-            result = cropWindowPixels(map.data, info.width, info.height, info.stride[0], this.active.maximized);
+            result = this.active.monitor
+                ? {pixels: new Uint8Array(map.data), metadata: {raw_size: [info.width, info.height], dimensions: [info.width, info.height]}}
+                : cropWindowPixels(map.data, info.width, info.height, info.stride[0], this.active.maximized);
         } finally {
             buffer.unmap(map);
         }
-        result.metadata.maximized = this.active.maximized;
+        if (!this.active.monitor) result.metadata.maximized = this.active.maximized;
         const {primaries, transfer, matrix, range} = info.colorimetry;
         result.metadata.colorimetry = {primaries, transfer, matrix, range};
         if (this.encoding) result.metadata.pixel_encoding = this.encoding;
         const [width, height] = result.metadata.dimensions;
         GLib.mkdir_with_parents(this.directory, 0o700);
         GdkPixbuf.Pixbuf.new_from_bytes(new GLib.Bytes(result.pixels), GdkPixbuf.Colorspace.RGB,
-            true, 8, width, height, width * 4).savev(`${this.directory}/${name}.png`, 'png', [], []);
+            !this.active.monitor, 8, width, height, this.active.monitor ? info.stride[0] : width * 4).savev(`${this.directory}/${name}.png`, 'png', [], []);
         GLib.file_set_contents(`${this.directory}/${name}.json`, `${JSON.stringify(result.metadata, null, 2)}\n`);
     }
 

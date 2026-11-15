@@ -137,6 +137,24 @@ test('success writes matching PNG and metadata and cleans each independent sessi
     assert.match(state.pipelines[0].command, /pipewiresrc path=42 ! video\/x-raw,format=BGRA ! videoconvert ! video\/x-raw,format=RGBA/);
 });
 
+test('monitor captures start independent streams and retain full RGB dimensions, colorimetry and encoding', () => {
+    const {state, capture, frame} = harness('gamma22-on-srgb');
+    state.format = 'RGB';
+    for (const name of ['first-monitor', 'second-monitor']) {
+        state.sample = null;
+        assert.equal(capture.capture({name, maximized: false, monitor: true}), false);
+        assert.equal(state.calls.at(-2).method, 'RecordMonitor');
+        assert.match(state.pipelines.at(-1).command, /format=RGB ! appsink/);
+        state.sample = state.frame;
+        assert.equal(capture.capture({name, maximized: false, monitor: true}), true);
+        const metadata = JSON.parse(state.writes.at(-1).value);
+        assert.deepEqual(metadata, {raw_size: [frame.width, frame.height], dimensions: [frame.width, frame.height],
+            colorimetry: state.colorimetry, pixel_encoding: 'gamma22-on-srgb'});
+        assertClosed(state, capture);
+    }
+    assert.equal(state.sessions, 2);
+});
+
 test('SDR capture declares pixel encoding and retains negotiated stream colorimetry', () => {
     const {state, capture} = harness('gamma22-on-srgb');
     state.sample = state.frame;

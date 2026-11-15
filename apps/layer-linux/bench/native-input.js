@@ -18,28 +18,12 @@ if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary d
 const captureDir = GLib.getenv('LAYER_NATIVE_CAPTURE_DIR');
 imports.searchPath.unshift(GLib.path_get_dirname(imports.system.programPath));
 const windowCapture = new imports['window-capture'].WindowCapture(captureDir, GLib.getenv('LAYER_NATIVE_CAPTURE_ENCODING'));
+const monitorCapture = new imports['window-capture'].WindowCapture(captureDir, GLib.getenv('LAYER_NATIVE_CAPTURE_ENCODING'));
 let captureFailure;
 let capturePipeline, captureSink;
 const captureFrame = name => {
     if (!captureDir || !/^[a-z0-9-]+$/.test(name)) throw Error('Invalid native capture request');
-    const sample = captureSink?.try_pull_sample(0) ?? captureSink?.last_sample;
-    if (!sample) return false;
-    const {Gst, GstVideo, GdkPixbuf} = imports.gi;
-    const info = GstVideo.VideoInfo.new_from_caps(sample.get_caps());
-    const buffer = sample.get_buffer();
-    const [ok, map] = buffer.map(Gst.MapFlags.READ);
-    if (!ok) throw Error('Cannot map compositor capture');
-    const pixels = new GLib.Bytes(map.data);
-    buffer.unmap(map);
-    GdkPixbuf.Pixbuf.new_from_bytes(pixels, GdkPixbuf.Colorspace.RGB, false, 8,
-        info.width, info.height, info.stride[0]).savev(`${captureDir}/${name}.png`, 'png', [], []);
-    const {primaries, transfer, matrix, range} = info.colorimetry;
-    GLib.file_set_contents(`${captureDir}/${name}.json`, `${JSON.stringify({
-        raw_size: [info.width, info.height], dimensions: [info.width, info.height],
-        colorimetry: {primaries, transfer, matrix, range},
-        ...(windowCapture.encoding ? {pixel_encoding: windowCapture.encoding} : {}),
-    }, null, 2)}\n`);
-    return true;
+    return monitorCapture.capture({name, maximized: false, monitor: true});
 };
 const recording = {name: null, samples: [], timer: 0, events: [], sink: null, window: false};
 const pullRecorded = () => {
@@ -175,9 +159,10 @@ const process = launcher.spawnv(launch);
 let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);
-    if (windowCapture.active) captureFailure ??= Error('Test exited during compositor window capture');
+    if (windowCapture.active || monitorCapture.active) captureFailure ??= Error('Test exited during compositor capture');
     windowCapture.close();
-    passed = p.get_successful() && !captureFailure && !windowCapture.error;
+    monitorCapture.close();
+    passed = p.get_successful() && !captureFailure && !windowCapture.error && !monitorCapture.error;
     if (capturePipeline) capturePipeline.set_state(imports.gi.Gst.State.NULL);
     tabletProxy?.force_exit();
     loop.quit();
@@ -264,18 +249,15 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             } else {
                 const event = events[index++];
                 if (tracing) trace.push({ns: GLib.get_monotonic_time() * 1000, event});
-                if ('capture_window' in event) {
+                if ('capture_window' in event || event.capture) {
                     try {
-                        if (!windowCapture.capture(event.capture_window)) index--;
+                        const captured = 'capture_window' in event ? windowCapture.capture(event.capture_window) : captureFrame(event.capture);
+                        if (!captured) index--;
                     } catch (error) {
                         captureFailure = error;
                         process.force_exit();
                         return GLib.SOURCE_REMOVE;
                     }
-                    return GLib.SOURCE_CONTINUE;
-                }
-                if (event.capture) {
-                    if (!captureFrame(event.capture)) index--;
                     return GLib.SOURCE_CONTINUE;
                 }
                 if (event.record_window) {
