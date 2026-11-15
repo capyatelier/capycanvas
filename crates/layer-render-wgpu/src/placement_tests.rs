@@ -660,6 +660,25 @@ fn wet_preview_microbatches_seed_only_the_pages_their_plan_accepted() {
 }
 
 #[test]
+fn a_stable_blender_keeps_its_coverage_state_on_its_own_page_beside_another_brushs() {
+    let extent = [256, 256];
+    let document = paint_document(extent, "two coverage formats on one page");
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let ink = Dab { center: Point { x: 128., y: 128. }, radii: [40.; 2], ..dab([0.1, 0.3, 0.8, 1.]) };
+    let pen = DabBatch { style: preset_style(layer_core::DefaultBrushPreset::GPen), damage: ink.bounds(), ..batch(target(&document)) };
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[ink], dab_batches: &[pen], ..packet(document.scene(), extent) })
+        .expect("the pen stroke commits");
+    assert_eq!(r.paint_layers[0].coverage_pages.len(), 1, "the pen stroke keeps a coverage page");
+    let dabs = [100., 140.].map(|x| Dab { center: Point { x, y: 128. }, radii: [24.; 2], ..ink });
+    let blends: Vec<_> = dabs.iter().enumerate().map(|(index, dab)| DabBatch {
+        style: preset_style(layer_core::DefaultBrushPreset::ScatterBlender), stroke_id: StrokeId(2), stroke_start: index == 0, stroke_end: false,
+        first_dab: index as u32, damage: dab.bounds(), ..batch(target(&document))
+    }).collect();
+    crate::test_support::submit_ready(&mut r, FramePacket { dabs: &dabs, dab_batches: &blends, composite_all: false, ..packet(document.scene(), extent) })
+        .expect("the second Scatter batch continues the coverage its first batch published");
+}
+
+#[test]
 fn a_stable_blender_preview_whose_contacts_miss_the_canvas_predicts_nothing() {
     for preset in [layer_core::DefaultBrushPreset::DitherBlender, layer_core::DefaultBrushPreset::ScatterBlender] {
         let extent = [256, 256];

@@ -17,7 +17,7 @@ impl WgpuRasterizer {
                 MaterialOutputKind::Coverage=> {
                     let pages=if publication.preview.is_some() {&mut self.preview_coverage_pages}else {
                         &mut self.paint_layers.iter_mut().find(|layer|layer.id==batch.target).ok_or(GpuRasterError::MissingPaintLayer(batch.target))?.coverage_pages};
-                    pages.iter_mut().find(|page|page.coordinate==publication.coordinate).ok_or(GpuRasterError::Invariant("prepared publish material state is inconsistent"))?.state=Some(state);
+                    pages.iter_mut().find(|page|page.matches(publication.coordinate,&batch.style)).ok_or(GpuRasterError::Invariant("prepared publish material state is inconsistent"))?.state=Some(state);
                 },
                 MaterialOutputKind::Reservoir=>self.reservoir.state=Some(state),
                 MaterialOutputKind::Wetness=> {
