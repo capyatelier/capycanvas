@@ -306,7 +306,7 @@ impl CapyApple {
             if app.host.session.engine().backend().0.is_some() {
                 // A failed GPU is suspended with its surviving CPU state. Recovery
                 // still proceeds; the shared snapshot/worker validates the pixels.
-                let _ = app.gpu_operation(|app| app.host.prepare_canvas_frame(now, now, true));
+                let _ = app.gpu_operation(|app| app.host.prepare_canvas_capture(now, now, true));
             }
             let renderer_ready = app.host.session.engine().backend().0.is_none()
                 || (app.host.startup.canvas_ready
@@ -953,7 +953,7 @@ pub unsafe extern "C" fn capy_apple_export_task(
             std::thread::Builder::new()
                 .name("capy-export".into())
                 .stack_size(8 * 1024 * 1024)
-                .spawn_scoped(scope, || host.prepare_canvas_frame(now, now, true))
+                .spawn_scoped(scope, || host.prepare_canvas_capture(now, now, true))
                 .map_err(|e| e.to_string())?
                 .join()
                 .map_err(|_| "Export preparation failed".to_string())?

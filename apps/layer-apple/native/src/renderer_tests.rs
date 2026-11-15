@@ -9,6 +9,21 @@ fn install(app: &App) {
 }
 
 #[test]
+fn recovery_preparation_preserves_a_pending_native_presentation() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        install(&app);
+        app.draw_until_idle();
+        let layout = c"{\"regions\":[[0,0,32,32,4,4,4,4]],\"connections\":[]}";
+        assert_eq!(unsafe { capy_apple_glass_regions(app.0, layout.as_ptr()) }, 0);
+        assert!(app.borrow().host.dirty);
+        let now = app.next_frame_time();
+        assert_eq!(unsafe { capy_apple_prepare_recovery(app.0, now) }, 0);
+        assert!(app.borrow().host.dirty, "Preparing a saved capture must not acknowledge native presentation");
+    }
+}
+
+#[test]
 fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
     for platform in [0, 1] {
         let reference = native_renderer();

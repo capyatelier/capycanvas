@@ -461,12 +461,15 @@ impl NativeHost {
         Ok(())
     }
     pub fn prepare_canvas_frame(&mut self,now:u64,presentation:u64,has_presented:bool)->Result<(),String> {
+        self.dirty=false;
+        self.prepare_canvas_capture(now,presentation,has_presented)
+    }
+    pub fn prepare_canvas_capture(&mut self,now:u64,presentation:u64,has_presented:bool)->Result<(),String> {
         self.prepare_canvas_startup()?;
         let presentable=self.session.engine().backend().0.as_ref().is_some_and(|gpu|gpu.has_presentable_frame());
         if self.startup.canvas_ready && (has_presented || !presentable) {
             let previous=self.session.state().revision;
             let change=self.session.frame(now,presentation)?;
-            self.dirty=change.needs_present();
             self.apply_change(previous,change);
         }
         self.dirty|=self.session.holding_input();
