@@ -362,8 +362,10 @@ mod tests {
         r.ensure_document_metadata(document.composition().size,document.scene()).unwrap();
         let coordinate=[0,0];let offsets=[Some([0,0])];
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let (accepted,views)=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,coordinate,offsets,encoder));
-        let source=views[0].as_ref().unwrap().texture().clone();
+        let (mut accepted,views)=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,coordinate,offsets,encoder));
+        let [Some(source),None]=accepted.raw_color(&r,target,coordinate).unwrap() else {panic!("the fixture binds one raw source")};
+        assert_eq!(views[0],Some(source.tile.view.clone()));
+        let source=source.tile.texture;
         assert_eq!([source.width(),source.height()],[PAGE_SIZE;2]);
         submit(&mut r,encoder);crate::test_support::complete(&r);
         crate::test_support::evict_sources(&mut r);
@@ -391,8 +393,12 @@ mod tests {
         r.ensure_document_metadata(extent,document.scene()).unwrap();
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         let offsets=std::array::from_fn::<_,9,_>(|i|Some([3*(i as i32%3),3*(i as i32/3)]));
-        let (accepted,views)=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,[1,1],offsets,encoder));
-        let textures=views.map(|view|view.expect("every neighbor has a source").texture().clone());accepted.track(&mut encoder);submit(&mut r,encoder);
+        let (mut accepted,views)=crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder|r.read_raw_neighborhood(target,[1,1],offsets,encoder));
+        let textures=std::array::from_fn::<_,9,_>(|i| {
+            let coordinate=[1+3*(i as u32%3),1+3*(i as u32/3)];
+            let [Some(source),None]=accepted.raw_color(&r,target,coordinate).unwrap() else {panic!("every neighbor binds one raw source")};
+            assert_eq!(views[i],Some(source.tile.view.clone()));source.tile.texture
+        });accepted.track(&mut encoder);submit(&mut r,encoder);
         for (i,texture) in textures.into_iter().enumerate() {
             let pixels=crate::test_support::float_pixels(&r,&texture);
             let coordinate=[1+3*(i as u32%3),1+3*(i as u32/3)];

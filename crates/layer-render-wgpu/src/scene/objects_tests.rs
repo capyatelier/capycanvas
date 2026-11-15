@@ -920,7 +920,7 @@ fn a_started_canonical_task_finishes_its_parts_under_pressure_while_queued_start
 }
 #[test]
 fn canonical_disjoint_tasks_keep_pending_inputs_until_their_contribution() {
-    fn codes(coordinate:[u32;2])->[u8;4] {[31+coordinate[0] as u8*11,43+coordinate[1] as u8*19,113,255]}
+    fn codes(coordinate:[u32;2])->[u8;4] {[31u8.wrapping_add((coordinate[0] as u8).wrapping_mul(11)),43u8.wrapping_add((coordinate[1] as u8).wrapping_mul(19)),113,255]}
     let source=AuthoredImage::new(rgba8_source([4096;2],|x,y|codes([x/PAGE_SIZE,y/PAGE_SIZE])));
     let (mut doc,owner,_)=document([4096;2],vec![ImageObject::new(source)]);
     let root=doc.artwork.root;doc.artwork.compositions.get_mut(root).unwrap().blend=layer_core::BlendSpace::Linear;
@@ -940,6 +940,8 @@ fn canonical_disjoint_tasks_keep_pending_inputs_until_their_contribution() {
         assert!(scene.object_results.resolve_collection(&r,doc.scene(),&request,None).unwrap().is_none());request
     }).collect::<Vec<_>>();
     scene.object_display=false;r.scene=Some(scene);
+    pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines().into_iter()
+        .chain([&r.scene_pipelines.constant.2]))).unwrap();
     let before=crate::test_support::PassCounts::snapshot();
     assert!(!attempt(&mut r));store.gate.entered();store.gate.release();
     let mut settled=false;
@@ -2003,7 +2005,6 @@ fn accepted_canonical_results_survive_pressure_until_consumed_and_released() {
     let mut scene=Scene::new(&r).unwrap();scene.object_display=true;scene.object_spatial.prepare(doc.scene());
     let mut cache=super::super::object_cache::ObjectCache::for_scene(&scene,true);
     let mut previous=Vec::<std::sync::Weak<std::sync::atomic::AtomicBool>>::new();
-    let mut previous_requests=Vec::new();
     let mut uniform_bytes=0;
     for batch in 0..3 {
         let mut accepted=sources::AcceptedInputs::default();
@@ -2035,11 +2036,14 @@ fn accepted_canonical_results_survive_pressure_until_consumed_and_released() {
         }
         let allowance=uniform_bytes+batch_bytes;
         assert_eq!(cache.pinned_gpu_bytes(),batch_bytes,"accepted completed results stay reported as pinned");
-        for request in &previous_requests {assert!(cache.resolve_collection(&r,doc.scene(),request,None).unwrap().is_some());}
+        assert!(previous.iter().all(|interest|interest.upgrade().is_some()));
+        cache.reset_used();
+        r.end_frame_memory();
         let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         cache.flush_retired(&encoder);r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();
         assert_eq!(cache.memory_bytes()[1],uniform_bytes+batch_bytes*(1+u64::from(!previous.is_empty())));
-        assert_eq!(cache.evict_to(allowance),if previous.is_empty() {0}else {batch_bytes});
+        r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Fallback);
+        assert_eq!(cache.retire_evicted(),if previous.is_empty() {0}else {batch_bytes});
         assert_eq!(cache.work_progress().0,32,"pressure must evict only the previous unaccepted batch");
         assert_eq!(cache.work_progress().1,32,"no accepted completed result may be evicted before consumption");
         assert!(interests.iter().all(|interest|interest.upgrade().is_some()));
@@ -2055,11 +2059,13 @@ fn accepted_canonical_results_survive_pressure_until_consumed_and_released() {
         assert_eq!(accepted.len(),32);
         drop(accepted);
         previous=interests;
-        previous_requests=requests;
         let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         cache.flush_retired(&encoder);r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();
     }
-    assert_eq!(cache.evict_to(uniform_bytes),batch_bytes,"cancelling the last accepted interest releases its result capacity");
+    cache.reset_used();
+    r.end_frame_memory();
+    r.scene_tiers.display.heap().evict(u64::MAX,crate::residency::Class::Fallback);
+    assert_eq!(cache.retire_evicted(),batch_bytes,"cancelling the last accepted interest releases its result capacity");
     let encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     cache.flush_retired(&encoder);r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();
     assert!(previous.iter().all(|interest|interest.upgrade().is_none()));
