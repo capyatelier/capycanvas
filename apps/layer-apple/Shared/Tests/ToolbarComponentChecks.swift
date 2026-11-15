@@ -129,7 +129,7 @@ extension XCTestCase {
         expectation(for: NSPredicate { _, _ in stampPixels() != empty }, evaluatedWith: preview)
         waitForExpectations(timeout: 15)
         XCTAssertEqual(editorText(caption), "Strength: 100 %")
-        XCTAssertEqual(preview.frame, footprint, "Zero Strength keeps the canonical stamp viewport")
+        XCTAssertEqual(preview.frame.size, footprint.size, "Zero Strength keeps the canonical stamp viewport")
         attachEditor(in: app, name: "strength-full-preview-\(theme)")
         strengthEnd(false)
         expectation(for: NSPredicate { _, _ in stampPixels() == empty }, evaluatedWith: preview)

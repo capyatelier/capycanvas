@@ -154,7 +154,9 @@ import SwiftUI
             }
         }
         color.measureLayerPages(layerSizing)
-        try await wait("Phone Layers uses shared page placement") { color.geometry["placement"].stableKey == layerSizing["placements"][0].stableKey }
+        let snapped = ContentDrawerPresentation.frame(["to": layerSizing["placements"][0].raw, "progress": 1, "clip_contents": true],
+            pixelScale: phone.contentDrawers.pixelScale)["placement"]
+        try await wait("Phone Layers uses shared page placement") { color.geometry["placement"].stableKey == snapped.stableKey }
         color.stop()
         phone.customize(["type": "close_expanded"])
         phone.dispatch(["type": "phone", "action": ["kind": "capy"]])
@@ -167,7 +169,7 @@ import SwiftUI
         precondition(phone.contentDrawers.sources["menu"]!.anchor["anchor"]["kind"].string == "capy")
         try await wait("Previous tool drawer retires before menu contact") { phone.contentDrawers.items["tool"] == nil }
         try await wait("The common drawer owner completes the menu opening") {
-            presenter.frame["placement"].stableKey == presenter.target.stableKey
+            presenter.frame["placement"].stableKey == ContentDrawerPresentation.frame(["to": presenter.target.raw, "progress": 1, "clip_contents": true], pixelScale: phone.contentDrawers.pixelScale)["placement"].stableKey
         }
         precondition(presenter.drawer === phone.contentDrawers.menu && presenter.focused == nil,
             "Touch opens the common menu without a keyboard focus highlight")
@@ -181,7 +183,7 @@ import SwiftUI
         phone.dispatch(["type": "phone", "action": ["kind": "capy"]])
         try await wait("Reopening interrupts closing at the unchanged menu placement") {
             phone.state["phone"]["menu"].bool && presenter.drawer.interactive
-                && presenter.frame["placement"].stableKey == presenter.target.stableKey
+                && presenter.frame["placement"].stableKey == ContentDrawerPresentation.frame(["to": presenter.target.raw, "progress": 1, "clip_contents": true], pixelScale: phone.contentDrawers.pixelScale)["placement"].stableKey
         }
         let menuBounds = presenter.frame["placement"]["bounds"].rect
         phone.workspace.chrome(["kind": "contact", "position": [menuBounds.midX, menuBounds.midY], "canvas": false])

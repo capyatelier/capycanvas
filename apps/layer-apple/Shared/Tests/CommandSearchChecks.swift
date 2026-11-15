@@ -118,6 +118,12 @@ extension XCTestCase {
 
     @MainActor private func dismissCommandSearch(_ field: XCUIElement, in app: XCUIApplication) {
         #if os(macOS)
+        let empty = { (field.value as? String).map { $0.isEmpty || $0 == field.placeholderValue } ?? true }
+        if !empty() {
+            app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
+            expectation(for: NSPredicate { _, _ in empty() }, evaluatedWith: field)
+            waitForExpectations(timeout: 5)
+        }
         app.typeKey(XCUIKeyboardKey.escape.rawValue, modifierFlags: [])
         #else
         workspaceActivate(app.buttons["command-search-close"])
