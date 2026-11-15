@@ -452,7 +452,7 @@ fn renderer_recreation_restores_pixels_without_changing_artwork_revision() {
 }
 
 #[test]
-fn display_damage_republishes_pixels_without_an_artwork_edit() {
+fn redundant_display_damage_does_not_recompose_unchanged_authored_inputs() {
     let extent=[96;2];let mut document=paint_document(extent,"Retained picture");
     crate::layer_tests::placement::paint_mut(&mut document).base=Some(layer_core::authored::PaintBase::new(
         layer_core::color::source::rgba8_source(extent,|_,_|[31,71,113,255]).into()));
@@ -464,6 +464,6 @@ fn display_damage_republishes_pixels_without_an_artwork_edit() {
     renderer.document_damage.push(PixelRect::full(extent));
     crate::test_support::submit_published(&mut renderer,frame);
     assert_eq!(crate::scene::scale::tests::display_pixels(&renderer),expected);
-    assert!(renderer.composite_revision>composite);
+    assert_eq!(renderer.composite_revision,composite,"damage is a scheduling hint; selected input names did not change");
     assert_eq!(renderer.artwork_revision,artwork,"derived display damage must not look like an authored edit");
 }
