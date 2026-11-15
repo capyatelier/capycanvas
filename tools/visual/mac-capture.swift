@@ -3,10 +3,15 @@
 import AppKit
 
 enum CaptureFailure: Error { case missingWindow, captureFailed, invalidImage, notFrontmost }
-let directory = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "artifacts/ui/parity/mac")
+let arguments = Array(CommandLine.arguments.dropFirst())
+let requestedPID = arguments.firstIndex(of: "--pid").flatMap { index in
+    arguments.indices.contains(index + 1) ? Int32(arguments[index + 1]) : nil
+}
+let directory = URL(fileURLWithPath: arguments.first ?? "artifacts/ui/parity/mac")
 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 guard let app = NSWorkspace.shared.frontmostApplication,
-    app.bundleIdentifier?.hasPrefix("art.capycanvas.CapyCanvas") == true else {
+    (requestedPID.map { $0 == app.processIdentifier && app.bundleIdentifier?.hasPrefix("art.capycanvas.") == true }
+        ?? (app.bundleIdentifier?.hasPrefix("art.capycanvas.CapyCanvas") == true)) else {
     fputs("Bring the native Mac editor to the front before capturing.\n", stderr)
     throw CaptureFailure.notFrontmost
 }

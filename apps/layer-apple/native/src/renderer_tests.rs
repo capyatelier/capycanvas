@@ -24,6 +24,18 @@ fn recovery_preparation_preserves_a_pending_native_presentation() {
 }
 
 #[test]
+fn apple_rendering_readiness_requires_a_settled_renderer() {
+    assert!(unsafe { capy_apple_rendering_pending(0) });
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        assert!(unsafe { capy_apple_rendering_pending(app.0) });
+        install(&app);
+        app.draw_until_idle();
+        assert!(!unsafe { capy_apple_rendering_pending(app.0) });
+    }
+}
+
+#[test]
 fn apple_idle_paper_presentation_notifies_once_and_settles_without_input() {
     for platform in [0, 1] {
         let reference = native_renderer();

@@ -14,7 +14,7 @@ spec.loader.exec_module(capture)
 class CaptureTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="capy-store-wrapper-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.source = self.root / "art.png"
         self.source.write_bytes(b"original source")
         self.recipe = self.root / "recipe.json"

@@ -66,13 +66,37 @@ with an owned hardware GPU VM. Store captures do not measure performance.
 
 ## Apple captures
 
-Use the same staged inputs on an Apple Silicon Mac. The native Apple showcase
-adapter is pending: extend the existing Swift fixtures and `tools/visual/mac-capture.swift`,
-using private storage and an owned bundle ID. Build both Mac and iPad targets;
-capture actual native controls and Metal content. Do not substitute GTK images.
-The website's Apple tool validates a capture handoff and explicitly reports that
-upload qualification remains incomplete. Its metadata command can independently
-prepare or save selected draft localizations without submitting for review.
+Use the same staged inputs on an Apple Silicon Mac. Build both Apple targets with
+the bundle ID from `tools/devices/devices.py appid`, then run the native editor
+fixture with the built app's resources and Rust archive:
+
+```sh
+python3 tools/visual/apple-store-capture.py \
+  --assets-app /path/to/CapyCanvas-Mac.app --inputs /path/to/staged-assets \
+  --device mac --languages en,ja --output artifacts/store/apple/mac-run
+```
+
+For iPad use a signed device app, `--device ipad --physical RESERVED_DEVICE`
+and `--signing-identity DEVELOPMENT_IDENTITY`; reserve it through the device tool
+first. For iPhone use a simulator app and `--device iphone --simulator OWNED_UUID`.
+The iOS app must target families `1,2`. The runner compiles the production editor
+and Metal canvas with `tests/store-showcase.swift`, uses private storage, verifies
+the artwork hash, awaits visible previews and exact scopes, checks native font
+coverage and captures the composed native display. It rejects unsupported native
+dimensions rather than resizing. Phone captures use the Layers drawer, or its
+Properties page for Photo, and declare that layout's scope visibility.
+Native PNGs stay in diagnostics; ColorSync encodes wide-color captures as sRGB
+for the website catalog without changing their dimensions.
+
+Outputs are `<mac|ipad|iphone>/<ui-language>/<scene>-<theme>.png` with native
+JSON receipts. `binary.json` identifies the capture fixture separately from its
+resource app; simulator receipts explicitly say `simulator: true`. Generate a
+separate website `native.mjs catalog --platform apple` catalog for each fixture
+binary and device family. `--build-only` prepares a fixture; `--fixture-app` reuses
+one only when its Swift sources, Rust archive and recipe still match. Review every variant.
+The website's Apple handoff still reports `readyForUpload: false`; upload and
+submission are separate. Its metadata command can independently prepare or save
+selected draft localizations without submitting for review.
 
 Mac App Store delivery also needs an App Store distribution/archive export path
 in [`release.sh`](../../apps/layer-apple/scripts/release.sh). Its current `mac`

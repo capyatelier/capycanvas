@@ -1008,6 +1008,14 @@ pub unsafe extern "C" fn capy_apple_frame(
     .unwrap_or(-1)
 }
 /// # Safety
+/// Call on the serial editor owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_rendering_pending(app: u64) -> bool {
+    let Some(app) = handles::app(app) else { return true; };
+    let engine = app.host.session.engine();
+    engine.has_pending_document_edits() || engine.backend().0.as_ref().is_none_or(|gpu| !gpu.settled())
+}
+/// # Safety
 /// Valid handle on its serial owner.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_launch_presented(app: u64, frame: u64) -> bool {

@@ -8,7 +8,7 @@ import CoreGraphics
     private weak var store: EditorStore?
     // A replacement panel can appear before its predecessor disappears.
     // Each mounted row owns its request independently, as filter previews do.
-    private var visible: [String: UInt64] = [:]
+    private(set) var visible: [String: UInt64] = [:]
     private struct Version: Equatable { let target: UInt64; let revision: UInt64 }
     private struct Request { let key: String; let version: Version }
     private var completed: [String: Version] = [:]

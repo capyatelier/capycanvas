@@ -857,6 +857,9 @@ final class NativeOwner: @unchecked Sendable {
             do { try work() } catch { receive(nil, error.localizedDescription) }
         }
     }
+    func renderingPending(_ completion: @escaping @Sendable (Bool) -> Void) {
+        queue.async { [self] in completion(capy_apple_rendering_pending(nativeValue(handle))) }
+    }
     func framePublication(active: Bool) {
         perform { [self] in
             framePublicationActive = active

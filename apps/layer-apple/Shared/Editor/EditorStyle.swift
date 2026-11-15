@@ -134,7 +134,7 @@ struct BundledPreview: View {
             image = await Task.detached(priority: .userInitiated) { SliderStampImage(image: Self.decode(name)) }.value.image
         }
     }
-    nonisolated(unsafe) private static let images: NSCache<NSString, CGImage> = {
+    nonisolated(unsafe) static let images: NSCache<NSString, CGImage> = {
         let cache = NSCache<NSString, CGImage>()
         cache.totalCostLimit = 8 << 20
         return cache

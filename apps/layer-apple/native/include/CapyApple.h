@@ -89,6 +89,7 @@ int32_t capy_apple_project_prepare_adopt(CapyApple app, CapyProjectTask task, ui
 /* kind: 0 save, 1 open, 3 Place/Paste, 4 color/history, 5 properties, 6 source, 7 histogram. */
 CapyProjectTask capy_apple_project_task(CapyApple app, uint32_t kind, const char *placement);
 int32_t capy_apple_project_ready(CapyApple app); /* 0 ready, 1 preparing filters, -1 interaction/error */
+bool capy_apple_rendering_pending(CapyApple app);
 int32_t capy_project_matches(CapyProjectTask task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_destination_matches(CapyProjectTask task, int32_t descriptor, const char *uri);
 int32_t capy_project_write(CapyProjectTask task, int32_t fd);
