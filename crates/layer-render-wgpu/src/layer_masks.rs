@@ -333,8 +333,8 @@ impl MaskRenderer {
         }).collect();
         let same = |stored: Option<&layer_core::CoverageSnapshot>, coverage: &layer_core::CoverageSnapshot|
             stored.is_some_and(|stored| stored.source == coverage.source && stored.selection == coverage.selection);
-        self.command_pages.retain(|(key, _), _| coverages.get(key)
-            .is_some_and(|coverage| same(self.command_definitions.get(key), coverage)));
+        self.command_pages.retain(|(key, coordinate), page| coverages.get(key).is_some_and(|coverage|
+            crate::raster::contents::command_mask(&coverage.source, coverage.selection.as_ref(), *coordinate).map_or(true, |name| page.has_name(&name))));
         for (key, coverage) in &coverages {
             let source = &coverage.source;
             let authored = SourceTarget::Coverage(coverage.use_.source);
@@ -479,6 +479,33 @@ fn initialize_pages<K: Copy + Ord>(
 mod tests {
     use super::*;
     use crate::layer_tests::placement;
+
+    #[test]
+    fn a_fill_preview_with_an_equal_new_selection_reads_pages_named_for_that_selection() {
+        let extent=[512,256];
+        let document=placement::paint_document(extent,"Enclosed fill");
+        let target=placement::target(&document);
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.compilation.blocking(||r.layer_masks.pipelines.initialize.compile());
+        let enclosed=||layer_core::Selection::pixels(Arc::new(layer_core::SelectionPixels::bytes(extent,[0,0,512,256],vec![255;512*256/4]).unwrap()));
+        let preview=|selection:layer_core::Selection| {
+            let mut coverage=layer_core::CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),extent,[0;2]);
+            coverage.source.default_coverage=0.;coverage.selection=Some(selection);
+            layer_render::FillPreview {transaction:1,revision:1,target,operation:layer_core::RasterOperation {placement:layer_core::Affine::IDENTITY,coverage,
+                kind:layer_core::RasterOperationKind::Fill {color:[0.1,0.4,0.7,1.],texture:Default::default(),alpha_locked:false,edges:None,underfill:None}}}
+        };
+        for fill in [preview(enclosed()),preview(enclosed())] {
+            let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+            r.layer_masks.prepare(&r.device,&mut encoder,(document.scene(),&[],Some(&fill)),extent,false,&mut r.selection_clip).unwrap();
+            let coverage=&fill.operation.coverage;
+            for coordinate in [[0,0],[1,0]] {
+                let name=crate::raster::contents::command_mask(&coverage.source,coverage.selection.as_ref(),coordinate).unwrap();
+                assert!(r.layer_masks.command_pages[&((target,u32::MAX,false),coordinate)].read(name,Some(&encoder.submission())).is_ok(),
+                    "the preview's page {coordinate:?} holds its own selection's name");
+            }
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        }
+    }
 
     #[test]
     fn background_underfill_keeps_only_band_pages_and_matches_explicit_zero_pages() {
