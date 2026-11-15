@@ -224,6 +224,15 @@ extension XCTestCase {
             #endif
             revealEditorControl(choice, identifier: id, type: .button, in: form)
         }
+        func expectHomeScreenIcon() {
+            #if os(iOS)
+            let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+            XCTAssertTrue(alert.waitForExistence(timeout: 10), "The chosen capy must become the Home Screen icon")
+            XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "icon")).firstMatch.exists, alert.debugDescription)
+            alert.buttons["OK"].tap()
+            XCTAssertTrue(alert.waitForNonExistence(timeout: 5))
+            #endif
+        }
         XCTAssertTrue(first.waitForExistence(timeout: 20))
         XCTAssertTrue(first.isSelected)
         for index in 1...3 {
@@ -233,6 +242,7 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: choice)
             waitForExpectations(timeout: 5)
             XCTAssertFalse(first.isSelected)
+            expectHomeScreenIcon()
         }
         attachEditor(in: app, name: "settings-image-choices")
         let selected = app.buttons["preference-zen_icon-3"]
@@ -246,6 +256,7 @@ extension XCTestCase {
         XCTAssertTrue(reset.waitForExistence(timeout: 5)); workspaceActivate(reset)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: first)
         waitForExpectations(timeout: 5)
+        expectHomeScreenIcon()
         workspaceActivate(app.buttons["settings-done"])
         XCTAssertTrue(first.waitForNonExistence(timeout: 5))
         #if os(macOS)
