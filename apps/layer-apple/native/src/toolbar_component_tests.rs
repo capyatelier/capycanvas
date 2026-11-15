@@ -168,10 +168,16 @@ fn apple_preferences_publish_trigger_pages_with_touch_and_pen_settings() {
             assert_eq!(input["title"], "Pen & Mouse");
             assert!(input["groups"].as_array().unwrap().iter().flat_map(|group| group["rows"].as_array().unwrap())
                 .all(|row| row["id"] != "finger_drawing"));
-            assert_eq!(input["groups"][0]["title"], "Pointer");
-            assert_eq!(input["groups"][0]["rows"].as_array().unwrap().iter()
+            let input_groups = input["groups"].as_array().unwrap();
+            assert_eq!(input_groups.iter().map(|group| group["title"].as_str().unwrap()).collect::<Vec<_>>(),
+                if platform == 1 { vec!["Pointer", "Pen response", "Eraser end", "Pen buttons", "Navigation"] }
+                else { vec!["Pointer", "Pen response", "Eraser end", "Navigation"] });
+            assert_eq!(input_groups[0]["rows"].as_array().unwrap().iter()
                 .map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>(),
-                ["cursor", "hide_cursor_while_drawing", "wheel_behavior", "pan_speed", "zoom_speed"]);
+                ["cursor", "hide_cursor_while_drawing"]);
+            assert_eq!(input_groups.last().unwrap()["rows"].as_array().unwrap().iter()
+                .map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>(),
+                ["wheel_behavior", "pan_speed", "zoom_speed"]);
             let color = pages.iter().find(|page| page["id"] == "color").unwrap();
             let layers = color["groups"].as_array().unwrap().last().unwrap();
             assert_eq!(layers["title"], "Layers");

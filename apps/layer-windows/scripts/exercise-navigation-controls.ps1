@@ -209,7 +209,7 @@ try{
  Wait-Until {(Model).preferences.page -eq 'input'} 'Pen & Mouse preferences did not open'
  $wheel=Preference 'wheel_behavior'
  if($wheel.kind.options.Count -ne 2){throw 'Mouse wheel preference is not a two-choice dropdown'}
- $combo=Control 'preference-choice-wheel_behavior' -Arranged
+ $combo=Reveal 'preference-choice-wheel_behavior'
  $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  (Control $wheel.kind.options[1] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
  Wait-Until {(Model).state.settings.wheel_zoom} 'Wheel Zoom preference did not reach shared settings'
@@ -241,7 +241,7 @@ try{
  if(Find 'settings-button' -Visible){Invoke-Id 'settings-button'}else{Menu-Command 'edit' 'settings'}
  Invoke-Id 'preference-page-input';Wait-Until {(Model).preferences.page -eq 'input'} 'Pen & Mouse preferences did not reopen'
  $wheel=Preference 'wheel_behavior'
- (Control 'preference-choice-wheel_behavior').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+ (Reveal 'preference-choice-wheel_behavior').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  (Control $wheel.kind.options[0] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
  Wait-Until {!(Model).state.settings.wheel_zoom} 'Wheel Pan preference did not reach shared settings'
  Close-Preferences 'Preferences did not close after Wheel Pan'

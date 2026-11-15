@@ -1281,12 +1281,6 @@ impl Settings {
                                 active: self.hide_cursor_while_drawing,
                             },
                         ),
-                        row(WheelBehavior, &localizer.text(MessageId::SETTINGS_MOUSE_WHEEL), "", PreferenceKind::Choice {
-                            options: [MessageId::SETTINGS_WHEEL_PAN, MessageId::SETTINGS_WHEEL_ZOOM].into_iter().map(|id| localizer.text(id).to_string()).collect(),
-                            selected: u32::from(self.wheel_zoom), icons: Vec::new(), presentation: ChoicePresentation::Dropdown,
-                        }),
-                        number(PanSpeed, &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED), "", self),
-                        number(ZoomSpeed, &localizer.text(MessageId::SETTINGS_SCROLL_ZOOM_SPEED), "", self),
                     ],
                 },
                 PreferenceGroup {
@@ -1323,6 +1317,17 @@ impl Settings {
                                 PreferenceKind::Switch { active: self.eraser_end.erase },
                             )
                         },
+                    ],
+                },
+                PreferenceGroup {
+                    title: localizer.text(MessageId::SETTINGS_NAVIGATION).to_string(),
+                    rows: vec![
+                        row(WheelBehavior, &localizer.text(MessageId::SETTINGS_MOUSE_WHEEL), "", PreferenceKind::Choice {
+                            options: [MessageId::SETTINGS_WHEEL_PAN, MessageId::SETTINGS_WHEEL_ZOOM].into_iter().map(|id| localizer.text(id).to_string()).collect(),
+                            selected: u32::from(self.wheel_zoom), icons: Vec::new(), presentation: ChoicePresentation::Dropdown,
+                        }),
+                        number(PanSpeed, &localizer.text(MessageId::SETTINGS_SCROLL_PAN_SPEED), "", self),
+                        number(ZoomSpeed, &localizer.text(MessageId::SETTINGS_SCROLL_ZOOM_SPEED), "", self),
                     ],
                 },
             ],
@@ -1437,6 +1442,12 @@ impl Settings {
                 if !platform.touch_gestures() {
                     for group in &mut groups { group.rows.retain(|row| row.id != PreferenceId::FingerDrawing); }
                     groups.retain(|group| !group.rows.is_empty());
+                }
+                if id == SettingsPage::Input && platform.pen_buttons() {
+                    groups.insert(groups.len() - 1, PreferenceGroup {
+                        title: localizer.text(MessageId::SHORTCUT_PEN_BUTTONS).to_string(),
+                        rows: Vec::new(),
+                    });
                 }
                 PreferencePage { id, title: id.localized_title(localizer), icon: id.icon().into(), groups }
             })
@@ -2561,18 +2572,17 @@ mod copy_tests {
         for platform in Platform::ALL {
             let mut settings = Settings::default();
             assert!(settings.hide_cursor_while_drawing);
-            for page in settings.pages(platform) {
-                for group in page.groups {
-                    for row in group.rows {
-                        if matches!(
-                            row.id,
-                            PreferenceId::Cursor | PreferenceId::HideCursorWhileDrawing
-                        ) {
-                            assert_eq!(page.id, SettingsPage::Input);
-                            assert_eq!(group.title, "Pointer");
-                        }
-                    }
-                }
+            let page = settings.pages(platform).into_iter().find(|page| page.id == SettingsPage::Input).unwrap();
+            let mut titles = vec!["Pointer", "Pen response", "Eraser end"];
+            if platform.pen_buttons() { titles.push("Pen buttons"); }
+            titles.push("Navigation");
+            assert_eq!(page.groups.iter().map(|group| group.title.as_str()).collect::<Vec<_>>(), titles, "{platform:?}");
+            for (title, ids) in [
+                ("Pointer", vec![PreferenceId::Cursor, PreferenceId::HideCursorWhileDrawing]),
+                ("Navigation", vec![PreferenceId::WheelBehavior, PreferenceId::PanSpeed, PreferenceId::ZoomSpeed]),
+            ] {
+                let group = page.groups.iter().find(|group| group.title == title).unwrap();
+                assert_eq!(group.rows.iter().map(|row| row.id).collect::<Vec<_>>(), ids);
             }
             let id = PreferenceId::HideCursorWhileDrawing;
             assert!(

@@ -155,9 +155,10 @@ saved in the application preferences and apply across drawings, workspaces and
 temporary Zoom use. Center on click moves the clicked point to the center of the
 view during click zoom. Wheel, pinch and smooth dragging keep their anchors.
 
-Pen & Mouse's Pointer group contains Mouse wheel (Pan/Zoom) and the pan and
-zoom speeds; the Touch page's Fingers group contains Rotate with two fingers
-and the pinch switches. The rotation switch applies to touch and
+Pen & Mouse ends with Navigation, below Pen buttons where available, containing
+Mouse wheel (Pan/Zoom) and the scroll pan and zoom speeds. Pointer contains only
+cursor appearance. The Touch page's Navigation group contains Rotate with two
+fingers and the pinch switches. The rotation switch applies to touch and
 trackpad gestures; it preserves panning, pinch zoom and the Rotate tool.
 The footer's zoom and rotation menu contains the saved Snap rotation preference;
 see [canvas navigation](shared-ui.md#drawing-and-navigation) for its behavior.

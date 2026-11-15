@@ -221,8 +221,9 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
                     if(list.Children().Size()){Border line;line.Height(1);line.Background(data->line(L"settings",L"card_shade"));list.Children().Append(line);}
                     list.Children().Append(field(row));
                 }
-                bindings.emplace_back([data=data,section,ids]{
+                bindings.emplace_back([data=data,section,heading,ids,id]{
                     bool visible=false;for(auto id:ids)visible|=flag(rowFor(data,id.GetString()),L"visible",true);
+                    for(auto value:array(object(preferences(data),L"shortcut_page"),L"triggers")){auto trigger=value.GetObject();visible|=str(trigger,L"page")==id&&str(trigger,L"section")==heading.Text();}
                     section.Visibility(visible?Visibility::Visible:Visibility::Collapsed);
                 });
             }

@@ -564,7 +564,7 @@ color in Off and Move canvas too. Settings → Input,
 the One-finger drag tile and the phone Capy menu choose the mode on every touch
 host.
 Mouse and stylus event collectors remain native.
-Wheel input follows Canvas → Mouse wheel (Pan by default, or Zoom).
+Wheel input follows Pen & Mouse → Navigation → Mouse wheel (Pan by default, or Zoom).
 Shift-wheel pans horizontally; Ctrl-wheel always zooms around the cursor. Hosts normalize native wheel units and Rust applies the camera gesture.
 These gestures also work while a mouse navigation button is held, including
 middle-button TrackPoint scrolling. A wheel gesture keeps that contact alive

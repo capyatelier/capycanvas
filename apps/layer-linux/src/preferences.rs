@@ -992,7 +992,10 @@ impl Preferences {
                 SettingsPage::Shortcuts => {
                     self.shortcut_page.build(w, &content, &self.shortcut_search, &self.content_page).upcast()
                 }
-                SettingsPage::Input => self.shortcut_page.build_triggers(w, &content).upcast(),
+                SettingsPage::Input => {
+                    let groups = self.groups.borrow().iter().filter(|(id, _, _)| *id == page.id).map(|(_, _, group)| group.clone()).collect();
+                    self.shortcut_page.build_triggers(w, &content, groups).upcast()
+                }
                 SettingsPage::Touch => {
                     let groups = self.groups.borrow().iter().filter(|(id, _, _)| *id == page.id).map(|(_, _, group)| group.clone()).collect();
                     self.shortcut_page.set_touch_page(&content, groups);
@@ -1106,7 +1109,8 @@ impl Preferences {
                     view.pages.iter().find(|p| p.id == *id).unwrap().groups[*index]
                         .rows
                         .iter()
-                        .any(|r| r.visible),
+                        .any(|r| r.visible)
+                        || view.shortcut_page.triggers.iter().any(|trigger| trigger.page == *id && trigger.section == group.title()),
                 );
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));

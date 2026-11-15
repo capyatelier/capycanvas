@@ -3370,8 +3370,11 @@ class AndroidHostTest {
             assertEquals(listOf("Touch gestures", "Navigation"), groups("touch").map { it.getString("title") })
             assertEquals(listOf(listOf("finger_drawing"), listOf("rotate_with_two_fingers", "quick_pinch_fit", "quick_pinch_restore")),
                 groups("touch").map { it.array("rows").objects().map { row -> row.getString("id") } })
-            assertEquals(listOf("cursor", "hide_cursor_while_drawing", "wheel_behavior", "pan_speed", "zoom_speed"),
+            assertEquals(listOf("Pointer", "Pen response", "Eraser end", "Pen buttons", "Navigation"), groups("input").map { it.getString("title") })
+            assertEquals(listOf("cursor", "hide_cursor_while_drawing"),
                 groups("input").first().array("rows").objects().map { it.getString("id") })
+            assertEquals(listOf("wheel_behavior", "pan_speed", "zoom_speed"),
+                groups("input").last().array("rows").objects().map { it.getString("id") })
             assertFalse(rows("input").contains("finger_drawing"))
             assertEquals("Layers", groups("color").last().getString("title"))
             assertEquals(listOf("pass_through_groups"), groups("color").last().array("rows").objects().map { it.getString("id") })

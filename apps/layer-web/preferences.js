@@ -407,8 +407,8 @@ export function createPreferences({ onKey, app, element, button, icon, dropdown:
       else if (row.kind.type === "swatches") paintSwatches(widget, input, row.kind);
       else if (row.kind.type === "switch" && input.checked !== row.kind.active) input.checked = row.kind.active;
     }
-    for (const [ids, section] of groups) {
-      const hidden = !ids.some((id) => visible.has(id));
+    for (const [ids, section, pageId] of groups) {
+      const hidden = !ids.some((id) => visible.has(id)) && !model.shortcut_page.triggers.some(trigger => trigger.page === pageId && trigger.section === section.querySelector("h3").textContent);
       if (section.hidden !== hidden) section.hidden = hidden;
     }
     if (error.textContent !== (model.error || "")) error.textContent = model.error || "";

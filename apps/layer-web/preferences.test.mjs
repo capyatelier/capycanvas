@@ -266,6 +266,14 @@ export async function checkPreferences({ call, evaluate, settle, errors }) {
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
       assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3}/(n.matches('.preference-text p,.number-description')?1.2:1))<.02)`), "settings titles use the shared size; subtitles follow Adwaita's smaller font");
       if (page === "input") {
+        const sections=await evaluate(`(() => [...document.querySelectorAll('.preferences-page[data-page="input"] .settings-group:not([hidden])')].map(group=>({title:group.querySelector('h3')?.textContent,rows:[...group.querySelectorAll('[data-preference]')].map(row=>row.dataset.preference),triggers:[...group.querySelectorAll('[data-trigger]')].map(row=>row.dataset.trigger)})))()`);
+        assert.deepEqual(sections.map(group=>group.title),['Pointer','Pen response','Eraser end','Pen buttons','Navigation']);
+        assert.deepEqual(sections[0].rows,['cursor','hide_cursor_while_drawing']);
+        assert.deepEqual(sections.at(-1).rows,['wheel_behavior','pan_speed','zoom_speed']);
+        assert.ok(sections.at(-2).triggers.length>0,'Pen buttons remain visible before Navigation');
+        await evaluate('document.querySelector("#setting-zoom-speed").closest(".settings-group").scrollIntoView({block:"end"})');await settle();
+        await capture(`input-end-${theme}`);
+        await evaluate('document.querySelector("#setting-cursor").scrollIntoView({block:"center"})');await settle();
         await click('.preference-choice:has(#setting-cursor) summary');
         assert.equal(await evaluate("document.querySelectorAll('.preference-choice:has(#setting-cursor) [role=option] svg').length"), 12);
         await capture(`cursor-choices-${theme}`);

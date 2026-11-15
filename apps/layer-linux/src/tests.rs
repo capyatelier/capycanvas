@@ -8450,6 +8450,14 @@ fn native_preferences_and_shortcuts() {
                 page
             );
             if page == SettingsPage::Input {
+                let navigation = find_named(w.preferences.dialog.upcast_ref(), "setting-wheel-behavior").unwrap()
+                    .ancestor(adw::PreferencesGroup::static_type()).and_downcast::<adw::PreferencesGroup>().unwrap();
+                assert_eq!(navigation.title(), "Navigation");
+                let buttons = find_named(w.preferences.dialog.upcast_ref(), "triggers-pen-buttons").unwrap();
+                assert!(buttons.is_visible() && buttons.is_mapped());
+                let button_bounds = buttons.compute_bounds(&w.window).unwrap();
+                let navigation_bounds = navigation.compute_bounds(&w.window).unwrap();
+                assert!(button_bounds.y() + button_bounds.height() <= navigation_bounds.y(), "Navigation follows Pen buttons");
                 let prediction: crate::number_control::NumberControl = find_named(
                     w.preferences.dialog.upcast_ref(),
                     "setting-prediction-horizon",

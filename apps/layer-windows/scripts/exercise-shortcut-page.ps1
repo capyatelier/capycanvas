@@ -121,7 +121,7 @@ try {
  if(((Prefs).pages.id -join '|') -ne 'appearance|color|touch|input|shortcuts|about' -or ((Prefs).pages.title -join '|') -ne 'Appearance|Color|Touch|Pen & Mouse|Keyboard Shortcuts|About'){throw 'Preferences pages have the wrong order or titles'}
  $touch=@((Prefs).pages|Where-Object id -eq 'touch')[0];$pointerPage=@((Prefs).pages|Where-Object id -eq 'input')[0]
  if(($touch.groups.title -join '|') -ne 'Touch gestures|Navigation' -or ($touch.groups.rows.id -join '|') -ne 'finger_drawing|rotate_with_two_fingers|quick_pinch_fit|quick_pinch_restore'){throw 'Touch has the wrong preference groups or rows'}
- if(($pointerPage.groups.title -join '|') -ne 'Pointer|Pen response|Eraser end' -or ($pointerPage.groups[0].rows.id -join '|') -ne 'cursor|hide_cursor_while_drawing|wheel_behavior|pan_speed|zoom_speed'){throw 'Pen & Mouse has the wrong preference groups or pointer rows'}
+ if(($pointerPage.groups.title -join '|') -ne 'Pointer|Pen response|Eraser end|Pen buttons|Navigation' -or ($pointerPage.groups[0].rows.id -join '|') -ne 'cursor|hide_cursor_while_drawing' -or ($pointerPage.groups[-1].rows.id -join '|') -ne 'wheel_behavior|pan_speed|zoom_speed'){throw 'Pen & Mouse has the wrong preference groups, pointer rows or navigation rows'}
  $originalTransparency=(Model).state.settings.transparency
  foreach($glass in @(@{name='off';index=0},@{name='low';index=1})){
   Set-CapyTransparency $glass.name
