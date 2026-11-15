@@ -132,10 +132,9 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
                 "validation" => assert_eq!(unsafe { capy_apple_test_gpu_fault(app.0, 1) }, 0),
                 _ => unreachable!(),
             }
-            // wgpu reports destruction after the old queue finishes. Observe
-            // that real callback through the owner; do not assume it is inline.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while !app.borrow().host.session.rendering_suspended() {
+                let _ = device.poll(wgpu::PollType::Poll);
                 let now = app.frame_time(3_010_000_000);
                 assert_eq!(unsafe { capy_apple_frame(app.0, now, now, std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
                 assert!(std::time::Instant::now() < deadline, "{platform} {fault}: loss callback did not arrive");
