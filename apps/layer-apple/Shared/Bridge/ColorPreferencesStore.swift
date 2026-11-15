@@ -153,6 +153,13 @@ final class ColorPreferencesStore: @unchecked Sendable {
     func profile(_ id: String) throws -> JSON {
         try exportProfile(library(JSON(["type": "get", "id": id]), bytes: read(location(id))))
     }
+    func profileMenu(purpose: JSON, document: JSON, current: JSON) throws -> (inventory: JSON, standards: [JSON], saved: [JSON]) {
+        let saved = try profiles()
+        let inventory = try library(JSON(["type": "picker", "purpose": purpose.raw, "document": document.raw, "current": current.raw,
+            "saved": saved.map { ["id": $0["id"].raw, "visible": $0["visible"].bool, "channels": $0["channels"].raw, "valid": $0["issue"].isNull] }]))
+        return (inventory, try library(JSON(["type": "standard", "purpose": purpose.raw])).array, saved)
+    }
+    func describe(_ profile: JSON) throws -> JSON { try library(JSON(["type": "describe", "profile": profile.raw])) }
     private func exportProfile(_ entry: JSON) -> JSON {
         JSON(["name": entry["name"].raw, "channels": entry["channels"].raw, "profile": entry["profile"].raw])
     }

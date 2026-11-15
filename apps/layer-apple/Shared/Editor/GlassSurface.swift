@@ -182,9 +182,9 @@ struct PanelBridgeMeasurement: ViewModifier {
     }
 }
 
-private extension CGRect {
+extension CGRect {
     var json: [String: Double] { ["x": Double(minX), "y": Double(minY), "width": Double(width), "height": Double(height)] }
-    var values: [Double] { isNull ? [0, 0, 0, 0] : [Double(minX), Double(minY), Double(width), Double(height)] }
+    fileprivate var values: [Double] { isNull ? [0, 0, 0, 0] : [Double(minX), Double(minY), Double(width), Double(height)] }
 }
 private extension Array where Element == Double {
     func withOpacity(_ opacity: Double) -> [Double] {

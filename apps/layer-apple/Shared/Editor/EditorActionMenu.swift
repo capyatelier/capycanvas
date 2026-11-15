@@ -71,6 +71,7 @@ struct EditorActionMenu: View {
     }
     private var sections: [[AppleContextMenu.Item]] { pages.isEmpty ? model.sections : page?.sections ?? [] }
     private var entries: [AppleContextMenu.Item] { sections.flatMap { $0 } }
+    private var checks: Bool { entries.contains { !$0.isHeading && $0.selected != nil && ($0.sections.isEmpty || !$0.enabled) } }
     private var enabled: [Int] { entries.indices.filter { entries[$0].enabled } }
     private var initialFocus: Int? {
         (rootFocusesSelection || !pages.isEmpty ? enabled.first { entries[$0].selected == true } : nil) ?? enabled.first
@@ -131,7 +132,7 @@ struct EditorActionMenu: View {
         }
     }
     private func itemLabel(_ item: AppleContextMenu.Item) -> some View {
-        EditorMenuRowLabel(label: item.label, icon: item.icon, selected: item.selected, marker: item.marker,
+        EditorMenuRowLabel(label: item.label, icon: item.icon, selected: item.selected, checks: checks, marker: item.marker,
             hint: item.hint, submenu: !item.sections.isEmpty)
     }
     private func key(_ key: String, latin: String?, command: Bool, shift: Bool, alt: Bool) {

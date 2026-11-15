@@ -19,10 +19,9 @@ struct ColorPanel: View {
         #endif
     }
     var body: some View {
-        GeometryReader { allocation in
+        ColorPanelFrame(hdr: hdr) { GeometryReader { allocation in
             let wheelContext = store.snapshot["color_wheel_context"], editContext = store.snapshot["color_edit_context"]
-            let full = ColorUI.resolve(["type": "picker_layout", "size": max(128, allocation.size.width), "hdr": hdr])
-            let side = max(128, allocation.size.width * min(1, allocation.size.height / max(1, full["height"].number)))
+            let side = resources.resolve(["type": "fit_layout", "width": allocation.size.width, "height": allocation.size.height, "hdr": hdr])["size"].number
             let spec = resources.resolve(["type": "picker_layout", "size": side, "hdr": hdr])
             let layout = spec["layout"], height = spec["height"].number
             let palette = EditorPalette(source: store.state["palette"])
@@ -99,7 +98,7 @@ struct ColorPanel: View {
                     .colorPlaced(layout["readout"], id: "readout")
             }.frame(width: side, height: height, alignment: .topLeading)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }.aspectRatio(1 / Self.aspect(hdr: hdr), contentMode: .fit).frame(minWidth: 128, minHeight: 128)
+        } }
             .modifier(ColorPanelMeasurement(id: "panel"))
             .accessibilityElement(children: .contain).accessibilityIdentifier("color-panel-controls")
             .onAppear { let store = store; touches.send = { store.input($0) } }
@@ -116,8 +115,21 @@ struct ColorPanel: View {
         capy_apple_parameter_hit(Float(point.x), Float(point.y), Float(size.width), true) != 0
     }
     private func color(_ action: [String: Any], context: JSON) { store.dispatch(["type": "color_edit", "context": context.raw, "action": action]) }
-    static func aspect(hdr: Bool) -> CGFloat {
-        hdr ? max(226, ColorUI.resolve(["type": "picker_layout", "size": 226, "hdr": true])["height"].number) / 226 : 1
+    static func naturalHeight(_ width: CGFloat, hdr: Bool) -> CGFloat {
+        ColorUI.resolve(["type": "fit_layout", "width": width, "hdr": hdr])["natural_height"].number
+    }
+}
+
+private struct ColorPanelFrame: Layout {
+    let hdr: Bool
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = max(128, proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 128)
+        let natural = ColorPanel.naturalHeight(width, hdr: hdr), minimum = ColorPanel.naturalHeight(128, hdr: hdr)
+        let height = proposal.height.flatMap { $0.isFinite ? $0 : nil }.map { min(natural, max(minimum, $0)) } ?? natural
+        return CGSize(width: width, height: height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
     }
 }
 

@@ -6,7 +6,7 @@ struct PanelMeasurementOrigin: Hashable {
     let key: String
     init(request: JSON, context: JSON) {
         self.request = request; self.context = context
-        key = JSON([request["tab"].raw, request["body"].raw, request["width"].raw, request["split_filters"].raw, context.raw]).stableKey
+        key = JSON([request["tab"].raw, request["body"].raw, request["width"].raw, context.raw]).stableKey
     }
     static func ==(lhs: Self, rhs: Self) -> Bool { lhs.key == rhs.key }
     func hash(into hasher: inout Hasher) { hasher.combine(key) }
@@ -107,7 +107,6 @@ struct PanelMeasurementOrigin: Hashable {
             }.sorted { $0.width < $1.width }
             let body = candidates.first { body in
                 abs(Double(body.width) - wanted.request["width"].number) < 0.25
-                    && body.origin.request["split_filters"].bool == wanted.request["split_filters"].bool
             } ?? candidates.first
             guard tab != nil || body != nil else { return nil }
             let origin = body?.origin ?? tab!.origin
@@ -184,14 +183,12 @@ struct PanelBodyMeasurement: ViewModifier {
 struct PanelMeasurementScope: ViewModifier {
     let panel: String
     var enabled = true
-    var splitFilters = false
     @Environment(\.workspacePanelMeasurementOrigins) private var origins
     @State private var width: CGFloat = 0
     private var scoped: [String: PanelMeasurementOrigin] {
         var result = origins
         if enabled, width > 0, let origin = origins[panel] {
             let request = origin.request.replacing("width", with: JSON(Double(width)))
-                .replacing("split_filters", with: JSON(splitFilters))
             result[panel] = PanelMeasurementOrigin(request: request, context: origin.context)
         } else { result.removeValue(forKey: panel) }
         return result

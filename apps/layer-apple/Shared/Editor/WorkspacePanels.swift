@@ -222,7 +222,7 @@ private struct WorkspacePanelGroupContent: View {
             if active["id"].string == "palettes" {
                 let hdr = store.snapshot["color_panel"]["hdr"].bool
                 Color.clear.frame(maxWidth: .infinity).frame(height: 1)
-                    .modifier(PanelBodyMeasurement(panel: "color", naturalHeight: { max(128, $0 - 16) * ColorPanel.aspect(hdr: hdr) + 16 }))
+                    .modifier(PanelBodyMeasurement(panel: "color", naturalHeight: { ColorPanel.naturalHeight($0 - 16, hdr: hdr) + 16 }))
                     .modifier(PanelMeasurementScope(panel: "color"))
                     .environment(\.measuresWorkspacePanel, true)
             } else if active["id"].string == "color" {

@@ -1,22 +1,27 @@
 import SwiftUI
 
 struct PaletteCells: Equatable {
-    static let maxTile: CGFloat = 40, gap: CGFloat = 4, basePitch: CGFloat = 44
     let width: CGFloat
-    var columns: Int { max(6, Int((width + Self.gap) / Self.basePitch)) }
-    private var cell: CGFloat { (width + Self.gap) / CGFloat(columns) }
-    var tile: CGFloat { min(Self.maxTile, max(1, cell - Self.gap)) }
-    var pitch: CGFloat { tile + Self.gap }
+    let columns: Int
+    let pitch: CGFloat
+    let gap: CGFloat
+    init(width: CGFloat) {
+        self.width = CGFloat(Int(width))
+        let layout = ColorUI.resolve(["type": "palette_grid", "width": Int(width)])
+        columns = Int(layout["columns"].uint); pitch = layout["pitch"].number; gap = layout["gap"].number
+    }
+    private var cell: CGFloat { max(pitch, (width + gap) / CGFloat(columns)) }
+    var tile: CGFloat { pitch - gap }
     func x(_ index: Int) -> CGFloat { (CGFloat(index % columns) * cell).rounded() }
-    func width(_ index: Int) -> CGFloat { (CGFloat(index % columns + 1) * cell).rounded() - x(index) - Self.gap }
+    func width(_ index: Int) -> CGFloat { (CGFloat(index % columns + 1) * cell).rounded() - x(index) - gap }
     func y(_ index: Int) -> CGFloat { CGFloat(index / columns) * pitch }
     func frame(_ index: Int) -> CGRect { CGRect(x: x(index), y: y(index), width: width(index), height: tile) }
     func rows(_ count: Int) -> Int { max(1, (count + columns - 1) / columns) }
-    func height(rows: Int) -> CGFloat { CGFloat(rows) * pitch - Self.gap }
+    func height(rows: Int) -> CGFloat { CGFloat(rows) * pitch - gap }
     func viewport(_ count: Int) -> CGFloat { height(rows: min(4, max(2, rows(count)))) }
     func slot(_ point: CGPoint, count: Int) -> Int? {
         guard point.x >= 0, point.x < width, point.y >= 0 else { return nil }
-        let index = Int(point.y / pitch) * columns + Int(point.x * CGFloat(columns) / (width + Self.gap))
+        let index = Int(point.y / pitch) * columns + Int(point.x * CGFloat(columns) / (width + gap))
         return index < count ? index : nil
     }
 }

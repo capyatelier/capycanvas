@@ -46,6 +46,12 @@ func toolbarTextWidth(_ text: String, size: CGFloat, bold: Bool = false) -> CGFl
 
 struct ToolbarSliderPresentation {
     static let paint = ToolbarUI.cached(["type": "slider_paint"])
+    static func thumb(in bounds: CGRect, fill: Double, vertical: Bool, scale: CGFloat = 1) -> CGRect {
+        let along: CGFloat = paint["thumb"][0].number * scale, across: CGFloat = paint["thumb"][1].number * scale
+        return vertical
+            ? CGRect(x: bounds.midX - across / 2, y: bounds.minY + (bounds.height - along) * (1 - fill), width: across, height: along)
+            : CGRect(x: bounds.minX + (bounds.width - along) * fill, y: bounds.midY - across / 2, width: along, height: across)
+    }
     let layout: JSON
     let scale: CGFloat
     let endInset: CGFloat
@@ -80,10 +86,13 @@ private struct BrushSliderComponent: View {
     private var setting: String {
         field.isNull ? (tile["control"]["kind"].string == "brush_size_slider" ? "size" : "strength") : field["id"].string
     }
+    private var presentation: ToolbarSliderPresentation {
+        ToolbarSliderPresentation(size: size, vertical: vertical, style: panel["tile_style"],
+            sliderStyle: tile["slider_style"], phone: !phone.isNull, language: store.interfaceLanguage)
+    }
     var body: some View {
         let item = toolbarItem(panel, tile)
-        let presentation = ToolbarSliderPresentation(size: size, vertical: vertical, style: panel["tile_style"],
-            sliderStyle: tile["slider_style"], phone: !phone.isNull, language: store.interfaceLanguage)
+        let presentation = presentation
         let layout = presentation.layout
         let shown = ToolbarUI.formatted(spec, value: value, language: store.interfaceLanguage)
         let marks = model["bookmarks"].array
@@ -182,8 +191,15 @@ private struct BrushSliderComponent: View {
         let geometry = ToolbarUI.resolve(["type": "slider_preview", "control": tile["control"].raw, "style": panel["tile_style"].raw,
             "value": value, "length": max(size.width, size.height), "extent": stamp.extent], language: store.interfaceLanguage)
         guard geometry["error"].isNull else { return }
+        let presentation = presentation
+        let track = presentation.layout["track"].rect
+            .insetBy(dx: vertical ? 0 : presentation.endInset, dy: vertical ? presentation.endInset : 0)
+            .offsetBy(dx: frame.minX, dy: frame.minY)
+        let handle = ToolbarSliderPresentation.thumb(in: track,
+            fill: ToolbarUI.formatted(spec, value: value, language: store.interfaceLanguage)["fill"].number,
+            vertical: vertical, scale: presentation.scale)
         let control = tile["control"].raw, model = model, store = store
-        store.workspace.sliderPreview.show(.init(owner: session.id, anchor: frame, vertical: vertical,
+        store.workspace.sliderPreview.show(.init(owner: session.id, anchor: frame, handle: handle, vertical: vertical,
             image: stamp.image, geometry: geometry,
             selected: model["bookmarks"].array.contains { $0["selected"].bool },
             bookmark: { store.toolbarEdit(model, ["type": "toggle_slider_bookmark", "control": control]) },
@@ -343,7 +359,7 @@ private struct ToolbarSliderTrack: View {
     }
     private func draw(_ context: GraphicsContext, _ size: CGSize) {
         let text = palette["text"], paint = ToolbarSliderPresentation.paint
-        let along: CGFloat = paint["thumb"][0].number, across: CGFloat = paint["thumb"][1].number
+        let along: CGFloat = paint["thumb"][0].number
         let tip: CGFloat = paint["tip"][0].number, bend: CGFloat = paint["tip"][1].number
         let radius: CGFloat = paint["radius"].number
         let length = (vertical ? size.height : size.width) - along
@@ -368,9 +384,7 @@ private struct ToolbarSliderTrack: View {
                 track.fill(Path(bounds), with: .color(text.opacity(0.22)))
             }
         }
-        let thumb = vertical
-            ? CGRect(x: (size.width - across) / 2, y: (size.height - along) * (1 - fill), width: across, height: along)
-            : CGRect(x: (size.width - along) * fill, y: (size.height - across) / 2, width: along, height: across)
+        let thumb = ToolbarSliderPresentation.thumb(in: CGRect(origin: .zero, size: size), fill: fill, vertical: vertical)
         context.fill(SquircleShape(radius).path(in: thumb), with: .color(palette["thumb"]))
         context.stroke(SquircleShape(radius - 0.5).path(in: thumb.insetBy(dx: 0.5, dy: 0.5)), with: .color(text.opacity(0.6)), lineWidth: 1)
         for mark in marks {
@@ -394,6 +408,7 @@ private struct ToolbarSliderTrack: View {
     struct Content {
         let owner: UUID
         let anchor: CGRect
+        let handle: CGRect
         let vertical: Bool
         let image: CGImage
         let geometry: JSON
@@ -419,11 +434,10 @@ struct ToolbarSliderPreviewOverlay: View {
     var body: some View {
         GeometryReader { viewport in
             if let content = preview.content {
-                let side = content.geometry["side"].number, a = content.anchor
-                let x = content.vertical ? (a.maxX + side + 8 <= viewport.size.width ? a.maxX + 8 : a.minX - side - 8) : a.minX
-                let y = content.vertical ? a.minY + (a.height - side) / 2
-                    : (a.maxY + side + 8 <= viewport.size.height ? a.maxY + 8 : a.minY - side - 8)
-                let origin = CGPoint(x: max(6, min(x, viewport.size.width - side - 6)), y: max(6, min(y, viewport.size.height - side - 6)))
+                let side = content.geometry["side"].number
+                let bounds = ToolbarUI.resolve(["type": "slider_placement", "handle": content.handle.json,
+                    "strip": content.anchor.json, "viewport": CGRect(origin: .zero, size: viewport.size).json,
+                    "axis": content.vertical ? "vertical" : "horizontal", "side": side])[1]
                 let geometry = content.geometry, shape = SquircleShape(geometry["radius"].number)
                 ZStack(alignment: .topLeading) {
                     Canvas { context, size in draw(context, size, content) }
@@ -444,7 +458,7 @@ struct ToolbarSliderPreviewOverlay: View {
                 .clipShape(shape)
                 .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor-workspace")) } action: { preview.frame = $0 }
-                .offset(x: origin.x, y: origin.y)
+                .offset(x: bounds["x"].number, y: bounds["y"].number)
                 .accessibilityElement(children: .contain).accessibilityIdentifier("brush-slider-preview")
             }
         }
@@ -560,10 +574,14 @@ struct ToolbarDivider: View {
     let vertical: Bool
     let color: Color
     var body: some View {
-        Rectangle().fill(color)
-            .frame(width: vertical ? nil : 1, height: vertical ? 1 : nil)
-            .padding(vertical ? .horizontal : .vertical, CGFloat(ToolbarUI.metrics["divider"]["inset"].number))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GeometryReader { geometry in
+            if geometry.size.width > 0 && geometry.size.height > 0 {
+                Rectangle().fill(color)
+                    .frame(width: vertical ? nil : 1, height: vertical ? 1 : nil)
+                    .padding(vertical ? .horizontal : .vertical, CGFloat(ToolbarUI.metrics["divider"]["inset"].number))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
     }
 }
 

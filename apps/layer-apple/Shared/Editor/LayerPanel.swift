@@ -39,7 +39,6 @@ struct LayerPanel: View {
                                     }.modifier(PhotoDropTarget(store: store, row: row.id))
                                 }
                                     .modifier(LayerRowMeasurement(id: row.id))
-                                    .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
                                     .overlay(alignment: .topLeading) { dropMark(row.layer) }
                                     .editorPopover(isPresented: menuPresented(at: .row(row.id)), placement: .inward) { menuContent }
                                     .editorPopover(isPresented: Binding(get: {
@@ -70,13 +69,19 @@ struct LayerPanel: View {
                                     .onHover { paperHover = $0 }
                                     .onDisappear { paperHover = false }
                                     .accessibilityIdentifier("layer-add-paper")
-                                    .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
                             }
                         }.scrollTargetLayout().coordinateSpace(name: "layer-rows")
                             .background(NativeReorderInput(model: interaction))
                             .onPreferenceChange(LayerRowFrames.self) { interaction.frames = $0 }
                             .overlay(alignment: .topLeading) { dragPreview }
                             .modifier(PanelBodyMeasurement(panel: "layers", part: "rows", kind: .scroll))
+                            .background(alignment: .topLeading) {
+                                LayerRow(store: store, swipe: store.layerSwipe,
+                                    layer: JSON(["label": store.catalog["native_copy"]["layers"]["show"].raw]),
+                                    previews: store.layerThumbnails, preview: true)
+                                    .hidden().allowsHitTesting(false).accessibilityHidden(true)
+                                    .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
+                            }
                             .modifier(BubbleNativeControl(viewport: viewport.frame(in: .named("editor-workspace")), cancel: { interaction.cancel() }))
                     }.overlayPreferenceValue(LayerRowFrames.self) { frames in
                         LayerConnections(store: store, frames: frames)
@@ -308,7 +313,7 @@ private struct LayerSwipeRow<Content: View>: View {
                             }.buttonStyle(.plain).disabled(!model["enabled"].bool).help(model["label"].string)
                                 .accessibilityIdentifier("layer-\(model["id"].string)-\(layer["id"].uint)")
                         }
-                    }.frame(width: min(width, CGFloat(actions.count) * 72))
+                    }.frame(width: min(width, CGFloat(actions.count) * store.panelMetrics.layerSwipeActionWidth))
                         .mask(alignment: .trailing) { Rectangle().frame(width: max(0, offset)) }
                 }
             }.clipped()
@@ -354,7 +359,7 @@ private struct LayerButton: View {
     }
 }
 
-let layerEdgeInset = CGFloat(ToolbarUI.metrics["layer_edge_inset"].number)
+let layerEdgeInset = PanelControlMetrics(view: ToolbarUI.metrics["panel"]).layerEdgeInset
 
 private struct LayerRow: View {
     @State private var rowCaption = ""
@@ -371,15 +376,15 @@ private struct LayerRow: View {
     private var id: UInt64 { layer["id"].uint }
     private var gripOpacity: Double {
         guard !preview, let interaction else { return 0.6 }
-        let width = min(CGFloat(layer["swipe_actions"].array.count) * 72, interaction.frames[id]?.root.width ?? 216)
+        let width = min(CGFloat(layer["swipe_actions"].array.count) * store.panelMetrics.layerSwipeActionWidth, interaction.frames[id]?.root.width ?? 216)
         return 0.6 * Double(1 - swipe.progress(owner: interaction.swipeOwner, layer: id, revealWidth: width))
     }
     var body: some View {
         HStack(spacing: 2) {
-            LayerButton(icon: layer["visible"].bool && !layer["visibility_blocked"].bool ? "eye" : "eye-hidden", label: visibilityLabel, side: store.panelMetrics.height, height: 36) {
+            LayerButton(icon: layer["visible"].bool && !layer["visibility_blocked"].bool ? "eye" : "eye-hidden", label: visibilityLabel, side: store.panelMetrics.height, height: store.panelMetrics.layerUnitHeight) {
                 perform { store.dispatch(["type": "set_layer_visibility", "id": id, "visible": !layer["visible"].bool]) }
             }.opacity(layer["visibility_blocked"].bool ? 0.35 : 1)
-            if !simple { LayerButton(icon: layer["selection_icon"].string, label: store.catalog["native_copy"]["layers"]["select_row_help"].string, side: store.panelMetrics.height, selected: layer["selected"].bool, height: 36) {
+            if !simple { LayerButton(icon: layer["selection_icon"].string, label: store.catalog["native_copy"]["layers"]["select_row_help"].string, side: store.panelMetrics.height, selected: layer["selected"].bool, height: store.panelMetrics.layerUnitHeight) {
                 selectRow(toggle: true)
             }.accessibilityAddTraits(layer["selected"].bool ? .isSelected : []) }
             HStack(spacing: 2) {
@@ -411,7 +416,7 @@ private struct LayerRow: View {
             if !simple { SharedIcon(name: layer["locked"].bool ? "lock" : "alpha-lock", size: 12)
                 .opacity(layer["locked"].bool || layer["alpha_locked"].bool ? 1 : 0) }
             if !simple && layer["can_drop_below"].bool {
-                SharedIcon(name: "grip").opacity(gripOpacity).frame(width: 16, height: 36)
+                SharedIcon(name: "grip").opacity(gripOpacity).frame(width: 16, height: store.panelMetrics.layerUnitHeight)
                     .contentShape(Rectangle())
                     .modifier(LayerRowMeasurement(id: id, part: \.grip, enabled: !preview))
                     .accessibilityLabel(store.catalog["native_copy"]["layers"]["move_layer"].string).accessibilityIdentifier("layer-grip-\(id)")

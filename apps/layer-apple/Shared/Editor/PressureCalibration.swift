@@ -35,9 +35,14 @@ private struct PenResponsePanel: View {
     }
     private func send(_ action: [String: Any]) { store.dispatch(panelAction(action)) }
     private func measure(_ size: CGSize, viewport: CGSize) {
-        measuredSize = size; measuredViewport = viewport; measurementAccepted = false
-        store.edit(panelAction(["kind": "measure", "extent": [size.width, size.height], "viewport": [viewport.width, viewport.height]])) { error in
-            if measuredSize == size && measuredViewport == viewport { measurementAccepted = error == nil }
+        let work = store.snapshot["layout"]["phone"]["work_area"]
+        let extent = DialogUI.resolve(["kind": "calibration_extent",
+            "area": work.isNull ? [viewport.width, viewport.height] : [work["width"].number, work["height"].number],
+            "natural": [size.width, bodySize.height + headerHeight + footerHeight]])
+        let measured = CGSize(width: extent[0].number, height: extent[1].number)
+        measuredSize = measured; measuredViewport = viewport; measurementAccepted = false
+        store.edit(panelAction(["kind": "measure", "extent": extent.raw, "viewport": [viewport.width, viewport.height]])) { error in
+            if measuredSize == measured && measuredViewport == viewport { measurementAccepted = error == nil }
         }
     }
     private func curve(_ action: [String: Any]) { store.dispatch(["type": "curve_editor", "target": ["kind": kind], "action": action]) }

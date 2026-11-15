@@ -361,14 +361,9 @@ impl SourceTask {
 
     pub fn details_localized(&self, localizer: &layer_ui::Localizer) -> Result<Value, String> {
         let original = &self.workflow.original;
-        let builtin = match original.interpretation.profile {
-            ColorProfile::Builtin(space) => Some(space),
-            _ => None,
-        };
         let source_profile_name = self.source_profile_name.as_ref().ok_or("Source details are not prepared")?;
         Ok(json!({
             "color": self.workflow.project.composition().color,
-            "profile_builtin": builtin,
             "channels": original.interpretation.channels,
             "depth": original.interpretation.depth,
             "source_profile": layer_ui::profile_library::profile_description_name(source_profile_name.clone(), localizer),

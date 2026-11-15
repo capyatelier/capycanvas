@@ -14,7 +14,7 @@ struct PalettePanel: View {
     var body: some View {
         let view = store.snapshot["palette_panel"]
         if !view.isNull {
-            let cells = PaletteCells(width: max(PaletteCells.maxTile, width))
+            let cells = PaletteCells(width: width)
             let count = view["swatches"].array.count + 1
             VStack(spacing: 0) {
                 ZStack(alignment: .topLeading) {
@@ -32,7 +32,7 @@ struct PalettePanel: View {
                         .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: cells.tile + 13))
                     if controller.expanded {
                         PaletteHistory(controller: controller, view: view, cells: cells,
-                            rows: min(4, max(1, Int((bodyHeight + PaletteCells.gap) / cells.pitch))), expanded: true, enabled: true,
+                            rows: min(4, max(1, Int((bodyHeight + cells.gap) / cells.pitch))), expanded: true, enabled: true,
                             hdr: hdr, viewing: store.colorViewing)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .accessibilityIdentifier("palette-history-expanded")
@@ -45,7 +45,7 @@ struct PalettePanel: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bodyHeight = $0 }
                 VStack(spacing: 0) {
                     divider
-                    PaletteFooter(controller: controller, view: view, control: store.panelMetrics.height)
+                    PaletteFooter(controller: controller, view: view, control: store.panelMetrics.height, labelWidth: store.panelLabelWidth([]))
                     if let message = controller.message {
                         Text(message.text).font(.system(size: 13))
                             .foregroundStyle(message.error ? Color.red : palette["text"].opacity(0.7))
@@ -236,6 +236,7 @@ private struct PaletteFooter: View {
     @ObservedObject var controller: PaletteController
     let view: JSON
     let control: CGFloat
+    let labelWidth: CGFloat
     var measuring = false
     @Environment(\.editorPalette) private var palette
     @FocusState private var editorFocused: Bool
@@ -243,7 +244,7 @@ private struct PaletteFooter: View {
     var body: some View {
         let selection = controller.selection(view)
         let name = selection?["name"].string ?? view["color_name"].string
-        PropertyChoiceRow(labelFraction: 0.55) {
+        PropertyChoiceRow(labelWidth: labelWidth) {
             Button { controller.focused = true; controller.toggleChooser() } label: {
                 HStack(spacing: 4) {
                     Text(view["name"].string).lineLimit(1).truncationMode(.tail)
@@ -377,7 +378,7 @@ struct PaletteMeasurement: View {
         if !view.isNull {
             VStack(spacing: 0) {
                 GeometryReader { geometry in
-                    let cells = PaletteCells(width: max(PaletteCells.maxTile, geometry.size.width - 16))
+                    let cells = PaletteCells(width: geometry.size.width - 16)
                     Color.clear
                         .modifier(PanelBodyMeasurement(panel: "palettes", part: "history", intrinsicHeight: cells.tile + 13))
                         .modifier(PanelBodyMeasurement(panel: "palettes", part: "grid",
@@ -387,7 +388,7 @@ struct PaletteMeasurement: View {
                 }.frame(height: 1)
                 VStack(spacing: 0) {
                     Rectangle().frame(height: 1).padding(.vertical, 6)
-                    PaletteFooter(controller: controller, view: view, control: store.panelMetrics.height, measuring: true)
+                    PaletteFooter(controller: controller, view: view, control: store.panelMetrics.height, labelWidth: store.panelLabelWidth([]), measuring: true)
                 }.fixedSize(horizontal: false, vertical: true).padding(.horizontal, 8)
                     .modifier(PanelBodyMeasurement(panel: "palettes", part: "footer"))
             }.modifier(PanelMeasurementScope(panel: "palettes")).opacity(0).allowsHitTesting(false).accessibilityHidden(true)

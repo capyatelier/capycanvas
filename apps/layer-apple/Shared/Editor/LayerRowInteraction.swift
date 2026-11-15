@@ -57,7 +57,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     }
     func progress(owner: UUID, layer: UInt64, revealWidth: CGFloat) -> CGFloat {
         guard self.owner == owner, self.layer == layer else { return 0 }
-        return min(1, abs(offset) / (offset > 0 ? max(1, revealWidth) : 72))
+        return min(1, abs(offset) / (offset > 0 ? max(1, revealWidth) : PanelControlMetrics(view: ToolbarUI.metrics["panel"]).layerSwipeActionWidth))
     }
     func close() {
         let row = owner.flatMap { owner in layer.map { Row(owner: owner, layer: $0) } }
@@ -106,7 +106,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     private var swipeOrigin = CGPoint.zero
     private var swipeStart: CGFloat = 0
     private var swipeMinimum: CGFloat = 0
-    private var swipeMaximum: CGFloat = 72
+    private var swipeMaximum: CGFloat = 0
     private var contactLayer: UInt64?
     var frames: [UInt64: LayerRowFrame] = [:]
     var viewport: CGRect = .zero
@@ -165,8 +165,8 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         let allowed = delta.x < 0 ? row["swipe_actions"].array.contains { $0["enabled"].bool } : start > 0 || !row["right_swipe"].isNull
         guard abs(delta.x) > abs(delta.y), allowed else { return false }
         swipeOrigin = contact.origin; swipeStart = start
-        swipeMinimum = start == 0 && !row["right_swipe"].isNull ? -72 : 0
-        swipeMaximum = min(CGFloat(row["swipe_actions"].array.count) * 72, frame.root.width)
+        swipeMinimum = start == 0 && !row["right_swipe"].isNull ? -store.panelMetrics.layerSwipeActionWidth : 0
+        swipeMaximum = min(CGFloat(row["swipe_actions"].array.count) * store.panelMetrics.layerSwipeActionWidth, frame.root.width)
         contact.suppressActivation(); closeMenu()
         swipe.owner = swipeOwner; swipe.layer = id; swipe.bounds = frame.root; swipe.tracking = true
         moveSwipe(to: point)
@@ -178,9 +178,10 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     }
     func finishSwipe(cancelled: Bool) {
         guard swiping, let store, let id = store.layerSwipe.layer else { return }
-        let swipe = store.layerSwipe, toggle = !cancelled && swipe.offset <= -72 * 0.4
+        let distance = store.panelMetrics.layerSwipeActionWidth * store.panelMetrics.layerSwipeThreshold
+        let swipe = store.layerSwipe, toggle = !cancelled && swipe.offset <= -distance
         swipe.tracking = false
-        let threshold = swipeStart > 0 ? swipeStart - 72 * 0.4 : 72 * 0.4
+        let threshold = swipeStart > 0 ? swipeStart - distance : distance
         if cancelled || swipe.offset < threshold { swipe.close() }
         else { swipe.offset = swipeMaximum }
         if toggle, let row = layers.first(where: { $0["id"].uint == id }), !row["right_swipe"].isNull {

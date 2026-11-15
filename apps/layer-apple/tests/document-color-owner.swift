@@ -74,6 +74,11 @@ import QuartzCore
             try await wait("Original drawing",store:store) {store.drawingTabs.selected == masterTab && !store.drawingTabs.busy}
             try require(store.state["colors"]["rgb_space"].string == "ProPhoto", "Original remains editable with its color history")
             editor=try await dialog("change_bit_depth")
+            try require(editor.suggestedDepth=="U8","A 16-bit drawing suggests 8-bit")
+            for (depth,available,value) in [("U8",true,"Stochastic8"),("U16",false,"None"),("F32",false,"None")] {
+                let dither=editor.dither(depth,active:true)
+                try require(dither["available"].bool==available && dither["value"].string==value,"Reduce banding availability for \(depth)")
+            }
             // A mismatched operation must remain retryable through a fresh job.
             editor.prepare(assignment)
             try await wait("Invalid color operation",store:store) {editor.error != nil}
@@ -81,15 +86,21 @@ import QuartzCore
             editor=try await dialog("document_properties")
             try require(editor.rows.contains {$0[0].string=="Bit depth" && $0[1].string=="8-bit integer SDR"},"Properties must report updated precision")
             editor.cancel();try await idle()
+            editor=try await dialog("change_bit_depth");try require(editor.suggestedDepth=="U16","An 8-bit drawing suggests 16-bit")
+            editor.cancel();try await idle()
             try await invoke("undo");try await idle()
             editor=try await dialog("document_properties")
             try require(editor.rows.contains {$0[0].string=="Bit depth" && $0[1].string=="16-bit integer SDR"},"Undo must restore higher precision")
             editor.cancel();try await idle()
+            editor=try await dialog("change_bit_depth");try await prepared(editor,JSON(["Depth":["depth":"F32","dither":"None"]]));editor.apply();try await idle()
+            editor=try await dialog("change_bit_depth");try require(editor.suggestedDepth=="F16","A float drawing suggests float16")
+            editor.cancel();try await idle()
+            try await invoke("undo");try await idle()
             try await wait("Thumbnail after color history",store:store) {store.layerThumbnails.images["1:false"] != nil}
             editor=try await dialog("convert_color_space")
             editor.prepare(conversion);editor.cancel();try await idle()
             try require(store.state["colors"]["rgb_space"].string=="ProPhoto" && store.state["document_file"]["epoch"].uint==epoch,"Cancel while preparing must leave the same document intact")
-            print("PASS platform \(platform): color previews, Cancel/Apply, exact history route, new-copy drawing isolation, retry, properties and worker cancellation")
+            print("PASS platform \(platform): color previews, Cancel/Apply, exact history route, new-copy drawing isolation, retry, depth suggestions, banding availability, properties and worker cancellation")
         }
     }
 }

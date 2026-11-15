@@ -9,7 +9,9 @@ import UniformTypeIdentifiers
     @Published var error: String?
     private var polling: Task<Void, Never>?
     init(store: EditorStore) { self.store = store }
-    var label: String { status["label"].isNull ? store?.catalog["native_copy"]["color"]["record_tablet"].string ?? "" : status["label"].string }
+    private var copy: JSON { store?.catalog["native_copy"]["color"] ?? JSON() }
+    var title: String { copy["stroke_recording"].string }
+    var label: String { status["label"].isNull ? copy["record_tablet"].string : status["label"].string }
 
     func refresh() { request(nil) }
     func activate() {
@@ -41,15 +43,17 @@ import UniformTypeIdentifiers
     private func save() {
         guard let native = store?.native, !busy else { return }
         busy = true
-        let fallback = store?.bootstrap["action_failed"].string ?? ""
-        native.strokeRecordingData { [weak self] result in
+        let fallback = copy["stroke_recording_save_failed"].string
+        native.strokeRecordingData(failure: fallback) { [weak self] result in
             let compressed = result.flatMap { raw in Result { try Self.compress(raw, failure: fallback) } }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 busy = false
                 switch compressed {
                 case .success(let data): export = BinaryFileDocument(data: data)
-                case .failure(let failure): error = failure.localizedDescription
+                case .failure(let failure):
+                    NSLog("Capy Canvas native diagnostic: %@", failure.localizedDescription)
+                    error = copy["stroke_recording_save_failed"].string
                 }
             }
         }
@@ -77,7 +81,10 @@ import UniformTypeIdentifiers
         case .success: request("saved")
         case .failure(let failure):
             let e = failure as NSError
-            if e.domain != NSCocoaErrorDomain || e.code != NSUserCancelledError { error = failure.localizedDescription }
+            if e.domain != NSCocoaErrorDomain || e.code != NSUserCancelledError {
+                NSLog("Capy Canvas native diagnostic: %@", failure.localizedDescription)
+                error = copy["stroke_recording_save_failed"].string
+            }
         }
     }
 }
@@ -90,8 +97,10 @@ struct StrokeRecordingFiles: ViewModifier {
             .fileExporter(isPresented: Binding(get: { recording.export != nil }, set: { if !$0 { recording.export = nil } }),
                 document: recording.export, contentType: UTType(filenameExtension: "capystrokes") ?? .data,
                 defaultFilename: "stroke-recording.capystrokes") { recording.exported($0) }
-            .alert(recording.error ?? "", isPresented: Binding(get: { recording.error != nil }, set: { if !$0 { recording.error = nil } })) {
+            .alert(recording.title, isPresented: Binding(get: { recording.error != nil }, set: { if !$0 { recording.error = nil } })) {
                 Button(common["ok"].string, role: .cancel) { recording.error = nil }
+            } message: {
+                Text(recording.error ?? "")
             }
     }
 }

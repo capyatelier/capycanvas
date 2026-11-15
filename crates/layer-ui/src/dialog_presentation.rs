@@ -12,6 +12,7 @@ pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
         FloatingWidth { window: f32, natural: f32 },
         CalibrationExtent { area: [f32; 2], natural: [f32; 2] },
         PanesFit { width: f32, minimum: [f32; 2], gap: f32 },
+        ComparisonLayout { width: f32 },
         DocumentColorSuggestedDepth { depth: layer_core::color::SampleDepth },
         DocumentColorDither { depth: layer_core::color::SampleDepth, active: bool },
         PreferencesContentWidth { width: f32, minimum: f32 },
@@ -33,6 +34,7 @@ pub fn dialog_ui(source: &str) -> Result<serde_json::Value, String> {
         Request::FloatingWidth { window, natural } => json!(floating_dialog_width(window, natural)),
         Request::CalibrationExtent { area, natural } => json!(calibration_extent(area, natural)),
         Request::PanesFit { width, minimum, gap } => json!(dialog_panes_fit(width, minimum, gap)),
+        Request::ComparisonLayout { width } => json!(comparison_layout(width)),
         Request::DocumentColorSuggestedDepth { depth } => json!(crate::document_color_suggested_depth(depth)),
         Request::DocumentColorDither { depth, active } => json!(crate::document_color_dither(depth, active)),
         Request::PreferencesContentWidth { width, minimum } => json!(preferences_content_width(width, minimum)),
@@ -172,6 +174,13 @@ pub fn dialog_panes_fit(width: f32, minimum: [f32; 2], gap: f32) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct ComparisonLayout { pub split: bool, pub width: f32, pub height: f32, pub gap: f32 }
+pub fn comparison_layout(width: f32) -> ComparisonLayout {
+    use crate::color_comparison::{GAP, HEIGHT, WIDTH};
+    ComparisonLayout { split: dialog_panes_fit(width, [WIDTH as f32; 2], GAP as f32), width: WIDTH as f32, height: HEIGHT as f32, gap: GAP as f32 }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct ColorEditorLayout { pub split: bool, pub compact_fields: bool }
 pub fn color_editor_layout(width: f32, minimum: [f32; 2]) -> ColorEditorLayout {
     ColorEditorLayout { split: dialog_panes_fit(width, minimum, 24.), compact_fields: width < minimum[1] }
@@ -233,6 +242,8 @@ mod tests {
             (json!({"kind":"floating_width","window":1024.,"natural":1000.}),json!(888.)),
             (json!({"kind":"calibration_extent","area":[280.,280.],"natural":[100.,100.]}),json!([280.,280.])),
             (json!({"kind":"panes_fit","width":500.,"minimum":[200.,320.],"gap":8.}),json!(false)),
+            (json!({"kind":"comparison_layout","width":331.}),json!({"split":false,"width":160.,"height":120.,"gap":12.})),
+            (json!({"kind":"comparison_layout","width":332.}),json!({"split":true,"width":160.,"height":120.,"gap":12.})),
             (json!({"kind":"document_color_suggested_depth","depth":"U16"}),json!("U8")),
             (json!({"kind":"document_color_dither","depth":"U8","active":true}),json!({"available":true,"value":"Stochastic8"})),
             (json!({"kind":"preferences_content_width","width":280.,"minimum":200.}),json!(256.)),

@@ -3,6 +3,7 @@ import UIKit
 extension CanvasView: UIPointerInteractionDelegate {
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
         switch store.navigationCursor {
+        case "ew-resize": UIPointerStyle(shape: NavigationPointer.resize)
         case "pan": .system()
         case "zoom": UIPointerStyle(shape: NavigationPointer.zoomIn)
         case "zoom_out": UIPointerStyle(shape: NavigationPointer.zoomOut)
@@ -18,6 +19,15 @@ extension CanvasView: UIPointerInteractionDelegate {
     static let rotate: UIPointerShape = {
         let path = UIBezierPath(rect: CGRect(x: -1, y: -9, width: 2, height: 18))
         path.append(UIBezierPath(rect: CGRect(x: -9, y: -1, width: 18, height: 2)))
+        return .path(path)
+    }()
+    static let resize: UIPointerShape = {
+        let path = UIBezierPath(rect: CGRect(x: -6, y: -1, width: 12, height: 2))
+        for side: CGFloat in [-1, 1] {
+            let head = UIBezierPath()
+            head.move(to: CGPoint(x: side * 9, y: 0)); head.addLine(to: CGPoint(x: side * 5, y: -4)); head.addLine(to: CGPoint(x: side * 5, y: 4)); head.close()
+            path.append(head)
+        }
         return .path(path)
     }()
     private static func lens(plus: Bool) -> UIPointerShape {

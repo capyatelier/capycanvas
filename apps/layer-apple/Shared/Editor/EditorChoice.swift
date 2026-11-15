@@ -2,19 +2,18 @@ import SwiftUI
 
 struct PropertyChoiceRow: Layout {
     var labelWidth: CGFloat? = nil
-    var labelFraction: CGFloat = 0.45
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let natural = subviews.reduce(CGFloat(4)) { $0 + $1.sizeThatFits(.unspecified).width }
         let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? natural
         guard subviews.count == 2 else { return CGSize(width: width, height: 24) }
-        let label = min(width * labelFraction, labelWidth ?? subviews[0].sizeThatFits(.unspecified).width)
+        let label = min(width, labelWidth ?? subviews[0].sizeThatFits(.unspecified).width)
         return CGSize(width: width, height: max(24,
             subviews[0].sizeThatFits(ProposedViewSize(width: label, height: nil)).height,
             subviews[1].sizeThatFits(ProposedViewSize(width: max(0, width - label - 4), height: nil)).height))
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard subviews.count == 2 else { return }
-        let label = min(bounds.width * labelFraction, labelWidth ?? subviews[0].sizeThatFits(.unspecified).width)
+        let label = min(bounds.width, labelWidth ?? subviews[0].sizeThatFits(.unspecified).width)
         subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
             proposal: ProposedViewSize(width: label, height: bounds.height))
         subviews[1].place(at: CGPoint(x: bounds.minX + label + 4, y: bounds.midY), anchor: .leading,

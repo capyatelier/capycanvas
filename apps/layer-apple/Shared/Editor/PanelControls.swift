@@ -38,7 +38,7 @@ struct PanelControls: View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace).environment(\.compactPanelControls, true)
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw]),
                 surface: .tile, context: JSON(["kind": "panel", "panel": panel["id"].raw]), canDrag: false, priority: -1))
-            .modifier(PanelMeasurementScope(panel: panel["id"].string, enabled: measureForWorkspace, splitFilters: splitFilters))
+            .modifier(PanelMeasurementScope(panel: panel["id"].string, enabled: measureForWorkspace))
     }
     @ViewBuilder private var contents: some View {
         if panel["id"].string == "proof" { ProofPanel(store: store, controller: store.proof, bodyFitsContent: bodyFitsContent).modifier(WorkspaceControlSurface(workspace: store.workspace, container: true)) }
@@ -90,8 +90,8 @@ struct PanelControls: View {
                 naturalHeight: fitsColorWheel ? colorWheelHeight : nil))
     }
     private var colorWheelHeight: (CGFloat) -> CGFloat {
-        { [padding, ratio = ColorPanel.aspect(hdr: store.snapshot["color_panel"]["hdr"].bool)] width in
-            max(128, width - padding * 2) * ratio + padding * 2 }
+        { [padding, hdr = store.snapshot["color_panel"]["hdr"].bool] width in
+            ColorPanel.naturalHeight(width - padding * 2, hdr: hdr) + padding * 2 }
     }
     @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {

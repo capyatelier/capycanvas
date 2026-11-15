@@ -13,6 +13,11 @@ import SwiftUI
     @Published private(set) var previews: [CGImage] = []
     @Published private(set) var clipped: UInt64 = 0
     @Published private(set) var copy = false
+    @Published private(set) var sourceDescription = ""
+    @Published private(set) var sourceProfile = ""
+    @Published private(set) var sourceOriginal = JSON()
+    @Published private(set) var sourceContext = JSON()
+    @Published private(set) var rasterizeDetails = ""
     @Published var error: String?
     let preferences: ColorPreferencesStore
     let operation: String
@@ -24,6 +29,7 @@ import SwiftUI
     @Published private(set) var bootstrap = JSON()
     @Published private(set) var propertiesView = JSON()
     private weak var store: EditorStore?
+    private let requestID: UInt64
     private let expected: (UInt64, UInt64)?
     private let completion: (Bool) -> Void
     private var task: NativeProjectTask?
@@ -31,9 +37,9 @@ import SwiftUI
     private var scheduled: DispatchWorkItem?
     private var closing = false
     private var finished = false
-    init(store: EditorStore, request: JSON, expected: (UInt64, UInt64)?, completion: @escaping (Bool) -> Void) {
+    init(store: EditorStore, request: JSON, requestID: UInt64, expected: (UInt64, UInt64)?, completion: @escaping (Bool) -> Void) {
         self.preferences = store.colorPreferences
-        self.store = store; self.expected = expected; self.completion = completion
+        self.store = store; self.requestID = requestID; self.expected = expected; self.completion = completion
         source = ["repair_source_profile", "rasterize_source"].contains(request["type"].string)
         operation = source ? request["type"].string : request["operation"].string
         history = request["type"].string == "color_history"
@@ -53,9 +59,28 @@ import SwiftUI
         return text[titles[operation] ?? "convert_title"].string
     }
     var propertiesDone: String { propertiesView["done"].isNull ? bootstrap["common"]["done"].string : propertiesView["done"].string }
+    var suggestedDepth: String { DialogUI.resolve(["kind": "document_color_suggested_depth", "depth": color["depth"].raw]).string }
+    func dither(_ depth: String, active: Bool) -> JSON {
+        DialogUI.resolve(["kind": "document_color_dither", "depth": depth, "active": active])
+    }
     func refreshCopy() {
         guard let store else { return }
         catalog = store.catalog; bootstrap = store.bootstrap
+        guard loaded else { return }
+        if operation == "rasterize_source" {
+            store.query(["type": "rasterize_details"]) { [weak self] details in self?.rasterizeDetails = details.string }
+        } else if operation == "repair_source_profile" && !sourceContext.isNull {
+            store.query(["type": "source_profile_copy", "name": sourceContext["name"].raw, "assumed": sourceContext["assumed"].bool]) { [weak self] copy in
+                self?.sourceDescription = copy["description"].string; self?.sourceProfile = copy["name"].string
+            }
+        }
+    }
+    private func describeSource() {
+        guard operation == "repair_source_profile" else { refreshCopy(); return }
+        store?.query(["type": "source_dialog_profile", "id": requestID]) { [weak self] profile in self?.sourceOriginal = profile }
+        store?.query(["type": "source_dialog_context", "id": requestID]) { [weak self] context in
+            self?.sourceContext = context; self?.refreshCopy()
+        }
     }
     func load() {
         if properties || source {
@@ -68,7 +93,7 @@ import SwiftUI
                             if self.source { self.sourceInfo = details; self.color = details["color"] }
                             else { self.propertiesView = details; self.rows = details["rows"].array }
                             self.loaded = true; self.busy = false; self.task = nil
-                            if self.closing { self.finish(false) }
+                            if self.closing { self.finish(false) } else if self.source { self.describeSource() }
                         }
                     } catch { let message = error.localizedDescription
                         DispatchQueue.main.async { self?.failed(message) }

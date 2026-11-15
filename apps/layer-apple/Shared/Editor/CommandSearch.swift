@@ -45,7 +45,7 @@ private struct CommandSearchBar: View {
     private func send(_ action: [String: Any]) {
         store.dispatch(["type": "command_search", "action": action])
     }
-    private func back() { send(["type": parameter.isNull ? "close" : "back"]) }
+    private func dismiss() { send(["type": "dismiss", "search_focused": focused, "text": text]) }
     private var detail: String { view["detail"].string }
     private var radius: CGFloat { style["radius"].isNull ? 12 : style["radius"].number }
     private func explanation(_ command: JSON) -> String {
@@ -82,6 +82,7 @@ private struct CommandSearchBar: View {
             withAnimation(reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.12)) { shown = true }
         }
         .onDisappear { if origin != "text" { store.focusCanvas?() } }
+        .onChange(of: view["query"].string) { _, query in if query.isEmpty && parameter.isNull { text = "" } }
         .onChange(of: parameter["id"].string) { _, _ in
             text = parameter.isNull ? view["query"].string : parameter["parameter"]["text"].string
             #if os(macOS)
@@ -143,7 +144,7 @@ private struct CommandSearchBar: View {
             identifier: "command-search", submit: { toCanvas in
                 if toCanvas { send(["type": "commit", "text": text]) }
                 return true
-            }, cancel: back, step: { _ = move(-$0) }, placeholder: prompt, alignment: .natural, returnKey: .search,
+            }, cancel: dismiss, step: { _ = move(-$0) }, placeholder: prompt, alignment: .natural, returnKey: .search,
             selectsReplacedText: true, softSubmit: { send(["type": "search", "text": text]) })
             .frame(height: 24)
         #else
@@ -151,7 +152,7 @@ private struct CommandSearchBar: View {
             .textFieldStyle(.plain).editorSearchInput().focused($focused)
             .accessibilityIdentifier("command-search").accessibilityLabel(label)
             .onNativeTextSubmit(text) { committed in text = committed; send(["type": "commit", "text": committed]); focused = true }
-            .onNativeTextKey(.escape) { back(); return .handled }
+            .onNativeTextKey(.escape) { dismiss(); return .handled }
             .onKeyPress(.upArrow) { NativeTextContext.composing ? .ignored : move(-1) }
             .onKeyPress(.downArrow) { NativeTextContext.composing ? .ignored : move(1) }
         #endif

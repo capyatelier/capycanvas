@@ -67,7 +67,7 @@ import UniformTypeIdentifiers
                 try require(editor.ready && editor.previews.count==2,editor.error ?? "Complete comparisons")
             }
             try await invoke("open_document");try await idle()
-            let properties = DocumentColorController(store: store, request: JSON(["type": "properties"]), expected: nil, completion: { _ in })
+            let properties = DocumentColorController(store: store, request: JSON(["type": "properties"]), requestID: 0, expected: nil, completion: { _ in })
             store.projectFiles.colorEditor = properties
             try require(properties.dialog["role"].string == "alert", "Properties starts with the shared progress intent")
             var propertiesPublications = 0
@@ -89,6 +89,7 @@ import UniformTypeIdentifiers
             let target=store.state["layer_tools"]["editing_layer"]["id"].uint
             var editor=try await dialog("repair_source_profile")
             try require(editor.source && !editor.sourceInfo["source_profile"].string.isEmpty,"Source details on worker")
+            try await wait("Shared source description",store:store) {!editor.sourceDescription.isEmpty}
             try await preview(editor,profile["profile"]);editor.cancel();try await idle()
             try require(store.state["layers"].array.count==count,"Cancel preserves layer count")
             editor=try await dialog("repair_source_profile")
@@ -106,7 +107,9 @@ import UniformTypeIdentifiers
             try await invoke("undo");try await idle();try require(store.state["layers"].array.count==count,"One-step source Undo")
             try await invoke("redo");try await idle();try require(store.state["layers"].array.count==count+1,"One-step source Redo")
             try await store.apply(["type":"layer","action":["op":"select","id":target,"mask":false]])
-            editor=try await dialog("rasterize_source");try await preview(editor,nil);editor.apply();try await idle()
+            editor=try await dialog("rasterize_source")
+            try await wait("Shared rasterize details",store:store) {!editor.rasterizeDetails.isEmpty}
+            try await preview(editor,nil);editor.apply();try await idle()
             try require(!store.command("rasterize_source")["enabled"].bool,"Rasterized source cannot be rasterized again")
             try await invoke("undo");try await idle();try require(store.command("repair_source_profile")["enabled"].bool,"Undo restores retained original")
             editor=try await dialog("rasterize_source");editor.prepare(nil);editor.cancel();try await idle()

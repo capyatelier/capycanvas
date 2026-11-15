@@ -163,7 +163,7 @@ import UIKit
             }
         case "change_color", "color_history", "properties", "repair_source_profile", "rasterize_source":
             guard let store else { fail("The canvas session is unavailable"); return }
-            let editor = DocumentColorController(store: store, request: document, expected: approved) { [weak self] result in
+            let editor = DocumentColorController(store: store, request: document, requestID: request["id"].uint, expected: approved) { [weak self] result in
                 self?.colorEditor = nil; self?.finish(result)
             }
             colorEditor = editor; editor.load()
@@ -665,6 +665,7 @@ import UIKit
         }
     }
     private func prepare(_ task: NativeProjectTask, url: URL?, next: (() -> Void)? = nil, retry: (() -> Void)? = nil, work: @escaping () throws -> Void) {
+        let name = url?.lastPathComponent ?? "Untitled"
         NativeProjectTask.io.async { [weak self] in
             do {
                 try work()
@@ -696,7 +697,7 @@ import UIKit
                     }
                     self.profileCompletion = nil; self.pendingProfile = nil
                     if let next { next(); return }
-                    self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url) { [weak self] error in
+                    self.store?.native?.finishProject(task, opening: true, title: name, url: url) { [weak self] error in
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if let error { self.report(error) }
@@ -709,13 +710,14 @@ import UIKit
                 }
             } catch {
                 let message = error.localizedDescription
+                NSLog("Capy Canvas native diagnostic: %@", message)
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.interpreting = false
                     if self.cancelled { self.finish() }
                     else if self.pendingProfile != nil { self.profileError = message }
                     else if let retry { retry() }
-                    else { self.fail(message) }
+                    else { self.store?.query(["type": "file_open_failure", "name": name]) { [weak self] copy in self?.fail(copy.string) } }
                 }
             }
         }
@@ -920,8 +922,7 @@ struct ProjectFilesModifier: ViewModifier {
                 }
             }
             .editorSheet(intent: profileCopy["dialog"], isPresented: Binding(get: { files.pendingProfile != nil }, set: { if !$0 { files.chooseProfile(nil) } })) {
-                PhotoProfileForm(preferences: files.preferences, interpretation: files.pendingProfile ?? JSON(),
-                    spaces: files.documentSpaces, error: files.profileError, busy: files.interpreting) {
+                PhotoProfileForm(preferences: files.preferences, interpretation: files.pendingProfile ?? JSON(), error: files.profileError, busy: files.interpreting) {
                     files.chooseProfile($0)
                 }.interactiveDismissDisabled(files.interpreting).modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
             }

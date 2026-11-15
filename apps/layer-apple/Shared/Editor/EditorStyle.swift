@@ -345,11 +345,19 @@ struct PanelControlMetrics {
     var sliderHeight: CGFloat { CGFloat(view["slider_height"].number) }
     var padding: CGFloat { CGFloat(view["field_padding"].number) }
     var icon: CGFloat { CGFloat(view["icon_size"].number) }
+    var layerSwipeActionWidth: CGFloat { CGFloat(view["layer_swipe_action_width"].number) }
+    var layerSwipeThreshold: CGFloat { CGFloat(view["layer_swipe_threshold"].number) }
+    var layerUnitHeight: CGFloat { CGFloat(view["layer_unit_height"].number) }
+    var disclosureHeight: CGFloat { CGFloat(view["disclosure_height"].number) }
+    var layerEdgeInset: CGFloat { CGFloat(view["layer_edge_inset"].number) }
+    var labelWidthChars: CGFloat { CGFloat(view["label_width_chars"].number) }
 }
 extension EditorStore {
     var panelMetrics: PanelControlMetrics { PanelControlMetrics(view: catalog["panel_metrics"]) }
     func panelLabelWidth(_ labels: [String]) -> CGFloat {
-        min(120, labels.map { EditorTextMetrics.width($0, size: catalog["text_size_pt"].number * 4 / 3, weight: .regular) }.max() ?? 0)
+        let size = catalog["text_size_pt"].number * 4 / 3
+        let reserve = EditorTextMetrics.width("0", size: size, weight: .regular) * panelMetrics.labelWidthChars
+        return max(reserve, labels.map { EditorTextMetrics.width($0, size: size, weight: .regular) }.max() ?? 0)
     }
 }
 private struct CompactPanelKey: EnvironmentKey { static let defaultValue = false }

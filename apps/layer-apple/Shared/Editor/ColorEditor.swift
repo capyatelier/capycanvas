@@ -425,16 +425,22 @@ private struct ColorClipboardKeys: UIViewRepresentable {
 private struct ColorEditorLayout: Layout {
     private let columns: CGFloat = 24, rows: CGFloat = 16, below: CGFloat = 18
     private func sizes(_ subviews: Subviews) -> [CGSize] { subviews.map { $0.sizeThatFits(.unspecified) } }
-    private func wide(_ sizes: [CGSize], width: CGFloat?) -> Bool {
-        sizes.count == 3 && DialogUI.resolve(["kind": "color_editor_layout", "width": Double(width.flatMap { $0.isFinite ? $0 : nil } ?? (sizes[1].width + columns + max(sizes[0].width, sizes[2].width))),
-            "minimum": [Double(sizes[1].width), Double(max(sizes[0].width, sizes[2].width))]])["split"].bool
+    private func wide(_ sizes: [CGSize], _ subviews: Subviews, width: CGFloat?) -> Bool {
+        let minimum = subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width }
+        return sizes.count == 3 && DialogUI.resolve(["kind": "color_editor_layout", "width": Double(width.flatMap { $0.isFinite ? $0 : nil } ?? (sizes[1].width + columns + max(sizes[0].width, sizes[2].width))),
+            "minimum": [Double(minimum[1]), Double(max(minimum[0], minimum[2]))]])["split"].bool
+    }
+    private func column(_ sizes: [CGSize], width: CGFloat?) -> CGFloat {
+        let natural = max(sizes[0].width, sizes[2].width)
+        guard let width, width.isFinite else { return natural }
+        return min(natural, max(0, width - sizes[1].width - columns))
     }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let sizes = sizes(subviews)
         guard sizes.count == 3 else { return .zero }
-        if wide(sizes, width: proposal.width) {
-            return CGSize(width: sizes[1].width + columns + max(sizes[0].width, sizes[2].width),
-                height: max(sizes[1].height, sizes[0].height + below + sizes[2].height))
+        if wide(sizes, subviews, width: proposal.width) {
+            let right = column(sizes, width: proposal.width), stacked = [0, 2].map { subviews[$0].sizeThatFits(ProposedViewSize(width: right, height: nil)) }
+            return CGSize(width: sizes[1].width + columns + right, height: max(sizes[1].height, stacked[0].height + below + stacked[1].height))
         }
         let width = min(proposal.width ?? .infinity, sizes.map(\.width).max() ?? 0)
         let stacked = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
@@ -443,12 +449,13 @@ private struct ColorEditorLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let sizes = sizes(subviews)
         guard sizes.count == 3 else { return }
-        if wide(sizes, width: bounds.width) {
-            let left = bounds.minX + (bounds.width - sizes[1].width - columns - max(sizes[0].width, sizes[2].width)) / 2
+        if wide(sizes, subviews, width: bounds.width) {
+            let width = column(sizes, width: bounds.width), top = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            let left = bounds.minX + (bounds.width - sizes[1].width - columns - width) / 2
             let right = left + sizes[1].width + columns
             subviews[1].place(at: CGPoint(x: left, y: bounds.minY), proposal: ProposedViewSize(sizes[1]))
-            subviews[0].place(at: CGPoint(x: right, y: bounds.minY), proposal: ProposedViewSize(sizes[0]))
-            subviews[2].place(at: CGPoint(x: right, y: bounds.minY + sizes[0].height + below), proposal: ProposedViewSize(sizes[2]))
+            subviews[0].place(at: CGPoint(x: right, y: bounds.minY), proposal: ProposedViewSize(width: width, height: top.height))
+            subviews[2].place(at: CGPoint(x: right, y: bounds.minY + top.height + below), proposal: ProposedViewSize(width: width, height: nil))
         } else {
             var y = bounds.minY
             for index in [0, 1, 2] {

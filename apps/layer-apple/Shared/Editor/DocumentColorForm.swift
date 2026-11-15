@@ -8,15 +8,17 @@ struct DocumentColorForm: View {
     @State private var space = "Srgb"
     @State private var depth = "U16"
     @State private var intent = "RelativeColorimetric"
-    @State private var dither = "None"
+    @State private var dither = false
     @State private var copy = false
-    @State private var imported = JSON()
+    @State private var profile = JSON()
     @State private var readingProfile = false
     private var text: JSON { editor.text }
     private var exportCopy: JSON { editor.catalog["export_copy"] }
     private var delivery: JSON { editor.catalog["document_delivery_copy"] }
+    private var dithering: JSON { editor.dither(depth, active: dither) }
     private var help: String {
-        let keys = ["rasterize_source": "rasterize_help", "repair_source_profile": "repair_help", "assign": "assign_help", "depth": "depth_help"]
+        if editor.operation == "rasterize_source" { return editor.rasterizeDetails }
+        let keys = ["repair_source_profile": "repair_help", "assign": "assign_help", "depth": "depth_help"]
         return text[keys[editor.operation] ?? "convert_help"].string
     }
     private var progress: String {
@@ -33,10 +35,10 @@ struct DocumentColorForm: View {
     }
     private var choice: JSON? {
         switch editor.operation {
-        case "repair_source_profile": return space == "imported" ? imported["profile"] : JSON(["Builtin": space])
+        case "repair_source_profile": return profile.isNull ? nil : profile["profile"]
         case "rasterize_source": return nil
         case "assign": return JSON(["Assign": space])
-        case "depth": return JSON(["Depth": ["depth": depth, "dither": depth == "U8" ? dither : "None"]])
+        case "depth": return JSON(["Depth": ["depth": depth, "dither": dithering["value"].raw]])
         default: return JSON(["Convert": ["space": space, "options": ["intent": intent, "black_point_compensation": false]]])
         }
     }
@@ -63,20 +65,24 @@ struct DocumentColorForm: View {
                         }
                     } else if !editor.history {
                         Text(help)
+                        if editor.operation == "repair_source_profile" {
+                            Text(text["current_source"].string).font(.headline)
+                            Text(editor.sourceDescription).textSelection(.enabled)
+                        }
                         choices.disabled(editor.publishing || !editor.loaded)
                     }
                     if editor.busy { ProgressView(progress) }
                     if editor.clipped > 0 { Text(text[editor.source ? "source_clipped" : "outside_gamut"].string) }
-                    if editor.source {
-                        Text(text["current_source"].string).font(.headline)
-                        Text(editor.sourceInfo["source_profile"].string).textSelection(.enabled)
-                        if editor.sourceInfo["adds_layer"].bool { Text(text["adds_layer"].string) }
-                    }
-                    ForEach(Array(editor.previews.enumerated()), id: \.offset) { index, image in
-                        Text(text[index == 0 ? "before" : "after"].string).font(.headline)
-                        Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity, maxHeight: 180)
-                            .accessibilityLabel(text[index == 0 ? "original_composition" : "prepared_composition"].string)
+                    if editor.sourceInfo["adds_layer"].bool { Text(text["adds_layer"].string) }
+                    ComparisonPanes {
+                        ForEach(Array(editor.previews.enumerated()), id: \.offset) { index, image in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(text[index == 0 ? "before" : "after"].string).font(.headline)
+                                Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit)
+                                    .frame(maxWidth: .infinity, maxHeight: 180)
+                                    .accessibilityLabel(text[index == 0 ? "original_composition" : "prepared_composition"].string)
+                            }
+                        }
                     }
                     if let error = editor.error { Text(error).foregroundStyle(.red) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -100,19 +106,21 @@ struct DocumentColorForm: View {
             .onChange(of: language, initial: true) { _, _ in editor.refreshCopy() }
             .onChange(of: editor.color.stableKey, initial: true) { _, _ in
                 if editor.loaded {
-                    space = editor.source ? editor.sourceInfo["profile_builtin"].string : editor.color["space"].string
-                    if space.isEmpty { space = "Srgb" }
-                    depth = editor.color["depth"].string
+                    space = editor.color["space"].string
+                    depth = editor.suggestedDepth
                 }
             }
             .onChange(of: editor.loaded) { _, loaded in if loaded { editor.schedule(choice, copy: copy) } }
-            .onChange(of: editor.source ? space : (choice ?? JSON()).stableKey) { _, _ in editor.schedule(choice, copy: copy) }
+            .onChange(of: editor.source ? nil : choice?.stableKey) { _, _ in editor.schedule(choice, copy: copy) }
             .onChange(of: copy) { _, _ in editor.schedule(choice, copy: copy) }
-            .onChange(of: readingProfile) { _, reading in if !reading { editor.schedule(choice, copy: copy) } }
     }
     @ViewBuilder private var choices: some View {
         if editor.operation == "repair_source_profile" {
-            SourceProfilePicker(preferences: editor.preferences, spaces: spaces, selection: $space, imported: $imported, busy: $readingProfile, onImport: { editor.schedule(choice, copy: copy) })
+            if !editor.sourceContext.isNull {
+                SourceProfilePicker(label: text["correct_profile"].string, preferences: editor.preferences, purpose: editor.sourceContext["purpose"],
+                    original: JSON(["name": editor.sourceProfile, "profile": editor.sourceOriginal.raw]),
+                    selection: Binding(get: { profile }, set: { profile = $0; editor.schedule($0["profile"], copy: copy) }), busy: $readingProfile)
+            }
         } else if editor.operation != "depth" && editor.operation != "rasterize_source" {
             FormPicker(text["space"].string, selection: $space) {
                 ForEach(spaces, id: \.stableKey) { Text($0[1].string).tag($0[0].string) }
@@ -124,11 +132,8 @@ struct DocumentColorForm: View {
                 Text(text["depth_float16"].string).tag("F16"); Text(text["depth_float32"].string).tag("F32")
             }
                 .accessibilityIdentifier("document-color-depth")
-            if depth == "U8" {
-                FormPicker(text["dither"].string, selection: $dither) {
-                    Text(exportCopy["dither_none"].string).tag("None"); Text(text["dither_stochastic"].string).tag("Stochastic8")
-                }
-            }
+            Toggle(exportCopy["reduce_banding"].string, isOn: $dither).disabled(!dithering["available"].bool)
+                .accessibilityIdentifier("document-color-dither")
         }
         if editor.operation == "convert" {
             FormPicker(text["result"].string, selection: $copy) {
@@ -139,6 +144,29 @@ struct DocumentColorForm: View {
                 Text(exportCopy["saturation"].string).tag("Saturation"); Text(exportCopy["absolute"].string).tag("AbsoluteColorimetric")
             }
 
+        }
+    }
+}
+
+private struct ComparisonPanes: Layout {
+    private func frames(_ width: CGFloat, _ subviews: Subviews) -> [CGRect] {
+        let fit = DialogUI.resolve(["kind": "comparison_layout", "width": width]), gap = fit["gap"].number
+        let split = fit["split"].bool && subviews.count == 2, column = split ? (width - gap) / 2 : width
+        var frames: [CGRect] = [], y: CGFloat = 0
+        for (index, view) in subviews.enumerated() {
+            let height = view.sizeThatFits(ProposedViewSize(width: column, height: nil)).height
+            frames.append(CGRect(x: split ? CGFloat(index) * (column + gap) : 0, y: split ? 0 : y, width: column, height: height))
+            y += height + gap
+        }
+        return frames
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 0
+        return CGSize(width: width, height: frames(width, subviews).map(\.maxY).max() ?? 0)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (view, frame) in zip(subviews, frames(bounds.width, subviews)) {
+            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
         }
     }
 }

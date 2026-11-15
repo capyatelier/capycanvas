@@ -7,7 +7,6 @@ struct GradientEditor: View {
     var identifier = "gradient"
     let send: ToolOptionEdit
     @Environment(\.isEnabled) private var enabled
-    @State private var selected = 0
     @State private var owner = ""
     @State private var revision: UInt64 = 0
     @State private var contact: (target: JSON, index: Int, x: CGFloat, position: Double)?
@@ -17,7 +16,7 @@ struct GradientEditor: View {
     private var gradient: JSON { control["gradient"] }
     private var target: JSON { gradient["destination"] }
     private var stops: [JSON] { control["value"]["value"]["stops"].array }
-    private var index: Int { max(0, min(selected, stops.count - 1)) }
+    private var index: Int { Int(gradient["selected"].uint) }
     private var interior: Bool { index > 0 && index < stops.count - 1 }
     private var field: String { "\(owner):\(revision):\(index):\(stops.count)" }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
@@ -38,9 +37,7 @@ struct GradientEditor: View {
         edit(["kind": "reset"], phase: "cancel", target: owner)
     }
     private func remove() {
-        let removed = index
-        selected = max(0, removed - 1)
-        edit(["kind": "stop", "index": removed, "position": 0, "color": NSNull(), "remove": true])
+        edit(["kind": "stop", "index": index, "position": 0, "color": NSNull(), "remove": true])
     }
     private func step(_ steps: Int) {
         let phase = held == nil ? "down" : "move"
@@ -63,7 +60,7 @@ struct GradientEditor: View {
                     edit(["kind": "interpolation", "value": modes[$0][0].raw])
                 }.frame(maxWidth: .infinity)
                 action("flip-horizontal", gradient["reverse_label"].string, "reverse") {
-                    selected = stops.count - 1 - index; revision &+= 1
+                    revision &+= 1
                     edit(["kind": "reverse"])
                 }
                 action("reset", nativeCopy["color"]["reset_gradient"].string, "reset") { revision &+= 1; edit(["kind": "reset"]) }
@@ -90,7 +87,7 @@ struct GradientEditor: View {
             }
         }.environment(\.compactPanelControls, true).accessibilityElement(children: .contain).accessibilityIdentifier(identifier)
             .onChange(of: ownerKey, initial: true) { _, next in
-                if owner != next { cancel(); selected = 0; owner = next }
+                if owner != next { cancel(); owner = next }
             }
             .onChange(of: stops.count) { _, _ in revision &+= 1 }
             .onDisappear(perform: cancel)
@@ -125,7 +122,7 @@ struct GradientEditor: View {
                         let found = stops.indices.first { abs(stops[$0]["position"].number - position) * width < 8 }
                         guard found != nil || gradient["can_add"].bool else { return }
                         let at = found ?? stops.filter { $0["position"].number < position }.count
-                        selected = at; focused = true
+                        focused = true
                         let start = found.map { stops[$0]["position"].number } ?? position
                         contact = (target, at, event.startLocation.x, start)
                         edit(stop(start, index: found), phase: "down", target: target)

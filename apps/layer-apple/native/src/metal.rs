@@ -364,11 +364,13 @@ impl MetalHost {
             .as_ref()
             .ok_or("Missing Metal renderer")?;
         if surface.working_color != gpu.document_color() {
+            let held = surface.presenter.capture_held(gpu.device(), gpu.queue());
             let encoding=Self::encoding(gpu.document_color());
             surface.config.format=if gpu.document_color().depth.is_float(){wgpu::TextureFormat::Rgba16Float}else{wgpu::TextureFormat::Bgra8UnormSrgb};
             surface.config.color_space=encoding.surface_color_space();
             surface.surface.configure(gpu.device(),&surface.config);
             surface.presenter = ViewportPresenter::for_surface(gpu, surface.config.format, encoding).map_err(error)?;
+            surface.presenter.adopt_held(held);
             surface.presenter.prepare_chrome(gpu);
             self.presented_panel_revision = None;
             surface.working_color = gpu.document_color();

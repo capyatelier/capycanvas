@@ -779,17 +779,17 @@ final class NativeOwner: @unchecked Sendable {
                 ? takeNativeText(capy_apple_error(nativeValue(handle))) ?? "Proof is unavailable" : nil)
         }
     }
-    func strokeRecordingData(completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
+    func strokeRecordingData(failure: String, completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
         queue.async { [self] in
             guard let bytes = nativeHandle(capy_apple_stroke_recording_data(nativeValue(handle))) else {
-                completion(.failure(HostFailure(message: takeNativeText(capy_apple_error(nativeValue(handle))) ?? "The recording is unavailable")))
+                completion(.failure(HostFailure(message: takeNativeText(capy_apple_error(nativeValue(handle))) ?? failure)))
                 return
             }
             NativeProjectTask.io.async {
                 defer { capy_bytes_free(bytes) }
                 if let data = copyNativeData(capy_bytes_length(bytes), copy: { capy_bytes_copy(bytes, $0, $1, $2) }) {
                     completion(.success(data))
-                } else { completion(.failure(HostFailure(message: "The recording is unavailable"))) }
+                } else { completion(.failure(HostFailure(message: failure))) }
             }
         }
     }

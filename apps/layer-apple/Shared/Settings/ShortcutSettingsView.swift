@@ -466,10 +466,11 @@ private struct RecordingRow: View {
     @ObservedObject var store: EditorStore
     let capture: JSON
     var actions = true
+    private var icon: String { store.snapshot["preferences"]["capture_icon"].string }
     private var text: some View {
         HStack(spacing: 10) {
-            SharedIcon(name: capture["existing"].bool || !capture["notice"].string.isEmpty ? "info" : "keyboard")
-                .foregroundStyle(!capture["notice"].string.isEmpty && !capture["existing"].bool ? Color.orange : Color.primary)
+            SharedIcon(name: icon == "information" ? "info" : icon)
+                .foregroundStyle(icon == "warning" ? Color.orange : Color.primary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(capture["shortcut"].string).accessibilityIdentifier("shortcut-captured")
                 if !capture["notice"].string.isEmpty {

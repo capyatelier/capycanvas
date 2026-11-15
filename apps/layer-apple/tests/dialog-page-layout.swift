@@ -31,8 +31,7 @@ import SwiftUI
         }
         try await wait("Dialog catalog loads") { !store.catalog.isNull }
         let profile = NSHostingView(rootView: PhotoProfileForm(preferences: store.colorPreferences,
-            interpretation: JSON(["channels": "Rgb", "depth": "U8"]), spaces: store.catalog["document_spaces"].array,
-            error: nil, busy: false, choose: { _ in }).environment(\.editorDialogPage, true)
+            interpretation: JSON(["channels": "Rgb", "depth": "U8"]), error: nil, busy: false, choose: { _ in }).environment(\.editorDialogPage, true)
             .environment(\.capyProfileCopy, store.catalog["profile_copy"]))
         window.setContentSize(CGSize(width: 320, height: 874)); window.contentView = profile
         var profilePicker: NSPopUpButton?

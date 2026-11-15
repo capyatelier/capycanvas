@@ -253,7 +253,6 @@ private struct PrintProofControls: View {
     }
 }
 
-/// The same section order as the shared profile menus; ICC loading stays off UI.
 private struct PrintProfileMenu: View {
     @Environment(\.capyInterfaceLanguage) private var language
     @Environment(\.capyProfileCopy) private var copy
@@ -264,25 +263,20 @@ private struct PrintProfileMenu: View {
     let height: CGFloat
     var labelWidth: CGFloat? = nil
     let choose: (JSON) -> Void
-    @StateObject private var entryCopy = ProfileEntryCopyCache()
-    @State private var metadata: [JSON] = []
+    @StateObject private var menu = ProfileMenuModel()
     @State private var importing = false
     @State private var library = false
     @State private var mounted = false
+    @State private var revision = 0
+    private var document: JSON { controller.form["print_settings"]["profile"] }
+    private var request: ProfileMenuRequest {
+        ProfileMenuRequest(purpose: JSON(["kind": "proof"]), document: document["profile"], current: recipe["profile"], language: language, revision: revision)
+    }
     var body: some View {
-        let saved = entryCopy.rows(metadata, language: language)
         PropertyChoiceRow(labelWidth:labelWidth) {
             Text(controller.form["copy"]["profile"].string).lineLimit(2)
             Menu {
-                if !controller.form["document_profile"].isNull {
-                    Section(copy["document"].string) { Button(controller.form["document_profile"]["name"].string) { choose(controller.form["document_profile"]) } }
-                }
-                if !saved.isEmpty {
-                    Section(copy["saved"].string) { ForEach(saved, id: \.stableKey) { p in Button(p["name"].string) { read(id: p["id"].string) } } }
-                }
-                Section(copy["standard"].string) {
-                    ForEach(controller.form["profiles"].array, id: \.stableKey) { p in Button(p["name"].string) { choose(p) } }
-                }
+                ProfileMenuItems(menu: menu, preferences: controller.preferences, document: document, current: recipe, busy: $busy, onChoose: choose)
                 Divider()
                 Button(copy["add_profile_dialog"].string) { importing = true }
                 Button(copy["manage"].string) { library = true }
@@ -296,40 +290,31 @@ private struct PrintProfileMenu: View {
             }.buttonStyle(.plain).controlSize(.mini)
                 .accessibilityIdentifier("proof-profile")
         }
-        .onAppear { mounted = true; reload() }.onDisappear { mounted = false }
-        .editorSheet(intent: copy["library_dialog"], isPresented: $library, onDismiss: reload) {
+        .onAppear { mounted = true }.onDisappear { mounted = false }
+        .task(id: request) { menu.load(request, preferences: controller.preferences) }
+        .onChange(of: menu.error) { _, error in if let error { controller.error = error } }
+        .editorSheet(intent: copy["library_dialog"], isPresented: $library, onDismiss: { revision += 1 }) {
             ColorProfileLibrary(preferences: controller.preferences) { choose($0); library = false }
                 .modifier(EditorFittedPresentation()).modifier(EditorPopupPresentation())
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "icc") ?? .data, UTType(filenameExtension: "icm") ?? .data]) { result in
             switch result {
-            case .success(let url): read(url: url)
+            case .success(let url): read(url)
             case .failure(let failure):
                 let e = failure as NSError
                 if e.domain != NSCocoaErrorDomain || e.code != NSUserCancelledError { controller.error = failure.localizedDescription }
             }
         }
     }
-    private func reload() {
-        let preferences = controller.preferences
-        NativeProjectTask.io.async {
-            let result = Result { try preferences.profiles() }
-            DispatchQueue.main.async {
-                guard mounted else { return }
-                switch result { case .success(let entries): metadata = entries.filter { $0["visible"].bool && $0["issue"].isNull }
-                case .failure(let error): controller.error = error.localizedDescription }
-            }
-        }
-    }
-    private func read(id: String? = nil, url: URL? = nil) {
+    private func read(_ url: URL) {
         busy = true
         let preferences = controller.preferences
         NativeProjectTask.io.async {
-            let result = Result { if let url { return try preferences.importProfile(url) }; return try preferences.profile(id!) }
+            let result = Result { try preferences.importProfile(url) }
             DispatchQueue.main.async {
                 busy = false
                 guard mounted else { return }
-                switch result { case .success(let profile): choose(profile); reload()
+                switch result { case .success(let profile): choose(profile); revision += 1
                 case .failure(let error): controller.error = error.localizedDescription }
             }
         }
