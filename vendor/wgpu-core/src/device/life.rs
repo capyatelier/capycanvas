@@ -218,6 +218,11 @@ impl LifetimeTracker {
         self.active.is_empty()
     }
 
+    /// Return the oldest submission still in flight.
+    pub fn oldest_submission(&self) -> Option<SubmissionIndex> {
+        self.active.first().map(|a| a.index)
+    }
+
     /// Start tracking resources associated with a new queue submission.
     pub fn track_submission(&mut self, index: SubmissionIndex, encoders: Vec<EncoderInFlight>) {
         self.active.push(ActiveSubmission {

@@ -322,6 +322,8 @@ Window-free noop-backend tests check the handoffs and callback reentry with
 
 `wgpu-unlocked-poll-wait.patch` waits for a poll's target submission before taking the snatch lock. Presentation and resource destruction take that lock for writing, so a thread blocked in `Device::poll(Wait)` no longer makes them wait for the GPU. The window-free `presentation_does_not_wait_for_a_poll_that_waits_on_the_gpu` holds a poll inside its fence wait while another thread presents.
 
+`wgpu-next-completion.patch` adds `Device::next_completion`, the oldest submission whose completion has not been processed yet. The renderer's poll owner waits for it without a timeout, so completion callbacks never wait behind later submissions. The renderer's `a_completion_callback_does_not_wait_for_later_unrelated_gpu_work` covers it.
+
 `wgpu-presentation-admission.patch` separates successful artwork submissions from
 bounded viewport and timestamp submissions. `Queue::try_present` checks the
 artwork fence without waiting and excludes concurrent submissions through the

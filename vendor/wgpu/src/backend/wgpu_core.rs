@@ -1011,6 +1011,12 @@ impl Drop for CoreAdapter {
     }
 }
 
+impl CoreDevice {
+    pub(crate) fn next_completion(&self) -> u64 {
+        self.context.0.device_next_completion(self.id)
+    }
+}
+
 impl dispatch::DeviceInterface for CoreDevice {
     fn features(&self) -> crate::Features {
         self.context.0.device_features(self.id)

@@ -810,6 +810,13 @@ impl Device {
         maintain_result
     }
 
+    /// Return the oldest submission whose completion has not been processed yet.
+    pub fn next_completion(&self) -> crate::SubmissionIndex {
+        let queue = self.get_queue();
+        let oldest = queue.as_ref().and_then(|queue| queue.lock_life().oldest_submission());
+        oldest.unwrap_or_else(|| self.last_successful_submission_index.load(Ordering::Acquire))
+    }
+
     fn wait_for_submission(
         &self,
         poll_type: wgt::PollType<crate::SubmissionIndex>,

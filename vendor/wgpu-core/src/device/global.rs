@@ -1809,6 +1809,10 @@ impl Global {
         result
     }
 
+    pub fn device_next_completion(&self, device_id: DeviceId) -> crate::SubmissionIndex {
+        self.hub.devices.get(device_id).next_completion()
+    }
+
     /// Poll all devices belonging to the specified backend.
     ///
     /// If `force_wait` is true, block until all buffer mappings are done.

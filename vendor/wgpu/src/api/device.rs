@@ -96,6 +96,15 @@ impl Device {
         self.inner.poll(poll_type.map_index(|s| s.index))
     }
 
+    /// The oldest submission whose completion has not been processed yet.
+    ///
+    /// Returns `None` on the `webgpu` and `custom` backends.
+    #[cfg(wgpu_core)]
+    pub fn next_completion(&self) -> Option<SubmissionIndex> {
+        let device = self.inner.as_core_opt()?;
+        Some(SubmissionIndex { index: device.next_completion() })
+    }
+
     /// The [features][Features] which can be used on this device.
     ///
     /// This will be equal to the [`required_features`][DeviceDescriptor::required_features]

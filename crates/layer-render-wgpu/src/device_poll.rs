@@ -21,7 +21,6 @@ struct Mailbox {
     terminal:Mutex<Vec<Notify>>,
     completion:Mutex<Vec<Notify>>,
     completions:std::sync::atomic::AtomicU64,
-    submissions:Mutex<std::collections::VecDeque<wgpu::SubmissionIndex>>,
     thread:OnceLock<std::thread::Thread>,
 }
 #[derive(Clone)]
@@ -29,19 +28,9 @@ pub(crate) struct RetirementHandle(Arc<Mailbox>);
 impl RetirementHandle {
     fn channel()->(Self,mpsc::Receiver<Message>) {
         let (sender,receiver)=mpsc::channel();
-        (Self(Arc::new(Mailbox {sink:Mutex::new(Sink::Open(sender)),retired:Default::default(),tickets:Mutex::new(Some(Vec::new())),waiters:Default::default(),armed:AtomicBool::new(false),released:AtomicBool::new(false),woken:AtomicBool::new(false),terminal:Default::default(),completion:Default::default(),completions:Default::default(),submissions:Default::default(),thread:OnceLock::new()})),receiver)
+        (Self(Arc::new(Mailbox {sink:Mutex::new(Sink::Open(sender)),retired:Default::default(),tickets:Mutex::new(Some(Vec::new())),waiters:Default::default(),armed:AtomicBool::new(false),released:AtomicBool::new(false),woken:AtomicBool::new(false),terminal:Default::default(),completion:Default::default(),completions:Default::default(),thread:OnceLock::new()})),receiver)
     }
     fn wake(&self) {self.0.woken.store(true,SeqCst);if let Some(thread)=self.0.thread.get() {thread.unpark();}}
-    fn submitted(&self,index:wgpu::SubmissionIndex) {self.0.submissions.lock().unwrap().push_back(index);}
-    fn wait_for_progress(&self,poll:impl FnOnce(wgpu::PollType)->Result<wgpu::PollStatus,wgpu::PollError>)->Result<bool,String> {
-        let (target,earlier)={let submissions=self.0.submissions.lock().unwrap();(submissions.front().cloned(),submissions.len())};
-        let status=poll(wgpu::PollType::Wait {submission_index:target.clone(),timeout:None});
-        let mut submissions=self.0.submissions.lock().unwrap();
-        match status {
-            Ok(wgpu::PollStatus::QueueEmpty)=>{submissions.drain(..earlier);Ok(false)},
-            Ok(_)|Err(_)=>{if target.is_some() {submissions.pop_front();}Ok(true)},
-        }
-    }
     fn send(&self,message:Message)->Result<(),Message> {
         let result={let sink=self.0.sink.lock().unwrap();match &*sink {
             Sink::Open(sender)|Sink::Closing {sender,..}=>sender.send(message).map_err(|error|error.0),
@@ -178,6 +167,9 @@ impl Owner {
     }
 }
 impl Drop for Owner {fn drop(&mut self) {self.shutdown();}}
+fn wait_for_progress(submission_index:Option<wgpu::SubmissionIndex>,poll:impl FnOnce(wgpu::PollType)->Result<wgpu::PollStatus,wgpu::PollError>)->Result<bool,String> {
+    Ok(!matches!(poll(wgpu::PollType::Wait {submission_index,timeout:None}),Ok(wgpu::PollStatus::QueueEmpty)))
+}
 enum State {New {handle:RetirementHandle,receiver:mpsc::Receiver<Message>},Running(Owner),Retired(RetirementHandle)}
 pub(crate) struct Root {state:Mutex<State>,queue:Arc<OnceLock<wgpu::Queue>>}
 impl Drop for Root {
@@ -215,8 +207,8 @@ impl Binding {
         let mut state=root.state.lock().unwrap();let handle=Self::state_handle(&state);
         if matches!(*state,State::New {..}) && !handle.closed() {
             let State::New {receiver,..}=std::mem::replace(&mut *state,State::Retired(handle.clone())) else {unreachable!()};
-            let (device,waiting)=(device.clone(),handle.clone());
-            match Owner::start(move||waiting.wait_for_progress(|kind|device.poll(kind)),handle.clone(),receiver,root.queue.clone()) {
+            let device=device.clone();
+            match Owner::start(move||wait_for_progress(device.next_completion(),|kind|device.poll(kind)),handle.clone(),receiver,root.queue.clone()) {
                 Ok(owner)=>*state=State::Running(owner),
                 Err(error)=>{handle.close();panic!("Device poll owner failed: {error}");},
             }
@@ -241,11 +233,7 @@ impl Binding {
             State::Retired(_)=>{},
         }
     }
-    pub fn submit(&self,work:impl FnOnce()->wgpu::SubmissionIndex)->Option<wgpu::SubmissionIndex> {
-        let Some(root)=self.root() else {drop(work);return None;};let state=root.state.lock().unwrap();
-        if !Self::live(&state) {drop(state);drop(work);return None;}
-        let index=work();Self::state_handle(&state).submitted(index.clone());Some(index)
-    }
+    pub fn submit(&self,work:impl FnOnce()->wgpu::SubmissionIndex)->Option<wgpu::SubmissionIndex> {self.admit(||Ok(work())).ok()}
 }
 fn receive(handle:&RetirementHandle,receiver:&mpsc::Receiver<Message>,queue:Option<&wgpu::Queue>)->Vec<mpsc::Sender<()>> {
     let mut waiters=Vec::new();
@@ -386,15 +374,15 @@ mod tests {
         let (unused,_duration,raw)=crate::test_support::bounded_outstanding_gpu_work(&r);drop(unused);
         let (handle,receiver)=RetirementHandle::channel();
         let polls=Arc::new(AtomicUsize::new(0));
-        let (device,waiting,counted)=((*r.device).clone(),handle.clone(),polls.clone());
-        let mut owner=Owner::start(move|| {counted.fetch_add(1,Ordering::AcqRel);waiting.wait_for_progress(|kind|device.poll(kind))},
+        let (device,counted)=((*r.device).clone(),polls.clone());
+        let mut owner=Owner::start(move|| {counted.fetch_add(1,Ordering::AcqRel);wait_for_progress(device.next_completion(),|kind|device.poll(kind))},
             handle.clone(),receiver,Arc::new(OnceLock::from(r.queue.clone()))).unwrap();
         let (idle,quiet)=mpsc::channel::<()>();
         let before_idle=polls.load(Ordering::Acquire);let _=quiet.recv_timeout(Duration::from_millis(50));
         let idle_polls=polls.load(Ordering::Acquire)-before_idle;
         let (done,completed)=mpsc::channel();
         let before_work=polls.load(Ordering::Acquire);let start=std::time::Instant::now();
-        handle.submitted(r.queue.submit([raw(1)]));handle.wake();
+        r.queue.submit([raw(1)]);handle.wake();
         r.queue.on_submitted_work_done(move||{let _=done.send(());});
         let completion=completed.recv_timeout(Duration::from_secs(2));
         let (work_polls,elapsed)=(polls.load(Ordering::Acquire)-before_work,start.elapsed());
@@ -406,10 +394,32 @@ mod tests {
         assert!(idle_polls<=2,"an idle poll owner polled {idle_polls} times in 50 ms");
     }
     #[test]
+    fn a_completion_callback_does_not_wait_for_later_unrelated_gpu_work() {
+        use std::time::Instant;
+        let r=crate::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        assert_ne!(r.adapter.get_info().device_type,wgpu::DeviceType::Cpu);
+        let (unused,_duration,raw)=crate::test_support::bounded_outstanding_gpu_work(&r);drop(unused);
+        let handle=r.device.retirement_handle();handle.flush().unwrap();
+        let (entered,busy)=mpsc::channel();let (release,held)=mpsc::channel::<()>();
+        handle.run(move||{let _=entered.send(());let _=held.recv_timeout(Duration::from_secs(10));});
+        busy.recv_timeout(Duration::from_secs(10)).unwrap();
+        let (drawing,unrelated)=(raw(2),(0..8).map(|_|raw(1)).collect::<Vec<_>>());
+        let start=Instant::now();
+        r.queue.submit([drawing]);
+        let (called,drawn)=mpsc::channel();r.on_gpu_done(move||{let _=called.send(Instant::now());});
+        r.queue.submit(unrelated);
+        let (finished,unrelated_done)=mpsc::channel();r.queue.on_submitted_work_done(move||{let _=finished.send(Instant::now());});
+        release.send(()).unwrap();
+        let drawn=drawn.recv_timeout(Duration::from_secs(10)).expect("the drawing's completion callback never ran");
+        let finished=unrelated_done.recv_timeout(Duration::from_secs(10)).expect("the unrelated work never completed");
+        assert!(finished.duration_since(drawn)>=finished.duration_since(start)/2,
+            "the drawing's completion waited for unrelated work: called after {:?}, unrelated work finished after {:?}",drawn-start,finished-start);
+    }
+    #[test]
     fn the_poll_owner_never_bounds_a_gpu_wait_with_a_timeout() {
         let (handle,receiver)=RetirementHandle::channel();
-        let (sent,timeouts)=mpsc::channel();let waiting=handle.clone();
-        let mut owner=Owner::start(move||waiting.wait_for_progress(|kind| {
+        let (sent,timeouts)=mpsc::channel();
+        let mut owner=Owner::start(move||wait_for_progress(None,|kind| {
             let wgpu::PollType::Wait {timeout,..}=kind else {panic!("the poll owner polled without waiting for progress");};
             let _=sent.send(timeout);Ok(wgpu::PollStatus::QueueEmpty)
         }),handle.clone(),receiver,Default::default()).unwrap();
@@ -422,8 +432,8 @@ mod tests {
     fn the_poll_owner_stops_at_the_first_device_loss() {
         use std::sync::atomic::{AtomicUsize,Ordering};
         let (handle,receiver)=RetirementHandle::channel();
-        let polls=Arc::new(AtomicUsize::new(0));let (waiting,counted)=(handle.clone(),polls.clone());
-        let mut owner=Owner::start(move||waiting.wait_for_progress(|_| {
+        let polls=Arc::new(AtomicUsize::new(0));let counted=polls.clone();
+        let mut owner=Owner::start(move||wait_for_progress(None,|_| {
             if counted.fetch_add(1,Ordering::AcqRel)<3 {panic!("Parent device is lost");}
             Ok(wgpu::PollStatus::QueueEmpty)
         }),handle.clone(),receiver,Default::default()).unwrap();

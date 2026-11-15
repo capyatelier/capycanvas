@@ -1,0 +1,86 @@
+diff --git a/wgpu-core/src/device/global.rs b/wgpu-core/src/device/global.rs
+index b5516e07f..a0f3904df 100644
+--- a/wgpu-core/src/device/global.rs
++++ b/wgpu-core/src/device/global.rs
+@@ -1809,6 +1809,10 @@ impl Global {
+         result
+     }
+ 
++    pub fn device_next_completion(&self, device_id: DeviceId) -> crate::SubmissionIndex {
++        self.hub.devices.get(device_id).next_completion()
++    }
++
+     /// Poll all devices belonging to the specified backend.
+     ///
+     /// If `force_wait` is true, block until all buffer mappings are done.
+diff --git a/wgpu-core/src/device/life.rs b/wgpu-core/src/device/life.rs
+index 322c85588..62deeff0e 100644
+--- a/wgpu-core/src/device/life.rs
++++ b/wgpu-core/src/device/life.rs
+@@ -218,6 +218,11 @@ impl LifetimeTracker {
+         self.active.is_empty()
+     }
+ 
++    /// Return the oldest submission still in flight.
++    pub fn oldest_submission(&self) -> Option<SubmissionIndex> {
++        self.active.first().map(|a| a.index)
++    }
++
+     /// Start tracking resources associated with a new queue submission.
+     pub fn track_submission(&mut self, index: SubmissionIndex, encoders: Vec<EncoderInFlight>) {
+         self.active.push(ActiveSubmission {
+diff --git a/wgpu-core/src/device/resource.rs b/wgpu-core/src/device/resource.rs
+index f6324425b..02e06859f 100644
+--- a/wgpu-core/src/device/resource.rs
++++ b/wgpu-core/src/device/resource.rs
+@@ -810,6 +810,13 @@ impl Device {
+         maintain_result
+     }
+ 
++    /// Return the oldest submission whose completion has not been processed yet.
++    pub fn next_completion(&self) -> crate::SubmissionIndex {
++        let queue = self.get_queue();
++        let oldest = queue.as_ref().and_then(|queue| queue.lock_life().oldest_submission());
++        oldest.unwrap_or_else(|| self.last_successful_submission_index.load(Ordering::Acquire))
++    }
++
+     fn wait_for_submission(
+         &self,
+         poll_type: wgt::PollType<crate::SubmissionIndex>,
+diff --git a/wgpu/src/api/device.rs b/wgpu/src/api/device.rs
+index 17981190e..b348d8e47 100644
+--- a/wgpu/src/api/device.rs
++++ b/wgpu/src/api/device.rs
+@@ -96,6 +96,15 @@ impl Device {
+         self.inner.poll(poll_type.map_index(|s| s.index))
+     }
+ 
++    /// The oldest submission whose completion has not been processed yet.
++    ///
++    /// Returns `None` on the `webgpu` and `custom` backends.
++    #[cfg(wgpu_core)]
++    pub fn next_completion(&self) -> Option<SubmissionIndex> {
++        let device = self.inner.as_core_opt()?;
++        Some(SubmissionIndex { index: device.next_completion() })
++    }
++
+     /// The [features][Features] which can be used on this device.
+     ///
+     /// This will be equal to the [`required_features`][DeviceDescriptor::required_features]
+diff --git a/wgpu/src/backend/wgpu_core.rs b/wgpu/src/backend/wgpu_core.rs
+index 477349f05..572bd189b 100644
+--- a/wgpu/src/backend/wgpu_core.rs
++++ b/wgpu/src/backend/wgpu_core.rs
+@@ -1011,6 +1011,12 @@ impl Drop for CoreAdapter {
+     }
+ }
+ 
++impl CoreDevice {
++    pub(crate) fn next_completion(&self) -> u64 {
++        self.context.0.device_next_completion(self.id)
++    }
++}
++
+ impl dispatch::DeviceInterface for CoreDevice {
+     fn features(&self) -> crate::Features {
+         self.context.0.device_features(self.id)
