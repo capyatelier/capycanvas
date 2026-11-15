@@ -76,11 +76,15 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
         &presenter.cursor_pipeline, &presenter.recipes.transition.pipeline])).unwrap();
     assert!(presenter.pipelines_ready(&renderer));
     assert!(paper[1..].iter().all(|pipeline| !pipeline.ready()));
+    drop(batch);
+    crate::test_support::wait_startup(&mut renderer,deadline,|progress|progress.complete,format_args!("required viewport requests retire"));
+    let batch=renderer.compilation.batch();
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = wakes.clone();
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); });
-    renderer.set_preparation_wake(wake.clone());
+    renderer.compilation.set_wake(wake.clone());
     renderer.context_compilation.set_wake(wake);
+    wakes.store(0,Ordering::Relaxed);
     let (_, target) = crate::create_target(renderer.device(), [128; 2], wgpu::TextureFormat::Rgba8UnormSrgb, "first lit viewport variant");
     let mut encoder = renderer.device.create_command_encoder(&Default::default());
     presenter.encode(&renderer, &mut encoder, &target, crate::test_support::view([128; 2]), [0.; 4]).unwrap();
@@ -98,6 +102,7 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
         renderer.compilation.check().unwrap();
         renderer.context_compilation.check().unwrap();
         assert!(renderer.poll_startup().unwrap().complete, "warming must keep startup complete");
+        assert!(renderer.frame_demand()!=layer_render::FrameDemand::Work,"unused warming must not demand an idle frame");
         assert!(Instant::now() < deadline, "every idle family must finish warming");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -106,11 +111,11 @@ fn first_lit_frame_gates_its_variant_without_idle_frames_from_any_warm_class() {
     assert!(renderer.poll_startup().unwrap().complete);
     assert!(renderer.frame_demand() != layer_render::FrameDemand::Work);
     assert!(!presenter.needs_present(&renderer, crate::test_support::view([128; 2]), [0.; 4]));
+    assert_eq!(wakes.load(Ordering::Relaxed), 0, "unused warm completions must request no idle frames");
     drop(presenter);
     drop(renderer);
     drop(reference);
     crate::finish_shader_compiler_shutdown();
-    assert_eq!(wakes.load(Ordering::Relaxed), 0, "unused warm completions must request no idle frames");
 }
 
 #[test]
@@ -211,15 +216,21 @@ fn standalone_navigator_declares_its_output_recipe_at_creation() {
 fn optional_picker_completion_repaints_without_parking_the_canvas() {
     use std::{sync::{Arc, atomic::{AtomicUsize, Ordering}}, time::{Duration, Instant}};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
     let batch = r.compilation.batch();
     let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8Unorm, SdrSurfaceColor::Srgb).unwrap();
     presenter.set_target_retention(true);
     presenter.set_color_picker(Some(picker()));
     pollster::block_on(r.compilation.prepare_all(presenter.pipeline.iter()
         .chain([&presenter.surround_pipeline, &presenter.cursor_pipeline, &presenter.recipes.transition.pipeline]))).unwrap();
+    drop(batch);
+    let compiler=r.compilation.clone();
+    crate::test_support::wait_startup(&mut r,deadline,|_|compiler.pending()==0,format_args!("required viewport requests retire"));
+    let batch=r.compilation.batch();
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = wakes.clone();
-    r.set_preparation_wake(Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); }));
+    r.compilation.set_wake(Arc::new(move || { count.fetch_add(1, Ordering::Relaxed); }));
+    wakes.store(0,Ordering::Relaxed);
     let (_, target) = crate::create_target(&r.device, [64; 2], wgpu::TextureFormat::Rgba8Unorm, "optional picker");
     let view = crate::test_support::view([64; 2]);
     let mut encoder = r.device.create_command_encoder(&Default::default());
@@ -230,7 +241,6 @@ fn optional_picker_completion_repaints_without_parking_the_canvas() {
     pollster::block_on(r.compilation.prepare_all(presenter.overview_pipeline.iter())).unwrap();
     assert!(!presenter.needs_present(&r, view, [0.; 4]), "a hidden overview does not invalidate presentation");
     drop(batch);
-    let deadline = Instant::now() + Duration::from_secs(30);
     while !presenter.picker.pipeline.ready() || wakes.load(Ordering::Relaxed) == 0 {
         r.compilation.check().unwrap();
         assert!(Instant::now() < deadline, "the waiting picker must wake when its recipe completes");

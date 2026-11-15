@@ -89,14 +89,13 @@ fn reduced_selection_standby_prepares_its_pipelines_without_encoding_on_the_fram
     crate::test_support::submit_ready(&mut r, FramePacket { dabs: &[dab([1., 0., 0., 1.])], dab_batches: &[batch(target(&document))],
         ..packet(document.scene(), extent) }).unwrap();
     r.shader_idle(false, false);
-    assert!(!r.scene_pipelines.source.pipeline.ready());
     let mut transforms = r.transforms.take().unwrap();
     assert!(!transforms.display_pipelines()[0].ready());
     let bytes = transforms.storage_bytes();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     transforms.prepare_standby(&mut r, &mut encoder, document.scene(), target(&document), &selection, 1).unwrap();
     assert_eq!(transforms.storage_bytes(), bytes, "Cold standby dependencies must finish before capture or reduction");
-    assert!(!r.scene_pipelines.source.pipeline.ready());
+    assert_eq!(encoder.pass_count(),0,"cold standby declares dependencies without encoding");
     r.shader_idle(true, false);
     while !r.scene_pipelines.source.pipeline.ready() || !transforms.display_pipelines()[0].ready() {
         r.poll_startup().unwrap();

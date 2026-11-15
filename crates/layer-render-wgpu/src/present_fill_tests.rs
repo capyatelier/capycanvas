@@ -62,6 +62,8 @@ fn fill_reveal_presents_before_after_and_circles_without_raster_work() {
     let after=capture(&mut presenter,&engine);
     assert_eq!(&after[(32*64+32)*4..][..4],&[255,0,0,255]);
     assert_eq!(&before[(32*64+32)*4..][..4],&[0,0,255,255]);
+    let current=engine.document().clone();
+    submit_settled(engine.backend_mut(),layer_render::FramePacket {composite_all:false,..packet(current.scene(),extent)});
     let raster_work=work(&engine);
     for radius in [0.,8.,24.,128.] {
         engine.set_fill_reveal(Some(FillReveal {radius,..reveal}));engine.render_frame().unwrap();

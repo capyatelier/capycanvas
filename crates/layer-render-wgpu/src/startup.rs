@@ -1346,7 +1346,10 @@ mod gpu_tests {
 
     #[test]
     fn context_received_before_startup_is_declared_when_startup_begins() {
-        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut r = crate::test_support::staged_renderer(&reference, Default::default());
+        r.startup = None;
+        let _batch = r.compilation.batch();
         let document = Document::new(layer_core::PortableId::random(), 64, 64,
             layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);

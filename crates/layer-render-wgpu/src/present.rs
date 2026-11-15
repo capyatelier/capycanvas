@@ -1844,12 +1844,12 @@ mod tests {
         let surround = [0.04, 0.12, 0.22, 1.];
         let view = crate::test_support::view(extent);
         let pixels = |renderer: &WgpuRasterizer, presenter: &mut ViewportPresenter| {
-            assert!(presenter.needs_present(renderer, view, surround));
             pollster::block_on(presenter.prepare(renderer)).unwrap();
             presenter.present(renderer, &surface, view, surround).unwrap();
             assert!(!presenter.needs_present(renderer, view, surround));
             crate::layer_tests::page_bytes(renderer, &texture)
         };
+        assert!(presenter.needs_present(&renderer,view,surround));
         let waiting = pixels(&renderer, &mut presenter);
         assert!(waiting.as_chunks::<4>().0.iter().all(|pixel| *pixel == waiting[..4]));
         assert_eq!(waiting[3], 255);
@@ -1858,11 +1858,13 @@ mod tests {
         let all = layer_core::SceneScope::All;
         crate::test_support::submit_settled(&mut renderer,
             layer_render::FramePacket {scene:document.scene().with_scope(&all),..crate::test_support::packet(document.scene(),extent)});
+        assert!(presenter.needs_present(&renderer,view,surround));
         let shown = pixels(&renderer, &mut presenter);
         assert_eq!(&shown[(48 * 96 + 16) * 4..][..4], &[0, 255, 0, 255]);
         renderer.analysis_changed();
         let other_surround = [1., 0., 0., 1.];
-        assert!(!presenter.needs_present(&renderer, view, other_surround));
+        assert!(!presenter.needs_present(&renderer, view, surround));
+        assert!(presenter.needs_present(&renderer, view, other_surround));
         pollster::block_on(presenter.prepare(&renderer)).unwrap();
         presenter.present(&renderer, &surface, view, other_surround).unwrap();
         assert_eq!(crate::layer_tests::page_bytes(&renderer, &texture), shown);
@@ -1874,6 +1876,7 @@ mod tests {
         hidden.visible = false;
         document.apply(layer_core::Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, handle, Some(hidden)).unwrap())).unwrap();
         crate::test_support::submit_settled(&mut renderer,crate::test_support::packet(document.scene(),extent));
+        assert!(presenter.needs_present(&renderer,view,surround));
         let hidden = pixels(&renderer, &mut presenter);
         assert_eq!(checker(&hidden), transparent);
         let replacement = layer_core::Document::from_artwork(document.artwork.clone()).unwrap();
