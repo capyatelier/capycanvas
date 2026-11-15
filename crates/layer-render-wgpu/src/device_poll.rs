@@ -288,7 +288,10 @@ fn run(poll:&mut impl FnMut()->Result<bool,String>,handle:&RetirementHandle,rece
                 }else {let _=send.send(());}
             }
             let waiters=receive(handle,receiver,queue.get());
-            let active=poll()?;
+            let active=match std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut *poll)) {
+                Ok(active)=>active?,
+                Err(panic)=>{failure.get_or_insert(panic);return Err("device poll panicked".into());},
+            };
             for waiter in waiters {let _=waiter.send(());}
             let drained=closing.as_ref().is_some_and(|ready|!matches!(ready.try_recv(),Err(mpsc::TryRecvError::Empty)));
             Ok((active,drained))
@@ -414,6 +417,22 @@ mod tests {
         let timeouts:Vec<_>=timeouts.try_iter().collect();
         assert!(!timeouts.is_empty(),"the poll owner never waited");
         assert!(timeouts.iter().all(Option::is_none),"the poll owner bounded a GPU wait: {timeouts:?}");
+    }
+    #[test]
+    fn the_poll_owner_stops_at_the_first_device_loss() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        let (handle,receiver)=RetirementHandle::channel();
+        let polls=Arc::new(AtomicUsize::new(0));let (waiting,counted)=(handle.clone(),polls.clone());
+        let mut owner=Owner::start(move||waiting.wait_for_progress(|_| {
+            if counted.fetch_add(1,Ordering::AcqRel)<3 {panic!("Parent device is lost");}
+            Ok(wgpu::PollStatus::QueueEmpty)
+        }),handle.clone(),receiver,Default::default()).unwrap();
+        let (closed,woken)=mpsc::channel();handle.on_retired(Arc::new(move||{let _=closed.send(());}));
+        let retired=woken.recv_timeout(Duration::from_secs(10));
+        let joined=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||owner.shutdown()));
+        assert_eq!(polls.load(Ordering::Acquire),1,"the poll owner polled a lost device again");
+        assert!(retired.is_ok(),"a lost device left the poll service open");
+        assert_eq!(joined.err().as_deref().map(crate::panic_message).as_deref(),Some("Parent device is lost"),"joining the poll owner lost the device's panic");
     }
     #[test]
     fn close_joins_its_inflight_fence_while_a_raw_straggler_keeps_submitting() {
