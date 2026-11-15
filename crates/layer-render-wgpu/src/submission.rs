@@ -84,7 +84,8 @@ pub(crate) struct CommandEncoder {
     compute: Option<wgpu::ComputePass<'static>>,
     device: wgpu::Device,
     prologue: Option<wgpu::CommandEncoder>,
-    current: wgpu::CommandEncoder,
+    label: Option<String>,
+    current: std::cell::OnceCell<wgpu::CommandEncoder>,
     earlier: Vec<wgpu::CommandEncoder>,
     passes: usize,
     total_passes: u64,
@@ -109,7 +110,8 @@ impl CommandEncoder {
             #[cfg(not(target_arch="wasm32"))]
             poll: device.poll_binding(),
             prologue: None,
-            current: device.create_command_encoder(descriptor),
+            label: descriptor.label.map(str::to_owned),
+            current: Default::default(),
             earlier: Vec::new(),
             passes: 0,
             total_passes: 0,
@@ -120,6 +122,13 @@ impl CommandEncoder {
     pub fn submission(&mut self)->Submission {
         self.submission.get_or_insert_with(||PendingSubmission(Submission(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(SubmissionState::Encoding as u8))))).0.clone()
     }
+    fn current(&self)->&wgpu::CommandEncoder {
+        self.current.get_or_init(|| {
+            #[cfg(test)] crate::test_support::PassCounts {command_encoders:1,..Default::default()}.record();
+            self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {label:self.label.as_deref()})
+        })
+    }
+    fn current_mut(&mut self)->&mut wgpu::CommandEncoder {self.current();self.current.get_mut().unwrap()}
     fn begin_pass(&mut self) {
         self.reserve_passes(1);
     }
@@ -137,8 +146,8 @@ impl CommandEncoder {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("continued document submission"),
                 });
-            self.earlier
-                .push(std::mem::replace(&mut self.current, next));
+            let full = std::mem::replace(self.current_mut(), next);
+            self.earlier.push(full);
             self.passes = 0;
         }
         self.passes += count;
@@ -155,21 +164,21 @@ impl CommandEncoder {
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'a> {
         self.begin_pass();
-        self.current.begin_render_pass(descriptor)
+        self.current_mut().begin_render_pass(descriptor)
     }
     pub fn begin_compute_pass<'a>(
         &'a mut self,
         descriptor: &wgpu::ComputePassDescriptor<'_>,
     ) -> wgpu::ComputePass<'a> {
         self.begin_pass();
-        self.current.begin_compute_pass(descriptor)
+        self.current_mut().begin_compute_pass(descriptor)
     }
     /// A compute pass that consecutive dispatches share until any other pass,
     /// copy or command ends it.
     pub fn compute_pass(&mut self) -> &mut wgpu::ComputePass<'static> {
         if self.compute.is_none() {
             self.begin_pass();
-            self.compute = Some(self.current.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            self.compute = Some(self.current_mut().begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("shared compute"),
                 timestamp_writes: None,
             }).forget_lifetime());
@@ -188,7 +197,7 @@ impl CommandEncoder {
     /// Record bounded timestamp commands without an artwork dependency.
     pub fn diagnostics(&mut self) -> &mut wgpu::CommandEncoder {
         self.compute = None;
-        &mut self.current
+        self.current_mut()
     }
     /// Finish staging uploads before calling this. Their completion callbacks
     /// belong to the final encoder, after every earlier chunk on this queue.
@@ -201,7 +210,7 @@ impl CommandEncoder {
         #[cfg(not(target_arch="wasm32"))]
         let device=self.device.clone();
         let work=|| {
-            let mut chunks=self.earlier.into_iter().chain([self.current]);
+            let mut chunks=self.earlier.into_iter().chain(self.current.into_inner());
             let mut index=submit_traced(queue,self.prologue.take().into_iter().chain(chunks.next()),!self.resource_work);
             for encoder in chunks {index=submit_traced(queue,[encoder],!self.resource_work);}
             index
@@ -221,9 +230,9 @@ impl CommandEncoder {
         #[cfg(not(target_arch="wasm32"))]
         let callback=self.poll.callback(&self.device,move|()|callback());
         #[cfg(not(target_arch="wasm32"))]
-        self.current.on_submitted_work_done(move||callback(()));
+        self.current().on_submitted_work_done(move||callback(()));
         #[cfg(target_arch="wasm32")]
-        self.current.on_submitted_work_done(callback);
+        self.current().on_submitted_work_done(callback);
     }
     pub fn hold(&self,value:impl Send+'static) {self.held.borrow_mut().push(Box::new(value));}
     pub fn retire(&self,value:impl Send+'static) {
@@ -241,14 +250,14 @@ impl CommandEncoder {
 impl Deref for CommandEncoder {
     type Target = wgpu::CommandEncoder;
     fn deref(&self) -> &Self::Target {
-        &self.current
+        self.current()
     }
 }
 impl DerefMut for CommandEncoder {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.resource_work = true;
         self.compute = None;
-        &mut self.current
+        self.current_mut()
     }
 }
 
@@ -279,7 +288,7 @@ impl ColorPass for wgpu::CommandEncoder {
 impl ColorPass for CommandEncoder {
     fn color_pass(&mut self, label: &str, view: &wgpu::TextureView, load: wgpu::LoadOp<wgpu::Color>) -> wgpu::RenderPass<'_> {
         self.begin_pass();
-        self.current.color_pass(label, view, load)
+        self.current_mut().color_pass(label, view, load)
     }
 }
 
@@ -361,6 +370,15 @@ mod tests {
         assert!((40. ..=75.).contains(&actual),"actual bounded GPU duration {actual} ms");
         assert!(destroy<=std::time::Duration::from_millis(1),"destroy waited: {destroy:?}");
         assert!(submit<=std::time::Duration::from_millis(1),"bare submit waited: {submit:?}");
+    }
+    #[test]
+    fn a_memory_pass_without_work_creates_no_command_encoder() {
+        let mut r=renderer();
+        let before=crate::test_support::PassCounts::snapshot();
+        drop(CommandEncoder::new(&r.device,&Default::default()));
+        r.memory.invalidate_limits();r.refresh_memory_limits();
+        let counts=crate::test_support::PassCounts::snapshot().delta(before);
+        assert_eq!((counts.grant_encoders,counts.command_encoders),(1,0),"an encoder that records nothing created a GPU command encoder");
     }
     fn renderer() -> WgpuRasterizer {
         let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
