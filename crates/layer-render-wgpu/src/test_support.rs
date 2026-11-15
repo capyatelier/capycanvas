@@ -179,6 +179,15 @@ pub(crate) fn observe_submitted_artwork(packet:FramePacket<'_>,before:u64,revisi
     });
 }
 
+#[test]
+fn bounded_calibration_reaches_its_range_for_dispatches_up_to_the_range_width() {
+    for dispatch in [0.01,0.3,7.,21.,34.,35.] {
+        let mut count=128;let mut calibrated=f64::from(count)*dispatch;
+        for _ in 0..3 {if (40. ..=75.).contains(&calibrated) {break;}count=calibration_count(count,calibrated);calibrated=f64::from(count)*dispatch;}
+        assert!((40. ..=75.).contains(&calibrated),"{dispatch} ms dispatches calibrated to {calibrated} ms with {count}");
+    }
+}
+
 #[cfg(test)]
 mod artwork_revision_oracle_tests {
     use super::*;
@@ -969,6 +978,7 @@ fn bounded_work_timestamp_bytes(r:&WgpuRasterizer,result:&wgpu::Buffer)->Vec<u8>
     receive.recv_timeout(std::time::Duration::from_secs(10)).unwrap().unwrap();
     let bytes=output.slice(..).get_mapped_range().unwrap().to_vec();output.unmap();bytes
 }
+fn calibration_count(count:u32,calibrated:f64)->u32 {((f64::from(count)*57.5/calibrated).round() as u32).clamp(1,4096)}
 pub(crate) fn bounded_outstanding_gpu_work(r:&WgpuRasterizer)->(crate::submission::CommandEncoder,impl Fn()->f64+'_,impl Fn(u32)->wgpu::CommandBuffer+'_ ) {
     let module=r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label:Some("bounded outstanding work"), source:wgpu::ShaderSource::Wgsl(r#"
@@ -1021,7 +1031,7 @@ pub(crate) fn bounded_outstanding_gpu_work(r:&WgpuRasterizer)->(crate::submissio
         r.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         calibrated=duration(&r);
         if (40. ..=75.).contains(&calibrated) {break;}
-        count=((count as f64*50./calibrated).round() as u32).clamp(1,4096);
+        count=calibration_count(count,calibrated);
     }
     assert!((40. ..=75.).contains(&calibrated),"bounded calibration: {calibrated} ms, {count} dispatches");
     let work=record(count);
