@@ -4,6 +4,7 @@
 #include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Provider.h>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -21,17 +22,17 @@ struct Contacts {
     void end(PointerRoutedEventArgs const& event,PointerCompletion completion);
 };
 struct RoutedTaps {
-    struct Press {weak_ref<Primitives::ButtonBase> button;uint64_t down=0;std::optional<winrt::Windows::Foundation::Point> away;};
+    struct Press {weak_ref<Primitives::ButtonBase> button;uint64_t down=0;std::optional<winrt::Windows::Foundation::Point> away;std::function<void()> hold;};
     std::map<uint32_t,Press> presses;
     void lift(Microsoft::UI::Input::PointerPoint const& point){
         auto found=presses.find(point.PointerId());if(found==presses.end())return;
         auto press=std::move(found->second);presses.erase(found);
         auto owner=press.button.get();auto button=owner?owner.try_as<Button>():nullptr;if(!button||!button.IsEnabled()||!press.away||!button.XamlRoot())return;
-        if(point.Timestamp()-press.down>uint64_t(GetDoubleClickTime())*1000)return;
         auto at=point.Position();float slop=2.f*GetSystemMetricsForDpi(SM_CXDRAG,96);
         if(std::abs(at.X-press.away->X)>slop||std::abs(at.Y-press.away->Y)>slop)return;
         auto bounds=button.TransformToVisual(nullptr).TransformBounds({0,0,float(button.ActualWidth()),float(button.ActualHeight())});
         if(at.X<bounds.X||at.Y<bounds.Y||at.X>bounds.X+bounds.Width||at.Y>bounds.Y+bounds.Height)return;
+        if(point.Timestamp()-press.down>uint64_t(GetDoubleClickTime())*1000){if(press.hold)press.hold();return;}
         Automation::Peers::ButtonAutomationPeer(button).GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();
     }
 };
@@ -72,6 +73,7 @@ struct State:std::enable_shared_from_this<State> {
     SolidColorBrush ink{nullptr};int64_t inkChanged=0;
     std::shared_ptr<Contacts> input;
     std::shared_ptr<RoutedTaps> taps;
+    std::function<void()> hold;
     std::optional<uint32_t> pointer;
     bool inside=false,hoverAllowed=true,ignoreNativePress=false;
     uint8_t hover=20,press=41;double disabledContentOpacity=92./255.;
@@ -136,7 +138,7 @@ inline std::shared_ptr<State> state(Primitives::ButtonBase const& button){
         auto button=state->owner.get();if(!button||!button.IsEnabled())return;auto point=e.GetCurrentPoint(button);
         if(!PointerGesture::PrimaryContact(point))return;
         if(state->pointer)state->end(true);state->pointer=point.PointerId();state->inside=state->hit(e);state->hoverAllowed=point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;
-        if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse&&(state->taps=routedTaps(button.XamlRoot())))state->taps->presses[point.PointerId()]={make_weak(button),point.Timestamp()};
+        if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse&&(state->taps=routedTaps(button.XamlRoot())))state->taps->presses[point.PointerId()]={make_weak(button),point.Timestamp(),std::nullopt,state->hold};
         if(state->input)state->input->owners[*state->pointer]=state;state->present();
     })),true);
     for(auto const& event:{UIElement::PointerEnteredEvent(),UIElement::PointerMovedEvent(),UIElement::PointerExitedEvent()})
@@ -160,6 +162,7 @@ inline void buttonFeedback(winrt::Microsoft::UI::Xaml::Controls::Primitives::But
     auto state=feedback::state(button);state->source(ink);state->hover=hover;state->press=press;
     state->hoverSurface=hoverSurface;state->fixed=fixed;state->checkedSurface=checkedSurface;state->disabledContentOpacity=disabledContentOpacity;state->present();
 }
+inline void buttonHold(winrt::Microsoft::UI::Xaml::Controls::Primitives::ButtonBase const& button,std::function<void()> hold){feedback::state(button)->hold=std::move(hold);}
 inline winrt::Microsoft::UI::Xaml::Media::SolidColorBrush buttonFeedbackBrush(winrt::Microsoft::UI::Xaml::Controls::Primitives::ButtonBase const& button,
     winrt::Microsoft::UI::Xaml::Media::SolidColorBrush const& ink,uint8_t hover=20,uint8_t press=41){
     buttonFeedback(button,ink,hover,press);auto state=feedback::state(button);state->external=true;state->present();return state->overlay;

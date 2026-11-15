@@ -423,11 +423,13 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 auto marker=ToolGroupMarker(data);marker.Margin({0,0,-10,0});text.Margin({0,0,12,0});content.Children().Append(marker);
             }
             row.Content(content);AutomationProperties::SetAutomationId(row,L"header-overflow-item-"+to_hstring(id));
-            row.ContextRequested([weak,popup,id,zone](auto&&,ContextRequestedEventArgs const& e){
-                e.Handled(true);auto self=weak.lock();if(!self)return;
+            auto context=[weak,popup,id,zone]{
+                auto self=weak.lock();if(!self)return;
                 if(auto list=popup.get())list.Hide();
                 self->input->Context(id,self->overflow[zone]);
-            });
+            };
+            row.ContextRequested([context](auto&&,ContextRequestedEventArgs const& e){e.Handled(true);context();});
+            buttonHold(row,context);
             rows.Children().Append(row);
         }
         ScrollViewer scroller;scroller.Content(rows);scroller.MaxHeight(400);scroller.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);mouseScrollbars(scroller);list.Content(scroller);
