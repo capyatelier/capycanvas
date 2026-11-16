@@ -40,6 +40,7 @@ public:
     winrt::Windows::Data::Json::JsonArray Glass(winrt::Microsoft::UI::Xaml::UIElement const& reference,winrt::Windows::Data::Json::JsonArray& connections,winrt::Windows::Data::Json::JsonArray& arcs,winrt::Windows::Data::Json::JsonArray& colors,winrt::Windows::Data::Json::JsonArray& panels) const;
     void ChromeSent(uint64_t revision);
     void MeasureChrome();
+    void PublishTrace();
 private:
     struct Impl;
     std::shared_ptr<Impl> impl;

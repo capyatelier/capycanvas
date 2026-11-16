@@ -136,9 +136,9 @@ void WorkspaceBubbles::Impl::apply(){
     if(contact&&(epoch!=nextEpoch||[&]{for(auto value:packets){auto v=object(value.GetObject(),L"view");if(num(v,L"id")==contact->record->id)return object(v,L"source").Stringify()!=contact->record->source;}return contact->mode!=L"moving"&&!(contact->paired&&contact->lifted);}()))cancel(true);
     if(candidate&&(epoch!=nextEpoch||!current(*candidate)))cancel(true);
     if(replaced){++owners;lastRing.Reset();}epoch=nextEpoch;
-    for(auto it=records.begin();it!=records.end();)if(!alive.contains(it->first)){remove(layer,it->second->root);remove(stamps,it->second->stampImage);it=records.erase(it);}else ++it;
+    for(auto it=records.begin();it!=records.end();)if(!alive.contains(it->first)){tracePlacements(it->second,false);remove(layer,it->second->root);remove(stamps,it->second->stampImage);it=records.erase(it);}else ++it;
     int order=0;for(auto value:packets){auto packet=value.GetObject(),view=object(packet,L"view");auto id=uint32_t(num(view,L"id"));auto& record=records[id];
-        if(record&&record->source!=object(view,L"source").Stringify()){remove(layer,record->root);remove(stamps,record->stampImage);record.reset();}
+        if(record&&record->source!=object(view,L"source").Stringify()){tracePlacements(record,false);remove(layer,record->root);remove(stamps,record->stampImage);record.reset();}
         if(!record){record=std::make_shared<Record>();record->id=id;record->source=object(view,L"source").Stringify();record->root.RenderTransform(record->transform);record->root.Visibility(Visibility::Collapsed);layer.Children().Append(record->root);}
         record->order=order++;record->stampDirty=true;update(record,packet);refresh(record);
     }
@@ -155,7 +155,9 @@ void WorkspaceBubbles::Impl::wake(){
 void WorkspaceBubbles::Impl::frame(){
     if(disposed||!workspace.IsLoaded()){frames.revoke();return;}
     auto reduced=!SystemUiSettings().AnimationsEnabled();
+    if(tracing)++traceFrame;
     if(!ticks.tick(milliseconds(),[&](double now){return advance(now,reduced);},[&]{return request(reduced);}))frames.revoke();
+    traceLayout();
 }
 bool WorkspaceBubbles::Impl::request(bool reduced){
     auto now=milliseconds();auto ticket=owners,wake=wakes;
@@ -173,11 +175,63 @@ bool WorkspaceBubbles::Impl::advance(double now,bool reduced){
     if(animating)present();
     return animating||restoreAt>=0;
 }
+void WorkspaceBubbles::Impl::traceTransition(std::shared_ptr<Record> const& r,std::shared_ptr<Part> const& p,hstring const& phase){
+    if(!tracing||(p->key!=L"card"&&!prefix(p->key,L"bead:")))return;
+    if(transitionReceipts.size()>=512){++traceOverflow;return;}
+    transitionReceipts.push_back({++traceSerial,traceFrame,epoch,uint64_t(reinterpret_cast<uintptr_t>(p->root.as<::IUnknown>().get())),
+        p->accessible?uint64_t(reinterpret_cast<uintptr_t>(p->accessible.as<::IUnknown>().get())):0,r->id,p->key,phase,p->appearance.value,p->appearance.target});
+}
+void WorkspaceBubbles::Impl::tracePlacements(std::shared_ptr<Record> const& r,bool alive){
+    if(!tracing)return;
+    auto source=object(r->view,L"source");auto document=uint64_t(num(object(data->state,L"document_file"),L"epoch"));
+    std::set<hstring> active;
+    auto apply=[&](hstring const& key,Point target,Size size,bool alive){
+        auto found=appliedLayouts.find({r->id,key});auto prior=found==appliedLayouts.end()?nullptr:found->second;
+        bool sameSource=prior&&JsonEqual(prior->source,source);
+        if(prior&&prior->epoch==document&&sameSource&&prior->target==target&&prior->size==size&&prior->active==alive)return;
+        if(!prior&&appliedLayouts.size()>=512){++traceOverflow;return;}
+        auto next=std::make_shared<LayoutReceipt>();next->token=++placementSerial;next->applied=traceFrame;next->epoch=document;
+        next->source=sameSource?prior->source:J::Parse(source.Stringify());next->bubble=r->id;next->part=key;next->target=target;next->size=size;next->active=alive;
+        appliedLayouts[{r->id,key}]=std::move(next);
+    };
+    for(auto value:array(r->view,L"beads")){
+        auto placement=object(value.GetObject(),L"placement");auto key=L"bead:"+object(placement,L"bead").Stringify();auto size=float(num(placement,L"size"));
+        active.insert(key);apply(key,point(array(placement,L"center")),{size,size},alive);
+    }
+    for(auto const& [key,current]:appliedLayouts)if(key.first==r->id&&current->active&&!active.contains(key.second))apply(key.second,current->target,current->size,false);
+}
+void WorkspaceBubbles::Impl::traceLayout(){
+    if(!tracing||!contact||contact->mode!=L"beads"||!contact->moved)return;
+    auto const& r=contact->record;auto scale=workspace.XamlRoot().RasterizationScale();
+    for(auto const& [key,row]:appliedLayouts){
+        if(key.first!=r->id||!row->active)continue;
+        if(!row->count){
+            if(layoutReceipts.size()>=512){++traceOverflow;continue;}
+            layoutReceipts.push_back(row);row->first=traceFrame;row->scale=scale;
+        }
+        auto native=r->parts.find(key.second);bool valid=native!=r->parts.end()&&native->second->appearance.target==1&&native->second->root.IsLoaded();
+        uint64_t owner=0,accessible=0;Rect bounds{};
+        if(valid){
+            auto const& part=native->second;owner=uint64_t(reinterpret_cast<uintptr_t>(part->root.as<::IUnknown>().get()));
+            accessible=part->accessible?uint64_t(reinterpret_cast<uintptr_t>(part->accessible.as<::IUnknown>().get())):0;
+            bounds=part->root.TransformToVisual(workspace).TransformBounds({0,0,float(part->root.ActualWidth()),float(part->root.ActualHeight())});
+            valid=part->root.Visibility()==Visibility::Visible&&part->root.Opacity()>0&&r->root.Visibility()==Visibility::Visible&&r->root.Opacity()>0;
+        }
+        if(!row->count){row->owner=owner;row->accessible=accessible;}
+        row->identityChanged|=owner!=row->owner||accessible!=row->accessible||scale!=row->scale;
+        auto zoom=r->scale();Rect expected{float(r->center.X+(row->target.X-row->size.Width/2)*zoom),float(r->center.Y+(row->target.Y-row->size.Height/2)*zoom),float(row->size.Width*zoom),float(row->size.Height*zoom)};
+        if(row->count<row->bounds.size()){row->bounds[row->count]=bounds;row->expected[row->count]=expected;row->frames[row->count]=traceFrame;}
+        ++row->count;row->last=traceFrame;
+        auto error=scale*std::max({std::abs(bounds.X-expected.X),std::abs(bounds.Y-expected.Y),std::abs(bounds.Width-expected.Width),std::abs(bounds.Height-expected.Height)});
+        if(!valid||bounds.Width<=0||bounds.Height<=0||expected.Width<=0||expected.Height<=0||!std::isfinite(error))error=1e30;
+        row->maximumError=std::max(row->maximumError,error);
+    }
+}
 void WorkspaceBubbles::Impl::present(){
     bool overlayChanged=false;
     for(auto const& [id,r]:records){
         for(auto it=r->parts.begin();it!=r->parts.end();){auto const& p=it->second;
-            if(p->appearance.value==0&&p->appearance.target==0){remove(r->root,p->root);it=r->parts.erase(it);continue;}
+            if(p->appearance.value==0&&p->appearance.target==0){traceTransition(r,p,L"removed");remove(r->root,p->root);it=r->parts.erase(it);continue;}
             overlayChanged=draw(r,p)||overlayChanged;++it;}
         r->place();r->root.IsHitTestVisible(!r->faded);Canvas::SetZIndex(r->root,(r->lifted?800:700)+r->order);
         stamp(r);
@@ -198,9 +252,10 @@ void WorkspaceBubbles::Impl::step(J const& motion,double now,uint64_t requestedW
 void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& packet){
     if(r->packet.Size()&&r->packet.Stringify()==packet.Stringify())return;
     auto prior=r->view;bool sameDiameter=prior.Size()&&num(prior,L"diameter")==num(object(packet,L"view"),L"diameter");r->packet=packet;r->view=object(packet,L"view");r->reach=num(packet,L"reach")+16;r->place();auto v=r->view;std::set<hstring> live;int order=0;
+    tracePlacements(r);
     bool tweenBeads=sameDiameter&&!(contact&&contact->record==r&&contact->mode==L"beads"&&contact->moved);
     auto part=[&](hstring const& key,J const& value,Point at,Size size,double radius,bool squircle=false,bool glass=true,double strength=1,double from=.6,double duration=180,double delay=0){
-        live.insert(key);auto& p=r->parts[key];if(!p){p=std::make_shared<Part>(key,(key==L"face"||key==L"badge")&&!r->parts.contains(L"card")?1:0);
+        live.insert(key);auto& p=r->parts[key];bool activated=!p||p->appearance.target==0;if(!p){p=std::make_shared<Part>(key,(key==L"face"||key==L"badge")&&!r->parts.contains(L"card")?1:0);
             p->root.RenderTransform(p->transform);p->shadow.IsHitTestVisible(false);p->selection.IsHitTestVisible(false);p->hover.IsHitTestVisible(false);p->decorations.IsHitTestVisible(false);p->art.IsHitTestVisible(key==L"card"||key==L"pill");p->root.Children().Append(p->shadow);p->root.Children().Append(p->ink);p->root.Children().Append(p->decorations);p->ink.Children().Append(p->background);p->ink.Children().Append(p->selection);p->ink.Children().Append(p->hover);p->ink.Children().Append(p->art);r->root.Children().Append(p->root);
         }
         if(p->retired){p->art.IsHitTestVisible(true);p->retired=false;p->contentDirty=true;p->appearance.snap(0);}
@@ -210,7 +265,7 @@ void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& pa
         if(tween&&!glass&&(p->appearance.value!=1||p->appearance.target==0)){
             auto initial=p->size.Width==0;p->place(initial?at:p->center,initial?size:p->size,p->strength*p->appearance.value,false);p->appearance.snap(1);
         }
-        p->place(at,size,strength,tween);p->appearance.to(1,duration,delay);return p;
+        p->place(at,size,strength,tween);p->appearance.to(1,duration,delay);if(activated)traceTransition(r,p,L"active");return p;
     };
     auto face=point(array(v,L"face"));bool card=object(v,L"card").Size();
     J faceData;for(auto name:{L"kind",L"icon",L"label",L"preview",L"variants",L"dots",L"buttons",L"selected"})faceData.Insert(name,v.GetNamedValue(name,JsonValue::CreateNullValue()));
@@ -239,8 +294,10 @@ void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& pa
             bool bead=prefix(key,L"bead:");
             bool immediate=card&&(key==L"face"||key==L"badge")||key==L"pill"||key==L"readout"||prefix(key,L"tag:")||bead&&(p->glass||!tweenBeads)||chooser.Size()&&(prefix(key,L"item:")||prefix(key,L"brush:"));
             if(immediate){remove(r->root,p->root);it=r->parts.erase(it);continue;}
-            if(p->appearance.target>0){if(bead)p->place(p->center,p->size,p->strength,false);else p->appearance.snap(1);}
+            bool retiring=p->appearance.target>0;
+            if(retiring){if(bead)p->place(p->center,p->size,p->strength,false);else p->appearance.snap(1);}
             p->appearance.to(0,bead?220:key==L"card"?150:120);p->background.IsHitTestVisible(false);if(p->accessible)p->accessible.IsHitTestVisible(false);if(key==L"card")retire(*p);
+            if(retiring)traceTransition(r,p,L"retiring");
         }++it;
     }
 }
@@ -492,6 +549,21 @@ A WorkspaceBubbles::TraceOverlays(UIElement const& reference)const{
             {L"overlay_phase",S(phase==OverlayPhase::Idle?L"idle":phase==OverlayPhase::Hover?L"hover":L"pressed")}}));
     }
     return overlays;
+}
+J WorkspaceBubbles::TraceFrames()const{
+    A transitions,placements,layouts;
+    auto shared=[](Impl::LayoutReceipt const& row){return O({{L"token",N(double(row.token))},{L"applied_frame",N(double(row.applied))},{L"epoch",N(double(row.epoch))},{L"source",row.source},
+        {L"bubble",N(row.bubble)},{L"part",S(row.part)},{L"active",B(row.active)},{L"target",point(row.target)},{L"size",point({row.size.Width,row.size.Height})}});};
+    for(auto const& row:impl->transitionReceipts)transitions.Append(O({{L"serial",N(double(row.serial))},{L"frame",N(double(row.frame))},{L"epoch",N(double(row.epoch))},{L"owner",N(double(row.owner))},{L"accessible",N(double(row.accessible))},{L"bubble",N(row.bubble)},{L"part",S(row.part)},{L"phase",S(row.phase)},{L"value",N(row.value)},{L"target",N(row.target)}}));
+    for(auto const& [key,row]:impl->appliedLayouts)placements.Append(shared(*row));
+    for(auto const& captured:impl->layoutReceipts){
+        auto const& row=*captured;auto frame=shared(row);A samples;
+        for(size_t i=0;i<std::min(uint64_t(row.bounds.size()),row.count);++i)samples.Append(O({{L"frame",N(double(row.frames[i]))},{L"bounds",rectangle(row.bounds[i])},{L"expected",rectangle(row.expected[i])}}));
+        for(auto const& field:O({{L"first_frame",N(double(row.first))},{L"last_frame",N(double(row.last))},{L"owner",N(double(row.owner))},{L"accessible",N(double(row.accessible))},
+            {L"identity_changed",B(row.identityChanged)},{L"scale",N(row.scale)},{L"count",N(double(row.count))},{L"maximum_error_px",N(row.maximumError)},{L"samples",samples}}))frame.Insert(field.Key(),field.Value());
+        layouts.Append(frame);
+    }
+    return O({{L"frame",N(double(impl->traceFrame))},{L"serial",N(double(impl->traceSerial))},{L"placement_serial",N(double(impl->placementSerial))},{L"overflow",N(double(impl->traceOverflow))},{L"transitions",transitions},{L"placements",placements},{L"layouts",layouts}});
 }
 A WorkspaceBubbles::InputRegions(UIElement const& reference)const{
     A result;if(!impl->layer.IsLoaded())return result;

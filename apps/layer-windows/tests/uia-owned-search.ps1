@@ -1,4 +1,4 @@
-$ErrorActionPreference='Stop'
+﻿$ErrorActionPreference='Stop'
 & {
  Add-Type -TypeDefinition @'
 namespace CapyShortcutFocusTest {
@@ -1173,6 +1173,25 @@ Write-Output 'Actual HeaderPlacement menu transition uses the available desktop 
 $bubbleTokens=$null;$bubbleErrors=$null
 $bubbleAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/BubbleVisualChecks.ps1'),[ref]$bubbleTokens,[ref]$bubbleErrors)
 if(@($bubbleErrors).Count){throw ($bubbleErrors|Out-String)}
+
+& {
+    $transition=$bubbleAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Assert-BubbleVisualBeadTransitions'},$true)
+    if(!$transition){throw 'Missing actual bead transition fixture'}
+    $physicalAssignment=@($transition.FindAll({param($node)$node-is[Management.Automation.Language.AssignmentStatementAst]-and$node.Left.Extent.Text-eq'$physical'},$true))
+    if($physicalAssignment.Count-ne1){throw 'Missing unique actual bead physical coordinate conversion'}
+    . ([scriptblock]::Create($physicalAssignment[0].Extent.Text))
+    foreach($case in @(
+        @{scale=[decimal]1;origin=@{X=-200.25;Y=80.5};bounds=@{x=-3.5;y=4.25;width=36.5;height=18.25};expected=@(-203.75,84.75,36.5,18.25)},
+        @{scale=[decimal]1.5;origin=@{X=40.125;Y=-100.75};bounds=@{x=2.5;y=-3.25;width=10.5;height=20.25};expected=@(43.875,-105.625,15.75,30.375)},
+        @{scale=[decimal]2;origin=@{X=-10.5;Y=-20.25};bounds=@{x=-2.25;y=-4.5;width=8.125;height=6.75};expected=@(-15,-29.25,16.25,13.5)}
+    )){
+        $origin=[pscustomobject]$case.origin;$scale=$case.scale
+        $actual=@(& $physical ([pscustomobject]$case.bounds))
+        if($actual.Count-ne4){throw 'Bead physical conversion did not return four scalar coordinates'}
+        foreach($axis in 0..3){if($actual[$axis]-isnot[ValueType]-or$actual[$axis]-ne$case.expected[$axis]){throw "Bead physical conversion changed coordinate $axis at scale $scale"}}
+    }
+    'Actual bead physical conversion preserves four scalar coordinates at 100/150/200 percent with negative and fractional geometry.'
+}
 Add-Type -TypeDefinition @'
 namespace CapyBubbleOverlayTest {
  public static class Input {
@@ -1213,12 +1232,12 @@ namespace CapyBubbleOverlayTest {
         throw $Message
     }
     function View([long]$Id){[pscustomobject]@{selected=$true;enabled=$true;kind='dial'}}
-    function Relative([long]$Id,$Offset){[pscustomobject]@{x=100;y=100}}
+    function Relative([long]$Id,$Offset){if($script:outsideOverlay -and $Offset[0] -eq -10){return [pscustomobject]@{x=600;y=600}};[pscustomobject]@{x=(118+$Offset[0]);y=(107+$Offset[1])}}
     function Center([long]$Id){[pscustomobject]@{x=[CapyBubbleOverlayTest.Input]::X;y=100}}
     function Control([string]$Id,[switch]$Arranged){[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=0}}}
     function Model{[pscustomobject]@{state=[pscustomobject]@{palette=[pscustomobject]@{text='#202020'}}}}
     function Bubble-VisualState([long]$Id){'unchanged'}
-    function Bubble-VisualBounds($Element){if([CapyBubbleOverlayTest.Input]::Held){return ,@(0.,0.,104.,104.)};return ,@(0.,0.,100.,100.)}
+    function Bubble-VisualBounds($Element){if([CapyBubbleOverlayTest.Input]::Held){return ,@(48.,48.,104.,104.)};return ,@(50.,50.,100.,100.)}
     function Patch-Pixels($Point){'stable'}
     function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
         $script:pixelReads++
@@ -1227,7 +1246,7 @@ namespace CapyBubbleOverlayTest {
     }
     function Read-BubbleVisualPatch($Point,[string]$Path){
         $value=switch($script:overlayPhase){'hover'{188};'pressed'{if($script:badColor){200}else{176}};default{200}}
-        return ,@((1..81)|ForEach-Object {@{r=$value;g=$value;b=$value}})
+        return ,@((1..81)|ForEach-Object {$pixel=if($script:popupShadow -and $script:overlayPhase -eq 'pressed' -and $Point.x -eq 100 -and $Point.y -eq 100 -and $_ -gt 78){0}else{$value};@{r=$pixel;g=$pixel;b=$pixel}})
     }
     function Screen-Pixels([int]$X,[int]$Y,[string]$Path){'screen'}
     function Capture([string]$Name,[switch]$Composed,[switch]$WithModel){}
@@ -1247,6 +1266,14 @@ namespace CapyBubbleOverlayTest {
         $rejected=$false
         try{Assert-BubbleVisualStates 23}catch{if($_.Exception.Message -notlike 'Selected bubble pressed pixels do not match its text-color overlay:*'){throw};$rejected=$true}
         if(!$rejected){throw 'Applied phase accepted wrong overlay pixels'}
+        $script:badColor=$false;$script:popupShadow=$true;$script:outsideOverlay=$false;$script:overlayPhase='idle';$script:pixelReads=0
+        [CapyBubbleOverlayTest.Input]::X=100;[CapyBubbleOverlayTest.Input]::Held=$false
+        Assert-BubbleVisualStates 23
+        $script:popupShadow=$false;$script:outsideOverlay=$true;$script:overlayPhase='idle';$script:pixelReads=0;$rejected=$false
+        [CapyBubbleOverlayTest.Input]::X=100;[CapyBubbleOverlayTest.Input]::Held=$false
+        try{Assert-BubbleVisualStates 23}catch{if($_.Exception.Message -cne 'Overlay sample patch is not inside the native face'){throw};$rejected=$true}
+        if(!$rejected){throw 'Overlay sampler accepted a patch outside the native face'}
+        'Actual pressed overlay excludes anchored popup shadow, keeps contact input, and rejects wrong colors and outside-face measurement.'
     }finally{Remove-Item -LiteralPath $script:run -Recurse -Force -ErrorAction SilentlyContinue}
 }
 Write-Output 'Actual bubble overlay sequence waits for applied Fill before composed pixels, rejects missing and wrong owned phase, and retains its pressed pixel assertion.'
@@ -1310,63 +1337,185 @@ Write-Output 'Actual HDR focus assertion selects the numeric minimum in both ret
 
 
 & {
-    foreach($name in 'Bubble-VisualBounds','Assert-BubbleVisualOrbitReturn'){
+    Add-Type -TypeDefinition @'
+using System.Collections.Generic;
+namespace CapyBubbleReopenTest {
+ public static class Driver {
+  public static List<string> Taps=new List<string>();public static List<int> Times=new List<int>();public static int Clock;
+  public static void Tap(string device,int x,int y,int hold){Taps.Add(device+":"+x+":"+y+":"+hold);Times.Add(Clock);}
+ }
+}
+'@
+    foreach($name in 'Find-BubbleVisualRetirement','Assert-BubbleVisualTransition','Wait-BubbleVisualTransition','Invoke-BubbleVisualReopen'){
+        $definition=$bubbleAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq$name}.GetNewClosure(),$true)
+        if(!$definition){throw "Missing actual $name fixture function"}
+        . ([scriptblock]::Create($definition.Extent.Text.Replace('[CapyRowPointer]','[CapyBubbleReopenTest.Driver]')))
+    }
+    function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt5;$poll++){[CapyBubbleReopenTest.Driver]::Clock+=1000;if(& $Condition){return}};throw $Message}
+    function Bubble-VisualFrames {
+        $state.reads++;$count=[CapyBubbleReopenTest.Driver]::Taps.Count
+        if($count-lt1-or$count-gt2){throw 'Reopen sampled native retirement outside its two taps'}
+        $retiring=@{serial=2;frame=20;epoch=1;owner=100;accessible=200;bubble=27;part=$state.part;phase='retiring';value=1;target=0}
+        switch($case){
+            'wrong-bubble'{$retiring.bubble=28}
+            'wrong-part'{$retiring.part='card-wrong'}
+            'missing-epoch'{$retiring.Remove('epoch')}
+            'missing-owner'{$retiring.owner=0}
+        }
+        $events=@()
+        if([CapyBubbleReopenTest.Driver]::Clock-ge3000-and$case-ne'missing-retirement'){$events+=,$retiring}
+        if($count-eq2){
+            $active=@{serial=4;frame=21;epoch=1;owner=100;accessible=200;bubble=27;part=$state.part;phase='active';value=0;target=1}
+            if($case-eq'wrong-epoch'){$active.epoch=2}
+            if($case-eq'wrong-owner'){$active.owner=101}
+            if($case-eq'completed'){$events+=,@{serial=3;frame=21;epoch=1;owner=100;accessible=200;bubble=27;part=$state.part;phase='removed';value=0;target=0};$active.owner=101;$active.accessible=201}
+            $events+=,$active
+        }
+        @{overflow=0;transitions=$events}
+    }
+    foreach($part in @('card',@{kind='swatch';index=6})){
+        foreach($device in 'mouse','pen','touch'){
+            foreach($case in 'delayed','completed','wrong-bubble','wrong-part','missing-epoch','missing-owner','wrong-epoch','wrong-owner','missing-retirement'){
+                [CapyBubbleReopenTest.Driver]::Taps.Clear();[CapyBubbleReopenTest.Driver]::Times.Clear();[CapyBubbleReopenTest.Driver]::Clock=0
+                $state=@{reads=0;part=$(if($part-is[string]){$part}else{'bead:'+($part|ConvertTo-Json -Compress)})};$failure=$null;$result=$null
+                try{$result=Invoke-BubbleVisualReopen 27 $part 1 $device @{x=10;y=20} @{x=30;y=40}}catch{$failure=$_}
+                $taps=@([CapyBubbleReopenTest.Driver]::Taps)
+                if(!$taps.Count-or$taps[0]-cne($device+':10:20:10')){throw 'Reopen changed its outside tap or contact duration'}
+                if($case-in@('delayed','completed')){
+                    if($failure){throw $failure}
+                    if(($taps-join',')-cne($device+':10:20:10,'+$device+':30:40:0')-or$state.reads-ne4-or([CapyBubbleReopenTest.Driver]::Times-join',')-cne'0,3000'){throw 'Delayed native acknowledgement repeated or reordered pointer taps'}
+                    if($result.phase-cne$(if($case-eq'completed'){'completed'}else{'interrupted'})){throw 'Delayed publication changed native lifecycle classification'}
+                }else{
+                    $expected=switch($case){
+                        'wrong-owner'{'Interrupted native bubble retirement replaced its retained peer'}
+                        {$_-in@('missing-owner','missing-epoch')}{'Native bubble retirement has no owned identity'}
+                        default{'Native bubble did not record an ordered owned retirement and reopen'}
+                    }
+                    if(!$failure-or$failure.Exception.Message-cne$expected){throw "Reopen accepted $case or lost its native acknowledgement failure: $failure"}
+                    $afterTap=$case-in@('wrong-epoch','wrong-owner')
+                    if($taps.Count-ne$(if($afterTap){2}else{1})){throw 'Reopen tapped again before an owned retirement acknowledgement'}
+                }
+            }
+        }
+    }
+    'Actual card and bead reopen paths accept a retirement first published at simulated 3 seconds and preserve both pointer tap packets while rejecting missing/foreign native identity.'
+}
+
+
+& {
+    foreach($name in 'Bubble-VisualBounds','Wait-BubbleVisualBead','Bubble-VisualFrames','Find-BubbleVisualRetirement','Assert-BubbleVisualTransition','Assert-BubbleVisualAppliedPlacement','Assert-BubbleVisualOrbitReturn'){
         $definition=$bubbleAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq$name}.GetNewClosure(),$true)
         if(!$definition){throw "Missing actual $name fixture function"}
         . ([scriptblock]::Create($definition.Extent.Text))
     }
-    function Orbit-Peer($Values,[bool]$Empty=$false){
-        [pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{X=$Values[0];Y=$Values[1];Width=$Values[2];Height=$Values[3];IsEmpty=$Empty}}}
-    }
+    function Orbit-Peer($Values,[bool]$Empty=$false){[pscustomobject]@{Current=[pscustomobject]@{BoundingRectangle=[pscustomobject]@{X=$Values[0];Y=$Values[1];Width=$Values[2];Height=$Values[3];IsEmpty=$Empty}}}}
     $transition=$bubbleAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Assert-BubbleVisualBeadTransitions'},$true)
     $outward=$transition.Find({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Wait-Until'-and@($node.CommandElements|Where-Object {$_.Value-eq'Held palette orbit did not move beyond its original position'}).Count-eq1},$true)
     $turnedBounds=$transition.Find({param($node)$node-is[Management.Automation.Language.AssignmentStatementAst]-and$node.Left.Extent.Text-eq'$evidence.orbit.turned_bounds'},$true)
-    $sampling=$transition.Find({param($node)$node-is[Management.Automation.Language.DoWhileStatementAst]-and$node.Extent.Text.Contains('Bubble-VisualBounds $peer')},$true)
-    if(!$outward-or!$turnedBounds-or!$sampling){throw 'Missing actual native orbit return observation sequence'}
+    if(!$outward-or!$turnedBounds){throw 'Missing actual native orbit return observation sequence'}
     $observe=$bubbleAst.Extent.Text.Substring($outward.Extent.EndOffset,$turnedBounds.Extent.EndOffset-$outward.Extent.EndOffset)
-    $Id=27;$script:orbitLookups=0;$evidence=@{orbit=@{}}
+    $Id=27;$script:orbitLookups=0;$script:orbitReturning=$false;$evidence=@{orbit=@{}}
     $peer=Orbit-Peer @([double]::PositiveInfinity,[double]::PositiveInfinity,[double]::NegativeInfinity,[double]::NegativeInfinity) -Empty $true
     $live=Orbit-Peer @(100.,0.,36.,36.)
     $bead=[pscustomobject]@{label='Swatch 6';placement=@{bead=@{kind='swatch';index=6};center=@(100,0);size=36}}
-    function View([long]$Bubble){if($Bubble-ne27){throw 'Orbit observed another bubble'};@{beads=@($bead)}}
-    function Bubble-VisualBead([long]$Bubble,$Bead){
+    function View([long]$Bubble){
+        if($Bubble-ne27){throw 'Orbit observed another bubble'}
+        $current=if($script:orbitReturning){[pscustomobject]@{label='Swatch 6';placement=@{bead=@{kind='swatch';index=6};center=@(20,0);size=36}}}else{$bead}
+        @{beads=@($current)}
+    }
+    function Bubble-VisualBead([long]$Bubble,$Bead,[switch]$Pending){
         if($Bubble-ne27-or$Bead.label-ne'Swatch 6'-or$Bead.placement.bead.kind-ne'swatch'-or$Bead.placement.bead.index-ne6){throw 'Orbit reacquired another logical bead'}
         $script:orbitLookups++;$live
     }
     function Start-Sleep([int]$Milliseconds){}
+    function Wait-Until($Condition,$Message){for($i=0;$i-lt5;$i++){if(& $Condition){return}};throw $Message}
     . ([scriptblock]::Create($observe))
-    if($script:orbitLookups-ne1-or$peer-ne$live-or($evidence.orbit.turned_bounds-join',')-ne'100,0,36,36'){throw 'Orbit retained the retired outward peer instead of acquiring its current logical bead before return'}
-    $live.Current.BoundingRectangle.X=20.
-    $returnClock=[pscustomobject]@{Elapsed=[pscustomobject]@{TotalMilliseconds=10.};ElapsedMilliseconds=300}
-    $samples=[Collections.Generic.List[object]]::new()
-    . ([scriptblock]::Create($sampling.Extent.Text))
-    if($samples.Count-ne1-or($samples[0].bounds-join',')-ne'20,0,36,36'-or$script:orbitLookups-ne1){throw 'Actual return sampling did not observe the acquired live bead'}
-    foreach($invalid in @(
-        (Orbit-Peer @(0.,0.,36.,36.) -Empty $true),
-        (Orbit-Peer @(0.,0.,0.,36.)),
-        (Orbit-Peer @(0.,0.,36.,-1.)),
-        (Orbit-Peer @([double]::NaN,0.,36.,36.)),
-        (Orbit-Peer @(0.,[double]::PositiveInfinity,36.,36.)),
-        (Orbit-Peer @(0.,0.,[double]::NegativeInfinity,36.))
-    )){
+    if($script:orbitLookups-ne1-or$peer-ne$live-or($evidence.orbit.turned_bounds-join',')-ne'100,0,36,36'){throw 'Orbit retained its retired outward peer'}
+    foreach($invalid in @((Orbit-Peer @(0.,0.,36.,36.) -Empty $true),(Orbit-Peer @(0.,0.,0.,36.)),(Orbit-Peer @(0.,0.,36.,-1.)),(Orbit-Peer @([double]::NaN,0.,36.,36.)),(Orbit-Peer @(0.,[double]::PositiveInfinity,36.,36.)))){
         $failure=$null;try{$null=Bubble-VisualBounds $invalid}catch{$failure=$_}
-        if(!$failure-or$failure.Exception.Message-notlike'Native bubble visual *'){throw 'Native visual geometry accepted empty, nonpositive or non-finite bounds'}
+        if(!$failure-or$failure.Exception.Message-notlike'Native bubble visual *'){throw 'Native visual geometry accepted invalid bounds'}
     }
-    foreach($case in 'snap','stationary','late','gap','short','tween'){
-        $turned=@(100.,0.,36.,36.)
-        $samples=@(@{ms=10.;bounds=@(20.,0.,36.,36.)},@{ms=20.;bounds=@(20.,0.,36.,36.)},@{ms=30.;bounds=@(20.,0.,36.,36.)})
+    foreach($case in 'snap','slow','stationary','short','gap','tween','later-tween','invalid','early-wrong-size-recovers','early-wrong-target-recovers'){
+        $turned=@(100.,0.,36.,36.);$maximum=0.
+        $samples=@(0..2|ForEach-Object {@{frame=11+$_;ms=10.*($_+1);bounds=@(20.,0.,36.,36.);expected=@(20.,0.,36.,36.)}})
         $message=switch($case){
-            'stationary'{foreach($sample in $samples){$sample.bounds=$turned};'Native orbit return did not acknowledge movement'}
-            'late'{$samples[0].ms=220.;'Native orbit samples did not resolve movement before a 220 ms tween could complete'}
-            'gap'{$samples[0].ms=76.;'Native orbit samples did not resolve movement before a 220 ms tween could complete'}
+            'slow'{foreach($sample in $samples){$sample.ms*=100};$null}
+            'stationary'{foreach($sample in $samples){$sample.bounds=$turned;$sample.expected=$turned};'Native orbit return did not acknowledge movement'}
             'short'{$samples=$samples[0..1];'Native orbit return needs at least two samples after its first movement'}
+            'gap'{$samples[1].frame=13;$samples[2].frame=14;'Native orbit return did not retain ordered distinct frames'}
             'tween'{$samples[0].bounds=@(50.,0.,36.,36.);'Returning inside press slop animated native bead bounds instead of snapping:*'}
+            'early-wrong-target-recovers'{$samples[0].bounds=@(50.,0.,36.,36.);'Returning inside press slop animated native bead bounds instead of snapping:*'}
+            'early-wrong-size-recovers'{$samples[0].bounds=@(20.,0.,48.,48.);'Returning inside press slop animated native bead bounds instead of snapping:*'}
+            'later-tween'{$maximum=3.;'Returning inside press slop animated native bead bounds instead of snapping:*'}
+            'invalid'{$samples[0].bounds[2]=[double]::NaN;'Native orbit return retained invalid frame geometry'}
         }
-        $failure=$null;try{$result=Assert-BubbleVisualOrbitReturn $samples $turned}catch{$failure=$_}
-        if($case-eq'snap'){if($failure){throw $failure};if($result.maximum_post_change_error_px-ne0-or$result.post_change_samples-ne2){throw 'Native orbit snap control lost its original geometry assertions'}}
+        $failure=$null;try{$result=Assert-BubbleVisualOrbitReturn $samples $turned $maximum}catch{$failure=$_}
+        if($case-in@('snap','slow')){if($failure){throw $failure};if($result.maximum_post_change_error_px-ne0-or$result.post_change_samples-ne2){throw 'Native orbit lost exact first-frame and two-later-frame geometry'}}
         elseif(!$failure-or$failure.Exception.Message-notlike$message){throw "Native orbit accepted $case return geometry: $failure"}
     }
-    'Actual bead return acquires its live logical peer before measurement, rejects empty/non-finite geometry and retains movement, 220 ms/75 ms timing, sample-count and no-tween assertions.'
+    $returnWait=$transition.Find({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Wait-Until'-and@($node.CommandElements|Where-Object {$_.Value-eq'Native bead did not follow the held orbit back inside the starting slop'}).Count-eq1},$true)
+    if(!$returnWait){throw 'Missing actual shared-placement frame acknowledgement'}
+    $script:orbitReturning=$true
+    $binding=@{after=10;epoch=1;source='{"kind":"control"}';part='bead:{"kind":"swatch","index":6}';bubble=27;target=@(20,0);size=36;scale=1}
+    function Workspace-Root{
+        $script:orbitReads++
+        $samples=@(0..2|ForEach-Object {@{frame=11+$_;bounds=@{x=20;y=0;width=36;height=36};expected=@{x=20;y=0;width=36;height=36}}})
+        $row=@{token=11;applied_frame=10;first_frame=11;last_frame=13;count=[Math]::Min(3,$script:orbitReads);bubble=27;part='bead:{"kind":"swatch","index":6}';target=@(20,0);size=@(36,36);epoch=1;source=@{kind='control'};active=$true;owner=100;accessible=200;identity_changed=$false;scale=1;samples=$samples;maximum_error_px=0}
+        switch($script:orbitSchedule){
+            'wrong-bead'{$row.part='bead:{"kind":"palette","index":6}'};'wrong-target'{$row.target=@(40,0)};'stale'{$row.token=1};'short'{$row.count=2}
+            'wrong-size'{$row.size=@(40,40)};'wrong-source'{$row.source=@{kind='medium'}};'wrong-epoch'{$row.epoch=2}
+            'late-first'{$row.first_frame=12;$row.last_frame=14;foreach($sample in $samples){$sample.frame++}}
+            'missing-middle'{$row.last_frame=14};'owner-recovered'{$row.identity_changed=$true};'scale'{$row.scale=1.5}
+        }
+        [pscustomobject]@{Current=@{ItemStatus=(@{bubble_frames=@{frame=14;serial=20;placement_serial=11;overflow=0;layouts=@($row)}}|ConvertTo-Json -Depth 12 -Compress)}}
+    }
+    foreach($script:orbitSchedule in 'slow','wrong-bead','wrong-target','stale','short','wrong-size','wrong-source','wrong-epoch','late-first','missing-middle','owner-recovered','scale'){
+        $script:orbitReads=0;$observed=@{receipt=$null;bead=$null};$failure=$null
+        try{. ([scriptblock]::Create($returnWait.Extent.Text))}catch{$failure=$_}
+        if($script:orbitSchedule-eq'slow'){if($failure){throw $failure};if($script:orbitReads-ne3-or$observed.receipt.count-ne3){throw 'Orbit did not wait for three frames of the returned shared placement'}}
+        else{
+            $expected=switch($script:orbitSchedule){
+                {$_-in@('wrong-size','wrong-source','wrong-epoch')}{'Native orbit frame changed its applied shared placement identity or size'}
+                {$_-in@('late-first','missing-middle')}{'Native orbit frame evidence omitted its first applied frames'}
+                {$_-in@('owner-recovered','scale')}{'Native orbit return changed its native owner, peer or scale'}
+                default{'Native bead did not follow the held orbit back inside the starting slop'}
+            }
+            if(!$failure-or$failure.Exception.Message-cne$expected){throw "Orbit accepted $script:orbitSchedule acknowledgement: $failure"}
+        }
+    }
+    foreach($case in 'interrupted','completed','completed-address-reused','early-replace','wrong-peer','wrong-epoch','incomplete-removal','overflow'){
+        $retiring=@{serial=2;frame=20;epoch=1;owner=100;accessible=200;bubble=27;part='card';phase='retiring';value=1;target=0}
+        $active=@{serial=4;frame=21;epoch=1;owner=100;accessible=200;bubble=27;part='card';phase='active';value=0;target=1}
+        $events=@($retiring);$overflow=0
+        switch($case){
+            {$_-in@('completed','completed-address-reused','incomplete-removal')}{$events+=@{serial=3;frame=21;epoch=1;owner=100;accessible=200;bubble=27;part='card';phase='removed';value=0;target=0}}
+        }
+        switch($case){
+            'completed'{$active.owner=101;$active.accessible=201}
+            'early-replace'{$active.owner=101}
+            'wrong-peer'{$active.accessible=201}
+            'wrong-epoch'{$active.epoch=2}
+            'incomplete-removal'{$events[1].value=.5}
+            'overflow'{$overflow=1}
+        }
+        $failure=$null;try{$result=Assert-BubbleVisualTransition @{overflow=$overflow;transitions=@($events)+@($active)} 27 'card' 1}catch{$failure=$_}
+        if($case-in@('interrupted','completed','completed-address-reused')){
+            if($failure){throw $failure};$phase=if($case-eq'interrupted'){'interrupted'}else{'completed'}
+            if($result.phase-cne$phase-or$result.peer_reused-ne($phase-eq'interrupted')){throw 'Native bubble transition changed its identity contract'}
+        }elseif(!$failure){throw "Native bubble transition accepted $case"}
+    }
+    foreach($maximum in @($null,[double]::NaN,[double]::PositiveInfinity,-1)){
+        $failure=$null;try{Assert-BubbleVisualOrbitReturn @(@{frame=1;bounds=@(20,0,36,36);expected=@(20,0,36,36)}) @(100,0,36,36) $maximum}catch{$failure=$_}
+        if(!$failure-or$failure.Exception.Message-cne'Native orbit return omitted its all-frame geometry bound'){throw 'Native orbit accepted missing or invalid all-frame evidence'}
+    }
+    $coverage=$transition.Find({param($node)$node-is[Management.Automation.Language.InvokeMemberExpressionAst]-and$node.Member.Extent.Text-eq'Add'-and$node.Extent.Text.Contains('native-palette-bead-')},$true)
+    if(!$coverage){throw 'Missing actual live bead lifecycle coverage label'}
+    $checks=[Collections.Generic.List[string]]::new()
+    foreach($phase in 'interrupted','completed'){
+        $evidence=@{revival=@{transition=@{phase=$phase}}};. ([scriptblock]::Create($coverage.Extent.Text))
+    }
+    if(($checks -join ',') -cne 'native-palette-bead-interrupted-retirement-and-exact-state-restoration,native-palette-bead-completed-retirement-and-exact-state-restoration'){throw 'Completed live bead retirement claimed an interrupted within-duration revival'}
+    'Actual orbit frame acknowledgement preserves shared identity, first-frame snap, all-frame error and peer lifecycle across slow reads.'
 }
 
 & {
@@ -3272,4 +3421,18 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
   if($empty -cne 'empty' -or $filled -cne 'filled' -or $script:textureParks -ne 2 -or $script:textureAcknowledgements -ne 2){throw "Texture endpoint schedule failed: $schedule"}
  }
  'Actual texture endpoints: baseline-stale and filled-stale acknowledged idle presentation, kept cursor parking and exact hashes.'
+}
+
+& {
+ $client=Join-Path $PSScriptRoot '..'
+ $workspace=Get-Content (Join-Path $client 'WorkspaceView.cpp') -Raw
+ $bubbles=Get-Content (Join-Path $client 'WorkspaceBubbles.cpp') -Raw
+ $canvas=Get-Content (Join-Path $client 'CanvasWindow.cpp') -Raw
+ $rendering=[regex]::Match($workspace,'(?s)resizeTraceFrame\s*=\s*CompositionTarget::Rendering\b.*?(?=data->strokes\s*=)').Value
+ $layout=[regex]::Match($bubbles,'(?s)void\s+WorkspaceBubbles::Impl::traceLayout\s*\(\s*\).*?(?=void\s+WorkspaceBubbles::Impl::present\s*\()').Value
+ if(!$rendering -or !$layout -or $rendering -match '\btracePresentation\s*\(' -or $layout -match '\boverlayApplied\s*\('){throw 'Frame collectors must not publish full workspace snapshots'}
+ $services=[regex]::Matches($canvas,'(?s)if\s*\(\s*pollServices\s*\)\s*\{(?<body>.*?)PresentNavigators\s*\(')
+ if($services.Count -ne 1 -or $services[0].Groups['body'].Value -notmatch '\bQueueWorkspaceTrace\s*\('){throw 'Owner service must request workspace trace publication independently of snapshots'}
+ $queue=[regex]::Match($canvas,'(?s)void\s+CanvasWindow::QueueWorkspaceTrace\s*\(\s*\).*?(?=void\s+CanvasWindow::TraceTextInput\s*\()').Value
+ if(!$queue -or $queue -notmatch 'workspaceTraceQueued\.exchange\(true\)' -or $queue -notmatch 'dispatcher\.TryEnqueue' -or $queue -notmatch 'workspace->PublishTrace\s*\(' -or $queue -notmatch 'queued\.store\(false\)' -or $queue -notmatch 'workspaceTraceQueued\.store\(false\)'){throw 'Workspace trace publication must stay coalesced on the UI dispatcher'}
 }

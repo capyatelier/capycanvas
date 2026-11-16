@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,
+﻿param([Parameter(Mandatory)][string]$Executable,
     [ValidateSet('dark-mouse','dark-touch','dark-pen','light-mouse','light-touch','light-pen','edge-dark-mouse','edge-dark-touch','edge-dark-pen','edge-light-mouse','edge-light-touch','edge-light-pen','row-pair-dark','row-pair-light','card-metrics-dark','card-metrics-light','inertia-dark','inertia-light','native-controls-dark','native-controls-light','blenders-dark','blenders-light','sliders-dark','sliders-light','blender-controls-dark','blender-controls-light','hdr-dark','hdr-light','hdr-f16-dark','hdr-f16-light','slider-preference-dark','slider-preference-light','retire-dark-mouse')][string]$Variant='dark-mouse',[switch]$RapidOnly,[switch]$ZenOnly,[switch]$SlidersOnly,[switch]$BlendersOnly,[switch]$EraserOnly,[switch]$EraserLightOnly,[switch]$HistoryOnly,[switch]$HistoryLightOnly,[switch]$NativeControlsOnly,[switch]$ScrollEpochOnly,[switch]$NumericOnly,[switch]$CurveOnly,[switch]$MenuOnly,[switch]$ObserverOnly,[switch]$VisualOnly,[switch]$BeadTransitionsOnly,[switch]$HdrOnly,[switch]$HdrRetirementOnly,[switch]$HdrPreviewOnly,[switch]$HdrContactsOnly,[switch]$ColorUndoOnly,[ValidateSet('F16','F32')][string]$HdrDepth='F16')
 $ErrorActionPreference='Stop'
 $retireOnly=$Variant -eq 'retire-dark-mouse';if($retireOnly){$Variant='dark-mouse'}
@@ -38,10 +38,8 @@ if($HdrOnly -and !$PSBoundParameters.ContainsKey('Variant')){
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 if(!('CapyCanvasTouch' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'CanvasTouchDriver.cs')}
 if(!('CapyBubbleFixtureNative' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'BubbleFixtureNative.cs')}
-if(($RapidOnly -or $ObserverOnly -or $BeadTransitionsOnly) -and !('CapyBubbleFoldObserver' -as [type])){
-    Add-Type -AssemblyName WindowsBase
+if($ObserverOnly -and !('CapyBubbleFoldObserver' -as [type])){
     $foldReferences=if($PSVersionTable.PSEdition -eq 'Core'){(Get-ChildItem (Join-Path $PSHOME 'ref/*.dll')).FullName}else{@('System.dll','System.Core.dll','System.Runtime.Serialization.dll','System.Xml.dll')}
-    $foldReferences+=@([System.Windows.Automation.AutomationElement].Assembly.Location,[System.Windows.Automation.AutomationIdentifier].Assembly.Location,[System.Windows.Point].Assembly.Location)
     Add-Type -Path (Join-Path $PSScriptRoot 'BubbleFoldObserver.cs') -ReferencedAssemblies ($foldReferences|Select-Object -Unique)
 }
 if($ObserverOnly){
@@ -1387,14 +1385,10 @@ function Rapid-Reopen([long]$Id){
     }
     $center=Center $Id;$outside=Screen ($width*.90) ($height*.78)
     if($RapidOnly){
-        $observer=[CapyBubbleFoldObserver]::new((State-File),$Id,(Card $Id))
-        try{$contactMilliseconds=[CapyRowPointer]::RapidReopen($Device,$outside.x,$outside.y,$center.x,$center.y,$observer.NativeFoldSignal);$reopenMilliseconds=([CapyRowPointer]::RapidReopenDownTicks-$observer.NativeFoldDetectedTicks)*1000.0/[Diagnostics.Stopwatch]::Frequency;Start-Sleep -Milliseconds 100}
-        finally{$observer.Dispose()}
-        $foldedFace=Find "tool-bubble-$Id"
-        $nativeIntervalUpper=([CapyRowPointer]::RapidReopenDownTicks-$observer.NativeLastOpenTicks)*1000.0/[Diagnostics.Stopwatch]::Frequency
-        @{fold_to_reopen_down_ms=$reopenMilliseconds;outside_to_reopen_ms=$contactMilliseconds;fold_duration_ms=150;observer='native-card-peer';model_observation='unobserved';fold_observed=($observer.NativeFoldDetectedTicks -gt 0);native_fold_observed=($observer.NativeFoldDetectedTicks -gt 0);native_fold_ticks=$observer.NativeFoldDetectedTicks;native_last_open_ticks=$observer.NativeLastOpenTicks;native_fold_to_down_upper_bound_ms=$nativeIntervalUpper;reopen_down_ticks=[CapyRowPointer]::RapidReopenDownTicks;samples=$observer.Samples;reopen_point=$center;outside_point=$outside;native_face_bounds=$(if($foldedFace){$foldedFace.Current.BoundingRectangle.ToString()}else{$null})}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'rapid-reopen-timing.json')
-        if($observer.FoldSnapshot){[IO.File]::WriteAllText((Join-Path $run 'rapid-fold-snapshot.json'),$observer.FoldSnapshot)}
-        if($reopenMilliseconds -lt 0 -or $reopenMilliseconds -ge 150 -or $observer.NativeFoldDetectedTicks -eq 0 -or $nativeIntervalUpper -ge 150){throw "Rapid reopen not exercised: native interval upper bound $nativeIntervalUpper ms; detection to Down $reopenMilliseconds ms (limit 150 ms)"}
+        $transitionStart=(Bubble-VisualFrames).serial
+        $transition=Invoke-BubbleVisualReopen $Id 'card' $transitionStart $Device $outside $center
+        Wait-Until {$null -ne (View $Id).card} 'Native immediate tap did not reopen folding card'
+        $transition|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'rapid-reopen-frames.json')
     }else{
         Tap $outside;Wait-Until {$null -eq (View $Id).card} 'Outside contact did not fold card'
         $face=Control "tool-bubble-$Id" -Arranged;Tap (At "tool-bubble-$Id")

@@ -481,6 +481,30 @@ int main() {
     }
     std::cout<<"Retiring bubble parts fade on every frame however late motion replies arrive, and idle bubbles stop their frames\n";
 
+    for(double duration:{150.,220.}){
+        for(double interval:{8.,400.}){
+            CapyBubbles::Tween retiring{1};retiring.to(0,duration);
+            retiring.step(1000,false);assert(retiring.value==1);
+            double previous=retiring.value;
+            for(double elapsed=interval;elapsed<duration+interval;elapsed+=interval){
+                retiring.step(1000+elapsed,false);
+                assert(retiring.value<=previous&&retiring.value>=0);
+                assert((elapsed<duration?retiring.value>0:retiring.value==0));previous=retiring.value;
+            }
+            retiring.step(1000+duration+interval,false);assert(retiring.value==0);
+        }
+        CapyBubbles::Tween interrupted{1};interrupted.to(0,duration);
+        interrupted.step(0,false);interrupted.step(duration-1,false);assert(interrupted.value>0&&interrupted.value<1);
+        interrupted.step(duration,false);assert(interrupted.value==0);
+        interrupted.snap(1);interrupted.to(0,duration);interrupted.step(1000,false);interrupted.step(1000+duration/2,false);
+        auto fading=interrupted.value;assert(fading>0&&fading<1);interrupted.to(1,220);
+        interrupted.step(9000,false);assert(interrupted.value==fading);
+        interrupted.step(9110,false);assert(interrupted.value>fading&&interrupted.value<1);
+        interrupted.step(9220,false);assert(interrupted.value==1);
+        interrupted.to(0,duration);interrupted.step(10000,true);assert(interrupted.value==0);
+    }
+    std::cout<<"Card and bead retirement keep their 150/220 ms durations across fast and slow frames, reversal and reduced motion\n";
+
     for(uint32_t phase=0;phase<=4;++phase) {
         assert(CanvasPointerPhase(phase,false)==phase);
         assert(CanvasPointerPhase(phase,true)==4);

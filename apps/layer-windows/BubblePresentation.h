@@ -164,6 +164,32 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     bool stroke=false,releasing=false,disposed=false,hovering=false;
     bool pointerPen=false,pointerHidden=false;
     double restoreAt=-1;
+    struct TransitionReceipt {
+        uint64_t serial=0,frame=0,epoch=0,owner=0,accessible=0;
+        uint32_t bubble=0;
+        CapyUi::hstring part,phase;
+        double value=0,target=0;
+    };
+    struct LayoutReceipt {
+        uint64_t token=0,applied=0,first=0,last=0,epoch=0,owner=0,accessible=0,count=0;
+        uint32_t bubble=0;
+        CapyUi::hstring part;
+        CapyUi::J source;
+        CapyUi::Point target{};
+        winrt::Windows::Foundation::Size size{};
+        bool active=false,identityChanged=false;
+        double maximumError=0,scale=0;
+        std::array<winrt::Windows::Foundation::Rect,3> bounds{},expected{};
+        std::array<uint64_t,3> frames{};
+    };
+    bool tracing=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    uint64_t traceFrame=0,traceSerial=0,placementSerial=0,traceOverflow=0;
+    std::vector<TransitionReceipt> transitionReceipts;
+    std::vector<std::shared_ptr<LayoutReceipt>> layoutReceipts;
+    std::map<std::pair<uint32_t,CapyUi::hstring>,std::shared_ptr<LayoutReceipt>> appliedLayouts;
+    void tracePlacements(std::shared_ptr<CapyBubbles::Record> const&,bool alive=true);
+    void traceTransition(std::shared_ptr<CapyBubbles::Record> const&,std::shared_ptr<CapyBubbles::Part> const&,CapyUi::hstring const&);
+    void traceLayout();
     CapyUi::PressRepeat lastRing;
     CapyUi::ColorTouches colorTouches;
     ~Impl();

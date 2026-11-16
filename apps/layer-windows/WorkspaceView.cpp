@@ -863,7 +863,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"shaders_ready",B(flag(data->model,L"shaders_ready"))},{L"checkpoint_camera",object(object(data->model,L"windows_recovery"),L"camera")},
             {L"color_field_pixels",N(double(data->colorFieldPixels))},{L"texture_dialog",TextureDialogState(data)},
             {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
-            {L"workspace_update",workspaceUpdate()},{L"groups",positions},{L"columns",collapsed->Presentation()},{L"handles",grips},{L"elements",elements},
+            {L"bubble_frames",bubbles->TraceFrames()},{L"workspace_update",workspaceUpdate()},{L"groups",positions},{L"columns",collapsed->Presentation()},{L"handles",grips},{L"elements",elements},
             {L"window_resizing",B(windowResizing)},{L"native_resize_pending",B(resizeHandback)},
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},
@@ -1416,6 +1416,7 @@ JsonArray WorkspaceView::DrawerSources()const{return impl->data->drawerSources;}
 JsonArray WorkspaceView::OverlayInputRegions(UIElement const& reference)const{auto result=impl->bubbles->InputRegions(reference);for(auto value:impl->pressure->inputRegions(reference))result.Append(value);return result;}
 JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections,JsonArray& arcs,JsonArray& colors,JsonArray& panels)const{return impl->glass(reference,connections,arcs,colors,panels);}
 void WorkspaceView::MeasureChrome(){impl->layoutUpdated();}
+void WorkspaceView::PublishTrace(){impl->tracePresentation();}
 void WorkspaceView::ChromeSent(uint64_t revision){if(impl->data->chromeFrames->Sent(revision)||impl->resizeHandback){impl->presentBackgrounds();impl->drawers->PresentChrome();}}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};

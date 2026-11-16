@@ -152,6 +152,15 @@ static winrt::fire_and_forget PublishPanelMetrics(std::filesystem::path name,std
 void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     WriteTraceFile(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json",value);
 }
+void CanvasWindow::QueueWorkspaceTrace() {
+    if(!presentationTrace.enabled||workspaceTraceQueued.exchange(true))return;
+    if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
+        if(auto self=weak.lock()){
+            struct Reset {std::atomic<bool>& queued;~Reset(){queued.store(false);}} reset{self->workspaceTraceQueued};
+            if(!self->closing&&self->workspace)self->workspace->PublishTrace();
+        }
+    }))workspaceTraceQueued.store(false);
+}
 void CanvasWindow::TraceTextInput(bool pressed) {
     if(!textInputTrace)return;
     if(pressed)++textInputPresses;
@@ -1428,6 +1437,7 @@ void CanvasWindow::Run() {
                 }
             }
             if(pollServices){
+                QueueWorkspaceTrace();
                 auto serviceResult=capy_poll_services(host);
                 if(serviceResult<0){if(capy_device_lost(host))continue;Fail(NativeString(capy_error()).get());break;}
                 nextServices=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);

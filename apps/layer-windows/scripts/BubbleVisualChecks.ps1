@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Drawing
+﻿Add-Type -AssemblyName System.Drawing
 
 function New-BubbleHdrDrawing([string]$Depth){
     $script:HdrSdrId=(Model).windows_tabs.selected
@@ -636,29 +636,32 @@ function Assert-BubbleVisualChooserTags([long]$Id){
 function Assert-BubbleVisualStates([long]$Id){
     $view=View $Id
     if(!$view.selected -or !$view.enabled -or $view.kind -notin @('dial','brush','medium','controls')){throw 'Visual state check requires an enabled selected tool face'}
-    $point=Relative $Id @(-18,-7);$away=@{x=[int]($w.X+20);y=[int]($w.Y+20)}
+    $point=Relative $Id @(-18,-7);$samplePoint=Relative $Id @(-10,-15);$away=@{x=[int]($w.X+20);y=[int]($w.Y+20)}
     $face=Control "tool-bubble-$Id" -Arranged;$prefix=Join-Path $run "bubble-$Id-visual"
     $color=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.text)
     $ink=@{r=[int]$color.R;g=[int]$color.G;b=[int]$color.B}
-    $before=Bubble-VisualState $Id;$evidence=[ordered]@{id=$Id;point=$point;ink=$ink;scale=$scale}
+    $before=Bubble-VisualState $Id;$evidence=[ordered]@{id=$Id;point=$point;sample_point=$samplePoint;ink=$ink;scale=$scale}
     $down=$false;$visualFailure=$null
     try{
         [CapyRowPointer]::Hover($away.x,$away.y)
         Wait-BubbleOverlayPhase $Id 'idle'
-        $null=Wait-StablePixels {Patch-Pixels $point} -Composed
-        $baseline=Read-BubbleVisualPatch $point ($prefix+'-idle-patch.png')
+        $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
+        $baseline=Read-BubbleVisualPatch $samplePoint ($prefix+'-idle-patch.png')
         $idleBounds=Bubble-VisualBounds $face
+        $sampleX=([Math]::Abs($samplePoint.x-($idleBounds[0]+$idleBounds[2]/2))+4)/($idleBounds[2]/2)
+        $sampleY=([Math]::Abs($samplePoint.y-($idleBounds[1]+$idleBounds[3]/2))+4)/($idleBounds[3]/2)
+        if($sampleX*$sampleX+$sampleY*$sampleY -ge 1){throw 'Overlay sample patch is not inside the native face'}
         $null=Screen-Pixels $point.x $point.y ($prefix+'-idle.png')
         [CapyRowPointer]::Hover($point.x,$point.y)
         Wait-BubbleOverlayPhase $Id 'hover'
-        $null=Wait-StablePixels {Patch-Pixels $point} -Composed
-        $hover=Read-BubbleVisualPatch $point ($prefix+'-hover-patch.png')
+        $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
+        $hover=Read-BubbleVisualPatch $samplePoint ($prefix+'-hover-patch.png')
         $evidence.hover=Measure-BubbleVisualOverlay $baseline $hover $ink .07
         $null=Screen-Pixels $point.x $point.y ($prefix+'-hover.png')
         [CapyRowPointer]::Down('mouse',$point.x,$point.y);$down=$true
         Wait-BubbleOverlayPhase $Id 'pressed'
-        $null=Wait-StablePixels {Patch-Pixels $point} -Composed
-        $pressed=Read-BubbleVisualPatch $point ($prefix+'-pressed-patch.png')
+        $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
+        $pressed=Read-BubbleVisualPatch $samplePoint ($prefix+'-pressed-patch.png')
         $pressedBounds=Bubble-VisualBounds $face
         $evidence.pressed=Measure-BubbleVisualOverlay $baseline $pressed $ink .14
         $evidence.idle_bounds=$idleBounds;$evidence.pressed_bounds=$pressedBounds
@@ -670,8 +673,8 @@ function Assert-BubbleVisualStates([long]$Id){
             [CapyRowPointer]::Move($point.x,$point.y)
             Wait-Until {$at=Center $Id;[Math]::Abs($at.x-$origin.x) -lt 2 -and [Math]::Abs($at.y-$origin.y) -lt 2} 'Held bubble did not return to its starting position'
             Wait-BubbleOverlayPhase $Id 'hover'
-            $null=Wait-StablePixels {Patch-Pixels $point} -Composed
-            $returned=Read-BubbleVisualPatch $point ($prefix+"-returned-$cycle-patch.png")
+            $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
+            $returned=Read-BubbleVisualPatch $samplePoint ($prefix+"-returned-$cycle-patch.png")
             $evidence["returned-$cycle"]=Measure-BubbleVisualOverlay $baseline $returned $ink .07
         }
         $null=Screen-Pixels $point.x $point.y ($prefix+'-returned.png')
@@ -690,7 +693,7 @@ function Assert-BubbleVisualStates([long]$Id){
                         foreach($i in 0..3){if([Math]::Abs($bounds[$i]-$idleBounds[$i]) -gt .75){return $false}}
                         $true
                     } 'Escape did not restore idle native bounds before mouse release'
-                    $cancelled=Read-BubbleVisualPatch $point ($prefix+'-cancelled-patch.png')
+                    $cancelled=Read-BubbleVisualPatch $samplePoint ($prefix+'-cancelled-patch.png')
                     $evidence.after_escape_idle=Measure-BubbleVisualOverlay $baseline $cancelled $ink 0
                     $evidence.after_escape_hover=Measure-BubbleVisualOverlay $baseline $cancelled $ink .07
                 }finally{[CapyRowPointer]::Cancel()}
@@ -701,7 +704,7 @@ function Assert-BubbleVisualStates([long]$Id){
             try{[CapyRowPointer]::Hover($away.x,$away.y)}catch{$evidence.hover_cleanup_failure=$_.ToString();if(!$visualFailure){throw}}finally{$evidence|ConvertTo-Json -Depth 10|Set-Content ($prefix+'.json')}
         }
     }
-    $null=Wait-StablePixels {Patch-Pixels $point}
+    $null=Wait-StablePixels {Patch-Pixels $samplePoint}
     $after=Bubble-VisualState $Id
     if($after -ne $before){@{before=($before|ConvertFrom-Json);after=($after|ConvertFrom-Json)}|ConvertTo-Json -Depth 90|Set-Content ($prefix+'-state-change.json');throw 'Cancelled visual state checks changed the bubble, workspace or artwork'}
     foreach($phase in @('hover','pressed','returned-1','returned-2','returned-3')){
@@ -720,30 +723,102 @@ function Wait-BubbleVisualLayout{
         $settled.same -ge 5
     } 'Bubble edge scene did not settle'
 }
-function Bubble-VisualBead([long]$Id,$Bead){
+function Bubble-VisualBead([long]$Id,$Bead,[switch]$Pending){
     $point=Relative $Id $Bead.placement.center;$size=$Bead.placement.size*$scale
     $matches=@(foreach($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)){
         $current=$element.Current;$bounds=$current.BoundingRectangle
         if($current.ControlType -ne [System.Windows.Automation.ControlType]::Button -or $current.Name -ne $Bead.label -or $current.IsOffscreen -or $bounds.IsEmpty){continue}
         if([Math]::Abs($bounds.Width-$size) -le 2 -and [Math]::Abs($bounds.Height-$size) -le 2 -and [Math]::Abs($bounds.X+$bounds.Width*.5-$point.x) -le 2 -and [Math]::Abs($bounds.Y+$bounds.Height*.5-$point.y) -le 2){$element}
     })
+    if($Pending -and $matches.Count -eq 0){return $null}
     if($matches.Count -ne 1){throw "Expected one native bead matching its shared bounds: $($Bead.label)"}
     $matches[0]
 }
-function Assert-BubbleVisualOrbitReturn($Samples,$Turned){
-    $difference={param($a,$b) $maximum=0.;foreach($i in 0..3){$maximum=[Math]::Max($maximum,[Math]::Abs($a[$i]-$b[$i]))};$maximum}
-    $changed=-1;$gap=0.;$previous=0.
-    for($i=0;$i -lt $Samples.Count;$i++){
-        $gap=[Math]::Max($gap,$Samples[$i].ms-$previous);$previous=$Samples[$i].ms
-        if((& $difference $Samples[$i].bounds $Turned) -gt 2){$changed=$i;break}
+function Wait-BubbleVisualBead([long]$Id,$Bead){
+    $observed=@{peer=$null}
+    Wait-Until {$observed.peer=Bubble-VisualBead $Id $Bead -Pending;$null -ne $observed.peer} "Expected one native bead matching its shared bounds: $($Bead.label)"
+    $observed.peer
+}
+function Bubble-VisualFrames {
+    $frames=((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).bubble_frames
+    if($null -eq $frames.frame -or $null -eq $frames.serial -or $null -eq $frames.placement_serial -or $null -eq $frames.overflow -or $frames.overflow -ne 0){throw 'Native bubble frame evidence is missing or overflowed'}
+    $frames
+}
+function Find-BubbleVisualRetirement($Frames,[long]$Id,$Part,[long]$After){
+    if($null -eq $Frames.overflow -or $Frames.overflow -ne 0){throw 'Native bubble transition evidence is missing or overflowed'}
+    $retiring=@($Frames.transitions|Where-Object {
+        if($_.bubble -ne $Id -or $_.phase -ne 'retiring' -or $_.serial -le $After){return $false}
+        if($Part -is [string]){return $_.part -ceq $Part}
+        if(!$_.part.StartsWith('bead:')){return $false}
+        $identity=$_.part.Substring(5)|ConvertFrom-Json
+        $identity.kind -eq $Part.kind -and $identity.index -eq $Part.index
+    }|Select-Object -First 1)[0]
+    if($retiring -and (!$retiring.owner -or $null -eq $retiring.epoch -or $null -eq $retiring.target -or $retiring.target -ne 0)){throw 'Native bubble retirement has no owned identity'}
+    $retiring
+}
+function Assert-BubbleVisualTransition($Frames,[long]$Id,[string]$Part,[long]$After){
+    if($null -eq $Frames.overflow -or $Frames.overflow -ne 0){throw 'Native bubble transition evidence is missing or overflowed'}
+    $events=@($Frames.transitions|Where-Object {$_.bubble -eq $Id -and $_.part -ceq $Part -and $_.serial -gt $After})
+    $retiring=Find-BubbleVisualRetirement $Frames $Id $Part $After
+    $active=@($events|Where-Object {$_.phase -eq 'active' -and $_.serial -gt $retiring.serial}|Select-Object -First 1)[0]
+    if(!$retiring -or !$active -or !$retiring.owner -or !$active.owner -or $retiring.epoch -ne $active.epoch -or $null -eq $retiring.target -or $retiring.target -ne 0 -or $active.target -ne 1 -or $active.frame -lt $retiring.frame){throw 'Native bubble did not record an ordered owned retirement and reopen'}
+    $removed=@($events|Where-Object {$_.phase -eq 'removed' -and $_.owner -eq $retiring.owner -and $_.serial -gt $retiring.serial -and $_.serial -lt $active.serial})
+    if($removed.Count){
+        if($removed.Count -ne 1 -or $removed[0].value -ne 0 -or $removed[0].target -ne 0 -or $removed[0].epoch -ne $retiring.epoch -or $removed[0].frame -gt $active.frame){throw 'Native bubble replaced a peer before retirement completed'}
+        return @{phase='completed';retiring=$retiring;removed=$removed[0];active=$active;peer_reused=$false;interrupted_coverage='native controls deterministic production update/advance/present test'}
     }
-    if($changed -lt 0){throw 'Native orbit return did not acknowledge movement'}
-    if($Samples[$changed].ms -ge 220 -or $gap -gt 75){throw 'Native orbit samples did not resolve movement before a 220 ms tween could complete'}
-    if($Samples.Count-$changed -lt 3){throw 'Native orbit return needs at least two samples after its first movement'}
-    $final=$Samples[$Samples.Count-1].bounds;$firstError=& $difference $Samples[$changed].bounds $final;$maximum=$firstError
-    for($i=$changed+1;$i -lt $Samples.Count;$i++){$maximum=[Math]::Max($maximum,(& $difference $Samples[$i].bounds $final))}
-    if($maximum -gt 2){throw "Returning inside press slop animated native bead bounds instead of snapping: $maximum physical pixels"}
-    @{first_change_ms=$Samples[$changed].ms;maximum_ack_sample_gap_ms=$gap;first_change_final_error_px=$firstError;maximum_post_change_error_px=$maximum;post_change_samples=($Samples.Count-$changed-1);geometry_claim='first observed movement already at final bounds'}
+    if($active.owner -ne $retiring.owner -or $active.accessible -ne $retiring.accessible){throw 'Interrupted native bubble retirement replaced its retained peer'}
+    @{phase='interrupted';retiring=$retiring;active=$active;peer_reused=$true}
+}
+function Wait-BubbleVisualTransition([long]$Id,$Part,[long]$After,[switch]$Retiring){
+    $observed=@{value=$null}
+    Wait-Until {
+        $frames=Bubble-VisualFrames
+        $retirement=Find-BubbleVisualRetirement $frames $Id $Part $After
+        if(!$retirement){return $false}
+        if($Retiring){$observed.value=$retirement;return $true}
+        if(!@($frames.transitions|Where-Object {$_.bubble -eq $Id -and $_.part -ceq $retirement.part -and $_.phase -eq 'active' -and $_.serial -gt $retirement.serial}).Count){return $false}
+        $observed.value=Assert-BubbleVisualTransition $frames $Id $retirement.part $After;$true
+    } 'Native bubble did not record an ordered owned retirement and reopen'
+    $observed.value
+}
+function Invoke-BubbleVisualReopen([long]$Id,$Part,[long]$After,[string]$Device,$Outside,$Reopen){
+    [CapyRowPointer]::Tap($Device,$Outside.x,$Outside.y,10)
+    $null=Wait-BubbleVisualTransition $Id $Part $After -Retiring
+    [CapyRowPointer]::Tap($Device,$Reopen.x,$Reopen.y,0)
+    Wait-BubbleVisualTransition $Id $Part $After
+}
+function Assert-BubbleVisualAppliedPlacement($Receipt,$Binding){
+    if(!$Receipt -or $null -eq $Receipt.token -or $Receipt.token -le $Binding.after -or !$Receipt.active -or $null -eq $Receipt.epoch -or $Receipt.epoch -ne $Binding.epoch -or
+       ($Receipt.source|ConvertTo-Json -Depth 20 -Compress) -cne $Binding.source -or $Receipt.part -cne $Binding.part -or $Receipt.bubble -ne $Binding.bubble -or
+       $Receipt.target.Count -ne 2 -or $Receipt.size.Count -ne 2 -or @(($Receipt.target + $Receipt.size)|Where-Object {[double]::IsNaN($_) -or [double]::IsInfinity($_)}).Count -or
+       [Math]::Abs($Receipt.target[0]-$Binding.target[0]) -gt .001 -or [Math]::Abs($Receipt.target[1]-$Binding.target[1]) -gt .001 -or
+       [Math]::Abs($Receipt.size[0]-$Binding.size) -gt .001 -or [Math]::Abs($Receipt.size[1]-$Binding.size) -gt .001){throw 'Native orbit frame changed its applied shared placement identity or size'}
+    if($null -eq $Receipt.applied_frame -or $null -eq $Receipt.first_frame -or $null -eq $Receipt.last_frame -or $null -eq $Receipt.count -or $Receipt.count -lt 3 -or
+       $Receipt.applied_frame -lt 0 -or $Receipt.first_frame -le 0 -or $Receipt.first_frame -lt $Receipt.applied_frame -or $Receipt.first_frame -gt ($Receipt.applied_frame + 1) -or ($Receipt.last_frame - $Receipt.first_frame + 1) -ne $Receipt.count -or
+       $Receipt.samples.Count -ne 3 -or $Receipt.samples[0].frame -ne $Receipt.first_frame){throw 'Native orbit frame evidence omitted its first applied frames'}
+    if($null -eq $Receipt.owner -or $Receipt.owner -le 0 -or $null -eq $Receipt.accessible -or $Receipt.accessible -le 0 -or $null -eq $Receipt.identity_changed -or $Receipt.identity_changed -or $null -eq $Receipt.scale -or
+       [double]::IsNaN($Receipt.scale) -or [double]::IsInfinity($Receipt.scale) -or [Math]::Abs($Receipt.scale-$Binding.scale) -gt .000001){throw 'Native orbit return changed its native owner, peer or scale'}
+}
+function Assert-BubbleVisualOrbitReturn($Samples,$Turned,$MaximumError){
+    if($null -eq $MaximumError -or [double]::IsNaN($MaximumError) -or [double]::IsInfinity($MaximumError) -or $MaximumError -lt 0){throw 'Native orbit return omitted its all-frame geometry bound'}
+    $difference={param($a,$b) $maximum=0.;foreach($i in 0..3){$maximum=[Math]::Max($maximum,[Math]::Abs($a[$i]-$b[$i]))};$maximum}
+    if($Samples.Count -lt 3){throw 'Native orbit return needs at least two samples after its first movement'}
+    $lastFrame=-1L
+    foreach($sample in $Samples){
+        if($null -eq $sample.frame -or $sample.frame -le $lastFrame -or ($lastFrame -ge 0 -and $sample.frame -ne $lastFrame+1)){throw 'Native orbit return did not retain ordered distinct frames'}
+        $lastFrame=$sample.frame
+        foreach($bounds in @($sample.bounds,$sample.expected)){
+            if($bounds.Count -ne 4 -or $bounds[2] -le 0 -or $bounds[3] -le 0 -or @($bounds|Where-Object {[double]::IsNaN($_) -or [double]::IsInfinity($_)}).Count){throw 'Native orbit return retained invalid frame geometry'}
+        }
+        if((& $difference $sample.expected $Samples[0].expected) -gt .001){throw 'Native orbit return changed its retained shared placement'}
+        $MaximumError=[Math]::Max($MaximumError,(& $difference $sample.bounds $sample.expected))
+    }
+    if((& $difference $Samples[0].bounds $Turned) -le 2){throw 'Native orbit return did not acknowledge movement'}
+    $final=$Samples[$Samples.Count-1].bounds;$firstError=& $difference $Samples[0].bounds $final
+    $MaximumError=[Math]::Max($MaximumError,$firstError)
+    if($MaximumError -gt 2){throw "Returning inside press slop animated native bead bounds instead of snapping: $MaximumError physical pixels"}
+    @{first_frame=$Samples[0].frame;last_frame=$lastFrame;first_change_final_error_px=$firstError;maximum_post_change_error_px=$MaximumError;post_change_samples=($Samples.Count-1);geometry_claim='first native frame using returned shared placement is at final bounds'}
 }
 function Assert-BubbleVisualBeadTransitions([long]$Id){
     $original=View $Id
@@ -756,12 +831,12 @@ function Assert-BubbleVisualBeadTransitions([long]$Id){
             $at=Center $Id;[CapyRowPointer]::RightClick($at.x,$at.y);Invoke 'Small' -Name;$resized=$true
             Wait-Until {(View $Id).options.size -eq 136} 'Native Small option did not resize the wheel';Escape
         }
-        Wait-BubbleVisualLayout;Start-Sleep -Milliseconds 300
+        Wait-BubbleVisualLayout
         $small=View $Id
         $bead=@($small.beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq 6})[0]
         $palette=@((Model).state.color_library.palettes|Where-Object name -eq $paletteName)[0]
         if(!$bead -or $palette.swatches.Count -le @($small.beads|Where-Object {$_.placement.bead.kind -eq 'swatch'}).Count){throw 'Small wheel fixture does not overflow its palette orbit'}
-        $peer=Bubble-VisualBead $Id $bead;$from=Relative $Id $bead.placement.center
+        $peer=Wait-BubbleVisualBead $Id $bead;$from=Relative $Id $bead.placement.center
         $angle=[Math]::Atan2($bead.placement.center[1],$bead.placement.center[0]);$radius=[Math]::Sqrt([Math]::Pow($bead.placement.center[0],2)+[Math]::Pow($bead.placement.center[1],2))
         $turn=Relative $Id @(($radius*[Math]::Cos($angle+.32)),($radius*[Math]::Sin($angle+.32)))
         $back=Relative $Id @(($radius*[Math]::Cos($angle+.04)),($radius*[Math]::Sin($angle+.04)))
@@ -774,19 +849,35 @@ function Assert-BubbleVisualBeadTransitions([long]$Id){
             $moved=@((View $Id).beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq 6})[0]
             $moved -and [Math]::Abs($moved.placement.center[0]-$bead.placement.center[0]) -gt 8
         } 'Held palette orbit did not move beyond its original position'
-        Start-Sleep -Milliseconds 300
-        $turned=@((View $Id).beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq 6})[0]
-        $peer=Bubble-VisualBead $Id $turned
+        $turnedBead=@((View $Id).beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq 6})[0]
+        $peer=Wait-BubbleVisualBead $Id $turnedBead
         $evidence.orbit.turned_bounds=Bubble-VisualBounds $peer
-        $returnClock=[Diagnostics.Stopwatch]::StartNew();[CapyRowPointer]::Move($back.x,$back.y)
-        $samples=[Collections.Generic.List[object]]::new()
-        do{$bounds=Bubble-VisualBounds $peer;$samples.Add(@{ms=$returnClock.Elapsed.TotalMilliseconds;bounds=$bounds});Start-Sleep -Milliseconds 10}while($returnClock.ElapsedMilliseconds -lt 300)
-        $evidence.orbit.samples=@($samples.ToArray())
-        $returned=@((View $Id).beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq 6})[0]
+        $beforeFrames=Bubble-VisualFrames
+        $prior=@($beforeFrames.placements|Where-Object {$_.bubble -eq $Id -and $_.active -and $_.part.StartsWith('bead:') -and ($_.part.Substring(5)|ConvertFrom-Json).kind -eq 'swatch' -and ($_.part.Substring(5)|ConvertFrom-Json).index -eq 6})
+        if($prior.Count -ne 1 -or $null -eq $prior[0].epoch -or $null -eq $prior[0].source){throw 'Held bead has no unique applied shared placement identity'}
+        $binding=@{after=$beforeFrames.placement_serial;epoch=$prior[0].epoch;source=($prior[0].source|ConvertTo-Json -Depth 20 -Compress);part=$prior[0].part;bubble=$Id;target=$null;size=$null;scale=$scale}
+        [CapyRowPointer]::Move($back.x,$back.y)
+        $observed=@{receipt=$null;bead=$null}
+        Wait-Until {
+            $returned=@((View $Id).beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq 6})[0]
+            if(!$returned -or [Math]::Abs($returned.placement.center[0]-$turnedBead.placement.center[0]) -le 8){return $false}
+            $observed.bead=$returned;$binding.target=$returned.placement.center;$binding.size=$returned.placement.size
+            $observed.receipt=@((Bubble-VisualFrames).layouts|Where-Object {
+                $_.bubble -eq $Id -and $_.token -gt $binding.after -and $_.part -ceq $binding.part -and
+                [Math]::Abs($_.target[0]-$binding.target[0]) -lt .001 -and [Math]::Abs($_.target[1]-$binding.target[1]) -lt .001
+            }|Select-Object -First 1)[0]
+            if(!$observed.receipt -or $observed.receipt.count -lt 3){return $false}
+            Assert-BubbleVisualAppliedPlacement $observed.receipt $binding
+            $true
+        } 'Native bead did not follow the held orbit back inside the starting slop'
+        $returned=$observed.bead;$receipt=$observed.receipt;$origin=(Workspace-Root).Current.BoundingRectangle
+        $physical={param($bounds) @(($origin.X+$bounds.x*$scale),($origin.Y+$bounds.y*$scale),($bounds.width*$scale),($bounds.height*$scale))}
+        $samples=@($receipt.samples|ForEach-Object {@{frame=$_.frame;bounds=(& $physical $_.bounds);expected=(& $physical $_.expected)}})
+        $evidence.orbit.samples=$samples;$evidence.orbit.native_frames=$receipt;$evidence.orbit.binding=$binding
         $null=Bubble-VisualBead $Id $returned
-        $last=$samples[$samples.Count-1].bounds;$turned=$evidence.orbit.turned_bounds
+        $last=Bubble-VisualBounds $peer;$turned=$evidence.orbit.turned_bounds
         if([Math]::Sqrt([Math]::Pow($last[0]-$turned[0],2)+[Math]::Pow($last[1]-$turned[1],2)) -le 8*$scale){throw 'Native bead did not follow the held orbit back inside the starting slop'}
-        $evidence.orbit.return_motion=Assert-BubbleVisualOrbitReturn $samples $turned
+        $evidence.orbit.return_motion=Assert-BubbleVisualOrbitReturn $samples $turned $receipt.maximum_error_px
         $evidence.orbit.returned_shared=$returned
         Capture 'orbit-return-held' -Composed -WithModel
     }finally{
@@ -796,7 +887,20 @@ function Assert-BubbleVisualBeadTransitions([long]$Id){
             }
         }
     }
-    Wait-BubbleVisualLayout;Start-Sleep -Milliseconds 300
+    Wait-BubbleVisualLayout
+    if($evidence.orbit.return_motion){
+        $drain=[Diagnostics.Stopwatch]::GetTimestamp()
+        Wait-Until {$native=(Workspace-Root).Current.ItemStatus|ConvertFrom-Json;$native.snapshot_qpc -ge $drain -and $native.bubble_frames.frame -ge $evidence.orbit.native_frames.last_frame} 'Native orbit history did not publish its final drain'
+        $token=$evidence.orbit.native_frames.token
+        $receipt=@((Bubble-VisualFrames).layouts|Where-Object token -eq $token)
+        if($receipt.Count -ne 1){throw 'Native orbit lost its applied placement frame history'}
+        $receipt=$receipt[0];$evidence.orbit.native_frames=$receipt
+        try{
+            Assert-BubbleVisualAppliedPlacement $receipt $binding
+            $samples=@($receipt.samples|ForEach-Object {@{frame=$_.frame;bounds=(& $physical $_.bounds);expected=(& $physical $_.expected)}})
+            $evidence.orbit.samples=$samples;$evidence.orbit.return_motion=Assert-BubbleVisualOrbitReturn $samples $turned $receipt.maximum_error_px
+        }finally{$evidence|ConvertTo-Json -Depth 20|Set-Content ($prefix+'.json')}
+    }
     if((Bubble-VisualState $Id) -ne $before){throw 'Cancelled orbit and size restoration changed the bubble, colors, artwork or workspace'}
     $model=Model;$palettes=@($model.state.color_library.palettes);$index=[Array]::IndexOf(@($palettes.name),$paletteName)
     $choices=@(foreach($direction in @(-1,1)){
@@ -808,27 +912,21 @@ function Assert-BubbleVisualBeadTransitions([long]$Id){
     $choice=$choices[0];$bead=$choice.bead;$peer=Bubble-VisualBead $Id $bead;$face=Control "tool-bubble-$Id" -Arranged;$pill=(Packet $Id).pill
     $evidence.revival=@{label=$bead.label;index=$bead.placement.bead.index;neighbor=$choice.neighbor.name;direction=$choice.direction;initial_bounds=(Bubble-VisualBounds $peer);native_retirement=$false;native_revival=$false}
     $point=Relative $Id $bead.placement.center;$null=Screen-Pixels $point.x $point.y ($prefix+'-revival-before.png')
+    $transitionStart=(Bubble-VisualFrames).serial
     $stepPoint={param($direction) $bounds=$face.Current.BoundingRectangle;@{x=[int]($bounds.X+$bounds.Width*.5+($pill.x+$(if($direction -lt 0){16}else{$pill.width-16}))*$scale);y=[int]($bounds.Y+$bounds.Height*.5+($pill.y+15)*$scale)}}
     try{
         $next=& $stepPoint $choice.direction;$previous=& $stepPoint (-$choice.direction)
-        $observer=[CapyBubbleFoldObserver]::new((State-File),$Id,$peer)
-        try{
-            $evidence.revival.injected_pair_ms=[CapyRowPointer]::RapidReopen('mouse',$next.x,$next.y,$previous.x,$previous.y,$observer.NativeFoldSignal)
-            $evidence.revival.native_retirement=$observer.NativeFoldDetectedTicks -gt 0
-            $evidence.revival.native_last_visible_ticks=$observer.NativeLastOpenTicks;$evidence.revival.native_retired_ticks=$observer.NativeFoldDetectedTicks
-            $evidence.revival.reverse_down_ticks=[CapyRowPointer]::RapidReopenDownTicks;$evidence.revival.reverse_up_ticks=[CapyRowPointer]::RapidReopenUpTicks
-            $evidence.revival.native_to_reverse_up_upper_ms=([CapyRowPointer]::RapidReopenUpTicks-$observer.NativeLastOpenTicks)*1000./[Diagnostics.Stopwatch]::Frequency
-            $evidence.revival.retirement_to_reverse_up_ms=([CapyRowPointer]::RapidReopenUpTicks-$observer.NativeFoldDetectedTicks)*1000./[Diagnostics.Stopwatch]::Frequency
-            $evidence.revival.observer_samples=$observer.Samples
-        }finally{$observer.Dispose()}
+        $evidence.revival.transition=Invoke-BubbleVisualReopen $Id $bead.placement.bead $transitionStart 'mouse' $next $previous
+        $evidence.revival.native_retirement=$true
         $null=Screen-Pixels $point.x $point.y ($prefix+'-reviving.png')
-        if(!$evidence.revival.native_retirement -or $evidence.revival.retirement_to_reverse_up_ms -lt 0 -or $evidence.revival.native_to_reverse_up_upper_ms -ge 220){throw "Palette revival was not exercised within 220 ms of native retirement: $($evidence.revival.native_to_reverse_up_upper_ms) ms upper bound"}
         Wait-Until {(View $Id).pill -eq $paletteName} 'Rapid reverse step did not restore the original palette'
-        Wait-Until {try{!$peer.Current.IsOffscreen -and $null -ne [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($peer)}catch [System.Windows.Automation.ElementNotAvailableException]{$false}} 'Retiring native bead was replaced instead of revived within its transition'
-        $evidence.revival.native_revival=$true
+        if($evidence.revival.transition.peer_reused){
+            Wait-Until {try{!$peer.Current.IsOffscreen -and $null -ne [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($peer)}catch [System.Windows.Automation.ElementNotAvailableException]{$false}} 'Retiring native bead was replaced instead of revived within its transition'
+        }
+        $evidence.revival.native_revival=$evidence.revival.transition.peer_reused
         Settled-Capture 'palette-rapid-revival'
         $restored=@((View $Id).beads|Where-Object {$_.placement.bead.kind -eq 'swatch' -and $_.placement.bead.index -eq $bead.placement.bead.index})[0]
-        $null=Bubble-VisualBead $Id $restored;$evidence.revival.final_bounds=Bubble-VisualBounds $peer
+        $currentPeer=Bubble-VisualBead $Id $restored;$evidence.revival.final_bounds=Bubble-VisualBounds $currentPeer
     }finally{
         try{if($down){[CapyRowPointer]::Cancel();$down=$false}
             if((View $Id).pill -eq $choice.neighbor.name){$restore=& $stepPoint (-$choice.direction);[CapyRowPointer]::Down('mouse',$restore.x,$restore.y);Start-Sleep -Milliseconds 10;[CapyRowPointer]::Up();Wait-Until {(View $Id).pill -eq $paletteName} 'Palette cleanup did not restore its original selection'}
@@ -837,7 +935,7 @@ function Assert-BubbleVisualBeadTransitions([long]$Id){
     Wait-BubbleVisualLayout
     if((Bubble-VisualState $Id) -ne $before){throw 'Bead transitions changed the bubble, colors, artwork or workspace'}
     $checks.Add('orbit-return-inside-slop-snaps-native-geometry')
-    $checks.Add('native-palette-bead-revival-within-220ms-and-exact-state-restoration')
+    $checks.Add('native-palette-bead-'+$evidence.revival.transition.phase+'-retirement-and-exact-state-restoration')
 }
 function Move-BubbleVisual([long]$Id,[double]$X,[double]$Y){
     $view=View $Id;$center=Center $Id;$target=Screen $X $Y

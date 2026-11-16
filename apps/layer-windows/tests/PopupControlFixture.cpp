@@ -1651,9 +1651,127 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }
     }
 
+    winrt::Windows::Foundation::IAsyncAction bubbleFrameTransitions(){
+        auto source=std::make_shared<WorkspaceData>();context.apply(source,J::Parse(co_await workspaceFixtureCatalog()));
+        source->model=J::Parse(LR"({"state":{"document_file":{"epoch":1},"layers":[],"layer_properties":{"layer":1}},"panels":[{"id":"layers"},{"id":"properties"}]})");source->state=object(source->model,L"state");
+        source->state.Insert(L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark"));
+        auto actions=std::make_shared<std::vector<J>>();source->send=[actions](std::string json){actions->push_back(J::Parse(to_hstring(json)));};
+        auto bubbles=std::make_shared<WorkspaceBubbles::Impl>();bubbles->data=source;bubbles->workspace=Canvas{};
+        auto record=std::make_shared<CapyBubbles::Record>();record->id=27;record->center={200,120};record->root.RenderTransform(record->transform);
+        bubbles->records.emplace(record->id,record);bubbles->layer.Children().Append(record->root);bubbles->workspace.Children().Append(bubbles->layer);
+        auto surface=bubbles->workspace;surface.Width(400);surface.Height(240);root.Children().InsertAt(0,surface);
+        auto peer=[](FrameworkElement const& element){return Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(element);};
+        auto invoke=[&](Button const& button){peer(button).GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();};
+        auto frame=[&](double now){bubbles->advance(now,false);bubbles->present();surface.UpdateLayout();};
+        auto apply=[&](J const& packet){bubbles->update(record,packet);};
+        try{
+            co_await wait([surface]{return surface.IsLoaded();},L"Bubble transition fixture did not load");
+            phase=L"bubble-card-retirement";
+            auto open=J::Parse(LR"({"reach":180,"view":{"id":27,"kind":"layers","selected":false,"enabled":true,"variants":false,"diameter":56,"face":[56,56],"icon":"layers","label":"Layers","layers":1,"card":{"size":[260,180],"full":false,"properties":false,"disclosure":"Properties"}}})");
+            auto closed=J::Parse(open.Stringify());object(closed,L"view").Remove(L"card");
+            apply(open);frame(0);frame(200);
+            auto card=record->parts.at(L"card");auto cardRoot=card->root;auto host=card->cardHost;auto inspector=card->inspector.get();auto cardPeer=peer(host);
+            require(cardPeer&&inspector&&card->appearance.value==1,L"Card fixture did not create a live native inspector and peer");
+            auto retainedCard=[&]{auto found=record->parts.find(L"card");return found!=record->parts.end()&&found->second==card&&ChromeFrames::Id(found->second->root)==ChromeFrames::Id(cardRoot)&&ChromeFrames::Id(found->second->cardHost)==ChromeFrames::Id(host)&&found->second->inspector.get()==inspector&&peer(found->second->cardHost)==cardPeer;};
+            apply(closed);frame(1000);frame(1075);
+            require(retainedCard()&&card->retired&&card->appearance.target==0&&card->appearance.value>0&&card->appearance.value<1&&!card->art.IsHitTestVisible()&&!card->root.IsHitTestVisible()&&card->root.Parent()==record->root,L"Card retirement did not retain its disabled native inspector during the fade");
+            apply(open);frame(1075);frame(1275);
+            require(retainedCard()&&!card->retired&&card->appearance.target==1&&card->appearance.value==1&&card->art.IsHitTestVisible()&&card->root.IsHitTestVisible()&&!card->contentDirty,L"Interrupted card retirement recreated its peer or left native content inert");
+            auto replacement=std::make_shared<CapyBubbles::Part>(L"card",1);replacement->data=card->data;replacement->center=card->center;replacement->size=card->size;
+            record->parts[L"card"]=replacement;require(!retainedCard(),L"Card lifetime oracle accepted a replacement with the same logical key and geometry");record->parts[L"card"]=card;
+            require(inspector->add&&inspector->footer&&inspector->add.Visibility()==Visibility::Visible&&inspector->add.IsEnabled()&&inspector->footer.IsEnabled(),L"Revived native card lacks its actual enabled add-layer and Properties footer controls");
+            actions->clear();invoke(inspector->add);bubbles->frames.revoke();
+            co_await wait([actions]{return actions->size()==1;},L"Revived card add-layer footer did not dispatch");bubbles->frames.revoke();
+            auto action=object(actions->front(),L"action");
+            require(str(actions->front(),L"type")==L"layer"&&str(action,L"op")==L"new"&&!flag(action,L"group")&&!flag(action,L"clipped"),L"Revived card footer dispatched the wrong shared layer action");
+            actions->clear();invoke(inspector->footer);bubbles->frames.revoke();
+            co_await wait([actions]{return actions->size()==1;},L"Revived card Properties footer did not dispatch");bubbles->frames.revoke();
+            action=object(actions->front(),L"action");require(str(actions->front(),L"type")==L"bubble"&&str(action,L"type")==L"properties"&&num(action,L"id")==record->id,L"Revived Properties footer lost its bubble owner");
+            auto properties=J::Parse(open.Stringify());object(object(properties,L"view"),L"card").Insert(L"properties",B(true));apply(properties);frame(1400);
+            require(retainedCard()&&inspector->targetPosition==1&&inspector->properties->Root().IsHitTestVisible()&&!card->layers->Root().IsHitTestVisible(),L"Revived card did not present its native Properties page");
+            apply(open);frame(1600);require(retainedCard()&&inspector->targetPosition==0&&card->layers->Root().IsHitTestVisible(),L"Revived card did not return to its native Layers page");
+            apply(closed);frame(2000);frame(2150);
+            require(!record->parts.contains(L"card")&&!cardRoot.Parent(),L"Completed card retirement retained its native root");
+            apply(open);frame(3000);frame(3200);
+            auto recreated=record->parts.at(L"card");require(!retainedCard()&&recreated!=card&&recreated->root!=cardRoot&&recreated->cardHost!=host&&peer(recreated->cardHost)!=cardPeer,L"Completed card retirement was mistaken for same-peer revival");
+
+            phase=L"bubble-bead-retirement";
+            auto swatch=J::Parse(LR"({"reach":120,"bead_colors":[[0.2,0.3,0.4,1]],"view":{"id":27,"kind":"color","selected":false,"enabled":true,"variants":false,"diameter":200,"face":[200,200],"label":"Color","beads":[{"label":"Swatch 6","selected":false,"placement":{"bead":{"kind":"swatch","index":6},"center":[70,40],"size":36,"alpha":1}}]}})");
+            auto placement=object(array(object(swatch,L"view"),L"beads").GetObjectAt(0),L"placement");auto key=L"bead:"+object(placement,L"bead").Stringify();
+            auto absent=J::Parse(swatch.Stringify());object(absent,L"view").Insert(L"beads",A{});absent.Insert(L"bead_colors",A{});
+            apply(swatch);frame(4000);frame(4220);
+            auto bead=record->parts.at(key);auto beadRoot=bead->root;auto accessible=bead->accessible;auto beadPeer=peer(accessible);
+            require(beadPeer&&bead->appearance.value==1,L"Bead fixture did not create a live native swatch peer");
+            auto retainedBeadNative=[&]{auto found=record->parts.find(key);return found!=record->parts.end()&&found->second==bead&&ChromeFrames::Id(found->second->root)==ChromeFrames::Id(beadRoot)&&ChromeFrames::Id(found->second->accessible)==ChromeFrames::Id(accessible);};
+            auto retainedBead=[&]{return retainedBeadNative()&&peer(record->parts.at(key)->accessible)==beadPeer;};
+            apply(absent);frame(5000);frame(5110);
+            require(retainedBeadNative()&&bead->appearance.target==0&&bead->appearance.value>0&&bead->appearance.value<1&&!bead->accessible.IsHitTestVisible()&&bead->accessible.Visibility()==Visibility::Collapsed&&!bead->root.IsHitTestVisible(),L"Bead retirement did not disable and retain the original native control");
+            apply(swatch);frame(5110);frame(5330);
+            require(retainedBead()&&bead->appearance.target==1&&bead->appearance.value==1&&bead->root.IsHitTestVisible()&&bead->accessible.Visibility()==Visibility::Visible,L"Interrupted bead retirement recreated or hid its native peer");
+            auto wrongPeer=Button{};bead->accessible=wrongPeer;require(!retainedBead(),L"Bead lifetime oracle accepted a replaced accessible button");bead->accessible=accessible;
+            apply(absent);frame(6000);frame(6220);
+            require(!record->parts.contains(key)&&!beadRoot.Parent(),L"Completed bead retirement retained its native root");
+            apply(swatch);frame(7000);frame(7220);
+            auto revived=record->parts.at(key);require(!retainedBead()&&revived!=bead&&revived->accessible!=accessible&&peer(revived->accessible)!=beadPeer,L"Completed bead retirement was mistaken for same-peer revival");
+
+            phase=L"bubble-held-orbit-frames";
+            auto outward=J::Parse(swatch.Stringify());object(array(object(outward,L"view"),L"beads").GetObjectAt(0),L"placement").Insert(L"center",CapyBubbles::point({30,75}));
+            auto returned=J::Parse(swatch.Stringify());auto returnedPlacement=object(array(object(returned,L"view"),L"beads").GetObjectAt(0),L"placement");returnedPlacement.Insert(L"center",CapyBubbles::point({66,44}));
+            auto expected=CapyBubbles::point(array(returnedPlacement,L"center"));auto size=float(num(returnedPlacement,L"size"));
+            require(CapyBubbles::distance(CapyBubbles::point(array(placement,L"center")),expected)<8&&CapyBubbles::distance(CapyBubbles::point(array(placement,L"center")),{30,75})>8,L"Orbit fixture did not cross and return within original press slop");
+            auto orbitAccessible=revived->accessible;auto orbitPeer=peer(orbitAccessible);
+            auto matches=[&]{surface.UpdateLayout();auto part=record->parts.at(key);auto bounds=part->root.TransformToVisual(surface).TransformBounds({0,0,float(part->root.ActualWidth()),float(part->root.ActualHeight())});return part==revived&&part->accessible==orbitAccessible&&peer(part->accessible)==orbitPeer&&part->center==expected&&part->size==CapyBubbles::Size{size,size}&&std::abs(bounds.X-(record->center.X+expected.X-size/2))<.01&&std::abs(bounds.Y-(record->center.Y+expected.Y-size/2))<.01&&std::abs(bounds.Width-size)<.01&&std::abs(bounds.Height-size)<.01;};
+            auto contact=std::make_shared<CapyBubbles::Contact>();contact->record=record;contact->mode=L"beads";bubbles->contact=contact;
+            for(bool held:{false,true}){
+                double start=held?10000:8000;contact->moved=true;apply(outward);frame(start);
+                require(record->parts.at(key)==revived&&revived->center==Point{30,75},L"Held orbit did not snap to its outward shared placement");
+                contact->moved=held;apply(returned);frame(start+1000);
+                if(held){
+                    require(matches()&&revived->layout.value==1,L"First held return frame tweened instead of matching its shared placement");
+                    for(double now:{start+1016,start+1236}){frame(now);require(matches()&&revived->layout.value==1,L"Subsequent held return frame departed from its exact shared placement");}
+                }else{
+                    require(!matches()&&revived->layout.value==0,L"Orbit geometry oracle accepted the non-held tween mutation");
+                    frame(start+1110);require(!matches()&&revived->layout.value>0&&revived->layout.value<1,L"Orbit geometry oracle accepted an intermediate tween frame");
+                    frame(start+1220);require(matches()&&revived->layout.value==1,L"Non-held tween control did not reach the same final shared placement");
+                }
+            }
+            phase=L"bubble-held-orbit-trace";
+            require(bubbles->tracing,L"Native orbit collector requires the existing opt-in fixture trace");
+            contact->moved=true;apply(outward);frame(12000);apply(returned);
+            auto receiptKey=std::pair{record->id,key};auto receipt=bubbles->appliedLayouts.at(receiptKey);
+            require(receipt->count==0&&receipt->target==expected&&receipt->size==CapyBubbles::Size{size,size},L"Orbit collector did not freeze the returned shared center and size before native presentation");
+            auto collect=[&](double now){frame(now);++bubbles->traceFrame;bubbles->traceLayout();};
+            revived->place({expected.X+10,expected.Y-5},{size+4,size+6},1,false);collect(13000);
+            auto first=receipt->bounds[0];auto firstFrame=receipt->frames[0];auto firstError=receipt->maximumError;
+            require(receipt->count==1&&firstError>2&&receipt->target==expected&&receipt->size==CapyBubbles::Size{size,size}&&receipt->expected[0].Width==size&&receipt->expected[0].Height==size,L"First wrong native target/size replaced the collector's authoritative shared placement");
+            revived->place(expected,{size,size},1,false);collect(13016);collect(13032);
+            require(matches()&&receipt->count==3&&receipt->bounds[0]==first&&receipt->frames[0]==firstFrame&&receipt->maximumError==firstError,L"Native orbit recovery discarded its wrong first presented sample or error");
+            revived->place({expected.X+30,expected.Y},{size+20,size},1,false);collect(13048);auto laterError=receipt->maximumError;
+            require(receipt->count==4&&laterError>firstError&&receipt->bounds[0]==first&&receipt->frames[0]==firstFrame,L"Orbit collector stopped checking geometry after its three retained samples");
+            revived->place(expected,{size,size},1,false);collect(13064);
+            require(matches()&&receipt->count==5&&receipt->maximumError==laterError,L"Correct later orbit frame reset the all-frame maximum error");
+            auto unrelated=J::Parse(returned.Stringify());object(unrelated,L"view").Insert(L"label",S(L"Updated color caption"));auto token=receipt->token;
+            apply(unrelated);collect(13080);
+            require(bubbles->appliedLayouts.at(receiptKey)==receipt&&receipt->token==token&&receipt->count==6&&receipt->bounds[0]==first&&receipt->maximumError==laterError,L"Unrelated bubble publication reset the shared placement token or native frame history");
+            revived->root.Visibility(Visibility::Collapsed);collect(13096);
+            require(receipt->count==7&&receipt->maximumError>=1e29,L"Hidden native orbit part was omitted instead of recorded invalid");
+            revived->root.Visibility(Visibility::Visible);collect(13112);
+            require(receipt->count==8&&receipt->maximumError>=1e29,L"Revealing the orbit part erased its invalid frame");
+            auto missingPacket=J::Parse(unrelated.Stringify());object(array(object(missingPacket,L"view"),L"beads").GetObjectAt(0),L"placement").Insert(L"center",CapyBubbles::point({expected.X+1,expected.Y}));apply(missingPacket);
+            auto missing=bubbles->appliedLayouts.at(receiptKey);require(missing!=receipt&&missing->token!=token&&missing->count==0,L"Changed shared placement did not establish a new collector token");
+            record->parts.erase(key);collect(14000);
+            require(missing->count==1&&missing->maximumError>=1e29&&missing->owner==0&&missing->accessible==0,L"Missing native orbit part was omitted instead of recorded invalid");
+            record->parts[key]=revived;collect(14016);
+            require(missing->count==2&&missing->maximumError>=1e29&&missing->identityChanged,L"Restoring a missing native part erased its invalid first frame or identity change");
+            bubbles->contact.reset();
+            bubbles->frames.revoke();root.Children().RemoveAt(0);
+        }catch(...){bubbles->frames.revoke();bubbles->contact.reset();root.Children().RemoveAt(0);throw;}
+    }
+
     winrt::Windows::Foundation::IAsyncAction controlCases(){
         phase=L"color-strip-presentation";co_await colorStripPresentation();
         phase=L"bubble-press-timestamps";co_await bubblePressTimestamps();
+        phase=L"bubble-frame-transitions";co_await bubbleFrameTransitions();
         phase=L"tooltip-help";
         Border semantic,owned;TranslateTransform metadata;
         AutomationProperties::SetHelpText(semantic,L"Selected texture");tooltip(semantic,L"Texture");tooltip(semantic,L"Texture updated");

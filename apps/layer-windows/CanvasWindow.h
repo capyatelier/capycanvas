@@ -63,6 +63,8 @@ private:
     bool TracePresentation(bool frame,bool dirty,bool repeat=false);
     std::shared_ptr<OrderedTraceFile> textInputTrace;uint64_t textInputPresses=0;
     void TraceTextInput(bool pressed);
+    std::atomic<bool> workspaceTraceQueued{false};
+    void QueueWorkspaceTrace();
     std::vector<std::wstring> launchFiles;
     void SendLaunchFiles(winrt::Windows::Data::Json::JsonObject const& model);
     struct Size { uint32_t width=1, height=1; float scale=1; };
