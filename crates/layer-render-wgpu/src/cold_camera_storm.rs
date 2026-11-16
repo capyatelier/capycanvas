@@ -111,10 +111,10 @@ fn image(extent:[u32;2],profile:ColorProfile,seed:u64)->layer_core::Image {
 }
 
 fn document(fixture:Fixture,seed:u64)->Document {
-    let extent=match fixture {Fixture::Paint28=>[4216,3016],Fixture::Gigapixel|Fixture::GigapixelPaint|Fixture::MultiGigapixel=>[32768,30518],Fixture::Panorama=>[65536,16384],_=>[9504,6336]};
-    let admitted=extent.map(|n|n.min(layer_core::MAX_EXTENT));
-    let mut artwork=Artwork::new(admitted).unwrap();
-    let (owner,target)=crate::test_support::add_paint(&mut artwork,"Ink",admitted);
+    let extent=match fixture {Fixture::Paint28=>[4216,3016],Fixture::Gigapixel|Fixture::GigapixelPaint|Fixture::MultiGigapixel=>[32768,30518],Fixture::Panorama=>[65536,16384],_=>[9504,6336]}
+        .map(|n|n.min(layer_core::MAX_EXTENT));
+    let mut artwork=Artwork::new(extent).unwrap();
+    let (owner,target)=crate::test_support::add_paint(&mut artwork,"Ink",extent);
     let color=layer_core::color::DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8};
     artwork.compositions.get_mut(artwork.root).unwrap().color=color;
     if matches!(fixture,Fixture::Paint28|Fixture::GigapixelPaint) {
@@ -168,7 +168,6 @@ fn document(fixture:Fixture,seed:u64)->Document {
     }
     let mut document=Document::from_artwork(artwork).unwrap();
     document.working.occurrence=Some(owner);document.working.target=Some(target);
-    document.artwork.compositions.get_mut(document.artwork.root).unwrap().size=extent;
     document
 }
 
