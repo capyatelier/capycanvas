@@ -371,3 +371,23 @@ fn a_cloned_publish_job_cannot_consume_one_encoding_twice() {
     assert!(matches!(&error,GpuRasterError::Invariant(_)),"{error:?}");
     assert!(!error.is_preparation_pending(),"a consumed encoding is an invariant failure, not missing preparation: {error:?}");
 }
+
+#[test]
+fn a_display_capture_declares_its_inputs_with_the_frames_signature() {
+    let extent = [512; 2];
+    let doc = crate::scene::scale::tests::document_at(extent);
+    let mut r = crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    let frame = packet(doc.scene(), extent);
+    crate::test_support::submit_settled(&mut r, frame);
+    let mut scene = r.scene.take().unwrap();
+    let region = PixelRect::new(0, 0, PAGE_SIZE, PAGE_SIZE);
+    let window = scene.cached_capture_window(frame.scene, region);
+    let destination = Image::new(&r, display_mips::Plan::window(extent, 0, region), "display capture");
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    scene.prepare_region(&mut r, frame, (region, window), PixelRect::EMPTY, false, &mut encoder).unwrap();
+    let before = crate::test_support::PassCounts::snapshot();
+    let _ = scene.declare_capture(&mut r, frame, &destination, &[region], Output::Display, None, None);
+    let reads = crate::test_support::PassCounts::snapshot().delta(before).signature_reads;
+    r.scene = Some(scene);
+    assert_eq!(reads, 0, "a display capture captured a signature frame of its own");
+}

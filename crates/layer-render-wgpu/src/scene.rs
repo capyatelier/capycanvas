@@ -2336,7 +2336,8 @@ impl Scene {
         reserved:Option<&[scratch::Usage]>,initialized:Option<&std::collections::BTreeSet<[u32;2]>>,
     )->Result<sources::Inputs,GpuRasterError> {
         let inputs=self.source_placements(packet,output)?;
-        let declaration=self.capture_declaration(r,packet)?;
+        let frame=matches!(output,Output::Display).then(||self.scale_pages.lock().unwrap().expected().cloned()).flatten();
+        let declaration=match frame {Some(frame)=>sources::Declaration::scene(frame,self.submission.clone()),None=>self.capture_declaration(r,packet)?};
         self.jobs.clear();self.source_jobs.clear();
         self.declare(r,inputs,declaration,|scene,r,accepted| {
             let mut waiting=false;
