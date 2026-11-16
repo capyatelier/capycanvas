@@ -608,7 +608,7 @@ impl State {
     fn rebalance(&self, cache: &BudgetCache) -> Vec<Arc<dyn Fn() + Send + Sync>> {
         cache.limit.store(self.ram_limit, Ordering::Release);
         let headroom=self.import_headroom();
-        let headroom_changed=cache.headroom.swap(headroom, Ordering::AcqRel)!=headroom;
+        cache.headroom.store(headroom, Ordering::Release);
         let owners: Vec<_> = self.owners.values().collect();
         let working:Vec<_>=self.owners.keys().map(|id|self.working(*id)).collect();
         let held: Vec<_> = owners.iter().enumerate().map(|(i,owner)|owner.report.pinned_gpu_bytes.saturating_add(working[i].gpu_bytes)).collect();
@@ -662,7 +662,7 @@ impl State {
         for (i,owner) in owners.iter().enumerate() {
             let changed=owner.grants.ram.swap(ram[i],Ordering::AcqRel)!=ram[i];
             let gpu_changed=owner.grants.gpu.swap(unified[i],Ordering::AcqRel)!=unified[i];
-            if (changed || gpu_changed || headroom_changed) && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
+            if (changed || gpu_changed) && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
         }
         wakes
     }
@@ -824,6 +824,20 @@ mod tests {
     fn unified_optional_bytes_take_only_room_no_other_owner_demands() {optional_bytes_take_only_room_no_other_owner_demands(true);}
 
     #[test]
+    fn a_headroom_change_wakes_only_owners_whose_grant_changed() {
+        let budget=MemoryBudget::with_facts(MemoryFacts {override_bytes:Some(4*GIB),..facts()});
+        let device=budget.register_device(device(true));
+        let display=owner(&budget,MemoryClass::Visible,Some(device),0,256*MIB);
+        let reads=owner(&budget,MemoryClass::Warm,None,64*MIB,0);
+        let woken=Arc::new(AtomicU64::new(0));
+        for owner in [&display,&reads] {let woken=woken.clone();owner.set_wake(Arc::new(move||{woken.fetch_add(1,Ordering::SeqCst);}));}
+        let (grants,headroom)=([display.grant(),reads.grant()],budget.import_headroom_bytes());
+        display.report(MemoryReport {gpu_bytes:128*MIB,pinned_gpu_bytes:128*MIB,demand_gpu_bytes:256*MIB,..Default::default()});
+        assert_eq!([display.grant(),reads.grant()],grants,"the pin stays inside both grants");
+        assert_ne!(budget.import_headroom_bytes(),headroom,"a unified pin moves the import headroom");
+        assert_eq!(woken.load(Ordering::SeqCst),0,"a headroom change woke owners whose grants did not change");
+    }
+    #[test]
     fn a_refused_working_admission_wakes_once_when_another_owner_releases() {
         let budget=MemoryBudget::with_facts(MemoryFacts {override_bytes:Some(GIB),..facts()});
         let device=budget.register_device(DeviceMemoryFacts {budget_bytes:Some(GIB),..Default::default()});
@@ -926,7 +940,7 @@ mod tests {
         drop(authored);
         cache.report(report(0));
         budget.set_ram_override(Some(GIB));
-        assert!(calls.load(Ordering::Relaxed) >= 10);
+        assert!(calls.load(Ordering::Relaxed) >= 8);
         assert!(!locked.load(Ordering::Relaxed), "grant wakes must run after releasing the budget lock");
     }
     #[test]
