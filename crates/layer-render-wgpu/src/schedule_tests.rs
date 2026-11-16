@@ -160,9 +160,10 @@ impl World {
             Some(Outstanding::Blocked(Input::Decode)) => self.jobs.iter().any(|job| !job.pending.is_empty()),
             Some(Outstanding::Blocked(Input::Gpu)) => self.jobs.iter().any(|job| job.in_flight.is_some()),
             Some(Outstanding::Blocked(Input::Residency)) => self.waiter.is_some() && (self.jobs.iter().any(|job| job.started) || !self.retiring.is_empty()),
+            None => self.jobs.iter().all(|job| !self.schedule.alive(&job.group)),
             _ => true,
         };
-        assert!(live, "tick {}: the core waits on {demand:?} with no producer", self.tick);
+        assert!(live, "tick {}: the core idles on {demand:?} with live groups and no producer", self.tick);
     }
     fn assert_bounded(&self) {
         if self.tick > self.cut + 200 {

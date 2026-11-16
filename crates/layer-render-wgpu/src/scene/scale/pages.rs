@@ -1013,9 +1013,11 @@ pub(super) fn hold_fixture_inputs(store:&mut Store,key:&Key,region:PixelRect,eva
     store.hold_inputs(&handle,sources.for_unit(handle.input_unit()).unwrap()).unwrap();
 }
 #[cfg(test)]
-pub(super) fn evict_composite_pages(cache:&Cache,areas:&[PixelRect]) {
+pub(super) fn evict_composite_pages(cache:&Cache,areas:&[PixelRect]) {evict_composite_pages_where(cache,areas,|_|true);}
+#[cfg(test)]
+pub(super) fn evict_composite_pages_where(cache:&Cache,areas:&[PixelRect],evicted:impl Fn(&Key)->bool) {
     let mut store=cache.pages.lock().unwrap();
-    let keys=store.retained_pages().into_iter().filter(|page|page.key.source.is_none()
+    let keys=store.retained_pages().into_iter().filter(|page|page.key.source.is_none() && evicted(&page.key)
         && areas.iter().any(|area|!page.key.plan().bounds.intersect(*area).is_empty())).map(|page|page.key).collect::<Vec<_>>();
     for key in keys {store.remove(&key);}
 }

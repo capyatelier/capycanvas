@@ -531,6 +531,106 @@ fn a_large_stroke_on_a_photo_at_its_display_room_parks_the_pivot_and_settles() {
         ..layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil)},&stroke,u64::from(4248u32.div_ceil(PAGE_SIZE)*2832u32.div_ceil(PAGE_SIZE)));
 }
 
+fn host_progress(live:&CanvasEngine<WgpuRasterizer>)->[u64;8] {
+    let r=live.backend();let metrics=r.metrics();let counts=crate::test_support::PassCounts::snapshot();
+    [metrics.source_tile_misses,metrics.composited_pixels,r.preparation_progress(),counts.composite_commits,counts.projected_copies,counts.unit_acceptances,live.metrics().committed_strokes,r.navigator.revision]
+}
+
+fn ellipse_stroke(view:ViewState,first:u64,radii:[f32;2],events:usize)->Vec<PenEvent> {
+    let center=[view.width_px as f32/2.,view.height_px as f32/2.];
+    (0..events).map(|index| {
+        let angle=index as f32/events as f32*std::f32::consts::TAU;
+        let phase=if index==0 {PenPhase::Down}else if index+1==events {PenPhase::Up}else {PenPhase::Move};
+        let sequence=first+index as u64;
+        PenEvent {sequence,timestamp_ns:sequence*8_333_333,phase,view_revision:1,
+            surface_position:Point {x:center[0]+radii[0]*angle.cos(),y:center[1]+radii[1]*angle.sin()},
+            ..crate::test_support::pen(sequence,PenPhase::Move,[0.;2],SampleFlags::PRIMARY)}
+    }).collect()
+}
+
+fn host_journey(context:&str,document:Document,renderer:WgpuRasterizer,view:ViewState,brush:layer_core::BrushSnapshot,reads:&Reads,steps:Vec<(Option<OccurrenceHandle>,Vec<PenEvent>)>) {
+    let [_,_,_,_,x,y]=view.document_to_surface;let zoom=view.document_to_surface[0];
+    let transform=ViewTransform {revision:1,surface_to_document:[1./zoom,0.,0.,1./zoom,-x/zoom,-y/zoom]};
+    let (woken,wakes)=std::sync::mpsc::channel::<()>();
+    let mut renderer=renderer;renderer.set_preparation_wake(Arc::new(move||{let _=woken.send(());}));
+    let (mut input,mut live)=engine(document,renderer,view,transform);
+    live.set_brush(brush).unwrap();
+    let mut presenter=crate::ViewportPresenter::for_surface(live.backend(),wgpu::TextureFormat::Rgba8UnormSrgb,crate::SdrSurfaceColor::Srgb).unwrap();
+    let output=create_target(&live.backend().device,[view.width_px,view.height_px],wgpu::TextureFormat::Rgba8UnormSrgb,"host journey presentation");
+    let mut steps=steps.into_iter();let mut pending=Vec::new().into_iter();
+    let (mut tick,mut frames,mut idle,mut first,mut step)=(0,0usize,0usize,true,0usize);
+    let deadline=Instant::now()+Duration::from_secs(120);
+    loop {
+        reads.advance(tick);tick+=1;
+        if let Some(event)=pending.next() {input.push(event).unwrap();}
+        let demand=live.frame_demand();
+        let state=|live:&CanvasEngine<WgpuRasterizer>,step:usize,frames:usize|format!("step {step}, frame {frames}, renderer {:?}, terms {:?}",
+            live.backend().frame_demand(),live.backend().outstanding_terms());
+        if first || matches!(demand,layer_render::FrameDemand::Work|layer_render::FrameDemand::Animate) {
+            first=false;
+            let before=host_progress(&live);
+            live.render_frame().unwrap();frames+=1;
+            if presenter.needs_present(live.backend(),view,[0.18,0.18,0.18,1.]) {presenter.present(live.backend_mut(),&output.1,view,[0.18,0.18,0.18,1.]).unwrap();}
+            let _=live.backend().device.poll(wgpu::PollType::Poll);
+            let reading=live.raster_backing_pending() || reads.gated() || live.has_active_stroke() || pending.len()!=0;
+            idle=if host_progress(&live)==before && !reading {idle+1}else {0};
+            assert!(idle<64,"{context}: {idle} Work frames in a row advanced nothing: {}",state(&live,step,frames));
+            assert!(Instant::now()<deadline,"{context}: the journey never settled: {}",state(&live,step,frames));
+            while wakes.try_recv().is_ok() {}
+            continue;
+        }
+        if pending.len()==0 && !live.has_active_stroke() && !live.has_pending_input() && !live.has_pending_document_edits() && live.backend().settled() {
+            let Some((layer,stroke))=steps.next() else {return;};
+            step+=1;
+            if let Some(layer)=layer {live.set_active_layer(layer).unwrap();}
+            pending=stroke.into_iter();first=true;continue;
+        }
+        let timeout=match demand {
+            layer_render::FrameDemand::WaitUntil(deadline)=>deadline.saturating_duration_since(web_time::Instant::now()),
+            _ if reads.gated() || pending.len()!=0=>Duration::from_millis(1),
+            _=>Duration::from_secs(10),
+        };
+        match wakes.recv_timeout(timeout) {
+            Ok(())=>while wakes.try_recv().is_ok() {},
+            Err(_) if reads.gated() || pending.len()!=0 || matches!(demand,layer_render::FrameDemand::WaitUntil(_))=>{},
+            Err(_)=>panic!("{context}: the renderer waits unsettled and nothing wakes it: {}, settled {}",state(&live,step,frames),live.backend().settled()),
+        }
+    }
+}
+
+#[test]
+fn a_host_driven_open_and_stroke_settle_without_a_lost_wake_or_a_spin() {
+    let unified=|total:u64,pinned:u64| {
+        let budget=MemoryBudget::with_facts(MemoryFacts {host_default_bytes:Some(total),override_bytes:Some(total),..Default::default()});
+        let resident=budget.register_owner(layer_core::MemoryOwnerKind::Authored,layer_core::MemoryClass::Pinned,None);
+        resident.report(layer_core::MemoryReport {ram_bytes:pinned,pinned_ram_bytes:pinned,..Default::default()});
+        (budget,resident)
+    };
+    let zoom=0.7f32;
+    let mut brush=layer_core::default_brush(layer_core::CONTACT_BRUSH_PRESETS.into_iter().find(|preset|*preset as u32==2).unwrap());brush.diameter=1024.;
+    for seed in SEEDS {for (total,pinned) in [(5_342_732_697u64,0u64),(1_193_000_000,600<<20)] {
+        let mut document=document(Fixture::Paint32,seed);
+        let handles:Vec<_>=document.artwork.occurrences.iter().map(|(handle,_,_)|handle).collect();
+        for handle in handles {document.artwork.occurrences.get_mut(handle).unwrap().visible=true;}
+        let root=document.artwork.root;document.artwork.compositions.get_mut(root).unwrap().blend=layer_core::BlendSpace::Perceptual;
+        let top=document.working.occurrence.unwrap();
+        let bottom=document.scene().order().iter().copied().find(|&handle|handle!=top && matches!(document.scene().source_target(handle),Some(SourceTarget::Paint(_)))).unwrap();
+        document.working.occurrence=Some(bottom);document.working.target=document.scene().source_target(bottom);
+        let extent=document.composition().size;
+        let reads=Reads::new(seed,IoProfile::Adversarial);
+        let retained=layer_core::Editor::new(document.clone()).retained_tiles();
+        let _store=crate::test_support::StoredTiles::with_reads(&retained,crate::test_support::tile_read_cache(),Some(reads.observe()));
+        let (budget,_resident)=unified(total,pinned);
+        let renderer=crate::memory::memory_tests::renderer_in_budget(document.composition().color,
+            DeviceMemoryFacts {heap_bytes:Some(11_872_739_328),unified:true,..Default::default()},budget).unwrap();
+        let size=[(extent[0] as f32*zoom).ceil() as u32+24,(extent[1] as f32*zoom).ceil() as u32+24];
+        let view=ViewState {width_px:size[0],height_px:size[1],document_to_surface:[zoom,0.,0.,zoom,
+            size[0] as f32/2.-zoom*extent[0] as f32/2.,size[1] as f32/2.-zoom*extent[1] as f32/2.]};
+        let steps=vec![(Some(top),Vec::new()),(None,ellipse_stroke(view,1,[520.*zoom,299.*zoom],180))];
+        host_journey(&format!("Paint32 seed={seed:x} total={total} pinned={pinned}"),document,renderer,view,brush.clone(),&reads,steps);
+    }}
+}
+
 #[test]
 fn an_effects_storm_holds_composition_scratch_to_one_unit() {
     let seed=SEEDS[0];let document=document(Fixture::Effects,seed);let extent=document.composition().size;

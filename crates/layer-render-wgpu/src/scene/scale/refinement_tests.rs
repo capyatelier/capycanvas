@@ -1239,3 +1239,55 @@ fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
     assert!(error[2]<2e-5,"{mode}: {error:?}: actual={:?}, expected={:?}",actual[0],expected[0]);
     }
 }
+
+#[test]
+fn a_fold_unit_in_flight_whose_half_is_gone_admits_the_half_and_settles() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let below:Vec<_>=(0..18u32).map(|index| {
+        let handle=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,move|x,y|[((x+index*7)%251) as u8,((y+index*13)%241) as u8,(index*11) as u8,255])));
+        doc.artwork.occurrences.get_mut(handle).unwrap().opacity=0.2+index as f32*0.03;handle
+    }).collect();
+    let top=paint_occurrence(&mut doc,"Top",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(top));
+    let settle=|r:&mut WgpuRasterizer,doc:&Document,context:&str| {
+        let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+        let mut idle=0;
+        for step in 0..256 {
+            let before=crate::test_support::PassCounts::snapshot();
+            crate::test_support::submit_ready(r,FramePacket {composite_all:step==0,..frame}).unwrap();crate::test_support::complete(r);
+            if r.next_frame()!=layer_render::FrameDemand::Work {return;}
+            idle=if crate::test_support::PassCounts::snapshot().delta(before).composite_commits==0 {idle+1}else {0};
+            assert!(idle<16,"{context}: {idle} Work frames in a row committed nothing: {:?}",r.outstanding_terms());
+        }
+        panic!("{context}: the display never settled: {:?}",r.outstanding_terms());
+    };
+    settle(&mut r,&doc,"open");
+    let top_index=doc.scene().order().iter().position(|&handle|handle==top).unwrap();
+    paint_mut(&mut doc,top_index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
+    settle(&mut r,&doc,"edit");
+    let cells:Vec<_>={let cache=r.scale_display.as_ref().unwrap();pages::coordinates(cache.plan.bounds,cache.plan.level).map(|coordinate|pages::bounds(coordinate,cache.plan.level,cache.plan.extent)).collect()};
+    assert!(cells.len()>=2 && r.scale_display.as_ref().unwrap().plan.level==0,"the fixture refines two cells at level 0");
+    evict_composite_pages(r.scale_display.as_ref().unwrap(),&cells);
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
+    let mut commands=scene.scale_commands.take().unwrap_or_else(||RegionRecords::new(&r));
+    scene.begin_frame();commands.begin();
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let write=scene.begin_write(&r,&mut encoder).unwrap();cache.submission_valid=Some(scene.valid.clone());
+    let mut budget=Scene::begin_work(false);budget.spend(budget.remaining());
+    cache.refine(&mut scene,&mut r,frame,&mut encoder,&mut commands,&mut budget).unwrap();
+    write.track(&encoder);
+    scene.scale_commands=Some(commands);r.scale_display=Some(cache);r.scene=Some(scene);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let cache=r.scale_display.as_ref().unwrap();let halves=cache.pivot_halves();
+    let folds:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).filter(|key|cache.graph.content.as_ref()==Some(&key.expression)).collect();
+    assert!(!folds.is_empty(),"a fold unit is left in flight by the spent frame");
+    cache.pages.lock().unwrap().trim(0,crate::residency::Class::Fallback);
+    for half in folds.iter().flat_map(|key|halves.iter().map(move|half|pages::Key {expression:half.clone(),..key.clone()})) {
+        assert!(cache.pages.lock().unwrap().get(&half,half.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Refinement).is_some(),"a trim keeps the halves of a fold in flight");
+    }
+    pages::evict_composite_pages_where(cache,&cells,|key|halves.contains(&key.expression));
+    settle(&mut r,&doc,"half evicted under a unit in flight");
+}

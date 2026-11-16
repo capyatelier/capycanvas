@@ -267,6 +267,7 @@ impl Cache {
         self.streaming.units.iter().map(|unit|&unit.interest.key).any(|unit|unit.level<=cell.level
             && unit.coordinate.map(|value|value>>(cell.level-unit.level))==cell.coordinate && parts.iter().any(|part|part.expression==unit.expression))
     }
+    fn continues_admitted(&self,key:&pages::Key)->bool {self.streaming.units.iter().any(|unit|self.cell_parts(&unit.interest.key).contains(key))}
     fn exact_level(&self)->u32 {self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level))}
     fn ancestors(&self,r:&WgpuRasterizer,key:&pages::Key)->Vec<pages::Key> {
         let level=std::iter::once(self).chain(r.scale_display.as_ref()).chain(r.navigator.cache()).map(Cache::exact_level).fold(0,u32::max);
@@ -335,9 +336,9 @@ impl Cache {
         key: &pages::Key, scope: Option<&layer_core::authored::SceneScope>, halves: Option<[Option<pages::Held>;2]>, class: &dyn Fn(PixelRect)->Class,
     ) -> Result<Outcome, GpuRasterError> {
         let admitted=self.streaming.units.iter().position(|unit|unit.interest.key==*key);
-        let bounded=!pass.owed;
-        if admitted.is_none() && bounded && pass.closed.is_none() && self.full(r,budget,self.streaming.turned) {pass.closed=Some(Closed::Full);}
-        if admitted.is_none() && let Some(closed)=pass.closed.as_ref().filter(|closed|closed.applies(class(key.plan().bounds))) {return Ok(self.flight(key.plan().bounds,closed));}
+        let bounded=!pass.owed && !self.continues_admitted(key);
+        if bounded && pass.closed.is_none() && self.full(r,budget,self.streaming.turned) {pass.closed=Some(Closed::Full);}
+        if bounded && let Some(closed)=pass.closed.as_ref().filter(|closed|closed.applies(class(key.plan().bounds))) {return Ok(self.flight(key.plan().bounds,closed));}
         let packet=match scope {Some(scope)=>FramePacket {scene:packet.scene.with_scope(scope),..packet},None=>packet};
         let passes=packet.scene.order().iter().filter_map(|handle|packet.scene.effect(*handle).filter(|effect|
             effect.program.image_boundary() && packet.scene.visible(*handle)))
@@ -359,12 +360,13 @@ impl Cache {
         let work=region.area().saturating_mul((inputs.reads()+folds).max(1)).saturating_add(window.area().saturating_mul(passes));
         let scratch=self.graph.root.as_ref().unwrap().cost().1 as usize+1;
         let interest=Self::exact_interest(key.clone(),region);
-        if admitted.is_none() && bounded && self.full(r,budget,work) {
+        if bounded && self.full(r,budget,work) {
             self.streaming.turned=work;pass.closed=Some(Closed::Full);
             return Ok(self.flight(region,&Closed::Full));
         }
         let ancestors=self.ancestors(r,key);
-        let outputs=std::iter::once((key.clone(),region)).chain(ancestors.iter().map(|ancestor|(ancestor.clone(),ancestor.plan().bounds))).collect();
+        let parts=if halves.is_some() {self.cell_parts(key)}else {vec![key.clone()]};
+        let outputs=parts.into_iter().map(|part|(part,region)).chain(ancestors.iter().map(|ancestor|(ancestor.clone(),ancestor.plan().bounds))).collect();
         let handle=match self.accept_working(scene,r,interest.clone(),outputs,inputs,[scratch,0],plan,true,class(region),class(region),encoder)? {
             Ok(handle)=>handle,
             Err(None)=>return Ok(waiting_input(scene,r,false).map_or(Outcome::Deferred,Outcome::Waiting)),
