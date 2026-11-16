@@ -1431,6 +1431,17 @@ fn closed_diagnostics_take_no_memory_sample_refresh_from_changed_frames() {
 }
 
 #[test]
+fn a_recomposed_frame_with_unchanged_inputs_prepares_no_composition_graph() {
+    let (doc, mut r, view) = retained_photo_display();
+    let frame = FramePacket { view, composite_all: true, ..packet(doc.scene(), [4096; 2]) };
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    complete(&r);
+    let before = crate::test_support::PassCounts::snapshot();
+    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).graph_prepares, 0, "a frame rebuilt a composition graph whose inputs did not change");
+}
+
+#[test]
 fn a_submitted_frame_sets_its_display_room_once() {
     let (doc, mut r, view) = retained_photo_display();
     let frame = FramePacket { view, ..packet(doc.scene(), [4096; 2]) };

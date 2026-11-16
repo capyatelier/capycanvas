@@ -277,11 +277,11 @@ impl Graph {
         Self { root: self.root.clone(), content:self.content.clone(), parts: self.parts.as_ref().map(|parts|Parts {nodes:parts.nodes.clone(),scopes:parts.scopes.clone()}), motion: None, prepared: None, split_changed: false, cached: HashSet::new(), interned: self.interned.clone(), effects: self.effects.clone(),
             revision: self.revision, blend_space: self.blend_space, objects:self.objects.clone(), active: self.active, inputs: None }
     }
-    pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, held: bool) -> Result<(), GpuRasterError> {
+    pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, _held: bool) -> Result<(), GpuRasterError> {
         let mut stroked = packet.dab_batches.iter().map(|batch| packet.scene.source_owner(batch.target));
         let active = match stroked.next() { Some(Some(owner)) if stroked.all(|other| other == Some(owner)) => Some(owner), _ => r.pivot.or(self.active) };
         let inputs = Inputs::new(packet, sources, plan, active);
-        if held && self.inputs.as_ref() == Some(&inputs) { return Ok(()); }
+        if self.inputs.as_ref() == Some(&inputs) { return Ok(()); }
         #[cfg(test)] crate::test_support::PassCounts {graph_prepares:1,..Default::default()}.record();
         self.inputs = None;
         self.objects.prepare(packet.scene);
