@@ -493,27 +493,26 @@ impl Drop for ReadWait {
 #[cfg(not(target_arch="wasm32"))]
 mod workers {
     use super::*;
-    struct Pool {queue:Arc<Mutex<std::collections::VecDeque<ReadCache>>>, threads:Vec<std::thread::Thread>}
-    fn pool()->&'static Arc<Pool> {
-        static POOL:OnceLock<Arc<Pool>>=OnceLock::new();
-        POOL.get_or_init(||{
-            let queue=Arc::new(Mutex::new(std::collections::VecDeque::<ReadCache>::new()));
-            let mut threads=Vec::new();
-            for index in 0..ACTIVE_READS {
-                let queue=queue.clone();
-                let thread=std::thread::Builder::new().name(format!("tile-read-{index}")).spawn(move ||loop {
-                    let cache={queue.lock().unwrap().pop_front()};
-                    if let Some(cache)=cache {let _=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||cache.drive_inner()));}
-                    else {std::thread::park();}
-                }).expect("tile read worker");
-                threads.push(thread.thread().clone());
-            }
-            Arc::new(Pool {queue,threads})
-        })
+    #[cfg(test)]
+    pub(super) static IDLE_WAKES:AtomicUsize=AtomicUsize::new(0);
+    static QUEUE:Mutex<std::collections::VecDeque<ReadCache>>=Mutex::new(std::collections::VecDeque::new());
+    static READY:std::sync::Condvar=std::sync::Condvar::new();
+    fn next()->ReadCache {
+        let mut queue=QUEUE.lock().unwrap();
+        loop {
+            if let Some(cache)=queue.pop_front() {return cache;}
+            queue=READY.wait(queue).unwrap();
+            #[cfg(test)] if queue.is_empty() {IDLE_WAKES.fetch_add(1,Ordering::Relaxed);}
+        }
     }
     pub(super) fn schedule(cache:ReadCache) {
-        let pool=pool();pool.queue.lock().unwrap().push_back(cache);
-        for thread in &pool.threads {thread.unpark();}
+        static WORKERS:std::sync::Once=std::sync::Once::new();
+        WORKERS.call_once(||for index in 0..ACTIVE_READS {
+            std::thread::Builder::new().name(format!("tile-read-{index}")).spawn(||loop {
+                let cache=next();let _=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||cache.drive_inner()));
+            }).expect("tile read worker");
+        });
+        QUEUE.lock().unwrap().push_back(cache);READY.notify_one();
     }
 }
 
@@ -823,6 +822,21 @@ mod tests {
         cache.drive_inner();assert_queue_indexes(&cache);
     }
     #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_scheduled_read_wakes_one_idle_worker() {
+        struct Immediate;
+        impl RangeReader for Immediate {
+            fn read(&self,_:u64,length:usize,_:Option<u32>,done:ReadCompletion) {done.complete(Ok(vec![5;length].into()));}
+        }
+        const READS:u64=64;
+        let cache=ReadCache::new(MemoryBudget::with_facts(crate::MemoryFacts {total_bytes:Some(1<<40),available_bytes:Some(1<<40),override_bytes:Some(1<<40),..Default::default()}));
+        let source=cache.source(READS*64,Arc::new(Immediate));
+        pollster::block_on(source.wait(0,64).unwrap()).unwrap();
+        let before=workers::IDLE_WAKES.load(Ordering::Relaxed);
+        for index in 1..READS {assert_eq!(&*pollster::block_on(source.wait(index*64,64).unwrap()).unwrap(),&[5;64]);}
+        let idle=workers::IDLE_WAKES.load(Ordering::Relaxed)-before;
+        assert!(idle<READS as usize,"{} reads woke {idle} idle read workers",READS-1);
+    }
     #[test]
     fn worker_reads_execute_on_the_calling_worker() {
         use std::sync::mpsc;
