@@ -28,6 +28,7 @@ fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:la
     assert_eq!(r.scale_display.as_ref().unwrap().plan.level,level);
     let batch=|dabs:&[layer_render::Dab],start:bool|layer_render::DabBatch {stroke_start:start,stroke_end:false,dab_count:dabs.len() as u32,
         damage:dabs.iter().map(|dab|dab.bounds()).reduce(|a,b|a.union(b)).unwrap(),..crate::test_support::dab_batch(target,style.clone(),dabs[0].bounds())};
+    let mut held=None;
     for step in 0..dabs.len() {
         before(&mut r,step);
         let time=0.01*(step+1) as f32;
@@ -35,7 +36,9 @@ fn each_contact_frame_matches_a_fresh_renderer(doc:&layer_core::Document,view:la
         let counts=crate::test_support::PassCounts::snapshot();
         crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs[step..=step],dab_batches:std::slice::from_ref(&next),time_seconds:time,..frame}).unwrap();
         let counts=crate::test_support::PassCounts::snapshot().delta(counts);
-        if contact.contains(&step) {assert_eq!([counts.unit_acceptances,counts.declarations],[0;2],"frame {step} composes in contact");}
+        let id=r.scale_display.as_ref().unwrap().contact_id();
+        if contact.contains(&step) {assert!(counts.unit_acceptances==0 && id.is_some() && id==held,"frame {step} composes in the contact begun before it: {counts:?}");}
+        held=id;
         let mut fresh=renderer(doc);layer_render::CanvasRenderer::set_working_layer(&mut fresh,doc.working.occurrence);
         crate::test_support::submit_settled(&mut fresh,frame);
         let whole=batch(&dabs[..=step],true);
@@ -377,7 +380,7 @@ fn predicted_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarg
     crate::test_support::submit_ready(r,FramePacket {dabs,dab_batches:&batches,time_seconds:time,..frame}).unwrap();
     crate::test_support::PassCounts::snapshot().delta(counts)
 }
-fn in_contact(counts:&crate::test_support::PassCounts)->bool {counts.unit_acceptances==0 && counts.declarations==0}
+fn in_contact(counts:&crate::test_support::PassCounts)->bool {counts.unit_acceptances==0}
 fn predicted_stroke(preset:DefaultBrushPreset,xs:&[f32])->Vec<crate::test_support::PassCounts> {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);let style=crate::layer_tests::preset_style(preset);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,4);
@@ -940,4 +943,99 @@ fn a_memory_trim_during_a_stroke_ends_the_contact_for_cells_it_did_not_declare_i
     }
     let error=max_error(&display_pixels(&r),&display_pixels(&twin));
     assert!(error<1e-4,"the trimmed renderer keeps every dab and recomposes the cells it released: {error}");
+}
+
+fn layered_fit(doc:&layer_core::Document)->(WgpuRasterizer,FramePacket<'_>) {
+    let extent=doc.composition().size;let scale=1200./extent[1] as f32;
+    let r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+    frame.view.width_px=1920;frame.view.height_px=1200;frame.view.document_to_surface=[scale,0.,0.,scale,(1920.-scale*extent[0] as f32)/2.,0.];
+    (r,frame)
+}
+fn named(doc:&layer_core::Document,name:&str)->layer_core::OccurrenceHandle {
+    doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()==name).unwrap()
+}
+fn pencil(x:f32,y:f32,radius:f32,style:&layer_render::DabStyle)->layer_render::Dab {
+    let mut dab=material_dab(x,y,style);dab.radii=[radius;2];dab.previous=[radius,radius,1.,0.];dab.motion=[8.,0.];dab
+}
+fn pencil_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,stroke:u64,[x,y]:[f32;2],radius:f32,step:usize)->crate::test_support::PassCounts {
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let x=x+16.*step as f32;
+    let counts=predicted_frame(r,frame,target,&style,stroke,&[pencil(x,y,radius,&style),pencil(x+8.,y,radius,&style)],step==0,0.01*(step+1) as f32);
+    crate::test_support::complete(r);counts
+}
+fn pencil_lift(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,stroke:u64,[x,y]:[f32;2],radius:f32) {
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let last=pencil(x,y,radius,&style);let end=layer_render::DabBatch {stroke_id:layer_core::StrokeId(stroke),stroke_start:false,stroke_end:true,..dab_batch(target,style,last.bounds())};
+    crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&end),time_seconds:1.,..frame}).unwrap();
+    crate::test_support::complete(r);
+}
+fn pencil_cells(r:&WgpuRasterizer,[x,y]:[f32;2],radius:f32)->usize {
+    let plan=r.scale_display.as_ref().unwrap().plan;let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    [x,x+8.].into_iter().flat_map(|x|pages::coordinates(crate::pixel_rect::pixel_rect(pencil(x,y,radius,&style).bounds(),plan.extent).intersect(plan.bounds),plan.level))
+        .collect::<BTreeSet<_>>().len()
+}
+fn idle_frames(r:&mut WgpuRasterizer,frame:FramePacket<'_>,frames:usize) {
+    for _ in 0..frames {
+        crate::test_support::submit_ready(r,frame).unwrap();crate::test_support::complete(r);
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+}
+struct Switched {counts:crate::test_support::PassCounts,decodes:u64,reach:usize,contact:bool,shown:bool}
+fn first_dab_after_a_switch_and_a_reaction_gap() -> Switched {
+    let doc=crate::memory::memory_tests::layered_raster_document(32,16);
+    let (mut r,frame)=layered_fit(&doc);
+    let (drawn,selected)=(named(&doc,"Layer 31"),named(&doc,"Layer 28"));
+    let at=[640.,640.];
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(drawn));
+    crate::test_support::submit_settled(&mut r,frame);
+    let target=doc.scene().source_target(drawn).unwrap();
+    for step in 0..3 {pencil_frame(&mut r,frame,target,1,at,12.,step);}
+    pencil_lift(&mut r,frame,target,1,at,12.);
+    idle_frames(&mut r,frame,12);
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(selected));
+    idle_frames(&mut r,frame,12);
+    let target=doc.scene().source_target(selected).unwrap();
+    let at=[at[0],at[1]+96.];
+    let misses=r.metrics().source_tile_misses;
+    let counts=pencil_frame(&mut r,frame,target,2,at,12.,0);
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let plan=r.scale_display.as_ref().unwrap().plan;
+    let reach=[at[0],at[0]+8.].into_iter().flat_map(|x|page_coordinates(crate::pixel_rect::pixel_rect(pencil(x,at[1],12.,&style).bounds(),plan.extent))).collect::<BTreeSet<_>>();
+    let shown=reach.iter().all(|tile|r.metrics.frame_composited_pages.contains(&(plan.level,*tile)));
+    Switched {counts,decodes:r.metrics().source_tile_misses-misses,reach:reach.len(),contact:r.scale_display.as_ref().unwrap().gesture.is_some(),shown}
+}
+
+#[test]
+fn the_first_contact_frame_after_a_switch_folds_no_layers_and_declares_only_cells_near_its_dab() {
+    let Switched {counts,decodes,reach,contact,..}=first_dab_after_a_switch_and_a_reaction_gap();
+    assert!(contact,"the pen-down frame after a switch and a reaction gap begins its contact: {counts:?}");
+    assert_eq!(counts.fold_inputs,0,"the pen-down frame builds no halves: {counts:?}");
+    assert!(decodes<=reach as u64,"the pen-down frame decodes {decodes} tiles; its dabs reach {reach}");
+    assert!(counts.declarations<=9,"the pen-down frame declares {} times; the cells within one cell of its dab are 9",counts.declarations);
+}
+
+#[test]
+fn the_dab_after_a_switch_and_a_reaction_gap_is_composed_on_its_first_frame() {
+    let Switched {counts,contact,shown,..}=first_dab_after_a_switch_and_a_reaction_gap();
+    assert!(contact && shown,"the first frame after the gap composes the dab's cell into the view and begins its contact: shown {shown}, contact {contact}, {counts:?}");
+}
+
+#[test]
+fn a_stroke_started_while_the_last_one_composes_begins_in_contact_and_commits_only_its_own_cells() {
+    let doc=crate::memory::memory_tests::layered_raster_document(8,16);
+    let (mut r,frame)=layered_fit(&doc);
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(named(&doc,"Layer 7")));
+    crate::test_support::submit_settled(&mut r,frame);
+    let layer=named(&doc,"Layer 5");let target=doc.scene().source_target(layer).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(layer));
+    idle_frames(&mut r,frame,60);
+    for step in 0..3 {pencil_frame(&mut r,frame,target,1,[1800.,2048.],512.,step);}
+    pencil_lift(&mut r,frame,target,1,[1900.,2048.],512.);
+    assert!(r.scale_display.as_ref().unwrap().has_pending_work(&r),"the last stroke's cells still compose");
+    let at=[2400.,2048.];
+    let counts=pencil_frame(&mut r,frame,target,2,at,12.,0);
+    let own=pencil_cells(&r,at,12.);
+    assert!(r.scale_display.as_ref().unwrap().gesture.is_some(),"the new stroke begins in contact: {counts:?}");
+    assert!(counts.composite_commits<=own as u64,"the new stroke's first frame commits {} cells; its dabs reach {own}: {counts:?}",counts.composite_commits);
 }

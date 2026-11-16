@@ -309,7 +309,7 @@ pub(crate) struct Cache {
     pivot_refusal: Option<crate::residency::Blocked>,
     pivot_pending: bool,
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
-    stroke_reach: Option<(layer_core::StrokeId,BTreeSet<[u32;2]>)>,
+    pointer: Option<[f32;2]>,
 }
 
 fn requires_native_effects(scene:SceneView<'_>,level:u32)->bool {
@@ -557,15 +557,19 @@ pub(super) fn centre_distance(view:layer_render::ViewState,region:PixelRect)->u6
     let offset=[a*center[0]+c*center[1]+x-f64::from(view.width_px)*0.5,b*center[0]+d*center[1]+y-f64::from(view.height_px)*0.5];
     (offset[0]*offset[0]+offset[1]*offset[1]) as u64
 }
+fn dab_centre(packet:FramePacket<'_>)->Option<[f32;2]> {
+    let batch=packet.dab_batches.iter().rev().find(|batch|batch.dab_count!=0)?;
+    let offset=layer_core::offsets::point(packet.scene.target_offset(batch.target));
+    Some([(batch.damage.min.x+batch.damage.max.x)*0.5+offset.x,(batch.damage.min.y+batch.damage.max.y)*0.5+offset.y])
+}
+fn centred(mut view:layer_render::ViewState,center:[f32;2])->layer_render::ViewState {
+    let [a,b,c,d,_,_]=view.document_to_surface;
+    view.document_to_surface[4]=view.width_px as f32*0.5-a*center[0]-c*center[1];
+    view.document_to_surface[5]=view.height_px as f32*0.5-b*center[0]-d*center[1];
+    view
+}
 fn work_view(packet:FramePacket<'_>,level:u32)->layer_render::ViewState {
-    let mut view=packet.view;
-    if let Some(batch)=packet.dab_batches.iter().rev().find(|batch|batch.dab_count!=0) {
-        let offset=layer_core::offsets::point(packet.scene.target_offset(batch.target));
-        let center=[(batch.damage.min.x+batch.damage.max.x)*0.5+offset.x,(batch.damage.min.y+batch.damage.max.y)*0.5+offset.y];
-        let [a,b,c,d,_,_]=view.document_to_surface;
-        view.document_to_surface[4]=view.width_px as f32*0.5-a*center[0]-c*center[1];
-        view.document_to_surface[5]=view.height_px as f32*0.5-b*center[0]-d*center[1];
-    }
+    let mut view=dab_centre(packet).map_or(packet.view,|center|centred(packet.view,center));
     for value in &mut view.document_to_surface[..4] {*value*=(1<<level) as f32;}
     view
 }
@@ -643,7 +647,7 @@ impl Cache {
             return (old,false);
         }
         let mut next=Self::new(r,request,packet.scene.order().len());
-        next.pages=old.pages.clone();next.window=old.window;next.graph=old.graph.without_pixels();next.unchanged=unchanged;next.pivot_edit=old.pivot_edit;
+        next.pages=old.pages.clone();next.window=old.window;next.graph=old.graph.without_pixels();next.unchanged=unchanged;next.pivot_edit=old.pivot_edit;next.pointer=old.pointer;
         let mut old=Some(Box::new(old));
         if let Some(overview)=&mut next.overview {
             overview.pages=next.pages.clone();overview.window=next.window;overview.unchanged=unchanged;
@@ -689,7 +693,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, pivot_pending: false, pivot_edit: None, stroke_reach: None,
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -1019,8 +1023,10 @@ impl Cache {
         if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}
         let stroking=!packet.dab_batches.is_empty();
         let view=matches!(destination,Destination::View);
-        let contact=self.gesture.is_some().then(||self.contact_continues(scene,r,packet,encoder)).flatten();
-        if self.gesture.is_some() && contact.is_none() {
+        let from=self.pointer;
+        if view && let Some(centre)=dab_centre(packet) {self.pointer=Some(centre);}
+        let reached=if self.gesture.is_some() {self.contact_continues(scene,r,packet,encoder)}else {None};
+        if self.gesture.is_some() && reached.is_none() {
             self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
         }
         let live=self.gesture.is_some();
@@ -1028,19 +1034,31 @@ impl Cache {
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
         if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
+        let mut lane=if view && stroking {self.lane_halves(packet)}else {Vec::new()};
+        for _ in 0..=self.plan.level {
+            if lane.is_empty() {break;}
+            let exact=self.exact_units(scene,r,packet,encoder,commands,budget,lane,&|_|Class::Visible,true)?;
+            for (key,input) in exact.blocks {self.block(arrivals,key.plan().bounds,input);}
+            for (region,refusal) in exact.refusals {self.refuse(None,region,&refusal);}
+            lane=if exact.committed {self.lane_halves(packet)}else {Vec::new()};
+        }
+        if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
+            self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
+        }
+        let live=self.gesture.is_some();
         let visible=if matches!(destination,Destination::View) {display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY)}else {PixelRect::EMPTY};
         let deferred=match destination {Destination::View=>Class::Prefetch,Destination::Navigator=>Class::Navigator,Destination::Overview(..)|Destination::Preview=>Class::Fallback};
         let served=if matches!(destination,Destination::View) {visible}else {self.plan.bounds};
         let presented=refinement::presented_accuracy(r,packet.scene,matches!(destination,Destination::Preview));
         if std::mem::replace(&mut self.presented,presented)==pages::Accuracy::Display && presented==pages::Accuracy::Exact {self.owe_exact();}
         let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
-        let selection=match contact.filter(|_|live) {
-            Some(composes)=>pages::Selection {copies:Vec::new(),composes,transition:false,waiting:false},
-            None=>self.select_cells(r,served,presented,&selected,arrivals)?,
-        };
+        let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_composes(),transition:false,waiting:false}}
+            else {self.select_cells(r,served,presented,&selected,arrivals)?};
         let transition=selection.transition;
         let direct=if view {self.stroke_only(packet)}else {stroking};
         let pages::Selection {mut copies,mut composes,..}=selection;
+        let halves=if view && !live {self.edit_halves(packet,budget)}else {Vec::new()};
+        let own=if view && stroking && !packet.dab_batches.iter().any(|batch|batch.target.is_coverage()) {self.dab_cells(packet)}else {Vec::new()};
         let mut streamed=if !live && !direct && matches!(destination,Destination::View|Destination::Navigator) && refinement::streams_exact(self,r,packet,presented)
             {std::mem::take(&mut composes)}else {Vec::new()};
         let target=if transition && !direct || !streamed.is_empty() {Root::Store}else {Root::Window};
@@ -1061,33 +1079,27 @@ impl Cache {
             if !written.is_empty() || self.pixels.committed_root().is_none() {self.commit_window(r,encoder)?;}
             for region in blocked {self.hide(region);self.block(arrivals,region,waiting_input(scene,r,false));}
             composed=done;
-        } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || self.graph.prepared.is_some() {
+        } else if !composes.is_empty() || !copies.is_empty() || !streamed.is_empty() || !halves.is_empty() || self.graph.prepared.is_some() {
             let root = self.graph.root.clone().expect("prepared composition graph");
             let input = input_plan(self.plan, packet.scene,Some(self.graph.objects()));
             let tiled = use_tiles(r, self.plan, packet, Some(scene)) && !(self.plan.level > 0 && root.fused_transform(r));
             let view=work_view(packet,0);
             composes.sort_by_key(|region|centre_distance(view,*region));
             streamed.sort_by_key(|region|centre_distance(view,*region));
-            let cells=streamed.iter().map(|region|self.refinement_interest(self.plan.level,*region).key).collect();
-            let exact=self.exact_units(scene,r,packet,encoder,commands,budget,cells,&class,false)?;
-            if stroking && matches!(destination,Destination::View) {self.reach_stroke(packet);}
-            blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
-            refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
+            let cells=streamed.iter().map(|region|self.refinement_interest(self.plan.level,*region).key).collect::<Vec<_>>();
+            if !stroking && !halves.is_empty() {self.prepare_edit_sources(scene,r,packet,encoder,budget)?;}
+            for (cells,class) in [(halves,&(|_|Class::Refinement) as &dyn Fn(PixelRect)->Class),(cells,&class)].into_iter().filter(|(cells,_)|!cells.is_empty()) {
+                let exact=self.exact_units(scene,r,packet,encoder,commands,budget,cells,class,false)?;
+                blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
+                refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
+            }
             let prepared = self.prepared_regions(scene, packet, &destination, budget);
             let halves:Vec<_>=self.graph.prepared.clone().into_iter().flatten().filter(|half|self.graph.caches(half)).collect();
             let preview=matches!(destination,Destination::Preview);
             let mut accepted=Vec::new();
             for region in composes {
+                if !own.is_empty() && if own.contains(&region) {self.pivot_missing(region)}else {self.keyless(region)} {continue;}
                 if !budget.fits(class(region),!accepted.is_empty(),object_cache::PASS_TAPS) {break;}
-                if stroking && matches!(destination,Destination::View) && self.pivot_missing(region)
-                    && self.stroke_reach.as_ref().is_some_and(|(_,cells)|pages::coordinates(region,self.plan.level).all(|cell|cells.contains(&cell))) {
-                    let cell=self.refinement_interest(self.plan.level,region).key;
-                    let halves=self.pivot_halves().into_iter().map(|half|pages::Key {expression:half,..cell.clone()}).collect();
-                    let exact=self.exact_units(scene,r,packet,encoder,commands,budget,halves,&class,true)?;
-                    blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
-                    refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
-                    if self.pivot_missing(region) {continue;}
-                }
                 let requests=self.region_sources(scene,r,packet,region,tiled);
                 let mut unpublished=false;
                 for (id,request) in requests.iter().cloned() {unpublished|=self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?.unpublished;}

@@ -400,8 +400,9 @@ impl Prepared {
             (*local,regions)
         }).collect()
     }
-    pub(super) fn composed(&self,target:SourceTarget,versions:raster::contents::Versions)->Self {
-        let mut snapshot=(*self.snapshot).clone();snapshot.rasters.insert(target,versions);snapshot.preview=None;
+    pub(super) fn composed(&self,target:SourceTarget,versions:raster::contents::Versions)->Self {self.advanced(target,versions,None)}
+    pub(super) fn advanced(&self,target:SourceTarget,versions:raster::contents::Versions,preview:Option<Arc<PreviewDeclaration>>)->Self {
+        let mut snapshot=(*self.snapshot).clone();snapshot.rasters.insert(target,versions);snapshot.preview=preview;
         Self {name_wake:self.name_wake.clone(),..Self::from_snapshot(Arc::new(snapshot))}
     }
     fn versions(&self,target:SourceTarget)->Option<&raster::contents::Versions> {self.snapshot.rasters.get(&target)}

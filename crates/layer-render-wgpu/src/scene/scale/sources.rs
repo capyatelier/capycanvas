@@ -185,10 +185,9 @@ impl Cache {
             }).collect()
     }
     #[expect(clippy::too_many_arguments,reason="A unit declaration evaluates the same region, input plan and preview stage as its reader")]
-    pub(super) fn declare_unit(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,region:PixelRect,input:display_mips::Plan,tiled:bool,
+    pub(super) fn declare_unit(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,expected:Arc<SignatureFrame>,region:PixelRect,input:display_mips::Plan,tiled:bool,
         preview:bool,retained:u64,class:Class,encoder:&mut submission::CommandEncoder,mut evaluate:impl FnMut(&mut Evaluator<'_>)->Result<(),GpuRasterError>,
     )->Result<super::super::sources::Inputs,GpuRasterError> {
-        let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
         let placements=scene.source_placements(packet,scene::Output::Display)?;
         let declaration=super::super::sources::Declaration::scene(expected,scene.submission.clone());
         let used=self.used.clone();let mut unit=Unit::default();self.declaring=true;
@@ -206,7 +205,8 @@ impl Cache {
     )->Result<Result<pages::Accepted,Option<crate::residency::Blocked>>,GpuRasterError> {
         let root=self.graph.root.clone().unwrap();let interest=self.parent_interest(region);let parent=interest.key.clone();
         let input=unit_plan(input_plan(self.plan,packet.scene,Some(self.graph.objects())),packet.scene,region,tiled,Some(self.graph.objects()));
-        let native=match self.declare_unit(scene,r,packet,region,input,tiled,preview,retained,class,encoder,
+        let expected=scene.scale_pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
+        let native=match self.declare_unit(scene,r,packet,expected,region,input,tiled,preview,retained,class,encoder,
             |compositor|roots.iter().try_for_each(|root|compositor.evaluate_root(root,Root::Store).map(drop))) {
             Err(GpuRasterError::SourceWorkingSetExceeded|GpuRasterError::NotReady)=>return Ok(Err(None)),
             native=>native?,

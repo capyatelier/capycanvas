@@ -107,19 +107,19 @@ impl Cache {
             selected=>(owner,stamp,selected.is_some()),
         });
     }
-    fn pivot_edited(&self)->bool {self.pivot_edit.is_some_and(|(_,_,edited)|edited)}
+    pub(super) fn pivot_edited(&self)->bool {self.pivot_edit.is_some_and(|(_,_,edited)|edited)}
     fn folds_halves(&self,key:&pages::Key,class:Class)->bool {
         let halves=self.pivot_halves();
         let region=key.plan().bounds;
         !halves.is_empty() && (self.pivot_edited() && class==Class::Refinement || halves.into_iter().all(|half|
             self.pages.lock().unwrap().get(&pages::Key {expression:half,..key.clone()},region,pages::Accuracy::Exact,0,class).is_some()))
     }
-    pub(super) fn reach_stroke(&mut self,packet:FramePacket<'_>) {
-        let Some(stroke)=packet.dab_batches.first().map(|batch|batch.stroke_id) else {return;};
-        let (level,extent)=(self.plan.level,self.plan.extent);
-        let reached=self.stroke_reach.get_or_insert_with(||(stroke,BTreeSet::new()));
-        if reached.0!=stroke {*reached=(stroke,BTreeSet::new());}
-        reached.1.extend(dab_reach(packet,extent).flat_map(|reach|pages::coordinates(reach,level)));
+    pub(super) fn wanted_halves(&self,region:PixelRect,view:layer_render::ViewState)->Vec<pages::Key> {
+        let halves=self.pivot_halves();
+        let mut cells=pages::coordinates(region.intersect(self.plan.bounds),self.plan.level).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent)).collect::<Vec<_>>();
+        let near=self.pointer.map_or(view,|point|centred(view,point));
+        cells.sort_by_key(|cell|centre_distance(near,*cell));
+        cells.into_iter().flat_map(|cell|{let cell=self.refinement_interest(self.plan.level,cell).key;halves.iter().map(move|half|pages::Key {expression:half.clone(),..cell.clone()})}).collect()
     }
     pub(super) fn pivot_halves(&self)->Vec<graph::Node> {
         self.graph.parts.iter().flat_map(|parts|[&parts.nodes[0],&parts.nodes[2]]).filter(|node|!graph::Expression::is_clear(node) && self.graph.caches(node)).cloned().collect()
@@ -172,8 +172,7 @@ impl Cache {
             keys.extend(coordinates.into_iter().map(|coordinate|cache.refinement_interest(cache.plan.level,pages::bounds(coordinate,cache.plan.level,cache.plan.extent)).key));
         }
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
-        let cells=keys.iter().filter(|key|key.level==self.plan.level).cloned().collect::<Vec<_>>();
-        keys.extend(cells.into_iter().flat_map(|cell|halves.iter().map(move|half|pages::Key {expression:half.clone(),..cell.clone()})));
+        if !halves.is_empty() {keys.extend(self.wanted_halves(self.plan.bounds,packet.view));}
         let mut exact=self.exact_units(scene,r,packet,encoder,commands,budget,keys,&|_|Class::Refinement,false)?;
         self.pivot_refusal=exact.pivot_refusal.take();
         self.pivot_waiting=exact.blocks.iter().find(|(key,_)|halves.contains(&key.expression)).and_then(|(_,input)|input.map(|input|(input,since)));
@@ -374,8 +373,7 @@ impl Cache {
             Err(Some(refusal))=>{let refusal=refusal.alone();pass.closed=Some(Closed::Refused(refusal.clone()));return Ok(Outcome::Refused(region,refusal));},
         };
         let unit=admitted.unwrap_or_else(||{self.streaming.units.push(Admitted {interest,view:packet.view,work,waiting:None});self.streaming.units.len()-1});
-        pass.owed=false;
-        if pass.started && work>budget.remaining() {self.streaming.units[unit].waiting=None;return Ok(Outcome::Deferred);}
+        if pass.started && bounded && work>budget.remaining() {self.streaming.units[unit].waiting=None;return Ok(Outcome::Deferred);}
         #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
         let image=self.pages.lock().unwrap().allocated(key,class(region)).expect("accepted exact page");
         let write=self.pages.lock().unwrap().prepare_write(key.clone(),region,pages::Accuracy::Exact,0)?;

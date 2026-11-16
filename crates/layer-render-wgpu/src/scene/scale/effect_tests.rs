@@ -179,7 +179,8 @@ fn native_level_pointwise_writes_branch_without_materialization_and_initializes_
             let mut unit=Unit::default();
             scene.used.iter_mut().for_each(super::scratch::Usage::reset);
             let target=Target { view: destination.view.clone(), slot: None, plan };
-            let mut accepted=cache.declare_unit(&mut scene,&mut r,frame,region,plan,true,false,0,crate::residency::Class::Visible,&mut encoder,
+            let held=scene.scale_pages.lock().unwrap().expected().cloned().unwrap();
+            let mut accepted=cache.declare_unit(&mut scene,&mut r,frame,held,region,plan,true,false,0,crate::residency::Class::Visible,&mut encoder,
                 |evaluator|evaluator.effect(input,chain,masks,Some(target.clone())).map(drop)).unwrap().accept_query(&mut r,Some(&scene)).unwrap();
             let mut evaluator = Evaluator {class:crate::residency::Class::Visible, accepted:&mut accepted, cache: &mut cache, scene: &mut scene, packet: frame,
                 r: &mut r, encoder: &mut encoder, region: region.into(), input: plan, tiled: true, unit: &mut unit, previous_motion:None,retained:0, approximate:false,preview:false };

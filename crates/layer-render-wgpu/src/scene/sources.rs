@@ -867,6 +867,11 @@ impl AcceptedInputs {
         (declared.decisions.0.len(),declared.decisions.0.iter().filter(|(address,(raw,wanted))|!self.decisions.0.get(address).is_some_and(|(held_raw,held)|held_raw==raw && same(held,wanted)))
             .map(|((_,plane,coordinate),_)|format!("{plane:?} {coordinate:?}")).collect())
     }
+    pub(in crate::scene) fn adopt(&mut self,other:Self)->Result<(),GpuRasterError> {
+        for (address,choice) in other.decisions.0 {self.decisions.0.entry(address).or_insert(choice);}
+        for input in other.leases {if !self.leases.iter().any(|held|Arc::ptr_eq(&held.owner,&input.owner)) {self.leases.push(input);}}
+        self.placements.extend(other.placements)
+    }
     pub(in crate::scene) fn overlay(&mut self,current:&Self) {
         for (address,choice) in &mut self.decisions.0 {if let Some(held)=current.decisions.0.get(address) {choice.clone_from(held);}}
     }

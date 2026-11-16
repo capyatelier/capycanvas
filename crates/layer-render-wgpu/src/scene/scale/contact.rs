@@ -28,7 +28,11 @@ pub(super) struct Contact {
     written:IdMap<[u32;2],(pages::Key,PixelRect,submission::Submission)>,
     submissions:Vec<submission::Submission>,
     stamps:Arc<PreviewStamps>,
+    reduced:BTreeSet<[u32;2]>,
 }
+
+#[derive(Default)]
+struct Declared {cells:Vec<(PixelRect,crate::scene::sources::Inputs)>,inputs:crate::scene::sources::AcceptedInputs,pages:IdMap<pages::Key,pages::Held>,level:Option<u32>}
 
 #[derive(PartialEq)]
 struct Guard {inspect_mask:Option<OccurrenceHandle>,clipping:[bool;2],blend_space:layer_core::BlendSpace,watercolor:Option<WatercolorLayerStyle>}
@@ -51,6 +55,10 @@ fn reads(node:&graph::Node,target:SourceTarget,tainted:&mut crate::IdSet<usize>)
     read
 }
 
+fn local_reach(packet:FramePacket<'_>,target:SourceTarget)->Vec<PixelRect> {
+    let extent=packet.scene.target_extent(target);
+    packet.dab_batches.iter().map(|batch|crate::pixel_rect::pixel_rect(batch.damage,extent)).filter(|reach|!reach.is_empty()).collect()
+}
 fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
     let first=packet.dab_batches.first()?;
     packet.dab_batches.iter().all(|batch|batch.stroke_id==first.stroke_id && batch.target==first.target
@@ -62,6 +70,32 @@ impl Cache {
         use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r))
     }
     pub(super) fn contact_id(&self)->Option<u64> {self.gesture.as_ref().map(|contact|contact.id)}
+    pub(super) fn stroke_scope(&self,packet:FramePacket<'_>,touched:&[PixelRect],from:Option<[f32;2]>)->Vec<PixelRect> {
+        let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);let span=PAGE_SIZE<<level;
+        let near=|reach:PixelRect|PixelRect::new(reach.min_x().saturating_sub(span),reach.min_y().saturating_sub(span),
+            reach.max_x().saturating_add(span),reach.max_y().saturating_add(span)).intersect(bounds);
+        let swept=|reach:PixelRect|{
+            let centre=[(reach.min_x()+reach.max_x()) as f32*0.5,(reach.min_y()+reach.max_y()) as f32*0.5];
+            let [dx,dy]=from.map_or([0.;2],|[x,y]|[x-centre[0],y-centre[1]]);
+            let steps=(dx.abs().max(dy.abs())/span as f32).ceil() as u32;
+            (0..=steps).map(move|step|{let t=step as f32/steps.max(1) as f32;let [x,y]=[(dx*t).round() as i64,(dy*t).round() as i64];
+                let shift=|value:u32,by:i64|(i64::from(value)+by).clamp(0,i64::from(u32::MAX)) as u32;
+                PixelRect::new(shift(reach.min_x(),x),shift(reach.min_y(),y),shift(reach.max_x(),x),shift(reach.max_y(),y))})
+        };
+        let coordinates:BTreeSet<[u32;2]>=dab_reach(packet,extent).flat_map(swept).map(near).chain(touched.iter().map(|cell|cell.intersect(bounds)))
+            .flat_map(|reach|pages::coordinates(reach,level)).collect();
+        coordinates.into_iter().map(|coordinate|pages::bounds(coordinate,level,extent)).collect()
+    }
+    pub(super) fn dab_cells(&self,packet:FramePacket<'_>)->Vec<PixelRect> {
+        if stroke(packet).is_none() {return Vec::new();}
+        let (level,extent,bounds)=(self.plan.level,self.plan.extent,self.plan.bounds);
+        dab_reach(packet,extent).flat_map(|reach|pages::coordinates(reach.intersect(bounds),level)).collect::<BTreeSet<_>>()
+            .into_iter().map(|coordinate|pages::bounds(coordinate,level,extent)).collect()
+    }
+    pub(super) fn contact_composes(&self)->Vec<PixelRect> {
+        let Some(contact)=self.gesture.as_ref() else {return Vec::new();};
+        self.contact_cells().into_iter().filter(|region|contact.cells.iter().any(|(cell,_)|cell==region)).collect()
+    }
     pub(super) fn contact_reads(&self,node:&graph::Node)->bool {
         self.gesture.as_ref().is_some_and(|contact|contact.tainted.contains(&(Arc::as_ptr(node) as *const () as usize)))
     }
@@ -112,6 +146,27 @@ impl Cache {
         let previous=std::mem::replace(&mut self.stroked,frame.clone());
         self.gesture.is_some() || stroke(packet).zip(previous.zip(frame)).is_some_and(|((_,target),(previous,frame))|frame.contact_continues(&previous,target).is_some())
     }
+    pub(super) fn edit_halves(&self,packet:FramePacket<'_>,budget:&WorkBudget)->Vec<pages::Key> {
+        if !packet.dab_batches.is_empty() || budget.motion || !self.pivot_edited() {Vec::new()}else {self.wanted_halves(self.plan.bounds,packet.view)}
+    }
+    pub(super) fn prepare_edit_sources(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,budget:&mut WorkBudget)
+        ->Result<(),GpuRasterError> {
+        let (Some([x,y]),Some(root))=(self.pointer,self.graph.root.clone()) else {return Ok(());};
+        let span=(PAGE_SIZE<<self.plan.level) as f32;
+        let near=PixelRect::new((x-span).max(0.) as u32,(y-span).max(0.) as u32,(x+span).max(0.) as u32+1,(y+span).max(0.) as u32+1).intersect(self.plan.bounds);
+        let tiled=self.tiled(r,packet,scene,&root);
+        let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
+        for coordinate in pages::coordinates(near,self.plan.level) {
+            let cell=pages::bounds(coordinate,self.plan.level,self.plan.extent);
+            if self.pivot_missing(cell) {continue;}
+            for (id,request) in self.region_sources(scene,r,packet,cell,tiled) {
+                if inside.contains(&id) || self.source_ready(scene,r,id,&request) {continue;}
+                if budget.remaining()<object_cache::PASS_TAPS {return Ok(());}
+                self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,budget)?;
+            }
+        }
+        Ok(())
+    }
     #[expect(clippy::too_many_arguments,reason="A contact begins from the frame's composed cells, encoding and budget")]
     pub(super) fn begin_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,
         touched:&[PixelRect],
@@ -119,41 +174,96 @@ impl Cache {
         let Some((stroke,target))=stroke(packet).filter(|(_,target)|!target.is_coverage() && !packet.dab_batches.iter().any(|batch|batch.stroke_end)) else {return Ok(());};
         let Some(root)=self.graph.root.clone() else {return Ok(());};
         let tier=self.pages.lock().unwrap().tier();
-        if tier.used()>tier.limit() || r.transform_preview.is_some() || r.moving_layer.is_some() || refinement::exact_at_view_level(packet.scene)
-            || root.native_capture(packet.scene,self.plan.level) || !self.contact_ready()
+        let scope=self.stroke_scope(packet,touched,None);
+        if scope.is_empty() || tier.used()>tier.limit() || r.transform_preview.is_some() || r.moving_layer.is_some() || refinement::exact_at_view_level(packet.scene)
+            || root.native_capture(packet.scene,self.plan.level) || !self.contact_ready(&scope)
             || packet.scene.order().iter().any(|handle|packet.scene.effect(*handle).is_some_and(|effect|effect.animated())) {return Ok(());}
         let (Some(window),Some(frame))=(self.pixels.root().map(|image|image.texture.clone()),self.pages.lock().unwrap().expected().cloned()) else {return Ok(());};
         let preview_level=std::sync::OnceLock::new();
         let (Some(guard),Some(composed),Some(generation))=(Guard::capture(r,packet,target,&preview_level),frame.target_versions(target),r.raster_generation(target)) else {return Ok(());};
-        let tiled=self.tiled(r,packet,scene,&root);let bounds=self.plan.bounds;
-        let halves=self.held_halves(bounds);
-        let ready=pages::coordinates(bounds,self.plan.level).map(|coordinate|pages::bounds(coordinate,self.plan.level,self.plan.extent))
-            .filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
-        if touched.iter().any(|region|pages::coordinates(*region,self.plan.level).any(|coordinate|!ready.contains(&pages::bounds(coordinate,self.plan.level,self.plan.extent)))) {return Ok(());}
-        let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
-        let mut requests=self.region_sources(scene,r,packet,bounds,tiled);
-        requests.retain(|(id,_)|!inside.contains(id));
-        for (id,request) in requests.iter().filter(|(id,request)|!self.source_ready(scene,r,*id,request)).cloned().collect::<Vec<_>>() {
-            self.prepare_source(scene,r,packet,encoder,id,request,Class::Visible,budget)?;
-        }
-        if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {return Ok(());}
-        let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
+        let tiled=self.tiled(r,packet,scene,&root);
+        let plan=self.plan;
+        let required=self.dab_cells(packet).into_iter().chain(touched.iter().filter(|cell|!cell.intersect(plan.bounds).is_empty()).copied()).collect::<Vec<_>>();
+        let ready=scope.into_iter().filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
+        if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
+        let reach=local_reach(packet,target);
+        let reduced=reach.iter().copied().flat_map(page_coordinates).collect();
+        let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,reach)? else {return Ok(());};
+        if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
+        let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
+        let mut tainted=crate::IdSet::default();reads(&root,target,&mut tainted);
+        let predicted=frame.preview_for(target).and_then(|preview|preview.contact_outputs().map(Iterator::collect)).unwrap_or_default();
+        static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
+        self.pixels.hold_current(&frame);
+        let previewed=r.preview_input_tiles(target);let stale=previewed.iter().map(|tile|(*tile,page_rect(*tile))).collect();
+        self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
+            previewed,next:None,
+            footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
+            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced});
+        Ok(())
+    }
+    #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
+    pub(super) fn grow_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,
+        reached:&[PixelRect],from:Option<[f32;2]>,
+    )->Result<bool,GpuRasterError> {
+        let Some(contact)=self.gesture.as_ref() else {return Ok(false);};
+        let (root,target,tiled,level)=(contact.root.clone(),contact.target,contact.tiled,contact.level);
+        let Some(current)=contact.next.as_ref().map(|(current,..)|current.clone()) else {return Ok(true);};
+        let frame=Arc::new(contact.frame.advanced(target,current,r.preview_declaration.clone()));
+        let known=contact.cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>();
+        let changed=contact.next.iter().flat_map(|(_,changed,..)|changed.iter().copied());
+        let tiles=local_reach(packet,target).into_iter().flat_map(page_coordinates).chain(changed).collect::<BTreeSet<_>>();
+        let tiles=if frame.watercolor(target) {tiles.into_iter().flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles};
+        let tiles=tiles.into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<Vec<_>>();
+        let reach=tiles.iter().copied().map(page_rect).collect::<Vec<_>>();
+        let scope=self.stroke_scope(packet,reached,from);
+        let view=work_view(packet,0);
+        let mut waiting=self.contact_cells().into_iter().filter(|cell|!known.contains(cell) && !scope.contains(cell) && self.keyless(*cell)).collect::<Vec<_>>();
+        waiting.sort_by_key(|cell|centre_distance(view,*cell));
+        let mut cells=scope.into_iter().filter(|cell|!known.contains(cell)).collect::<Vec<_>>();
+        cells.extend(waiting.into_iter().take(usize::from(budget.remaining()>=object_cache::PASS_TAPS)));
+        cells.retain(|cell|!self.pivot_missing(*cell));
+        let declared=if cells.is_empty() && reach.is_empty() {Some(Declared::default())}
+            else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells.clone(),&cells,reach)?};
+        let Some(Declared {cells,inputs,pages,level})=declared else {return Ok(false);};
+        let contact=self.gesture.as_mut().expect("live contact");
+        contact.cells.extend(cells);
+        if level.is_some() {contact.level=level;contact.reduced.extend(tiles);}
+        contact.inputs.adopt(inputs)?;
+        for (key,page) in pages {contact.pages.entry(key).or_insert(page);}
+        Ok(reached.iter().all(|cell|contact.cells.iter().any(|(declared,_)|declared==cell)))
+    }
+    pub(super) fn lane_halves(&self,packet:FramePacket<'_>)->Vec<pages::Key> {
+        self.dab_cells(packet).into_iter().filter(|cell|self.pivot_missing(*cell)).flat_map(|cell|self.wanted_halves(cell,packet.view)).collect()
+    }
+    #[expect(clippy::too_many_arguments,reason="A contact declares its cells with the frame's scene, encoding and budget, around the pages it already holds")]
+    fn declare_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,
+        frame:&Arc<SignatureFrame>,root:&graph::Node,target:SourceTarget,tiled:bool,level:Option<u32>,cells:Vec<PixelRect>,prepared:&[PixelRect],reach:Vec<PixelRect>,
+    )->Result<Option<Declared>,GpuRasterError> {
         let wet=frame.watercolor(target);
-        let mut cells=Vec::new();
-        for cell in ready {
-            let unit=unit_plan(input,packet.scene,cell,tiled,Some(self.graph.objects()));
-            let declared=self.declare_unit(scene,r,packet,cell,unit,tiled,false,retained,Class::Visible,encoder,|compositor| {
-                compositor.evaluate_root(&root,Root::Store)?;
-                if wet {compositor.accepted.declare_watercolor_stencils(compositor.r,compositor.packet.scene,target)?;}
-                Ok(())
-            });
-            let Some(declared)=declared.ok().filter(|inputs|inputs.objects().is_empty()) else {return Ok(());};
-            cells.push((cell,declared));
+        let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
+        let held:std::collections::HashSet<pages::Key>=self.gesture.iter().flat_map(|contact|contact.pages.keys().cloned()).collect();
+        let (mut ready,mut requests)=(Vec::new(),Vec::<(SourceTarget,SourceRequest)>::new());
+        for cell in cells {
+            let mut wanted=self.region_sources(scene,r,packet,cell,tiled);
+            wanted.retain(|(id,_)|!inside.contains(id));
+            for (id,request) in &mut wanted {
+                let (source,level)=(&scene.scale_sources.entries[id],request.plan.level);
+                let mut unheld=Vec::new();
+                for area in &request.required.regions {for coordinate in pages::coordinates(*area,level) {
+                    let key=source.key(r,*id,level,coordinate);
+                    if !held.contains(&key) {unheld.push(key.plan().bounds.intersect(*area));}
+                }}
+                request.required=Damage::from_regions(unheld);
+            }
+            if prepared.contains(&cell) {
+                for (id,request) in wanted.iter().filter(|(id,request)|!self.source_ready(scene,r,*id,request)).cloned().collect::<Vec<_>>() {
+                    self.prepare_source(scene,r,packet,encoder,id,request,Class::Visible,budget)?;
+                }
+            }
+            if wanted.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {ready.push(cell);requests.extend(wanted);}
         }
-        let request=requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request);
-        let level=request.map(|request|request.plan.level);
-        let reductions=match request {Some(request)=>self.declare_reductions(scene,r,packet,target,request,encoder),None=>Ok(Default::default())};
-        let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene)).ok()) else {return Ok(());};
+        let bounds=ready.iter().fold(PixelRect::EMPTY,|bounds,cell|bounds.union(*cell)).intersect(self.plan.bounds);
         let mut areas=IdMap::<pages::Key,(PixelRect,u32)>::default();
         for (id,request) in &requests {
             let source=&scene.scale_sources.entries[id];
@@ -164,29 +274,36 @@ impl Cache {
                 let held=areas.entry(key).or_insert((region,request.plan.level));held.0=held.0.union(region);
             }}
         }
-        let mut held=IdMap::default();
-        for (key,_,page) in halves {held.insert(key,page);}
+        let mut pages=IdMap::default();
+        for (key,_,page) in self.held_halves(bounds) {pages.insert(key,page);}
         {
             let mut store=self.pages.lock().unwrap();
             for (key,(region,level)) in areas {
-                let Some(page)=store.get(&key,region,pages::Accuracy::Display,level,Class::Visible) else {return Ok(());};
-                held.insert(key,page);
+                let Some(page)=store.get(&key,region,pages::Accuracy::Display,level,Class::Visible) else {return Ok(None);};
+                pages.insert(key,page);
             }
         }
-        self.touch_cell_keys();
-        let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
-        let mut tainted=crate::IdSet::default();reads(&root,target,&mut tainted);
-        let predicted=frame.preview_for(target).and_then(|preview|preview.contact_outputs().map(Iterator::collect)).unwrap_or_default();
-        static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
-        self.pixels.hold_current(&frame);
-        let previewed=r.preview_input_tiles(target);let stale=previewed.iter().map(|tile|(*tile,page_rect(*tile))).collect();
-        self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
-            previewed,next:None,
-            footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages:held,level,
-            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default()});
-        Ok(())
+        if let Some(contact)=self.gesture.as_mut() {for (key,page) in &pages {contact.pages.entry(key.clone()).or_insert_with(||page.clone());}}
+        let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
+        let mut cells=Vec::new();
+        for cell in ready {
+            let unit=unit_plan(input,packet.scene,cell,tiled,Some(self.graph.objects()));
+            let declared=self.declare_unit(scene,r,packet,frame.clone(),cell,unit,tiled,false,retained,Class::Visible,encoder,|compositor| {
+                compositor.evaluate_root(root,Root::Store)?;
+                if wet {compositor.accepted.declare_watercolor_stencils(compositor.r,compositor.packet.scene,target)?;}
+                Ok(())
+            });
+            let Some(declared)=declared.ok().filter(|inputs|inputs.objects().is_empty()) else {continue;};
+            cells.push((cell,declared));
+        }
+        let level=level.or_else(||requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request.plan.level));
+        let request=level.filter(|_|!reach.is_empty()).map(|level|SourceRequest {plan:display_mips::Plan::at(self.plan.extent,level),required:Damage::from_regions(reach),covered:PixelRect::EMPTY});
+        let reductions=match &request {Some(request)=>self.declare_reductions(scene,r,packet,frame,target,request,encoder),None=>Ok(Default::default())};
+        let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene)).ok()) else {return Ok(None);};
+        self.touch_cell_keys(bounds);
+        Ok(Some(Declared {cells,inputs,pages,level}))
     }
-    fn declare_reductions(&self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,target:SourceTarget,request:&SourceRequest,
+    fn declare_reductions(&self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,frame:&Arc<SignatureFrame>,target:SourceTarget,request:&SourceRequest,
         encoder:&mut submission::CommandEncoder,
     )->Result<crate::scene::sources::Inputs,GpuRasterError> {
         let level=request.plan.level;
@@ -194,11 +311,10 @@ impl Cache {
         let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));
         let pages=request.required.regions.iter().flat_map(|area|pages::coordinates(*area,level))
             .map(|coordinate|(source.key(r,target,level,coordinate).plan(),coordinate)).collect::<Vec<_>>();
-        let tiles=pages.iter().flat_map(|(plan,_)|page_coordinates(plan.bounds.intersect(valid))).collect::<BTreeSet<_>>();
-        let expected=self.pages.lock().unwrap().expected().cloned().ok_or(GpuRasterError::NotReady)?;
-        let wet=expected.watercolor(target);
+        let tiles=request.required.regions.iter().flat_map(|area|page_coordinates(area.intersect(valid))).collect::<BTreeSet<_>>();
+        let wet=frame.watercolor(target);
         let placements=scene.source_placements(packet,scene::Output::Display)?;
-        scene.declare(r,placements,crate::scene::sources::Declaration::scene(expected,Some(encoder.submission())),|scene,r,accepted| {
+        scene.declare(r,placements,crate::scene::sources::Declaration::scene(frame.clone(),Some(encoder.submission())),|scene,r,accepted| {
             let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
             for tile in &tiles {
                 let plan=pages.iter().find(|(plan,_)|!plan.bounds.intersect(page_rect(*tile)).is_empty()).map(|(plan,_)|*plan).ok_or(GpuRasterError::NotReady)?;
@@ -209,16 +325,16 @@ impl Cache {
         })
     }
     pub(super) fn contact_continues(&mut self,scene:&Scene,r:&WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder)->Option<Vec<PixelRect>> {
-        let Some(contact)=self.gesture.as_mut() else {return None;};
+        let contact=self.gesture.as_mut()?;
         contact.submissions.retain(|submission|submission.pending() || submission.discarded());
         if contact.exit.get().is_some() || !self.contact_holds(r,packet) || self.graph.root.as_ref()!=self.gesture.as_ref().map(|contact|&contact.root) {return None;}
-        let Some(contact)=self.gesture.as_mut() else {return None;};
+        let contact=self.gesture.as_mut()?;
         let target=contact.target;let wet=contact.frame.watercolor(target);
-        let Ok(current)=r.current_raster_versions(target) else {return None;};
+        let current=r.current_raster_versions(target).ok()?;
         let mut changed=BTreeSet::new();
         if !contact.composed.changes(&current,|coordinate|{changed.insert(coordinate);}) {return None;}
         let predicted:BTreeSet<_>=match &r.preview_declaration {
-            Some(preview) if preview.target()==target=>match preview.contact_outputs() {Some(outputs)=>outputs.collect(),None=>return None},
+            Some(preview) if preview.target()==target=>preview.contact_outputs()?.collect(),
             Some(_)=>return None,
             None=>BTreeSet::new(),
         };
@@ -227,6 +343,8 @@ impl Cache {
         let previewed=r.preview_input_tiles(target);
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
             .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
+        let all=pages::coordinates(contact.plan.bounds,contact.plan.level).collect::<Vec<_>>();
+        let reached=stale.iter().map(|index|pages::bounds(all[*index],contact.plan.level,contact.plan.extent)).collect();
         let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
         let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
         if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return None;}
@@ -235,8 +353,7 @@ impl Cache {
         }}
         contact.next=Some((current,changed,predicted,previewed));
         self.invalidate_cells(stale);
-        let cells=self.contact_cells();
-        self.gesture.as_ref().is_some_and(|contact|cells.iter().all(|cell|contact.cells.iter().any(|(declared,_)|declared==cell))).then_some(cells)
+        Some(reached)
     }
     #[cfg(test)]
     pub(super) fn contact_decisions_differ_from_a_declaration(&self,r:&WgpuRasterizer,scene:SceneView<'_>)->Result<(usize,Vec<String>),GpuRasterError> {
@@ -261,6 +378,7 @@ impl Cache {
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
+        let changed=changed.into_iter().chain(stale.keys().copied()).collect::<BTreeSet<_>>();
         let mut reductions=Vec::new();
         if let Some(level)=contact.level {
             let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));

@@ -1743,7 +1743,7 @@ fn the_display_report_and_grant_pass_walk_no_composition_window() {
     assert_eq!(crate::test_support::PassCounts::snapshot().delta(counts).display_walks, 0, "the report reads window counters, not windows");
 }
 
-fn layered_raster_document(layers:u8,tiles:u32)->layer_core::Document {
+pub(crate) fn layered_raster_document(layers:u8,tiles:u32)->layer_core::Document {
     use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
     let extent=[PAGE_SIZE*tiles;2];
     let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
@@ -1907,7 +1907,7 @@ fn selecting_another_layer_builds_its_halves_only_in_idle_frames() {
 }
 
 #[test]
-fn stroke_frames_build_halves_only_within_their_dab_reach_and_their_budget() {
+fn stroke_frames_build_every_half_of_their_dab_cells_and_none_outside_them() {
     let doc=layered_raster_document(8,8);
     let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
     let layer=working_layer(&doc);
@@ -1917,7 +1917,7 @@ fn stroke_frames_build_halves_only_within_their_dab_reach_and_their_budget() {
     frame.view.width_px=512;frame.view.height_px=512;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     settle_observing(&mut r,frame,|_|{});
     let cell=PixelRect::new(0,0,1024,1024);
-    let units=1+(1<<20)/(3*u64::from(PAGE_SIZE).pow(2)) as usize;
+    let units=2*(cell.width()/PAGE_SIZE*cell.height()/PAGE_SIZE) as usize;
     let mut built=0;
     for step in 0..8 {
         let dab=crate::tests::test_dab([200.+8.*step as f32,200.],[0.9,0.1,0.3,1.],0.8);
@@ -1925,12 +1925,10 @@ fn stroke_frames_build_halves_only_within_their_dab_reach_and_their_budget() {
         crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame}).unwrap();
         crate::test_support::complete(&r);
         let halves=r.scale_display.as_ref().unwrap().half_pages();
-        assert!(halves.iter().all(|(_,region)|region.intersect(cell)==*region),"stroke frame {step} built halves outside its dab reach: {halves:?}");
-        let level_zero=halves.iter().filter(|(level,_)|*level==0).count();
-        assert!(level_zero-built<=units,"stroke frame {step} built {} level-0 half units; its budget admits {units}",level_zero-built);
-        built=level_zero;
+        assert!(halves.iter().all(|(_,region)|region.intersect(cell)==*region),"stroke frame {step} built halves outside its dab cell: {halves:?}");
+        built=halves.iter().filter(|(level,_)|*level==0).count();
     }
-    assert!(built>0,"the stroke builds halves for the cell it reaches");
+    assert_eq!(built,units,"the stroke builds both halves of the cell it reaches");
 }
 
 #[test]

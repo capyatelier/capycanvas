@@ -52,7 +52,8 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
     let mut units=Vec::new();
     for page in 0..2 {
         let start=scene.jobs.len();let mut unit=Unit::default();
-        let mut accepted=cache.declare_unit(&mut scene,&mut r,frame,page_rect([page,0]),plan,false,false,0,crate::residency::Class::Visible,&mut encoder,|evaluator| {
+        let expected=scene.scale_pages.lock().unwrap().expected().cloned().unwrap();
+        let mut accepted=cache.declare_unit(&mut scene,&mut r,frame,expected,page_rect([page,0]),plan,false,false,0,crate::residency::Class::Visible,&mut encoder,|evaluator| {
             let output=evaluator.evaluate_root(&root,Root::Store)?;evaluator.materialize(output,None).map(drop)
         }).unwrap().accept_query(&mut r,Some(&scene)).unwrap();
         {

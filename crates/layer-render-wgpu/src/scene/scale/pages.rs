@@ -1822,13 +1822,19 @@ impl Cache {
     pub(super) fn waiting_cells(&self,r:&WgpuRasterizer)->bool {
         self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().any(|cell|cell.naming(r)))
     }
+    pub(super) fn keyless(&self,region:PixelRect)->bool {
+        self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
+            cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none()))))
+    }
     pub(super) fn contact_cells(&self)->Vec<PixelRect> {
         let Some((cells,_store,_))=self.cells() else {return Vec::new();};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.queued && !cell.derived)
             .map(|(_,coordinate)|bounds(coordinate,self.plan.level,self.plan.extent)).collect()
     }
-    pub(super) fn contact_ready(&self)->bool {
-        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().all(|cell|cell.derived || !cell.queued && cell.current && cell.shown.is_some()))
+    pub(super) fn contact_ready(&self,scope:&[PixelRect])->bool {
+        self.cells().is_some_and(|(cells,_,_)|cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level))
+            .filter(|(_,coordinate)|scope.contains(&bounds(*coordinate,self.plan.level,self.plan.extent)))
+            .all(|(cell,_)|cell.written()))
     }
     pub(super) fn hide(&self,region:PixelRect) {
         let Some((mut cells,_store,_))=self.cells() else {return;};
@@ -1837,10 +1843,10 @@ impl Cache {
             cell.shown=None;cell.invalidate();
         }
     }
-    pub(super) fn touch_cell_keys(&self) {
+    pub(super) fn touch_cell_keys(&self,region:PixelRect) {
         let Some((_cells,store,template))=self.cells() else {return;};
         let Some(frame)=store.expected() else {return;};
-        for coordinate in coordinates(self.plan.bounds,self.plan.level) {
+        for coordinate in coordinates(region.intersect(self.plan.bounds),self.plan.level) {
             drop(frame.expected_key(&Key {coordinate,..template.clone()},bounds(coordinate,self.plan.level,self.plan.extent),self.required_input_level()));
         }
     }
