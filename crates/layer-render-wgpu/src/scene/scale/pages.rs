@@ -165,6 +165,8 @@ impl Cache {
         Ok(())
     }
     #[cfg(test)]
+    pub(crate) fn view_cells(&self)->u64 {coordinates(self.plan.bounds,self.plan.level).count() as u64}
+    #[cfg(test)]
     pub(crate) fn presentable_pages(&self) -> usize {
         usize::from(self.pixels.committed_root().is_some())*self.cells().map_or(0,|(cells,_,_)|cells.cells.iter().filter(|cell|cell.written()).count())
             +self.overview.as_ref().map_or(0,|cache|cache.presentable_pages())

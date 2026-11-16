@@ -93,7 +93,7 @@ impl Cache {
         }
     }
     fn retain_exact(&self,key:&pages::Key) {
-        if key.level!=self.plan.level || self.graph.content.as_ref()!=Some(&key.expression) {self.pages.lock().unwrap().set_optional(key);}
+        if key.level!=self.plan.level || self.graph.content.as_ref()!=Some(&key.expression) && !self.pivot_halves().contains(&key.expression) {self.pages.lock().unwrap().set_optional(key);}
     }
     pub(super) fn pivot_missing(&self,region:PixelRect)->bool {
         let halves=self.pivot_halves().len();
