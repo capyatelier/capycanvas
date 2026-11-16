@@ -132,7 +132,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let frame = FramePacket { view: v, ..packet(abandoned.scene(), doc.composition().size) };
     working_scene_frame(&mut r,frame);
     super::submit_published(&mut r, frame);
-    {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(cache,&[cache.plan.bounds]);cache.evict_window(cache.plan.bounds);}
+    evict_view(&r);
     assert!(r.next_frame()==layer_render::FrameDemand::Work);
     let mut scene = r.scene.take().unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());

@@ -493,7 +493,7 @@ fn cold_multilayer_idle_refinement_finishes_with_a_bounded_source_batch() {
     frame.view = crate::test_support::view([extent[0] / 4, extent[1] / 4]);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     submit_published(&mut r, frame);
-    {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(cache,&[cache.plan.bounds]);cache.evict_window(cache.plan.bounds);}
+    evict_view(&r);
     assert!(r.next_frame()==layer_render::FrameDemand::Work, "the evicted Fit view streams its exact cells again");
     crate::test_support::complete(&r);
     crate::memory::memory_tests::cold_color_pressure(&mut r);

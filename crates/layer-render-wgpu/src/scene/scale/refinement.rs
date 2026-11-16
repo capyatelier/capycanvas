@@ -190,7 +190,7 @@ impl Cache {
         let mut outcomes=std::collections::HashMap::<pages::Key,(bool,Option<crate::frame_demand::Input>)>::new();
         {let pages=self.pages.lock().unwrap();self.streaming.units.retain(|unit|pages.accepted(&unit.interest.key,unit.interest.key.plan().bounds,0));}
         let mut previous=std::mem::take(&mut self.streaming.cells);
-        let admitted=self.streaming.units.iter().map(|unit|unit.interest.key.clone()).collect::<Vec<_>>();
+        let admitted=self.streaming.units.iter().map(|unit|unit.interest.key.clone()).filter(|unit|cells.iter().any(|cell|cell.expression==unit.expression)).collect::<Vec<_>>();
         let mut pass=Pass {started:false,owed,closed:None};
         let flying=admitted.len();
         for (index,cell) in admitted.into_iter().chain(cells).enumerate() {

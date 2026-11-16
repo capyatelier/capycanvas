@@ -179,6 +179,36 @@ fn compact_contribution_omits_unused_paint_and_matches_bound_source() {
 }
 
 #[test]
+fn stroke_frames_capture_no_exact_unit_admitted_before_the_stroke_and_keep_the_reduced_preview() {
+    let extent=[517,259];
+    let mut doc=document_at(extent);
+    paint_mut(&mut doc,0).base = (Some(rgba8_source(extent,|x,y|[(x%251) as u8,(y%239) as u8,173,211]))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+    let target=source_at(&doc,0);
+    attach_filter(&mut doc,"threshold");
+    let mut frame=packet(doc.scene(),extent);
+    frame.composite_all=false;
+    frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::submit_ready(&mut r,frame).unwrap();
+    let in_flight=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().streamed_interests(frame.view).map(|interest|interest.key).collect::<Vec<_>>();
+    let admitted=in_flight(&r);
+    assert!(!admitted.is_empty(),"the cold open leaves exact units in flight");
+    let captured=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().pages.lock().unwrap().retained_pages().into_iter()
+        .filter(|page|admitted.contains(&page.key) && !page.exact.regions(page.key.plan().bounds).is_empty()).count();
+    let mut dab=crate::tests::test_dab([125.5,126.5],[0.031,0.13,0.29,0.63],0.8);
+    dab.radii=[13.25,11.75];
+    let mut persistent=dab_batch(target,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
+    persistent.style.blend_space=frame.blend_space;persistent.stroke_end=false;
+    let preview=DabBatch {kind:DabBatchKind::Preview,stroke_start:false,..persistent.clone()};
+    for batch in [&persistent,&preview] {
+        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(batch),..frame}).unwrap();
+        assert_eq!(captured(&r),0,"{:?} frames capture no exact unit admitted before the stroke",batch.kind);
+        assert!(in_flight(&r).iter().all(|key|admitted.contains(key)),"{:?} frames admit no exact unit",batch.kind);
+    }
+    assert!(r.preview_level>0 && r.compact_preview_contribution(&preview),"the stroke keeps its reduced preview contribution");
+}
+
+#[test]
 fn native_alpha_reuse_admits_warm_pages_beside_cold_output_pages() {
     let extent=[517,259];
     for name in ["brightness_to_opacity","threshold"] {

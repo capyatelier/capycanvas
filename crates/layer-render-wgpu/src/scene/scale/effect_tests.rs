@@ -58,16 +58,7 @@ fn native_pointwise_alpha_runs_before_reduction_and_settles_exact_stacks() {
     let extent = [517, 259];
     for name in ["threshold", "brightness_to_opacity"] {
         for space in layer_core::BlendSpace::ALL {
-            let mut doc = document_at(extent);
-            paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| {
-                if x>=384 && y>=127 {return [184,53,137,111];}
-                let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 };
-                [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
-            }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
-            let owner = doc.scene().order()[0];
-            let filter = effect(&mut doc, name);
-            doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
-            insert_occurrence(&mut doc, filter, 0);
+            let (mut doc, owner, filter) = native_pointwise_document(name);
             let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
             let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
             exact.test.reference = true;
@@ -109,6 +100,45 @@ fn native_pointwise_alpha_runs_before_reduction_and_settles_exact_stacks() {
             }
         }
     }
+}
+
+fn native_pointwise_document(name: &str) -> (Document, OccurrenceHandle, OccurrenceHandle) {
+    let extent = [517, 259];
+    let mut doc = document_at(extent);
+    paint_mut(&mut doc, 0).base = (Some(rgba8_source(extent, |x, y| {
+        if x>=384 && y>=127 {return [184,53,137,111];}
+        let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 };
+        [gray, gray, gray, if (x / 13 + y / 7) % 2 == 0 { 37 } else { 193 }]
+    }))).map(|source|layer_core::authored::PaintBase::new(source.into()));
+    let owner = doc.scene().order()[0];
+    let filter = effect(&mut doc, name);
+    doc.artwork.occurrences.get_mut(filter).unwrap().attachment = Attachment::Effect;
+    insert_occurrence(&mut doc, filter, 0);
+    (doc, owner, filter)
+}
+
+#[test]
+fn cells_a_frame_composes_leave_their_refinement_units_to_refinement_and_settle_exact() {
+    let (doc, _, _) = native_pointwise_document("threshold");
+    let mut frame = FramePacket { composite_all: false, ..packet(doc.scene(), doc.composition().size) };
+    frame.view.width_px = 51; frame.view.height_px = 31;
+    frame.view.document_to_surface = [1., 0., 0., 1., 0., -70.];
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    exact.test.reference = true;
+    submit_published(&mut exact, frame);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    crate::test_support::submit_settled(&mut r, frame);
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 0);
+    evict_view(&r);
+    crate::test_support::complete(&r);
+    let mut scene = r.scene.take().unwrap();
+    let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
+    let mut budget = Scene::begin_work(false); budget.spend(object_cache::IDLE_TAPS);
+    scene.refine_display(&mut r, frame, &mut encoder, &mut budget).unwrap();
+    drop(budget);
+    r.uploads.finish(&encoder); encoder.submit(&r.queue); r.scene = Some(scene);
+    assert!(r.scale_display.as_ref().unwrap().streamed_interests(frame.view).count() > 0, "refinement leaves an admitted unit in flight");
+    assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
 }
 
 #[test]

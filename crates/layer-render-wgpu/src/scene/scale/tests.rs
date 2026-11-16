@@ -21,6 +21,7 @@ pub(super) fn prepare_fixture_frame(r:&WgpuRasterizer,packet:FramePacket<'_>,sce
 }
 
 pub(super) fn evict_composite_pages(cache:&Cache,areas:&[PixelRect]) {pages::evict_composite_pages(cache,areas)}
+pub(crate) fn evict_view(r:&WgpuRasterizer) {let cache=r.scale_display.as_ref().unwrap();evict_composite_pages(cache,&[cache.plan.bounds]);cache.evict_window(cache.plan.bounds);}
 
 fn source_chunks(cache:&Cache,id:SourceTarget,level:u32)->BTreeSet<[u32;2]> {
     cache.pages.lock().unwrap().retained_pages().into_iter().filter(|page|page.key.source==Some(id) && page.key.level==level)
