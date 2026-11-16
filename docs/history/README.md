@@ -44,6 +44,8 @@ Progress notes, validation reports and other work records are not committed
   current capabilities and recommended behavior, with detailed daily-editing and
   enclosed-region coloring priorities.
 - [Color palettes](color-palettes-research.md).
+- [File thumbnails for drawings](file-thumbnails-research.md): how `.capy`
+  drawings can show their artwork in file managers and open dialogs on each host.
 - [X11 session support](x11-session-support.md): why the Linux client needs
   Wayland, the texture path X11 would need, the components it touches, the
   features that stay Wayland-only and the recommended next step.
