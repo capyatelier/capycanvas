@@ -235,7 +235,7 @@ try {
     $blank=Capture 'blank'
     try {
         if(!(Surround-Matches $blank)){throw 'Navigator surround differs from the shared palette'}
-        Invoke 'Test stroke' -Name
+        Wait-CanvasStroke {Invoke 'Test stroke' -Name}
         Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not reach the shared document'
         Wait-Until {$paint=Capture 'paint';try {(Different $blank $paint $area) -ge 20}finally{$paint.Dispose()}} 'Live GPU overview did not show the stroke'
         Invoke 'Undo' -Name

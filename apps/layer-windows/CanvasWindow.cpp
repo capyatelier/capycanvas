@@ -179,10 +179,16 @@ bool CanvasWindow::TracePresentation(bool frame,bool dirty,bool repeat) {
     auto shown=capy_presentation_stats(host,stats)==0?std::optional<uint64_t>(stats[1]):std::nullopt;
     trace.Observe(frame,dirty,repeat,stats[0],shown,std::chrono::steady_clock::now());
     bool draw=stalled&&trace.Flushed(before);
+    CapyRenderProgress progress{};
+    bool progressKnown=capy_render_progress(host,stats[0],shown.value_or(0),shown.has_value(),frame?nullptr:&progress);
     if(frame)return draw;
     auto value="{\"process_id\":"+std::to_string(GetCurrentProcessId())+",\"window_id\":"+std::to_string(windowId)+
         ",\"presentation_epoch\":"+std::to_string(trace.epoch)+",\"required\":"+std::to_string(trace.required)+
-        ",\"displayed\":"+(trace.displayed?std::to_string(*trace.displayed):std::string("null"))+"}";
+        ",\"displayed\":"+(trace.displayed?std::to_string(*trace.displayed):std::string("null"));
+    if(progressKnown)value+=",\"render_progress\":{\"owner\":"+std::to_string(progress.owner)+",\"epoch\":"+std::to_string(progress.epoch)+",\"revision\":"+std::to_string(progress.revision)+
+        ",\"content_owner\":"+std::to_string(progress.content_owner)+",\"content_epoch\":"+std::to_string(progress.content_epoch)+",\"content_revision\":"+(progress.content_known?std::to_string(progress.content_revision):std::string("null"))+
+        ",\"settled\":"+(progress.settled?"true":"false")+",\"outstanding_work\":"+(progress.outstanding?"true":"false")+"}";
+    value+="}";
     TraceState("presentation-state",value);
     return draw;
 }

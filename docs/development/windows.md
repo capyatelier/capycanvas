@@ -536,6 +536,7 @@ Follow these rules when writing one:
   a new stroke committed, and `WaitForInputIdle` does not acknowledge an operation.
   Equal pixel or state signatures across a sleep do not prove a commit; wait for
   the published document revision.
+  Use `Wait-CanvasStroke { ... }` for starter strokes before their existing pixel checks; it joins the committed revision to displayed content and resets only while outstanding work is reported.
   For native overlays, acknowledge the applied fill before composed pixel
   sampling; bubble checks use `Wait-BubbleOverlayPhase`.
   After zooming, steady-motion checks also wait for the committed

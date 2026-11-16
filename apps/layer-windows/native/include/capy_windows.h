@@ -139,6 +139,11 @@ __declspec(dllimport) void capy_clear_temporary_files(void);
 __declspec(dllimport) int32_t capy_write_file(const char* path, const uint8_t* bytes, size_t length);
 /* Read-only DXGI diagnostics: six counters; 0=valid, HRESULT otherwise. */
 __declspec(dllimport) int32_t capy_presentation_stats(CapyHost, uint64_t* values);
+typedef struct CapyRenderProgress {
+    uint64_t owner,epoch,revision,content_owner,content_epoch,content_revision,content_known,settled,outstanding;
+} CapyRenderProgress;
+__declspec(dllimport) bool capy_render_progress(CapyHost, uint64_t last, uint64_t displayed, bool statistics, CapyRenderProgress*);
+
 __declspec(dllimport) CapyString capy_error(void);
 __declspec(dllimport) int32_t capy_resize(CapyHost, uint32_t width, uint32_t height, float scale);
 __declspec(dllimport) int32_t capy_pointer(CapyHost, const CapyPointer*, size_t count);

@@ -8,6 +8,10 @@ pub(crate) struct FramePacing {
 impl FramePacing {
     pub(crate) const IN_FLIGHT: usize = 1;
 
+    pub(crate) fn pending(&self) -> bool {
+        self.in_flight.iter().any(|done|!done.load(Ordering::Acquire))
+    }
+
     pub(crate) fn ready(&mut self) -> bool {
         while self.in_flight.front().is_some_and(|done| done.load(Ordering::Acquire)) { self.in_flight.pop_front(); }
         !self.saturated()
@@ -28,6 +32,16 @@ impl FramePacing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_reads_completion_flags_without_requiring_another_frame() {
+        let done=Arc::new(AtomicBool::new(false));
+        let pacing=FramePacing {in_flight:[done.clone()].into()};
+        assert!(pacing.pending());
+        done.store(true,Ordering::Release);
+        assert!(!pacing.pending(),"completed work is idle even before acquire removes its old receipt");
+        assert_eq!(pacing.in_flight.len(),1,"the diagnostic read must not mutate pacing");
+    }
 
     #[test]
     #[cfg(target_os = "windows")]

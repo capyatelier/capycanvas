@@ -350,7 +350,7 @@ try{
  $tab=@((Model).state.tabs|Where-Object active)[0]
  $from=Point ($tab.width*.45) ($tab.height*.45);$to=Point ($tab.width*.55) ($tab.height*.55)
  $before=Revision;$contact=Observe 'starter-contact' $null
- Stroke $from $to
+ Wait-CanvasStroke {Stroke $from $to}
  Wait-Until {(Revision) -ne $before -and ((Model).state.commands|Where-Object id -eq 'undo').enabled} 'The selected brush did not paint its starter stroke'
  $checks.starter_stroke=[ordered]@{pending_at_first_ready=!$firstReady.shaders_ready;pending_at_contact=!$contact.shaders_ready;commit=Observe 'starter-commit' $null}
  Capture 'starter-stroke' -WithModel -Composed

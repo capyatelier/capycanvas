@@ -56,6 +56,39 @@ pub struct CapyLaunch {
     settings: Option<crate::settings::PreparedSettings>,
     bootstrap: CString,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PresentedContent {owner:u64,epoch:u64,revision:u64}
+#[derive(Default)]
+struct PresentationProgress {
+    candidate:Option<PresentedContent>,
+    pending:std::collections::VecDeque<(u64,Option<PresentedContent>)>,
+    shown:Option<(u64,Option<PresentedContent>)>,
+    last:u64,
+}
+impl PresentationProgress {
+    fn observe(&mut self,last:u64,displayed:Option<u64>)->Option<PresentedContent> {
+        if last<self.last {self.pending.clear();self.shown=None;}
+        if last!=self.last {
+            self.last=last;
+            if last!=0 {
+                if self.pending.len()==32 {self.pending.pop_front();self.shown=None;}
+                self.pending.push_back((last,self.candidate));
+            }
+        }
+        let displayed=displayed?;
+        while self.pending.front().is_some_and(|(frame,_)|*frame<=displayed) {
+            self.shown=self.pending.pop_front();
+        }
+        self.shown.filter(|(frame,_)|*frame<=displayed).and_then(|(_,content)|content)
+    }
+}
+#[repr(C)]
+#[derive(Default)]
+pub struct CapyRenderProgress {
+    owner:u64,epoch:u64,revision:u64,
+    content_owner:u64,content_epoch:u64,content_revision:u64,content_known:u64,
+    settled:u64,outstanding:u64,
+}
 #[derive(Default)]
 struct SurfaceReadiness {
     queued: bool,
@@ -145,6 +178,7 @@ pub struct CapyHost {
     surface_ready: SurfaceReadiness,
     prediction_frames: Option<[u64; 2]>, // opt-in, accumulated across document switches
     frame_timing: Option<crate::frame_timing::FrameTiming>,
+    presentation_progress: Option<PresentationProgress>,
     services: Option<crate::settings::SettingsService>,
     launch_settings: Option<crate::settings::PreparedSettings>,
     filters: Option<crate::filter_packages::FilterService>,
@@ -329,6 +363,7 @@ impl CapyHost {
             surface_ready: Default::default(),
             prediction_frames: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| [0; 2]),
             frame_timing: std::env::var_os("CAPY_LATENCY_TRACE").map(|_| Default::default()),
+            presentation_progress: std::env::var_os("CAPY_TRACE_UI").map(|_| Default::default()),
             services: None,
             launch_settings: launch.settings.take(),
             filters: None,
@@ -609,6 +644,7 @@ impl CapyHost {
                         })],..Default::default()
                     });
                 }
+                if let Some(trace)=&mut self.presentation_progress {trace.candidate=None;}
                 gpu.queue().submit_for_present([encoder.finish()]);gpu.queue().present(target);
                 self.native.canvas_frame_rate.submitted();self.pacing.submitted(gpu,self.native.wake_callback());
                 self.surface_ready.submitted(gpu, &self.chrome, None, None);
@@ -623,6 +659,11 @@ impl CapyHost {
             view,
             surround,
         ).map_err(err)?;
+        if let Some(trace)=&mut self.presentation_progress {
+            trace.candidate=presenter.content_revision(gpu)
+                .filter(|(owner,_)|*owner==self.native.session.engine().document().owner)
+                .map(|(owner,revision)|PresentedContent {owner,epoch:self.native.session.state().document_file.epoch,revision});
+        }
         if let Some(timing) = &mut self.frame_timing { timing.submitted_ns = crate::frame_timing::now(); }
         gpu.queue().present(target);
         if let Some(timing) = &mut self.frame_timing { timing.presented_ns = crate::frame_timing::now(); }
@@ -1922,6 +1963,27 @@ pub unsafe extern "C" fn capy_test_display(host: u64, hdr: bool) -> i32 {
     })
 }
 
+/// # Safety
+/// Exclusive render-owner access; output is null or writes one CapyRenderProgress.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_render_progress(host:u64,last:u64,displayed:u64,statistics:bool,output:*mut CapyRenderProgress)->bool {
+    guard(host,|host| {
+        let Some(trace)=host.presentation_progress.as_mut() else {return Ok(0);};
+        let content=trace.observe(last,statistics.then_some(displayed));
+        let Some(output)=(unsafe {output.as_mut()}) else {return Ok(1);};
+        *output=CapyRenderProgress::default();
+        let engine=host.native.session.engine();
+        let Some(gpu)=engine.backend().0.as_ref() else {return Ok(0);};
+        output.owner=engine.document().owner;output.epoch=host.native.session.state().document_file.epoch;output.revision=engine.document().revision;
+        let settled=gpu.settled();output.settled=u64::from(settled);
+        output.outstanding=u64::from(!settled||engine.has_pending_input()||engine.raster_backing_pending()||host.pacing.pending());
+        if let Some(content)=content {
+            output.content_owner=content.owner;output.content_epoch=content.epoch;output.content_revision=content.revision;output.content_known=1;
+        }
+        Ok(1)
+    })==1
+}
+
 /// Optional read-only presentation counters. A failed query is diagnostic only;
 /// it must not change document state or stop the renderer.
 /// # Safety
@@ -2766,5 +2828,33 @@ mod chrome_completion_tests {
         assert!(!readiness.changed(&mut chrome));assert_eq!(chrome.presented_revision,Some(8));assert_eq!(chrome.presented_document,Some([128,64]));
         assert_eq!(readiness.completed_launch(Some(3)),Some(3));
         drop(gpu);layer_render_wgpu::finish_shader_compiler_shutdown();
+    }
+}
+
+#[cfg(test)]
+mod presentation_progress_tests {
+    use super::*;
+    #[test]
+    fn content_acknowledgement_follows_displayed_frames_not_current_document_or_poll_epochs() {
+        let first=PresentedContent {owner:7,epoch:0,revision:1};
+        let second=PresentedContent {revision:2,..first};
+        let mut trace=PresentationProgress {candidate:Some(first),..Default::default()};
+        assert_eq!(trace.observe(3,Some(2)),None,"an undisplayed submission cannot acknowledge its revision");
+        assert_eq!(trace.observe(3,Some(3)),Some(first));
+        trace.candidate=Some(second);
+        assert_eq!(trace.observe(3,Some(3)),Some(first),"polling newer editor state is not a new presentation");
+        assert_eq!(trace.observe(4,Some(3)),Some(first));
+        assert_eq!(trace.observe(4,Some(4)),Some(second));
+        assert_eq!(trace.observe(4,Some(2)),None,"regressed display statistics cannot reuse a future content acknowledgement");
+        assert_eq!(trace.observe(4,Some(4)),Some(second));
+        assert_eq!(trace.observe(4,None),None,"missing DXGI acknowledgement cannot prove display");
+        trace.candidate=None;
+        assert_eq!(trace.observe(5,Some(5)),None,"mixed or unproved bound pixels cannot inherit a newer revision");
+        trace.candidate=Some(second);
+        assert_eq!(trace.observe(0,Some(0)),None,"a new swapchain with no presented frame cannot inherit content");
+        assert_eq!(trace.observe(1,Some(0)),None,"a reset swapchain cannot reuse an earlier acknowledgement");
+        assert_eq!(trace.observe(1,Some(1)),Some(second));
+        for frame in 2..40 {trace.candidate=None;trace.observe(frame,Some(1));}
+        assert_eq!(trace.observe(39,Some(7)),None,"evicted unacknowledged content cannot be replaced by an older known frame");
     }
 }

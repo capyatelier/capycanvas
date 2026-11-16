@@ -792,6 +792,14 @@ impl Cache {
             .or_else(||self.previous.as_deref().and_then(Self::presentable))
             .or_else(||self.overview.as_deref().and_then(Self::presentable))
     }
+    pub(crate) fn content_revision(&self)->Option<(u64,u64)> {
+        if !self.complete {return None;}
+        let frame=self.pages.lock().unwrap().expected()?.clone();
+        let expression=self.graph.content.as_ref().or(self.graph.root.as_ref())?;
+        let authored=frame.authored_revision(expression).ok()?;
+        if !self.presentation()?.views.iter().all(|image|image.authored()==Some(authored)) {return None;}
+        Some((frame.scene().owner(),frame.scene().revision()))
+    }
     pub fn presentation(&self)->Option<PresentedPage<'_>> {
         let root=self.pixels.committed_root()?;
         let next=self.pixels.committed_next().unwrap_or(root);

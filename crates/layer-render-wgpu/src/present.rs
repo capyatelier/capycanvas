@@ -968,6 +968,10 @@ impl ViewportPresenter {
     pub fn damage_area_pixels(&self) -> u64 { self.presented_area }
     #[cfg(test)]
     pub(crate) fn presented_camera(&self)->Option<ViewState> {self.presented_view.map(|(view,..)|view)}
+    pub fn content_revision(&self, renderer: &WgpuRasterizer) -> Option<(u64,u64)> {
+        if self.canvas_revision()!=Some(renderer.canvas_preview_revision()) {return None;}
+        renderer.selected_display_cache()?.content_revision()
+    }
     pub fn canvas_revision(&self) -> Option<u64> {
         self.presented_drawing.filter(|drawing| drawing.showing).and_then(|_| self.history.valid.then_some(self.history.artwork_revision))
     }

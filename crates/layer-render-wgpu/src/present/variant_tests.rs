@@ -175,3 +175,26 @@ fn immediate_viewport_source_switch_uses_the_ready_keyed_projection() {
     }
     crate::finish_shader_compiler_shutdown();
 }
+
+#[test]
+fn content_receipt_names_the_bound_scene_not_the_current_document_or_redraw_counter() {
+    let mut fixture=VariantFixture::new(0);
+    let owner=fixture.document.scene().owner();
+    let mut presenter=fixture.presenter();
+    assert_eq!(presenter.content_revision(&fixture.renderer),None,"a cold viewport has shown no document revision");
+    let submission=fixture.encode(&mut presenter);fixture.complete(submission);
+    assert_eq!(presenter.content_revision(&fixture.renderer),None,"a skipped cold encode cannot acknowledge artwork");
+    prepare_projection(&fixture.renderer,&presenter);
+    let submission=fixture.encode(&mut presenter);fixture.complete(submission);
+    assert_eq!(presenter.content_revision(&fixture.renderer),Some((owner,fixture.document.revision)),"the ready receipt must identify the actual bound scene");
+    fixture.document.revision=17;
+    fixture.expose(1);
+    assert_ne!(fixture.renderer.canvas_preview_revision(),17,"document revisions and redraw generations are different domains");
+    assert_eq!(presenter.content_revision(&fixture.renderer),None,"an unpresented replacement cannot inherit the old acknowledgement");
+    prepare_projection(&fixture.renderer,&presenter);
+    let submission=fixture.encode(&mut presenter);fixture.complete(submission);
+    assert_eq!(presenter.content_revision(&fixture.renderer),Some((owner,17)),"the replacement receipt must identify its bound composition");
+    fixture.document.revision=99;
+    assert_eq!(presenter.content_revision(&fixture.renderer),Some((owner,17)),"unrendered editor changes cannot advance the displayed revision");
+    drop(presenter);drop(fixture);crate::finish_shader_compiler_shutdown();
+}

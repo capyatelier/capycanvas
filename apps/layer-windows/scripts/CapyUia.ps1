@@ -47,15 +47,54 @@ function Sta([scriptblock]$Script,[object[]]$Arguments=@()){
 }
 
 function Wait-Scale{if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing){
+function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound){
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{
         if($script:CapyEach){& $script:CapyEach}
-        try{if(& $Condition){return}}catch [System.Windows.Automation.ElementNotAvailableException]{}
+        try{if($ResetBound -and (& $ResetBound)){$watch.Restart()};if(& $Condition){return}}catch [System.Windows.Automation.ElementNotAvailableException]{}
         if($review){$review.Refresh();if($review.HasExited){if($Closing){return};throw "Owned review exited with code $($review.ExitCode): $Message"}}
         Start-Sleep -Milliseconds 50
     }while($watch.Elapsed.TotalSeconds -lt $Seconds*(Wait-Scale))
     throw $Message
+}
+function Wait-CanvasStroke([scriptblock]$PaintAction){
+    $strokeBefore=Model;$strokePath=State-File
+    if(!$review -or !$strokePath -or $null -eq $strokeBefore.state.document_file.revision){throw 'Stroke progress requires the owned drawing trace'}
+    $strokeUi=Read-Snapshot $strokePath
+    $strokePresentation=Join-Path (Split-Path -Parent $strokePath) ((Split-Path -Leaf $strokePath) -replace '^ui-state-','presentation-state-')
+    $readStrokeProgress={
+        $sample=Read-Snapshot $strokePresentation;$progress=$sample.render_progress
+        if($sample.process_id -ne $review.Id -or $sample.window_id -ne $strokeUi.window_id -or !$progress){return $null}
+        foreach($value in @($progress.owner,$progress.epoch,$progress.revision)){
+            if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return $null}
+        }
+        if($progress.settled -isnot [bool] -or $progress.outstanding_work -isnot [bool]){return $null}
+        if($null -ne $progress.content_revision){
+            foreach($value in @($progress.content_owner,$progress.content_epoch,$progress.content_revision)){
+                if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return $null}
+            }
+        }
+        $sample
+    }
+    $strokeBaseline=& $readStrokeProgress
+    if($strokeUi.process_id -ne $review.Id -or $null -eq $strokeUi.window_id -or !$strokeBaseline -or
+        $strokeBaseline.render_progress.epoch -ne $strokeBefore.state.document_file.epoch -or $strokeBaseline.render_progress.revision -ne $strokeBefore.state.document_file.revision){throw 'Stroke baseline lacks a matching renderer progress receipt'}
+    $strokeWait=@{sample=$null;model=$null}
+    & $PaintAction
+    Wait-Until {
+        $sample=$strokeWait.sample;$model=$strokeWait.model
+        if(!$sample -or !$model){return $false}
+        $progress=$sample.render_progress;$file=$model.state.document_file
+        $file.revision -gt $strokeBefore.state.document_file.revision -and $null -ne $progress.content_revision -and
+            $progress.content_owner -eq $strokeBaseline.render_progress.owner -and $progress.content_epoch -eq $file.epoch -and $progress.content_revision -ge $file.revision
+    } 'The stroke did not commit and reach the displayed canvas' -ResetBound {
+        $strokeWait.sample=& $readStrokeProgress;$strokeWait.model=Model
+        if(!$strokeWait.sample){return $false}
+        $progress=$strokeWait.sample.render_progress
+        if($progress.owner -ne $strokeBaseline.render_progress.owner -or $progress.epoch -ne $strokeBefore.state.document_file.epoch -or
+            $strokeWait.model.state.document_file.epoch -ne $strokeBefore.state.document_file.epoch -or $strokeWait.model.windows_tabs.selected -ne $strokeBefore.windows_tabs.selected){throw 'The drawing changed during its stroke progress wait'}
+        $progress.outstanding_work
+    }
 }
 function Start-CapyDebugger([Diagnostics.Process]$Process,[string]$DebuggerPath,[string]$Run,$Drawing){
     $owner=[uint32]0

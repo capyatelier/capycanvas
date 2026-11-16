@@ -113,3 +113,68 @@ try{
     }
     "Presented frame wait: $checks passed"
 }finally{Remove-Item -LiteralPath $out -Recurse -Force}
+
+& {
+ Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+ Add-Type -TypeDefinition @'
+using System;
+public class CapyStrokeProgressClock {
+ public static double Seconds; public static int Restarts;
+ double start;
+ public static CapyStrokeProgressClock StartNew(){return new CapyStrokeProgressClock{start=Seconds};}
+ public TimeSpan Elapsed{get{return TimeSpan.FromSeconds(Seconds-start);}}
+ public void Restart(){start=Seconds;Restarts++;}
+}
+'@
+ foreach($name in 'Wait-Until','Wait-CanvasStroke'){
+  $definition=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
+  if(!$definition){throw "Missing progress helper: $name"}
+  . ([scriptblock]::Create($definition.Extent.Text.Replace('[Diagnostics.Stopwatch]','[CapyStrokeProgressClock]')))
+ }
+ function Wait-Scale{1}
+ function State-File{Join-Path $repo 'ui-state-7-11.json'}
+ function Start-Sleep([int]$Milliseconds){
+  if($Milliseconds-ne50){throw 'Stroke progress changed the existing poll cadence'}
+  [CapyStrokeProgressClock]::Seconds++
+  if([CapyStrokeProgressClock]::Seconds-gt40){throw 'outer row timeout'}
+ }
+ function Model{
+  $time=[CapyStrokeProgressClock]::Seconds
+  $committed=$script:strokeInputs-and($script:strokeCase-notin@('heartbeat','outer')-and($script:strokeCase-notin@('slow','paused')-or$time-ge25))
+  @{state=@{document_file=@{revision=[long][bool]$committed;epoch=$(if($script:strokeInputs-and$script:strokeCase-eq'switched'){1}else{0})}};windows_tabs=@{selected=3}}
+ }
+ function Read-Snapshot([string]$Path){
+  if((Split-Path -Leaf $Path)-like'ui-state-*'){return @{process_id=7;window_id=11;model=(Model)}}
+  $time=[CapyStrokeProgressClock]::Seconds;$sent=$script:strokeInputs-gt0
+  if($script:strokeCase-eq'missing-baseline'-or($sent-and$script:strokeCase-eq'missing')){return $null}
+  $work=$sent-and($script:strokeCase-eq'outer'-or($script:strokeCase-in@('slow','paused')-and$time-lt30))
+  $shown=$sent-and($script:strokeCase-eq'hardware'-or($script:strokeCase-in@('slow','paused')-and$time-ge31))
+  $progress=@{owner=19;epoch=0;revision=(Model).state.document_file.revision;content_owner=19;content_epoch=0;content_revision=$(if($shown){1}else{0});settled=(!$work);outstanding_work=$work}
+  if($sent-and$script:strokeCase-eq'unacknowledged'){$progress.content_revision=$null}
+  if($sent-and$script:strokeCase-eq'malformed'){$progress.outstanding_work='true'}
+  if($sent-and$script:strokeCase-eq'switched'){$progress.owner=20;$progress.epoch=1}
+  @{process_id=$(if($sent-and$script:strokeCase-eq'foreign'){8}else{7});window_id=11;presentation_epoch=$(if(!$sent){0}elseif($script:strokeCase-eq'paused'-and$time-lt31){1}else{[long]$time+1});render_progress=$progress}
+ }
+ $review=[pscustomobject]@{Id=7;HasExited=$false};$review|Add-Member ScriptMethod Refresh {}
+ $script:CapyEach=$null;$script:CapyWaitSeconds=8
+ foreach($case in 'slow','hardware','heartbeat','paused','unacknowledged','missing','malformed','foreign','switched','outer','missing-baseline'){
+  $script:strokeCase=$case;$script:strokeInputs=0;$failure=$null;$existing=@{checks=0}
+  [CapyStrokeProgressClock]::Seconds=0;[CapyStrokeProgressClock]::Restarts=0
+  try{Wait-CanvasStroke {$script:strokeInputs++};Wait-Until {$existing.checks++;$true} 'original pixel assertion'}catch{$failure=$_}
+  if($case-eq'missing-baseline'){
+   if(!$failure-or$script:strokeInputs-ne0-or$existing.checks){throw 'A missing owned baseline admitted a stroke'}
+  }elseif($script:strokeInputs-ne1){throw "Stroke progress repeated or omitted the original input: $case $failure"}
+  elseif($case-in@('slow','paused','hardware')){
+   if($failure-or$existing.checks-ne1){throw "A committed displayed stroke failed its progress gate: $case $failure"}
+   if($case-in@('slow','paused')-and[CapyStrokeProgressClock]::Seconds-ne31){throw 'The existing pixel assertion started before committed pixels were displayed'}
+   if($case-eq'hardware'-and[CapyStrokeProgressClock]::Seconds-ne0){throw 'An already-displayed hardware stroke acquired another wait'}
+  }elseif($case-eq'switched'){
+   if(!$failure-or$failure.Exception.Message-cne'The drawing changed during its stroke progress wait'-or$existing.checks){throw "A different document satisfied the stroke gate: $failure"}
+  }elseif($case-eq'outer'){
+   if(!$failure-or$failure.Exception.Message-cne'outer row timeout'-or$existing.checks){throw 'Stroke progress swallowed its outer row timeout'}
+  }else{
+   if(!$failure-or$failure.Exception.Message-cne'The stroke did not commit and reach the displayed canvas'-or$existing.checks-or[CapyStrokeProgressClock]::Seconds-gt9){throw "Idle, malformed or foreign progress escaped the unchanged bound: $case $failure"}
+  }
+ }
+ 'Stroke progress: slow GPU work, commit/display join, immediate hardware completion, idle heartbeat, paused polling during outstanding work, missing/malformed/foreign receipts, document changes and outer interruption passed.'
+}
