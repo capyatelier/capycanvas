@@ -182,6 +182,7 @@ impl Blocked {
 impl Blocked {
     pub(crate) fn class(&self)->Class {self.class}
     pub(crate) fn covering(self, bytes: u64) -> Self { Self { bytes: self.bytes.max(bytes), ..self } }
+    pub(crate) fn alone(self) -> Self { Self { ahead: Default::default(), ..self } }
     pub(crate) fn fits(&self) -> bool {
         let bytes = self.need();
         self.tier.fits_after(self.tier.used().saturating_sub(self.tier.yielding()), self.class, bytes)

@@ -2906,3 +2906,43 @@ fn a_transition_held_for_an_unpublished_page_waits_for_it_instead_of_spinning() 
     assert!(r.next_frame()==layer_render::FrameDemand::Work,"the page's publication resumes the transition");
     submit_published(&mut r,FramePacket {composite_all:false,..frame});
 }
+
+fn cold_photo_at_fit(display_grant:u64,frames:u32,done:impl Fn(&WgpuRasterizer)->bool)->Option<u32> {
+    let extent=[12000,8000];
+    let doc=document_at(extent);
+    let ram=2<<30;
+    let budget=layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts {host_default_bytes:Some(ram),override_bytes:Some(ram),..Default::default()});
+    let mut r=crate::memory::memory_tests::renderer_in_budget(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(4<<30),..Default::default()},budget).unwrap();
+    let zoom=0.14505f32;
+    let view=layer_render::ViewState {width_px:(extent[0] as f32*zoom).ceil() as u32,height_px:(extent[1] as f32*zoom).ceil() as u32,document_to_surface:[zoom,0.,0.,zoom,0.,0.]};
+    let frame=FramePacket {view,..packet(doc.scene(),extent)};
+    let _pressure=crate::memory::memory_tests::display_frame_with_budget(&mut r,frame,display_grant);
+    (1..=frames).find(|&submitted| {
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        while r.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.landed()) {
+            assert!(std::time::Instant::now()<deadline,"requested decodes land before the next frame");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        r.poll_startup().unwrap();
+        crate::test_support::submit_ready(&mut r,if submitted==1 {frame}else {FramePacket {composite_all:false,..frame}}).unwrap();
+        r.wait_idle().unwrap();
+        r.device.retirement_handle().flush().unwrap();
+        done(&r)
+    })
+}
+
+fn display_written(r:&WgpuRasterizer)->bool {r.scale_display.as_ref().is_some_and(|cache|cache.coverage_complete() && cache.output_complete())}
+
+#[test]
+fn a_cold_photo_at_fit_writes_every_display_cell_when_its_exact_cells_fill_the_display_grant() {
+    let written=cold_photo_at_fit(200<<20,200,display_written);
+    assert!(written.is_some(),"every display cell of a cold 12000x8000 photo at Fit is written within 200 frames on a 200 MiB display grant");
+}
+
+#[test]
+fn a_cold_photo_at_fit_settles_across_display_grants() {
+    for grant in (120..=400).step_by(20) {
+        let settled=cold_photo_at_fit(grant<<20,300,|r|display_written(r) && r.next_frame()==layer_render::FrameDemand::Wait);
+        assert!(settled.is_some(),"a cold 12000x8000 photo at Fit settles with every display cell written on a {grant} MiB display grant");
+    }
+}

@@ -394,6 +394,7 @@ impl Page {
     fn set_optional(&mut self,optional:bool) {self.optional=optional;self.retention.set_optional(optional);}
     fn hold(&mut self,tier:&Arc<crate::residency::Tier>)->Held {Held {image:self.image.clone(),pin:self.pin(tier)}}
     fn pinned(&self)->bool {self.pin.strong_count()!=0}
+    fn unwanted(&self)->bool {self.coverage.written.is_empty() && !self.pinned()}
     fn matches(&self,frame:Option<&SignatureFrame>,area:PixelRect,required_input_level:u32)->Option<bool> {
         if self.submission.as_ref().is_some_and(submission::Submission::discarded)
             || area.intersect(self.image.plan.bounds)!=area || !Coverage::covers(&self.coverage.written,area) {return Some(false);}
@@ -854,9 +855,13 @@ impl Store {
         }
         self.retain_referenced_inputs();
         self.inputs.retain(|_,inputs|!inputs.is_empty());
-        let unwanted=self.pages.iter().filter(|(_,page)|page.coverage.written.is_empty() && !page.pinned())
-            .map(|(key,_)|key.clone()).collect::<Vec<_>>();
-        for key in unwanted {let image=self.remove(&key).image;self.retire(image);}
+        let unwanted=self.pages.iter().filter(|(_,page)|page.unwanted()).map(|(key,_)|key.clone()).collect::<Vec<_>>();
+        self.release_unwanted(&unwanted);
+    }
+    pub(super) fn release_unwanted(&mut self,keys:&[Key]) {
+        for key in keys {
+            if self.pages.get(key).is_some_and(Page::unwanted) {let image=self.remove(key).image;self.retire(image);}
+        }
     }
     fn retain_referenced_inputs(&mut self) {
         let mut accepted=std::collections::HashMap::<Key,Vec<PixelRect>>::new();

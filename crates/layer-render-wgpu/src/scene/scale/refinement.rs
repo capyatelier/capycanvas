@@ -202,14 +202,14 @@ impl Cache {
                     Outcome::Refused(region,refusal)=>exact.refusals.push((region,refusal)),
                     _=>{},
                 }
-                if !carried.is_empty() {self.streaming.cells.push((cell,carried));}
+                if self.has_admitted_unit(&cell) {self.streaming.cells.push((cell,carried));}else {for page in carried {page.track(encoder);}}
                 continue;
             }
             for page in carried {page.track(encoder);}
             let mut frontier=Vec::new();
             self.pages.lock().unwrap().refinement_frontier(&cell,usize::MAX,&mut frontier,0);
             if frontier.is_empty() {continue;}
-            let (mut pending,mut waiting,mut refused)=(false,None,false);
+            let (mut pending,mut waiting)=(false,None);
             let mut pinned=self.exact_children(&cell,class);
             for key in frontier {
                 if let Some((held,outcome))=outcomes.get(&key) {pending|=*held;waiting=waiting.or(*outcome);continue;}
@@ -223,14 +223,14 @@ impl Cache {
                     Outcome::Committed=>{exact.committed=true;None},
                     Outcome::Waiting(input)=>Some(input),
                     Outcome::Deferred=>None,
-                    Outcome::Refused(region,refusal)=>{exact.refusals.push((region,refusal));refused=true;continue;},
+                    Outcome::Refused(region,refusal)=>{exact.refusals.push((region,refusal));continue;},
                     Outcome::Skipped=>continue,
                 };
                 let held=!matches!(outcome,Outcome::Committed);
                 pending|=held;waiting=waiting.or(input);
                 outcomes.insert(key,(held,input));
             }
-            if pending && !refused {
+            if self.has_admitted_unit(&cell) {
                 let pins=self.exact_children(&cell,class);
                 if !pins.is_empty() {self.streaming.cells.push((cell.clone(),pins));}
             }
@@ -239,7 +239,7 @@ impl Cache {
             else if !pending && cell.level==self.plan.level {self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class)?;}
         }
         for (cell,pins) in previous {
-            if self.current(&cell) {self.streaming.cells.push((cell,pins));}else {for page in pins {page.track(encoder);}}
+            if self.current(&cell) && self.has_admitted_unit(&cell) {self.streaming.cells.push((cell,pins));}else {for page in pins {page.track(encoder);}}
         }
         Ok(exact)
     }
@@ -248,6 +248,17 @@ impl Cache {
         std::iter::once(cell.expression.clone()).chain(self.graph.parts.as_ref().filter(|_|self.graph.content.as_ref()==Some(&cell.expression))
             .map(|parts|[parts.nodes[0].clone(),parts.nodes[2].clone()]).into_iter().flatten().filter(|node|!graph::Expression::is_clear(node)))
             .map(|expression|pages::Key {expression,..cell.clone()}).collect()
+    }
+    fn has_admitted_unit(&self,cell:&pages::Key)->bool {
+        let parts=self.cell_parts(cell);
+        self.streaming.units.iter().map(|unit|&unit.interest.key).any(|unit|unit.level<=cell.level
+            && unit.coordinate.map(|value|value>>(cell.level-unit.level))==cell.coordinate && parts.iter().any(|part|part.expression==unit.expression))
+    }
+    fn exact_level(&self)->u32 {self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level))}
+    fn ancestors(&self,r:&WgpuRasterizer,key:&pages::Key)->Vec<pages::Key> {
+        let level=std::iter::once(self).chain(r.scale_display.as_ref()).chain(r.navigator.cache()).map(Cache::exact_level).fold(0,u32::max);
+        self.cell_parts(key).into_iter().flat_map(|part|(part.level+1..=level)
+            .map(move|level|pages::Key {level,coordinate:part.coordinate.map(|value|value>>(level-part.level)),..part.clone()})).collect()
     }
     fn exact_children(&self,cell:&pages::Key,class:&dyn Fn(PixelRect)->Class)->Vec<pages::Held> {
         let parts=self.cell_parts(cell);
@@ -338,10 +349,12 @@ impl Cache {
             self.streaming.turned=work;pass.closed=Some(Closed::Full);
             return Ok(self.flight(region,&Closed::Full));
         }
-        let handle=match self.accept_working(scene,r,interest.clone(),vec![(key.clone(),region)],inputs,[scratch,0],plan,true,class(region),class(region),encoder)? {
+        let ancestors=self.ancestors(r,key);
+        let outputs=std::iter::once((key.clone(),region)).chain(ancestors.iter().map(|ancestor|(ancestor.clone(),ancestor.plan().bounds))).collect();
+        let handle=match self.accept_working(scene,r,interest.clone(),outputs,inputs,[scratch,0],plan,true,class(region),class(region),encoder)? {
             Ok(handle)=>handle,
             Err(None)=>return Ok(waiting_input(scene,r,false).map_or(Outcome::Deferred,Outcome::Waiting)),
-            Err(Some(refusal))=>{pass.closed=Some(Closed::Refused(refusal.clone()));return Ok(Outcome::Refused(region,refusal));},
+            Err(Some(refusal))=>{let refusal=refusal.alone();pass.closed=Some(Closed::Refused(refusal.clone()));return Ok(Outcome::Refused(region,refusal));},
         };
         let unit=admitted.unwrap_or_else(||{self.streaming.units.push(Admitted {interest,view:packet.view,work,waiting:None});self.streaming.units.len()-1});
         pass.owed=false;
@@ -367,18 +380,17 @@ impl Cache {
                 self.pages.lock().unwrap().commit(write,if intermediate {0}else {work},encoder);
                 self.retain_exact(key);
                 if intermediate && identity {self.pages.lock().unwrap().set_transient(key);}
-                self.pages.lock().unwrap().finish_inputs(&handle);
                 pinned.extend(halves.into_iter().flatten().flatten());
                 r.metrics.composited_pixels+=region.area();r.metrics.frame_composited_pages.push((0,key.coordinate));
                 pinned.push(image);
-                if self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level))==0 {return Ok(Outcome::Committed);}
-                let parent=pages::Key {level:1,coordinate:key.coordinate.map(|value|value/2),..key.clone()};
-                let halves=self.graph.parts.as_ref().filter(|_|self.graph.content.as_ref()==Some(&key.expression))
-                    .map(|parts|[parts.nodes[0].clone(),parts.nodes[2].clone()]).into_iter().flatten().filter(|node|!graph::Expression::is_clear(node));
-                for parent in std::iter::once(parent.clone()).chain(halves.map(|expression|pages::Key {expression,..parent.clone()})).collect::<Vec<_>>() {
-                    if let Outcome::Refused(region,refusal)=self.reduce_exact(scene,r,encoder,commands,parent,class)? {return Ok(Outcome::Refused(region,refusal));}
-                }
-                Ok(Outcome::Committed)
+                let reduced=ancestors.iter().filter(|parent|parent.level==key.level+1).try_for_each(|parent|
+                    match self.reduce_exact(scene,r,encoder,commands,parent.clone(),class)? {
+                        Outcome::Refused(..)=>Err(GpuRasterError::Invariant("an admitted exact unit's reserved ancestor was refused")),
+                        _=>Ok(()),
+                    });
+                let mut store=self.pages.lock().unwrap();
+                store.finish_inputs(&handle);store.release_unwanted(&ancestors);
+                reduced.map(|()|Outcome::Committed)
             },
             Err(error@(GpuRasterError::NotReady|GpuRasterError::NotPublished))=>{
                 self.pages.lock().unwrap().hold_inputs(&handle,held)?;
@@ -393,13 +405,13 @@ impl Cache {
     fn reduce_exact(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,commands:&mut RegionRecords,
         mut key:pages::Key,class:&dyn Fn(PixelRect)->Class,
     )->Result<Outcome,GpuRasterError> {
-        let level=self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level));
+        let level=self.exact_level();
         loop {
             let region=key.plan().bounds;
             if self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Exact,0,class(region)).is_none() {
                 let inputs=self.pages.lock().unwrap().reduction(&key,0,class(region));
                 let Some((inputs,pages::Accuracy::Exact))=inputs else {break;};
-                let image=match self.claim_page(scene,r,key.clone(),class(region))? {Ok(image)=>image,Err(blocked)=>return Ok(Outcome::Refused(region,blocked))};
+                let image=match self.claim_page(scene,r,key.clone(),class(region))? {Ok(image)=>image,Err(blocked)=>return Ok(Outcome::Refused(region,blocked.alone()))};
                 let write=self.pages.lock().unwrap().prepare_write(key.clone(),image.plan.bounds,pages::Accuracy::Exact,0)?;
                 let work=inputs.len() as u64*object_cache::PASS_TAPS;
                 let children=inputs.iter().map(|(child,_)|child.clone()).collect::<Vec<_>>();

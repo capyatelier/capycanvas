@@ -960,6 +960,8 @@ impl MipDecodeQueue {
     }
     pub(crate) fn ready(&self)->bool {self.ready.load(Ordering::Acquire)>0}
     #[cfg(test)]
+    pub(crate) fn landed(&self)->bool {self.ready.load(Ordering::Acquire)>=self.outstanding.len()}
+    #[cfg(test)]
     pub(crate) fn outstanding_classes(&self)->Vec<Class> {self.outstanding.iter().map(|outstanding|outstanding.class).collect()}
     #[cfg(target_arch="wasm32")]
     pub(crate) fn take_external(&mut self)->Option<(u64,MipDecodeRequest)> {self.external.take()}
