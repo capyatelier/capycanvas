@@ -1418,6 +1418,19 @@ fn an_unchanged_idle_frame_creates_no_grant_encoder_and_syncs_no_report() {
 }
 
 #[test]
+fn closed_diagnostics_take_no_memory_sample_refresh_from_changed_frames() {
+    let (doc, mut r, mut view) = retained_photo_display();
+    for (enabled, translation) in [(false, [-1024., 0.]), (true, [-1024., -1024.])] {
+        r.set_telemetry_enabled(enabled);
+        view.document_to_surface = [1., 0., 0., 1., translation[0], translation[1]];
+        let before = crate::test_support::PassCounts::snapshot();
+        submit_settled(&mut r, FramePacket { view, ..packet(doc.scene(), [4096; 2]) });
+        let requests = crate::test_support::PassCounts::snapshot().delta(before).memory_updates;
+        assert_eq!(requests > 0, enabled, "telemetry {enabled}: frames requested {requests} memory sample refreshes");
+    }
+}
+
+#[test]
 fn a_submitted_frame_sets_its_display_room_once() {
     let (doc, mut r, view) = retained_photo_display();
     let frame = FramePacket { view, ..packet(doc.scene(), [4096; 2]) };

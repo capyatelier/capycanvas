@@ -111,6 +111,7 @@ impl RendererFactory {
     }
     pub(super) fn unified_memory(&self)->bool {self.0.budget.snapshot().devices.iter().any(|device|device.device==self.0.memory_device && device.unified)}
     pub(super) fn request_memory_update(&self) {
+        #[cfg(test)] crate::test_support::PassCounts {memory_updates:1,..Default::default()}.record();
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(memory) = self.0.memory.lock().unwrap().upgrade() { memory.request_update(); }
         #[cfg(target_arch = "wasm32")]

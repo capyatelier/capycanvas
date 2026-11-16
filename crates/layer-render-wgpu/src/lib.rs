@@ -4178,6 +4178,7 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_clipping_preview(&mut self, shadows: bool, highlights: bool) { self.clipping_preview = [shadows, highlights]; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
+        self.request_memory_samples();
     }
     fn showing_drawing(&self) -> bool { self.presentation.showing }
     fn showing_navigator(&self) -> bool { self.presentation.navigator }
