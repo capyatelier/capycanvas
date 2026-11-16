@@ -3586,3 +3586,48 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
  }
  'Actual visual transparency journey retains the original failure and still fails on cleanup-only errors.'
 }
+
+& {
+ $scopesAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-scopes.ps1'),[ref]$null,[ref]$null)
+& {
+    $ack=@($scopesAst.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and @($n.CommandElements|Where-Object {$_.Value -eq 'Pen did not choose Red'}).Count},$true))
+    $pixels=@($scopesAst.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and @($n.CommandElements|Where-Object {$_.Value -eq 'Red counts were not drawn'}).Count},$true))
+    $pick=@($scopesAst.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Pick' -and $n.Extent.Text -eq "Pick 'histogram-channel' `$channels[1] 'pen'"},$true))
+    if($ack.Count -ne 1 -or $pixels.Count -ne 1 -or $pick.Count -ne 1){throw 'Missing actual Scopes Red channel sequence'}
+    $sequence=[scriptblock]::Create(($pick[0].Extent.Text,$ack[0].Extent.Text,$pixels[0].Extent.Text -join "`n"))
+    $channels=@('RGB','Red','Green','Blue','Luminance')
+    function Pick([string]$Id,[string]$Option,[string]$Device){
+        if($Id -ne 'histogram-channel' -or $Option -ne 'Red' -or $Device -ne 'pen'){throw 'Scopes changed its Red channel input'}
+        $state.picks++
+    }
+    function View([string]$Name){if($Name -ne 'histogram'){throw 'Unexpected Scopes view'};$state.histogram}
+    function Chart-Shades([string]$Id){
+        $state.pixel_reads++
+        if($Id -ne 'histogram-chart'){throw 'Unexpected Scopes pixel target'}
+        if($null -eq $state.histogram.data){throw 'histogram-chart is not visible'}
+        3
+    }
+    function Wait-Until([scriptblock]$Condition,[string]$Message){
+        $state.waits++
+        if($Message -eq 'Pen did not choose Red'){
+            $reports=@([pscustomobject]@{channel=0;data=@(1)},[pscustomobject]@{channel=1;data=$null})
+            if(!$state.missing){$reports+=,[pscustomobject]@{channel=1;data=@(1)}}
+            foreach($report in $reports){$state.histogram=$report;if(& $Condition){return}}
+            throw $Message
+        }
+        if($Message -ne 'Red counts were not drawn'){throw 'Scopes changed its acknowledgment failure message'}
+        if(& $Condition){return}
+        throw $Message
+    }
+    foreach($missing in $false,$true){
+        $state=@{missing=$missing;picks=0;waits=0;pixel_reads=0;histogram=$null}
+        $failure=$null;try{. $sequence}catch{$failure=$_}
+        if($state.picks -ne 1){throw 'Scopes repeated or omitted its original pen input'}
+        if($missing){
+            if(!$failure -or $failure.Exception.Message -cne 'Pen did not choose Red' -or $state.waits -ne 1 -or $state.pixel_reads -ne 0){throw 'Scopes missing counts escaped its original acknowledgment bound'}
+        }elseif($failure -or $state.waits -ne 2 -or $state.pixel_reads -ne 1){throw "Scopes sampled pixels before acknowledged Red counts: $failure"}
+    }
+}
+Write-Output 'Actual Scopes Red channel sequence: pending counts defer unchanged pixel assertion; absent counts fail original acknowledgment without another input.'
+
+}

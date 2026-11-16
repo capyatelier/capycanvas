@@ -306,7 +306,7 @@ try{
     $sources=@((View 'histogram').sources);$channels=@((View 'histogram').channels)
     Pick 'histogram-source' $sources[3] 'touch';Wait-Until {(View 'histogram').source -eq 3} 'Touch did not choose Selection'
     Pick 'histogram-source' $sources[0] 'mouse';Wait-Until {(View 'histogram').source -eq 0} 'Mouse did not restore Visible'
-    Pick 'histogram-channel' $channels[1] 'pen';Wait-Until {(View 'histogram').channel -eq 1} 'Pen did not choose Red'
+    Pick 'histogram-channel' $channels[1] 'pen';Wait-Until {$histogram=View 'histogram';$histogram.channel -eq 1 -and $null -ne $histogram.data} 'Pen did not choose Red'
     Wait-Until {(Chart-Shades 'histogram-chart') -gt 2} 'Red counts were not drawn'
     Pick 'histogram-channel' $channels[0] 'mouse';Wait-Until {(View 'histogram').channel -eq 0} 'Mouse did not restore RGB'
     $checks.source_and_channel='passed'
