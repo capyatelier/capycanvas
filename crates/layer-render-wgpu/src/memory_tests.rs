@@ -1797,6 +1797,28 @@ fn a_cold_32_layer_open_decodes_each_present_tile_once_and_reduces_no_layer() {
     assert!(leased<=frame_budget*unit,"the open leased {} MiB of decoded inputs at once, {} cells of 32 layers",leased>>20,leased/unit);
 }
 
+#[test]
+fn a_cold_32_layer_open_admits_decodes_by_working_set_instead_of_per_frame() {
+    let doc=layered_raster_document(32,6);
+    let mut r=renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let (mut seen,mut widest,mut heaviest,mut frames)=(0,0,0,0);
+    settle_observing(&mut r,reduced_32_layer_view(&doc),|r| {
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
+        while let Some((_,queue))=&r.moving_decode {
+            heaviest=heaviest.max(queue.working_bytes());
+            if queue.decoded() {break;}
+            assert!(std::time::Instant::now()<deadline,"admitted decodes must finish");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let misses=r.source_tiles.borrow().misses;
+        widest=widest.max(misses-seen);seen=misses;frames+=1;
+    });
+    let bound=(crate::object_image_mips::decode_workers() as u64+128)*u64::from(PAGE_SIZE).pow(2)*4;
+    assert_eq!(r.source_tiles.borrow().misses,32*36,"each present tile is decoded once");
+    assert!(widest>18,"a frame whose workers finish early still started only {widest} decodes over {frames} frames");
+    assert!(heaviest<=bound,"{} KiB of decodes were admitted at once; the working set is {} KiB",heaviest>>10,bound>>10);
+}
+
 fn working_layer(doc:&layer_core::Document)->layer_core::OccurrenceHandle {
     doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()=="Layer 3").unwrap()
 }

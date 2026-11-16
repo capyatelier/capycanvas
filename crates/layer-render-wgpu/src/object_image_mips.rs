@@ -1,6 +1,8 @@
 use crate::{display_mips, residency::{Charge, Class, Lease, Tier}, GpuRasterError, PipelineDevice, WgpuRasterizer, PAGE_SIZE, PixelRect};
 use layer_core::{authored::PortableId, color::{RgbSpace,source::SourceImage}};
 use std::{collections::VecDeque, sync::{Arc,Weak,atomic::{AtomicBool,Ordering}}};
+#[cfg(not(target_arch="wasm32"))]
+use std::sync::atomic::AtomicU64;
 
 #[derive(Clone)]
 pub(crate) struct MovingRequest {
@@ -572,6 +574,22 @@ pub(crate) enum MipDecodeRequest {
     Paper {blob:Arc<layer_core::raster::TileBlob>,coordinate:[u32;2]},
     Coordinates(CoordinateRequest),
 }
+impl MipDecodeRequest {
+    fn decoded_bytes(&self)->u64 {
+        let page=u64::from(PAGE_SIZE).pow(2);
+        match self {
+            Self::Image(request)=>{
+                let interpretation=&request.source.interpretation;
+                if matches!(interpretation.profile,layer_core::color::ColorProfile::Builtin(_)) && interpretation.channels!=layer_core::color::source::SourceChannels::Cmyk {
+                    page*4*interpretation.depth.bytes() as u64
+                } else {crate::scene::sources::NORMALIZED_PAGE_BYTES}
+            },
+            Self::Raster(request)=>page*4*request.blob.descriptor.depth().bytes() as u64,
+            Self::Paper {blob,..}=>page*u64::from(blob.descriptor.channels)*blob.descriptor.depth().bytes() as u64,
+            Self::Coordinates(request)=>u64::from(request.count)*8,
+        }
+    }
+}
 pub(crate) enum PreparedImageWork {
     Image(PreparedMipTile),
     Raster(PreparedRasterTile),
@@ -661,10 +679,24 @@ impl DecodeKey {
         }
     }
 }
+#[cfg(not(target_arch="wasm32"))]
+const TILE_BYTES:u64=PAGE_SIZE as u64*PAGE_SIZE as u64*4;
+#[cfg(not(target_arch="wasm32"))]
+fn rank(class:Class,distance:u64)->u64 {(class as u64)<<56|distance.min((1<<56)-1)}
 struct Outstanding {
-    sequence:u64,key:Option<DecodeKey>,region:PixelRect,class:Class,
+    sequence:u64,key:Option<DecodeKey>,region:PixelRect,class:Class,charge:Charge,
+    #[cfg(not(target_arch="wasm32"))]
+    rank:Arc<AtomicU64>,
     #[cfg(not(target_arch="wasm32"))]
     input:Arc<DecodeInput>,
+}
+#[cfg(not(target_arch="wasm32"))]
+impl Outstanding {
+    fn rerank(&self,priority:Option<(layer_render::ViewState,PixelRect)>) {
+        let distance=priority.filter(|_|!self.region.is_empty()).map_or(u64::MAX,|(view,_)|MipDecodeQueue::distance(view,self.region));
+        let ranked=rank(self.class,distance);
+        if self.rank.swap(ranked,Ordering::AcqRel)!=ranked && distance!=u64::MAX && let Ok(Some(read))=&self.input.read {read.prioritize(distance);}
+    }
 }
 #[cfg(not(target_arch="wasm32"))]
 struct DecodeInput {samples:Option<Arc<Vec<u8>>>,read:Result<Option<layer_core::tile_io::ReadWait>,String>}
@@ -684,28 +716,58 @@ pub(crate) struct MipDecodeQueue {
     ready:Arc<std::sync::atomic::AtomicUsize>,
     outstanding:Vec<Outstanding>,
     next_sequence:u64,
-    capacity:usize,
+    working:Arc<Tier>,
     priority:Option<(layer_render::ViewState,PixelRect)>,
 }
 #[cfg(not(target_arch="wasm32"))]
 struct DecodeContext {
     cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace,
-    send:std::sync::mpsc::SyncSender<(u64,PreparedImageWork)>,ready:Arc<std::sync::atomic::AtomicUsize>,
+    send:std::sync::mpsc::Sender<(u64,PreparedImageWork)>,ready:Arc<std::sync::atomic::AtomicUsize>,
     wake: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     waiter: std::sync::Mutex<Option<std::task::Waker>>,
 }
 #[cfg(not(target_arch="wasm32"))]
-struct DecodeJob {sequence:u64,request:MipDecodeRequest,context:Weak<DecodeContext>,input:Weak<DecodeInput>}
+struct DecodeJob {sequence:u64,rank:Arc<AtomicU64>,request:MipDecodeRequest,context:Weak<DecodeContext>,input:Weak<DecodeInput>}
 #[cfg(not(target_arch="wasm32"))]
-struct DecodePool {requests:std::sync::mpsc::SyncSender<DecodeJob>,capacity:usize,epoch:Arc<std::sync::atomic::AtomicU64>,
-    capacity_waiters:Arc<std::sync::Mutex<Vec<Weak<DecodeContext>>>>,resumed:std::sync::Mutex<VecDeque<DecodeJob>>}
+#[derive(Default)]
+struct Dispatch {jobs:std::sync::Mutex<(Vec<DecodeJob>,bool)>,available:std::sync::Condvar}
 #[cfg(not(target_arch="wasm32"))]
-struct ParkedDecode {job:std::sync::Mutex<Option<DecodeJob>>,pool:Weak<DecodePool>}
+impl Dispatch {
+    fn offer(&self,job:DecodeJob,capacity:usize)->Result<(),DecodeJob> {
+        let mut jobs=self.jobs.lock().unwrap();
+        if jobs.0.len()>=capacity {return Err(job);}
+        jobs.0.push(job);drop(jobs);self.available.notify_one();Ok(())
+    }
+    fn resume(&self,job:DecodeJob) {self.jobs.lock().unwrap().0.push(job);self.available.notify_one();}
+    fn next(jobs:&mut Vec<DecodeJob>)->Option<DecodeJob> {
+        let index=jobs.iter().enumerate().min_by_key(|(_,job)|(job.rank.load(Ordering::Acquire),job.sequence)).map(|(index,_)|index)?;
+        Some(jobs.swap_remove(index))
+    }
+    fn take(&self)->Option<DecodeJob> {
+        let mut jobs=self.jobs.lock().unwrap();
+        loop {
+            if let Some(job)=Self::next(&mut jobs.0) {return Some(job);}
+            if jobs.1 {return None;}
+            jobs=self.available.wait(jobs).unwrap();
+        }
+    }
+    #[cfg(test)]
+    fn try_take(&self)->Option<DecodeJob> {Self::next(&mut self.jobs.lock().unwrap().0)}
+    fn close(&self) {self.jobs.lock().unwrap().1=true;self.available.notify_all();}
+}
+#[cfg(not(target_arch="wasm32"))]
+struct DecodePool {dispatch:Arc<Dispatch>,capacity:usize,epoch:Arc<AtomicU64>,capacity_waiters:Arc<std::sync::Mutex<Vec<Weak<DecodeContext>>>>}
+#[cfg(not(target_arch="wasm32"))]
+impl Drop for DecodePool {
+    fn drop(&mut self) {self.dispatch.close();}
+}
+#[cfg(not(target_arch="wasm32"))]
+struct ParkedDecode {job:std::sync::Mutex<Option<DecodeJob>>,dispatch:Weak<Dispatch>}
 #[cfg(not(target_arch="wasm32"))]
 impl std::task::Wake for ParkedDecode {
     fn wake(self:Arc<Self>) {
         let job=self.job.lock().unwrap().take();
-        if let Some(job)=job && let Some(pool)=self.pool.upgrade() {pool.resume(job);}
+        if let Some(job)=job && let Some(dispatch)=self.dispatch.upgrade() {dispatch.resume(job);}
     }
 }
 #[cfg(not(target_arch="wasm32"))]
@@ -721,13 +783,13 @@ impl DecodeContext {
 type Decoders=std::collections::VecDeque<(Weak<SourceImage>,RgbSpace,layer_color::WorkingDecoder)>;
 #[cfg(not(target_arch="wasm32"))]
 impl DecodeJob {
-    fn run(self,decoders:&mut Decoders,pool:&Weak<DecodePool>) {
+    fn run(self,decoders:&mut Decoders,dispatch:&Weak<Dispatch>) {
         let Some(context)=self.context.upgrade() else {return;};
         let (cache,destination)=(context.cache.clone(),context.destination);drop(context);
         let Some(input)=self.input.upgrade() else {return;};
         let (job,bytes)=match &input.read {
             Ok(Some(read))=>{
-                let parked=Arc::new(ParkedDecode {job:std::sync::Mutex::new(Some(self)),pool:pool.clone()});
+                let parked=Arc::new(ParkedDecode {job:std::sync::Mutex::new(Some(self)),dispatch:dispatch.clone()});
                 let std::task::Poll::Ready(bytes)=read.poll_bytes(&std::task::Waker::from(parked.clone())) else {return;};
                 let Some(job)=parked.job.lock().unwrap().take() else {return;};
                 (job,bytes.map(Some))
@@ -743,12 +805,15 @@ impl DecodeJob {
     }
 }
 #[cfg(not(target_arch="wasm32"))]
+pub(crate) fn decode_workers()->usize {std::thread::available_parallelism().map_or(1,|count|count.get().saturating_sub(2).clamp(1,3))}
+#[cfg(not(target_arch="wasm32"))]
 impl DecodePool {
     fn shared()->Result<Arc<Self>,GpuRasterError> {
         static POOL:std::sync::OnceLock<std::io::Result<Arc<DecodePool>>>=std::sync::OnceLock::new();
-        POOL.get_or_init(||Self::start(std::thread::available_parallelism().map_or(1,|count|count.get().saturating_sub(2).clamp(1,3))))
+        POOL.get_or_init(||Self::start(decode_workers()))
             .as_ref().cloned().map_err(|_|GpuRasterError::Color("Image preparation worker unavailable".into()))
     }
+    fn working_limit(&self)->u64 {self.capacity as u64*TILE_BYTES}
     fn subscribe(&self,context:&Arc<DecodeContext>,epoch:u64) {
         let changed={
             let mut waiters=self.capacity_waiters.lock().unwrap();
@@ -762,37 +827,29 @@ impl DecodePool {
         if changed {context.notify();}
     }
     fn start(workers:usize)->std::io::Result<Arc<Self>> {
-        let capacity=workers*6;
-        let (requests,receive)=std::sync::mpsc::sync_channel::<DecodeJob>(capacity);
-        let epoch=Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let receive=Arc::new(std::sync::Mutex::new(receive));
+        let dispatch=Arc::new(Dispatch::default());
+        let epoch=Arc::new(AtomicU64::new(0));
         let capacity_waiters=Arc::new(std::sync::Mutex::new(Vec::<Weak<DecodeContext>>::new()));
-        let pool=Arc::new(Self {requests,capacity,epoch:epoch.clone(),capacity_waiters:capacity_waiters.clone(),resumed:Default::default()});
+        let pool=Arc::new(Self {dispatch:dispatch.clone(),capacity:workers+crate::scene::IDLE_FRAME_TILES,epoch:epoch.clone(),capacity_waiters:capacity_waiters.clone()});
         for worker in 0..workers {
-            let (receive,epoch,waiters,pool)=(receive.clone(),epoch.clone(),capacity_waiters.clone(),Arc::downgrade(&pool));
+            let (dispatch,epoch,waiters)=(dispatch.clone(),epoch.clone(),capacity_waiters.clone());
             std::thread::Builder::new().name(format!("capy-image-prefilter-{worker}")).spawn(move || {
                 let mut decoders=Decoders::new();
-                loop {
-                    let resumed=pool.upgrade().and_then(|pool|pool.resumed.lock().unwrap().pop_front());
-                    let job=if let Some(job)=resumed {job} else {
-                        let Ok(job)=receive.lock().unwrap().recv() else {break;};
-                        let subscribers={
-                            let mut waiters=waiters.lock().unwrap();
-                            epoch.fetch_add(1,Ordering::Release);
-                            std::mem::take(&mut *waiters)
-                        };
-                        for context in subscribers.into_iter().filter_map(|context|context.upgrade()) {context.notify();}
-                        job
+                let parked=Arc::downgrade(&dispatch);
+                while let Some(job)=dispatch.take() {
+                    let subscribers={
+                        let mut waiters=waiters.lock().unwrap();
+                        epoch.fetch_add(1,Ordering::Release);
+                        std::mem::take(&mut *waiters)
                     };
-                    job.run(&mut decoders,&pool);
+                    for context in subscribers.into_iter().filter_map(|context|context.upgrade()) {context.notify();}
+                    job.run(&mut decoders,&parked);
                 }
             })?;
         }
         Ok(pool)
     }
-    fn resume(&self,job:DecodeJob) {
-        if let Err(std::sync::mpsc::TrySendError::Full(job))=self.requests.try_send(job) {self.resumed.lock().unwrap().push_back(job);}
-    }
+    fn offer(&self,job:DecodeJob)->Result<(),DecodeJob> {self.dispatch.offer(job,self.capacity)}
 }
 #[cfg(not(target_arch="wasm32"))]
 fn contained<T,E:From<String>>(work:impl FnOnce()->Result<T,E>)->Result<T,E> {
@@ -842,13 +899,11 @@ impl MipDecodeQueue {
     pub(crate) fn prioritize(&mut self,view:layer_render::ViewState,region:PixelRect) {
         #[cfg(not(target_arch="wasm32"))]
         if self.priority.is_none_or(|(previous,_)|previous!=view) {
-            for request in &self.outstanding {
-                if !request.region.is_empty() && let Ok(Some(read))=&request.input.read {read.prioritize(Self::distance(view,request.region));}
-            }
+            for request in &self.outstanding {request.rerank(Some((view,region)));}
         }
         self.priority=Some((view,region));
     }
-    fn distance(view:layer_render::ViewState,region:PixelRect)->u64 {
+    pub(crate) fn distance(view:layer_render::ViewState,region:PixelRect)->u64 {
         let [a,b,c,d,tx,ty]=view.document_to_surface.map(f64::from);
         let x=f64::from(region.min_x()+region.max_x())*0.5;let y=f64::from(region.min_y()+region.max_y())*0.5;
         let dx=a*x+c*y+tx-f64::from(view.width_px)*0.5;let dy=b*x+d*y+ty-f64::from(view.height_px)*0.5;
@@ -861,21 +916,33 @@ impl MipDecodeQueue {
         }).collect();
         tiles.sort();tiles
     }
-    pub(crate) fn accepts_held(&self,held:usize,receipt:bool)->bool {self.outstanding.len().saturating_add(held)<self.capacity+usize::from(receipt)}
-    pub(crate) fn new(device:&PipelineDevice)->Result<Self,GpuRasterError> {
+    fn working_limit(&self)->u64 {
         #[cfg(not(target_arch="wasm32"))]
-        {Self::native(device.source_samples.clone(),device.working_space())}
+        {self.pool.working_limit()}
         #[cfg(target_arch="wasm32")]
-        {let _=device;Ok(Self {external:None,completed:None,ready:Default::default(),outstanding:Vec::new(),next_sequence:0,capacity:1,priority:None})}
+        {0}
+    }
+    pub(crate) fn has_room(&self)->bool {self.working.used()<self.working_limit().max(1)}
+    fn admit(&self,bytes:u64,receipt:bool)->Option<Charge> {
+        self.working.charge_within(self.working_limit().max(bytes).saturating_add(if receipt {bytes}else {0}),bytes)
+    }
+    #[cfg(test)]
+    pub(crate) fn working_bytes(&self)->u64 {self.working.used()}
+    #[cfg(test)]
+    pub(crate) fn decoded(&self)->bool {self.ready.load(Ordering::Acquire)>=self.outstanding.len()}
+    pub(crate) fn new(device:&PipelineDevice,ram:&Arc<Tier>)->Result<Self,GpuRasterError> {
+        #[cfg(not(target_arch="wasm32"))]
+        {Self::native(device.source_samples.clone(),device.working_space(),ram)}
+        #[cfg(target_arch="wasm32")]
+        {let _=device;Ok(Self {external:None,completed:None,ready:Default::default(),outstanding:Vec::new(),next_sequence:0,working:Tier::within(ram),priority:None})}
     }
     #[cfg(not(target_arch="wasm32"))]
-    fn native(cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace)->Result<Self,GpuRasterError> {
+    fn native(cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace,ram:&Arc<Tier>)->Result<Self,GpuRasterError> {
         let pool=DecodePool::shared()?;
-        let capacity=pool.capacity;
         let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let (send,results)=std::sync::mpsc::sync_channel(capacity);
+        let (send,results)=std::sync::mpsc::channel();
         let context=Arc::new(DecodeContext {cache,destination,send,ready:ready.clone(),wake:Default::default(),waiter:Default::default()});
-        Ok(Self {pool,context,waiting:None,results,ready,outstanding:Vec::new(),next_sequence:0,capacity,priority:None})
+        Ok(Self {pool,context,waiting:None,results,ready,outstanding:Vec::new(),next_sequence:0,working:Tier::within(ram),priority:None})
     }
     #[cfg(not(target_arch="wasm32"))]
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
@@ -897,61 +964,64 @@ impl MipDecodeQueue {
     pub(crate) fn clear_waker(&self) {let waiter=self.context.waiter.lock().unwrap().take();drop(waiter);}
     #[cfg(test)]
     pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
-        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Native,Class::Visible)
+        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Native,Class::Visible,false)
     }
-    pub(crate) fn request_for(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2],use_:crate::scene::sources::SourceUse,class:Class)->bool {
+    pub(crate) fn request_for(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2],use_:crate::scene::sources::SourceUse,class:Class,receipt:bool)->bool {
         let weak=Arc::downgrade(&source);
-        self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {class,use_,id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)),class)
+        self.enqueue(MipDecodeRequest::Image(ImageDecodeRequest {class,use_,id,source,coordinate}),Some(DecodeKey::Image(weak,coordinate)),class,receipt)
     }
-    pub(crate) fn request_raster(&mut self,blob:Arc<layer_core::raster::TileBlob>,space:RgbSpace,destination:RgbSpace,scalar:bool,class:Class)->bool {
+    pub(crate) fn request_raster(&mut self,blob:Arc<layer_core::raster::TileBlob>,space:RgbSpace,destination:RgbSpace,scalar:bool,class:Class,receipt:bool)->bool {
         let key=DecodeKey::Raster(Arc::downgrade(&blob),space,destination,scalar);
-        self.enqueue(MipDecodeRequest::Raster(RasterDecodeRequest {class,blob,space,destination,scalar}),Some(key),class)
+        self.enqueue(MipDecodeRequest::Raster(RasterDecodeRequest {class,blob,space,destination,scalar}),Some(key),class,receipt)
     }
     pub(crate) fn request_paper(&mut self,blob:Arc<layer_core::raster::TileBlob>,coordinate:[u32;2])->bool {
         let key=DecodeKey::Paper(Arc::downgrade(&blob),coordinate);
-        self.enqueue(MipDecodeRequest::Paper {blob,coordinate},Some(key),Class::Visible)
+        self.enqueue(MipDecodeRequest::Paper {blob,coordinate},Some(key),Class::Visible,false)
     }
     pub(crate) fn request_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:CoordinateDestination)->bool {
-        self.enqueue(MipDecodeRequest::Coordinates(CoordinateRequest {inverse,size,first,count,destination}),None,Class::Visible)
+        self.enqueue(MipDecodeRequest::Coordinates(CoordinateRequest {inverse,size,first,count,destination}),None,Class::Visible,false)
     }
-    fn enqueue(&mut self,request:MipDecodeRequest,key:Option<DecodeKey>,class:Class)->bool {
+    fn enqueue(&mut self,request:MipDecodeRequest,key:Option<DecodeKey>,class:Class,receipt:bool)->bool {
         if let Some(stored)=key.as_ref().and_then(|key|self.outstanding.iter_mut().find(|stored|stored.key.as_ref().is_some_and(|stored|stored.matches(key)))) {
             stored.class=stored.class.min(class);
-            if let Some((view,region))=self.priority && (stored.region.is_empty() || Self::distance(view,region)<Self::distance(view,stored.region)) {
-                stored.region=region;
-                #[cfg(not(target_arch="wasm32"))]
-                if let Ok(Some(read))=&stored.input.read {read.prioritize(Self::distance(view,region));}
-            }
+            if let Some((view,region))=self.priority && (stored.region.is_empty() || Self::distance(view,region)<Self::distance(view,stored.region)) {stored.region=region;}
+            #[cfg(not(target_arch="wasm32"))]
+            stored.rerank(self.priority);
             return true;
         }
-        if self.outstanding.len()>=self.capacity {return false;}
+        let Some(charge)=self.admit(request.decoded_bytes(),receipt) else {return false;};
         let sequence=self.next_sequence;
+        let region=self.priority.map_or(PixelRect::EMPTY,|(_,region)|region);
         #[cfg(not(target_arch="wasm32"))]
         {
             let blob=match &request {MipDecodeRequest::Image(request)=>request.source.tiles.get(&request.coordinate),MipDecodeRequest::Raster(request)=>Some(&request.blob),MipDecodeRequest::Paper {blob,..}=>Some(blob),MipDecodeRequest::Coordinates(_)=>None};
             let samples=blob.map(|blob|self.context.cache.cached(blob)).transpose().map(Option::flatten);
             let read=samples.as_ref().map_err(Clone::clone).and_then(|samples|if samples.is_some() {Ok(None)}else{blob.map(|blob|blob.read_interest()).transpose().map(Option::flatten)});
-            let input=Arc::new(DecodeInput {samples:samples.ok().flatten(),read});
-            if let Some((view,region))=self.priority && let Ok(Some(read))=&input.read {read.prioritize(Self::distance(view,region));}
+            let stored=Outstanding {sequence,key,region,class,charge,rank:Default::default(),input:Arc::new(DecodeInput {samples:samples.ok().flatten(),read})};
+            stored.rerank(self.priority);
             let epoch=self.pool.epoch.load(Ordering::Acquire);
-            if self.pool.requests.try_send(DecodeJob {sequence,request,context:Arc::downgrade(&self.context),input:Arc::downgrade(&input)}).is_err() {self.waiting=Some(epoch);self.pool.subscribe(&self.context,epoch);return false;}
-            if let Ok(Some(read))=&input.read {read.start();}
-            self.waiting=None;self.outstanding.push(Outstanding {sequence,key,region:self.priority.map_or(PixelRect::EMPTY,|(_,region)|region),class,input});
+            let job=DecodeJob {sequence,rank:stored.rank.clone(),request,context:Arc::downgrade(&self.context),input:Arc::downgrade(&stored.input)};
+            if self.pool.offer(job).is_err() {self.waiting=Some(epoch);self.pool.subscribe(&self.context,epoch);return false;}
+            if let Ok(Some(read))=&stored.input.read {read.start();}
+            self.waiting=None;self.outstanding.push(stored);
         }
         #[cfg(target_arch="wasm32")]
-        {self.external=Some((sequence,request));self.outstanding.push(Outstanding {sequence,key,region:self.priority.map_or(PixelRect::EMPTY,|(_,region)|region),class});}
+        {self.external=Some((sequence,request));self.outstanding.push(Outstanding {sequence,key,region,class,charge});}
         self.next_sequence+=1;
         true
     }
-    pub(crate) fn poll(&mut self)->Option<PreparedImageWork> {
+    pub(crate) fn poll(&mut self)->Option<(PreparedImageWork,Charge)> {
         if !self.ready() {return None;}
         #[cfg(not(target_arch="wasm32"))]
         let (sequence,mut result)=self.results.try_recv().ok()?;
         #[cfg(target_arch="wasm32")]
         let (sequence,mut result)=self.completed.take()?;
         self.ready.fetch_sub(1,Ordering::AcqRel);
-        if let Some(index)=self.outstanding.iter().position(|stored|stored.sequence==sequence) {result.raise(self.outstanding.swap_remove(index).class);}
-        Some(result)
+        let charge=match self.outstanding.iter().position(|stored|stored.sequence==sequence) {
+            Some(index)=>{let stored=self.outstanding.swap_remove(index);result.raise(stored.class);stored.charge},
+            None=>self.working.charge(0),
+        };
+        Some((result,charge))
     }
     pub(crate) fn pending(&self)->bool {
         #[cfg(not(target_arch="wasm32"))]
@@ -974,20 +1044,26 @@ pub(crate) mod tests {
     use super::*;
     use crate::test_support::{page_texture,upload_page};
     #[cfg(not(target_arch="wasm32"))]
-    fn queued(requests:std::sync::mpsc::SyncSender<DecodeJob>,results:std::sync::mpsc::Receiver<(u64,PreparedImageWork)>,
+    fn idle_pool(capacity:usize)->Arc<DecodePool> {
+        Arc::new(DecodePool {dispatch:Default::default(),capacity,epoch:Default::default(),capacity_waiters:Default::default()})
+    }
+    #[cfg(not(target_arch="wasm32"))]
+    fn queued(results:std::sync::mpsc::Receiver<(u64,PreparedImageWork)>,
         ready:Arc<std::sync::atomic::AtomicUsize>,outstanding:Vec<Option<DecodeKey>>,capacity:usize)->MipDecodeQueue {
-        let (send,_)=std::sync::mpsc::sync_channel(capacity);
+        let (send,_)=std::sync::mpsc::channel();
         let context=Arc::new(DecodeContext {cache:Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination:RgbSpace::Srgb,send,ready:ready.clone(),wake:Default::default(),waiter:Default::default()});
-        MipDecodeQueue {pool:Arc::new(DecodePool {requests,capacity,epoch:Default::default(),capacity_waiters:Default::default(),resumed:Default::default()}),context,waiting:None,results,ready,next_sequence:outstanding.len() as u64,
-            outstanding:outstanding.into_iter().zip(0..).map(|(key,sequence)|Outstanding {sequence,key,region:PixelRect::EMPTY,class:Class::Visible,input:Arc::new(DecodeInput {samples:None,read:Ok(None)})}).collect(),capacity,priority:None}
+        let working=Arc::new(Tier::default());
+        MipDecodeQueue {pool:idle_pool(capacity),context,waiting:None,results,ready,next_sequence:outstanding.len() as u64,
+            outstanding:outstanding.into_iter().zip(0..).map(|(key,sequence)|Outstanding {sequence,key,region:PixelRect::EMPTY,class:Class::Visible,charge:working.charge(0),rank:Default::default(),
+                input:Arc::new(DecodeInput {samples:None,read:Ok(None)})}).collect(),working,priority:None}
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]
     fn snapshot_decode_registration_rechecks_capacity_and_releases_its_task_waker() {
         struct Count(std::sync::atomic::AtomicUsize);
         impl std::task::Wake for Count {fn wake(self:Arc<Self>) {self.0.fetch_add(1,Ordering::Relaxed);}}
-        let (requests,_)=std::sync::mpsc::sync_channel(1);let (_,results)=std::sync::mpsc::sync_channel(1);
-        let mut queue=queued(requests,results,Default::default(),Vec::new(),1);
+        let (_,results)=std::sync::mpsc::sync_channel(1);
+        let mut queue=queued(results,Default::default(),Vec::new(),1);
         queue.waiting=Some(0);queue.pool.epoch.store(1,Ordering::Release);
         let count=Arc::new(Count(Default::default()));let waker=std::task::Waker::from(count.clone());
         queue.register_waker(&waker);assert_eq!(count.0.load(Ordering::Relaxed),1);
@@ -1000,9 +1076,9 @@ pub(crate) mod tests {
     fn snapshot_decode_late_results_are_observed_after_registration() {
         use std::sync::{Mutex,mpsc,atomic::AtomicUsize};
         for paper in [false,true] {
-            let (requests,_)=mpsc::sync_channel(1);let (send,results)=mpsc::sync_channel(1);
+            let (send,results)=mpsc::sync_channel(1);
             let ready=Arc::new(AtomicUsize::new(1));
-            let mut queue=queued(requests,results,ready,Vec::new(),1);
+            let mut queue=queued(results,ready,Vec::new(),1);
             let target=Arc::new(Mutex::new(CoordinateSlot::new(&Default::default())));
             let result=if paper {
                 let pixels=Arc::new(vec![73;(PAGE_SIZE*PAGE_SIZE) as usize]);
@@ -1023,18 +1099,18 @@ pub(crate) mod tests {
         let cache=Arc::new(layer_core::raster::DecodedTileCache::new(0));
         let pool=DecodePool::start(1).unwrap();
         let owner=|| {
-            let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb).unwrap();
-            queue.capacity=pool.capacity;queue.pool=pool.clone();queue
+            let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb,&Default::default()).unwrap();
+            queue.pool=pool.clone();queue
         };
         let mut blockers=owner();
-        let workers=blockers.capacity/6;
+        let workers=pool.capacity-crate::scene::IDLE_FRAME_TILES;
         let (entered,seen)=mpsc::channel();let (release,held)=mpsc::channel();let held=Mutex::new(held);
         blockers.set_wake(Arc::new(move || {let _=entered.send(());let _=held.lock().unwrap().recv();}));
         let target=Arc::new(Mutex::new(CoordinateSlot::new(&Default::default())));
         for n in 0..workers {assert!(blockers.request_coordinates([1.,0.,0.,1.,0.,0.],[256;2],n as u32,1,Arc::downgrade(&target)));}
         for _ in 0..workers {seen.recv_timeout(Duration::from_secs(5)).unwrap();}
         let mut other=owner();
-        for n in 0..other.capacity {assert!(other.request_coordinates([1.,0.,0.,1.,0.,0.],[256;2],n as u32,1,Arc::downgrade(&target)));}
+        for n in 0..pool.capacity {assert!(other.request_coordinates([1.,0.,0.,1.,0.,0.],[256;2],n as u32,1,Arc::downgrade(&target)));}
         let mut refused=owner();
         let calls=Arc::new(AtomicUsize::new(0));let count=calls.clone();let (notified,woken)=mpsc::channel();
         refused.set_wake(Arc::new(move || {count.fetch_add(1,Ordering::Relaxed);let _=notified.send(());}));
@@ -1052,10 +1128,10 @@ pub(crate) mod tests {
         let cache=Arc::new(layer_core::raster::DecodedTileCache::new(0));
         let pool=DecodePool::start(1).unwrap();
         let owner=|| {
-            let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb).unwrap();
-            queue.capacity=pool.capacity;queue.pool=pool.clone();queue
+            let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb,&Default::default()).unwrap();
+            queue.pool=pool.clone();queue
         };
-        let workers=pool.capacity/6;
+        let workers=pool.capacity-crate::scene::IDLE_FRAME_TILES;
         let stored=layer_core::color::source::rgba8_source([workers as u32*PAGE_SIZE,PAGE_SIZE],|x,y|[x as u8,y as u8,41,255]);
         let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([stored.as_ref()]),false);
         let mut held=owner();
@@ -1069,14 +1145,14 @@ pub(crate) mod tests {
         visible.set_wake(Arc::new(move || {let _=notified.send(());}));
         assert!(visible.request(PortableId::random(),resident,[0,0]));
         assert!(woken.recv_timeout(Duration::from_secs(5)).is_ok(),"a decode whose input is resident must not wait behind another owner's held read");
-        assert!(matches!(visible.poll(),Some(PreparedImageWork::Image(tile)) if tile.pixels.is_ok()));
+        assert!(matches!(visible.poll(),Some((PreparedImageWork::Image(tile),_)) if tile.pixels.is_ok()));
         assert_eq!(held.ready.load(Ordering::Acquire),0);
         store.gate.release();
         let deadline=std::time::Instant::now()+Duration::from_secs(10);
         let mut decoded=0;
         while decoded<workers {
             assert!(arrived.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(),"a released read must resume its decode");
-            while let Some(work)=held.poll() {assert!(matches!(work,PreparedImageWork::Image(tile) if tile.pixels.is_ok()));decoded+=1;}
+            while let Some((work,_))=held.poll() {assert!(matches!(work,PreparedImageWork::Image(tile) if tile.pixels.is_ok()));decoded+=1;}
         }
         assert!(!held.pending());
     }
@@ -1085,8 +1161,8 @@ pub(crate) mod tests {
     fn accepted_decode_jobs_fill_the_read_window_before_a_decode_worker_runs() {
         let source=layer_core::color::source::rgba8_source([8*PAGE_SIZE,PAGE_SIZE],|x,y|[x as u8,y as u8,73,255]);
         let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([source.as_ref()]),false);
-        let (requests,_receive)=std::sync::mpsc::sync_channel(8);let (_send,results)=std::sync::mpsc::sync_channel(8);
-        let mut queue=queued(requests,results,Default::default(),Vec::new(),8);
+        let (_send,results)=std::sync::mpsc::sync_channel(8);
+        let mut queue=queued(results,Default::default(),Vec::new(),8);
         for x in 0..8 {assert!(queue.request(PortableId::random(),source.clone(),[x,0]));}
         let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
         while store.gate.reads.load(Ordering::Acquire)<8 && std::time::Instant::now()<deadline {std::thread::yield_now();}
@@ -1097,12 +1173,12 @@ pub(crate) mod tests {
     #[test]
     fn resident_samples_do_not_reread_the_compressed_store() {
         let source=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[29,71,83,255]);
-        let (requests,receive)=std::sync::mpsc::sync_channel(1);let (_send,results)=std::sync::mpsc::sync_channel(1);
-        let mut queue=queued(requests,results,Default::default(),Vec::new(),1);
+        let (_send,results)=std::sync::mpsc::sync_channel(1);
+        let mut queue=queued(results,Default::default(),Vec::new(),1);
         queue.context.cache.set_limit((PAGE_SIZE*PAGE_SIZE*4) as usize);
         let samples=queue.context.cache.decode_on_worker(&source.tiles[&[0,0]]).unwrap();
         let store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([source.as_ref()]),false);
-        assert!(queue.request(PortableId::random(),source,[0,0]));let job=receive.try_recv().unwrap();
+        assert!(queue.request(PortableId::random(),source,[0,0]));let job=queue.pool.dispatch.try_take().unwrap();
         let input=job.input.upgrade().unwrap();assert!(input.read.as_ref().unwrap().is_none());assert!(Arc::ptr_eq(input.samples.as_ref().unwrap(),&samples));
         assert_eq!(store.gate.reads.load(Ordering::Acquire),0);
     }
@@ -1110,25 +1186,24 @@ pub(crate) mod tests {
     #[test]
     fn paper_tiles_pipeline_to_capacity_and_complete_out_of_order() {
         use std::sync::atomic::AtomicUsize;
-        let (requests,receive)=std::sync::mpsc::sync_channel(2);
         let (send,results)=std::sync::mpsc::sync_channel(2);let ready=Arc::new(AtomicUsize::new(0));
-        let mut queue=queued(requests,results,ready.clone(),Vec::new(),2);
+        let mut queue=queued(results,ready.clone(),Vec::new(),2);let dispatch=queue.pool.dispatch.clone();
         let pixels=Arc::new(vec![73;(PAGE_SIZE*PAGE_SIZE) as usize]);
         let blob=Arc::new(layer_core::raster::TileBlob::encode(layer_core::color::PixelDescriptor::COVERAGE8,&pixels).unwrap());
         assert!(queue.request_paper(blob.clone(),[0,0]));assert!(queue.request_paper(blob.clone(),[1,0]));
         assert!(queue.request_paper(blob.clone(),[0,0]));assert!(!queue.request_paper(blob.clone(),[2,0]));
         for (sequence,coordinate) in [[0,0],[1,0]].into_iter().enumerate() {
-            assert!(matches!(receive.try_recv(),Ok(DecodeJob {sequence:job,request:MipDecodeRequest::Paper {coordinate:at,..},..}) if at==coordinate && job==sequence as u64));
+            assert!(matches!(dispatch.try_take(),Some(DecodeJob {sequence:job,request:MipDecodeRequest::Paper {coordinate:at,..},..}) if at==coordinate && job==sequence as u64));
         }
-        assert!(receive.try_recv().is_err());
+        assert!(dispatch.try_take().is_none());
         send.send((1,PreparedImageWork::Paper {blob:blob.clone(),coordinate:[1,0],pixels:Ok(pixels.clone())})).unwrap();ready.fetch_add(1,Ordering::AcqRel);
-        assert!(matches!(queue.poll(),Some(PreparedImageWork::Paper {coordinate:[1,0],..})));
-        assert!(queue.request_paper(blob.clone(),[0,0]));assert!(receive.try_recv().is_err());
+        assert!(matches!(queue.poll(),Some((PreparedImageWork::Paper {coordinate:[1,0],..},_))));
+        assert!(queue.request_paper(blob.clone(),[0,0]));assert!(dispatch.try_take().is_none());
         assert!(queue.request_paper(blob.clone(),[2,0]));
-        assert!(matches!(receive.try_recv(),Ok(DecodeJob {sequence:2,request:MipDecodeRequest::Paper {coordinate:[2,0],..},..})));
+        assert!(matches!(dispatch.try_take(),Some(DecodeJob {sequence:2,request:MipDecodeRequest::Paper {coordinate:[2,0],..},..})));
         for (sequence,coordinate) in [(2,[2,0]),(0,[0,0])] {
             send.send((sequence,PreparedImageWork::Paper {blob:blob.clone(),coordinate,pixels:Ok(pixels.clone())})).unwrap();ready.fetch_add(1,Ordering::AcqRel);
-            assert!(matches!(queue.poll(),Some(PreparedImageWork::Paper {coordinate:at,..}) if at==coordinate));
+            assert!(matches!(queue.poll(),Some((PreparedImageWork::Paper {coordinate:at,..},_)) if at==coordinate));
         }
         assert!(!queue.pending());
     }
@@ -1138,7 +1213,7 @@ pub(crate) mod tests {
         use std::sync::{Mutex,mpsc,atomic::AtomicUsize};
         use std::time::Duration;
         let cache=Arc::new(layer_core::raster::DecodedTileCache::new(0));
-        let mut queue=MipDecodeQueue::native(cache,RgbSpace::Srgb).unwrap();
+        let mut queue=MipDecodeQueue::native(cache,RgbSpace::Srgb,&Default::default()).unwrap();
         let context=Arc::downgrade(&queue.context);
         let calls=Arc::new(AtomicUsize::new(0));let notified=calls.clone();
         let (wake,awakened)=mpsc::channel();let (release,held)=mpsc::channel();let held=Mutex::new(held);
@@ -1156,7 +1231,7 @@ pub(crate) mod tests {
         let _=release.send(());
         completed.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(ready.unwrap(),1);
-        let PreparedImageWork::Coordinates {destination:received,pixels}=result.unwrap() else {panic!("Coordinate preparation must be queued before notification");};
+        let PreparedImageWork::Coordinates {destination:received,pixels}=result.unwrap().0 else {panic!("Coordinate preparation must be queued before notification");};
         assert!(received.ptr_eq(&destination));
         assert_eq!(pixels.unwrap().as_slice(),[20_i32,-2].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>());
         assert!(!pending);assert!(!still_ready);assert!(queue.poll().is_none());
@@ -1166,13 +1241,13 @@ pub(crate) mod tests {
     #[test]
     fn dropped_preparation_queue_releases_its_wake_and_abandoned_jobs_never_notify() {
         use std::sync::{Mutex,atomic::AtomicUsize};
-        let queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),RgbSpace::Srgb).unwrap();
+        let queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),RgbSpace::Srgb,&Default::default()).unwrap();
         let calls=Arc::new(AtomicUsize::new(0));let notified=calls.clone();
         let callback_owner=Arc::new(());let callback_lifetime=Arc::downgrade(&callback_owner);
         queue.set_wake(Arc::new(move|| {let _=&callback_owner;notified.fetch_add(1,Ordering::Relaxed);}));
         let target=Arc::new(Mutex::new(CoordinateSlot::new(&Default::default())));let ready=queue.ready.clone();
         let input=Arc::new(DecodeInput {samples:None,read:Ok(None)});
-        let job=DecodeJob {sequence:0,context:Arc::downgrade(&queue.context),input:Arc::downgrade(&input),request:MipDecodeRequest::Coordinates(CoordinateRequest {
+        let job=DecodeJob {sequence:0,rank:Default::default(),context:Arc::downgrade(&queue.context),input:Arc::downgrade(&input),request:MipDecodeRequest::Coordinates(CoordinateRequest {
             inverse:[1.,0.,0.,1.,0.,0.],size:[256;2],first:0,count:1,destination:Arc::downgrade(&target)})};
         drop(queue);assert!(callback_lifetime.upgrade().is_none());
         job.run(&mut Decoders::new(),&Weak::new());
@@ -1209,54 +1284,52 @@ pub(crate) mod tests {
         let result=|id,source:&Arc<SourceImage>|PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Native,id,source:source.clone(),coordinate:[0;2],
             pixels:prepare_image_tile(source,[0;2],space,&r.device.source_samples,None)});
         let (send,results)=std::sync::mpsc::sync_channel(2);assert!(send.send((1,result(bid,&b))).is_ok());assert!(send.send((0,result(aid,&a))).is_ok());
-        let (requests,receive)=std::sync::mpsc::sync_channel(2);
-        r.moving_decode=Some((space,queued(requests,results,Arc::new(std::sync::atomic::AtomicUsize::new(2)),
-            vec![Some(DecodeKey::Image(Arc::downgrade(&a),[0;2])),Some(DecodeKey::Image(Arc::downgrade(&b),[0;2]))],2)));
+        let queue=queued(results,Arc::new(std::sync::atomic::AtomicUsize::new(2)),
+            vec![Some(DecodeKey::Image(Arc::downgrade(&a),[0;2])),Some(DecodeKey::Image(Arc::downgrade(&b),[0;2]))],2);
+        let dispatch=queue.pool.dispatch.clone();r.moving_decode=Some((space,queue));
         r.source_receipt=Some(Arc::downgrade(&ra));
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         r.drain_image_decode(&mut encoder).unwrap();assert_eq!(r.source_results.len(),1);assert!(ra.prepared().is_none());
-        assert!(r.request_image_decode(bid,b.clone(),[0;2],crate::residency::Class::Visible).unwrap());assert!(receive.try_recv().is_err());
+        assert!(r.request_image_decode(bid,b.clone(),[0;2],crate::residency::Class::Visible).unwrap());assert!(dispatch.try_take().is_none());
         r.drain_image_decode(&mut encoder).unwrap();assert!(ra.prepared().is_some());assert_eq!(r.source_results.len(),1);
         r.source_receipt=Some(Arc::downgrade(&rb));assert!(r.held_result_ready());assert!(!r.image_decode_waiting());
-        assert!(r.request_image_decode(bid,b.clone(),[0;2],crate::residency::Class::Visible).unwrap());assert!(receive.try_recv().is_err());
+        assert!(r.request_image_decode(bid,b.clone(),[0;2],crate::residency::Class::Visible).unwrap());assert!(dispatch.try_take().is_none());
         r.drain_image_decode(&mut encoder).unwrap();assert!(rb.prepared().is_some());assert!(r.source_results.is_empty());
         assert!(r.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.pending()));
-        r.drain_image_decode(&mut encoder).unwrap();assert!(r.source_results.is_empty());assert!(receive.try_recv().is_err());
+        r.drain_image_decode(&mut encoder).unwrap();assert!(r.source_results.is_empty());assert!(dispatch.try_take().is_none());
         let c=layer_core::color::source::rgba8_source([1;2],|_,_|[0,255,0,255]);
         assert!(r.request_image_decode(bid,c.clone(),[0;2],crate::residency::Class::Visible).unwrap());
-        assert!(matches!(receive.try_recv(),Ok(DecodeJob {request:MipDecodeRequest::Image(request),..}) if Arc::ptr_eq(&request.source,&c)));
+        assert!(matches!(dispatch.try_take(),Some(DecodeJob {request:MipDecodeRequest::Image(request),..}) if Arc::ptr_eq(&request.source,&c)));
         assert!(!encoder.has_work(),"raw receipts must not publish into shared GPU cache slots");
     }
 
     #[cfg(not(target_arch="wasm32"))]
     #[test]
     fn preparation_channel_delivery_precedes_readiness_publication() {
-        let (requests,_)=std::sync::mpsc::sync_channel(1);
         let (sender,results)=std::sync::mpsc::sync_channel(1);
         let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut queue=queued(requests,results,ready.clone(),vec![None],1);
+        let mut queue=queued(results,ready.clone(),vec![None],1);
         let target=Arc::new(std::sync::Mutex::new(CoordinateSlot::new(&Default::default())));
         let destination=Arc::downgrade(&target);
         assert!(sender.send((0,PreparedImageWork::Coordinates {destination:destination.clone(),pixels:Ok(Arc::new(vec![7]))})).is_ok());
         assert!(queue.poll().is_none());
         assert!(!queue.ready());assert!(queue.pending());
         ready.fetch_add(1,Ordering::AcqRel);
-        let PreparedImageWork::Coordinates {destination:completed,pixels}=queue.poll().unwrap() else {panic!("Prepared coordinates retain their identity");};
+        let PreparedImageWork::Coordinates {destination:completed,pixels}=queue.poll().unwrap().0 else {panic!("Prepared coordinates retain their identity");};
         assert!(completed.ptr_eq(&destination));assert_eq!(pixels.unwrap().as_slice(),[7]);
         assert!(!queue.ready());assert!(!queue.pending());
     }
     #[cfg(not(target_arch="wasm32"))]
     #[test]
     fn out_of_order_keyless_results_complete_the_requests_that_produced_them() {
-        let mut queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),RgbSpace::Srgb).unwrap();
-        let (requests,receive)=std::sync::mpsc::sync_channel(3);
-        queue.pool=Arc::new(DecodePool {requests,capacity:3,epoch:Default::default(),capacity_waiters:Default::default(),resumed:Default::default()});
+        let mut queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),RgbSpace::Srgb,&Default::default()).unwrap();
+        queue.pool=idle_pool(3);
         let targets:Vec<_>=(0..3).map(|_|Arc::new(std::sync::Mutex::new(CoordinateSlot::new(&Default::default())))).collect();
         for (first,target) in targets.iter().enumerate() {assert!(queue.request_coordinates([1.,0.,0.,1.,0.,0.],[256;2],first as u32,1,Arc::downgrade(target)));}
-        let jobs:Vec<_>=receive.try_iter().collect();assert_eq!(jobs.len(),3);
+        let jobs:Vec<_>=std::iter::from_fn(||queue.pool.dispatch.try_take()).collect();assert_eq!(jobs.len(),3);
         for (first,job) in jobs.into_iter().enumerate().rev() {
             job.run(&mut Decoders::new(),&Weak::new());
-            let Some(PreparedImageWork::Coordinates {destination,pixels})=queue.poll() else {panic!("request {first} must deliver its own result");};
+            let Some((PreparedImageWork::Coordinates {destination,pixels},_))=queue.poll() else {panic!("request {first} must deliver its own result");};
             assert!(destination.ptr_eq(&Arc::downgrade(&targets[first])));
             assert_eq!(pixels.unwrap().as_slice(),[first as i32,0].into_iter().flat_map(i32::to_le_bytes).collect::<Vec<_>>());
         }
@@ -1269,17 +1342,17 @@ pub(crate) mod tests {
             let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
             let mut results=Vec::new();
             while results.len()<count {
-                if let Some(result)=queue.poll() {results.push(result);continue;}
+                if let Some((result,_))=queue.poll() {results.push(result);continue;}
                 assert!(std::time::Instant::now()<deadline,"prepared work must complete");
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             results
         }
         let cache=Arc::new(layer_core::raster::DecodedTileCache::new(64*1024*1024));
-        let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb).unwrap();
-        let source=layer_core::color::source::rgba8_source([2048;2],|x,y|[(x%256) as u8,(y%256) as u8,0,255]);
+        let mut queue=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb,&Default::default()).unwrap();
+        let source=layer_core::color::source::rgba8_source([4096,2304],|x,y|[(x%256) as u8,(y%256) as u8,0,255]);
         let id=PortableId::random();
-        let tiles:Vec<[u32;2]>=(0..64).map(|index|[index%8,index/8]).collect();
+        let tiles:Vec<[u32;2]>=(0..144).map(|index|[index%16,index/16]).collect();
         let mut accepted=Vec::new();
         for tile in &tiles {
             if !queue.request(id,source.clone(),*tile) {break;}
@@ -1287,6 +1360,7 @@ pub(crate) mod tests {
             accepted.push(*tile);
         }
         assert!(!accepted.is_empty() && accepted.len()<tiles.len(),"outstanding preparation is bounded: {}",accepted.len());
+        assert!(queue.working_bytes()<=queue.working_limit(),"{} admitted bytes exceed the working set",queue.working_bytes());
         assert_eq!(queue.outstanding.len(),accepted.len());
         let mut prepared:Vec<_>=drain(&mut queue,accepted.len()).into_iter().map(|result|{
             let PreparedImageWork::Image(tile)=result else {panic!("Image request must return image samples");};
@@ -1305,8 +1379,8 @@ pub(crate) mod tests {
             (hdr,[-1f32,2.,0.25,0.5].into_iter().flat_map(f32::to_le_bytes).collect(),[-1f32,2.,0.25,0.5].into_iter().flat_map(f32::to_le_bytes).collect()),
         ] {
             let blob=Arc::new(layer_core::raster::TileBlob::encode(descriptor,&input.repeat((PAGE_SIZE*PAGE_SIZE) as usize)).unwrap());
-            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3,false,crate::residency::Class::Visible));
-            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3,false,crate::residency::Class::Visible));
+            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3,false,crate::residency::Class::Visible,false));
+            assert!(queue.request_raster(blob.clone(),RgbSpace::Srgb,RgbSpace::DisplayP3,false,crate::residency::Class::Visible,false));
             assert_eq!(queue.outstanding.len(),1);
             let PreparedImageWork::Raster(tile)=drain(&mut queue,1).pop().unwrap() else {panic!("Raster preparation returns native samples");};
             assert!(Arc::ptr_eq(&tile.blob,&blob));assert_eq!(tile.space,RgbSpace::Srgb);assert_eq!(tile.destination,RgbSpace::DisplayP3);

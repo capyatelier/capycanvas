@@ -2729,8 +2729,9 @@ fn entering_visible_pages_decode_as_visible_work_while_the_view_moves() {
     frame.view.document_to_surface[4] = -6144.;
     crate::test_support::submit_ready(&mut r, frame).unwrap();
     let mut classes = r.moving_decode.as_ref().unwrap().1.outstanding_classes();
-    classes.extend(r.source_results.iter().map(|(_, result)| result.class()));
-    assert!(classes.contains(&Class::Visible) && !classes.contains(&Class::Refinement), "{classes:?}");
+    classes.extend(r.source_results.iter().map(|(_, result, _)| result.class()));
+    let composed = !r.metrics.frame_composited_pages.is_empty();
+    assert!((classes.contains(&Class::Visible) || composed) && !classes.contains(&Class::Refinement), "entering pages neither composed nor decode as visible work: {classes:?}");
 }
 
 fn stroke_composites(node: &super::graph::Node, target: SourceTarget) -> Option<usize> {

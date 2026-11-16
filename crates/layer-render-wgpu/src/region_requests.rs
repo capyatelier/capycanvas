@@ -803,7 +803,7 @@ impl WgpuRasterizer {
     pub(super) fn prefetch_regions(&mut self,frame:&Arc<artwork::Frame>,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError> {
         let Some(mut regions)=self.regions.take() else {return Ok(());};
         let old=self.artwork_frame.replace(frame.clone());
-        let result=self.drain_image_decodes(encoder).and_then(|()|regions.prewarm(self,encoder));
+        let result=regions.prewarm(self,encoder);
         self.artwork_frame=old;self.keep_regions(regions);result
     }
     pub(super) fn region_chunks_submitted(&mut self) {

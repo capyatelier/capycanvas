@@ -145,7 +145,9 @@ fn deferred_fine_objects_keep_committed_coarse_pages_without_backup() {
 
 #[test]
 fn reduced_photo_larger_than_decoded_cache_publishes_only_after_its_exact_cells_finish() {
-    let doc = photo(0);
+    let mut doc = photo(0);
+    let (ink, copy) = (doc.scene().order()[0], copy_paint(&mut doc, 0));
+    set_root_entries(&mut doc, vec![ink, copy]);
     let mut previous = doc.clone();
     paint_mut(&mut previous, 0).base = Some(PaintBase::new(rgba8_source([2048; 2], |x, y| color(x, y, 27)).into()));
     let mut r = crate::memory::memory_tests::renderer_for_restore(&previous);

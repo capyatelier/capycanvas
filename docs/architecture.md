@@ -39,11 +39,14 @@ its original bytes and any independently verified preview. See the
 
 Interactive exact image preparation decodes parked samples on workers. Native
 image, raster and coordinate preparation shares one bounded pool across windows
-and renderers: at most three workers and eighteen queued jobs. Dropping a queue
-invalidates its queued jobs and discards any result already in progress; workers
-finish at most the pool's active jobs. Each queue retains its existing
-outstanding/result limit and ordered receipt allowance. Worker decoder caches
-include the destination color space.
+and renderers: at most three workers, which take the queued job of the most
+urgent class nearest the view centre first. Each queue admits a decode while its
+decoded-but-unconsumed bytes stay within the workers plus one idle frame's tiles
+of native 8-bit samples, charged to the renderer's RAM, plus one request's room
+for an ordered receipt. Frames take every ready result before the display walk,
+so the walk refills the room it frees. Dropping a queue invalidates its queued
+jobs and discards any result already in progress; workers finish at most the
+pool's active jobs. Worker decoder caches include the destination color space.
 Raster restoration prepares private color, coverage and wetness pages before
 publishing them together. Source preparation includes transform and retouch
 footprints, displaced Liquify inputs and brush neighborhoods before authored

@@ -16,13 +16,13 @@ fn parked(fail:bool)->(Arc<SourceImage>,Arc<ReadGate>,GatedStore) {
     (source,gate,store)
 }
 fn queue(pool:&Arc<DecodePool>,destination:RgbSpace)->MipDecodeQueue {
-    let mut queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination).unwrap();
+    let mut queue=MipDecodeQueue::native(Arc::new(layer_core::raster::DecodedTileCache::new(0)),destination,&Default::default()).unwrap();
     queue.pool=pool.clone();queue
 }
 fn result(queue:&mut MipDecodeQueue)->PreparedImageWork {
     let deadline=Instant::now()+DEADLINE;
     loop {
-        if let Some(result)=queue.poll() {return result;}
+        if let Some((result,_))=queue.poll() {return result;}
         assert!(Instant::now()<deadline,"accepted decode did not complete");std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -38,13 +38,13 @@ fn samples(pixels:&crate::scene::sources::PreparedSourcePixels)->&[u8] {
 #[test]
 fn queue_churn_keeps_one_shared_pool_and_does_not_retain_idle_contexts() {
     let cache=Arc::new(layer_core::raster::DecodedTileCache::new(0));
-    let first=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb).unwrap();let pool=first.pool.clone();
-    assert!((1..=3).contains(&(pool.capacity/6)));
+    let first=MipDecodeQueue::native(cache.clone(),RgbSpace::Srgb,&Default::default()).unwrap();let pool=first.pool.clone();
+    assert_eq!(pool.capacity,decode_workers()+crate::scene::IDLE_FRAME_TILES);assert!((1..=3).contains(&decode_workers()));
     let epoch=pool.epoch.load(Ordering::Acquire);
     for index in 0..128 {
-        let queue=MipDecodeQueue::native(cache.clone(),if index%2==0 {RgbSpace::Srgb}else {RgbSpace::DisplayP3}).unwrap();
-        assert!(Arc::ptr_eq(&queue.pool,&pool));assert_eq!(queue.capacity,pool.capacity);
-        assert!(queue.capacity<=18);assert!(!queue.pending());assert!(!queue.ready());
+        let queue=MipDecodeQueue::native(cache.clone(),if index%2==0 {RgbSpace::Srgb}else {RgbSpace::DisplayP3},&Default::default()).unwrap();
+        assert!(Arc::ptr_eq(&queue.pool,&pool));assert_eq!(queue.working_limit(),pool.working_limit());
+        assert!(queue.has_room());assert!(!queue.pending());assert!(!queue.ready());
         let context=Arc::downgrade(&queue.context);drop(queue);assert!(context.upgrade().is_none());
     }
     assert_eq!(pool.epoch.load(Ordering::Acquire),epoch);assert_eq!(Arc::strong_count(&cache),2);
@@ -88,21 +88,21 @@ fn full_pool_retries_on_its_capacity_epoch_and_drops_cancelled_queued_and_active
 #[test]
 fn unpolled_results_stay_queue_local_and_do_not_block_another_queue() {
     let pool=DecodePool::start(1).unwrap();let mut full=queue(&pool,RgbSpace::Srgb);let mut other=queue(&pool,RgbSpace::DisplayP3);
-    let inputs:Vec<_>=(0..full.capacity).map(|i|(PortableId::random(),layer_core::color::source::rgba8_source([1;2],|_,_|[i as u8,31,19,255]))).collect();
+    let inputs:Vec<_>=(0..pool.capacity).map(|i|(PortableId::random(),layer_core::color::source::rgba8_source([1;2],|_,_|[i as u8,31,19,255]))).collect();
     let deadline=Instant::now()+DEADLINE;
     for (id,source) in &inputs {
         while !full.request(*id,source.clone(),[0;2]) {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
         assert!(full.request(*id,source.clone(),[0;2]));
     }
-    while full.ready.load(Ordering::Acquire)!=full.capacity {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
-    assert!(!full.accepts_held(0,false));assert!(full.accepts_held(0,true));
+    while full.ready.load(Ordering::Acquire)!=pool.capacity {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
+    assert!(!full.has_room());assert!(full.admit(TILE_BYTES,false).is_none());assert!(full.admit(TILE_BYTES,true).is_some());
     let source=layer_core::color::source::rgba8_source([1;2],|_,_|[91,82,73,255]);let id=PortableId::random();
     assert!(other.request(id,source.clone(),[0;2]));let (actual_id,actual_source,pixels)=image_pixels(result(&mut other));
     assert_eq!(actual_id,id);assert!(Arc::ptr_eq(&actual_source,&source));assert_eq!(&samples(&pixels)[..4],&[91,82,73,255]);
-    assert_eq!(full.ready.load(Ordering::Acquire),full.capacity);assert!(!other.pending());assert!(!other.ready());
+    assert_eq!(full.ready.load(Ordering::Acquire),pool.capacity);assert!(!other.pending());assert!(!other.ready());
     let mut seen=std::collections::BTreeSet::new();
-    for remaining in (0..full.capacity).rev() {
-        let (id,source,pixels)=image_pixels(full.poll().unwrap());let index=inputs.iter().position(|(expected,_)|*expected==id).unwrap();
+    for remaining in (0..pool.capacity).rev() {
+        let (id,source,pixels)=image_pixels(full.poll().unwrap().0);let index=inputs.iter().position(|(expected,_)|*expected==id).unwrap();
         assert!(seen.insert(id));assert!(Arc::ptr_eq(&source,&inputs[index].1));assert_eq!(&samples(&pixels)[..4],&[index as u8,31,19,255]);
         assert_eq!(full.ready.load(Ordering::Acquire),remaining);
     }
@@ -127,4 +127,27 @@ fn shared_workers_cache_embedded_profile_decoders_by_destination_space() {
         assert_eq!(actual_id,id);assert!(Arc::ptr_eq(&actual_source,&source));assert_eq!(samples(&pixels),samples(&references[index]));
         assert!(!queue.pending());assert!(!queue.ready());
     }
+}
+
+#[test]
+fn after_a_pan_the_entering_decode_starts_before_stale_queued_work() {
+    let pool=DecodePool::start(1).unwrap();
+    let mut blocker=queue(&pool,RgbSpace::Srgb);let mut panned=queue(&pool,RgbSpace::Srgb);
+    let (entered,seen)=std::sync::mpsc::channel();let (release,held)=std::sync::mpsc::channel();let held=Mutex::new(held);
+    blocker.set_wake(Arc::new(move || {let _=entered.send(());let _=held.lock().unwrap().recv();}));
+    let tile=|value:u8|(PortableId::random(),layer_core::color::source::rgba8_source([1;2],move|_,_|[value,0,0,255]));
+    let (id,source)=tile(0);assert!(blocker.request(id,source,[0;2]));
+    seen.recv_timeout(DEADLINE).expect("the only worker holds at its notification");
+    let view=|x:f32|layer_render::ViewState {width_px:PAGE_SIZE,height_px:PAGE_SIZE,document_to_surface:[1.,0.,0.,1.,-x,0.]};
+    panned.prioritize(view(0.),PixelRect::new(0,0,PAGE_SIZE,PAGE_SIZE));
+    let stale:Vec<_>=(1..=4).map(tile).collect();
+    for (id,source) in &stale {assert!(panned.request(*id,source.clone(),[0;2]));}
+    let far=8*PAGE_SIZE;
+    panned.prioritize(view(far as f32),PixelRect::new(far,0,far+PAGE_SIZE,PAGE_SIZE));
+    let (entering,source)=tile(9);assert!(panned.request(entering,source,[0;2]));
+    release.send(()).unwrap();
+    let order:Vec<_>=(0..=stale.len()).map(|_|image_pixels(result(&mut panned)).0).collect();
+    let position=order.iter().position(|id|*id==entering).unwrap();
+    let workers=pool.capacity-crate::scene::IDLE_FRAME_TILES;
+    assert!(position<workers,"the entering decode started after {position} stale jobs; the pool has {workers} workers");
 }

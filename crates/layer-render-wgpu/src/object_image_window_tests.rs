@@ -1037,16 +1037,16 @@ fn held_native_window_samples_do_not_starve_exact_queries_without_a_frame() {
     r.moving_images=images;
     r.source_results.push_back((r.device.working_space(),PreparedImageWork::Image(PreparedMipTile {
         class:crate::residency::Class::Visible,use_:SourceUse::Native,id:request.id,source:request.source.clone(),coordinate:[0;2],pixels:Ok(pixels),
-    })));
+    }),r.scene_tiers.ram.charge(0)));
     assert!(!r.held_result_ready(),"a pending window owns its samples until its budgeted build step");
-    let (requests,receive)=std::sync::mpsc::sync_channel(2);
     let (send,results)=std::sync::mpsc::sync_channel(2);
     let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    r.moving_decode=Some((r.device.working_space(),queued(requests,results,ready.clone(),Vec::new(),2)));
+    let queue=queued(results,ready.clone(),Vec::new(),2);let dispatch=queue.pool.dispatch.clone();
+    r.moving_decode=Some((r.device.working_space(),queue));
     r.set_preparation_wake(Arc::new(|| {}));
     let id=PortableId::random();
     assert!(r.request_exact_image_decode(id,exact.clone(),[0;2],crate::residency::Class::Visible).unwrap());
-    let Ok(DecodeJob {sequence,request:MipDecodeRequest::Image(_),..})=receive.try_recv() else {panic!("the exact request reaches a worker");};
+    let Some(DecodeJob {sequence,request:MipDecodeRequest::Image(_),..})=dispatch.try_take() else {panic!("the exact request reaches a worker");};
     assert!(r.image_decode_waiting());
     assert!(!r.held_result_ready());
     assert!(r.moving_images.pending());

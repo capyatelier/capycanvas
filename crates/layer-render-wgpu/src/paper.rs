@@ -288,6 +288,7 @@ pub(super) struct Papers {
     clock: u64,
     submitted: Arc<AtomicBool>,
     decode: Option<object_image_mips::MipDecodeQueue>,
+    ram: Arc<crate::residency::Tier>,
     #[cfg(not(target_arch="wasm32"))]
     wake: Option<Arc<dyn Fn()+Send+Sync>>,
     #[cfg(target_arch="wasm32")]
@@ -328,9 +329,9 @@ impl Recipes {
     }
 }
 impl Papers {
-    pub fn from_recipes(recipes: Arc<Recipes>) -> Self {
+    pub fn from_recipes(recipes: Arc<Recipes>, ram: &Arc<crate::residency::Tier>) -> Self {
         Self { recipes, programs: Vec::new(), slope_programs: None, bakes: Vec::new(), clock: 0, submitted: Arc::new(AtomicBool::new(true)),
-            decode:None,wake:Default::default(),
+            decode:None,ram:ram.clone(),wake:Default::default(),
             #[cfg(target_arch="wasm32")] decoder:None,
             #[cfg(target_arch="wasm32")] decoded:Default::default(),
         }
@@ -373,7 +374,7 @@ impl Papers {
     fn advance_images(&mut self,device:&PipelineDevice,queue:&wgpu::Queue,held:Option<&TextureSource>)->Result<(),GpuRasterError> {
         #[cfg(target_arch="wasm32")]
         if let Some((sequence,result))=self.decoded.borrow_mut().take() && let Some(decode)=&mut self.decode {decode.complete_external(sequence,result);}
-        while let Some(prepared)=self.decode.as_mut().and_then(|decode|decode.poll()) {
+        while let Some((prepared,_))=self.decode.as_mut().and_then(|decode|decode.poll()) {
             let object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels}=prepared else {return Err(GpuRasterError::InvalidImage);};
             for bake in &mut self.bakes {
                 let Some(source)=Self::image_source(bake) else {continue;};
@@ -396,7 +397,7 @@ impl Papers {
             if held==Some(&bake.surface.texture) {continue;}
             let Some(source)=Self::image_source(bake) else {continue;};
             if self.decode.is_none() {
-                let decode=object_image_mips::MipDecodeQueue::new(device)?;
+                let decode=object_image_mips::MipDecodeQueue::new(device,&self.ram)?;
                 #[cfg(not(target_arch="wasm32"))]
                 if let Some(wake)=&self.wake {decode.set_wake(wake.clone());}
                 self.decode=Some(decode);
@@ -790,7 +791,7 @@ mod tests {
                 let target=Arc::new(std::sync::Mutex::new(object_image_mips::CoordinateSlot::new(&Default::default())));
                 renderer.source_results.push_back((renderer.device.working_space(),object_image_mips::PreparedImageWork::Coordinates {
                     destination:Arc::downgrade(&target),pixels:Ok(Arc::new(vec![0;8])),
-                }));
+                },renderer.scene_tiers.ram.charge(0)));
                 assert!(!renderer.image_decode_waiting(),"ready source work must run while paper reads are pending");
                 renderer.source_results.clear();
             }

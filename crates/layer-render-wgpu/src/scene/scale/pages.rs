@@ -3260,7 +3260,7 @@ pub(super) mod query_tests {
         cache.prepare_graph(&r,frame,&scene).unwrap();
         let slot=Arc::new(std::sync::Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
         let decoded=|r:&mut WgpuRasterizer|r.source_results.push_back((r.device.working_space(),crate::object_image_mips::PreparedImageWork::Coordinates {
-            destination:Arc::downgrade(&slot),pixels:Ok(Arc::new(vec![0;8]))}));
+            destination:Arc::downgrade(&slot),pixels:Ok(Arc::new(vec![0;8]))},r.scene_tiers.ram.charge(0)));
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         decoded(&mut r);
         cache.block(r.arrival_token(),cache.plan.bounds,Some(Input::Residency));

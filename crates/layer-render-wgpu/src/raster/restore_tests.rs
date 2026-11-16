@@ -110,7 +110,7 @@ fn ready_restore_requires_consumed_preparation_progress_between_iterations() {
         crate::object_image_mips::PreparedRasterTile {
             class: crate::residency::Class::Authored, blob, space: color.space, destination: color.space, scalar: false, pixels,
         },
-    )));
+    ), r.scene_tiers.ram.charge(0)));
     assert!(matches!(r.restore_raster(source, &first, &second), Err(GpuRasterError::NotReady)));
     assert!(r.held_result_ready());
     assert!(r.raster_preparation_ready(previous));

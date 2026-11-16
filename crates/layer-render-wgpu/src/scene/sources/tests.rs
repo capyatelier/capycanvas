@@ -1464,13 +1464,13 @@ fn decode_results_keep_their_requester_class_and_navigator_results_cannot_take_t
         let pixels = crate::prepare_image_tile(&source, [x, 0], space, &r.device.source_samples, None);
         r.source_results.push_back((space, PreparedImageWork::Image(PreparedMipTile {
             class, use_: SourceUse::Native, id: layer_core::authored::PortableId::random(), source: source.clone(), coordinate: [x, 0], pixels,
-        })));
+        }), r.scene_tiers.ram.charge(0)));
     }
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let upload = r.drain_image_decode(&mut encoder).unwrap().expect("a visible result may use the floor");
     assert_eq!((upload.prepared.class, upload.prepared.coordinate), (Class::Visible, [1, 0]));
     assert!(r.drain_image_decode(&mut encoder).unwrap().is_none());
-    assert!(matches!(r.source_results.iter().map(|(_, held)| held.class()).collect::<Vec<_>>()[..], [Class::Navigator]));
+    assert!(matches!(r.source_results.iter().map(|(_, held, _)| held.class()).collect::<Vec<_>>()[..], [Class::Navigator]));
     Scene::submit_chunk(&mut r, &mut encoder, "test floor").unwrap();
 }
 

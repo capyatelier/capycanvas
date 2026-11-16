@@ -69,6 +69,8 @@ pub(crate) mod scale;
 pub(crate) use scale::{Capture,Declared,Input,SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 
 const FILL_LINES_PIPELINE:usize=9;
+#[cfg(not(target_arch="wasm32"))]
+pub(crate) const IDLE_FRAME_TILES:usize=(object_cache::IDLE_TAPS/object_cache::PASS_TAPS) as usize;
 
 use crate::residency::Class;
 thread_local! {static ATTEMPT_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };}
@@ -2057,6 +2059,7 @@ impl Scene {
         self.effect_passes = 0;
         self.image_window = Some(window);
         self.image_output = Some(output);
+        if let Some((_,queue))=&mut r.moving_decode {queue.prioritize(packet.view,output);}
         self.effects.retain(packet.scene);
         let result = if raw {
             self.retire_images(|scene|scene.images=images::ImageStages::charged(&scene.tiers.gpu,&scene.tiers.ram));
