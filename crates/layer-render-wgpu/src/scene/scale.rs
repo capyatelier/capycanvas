@@ -1090,7 +1090,7 @@ impl Cache {
                 }
                 let requests=self.region_sources(scene,r,packet,region,tiled);
                 let mut unpublished=false;
-                for (id,request) in requests.iter().cloned() {unpublished|=self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?;}
+                for (id,request) in requests.iter().cloned() {unpublished|=self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?.unpublished;}
                 if !requests.iter().all(|(id,request)|self.source_ready(scene,r,*id,request)) {
                     #[cfg(test)] crate::test_support::PassCounts {destination_units:1,..Default::default()}.record();
                     blocks.push((region,waiting_input(scene,r,unpublished)));continue;

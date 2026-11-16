@@ -17,9 +17,7 @@ impl Eq for Entry {}
 #[derive(Default)]
 struct State { offered: Option<u64>, bytes: u64, evicted: bool, demand: Demand, guard: Option<Weak<dyn Send + Sync>> }
 impl State {
-    fn protected(&self, epoch: u64, class: Class) -> bool {
-        self.demand.current(epoch, class) || self.guard.as_ref().is_some_and(|guard| guard.strong_count() != 0)
-    }
+    fn guarded(&self) -> bool { self.guard.as_ref().is_some_and(|guard| guard.strong_count() != 0) }
 }
 pub(crate) struct Lease { heap: Arc<Heap>, notice: Arc<AtomicBool>, state: Mutex<State> }
 
@@ -30,13 +28,15 @@ impl Heap {
     pub(crate) fn begin_frame(&self) { self.epoch.fetch_add(1, SeqCst); }
     pub(crate) fn epoch(&self) -> u64 { self.epoch.load(SeqCst) }
     pub(crate) fn pending(&self) -> u64 { self.pending.load(SeqCst) }
-    pub(crate) fn evict(&self, bytes: u64, class: Class) -> u64 {
+    pub(crate) fn evict(&self, bytes: u64, class: Class) -> u64 { self.mark(bytes, |demand, epoch| demand.current(epoch, class) || demand.outranks(epoch, class)) }
+    pub(crate) fn reclaim(&self, bytes: u64) -> u64 { self.mark(bytes, |demand, epoch| demand.current(epoch, Class::Fallback)) }
+    fn mark(&self, bytes: u64, protected: impl Fn(Demand, u64) -> bool) -> u64 {
         let wanted = bytes.saturating_sub(self.pending());
         let (epoch, mut queue, mut marked, mut kept, mut seen) = (self.epoch(), self.queue.lock().unwrap(), 0, Vec::new(), Vec::new());
         while marked < wanted && let Some(entry) = queue.entries.pop() {
             let Some(lease) = entry.lease.upgrade() else { continue; };
             let mut state = lease.state.lock().unwrap();
-            if state.offered == Some(entry.sequence) && state.protected(epoch, class) { kept.push(entry); }
+            if state.offered == Some(entry.sequence) && (protected(state.demand, epoch) || state.guarded()) { kept.push(entry); }
             else if state.offered == Some(entry.sequence) {
                 (state.offered, state.evicted) = (None, true);
                 queue.live -= 1;
@@ -155,14 +155,16 @@ mod tests {
         assert!(!leases[0].evicted());
     }
     #[test]
-    fn a_stamp_from_an_earlier_frame_does_not_protect() {
+    fn an_earlier_frames_stamp_yields_to_its_own_class_and_grant_cuts_but_not_to_refinement() {
         let (heap, notice) = (Arc::new(Heap::default()), Arc::new(AtomicBool::new(false)));
-        let leases = leases(&heap, &notice, &[(4, 0), (4, 0)]);
+        let leases = leases(&heap, &notice, &[(4, 0), (4, 0), (4, 0)]);
         leases.iter().for_each(|lease| lease.stamp(Class::Visible));
         heap.begin_frame();
         leases[0].stamp(Class::Visible);
-        assert_eq!(heap.evict(8, Class::Fallback), 4);
-        assert!(!leases[0].evicted() && leases[1].evicted());
+        assert_eq!(heap.evict(12, Class::Refinement), 0, "refinement never takes what required work last used");
+        assert_eq!(heap.evict(4, Class::Visible), 4);
+        assert_eq!(heap.reclaim(8), 4, "a grant cut takes what no class used this frame");
+        assert_eq!(leases.iter().map(|lease| lease.evicted()).collect::<Vec<_>>(), [false, true, true]);
     }
     #[test]
     fn repeated_use_keeps_the_heap_within_four_times_its_live_leases() {

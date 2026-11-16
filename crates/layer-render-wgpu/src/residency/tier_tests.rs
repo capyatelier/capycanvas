@@ -165,3 +165,40 @@ fn consuming_a_child_reservation_never_charges_its_parent_twice() {
     assert_eq!((parent.used(),child.used()),(6,6));
     drop(allocation);assert_eq!(parent.used(),0);
 }
+
+#[test]
+fn seeded_optional_admissions_never_evict_an_entry_a_higher_class_used_this_frame_or_last() {
+    const CLASSES: [Class; 6] = [Class::Authored, Class::Visible, Class::Fallback, Class::Navigator, Class::Prefetch, Class::Refinement];
+    let tier = tier(64 << 10, 8 << 10);
+    let notice = Arc::new(AtomicBool::new(false));
+    let mut entries: Vec<(Arc<crate::residency::Lease>, Charge, Vec<(u64, Class)>)> = Vec::new();
+    let (mut seed, mut evicted) = (0x9e37_79b9_7f4a_7c15u64, 0);
+    for _ in 0..4000 {
+        tier.heap().begin_frame();
+        let epoch = tier.heap().epoch();
+        for _ in 0..8 {
+            let roll = next(&mut seed);
+            let class = CLASSES[(roll % 6) as usize];
+            if (roll >> 8) & 1 == 0 && !entries.is_empty() {
+                let index = (roll >> 16) as usize % entries.len();
+                let (lease, charge, uses) = &mut entries[index];
+                lease.stamp(class);lease.offer(charge.bytes(), roll >> 40);uses.push((epoch, class));
+                continue;
+            }
+            let bytes = 1 + (roll >> 24) % (4 << 10);
+            if let Ok(reservation) = tier.admit(class, bytes) {
+                let lease = tier.heap().lease(&notice);
+                lease.stamp(class);lease.offer(bytes, roll >> 40);
+                entries.push((lease, reservation.charge(bytes), vec![(epoch, class)]));
+            }
+            entries.retain(|(lease, _, uses)| {
+                if !lease.evicted() { return true; }
+                let window = if class.floor_reserved() { epoch } else { epoch - 1 };
+                assert!(!uses.iter().any(|&(at, used)| at >= window && used < class), "a {class:?} admission at epoch {epoch} evicted an entry used {uses:?}");
+                evicted += 1;
+                false
+            });
+        }
+    }
+    assert!(evicted > 1000, "the run evicted only {evicted} entries");
+}

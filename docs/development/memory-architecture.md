@@ -91,7 +91,11 @@ exact refinement; the `Disk`/`External` backings; OPFS storage on the web.
 
 Every derived and authored copy in RAM or VRAM belongs to one class. Eviction
 takes from the lowest class first and, within it, by the lowest
-`recent use × refetch cost ÷ bytes`.
+`recent use × refetch cost ÷ bytes`. Optional retention yields to any class.
+Otherwise optional work (the Navigator, prefetch and refinement) never evicts
+what a higher class used this frame or the last, and refinement never evicts
+what visible or authored work last used; optional work that does not fit is
+refused and waits for a release instead of retrying every frame.
 
 | Class | What | Where | Leaves when |
 | --- | --- | --- | --- |

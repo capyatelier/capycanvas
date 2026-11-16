@@ -35,7 +35,7 @@ impl Tier {
     pub(crate) fn within(parent: &Arc<Self>) -> Arc<Self> { Arc::new(Self { parent: Some(parent.clone()), limit: AtomicU64::new(u64::MAX), heap: parent.heap.clone(), ..Default::default() }) }
     pub(crate) fn heap(&self) -> &Arc<super::Heap> { &self.heap }
     fn root_used(&self) -> u64 { self.parent.as_ref().map_or_else(|| self.used(), |parent| parent.root_used()) }
-    fn root_yielding(&self) -> u64 { self.parent.as_ref().map_or_else(|| self.yielding(), |parent| parent.root_yielding()) }
+    fn root_evictable(&self, class: Class) -> u64 { self.parent.as_ref().map_or_else(|| self.evictable(class), |parent| parent.root_evictable(class)) }
     pub(crate) fn yielding(&self) -> u64 { self.yielding.load(SeqCst) }
     fn offer(&self, bytes: u64) {
         self.yielding.fetch_add(bytes, SeqCst);
@@ -94,6 +94,10 @@ impl Tier {
         bytes == 0 || used.checked_add(bytes).is_some_and(|used| used <= self.available(class))
     }
     fn fits(&self, class: Class, bytes: u64) -> bool { self.fits_after(self.used(), class, bytes) }
+    fn evictable(&self, class: Class) -> u64 { if class == Class::Refinement { 0 } else { self.yielding() } }
+    fn fits_through(&self, class: Class, bytes: u64) -> bool {
+        self.fits_after(self.used().saturating_sub(self.evictable(class)), class, bytes) && self.parent.as_ref().is_none_or(|parent| parent.fits_through(class, bytes))
+    }
     pub(crate) fn charge(self: &Arc<Self>, bytes: u64) -> Charge {
         self.add(bytes);
         Charge { tier: self.clone(), bytes }
@@ -186,8 +190,8 @@ impl Blocked {
     pub(crate) fn alone(self) -> Self { Self { ahead: Default::default(), ..self } }
     pub(crate) fn fits(&self) -> bool {
         let bytes = self.need();
-        self.tier.fits_after(self.tier.used().saturating_sub(self.tier.yielding()), self.class, bytes)
-            && self.ledger.as_ref().is_none_or(|ledger| ledger.fits_working_through(self.tier.root_used().saturating_sub(self.tier.root_yielding()).saturating_add(bytes)))
+        self.tier.fits_through(self.class, bytes)
+            && self.ledger.as_ref().is_none_or(|ledger| ledger.fits_working_through(self.tier.root_used().saturating_sub(self.tier.root_evictable(self.class)).saturating_add(bytes)))
     }
     pub(crate) fn need(&self) -> u64 { self.bytes.saturating_add(self.ahead.load(SeqCst)) }
     pub(crate) fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.ahead, &other.ahead) }

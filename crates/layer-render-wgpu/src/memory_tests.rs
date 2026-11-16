@@ -1582,10 +1582,12 @@ fn demand_the_first_decode_above_more_recent_lower_class_ones(r: &mut WgpuRaster
     source: &Arc<layer_core::color::source::SourceImage>, tiles: u32) {
     r.begin_frame_memory(frame);
     for x in 0..tiles { decode_at(r, source, x, crate::residency::Class::Visible); }
-    r.end_frame_memory();
-    r.begin_frame_memory(frame);
-    decode_at(r, source, 0, crate::residency::Class::Visible);
-    for x in 1..tiles { decode_at(r, source, x, crate::residency::Class::Refinement); }
+    for _ in 0..2 {
+        r.end_frame_memory();
+        r.begin_frame_memory(frame);
+        decode_at(r, source, 0, crate::residency::Class::Visible);
+        for x in 1..tiles { decode_at(r, source, x, crate::residency::Class::Refinement); }
+    }
     assert!((0..tiles).all(|x| resident(r, source, x)), "the fixture holds every decode before the grant changes");
 }
 

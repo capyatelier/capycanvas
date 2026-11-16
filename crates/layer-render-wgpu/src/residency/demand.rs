@@ -1,16 +1,28 @@
 use super::Class;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Demand(Option<(u64, Class)>);
+pub(crate) struct Demand(Option<(u64, Class, Class)>);
 impl Demand {
     pub(crate) fn stamp(&mut self, epoch: u64, class: Class) {
-        self.0 = Some((epoch, self.0.filter(|(stamped, _)| *stamped == epoch).map_or(class, |(_, demanded)| demanded.min(class))));
+        let (latest, window) = match self.0 {
+            Some((at, latest, window)) if at == epoch => (latest.min(class), window.min(class)),
+            Some((at, latest, _)) if at.saturating_add(1) == epoch => (class, latest.min(class)),
+            _ => (class, class),
+        };
+        self.0 = Some((epoch, latest, window));
+    }
+    fn recent(self, epoch: u64) -> Option<Class> {
+        self.0.and_then(|(at, latest, window)| if at == epoch { Some(window) } else if at.saturating_add(1) == epoch { Some(latest) } else { None })
     }
     pub(crate) fn protects(self, epoch: u64, class: Class) -> bool {
-        self.0.is_some_and(|(demanded_at, demanded)| demanded_at.saturating_add(1) >= epoch && demanded <= class)
+        self.0.is_some_and(|(at, latest, _)| at.saturating_add(1) >= epoch && latest <= class)
     }
     pub(crate) fn current(self, epoch: u64, class: Class) -> bool { self.class_at(epoch).is_some_and(|demanded| demanded <= class) }
-    pub(crate) fn class_at(self, epoch: u64) -> Option<Class> { self.0.filter(|(demanded_at, _)| *demanded_at == epoch).map(|(_, demanded)| demanded) }
+    pub(crate) fn outranks(self, epoch: u64, class: Class) -> bool {
+        !class.floor_reserved() && self.recent(epoch).is_some_and(|demanded| demanded < class)
+            || class == Class::Refinement && self.0.is_some_and(|(_, latest, _)| latest.required())
+    }
+    pub(crate) fn class_at(self, epoch: u64) -> Option<Class> { self.0.filter(|(at, ..)| *at == epoch).map(|(_, latest, _)| latest) }
 }
 
 #[cfg(test)]

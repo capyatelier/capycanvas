@@ -127,9 +127,9 @@ impl Cache {
     fn pivot_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::{Blocked,Runnable};
         if !refining(r) || self.gesture.is_some() || self.graph.parts.is_none() {return None;}
+        if self.pivot_refusal.as_ref().is_some_and(|refusal|r.refuses(refusal)) {return None;}
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         if halves.is_empty() {return self.pivot_input(r);}
-        if self.pivot_refusal.as_ref().is_some_and(|refusal|r.refuses(refusal)) {return None;}
         let held=self.half_cells(self.plan.bounds);
         let mut naming=false;
         for coordinate in pages::coordinates(self.plan.bounds,self.plan.level) {
@@ -183,7 +183,8 @@ impl Cache {
         for (region,refusal) in &exact.refusals {self.refuse(None,*region,refusal);}
         self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
         if self.pivot_pending {
-            self.prepare_pivot(scene,r,packet,encoder,budget,self.plan.bounds,&|_|Class::Refinement)?;
+            let refusal=self.prepare_pivot(scene,r,packet,encoder,budget,self.plan.bounds,&|_|Class::Refinement)?;
+            self.pivot_refusal=self.pivot_refusal.take().or(refusal);
             self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
         }
         if exact.committed {self.project_exact(scene,r,encoder,commands)}else {Ok(PixelRect::EMPTY)}
@@ -246,7 +247,9 @@ impl Cache {
             }
             for page in pinned {page.track(encoder);}
             if waiting.is_some() {exact.blocks.push((cell,waiting));}
-            else if !pending && cell.level==self.plan.level {self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class)?;}
+            else if !pending && cell.level==self.plan.level && let Some(refusal)=self.prepare_pivot(scene,r,packet,encoder,budget,cell.plan().bounds,class)? {
+                exact.pivot_refusal.get_or_insert(refusal);
+            }
         }
         for (cell,pins) in previous {
             if self.current(&cell) && self.has_admitted_unit(&cell) {self.streaming.cells.push((cell,pins));}else {for page in pins {page.track(encoder);}}
@@ -286,14 +289,15 @@ impl Cache {
     fn prepare_pivot(
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         encoder: &mut crate::submission::CommandEncoder, budget: &mut WorkBudget, region: PixelRect, class: &dyn Fn(PixelRect)->Class,
-    ) -> Result<(), GpuRasterError> {
-        if self.graph.parts.is_none() || self.pivot_missing(region) {return Ok(());}
+    ) -> Result<Option<crate::residency::Blocked>, GpuRasterError> {
+        if self.graph.parts.is_none() || self.pivot_missing(region) {return Ok(None);}
         let root=self.graph.root.clone().unwrap();
         let tiled=use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r));
+        let mut refusal=None;
         for (id,request) in self.region_sources(scene,r,packet,region,tiled) {
-            if !self.source_ready(scene,r,id,&request) {self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?;}
+            if !self.source_ready(scene,r,id,&request) {refusal=refusal.or(self.prepare_source(scene,r,packet,encoder,id,request,class(region),budget)?.refusal);}
         }
-        Ok(())
+        Ok(refusal)
     }
 
     #[expect(clippy::too_many_arguments, reason = "An exact unit shares the frame's scene, encoding and budget with its cell")]

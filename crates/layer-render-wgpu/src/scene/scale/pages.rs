@@ -494,7 +494,6 @@ struct Share {bytes:u64,touched:u64,heap:std::collections::BinaryHeap<Victim>}
 #[derive(Default)]
 struct Victims {windows:std::collections::HashMap<WindowId,Share>,inflation:u64,epoch:u64}
 fn rank(page:&Page)->(bool,u64,u64) {(!page.optional,page.priority,page.used)}
-fn demanded(page:&Page,epoch:u64,class:Class)->bool {page.demand.protects(epoch,class)}
 fn rebuild_value(work:u64,bytes:u64)->u64 {work.saturating_mul(1<<32)/bytes.max(1)}
 fn estimated_work(key:&Key)->u64 {
     let bounds=key.plan().bounds;
@@ -932,9 +931,12 @@ impl Store {
         self.index.remove(key);self.touch(key);self.ids.remove(&page.id);self.victims.release(page.window,page.image.bytes());
         self.version_slots-=page.versions.capacity() as u64;page
     }
-    pub(super) fn trim(&mut self,limit:u64,class:Class) {self.trim_at(limit,class,self.victims.epoch);}
-    pub(super) fn release_undemanded(&mut self,limit:u64) {self.trim_at(limit,Class::Fallback,self.victims.epoch+1);}
-    fn trim_at(&mut self,limit:u64,class:Class,epoch:u64) {
+    pub(super) fn trim(&mut self,limit:u64,class:Class) {
+        let epoch=self.victims.epoch;
+        self.trim_at(limit,|page|!page.optional && (page.demand.protects(epoch,class) || page.demand.outranks(epoch,class)));
+    }
+    pub(super) fn release_undemanded(&mut self,limit:u64) {let epoch=self.victims.epoch+1;self.trim_at(limit,|page|!page.optional && page.demand.protects(epoch,Class::Fallback));}
+    fn trim_at(&mut self,limit:u64,kept:impl Fn(&Page)->bool) {
         let mut bytes=self.bytes();
         let mut pinned=Vec::new();
         while bytes>limit {
@@ -942,7 +944,7 @@ impl Store {
             let heap=&mut self.victims.windows.get_mut(&window).unwrap().heap;
             let Some(victim)=heap.pop() else {break;};
             let Some((key,page))=self.ids.get(&victim.id).and_then(|key|self.pages.get_key_value(key)).filter(|(_,page)|rank(page)==victim.rank) else {continue;};
-            if page.pinned() || !page.optional && demanded(page,epoch,class) {pinned.push((page.window,victim));continue;}
+            if page.pinned() || kept(page) {pinned.push((page.window,victim));continue;}
             let key=key.clone();
             let removed=self.remove(&key).image;
             if victim.rank.0 {self.victims.inflation=self.victims.inflation.max(victim.rank.1);}
@@ -1154,6 +1156,41 @@ mod tests {
         drop(store.claim(&r,indexed_key([2,0],1),2*bytes,WindowId::default(),Class::Fallback).unwrap());
         assert!(store.pages.contains_key(&view),"overview-first work evicted the page projected last frame");
         assert!(!store.pages.contains_key(&other));
+    }
+    #[test]
+    fn seeded_optional_admissions_never_evict_a_wanted_page_a_higher_class_used_this_frame_or_last() {
+        const CLASSES:[Class;6]=[Class::Authored,Class::Visible,Class::Fallback,Class::Navigator,Class::Prefetch,Class::Refinement];
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let display=Arc::new(crate::residency::Tier::default());
+        let page=indexed_key([0;2],0).bytes();
+        display.set_limit(8*page,2*page);
+        let mut store=Store::within(&display);store.victims.epoch=1;
+        let mut uses=std::collections::HashMap::<Key,Vec<(u64,Class)>>::new();let mut optional=std::collections::HashSet::new();
+        let (mut seed,mut evicted)=(0x5eed_0f_9a6e_5u64,0);
+        for _ in 0..600 {
+            store.advance_epoch();let epoch=store.victims.epoch;
+            for _ in 0..8 {
+                seed^=seed<<13;seed^=seed>>7;seed^=seed<<17;
+                let class=CLASSES[(seed%6) as usize];let key=indexed_key([(seed>>8) as u32%12,0],0);
+                if store.pages.contains_key(&key) {
+                    drop(store.allocated(&key,class));uses.get_mut(&key).unwrap().push((epoch,class));
+                    if (seed>>20)%3==0 {store.set_optional(&key);optional.insert(key);}
+                    continue;
+                }
+                let tier=store.tier();
+                let admitted=tier.admit(class,page).or_else(|blocked| {store.trim(store.bytes().saturating_sub(blocked.deficit()),class);tier.admit(class,page)});
+                if let Ok(mut reservation)=admitted {
+                    drop(store.claim_reserved(&r,key.clone(),WindowId::default(),class,&mut reservation).unwrap());drop(store.allocated(&key,class));uses.insert(key,vec![(epoch,class)]);
+                }
+                uses.retain(|key,used| {
+                    if store.pages.contains_key(key) {return true;}
+                    let window=if class.floor_reserved() {epoch}else {epoch-1};
+                    assert!(optional.remove(key) || !used.iter().any(|&(at,user)|at>=window && user<class),"a {class:?} admission at epoch {epoch} evicted a page used {used:?}");
+                    evicted+=1;false
+                });
+            }
+        }
+        assert!(evicted>100,"the run evicted only {evicted} pages");
     }
     #[test]
     fn page_index_queries_visit_only_the_requested_cells_at_each_kept_level() {

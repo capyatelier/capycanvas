@@ -17,7 +17,7 @@ const CPU_MAX:Duration=Duration::from_nanos(33_333_332);
 const CPU_P99:Duration=Duration::from_micros(8300);
 
 #[derive(Clone,Copy,Debug)]
-enum Fixture {Object,PaintBase,Paint28,Paint32,Effects,Mixed,Gigapixel,GigapixelPaint,Panorama,MultiGigapixel}
+enum Fixture {Object,PaintBase,Photo,Paint28,Paint32,Effects,Mixed,Gigapixel,GigapixelPaint,Panorama,MultiGigapixel}
 #[derive(Clone,Copy,Debug)]
 enum Grant {Desktop,Edge,Tablet}
 impl Grant {
@@ -111,7 +111,7 @@ fn image(extent:[u32;2],profile:ColorProfile,seed:u64)->layer_core::Image {
 }
 
 fn document(fixture:Fixture,seed:u64)->Document {
-    let extent=match fixture {Fixture::Paint28=>[4216,3016],Fixture::Paint32=>[3840,2160],Fixture::Gigapixel|Fixture::GigapixelPaint|Fixture::MultiGigapixel=>[32768,30518],Fixture::Panorama=>[65536,16384],_=>[9504,6336]}
+    let extent=match fixture {Fixture::Paint28=>[4216,3016],Fixture::Paint32=>[3840,2160],Fixture::Photo=>[4248,2832],Fixture::Gigapixel|Fixture::GigapixelPaint|Fixture::MultiGigapixel=>[32768,30518],Fixture::Panorama=>[65536,16384],_=>[9504,6336]}
         .map(|n|n.min(layer_core::MAX_EXTENT));
     let mut artwork=Artwork::new(extent).unwrap();
     let (owner,target)=crate::test_support::add_paint(&mut artwork,"Ink",extent);
@@ -136,8 +136,8 @@ fn document(fixture:Fixture,seed:u64)->Document {
             artwork.paint.get_mut(handle).unwrap().raster=RasterRevision::backed(RasterData {tiles:tiles.into(),watercolor:None});
         }
     } else {
-        let source=image([9504,6336],ColorProfile::Builtin(RgbSpace::Srgb),seed);
-        if matches!(fixture,Fixture::PaintBase) {
+        let source=image(if matches!(fixture,Fixture::Photo) {extent}else {[9504,6336]},ColorProfile::Builtin(RgbSpace::Srgb),seed);
+        if matches!(fixture,Fixture::PaintBase|Fixture::Photo) {
             let SourceTarget::Paint(handle)=target else {unreachable!()};
             artwork.paint.get_mut(handle).unwrap().base=Some(PaintBase::new(source));
         } else {
@@ -452,62 +452,83 @@ fn recreated_tablet_renderer_under_real_pressure_keeps_frames_resumable() {
     assert!(published,"releasing real import pressure must let the Navigator publish");
 }
 
-#[test]
-fn a_stroked_pivot_above_its_display_room_settles_instead_of_recomposing() {
-    let seed=SEEDS[0];let mut document=document(Fixture::Paint32,seed);
+fn settles_after_a_stroke(fixture:Fixture,pinned:u64,view:ViewState,brush:layer_core::BrushSnapshot,stroke:&[Point],source_reads:u64) {
+    let seed=SEEDS[0];let mut document=document(fixture,seed);
     let handles:Vec<_>=document.artwork.occurrences.iter().map(|(handle,_,_)|handle).collect();
     for handle in handles {document.artwork.occurrences.get_mut(handle).unwrap().visible=true;}
     let root=document.artwork.root;document.artwork.compositions.get_mut(root).unwrap().blend=layer_core::BlendSpace::Perceptual;
-    let extent=document.composition().size;
     let reads=Reads::new(seed,IoProfile::Adversarial);
     let retained=layer_core::Editor::new(document.clone()).retained_tiles();
     let _store=crate::test_support::StoredTiles::with_reads(&retained,crate::test_support::tile_read_cache(),Some(reads.observe()));
     let budget=MemoryBudget::with_facts(MemoryFacts {host_default_bytes:Some(1_193_000_000),override_bytes:Some(1_193_000_000),..Default::default()});
     let resident=budget.register_owner(layer_core::MemoryOwnerKind::Authored,layer_core::MemoryClass::Pinned,None);
-    resident.report(layer_core::MemoryReport {ram_bytes:600<<20,pinned_ram_bytes:600<<20,..Default::default()});
+    resident.report(layer_core::MemoryReport {ram_bytes:pinned,pinned_ram_bytes:pinned,..Default::default()});
     let renderer=crate::memory::memory_tests::renderer_in_budget(document.composition().color,
         DeviceMemoryFacts {heap_bytes:Some(8_264_355_840),unified:true,..Default::default()},budget).unwrap();
-    let zoom=0.49f32;let view=ViewState {width_px:1883,height_px:1059,document_to_surface:[zoom,0.,0.,zoom,
-        941.5-zoom*extent[0] as f32/2.,529.5-zoom*extent[1] as f32/2.]};
-    let [_,_,_,_,x,y]=view.document_to_surface;
+    let [zoom,_,_,_,x,y]=view.document_to_surface;
     let transform=ViewTransform {revision:1,surface_to_document:[1./zoom,0.,0.,1./zoom,-x/zoom,-y/zoom]};
     let (woken,wakes)=std::sync::mpsc::channel::<()>();
     let mut renderer=renderer;renderer.set_preparation_wake(Arc::new(move||{let _=woken.send(());}));
     let (mut input,mut live)=engine(document,renderer,view,transform);
+    live.set_brush(brush).unwrap();
     let mut presenter=crate::ViewportPresenter::for_surface(live.backend(),wgpu::TextureFormat::Rgba8UnormSrgb,crate::SdrSurfaceColor::Srgb).unwrap();
-    let output=create_target(&live.backend().device,[view.width_px,view.height_px],wgpu::TextureFormat::Rgba8UnormSrgb,"pivot room presentation");
-    let mut stroked=None;let deadline=Instant::now()+Duration::from_secs(30);
+    let output=create_target(&live.backend().device,[view.width_px,view.height_px],wgpu::TextureFormat::Rgba8UnormSrgb,"stroked presentation");
+    let mut stroked=None;let mut pushed=0;let deadline=Instant::now()+Duration::from_secs(30);
     for frame in 0.. {
         if Instant::now()>deadline {break;}
         while wakes.try_recv().is_ok() {}
         reads.advance(frame);
+        if stroked.is_some() {
+            for (index,position) in stroke.iter().enumerate().skip(pushed).take(8) {
+                let phase=if index==0 {PenPhase::Down}else if index+1==stroke.len() {PenPhase::Up}else {PenPhase::Move};
+                let sequence=index as u64+1;
+                input.push(PenEvent {sequence,timestamp_ns:(frame as u64+1)*8_333_333+sequence,phase,view_revision:1,surface_position:*position,
+                    ..crate::test_support::pen(sequence,PenPhase::Move,[0.;2],SampleFlags::PRIMARY)}).unwrap();
+                pushed=index+1;
+            }
+        }
         live.render_frame().unwrap();live.backend_mut().wait_idle().unwrap();
         if presenter.needs_present(live.backend(),view,[0.18,0.18,0.18,1.]) {presenter.present(live.backend_mut(),&output.1,view,[0.18,0.18,0.18,1.]).unwrap();}
-        let quiet=!live.has_pending_input() && !live.has_active_stroke() && !live.has_pending_document_edits();
+        let feeding=stroked.is_some() && pushed<stroke.len();
+        let quiet=!feeding && !live.has_pending_input() && !live.has_active_stroke() && !live.has_pending_document_edits();
         let r=live.backend();
         let settled=quiet && r.settled() && r.scale_display.as_ref().is_some_and(|cache|cache.storm_view_settled(view).is_ok());
         match stroked {
-            None if settled => {
-                stroked=Some(r.metrics().source_tile_misses);
-                for (sequence,phase,dx) in [(1,PenPhase::Down,0.),(2,PenPhase::Move,40.),(3,PenPhase::Move,80.),(4,PenPhase::Up,120.)] {
-                    input.push(PenEvent {sequence,timestamp_ns:(frame as u64+1)*8_333_333+sequence,phase,view_revision:1,
-                        surface_position:Point {x:view.width_px as f32/2.+dx,y:view.height_px as f32/2.},
-                        ..crate::test_support::pen(sequence,PenPhase::Move,[0.;2],SampleFlags::PRIMARY)}).unwrap();
-                }
-            },
+            None if settled => stroked=Some(r.metrics().source_tile_misses),
             Some(before) if settled && live.metrics().committed_strokes==1 => {
-                let layer_pages=u64::from((extent[0]/2).div_ceil(PAGE_SIZE)+1)*u64::from((extent[1]/2).div_ceil(PAGE_SIZE)+1);
                 let reads=r.metrics().source_tile_misses-before;
-                assert!(reads<=2*32*layer_pages,"settling the stroked picture read {reads} source tiles, more than twice its {} layer pages",32*layer_pages);
+                assert!(reads<=source_reads,"settling the stroked picture read {reads} source tiles, more than {source_reads}");
                 return;
             },
             _ => {},
         }
-        if matches!(live.frame_demand(),layer_render::FrameDemand::Wait|layer_render::FrameDemand::WaitUntil(_)) && !reads.gated() {let _=wakes.recv_timeout(QUIET);}
+        if !feeding && matches!(live.frame_demand(),layer_render::FrameDemand::Wait|layer_render::FrameDemand::WaitUntil(_)) && !reads.gated() {let _=wakes.recv_timeout(QUIET);}
     }
     let r=live.backend();
     panic!("the stroked picture never settled: stroked={}, display used {} of grant {}, source tile misses {}, outstanding {:?}",
         stroked.is_some(),r.scene_tiers.display.used(),r.memory.display_grant(),r.metrics().source_tile_misses,r.outstanding_terms());
+}
+
+fn centred(extent:[u32;2],zoom:f32,viewport:[u32;2])->ViewState {
+    ViewState {width_px:viewport[0],height_px:viewport[1],document_to_surface:[zoom,0.,0.,zoom,
+        viewport[0] as f32/2.-zoom*extent[0] as f32/2.,viewport[1] as f32/2.-zoom*extent[1] as f32/2.]}
+}
+
+#[test]
+fn a_stroked_pivot_above_its_display_room_settles_instead_of_recomposing() {
+    let view=centred([3840,2160],0.49,[1883,1059]);
+    let stroke=[0.,40.,80.,120.].map(|dx|Point {x:view.width_px as f32/2.+dx,y:view.height_px as f32/2.});
+    let layer_pages=u64::from(1920u32.div_ceil(PAGE_SIZE)+1)*u64::from(1080u32.div_ceil(PAGE_SIZE)+1);
+    settles_after_a_stroke(Fixture::Paint32,600<<20,view,layer_core::BrushSnapshot {diameter:24.,color_rgba_linear:[1.,0.,1.,1.],mappings:Arc::from([]),
+        ..layer_core::default_brush(layer_core::DefaultBrushPreset::GPen)},&stroke,2*32*layer_pages);
+}
+
+#[test]
+fn a_large_stroke_on_a_photo_at_its_display_room_parks_the_pivot_and_settles() {
+    let view=centred([4248,2832],0.42425845,[2200,1440]);
+    let stroke:Vec<_>=(0..=240).map(|step|{let angle=step as f32*std::f32::consts::TAU/120.;Point {x:1145.+520.*angle.cos(),y:763.5+299.*angle.sin()}}).collect();
+    settles_after_a_stroke(Fixture::Photo,300<<20,view,layer_core::BrushSnapshot {diameter:1024.,mappings:Arc::from([]),
+        ..layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil)},&stroke,u64::from(4248u32.div_ceil(PAGE_SIZE)*2832u32.div_ceil(PAGE_SIZE)));
 }
 
 #[test]

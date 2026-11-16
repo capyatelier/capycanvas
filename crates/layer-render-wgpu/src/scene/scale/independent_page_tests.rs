@@ -207,7 +207,7 @@ fn one_remaining_source_preparation_attempt_does_not_discover_every_cold_page() 
     crate::scene::scale::tests::prepare_fixture_frame(&pages.r,frame,&pages.scene);
     let mut budget=Scene::begin_work(false);budget.spend(object_cache::IDLE_TAPS-object_cache::PASS_TAPS);
     let unpublished=pages.cache.prepare_source(&mut pages.scene,&mut pages.r,frame,&mut encoder,target,
-        SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut budget).unwrap();
+        SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut budget).unwrap().unpublished;
     assert!(!unpublished,"a cold decode is not an unpublished input");assert_eq!(encoder.pass_count(),0);
     assert_eq!(pages.r.source_tiles.borrow().misses,before_misses);
     assert!(source_chunks(&pages.cache,target,0).is_empty());assert_eq!(pages.scene.scale_sources.entries[&target].updates,0);

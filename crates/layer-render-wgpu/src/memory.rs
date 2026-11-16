@@ -384,7 +384,7 @@ impl WgpuRasterizer {
     fn trim_display_to_grant(&self,scene:Option<&scene::Scene>) {
         let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
         let excess=display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used()));
-        display.heap().evict(excess,crate::residency::Class::Fallback);
+        display.heap().reclaim(excess);
         let excess=excess.saturating_sub(display.heap().pending());
         if excess!=0 && let Some(scene)=scene {scene.release_pages_by(excess);}
         self.memory.trimmed.set(Some([grant,display.used()]));

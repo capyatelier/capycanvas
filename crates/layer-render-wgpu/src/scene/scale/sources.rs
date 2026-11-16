@@ -56,6 +56,9 @@ impl Source {
 }
 
 #[derive(Default)]
+pub(super) struct Prepared {pub(super) unpublished:bool,pub(super) refusal:Option<crate::residency::Blocked>}
+
+#[derive(Default)]
 pub(crate) struct Sources {
     pub(super) entries: HashMap<SourceTarget, Source>,
     pub(super) object_moving: Option<OccurrenceHandle>,
@@ -287,7 +290,7 @@ impl Cache {
     }
     pub(super) fn prepare_source(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
         id:SourceTarget,request:SourceRequest,class:Class,budget:&mut WorkBudget,
-    )->Result<bool,GpuRasterError> {
+    )->Result<Prepared,GpuRasterError> {
         if !Arc::ptr_eq(&self.pages,&scene.scale_pages) {self.pages=scene.scale_pages.clone();}
         let SourceRequest {plan,required,covered}=request;
         let limit=(budget.allowance(class)/object_cache::PASS_TAPS).max(1) as usize;
@@ -298,7 +301,7 @@ impl Cache {
             required.intersects(region) && region.intersect(covered).is_empty()
                 && self.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,class).is_none()
         });
-        let mut ready=Vec::new();let mut handles=Vec::new();let mut unpublished=false;
+        let mut ready=Vec::new();let mut handles=Vec::new();let mut prepared=Prepared::default();
         for coordinate in candidates {
             if !budget.fits(class,!ready.is_empty(),object_cache::PASS_TAPS) {break;}
             budget.spend(object_cache::PASS_TAPS);
@@ -322,11 +325,13 @@ impl Cache {
                 native=match scene.declare(r,native,declaration,|scene,r,accepted| {
                     let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
                     scene.reduce_source(r,packet,id,key.plan(),&output,coordinate,accepted)
-                }) {Err(GpuRasterError::NotReady)=>continue,Err(GpuRasterError::NotPublished)=>{unpublished=true;continue;},native=>native?};
+                }) {Err(GpuRasterError::NotReady)=>continue,Err(GpuRasterError::NotPublished)=>{prepared.unpublished=true;continue;},native=>native?};
             }
             let mut areas=vec![(key.clone(),region)];
             if let Some((input,_))=&derived {areas.push((input.clone(),region));}
-            let Ok(handle)=self.accept_working(scene,r,interest,areas,native,scratch,plan,true,class,Class::Prefetch,encoder)? else {continue;};
+            let handle=match self.accept_working(scene,r,interest,areas,native,scratch,plan,true,class,Class::Prefetch,encoder)? {
+                Ok(handle)=>handle,Err(refusal)=>{prepared.refusal=prepared.refusal.or(refusal);continue;},
+            };
             let image=self.pages.lock().unwrap().allocated(&key,class).expect("accepted source page");
             let write=self.pages.lock().unwrap().prepare_write(key.clone(),region,pages::Accuracy::Display,plan.level)?;
             let mut unit=Unit::default();unit.sources=self.pages.lock().unwrap().take_inputs(&handle)?;
@@ -377,7 +382,7 @@ impl Cache {
         if !ready.is_empty() {self.encode_units(scene,r,encoder,ready)?;}
         let mut pages=self.pages.lock().unwrap();
         for handle in handles {pages.finish_inputs(&handle);}
-        Ok(unpublished)
+        Ok(prepared)
     }
 }
 
