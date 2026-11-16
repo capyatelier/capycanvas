@@ -1030,7 +1030,7 @@ impl ViewportPresenter {
             || self.presented_selection_overlay != renderer.selection_overlay
             || self.presented_motion != renderer.display_motion().map(|(_, values, moved, revision)| (values, moved, revision))
             || (renderer.presentation.showing && self.presented_paper != Some(self.bound_viewport(renderer).1))
-            || previous.revision != renderer.composite_revision
+            || previous.revision != renderer.composite_revision && previous.revision != renderer.presentable_revision
             || previous.selection_revision != renderer.selection_paint_revision
             || previous.outline_revision != renderer.display_selection_revision
             || previous.hdr != self.hdr_options

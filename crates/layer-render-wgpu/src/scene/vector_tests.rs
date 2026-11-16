@@ -319,6 +319,41 @@ fn derivation_work(r: &WgpuRasterizer, since: u64, derived: u64) -> (u64, usize)
 }
 
 #[test]
+fn a_background_picture_is_held_only_while_preparation_is_pending_within_one_settle_interval() {
+    let extent = [1200u32, 900u32];
+    let records: Vec<Record> = crate::vector::bench::scene_b([1200., 900.], 50).into_iter().map(Record::Path).collect();
+    let (editor, _) = document(extent, records);
+    let view = layer_render::ViewState { width_px: 600, height_px: 450, document_to_surface: [0.5, 0., 0., 0.5, 0., 0.] };
+    let mut r = WgpuRasterizer::new_native_headless(editor.document().composition().color).unwrap();
+    crate::test_support::submit_settled(&mut r, FramePacket { view, ..packet(editor.document().scene(), extent) });
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut presenter = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
+    crate::test_support::prepare_lit_presenter(&r, &mut presenter);
+    let (_texture, target) = create_target(&r.device, [600, 450], format, "settling presentation");
+    presenter.present(&r, &target, view, [0.; 4]).unwrap();
+    r.wait_idle().unwrap();
+    assert!(!presenter.needs_present(&r, view, [0.; 4]), "the settled picture is presented");
+    let changed = |r: &mut WgpuRasterizer, background: bool, preparation_pending: bool, released: std::time::Duration| {
+        r.presentation_released = web_time::Instant::now().checked_sub(released);
+        r.composite_revision = r.composite_revision.wrapping_add(1);
+        r.background_frame = background;
+        r.release_presentation(preparation_pending);
+        r.presentable_revision != r.composite_revision
+    };
+    let within = std::time::Duration::ZERO;
+    assert!(changed(&mut r, true, true, within), "a background picture with preparation pending waits for the settle presentation");
+    assert!(!presenter.needs_present(&r, view, [0.; 4]), "a held picture is not presented");
+    assert!(r.presentation_due().is_some_and(|due| due > web_time::Instant::now()), "a held picture names the settle deadline");
+    assert_ne!(r.next_frame(), layer_render::FrameDemand::Wait, "a held picture keeps a frame due");
+    assert!(changed(&mut r, true, true, within), "later background pictures inside the interval are held too");
+    assert!(!changed(&mut r, true, false, within), "the picture that finishes preparation is presented at once");
+    assert!(presenter.needs_present(&r, view, [0.; 4]), "a released picture is presented");
+    assert!(!changed(&mut r, true, true, crate::frame_pace::SETTLE_PRESENTATION), "a background picture is presented once the settle interval has passed");
+    assert!(!changed(&mut r, false, true, within), "a foreground picture is never held");
+    assert_eq!(r.presentation_due(), None, "nothing is due once the picture is released");
+}
+
+#[test]
 fn crossing_a_level_shows_the_previous_one_resampled_and_refines_a_few_pages_a_frame() {
     let extent = [1200u32, 900u32];
     let records: Vec<Record> = crate::vector::bench::scene_b([1200., 900.], 5000).into_iter().map(Record::Path).collect();

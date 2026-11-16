@@ -757,7 +757,7 @@ Pinned, Edit-ready, Visible, Ahead, then idle work.
 | Transform drag | Resample the target's pyramid over below and above composites | Coarser level of the target |
 | Layer change | Present the root; prewarm the Edit-ready set, then build the new pivot | Root as it is |
 | Tab switch | Present the incoming drawing's retained root; resume its scene | Its overview, then refinement as after a Navigator jump |
-| Idle | Exact refinement, mip and pivot completion, derived-cache writes, write-behind | — |
+| Idle | Exact refinement, mip and pivot completion, derived-cache writes, write-behind; progress presents at most every 50 ms and the finished picture at once | — |
 
 **Rules for every frame:**
 

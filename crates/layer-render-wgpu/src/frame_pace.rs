@@ -8,6 +8,7 @@ pub(crate) const MOVING_TAPS: u64 = 1 << 20;
 pub(crate) const IDLE_TAPS: u64 = 8 << 20;
 const UNIT: u64 = crate::scene::PASS_TAPS;
 const RECOVERY_FRAMES: u64 = 8;
+pub(crate) const SETTLE_PRESENTATION: Duration = Duration::from_millis(50);
 
 fn milliseconds(duration: Duration) -> f64 { duration.as_secs_f64() * 1000. }
 

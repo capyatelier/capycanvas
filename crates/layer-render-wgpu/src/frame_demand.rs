@@ -100,7 +100,7 @@ impl WgpuRasterizer {
         if self.scene_tiers.display.settle() && self.frame_work() { return FrameDemand::Work; }
         #[cfg(debug_assertions)]
         self.assert_blocked_inputs_outstanding();
-        FrameDemand::Wait
+        self.presentation_due().map_or(FrameDemand::Wait, FrameDemand::WaitUntil)
     }
     #[cfg(debug_assertions)]
     fn assert_blocked_inputs_outstanding(&self) {

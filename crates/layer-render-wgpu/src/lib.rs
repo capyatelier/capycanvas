@@ -1161,6 +1161,9 @@ pub struct WgpuRasterizer {
     navigator: scene::scale::Navigator,
     color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
+    presentable_revision: u64,
+    presentation_released: Option<web_time::Instant>,
+    background_frame: bool,
     presentation: DrawingPresentation,
     canvas_transition: layer_render::CanvasFade,
     warm: Option<warm::Warm>,
@@ -1599,6 +1602,9 @@ impl WgpuRasterizer {
             navigator: Default::default(),
             color_sampler: color_sample::ColorSampler::new(&raster_tiers.paint),
             composite_revision: 0,
+            presentable_revision: 0,
+            presentation_released: None,
+            background_frame: false,
             presentation: DrawingPresentation::default(),
             canvas_transition: Default::default(),
             warm: None,
@@ -3872,6 +3878,8 @@ impl CanvasRenderer for WgpuRasterizer {
         self.document_extent=previous.document_extent;
         self.artwork_revision=previous.artwork_revision;
         self.composite_revision=previous.composite_revision;
+        self.presentable_revision=previous.presentable_revision;
+        self.presentation_released=previous.presentation_released;
         self.presentation=previous.presentation;
         self.navigator=std::mem::take(&mut previous.navigator);
         if self.document_color==previous.document_color {
@@ -4364,6 +4372,8 @@ impl WgpuRasterizer {
             self.clear_preview_stamps();
             return Err(error);
         }
+        let preparation_pending = self.frame_preparation_pending();
+        self.release_presentation(preparation_pending);
         if self.composite_revision != revision && self.has_presentable_frame()
             && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
             self.presentation.showing = true;
@@ -4413,7 +4423,20 @@ impl WgpuRasterizer {
         EvaluationContext { elapsed: packet.time_seconds, phases }
     }
 
+    fn release_presentation(&mut self, preparation_pending: bool) {
+        if self.presentable_revision == self.composite_revision { return; }
+        let now = web_time::Instant::now();
+        let recent = self.presentation_released.is_some_and(|released| now.saturating_duration_since(released) < frame_pace::SETTLE_PRESENTATION);
+        if self.background_frame && recent && preparation_pending { return; }
+        self.presentable_revision = self.composite_revision;
+        self.presentation_released = Some(now);
+    }
+    pub(crate) fn presentation_due(&self) -> Option<web_time::Instant> {
+        (self.presentable_revision != self.composite_revision)
+            .then(|| self.presentation_released.map_or_else(web_time::Instant::now, |released| released + frame_pace::SETTLE_PRESENTATION))
+    }
     fn submit_frame_inner(&mut self, packet: FramePacket<'_>, settled_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        self.background_frame = false;
         #[cfg(test)]
         let artwork_revision_before=self.artwork_revision;
         if let Some(error)=self.take_bake_failure().or_else(||self.take_fill_edges_failure()).or_else(||self.take_restore_failure()) {return Err(error);}
@@ -5346,6 +5369,8 @@ impl WgpuRasterizer {
         }
         #[cfg(test)]
         if std::mem::take(&mut self.test.discard_frame) {drop(encoder);return Ok(());}
+        self.background_frame = !motion && !reset && !animated && !display_rebuilt && unchanged && dirty.is_empty()
+            && original_batches.is_empty() && packet.dabs.is_empty() && native_commit.is_none();
         let publication=encoder.submission();
         let submitting = web_time::Instant::now();
         let submission = encoder.submit(&self.queue)
