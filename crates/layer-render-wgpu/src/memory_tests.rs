@@ -1418,6 +1418,20 @@ fn an_unchanged_idle_frame_creates_no_grant_encoder_and_syncs_no_report() {
 }
 
 #[test]
+fn a_submitted_frame_sets_its_display_room_once() {
+    let (doc, mut r, view) = retained_photo_display();
+    let frame = FramePacket { view, ..packet(doc.scene(), [4096; 2]) };
+    for _ in 0..2 {
+        r.poll_pending(view).unwrap();
+        let before = crate::test_support::PassCounts::snapshot();
+        let std::task::Poll::Ready(result) = r.submit_when_ready(frame, None) else { panic!("the settled view is ready") };
+        result.unwrap();
+        assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).display_rooms, 1, "a frame published and flushed its display room more than once");
+        complete(&r);
+    }
+}
+
+#[test]
 fn telemetry_counts_each_composition_window_and_strip_once() {
     let extent = [1033, 517];
     let mut threshold = (*crate::tests::fixture("threshold").program()).clone();
@@ -1574,7 +1588,7 @@ fn the_end_of_a_frame_releases_the_decodes_its_trim_takes_from_a_lowered_grant()
     r.end_frame_memory();
     let other = pin_the_free_device(&r);
     assert!(display_resident(&r) > r.memory.retention_grant(), "the competing pin leaves the decodes above the display grant");
-    r.frame_room(frame);
+    r.fit_grants();
     assert!(display_resident(&r) <= r.memory.retention_grant(), "the frame ended with its trimmed decodes still resident: resident {} grant {}",
         display_resident(&r), r.memory.retention_grant());
     drop(other);

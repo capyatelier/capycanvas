@@ -4040,6 +4040,7 @@ impl CanvasRenderer for WgpuRasterizer {
             packet.view = view;
             packet.composite_all = pending.capture.is_none();
             let native = pending.capture.take().map(|capture| capture.frame);
+            self.begin_frame_memory(packet);
             self.submit_frame(packet, native)?;
             self.release_unused_retouch();
         }
@@ -4358,12 +4359,11 @@ impl WgpuRasterizer {
         self.activate_presentation(packet.scene);
         self.prepare_moving_projection(packet)?;
         let revision = self.composite_revision;
-        self.begin_frame_memory(packet);
         let submitted = self.metrics.submissions;
         let navigator_revision = self.navigator.revision;
         let result = self.submit_frame_inner(packet, native_commit);
         self.end_frame_memory();
-        self.frame_room(packet);
+        self.fit_grants();
         self.brush_inputs=None;
         if let Err(error)=result {
             self.clear_preview_stamps();

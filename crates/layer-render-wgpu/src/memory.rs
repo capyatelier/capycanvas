@@ -356,6 +356,9 @@ impl WgpuRasterizer {
     }
     pub(crate) fn frame_room(&mut self, packet: FramePacket<'_>) {
         self.set_display_room(packet);
+        self.fit_grants();
+    }
+    pub(crate) fn fit_grants(&mut self) {
         self.trim_display_to_grant(self.scene.as_deref());
         self.refresh_memory_limits();
         self.trim_raster_to_grant();
@@ -368,6 +371,7 @@ impl WgpuRasterizer {
         if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
     }
     fn set_display_room(&mut self, packet: FramePacket<'_>) {
+        #[cfg(test)] crate::test_support::PassCounts {display_rooms:1,..Default::default()}.record();
         self.memory_demand(packet);
         self.memory.refused.set(self.scale_display.as_ref().map_or(0,scene::scale::Cache::refused_bytes));
         let presented=self.composition_memory(self.scene.as_deref())[1];
