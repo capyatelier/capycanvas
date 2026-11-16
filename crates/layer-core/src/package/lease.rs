@@ -4,16 +4,14 @@ use std::{collections::BTreeMap,sync::{Arc,Mutex,OnceLock,Weak}};
 
 pub fn normalize_filtered_tile(descriptor:PixelDescriptor,bytes:&[u8],crc:u32)->Result<Arc<[u8]>,String> {
     crate::tile_io::verify_crc(bytes,Some(crc))?;
-    let scratch=descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid package tile descriptor")? as u64*4;
-    let _admission=crate::MemoryBudget::process().admit_import(scratch).ok_or(crate::MEMORY_BUDGET_EXCEEDED)?;
     crate::raster::TileBlob::from_filtered_deflate(crate::PortableId::random(),descriptor,bytes)?.memory_compressed()?.ok_or_else(||"Missing normalized package tile".into())
 }
 struct Reader {backing:ImmutableBacking,ranges:Arc<Mutex<BTreeMap<(u64,usize),Arc<PackageIdentity>>>>}
 impl RangeReader for Reader {
     fn allocation_bytes(&self,offset:u64,length:usize)->usize {
         let input=self.backing.read_source().map_or(length,|source|source.allocation_bytes(offset,length));
-        let filtered=self.ranges.lock().unwrap().get(&(offset,length)).is_some_and(|range|range.filtered);
-        if filtered {input.saturating_add(*self.result_bounds(offset,length).end())}else{input}
+        let scratch=self.ranges.lock().unwrap().get(&(offset,length)).filter(|range|range.filtered).map(|range|range.descriptor.byte_len([super::RASTER_TILE_SIZE;2]).unwrap_or(0).saturating_mul(4));
+        scratch.map_or(input,|scratch|input.saturating_add(*self.result_bounds(offset,length).end()).saturating_add(scratch))
     }
     fn result_bounds(&self,offset:u64,length:usize)->std::ops::RangeInclusive<usize> {
         match self.ranges.lock().unwrap().get(&(offset,length)) {

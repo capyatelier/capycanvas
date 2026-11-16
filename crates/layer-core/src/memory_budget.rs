@@ -334,7 +334,7 @@ impl std::fmt::Debug for MemoryBudget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.debug_struct("MemoryBudget").field("limit", &self.ram_limit_bytes()).field("headroom", &self.import_headroom_bytes()).finish() }
 }
 #[cfg(test)]
-std::thread_local! {static REBALANCES: std::cell::Cell<u64> = const {std::cell::Cell::new(0)};}
+std::thread_local! {pub(crate) static REBALANCES: std::cell::Cell<u64> = const {std::cell::Cell::new(0)};}
 impl MemoryBudget {
     fn rebalance(&self, mut state: MutexGuard<'_, State>) {
         #[cfg(test)] REBALANCES.with(|count| count.set(count.get() + 1));

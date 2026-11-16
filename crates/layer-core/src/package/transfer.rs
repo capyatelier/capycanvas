@@ -538,12 +538,23 @@ mod tests {
         assert_eq!(file.reads.load(Ordering::SeqCst),0);
     }
     #[test]
+    fn a_filtered_tile_reserves_its_normalization_in_its_read_and_takes_no_ledger_round_trip() {
+        let (capture,file)=reference_fixture(true);
+        let tile=capture.artwork.paint.iter().next().unwrap().2.base.as_ref().unwrap().image.tiles.values().next().unwrap();
+        let lease=super::super::PackageLease::new(ImmutableBacking::new(file.clone()).unwrap());let length=file.bytes.len();
+        lease.range(0,length as u64,crc32fast::hash(&file.bytes),tile.descriptor,true).unwrap();
+        assert!(lease.read_source().allocation_bytes(0,length)>=4*tile.descriptor.byte_len([super::super::RASTER_TILE_SIZE;2]).unwrap(),"the read reserves its normalization scratch");
+        let rebalances=crate::memory_budget::REBALANCES.with(std::cell::Cell::get);
+        assert_eq!(tile.decode_on_worker().unwrap(),vec![21;256*256*4]);
+        assert_eq!(crate::memory_budget::REBALANCES.with(std::cell::Cell::get),rebalances,"normalizing a package tile rebalanced the memory budget");
+    }
+    #[test]
     #[cfg(not(target_arch="wasm32"))]
-    fn filtered_package_tiles_recover_after_temporary_memory_refusal() {
-        const CHILD: &str = "CAPY_TEST_PACKAGE_MEMORY_REFUSAL";
+    fn filtered_package_tiles_read_at_zero_import_headroom() {
+        const CHILD: &str = "CAPY_TEST_PACKAGE_ZERO_HEADROOM";
         if std::env::var_os(CHILD).is_none() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "package::transfer::tests::filtered_package_tiles_recover_after_temporary_memory_refusal",
+                .args(["--exact", "package::transfer::tests::filtered_package_tiles_read_at_zero_import_headroom",
                     "--nocapture", "--test-threads=1"])
                 .env(CHILD, "1").output().unwrap();
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -556,14 +567,10 @@ mod tests {
             .image.tiles.values().next().unwrap();
         let budget = crate::MemoryBudget::process();
         budget.flush_reports();
-        let held = budget.admit_import(budget.import_headroom_bytes()).unwrap();
-        assert_eq!(tile.decode_on_worker().unwrap_err(), crate::MEMORY_BUDGET_EXCEEDED);
-        assert!(tile.compressed.healthy().is_ok(), "a budget refusal is not damaged source data");
-        drop(held);
-        budget.flush_reports();
+        let _held = budget.admit_import(budget.import_headroom_bytes()).unwrap();
         assert_eq!(tile.decode_on_worker().unwrap(), vec![21; 256 * 256 * 4]);
         assert!(tile.compressed.healthy().is_ok());
-        assert_eq!(file.reads.load(Ordering::SeqCst), 2);
+        assert_eq!(file.reads.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn filtered_references_normalize_lazily_and_keep_their_generation() {
