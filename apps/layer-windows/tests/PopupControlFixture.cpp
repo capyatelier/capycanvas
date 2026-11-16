@@ -609,6 +609,53 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             root.Children().RemoveAt(0);attached=false;view.reset();
         }catch(...){if(attached)root.Children().RemoveAt(0);view.reset();throw;}
     }
+    winrt::Windows::Foundation::IAsyncAction chromePendingOwners(J model,J catalog,NativeLayoutInput layout){
+        catalog.Insert(L"bootstrap",object(object(model,L"localization"),L"bootstrap"));
+        hstring checkpoint=L"construct";auto stage=[&](hstring call){phase=L"workspace-chrome-pending-owners/"+checkpoint+L"/"+call;};stage(L"WorkspaceView");
+        auto send=[](std::string){};
+        auto view=std::make_unique<WorkspaceView>(send,catalog,context.localization,[](CanvasQueryKind,std::string,PreviewReply){return false;},[](bool){},send,send,[](std::string,std::function<void(int32_t)>){ });
+        stage(L"Root");auto surface=view->Root();stage(L"WidthHeight");surface.Width(1000);surface.Height(700);stage(L"InsertAt");root.Children().InsertAt(0,surface);
+        try{
+            checkpoint=L"initial";stage(L"Apply");require(view->Apply(model,layout),L"Pending-owner shared workspace model was rejected");stage(L"Resize");view->Resize(1000,700);
+            co_await wait([&]{stage(L"UpdateLayout");surface.UpdateLayout();stage(L"MeasureChrome");view->MeasureChrome();stage(L"GetItemStatus");return array(object(J::Parse(AutomationProperties::GetItemStatus(surface)),L"panel_bridge_frame"),L"bridges").Size()>0;},L"Pending-owner fixture did not arrange its real column bridges");
+            auto snapshot=[&]{stage(L"MeasureChrome");view->MeasureChrome();stage(L"GetItemStatus");return J::Parse(AutomationProperties::GetItemStatus(surface));};
+            auto initial=snapshot();std::set<uint32_t> receivers;
+            for(auto value:array(object(initial,L"panel_bridge_frame"),L"bridges"))for(auto receiver:array(value.GetArray().GetObjectAt(2),L"receivers"))receivers.insert(uint32_t(num(receiver.GetObject(),L"group")));
+            require(receivers.size()==3,L"Pending-owner fixture needs the actual three connected receivers");
+            std::map<uint32_t,FrameworkElement> retained;for(auto id:receivers)retained.emplace(id,findElement(surface,L"workspace-group-"+to_hstring(id)));
+            auto owners=[&](bool gpu,bool sizing,bool handback){
+                auto status=snapshot();require(flag(status,L"window_resizing")==sizing&&flag(status,L"native_resize_pending")==handback,L"Native chrome sizing/handback phase differs from the forced sequence");
+                for(auto id:receivers){auto row=findId(array(status,L"groups"),id);require(row.Size()&&flag(row,L"gpu_background")==gpu&&flag(row,L"native_bridge_background")!=gpu,L"Continuing bridge receiver changed GPU/native ownership in a pending chrome phase");require(retained.at(id)&&findElement(surface,L"workspace-group-"+to_hstring(id))==retained.at(id),L"Pending chrome replaced a continuing native receiver");}
+            };
+            J document;auto publish=[&](uint64_t revision,float width){checkpoint=L"send-"+to_hstring(revision);stage(L"Width");surface.Width(width);stage(L"UpdateLayout");surface.UpdateLayout();stage(L"Resize");view->Resize(width,700);A connections,arcs,colors,panels;stage(L"Glass");view->Glass(surface,connections,arcs,colors,panels);stage(L"ChromeDocument");document=view->ChromeDocument();stage(L"ChromeSent");view->ChromeSent(revision);};
+            auto ack=[&](uint64_t requested,bool accepted,uint64_t presented){
+                A extent;extent.Append(N(num(document,L"width")));extent.Append(N(num(document,L"height")));
+                checkpoint=L"ack-"+to_hstring(requested);stage(L"Apply");require(view->Apply(O({{L"windows_glass",O({{L"chrome_revision",N(double(requested))},{L"document",extent}})}})),L"Pending chrome acknowledgement packet was rejected by WorkspaceView");
+                auto status=snapshot(),events=object(status,L"bridge_events");require(num(events,L"overflow",-1)==0,L"Pending-owner decision evidence overflowed or was absent");J matched;
+                for(auto value:array(events,L"samples")){auto event=value.GetObject();if(str(event,L"kind")==L"chrome-ack"&&num(event,L"requested_chrome_revision",-1)==double(requested))matched=event;}
+                require(matched.Size()&&flag(matched,L"accepted")==accepted&&num(matched,L"presented_chrome_revision",-1)==double(presented),L"Real WorkspaceView did not accept/reject the forced chrome acknowledgement at its ownership boundary");
+            };
+            uint64_t revision=uint64_t(std::max(0.,num(object(model,L"windows_glass"),L"chrome_revision")))+10;
+            publish(revision,1000);ack(revision,true,revision);owners(true,false,false);
+            checkpoint=L"unchanged-boundary";stage(L"ChromeSent-warm");view->ChromeSent(revision);
+            auto stable=object(snapshot(),L"bridge_events");
+            for(unsigned repeated=0;repeated<8;++repeated){stage(L"ChromeSent-repeat");view->ChromeSent(revision);}
+            auto repeated=object(snapshot(),L"bridge_events");
+            require(num(stable,L"overflow",-1)==0&&num(repeated,L"overflow",-1)==0&&num(stable,L"serial",-1)==num(repeated,L"serial",-1)&&array(stable,L"samples").Size()==array(repeated,L"samples").Size(),L"Native chrome tracing repeated an unchanged boundary");
+            auto before=object(snapshot(),L"panel_bridge_frame").Stringify();
+            publish(revision+1,1040);owners(true,false,false);publish(revision+2,1080);owners(true,false,false);
+            require(object(snapshot(),L"panel_bridge_frame").Stringify()!=before&&num(snapshot(),L"chrome_revision")==double(revision+2),L"Forced pending sends did not publish changed bridge geometry and two newer chrome revisions");
+            auto pendingEvents=object(snapshot(),L"bridge_events");unsigned sends=0;
+            for(auto value:array(pendingEvents,L"samples")){auto event=value.GetObject();if(str(event,L"kind")==L"chrome-sent"&&num(event,L"presented_chrome_revision",-1)==double(revision)){auto requested=num(event,L"requested_chrome_revision",-1);if(requested==double(revision+1))sends|=1;if(requested==double(revision+2))sends|=2;}}
+            require(sends==3&&num(pendingEvents,L"overflow",-1)==0,L"Real WorkspaceView did not retain two sends before either acknowledgement");
+            ack(revision-1,false,revision);owners(true,false,false);ack(revision+1,true,revision+1);owners(true,false,false);ack(revision,false,revision+1);owners(true,false,false);
+            ack(revision+2,true,revision+2);owners(true,false,false);
+            checkpoint=L"sizing";stage(L"SetWindowResizing-true");view->SetWindowResizing(true);owners(false,true,false);publish(revision+3,1120);owners(false,true,false);
+            checkpoint=L"handback";stage(L"SetWindowResizing-false");view->SetWindowResizing(false);owners(false,false,true);publish(revision+4,1120);owners(false,false,true);
+            ack(revision+1,false,revision+2);owners(false,false,true);ack(revision+4,true,revision+4);owners(true,false,false);
+            checkpoint=L"cleanup";stage(L"RemoveAt");root.Children().RemoveAt(0);stage(L"DestroyWorkspaceView");view.reset();
+        }catch(...){root.Children().RemoveAt(0);view.reset();throw;}
+    }
     winrt::fire_and_forget measureFixtureHeader(std::string snapshot,std::string catalog,double id,std::shared_ptr<std::promise<std::string>> result){
         auto self=shared_from_this();std::shared_ptr<HeaderView> header;bool attached=false;auto previousSize=window.AppWindow().Size();auto previousWidth=root.Width();
         try{
@@ -621,7 +668,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }catch(...){if(attached)root.Children().RemoveAt(0);header.reset();root.Width(previousWidth);window.AppWindow().Resize(previousSize);result->set_exception(std::current_exception());}
     }
     winrt::Windows::Foundation::IAsyncAction layerLanguageDraft(){
-        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec,inspectorSnapshot,tiltSnapshot,paperSnapshot;NativeLayoutInput layout,inspectorLayout,paperLayout;
+        auto theme=root.RequestedTheme();std::string snapshot,catalog,translated,paletteChanged,paletteRemoved,paletteSwitched,gradientSpec,inspectorSnapshot,tiltSnapshot,paperSnapshot,bridgeSnapshot;NativeLayoutInput layout,inspectorLayout,paperLayout,bridgeLayout;
         auto queue=root.DispatcherQueue();auto weak=weak_from_this();
         co_await resume_background();
         {
@@ -637,9 +684,23 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 require(false,message);return J{};
             };
             require(capy_start_services(host.get(),nullptr,nullptr)>=0,L"Layer fixture services failed");
-            waitModel([](J const& model){auto workspace=object(model,L"windows_workspace");return flag(workspace,L"ready")&&!flag(workspace,L"busy");},L"Layer fixture workspace did not become ready");
+            auto readyModel=waitModel([](J const& model){auto workspace=object(model,L"windows_workspace");return flag(workspace,L"ready")&&!flag(workspace,L"busy");},L"Layer fixture workspace did not become ready");
             auto action=[&](std::string const& value){if(capy_action(host.get(),value.c_str())!=0)throw hresult_error(E_FAIL,L"Layer language fixture action failed: "+to_hstring(value)+L": "+to_hstring(NativeString(capy_error()).get()));};
             action(theme==ElementTheme::Light?R"({"type":"set_theme","theme":"light"})":R"({"type":"set_theme","theme":"dark"})");
+            J bridgeModel;
+            if(str(object(readyModel,L"windows_workspace"),L"id")!=L"builtin:workspace:illustrator"){
+                action(R"({"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:illustrator"}})");
+                bridgeModel=waitModel([](J const& model){auto workspace=object(model,L"windows_workspace");return str(workspace,L"id")==L"builtin:workspace:illustrator"&&!flag(workspace,L"busy");},L"Pending-owner Paint workspace did not become ready");
+            }else{CapySnapshotInfo info{};NativeString value(capy_snapshot(host.get(),&info));require(bool(value)&&info.full,L"Pending-owner initial shared Paint model missing");bridgeModel=J::Parse(to_hstring(value.bytes));}
+            double layersGroup=0;bool openColumn=false;
+            for(auto value:array(object(bridgeModel,L"layout"),L"collapsed")){auto column=value.GetObject();for(auto groupValue:array(column,L"groups")){auto group=groupValue.GetObject();for(auto icon:array(group,L"icons"))if(str(icon.GetObject(),L"panel")==L"layers"){layersGroup=num(group,L"group");auto open=column.GetNamedValue(L"open");require(open.ValueType()==JsonValueType::Null||open.ValueType()==JsonValueType::Object,L"Collapsed column open state must be null or its shared drawer object");openColumn=open.ValueType()==JsonValueType::Object;}}}
+            require(layersGroup>0,L"Pending-owner shared Paint layout has no collapsed Layers receiver");
+            if(!openColumn){
+                action(to_string(O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"toggle_column_drawer")},{L"group",N(layersGroup)},{L"panel",S(L"layers")}})}}).Stringify()));
+                CapySnapshotInfo info{};NativeString value(capy_snapshot(host.get(),&info));require(bool(value)&&info.full,L"Pending-owner full shared receiver model missing");bridgeModel=J::Parse(to_hstring(value.bytes));
+            }
+            bridgeModel.Insert(L"localization",presentation);bridgeSnapshot=to_string(bridgeModel.Stringify());
+            bridgeLayout=NativeLayoutInput(capy_layout_input_prepare(to_string(object(bridgeModel,L"layout_input").Stringify()).c_str()));require(bool(bridgeLayout),L"Pending-owner shared layout input missing");
             action(R"({"type":"customize","action":{"type":"set_panel_visible","panel":"layers","visible":true}})");
             action(R"({"type":"move_panel","panel":"layers","target":{"kind":"float","position":[20,20]},"viewport":[1000,700]})");
             action(R"({"type":"layer","action":{"op":"new","group":false,"clipped":false}})");
@@ -701,6 +762,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         co_await apartment;
         auto model=J::Parse(to_hstring(snapshot)),next=J::Parse(to_hstring(snapshot)),copy=J::Parse(to_hstring(catalog));
         co_await paperRegistryClosed(J::Parse(to_hstring(paperSnapshot)),copy,paperLayout);
+        co_await chromePendingOwners(J::Parse(to_hstring(bridgeSnapshot)),copy,bridgeLayout);
         phase=L"cold-layer-inspector";
         {
             auto inspectorModel=J::Parse(to_hstring(inspectorSnapshot));auto inspectorCopy=J::Parse(to_hstring(catalog));inspectorCopy.Insert(L"bootstrap",object(object(inspectorModel,L"localization"),L"bootstrap"));
@@ -1819,6 +1881,14 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             frames.current.columns.insert(4);frames.Sent(7);require(frames.Present(7,document),L"Changed chrome column was ignored");
             frames.current.elements.insert(ChromeFrames::Id(extra));frames.Sent(8);require(frames.Present(8,document),L"Changed chrome element was ignored");
             require(!frames.Present(1,document)&&frames.revision==8,L"Stale chrome frame changed the acknowledgement");
+            frames.current=frame();frames.current.elements.insert(ChromeFrames::Id(extra));frames.Sent(9);
+            frames.current=frame();frames.current.groups.insert(3);frames.Sent(10);
+            bool released=false;frames.retiring.emplace(ChromeFrames::Id(extra),[&]{released=true;});
+            require(frames.revision==8&&frames.sentRevision==10&&frames.Group(1)&&frames.Column(2)&&frames.Retains(extra)&&!released,L"Pending chrome sends lost their continuing receiver or retired an unacknowledged element");
+            require(frames.Present(9,document)&&frames.revision==9&&frames.Retains(extra)&&!released,L"Older pending acknowledgement retired its still-presented element");
+            require(!frames.Present(8,document)&&frames.revision==9&&frames.Retains(extra)&&!released,L"Stale acknowledgement changed pending chrome ownership");
+            require(frames.Present(10,document)&&frames.revision==10&&frames.Group(1)&&frames.Group(3)&&frames.Column(2)&&!frames.Retains(extra)&&released,L"Final chrome acknowledgement failed to retain current receivers and release the retired element");
+            require(!frames.Present(11,document)&&frames.revision==10,L"Unknown chrome acknowledgement changed ownership");
             frames.Close();++checks;
         }
         ComboBox choice;comboOption(choice,L"One");auto selected=comboOption(choice,L"Two");choiceColors(data,choice,ControlSurface::Settings,ChoiceFeedbackMode::Field,Windows::UI::Text::FontWeights::Bold());

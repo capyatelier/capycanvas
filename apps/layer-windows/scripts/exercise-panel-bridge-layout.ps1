@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('light','dark')][string]$Theme='light')
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('light','dark')][string]$Theme='light')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -35,6 +35,53 @@ $checks=[Collections.Generic.List[object]]::new();$stderr=Join-Path $run 'stderr
 function Check($condition,[string]$name,$data){
     $checks.Add(@{name=$name;pass=[bool]$condition;data=$data})
     if(!$condition){throw $name}
+}
+function Bridge-FrameRange($History,[long]$After,[long]$Through){
+    if($null -eq $History.frame -or $null -eq $History.samples -or $null -eq $History.overflow -or $History.overflow -ne 0 -or $Through -gt $History.frame -or $Through -lt $After){throw 'Native bridge frame evidence is missing or overflowed'}
+    $selected=@($History.samples|Where-Object {$_.last_frame -gt $After -and $_.first_frame -le $Through})
+    $next=$After+1;$first=$true
+    foreach($entry in $selected){
+        if($null -eq $entry.first_frame -or $null -eq $entry.last_frame -or $entry.first_frame -gt $next -or $entry.last_frame -lt $next -or (!$first -and $entry.first_frame -ne $next)){throw 'Native bridge frame evidence skipped or reordered a frame'}
+        $first=$false;$next=[Math]::Min($Through,$entry.last_frame)+1
+    }
+    if($next -ne $Through+1){throw 'Native bridge frame evidence skipped or reordered a frame'}
+    $selected
+}
+function Bridge-EventRange($History,[long]$After,[long]$Through){
+    if($null -eq $History.serial -or $null -eq $History.overflow -or $History.overflow -ne 0 -or $Through -gt $History.serial -or $Through -lt $After){throw 'Native bridge boundary evidence is missing or overflowed'}
+    $selected=@($History.samples|Where-Object {$_.serial -gt $After -and $_.serial -le $Through})
+    $next=$After+1;$qpc=0L
+    foreach($entry in $selected){
+        if($null -eq $entry.serial -or $entry.serial -ne $next -or $entry.kind -notin @('ownership','chrome-sent','chrome-ack','chrome-reset') -or $null -eq $entry.accepted -or $entry.qpc -le 0 -or $entry.qpc -lt $qpc){throw 'Native bridge boundary evidence skipped or reordered an event'}
+        $next++;$qpc=[long]$entry.qpc
+    }
+    if($next -ne $Through+1){throw 'Native bridge boundary evidence skipped or reordered an event'}
+    $selected
+}
+function Assert-BridgeEvents($History,[long]$After,[long]$Through,$Continuing,[long]$PreSizingRegions,[long]$SnapshotQpc,[long]$SizingStart=0,[long]$SizingEnd=0){
+    $events=@(Bridge-EventRange $History $After $Through)
+    foreach($entry in $events){
+        Check ($entry.qpc -le $SnapshotQpc) 'Every bridge boundary precedes its source snapshot' $entry
+        if($SizingStart -gt 0){
+            if($entry.qpc -lt $SizingStart){Check (!$entry.window_resizing -and !$entry.native_resize_pending) 'Every pre-sizing boundary retains GPU ownership' $entry}
+            elseif($entry.qpc -lt $SizingEnd){Check $entry.window_resizing 'Every active sizing boundary retains native ownership' $entry}
+            else{Check (!$entry.window_resizing) 'Every post-sizing boundary has left native sizing' $entry}
+        }
+        Assert-BridgeFrameOwners $entry $Continuing $PreSizingRegions
+    }
+    $events
+}
+function Assert-BridgeFrameOwners($Entry,$Continuing,[long]$PreSizingRegions){
+    $receivers=@($Entry.groups|Where-Object {$_.id -in $Continuing})
+    Check ($receivers.Count -eq $Continuing.Count -and @($Continuing|Where-Object {$_ -notin $Entry.projected}).Count -eq 0 -and $Entry.bridges -gt 0) 'Every source interval retains three measured bridge receivers' $Entry
+    if($Entry.window_resizing){
+        Check ($PreSizingRegions -gt 0 -and $Entry.glass_regions -ge $PreSizingRegions) 'Every active source snapshot retains the pre-sizing glass regions' $Entry
+        Check (@($receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Every active source snapshot retains three native tint owners' $Entry
+    }elseif($Entry.native_resize_pending){
+        Check (@($receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Post-sizing handback keeps three native owners until acknowledgment' $Entry
+    }else{
+        Check (@($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Acknowledged native frames retain three GPU owners' $Entry
+    }
 }
 function Save-State([string]$phase){
     $model=Model;$status=Find 'canvas-status'
@@ -91,29 +138,35 @@ try{
     Open-Column 'before-resize';$retained=Retained-Controls
     $continuing=@((Presentation).groups|Where-Object gpu_background|ForEach-Object id)
     Check ($continuing.Count -eq 3) 'Real border resize starts with three presented receivers' $continuing
-    $dividerFolder=Join-Path $run 'stack-divider';$at=At 'divider-13'
-    $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$dividerFolder,(State-File))
+    $dividerFolder=Join-Path $run 'stack-divider';[IO.Directory]::CreateDirectory($dividerFolder)|Out-Null;$at=At 'divider-13'
+    $dividerStart=Presentation;$dividerBefore=$dividerStart.bridge_frames.frame;$dividerEventBefore=$dividerStart.bridge_events.serial
+    [CapyRowPointer]::Down('mouse',$at.x,$at.y)
     try{
-        $observer.Arm();[CapyRowPointer]::Down('mouse',$at.x,$at.y)
-        $dividerStart=[Diagnostics.Stopwatch]::GetTimestamp();$clock=[Diagnostics.Stopwatch]::StartNew()
-        try{
-            while($clock.ElapsedMilliseconds -lt 3000){
-                [CapyRowPointer]::Move($at.x,$at.y+[int](60*[Math]::Sin([Math]::PI*$clock.Elapsed.TotalSeconds)))
-                Start-Sleep -Milliseconds 8
-            }
-            [CapyRowPointer]::Move($at.x,$at.y)
-        }finally{$dividerEnd=[Diagnostics.Stopwatch]::GetTimestamp();[CapyRowPointer]::Up()}
-    }finally{$observer.Dispose()}
-    $dividerSamples=@(foreach($sample in $observer.States){
-        $native=Get-Content -LiteralPath $sample.path -Raw|ConvertFrom-Json
-        if($native.snapshot_qpc -ge $dividerStart -and $native.snapshot_qpc -le $dividerEnd){$native}
-    })
+        foreach($offset in @(30,60,30,0,-30,-60,-30,0)){
+            $before=Presentation;$priorRevision=$before.chrome_revision;$priorFrame=$before.bridge_frames.frame
+            [CapyRowPointer]::Move($at.x,$at.y+$offset)
+            Wait-Until {
+                $native=Presentation;$last=@($native.bridge_frames.samples)[-1]
+                $native.chrome_revision -gt $priorRevision -and $native.bridge_frames.frame -gt $priorFrame -and
+                $last.chrome_revision -eq $native.chrome_revision -and $last.presented_chrome_revision -eq $last.chrome_revision
+            } 'Stack-divider placement did not reach an acknowledged native frame'
+        }
+    }finally{[CapyRowPointer]::Up()}
+    $dividerDrain=[Diagnostics.Stopwatch]::GetTimestamp()
+    Wait-Until {$native=Presentation;$native.snapshot_qpc -ge $dividerDrain -and $native.bridge_frames.frame -ge $dividerBefore -and $native.bridge_events.serial -ge $dividerEventBefore} 'Stack-divider history did not publish its final drain'
+    $dividerState=Presentation;$dividerHistory=$dividerState.bridge_frames
+    $dividerSamples=@(Bridge-FrameRange $dividerHistory $dividerBefore $dividerHistory.frame)
     $dividerSamples|ConvertTo-Json -Depth 40|Set-Content (Join-Path $dividerFolder 'presentations.json')
-    Check ($dividerSamples.Count -gt 0 -and @($dividerSamples.chrome_revision|Sort-Object -Unique).Count -gt 1 -and @($dividerSamples|Where-Object {$_.chrome_revision -ne $_.presented_chrome_revision}).Count -gt 0) 'Stack-divider samples include changing unacknowledged bridge revisions' $dividerSamples.Count
+    Check ($dividerSamples.Count -gt 0 -and @($dividerSamples.chrome_revision|Sort-Object -Unique).Count -gt 1) 'Stack-divider frames include changing bridge revisions' $dividerSamples.Count
     foreach($native in $dividerSamples){
+        Assert-BridgeFrameOwners $native $continuing 0
         $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
-        Check ($receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Stack-divider receivers retain GPU ownership without native backing' @{qpc=$native.snapshot_qpc;revision=$native.chrome_revision;presented=$native.presented_chrome_revision;receivers=$receivers}
+        Check (!$native.window_resizing -and !$native.native_resize_pending -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Stack-divider receivers retain GPU ownership without native backing' $native
     }
+    $dividerEvents=@(Assert-BridgeEvents $dividerState.bridge_events $dividerEventBefore $dividerState.bridge_events.serial $continuing 0 $dividerState.snapshot_qpc)
+    $dividerEvents|ConvertTo-Json -Depth 40|Set-Content (Join-Path $dividerFolder 'boundaries.json')
+    Check ($dividerEvents.Count -gt 0 -and @($dividerEvents|Where-Object {$_.kind -eq 'chrome-sent'}).Count -gt 0 -and @($dividerEvents|Where-Object {$_.kind -eq 'chrome-ack'}).Count -gt 0) 'Stack-divider boundaries include native send and acknowledgment decisions' $dividerEvents.Count
+    @{native_frames=($dividerHistory.frame-$dividerBefore);boundary_events=$dividerEvents.Count;outstanding_revision_segments=@($dividerSamples|Where-Object {$_.chrome_revision -ne $_.presented_chrome_revision}).Count;forced_pending_coverage='real WorkspaceView text-layout send/send/stale/current acknowledgment and resize-handback proof';scope='contiguous native Rendering history and every ownership/send/ack boundary; event serials are not frame IDs'}|ConvertTo-Json|Set-Content (Join-Path $dividerFolder 'coverage.json')
     Open-Column 'stack-divider-settled'
     $moveStart=[CapyBridgeWindow]::Bounds($window);$caption=$null
     $captionY=[int]($root.Current.BoundingRectangle.Top+(Model).titlebar_insets[2]*([CapyRowPointer]::GetDpiForWindow($window)/96.)*.5)
@@ -121,7 +174,7 @@ try{
         if([CapyBridgeWindow]::Caption($window,$x,$captionY)){$caption=@($x,$captionY);break}
     }
     Check ($null-ne$caption) 'Titlebar move uses measured native caption hit region' $caption
-    $moveSamples=[Collections.Generic.List[object]]::new()
+    $moveBefore=Presentation;$moveSamples=[Collections.Generic.List[object]]::new()
     [CapyRowPointer]::Down('mouse',$caption[0],$caption[1])
     try{
         for($step=1;$step-le6;$step++){
@@ -132,12 +185,19 @@ try{
             Check (!$native.window_resizing -and !$native.native_resize_pending -and $native.chrome_revision -eq $native.presented_chrome_revision -and $receivers.Count -eq $continuing.Count -and @($receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Titlebar movement retains presented GPU receivers' $moveSamples[$moveSamples.Count-1]
         }
     }finally{[CapyRowPointer]::Up();$moveSamples|ConvertTo-Json -Depth 30|Set-Content (Join-Path $run 'titlebar-move-samples.json')}
+    $moveDrain=[Diagnostics.Stopwatch]::GetTimestamp()
+    Wait-Until {$native=Presentation;$native.snapshot_qpc -ge $moveDrain -and $native.bridge_frames.frame -ge $moveBefore.bridge_frames.frame -and $native.bridge_events.serial -ge $moveBefore.bridge_events.serial} 'Titlebar history did not publish its final drain'
+    $moveAfter=Presentation
+    $moveFrames=@(Bridge-FrameRange $moveAfter.bridge_frames $moveBefore.bridge_frames.frame $moveAfter.bridge_frames.frame)
+    foreach($entry in $moveFrames){Assert-BridgeFrameOwners $entry $continuing 0}
+    $moveEvents=@(Assert-BridgeEvents $moveAfter.bridge_events $moveBefore.bridge_events.serial $moveAfter.bridge_events.serial $continuing 0 $moveAfter.snapshot_qpc)
+    @{frames=$moveFrames;boundaries=$moveEvents;rendering_after=$moveBefore.bridge_frames.frame;rendering_through=$moveAfter.bridge_frames.frame;scope='Contiguous native Rendering intervals and every native boundary event'}|ConvertTo-Json -Depth 40|Set-Content (Join-Path $run 'titlebar-source-history.json')
     $moveEnd=[CapyBridgeWindow]::Bounds($window)
     Check ($moveEnd[0] -gt $moveStart[0]+30 -and $moveEnd[2] -eq $moveStart[2] -and $moveEnd[3] -eq $moveStart[3]) 'Real titlebar drag changes position without resizing' $moveEnd
     Save-State 'titlebar-move-settled';Capture 'titlebar-move' -Composed -WithModel
     Resize-BridgeWindow 1500 1000
     $preSizingRegions=(Model).windows_glass.regions
-    $motionFolder=Join-Path $run 'continuous-resize'
+    $resizeBefore=Presentation;$motionFolder=Join-Path $run 'continuous-resize'
     $observer=[PanelBridgeCapture]::new($window,[uint32]$review.Id,(Workspace-Root),$motionFolder,(State-File))
     try{$observer.Arm();$observer.Drag([CapyWindowExercise])}
     finally{$observer.Dispose()}
@@ -147,45 +207,33 @@ try{
     $observed=@($samples|Where-Object {$_.end -ge $observer.DownQpc -and $_.begin -le $observer.UpQpc -and ($_.width_begin -ne $observer.InitialWidth -or $_.width_end -ne $observer.InitialWidth)})
     $boundary=@($samples|Where-Object {($_.begin -lt $observer.DownQpc -and $_.end -ge $observer.DownQpc) -or ($_.begin -le $observer.UpQpc -and $_.end -gt $observer.UpQpc) -or ($_.width_begin -eq $observer.InitialWidth -and $_.width_end -ne $observer.InitialWidth)})
     $boundary|ConvertTo-Json -Depth 10|Set-Content (Join-Path $motionFolder 'boundary-intervals.json')
-    $motion=@($samples|Where-Object {$_.begin -ge $observer.DownQpc -and $_.end -le $observer.UpQpc -and $_.width_begin -ne $observer.InitialWidth})
-    Check ($motion.Count -gt 0) 'Real border resize has fully observed active motion' $motion.Count
-    Wait-Until {$native=Presentation;!$native.window_resizing -and !$native.native_resize_pending} 'Real border resize did not return surfaces to the GPU'
+    Wait-Until {$native=Presentation;$native.snapshot_qpc -ge $observer.UpQpc -and !$native.window_resizing -and !$native.native_resize_pending -and $native.bridge_frames.frame -ge $resizeBefore.bridge_frames.frame -and $native.bridge_events.serial -ge $resizeBefore.bridge_events.serial} 'Real border resize did not return surfaces to the GPU'
     $settled=Presentation;$sizingStart=[long]$settled.native_sizing_start_qpc;$sizingEnd=[long]$settled.native_sizing_end_qpc
     Check ($sizingStart -ge $observer.DownQpc -and $sizingEnd -ge $sizingStart -and $sizingEnd -ge $observer.UpQpc) 'Native sizing source markers bracket the actual contact' @{start=$sizingStart;end=$sizingEnd;down=$observer.DownQpc;up=$observer.UpQpc}
-    $classified=@(foreach($sample in $samples){
-        $native=Get-Content -LiteralPath $sample.path -Raw|ConvertFrom-Json
-        $model=(Get-Content -LiteralPath $sample.model_path -Raw|ConvertFrom-Json).model
-        $source=[long]$native.snapshot_qpc
-        $interval=if($source -lt $sizingStart){'pre-sizing'}elseif($source -lt $sizingEnd){'active-sizing'}else{'post-sizing'}
-        $receivers=@($native.groups|Where-Object {$_.id -in $continuing})
-        $projected=@($native.panel_bridge_frame.bridges|ForEach-Object {$_[2].receivers}|ForEach-Object group|Sort-Object -Unique)
-        @{sample=$sample;source_qpc=$source;glass_regions=$model.windows_glass.regions;interval=$interval;window_resizing=$native.window_resizing;native_resize_pending=$native.native_resize_pending;receivers=$receivers;projected=$projected;bridges=@($native.panel_bridge_frame.bridges).Count}
-    })
+    $history=$settled.bridge_frames
+    if($null -eq $history.overflow -or $history.overflow -ne 0){throw 'Native bridge frame evidence is missing or overflowed'}
+    $resizeFrames=@(Bridge-FrameRange $history $resizeBefore.bridge_frames.frame $history.frame)
+    $classified=@($resizeFrames|Where-Object {$_.last_qpc -ge $observer.DownQpc})
+    $resizeEvents=@(Assert-BridgeEvents $settled.bridge_events $resizeBefore.bridge_events.serial $settled.bridge_events.serial $continuing $preSizingRegions $settled.snapshot_qpc $sizingStart $sizingEnd)
+    $resizeEvents|ConvertTo-Json -Depth 40|Set-Content (Join-Path $motionFolder 'boundaries.json')
+    Check ($resizeEvents.Count -gt 0 -and @($resizeEvents|Where-Object window_resizing).Count -gt 0 -and @($resizeEvents|Where-Object {$_.kind -eq 'chrome-ack'}).Count -gt 0) 'Real border resize retains active ownership and acknowledgment boundaries' $resizeEvents.Count
     $classified|ConvertTo-Json -Depth 30|Set-Content (Join-Path $motionFolder 'source-intervals.json')
-    $firstActive=@($classified|Where-Object {$_.source_qpc -ge $sizingStart -and $_.source_qpc -lt $sizingEnd}|Select-Object -First 1)
-    $firstObserved=$classified|Where-Object {$_.sample.path -eq $observed[0].path}|Select-Object -First 1
-    @{first_client_motion_read=$firstObserved;first_source_active=$firstActive;first_fully_active_client_read=$motion[0];sizing_start_qpc=$sizingStart;sizing_end_qpc=$sizingEnd;boundary_intervals=$boundary;input='input.csv';frames='frames.csv';origin='origin.json'}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $motionFolder 'first-motion.json')
+    $firstActive=@($classified|Where-Object window_resizing|Select-Object -First 1)
     Check ($firstActive.Count -eq 1) 'Real border resize observes its first active source snapshot' $firstActive
+    @{first_source_active=$firstActive;sizing_start_qpc=$sizingStart;sizing_end_qpc=$sizingEnd;input='input.csv';frames='frames.csv';origin='origin.json';scope='native Rendering ownership and source revisions, independent of UIA call intervals'}|ConvertTo-Json -Depth 30|Set-Content (Join-Path $motionFolder 'first-motion.json')
     foreach($entry in $classified){
-        Check ($entry.source_qpc -gt 0 -and $entry.source_qpc -le $entry.sample.end) 'Every presentation snapshot has an ordered source timestamp' $entry
-        Check ($entry.receivers.Count -eq 3 -and @($continuing|Where-Object {$_ -notin $entry.projected}).Count -eq 0 -and $entry.bridges -gt 0) 'Every source interval retains three measured bridge receivers' $entry
-        if($entry.interval -eq 'active-sizing'){
-            Check ($preSizingRegions -gt 0 -and $entry.glass_regions -ge $preSizingRegions) 'Every active source snapshot retains the pre-sizing glass regions' @{before=$preSizingRegions;entry=$entry}
-            Check ($entry.window_resizing -and @($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Every active source snapshot retains three native tint owners' $entry
-        }elseif($entry.interval -eq 'pre-sizing'){
-            Check (!$entry.window_resizing -and !$entry.native_resize_pending -and @($entry.receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Every pre-sizing source snapshot retains three GPU owners' $entry
-        }else{
-            Check (!$entry.window_resizing) 'Every post-sizing source snapshot has left native sizing' $entry
-            if($entry.native_resize_pending){
-                Check (@($entry.receivers|Where-Object {!$_.native_bridge_background -or $_.gpu_background}).Count -eq 0) 'Post-sizing handback keeps three native owners until acknowledgment' $entry
-            }else{
-                Check (@($entry.receivers|Where-Object {!$_.gpu_background -or $_.native_bridge_background}).Count -eq 0) 'Acknowledged post-sizing snapshots restore three GPU owners' $entry
-            }
-        }
+        Check ($entry.first_qpc -gt 0 -and $entry.last_qpc -ge $entry.first_qpc -and $entry.last_qpc -le $settled.snapshot_qpc) 'Every presentation snapshot has an ordered source timestamp' $entry
+        if($entry.first_qpc -lt $sizingStart){
+            Check (!$entry.window_resizing -and !$entry.native_resize_pending) 'Every pre-sizing source snapshot retains three GPU owners' $entry
+        }elseif($entry.first_qpc -lt $sizingEnd){
+            Check $entry.window_resizing 'Every active source snapshot retains three native tint owners' $entry
+        }else{Check (!$entry.window_resizing) 'Every post-sizing source snapshot has left native sizing' $entry}
+        Assert-BridgeFrameOwners $entry $continuing $preSizingRegions
     }
     $native=Presentation
     $layoutFrames=$native.resize_layout_frames;$frameSamples=@($layoutFrames.samples)
     Check ($layoutFrames.count -gt 0 -and $layoutFrames.overflow -eq 0 -and $frameSamples.Count -eq $layoutFrames.count) 'Every native resize Rendering tick has a bounded layout size record' $layoutFrames
+    Check (@($frameSamples.width|Sort-Object -Unique).Count -gt 1) 'Real border resize has fully observed active motion' $frameSamples.Count
     $mismatches=@($frameSamples|Where-Object mismatch);$invalid=@($frameSamples|Where-Object {!$_.valid})
     @{theme=$Theme;stage='synchronous resize layout';scope='native CompositionTarget.Rendering during real sizing contact';count=$frameSamples.Count;mismatch_count=$mismatches.Count;invalid_viewports=$invalid.Count;overflow=$layoutFrames.overflow;tolerance=$layoutFrames.tolerance;first_mismatch=@($mismatches|Select-Object -First 1);samples=$frameSamples}|
         ConvertTo-Json -Depth 20|Set-Content (Join-Path $motionFolder 'layout-frames.json')

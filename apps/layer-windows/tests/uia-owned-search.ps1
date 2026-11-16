@@ -3424,6 +3424,63 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
 }
 
 & {
+    $panelAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-panel-bridge-layout.ps1'),[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    foreach($name in 'Bridge-FrameRange','Bridge-EventRange','Assert-BridgeEvents','Assert-BridgeFrameOwners'){
+        $definition=$panelAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq$name}.GetNewClosure(),$true)
+        if(!$definition){throw "Missing actual bridge frame oracle $name"}
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    function Check($Condition,$Message,$Data){if(!$Condition){throw $Message}}
+    foreach($case in 'slow','gap','duplicate','overflow','short'){
+        $rows=@(@{first_frame=1;last_frame=100;chrome_revision=20;presented_chrome_revision=19},@{first_frame=101;last_frame=200;chrome_revision=21;presented_chrome_revision=21})
+        $history=@{frame=200;overflow=0;samples=$rows}
+        switch($case){'gap'{$rows[1].first_frame=102};'duplicate'{$rows[1].first_frame=99};'overflow'{$history.overflow=1};'short'{$rows[1].last_frame=199}}
+        $failure=$null;try{$actual=@(Bridge-FrameRange $history 99 200)}catch{$failure=$_}
+        if($case-eq'slow'){if($failure){throw $failure};if($actual.Count-ne2){throw 'Bridge frame history lost a native source interval'}}
+        elseif(!$failure){throw "Bridge frame history accepted $case evidence"}
+    }
+    foreach($case in 'zero','zero-missing','zero-overflow','reverse'){
+        $history=@{frame=200;overflow=0;samples=@()};$after=200
+        switch($case){'zero-missing'{$history.Remove('samples')};'zero-overflow'{$history.overflow=1};'reverse'{$after=201}}
+        $failure=$null;try{$actual=@(Bridge-FrameRange $history $after 200)}catch{$failure=$_}
+        if($case -eq 'zero'){if($failure){throw $failure};if($actual.Count -ne 0){throw 'An origin-only window move invented a native Rendering interval'}}
+        elseif(!$failure){throw "Native bridge history accepted $case evidence"}
+    }
+    foreach($case in 'gpu','sizing','handback','missing','wrong-projection','native-outside-sizing','gpu-during-sizing','glass-lost'){
+        $row=@{groups=@(1..3|ForEach-Object {@{id=$_;gpu_background=$true;native_bridge_background=$false}});projected=@(1,2,3);bridges=1;window_resizing=$false;native_resize_pending=$false;glass_regions=5}
+        if($case-in@('sizing','handback','gpu-during-sizing','glass-lost')){foreach($group in $row.groups){$group.gpu_background=$false;$group.native_bridge_background=$true};if($case-eq'handback'){$row.native_resize_pending=$true}else{$row.window_resizing=$true}}
+        switch($case){'missing'{$row.groups=$row.groups[0..1]};'wrong-projection'{$row.projected=@(1,2,4)};'native-outside-sizing'{$row.groups[0].native_bridge_background=$true};'gpu-during-sizing'{$row.groups[0].gpu_background=$true};'glass-lost'{$row.glass_regions=4}}
+        $failure=$null;try{Assert-BridgeFrameOwners $row @(1,2,3) 5}catch{$failure=$_}
+        if($case-in@('gpu','sizing','handback')){if($failure){throw $failure}}
+        elseif(!$failure){throw "Native bridge ownership accepted $case evidence"}
+    }
+    foreach($case in 'same-frame-good','same-frame-bad-owner','gap','duplicate','overflow','short','qpc-reordered','future-qpc','unknown-kind'){
+        $rows=@(1..3|ForEach-Object {@{serial=$_;kind='ownership';qpc=100;accepted=$true;chrome_revision=20;presented_chrome_revision=19;groups=@(1..3|ForEach-Object {@{id=$_;gpu_background=$true;native_bridge_background=$false}});projected=@(1,2,3);bridges=1;window_resizing=$false;native_resize_pending=$false;glass_regions=5}})
+        $rows[0].kind='chrome-sent';$rows[2].kind='chrome-ack';$rows[2].accepted=$false
+        $history=@{serial=3;overflow=0;samples=$rows}
+        switch($case){
+            'same-frame-bad-owner'{$rows[1].groups[0].gpu_background=$false;$rows[1].groups[0].native_bridge_background=$true}
+            'gap'{$rows[1].serial=4};'duplicate'{$rows[1].serial=1};'overflow'{$history.overflow=1}
+            'short'{$history.samples=$rows[0..1]};'qpc-reordered'{$rows[1].qpc=99};'future-qpc'{$rows[2].qpc=201};'unknown-kind'{$rows[1].kind='rendering'}
+        }
+        $failure=$null;try{$actual=@(Assert-BridgeEvents $history 0 3 @(1,2,3) 5 200)}catch{$failure=$_}
+        if($case -eq 'same-frame-good'){if($failure){throw $failure};if($actual.Count -ne 3 -or $actual[2].accepted){throw 'Bridge boundaries lost their stale acknowledgment or same-frame ordering'}}
+        elseif(!$failure){throw "Bridge boundary history accepted $case evidence"}
+    }
+    foreach($case in 'native-through-handback','gpu-during-handback','native-before-sizing'){
+        $rows=@(1..3|ForEach-Object {@{serial=$_;kind='ownership';qpc=(99+$_);accepted=$true;groups=@(1..3|ForEach-Object {@{id=$_;gpu_background=$false;native_bridge_background=$true}});projected=@(1,2,3);bridges=1;window_resizing=$false;native_resize_pending=$true;glass_regions=5}})
+        $rows[0].window_resizing=$true;$rows[0].native_resize_pending=$false
+        $rows[2].native_resize_pending=$false;foreach($group in $rows[2].groups){$group.gpu_background=$true;$group.native_bridge_background=$false}
+        switch($case){'gpu-during-handback'{$rows[1].groups[0].gpu_background=$true};'native-before-sizing'{$rows[0].qpc=99}}
+        $failure=$null;try{$actual=@(Assert-BridgeEvents @{serial=3;overflow=0;samples=$rows} 0 3 @(1,2,3) 5 200 100 101)}catch{$failure=$_}
+        if($case -eq 'native-through-handback'){if($failure){throw $failure};if($actual.Count -ne 3){throw 'Native handback boundaries were dropped'}}
+        elseif(!$failure){throw "Bridge source boundaries accepted $case evidence"}
+    }
+    'Actual bridge oracles preserve contiguous Rendering history and every ownership/send/ack boundary, including incorrect transitions entirely between Rendering ticks.'
+}
+
+& {
  $client=Join-Path $PSScriptRoot '..'
  $workspace=Get-Content (Join-Path $client 'WorkspaceView.cpp') -Raw
  $bubbles=Get-Content (Join-Path $client 'WorkspaceBubbles.cpp') -Raw
