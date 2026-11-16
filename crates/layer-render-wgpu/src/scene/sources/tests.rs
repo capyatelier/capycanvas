@@ -1463,7 +1463,7 @@ fn decode_results_keep_their_requester_class_and_navigator_results_cannot_take_t
     for (x, class) in [(0, Class::Navigator), (1, Class::Visible)] {
         let pixels = crate::prepare_image_tile(&source, [x, 0], space, &r.device.source_samples, None);
         r.source_results.push_back((space, PreparedImageWork::Image(PreparedMipTile {
-            class, use_: SourceUse::Display, id: layer_core::authored::PortableId::random(), source: source.clone(), coordinate: [x, 0], pixels,
+            class, use_: SourceUse::Native, id: layer_core::authored::PortableId::random(), source: source.clone(), coordinate: [x, 0], pixels,
         })));
     }
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());

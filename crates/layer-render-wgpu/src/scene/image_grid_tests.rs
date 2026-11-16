@@ -292,12 +292,13 @@ fn normal_composition_converts_in_its_final_destination() {
     for count in [1, 2] {
         scene.begin_frame();
         let output = scene.alloc(&r, wgpu::Color::TRANSPARENT).unwrap();
+        let mut output = scene.own(output);
         for _ in 0..count {
-            scene.draw(&r, output, image.view.clone(), None, [0., 0., PAGE_SIZE as f32, PAGE_SIZE as f32],
-                [7., 0.7, 1., 0.], true, Convert::Encode);
+            scene.fold(&r, &mut output, fold::Layer { base: Some(image.view.clone()), overlay: None, mask: None, opacity: 0.7, coverage: 1. }, Convert::Encode).unwrap();
         }
+        let output = scene.keep(output);
         let output = scene.converted(&r, output, Convert::DecodeStore).unwrap();
-        assert_eq!(scene.jobs.iter().filter(|j| matches!(j, Job::Draw { .. })).count(), 1,
+        assert_eq!(scene.jobs.iter().filter(|j| matches!(j, Job::Draw { .. } | Job::Fold(_))).count(), 1,
             "normal layers and their output conversion require one destination write");
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         pollster::block_on(scene.prepare_capture_work_async(&mut r)).unwrap();
@@ -329,7 +330,7 @@ fn complete_compute_composition_replaces_the_clear_but_partial_writes_preserve_i
         let output = scene.alloc(&r, wgpu::Color { r: 0.3, g: 0.4, b: 0.6, a: 1. }).unwrap();
         let region = PixelRect::new(0, 0, width, PAGE_SIZE);
         scene.draw(&r, output, image.view.clone(), None, [0., 0., width as f32, PAGE_SIZE as f32],
-            [7., 1., 1., 0.], true, Convert::None);
+            [1., 1., 0., 0.], true, Convert::None);
         let Some(Job::Draw { clip, .. }) = scene.jobs.last_mut() else { unreachable!() };
         *clip = Some(region);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());

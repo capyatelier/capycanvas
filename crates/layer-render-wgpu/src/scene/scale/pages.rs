@@ -2476,7 +2476,7 @@ pub(super) mod query_tests {
             .chain(crate::startup::SourceKinds::for_scene(document.scene()).pipelines(&renderer.scene_pipelines.source)))).unwrap();
         let format=renderer.display_precision(document.scene()).format();
         pollster::block_on(renderer.compilation.prepare_all(renderer.scene_pipelines.scale_pipelines(format).into_iter()
-            .chain([&renderer.scene_pipelines.scale.output(format).project,&renderer.scene_pipelines.scale.full.reduce,&renderer.scene_pipelines.constant.2]))).unwrap();
+            .chain([&renderer.scene_pipelines.scale.output(format).project,&renderer.scene_pipelines.scale.full.reduce,&renderer.scene_pipelines.constant.2,&renderer.scene_pipelines.fold.pipeline]))).unwrap();
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
         for coordinate in page_coordinates(PixelRect::full(extent)) {
             let pixels=crate::prepare_image_tile(source,coordinate,renderer.device.working_space(),&renderer.device.source_samples,None).unwrap();
@@ -2649,7 +2649,7 @@ pub(super) mod query_tests {
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();
         let pipelines=&renderer.scene_pipelines;let kernels=pipelines.scale.output(cache.precision.format());
-        pollster::block_on(renderer.compilation.prepare_all([&pipelines.constant.2,&pipelines.objects.preview,&kernels.compose,&kernels.reduce_pair,&kernels.reduce])).unwrap();
+        pollster::block_on(renderer.compilation.prepare_all([&pipelines.constant.2,&pipelines.fold.pipeline,&pipelines.objects.preview,&kernels.compose,&kernels.reduce_pair,&kernels.reduce])).unwrap();
         assert_eq!(leaf.child(0,leaf.window,renderer.empty_view.clone()).unwrap().key.image,id);
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
         cache.render_graph(&mut scene,renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::Preview,None).unwrap();

@@ -18,7 +18,7 @@ use std::{
 };
 pub(crate) type RequiredSource = (Arc<SourceImage>, [u32; 2]);
 #[derive(Clone,Copy,PartialEq,Eq)]
-pub(crate) enum SourceUse { Display, Exact }
+pub(crate) enum SourceUse { Native, Exact }
 pub(crate) const NORMALIZED_PAGE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 const ARRAY_BYTES: u64 = 16 << 20;
 const DECODERS: usize = 4;
@@ -304,9 +304,19 @@ impl Inputs {
         self.insert_for(Key::Image(Arc::downgrade(source),coordinate),builtin_settings(source,coordinate,destination),Some(Pixels::Image(source.clone(),coordinate)),use_);
     }
     pub(crate) fn raster(&mut self,blob:Arc<TileBlob>,space:RgbSpace,destination:RgbSpace) {
+        self.raster_for(blob,space,destination,SourceUse::Exact);
+    }
+    pub(crate) fn raster_for(&mut self,blob:Arc<TileBlob>,space:RgbSpace,destination:RgbSpace,use_:SourceUse) {
         let mut color=rgb_settings(space,destination,blob.descriptor.depth(),[PAGE_SIZE;2],blob.descriptor.alpha);
         color.scalar=u32::from(blob.descriptor.channels==1);color.scalar_scale=if color.scalar!=0 {1./blob.descriptor.depth().maximum() as f32}else {0.};
-        self.insert(Key::raster(&blob,space,destination),Some(color),Some(Pixels::Raster(blob,space,destination)));
+        let use_=if folds_natively(blob.descriptor,space,destination) {use_}else {SourceUse::Exact};
+        self.insert_for(Key::raster(&blob,space,destination),Some(color),Some(Pixels::Raster(blob,space,destination)),use_);
+    }
+    fn require_exact(&mut self,address:Address) {
+        let Some((_,choices))=self.decisions.0.get(&address) else {return;};
+        for key in choices.iter().flatten().filter_map(|choice|match choice {Selected::Decoded(key)=>Some(key),Selected::Resident(..)=>None}) {
+            if let Some((_,_,_,use_))=self.tiles.iter_mut().find(|(stored,..)|stored.matches(key)) {*use_=SourceUse::Exact;}
+        }
     }
     pub(crate) fn base(&mut self,base:&layer_core::authored::PaintBase,coordinate:[u32;2],destination:RgbSpace) {
         let bounds=crate::source_access::paint_base_source_bounds(base,coordinate);
@@ -318,10 +328,10 @@ impl Inputs {
         }
         for coordinate in page_coordinates(bounds) {self.image(base.image.storage(),coordinate,destination);}
     }
-    fn fallback(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,id:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->Result<Option<Selected>,GpuRasterError> {
+    fn fallback(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,id:SourceTarget,plane:RasterPlane,coordinate:[u32;2],use_:SourceUse)->Result<Option<Selected>,GpuRasterError> {
         let space=r.document_color().space;
         if let Some(blob)=r.raster_tile_for(scene,id,plane,coordinate)? {
-            let key=Key::raster(&blob,space,space);self.raster(blob,space,space);return Ok(Some(Selected::Decoded(key)));
+            let key=Key::raster(&blob,space,space);self.raster_for(blob,space,space,use_);return Ok(Some(Selected::Decoded(key)));
         }
         if plane==RasterPlane::Color && let Some(base)=scene.paint_base(id) && source_access::paint_base_contains(base,coordinate) {
             self.base(base,coordinate,space);return Ok(Some(Selected::Decoded(Key::base(base,coordinate))));
@@ -374,21 +384,22 @@ impl Inputs {
             crate::paint_transform::NativeRead::Resident(read)=>Some(Selected::resident(read)),
             crate::paint_transform::NativeRead::Original(expected)=>{
                 if r.raster_version_for(scene,id,plane,coordinate)?.matches(&expected)!=Some(true) {return Err(GpuRasterError::NotReady);}
-                self.fallback(r,scene,id,plane,coordinate)?
+                self.fallback(r,scene,id,plane,coordinate,SourceUse::Exact)?
             },
             crate::paint_transform::NativeRead::Display=>return Ok(false),
         };
         self.decisions.insert(address,false,[selected,None])?;
         Ok(true)
     }
-    fn color(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,wanted:Option<&super::SignatureFrame>,consumer:Option<&crate::submission::Submission>,id:SourceTarget,coordinate:[u32;2])->Result<(),GpuRasterError> {
+    #[expect(clippy::too_many_arguments, reason = "A color decision reads the frame's versions for one consumer use")]
+    fn color(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,wanted:Option<&super::SignatureFrame>,consumer:Option<&crate::submission::Submission>,id:SourceTarget,coordinate:[u32;2],use_:SourceUse)->Result<(),GpuRasterError> {
         if self.record_capture(r,scene,wanted,consumer,(id,RasterPlane::Color,coordinate))? {return Ok(());}
         let persistent=r.paint_layers.iter().find(|layer|layer.id==id).and_then(|layer|layer.pages.iter().find(|page|page.coordinate==coordinate));
         let preview=(r.preview_layer_id==Some(id)).then(||r.preview_page(coordinate)).flatten();
         let page=preview.filter(|_|r.preview_requires_base).or(persistent);
         let resident=page.map(|page|r.read_scene_color_input(scene,id,page,preview.is_some_and(|p|std::ptr::eq(p,page)),wanted,consumer))
             .transpose()?.flatten().map(Selected::resident);
-        let base=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,RasterPlane::Color,coordinate)?};
+        let base=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,RasterPlane::Color,coordinate,use_)?};
         let overlay=preview.filter(|_|!r.preview_requires_base).map(|page|r.read_scene_color_input(scene,id,page,true,wanted,consumer))
             .transpose()?.flatten().map(Selected::resident);
         self.decisions.insert((id,RasterPlane::Color,coordinate),false,[base,overlay])
@@ -412,14 +423,14 @@ impl Inputs {
             .and_then(|layer|layer.watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)));
         let resident=page.map(|page|r.read_scene_wetness_input(scene,id,page,predicted.is_some(),wanted,consumer))
             .transpose()?.flatten().map(Selected::resident);
-        let input=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,plane,coordinate)?};
+        let input=match resident {Some(read)=>Some(read),None=>self.fallback(r,scene,id,plane,coordinate,SourceUse::Exact)?};
         self.decisions.insert((id,plane,coordinate),false,[input,None])
     }
     pub(crate) fn additional_bytes(&self,cache:&DecodedTiles)->u64 {
         let mut bytes=self.tiles.iter().map(|(key,color,_,use_)| {
             if cache.keyed(key).is_some_and(|slot|slot.valid.load(Ordering::Acquire)
-                && (*use_==SourceUse::Display || slot.layer.format()==wgpu::TextureFormat::Rgba32Float)) {return 0;}
-            let format=if *use_==SourceUse::Display {color.map_or(wgpu::TextureFormat::Rgba32Float,SourceColor::input_format)}else {wgpu::TextureFormat::Rgba32Float};
+                && (*use_==SourceUse::Native || slot.layer.format()==wgpu::TextureFormat::Rgba32Float)) {return 0;}
+            let format=if *use_==SourceUse::Native {color.map_or(wgpu::TextureFormat::Rgba32Float,SourceColor::input_format)}else {wgpu::TextureFormat::Rgba32Float};
             u64::from(PAGE_SIZE).pow(2)*u64::from(format.block_copy_size(None).unwrap())
         }).sum::<u64>();
         let mut formats=std::collections::HashSet::new();let mut tables=std::collections::BTreeSet::new();
@@ -458,7 +469,7 @@ impl Inputs {
                 && slot.ready()) {cache.prepare_color(&r.device,*color)?;}
             let (tile,pending)=match pixels {
                 Some(Pixels::Image(source,coordinate))=>cache.plan_image(r,source,*coordinate,*use_)?,
-                Some(Pixels::Raster(blob,space,destination))=>cache.plan_raster(r,blob,*space,*destination)?,
+                Some(Pixels::Raster(blob,space,destination))=>cache.plan_raster(r,blob,*space,*destination,*use_)?,
                 _=>continue,
             };
             let (tile,promotion)=if *use_==SourceUse::Exact {cache.promote(r,tile)?}else {(tile,None)};
@@ -771,10 +782,19 @@ impl AcceptedInputs {
         self.decisions().0.get(&(target,plane,coordinate)).and_then(|(_,[base,overlay])|overlay.as_ref().or(base.as_ref())).map_or(0,Selected::level)
     }
     pub(crate) fn color(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,coordinate:[u32;2])->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
-        self.decide(r,(target,RasterPlane::Color,coordinate),None,|inputs,declaration|match declaration.raw {
+        self.color_for(r,scene,target,coordinate,SourceUse::Exact)
+    }
+    pub(crate) fn native_color(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,coordinate:[u32;2])->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
+        self.color_for(r,scene,target,coordinate,SourceUse::Native)
+    }
+    fn color_for(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,coordinate:[u32;2],use_:SourceUse)->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
+        let address=(target,RasterPlane::Color,coordinate);
+        let reads=self.decide(r,address,None,|inputs,declaration|match declaration.raw {
             Some(_)=>declaration.raw_color(inputs,r,target,coordinate),
-            None=>inputs.color(r,scene,declaration.wanted.as_deref(),declaration.consumer.as_ref(),target,coordinate),
-        })
+            None=>inputs.color(r,scene,declaration.wanted.as_deref(),declaration.consumer.as_ref(),target,coordinate,use_),
+        })?;
+        if use_==SourceUse::Exact && let Some((inputs,_))=self.declaring.as_deref_mut() {inputs.require_exact(address);}
+        Ok(reads)
     }
     pub(crate) fn raw_color(&mut self,r:&WgpuRasterizer,target:SourceTarget,coordinate:[u32;2])->Result<[Option<source_access::SourceRead>;2],GpuRasterError> {
         self.decide(r,(target,RasterPlane::Color,coordinate),Some(true),|inputs,declaration|declaration.raw_color(inputs,r,target,coordinate))
@@ -1451,7 +1471,7 @@ impl DecodedTiles {
         source: &Arc<SourceImage>,
         coordinate: [u32; 2],
     ) -> Result<(RawTile, Option<Arc<PendingTile>>), GpuRasterError> {
-        self.plan_image(r,source,coordinate,SourceUse::Display)
+        self.plan_image(r,source,coordinate,SourceUse::Native)
     }
     pub(in crate::scene) fn plan_exact(&mut self,r:&WgpuRasterizer,source:&Arc<SourceImage>,coordinate:[u32;2])->Result<(RawTile,Option<Arc<PendingTile>>),GpuRasterError> {
         self.plan_image(r,source,coordinate,SourceUse::Exact)
@@ -1481,6 +1501,7 @@ impl DecodedTiles {
         blob: &Arc<TileBlob>,
         space: RgbSpace,
         destination: RgbSpace,
+        use_: SourceUse,
     ) -> Result<(RawTile, Option<Arc<PendingTile>>), GpuRasterError> {
         validate_raster(blob, space)?;
         let d = blob.descriptor;
@@ -1489,7 +1510,7 @@ impl DecodedTiles {
         data.scalar = u32::from(d.channels == 1);
         data.scalar_scale = if d.channels == 1 { 1. / depth.maximum() as f32 } else { 0. };
         let (tile, write) =
-            self.plan_key_for(r,Key::raster(blob,space,destination),SourceUse::Exact)?;
+            self.plan_key_for(r,Key::raster(blob,space,destination),use_)?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Raster(blob.clone(), space,destination),
             texture: tile.texture.clone(),
@@ -1568,7 +1589,7 @@ impl DecodedTiles {
         self.slots.len() - 1
     }
     fn plan_key(&mut self, r: &WgpuRasterizer, key: Key) -> Result<(RawTile, Option<crate::submission::CacheWrite>), GpuRasterError> {
-        self.plan_key_for(r,key,SourceUse::Display)
+        self.plan_key_for(r,key,SourceUse::Native)
     }
     fn plan_key_for(&mut self,r:&WgpuRasterizer,key:Key,use_:SourceUse)->Result<(RawTile,Option<crate::submission::CacheWrite>),GpuRasterError> {
         #[cfg(test)]
@@ -1901,6 +1922,9 @@ fn builtin_settings(
         }),
         AlphaAssociation::Straight,
     ))
+}
+pub(super) fn folds_natively(descriptor:PixelDescriptor,space:RgbSpace,destination:RgbSpace)->bool {
+    space==destination && descriptor.channels==4 && descriptor.depth()==SampleDepth::U8 && descriptor.alpha==AlphaAssociation::Straight
 }
 fn rgb_settings(
     space: RgbSpace,

@@ -285,6 +285,16 @@ impl Scene {
         if !region.is_empty() {
             let extent = [destination.texture.width(), destination.texture.height()];
             let view = &self.pool[output].view;
+            let texture = &destination.texture;
+            if texture.format() == wgpu::TextureFormat::Rgba32Float && texture.usage().contains(wgpu::TextureUsages::STORAGE_BINDING)
+                && texture.mip_level_count() == 1 && texture.depth_or_array_layers() == 1
+                && let Some(Job::Fold(fold)) = self.jobs.last_mut()
+                && fold.retarget(view, &destination.view, [i64::from(tile[0] * PAGE_SIZE) - i64::from(bounds.min_x()),
+                    i64::from(tile[1] * PAGE_SIZE) - i64::from(bounds.min_y())], region.window_local(bounds))
+            {
+                self.free(output);
+                return;
+            }
             let direct = match self.jobs.last_mut() {
                 Some(Job::Draw { target, sources, data, over: false, clip, .. })
                     if clip.is_none_or(|clip| clip == PixelRect::full([PAGE_SIZE; 2])) => Some((target, sources, data, Some(clip))),

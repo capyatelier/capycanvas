@@ -52,6 +52,7 @@ pub(super) fn same_metadata(r:&WgpuRasterizer,packet:FramePacket<'_>)->bool {
     })
 }
 mod stack;
+mod fold;
 pub(crate) mod windows;
 pub(super) use previews::FilterPreviews;
 pub(super) mod sources;
@@ -108,7 +109,7 @@ fn fragment_pipeline(operation: u32, over: bool, scalar:bool) -> Option<usize> {
         12 => 7,
         10 => 8,
         23 if scalar => FILL_LINES_PIPELINE,
-        0 | 1 | 2 | 3 | 5 | 7 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => usize::from(over),
+        0 | 1 | 2 | 3 | 5 | 13 | 14 | 16 | 17 | 19 | 20 | 23 => usize::from(over),
         4 => 6,
         _ => panic!("Unknown scene draw operation {operation}"),
     })
@@ -196,6 +197,7 @@ enum Job {
         pipeline: Option<usize>,
     },
     Clear(wgpu::TextureView, wgpu::Color),
+    Fold(Box<fold::Fold>),
     Watercolor {
         coordinates: (wgpu::BindGroup, u32),
         target: wgpu::TextureView,
@@ -256,6 +258,7 @@ impl Job {
             Self::Resample {size,..}|Self::VectorResample {size,..}|Self::Reduce {size,..}=>area(*size),
             Self::Draw {target,clip,..}=>clip.map_or_else(||texture(target),PixelRect::area),
             Self::Effect {target,..}|Self::Clear(target,_)|Self::Watercolor {target,..}=>texture(target),
+            Self::Fold(fold)=>u64::from(PAGE_SIZE).pow(2)*fold.layers,
             Self::Vector(job)=>texture(&job.output),
             Self::Copy {width,height,..}=>area([*width,*height]),
             Self::Publish {..}=>0,
@@ -391,6 +394,8 @@ pub(super) struct Scene {
     buffer: wgpu::Buffer,
     binding: wgpu::BindGroup,
     reduction_binding: wgpu::BindGroup,
+    fold_binding: wgpu::BindGroup,
+    fold_bindings: RecentBindings<([wgpu::TextureView; fold::SLOTS],wgpu::Buffer)>,
     stride: usize,
     capacity: usize,
     record_count: usize,
@@ -425,10 +430,12 @@ pub(super) struct Pipelines {
     pub pipeline: [Deferred<wgpu::RenderPipeline>; FRAGMENTS.len()],
     pub source: sources::Pipelines,
     pub constant: (wgpu::BindGroupLayout, wgpu::BindGroupLayout, Deferred<wgpu::ComputePipeline>),
+    pub fold: fold::Pipelines,
     edges: wgpu::BindGroupLayout,
 }
 
 fn is_compute(job: &Job) -> bool {
+    if matches!(job,Job::Fold(_)) {return true;}
     if matches!(job,Job::Effect {prepared:effects::PreparedEffect {pipeline:effects::Pipeline::Compute(_),..},..}) {return true;}
     let Job::Draw { data, over: false, clip, .. } = job else { return false; };
     if data[8] == 15. || (data[8] == 13. && clip.is_some()) { return true; }
@@ -481,6 +488,7 @@ impl Scene {
             });
             self.binding=uniform_binding(&r.device,&self.uniforms,&self.buffer);
             self.reduction_binding=scale::RegionRecords::record_binding(r,&self.buffer);
+            self.fold_binding=r.scene_pipelines.fold.records(&r.device,&self.buffer);
         }
         base
     }
@@ -690,7 +698,7 @@ impl Scene {
         self.clear_material_pages();
         for pass in &mut self.placement { pass.begin_frame(); }
         self.source_bindings.begin_frame();self.region_bindings.begin_frame();self.watercolor_bindings.begin_frame();
-        self.compute_bindings.begin_frame();
+        self.compute_bindings.begin_frame();self.fold_bindings.begin_frame();
         self.output_bindings.begin_frame();
         self.mask_bindings.begin_frame();
         self.effect_outputs.begin_frame();
@@ -762,6 +770,8 @@ impl Scene {
             layout,
             uniforms,
             reduction_binding: scale::RegionRecords::record_binding(r, &buffer),
+            fold_binding: r.scene_pipelines.fold.records(device, &buffer),
+            fold_bindings: Default::default(),
             buffer,
             binding,
             stride,
@@ -794,6 +804,7 @@ impl Scene {
         self.output_bindings.forget(|view| retired.contains(view));
         self.mask_bindings.forget(|views| views.0.iter().any(|view| retired.contains(view)));
         self.effect_outputs.forget(|(_,views,output)|retired.contains(output) || views.iter().any(|view|retired.contains(view)));
+        self.fold_bindings.forget(|(views,_)|views.iter().any(|view|retired.contains(view)));
     }
     fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> Result<usize, GpuRasterError> {
         let id = self.reserve(r)?;
@@ -856,12 +867,20 @@ impl Scene {
         if let Some(dependency)=pending.dependency() {self.enqueue_source_decode(dependency.clone());}
         // Decoding writes only the separate source cache. Keep an adjacent
         // scratch clear beside its first draw so both share one render pass.
-        let index = self.jobs.len() - usize::from(matches!(self.jobs.last(), Some(Job::Clear(..))));
+        let index = self.source_position();
         self.jobs.insert(index, Job::DecodedTile(pending));
+    }
+    fn source_position(&self)->usize {
+        let n=self.jobs.len();
+        match &self.jobs[n.saturating_sub(2)..] {
+            [Job::Clear(cleared,_),Job::Fold(fold)] if fold.absorbs(cleared)=>n-2,
+            [..,Job::Clear(..)|Job::Fold(_)]=>n-1,
+            _=>n,
+        }
     }
     fn read_input(&mut self,read:source_access::SourceRead)->wgpu::TextureView {
         for pending in read.pending {self.enqueue_source_decode(pending);}
-        if let Some(assembly)=read.assembly {self.jobs.push(Job::PaintBase(assembly));}
+        if let Some(assembly)=read.assembly {let index=self.source_position();self.jobs.insert(index,Job::PaintBase(assembly));}
         read.tile.view
     }
     pub(super) fn declare(&mut self,r:&mut WgpuRasterizer,inputs:sources::Inputs,declaration:sources::Declaration,
@@ -1177,21 +1196,12 @@ impl Scene {
                 && target == clear
                 && paint_data[..4] == [0., 0., 256., 256.]
                 && paint_data[31] == Convert::layers(packet).code()
-                && ((*over && (paint_data[8] == 7. || paint_data[8] == 1.))
+                && ((*over && paint_data[8] == 1.)
                     || (!*over && (paint_data[8] == 13. || paint_data[8]==19.)))
             {
                 sources = paint.clone();
                 source_target = *ownership;
-                data[16..20].copy_from_slice(&[
-                    paint_data[9],
-                    if paint_data[8] == 1. || paint_data[8]==19. {
-                        1.
-                    } else {
-                        paint_data[10]
-                    },
-                    if paint_data[8]==19. {0.} else {paint_data[11]},
-                    if paint_data[8]==19. {3.} else {1.},
-                ]);
+                data[16..20].copy_from_slice(&[paint_data[9], 1., 0., if paint_data[8]==19. {3.} else {1.}]);
                 data[20..24].copy_from_slice(&[bg.r as f32, bg.g as f32, bg.b as f32, bg.a as f32]);
                 self.jobs.truncate(n - 2);
             }
@@ -1230,11 +1240,11 @@ impl Scene {
         if over && options[0]==19. && matches!(self.jobs.last(),Some(Job::Clear(clear,color)) if *clear==self.pool[target].view && *color==wgpu::Color::TRANSPARENT) {over=false;}
         // A normal draw over a constant clear supplies its own backdrop. Lower
         // this once when creating the job, for both tiled and direct composition.
-        if over && matches!(options[0] as u32,1 | 7)
+        if over && options[0] == 1.
             && let Some(Job::Clear(clear, color)) = self.jobs.last()
             && *clear == self.pool[target].view
         {
-            if options[0]==1. {data[10]=1.;data[11]=0.;}
+            data[10]=1.;data[11]=0.;
             data[8] = 13.;
             data[16..20].copy_from_slice(&[
                 color.r as f32, color.g as f32, color.b as f32, color.a as f32,
@@ -1246,16 +1256,12 @@ impl Scene {
         // preserves layer opacity after preview composition and needs neither
         // a scratch color tile nor an attachment destination read.
         if over && rect == [0., 0., 256., 256.]
-            && (options[0] == 14. || (options[0] == 7. && options[3] < 2.))
+            && options[0] == 14.
             && let Some(Job::Draw { target: prior_target, sources: prior_sources,
                 data: prior, over: false, clip: None, .. }) = self.jobs.last()
             && *prior_target == self.pool[target].view
-            && prior[..4] == rect && prior[8] == 13. && prior[11] < 2. && prior[31] == data[31]
+            && prior[..4] == rect && prior[8] == 13. && prior[31] == data[31]
         {
-            if options[0] == 7. {
-                data[9] *= options[2];
-                sources[1] = r.empty_view.clone();
-            }
             sources[2] = prior_sources[0].clone();
             data[8] = 15.;
             data[16] = prior[9] * prior[10];
@@ -1328,7 +1334,7 @@ impl Scene {
         if !clip && blend==layer_core::LayerBlend::Normal
             && let Some(Job::Effect {target,sources,data,prepared,..})=self.jobs.last_mut()
             && *target==self.pool[front].view && prepared.pointwise && prepared.original_independent
-            && data[8]==0. && data[11]<=0.5 && data[6]==0. && data[18]<2. && data[19]<=2.5
+            && data[8]==0. && data[11]<=0.5 && data[6]==0. && data[19]<=2.5
         {
             sources[1]=self.pool[back].view.clone();
             data[8]=2.;data[9]=opacity;data[10]=crate::blend_code(blend,&r.device,space) as f32;
@@ -1372,6 +1378,10 @@ impl Scene {
     /// nothing converts.
     pub(super) fn converted(&mut self, r: &WgpuRasterizer, tile: usize, convert: Convert) -> Result<usize, GpuRasterError> {
         if convert == Convert::None {
+            return Ok(tile);
+        }
+        if let Some(Job::Fold(fold)) = self.jobs.last_mut() && fold.target == self.pool[tile].view && fold.output_convert == Convert::None {
+            fold.output_convert = convert;
             return Ok(tile);
         }
         if let Some(Job::Draw { target, data, over: false, clip: None, .. }) = self.jobs.last_mut()
@@ -1577,15 +1587,13 @@ impl Scene {
         stack::tile(self, r, packet, parent, tile,accepted)
     }
 
-    // A normal paint tile with an aligned scalar mask needs one source-over
-    // draw, not separate color, mask, multiplication and blend scratch passes.
     fn draw_normal_layer(
         &mut self,
         r: &WgpuRasterizer,
         packet: FramePacket<'_>,
         index: OccurrenceHandle,
         tile: [u32; 2],
-        output: usize,
+        output: &mut scratch::Lease,
      accepted:&mut sources::AcceptedInputs) -> Result<bool, GpuRasterError> {
         let layer = packet.scene.occurrence(index).unwrap();
         if !normal_context(packet.scene, index) { return Ok(false); }
@@ -1594,7 +1602,7 @@ impl Scene {
             && let Some(color) = packet.scene.effect(index).and_then(|effect| effect.constant_color())
             && ((self.image_window.is_none() && packet.scene.evaluation_offset64()==[0.;2]) || constant_frame_tile(packet.scene,tile,self.image_window))
             && let Some(Job::Clear(view, back)) = self.jobs.last_mut()
-            && *view == self.pool[output].view
+            && *view == self.pool[output.index].view
         {
             let mut color = color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?;
             color[3] *= layer.opacity;
@@ -1607,41 +1615,35 @@ impl Scene {
         let target = packet.scene.source_target(index).unwrap_or_default();
         if !normal_paint(packet.scene, index) || r.watercolor_style(target, packet.dab_batches).is_some() { return Ok(false); }
         let mask = packet.scene.mask(index).filter(|(mask, _)| mask.enabled);
-        let [base,overlay]=self.color_inputs(r,packet.scene,target,tile,accepted)?;
-        if let Some(overlay)=overlay {
-            if mask.is_some() {return Ok(false);}
-            self.draw(r,output,overlay.view,base.map(|input|input.view),[0.,0.,256.,256.],
-                [if r.preview_contribution {19.}else {14.},layer.opacity,f32::from(r.preview_contribution && packet.blend_space==layer_core::BlendSpace::Perceptual),0.],true,Convert::layers(packet));
-            if let Some(Job::Draw {source_target,..})=self.jobs.last_mut() {*source_target=Some(target);}
-            return Ok(true);
-        }
-        let Some(base)=base else {return Ok(true);};
-        let view=base.view;
-        let default = mask.map_or(1., |(m, source)| {
-            if m.inverted {
-                1. - source.default_coverage
-            } else {
-                source.default_coverage
-            }
-        });
-        let source = match mask { Some((mask, source)) => self.mask_page(r, SourceTarget::Coverage(mask.source),source, tile, accepted)?, None => None };
-        self.draw(
-            r,
-            output,
-            view,
-            source.clone(),
-            [0., 0., 256., 256.],
-            [
-                7.,
-                layer.opacity,
-                default,
-                source.map_or(0., |_| 2. + f32::from(mask.unwrap().0.inverted)),
-            ],
-            true,
-            Convert::layers(packet),
-        );
-        if mask.is_none() && let Some(Job::Draw {source_target,..})=self.jobs.last_mut() {*source_target=Some(target);}
+        let [base,overlay]=accepted.native_color(r,packet.scene,target,tile)?.map(|read|read.map(|read|self.read_input(read)));
+        if overlay.is_some() && mask.is_some() || accepted.level(target,RasterPlane::Color,tile)!=0 {return Ok(false);}
+        if base.is_none() && overlay.is_none() {return Ok(true);}
+        let coverage = mask.map_or(1., |(m, source)| if m.inverted { 1. - source.default_coverage } else { source.default_coverage });
+        let mask = match mask {
+            Some((mask, source)) => self.mask_page(r, SourceTarget::Coverage(mask.source), source, tile, accepted)?.map(|view| (view, mask.inverted)),
+            None => None,
+        };
+        let contribution = r.preview_contribution && packet.blend_space == layer_core::BlendSpace::Perceptual;
+        self.fold(r, output, fold::Layer {base, overlay: overlay.map(|view| (view, contribution)), mask, opacity: layer.opacity, coverage}, Convert::layers(packet))?;
         Ok(true)
+    }
+    fn fold(&mut self, r: &WgpuRasterizer, output: &mut scratch::Lease, layer: fold::Layer, convert: Convert) -> Result<(), GpuRasterError> {
+        let view = self.pool[output.index].view.clone();
+        if !matches!(self.jobs.last(), Some(Job::Fold(fold)) if fold.extends(&view, &layer, convert)) {
+            let transfer = r.source_tiles.borrow_mut().prepare_transfer(&r.device, r.document_color().space)?.table;
+            let fold = if let Some(Job::Clear(cleared, color)) = self.jobs.last() && *cleared == view {
+                fold::Fold::constant(view, transfer, convert, *color)
+            } else {
+                let next = self.reserve(r)?;
+                let fold = fold::Fold::over(self.pool[next].view.clone(), transfer, convert, view);
+                *output = self.own(next);
+                fold
+            };
+            self.jobs.push(Job::Fold(Box::new(fold)));
+        }
+        let Some(Job::Fold(fold)) = self.jobs.last_mut() else { unreachable!() };
+        fold.push(layer);
+        Ok(())
     }
     /// Run a pending paint operation over `damage`, the batch's pages. Masks
     /// and erases that cover the whole layer settle watercolor and wet
@@ -2500,6 +2502,7 @@ impl Scene {
             if is_compute(job) || matches!(job,Job::Clear(..)) {compute(&r.scene_pipelines.constant.2);}
             match job {
                 Job::Draw {..}=>if let Some(index)=bound_fragment(&r.device,&self.jobs,i) {render(&self.pipeline[index]);},
+                Job::Fold(_)=>compute(&r.scene_pipelines.fold.pipeline),
                 Job::Effect {prepared,..}=> {
                     effects_ready &= prepared.pipeline.ready();
                     match &prepared.pipeline {effects::Pipeline::Render(pipeline)=>render(pipeline),effects::Pipeline::Compute(pipeline)=>compute(pipeline)}
@@ -2666,6 +2669,7 @@ impl Scene {
                     None
                 }
                 Job::Resample { values, .. } => {self.upload[i*self.stride..i*self.stride+values.len()].copy_from_slice(values);None}
+                Job::Fold(fold) => {self.upload[i*self.stride..i*self.stride+fold::RECORD_BYTES as usize].copy_from_slice(&fold.record());None}
                 Job::Transform(region) => {
                     if let Some(values) = region.values() {self.upload[i*self.stride..i*self.stride+values.len()].copy_from_slice(values);}
                     None
@@ -2698,18 +2702,27 @@ impl Scene {
         }
         let overwritten_clear = |i: usize| {
             let Job::Clear(target, _) = &jobs[i] else { return false; };
+            if matches!(jobs.get(i + 1), Some(Job::Fold(fold)) if fold.absorbs(target)) { return true; }
             jobs.get(i + 1).is_some_and(|next|
                 matches!(next, Job::Draw { target: next, .. } | Job::Effect { target: next, .. }
                     | Job::Watercolor { target: next, .. } if next == target)
                 && (!is_compute(next) || matches!(next, Job::Draw { data, .. } | Job::Effect {data,..}
                     if data[..2] == [0., 0.] && data[2..4] == data[4..6])))
         };
+        #[cfg(test)]
+        crate::test_support::PassCounts {scene_dispatches:jobs.iter().enumerate().map(|(i,job)|match job {
+            Job::Clear(..)=>u64::from(!overwritten_clear(i)),
+            Job::Draw {..}|Job::Watercolor {..}=>1+u64::from(portable_draw(&r.device,jobs,i)),
+            Job::Effect {..}|Job::Reduce {..}|Job::Compose {..}|Job::Resample {..}|Job::Placement(_)|Job::Fold(_)=>1,
+            _=>0,
+        }).sum(),fold_inputs:jobs.iter().map(|job|if let Job::Fold(fold)=job {fold.layers}else {0}).sum(),..Default::default()}.record();
         let compute_clear = |i: usize| matches!(&jobs[i], Job::Clear(target, _) if !overwritten_clear(i) && {
             let texture = target.texture();
             texture.format() == wgpu::TextureFormat::Rgba32Float && texture.usage().contains(wgpu::TextureUsages::STORAGE_BINDING)
                 && texture.mip_level_count() == 1 && texture.depth_or_array_layers() == 1
         });
         let source_bindings = &mut self.source_bindings;
+        let fold_bindings = &mut self.fold_bindings;
         let mask_bindings = &mut self.mask_bindings;
         let output_bindings = &mut self.output_bindings;
         let compute_bindings = &mut self.compute_bindings;
@@ -2824,6 +2837,22 @@ impl Scene {
                         pass.dispatch_workgroups(size.width.div_ceil(32), size.height.div_ceil(2), 1);
                         continue;
                     }
+                    if let Job::Fold(fold)=job {
+                        let key=(fold.views(&r.empty_view),fold.transfer.clone());
+                        let inputs=fold_bindings.get(&key,||r.scene_pipelines.fold.inputs(&r.device,&key.0,&key.1));
+                        let output = match self.pool.iter().find(|page| page.view == fold.target) {
+                            Some(page) => page.scene_output(r, layout),
+                            None => output_bindings.get(&fold.target, || crate::bindings::group(&r.device, "scene fold destination", layout, [
+                                wgpu::BindingResource::TextureView(&fold.target),
+                            ])),
+                        };
+                        pass.set_pipeline(&r.scene_pipelines.fold.pipeline);
+                        pass.set_bind_group(0,&self.fold_binding,&[((base+j)*self.stride) as u32]);
+                        pass.set_bind_group(1,inputs,&[]);
+                        pass.set_bind_group(2,output,&[]);
+                        pass.dispatch_workgroups(PAGE_SIZE.div_ceil(32),PAGE_SIZE.div_ceil(2),1);
+                        continue;
+                    }
                     if let Job::Effect {target,sources,data,prepared,masks,..}=job {
                         let effects::Pipeline::Compute(pipeline)=&prepared.pipeline else {unreachable!()};
                         let input=source_bindings.get(&(true,sources.clone()),||source_binding(r,&self.effects.sources,sources,false));
@@ -2873,7 +2902,7 @@ impl Scene {
                     region.encode(r, encoder, &self.buffer, ((base+i)*self.stride) as u64)?;
                 }
                 Job::PaintBase(assembly) => assembly.encode(r,encoder),
-                Job::Placement(_) | Job::Reduce { .. } | Job::Compose { .. } | Job::Resample { .. } => unreachable!(),
+                Job::Placement(_) | Job::Reduce { .. } | Job::Compose { .. } | Job::Resample { .. } | Job::Fold(_) => unreachable!(),
                 Job::VectorResample { source, origin, target, target_origin, side, size, inverse } => r.scene_pipelines.vector.resample(&r.device, encoder,
                     crate::vector::Placed { view: source, origin: *origin, side: *side },
                     crate::vector::Placed { view: target, origin: *target_origin, side: *side }, PixelRect::full(*size), *inverse),
@@ -3060,7 +3089,7 @@ pub(super) fn operation_index(operation: layer_render::OperationUse) -> usize {
 fn shader_source(space: layer_core::color::RgbSpace) -> Cow<'static,str> {
     compose_wgsl(&[&working_color::source(space), &crate::view_color::hdr_shader(space, layer_core::color::RgbSpace::Srgb),
         include_str!("blend_codes.wgsl"), include_str!("blend_modes.wgsl"), include_str!("scene_vertex.wgsl"),
-        include_str!("relief_transfer.wgsl"), include_str!("paper_sample.wgsl"), &fill_edges::shader(),include_str!("scene.wgsl"),
+        include_str!("relief_transfer.wgsl"), include_str!("paper_sample.wgsl"), &fill_edges::shader(),include_str!("scene_convert.wgsl"),include_str!("scene.wgsl"),
         "@group(1) @binding(3) var scene_extra:texture_2d<f32>; @group(1) @binding(4) var scene_paper:texture_2d<f32>; @group(1) @binding(5) var paper_sampling:sampler; fn gradient_record(base:u32,index:u32)->vec4<f32>{return textureLoad(scene_extra,vec2<i32>(i32(index),0),0);}",
         include_str!("float_number.wgsl"), crate::gradient::SOURCE, include_str!("scene_constant.wgsl")])
 }
@@ -3161,6 +3190,7 @@ impl Pipelines {
             let pipeline = Deferred::compute(device, "scene constant backdrop", &layout, &shader, "compose_constant");
             (output, inputs, pipeline)
         };
+        let fold = fold::Pipelines::new(device, &constant.0);
         Self {
             objects: crate::object_sampling::ObjectSampler::new(device),
             vector: crate::vector::Kernel::new(device),
@@ -3168,7 +3198,7 @@ impl Pipelines {
             resample: resample::Resample::new(device),
             fine_resample: resample::Resample::with_fine(device,true),
             source: sources::Pipelines::new(device, &uniforms),
-            constant,edges,
+            constant,fold,edges,
             uniforms,
             layout,
             pipeline,
@@ -3392,6 +3422,9 @@ mod capture_readiness_tests;
 mod prediction_tests;
 
 #[cfg(test)]
+mod fold_tests;
+
+#[cfg(test)]
 mod shader_tests {
     use super::*;
 
@@ -3411,10 +3444,8 @@ mod shader_tests {
     fn scene_conversion_preserves_every_code_and_foreign_values() {
         let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         let output = crate::test_support::page_texture(&r, wgpu::TextureFormat::Rgba32Float);
-        let scene = include_str!("scene.wgsl");
-        let conversion = scene.split_once("fn scene_convert").unwrap().1.split_once("fn scene_sample").unwrap().0;
         for space in layer_core::color::RgbSpace::ALL {
-            let source = format!("{}\nfn scene_convert{}\n{}", working_color::source(space), conversion, "
+            let source = format!("{}\n{}\n{}", working_color::source(space), include_str!("scene_convert.wgsl"), "
                 @group(0) @binding(0) var output:texture_storage_2d<rgba32float,write>;
                 fn expected(c:vec4<f32>,code:f32)->vec4<f32> {
                     if code==1. {return working_encode(c);}
@@ -3463,7 +3494,7 @@ mod shader_tests {
             [Some(6),Some(6)],
             [Some(0),Some(1)],
             [Some(3),Some(3)],
-            [Some(0),Some(1)],
+            [None,None],
             [None,None],
             [None,None],
             [Some(8),Some(8)],
@@ -3483,7 +3514,7 @@ mod shader_tests {
         ];
         for (operation,pipelines) in expected.into_iter().enumerate() {
             for over in [false,true] {
-                if matches!(operation,8|9) {
+                if matches!(operation,7..=9) {
                     assert!(std::panic::catch_unwind(|| fragment_pipeline(operation as u32,over,false)).is_err(),
                         "undefined operation {operation} over={over} selected a fragment pipeline");
                 } else {
@@ -3492,7 +3523,7 @@ mod shader_tests {
                 }
             }
         }
-        for operation in [0,1,2,3,5,7,13,14,16,17,19,20] {
+        for operation in [0,1,2,3,5,13,14,16,17,19,20] {
             for over in [false,true] {assert_eq!(fragment_pipeline(operation,over,true),Some(usize::from(over)));}
         }
         for over in [false,true] {assert_eq!(fragment_pipeline(23,over,true),Some(FILL_LINES_PIPELINE));}

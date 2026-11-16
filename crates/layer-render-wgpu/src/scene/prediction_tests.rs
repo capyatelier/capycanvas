@@ -60,7 +60,7 @@ fn assert_bindings(r: &mut WgpuRasterizer, frame: FramePacket<'_>, case: &str) {
                 fragments.push(index);
             }
         }
-        assert!(scene.jobs.iter().any(|job| matches!(job, Job::Draw {..} | Job::Effect {..})), "{case}: exercise a draw or fused effect");
+        assert!(scene.jobs.iter().any(|job| matches!(job, Job::Draw {..} | Job::Effect {..} | Job::Fold(_))), "{case}: exercise a draw, a fold or a fused effect");
         if matches!(case, "multiply" | "clipped" | "hidden clip" | "offset" | "mask offset" | "masked Flow" | "future masked Flow" | "watercolor" | "batch watercolor" | "omitted clip" | "omitted ancestor") {
             assert!(fragments.contains(&6), "{case}: exercise fallback blending");
         }

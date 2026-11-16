@@ -12,7 +12,7 @@ pub(super) trait Compositor {
     fn blend(&mut self, front: Self::Image, back: Self::Image, index: OccurrenceHandle, clipped: bool) -> Result<Self::Image, GpuRasterError>;
     fn effect(&mut self, chain: &[OccurrenceHandle], input: Self::Image) -> Result<Self::Image, GpuRasterError>;
     fn has_content(&self, index: OccurrenceHandle) -> bool;
-    fn draw_normal(&mut self, _index: OccurrenceHandle, _output: &Self::Image) -> Result<bool, GpuRasterError> { Ok(false) }
+    fn draw_normal(&mut self, _index: OccurrenceHandle, _output: &mut Self::Image) -> Result<bool, GpuRasterError> { Ok(false) }
     fn checkpoint(&mut self, _parent: Option<OccurrenceHandle>) -> Result<Option<Checkpoint<Self::Image>>, GpuRasterError> { Ok(None) }
     fn presented_backdrop(&self) -> Option<OccurrenceHandle> { None }
 }
@@ -107,7 +107,7 @@ fn group_into<C: Compositor>(
                 continue;
             }
             let clips_above = siblings.peek().is_some_and(|handle| scene.effective_clipped(*handle));
-            if scene.visible(i) && !clips_above && scene.attached_effects(i).is_empty() && c.draw_normal(i, &output)? { continue; }
+            if scene.visible(i) && !clips_above && scene.attached_effects(i).is_empty() && c.draw_normal(i, &mut output)? { continue; }
             if scene.visible(i) && (c.has_content(i) || !scene.attached_effects(i).is_empty()) { stack = Some((owner_image(c, scene, i, None)?, i)); }
         } else if scene.visible(i) && let Some((pixels, base)) = stack.take() {
             let source = owner_image(c, scene, i, None)?;
@@ -202,8 +202,8 @@ impl Compositor for Tile<'_> {
         Ok(match self.ready(result)? {Some(output)=>self.scene.own(output),None=>input})
     }
     fn has_content(&self, index: OccurrenceHandle) -> bool { has_content(self.r, self.packet.scene, index) }
-    fn draw_normal(&mut self, index: OccurrenceHandle, output: &Self::Image) -> Result<bool, GpuRasterError> {
-        let result = self.scene.draw_normal_layer(self.r, self.packet, index, self.coordinate, output.index, self.accepted);
+    fn draw_normal(&mut self, index: OccurrenceHandle, output: &mut Self::Image) -> Result<bool, GpuRasterError> {
+        let result = self.scene.draw_normal_layer(self.r, self.packet, index, self.coordinate, output, self.accepted);
         Ok(self.ready(result)?.unwrap_or(true))
     }
     fn checkpoint(&mut self, parent: Option<OccurrenceHandle>) -> Result<Option<Checkpoint<Self::Image>>, GpuRasterError> {

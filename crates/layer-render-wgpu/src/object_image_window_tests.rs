@@ -1036,7 +1036,7 @@ fn held_native_window_samples_do_not_starve_exact_queries_without_a_frame() {
     images.allocate(&r,MipPlan {targets:vec![target],waiting:false},&mut encoder);
     r.moving_images=images;
     r.source_results.push_back((r.device.working_space(),PreparedImageWork::Image(PreparedMipTile {
-        class:crate::residency::Class::Visible,use_:SourceUse::Display,id:request.id,source:request.source.clone(),coordinate:[0;2],pixels:Ok(pixels),
+        class:crate::residency::Class::Visible,use_:SourceUse::Native,id:request.id,source:request.source.clone(),coordinate:[0;2],pixels:Ok(pixels),
     })));
     assert!(!r.held_result_ready(),"a pending window owns its samples until its budgeted build step");
     let (requests,receive)=std::sync::mpsc::sync_channel(2);

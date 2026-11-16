@@ -897,7 +897,7 @@ impl MipDecodeQueue {
     pub(crate) fn clear_waker(&self) {let waiter=self.context.waiter.lock().unwrap().take();drop(waiter);}
     #[cfg(test)]
     pub(crate) fn request(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2])->bool {
-        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Display,Class::Visible)
+        self.request_for(id,source,coordinate,crate::scene::sources::SourceUse::Native,Class::Visible)
     }
     pub(crate) fn request_for(&mut self,id:PortableId,source:Arc<SourceImage>,coordinate:[u32;2],use_:crate::scene::sources::SourceUse,class:Class)->bool {
         let weak=Arc::downgrade(&source);
@@ -1183,9 +1183,9 @@ pub(crate) mod tests {
         let b=layer_core::color::source::rgba8_source([1;2],|_,_|[9,8,7,255]);
         let (aid,bid)=(PortableId::random(),PortableId::random());
         let weak=Arc::downgrade(&a);let mut failures=Vec::new();
-        let stale=PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Display,id:aid,source:a.clone(),coordinate:[0;2],pixels:Err("retired A decode".into())};
+        let stale=PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Native,id:aid,source:a.clone(),coordinate:[0;2],pixels:Err("retired A decode".into())};
         assert!(!retain_image_decode(&stale,RgbSpace::Srgb,&mut failures));
-        let current=PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Display,id:bid,source:b.clone(),coordinate:[0;2],pixels:Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(Arc::new(vec![9,8,7,255])))};
+        let current=PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Native,id:bid,source:b.clone(),coordinate:[0;2],pixels:Ok(crate::scene::sources::PreparedSourcePixels::NativeSamples(Arc::new(vec![9,8,7,255])))};
         assert!(retain_image_decode(&current,RgbSpace::Srgb,&mut failures));
         assert!(image_decode_failure(&failures,bid,&b,[0;2],RgbSpace::Srgb).is_none());
         assert!(image_decode_failure(&failures,aid,&b,[0;2],RgbSpace::Srgb).is_none());
@@ -1202,9 +1202,9 @@ pub(crate) mod tests {
         let a=layer_core::color::source::rgba8_source([1;2],|_,_|[255,0,0,255]);
         let b=layer_core::color::source::rgba8_source([1;2],|_,_|[0,0,255,255]);
         let aid=PortableId::random();let bid=PortableId::random();
-        let pending=|r:&WgpuRasterizer,source:&Arc<SourceImage>|Arc::new(r.source_tiles.borrow_mut().fixture_image_plan(r,source,[0;2],crate::scene::sources::SourceUse::Display).unwrap().1.unwrap());
+        let pending=|r:&WgpuRasterizer,source:&Arc<SourceImage>|Arc::new(r.source_tiles.borrow_mut().fixture_image_plan(r,source,[0;2],crate::scene::sources::SourceUse::Native).unwrap().1.unwrap());
         let (ra,rb)=(pending(&r,&a),pending(&r,&b));
-        let result=|id,source:&Arc<SourceImage>|PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Display,id,source:source.clone(),coordinate:[0;2],
+        let result=|id,source:&Arc<SourceImage>|PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:crate::scene::sources::SourceUse::Native,id,source:source.clone(),coordinate:[0;2],
             pixels:prepare_image_tile(source,[0;2],space,&r.device.source_samples,None)});
         let (send,results)=std::sync::mpsc::sync_channel(2);assert!(send.send((1,result(bid,&b))).is_ok());assert!(send.send((0,result(aid,&a))).is_ok());
         let (requests,receive)=std::sync::mpsc::sync_channel(2);

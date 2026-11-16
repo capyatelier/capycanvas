@@ -446,7 +446,7 @@ impl Scene {
 pub(crate) fn decode_prepared(r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
     source: &Arc<SourceImage>, coordinate: [u32; 2], pixels: sources::PreparedSourcePixels,
 ) -> Result<crate::source_access::RawTile, GpuRasterError> {
-    decode_prepared_for(r,encoder,source,coordinate,pixels,sources::SourceUse::Display,Class::Visible)
+    decode_prepared_for(r,encoder,source,coordinate,pixels,sources::SourceUse::Native,Class::Visible)
 }
 pub(crate) fn decode_prepared_for(r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,
     source:&Arc<SourceImage>,coordinate:[u32;2],pixels:sources::PreparedSourcePixels,use_:sources::SourceUse,class:Class,
@@ -461,7 +461,7 @@ pub(crate) fn decode_prepared_raster(r: &mut WgpuRasterizer, encoder: &mut crate
     blob: &Arc<layer_core::raster::TileBlob>, space: layer_core::color::RgbSpace, destination: layer_core::color::RgbSpace,
     pixels: sources::PreparedSourcePixels, class: Class,
 ) -> Result<crate::source_access::RawTile, GpuRasterError> {
-    let mut requested=sources::Inputs::default();requested.raster(blob.clone(),space,destination);
+    let mut requested=sources::Inputs::default();requested.raster_for(blob.clone(),space,destination,sources::SourceUse::Native);
     let inputs=requested.accept_query(r,None)?;
     let read=sources::accepted_raster(&inputs,blob,space,destination)?;
     encode_prepared(r,encoder,inputs,read,pixels,class)

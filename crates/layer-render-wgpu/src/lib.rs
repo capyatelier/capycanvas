@@ -3598,7 +3598,7 @@ impl WgpuRasterizer {
                 && (self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready())))
     }
     pub(crate) fn request_image_decode(&mut self, id: layer_core::authored::PortableId, source: Arc<layer_core::color::source::SourceImage>, coordinate: [u32; 2], class: residency::Class) -> Result<bool, GpuRasterError> {
-        self.request_image_decode_for(id,source,coordinate,scene::sources::SourceUse::Display,class)
+        self.request_image_decode_for(id,source,coordinate,scene::sources::SourceUse::Native,class)
     }
     pub(crate) fn request_exact_image_decode(&mut self,id:layer_core::authored::PortableId,source:Arc<layer_core::color::source::SourceImage>,coordinate:[u32;2],class:residency::Class)->Result<bool,GpuRasterError> {
         self.request_image_decode_for(id,source,coordinate,scene::sources::SourceUse::Exact,class)
@@ -3813,7 +3813,7 @@ impl WgpuRasterizer {
                 });
                 if let Some((id,source,coordinate))=cached {
                     let mut requested=scene::sources::Inputs::default();
-                    requested.image_for(&source,coordinate,self.device.working_space(),scene::sources::SourceUse::Display);
+                    requested.image_for(&source,coordinate,self.device.working_space(),scene::sources::SourceUse::Native);
                     let accepted=requested.accept_query(self,None)?;
                     let read=scene::sources::accepted_image(&accepted,&source,coordinate)?;
                     if !read.encode(self,encoder,residency::Class::Visible)? {return Err(GpuRasterError::NotReady);}
@@ -3948,7 +3948,8 @@ impl CanvasRenderer for WgpuRasterizer {
             required.compute.extend(self.selection_clip.pipelines().into_iter().cloned());
         }
         let transforms_ready = required.require(&self.compilation,startup::BRUSH);
-        let scene_ready = self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT);
+        let scene_ready = self.compilation.require(self.scene_pipelines.for_scene(self,packet.scene,packet.dab_batches), startup::DOCUMENT)
+            & self.compilation.require([&self.scene_pipelines.fold.pipeline], startup::DOCUMENT);
         let fill_ready=if let Some(fill)=self.fill_preview.clone() {
             let pipeline=scene::operation_pipeline(&fill.operation.kind).unwrap_or(0);
             self.compilation.require([&self.scene_pipelines.pipeline[pipeline],&self.layer_masks.initialize],startup::BRUSH)

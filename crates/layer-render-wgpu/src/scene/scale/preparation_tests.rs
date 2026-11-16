@@ -42,7 +42,7 @@ fn a_retained_cold_lookup_does_not_block_an_independent_ready_unit() {
     let reference=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut r=crate::test_support::staged_renderer(&reference,doc.composition().color);
     for renderer in [&r,&reference] {
-        pollster::block_on(renderer.compilation.prepare_all([&renderer.scene_pipelines.constant.2])).unwrap();
+        pollster::block_on(renderer.compilation.prepare_all([&renderer.scene_pipelines.constant.2,&renderer.scene_pipelines.fold.pipeline])).unwrap();
     }
     let mut scene=Scene::new(&r).unwrap();
     let image=||crate::test_support::page_texture(&r,r.device.working_format());

@@ -1056,8 +1056,7 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         source.push_str("c=front_value;if settings.source_over.w>.5 {\n");
         if perceptual {source.push_str("c=working_encode(c);\n");}
         source.push_str(r#"
-            let coverage=select(settings.source_over.y,mix(back_value.r,1.-back_value.r,settings.source_over.z-2.),settings.source_over.z>=2.);
-            c*=settings.source_over.x*coverage;
+            c*=settings.source_over.x;
             if settings.source_over.w<1.5 {c+=settings.backdrop*(1.-c.a);}
         }
 "#);

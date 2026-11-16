@@ -591,6 +591,10 @@ colour space, depth, blend space and HDR encoding as well as by device.
 ### Today
 
 `stack::compose` builds one expression for exact and display composition.
+Exact tiles fold each unclipped Normal run in one pass per 16 inputs, reading
+8-bit tiles in their native samples (`scene/fold.rs`;
+`normal_runs_fold_each_cell_in_a_pass_per_sixteen_inputs_to_the_per_layer_arithmetic`
+in `crates/layer-render-wgpu/src/scene/fold_tests.rs`).
 Unclipped Normal runs become balanced `over` trees; masks, opacity, other blend
 modes, clipping and effects are expression boundaries. The display graph splits
 the stack at the working layer into two halves, everything below it and

@@ -67,7 +67,7 @@ fn cold_compute_copy_encodes_without_admitting_fragment_pipelines() {
     let reference = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut r = staged_renderer(&reference,Default::default());
     let mut scene = Scene::new(&r).unwrap();
-    r.compilation.blocking(||r.scene_pipelines.constant.2.compile());
+    r.compilation.blocking(||{r.scene_pipelines.constant.2.compile();r.scene_pipelines.fold.pipeline.compile();});
     let (source,source_view) = create_color_target(&r.device,EXTENT,"compute copy source");
     let (output,view) = create_color_target(&r.device,EXTENT,"compute copy output");
     let color = [0.125_f32,0.25,0.375,0.5];

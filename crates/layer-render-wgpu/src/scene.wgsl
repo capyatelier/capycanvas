@@ -5,13 +5,6 @@
 fn scene_space(c:vec4<f32>)->vec4<f32> {
     return scene_convert(c,settings.operation_offset.w);
 }
-fn scene_convert(c:vec4<f32>,convert:f32)->vec4<f32> {
-    if convert==1. {return working_encode(c);}
-    var r=c;
-    if convert==2. || convert==4. {r=working_decode(c);}
-    if convert==3. || convert==4. {r=working_clamp(r);}
-    return r;
-}
 fn scene_sample(image:texture_2d<f32>,uv:vec2<f32>)->vec4<f32> {
     return working_sample_float(image,uv*vec2<f32>(textureDimensions(image)));
 }
@@ -136,7 +129,7 @@ fn fill_line_alpha(v:Vertex)->vec4<f32> {
     let raw=scene_read(front,v);
     var dst=vec4(0.);
     if scene_needs_back(op) {dst=scene_read(back,v);}
-    if op==1u || op==7u || op==13u || op==14u || op==17u || op==19u {return scene_pointwise(raw,dst,v);}
+    if op==1u || op==13u || op==14u || op==17u || op==19u {return scene_pointwise(raw,dst,v);}
     if op==2u {let m=mix(raw.r,1.-raw.r,settings.options.z);return vec4<f32>(m);}
     if op==20u {return working_decode(vec4<f32>(vec3<f32>(raw.r),1.));}
     if op==16u {return raw*settings.options.y+dst*settings.options.z;}
@@ -236,7 +229,7 @@ fn scene_fill_over(input:FillInput)->vec4<f32> {
 }
 
 fn scene_needs_back(op:u32)->bool {
-    return !(op==1u || op==2u || op==20u || ((op==7u || op==13u) && settings.options.w<2.));
+    return !(op==1u || op==2u || op==20u || op==13u);
 }
 fn scene_pointwise(raw: vec4<f32>, dst: vec4<f32>, v: Vertex) -> vec4<f32> {
     let op = u32(settings.options.x);
@@ -260,10 +253,6 @@ fn scene_pointwise(raw: vec4<f32>, dst: vec4<f32>, v: Vertex) -> vec4<f32> {
         } else { color = preview+base*(1.-preview.a); }
     } else if op != 1u {
         m = settings.options.z;
-        if settings.options.w>=2. {
-            let mask=dst.r;
-            m=mix(mask,1.-mask,settings.options.w-2.);
-        }
     }
     let src = scene_space(color) * m * settings.options.y;
     if settings.options.x == 13. { return scene_convert(src + settings.source_over * (1. - src.a),settings.extent.w); }

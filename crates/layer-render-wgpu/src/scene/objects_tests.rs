@@ -941,7 +941,7 @@ fn canonical_disjoint_tasks_keep_pending_inputs_until_their_contribution() {
     }).collect::<Vec<_>>();
     scene.object_display=false;r.scene=Some(scene);
     pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines().into_iter()
-        .chain([&r.scene_pipelines.constant.2]))).unwrap();
+        .chain([&r.scene_pipelines.constant.2,&r.scene_pipelines.fold.pipeline]))).unwrap();
     let before=crate::test_support::PassCounts::snapshot();
     assert!(!attempt(&mut r));store.gate.entered();store.gate.release();
     let mut settled=false;
@@ -2083,7 +2083,7 @@ fn perceptual_object_completion_preserves_an_unready_capture_prefix() {
     r.document_extent=extent;
     let mut scene=Scene::new(&r).unwrap();scene.ordered=true;
     pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines())).unwrap();
-    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.constant.2])).unwrap();
+    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.constant.2,&r.scene_pipelines.fold.pipeline])).unwrap();
     pollster::block_on(r.compilation.prepare_all([r.scene_pipelines.source.for_format(wgpu::TextureFormat::Rgba8Unorm)])).unwrap();
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     for coordinate in page_coordinates(PixelRect::full(extent)) {
@@ -2154,10 +2154,10 @@ fn prepared_upload_keeps_its_source_through_the_consuming_submission() {
     pollster::block_on(r.compilation.prepare_all(crate::startup::SourceKinds::for_source(&source).pipelines(&r.scene_pipelines.source))).unwrap();
     let prepared=crate::prepare_image_tile(&source,[0;2],r.document_color().space,&r.device.source_samples,None).unwrap();
     let mut warm=submission::CommandEncoder::new(&r.device,&Default::default());
-    Scene::decode_prepared_for(&mut r,&mut warm,&source,[0;2],prepared.clone(),sources::SourceUse::Display,crate::residency::Class::Visible).unwrap();
+    Scene::decode_prepared_for(&mut r,&mut warm,&source,[0;2],prepared.clone(),sources::SourceUse::Native,crate::residency::Class::Visible).unwrap();
     r.uploads.finish(&warm);warm.submit(&r.queue);crate::test_support::complete(&r);
     let mut consumer=submission::CommandEncoder::new(&r.device,&Default::default());
-    let encoded=Scene::decode_prepared_for(&mut r,&mut consumer,&source,[0;2],prepared.clone(),sources::SourceUse::Display,crate::residency::Class::Visible).unwrap();
+    let encoded=Scene::decode_prepared_for(&mut r,&mut consumer,&source,[0;2],prepared.clone(),sources::SourceUse::Native,crate::residency::Class::Visible).unwrap();
     assert_eq!(encoded.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
     let copy=r.device.create_texture(&wgpu::TextureDescriptor {label:Some("accepted encoded upload read"),size:encoded.texture.size(),
         mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:encoded.texture.format(),

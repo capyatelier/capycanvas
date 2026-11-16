@@ -254,7 +254,7 @@ impl Needs {
     pub(super) fn capture_scene(r:&WgpuRasterizer,view:SceneView<'_>,watercolor:bool)->Self {
         let mut required = Self::default();
         required.render.extend(r.scene_pipelines.for_scene(r,view,&[]).cloned());
-        required.compute.push(r.scene_pipelines.constant.2.clone());
+        required.compute.extend([r.scene_pipelines.constant.2.clone(),r.scene_pipelines.fold.pipeline.clone()]);
         required.compute.extend([r.recipes.display.reduce.clone(),r.recipes.display.fused_reduce.clone()]);
         required.compute.extend(r.scene_pipelines.scale_pipelines(wgpu::TextureFormat::Rgba32Float).into_iter().cloned());
         required.compute.extend(r.transforms.as_ref().unwrap().placement_pipelines());
@@ -601,7 +601,7 @@ impl WgpuRasterizer {
                 .render
                 .extend(self.scene_pipelines.for_scene(self,document.scene(),&[]).cloned());
             if self.device.portable_blend() { required.compute.extend(self.portable_blend.pipelines.iter().cloned()); }
-            required.compute.push(self.scene_pipelines.constant.2.clone());
+            required.compute.extend([self.scene_pipelines.constant.2.clone(),self.scene_pipelines.fold.pipeline.clone()]);
             if shader.key.watercolor {required.compute.push(self.pipelines.watercolor_compute.1.clone());}
             required.compute.extend(self.transforms.as_ref().unwrap().placement_pipelines());
             if self.native_edit.is_some() {
