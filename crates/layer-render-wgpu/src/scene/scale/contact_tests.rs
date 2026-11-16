@@ -899,3 +899,45 @@ fn a_stroke_crossing_into_a_cell_without_its_halves_keeps_every_dab_and_shows_th
     let error=max_error(&display_pixels(&r),&display_pixels(&twin));
     assert!(error<1e-4,"every dab keeps its ink across the crossing: {error}");
 }
+
+#[test]
+fn a_memory_trim_during_a_stroke_ends_the_contact_for_cells_it_did_not_declare_instead_of_stopping_the_canvas() {
+    let extent=[2048,1024];
+    let mut doc=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/9) as u8,(y/5) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    let (ink,lower)=(doc.active_target().unwrap(),doc.scene().source_target(below).unwrap());
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,2);
+    let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
+    let submit=|r:&mut WgpuRasterizer,target:SourceTarget,stroke:u64,[x,y]:[f32;2],[start,end]:[bool;2],time:f32| {
+        let dab=stroke_dab(x,y);let batch=layer_render::DabBatch {stroke_id:layer_core::StrokeId(stroke),..stroke_batch(target,&dab,start,end)};
+        crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:time,..frame})
+    };
+    for r in [&mut r,&mut twin] {
+        crate::test_support::submit_settled(r,frame);
+        for (step,x) in [1150.,1200.,1250.,1300.,1350.].into_iter().enumerate() {submit(r,ink,1,[x,250.],[step==0,false],0.01*(step+1) as f32).unwrap();}
+        submit(r,ink,1,[1800.,800.],[false,true],0.06).unwrap();
+        layer_render::CanvasRenderer::set_working_layer(r,Some(below));
+    }
+    let mut trimmed=None;
+    for step in 0..16 {
+        let time=0.1+0.01*step as f32;
+        submit(&mut twin,lower,2,[300.+10.*step as f32,700.],[step==0,false],time).unwrap();
+        submit(&mut r,lower,2,[300.+10.*step as f32,700.],[step==0,false],time)
+            .expect("a stroke frame after a memory trim ends the contact instead of stopping the canvas");
+        let cache=r.scale_display.as_ref().unwrap();
+        if trimmed.is_none() && cache.gesture.is_some() {
+            assert!(cache.pivot_missing(cache.plan.bounds),"the contact begins without the halves of some cells it shows");
+            r.scene.as_ref().unwrap().release_pages_by(u64::MAX);
+            trimmed=Some(step);
+        }
+    }
+    assert!(trimmed.is_some_and(|step|step<15),"the stroke on the selected layer enters contact before its last frame: {trimmed:?}");
+    for r in [&mut r,&mut twin] {
+        submit(r,lower,2,[460.,700.],[false,true],0.3).unwrap();
+        crate::test_support::submit_settled(r,frame);
+    }
+    let error=max_error(&display_pixels(&r),&display_pixels(&twin));
+    assert!(error<1e-4,"the trimmed renderer keeps every dab and recomposes the cells it released: {error}");
+}

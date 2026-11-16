@@ -1010,7 +1010,8 @@ impl Cache {
         if let Some(previous)=self.previous.as_deref_mut() {previous.write_back(r,scene,encoder)?;}
         let stroking=!packet.dab_batches.is_empty();
         let view=matches!(destination,Destination::View);
-        if self.gesture.is_some() && !self.contact_continues(scene,r,packet,encoder) {
+        let contact=self.gesture.is_some().then(||self.contact_continues(scene,r,packet,encoder)).flatten();
+        if self.gesture.is_some() && contact.is_none() {
             self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
         }
         let live=self.gesture.is_some();
@@ -1024,8 +1025,10 @@ impl Cache {
         let presented=refinement::presented_accuracy(r,packet.scene,matches!(destination,Destination::Preview));
         if std::mem::replace(&mut self.presented,presented)==pages::Accuracy::Display && presented==pages::Accuracy::Exact {self.owe_exact();}
         let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
-        let selection=if live {pages::Selection {copies:Vec::new(),composes:self.contact_cells(),transition:false,waiting:false}}
-            else {self.select_cells(served,presented,&selected,arrivals)?};
+        let selection=match contact.filter(|_|live) {
+            Some(composes)=>pages::Selection {copies:Vec::new(),composes,transition:false,waiting:false},
+            None=>self.select_cells(served,presented,&selected,arrivals)?,
+        };
         let transition=selection.transition;
         let direct=if view {self.stroke_only(packet)}else {stroking};
         let pages::Selection {mut copies,mut composes,..}=selection;

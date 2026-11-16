@@ -208,18 +208,18 @@ impl Cache {
             Ok(())
         })
     }
-    pub(super) fn contact_continues(&mut self,scene:&Scene,r:&WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder)->bool {
-        let Some(contact)=self.gesture.as_mut() else {return false;};
+    pub(super) fn contact_continues(&mut self,scene:&Scene,r:&WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder)->Option<Vec<PixelRect>> {
+        let Some(contact)=self.gesture.as_mut() else {return None;};
         contact.submissions.retain(|submission|submission.pending() || submission.discarded());
-        if contact.exit.get().is_some() || !self.contact_holds(r,packet) || self.graph.root.as_ref()!=self.gesture.as_ref().map(|contact|&contact.root) {return false;}
-        let Some(contact)=self.gesture.as_mut() else {return false;};
+        if contact.exit.get().is_some() || !self.contact_holds(r,packet) || self.graph.root.as_ref()!=self.gesture.as_ref().map(|contact|&contact.root) {return None;}
+        let Some(contact)=self.gesture.as_mut() else {return None;};
         let target=contact.target;let wet=contact.frame.watercolor(target);
-        let Ok(current)=r.current_raster_versions(target) else {return false;};
+        let Ok(current)=r.current_raster_versions(target) else {return None;};
         let mut changed=BTreeSet::new();
-        if !contact.composed.changes(&current,|coordinate|{changed.insert(coordinate);}) {return false;}
+        if !contact.composed.changes(&current,|coordinate|{changed.insert(coordinate);}) {return None;}
         let predicted:BTreeSet<_>=match &r.preview_declaration {
-            Some(preview) if preview.target()==target=>match preview.contact_outputs() {Some(outputs)=>outputs.collect(),None=>return false},
-            Some(_)=>return false,
+            Some(preview) if preview.target()==target=>match preview.contact_outputs() {Some(outputs)=>outputs.collect(),None=>return None},
+            Some(_)=>return None,
             None=>BTreeSet::new(),
         };
         let persistent=changed.clone();
@@ -227,17 +227,16 @@ impl Cache {
         let previewed=r.preview_input_tiles(target);
         let stale=contact.footprints.iter().filter(|(local,_)|changed.iter().any(|tile|!page_rect(*tile).intersect(*local).is_empty()))
             .flat_map(|(_,cells)|cells.iter().copied()).collect::<Vec<_>>();
-        let all=pages::coordinates(contact.plan.bounds,contact.plan.level).collect::<Vec<_>>();
-        if stale.iter().any(|index|!contact.cells.iter().any(|(cell,_)|*cell==pages::bounds(all[*index],contact.plan.level,contact.plan.extent))) {return false;}
         let refreshed:BTreeSet<_>=changed.iter().chain(&contact.previewed).chain(&previewed).copied().collect();
         let planes:&[layer_core::raster::RasterPlane]=if wet {&[layer_core::raster::RasterPlane::Color,layer_core::raster::RasterPlane::WatercolorWetness]}else {&[layer_core::raster::RasterPlane::Color]};
-        if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return false;}
+        if !contact.inputs.refresh_contact(r,packet.scene,target,planes,refreshed,&persistent,encoder) {return None;}
         for region in scene.scale_sources.entries.get(&target).into_iter().flat_map(|source|&source.damage.regions) {for tile in page_coordinates(*region) {
             let rect=contact.stale.entry(tile).or_insert(PixelRect::EMPTY);*rect=rect.union(region.intersect(page_rect(tile)));
         }}
         contact.next=Some((current,changed,predicted,previewed));
         self.invalidate_cells(stale);
-        true
+        let cells=self.contact_cells();
+        self.gesture.as_ref().is_some_and(|contact|cells.iter().all(|cell|contact.cells.iter().any(|(declared,_)|declared==cell))).then_some(cells)
     }
     #[cfg(test)]
     pub(super) fn contact_decisions_differ_from_a_declaration(&self,r:&WgpuRasterizer,scene:SceneView<'_>)->Result<(usize,Vec<String>),GpuRasterError> {
