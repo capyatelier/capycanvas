@@ -1240,47 +1240,61 @@ fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
     }
 }
 
-#[test]
-fn a_fold_unit_in_flight_whose_half_is_gone_admits_the_half_and_settles() {
-    let extent=[512,256];let mut doc=document_at(extent);
-    let below:Vec<_>=(0..18u32).map(|index| {
-        let handle=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,move|x,y|[((x+index*7)%251) as u8,((y+index*13)%241) as u8,(index*11) as u8,255])));
+fn settle_refinement(r:&mut WgpuRasterizer,doc:&Document,extent:[u32;2],context:&str) {
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    let mut idle=0;
+    for step in 0..256 {
+        let before=crate::test_support::PassCounts::snapshot();
+        crate::test_support::submit_ready(r,FramePacket {composite_all:step==0,..frame}).unwrap();crate::test_support::complete(r);
+        if r.next_frame()!=layer_render::FrameDemand::Work {return;}
+        idle=if crate::test_support::PassCounts::snapshot().delta(before).composite_commits==0 {idle+1}else {0};
+        assert!(idle<16,"{context}: {idle} Work frames in a row committed nothing: {:?}",r.outstanding_terms());
+    }
+    panic!("{context}: the display never settled: {:?}",r.outstanding_terms());
+}
+
+fn refine_spent_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>) {
+    let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
+    let mut commands=scene.scale_commands.take().unwrap_or_else(||RegionRecords::new(r));
+    scene.begin_frame();commands.begin();
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let write=scene.begin_write(r,&mut encoder).unwrap();cache.submission_valid=Some(scene.valid.clone());
+    let mut budget=Scene::begin_work(false);budget.spend(budget.remaining());
+    cache.refine(&mut scene,r,frame,&mut encoder,&mut commands,&mut budget).unwrap();
+    write.track(&encoder);
+    scene.scale_commands=Some(commands);r.scale_display=Some(cache);r.scene=Some(scene);
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
+}
+
+fn translucent_layers(doc:&mut Document,extent:[u32;2],count:u32)->Vec<OccurrenceHandle> {
+    (0..count).map(|index| {
+        let handle=paint_occurrence(doc,"Layer",Some(rgba8_source(extent,move|x,y|[((x+index*7)%251) as u8,((y+index*13)%241) as u8,(index*11) as u8,255])));
         doc.artwork.occurrences.get_mut(handle).unwrap().opacity=0.2+index as f32*0.03;handle
-    }).collect();
-    let top=paint_occurrence(&mut doc,"Top",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
-    set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
+    }).collect()
+}
+
+fn edited_pivot_with_evicted_cells(doc:&mut Document,extent:[u32;2],pivot:OccurrenceHandle)->(WgpuRasterizer,Vec<PixelRect>) {
     let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(top));
-    let settle=|r:&mut WgpuRasterizer,doc:&Document,context:&str| {
-        let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
-        let mut idle=0;
-        for step in 0..256 {
-            let before=crate::test_support::PassCounts::snapshot();
-            crate::test_support::submit_ready(r,FramePacket {composite_all:step==0,..frame}).unwrap();crate::test_support::complete(r);
-            if r.next_frame()!=layer_render::FrameDemand::Work {return;}
-            idle=if crate::test_support::PassCounts::snapshot().delta(before).composite_commits==0 {idle+1}else {0};
-            assert!(idle<16,"{context}: {idle} Work frames in a row committed nothing: {:?}",r.outstanding_terms());
-        }
-        panic!("{context}: the display never settled: {:?}",r.outstanding_terms());
-    };
-    settle(&mut r,&doc,"open");
-    let top_index=doc.scene().order().iter().position(|&handle|handle==top).unwrap();
-    paint_mut(&mut doc,top_index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
-    settle(&mut r,&doc,"edit");
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(pivot));
+    settle_refinement(&mut r,doc,extent,"open");
+    let index=doc.scene().order().iter().position(|&handle|handle==pivot).unwrap();
+    paint_mut(doc,index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
+    settle_refinement(&mut r,doc,extent,"edit");
     let cells:Vec<_>={let cache=r.scale_display.as_ref().unwrap();pages::coordinates(cache.plan.bounds,cache.plan.level).map(|coordinate|pages::bounds(coordinate,cache.plan.level,cache.plan.extent)).collect()};
     assert!(cells.len()>=2 && r.scale_display.as_ref().unwrap().plan.level==0,"the fixture refines two cells at level 0");
     evict_composite_pages(r.scale_display.as_ref().unwrap(),&cells);
+    (r,cells)
+}
+
+#[test]
+fn a_fold_unit_in_flight_whose_half_is_gone_admits_the_half_and_settles() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let below=translucent_layers(&mut doc,extent,18);
+    let top=paint_occurrence(&mut doc,"Top",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
+    let (mut r,cells)=edited_pivot_with_evicted_cells(&mut doc,extent,top);
     let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
-    let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
-    let mut commands=scene.scale_commands.take().unwrap_or_else(||RegionRecords::new(&r));
-    scene.begin_frame();commands.begin();
-    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-    let write=scene.begin_write(&r,&mut encoder).unwrap();cache.submission_valid=Some(scene.valid.clone());
-    let mut budget=Scene::begin_work(false);budget.spend(budget.remaining());
-    cache.refine(&mut scene,&mut r,frame,&mut encoder,&mut commands,&mut budget).unwrap();
-    write.track(&encoder);
-    scene.scale_commands=Some(commands);r.scale_display=Some(cache);r.scene=Some(scene);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    refine_spent_frame(&mut r,frame);
     let cache=r.scale_display.as_ref().unwrap();let halves=cache.pivot_halves();
     let folds:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).filter(|key|cache.graph.content.as_ref()==Some(&key.expression)).collect();
     assert!(!folds.is_empty(),"a fold unit is left in flight by the spent frame");
@@ -1289,5 +1303,34 @@ fn a_fold_unit_in_flight_whose_half_is_gone_admits_the_half_and_settles() {
         assert!(cache.pages.lock().unwrap().get(&half,half.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Refinement).is_some(),"a trim keeps the halves of a fold in flight");
     }
     pages::evict_composite_pages_where(cache,&cells,|key|halves.contains(&key.expression));
-    settle(&mut r,&doc,"half evicted under a unit in flight");
+    settle_refinement(&mut r,&doc,extent,"half evicted under a unit in flight");
+}
+
+#[test]
+fn selecting_another_layer_releases_the_units_admitted_for_the_previous_pivot() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let mut entries=translucent_layers(&mut doc,extent,18);
+    let pivot=paint_occurrence(&mut doc,"Pivot",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    entries.insert(entries.len()/2,pivot);
+    set_root_entries(&mut doc,entries.clone());
+    let (mut r,_)=edited_pivot_with_evicted_cells(&mut doc,extent,pivot);
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    refine_spent_frame(&mut r,frame);
+    let (halves,admitted)={
+        let cache=r.scale_display.as_ref().unwrap();let halves=cache.pivot_halves();
+        let admitted:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).filter(|key|halves.contains(&key.expression)).collect();
+        (halves,admitted)
+    };
+    assert!(halves.len()==2 && !admitted.is_empty(),"the spent frame leaves a half of the edited pivot admitted");
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(entries[0]));
+    settle_refinement(&mut r,&doc,extent,"another layer selected");
+    {
+        let cache=r.scale_display.as_ref().unwrap();
+        assert!(cache.pivot_halves().iter().all(|half|!halves.contains(half)),"the selection moves the pivot");
+        let flying:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).collect();
+        assert!(admitted.iter().all(|key|!flying.contains(key)),"a unit admitted for the previous pivot is still in flight: {:?}",flying.iter().map(|key|key.coordinate).collect::<Vec<_>>());
+    }
+    crate::test_support::submit_ready(&mut r,FramePacket {composite_all:false,..packet(doc.scene(),extent)}).unwrap();crate::test_support::complete(&r);
+    let pages=r.scale_display.as_ref().unwrap().pages.lock().unwrap();
+    assert!(admitted.iter().all(|key|!pages.accepted(key,key.plan().bounds,0)),"the next frame releases the inputs of the dropped unit");
 }

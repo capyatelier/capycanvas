@@ -199,7 +199,8 @@ impl Cache {
         let mut exact=Exact::default();
         let halves=self.pivot_halves();
         let mut outcomes=std::collections::HashMap::<pages::Key,(bool,Option<crate::frame_demand::Input>)>::new();
-        {let pages=self.pages.lock().unwrap();self.streaming.units.retain(|unit|pages.accepted(&unit.interest.key,unit.interest.key.plan().bounds,0));}
+        {let units=std::mem::take(&mut self.streaming.units);let pages=self.pages.lock().unwrap();
+            self.streaming.units=units.into_iter().filter(|unit|self.current(&unit.interest.key) && pages.accepted(&unit.interest.key,unit.interest.key.plan().bounds,0)).collect();}
         let mut previous=std::mem::take(&mut self.streaming.cells);
         let admitted=self.streaming.units.iter().map(|unit|unit.interest.key.clone()).filter(|unit|cells.iter().any(|cell|cell.expression==unit.expression)).collect::<Vec<_>>();
         let mut pass=Pass {started:false,owed,closed:None};
