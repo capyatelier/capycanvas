@@ -954,6 +954,12 @@ function Check-ZenMatrix {
         }
     }
     function Check-CapyBounds([string]$Label,[switch]$Fallback) {
+        Wait-Until {
+            $view=Model
+            $normal=@($view.header.sizes|Where-Object {$_.id -eq $view.header.model.size})
+            !$view.header.editing -and $normal.Count -eq 1 -and $normal[0].height -gt 0 -and
+                $null -ne $view.header_presentation_height -and $view.header_presentation_height -eq $normal[0].height
+        } 'Normal header layout did not settle before Zen'
         $normalControl=$null
         if($Fallback){Wait-Until {!(Find 'zen-capy' -Visible)} 'Fallback retained a normal Capy'}
         else {
@@ -997,7 +1003,6 @@ function Check-ZenMatrix {
                 Wait-Until {(Header).size -eq $size} 'Header size did not update'
                 Invoke 'header-edit-done'
                 Wait-Until {!(Model).header.editing} 'Header editor did not close'
-                Start-Sleep -Milliseconds 300
                 Check-CapyBounds "$workspace/$theme/$size"
             }
         }

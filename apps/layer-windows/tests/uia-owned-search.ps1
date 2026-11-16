@@ -3493,3 +3493,25 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
  $queue=[regex]::Match($canvas,'(?s)void\s+CanvasWindow::QueueWorkspaceTrace\s*\(\s*\).*?(?=void\s+CanvasWindow::TraceTextInput\s*\()').Value
  if(!$queue -or $queue -notmatch 'workspaceTraceQueued\.exchange\(true\)' -or $queue -notmatch 'dispatcher\.TryEnqueue' -or $queue -notmatch 'workspace->PublishTrace\s*\(' -or $queue -notmatch 'queued\.store\(false\)' -or $queue -notmatch 'workspaceTraceQueued\.store\(false\)'){throw 'Workspace trace publication must stay coalesced on the UI dispatcher'}
 }
+
+& {
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-header.ps1'),[ref]$null,[ref]$null)
+ $bounds=$source.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Check-CapyBounds'},$true)
+ $baseline=$bounds.Body.EndBlock.Statements|Where-Object {$_.Extent.Text -like '$layout=(Model).layout*'}
+ $settle=$bounds.Find({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and @($n.CommandElements|Where-Object {$_.Value -eq 'Normal header layout did not settle before Zen'}).Count -eq 1},$true)
+ if(!$baseline -or ($settle -and $settle.Extent.StartOffset -gt $baseline.Extent.StartOffset)){throw 'Missing normal header layout acknowledgement before the Zen baseline'}
+ $sequence=@($(if($settle){$settle.Extent.Text}),$baseline.Extent.Text)-join"`n"
+ function Model {
+  $script:zenReads++;$height=if($script:zenCase -eq 'ready' -or $script:zenReads -gt 3){64}else{164}
+  [pscustomobject]@{header=@{editing=$false;model=@{size='medium'};sizes=@(@{id='small';height=48},@{id='medium';height=64},@{id='large';height=80})};header_presentation_height=$(if($script:zenCase -ne 'missing'){$height});layout=@{header_height=$height}}
+ }
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll -lt 6;$poll++){if(& $Condition){return}};throw $Message}
+ foreach($case in 'delayed','ready','missing'){
+  $script:zenCase=$case;$script:zenReads=0;$layout=$null;$failure=$null
+  try{. ([scriptblock]::Create($sequence))}catch{$failure=$_}
+  if($case -eq 'missing'){
+   if(!$failure -or $failure.Exception.Message -cne 'Normal header layout did not settle before Zen' -or $null -ne $layout){throw 'Missing header measurement reached the Zen baseline'}
+  }elseif($failure -or ($layout|ConvertFrom-Json).header_height -ne 64){throw 'Zen baseline sampled the expanded editor layout'}
+ }
+ 'Actual Zen baseline waits for the selected normal header height; missing measurements cannot reach the exact layout comparison.'
+}
