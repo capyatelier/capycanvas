@@ -754,7 +754,9 @@ fn canonical_dry_lift(
         elapsed_micros: ((up.timestamp_ns - 1_000_000_000) / 1_000) as u32,
     });
     input.push(up).unwrap();
-    for frame in 0..=32 {
+    let submitted = engine.metrics().frames;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    for frame in 0.. {
         let now = time + frame * 16_000_000;
         engine.render_frame_for(now, now).unwrap();
         engine.backend_mut().wait_idle().unwrap();
@@ -762,8 +764,12 @@ fn canonical_dry_lift(
             break;
         }
         assert!(
-            frame < 32,
+            engine.metrics().frames - submitted < 32,
             "the stored Up completes its real settlement frames"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stored Up's frames become ready"
         );
     }
     assert!(
