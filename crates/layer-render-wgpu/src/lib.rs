@@ -3680,7 +3680,7 @@ impl WgpuRasterizer {
         for (_,_,region,blob) in frontier {
             let Ok(queue)=self.image_decode_queue(self.device.working_space()) else {return;};
             queue.prioritize(packet.view,region);
-            if !matches!(self.request_raster_decode_to(blob,space,space,residency::Class::Refinement),Ok(true)) {return;}
+            if !matches!(self.request_raster_decode_to(blob,space,space,residency::Class::Prefetch),Ok(true)) {return;}
         }
     }
     pub(crate) fn request_nearest_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:object_image_mips::CoordinateDestination)->Result<bool,GpuRasterError> {

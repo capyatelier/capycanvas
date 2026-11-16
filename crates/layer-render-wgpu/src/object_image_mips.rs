@@ -682,6 +682,10 @@ impl DecodeKey {
 #[cfg(not(target_arch="wasm32"))]
 const TILE_BYTES:u64=PAGE_SIZE as u64*PAGE_SIZE as u64*4;
 #[cfg(not(target_arch="wasm32"))]
+const SPECULATIVE_TILES_PER_WORKER:u64=6;
+#[cfg(not(target_arch="wasm32"))]
+fn speculative(class:Class)->bool {matches!(class,Class::Fallback|Class::Navigator|Class::Prefetch)}
+#[cfg(not(target_arch="wasm32"))]
 fn rank(class:Class,distance:u64)->u64 {(class as u64)<<56|distance.min((1<<56)-1)}
 struct Outstanding {
     sequence:u64,key:Option<DecodeKey>,region:PixelRect,class:Class,charge:Charge,
@@ -756,7 +760,7 @@ impl Dispatch {
     fn close(&self) {self.jobs.lock().unwrap().1=true;self.available.notify_all();}
 }
 #[cfg(not(target_arch="wasm32"))]
-struct DecodePool {dispatch:Arc<Dispatch>,capacity:usize,epoch:Arc<AtomicU64>,capacity_waiters:Arc<std::sync::Mutex<Vec<Weak<DecodeContext>>>>}
+struct DecodePool {dispatch:Arc<Dispatch>,capacity:usize,speculative:u64,epoch:Arc<AtomicU64>,capacity_waiters:Arc<std::sync::Mutex<Vec<Weak<DecodeContext>>>>}
 #[cfg(not(target_arch="wasm32"))]
 impl Drop for DecodePool {
     fn drop(&mut self) {self.dispatch.close();}
@@ -813,7 +817,7 @@ impl DecodePool {
         POOL.get_or_init(||Self::start(decode_workers()))
             .as_ref().cloned().map_err(|_|GpuRasterError::Color("Image preparation worker unavailable".into()))
     }
-    fn working_limit(&self)->u64 {self.capacity as u64*TILE_BYTES}
+    fn working_limit(&self,class:Class)->u64 {if speculative(class) {self.speculative}else {self.capacity as u64*TILE_BYTES}}
     fn subscribe(&self,context:&Arc<DecodeContext>,epoch:u64) {
         let changed={
             let mut waiters=self.capacity_waiters.lock().unwrap();
@@ -830,7 +834,7 @@ impl DecodePool {
         let dispatch=Arc::new(Dispatch::default());
         let epoch=Arc::new(AtomicU64::new(0));
         let capacity_waiters=Arc::new(std::sync::Mutex::new(Vec::<Weak<DecodeContext>>::new()));
-        let pool=Arc::new(Self {dispatch:dispatch.clone(),capacity:workers+crate::scene::IDLE_FRAME_TILES,epoch:epoch.clone(),capacity_waiters:capacity_waiters.clone()});
+        let pool=Arc::new(Self {dispatch:dispatch.clone(),capacity:workers+crate::scene::IDLE_FRAME_TILES,speculative:workers as u64*SPECULATIVE_TILES_PER_WORKER*TILE_BYTES,epoch:epoch.clone(),capacity_waiters:capacity_waiters.clone()});
         for worker in 0..workers {
             let (dispatch,epoch,waiters)=(dispatch.clone(),epoch.clone(),capacity_waiters.clone());
             std::thread::Builder::new().name(format!("capy-image-prefilter-{worker}")).spawn(move || {
@@ -916,15 +920,15 @@ impl MipDecodeQueue {
         }).collect();
         tiles.sort();tiles
     }
-    fn working_limit(&self)->u64 {
+    fn working_limit(&self,class:Class)->u64 {
         #[cfg(not(target_arch="wasm32"))]
-        {self.pool.working_limit()}
+        {self.pool.working_limit(class)}
         #[cfg(target_arch="wasm32")]
-        {0}
+        {let _=class;0}
     }
-    pub(crate) fn has_room(&self)->bool {self.working.used()<self.working_limit().max(1)}
-    fn admit(&self,bytes:u64,receipt:bool)->Option<Charge> {
-        self.working.charge_within(self.working_limit().max(bytes).saturating_add(if receipt {bytes}else {0}),bytes)
+    pub(crate) fn has_room(&self)->bool {self.working.used()<self.working_limit(Class::Visible).max(1)}
+    fn admit(&self,bytes:u64,receipt:bool,class:Class)->Option<Charge> {
+        self.working.charge_within(self.working_limit(class).max(bytes).saturating_add(if receipt {bytes}else {0}),bytes)
     }
     #[cfg(test)]
     pub(crate) fn working_bytes(&self)->u64 {self.working.used()}
@@ -989,7 +993,7 @@ impl MipDecodeQueue {
             stored.rerank(self.priority);
             return true;
         }
-        let Some(charge)=self.admit(request.decoded_bytes(),receipt) else {return false;};
+        let Some(charge)=self.admit(request.decoded_bytes(),receipt,class) else {return false;};
         let sequence=self.next_sequence;
         let region=self.priority.map_or(PixelRect::EMPTY,|(_,region)|region);
         #[cfg(not(target_arch="wasm32"))]
@@ -1045,7 +1049,7 @@ pub(crate) mod tests {
     use crate::test_support::{page_texture,upload_page};
     #[cfg(not(target_arch="wasm32"))]
     fn idle_pool(capacity:usize)->Arc<DecodePool> {
-        Arc::new(DecodePool {dispatch:Default::default(),capacity,epoch:Default::default(),capacity_waiters:Default::default()})
+        Arc::new(DecodePool {dispatch:Default::default(),capacity,speculative:0,epoch:Default::default(),capacity_waiters:Default::default()})
     }
     #[cfg(not(target_arch="wasm32"))]
     fn queued(results:std::sync::mpsc::Receiver<(u64,PreparedImageWork)>,
@@ -1360,7 +1364,7 @@ pub(crate) mod tests {
             accepted.push(*tile);
         }
         assert!(!accepted.is_empty() && accepted.len()<tiles.len(),"outstanding preparation is bounded: {}",accepted.len());
-        assert!(queue.working_bytes()<=queue.working_limit(),"{} admitted bytes exceed the working set",queue.working_bytes());
+        assert!(queue.working_bytes()<=queue.working_limit(Class::Visible),"{} admitted bytes exceed the working set",queue.working_bytes());
         assert_eq!(queue.outstanding.len(),accepted.len());
         let mut prepared:Vec<_>=drain(&mut queue,accepted.len()).into_iter().map(|result|{
             let PreparedImageWork::Image(tile)=result else {panic!("Image request must return image samples");};

@@ -43,7 +43,7 @@ fn queue_churn_keeps_one_shared_pool_and_does_not_retain_idle_contexts() {
     let epoch=pool.epoch.load(Ordering::Acquire);
     for index in 0..128 {
         let queue=MipDecodeQueue::native(cache.clone(),if index%2==0 {RgbSpace::Srgb}else {RgbSpace::DisplayP3},&Default::default()).unwrap();
-        assert!(Arc::ptr_eq(&queue.pool,&pool));assert_eq!(queue.working_limit(),pool.working_limit());
+        assert!(Arc::ptr_eq(&queue.pool,&pool));assert_eq!(queue.working_limit(Class::Visible),pool.working_limit(Class::Visible));
         assert!(queue.has_room());assert!(!queue.pending());assert!(!queue.ready());
         let context=Arc::downgrade(&queue.context);drop(queue);assert!(context.upgrade().is_none());
     }
@@ -95,7 +95,7 @@ fn unpolled_results_stay_queue_local_and_do_not_block_another_queue() {
         assert!(full.request(*id,source.clone(),[0;2]));
     }
     while full.ready.load(Ordering::Acquire)!=pool.capacity {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
-    assert!(!full.has_room());assert!(full.admit(TILE_BYTES,false).is_none());assert!(full.admit(TILE_BYTES,true).is_some());
+    assert!(!full.has_room());assert!(full.admit(TILE_BYTES,false,Class::Visible).is_none());assert!(full.admit(TILE_BYTES,true,Class::Visible).is_some());
     let source=layer_core::color::source::rgba8_source([1;2],|_,_|[91,82,73,255]);let id=PortableId::random();
     assert!(other.request(id,source.clone(),[0;2]));let (actual_id,actual_source,pixels)=image_pixels(result(&mut other));
     assert_eq!(actual_id,id);assert!(Arc::ptr_eq(&actual_source,&source));assert_eq!(&samples(&pixels)[..4],&[91,82,73,255]);
