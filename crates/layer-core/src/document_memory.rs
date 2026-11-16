@@ -56,8 +56,8 @@ impl DocumentMemory {
     pub fn package_pending(&self)->bool {self.owner.package_pending.load(Ordering::Acquire)}
     pub fn has_package(&self)->bool {self.owner.package.load(Ordering::Acquire)}
     pub fn presented(&self) {self.owner.presented.store(true,Ordering::Release);}
-    pub fn package_inventory(&self)->Option<Arc<crate::raster_storage::RetainedTiles>> {
-        (self.package_pending() && self.owner.presented.load(Ordering::Acquire)).then(||self.owner.inventories.lock().unwrap().current.clone())
+    pub fn package_inventory(&self,awaited:bool)->Option<Arc<crate::raster_storage::RetainedTiles>> {
+        (self.package_pending() && (awaited || self.owner.presented.load(Ordering::Acquire))).then(||self.owner.inventories.lock().unwrap().current.clone())
     }
     pub fn storage_identity(&self)->u64 {self.owner.storage_identity}
     pub fn storage(&self)->Option<crate::package::session_store::DrawingStore> {self.owner.storage.lock().unwrap().clone()}

@@ -122,6 +122,8 @@ struct StoreInput {
     id:PortableId,record:StoredRecord,payload:Payload,length:u64,crc:u32,descriptor:[u8;32],owner:Weak<dyn Send+Sync>,
 }
 pub struct PackageCopy {tiles:Vec<Arc<crate::raster::TileBlob>>,next:usize}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum CopyPriority {Idle,Checkpoint,Required}
 impl PackageCopy {
     pub async fn new(inventory:&crate::raster_storage::RetainedTiles)->Result<Self,String> {
         Ok(Self {tiles:inventory.await_blobs().await?.into_iter().filter(|tile|tile.has_package_origin()).collect(),next:0})
@@ -541,15 +543,19 @@ impl SessionStore {
         self.by_owner.insert(input.owner_key(),input.id);
         self.index.insert(input.id,IndexedResource {record:input.record,location,owner:Some(input.owner)});Ok(())
     }
-    pub async fn copy_package_step(&mut self,copy:&mut PackageCopy,cancelled:&AtomicBool,checkpoint:bool,activity:&CompactionActivity)->Result<(),String> {
+    pub async fn copy_package_step(&mut self,copy:&mut PackageCopy,cancelled:&AtomicBool,priority:CopyPriority,activity:&CompactionActivity)->Result<(),String> {
         let epoch=activity.revision();
-        let Some(_permit)=activity.chunk(checkpoint) else {return Ok(());};
-        self.copy_package_ready(copy,cancelled,activity,epoch).await
+        let interrupted=||priority!=CopyPriority::Required && activity.revision()!=epoch;
+        let _permit=match priority {
+            CopyPriority::Required=>None,
+            _=>match activity.chunk(priority==CopyPriority::Checkpoint) {None=>return Ok(()),permit=>permit},
+        };
+        self.copy_package_ready(copy,cancelled,interrupted).await
     }
-    async fn copy_package_ready(&mut self,copy:&mut PackageCopy,cancelled:&AtomicBool,activity:&CompactionActivity,epoch:u64)->Result<(),String> {
+    async fn copy_package_ready(&mut self,copy:&mut PackageCopy,cancelled:&AtomicBool,interrupted:impl Fn()->bool)->Result<(),String> {
         let mut bytes=0;let mut next=copy.next;let mut inputs=Vec::new();
         while let Some(blob)=copy.tiles.get(next) {
-            if activity.revision()!=epoch {break;}
+            if interrupted() {break;}
             if !blob.compressed.needs_store()? {next+=1;continue;}
             let bound=if blob.compressed.needs_preparation() {crate::raster::TileBlob::max_compressed_len(blob.descriptor).ok_or("Invalid package tile descriptor")?}
                 else {blob.compressed_len()} as u64;
@@ -558,7 +564,7 @@ impl SessionStore {
             let entry=super::resources::ResourceEntry {kind:"capy.raster-tile/1",data:super::resources::encode_descriptor(blob.descriptor)?,raw_encoding:"capy.lz4-tile/1",payload:Payload::Tile(blob.clone())};
             inputs.push(StoreInput::entry(&entry,cancelled)?);bytes+=bound;next+=1;
         }
-        if activity.revision()!=epoch {return Ok(());}
+        if interrupted() {return Ok(());}
         if !inputs.is_empty() {self.store_inputs(inputs,cancelled).await?.commit()?;}
         copy.next=next;Ok(())
     }

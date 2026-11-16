@@ -1,4 +1,4 @@
-use layer_core::{PortableId,ProjectLimits,package::session_store::{CompactionActivity,DrawingStore,StoreOpener},raster_storage::RetainedTiles};
+use layer_core::{PortableId,ProjectLimits,package::session_store::{CompactionActivity,CopyPriority,DrawingStore,StoreOpener},raster_storage::RetainedTiles};
 use layer_ui::{SessionCapture,SessionStamp};
 #[cfg(not(target_arch="wasm32"))]
 use futures_util::FutureExt;
@@ -44,7 +44,7 @@ impl std::future::Future for StoreReply {
     }
 }
 pub type CapturePreparation=Box<dyn FnOnce(&mut SessionCapture)->Result<(),String>+Send>;
-enum Work {Package {inventory:Arc<RetainedTiles>,copy:Option<layer_core::package::session_store::PackageCopy>,checkpoint:bool},Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Import {expected:Option<PortableId>,metadata:Arc<[u8]>,resources:BTreeMap<PortableId,layer_core::package::ImmutableBacking>},ImportTiles {tiles:RetainedTiles,_reservation:Option<layer_core::MemoryReservation>},Compact,SampleStorage,Restore(ProjectLimits),PrepareRetirement,Retire}
+enum Work {Package {inventory:Arc<RetainedTiles>,copy:Option<layer_core::package::session_store::PackageCopy>,priority:CopyPriority},Checkpoint {capture:SessionCapture,stamp:SessionStamp,forced:bool,prepare:Option<CapturePreparation>},Pressure(Vec<RetainedTiles>),Import {expected:Option<PortableId>,metadata:Arc<[u8]>,resources:BTreeMap<PortableId,layer_core::package::ImmutableBacking>},ImportTiles {tiles:RetainedTiles,_reservation:Option<layer_core::MemoryReservation>},Compact,SampleStorage,Restore(ProjectLimits),PrepareRetirement,Retire}
 struct Request {work:Work,replies:Vec<StoreReply>}
 impl Request {
     fn finish(self,result:Result<StoreResult,String>) {
@@ -202,15 +202,16 @@ impl SessionStores {
     fn copy_package(&self,key:&str)->bool {
         let mut state=self.0.state.lock().unwrap();let Some(drawing)=state.drawings.get_mut(key) else {return false;};
         if drawing.running || drawing.retiring || drawing.storage_error.is_some() {return false;}
-        let checkpoint=!drawing.package_replies.is_empty() || drawing.deferred_since.is_some_and(|since|(self.0.clock)().saturating_sub(since)>=5*Self::checkpoint_interval_ms());
-        if !self.0.activity.ready(checkpoint) {return false;}
-        let Some(inventory)=drawing.memory.as_ref().and_then(layer_core::DocumentMemory::package_inventory) else {return false;};
+        let priority=if !drawing.package_replies.is_empty() {CopyPriority::Required}
+            else if drawing.deferred_since.is_some_and(|since|(self.0.clock)().saturating_sub(since)>=5*Self::checkpoint_interval_ms()) {CopyPriority::Checkpoint}else {CopyPriority::Idle};
+        if priority!=CopyPriority::Required && !self.0.activity.ready(priority==CopyPriority::Checkpoint) {return false;}
+        let Some(inventory)=drawing.memory.as_ref().and_then(|memory|memory.package_inventory(priority==CopyPriority::Required)) else {return false;};
         let copy=match drawing.package.take() {
             Some((current,copy)) if Arc::ptr_eq(&current,&inventory)=>match copy {
                 Ok(Some(copy))=>Some(copy),finished=>{drawing.package=Some((current,finished));return false;},
             },_=>None,
         };
-        let task=self.start(drawing,Request {work:Work::Package {inventory,copy,checkpoint},replies:Vec::new()});
+        let task=self.start(drawing,Request {work:Work::Package {inventory,copy,priority},replies:Vec::new()});
         drop(state);(self.0.execute)(task);true
     }
     pub fn maintain(&self)->Result<(),String> {
@@ -447,9 +448,9 @@ impl DrawingWork {
             let sampling=matches!(request.work,Work::SampleStorage);
             let retirement=matches!(request.work,Work::PrepareRetirement|Work::Retire);let preparing_retirement=matches!(request.work,Work::PrepareRetirement);
             let operation=async |store:&mut layer_core::package::session_store::SessionStore|match &mut request.work {
-                Work::Package {inventory,copy,checkpoint}=>{
+                Work::Package {inventory,copy,priority}=>{
                     let mut copy=match copy.take() {Some(copy)=>copy,None=>layer_core::package::session_store::PackageCopy::new(inventory).await?};
-                    let before=copy.remaining();store.copy_package_step(&mut copy,&cancelled,*checkpoint,&activity).await?;
+                    let before=copy.remaining();store.copy_package_step(&mut copy,&cancelled,*priority,&activity).await?;
                     let progress=before!=copy.remaining();
                     Ok(StoreResult::PackageCopy {inventory:inventory.clone(),copy:(!copy.complete()).then_some(copy),progress})
                 },
@@ -524,7 +525,8 @@ impl DrawingWork {
         }
         let storage_ready=matches!(result,Ok(StoreResult::StorageReady(true)));
         self.complete(committed,matches!(result,Ok(StoreResult::Retired)));
-        if continue_package {self.stores.copy_package(&self.key);}
+        let awaited=self.stores.0.state.lock().unwrap().drawings.get(&self.key).is_some_and(|drawing|!drawing.package_replies.is_empty());
+        if continue_package || awaited {self.stores.copy_package(&self.key);}
         if matches!(request.work,Work::Package {..}) && let Err(error)=&result {
             let watched=self.stores.0.pressure.lock().unwrap().clone();if let Some((source,generation))=watched && source.is_current(generation) {source.storage_completed(Err(error.clone()));}
         }

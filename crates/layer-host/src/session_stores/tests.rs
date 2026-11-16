@@ -1221,27 +1221,37 @@ fn queue_package_copy(fixture:&Fixture,stamp:&SessionStamp) {
 fn package_open_does_not_queue_a_copy_or_checkpoint_before_the_first_picture() {
     let fixture=Fixture::new();let session=package_session(&fixture);
     assert!(session.engine().document().memory().package_pending());
-    assert!(session.engine().document().memory().package_inventory().is_none());
+    assert!(session.engine().document().memory().package_inventory(false).is_none());
     assert!(!fixture.stores.checkpoint_due(1,session.session_stamp(),false).unwrap());
     assert!(!fixture.stores.copy_package(fixture.stores.bind(1,None).unwrap().key()));
     assert!(fixture.queue.lock().unwrap().is_empty());assert!(!fixture.root.exists());
 }
 
 #[test]
-fn save_over_waits_for_existing_package_copy_without_publishing_a_head() {
-    let fixture=Fixture::new();let session=package_session(&fixture);let memory=session.engine().document().memory();memory.presented();
-    let binding=fixture.stores.bind(1,None).unwrap();let before=heads(binding.path());
-    let reply=fixture.stores.finish_package(1).unwrap();
-    assert!(reply.try_take().is_none());assert!(memory.package_pending());assert_eq!(heads(binding.path()),before);
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
-    while memory.package_pending() && std::time::Instant::now()<deadline {
-        fixture.stores.maintain().unwrap();
-        if !fixture.queue.lock().unwrap().is_empty() {fixture.run();}else{std::thread::yield_now();}
+fn save_over_finishes_its_package_copy_while_editing_without_maintenance_or_publishing_a_head() {
+    for presented in [true,false] {
+        let fixture=Fixture::new();let session=package_session(&fixture);let memory=session.engine().document().memory();
+        if presented {memory.presented();}
+        let mut editing=fixture.activity.clone();editing.set_busy(true);
+        let binding=fixture.stores.bind(1,None).unwrap();let before=heads(binding.path());
+        let reply=fixture.stores.finish_package(1).unwrap();
+        assert!(reply.try_take().is_none());assert!(memory.package_pending());assert_eq!(heads(binding.path()),before);
+        while !fixture.queue.lock().unwrap().is_empty() {fixture.run();}
+        assert!(!memory.package_pending(),"presented: {presented}");
+        assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Durable(_)))),"presented: {presented}");
+        assert_eq!(heads(binding.path()),before);
+        for tile in pollster::block_on(session.retained_document_tiles().await_blobs()).unwrap() {assert!(tile.memory_compressed().unwrap().is_none());assert!(!pollster::block_on(tile.read_compressed()).unwrap().is_empty());}
+        drop(editing);
     }
+}
+
+#[test]
+fn save_over_starts_its_copy_when_the_store_work_ahead_of_it_finishes() {
+    let fixture=Fixture::new();let session=package_session(&fixture);let memory=session.engine().document().memory();memory.presented();
+    let binding=fixture.stores.bind(1,None).unwrap();fixture.stores.request_key(binding.key(),Work::Compact).unwrap();
+    let reply=fixture.stores.finish_package(1).unwrap();assert_eq!(fixture.queue.lock().unwrap().len(),1);
+    while !fixture.queue.lock().unwrap().is_empty() {fixture.run();}
     assert!(!memory.package_pending());assert!(matches!(reply.try_take(),Some(Ok(StoreResult::Durable(_)))));
-    assert_eq!(heads(binding.path()),before);
-    let inventory=session.retained_document_tiles();
-    for tile in pollster::block_on(inventory.await_blobs()).unwrap() {assert!(tile.memory_compressed().unwrap().is_none());assert!(!pollster::block_on(tile.read_compressed()).unwrap().is_empty());}
 }
 
 #[test]

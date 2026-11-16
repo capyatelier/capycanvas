@@ -330,11 +330,11 @@ fn package_copy_bounds_each_idle_chunk_and_stops_on_input_before_writing() {
     let tiles=crate::raster_storage::RetainedTiles {sources:records.iter().map(|&(offset,length,crc)|Arc::new(TileBlob::from_package_range(PortableId::random(),descriptor,lease.range(offset,length,crc,descriptor,false).unwrap()).unwrap())).collect(),..Default::default()};
     let mut copy=PackageCopy::new(&tiles).wait().unwrap();let activity=CompactionActivity {state:Arc::new(Activity::default()),busy:false};
     let epoch=activity.revision();activity.touch();
-    store.copy_package_ready(&mut copy,&cancelled,&activity,epoch).wait().unwrap();
+    store.copy_package_ready(&mut copy,&cancelled,||activity.revision()!=epoch).wait().unwrap();
     assert_eq!(copy.remaining(),24);assert!(store.index.is_empty());
     let mut previous=0;let mut chunks=0;
     while !copy.complete() {
-        let before=copy.remaining();store.copy_package_ready(&mut copy,&cancelled,&activity,activity.revision()).wait().unwrap();
+        let before=copy.remaining();store.copy_package_ready(&mut copy,&cancelled,||false).wait().unwrap();
         let bytes=fs::read_dir(directory.0.join("packs")).unwrap().map(|entry|entry.unwrap().metadata().unwrap().len()).sum::<u64>();
         assert!(copy.remaining()<before);assert!(bytes-previous<=CHUNK_BYTES);previous=bytes;chunks+=1;
         assert_eq!(store.generation(),None);
@@ -353,7 +353,7 @@ fn package_copy_admits_a_full_chunk_of_known_compressed_tiles() {
     assert!((bytes.len() as u64)<CHUNK_BYTES);assert!(64*TileBlob::max_compressed_len(descriptor).unwrap() as u64>CHUNK_BYTES);
     let lease=super::super::PackageLease::new(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap());
     let tiles=crate::raster_storage::RetainedTiles {sources:records.iter().map(|&(offset,length,crc)|Arc::new(TileBlob::from_package_range(PortableId::random(),descriptor,lease.range(offset,length,crc,descriptor,false).unwrap()).unwrap())).collect(),..Default::default()};
-    let mut copy=PackageCopy::new(&tiles).wait().unwrap();let activity=CompactionActivity {state:Arc::new(Activity::default()),busy:false};
-    store.copy_package_ready(&mut copy,&cancel,&activity,activity.revision()).wait().unwrap();
+    let mut copy=PackageCopy::new(&tiles).wait().unwrap();
+    store.copy_package_ready(&mut copy,&cancel,||false).wait().unwrap();
     assert!(copy.complete());assert_eq!(store.index.len(),64);
 }
