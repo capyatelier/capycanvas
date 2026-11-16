@@ -382,7 +382,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
     }
     void updateSlider(){
         auto next=object(model,L"numeric");enabled=next.Size()!=0;
-        if(enabled){field=next;spec=object(next,L"numeric");current=num(next,L"value");}
+        if(enabled){field=next;spec=object(next,L"numeric");if(!contact)current=num(next,L"value");}
         auto title=enabled?str(next,L"label"):tileLabel;
         AutomationProperties::SetName(cap,title);tooltip(cap,title);AutomationProperties::SetName(access,title);
         auto shown=numeric(data->localization.get(),spec,current,O({{L"type",S(L"format")}}));level=num(shown,L"fill");
