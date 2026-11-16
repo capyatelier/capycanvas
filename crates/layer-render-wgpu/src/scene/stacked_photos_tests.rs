@@ -97,3 +97,56 @@ fn imported_fit_photos_pin_only_the_visible_demand() {
     let [plateau,last]=[settled[7][0],settled[9][0]];
     assert!(last<=plateau+(32<<20),"tracked bytes keep growing once the view's demand is resident: {} MiB with eight photos, {} MiB with ten",plateau>>20,last>>20);
 }
+
+fn noisy_photo(seed:u32,extent:[u32;2],profile:layer_core::color::ColorProfile)->AuthoredImage {
+    let mut builder=SourceBuilder::new(extent,SourceInterpretation {channels:SourceChannels::Rgb,depth:SampleDepth::U8,profile,profile_assumed:false},64<<20).unwrap();
+    let mut state=0x9e37_79b9_7f4a_7c15u64^u64::from(seed).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let mut row=vec![0u8;extent[0] as usize*3];
+    for y in 0..extent[1] {
+        for (x,pixel) in (0..).zip(row.chunks_exact_mut(3)) {
+            state^=state<<13;state^=state>>7;state^=state<<17;
+            pixel.copy_from_slice(&[((x*200/extent[0]) as u8).wrapping_add(state as u8&31).wrapping_add(seed as u8*7),
+                ((y*200/extent[1]) as u8).wrapping_add((state>>8) as u8&31),(((x+y)/40) as u8).wrapping_add((state>>16) as u8&31)]);
+        }
+        builder.push_row(&row).unwrap();
+    }
+    AuthoredImage::new(Arc::new(builder.finish().unwrap()))
+}
+
+fn photo_stack(extent:[u32;2],profile:layer_core::color::ColorProfile)->layer_core::Document {
+    document(extent,(0..28).map(|seed|ImageObject::new(noisy_photo(seed,extent,profile.clone()))).collect()).0
+}
+
+fn fit_frame(doc:&layer_core::Document,viewport:[u32;2])->FramePacket<'_> {
+    let extent=doc.composition().size;
+    let scale=(viewport[0] as f32/extent[0] as f32).min(viewport[1] as f32/extent[1] as f32);
+    let view=layer_render::ViewState {width_px:viewport[0],height_px:viewport[1],document_to_surface:[scale,0.,0.,scale,
+        (viewport[0] as f32-extent[0] as f32*scale)/2.,(viewport[1] as f32-extent[1] as f32*scale)/2.]};
+    FramePacket {view,..packet(doc.scene(),extent)}
+}
+
+const PHOTO:[u32;2]=[1024,768];
+
+fn open_photos(doc:&layer_core::Document,budget:u64)->WgpuRasterizer {
+    let frame=fit_frame(doc,[560,420]);
+    assert_eq!(crate::display_mips::view_level(frame.view.document_to_surface,crate::display_mips::MAX_LEVEL),Some(0));
+    let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(budget),..Default::default()}).unwrap();
+    crate::test_support::submit_settled(&mut r,frame);
+    r
+}
+
+#[test]
+fn fit_photo_page_windows_each_read_only_their_own_tile() {
+    let doc=photo_stack(PHOTO,Default::default());
+    let mut r=open_photos(&doc,8<<30);
+    let frame=fit_frame(&doc,[560,420]);
+    let mut scene=r.scene.take().unwrap();
+    let windows:Vec<_>=scene.object_results.request_windows().into_iter().filter(|(_,_,window)|window.side==1.).collect();
+    assert!(!windows.is_empty(),"the level-0 view samples its photos in page windows");
+    for (_,owner,window) in windows {
+        let content=scene.object_spatial.content(frame.scene,owner).unwrap();
+        let job=scene.collection_job(&r,frame,owner,content,window);
+        let pages=super::super::object_cache::working_set(&job.child(0,job.part(0),r.empty_view.clone()).unwrap()).unwrap().2;
+        assert_eq!(pages,1,"the page window at {:?} reads {pages} source tiles",window.origin);
+    }
+}

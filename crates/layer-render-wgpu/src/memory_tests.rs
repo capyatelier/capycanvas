@@ -110,8 +110,6 @@ pub(crate) fn declare_source_budget(r: &mut WgpuRasterizer, frame: FramePacket<'
     r.refresh_memory_limits();
 }
 
-pub(crate) fn declared_source_demand(r: &WgpuRasterizer) -> u64 { r.memory.demand.get().wanted(0)[3] }
-
 pub(crate) fn isolate(r: &mut WgpuRasterizer) -> MemoryBudget {
     let budget = MemoryBudget::with_facts(MemoryFacts { host_default_bytes: Some(2 << 30),
         override_bytes: Some(2 << 30), ..Default::default() });

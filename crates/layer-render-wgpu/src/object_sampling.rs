@@ -100,7 +100,7 @@ impl PhaseGeometry {
     fn count(&self)->u64 {self.windows().saturating_mul(u64::from(self.height.div_ceil(self.rows.max(1))))}
 }
 fn phase_geometry(size:[u32;2],stretch:[f64;3],nearest:bool,phase:u32,extent:[u32;2])->PhaseGeometry {
-    let radius=[stretch[0]+stretch[1].abs(),stretch[2]+stretch[1].abs()];
+    let radius=radius(stretch);
     let bilinear=stretch==[1.,0.,1.];
     let height=if phase==2 || nearest || bilinear {1} else {(radius[1]*2.).ceil() as u32+3};
     let width=if nearest || phase==2 {1} else if bilinear {if phase==1 {4} else {1}} else {((radius[0]*2.+3.).ceil().min(if phase==1 {f64::from(extent[0])} else {f64::INFINITY})) as u32};
@@ -109,21 +109,39 @@ fn phase_geometry(size:[u32;2],stretch:[f64;3],nearest:bool,phase:u32,extent:[u3
     let side=(((DISPATCH_TAPS/u64::from(taps)) as u32).clamp(1,DISPATCH_THREADS) as f64).sqrt().floor().max(1.) as u32;
     PhaseGeometry {side,columns:size[0].div_ceil(side),lines:size[1].div_ceil(side),height,rows,taps}
 }
-fn tent_bounds(inverse:[f64;6],radius:[f64;2],nearest:bool,work:[u32;4])->([f64;2],[f64;2],[f64;2],[f64;2]) {
+fn radius(stretch:[f64;3])->[f64;2] {[stretch[0]+stretch[1].abs(),stretch[2]+stretch[1].abs()]}
+fn sample_range(inverse:[f64;6],work:[u32;4])->([f64;2],[f64;2]) {
     let [a,b,c,d,tx,ty]=inverse;
     let mut qlow=[f64::INFINITY;2];let mut qhigh=[f64::NEG_INFINITY;2];
     for y in [f64::from(work[1])+0.5,f64::from(work[1]+work[3])-0.5] {for x in [f64::from(work[0])+0.5,f64::from(work[0]+work[2])-0.5] {
         for (axis,q) in [a*x+c*y+tx,b*x+d*y+ty].into_iter().enumerate() {qlow[axis]=qlow[axis].min(q);qhigh[axis]=qhigh[axis].max(q);}
     }}
-    let low=std::array::from_fn(|axis|if nearest {qlow[axis].floor()} else {(qlow[axis]-radius[axis]-0.5).floor()});
-    let high=std::array::from_fn(|axis|if nearest {qhigh[axis].floor()+1.} else {(qhigh[axis]+radius[axis]-0.5).ceil()+1.});
-    (low,high,qlow,qhigh)
+    (qlow,qhigh)
+}
+#[derive(Clone,Copy)]
+struct Footprint {radius:[f64;2],slack:f64,nearest:bool}
+impl Footprint {
+    fn new(inverse:[f64;6],size:[u32;2],nearest:bool,stretch:[f64;3])->Self {
+        let radius=radius(stretch);
+        let [a,b,c,d,tx,ty]=inverse;
+        let centred=stretch==[1.,0.,1.] && [a,b,c,d].iter().all(|v|v.fract()==0.) && [tx,ty].iter().all(|v|(v*2.).fract()==0.);
+        let (qlow,qhigh)=sample_range(inverse,[0,0,size[0],size[1]]);
+        let reach=qlow.into_iter().chain(qhigh).fold(0f64,|reach,q|reach.max(q.abs()));
+        let slack=if nearest || centred {0.} else {(reach+radius[0].max(radius[1])+1.)/f64::from(1u32<<20)};
+        Self {radius,slack,nearest}
+    }
+    fn texels(&self,qlow:[f64;2],qhigh:[f64;2])->([f64;2],[f64;2]) {
+        if self.nearest {return (qlow.map(f64::floor),qhigh.map(|q|q.floor()+1.));}
+        (std::array::from_fn(|axis|(qlow[axis]-self.radius[axis]-0.5-self.slack).floor()+1.),
+            std::array::from_fn(|axis|(qhigh[axis]+self.radius[axis]-0.5+self.slack).ceil()))
+    }
 }
 fn contribution_schedule(request:SamplingRequest,stretch:[f64;3],kind:u32,origin:[i32;2],extent:[u32;2],geometry:&PhaseGeometry,limit:u64)->ContributionSchedule {
     let SamplingRequest {inverse,size,nearest,..}=request;
     let [a,b,c,d,tx,ty]=inverse;
     let determinant=a*d-b*c;
-    let radius=if nearest {[0.;2]} else {[stretch[0]+stretch[1].abs(),stretch[2]+stretch[1].abs()]};
+    let radius=if nearest {[0.;2]} else {radius(stretch)};
+    let footprint=Footprint::new(inverse,size,nearest,stretch);
     let mut bounds=[[f64::INFINITY;2],[f64::NEG_INFINITY;2]];
     for y in [f64::from(origin[1])-radius[1]-0.5,f64::from(origin[1])+f64::from(extent[1])+radius[1]+0.5] {
         for x in [f64::from(origin[0])-radius[0]-0.5,f64::from(origin[0])+f64::from(extent[0])+radius[0]+0.5] {
@@ -140,7 +158,8 @@ fn contribution_schedule(request:SamplingRequest,stretch:[f64;3],kind:u32,origin
     for line in 0..span[1] {for column in 0..span[0] {
         let [x,y]=[low[0]+column*geometry.side,low[1]+line*geometry.side];
         let work=[x,y,geometry.side.min(high[0]-x),geometry.side.min(high[1]-y)];
-        let (kernel_low,kernel_high,qlow,qhigh)=tent_bounds(inverse,radius,nearest,work);
+        let (qlow,qhigh)=sample_range(inverse,work);
+        let (kernel_low,kernel_high)=footprint.texels(qlow,qhigh);
         if (0..2).any(|axis|kernel_high[axis]<=f64::from(origin[axis]) || kernel_low[axis]>=f64::from(origin[axis])+f64::from(extent[axis])) {continue;}
         let (first,end)=if kind==0 {
             if (0..2).all(|axis|kernel_low[axis]>=f64::from(origin[axis]) && kernel_high[axis]<=f64::from(origin[axis])+f64::from(extent[axis])) {continue;}
@@ -203,7 +222,7 @@ pub(crate) fn mapping(inverse:[f64;6],size:[u32;2])->Result<(),GpuRasterError> {
 fn admission(inverse:[f64;6],size:[u32;2],nearest:bool,limit:u64)->Result<([f64;3],u64),GpuRasterError> {
     mapping(inverse,size)?;
     let stretch=if nearest {[1.,0.,1.]} else {stretch(inverse)?};
-    let radius=[stretch[0]+stretch[1].abs(),stretch[2]+stretch[1].abs()];
+    let radius=radius(stretch);
     if !nearest && radius.iter().any(|&v|!v.is_finite() || v>MAX_RADIUS) {return Err(GpuRasterError::ExtentUnsupported);}
     let bytes=u64::from(size[0]).checked_mul(u64::from(size[1])).and_then(|v|v.checked_mul(32)).ok_or(GpuRasterError::SizeOverflow)?;
     if bytes>limit {return Err(GpuRasterError::SourceWorkingSetExceeded);}
@@ -246,17 +265,10 @@ impl ObjectAccumulator {
     pub(crate) fn nearest_coordinates_ready(&self)->bool {!self.nearest || u64::from(self.coordinates_uploaded.get())==u64::from(self.size[0])*u64::from(self.size[1])}
 }
 fn source_bounds(inverse:[f64;6],size:[u32;2],nearest:bool,stretch:[f64;3],extent:[u32;2])->PixelRect {
-        let [a,b,c,d,tx,ty] = inverse;
-        let [rx,ry] = if nearest { [0.,0.] } else { [stretch[0]+stretch[1].abs(),stretch[2]+stretch[1].abs()] };
-        let mut low = [f64::INFINITY;2];
-        let mut high = [f64::NEG_INFINITY;2];
-        for y in [0.5,size[1] as f64-0.5] { for x in [0.5,size[0] as f64-0.5] {
-            for (axis,value) in [a*x+c*y+tx,b*x+d*y+ty].into_iter().enumerate() { low[axis]=low[axis].min(value);high[axis]=high[axis].max(value); }
-        }}
-        PixelRect::new((low[0]-rx-0.5).floor().max(0.).min(extent[0] as f64) as u32,
-            (low[1]-ry-0.5).floor().max(0.).min(extent[1] as f64) as u32,
-            (high[0]+rx+0.5).ceil().max(0.).min(extent[0] as f64) as u32,
-            (high[1]+ry+0.5).ceil().max(0.).min(extent[1] as f64) as u32)
+    let (qlow,qhigh)=sample_range(inverse,[0,0,size[0],size[1]]);
+    let (low,high)=Footprint::new(inverse,size,nearest,stretch).texels(qlow,qhigh);
+    let clamp=|value:f64,axis:usize|value.max(0.).min(f64::from(extent[axis])) as u32;
+    PixelRect::new(clamp(low[0],0),clamp(low[1],1),clamp(high[0],0),clamp(high[1],1))
 }
 impl ObjectSampler {
     pub(crate) fn gpu_working_bytes(inverse:[f64;6],size:[u32;2],nearest:bool)->Result<u64,GpuRasterError> {
@@ -370,13 +382,14 @@ impl ObjectSampler {
     pub(crate) fn reuse(&self,device:&PipelineDevice,previous:Option<ObjectAccumulator>,request:SamplingRequest,output:&wgpu::TextureView,empty:&wgpu::TextureView,uniform:&wgpu::Buffer) -> Result<ObjectAccumulator,GpuRasterError> {
         let SamplingRequest {inverse,size,nearest}=request;
         let (stretch,bytes)=admission(inverse,size,nearest,device.limits().max_storage_buffer_binding_size)?;
-        let radius=[stretch[0]+stretch[1].abs(),stretch[2]+stretch[1].abs()];
+        let radius=radius(stretch);
         let [a,b,c,d,tx,ty] = inverse;
         let centre = [size[0] as f64*0.5,size[1] as f64*0.5];
         let anchor = if nearest {[0;2]} else {[(a*centre[0]+c*centre[1]+tx).floor() as i64,(b*centre[0]+d*centre[1]+ty).floor() as i64]};
         let determinant = stretch[0]*stretch[2]-stretch[1]*stretch[1];
         let mut data = [0u8;112];
-        for (i,value) in [a,c,tx-anchor[0] as f64,0.,b,d,ty-anchor[1] as f64,0.,stretch[2]/determinant,-stretch[1]/determinant,stretch[0]/determinant,0.,radius[0],radius[1],f64::from(nearest),f64::from(stretch==[1.,0.,1.])].into_iter().enumerate() { let value=if nearest && i<8 {0.} else {value};data[i*4..i*4+4].copy_from_slice(&(value as f32).to_le_bytes()); }
+        let slack=Footprint::new(inverse,size,nearest,stretch).slack;
+        for (i,value) in [a,c,tx-anchor[0] as f64,0.,b,d,ty-anchor[1] as f64,0.,stretch[2]/determinant,-stretch[1]/determinant,stretch[0]/determinant,slack,radius[0],radius[1],f64::from(nearest),f64::from(stretch==[1.,0.,1.])].into_iter().enumerate() { let value=if nearest && i<8 {0.} else {value};data[i*4..i*4+4].copy_from_slice(&(value as f32).to_le_bytes()); }
         for (i,value) in size.into_iter().enumerate() { data[80+i*4..84+i*4].copy_from_slice(&value.to_le_bytes()); }
         let (kept,kept_coordinates)=previous.map_or((None,None),|previous|(Some(previous.buffer),previous.coordinates));
         let buffer=kept.filter(|buffer|buffer.size()>=bytes).unwrap_or_else(||device.create_buffer(&wgpu::BufferDescriptor {label:Some("image-object sampling accumulation"),size:bytes,usage:wgpu::BufferUsages::STORAGE|wgpu::BufferUsages::COPY_DST,mapped_at_creation:false}));
@@ -633,6 +646,54 @@ mod tests {
                 eprintln!("cross-tile tent {linear:?} centre={centre:?} nearest={nearest}: max={max:?} mean={mean:?}");
             }
         }
+    }
+    #[test]
+    fn footprint_tiles_reproduce_every_sample_bit_of_sampling_all_tiles() {
+        let r=crate::WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let sampler=ObjectSampler::new(&r.device);
+        pollster::block_on(r.compilation.prepare_all(sampler.pipelines())).unwrap();
+        let mut uploads=crate::Uploads::new(&r.device,64*1024);
+        let extent=[700u32,500];
+        let color=|x:i64,y:i64|if x<i64::from(extent[0]) && y<i64::from(extent[1]) {signal(x,y)} else {[0.;4]};
+        let mut sources=std::collections::BTreeMap::new();
+        for tile in crate::page_coordinates(crate::PixelRect::full(extent)) {
+            let source=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+            let origin=tile.map(|v|i64::from(v*256));
+            let bytes:Vec<u8>=(0..256).flat_map(|dy|(0..256).flat_map(move|dx|color(origin[0]+dx,origin[1]+dy))).flat_map(f32::to_le_bytes).collect();
+            upload_page(&r,&source,&bytes);
+            sources.insert(tile,source.create_view(&Default::default()));
+        }
+        let (s,c)=0.47f64.sin_cos();
+        let cases:[(&str,[f64;6]);16]=[("identity on a tile edge",[1.,0.,0.,1.,256.,256.]),("half pixel on a tile edge",[1.,0.,0.,1.,255.5,256.]),
+            ("fractional translation on a tile edge",[1.,0.,0.,1.,256.25,255.75]),("scale down on a tile edge",[2.,0.,0.,2.,256.,256.]),("scale up on a tile edge",[0.5,0.,0.,0.5,256.,256.]),
+            ("identity",[1.,0.,0.,1.,230.,236.]),("quarter turn",[0.,1.,-1.,0.,300.,230.]),("half pixel",[1.,0.,0.,1.,230.5,236.]),
+            ("fractional translation",[1.,0.,0.,1.,230.3,236.7]),("scale up",[0.6,0.,0.,0.6,240.2,241.9]),
+            ("scale down",[2.3,0.,0.,2.3,200.4,210.1]),("integer scale down",[16.,0.,0.,16.,-60.,-40.]),("wide scale down",[40.,0.,0.,40.,-500.,-400.]),
+            ("rotation",[c,s,-s,c,250.4,230.6]),("rotation scale down",[3.*c,3.*s,-3.*s,3.*c,200.25,180.75]),("rotation scale up",[0.7*c,0.7*s,-0.7*s,0.7*c,240.1,239.3])];
+        let size=[48u32,40];
+        let sample=|inverse:[f64;6],nearest:bool,tiles:&[[u32;2]],uploads:&mut crate::Uploads|->Vec<u8> {
+            let output=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+            let view=output.create_view(&Default::default());
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            let acc=sampler.begin(&r.device,&mut encoder,uploads,SamplingRequest {inverse,size,nearest},extent,&view,&r.empty_view).unwrap();
+            for tile in tiles {
+                let origin=tile.map(|v|v*256);
+                sampler.encode_phase(&r.device,&mut encoder,uploads,&acc,SamplingPhase::Contribute {source:&sources[tile],origin:origin.map(|v|v as i32),
+                    extent:std::array::from_fn(|axis|(extent[axis]-origin[axis]).min(256))}).unwrap();
+            }
+            sampler.encode_phase(&r.device,&mut encoder,uploads,&acc,SamplingPhase::Normalize).unwrap();
+            uploads.finish(&encoder);encoder.submit(&r.queue);
+            crate::layer_tests::page_bytes(&r,&output)
+        };
+        let all:Vec<_>=crate::page_coordinates(crate::PixelRect::full(extent)).collect();
+        for (name,inverse) in cases {for nearest in [false,true] {
+            let footprint:Vec<_>=crate::page_coordinates(ObjectSampler::source_bounds(inverse,size,nearest,extent).unwrap()).collect();
+            let expected=sample(inverse,nearest,&all,&mut uploads);
+            let actual=sample(inverse,nearest,&footprint,&mut uploads);
+            let hash=expected.iter().fold(0xcbf2_9ce4_8422_2325u64,|hash,byte|(hash^u64::from(*byte)).wrapping_mul(0x100_0000_01b3));
+            eprintln!("footprint {name} nearest={nearest}: {} of {} tiles, all-tile hash {hash:016x}",footprint.len(),all.len());
+            assert!(expected==actual,"{name} nearest={nearest}: sampling only the footprint's {} tiles changed sample bits",footprint.len());
+        }}
     }
     #[test]
     fn gpu_matches_independent_uncapped_affine_reference() {

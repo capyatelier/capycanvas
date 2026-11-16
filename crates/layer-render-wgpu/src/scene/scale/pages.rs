@@ -1725,8 +1725,10 @@ impl Cache {
             if cell.pending() {cell.blocked=input;cell.name=None;cell.arrivals=since;cell.queued=true;}
         }
     }
-    pub(super) fn parked(&self,r:&WgpuRasterizer)->bool {
-        self.cells().is_some_and(|(cells,_store,_)|cells.cells.iter().any(|cell|cell.pending() && cell.parked(r)))
+    pub(super) fn residual_demand(&self,r:&WgpuRasterizer)->crate::frame_demand::Outstanding {
+        use crate::frame_demand::{Input,Outstanding};
+        if self.cells().is_some_and(|(cells,_store,_)|cells.cells.iter().any(|cell|cell.pending() && cell.parked(r))) {Outstanding::Blocked(Input::Residency)}
+        else {Outstanding::Runnable}
     }
     pub(super) fn forget_refusals(&self) {
         for cell in &mut self.cells.lock().unwrap().cells {cell.refusal=None;}

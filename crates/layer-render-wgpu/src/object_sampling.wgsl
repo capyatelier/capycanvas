@@ -12,6 +12,10 @@ fn centre(p: vec2<u32>) -> vec2<f32> {
     let h = vec3(vec2<f32>(p-parameters.work.xy)+vec2(0.5)-vec2<f32>(parameters.work.zw)*0.5,1.);
     return vec2(dot(parameters.x.xyz,h),dot(parameters.y.xyz,h));
 }
+fn support(q: vec2<f32>) -> vec4<i32> {
+    let slack = vec2(parameters.inverse_stretch.w);
+    return vec4(vec2<i32>(floor(q-parameters.radius.xy-vec2(0.5)-slack))+vec2(1),vec2<i32>(ceil(q+parameters.radius.xy-vec2(0.5)+slack)));
+}
 fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
     let d = vec2<f32>(p)+vec2(0.5)-q;
     let s = parameters.inverse_stretch.xyz;
@@ -29,10 +33,11 @@ fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
     let high = vec2<i32>(ceil(q+parameters.radius.xy-vec2(0.5)));
     let begin = low.y+i32(parameters.window.z);
     let end = min(high.y+1,begin+i32(parameters.window.w));
+    let footprint = support(q);
     let origin = parameters.source.xy;
     let extent = parameters.source.zw;
     var total = 0.;
-    for(var y=begin;y<end;y++) { for(var x=low.x;x<=high.x;x++) {
+    for(var y=max(begin,footprint.y);y<min(end,footprint.w);y++) { for(var x=max(low.x,footprint.x);x<min(high.x+1,footprint.z);x++) {
         let p = vec2(x,y);
         if any(p<origin) || any(p>=origin+extent) { total+=weight(p,q); }
     } }
@@ -50,6 +55,7 @@ fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
         return;
     }
     let q = centre(position);
+    let footprint = support(q);
     if parameters.radius.w!=0. {
         let point=q-vec2(0.5);
         let low=vec2<i32>(floor(point));
@@ -57,7 +63,7 @@ fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
         var sum=vec4(0.);
         for(var y=0;y<2;y++) {for(var x=0;x<2;x++) {
             let p=low+vec2(x,y);
-            if all(p>=origin) && all(p<origin+extent) {
+            if all(p>=max(origin,footprint.xy)) && all(p<min(origin+extent,footprint.zw)) {
                 let w=select(1.-fraction.x,fraction.x,x==1)*select(1.-fraction.y,fraction.y,y==1);
                 if w>0. {sum+=textureLoad(source,p-origin,0)*w;}
             }
@@ -66,8 +72,8 @@ fn weight(p: vec2<i32>, q: vec2<f32>) -> f32 {
         return;
     }
     let kernel_low = vec2<i32>(floor(q-parameters.radius.xy-vec2(0.5)));
-    let low = max(origin,kernel_low);
-    let high = min(origin+extent,vec2<i32>(ceil(q+parameters.radius.xy-vec2(0.5)))+vec2(1));
+    let low = max(max(origin,kernel_low),footprint.xy);
+    let high = min(min(origin+extent,vec2<i32>(ceil(q+parameters.radius.xy-vec2(0.5)))+vec2(1)),footprint.zw);
     let begin = max(low.y,kernel_low.y+i32(parameters.window.z));
     let end = min(high.y,kernel_low.y+i32(parameters.window.z+parameters.window.w));
     var sum = vec4(0.);

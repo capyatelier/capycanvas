@@ -133,9 +133,9 @@ fn export_sources_fit_one_aligned_capture_window_instead_of_the_whole_document()
     let mut reader=hardware.snapshot_gpu().capture_scene(doc.snapshot(),SceneScope::All,Default::default()).unwrap();
     for region in [[256,256,512,256],[0,0,1024,1024]] {
         let (renderer,_,_,encoder)=reader.prepare_region_gpu(region,0).unwrap();
-        let slots=crate::memory::memory_tests::declared_source_demand(renderer)/crate::scene::sources::NORMALIZED_PAGE_BYTES;
-        assert!(slots>=28*4*3,"the actual window's source footprint is demanded: {slots} slots");
-        assert!(slots<28*4*4,"the capture does not demand the whole document: {slots} slots");
+        let slots=renderer.memory.unit()/crate::scene::sources::NORMALIZED_PAGE_BYTES;
+        assert!(slots>=28*2,"each photo's aligned 512x256 capture window reads its own two tiles: {slots} slots");
+        assert!(slots<28*2*2,"the capture demands one window's tiles, not the whole document: {slots} slots");
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);
         crate::test_support::complete(renderer);
     }

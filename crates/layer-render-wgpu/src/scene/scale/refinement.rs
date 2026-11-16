@@ -64,7 +64,7 @@ impl Cache {
     fn display_demand(&self, r: &WgpuRasterizer) -> Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::Runnable;
         if self.contact || self.preparing {return Some(Runnable);}
-        self.cells_demand(r,refining(r)).or_else(||self.pixels.committed_root().is_none().then_some(Runnable))
+        self.cells_demand(r,refining(r)).or_else(||self.pixels.committed_root().is_none().then(||self.residual_demand(r)))
     }
 
     pub(super) fn release_streaming(&mut self,encoder:&crate::submission::CommandEncoder) {

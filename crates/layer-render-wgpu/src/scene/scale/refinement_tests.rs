@@ -1084,6 +1084,38 @@ fn a_refused_refinement_takes_no_idle_frames_and_one_release_wakes_it() {
     assert!(!needs_exact(&r),"the woken refinement reaches exact");
 }
 
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn an_overview_refused_before_it_shows_a_cell_waits_for_the_release_instead_of_requesting_frames() {
+    let extent=[2304;2];let doc=document_at(extent);
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+    frame.view.width_px=512;frame.view.height_px=512;
+    frame.view.document_to_surface=[1.,0.,0.,1.,-896.,-896.];
+    crate::test_support::submit_settled(&mut r,frame);
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    let objects=Arc::new(crate::residency::Tier::default());
+    let refusal=objects.blocked(crate::residency::Class::Prefetch,1).expect("a full tier refuses a prefetch unit");
+    r.wait_for_release(refusal.clone());
+    let overview=r.scale_display.as_mut().unwrap().overview.as_mut().expect("the zoomed view keeps an overview");
+    overview.pixels.take();overview.evict_window(overview.plan.bounds);overview.refuse(overview.plan.bounds,&refusal);
+    let committed=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().overview.as_ref().unwrap().pixels.committed_root().is_some();
+    let mut audit=crate::frame_demand::DemandAudit::default();
+    for step in 0..4 {
+        audit.begin(&r);
+        crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+        audit.end(&r,format_args!("refused step={step}"));
+    }
+    assert!(!committed(&r),"an overview whose every cell is refused shows no cell and commits no window");
+    while woken.try_recv().is_ok() {}
+    assert_ne!(r.next_frame(),layer_render::FrameDemand::Work,"an overview with only parked cells requests no frame");
+    objects.update_limit(u64::MAX);
+    woken.recv_timeout(std::time::Duration::from_secs(1)).expect("the release wakes the parked overview");
+    crate::test_support::submit_settled(&mut r,frame);
+    assert!(committed(&r),"the woken overview shows its cells and commits its window");
+}
+
 #[test]
 fn a_selected_layer_leaves_no_display_demand_that_its_frames_never_attempt() {
     for objects in [false,true] {
