@@ -1,6 +1,6 @@
 use crate::{MemoryBudget, MemoryClass, MemoryOwner, MemoryOwnerKind, MemoryReport};
 use crate::package::{ByteRange, RangeState, MAX_RANGE_BYTES};
-use std::{collections::{HashMap,VecDeque}, sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}, task::{Context, Poll, Waker}};
+use std::{collections::{BTreeSet,HashMap}, sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}}, task::{Context, Poll, Waker}};
 
 pub const HOT_SET_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) const QUEUED_READS: usize = 18;
@@ -14,6 +14,8 @@ pub(crate) fn buffer_class(length:usize)->usize {
 }
 #[cfg(test)]
 std::thread_local! {static READ_ALLOCATIONS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
+#[cfg(test)]
+std::thread_local! {static PRIORITIES:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
 
 pub fn read_buffer(length:usize)->Arc<[u8]> {
     #[cfg(test)]
@@ -86,9 +88,16 @@ struct State {
     buffers:std::collections::BTreeMap<usize,Vec<Arc<[u8]>>>,
     pooled:u64,
     queued: Vec<Key>,
-    cold: VecDeque<Key>,
+    cold: BTreeSet<(u64,u64,Key)>,
 }
 impl State {
+    fn rank(&mut self,key:Key) {
+        let Some(entry)=self.entries.get_mut(&key) else {return;};
+        let order=entry.cold.take().map(|(priority,order)|{self.cold.remove(&(priority,order,key));order});
+        if !matches!(entry.phase,Phase::Cold) || entry.waiters.is_empty() {return;}
+        let (priority,order)=(entry.priority(),order.unwrap_or_else(||{self.clock+=1;self.clock}));
+        entry.cold=Some((priority,order));self.cold.insert((priority,order,key));
+    }
     fn retire(&mut self,key:&Key,retired:&mut Vec<ByteRange>) {
         let entry=self.remove(key);self.physical-=entry.bytes() as u64;
         if let Phase::Ready(bytes)=entry.phase {retired.push(bytes);}
@@ -96,14 +105,14 @@ impl State {
     fn remove(&mut self,key:&Key)->Entry {
         let entry=self.entries.remove(key).unwrap();
         match &entry.phase {
-            Phase::Cold=>self.cold.retain(|cold|cold!=key),
+            Phase::Cold=>{if let Some((priority,order))=entry.cold {self.cold.remove(&(priority,order,*key));}},
             Phase::Queued=>self.queued.retain(|queued|queued!=key),
             _=>{},
         }
         entry
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Key(u64, u64, usize);
 struct Waiter {id:u64,wake:Option<Waker>,distance_squared:u64}
 struct Entry {
@@ -115,10 +124,14 @@ struct Entry {
     crc:Option<u32>,
     bounds:std::ops::RangeInclusive<usize>,
     reservation:usize,
+    cold:Option<(u64,u64)>,
 }
 impl Entry {
     fn bytes(&self)->usize {match &self.phase {Phase::Ready(bytes)=>bytes.retained_bytes(),Phase::Reading=>self.reservation,_=>0}}
-    fn priority(&self)->u64 {self.waiters.iter().map(|waiter|waiter.distance_squared).min().unwrap_or(u64::MAX)}
+    fn priority(&self)->u64 {
+        #[cfg(test)] PRIORITIES.set(PRIORITIES.get()+1);
+        self.waiters.iter().map(|waiter|waiter.distance_squared).min().unwrap_or(u64::MAX)
+    }
     fn working(&self)->bool {self.waiters.iter().any(|waiter|waiter.wake.is_some())}
 }
 enum Phase { Cold, Queued, Reading, Ready(ByteRange), Failed(String) }
@@ -233,7 +246,7 @@ impl ReadCache {
         retired
     }
     fn pool_room(state:&State)->u64 {
-        state.queued.iter().chain(&state.cold).map(|key|state.entries[key].reservation as u64).fold(0,u64::saturating_add).min(BUFFER_BYTES)
+        state.queued.iter().chain(state.cold.iter().map(|(_,_,key)|key)).map(|key|state.entries[key].reservation as u64).fold(0,u64::saturating_add).min(BUFFER_BYTES)
     }
     fn recycle(&self,retired:Vec<ByteRange>) {
         let mut discarded=Vec::new();let mut state=self.0.state.lock().unwrap();
@@ -252,7 +265,7 @@ impl ReadCache {
     fn ready(&self, state: &mut State, key: Key, source: &Arc<Source>, crc:Option<u32>) -> Result<RangeState,String> {
         state.clock=state.clock.saturating_add(1);
         let queued=state.queued.len();
-        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(source),phase:Phase::Cold,used:state.clock,leases:0,waiters:Vec::new(),crc,bounds:source.reader.result_bounds(key.1,key.2),reservation:source.reader.allocation_bytes(key.1,key.2)});
+        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(source),phase:Phase::Cold,used:state.clock,leases:0,waiters:Vec::new(),crc,bounds:source.reader.result_bounds(key.1,key.2),reservation:source.reader.allocation_bytes(key.1,key.2),cold:None});
         if crc.is_some() && entry.crc!=crc {return Err("Conflicting immutable range checksum".into());}
         match &entry.phase {
             Phase::Ready(bytes)=>{
@@ -268,7 +281,7 @@ impl ReadCache {
             },
             Phase::Cold=>{
                 if queued<QUEUED_READS {
-                    entry.phase=Phase::Queued;state.cold.retain(|cold|*cold!=key);state.queued.push(key);
+                    entry.phase=Phase::Queued;state.rank(key);state.queued.push(key);
                 }
                 Ok(RangeState::Pending)
             },
@@ -299,9 +312,8 @@ impl ReadCache {
         let mut retired=if expired || state.physical>self.limit_bytes() {self.trim(state,self.limit_bytes(),expired)}else{Vec::new()};
         let task=loop {
             while state.queued.len()<QUEUED_READS {
-                let Some(index)=(0..state.cold.len()).min_by_key(|&index|state.entries[&state.cold[index]].priority()) else {break;};
-                let key=state.cold.remove(index).unwrap();
-                state.entries.get_mut(&key).unwrap().phase=Phase::Queued;state.queued.push(key);
+                let Some((_,_,key))=state.cold.pop_first() else {break;};
+                let entry=state.entries.get_mut(&key).unwrap();entry.cold=None;entry.phase=Phase::Queued;state.queued.push(key);
             }
             if state.running.len()>=ACTIVE_READS || state.queued.is_empty() {break None;}
             let index=(0..state.queued.len()).min_by_key(|&index| {
@@ -392,9 +404,9 @@ impl ReadSource {
         let existed=state.entries.get(&key).is_some_and(|entry|entry.leases>0 || !entry.waiters.is_empty());
         let ready=state.entries.get(&key).is_some_and(|entry|matches!(entry.phase,Phase::Ready(_)));
         state.clock+=1;let used=state.clock;
-        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(&self.0),phase:Phase::Cold,used,leases:0,waiters:Vec::new(),crc,bounds:self.0.reader.result_bounds(offset,length),reservation:self.0.reader.allocation_bytes(offset,length)});
+        let entry=state.entries.entry(key).or_insert_with(||Entry {source:Arc::downgrade(&self.0),phase:Phase::Cold,used,leases:0,waiters:Vec::new(),crc,bounds:self.0.reader.result_bounds(offset,length),reservation:self.0.reader.allocation_bytes(offset,length),cold:None});
         entry.waiters.push(Waiter {id,wake:None,distance_squared:0});let bytes=entry.bytes() as u64;
-        if entry.waiters.len()==1 && matches!(entry.phase,Phase::Cold) {state.cold.push_back(key);}
+        state.rank(key);
         if ready && !existed {state.pinned+=bytes;}
         self.0.cache.publish(&state);drop(state);
         Ok(ReadWait {source:self.clone(),key,id,crc})
@@ -452,7 +464,7 @@ pub struct ReadWait { source: ReadSource, key: Key, id:u64, crc:Option<u32> }
 impl ReadWait {
     pub fn prioritize(&self,distance_squared:u64) {
         let mut state=self.source.0.cache.0.state.lock().unwrap();
-        if let Some(entry)=state.entries.get_mut(&self.key) && let Some(waiter)=entry.waiters.iter_mut().find(|waiter|waiter.id==self.id) {waiter.distance_squared=distance_squared;}
+        if let Some(entry)=state.entries.get_mut(&self.key) && let Some(waiter)=entry.waiters.iter_mut().find(|waiter|waiter.id==self.id) {waiter.distance_squared=distance_squared;state.rank(self.key);}
     }
 }
 impl ReadWait {
@@ -481,9 +493,8 @@ impl Drop for ReadWait {
         if let Some(entry)=state.entries.get_mut(&self.key) {
             entry.waiters.retain(|waiter|waiter.id!=self.id);
             let unpinned=if entry.leases==0 && entry.waiters.is_empty() && matches!(entry.phase,Phase::Ready(_)) {entry.bytes() as u64}else{0};
-            let cold=entry.waiters.is_empty() && matches!(entry.phase,Phase::Cold);
             let refused=entry.waiters.is_empty() && matches!(&entry.phase,Phase::Failed(error) if error==crate::MEMORY_BUDGET_EXCEEDED);
-            state.pinned-=unpinned;if cold {state.cold.retain(|cold|*cold!=self.key);}
+            state.pinned-=unpinned;state.rank(self.key);
             if refused {state.remove(&self.key);}
         }
         let drive=state.physical>cache.limit_bytes() || !state.queued.is_empty() || !state.cold.is_empty();cache.publish(&state);drop(state);if drive {cache.schedule();}
@@ -571,6 +582,21 @@ mod tests {
         drop(first);assert!(cache.0.scheduled.load(Ordering::Acquire));cache.drive_inner();
         assert_eq!(reader.calls.load(Ordering::Relaxed),3);assert_eq!(cache.0.state.lock().unwrap().physical,128);
         drop(second);
+    }
+    #[test]
+    fn draining_a_cold_burst_ranks_each_read_a_bounded_number_of_times() {
+        const READS:usize=2048;
+        let (_budget,cache,reader,source)=setup();
+        let waits=(0..READS).map(|index|source.wait(index as u64*64,64).unwrap()).collect::<Vec<_>>();
+        let before=PRIORITIES.get();
+        let mut completed=0;
+        while completed<READS {
+            cache.drive_inner();
+            while !reader.requests.lock().unwrap().is_empty() {reader.finish(1);completed+=1;}
+        }
+        let ranked=PRIORITIES.get()-before;
+        assert!(ranked<32*READS,"draining {READS} cold reads evaluated {ranked} read priorities");
+        drop(waits);
     }
     #[test]
     fn camera_priority_precedes_source_sharing_without_serializing_a_package() {
@@ -766,7 +792,7 @@ mod tests {
         use std::collections::HashSet;
         let (cold,queued,expected_cold,expected_queued,actual,expected)={
             let state=cache.0.state.lock().unwrap();
-            let cold=state.cold.iter().copied().collect::<Vec<_>>();let queued=state.queued.clone();
+            let cold=state.cold.iter().map(|&(_,_,key)|key).collect::<Vec<_>>();let queued=state.queued.clone();
             let expected_cold=state.entries.iter().filter(|(_,entry)|matches!(entry.phase,Phase::Cold)&&!entry.waiters.is_empty()).map(|(&key,_)|key).collect::<HashSet<_>>();
             let expected_queued=state.entries.iter().filter(|(_,entry)|matches!(entry.phase,Phase::Queued)).map(|(&key,_)|key).collect::<HashSet<_>>();
             let physical=state.entries.values().map(|entry|entry.bytes() as u64).sum::<u64>()+state.pooled;
