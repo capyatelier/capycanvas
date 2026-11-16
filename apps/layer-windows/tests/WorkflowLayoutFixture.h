@@ -1,6 +1,7 @@
 #pragma once
 #include "WorkflowMotion.h"
 #include "PanelBody.h"
+#include "../SmokeCommand.h"
 #include <fstream>
 #include <thread>
 #include <sstream>
@@ -36,8 +37,30 @@ struct WorkflowLayoutFixture:std::enable_shared_from_this<WorkflowLayoutFixture>
         }catch(winrt::hresult_error const& error){fault=describe(error);}
         window.Close();
     }
+    void verifySmokeCommands(){
+        using namespace CapyUi;
+        Grid surface;surface.Width(944);surface.Height(660);
+        StackPanel legacy;legacy.Orientation(Orientation::Horizontal);legacy.Spacing(4);
+        legacy.HorizontalAlignment(HorizontalAlignment::Center);legacy.VerticalAlignment(VerticalAlignment::Bottom);
+        for(auto label:{L"Test stroke",L"Test pan",L"Test backlog",L"Test pen",L"Test pen begin",L"Test pen end",L"Test filter reload",L"Test GPU loss"}){
+            Button command;command.Content(box_value(label));legacy.Children().Append(command);
+        }
+        surface.Children().Append(legacy);
+        auto arrange=[&]{surface.Measure({944,660});surface.Arrange({0,0,944,660});};arrange();
+        auto before=legacy.DesiredSize();auto count=legacy.Children().Size();
+        smokeCommand(surface,L"test-eraser-position",L"Test eraser",[](TextBox const&){});
+        smokeCommand(surface,L"test-file-drop-arguments",L"Test file drop",[](TextBox const&){});
+        arrange();
+        if(legacy.Children().Size()!=count||legacy.DesiredSize()!=before)throw hresult_error(E_FAIL,L"UIA smoke commands changed the legacy toolbar geometry");
+        for(uint32_t index=1;index<surface.Children().Size();++index){
+            auto host=surface.Children().GetAt(index).as<Canvas>();
+            if(host.IsHitTestVisible()||host.Width()!=0||host.Height()!=0)throw hresult_error(E_FAIL,L"UIA smoke command exposed a physical input surface");
+            for(auto const& child:host.Children())if(child.as<Control>().IsTabStop())throw hresult_error(E_FAIL,L"UIA smoke command added a native tab stop");
+        }
+    }
     void start(){
         try{
+            verifySmokeCommands();
             animationsEnabled=winrt::Windows::UI::ViewManagement::UISettings().AnimationsEnabled();
             pages->show(0);panel->Root().UpdateLayout();measure();
             outgoingDesired=outgoing.DesiredSize().Height;scale=panel->Root().XamlRoot().RasterizationScale();

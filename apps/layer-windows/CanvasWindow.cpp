@@ -6,6 +6,7 @@
 #include "CanvasPointerSample.h"
 #include "PenInput.h"
 #include "UiControls.h"
+#include "SmokeCommand.h"
 #include "KeyNames.h"
 #include "NativeKeyRepeats.h"
 #include "NavigationCursors.h"
@@ -413,10 +414,9 @@ void CanvasWindow::Open() {
             toolbar.Children().Append(test);
         }
         if(GetEnvironmentVariableW(L"CAPY_STORAGE_DIR",nullptr,0)){
-            TextBox point;point.Width(120);AutomationProperties::SetAutomationId(point,L"test-eraser-position");
-            Button eraser;eraser.Content(box_value(L"Test eraser"));
-            eraser.Click([weak=weak_from_this(),point](auto&&,auto&&){if(auto self=weak.lock())self->Replay(ReplayKind::Eraser,to_string(point.Text()));});
-            toolbar.Children().Append(point);toolbar.Children().Append(eraser);
+            CapyUi::smokeCommand(root,L"test-eraser-position",L"Test eraser",[weak=weak_from_this()](TextBox const& point){
+                if(auto self=weak.lock())self->Replay(ReplayKind::Eraser,to_string(point.Text()));
+            });
         }
         Button reload;reload.Content(box_value(L"Test filter reload"));
         reload.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
@@ -426,10 +426,9 @@ void CanvasWindow::Open() {
         recover.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->testDeviceLoss();});
         toolbar.Children().Append(recover);
         if(GetEnvironmentVariableW(L"CAPY_TEST_HDR",nullptr,0))for(bool hdr:{false,true}){Button test;test.Content(box_value(hdr?L"Test HDR output":L"Test SDR output"));test.Click([weak=weak_from_this(),hdr](auto&&,auto&&){if(auto self=weak.lock())self->Send(hdr?"hdr":"sdr",CanvasCommandKind::TestDisplay);});toolbar.Children().Append(test);}
-        TextBox dropArguments;dropArguments.Width(180);AutomationProperties::SetAutomationId(dropArguments,L"test-file-drop-arguments");
-        Button drop;drop.Content(box_value(L"Test file drop"));
-        drop.Click([weak=weak_from_this(),dropArguments](auto&&,auto&&){if(auto self=weak.lock())self->TestFileDrop(dropArguments);});
-        toolbar.Children().Append(dropArguments);toolbar.Children().Append(drop);
+        CapyUi::smokeCommand(root,L"test-file-drop-arguments",L"Test file drop",[weak=weak_from_this()](TextBox const& arguments){
+            if(auto self=weak.lock())self->TestFileDrop(arguments);
+        });
     }
     root.Children().Append(toolbar);
     Microsoft::UI::Xaml::Automation::AutomationProperties::SetAutomationId(status,L"canvas-status");
