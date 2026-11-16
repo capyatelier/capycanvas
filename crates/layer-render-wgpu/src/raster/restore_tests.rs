@@ -424,7 +424,7 @@ fn renderer_recreation_restores_pixels_without_changing_artwork_revision() {
         RasterRevision::backed(data(color,1,&[RasterPlane::Color],17));
     let frame=FramePacket {reset_layers:true,..crate::test_support::packet(document.scene(),extent)};
     let mut previous=WgpuRasterizer::new_native_headless(color).unwrap();
-    crate::test_support::submit_published(&mut previous,frame);
+    crate::test_support::submit_settled(&mut previous,frame);
     let expected=crate::scene::scale::tests::display_pixels(&previous);
     assert!(expected.iter().any(|pixel|pixel[0]>0. && pixel[3]>0.));
     let artwork_revision=previous.artwork_revision;
@@ -436,8 +436,13 @@ fn renderer_recreation_restores_pixels_without_changing_artwork_revision() {
     assert_eq!(renderer.artwork_revision,artwork_revision);
     crate::test_support::submit_published(&mut renderer,frame);
     assert_eq!(crate::scene::scale::tests::display_pixels(&renderer),expected);
-    assert!(renderer.composite_revision>composite_revision,"restored storage must publish composition pixels");
+    assert_eq!(renderer.composite_revision,composite_revision,"restoring unchanged authored tiles keeps the adopted composition");
     assert_eq!(renderer.artwork_revision,artwork_revision,"physical restoration of unchanged authored tiles is not an artwork edit");
+    crate::scene::scale::tests::evict_view(&renderer);
+    crate::test_support::submit_settled(&mut renderer,FramePacket {reset_layers:false,composite_all:false,..frame});
+    assert_eq!(crate::scene::scale::tests::display_pixels(&renderer),expected,"restored storage composes the same pixels");
+    assert!(renderer.composite_revision>composite_revision,"restored storage must publish composition pixels");
+    assert_eq!(renderer.artwork_revision,artwork_revision,"composing restored storage is not an artwork edit");
     let target=target(&document);
     renderer.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction:1,target,moving:false,selection:None,
