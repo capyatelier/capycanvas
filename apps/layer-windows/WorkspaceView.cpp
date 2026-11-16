@@ -1366,6 +1366,7 @@ WorkspaceView::WorkspaceView(Dispatch send,Json catalog,NativeLocalization local
 WorkspaceView::~WorkspaceView(){impl->gestures->Cancel();impl->data->chromeFrames->Close();}
 void WorkspaceView::SetNavigatorSurfaces(CapyUi::WorkspaceData::NavigatorTransport transport){impl->data->navigatorSurface=std::move(transport);}
 void WorkspaceView::ResetNavigatorSurfaces(){for(auto const& [id,view]:*impl->data->navigatorViews)view.second();}
+void WorkspaceView::SetReport(Dispatch report){impl->data->report=std::move(report);}
 void WorkspaceView::SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit){impl->data->commit=std::move(commit);}
 Canvas WorkspaceView::Root()const{return impl->root;}
 bool WorkspaceView::Apply(Json const& snapshot,NativeLayoutInput input,CanvasModelChanges const& changes){return impl->apply(snapshot,std::move(input),changes);}

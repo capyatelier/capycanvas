@@ -373,7 +373,7 @@ The normal suite's `hdr-dial-commit.ps1` checks that Dial history references ack
 | Windows desktop | The `exercise-*.ps1` [UI fixtures](#ui-fixtures) for the changed area. On Linux: `tools/windows-vm/windows-vm.py fixtures <name>`. |
 | Hardware D3D12 | `cargo test --locked -p layer-windows --lib d3d12_ -- --ignored --test-threads=1`, which adds the HDR and color round-trip tests; [GPU reconstruction](#gpu-reconstruction); renderer tests with `LAYER_GPU_INDEX`; performance. |
 
-`scripts/test-input.ps1` compiles the C++ input queue and composition-key tests
+`scripts/test-input.ps1` compiles the C++ input queue, composition-key and windowless real-DataPackage file-drop tests
 with `cl` and needs a Visual Studio developer shell. Windows PowerShell 5.1 reads
 scripts without an encoding marker in the system code page, so scripts with
 Unicode text use a UTF-8 BOM; `tests/script-encoding.ps1` checks this.

@@ -31,6 +31,7 @@ public:
     void SetGlassChanged(std::function<void()> changed);
     void SetNavigatorSurfaces(std::function<void(uint64_t,CapyNavigatorViewport const*,std::function<void(NativeSurfaceAttachment)>)>);
     void ResetNavigatorSurfaces();
+    void SetReport(Dispatch report);
     void SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit);
     void CanvasContact(bool active);
     void AttachOverlays(winrt::Microsoft::UI::Xaml::UIElement const&,std::function<void()>);

@@ -884,6 +884,8 @@ HeaderView::HeaderView(Dispatch send,Json catalog,NativeLocalization localizatio
     impl->data->popupChanged=std::move(popup);impl->changed=std::move(layout);impl->fullscreen=std::move(fullscreen);impl->newWindow=std::move(newWindow);impl->init();
 }
 HeaderView::~HeaderView()=default;
+void HeaderView::SetReport(Dispatch report){impl->data->report=std::move(report);}
+bool HeaderView::FileDropAllowed()const{return CapyUi::fileDropAllowed(impl->data->state,CapyUi::DropKind::Images,CapyUi::DropTarget::Tabs);}
 void HeaderView::SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit){impl->data->commit=std::move(commit);}
 Grid HeaderView::Root()const{return impl->root;}
 void HeaderView::Apply(Json const& snapshot,CanvasModelChanges const& changes){impl->apply(snapshot,changes);}

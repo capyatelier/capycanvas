@@ -10,89 +10,24 @@ $elsewhere=Join-Path $run 'elsewhere'
 [IO.Directory]::CreateDirectory($elsewhere)|Out-Null
 $CapyTraceDirectory=$run
 $review=$null;$other=$null
-$fileDragDefinition=@"
-using System;using System.ComponentModel;using System.Runtime.InteropServices;using System.Threading;
-public static class CapyFileDrag {
- [StructLayout(LayoutKind.Sequential)] struct Mouse {public int dx,dy;public uint data,flags,time;public UIntPtr extra;}
- [StructLayout(LayoutKind.Explicit,Size=40)] struct Input {[FieldOffset(0)]public uint type;[FieldOffset(8)]public Mouse mouse;}
- [StructLayout(LayoutKind.Sequential)] struct Rect {public int left,top,right,bottom;}
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] input,int size);
- [DllImport("user32.dll")] static extern int GetSystemMetrics(int code);
- [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window,out Rect rect);
- [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
- public static volatile Exception Failure;
- public static void Release(int x,int y){Send(4,x,y);}
- static void Send(uint flags,int x,int y){
-  var mouse=new Mouse{dx=(x-GetSystemMetrics(76))*65535/(GetSystemMetrics(78)-1),dy=(y-GetSystemMetrics(77))*65535/(GetSystemMetrics(79)-1),flags=flags|0xC001};
-  if(SendInput(1,new[]{new Input{mouse=mouse}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
- }
- public static Thread Press(IntPtr source,int x,int y){
-  Rect rect;if(!GetWindowRect(source,out rect))throw new Win32Exception(Marshal.GetLastWin32Error());
-  int sx=(rect.left+rect.right)/2,sy=(rect.top+rect.bottom)/2;
-  Send(0,sx,sy);Send(2,sx,sy);
-  Failure=null;
-  var glide=new Thread(()=>{
-   var dpi=SetThreadDpiAwarenessContext(new IntPtr(-4));
-   try{
-    if(dpi==IntPtr.Zero)throw new Exception("The file drag thread could not use physical coordinates.");
-    Thread.Sleep(400);
-    for(int step=1;step<=16;step++){Send(0,sx+(x-sx)*step/16,sy+(y-sy)*step/16);Thread.Sleep(40);}
-    for(int dwell=0;dwell<12;dwell++){Send(0,x+dwell%2,y);Thread.Sleep(60);}
-   }catch(Exception error){Failure=error;}
-   finally{
-    try{Send(4,x,y);}catch(Exception error){Failure=Failure??error;}
-    finally{if(dpi!=IntPtr.Zero&&SetThreadDpiAwarenessContext(dpi)==IntPtr.Zero)Failure=Failure??new Exception("The file drag thread did not restore its DPI context.");}
-   }
-  });
-  glide.Start();return glide;
- }
-}
-"@
-if(!('CapyFileDrag' -as [type])){Add-Type -TypeDefinition $fileDragDefinition}
 function Drop-Files([string[]]$Paths,[string]$Target){
-    [CapyWindowApi]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $bounds=(Control $Target -Arranged).Current.BoundingRectangle
-    $receipt=Join-Path $run ('drop-'+[Guid]::NewGuid().ToString('N')+'.json')
-    $payload=@{paths=$Paths;x=[int]($bounds.X+$bounds.Width/2);y=[int]($bounds.Y+$bounds.Height/2);receipt=$receipt}|ConvertTo-Json -Compress
-    $source={param($fileDragDefinition,$Payload)
-        $ErrorActionPreference='Stop'
-        $data=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload))|ConvertFrom-Json
-        $result=@{effect=$null;error=$null};$form=$null
-        try{
-            Add-Type -TypeDefinition $fileDragDefinition
-            Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-            [CapyFileDrag]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
-            $form=[Windows.Forms.Form]@{FormBorderStyle='None';ShowInTaskbar=$false;TopMost=$true;StartPosition='Manual';Bounds=[Drawing.Rectangle]::new($data.x-40,$data.y+160,80,80)}
-            $form.Show();[Windows.Forms.Application]::DoEvents()
-            $glide=[CapyFileDrag]::Press($form.Handle,$data.x,$data.y);[Windows.Forms.Application]::DoEvents()
-            $effect=$form.DoDragDrop([Windows.Forms.DataObject]::new([Windows.Forms.DataFormats]::FileDrop,[string[]]$data.paths),[Windows.Forms.DragDropEffects]::Copy)
-            if(!$glide.Join(10000)){throw 'The file drag did not release'}
-            if([CapyFileDrag]::Failure){throw [CapyFileDrag]::Failure};$result.effect=[string]$effect
-        }catch{$result.error=$_|Out-String}
-        finally{
-            try{if($form){$form.Close();$form.Dispose()}}catch{if(!$result.error){$result.error=$_|Out-String}}
-            [IO.File]::WriteAllText($data.receipt,($result|ConvertTo-Json -Compress))
-        }
-    }
-    $definition=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fileDragDefinition))
-    $arguments=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
-    $command='& {'+$source.ToString()+"} ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$definition'))) '$arguments'"
-    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $drag=$null;$failure=$null
-    try{
-        $drag=Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile','-STA','-EncodedCommand',$encoded) -WindowStyle Hidden -PassThru
-        $null=$drag.Handle
-        $refused=if($Target -eq 'drawing-canvas'){'The canvas refused the dropped photo: None'}else{'The drawing tabs refused an image and a drawing: None'}
-        Wait-Until {$drag.Refresh();$drag.HasExited} $refused
-        if(![IO.File]::Exists($receipt)){throw "The file drag source exited without a result: $($drag.ExitCode)"}
-        $result=Read-Snapshot $receipt
-        if($result.error){throw $result.error};[string]$result.effect
-    }catch{$failure=$_;throw}
-    finally{
-        try{
-            if($drag){try{$drag.Refresh();if(!$drag.HasExited){try{$drag.Kill();if(!$drag.WaitForExit(5000)){throw 'The file drag source did not stop'}}finally{[CapyFileDrag]::Release([int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2))}}}finally{$drag.Dispose()}}
-        }catch{if($failure){Write-Warning ('The file drag cleanup failed: '+$_.Exception.Message)}else{throw}}
-    }
+    $scale=[CapyWindowApi]::GetDpiForWindow($drawingWindow)/96.
+    $targetName=switch($Target){'drawing-canvas'{'canvas'} 'drawing-tabs'{'tabs'} default{throw "Unknown file drop target: $Target"}}
+    $payload=@{request=[guid]::NewGuid().ToString('N');paths=@($Paths);target=$targetName;point=@(($bounds.Width/2/$scale),($bounds.Height/2/$scale))}|ConvertTo-Json -Compress
+    $arguments=Control 'test-file-drop-arguments'
+    $arguments.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($payload)
+    Invoke 'Test file drop' -Name
+    $result=@{value=$null}
+    Wait-Until {
+        $status=$arguments.Current.ItemStatus
+        if(!$status){return $false}
+        $reply=$status|ConvertFrom-Json
+        if($reply.request -cne $payload){return $false}
+        if($reply.error){throw $reply.error}
+        $result.value=$reply;$true
+    } 'The file drop command did not acknowledge its request'
+    [string]$result.value.effect
 }
 function Tabs {@((Model).windows_tabs.tabs)}
 function Image([string]$Name,[Drawing.Color]$Color){
@@ -113,7 +48,10 @@ try {
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+    $smoke=$env:CAPY_SMOKE_TEST;$env:CAPY_SMOKE_TEST='1'
+    try{
     $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
+    }finally{Restore-CapyEnvironmentValue 'CAPY_SMOKE_TEST' $smoke}
     $null=$review.Handle
     Write-Output "Owned file activation review $($review.Id): $run"
     Wait-Until {$m=Model;(Review-Ready $m) -and $m.state.theme -eq $Theme -and !$m.windows_workspace.busy -and @($m.state.commands|Where-Object {$_.id -eq 'open_document' -and $_.enabled}).Count} 'File activation review did not start' 90
@@ -182,7 +120,7 @@ try {
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -StateDirectory $run
     if(!$review.WaitForExit(20000)){throw 'The app launched with a saved drawing did not close'}
     if((Get-Item (Join-Path $run 'cold-stderr.log')).Length){throw 'Cold launch stderr requires review'}
-    [pscustomobject]@{cold_launch_drawing='passed';forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';canvas_photo_drop_place_and_undo='passed';theme=$Theme;evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
+    [pscustomobject]@{cold_launch_drawing='passed';forwarded_in_order='passed';relative_path='passed';launch_opens_window='passed';storage_isolated='passed';tab_drop='passed';canvas_photo_drop_place_and_undo='passed';drop_transport='real DataPackage below OLE; OLE delivery unverified';theme=$Theme;evidence=$run}|ConvertTo-Json|Tee-Object -FilePath (Join-Path $run 'results.json')
 } finally {
     if($other -and !$other.HasExited){Stop-Process -Id $other.Id -Force}
     if($review){$review.Refresh();if(!$review.HasExited){Stop-Process -Id $review.Id -Force}}

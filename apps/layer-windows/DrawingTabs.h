@@ -236,11 +236,11 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         root.AllowDrop(true);
         root.DragOver([weak](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&fileDrag(event)){
             using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
-            auto command=find(array(self->data->state,L"commands"),L"id",L"open_document");bool open=flag(command,L"enabled");
+            auto command=find(array(self->data->state,L"commands"),L"id",L"open_document");bool open=fileDropAllowed(self->data->state,DropKind::Images,DropTarget::Tabs);
             event.AcceptedOperation(open?DataPackageOperation::Copy:DataPackageOperation::None);event.DragUIOverride().Caption(open?str(object(object(self->data->catalog,L"bootstrap"),L"recovery"),L"open"):str(command,L"disabled_reason"));event.Handled(true);
         }});
         root.Drop([weak](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&fileDrag(event))
-            receiveFileDrop(event,O({{L"operation",S(L"open_paths")}}),[weak](std::string json){if(auto self=weak.lock())self->data->document(std::move(json));});});
+            receiveFileDrop(event,drawingTabsFileDrop(),[weak](std::string json){if(auto self=weak.lock())self->data->document(std::move(json));},self->data->report);});
         overlay.HorizontalAlignment(HorizontalAlignment::Left);overlay.VerticalAlignment(VerticalAlignment::Top);overlay.IsHitTestVisible(false);overlay.Visibility(Visibility::Collapsed);
         AutomationProperties::SetAutomationId(overlay,L"drawing-tab-slide");AutomationProperties::SetName(overlay,data->caption(L"header",L"slide"));root.Children().Append(overlay);
         list=selectableRows(data);AutomationProperties::SetAutomationId(list,L"drawing-list");

@@ -136,7 +136,7 @@ void LayerRow::init(){
     }});
     root.Drop([weak](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&self->current()&&fileDrag(event)){
         auto action=imageDrop(self->data->state);A row;row.Append(N(self->id));row.Append(N(event.GetPosition(self->root).Y/std::max(1.,self->root.ActualHeight())));action.Insert(L"layer",row);
-        receiveFileDrop(event,action,self->data->document);
+        receiveFileDrop(event,action,self->data->document,self->data->report);
     }});
     auto pick=[&](hstring const& title,int column,std::function<void()> action){
         auto control=layerRowButton(data,title,column,[weak,action=std::move(action)]{

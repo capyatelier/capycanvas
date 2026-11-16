@@ -22,6 +22,14 @@ if($LASTEXITCODE -ne 0){throw 'Model update test build failed.'}
 & $executable
 if($LASTEXITCODE -ne 0){throw 'Model update replay failed.'}
 
+$source=Join-Path $PSScriptRoot '../tests/file-drop.cpp'
+$object=Join-Path $OutputDirectory 'file-drop.obj'
+$executable=Join-Path $OutputDirectory 'file-drop-test.exe'
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" windowsapp.lib /link @manifest
+if($LASTEXITCODE -ne 0){throw 'DataPackage file drop test build failed.'}
+& $executable $OutputDirectory
+if($LASTEXITCODE -ne 0){throw 'DataPackage file drop test failed.'}
+
 & {
  $tokens=$null;$errors=$null
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'build.ps1'),[ref]$tokens,[ref]$errors)

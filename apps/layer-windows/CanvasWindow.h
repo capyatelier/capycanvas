@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "CanvasModelUpdate.h"
 #include "NativeJson.h"
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include "WorkspaceView.h"
 #include "HeaderView.h"
 #include "SettingsView.h"
@@ -285,6 +286,8 @@ private:
     enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd, Eraser };
     uint64_t replayTime=0;
     void Replay(ReplayKind,std::string point={});
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation> DropFiles(winrt::Windows::ApplicationModel::DataTransfer::DataPackageView content,winrt::Windows::Foundation::Point point);
+    winrt::fire_and_forget TestFileDrop(winrt::Microsoft::UI::Xaml::Controls::TextBox arguments);
     void StartInput();
     void LeaveHover(HoverRoute route);
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);

@@ -297,7 +297,7 @@ struct WorkspaceData : CanvasModelSource,std::enable_shared_from_this<WorkspaceD
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
-    std::function<void(std::string)> send,document,input;
+    std::function<void(std::string)> send,document,input,report;
     std::function<void(std::string,bool,std::function<void()>)> commit;
     std::function<void(std::string,std::function<void(int32_t)>)> edges;
     std::function<bool(uint32_t)> edgeHolding,cancelEdge;

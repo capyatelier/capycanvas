@@ -19,6 +19,8 @@ public:
     void SetInsets(float left,float right,float height);
     void SetFullscreen(bool active);
     void SetBlocked(bool blocked);
+    void SetReport(Dispatch report);
+    bool FileDropAllowed()const;
     void SetCommit(std::function<void(std::string,bool,std::function<void()>)> commit);
     bool Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& event,bool pressed);
     bool CancelGesture();

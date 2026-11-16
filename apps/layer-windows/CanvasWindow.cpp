@@ -417,6 +417,10 @@ void CanvasWindow::Open() {
         recover.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->testDeviceLoss();});
         toolbar.Children().Append(recover);
         if(GetEnvironmentVariableW(L"CAPY_TEST_HDR",nullptr,0))for(bool hdr:{false,true}){Button test;test.Content(box_value(hdr?L"Test HDR output":L"Test SDR output"));test.Click([weak=weak_from_this(),hdr](auto&&,auto&&){if(auto self=weak.lock())self->Send(hdr?"hdr":"sdr",CanvasCommandKind::TestDisplay);});toolbar.Children().Append(test);}
+        TextBox dropArguments;dropArguments.Width(180);AutomationProperties::SetAutomationId(dropArguments,L"test-file-drop-arguments");
+        Button drop;drop.Content(box_value(L"Test file drop"));
+        drop.Click([weak=weak_from_this(),dropArguments](auto&&,auto&&){if(auto self=weak.lock())self->TestFileDrop(dropArguments);});
+        toolbar.Children().Append(dropArguments);toolbar.Children().Append(drop);
     }
     root.Children().Append(toolbar);
     Microsoft::UI::Xaml::Automation::AutomationProperties::SetAutomationId(status,L"canvas-status");
@@ -688,6 +692,8 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
         self->Send(std::move(json),CanvasCommandKind::EdgeContact,[dispatcher=self->dispatcher,reply=std::move(reply)](int32_t bits){
             dispatcher.TryEnqueue([reply,bits]{reply(bits);});
         });});
+    auto report=[weak=weak_from_this()](std::string message){if(auto self=weak.lock())self->Fail(std::move(message));};
+    workspace->SetReport(report);
     workspace->SetWindowId(windowId);
     workspace->SetNavigatorSurfaces([weak=weak_from_this()](uint64_t id,CapyNavigatorViewport const* viewport,std::function<void(NativeSurfaceAttachment)> reply){
         if(auto self=weak.lock()){
@@ -731,6 +737,7 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
             if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
         },[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Input);},
         [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);});
+    header->SetReport(report);
     header->SetCommit(std::move(commit));
     root.Children().Append(header->Root());
     workspace->AttachOverlays(root,[weak=weak_from_this()]{if(auto self=weak.lock();self&&self->header)self->header->CancelGesture();});
@@ -751,15 +758,15 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     auto dropKind=std::make_shared<CapyUi::DropKind>(CapyUi::DropKind::Images);
     panel.DragEnter([dropKind](auto&&,DragEventArgs const& event){if(CapyUi::fileDrag(event))CapyUi::classifyDrop(event,dropKind);});
     panel.DragOver([weak=weak_from_this(),dropKind](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
-        auto kind=*dropKind;auto commands=CapyUi::array(CapyUi::branch(self->lastModel,L"state"),L"commands");
-        bool enabled=kind!=CapyUi::DropKind::Mixed&&CapyUi::flag(CapyUi::find(commands,L"id",kind==CapyUi::DropKind::Drawings?L"open_document":L"import_image"),L"enabled");
+        auto kind=*dropKind;bool enabled=CapyUi::fileDropAllowed(CapyUi::branch(self->lastModel,L"state"),kind,CapyUi::DropTarget::Canvas);
         using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
         event.AcceptedOperation(enabled?DataPackageOperation::Copy:DataPackageOperation::None);event.DragUIOverride().Caption(CapyUi::dropCaption(self->screenData,kind));event.Handled(true);
     }});
-    panel.Drop([weak=weak_from_this()](auto&&,DragEventArgs const& event){if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
-        auto action=CapyUi::imageDrop(CapyUi::branch(self->lastModel,L"state"));auto point=event.GetPosition(self->panel);auto scale=self->panel.XamlRoot().RasterizationScale();
-        action.Insert(L"screen",CapyUi::O({{L"x",CapyUi::N(point.X*scale)},{L"y",CapyUi::N(point.Y*scale)}}));
-        CapyUi::receiveFileDrop(event,action,[weak](std::string json){if(auto self=weak.lock();self&&!self->closing)self->Send(std::move(json),CanvasCommandKind::Document);});
+    panel.Drop([weak=weak_from_this()](auto&&,DragEventArgs event)->fire_and_forget {if(auto self=weak.lock();self&&!self->closing&&CapyUi::fileDrag(event)){
+        auto deferral=event.GetDeferral();event.Handled(true);
+        try{event.AcceptedOperation(co_await self->DropFiles(event.DataView(),event.GetPosition(self->panel)));}
+        catch(hresult_error const& error){event.AcceptedOperation(winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation::None);self->Fail(CapyUi::fileDropError(error));}
+        deferral.Complete();
     }});
     for(auto [dialog,kind]:{std::pair{&canvasSize,SizeDialog::Kind::Canvas},std::pair{&imageSize,SizeDialog::Kind::Image}})
         *dialog=std::make_unique<SizeDialog>(kind,send,model,localization,root.XamlRoot(),
@@ -835,6 +842,37 @@ bool CanvasWindow::Enqueue(CanvasWork item) {
     work.Push(std::move(item));
     lock.unlock();wake.notify_one();
     return true;
+}
+winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation> CanvasWindow::DropFiles(winrt::Windows::ApplicationModel::DataTransfer::DataPackageView content,winrt::Windows::Foundation::Point point){
+    auto lifetime=shared_from_this();
+    if(closing)throw hresult_error(E_ABORT,L"The drop window is closing.");
+    auto action=CapyUi::canvasFileDrop(CapyUi::branch(lastModel,L"state"),point,panel.XamlRoot().RasterizationScale());
+    co_return co_await CapyUi::receiveFileDrop(content,action,[weak=weak_from_this()](std::string json){
+        auto self=weak.lock();if(!self||self->closing)throw hresult_error(E_ABORT,L"The drop window is closing.");self->Send(std::move(json),CanvasCommandKind::Document);
+    });
+}
+fire_and_forget CanvasWindow::TestFileDrop(TextBox arguments){
+    auto lifetime=shared_from_this();auto text=arguments.Text();
+    try{
+        if(!GetEnvironmentVariableW(L"CAPY_SMOKE_TEST",nullptr,0)||!CapyUi::flag(lastModel,L"windows_isolated_settings"))throw hresult_access_denied(L"File drop test requires isolated smoke storage.");
+        auto request=Windows::Data::Json::JsonObject::Parse(text);auto target=request.GetNamedString(L"target");
+        if(target!=L"canvas"&&target!=L"tabs")throw hresult_invalid_argument(L"Unknown file drop target.");
+        auto package=co_await CapyUi::fileDropPackage(request.GetNamedArray(L"paths"));auto content=package.GetView();
+        using winrt::Windows::ApplicationModel::DataTransfer::DataPackageOperation;
+        auto kind=CapyUi::fileDropKind(co_await CapyUi::fileDropPaths(content));
+        bool allowed=target==L"canvas"?CapyUi::fileDropAllowed(CapyUi::branch(lastModel,L"state"),kind,CapyUi::DropTarget::Canvas):header->FileDropAllowed();
+        DataPackageOperation effect=DataPackageOperation::None;
+        if(allowed&&target==L"canvas"){
+            auto coordinates=request.GetNamedArray(L"point");
+            effect=co_await DropFiles(content,{float(coordinates.GetNumberAt(0)),float(coordinates.GetNumberAt(1))});
+        }else if(allowed)effect=co_await CapyUi::receiveFileDrop(content,CapyUi::drawingTabsFileDrop(),[weak=weak_from_this()](std::string json){
+            auto self=weak.lock();if(!self||self->closing)throw hresult_error(E_ABORT,L"The drop window is closing.");self->Send(std::move(json),CanvasCommandKind::Document);
+        });
+        AutomationProperties::SetItemStatus(arguments,CapyUi::O({{L"request",CapyUi::S(text)},{L"effect",CapyUi::S(effect==DataPackageOperation::Copy?L"Copy":L"None")}}).Stringify());
+    }catch(hresult_error const& error){
+        auto message=CapyUi::fileDropError(error);Fail(message);
+        AutomationProperties::SetItemStatus(arguments,CapyUi::O({{L"request",CapyUi::S(text)},{L"error",CapyUi::S(to_hstring(message))}}).Stringify());
+    }
 }
 void CanvasWindow::Replay(ReplayKind kind,std::string point) {
     if(kind==ReplayKind::Eraser&&(!GetEnvironmentVariableW(L"CAPY_SMOKE_TEST",nullptr,0)||!CapyUi::flag(lastModel,L"windows_isolated_settings")))return;
