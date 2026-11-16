@@ -151,3 +151,29 @@ fn after_a_pan_the_entering_decode_starts_before_stale_queued_work() {
     let workers=pool.capacity-crate::scene::IDLE_FRAME_TILES;
     assert!(position<workers,"the entering decode started after {position} stale jobs; the pool has {workers} workers");
 }
+
+#[cfg(any(target_os="linux",target_os="android"))]
+fn decode_worker_niceness()->Vec<libc::c_int> {
+    std::fs::read_dir("/proc/self/task").unwrap().filter_map(|entry| {
+        let tid=entry.ok()?.file_name().to_str()?.parse::<libc::id_t>().ok()?;
+        let name=std::fs::read_to_string(format!("/proc/self/task/{tid}/comm")).ok()?;
+        name.starts_with("capy-image-pref").then(||unsafe {libc::getpriority(libc::PRIO_PROCESS,tid)})
+    }).collect()
+}
+
+#[cfg(any(target_os="linux",target_os="android"))]
+#[test]
+fn decode_workers_run_below_the_compile_and_render_threads() {
+    let pool=DecodePool::start(1).unwrap();
+    let mut queue=queue(&pool,RgbSpace::Srgb);
+    assert!(queue.request(PortableId::random(),layer_core::color::source::rgba8_source([1;2],|_,_|[1,2,3,255]),[0;2]));
+    result(&mut queue);
+    let frame_thread=unsafe {libc::getpriority(libc::PRIO_PROCESS,libc::gettid() as libc::id_t)};
+    let deadline=Instant::now()+DEADLINE;
+    loop {
+        let workers=decode_worker_niceness();
+        if !workers.is_empty() && workers.iter().all(|nice|*nice==BACKGROUND_NICE && *nice>frame_thread) {break;}
+        assert!(Instant::now()<deadline,"decode workers run at nice {workers:?} beside a frame thread at {frame_thread}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}

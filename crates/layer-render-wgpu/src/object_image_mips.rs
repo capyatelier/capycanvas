@@ -808,6 +808,20 @@ impl DecodeJob {
         }
     }
 }
+#[cfg(any(target_os="linux",target_os="android"))]
+const BACKGROUND_NICE:libc::c_int=10;
+#[cfg(not(target_arch="wasm32"))]
+fn yield_to_frame_threads() {
+    #[cfg(any(target_os="linux",target_os="android"))]
+    unsafe {libc::setpriority(libc::PRIO_PROCESS,libc::gettid() as libc::id_t,BACKGROUND_NICE);}
+    #[cfg(target_os="windows")]
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentThread,SetThreadPriority,THREAD_PRIORITY_BELOW_NORMAL};
+        let _=SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
+    }
+    #[cfg(target_vendor="apple")]
+    unsafe {libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY,0);}
+}
 #[cfg(not(target_arch="wasm32"))]
 pub(crate) fn decode_workers()->usize {std::thread::available_parallelism().map_or(1,|count|count.get().saturating_sub(2).clamp(1,3))}
 #[cfg(not(target_arch="wasm32"))]
@@ -838,6 +852,7 @@ impl DecodePool {
         for worker in 0..workers {
             let (dispatch,epoch,waiters)=(dispatch.clone(),epoch.clone(),capacity_waiters.clone());
             std::thread::Builder::new().name(format!("capy-image-prefilter-{worker}")).spawn(move || {
+                yield_to_frame_threads();
                 let mut decoders=Decoders::new();
                 let parked=Arc::downgrade(&dispatch);
                 while let Some(job)=dispatch.take() {
