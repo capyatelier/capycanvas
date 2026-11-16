@@ -2273,7 +2273,7 @@ impl Scene {
         for (tile,covered) in self.begin_capture(r,packet,destination,regions,output,reserved) {
             self.capture_prepared_tile_jobs(r, packet, destination, tile, covered, output, initialized, accepted)?;
             if preview || object_pages {
-                let result = self.encode_query_jobs(r, encoder, preview.then_some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]));
+                let result = self.encode_jobs_for(r, encoder, preview.then_some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]), accepted.decode_class());
                 if result.is_err() { self.object_results.reset_used(); self.exact_object_results.reset_used(); return result; }
                 self.object_results.flush_retired(encoder); self.exact_object_results.flush_retired(encoder);
                 if self.inline_objects.taps > object_cache::IDLE_TAPS {
@@ -2305,7 +2305,7 @@ impl Scene {
         }
         crate::performance_trace::counter(c"Capy native effect reuse candidates",r.metrics.native_effect_reuse_candidate_cells);
         crate::performance_trace::counter(c"Capy native effect forced cells",r.metrics.native_effect_forced_cells);
-        let result = self.encode_jobs(r, encoder);
+        let result = self.encode_jobs_for(r, encoder, None, accepted.decode_class());
         if result.is_ok() {
             self.object_results.flush_retired(encoder);
             self.exact_object_results.flush_retired(encoder);
@@ -2564,9 +2564,13 @@ impl Scene {
         Ok(())
     }
     fn encode_query_jobs(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>) -> Result<(), GpuRasterError> {
+        self.encode_jobs_for(r, encoder, grid, Class::Visible)
+    }
+
+    fn encode_jobs_for(&mut self, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder, grid: Option<[u32;4]>, class: Class) -> Result<(), GpuRasterError> {
         r.source_tiles.get_mut().flush_retired(encoder);
         if self.ordered {return self.encode_ordered_jobs(r,encoder,grid).and_then(|ready|if ready {Ok(())}else {Err(GpuRasterError::NotReady)});}
-        let result = self.prepare_jobs(r, encoder, 0, Class::Visible).and_then(|ready|if ready {self.encode_jobs_inner(r, encoder, grid)}else {Err(GpuRasterError::NotReady)});
+        let result = self.prepare_jobs(r, encoder, 0, class).and_then(|ready|if ready {self.encode_jobs_inner(r, encoder, grid)}else {Err(GpuRasterError::NotReady)});
         if result.is_err() {self.discard_unencoded_jobs();}
         result
     }

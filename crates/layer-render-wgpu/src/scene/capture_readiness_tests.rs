@@ -391,3 +391,31 @@ fn a_display_capture_declares_its_inputs_with_the_frames_signature() {
     r.scene = Some(scene);
     assert_eq!(reads, 0, "a display capture captured a signature frame of its own");
 }
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_capture_requests_its_cold_decodes_at_the_class_its_inputs_were_admitted_at() {
+    use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
+    let extent=[PAGE_SIZE;2];
+    let mut artwork=layer_core::authored::Artwork::new(extent).unwrap();
+    let descriptor=layer_core::color::DocumentColor::default().paint_descriptor();
+    let (_,SourceTarget::Paint(paint))=crate::test_support::add_paint(&mut artwork,"Photo",extent) else {unreachable!()};
+    let tile=RasterTile::backed(TileBlob::encode(descriptor,&[40,80,120,255].repeat(PAGE_SIZE.pow(2) as usize)).unwrap());
+    artwork.paint.get_mut(paint).unwrap().raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},tile)].into(),watercolor:None});
+    let doc=Document::from_artwork(artwork).unwrap();
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut scene=Scene::new(&r).unwrap();
+    let frame=packet(doc.scene(),extent);
+    let region=PixelRect::full(extent);
+    let (texture,view)=create_color_target(&r.device,extent,"refined capture");
+    let destination=Image {texture,view,plan:display_mips::Plan::window(extent,0,region)};
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    scene.prepare_region(&mut r,frame,(region,DocRect::from(region)),PixelRect::EMPTY,false,&mut encoder).unwrap();
+    let inputs=scene.declare_capture(&mut r,frame,&destination,&[region],Output::Artwork(None),None,None).unwrap();
+    let (_,mut accepted)=inputs.accept(&mut r,&mut (),|_,r,inputs| {
+        let bytes=inputs.additional_bytes(&r.source_tiles.borrow());r.admit_display(None,Class::Refinement,bytes).ok()
+    },|_,_|Ok(()),|_,_,_|Ok(())).unwrap().unwrap();
+    let captured=scene.capture_prepared_regions(&mut r,frame,&destination,&[region],Output::Artwork(None),false,None,&mut encoder,&mut accepted);
+    assert!(matches!(captured,Err(GpuRasterError::NotReady)),"{captured:?}");
+    assert_eq!(r.moving_decode.as_ref().unwrap().1.outstanding_classes(),[Class::Refinement],"a refinement capture decodes ahead of the view");
+}

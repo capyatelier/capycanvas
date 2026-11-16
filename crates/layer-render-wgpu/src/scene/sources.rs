@@ -491,7 +491,7 @@ impl Inputs {
             lease.read=Some(Arc::new(Read {key:Key::base(base,*coordinate),tile:read.tile,pending:read.pending,assembly:read.assembly}));
             accepted.push(lease);
         }
-        Ok(AcceptedInputs {brush:None,brush_state:None,unit:self.unit,leases:accepted,placements:self.placements.clone(),decisions:self.decisions.clone(),declaring:None,objects_refusal:None})
+        Ok(AcceptedInputs {brush:None,brush_state:None,unit:self.unit,leases:accepted,placements:self.placements.clone(),decisions:self.decisions.clone(),declaring:None,objects_refusal:None,class:Some(class)})
     }
 }
 pub(crate) trait Admitted {fn class(&self)->crate::residency::Class;}
@@ -670,7 +670,7 @@ pub(crate) enum BrushState {Coverage(u32,bool),Start(layer_core::StrokeId),Reser
 pub(crate) type PreparedState=std::collections::BTreeMap<(SourceTarget,[u32;2],BrushState),BrushResidents>;
 pub(crate) type PreparedBrush=std::collections::BTreeMap<Address,BrushResidents>;
 #[derive(Clone,Default)]
-pub(crate) struct AcceptedInputs {brush:Option<Arc<PreparedBrush>>,brush_state:Option<Arc<PreparedState>>,unit:Option<InputUnit>,leases:Vec<Lease>,placements:PlacementSet,decisions:Decisions,declaring:Option<Box<(Inputs,Declaration)>>,objects_refusal:Option<crate::residency::Blocked>}
+pub(crate) struct AcceptedInputs {brush:Option<Arc<PreparedBrush>>,brush_state:Option<Arc<PreparedState>>,unit:Option<InputUnit>,leases:Vec<Lease>,placements:PlacementSet,decisions:Decisions,declaring:Option<Box<(Inputs,Declaration)>>,objects_refusal:Option<crate::residency::Blocked>,class:Option<crate::residency::Class>}
 impl std::ops::Deref for AcceptedInputs {type Target=[Lease];fn deref(&self)->&Self::Target {&self.leases}}
 impl IntoIterator for AcceptedInputs {
     type Item=Lease;type IntoIter=std::vec::IntoIter<Lease>;
@@ -733,6 +733,7 @@ impl AcceptedInputs {
     }
     pub(crate) fn for_unit(mut self,unit:InputUnit)->Result<Self,GpuRasterError> {merge_unit(&mut self.unit,Some(unit))?;Ok(self)}
     pub(crate) fn unit(&self)->Option<InputUnit> {self.unit}
+    pub(crate) fn decode_class(&self)->crate::residency::Class {self.class.unwrap_or(crate::residency::Class::Visible)}
     pub(crate) fn check_unit(&self,unit:InputUnit)->Result<(),GpuRasterError> {
         debug_assert_eq!(self.unit,Some(unit),"accepted source unit differs from its consumer");
         if self.unit==Some(unit) {Ok(())}else {Err(GpuRasterError::Invariant("accepted source unit differs from its consumer"))}
@@ -882,6 +883,7 @@ impl AcceptedInputs {
     }
     pub(crate) fn extend(&mut self,other:Self)->Result<(),GpuRasterError> {
         merge_unit(&mut self.unit,other.unit)?;
+        self.class=match (self.class,other.class) {(Some(a),Some(b))=>Some(a.min(b)),(a,b)=>a.or(b)};
         if self.objects_refusal.is_none() {self.objects_refusal=other.objects_refusal;}
         self.placements.extend(other.placements)?;
         self.decisions.extend(other.decisions)?;
