@@ -549,22 +549,15 @@ impl WgpuRasterizer {
         [0,self.scene_tiers.windows.used().saturating_add(self.scale_display.as_ref().map_or_else(||scene.map_or(0,|scene|scene.retained_scale_bytes()[1]),scene::scale::Cache::pinned_page_bytes))]
     }
     pub(super) fn publish_memory(&self) {
-        let display_changed = self.memory.display.publish(self.current_display_memory_report());
-        let raster_changed=self.memory.raster.publish(self.raster_memory_report());
-        let staging_changed=self.memory.staging.publish(self.staging_memory_report());
-        #[cfg(not(target_arch = "wasm32"))]
-        if display_changed || raster_changed || staging_changed { self.request_memory_samples(); }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (display_changed, raster_changed, staging_changed);
+        self.memory.display.publish(self.current_display_memory_report());
+        self.memory.raster.publish(self.raster_memory_report());
+        self.memory.staging.publish(self.staging_memory_report());
     }
-    pub(super) fn request_memory_samples(&self) { if self.telemetry.enabled { self.factory.request_memory_update(); } }
     fn publish_samples(&self) {
         let samples = self.device.source_samples.stats();
-        if self.memory.samples.publish(MemoryReport { ram_bytes: samples.physical_bytes as u64,
+        self.memory.samples.publish(MemoryReport { ram_bytes: samples.physical_bytes as u64,
             pinned_ram_bytes: (samples.pinned_bytes as u64).max(SOURCE_WORKING_BYTES),
-            demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() }) {
-            self.request_memory_samples();
-        }
+            demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() });
     }
     pub fn after_present(&mut self) {
         if !self.memory.idle.load(std::sync::atomic::Ordering::Acquire)
@@ -572,12 +565,8 @@ impl WgpuRasterizer {
         if self.restore_preparation().is_none() && !self.bake_preflight.as_ref().is_some_and(|state|state.pending()) { self.memory.preparation.set(0); }
         self.publish_memory();
         self.publish_samples();
-        #[cfg(target_arch = "wasm32")]
-        self.request_memory_samples();
         self.memory.invalidate_limits();self.refresh_memory_limits();
         self.publish_memory();
-        #[cfg(target_arch = "wasm32")]
-        self.request_memory_samples();
     }
 }
 

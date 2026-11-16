@@ -1418,7 +1418,7 @@ fn an_unchanged_idle_frame_creates_no_grant_encoder_and_syncs_no_report() {
 }
 
 #[test]
-fn closed_diagnostics_take_no_memory_sample_refresh_from_changed_frames() {
+fn changed_frames_request_no_memory_sample_and_any_reader_gets_one() {
     let (doc, mut r, mut view) = retained_photo_display();
     for (enabled, translation) in [(false, [-1024., 0.]), (true, [-1024., -1024.])] {
         r.set_telemetry_enabled(enabled);
@@ -1426,7 +1426,13 @@ fn closed_diagnostics_take_no_memory_sample_refresh_from_changed_frames() {
         let before = crate::test_support::PassCounts::snapshot();
         submit_settled(&mut r, FramePacket { view, ..packet(doc.scene(), [4096; 2]) });
         let requests = crate::test_support::PassCounts::snapshot().delta(before).memory_updates;
-        assert_eq!(requests > 0, enabled, "telemetry {enabled}: frames requested {requests} memory sample refreshes");
+        assert_eq!(requests, 0, "telemetry {enabled}: frames requested {requests} memory sample refreshes");
+    }
+    r.set_telemetry_enabled(false);
+    let deadline = std::time::Instant::now() + crate::READBACK_TIMEOUT;
+    while r.telemetry().memory_budget.is_none() {
+        assert!(std::time::Instant::now() < deadline, "a renderer stats reader never received a memory sample");
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 

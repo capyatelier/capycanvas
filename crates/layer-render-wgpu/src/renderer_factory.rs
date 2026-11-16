@@ -1,6 +1,8 @@
 use super::*;
 use std::sync::{Mutex, OnceLock};
 
+const MEMORY_SAMPLE_AGE: std::time::Duration = std::time::Duration::from_millis(500);
+
 #[derive(Clone)]
 pub struct RendererFactory(Arc<Factory>);
 struct Factory {
@@ -14,8 +16,6 @@ struct Factory {
     memory_device: layer_core::MemoryDevice,
     #[cfg(target_arch = "wasm32")]
     memory_summary: Mutex<Option<Arc<layer_render::MemoryBudgetSummary>>>,
-    #[cfg(target_arch = "wasm32")]
-    memory_update_pending: std::sync::atomic::AtomicBool,
     #[cfg(not(target_arch = "wasm32"))]
     memory: Mutex<std::sync::Weak<crate::memory_sample::MemorySampler>>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -36,7 +36,6 @@ pub(crate) fn fixture_factory(hardware: &RendererFactory, budget: layer_core::Me
     let factory = RendererFactory(Arc::new(Factory { adapter: hardware.adapter().clone(), adapter_summary: hardware.0.adapter_summary.clone(), device: hardware.device().clone(), queue: hardware.queue().clone(),
         choices: Default::default(), shared, budget: budget.clone(), memory_device,
         #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
-        #[cfg(target_arch = "wasm32")] memory_update_pending: Default::default(),
         #[cfg(not(target_arch = "wasm32"))] memory: Mutex::new(Arc::downgrade(&memory)),
         #[cfg(not(target_arch = "wasm32"))] allocator_memory: budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device)),
         #[cfg(not(target_arch = "wasm32"))] _memory_fixture: Some(memory),
@@ -73,7 +72,6 @@ impl RendererFactory {
         let allocator_memory = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Pinned, Some(memory_device));
         let factory = Self(Arc::new(Factory { adapter_summary: Arc::new(adapter_summary(&adapter.get_info())), adapter, device: (**device).clone(), queue, choices: Default::default(), shared, budget, memory_device,
             #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
-            #[cfg(target_arch = "wasm32")] memory_update_pending: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] memory: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] allocator_memory,
             #[cfg(all(test, not(target_arch = "wasm32")))] _memory_fixture: None }));
@@ -110,22 +108,6 @@ impl RendererFactory {
             .map(|device|device.limit_bytes).filter(|limit|*limit!=0)
     }
     pub(super) fn unified_memory(&self)->bool {self.0.budget.snapshot().devices.iter().any(|device|device.device==self.0.memory_device && device.unified)}
-    pub(super) fn request_memory_update(&self) {
-        #[cfg(test)] crate::test_support::PassCounts {memory_updates:1,..Default::default()}.record();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(memory) = self.0.memory.lock().unwrap().upgrade() { memory.request_update(); }
-        #[cfg(target_arch = "wasm32")]
-        {
-            if self.0.memory_update_pending.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
-            let factory = self.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                factory.0.budget.flush_reports();
-                let snapshot = factory.0.budget.snapshot();
-                *factory.0.memory_summary.lock().unwrap() = Some(Arc::new(layer_render::MemoryBudgetSummary::new(&snapshot, factory.0.memory_device)));
-                factory.0.memory_update_pending.store(false, std::sync::atomic::Ordering::Release);
-            });
-        }
-    }
     pub(super) fn memory_owner(&self, kind: layer_core::MemoryOwnerKind) -> layer_core::MemoryOwner {
         self.memory_owner_in(kind,layer_core::MemoryClass::Visible)
     }
@@ -133,10 +115,26 @@ impl RendererFactory {
         self.0.budget.register_owner(kind,class,Some(self.0.memory_device))
     }
     pub(super) fn budget_snapshot(&self) -> Option<Arc<layer_render::MemoryBudgetSummary>> {
+        let fresh = |summary: &Option<Arc<layer_render::MemoryBudgetSummary>>| summary.as_ref().is_some_and(|summary| summary.sampled_at.elapsed() < MEMORY_SAMPLE_AGE);
         #[cfg(not(target_arch = "wasm32"))]
-        { self.0.memory.lock().unwrap().upgrade().and_then(|memory| memory.budget_snapshot()) }
+        {
+            let memory = self.0.memory.lock().unwrap().upgrade()?;
+            let summary = memory.budget_snapshot();
+            if !fresh(&summary) {
+                #[cfg(test)] crate::test_support::PassCounts {memory_updates:1,..Default::default()}.record();
+                memory.request_update();
+            }
+            summary
+        }
         #[cfg(target_arch = "wasm32")]
-        { self.0.memory_summary.try_lock().ok().and_then(|summary| summary.clone()) }
+        {
+            let mut summary = self.0.memory_summary.try_lock().ok()?;
+            if !fresh(&summary) {
+                self.0.budget.flush_reports();
+                *summary = Some(Arc::new(layer_render::MemoryBudgetSummary::new(&self.0.budget.snapshot(), self.0.memory_device)));
+            }
+            summary.clone()
+        }
     }
     pub fn rasterizer(&self, color: layer_core::color::DocumentColor) -> Result<Box<WgpuRasterizer>, GpuRasterError> {
         let device = self.pipeline_device(color);
