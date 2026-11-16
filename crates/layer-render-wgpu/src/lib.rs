@@ -3659,30 +3659,6 @@ impl WgpuRasterizer {
         self.dispatch_browser_image_decode()?;
         Ok(requested)
     }
-    fn request_open_frontier(&mut self,packet:FramePacket<'_>) {
-        if self.scale_display.is_some() || !packet.dab_batches.is_empty() || !packet.restore_rasters.is_empty() || !self.decode_queue_has_room() {return;}
-        let Ok(visible)=display_mips::view_bounds(packet.view,packet.document_extent,0) else {return;};
-        let (space,document)=(self.document_color().space,DocRect::from(PixelRect::full(packet.document_extent)));
-        let mut frontier=Vec::new();
-        for (layer,&owner) in packet.scene.order().iter().enumerate() {
-            if !packet.scene.includes(owner) || !packet.scene.visible(owner) {continue;}
-            let Some(target)=packet.scene.source_target(owner).filter(|target|matches!(target,SourceTarget::Paint(_))) else {continue;};
-            let offset=packet.scene.target_offset(target);
-            let placed=DocRect::from(PixelRect::full(packet.scene.target_extent(target))).translated(offset);
-            for coordinate in page_coordinates(placed.local(visible)) {
-                let Ok(Some(blob))=self.raster_tile_for(packet.scene,target,RasterPlane::Color,coordinate) else {continue;};
-                if self.source_tiles.borrow().prepared_raster_any_view(&blob,space,space).is_some() {continue;}
-                let region=document.local(DocRect::from(page_rect(coordinate)).translated(offset));
-                frontier.push((object_image_mips::MipDecodeQueue::distance(packet.view,region),layer,region,blob));
-            }
-        }
-        frontier.sort_by_key(|(distance,layer,..)|(*distance,*layer));
-        for (_,_,region,blob) in frontier {
-            let Ok(queue)=self.image_decode_queue(self.device.working_space()) else {return;};
-            queue.prioritize(packet.view,region);
-            if !matches!(self.request_raster_decode_to(blob,space,space,residency::Class::Prefetch),Ok(true)) {return;}
-        }
-    }
     pub(crate) fn request_nearest_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:object_image_mips::CoordinateDestination)->Result<bool,GpuRasterError> {
         #[cfg(target_arch="wasm32")]
         if self.browser_nearest_coordinate_decoder.is_none() && (!self.snapshot_worker || self.browser_image_decoder.is_some()) {
@@ -3981,7 +3957,7 @@ impl CanvasRenderer for WgpuRasterizer {
             && self.brush_batches_ready(packet)
             && self.prepare_raster_restores(packet) && self.bake_analyses_ready(packet) && self.retouch_analyses_ready(packet) && self.retouch_references_ready(packet)
             && self.bake_vectors_ready(packet) && self.prepare_bakes(packet) && self.prepare_fill_edges(packet) && self.prepare_operation_masks(packet) && self.prepare_transform_cancel(packet) && self.prepare_transform_preview(packet,preview);
-        if !ready {self.upload_window_open(residency::Class::Visible);self.request_open_frontier(packet);}
+        if !ready {self.upload_window_open(residency::Class::Visible);}
         if let Some(installed) = installed { self.transform_preview = installed; }
         ready
     }
