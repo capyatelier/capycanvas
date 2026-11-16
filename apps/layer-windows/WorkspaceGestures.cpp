@@ -32,6 +32,7 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
     J tabCapture;
     Microsoft::UI::Dispatching::DispatcherQueueTimer timer{nullptr};
     std::optional<uint32_t> pointer,rejectedPointer;
+    Microsoft::UI::Xaml::Input::Pointer heldEdge{nullptr};
     J action,sourceTag;
     weak_ref<FrameworkElement> source;
     Input::Pointer contact{nullptr};
@@ -389,6 +390,9 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         if(edge->claimed)e.Handled(true);
     }
     void edgeUp(PointerRoutedEventArgs const& e){
+        if(heldEdge&&heldEdge.PointerId()==e.Pointer().PointerId()){
+            auto held=std::exchange(heldEdge,nullptr);releasing=true;root.ReleasePointerCapture(held);releasing=false;e.Handled(true);return;
+        }
         if(!edge||edge->pointer!=e.Pointer().PointerId())return;
         auto p=e.GetCurrentPoint(root);edge->at=p.Position();edge->time=p.Timestamp()*1000;
         if(edge->claimed)e.Handled(true);
@@ -406,7 +410,10 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
             {L"captured",B(PointerGesture::Captured(root,edge->pointer))}});
         bool claimed=edge->claimed;auto released=edge->contact;
         auto retired=std::move(edge->retired);auto owners=std::move(edge->owners);auto shield=edge->shield;edge.reset();++edgeSerial;
-        if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;cursor();}
+        bool held=claimed&&std::wstring_view(phase)!=L"up"&&released&&PointerGesture::Captured(root,released.PointerId());
+        if(held)heldEdge=released;
+        else if(claimed){releasing=true;root.ReleasePointerCapture(released);releasing=false;}
+        if(claimed)cursor();
         deferClick();
         for(auto const& [weak,element]:retired)if(auto parent=weak.get()){uint32_t at=0;if(parent.Children().IndexOf(element,at))parent.Children().RemoveAt(at);}
         uint32_t at=0;if(shield&&root.Children().IndexOf(shield,at))root.Children().RemoveAt(at);
@@ -743,11 +750,13 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
                 if(self->pointer==e.Pointer().PointerId())self->cancel(L"pointer_canceled");
                 if(self->edge&&self->edge->pointer==e.Pointer().PointerId())self->edgeEnd(L"cancel",L"pointer_canceled");
                 if(self->rejectedPointer==e.Pointer().PointerId()){self->rejectedPointer.reset();self->deferClick();}
+                if(self->heldEdge&&self->heldEdge.PointerId()==e.Pointer().PointerId())self->heldEdge=nullptr;
             }
         })),true);
         root.AddHandler(UIElement::PointerCaptureLostEvent(),box_value(PointerEventHandler([weak](auto&&,auto&& e){
             if(auto self=weak.lock())self->observePointer(e);
             if(auto self=weak.lock();self&&!self->releasing&&e.OriginalSource().template try_as<UIElement>()!=self->root&&PointerGesture::Captured(self->root,e.Pointer().PointerId()))return;
+            if(auto self=weak.lock();self&&!self->releasing&&self->heldEdge&&self->heldEdge.PointerId()==e.Pointer().PointerId())self->heldEdge=nullptr;
             if(auto self=weak.lock();self&&!self->releasing&&self->edge&&self->edge->pointer==e.Pointer().PointerId()&&e.GetCurrentPoint(self->root).IsInContact()
                 &&(!self->edge->claimed||e.OriginalSource().try_as<UIElement>()==self->root))self->edgeEnd(L"cancel",L"capture_lost");
             if(auto self=weak.lock();self&&!self->releasing&&self->pointer==e.Pointer().PointerId()){
