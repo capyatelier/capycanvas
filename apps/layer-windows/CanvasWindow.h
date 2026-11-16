@@ -282,9 +282,9 @@ private:
     void ObservePointerModality(winrt::Microsoft::UI::Input::PointerPoint const&);
     CanvasScroll ScrollSample(winrt::Windows::Foundation::Point,int32_t,bool,winrt::Windows::System::VirtualKeyModifiers);
     // Explicit smoke fixtures; only the input dispatcher touches replayTime.
-    enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd };
+    enum class ReplayKind { Stroke, Pan, Backlog, Pen, PenBegin, PenEnd, Eraser };
     uint64_t replayTime=0;
-    void Replay(ReplayKind);
+    void Replay(ReplayKind,std::string point={});
     void StartInput();
     void LeaveHover(HoverRoute route);
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);

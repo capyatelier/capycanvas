@@ -403,6 +403,12 @@ void CanvasWindow::Open() {
             test.Click([weak=weak_from_this(),kind](auto&&,auto&&){if(auto self=weak.lock())self->Replay(kind);});
             toolbar.Children().Append(test);
         }
+        if(GetEnvironmentVariableW(L"CAPY_STORAGE_DIR",nullptr,0)){
+            TextBox point;point.Width(120);AutomationProperties::SetAutomationId(point,L"test-eraser-position");
+            Button eraser;eraser.Content(box_value(L"Test eraser"));
+            eraser.Click([weak=weak_from_this(),point](auto&&,auto&&){if(auto self=weak.lock())self->Replay(ReplayKind::Eraser,to_string(point.Text()));});
+            toolbar.Children().Append(point);toolbar.Children().Append(eraser);
+        }
         Button reload;reload.Content(box_value(L"Test filter reload"));
         reload.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())
             self->Send(R"({"mode":"merge"})",CanvasCommandKind::Filters);});
@@ -830,24 +836,33 @@ bool CanvasWindow::Enqueue(CanvasWork item) {
     lock.unlock();wake.notify_one();
     return true;
 }
-void CanvasWindow::Replay(ReplayKind kind) {
-    inputDispatcher.TryEnqueue([weak=weak_from_this(),kind] {
-        bool pan=kind==ReplayKind::Pan,backlog=kind==ReplayKind::Backlog;
+void CanvasWindow::Replay(ReplayKind kind,std::string point) {
+    if(kind==ReplayKind::Eraser&&(!GetEnvironmentVariableW(L"CAPY_SMOKE_TEST",nullptr,0)||!CapyUi::flag(lastModel,L"windows_isolated_settings")))return;
+    inputDispatcher.TryEnqueue([weak=weak_from_this(),kind,point=std::move(point)] {
+        bool pan=kind==ReplayKind::Pan,backlog=kind==ReplayKind::Backlog,eraser=kind==ReplayKind::Eraser;
         bool pen=kind==ReplayKind::Pen||kind==ReplayKind::PenBegin||kind==ReplayKind::PenEnd;
         auto self=weak.lock();if(!self)return;
-        CapyView view;
-        {std::lock_guard lock(self->mutex);if(self->closing)return;view=self->inputView;}
+        CapyView view;Size size;
+        {std::lock_guard lock(self->mutex);if(self->closing)return;view=self->inputView;size=self->desired;}
+        Point origin{};
+        if(eraser){
+            Windows::Data::Json::JsonArray value;
+            if(point.size()>128||!Windows::Data::Json::JsonArray::TryParse(to_hstring(point),value)||value.Size()!=2
+                ||value.GetAt(0).ValueType()!=Windows::Data::Json::JsonValueType::Number||value.GetAt(1).ValueType()!=Windows::Data::Json::JsonValueType::Number)return;
+            origin={float(value.GetNumberAt(0)),float(value.GetNumberAt(1))};
+            if(!CanvasEraserReplayPosition(origin.X,origin.Y,float(size.width),float(size.height)))return;
+        }
         std::vector<CapyPointer> records;records.reserve(CanvasWorkBuffer::PointerBatch);
-        uint32_t count=backlog?32768:pan?3:42;
+        uint32_t count=backlog?32768:pan?3:eraser?21:42;
         if(kind==ReplayKind::PenEnd&&!self->replayTime)return;
-        uint64_t start=kind==ReplayKind::PenEnd?self->replayTime:Now()-count*1000000ULL;
+        uint64_t start=kind==ReplayKind::PenEnd?self->replayTime:Now()-(eraser?217000000ULL:count*1000000ULL);
         if(kind==ReplayKind::PenBegin)self->replayTime=start;
         uint32_t first=kind==ReplayKind::PenEnd?21:0,limit=kind==ReplayKind::PenBegin?21:count;
         for(uint32_t i=first;i<limit;i++) {
-            auto p=CanvasReplaySample(view,i,count,pen,pan,backlog);
-            p.id=77;p.sequence=++self->sequence;p.timestamp_ns=start+i*1000000ULL;
+            auto p=eraser?CanvasEraserReplaySample(view,origin.X,origin.Y,i):CanvasReplaySample(view,i,count,pen,pan,backlog);
+            p.id=77;p.sequence=++self->sequence;p.timestamp_ns=start+(eraser?p.timestamp_ns:i*1000000ULL);
             records.push_back(p);
-            if(records.size()==CanvasWorkBuffer::PointerBatch){
+            if(records.size()==CanvasWorkBuffer::PointerBatch||(eraser&&i==0)){
                 if(!self->SendIndependent(std::move(records)))return;
                 records={};records.reserve(CanvasWorkBuffer::PointerBatch);
             }
@@ -1067,7 +1082,7 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
     std::vector<CapyPointer> samples;samples.reserve(std::max(1u,count));
     auto capture=[&](Microsoft::UI::Input::PointerPoint const& point,bool predicted){
         auto props=point.Properties();auto type=point.PointerDeviceType();auto pos=point.Position();
-        uint32_t tool=type==Microsoft::UI::Input::PointerDeviceType::Mouse?1:type==Microsoft::UI::Input::PointerDeviceType::Touch?3:props.IsEraser()||props.IsInverted()?2:0;
+        uint32_t tool=CanvasPointerTool(type,[&]{return props.IsEraser();},[&]{return props.IsInverted();});
         auto radians=[](float degrees){return degrees*0.017453292519943295f;};
         CapyPointer p{};p.id=point.PointerId();p.timestamp_ns=point.Timestamp()*1000;p.view_revision=view;p.x=pos.X*scale;p.y=pos.Y*scale;
         p.pressure=tool==1?(point.IsInContact()?1.f:0.f):props.Pressure();

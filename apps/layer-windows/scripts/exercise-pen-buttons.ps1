@@ -44,6 +44,24 @@ function Inked([string]$Name,[string]$Baseline,[int]$Y) {
   $coverage
  } finally { $image.Dispose();$before.Dispose() }
 }
+function Select-EraserOracleBrush {
+ Invoke-Id (Tool-Tile 'pen')
+ Wait-Until {
+  $subtools=@((Model).state.tool_set.subtools)
+  @($subtools|Where-Object {$_.preview -eq 1}).Count -eq 1
+ } 'The Pen group did not expose one G-Pen preset for the eraser oracle'
+ $choice=@{id=$null}
+ Wait-Until {
+  $subtools=@((Model).state.tool_set.subtools)
+  $gpen=@(for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].preview -eq 1){$i}})
+  if($gpen.Count -ne 1){return $false}
+  $id='tool-subtool-'+$gpen[0];$native=Find $id
+  if(!$native -or $native.Current.Name -cne $subtools[$gpen[0]].label){return $false}
+  $choice.id=$id;$true
+ } 'The native G-Pen choice did not match the shared eraser oracle preset'
+ Invoke-Id $choice.id
+ Wait-Until {$m=Model;$m.state.brush.preset -eq 1 -and $m.brush_ready} 'G-Pen did not become ready for the eraser oracle'
+}
 function Barrel-Stroke([int]$X,[int]$Y,[switch]$Held) {
  Assert-PaperSegment 'barrel-stroke' $X $Y ($X+72) $Y
  [CapyRowPointer]::PenHover($X,$Y)
@@ -61,7 +79,7 @@ function Barrel-Stroke([int]$X,[int]$Y,[switch]$Held) {
 }
 try {
  Enter-CapyEnvironment
- $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned pen button review $($review.Id): $run"
@@ -167,13 +185,19 @@ try {
  Start-Sleep -Milliseconds 300
  if((Model).state.document_file.revision -ne $revision){throw 'A barrel bound to Pan painted'}
  Write-Output 'A barrel bound to Pan pans without painting'
- function Pen-Stroke([int]$X,[int]$Y){
+ function Pen-Stroke([int]$X,[int]$Y,[switch]$Eraser){
   Assert-PaperSegment 'pen-stroke' $X $Y ($X+72) $Y
   $revision=(Model).state.document_file.revision
-  [CapyRowPointer]::PenHover($X,$Y);Start-Sleep -Milliseconds 35
-  [CapyRowPointer]::Down('pen',$X,$Y)
-  for($i=1;$i -le 18;$i++){[CapyRowPointer]::Move($X+4*$i,$Y);Start-Sleep -Milliseconds 10}
-  [CapyRowPointer]::Up($true);[CapyRowPointer]::PenLeave()
+  if($Eraser){
+   $bounds=(Find 'drawing-canvas').Current.BoundingRectangle
+   (Find 'test-eraser-position').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue((@(($X-$bounds.X),($Y-$bounds.Y))|ConvertTo-Json -Compress))
+   Invoke 'Test eraser' -Name
+  }else{
+   [CapyRowPointer]::PenHover($X,$Y);Start-Sleep -Milliseconds 35
+   [CapyRowPointer]::Down('pen',$X,$Y)
+   for($i=1;$i -le 18;$i++){[CapyRowPointer]::Move($X+4*$i,$Y);Start-Sleep -Milliseconds 10}
+   [CapyRowPointer]::Up($true);[CapyRowPointer]::PenLeave()
+  }
   Wait-Until {(Model).state.document_file.revision -gt $revision} 'The pen stroke did not finish'
   Start-Sleep -Milliseconds 300
  }
@@ -181,11 +205,15 @@ try {
   $m=Model;$c=$m.state.camera;$tab=@($m.state.tabs)[0];$b=(Find 'drawing-canvas').Current.BoundingRectangle
   @([int]($b.X+$c.translation[0]+$tab.width*$c.zoom*$Across),[int]($b.Y+$c.translation[1]+$tab.height*$c.zoom*$Down))
  }
+ Select-EraserOracleBrush
+ $size=Control 'tool-setting-size';$size.SetFocus();$size.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('18')
+ (Control 'tool-setting-opacity').SetFocus()
+ Wait-Until {$m=Model;$m.state.brush.preset -eq 1 -and [Math]::Abs($m.state.brush.diameter-18) -lt .001 -and [Math]::Abs($m.state.brush.opacity-1) -lt .001} 'The eraser oracle brush did not acknowledge its dense 18 pixel setup'
  $at=Paper .3 .3;$x=$at[0];$row=$at[1]
  $eraseBlank=Join-Path $run 'eraser-blank.png';$null=Wait-StablePixels {Stroke-Pixels $row $eraseBlank}
  Pen-Stroke $x $row
  if((Inked 'eraser-before' $eraseBlank $row) -lt .9){throw 'The eraser end check did not start from ink'}
- [CapyRowPointer]::EraserEnd($true);try{Pen-Stroke $x $row}finally{[CapyRowPointer]::EraserEnd($false)}
+ Pen-Stroke $x $row -Eraser
  $erased=Inked 'eraser-end' $eraseBlank $row
  if($erased -gt .1){throw "The eraser end did not erase by default ($erased inked)"}
  (Find 'drawing-canvas').SetFocus()
@@ -199,7 +227,7 @@ try {
  [CapyRowPointer]::SetForegroundWindow($ownedDrawing.Handle)|Out-Null
  $at=Paper .3 .7;$x=$at[0];$row=$at[1]
  $paintBlank=Join-Path $run 'eraser-end-paints-blank.png';$null=Wait-StablePixels {Stroke-Pixels $row $paintBlank}
- [CapyRowPointer]::EraserEnd($true);try{Pen-Stroke $x $row}finally{[CapyRowPointer]::EraserEnd($false)}
+ Pen-Stroke $x $row -Eraser
  $painted=Inked 'eraser-end-paints' $paintBlank $row
  if($painted -lt .9){throw "The eraser end still erased with Paint with transparency off ($painted inked)"}
  Write-Output "Eraser end erases by default and paints ($painted) with transparency off"
@@ -207,7 +235,7 @@ try {
  [CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $ownedDrawing.Handle.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
- [pscustomobject]@{draw_then_clear='6/6';barrel_mid_stroke='one stroke, one Undo';barrel_held='paints';middle_drag='pans';barrel_bound_to_pan='pans without painting';eraser_end='erases by default, paints with transparency off';scope='OS-injected pen with continuous hover; physical Wacom acceptance remains separate';evidence=$run}|ConvertTo-Json
+ [pscustomobject]@{draw_then_clear='6/6';barrel_mid_stroke='one stroke, one Undo';barrel_held='paints';middle_drag='pans';barrel_bound_to_pan='pans without painting';eraser_end='erases by default, paints with transparency off';scope='OS-injected tip and barrel; native tool=2 eraser replay; physical Wacom acceptance remains separate';evidence=$run}|ConvertTo-Json
 } catch {
  $failure=$_
  if($review -and !$review.HasExited -and $ownedDrawing){

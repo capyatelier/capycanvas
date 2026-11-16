@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
+template<typename Device,typename Eraser,typename Inverted>
+uint32_t CanvasPointerTool(Device type,Eraser eraser,Inverted inverted) {
+    return type==Device::Mouse?1:type==Device::Touch?3:eraser()||inverted()?2:0;
+}
+
 inline uint32_t CanvasPointerPhase(uint32_t phase, bool canceled) {
     return canceled?4:phase;
 }
@@ -44,5 +49,17 @@ inline CapyPointer CanvasReplaySample(CapyView const& view,uint32_t i,uint32_t c
     float x=view.document[0]*(pan?0.5f:0.25f+0.5f*float(backlog?i%42:i)/41),y=view.document[1]*(pan?0.5f:0.5f+0.05f*std::sin(float(i)/6));
     auto const& m=view.document_to_surface;
     p.x=m[0]*x+m[2]*y+m[4];p.y=pan&&i?28.0f:m[1]*x+m[3]*y+m[5];
+    return p;
+}
+
+inline bool CanvasEraserReplayPosition(float x,float y,float width,float height) {
+    return std::isfinite(x)&&std::isfinite(y)&&x>=0&&y>=0&&x+72<width&&y<height;
+}
+
+inline CapyPointer CanvasEraserReplaySample(CapyView const& view,float x,float y,uint32_t i) {
+    CapyPointer p{};p.view_revision=view.revision;p.tool=2;p.flags=2;p.pressure=0.5f;
+    p.phase=i==0?0:i==1?1:i==20?3:2;
+    p.x=x+4*float(i==0?0:std::min(i-1,18u));p.y=y;
+    p.timestamp_ns=(i==0?0:i==1?35:i==20?217:35+(i-2)*10)*1000000ULL;
     return p;
 }

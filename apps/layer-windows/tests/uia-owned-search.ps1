@@ -2576,6 +2576,74 @@ Write-Output 'Actual clipboard Copy routing rejects stale native context and rev
 
 & {
  $tokens=$null;$errors=$null
+ $penAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-pen-buttons.ps1'),[ref]$tokens,[ref]$errors)
+ if($errors.Count){throw($errors|Out-String)}
+ $definition=@($penAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Select-EraserOracleBrush'},$true))
+ if($definition.Count -ne 1){throw 'Missing actual Select-EraserOracleBrush helper'}
+ . ([scriptblock]::Create($definition[0].Extent.Text))
+ $calls=@($penAst.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Select-EraserOracleBrush'},$true))
+ if($calls.Count -ne 1){throw 'The eraser oracle must select its brush exactly once'}
+ function Tool-Tile([string]$Command){if($Command -cne 'pen'){throw 'The eraser oracle selected another tool'};'tile-tools-34'}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){
+  $script:eraserChoice.waits.Add($Message)
+  for($poll=0;$poll -lt 8;$poll++){if(& $Condition){return}}
+  throw $Message
+ }
+ function Model {
+  $c=$script:eraserChoice
+  $subtools=@([pscustomobject]@{preview=2;label='Pencil'},[pscustomobject]@{preview=25;label='Pointy Pencil'},[pscustomobject]@{preview=26;label='Shading Pencil'})
+  $preset=2;$ready=$false
+  if($c.phase -ne 'pencil'){
+   $c.modelReads++
+   if($c.modelReads -gt 2){
+    $subtools=@([pscustomobject]@{preview=1;label='G-Pen'},[pscustomobject]@{preview=44;label='Monoline'})
+    if($c.mode -eq 'missing'){$subtools[0].preview=2}
+    if($c.mode -eq 'duplicate'){$subtools[1].preview=1}
+   }
+  }
+  if($c.phase -eq 'ack'){
+   $c.ackReads++
+   if($c.ackReads -gt 2 -and $c.mode -ne 'preset-not-acknowledged'){$preset=1}
+   $ready=$c.ackReads -gt 3 -and $c.mode -ne 'brush-not-ready'
+  }
+  [pscustomobject]@{brush_ready=$ready;state=[pscustomobject]@{brush=[pscustomobject]@{preset=$preset};tool_set=[pscustomobject]@{subtools=$subtools}}}
+ }
+ function Find([string]$Id){
+  $c=$script:eraserChoice
+  if($Id -cne 'tool-subtool-0'){throw 'The eraser oracle used a label instead of the semantic G-Pen index'}
+  $c.nativeReads++
+  $c.nativeReady=$c.modelReads -gt 2 -and $c.nativeReads -gt 2 -and $c.mode -ne 'wrong-native-label'
+  [pscustomobject]@{Current=[pscustomobject]@{Name=$(if($c.nativeReady){'G-Pen'}else{'Pencil'})}}
+ }
+ function Invoke-Id([string]$Id){
+  $c=$script:eraserChoice
+  if($Id -ceq 'tile-tools-34'){
+   if($c.phase -ne 'pencil'){throw 'The eraser oracle invoked Pen more than once'}
+   $c.phase='pen'
+  }elseif($Id -ceq 'tool-subtool-0'){
+   if(!$c.nativeReady -or $c.phase -ne 'pen'){throw 'The eraser oracle invoked the stale Pencil peer'}
+   $c.phase='ack'
+  }else{throw "Unexpected eraser oracle invocation: $Id"}
+  $c.invokes.Add($Id)
+ }
+ $shared='The Pen group did not expose one G-Pen preset for the eraser oracle'
+ $native='The native G-Pen choice did not match the shared eraser oracle preset'
+ $ready='G-Pen did not become ready for the eraser oracle'
+ foreach($case in @(@('ready',$null),@('missing',$shared),@('duplicate',$shared),@('wrong-native-label',$native),@('preset-not-acknowledged',$ready),@('brush-not-ready',$ready))){
+  $script:eraserChoice=@{mode=$case[0];phase='pencil';modelReads=0;nativeReads=0;nativeReady=$false;ackReads=0;invokes=[Collections.Generic.List[string]]::new();waits=[Collections.Generic.List[string]]::new()}
+  $failure=$null;try{Select-EraserOracleBrush}catch{$failure=$_.Exception.Message}
+  $c=$script:eraserChoice
+  if($failure -cne $case[1]){throw "Eraser oracle case $($case[0]) reached unexpected stage: $failure"}
+  $expected=if($case[0] -in 'ready','preset-not-acknowledged','brush-not-ready'){'tile-tools-34,tool-subtool-0'}else{'tile-tools-34'}
+  if(($c.invokes -join ',') -cne $expected){throw "Eraser oracle case $($case[0]) changed exactly-once Pen/G-Pen input"}
+  if($case[0] -eq 'ready' -and ($c.nativeReads -lt 3 -or $c.ackReads -lt 4 -or ($c.waits -join '|') -cne (@($shared,$native,$ready) -join '|'))){throw 'The eraser oracle skipped delayed shared/native/brush acknowledgement'}
+ }
+ Remove-Variable eraserChoice -Scope Script
+ 'Actual eraser oracle brush helper: delayed Pen model and native G-Pen label precede exactly-once selection; missing/duplicate preview1, stale Pencil label, missing preset ACK and unready brush fail at their named stages.'
+}
+
+& {
+ $tokens=$null;$errors=$null
  $drawingAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
  if($errors.Count){throw($errors|Out-String)}
  $definition=@($drawingAst.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'New-DrawingPixels'},$true))

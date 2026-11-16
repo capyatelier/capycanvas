@@ -511,6 +511,34 @@ int main() {
     assert(!CanvasPointerHistoryNewestFirst(HistoryPoints{{{40,7000},{41,7000},{42,7000}}},3,newest));
     assert(!CanvasPointerHistoryNewestFirst(HistoryPoints{{{42,7000}}},1,newest));
     std::cout<<"Native pointer history order follows input frames when timestamps tie\n";
+    {
+        enum class Device { Mouse, Touch, Pen };
+        struct Case {Device device;uint32_t tools[4],eraserReads[4],invertedReads[4];};
+        Case cases[]={
+            {Device::Mouse,{1,1,1,1},{0,0,0,0},{0,0,0,0}},
+            {Device::Touch,{3,3,3,3},{0,0,0,0},{0,0,0,0}},
+            {Device::Pen,{0,2,2,2},{1,1,1,1},{1,0,1,0}}};
+        for(auto const& test:cases)for(unsigned flags=0;flags<4;++flags){
+            uint32_t eraserReads=0,invertedReads=0;
+            auto tool=CanvasPointerTool(test.device,[&]{++eraserReads;return bool(flags&1);},[&]{++invertedReads;return bool(flags&2);});
+            assert(tool==test.tools[flags]&&"Native pointer tool mapping ignored eraser or inverted identity");
+            assert(eraserReads==test.eraserReads[flags]&&invertedReads==test.invertedReads[flags]&&"Native pointer flag getter short-circuit changed");
+        }
+        assert(CanvasEraserReplayPosition(10,20,200,100));
+        for(auto x:{-1.f,128.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})
+            assert(!CanvasEraserReplayPosition(x,20,200,100));
+        assert(!CanvasEraserReplayPosition(10,-1,200,100)&&!CanvasEraserReplayPosition(10,100,200,100));
+        CapyView view{};view.revision=17;
+        uint32_t milliseconds[]={0,35,35,45,55,65,75,85,95,105,115,125,135,145,155,165,175,185,195,205,217};
+        for(uint32_t i=0;i<=20;++i){
+            auto p=CanvasEraserReplaySample(view,10,20,i);
+            assert(p.view_revision==17&&p.tool==2&&p.flags==2&&p.button==0&&p.pressure==0.5f&&p.tilt_x==0&&p.tilt_y==0&&p.twist==0);
+            assert(p.phase==(i==0?0u:i==1?1u:i==20?3u:2u)&&p.x==10+4*float(i==0?0:std::min(i-1,18u))&&p.y==20);
+            assert(p.timestamp_ns==milliseconds[i]*1000000ULL);
+        }
+    }
+    std::cout<<"Canvas tools preserve all eraser/inverted flags; isolated eraser samples preserve the pen stroke geometry and timing\n";
+
     for(uint32_t tool:{0u,2u}) {
         for(bool middle:{false,true})for(bool right:{false,true})
             assert(CanvasPointerButton(tool,middle,right)==0);
