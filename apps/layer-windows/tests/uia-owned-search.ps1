@@ -22,6 +22,28 @@
 }
 
 & {
+ $tokens=$null;$errors=$null
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/LocalizationProperties.ps1'),[ref]$tokens,[ref]$errors)
+ $copy=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Copy-Panel'},$true)
+ $branch=$copy.Body.Find({param($n)$n-is[Management.Automation.Language.IfStatementAst]-and$n.Extent.Text-like'*layout.collapsed*'},$true).Clauses[0].Item2
+ $invoke=$branch.Statements|Where-Object {$_.Extent.Text-like'Invoke *'}|Select-Object -First 1
+ $sequence=($branch.Statements|Where-Object {$_.Extent.StartOffset-lt$invoke.Extent.StartOffset}|ForEach-Object {$_.Extent.Text})-join"`n"
+ $sequence=$sequence.Replace('[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)','Send-PanelContext ([uint32]$review.Id) ([uint16[]]@(0x10)) 0x79')
+ function Control($Id,[switch]$Arranged){if($Id-ne'column-icon-tool_settings'-or!$Arranged){throw 'Unexpected column icon lookup'};$script:panelIcon}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt4;$poll++){if($poll-eq2-and!$script:panelLost){$script:panelIcon.Current.HasKeyboardFocus=$true};if(& $Condition){return}};throw $Message}
+ function Send-PanelContext($Process,$Modifiers,$Key){if(!$script:panelIcon.Current.HasKeyboardFocus){throw 'Context key preceded column focus'};if($Process-ne33-or$Modifiers[0]-ne0x10-or$Key-ne0x79){throw 'Unexpected column context key'};$script:panelKeys++}
+ $Id='tool_settings';$review=@{Id=33}
+ foreach($lost in $false,$true){
+  $script:panelLost=$lost;$script:panelKeys=0;$script:panelIcon=[pscustomobject]@{Current=[pscustomobject]@{HasKeyboardFocus=$false}}
+  $script:panelIcon|Add-Member ScriptMethod SetFocus {}
+  $failure=$null;try{. ([scriptblock]::Create($sequence))}catch{$failure=$_}
+  if($lost){if(!$failure-or$failure.Exception.Message-cne'Collapsed column icon did not receive focus'-or$script:panelKeys-ne0){throw 'Missing column focus admitted a context key'}}
+  elseif($failure-or$script:panelKeys-ne1){throw "Collapsed column context key did not await focus: $failure"}
+ }
+ 'Collapsed column context: delayed focus precedes Shift+F10; missing focus prevents the key.'
+}
+
+& {
  Add-Type -TypeDefinition @'
 namespace CapyShortcutFocusTest {
  public class Node {public Node Parent;}

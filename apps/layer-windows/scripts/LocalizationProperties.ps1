@@ -376,7 +376,7 @@ function Copy-Panel([string]$Id,[string]$Probe){
   Wait-Until {(& $menu $Id).selected} "Window menu did not show panel: $Id" 20
  }
  if(@((Fresh-Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $Id}).Count){
-  (Control ('column-icon-'+$Id) -Arranged).SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
+  $icon=Control ('column-icon-'+$Id) -Arranged;$icon.SetFocus();Wait-Until {$icon.Current.HasKeyboardFocus} 'Collapsed column icon did not receive focus';[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x79)
   Invoke (Catalog-Text (Fresh-Model).windows_active_tag 'workspace-expand-column-menu' 'workspace') -Name
   Wait-Until {@((Model).layout.collapsed|Where-Object {$_.groups.icons.panel -contains $Id}).Count -eq 0} "Native column did not expand for panel: $Id" 20
  }
