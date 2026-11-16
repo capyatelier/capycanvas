@@ -306,6 +306,7 @@ pub(crate) struct Cache {
     refused_at: Option<layer_render::ViewState>,
     streaming: refinement::Streaming,
     pivot_waiting: Option<(crate::frame_demand::Input,crate::frame_demand::ArrivalToken)>,
+    pivot_refusal: Option<crate::residency::Blocked>,
     pivot_pending: bool,
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
     stroke_reach: Option<(layer_core::StrokeId,BTreeSet<[u32;2]>)>,
@@ -688,7 +689,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_pending: false, pivot_edit: None, stroke_reach: None,
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, pivot_pending: false, pivot_edit: None, stroke_reach: None,
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {

@@ -45,7 +45,14 @@ impl Closed {
 struct Pass {started:bool,owed:bool,closed:Option<Closed>}
 
 #[derive(Default)]
-pub(super) struct Exact {pub(super) committed:bool,pub(super) blocks:Vec<(pages::Key,Option<crate::frame_demand::Input>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked)>}
+pub(super) struct Exact {pub(super) committed:bool,pub(super) blocks:Vec<(pages::Key,Option<crate::frame_demand::Input>)>,pub(super) refusals:Vec<(PixelRect,crate::residency::Blocked)>,
+    pub(super) pivot_refusal:Option<crate::residency::Blocked>}
+impl Exact {
+    fn refuse(&mut self,region:PixelRect,refusal:crate::residency::Blocked,pivot:bool) {
+        if pivot {self.pivot_refusal.get_or_insert_with(||refusal.clone());}
+        self.refusals.push((region,refusal));
+    }
+}
 
 impl Cache {
     pub fn approximating(&self) -> bool { !self.output_complete() || self.preparing || self.overview.as_ref().is_some_and(|overview| overview.approximating()) }
@@ -122,6 +129,7 @@ impl Cache {
         if !refining(r) || self.gesture.is_some() || self.graph.parts.is_none() {return None;}
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         if halves.is_empty() {return self.pivot_input(r);}
+        if self.pivot_refusal.as_ref().is_some_and(|refusal|r.refuses(refusal)) {return None;}
         let held=self.half_cells(self.plan.bounds);
         let mut naming=false;
         for coordinate in pages::coordinates(self.plan.bounds,self.plan.level) {
@@ -166,7 +174,8 @@ impl Cache {
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         let cells=keys.iter().filter(|key|key.level==self.plan.level).cloned().collect::<Vec<_>>();
         keys.extend(cells.into_iter().flat_map(|cell|halves.iter().map(move|half|pages::Key {expression:half.clone(),..cell.clone()})));
-        let exact=self.exact_units(scene,r,packet,encoder,commands,budget,keys,&|_|Class::Refinement,false)?;
+        let mut exact=self.exact_units(scene,r,packet,encoder,commands,budget,keys,&|_|Class::Refinement,false)?;
+        self.pivot_refusal=exact.pivot_refusal.take();
         self.pivot_waiting=exact.blocks.iter().find(|(key,_)|halves.contains(&key.expression)).and_then(|(_,input)|input.map(|input|(input,since)));
         for cache in std::iter::once(&*self).chain(self.overview.as_deref()) {
             for (key,input) in exact.blocks.iter().filter(|(key,_)|key.level==cache.plan.level) {cache.block(since,key.plan().bounds,*input);}
@@ -187,6 +196,7 @@ impl Cache {
         cells: Vec<pages::Key>, class: &dyn Fn(PixelRect)->Class, owed: bool,
     ) -> Result<Exact, GpuRasterError> {
         let mut exact=Exact::default();
+        let halves=self.pivot_halves();
         let mut outcomes=std::collections::HashMap::<pages::Key,(bool,Option<crate::frame_demand::Input>)>::new();
         {let pages=self.pages.lock().unwrap();self.streaming.units.retain(|unit|pages.accepted(&unit.interest.key,unit.interest.key.plan().bounds,0));}
         let mut previous=std::mem::take(&mut self.streaming.cells);
@@ -199,7 +209,7 @@ impl Cache {
             if index>=flying && let Some(closed)=pass.closed.as_ref().filter(|closed|closed.applies(class(cell.plan().bounds))) {
                 match self.flight(cell.plan().bounds,closed) {
                     Outcome::Waiting(input)=>exact.blocks.push((cell.clone(),Some(input))),
-                    Outcome::Refused(region,refusal)=>exact.refusals.push((region,refusal)),
+                    Outcome::Refused(region,refusal)=>exact.refuse(region,refusal,halves.contains(&cell.expression)),
                     _=>{},
                 }
                 if self.has_admitted_unit(&cell) {self.streaming.cells.push((cell,carried));}else {for page in carried {page.track(encoder);}}
@@ -223,7 +233,7 @@ impl Cache {
                     Outcome::Committed=>{exact.committed=true;None},
                     Outcome::Waiting(input)=>Some(input),
                     Outcome::Deferred=>None,
-                    Outcome::Refused(region,refusal)=>{exact.refusals.push((region,refusal));continue;},
+                    Outcome::Refused(region,refusal)=>{exact.refuse(region,refusal,halves.contains(&cell.expression));continue;},
                     Outcome::Skipped=>continue,
                 };
                 let held=!matches!(outcome,Outcome::Committed);
