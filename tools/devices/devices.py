@@ -5,7 +5,6 @@ See docs/development/devices.md.
 """
 
 import argparse
-import contextlib
 import fcntl
 import json
 import os
@@ -29,10 +28,8 @@ TABLETS = {
     "MNP1095": ("xppen", None),
 }
 TIERS = ("low", "mid", "top")
-AUTOMATION_LOCK = STATE / "capy-apple-automation.lock"
 AUTOMATION_HINT = ("UI tests failed. If the log says 'Timed out while enabling automation mode', unlock the device and "
-                   "approve its Automation Mode prompt (the first UI test after a restart asks even with Enable UI "
-                   "Automation on), then run again. See docs/development/devices.md#apple.")
+                   "approve its Automation Mode prompt, then run again. See docs/development/devices.md#apple.")
 
 
 class Device:
@@ -198,42 +195,6 @@ def print_application_id(args):
     print(application_id(args.owner))
 
 
-@contextlib.contextmanager
-def holding(path, label, owner, command):
-    with open(path, "a+") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            lock.seek(0)
-            print(f"Waiting for {label}: {lock.read().strip() or 'another process'}", file=sys.stderr)
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        lock.seek(0)
-        lock.truncate()
-        lock.write(f"{owner} pid {os.getpid()}: {' '.join(command)[:120]}")
-        lock.flush()
-        try:
-            yield
-        finally:
-            lock.seek(0)
-            lock.truncate()
-
-
-def ui_tests(command):
-    return any(Path(argument).name == "xcodebuild" for argument in command[:2]) and bool(
-        {"test", "test-without-building"} & set(command))
-
-
-def automation(args):
-    command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    if not command:
-        sys.exit("Give a command after --.")
-    with holding(AUTOMATION_LOCK, "Apple UI automation", args.owner, command):
-        code = subprocess.run(command).returncode
-    if code:
-        print(AUTOMATION_HINT, file=sys.stderr)
-    return code
-
-
 def run(args):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
@@ -267,13 +228,23 @@ def run(args):
         environment.update(CAPY_APPLE_DEVICE_ID=device.serial, CAPY_APPLE_BUNDLE_ID=application_id(args.owner))
     else:
         environment.update(ANDROID_SERIAL=device.serial, CAPY_ANDROID_SERIAL=device.serial)
-    automated = device.platform == "apple" and ui_tests(command)
-    with contextlib.ExitStack() as locks:
-        if automated:
-            locks.enter_context(holding(AUTOMATION_LOCK, "Apple UI automation", args.owner, command))
-        locks.enter_context(holding(device.lock_path, device.name, args.owner, command))
-        code = subprocess.run(command, env=environment).returncode
-    if automated and code:
+    with open(device.lock_path, "a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.seek(0)
+            print(f"Waiting for {device.name}: {lock.read().strip() or 'another process'}", file=sys.stderr)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        lock.seek(0)
+        lock.truncate()
+        lock.write(f"{args.owner} pid {os.getpid()}: {' '.join(command)[:120]}")
+        lock.flush()
+        try:
+            code = subprocess.run(command, env=environment).returncode
+        finally:
+            lock.seek(0)
+            lock.truncate()
+    if code and device.platform == "apple" and {"test", "test-without-building"} & set(command):
         print(AUTOMATION_HINT, file=sys.stderr)
     return code
 
@@ -306,8 +277,6 @@ def main():
                         help="only list/copy shared stroke recordings, without reservations or app interaction")
     runner.add_argument("device", help="tablet name, model or serial")
     runner.add_argument("command", nargs=argparse.REMAINDER, help="-- command and arguments")
-    command("automation", automation, "run a Mac or simulator UI test while holding the Apple UI automation lock"
-            ).add_argument("command", nargs=argparse.REMAINDER, help="-- command and arguments")
     args = parser.parse_args()
     sys.exit(args.handler(args))
 

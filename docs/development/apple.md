@@ -377,9 +377,7 @@ Set `CAPY_REPORTS` to an isolated output directory when running `scripts/test-wi
 ### UI tests
 
 Use an iOS 26.5 simulator runtime and one `-only-testing` case per `xcodebuild`
-invocation. Run one UI test session at a time on the Mac, through
-`tools/devices/devices.py` ([devices](devices.md#apple)), so Mac, simulator and
-device sessions queue instead of timing out while enabling automation mode. Long sessions on iOS 26.5 and 27 can incur 60-second animation-idle
+invocation. Long sessions on iOS 26.5 and 27 can incur 60-second animation-idle
 waits after numeric Return even when the app is ready.
 
 Select phone visitors with their published `-enumerate-tests` identifier and one `-only-testing` filter; zero executed tests is a failure.

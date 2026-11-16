@@ -158,52 +158,6 @@ class DevicesTest(unittest.TestCase):
         self.assertEqual(devices.ports("capycanvas1"), devices.ports("capycanvas1"))
         self.assertNotEqual(devices.ports("capycanvas1"), devices.ports("capycanvas2"))
 
-    def fake_apple(self, listing):
-        xcrun = self.state / "xcrun"
-        xcrun.write_text(f"#!{sys.executable}\nimport pathlib, sys\npathlib.Path(sys.argv[-1]).write_text({json.dumps(listing)!r})\n")
-        xcrun.chmod(0o755)
-        self.environment["PATH"] = str(self.state) + os.pathsep + os.environ["PATH"]
-
-    def lock_probe(self, name):
-        probe = self.state / name
-        probe.write_text(
-            f"#!{sys.executable}\nimport fcntl, sys\n"
-            "for path in sys.argv[-2:]:\n"
-            "    lock = open(path, 'a+')\n"
-            "    try:\n"
-            "        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
-            "        print('unlocked')\n"
-            "    except BlockingIOError:\n"
-            "        print('locked')\n"
-            "sys.exit(65 if 'fail' in sys.argv else 0)\n")
-        probe.chmod(0o755)
-        return probe
-
-    def test_apple_ui_tests_take_the_machine_automation_lock(self):
-        self.fake_apple({"result": {"devices": [
-            {"hardwareProperties": {"deviceType": "iPad", "isProductionFused": True, "productType": "iPad16,6", "udid": "IPAD0001"},
-             "connectionProperties": {"pairingState": "paired"}}]}})
-        self.devices("alpha", "--platform", "apple", "reserve", "IPAD0001")
-        automation, device = str(self.state / "capy-apple-automation.lock"), str(self.state / "capy-IPAD0001.lock")
-        tests = self.devices("alpha", "--platform", "apple", "run", "IPAD0001", "--",
-                             str(self.lock_probe("xcodebuild")), "test-without-building", automation, device)
-        self.assertEqual(tests.stdout.split(), ["locked", "locked"], tests.stderr)
-        launch = self.devices("alpha", "--platform", "apple", "run", "IPAD0001", "--",
-                              str(self.lock_probe("devicectl")), "launch", automation, device)
-        self.assertEqual(launch.stdout.split(), ["unlocked", "locked"], launch.stderr)
-        failed = self.devices("alpha", "--platform", "apple", "run", "IPAD0001", "--",
-                              str(self.state / "xcodebuild"), "test", "fail", automation, device)
-        self.assertEqual(failed.returncode, 65)
-        self.assertIn("Automation Mode prompt", failed.stderr)
-
-    def test_automation_runs_mac_ui_tests_under_the_same_lock(self):
-        automation = str(self.state / "capy-apple-automation.lock")
-        result = self.devices("alpha", "--platform", "apple", "automation", "--",
-                              str(self.lock_probe("xcodebuild")), "test", "fail", automation, automation)
-        self.assertEqual(result.returncode, 65)
-        self.assertEqual(result.stdout.split(), ["locked", "locked"])
-        self.assertIn("Automation Mode prompt", result.stderr)
-
     def test_apple_reservation_and_device_environment(self):
         listing = {"result": {"devices": [
             {"hardwareProperties": {"deviceType": "iPad", "reality": "physical", "productType": "iPad16,6", "udid": "IPAD0001"},
@@ -223,7 +177,10 @@ class DevicesTest(unittest.TestCase):
             {"hardwareProperties": {"deviceType": "iPad", "reality": "simulated", "isProductionFused": True, "udid": "SIM0001"},
              "connectionProperties": {"pairingState": "paired"}},
         ]}}
-        self.fake_apple(listing)
+        xcrun = self.state / "xcrun"
+        xcrun.write_text(f"#!{sys.executable}\nimport pathlib, sys\npathlib.Path(sys.argv[-1]).write_text({json.dumps(listing)!r})\n")
+        xcrun.chmod(0o755)
+        self.environment["PATH"] = str(self.state) + os.pathsep + os.environ["PATH"]
         output = self.devices("alpha", "--platform", "apple", "list").stdout
         self.assertRegex(output, r"ipad\s+iPad16,6\s+no tier\s+IPAD0001\s+free")
         self.assertRegex(output, r"ipad\s+iPad13,16\s+no tier\s+IPAD0002\s+free")
@@ -245,6 +202,9 @@ class DevicesTest(unittest.TestCase):
         result = self.devices("alpha", "--platform", "apple", "run", "IPAD0002", "--", sys.executable, "-c", probe)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "IPAD0002 art.capycanvas.alpha")
+        failed = self.devices("alpha", "--platform", "apple", "run", "IPAD0002", "--", "sh", "-c", "exit 65", "test")
+        self.assertEqual(failed.returncode, 65)
+        self.assertIn("Automation Mode prompt", failed.stderr)
         self.devices("alpha", "--platform", "apple", "release", "IPAD0002")
         self.assertRegex(self.devices("beta", "--platform", "apple", "list").stdout,
                          r"ipad\s+iPad13,16\s+no tier\s+IPAD0002\s+free")

@@ -145,16 +145,11 @@ Apple commands require a current reservation. The runner exports
 latter as an `xcodebuild` build setting when building the app.
 
 - The iPad must be awake and unlocked, with Settings > Developer > Enable UI
-  Automation on. The first UI test after a restart still shows an Automation
-  Mode prompt that needs the passcode or Touch ID; XCTest gives up after 60 s
-  with "Timed out while enabling automation mode". Approve it and run again.
-- Only one UI test session may run on this Mac at a time: overlapping sessions,
-  including a Mac or simulator batch, also time out enabling automation mode.
-  `run` holds a machine-wide UI automation lock for `xcodebuild` test commands,
-  so device runs queue; run Mac and simulator UI tests through
-  `devices.py automation -- xcodebuild ... test` to queue them as well.
-  `devicectl` launches, such as drawing workloads, take only the device's lock
-  and can run on several devices in parallel.
+  Automation on. iPadOS still asks for the passcode or Touch ID before the first
+  UI test after a restart, and again after hours or days; until someone approves
+  it, XCTest fails after 60 s with "Timed out while enabling automation mode".
+  Approve the prompt on the device and run again. UI tests on different devices
+  can run at the same time.
 - Never replace or clear an installed `art.capycanvas.CapyCanvas`,
   `art.capycanvas.CapyCanvas.dev` or older `art.capycanvas.apple.ipad`/`.mac`
   app; they may hold an artist's drawings. Build test and benchmark apps under
