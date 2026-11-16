@@ -1,5 +1,27 @@
 ﻿$ErrorActionPreference='Stop'
 & {
+ $tokens=$null;$errors=$null
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-effects.ps1'),[ref]$tokens,[ref]$errors)
+ $wait=$source.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Wait-Until'-and@($n.CommandElements|Where-Object {$_.Value-eq'Filter slider release did not finish its gesture'}).Count-eq1},$true)
+ $body=$wait.Parent.Parent.Statements;$index=[array]::IndexOf(@($body),$wait.Parent)
+ $sequence=($body[$index..($index+1)]|ForEach-Object {$_.Extent.Text})-join"`n"
+ function Model {
+  $script:filterReads++;$committed=$script:filterReads-ge3-and$script:filterCase-ne'preview'
+  $stamp=@{id=1;stamp=@{checkpoint=$(if($committed){14}else{12})}}
+  @{windows_tabs=@{selected=$(if($script:filterCase-eq'wrong-owner'){2}else{1});session_stamps=@(if($script:filterCase-ne'missing-stamp'){$stamp})};state=@{document_file=@{epoch=0};commands=@(@{id='undo';enabled=$true});layer_properties=@{controls=@(@{key='midtones_red';value=@{value=$(if($script:filterReads-gt3){42}elseif($committed){39}else{30})}})}}}
+ }
+ function Property($Key){(Model).state.layer_properties.controls|Where-Object key -eq $Key}
+ function Wait-Until([scriptblock]$Condition,[string]$Message){foreach($poll in 1..4){if(& $Condition){return}};throw $Message}
+ foreach($case in 'delayed','preview','wrong-owner','missing-stamp'){
+  $script:filterCase=$case;$script:filterReads=0;$document=1;$epoch=0;$checkpoint=12;$released=@{value=$null};$edited=$null
+  $failure=$null;try{. ([scriptblock]::Create($sequence))}catch{$failure=$_}
+  if($case-eq'delayed'){if($failure-or$edited-ne39){throw "Redo reference preceded the committed filter value: edited=$edited failure=$failure"}}
+  elseif(!$failure-or$failure.Exception.Message-cne'Filter slider release did not finish its gesture'-or$null-ne$edited){throw "Uncommitted or foreign filter snapshot became the redo reference: $case"}
+ }
+ 'Filter redo reference uses the current drawing committed checkpoint, not retained Undo availability or a later model read.'
+}
+
+& {
  Add-Type -TypeDefinition @'
 namespace CapyShortcutFocusTest {
  public class Node {public Node Parent;}

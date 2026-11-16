@@ -497,15 +497,28 @@ function Check-PropertyLayout {
     Property-Row 'midtones_red' 'filter-inline-en'
     Property-Typed 'midtones_red' '12' 12
     Pointer-Session {
-    $before=(Property 'midtones_red').value.value;$track=Control 'property-midtones_red-slider' -Arranged;$box=$track.Current.BoundingRectangle;$y=[int]($box.Top+$box.Height/2)
+    $view=Model;$document=$view.windows_tabs.selected;$epoch=$view.state.document_file.epoch
+    $stamp=@($view.windows_tabs.session_stamps|Where-Object id -eq $document)
+    if($stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint){throw 'Filter slider has no unique committed document checkpoint'}
+    $checkpoint=$stamp[0].stamp.checkpoint;$released=@{value=$null}
+    $before=@($view.state.layer_properties.controls|Where-Object key -eq 'midtones_red')[0].value.value;$track=Control 'property-midtones_red-slider' -Arranged;$box=$track.Current.BoundingRectangle;$y=[int]($box.Top+$box.Height/2)
     [CapyRowPointer]::Down('mouse',[int]($box.Left+$box.Width*.3),$y)
     for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($box.Left+$box.Width*(.3+.05*$i)),$y);Start-Sleep -Milliseconds 30}
     Wait-Until {[Math]::Abs($track.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.7) -lt .03 -and (Property 'midtones_red').value.value -ne $before} 'Filter slider did not preview the live drag'
     [CapyRowPointer]::Up()
-    Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Filter slider release did not finish its gesture'
-    $edited=(Property 'midtones_red').value.value
+    Wait-Until {
+        $view=Model;$stamp=@($view.windows_tabs.session_stamps|Where-Object id -eq $document)
+        if($view.windows_tabs.selected -ne $document -or $view.state.document_file.epoch -ne $epoch -or $stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint -or $stamp[0].stamp.checkpoint -le $checkpoint -or !($view.state.commands|Where-Object id -eq 'undo').enabled){return $false}
+        $released.value=@($view.state.layer_properties.controls|Where-Object key -eq 'midtones_red')[0].value.value;$null -ne $released.value
+    } 'Filter slider release did not finish its gesture'
+    $edited=$released.value
     Invoke 'Undo' -Name;Wait-Until {(Property 'midtones_red').value.value -eq $before} 'Filter slider drag needed more than one Undo'
-    Invoke 'Redo' -Name;Wait-Until {(Property 'midtones_red').value.value -eq $edited} 'Filter slider drag did not redo exactly'
+    Invoke 'Redo' -Name
+    try{Wait-Until {(Property 'midtones_red').value.value -eq $edited} 'Filter slider drag did not redo exactly'}catch{
+        $failure=$_
+        try{$view=Model;@{before=$before;expected=$edited;actual=@($view.state.layer_properties.controls|Where-Object key -eq 'midtones_red')[0].value.value;document=$view.state.document_file}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'filter-slider-redo-failure.json')}catch{Write-Host "Filter redo evidence failed: $_"}
+        throw $failure
+    }
     Capture 'filter-drag-redo' -Composed
 }}
 
