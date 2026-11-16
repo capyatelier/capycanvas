@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(\.editorDialogPage) private var pagePresented
     @State private var searching = false
     @State private var editResets: [String: UInt64] = [:]
+    @State private var admissions = NumericAdmissions()
     @State private var linkFailed = false
     @State private var profiles = false
     @State private var headroomCaption = ""
@@ -30,7 +31,7 @@ struct SettingsView: View {
                             : store.catalog["native_copy"]["shortcuts"]["settings"].string) : model["navigation"]["title"].string)
                             .font(.headline).accessibilityIdentifier("shortcut-pane-title")
                         Spacer()
-                        SettingsDoneButton(store: store, label: store.bootstrap["common"]["done"].string)
+                        doneButton
                     }.padding()
                     if model["page_requested"].bool { detail } else { phoneSidebar }
                 }.modifier(EditorDialogFrame(minHeight: 420))
@@ -114,13 +115,19 @@ struct SettingsView: View {
                     if layout["subpage"].bool { ToolbarItem(placement: .navigation) { backButton } }
                     #endif
                     ToolbarItem(placement: .confirmationAction) {
-                        SettingsDoneButton(store: store, label: store.bootstrap["common"]["done"].string)
+                        doneButton
                     }
                 }
         }.frame(minHeight: 420)
         #if os(macOS)
         .frame(minWidth: 560)
         #endif
+    }
+    private var doneButton: some View {
+        Button(store.bootstrap["common"]["done"].string) {
+            _ = admissions.finish()
+            store.dispatch(["type": "close_settings"])
+        }.accessibilityIdentifier("settings-done")
     }
     private var backButton: some View {
         Button { action(model["navigation"]["back"].object) } label: { SharedIcon(name: "go-previous") }
@@ -253,12 +260,14 @@ struct SettingsView: View {
             case "choice":
                 choice(row)
             case "number":
-                NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"], panel: false) { value, completion in
+                NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"], panel: false,
+                    registerAdmission: { key, change in admissions.receive(key, change) }) { value, completion in
                     guard reset == editResets[row["id"].string, default: 0] else { completion(nil); return }
                     store.edit(["type": "preferences", "action": ["type": "edit", "id": row["id"].raw, "value": value]], completion: completion)
                 }.id(reset)
             case "swatches":
-                PreferenceSwatches(row: row, palette: EditorPalette(source: store.state["palette"])) { value in
+                PreferenceSwatches(row: row, palette: EditorPalette(source: store.state["palette"]),
+                    registerAdmission: { key, change in admissions.receive(key, change) }) { value in
                     guard reset == editResets[row["id"].string, default: 0] else { return }
                     edit(row, value)
                 }.id(reset)
@@ -339,24 +348,12 @@ struct SettingsView: View {
     }
 }
 
-private struct SettingsDoneButton: View {
-    let store: EditorStore
-    let label: String
-    // Observing a child's focused callback must not invalidate the form that
-    // publishes it; a native text field can otherwise trigger a focus loop.
-    @FocusedValue(\.editorTextCommit) private var commitText
-    var body: some View {
-        Button(label) {
-            commitText?()
-            store.dispatch(["type": "close_settings"])
-        }.accessibilityIdentifier("settings-done")
-    }
-}
-
 private struct PreferenceSwatches: View {
     let row: JSON
     let palette: EditorPalette
+    let registerAdmission: (String, NumericAdmissions.Change) -> Void
     let commit: (String) -> Void
+    @State private var admissionOwner = UUID()
     @State private var editing = false
     @State private var text = ""
     @State private var focusRequest = 0
@@ -384,7 +381,12 @@ private struct PreferenceSwatches: View {
             }
         }
         }.clipped().animation(.easeOut(duration: 0.25), value: revealed)
-            .onAppear { if !focused { text = kind["custom"].string } }
+            .onAppear {
+                if !focused { text = kind["custom"].string }
+                registerAdmission(row["id"].string, .mounted(admissionOwner, admit))
+            }
+            .onChange(of: kind.stableKey) { _, _ in registerAdmission(row["id"].string, .updated(admissionOwner, admit)) }
+            .onDisappear { registerAdmission(row["id"].string, .unmounted(admissionOwner)) }
             .onChange(of: kind["custom"].string) { _, next in if !focused { text = next } }
             .onChange(of: kind["value"].string) { _, _ in if !focused { editing = false; text = kind["custom"].string } }
     }
@@ -427,11 +429,14 @@ private struct PreferenceSwatches: View {
             submit: { _ in submit(); return true }, cancel: { focused = false })
             .id(focusRequest).frame(height: 28).padding(.horizontal, 6)
             .background(palette["input"], in: SquircleShape.control)
-            .focusedValue(\.editorTextCommit, { submit() })
             .onChange(of: text) { _, next in if !NativeTextContext.composing && next.count > 7 { text = String(next.prefix(7)) } }
             .onChange(of: focused) { old, next in if old && !next { submit() } }
     }
 
+    private func admit(_ discard: Bool) -> Bool {
+        if !discard && revealed { submit() }
+        return true
+    }
     private func submit() {
         guard !NativeTextContext.composing else { return }
         let trimmed = text.trimmingCharacters(in: .whitespaces)

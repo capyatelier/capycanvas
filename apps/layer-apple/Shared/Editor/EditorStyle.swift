@@ -428,15 +428,6 @@ extension View {
     }
 }
 
-/// Submit the focused field before a containing dialog closes.
-private struct EditorTextCommit: FocusedValueKey { typealias Value = () -> Void }
-extension FocusedValues {
-    var editorTextCommit: (() -> Void)? {
-        get { self[EditorTextCommit.self] }
-        set { self[EditorTextCommit.self] = newValue }
-    }
-}
-
 private struct HeaderFaceShape: Shape {
     let face: CGRect?
     let shape: SquircleShape

@@ -293,7 +293,6 @@ struct NumberControl: View {
             focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
             color: palette["text"], identifier: "number-entry-" + key,
             submit: finish, cancel: cancel, step: step, alignment: toolbar != nil ? .center : .right)
-            .focusedValue(\.editorTextCommit, { _ = commit() })
             .frame(width: valueOnly || inline || toolbar != nil || affixes != nil ? nil : compactPanel ? 56 : slider ? 80 : spinWidth)
             .padding(.horizontal, 6).frame(height: compact || toolbar != nil || valueOnly || slider || compactPanel ? store.panelMetrics.height : 32)
             .background(entryGrouped ? Color.clear : inputFill, in: SquircleShape.control)

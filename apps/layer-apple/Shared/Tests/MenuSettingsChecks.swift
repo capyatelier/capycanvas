@@ -335,7 +335,7 @@ extension XCTestCase {
         #if os(macOS)
         workspaceActivate(app.buttons["settings-button"])
         #else
-        editorMenu(in: app, menu: "Edit", id: "settings", label: "Settings…")
+        app.typeKey(",", modifierFlags: .command)
         #endif
         let search = app.textFields["settings-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 10)); workspaceActivate(search); search.typeText("Scroll pan speed")
