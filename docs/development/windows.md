@@ -211,7 +211,7 @@ set, and passing `$null` to `[Environment]::SetEnvironmentVariable` can leave on
 | `CAPY_SMOKE_TEST=1` | Adds test buttons: replayed stroke, pan, pen and backlog, filter reload and GPU device removal; isolated profiles also accept a surface-position eraser replay. Replay bypasses OS input delivery. |
 | `CAPY_TEST_HDR=1` | With `CAPY_SMOKE_TEST`, adds buttons that simulate HDR and SDR output. |
 | `CAPY_TEST_DISPLAY=1` | Opens the window on a display running at 120 Hz or more, or on the primary display with `CAPY_TEST_PRIMARY=1`. |
-| `CAPY_LATENCY_TRACE=1` | Bounded input and presentation timing capture, and prediction frame counts at exit; also writes `windows-<pid>.json` in the working directory. |
+| `CAPY_LATENCY_TRACE=1` | Bounded input and presentation timing capture, and prediction frame counts at exit; also writes `windows-<pid>.json` in the working directory. With `CAPY_TRACE_UI`, records native bubble and panel-bridge frame histories. |
 | `CAPY_TRACE_SHADER_JOBS=1` | Logs pipeline compile durations to stderr. |
 | `CAPY_FILTERS_DIR`, `CAPY_FILTERS_MODE` | [Runtime filter package](#runtime-filter-packages) override. |
 | `LAYER_GPU_INDEX` | Adapter index for headless renderer tests. The default adapter can be Vulkan; select the D3D12 one explicitly. |

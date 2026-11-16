@@ -182,7 +182,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
         std::array<winrt::Windows::Foundation::Rect,3> bounds{},expected{};
         std::array<uint64_t,3> frames{};
     };
-    bool tracing=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    bool tracing=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0&&GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0;
     uint64_t traceFrame=0,traceSerial=0,placementSerial=0,traceOverflow=0;
     std::vector<TransitionReceipt> transitionReceipts;
     std::vector<std::shared_ptr<LayoutReceipt>> layoutReceipts;

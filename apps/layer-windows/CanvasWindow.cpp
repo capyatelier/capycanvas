@@ -154,7 +154,7 @@ void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
     WriteTraceFile(std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json",value);
 }
 void CanvasWindow::QueueWorkspaceTrace() {
-    if(!presentationTrace.enabled||workspaceTraceQueued.exchange(true))return;
+    if(!presentationTrace.enabled||!latencyTrace.enabled||workspaceTraceQueued.exchange(true))return;
     if(!dispatcher.TryEnqueue([weak=weak_from_this()]{
         if(auto self=weak.lock()){
             struct Reset {std::atomic<bool>& queued;~Reset(){queued.store(false);}} reset{self->workspaceTraceQueued};

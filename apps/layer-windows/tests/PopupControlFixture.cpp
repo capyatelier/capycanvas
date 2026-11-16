@@ -611,6 +611,26 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     }
     winrt::Windows::Foundation::IAsyncAction chromePendingOwners(J model,J catalog,NativeLayoutInput layout){
         catalog.Insert(L"bootstrap",object(object(model,L"localization"),L"bootstrap"));
+        struct LatencySetting {
+            std::wstring previous;DWORD length=GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0);
+            LatencySetting(){if(length){previous.resize(length);previous.resize(GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",previous.data(),length));}check_bool(SetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr));}
+            ~LatencySetting(){SetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",length?previous.c_str():nullptr);}
+        } latency;
+        {
+            auto send=[](std::string){};
+            WorkspaceView ordinary(send,catalog,context.localization,[](CanvasQueryKind,std::string,PreviewReply){return false;},[](bool){},send,send,[](std::string,std::function<void(int32_t)>){ });
+            auto surface=ordinary.Root();surface.Width(1000);surface.Height(700);root.Children().InsertAt(0,surface);
+            try{
+            require(ordinary.Apply(model,layout),L"Ordinary trace workspace model was rejected");ordinary.PublishTrace();
+            auto before=AutomationProperties::GetItemStatus(surface);
+            for(uint64_t revision=1;revision<=8;++revision)ordinary.ChromeSent(revision);
+            require(AutomationProperties::GetItemStatus(surface)==before,L"Ordinary UI trace published full snapshots from chrome send boundaries");
+            ordinary.PublishTrace();auto status=J::Parse(AutomationProperties::GetItemStatus(surface));
+            require(array(object(status,L"bridge_frames"),L"samples").Size()==0&&array(object(status,L"bridge_events"),L"samples").Size()==0,L"Ordinary UI trace accumulated detailed bridge history");
+            }catch(...){root.Children().RemoveAt(0);throw;}
+            root.Children().RemoveAt(0);
+        }
+        check_bool(SetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",L"1"));
         hstring checkpoint=L"construct";auto stage=[&](hstring call){phase=L"workspace-chrome-pending-owners/"+checkpoint+L"/"+call;};stage(L"WorkspaceView");
         auto send=[](std::string){};
         auto view=std::make_unique<WorkspaceView>(send,catalog,context.localization,[](CanvasQueryKind,std::string,PreviewReply){return false;},[](bool){},send,send,[](std::string,std::function<void(int32_t)>){ });
@@ -1714,10 +1734,31 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     }
 
     winrt::Windows::Foundation::IAsyncAction bubbleFrameTransitions(){
+        struct TraceSetting {
+            wchar_t const* key;std::wstring previous;DWORD length;
+            TraceSetting(wchar_t const* name,wchar_t const* value):key(name),length(GetEnvironmentVariableW(name,nullptr,0)){
+                if(length){previous.resize(length);previous.resize(GetEnvironmentVariableW(key,previous.data(),length));}
+                check_bool(SetEnvironmentVariableW(key,value));
+            }
+            ~TraceSetting(){SetEnvironmentVariableW(key,length?previous.c_str():nullptr);}
+        } tracing(L"CAPY_TRACE_UI",L"1"),ordinary(L"CAPY_LATENCY_TRACE",nullptr);
         auto source=std::make_shared<WorkspaceData>();context.apply(source,J::Parse(co_await workspaceFixtureCatalog()));
         source->model=J::Parse(LR"({"state":{"document_file":{"epoch":1},"layers":[],"layer_properties":{"layer":1}},"panels":[{"id":"layers"},{"id":"properties"}]})");source->state=object(source->model,L"state");
         source->state.Insert(L"theme",S(root.RequestedTheme()==ElementTheme::Light?L"light":L"dark"));
         auto actions=std::make_shared<std::vector<J>>();source->send=[actions](std::string json){actions->push_back(J::Parse(to_hstring(json)));};
+        auto collectTransition=[&]{
+            auto observed=std::make_shared<WorkspaceBubbles::Impl>();observed->data=source;
+            auto row=std::make_shared<CapyBubbles::Record>();row->id=27;
+            auto card=std::make_shared<CapyBubbles::Part>(L"card",1);
+            observed->traceTransition(row,card,L"active");return observed->transitionReceipts.size();
+        };
+        require(collectTransition()==0,L"Ordinary UI tracing collected detailed bubble transitions");
+        {
+            TraceSetting withoutUi(L"CAPY_TRACE_UI",nullptr),latencyOnly(L"CAPY_LATENCY_TRACE",L"1");
+            require(collectTransition()==0,L"Latency-only profiling collected native bubble transitions");
+        }
+        TraceSetting detailed(L"CAPY_LATENCY_TRACE",L"1");
+        require(collectTransition()==1,L"Detailed bubble trace omitted its native transition");
         auto bubbles=std::make_shared<WorkspaceBubbles::Impl>();bubbles->data=source;bubbles->workspace=Canvas{};
         auto record=std::make_shared<CapyBubbles::Record>();record->id=27;record->center={200,120};record->root.RenderTransform(record->transform);
         bubbles->records.emplace(record->id,record);bubbles->layer.Children().Append(record->root);bubbles->workspace.Children().Append(bubbles->layer);

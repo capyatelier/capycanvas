@@ -87,6 +87,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     WorkspacePublication publication;
     std::optional<uint32_t> movingGroup;
     bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    bool bridgeTrace=trace&&GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0;
     uint64_t fullUpdates=0,motionUpdates=0;
     struct ResizeFrame {int64_t qpc;float width,height,appliedWidth,appliedHeight;bool valid,mismatch;uint32_t panels,columns,outside;};
     struct ResizeBound {int64_t qpc;uint32_t group;Rect bounds;bool outside,column;};
@@ -805,6 +806,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(mismatch)++surfaceMismatches;
         if(tabbed)++tabFrames;
         if(escaped)++escapedLabels;
+        if(!bridgeTrace)return;
         auto frame=bridgeState();frame.first=frame.last=surfaceFrames;
         if(!bridgeFrames.empty()&&bridgeFrames.back().Same(frame)){bridgeFrames.back().last=frame.last;bridgeFrames.back().lastQpc=frame.lastQpc;}
         else if(bridgeFrames.size()<4096)bridgeFrames.push_back(std::move(frame));
@@ -821,18 +823,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto value:array(panelBridgeFrame,L"bridges"))for(auto receiver:array(value.GetArray().GetObjectAt(2),L"receivers"))projected.insert(uint32_t(num(receiver.GetObject(),L"group")));
         frame.projected.assign(projected.begin(),projected.end());return frame;
     }
-    bool traceBridgeEvent(hstring kind,uint64_t requested=0,bool accepted=true){
-        if(!trace)return false;
+    void traceBridgeEvent(hstring kind,uint64_t requested=0,bool accepted=true){
+        if(!bridgeTrace)return;
         auto state=bridgeState();auto found=lastBridgeEvent.find(kind);
         if(found!=lastBridgeEvent.end()){
             auto const& previous=bridgeEvents[found->second];
-            if(previous.requested==requested&&previous.accepted==accepted&&previous.state.Same(state))return false;
+            if(previous.requested==requested&&previous.accepted==accepted&&previous.state.Same(state))return;
         }
         auto serial=++bridgeEventSerial;
-        if(bridgeEvents.size()>=4096){++bridgeEventOverflow;return false;}
+        if(bridgeEvents.size()>=4096){++bridgeEventOverflow;return;}
         lastBridgeEvent[kind]=bridgeEvents.size();
         bridgeEvents.push_back({serial,requested,state.lastQpc,std::move(kind),accepted,std::move(state)});
-        return true;
     }
     J bridgeState(BridgeFrame const& frame)const{
         A owners,projected;
@@ -1480,7 +1481,7 @@ void WorkspaceView::MeasureChrome(){impl->layoutUpdated();}
 void WorkspaceView::PublishTrace(){impl->tracePresentation();}
 void WorkspaceView::ChromeSent(uint64_t revision){
     if(impl->data->chromeFrames->Sent(revision)||impl->resizeHandback){impl->presentBackgrounds();impl->drawers->PresentChrome();}
-    if(impl->traceBridgeEvent(L"chrome-sent",revision,!impl->data->chromeFrames->closed))impl->tracePresentation();
+    impl->traceBridgeEvent(L"chrome-sent",revision,!impl->data->chromeFrames->closed);
 }
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){
     std::array<float,3> value{left,right,height};
