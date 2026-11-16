@@ -2223,6 +2223,9 @@ fn object_counters_match_a_cache_walk_after_seeded_windows_edits_and_completions
         let [objects, walked_objects] = scene.object_gpu();
         assert_eq!([counted.working, counted.ram, counted.pinned, objects], [walked.working, walked.ram, walked.pinned, walked_objects], "step {step}");
     }
+    crate::test_support::settle_decodes(&mut r);
+    let held = r.source_results.iter().map(|(_, _, charge)| charge.bytes()).sum::<u64>();
+    assert_eq!(r.scene_tiers.decodes.used(), held, "once the queue drains, only held results keep decode working-set charges");
 }
 
 #[test]

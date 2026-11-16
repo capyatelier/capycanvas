@@ -472,7 +472,7 @@ impl WgpuRasterizer {
     }
     pub fn display_bytes(&self)->u64 {self.scene_tiers.display.used()}
     pub(crate) fn resident_bytes(&self)->u64 {
-        [&self.scene_tiers.display,&self.raster_tiers.raster,&self.device.transient_display,&self.scene_tiers.ram,&self.raster_buffers.working]
+        [&self.scene_tiers.display,&self.raster_tiers.raster,&self.device.transient_display,&self.scene_tiers.ram,&self.scene_tiers.decodes,&self.raster_buffers.working]
             .into_iter().map(|tier|tier.used()).sum::<u64>().saturating_add(self.uncharged_bytes())
     }
     fn uncharged_bytes(&self)->u64 {
@@ -494,7 +494,7 @@ impl WgpuRasterizer {
     pub(super) fn display_usage(&self)->DisplayUsage {
         let scene=self.scene_tiers.usage();
         let source = self.source_tiles.borrow();
-        let ram = scene.ram.saturating_add(source.cpu_bytes()).saturating_add(self.scene_tiers.moving[1].used()).saturating_add(self.moving_images.metadata_bytes());
+        let ram = scene.ram.saturating_add(source.cpu_bytes()).saturating_add(self.scene_tiers.moving[1].used()).saturating_add(self.scene_tiers.decodes.used()).saturating_add(self.moving_images.metadata_bytes());
         let resources = self.device.analysis_memory.used();
         let pinned_transforms = if self.transform_preview.is_some() || self.transforms.as_ref().is_some_and(|transforms| transforms.has_preview()) {
             self.transforms.as_ref().map_or(0, paint_transform::PaintTransforms::charged_bytes) } else { 0 };

@@ -333,13 +333,13 @@ pub(super) fn raw_output(scope:&SceneScope)->Option<Output> {Some(match scope {
 #[derive(Clone,Copy)]
 pub(crate) struct Usage {pub(crate) working:u64,pub(crate) ram:u64,pub(crate) pinned:u64}
 #[derive(Clone)]
-pub(crate) struct Tiers {pub(super) display:Arc<crate::residency::Tier>,pub(super) windows:Arc<crate::residency::Tier>,pub(super) retiring:Arc<crate::residency::Tier>,pub(super) gpu:Arc<crate::residency::Tier>,pub(super) ram:Arc<crate::residency::Tier>,pub(super) objects:Arc<crate::residency::Tier>,pub(super) pinned:Arc<crate::residency::Tier>,pub(super) moving:[Arc<crate::residency::Tier>;2]}
+pub(crate) struct Tiers {pub(super) display:Arc<crate::residency::Tier>,pub(super) windows:Arc<crate::residency::Tier>,pub(super) retiring:Arc<crate::residency::Tier>,pub(super) gpu:Arc<crate::residency::Tier>,pub(super) ram:Arc<crate::residency::Tier>,pub(super) objects:Arc<crate::residency::Tier>,pub(super) pinned:Arc<crate::residency::Tier>,pub(super) moving:[Arc<crate::residency::Tier>;2],pub(super) decodes:Arc<crate::residency::Tier>}
 impl Default for Tiers {
     fn default()->Self {
         let retiring=Arc::new(crate::residency::Tier::default());
         let display=crate::residency::Tier::retiring_into(&retiring);
         Self {windows:crate::residency::Tier::within(&display),retiring,gpu:crate::residency::Tier::within(&display),objects:crate::residency::Tier::within(&display),moving:[crate::residency::Tier::within(&display),Default::default()],
-            ram:Default::default(),pinned:Default::default(),display}
+            ram:Default::default(),pinned:Default::default(),decodes:Default::default(),display}
     }
 }
 impl Tiers {

@@ -1466,7 +1466,7 @@ impl WgpuRasterizer {
         let restore_uploads = Uploads::new(&device, 64 * 1024);
         let layer_masks =
             layer_masks::MaskRenderer::from_pipelines(recipes.masks.clone());
-        let papers = paper::Papers::from_recipes(recipes.paper.clone(), &scene_tiers.ram);
+        let papers = paper::Papers::from_recipes(recipes.paper.clone(), &scene_tiers.decodes);
         let telemetry = telemetry::Telemetry::new(&device, &queue);
         let selection_clip = selection_clip::SelectionClip::from_pipelines(recipes.selection.clone(), &raster_tiers.paint);
         let scene_pipelines = recipes.scene.clone();
@@ -3558,7 +3558,7 @@ impl WgpuRasterizer {
     }
     fn image_decode_queue(&mut self,space:layer_core::color::RgbSpace)->Result<&mut object_image_mips::MipDecodeQueue,GpuRasterError> {
         if self.moving_decode.is_none() {
-            let queue=object_image_mips::MipDecodeQueue::new(&self.device,&self.scene_tiers.ram)?;
+            let queue=object_image_mips::MipDecodeQueue::new(&self.device,&self.scene_tiers.decodes)?;
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(wake)=&self.decode_wake {queue.set_wake(wake.clone());}
             self.moving_decode=Some((space,queue));
