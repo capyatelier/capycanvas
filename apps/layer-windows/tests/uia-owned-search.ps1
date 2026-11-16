@@ -3559,3 +3559,30 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
  }
  'Actual Zen baseline waits for the selected normal header height; missing measurements cannot reach the exact layout comparison.'
 }
+
+& {
+ $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/BubbleVisualChecks.ps1'),[ref]$null,[ref]$null)
+ $function=$source.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-BubbleVisualEdges'},$true)
+ $journey=@($function.Body.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.TryStatementAst]})
+ if($journey.Count -ne 1){throw 'Visual transparency cleanup journey is missing'}
+ function Model{[pscustomobject]@{state=@{palette=@{glass=@{transparency='high'}}}}}
+ function View{@{chooser=@()}}
+ function Tap{}
+ function Center{}
+ function Wait-Until{}
+ function Settled-Capture{}
+ function Open-BubbleVisualChooser{}
+ function Assert-BubbleVisualGeometry{}
+ function Escape{}
+ function Set-BubbleVisualTransparency([int]$Choice){
+  if($Choice -eq 1 -and $index -ne 1){$script:cleanupCalls++;if($script:cleanupFails){throw 'cleanup-marker'};return}
+  if($script:primaryFails){throw 'primary-marker'}
+ }
+ foreach($case in @(@{primary=$true;cleanup=$true;expected='primary-marker'},@{primary=$false;cleanup=$true;expected='cleanup-marker'},@{primary=$true;cleanup=$false;expected='primary-marker'},@{primary=$false;cleanup=$false;expected=$null})){
+  $script:primaryFails=$case.primary;$script:cleanupFails=$case.cleanup;$script:cleanupCalls=0
+  $modes=@('off','low','medium','high');$original='low';$Dial=1;$Color=2;$transparencyFailure=$null;$failure=$null
+  try{. ([scriptblock]::Create($journey[0].Extent.Text))}catch{$failure=$_.Exception.Message}
+  if($failure -cne $case.expected -or $script:cleanupCalls -ne 1){throw 'Visual transparency cleanup replaced the original error or skipped its unchanged restore'}
+ }
+ 'Actual visual transparency journey retains the original failure and still fails on cleanup-only errors.'
+}

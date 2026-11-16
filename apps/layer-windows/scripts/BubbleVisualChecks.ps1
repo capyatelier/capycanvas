@@ -985,19 +985,31 @@ function Assert-BubbleVisualGeometry([long]$Id,[string]$Stage){
 }
 function Set-BubbleVisualTransparency([ValidateRange(0,3)][int]$Index){
     $types=[System.Windows.Automation.ControlType];$modes=@('off','low','medium','high')
+    $transparency=@{index=$Index;target=$modes[$Index];compared_shared=$null;compared_glass=$null;status_read=$false;compared_status=$null};$circle=$null
+    try{
     (Control 'drawing-canvas').SetFocus()
     [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0xBC)
     $dialog=Control 'Preferences' -Name -Type $types::Window
     $circle=Control "preference-transparency-$Index" -Within $dialog
     if($circle.Current.Name -ne @('Off','Low','Medium','High')[$Index]){throw 'Transparency preference has the wrong accessible name'}
     Invoke "preference-transparency-$Index" -Within $dialog
-    Wait-Until {$state=(Model).state;$state.settings.transparency -eq $modes[$Index] -and $state.palette.glass.transparency -eq $modes[$Index] -and $circle.Current.ItemStatus -eq 'Selected'} 'Native transparency preference did not update its shared setting'
+    Wait-Until {
+        $state=(Model).state;$transparency.compared_shared=$state.settings.transparency;$transparency.compared_glass=$state.palette.glass.transparency;$transparency.status_read=$false;$transparency.compared_status=$null
+        $state.settings.transparency -eq $modes[$Index] -and $state.palette.glass.transparency -eq $modes[$Index] -and $($transparency.status_read=$true;$transparency.compared_status=$circle.Current.ItemStatus;$transparency.compared_status -eq 'Selected')
+    } 'Native transparency preference did not update its shared setting'
     $close=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'CloseButton'),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$types::Button)))
     $close.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     Wait-Until {!(Find 'Preferences' -Name -Type $types::Window)} 'Native transparency Preferences did not close'
     Wait-BubbleVisualLayout
+    }catch{
+        $transparency.error=$_.Exception.Message;$transparency.stack=$_.ScriptStackTrace
+        try{$model=Model;$transparency.failure_shared=$model.state.settings.transparency;$transparency.failure_glass=$model.state.palette.glass.transparency;$transparency.preferences_open=$null -ne $model.preferences}catch{}
+        if($circle){try{$transparency.runtime_id=$circle.GetRuntimeId();$transparency.failure_status=$circle.Current.ItemStatus;$transparency.failure_enabled=$circle.Current.IsEnabled}catch{$transparency.control_error=$_.Exception.Message}}
+        try{$transparency|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ('transparency-choice-'+$Index+'-failure.json')) -Encoding UTF8}catch{}
+        throw
+    }
 }
 function Open-BubbleVisualChooser([long]$Id){
     $receipt=@{view=View $Id}
@@ -1042,7 +1054,7 @@ function Assert-BubbleVisualEdges([long]$Dial,[long]$Color){
     $distance=[Math]::Sqrt([Math]::Pow($dialCenter.x-$colorCenter.x,2)+[Math]::Pow($dialCenter.y-$colorCenter.y,2))
     if($distance -lt ((View $Dial).face[0]+(View $Color).face[0])*$scale*.5-2){throw 'Crowded native dial and wheel faces overlap after settling'}
     Settled-Capture 'crowded-chooser-and-wheel'
-    $modes=@('off','low','medium','high');$original=(Model).state.palette.glass.transparency
+    $modes=@('off','low','medium','high');$original=(Model).state.palette.glass.transparency;$transparencyFailure=$null
     try{
         foreach($index in 0..3){
             if(@((View $Dial).chooser).Count){Tap (Center $Dial);Wait-Until {!@((View $Dial).chooser).Count} 'Chooser did not close before changing transparency'}
@@ -1053,8 +1065,9 @@ function Assert-BubbleVisualEdges([long]$Dial,[long]$Color){
             Settled-Capture "transparency-$($modes[$index])-chooser"
             Escape
         }
-    }finally{
-        if((Model).state.palette.glass.transparency -ne $original){Set-BubbleVisualTransparency ([Array]::IndexOf($modes,$original))}
+    }catch{$transparencyFailure=$_;throw}finally{
+        try{if((Model).state.palette.glass.transparency -ne $original){Set-BubbleVisualTransparency ([Array]::IndexOf($modes,$original))}}
+        catch{if(!$transparencyFailure){throw};try{[Console]::Error.WriteLine('Transparency cleanup after '+$transparencyFailure.Exception.Message+': '+$_.Exception.Message)}catch{}}
     }
     $after=Model
     if($after.state.document_file.revision -ne $revision -or ($after.state.colors|ConvertTo-Json -Depth 30 -Compress) -ne $colors){throw 'Native bubble edge matrix changed artwork or selected colors'}
