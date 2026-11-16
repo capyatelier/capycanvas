@@ -8,8 +8,12 @@ static READER: OnceLock<(JavaVM, GlobalRef)> = OnceLock::new();
 #[unsafe(no_mangle)]
 pub extern "system" fn JNI_OnLoad(vm: JavaVM, _: *mut std::ffi::c_void) -> jint {
     crate::jni_entry!(result => { result.unwrap_or(JNI_ERR) }; {
-        let class = vm.get_env().and_then(|mut env| { let class = env.find_class("art/capycanvas/PhotoReader")?; env.new_global_ref(class) })
-            .map_err(|error| error.to_string())?;
+        let class = {
+            let mut env = vm.get_env().map_err(|error| error.to_string())?;
+            let class = env.find_class("art/capycanvas/PhotoReader").and_then(|class| env.new_global_ref(class)).map_err(|error| error.to_string())?;
+            crate::system_memory::install(&mut env)?;
+            class
+        };
         READER.set((vm, class)).map_err(|_| "Photo decoder is already initialized".to_owned())?;
         Ok(JNI_VERSION_1_6)
     })

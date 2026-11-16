@@ -1,8 +1,43 @@
 #[cfg(target_arch = "wasm32")]
 pub fn system_facts() -> super::MemoryFacts { Default::default() }
 
+#[cfg(target_os = "linux")]
+pub fn system_facts() -> super::MemoryFacts { kernel_facts() }
+
+#[cfg(target_os = "android")]
+pub fn system_facts() -> super::MemoryFacts { android_facts(kernel_facts(), ANDROID.get().and_then(|read| read())) }
+
+#[cfg(target_os = "android")]
+static ANDROID: std::sync::OnceLock<fn() -> Option<AndroidMemory>> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "android")]
+pub fn read_android_memory_with(read: fn() -> Option<AndroidMemory>) { let _ = ANDROID.set(read); }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AndroidMemory {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub threshold_bytes: u64,
+    pub low_memory: bool,
+    pub trim_levels: Vec<i32>,
+}
+
+const TRIM_MEMORY_RUNNING_CRITICAL: i32 = 15;
+const TRIM_MEMORY_COMPLETE: i32 = 80;
+
+pub fn android_facts(mut facts: super::MemoryFacts, memory: Option<AndroidMemory>) -> super::MemoryFacts {
+    let Some(memory) = memory else { return facts; };
+    facts.pressure |= memory.low_memory || memory.trim_levels.iter().any(|&level| level == TRIM_MEMORY_RUNNING_CRITICAL || level >= TRIM_MEMORY_COMPLETE);
+    if memory.threshold_bytes > 0 && memory.threshold_bytes < memory.total_bytes {
+        facts.total_bytes = Some(memory.total_bytes);
+        facts.available_bytes = Some(memory.available_bytes);
+        facts.low_memory_bytes = Some(memory.threshold_bytes);
+    }
+    facts
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn system_facts() -> super::MemoryFacts {
+fn kernel_facts() -> super::MemoryFacts {
     let info = std::fs::read_to_string("/proc/meminfo").ok();
     let mut facts = super::MemoryFacts {
         total_bytes: info.as_deref().and_then(|s| proc_bytes(s, "MemTotal:")),
@@ -176,6 +211,22 @@ pub fn system_facts() -> super::MemoryFacts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_readings_replace_kernel_figures_only_with_a_usable_low_memory_line() {
+        let kernel = super::super::MemoryFacts { total_bytes: Some(8000), available_bytes: Some(900), process_limit_bytes: Some(5000),
+            process_used_bytes: Some(100), tablet: true, ..Default::default() };
+        let reading = |threshold_bytes, low_memory, trim_levels: &[i32]| Some(AndroidMemory { total_bytes: 8192, available_bytes: 1300,
+            threshold_bytes, low_memory, trim_levels: trim_levels.to_vec() });
+        assert_eq!(android_facts(kernel, None), kernel);
+        assert_eq!(android_facts(kernel, reading(200, false, &[])),
+            super::super::MemoryFacts { total_bytes: Some(8192), available_bytes: Some(1300), low_memory_bytes: Some(200), ..kernel });
+        for threshold in [0, 8192, 9000] { assert_eq!(android_facts(kernel, reading(threshold, false, &[])), kernel); }
+        assert_eq!(android_facts(kernel, reading(0, true, &[])), super::super::MemoryFacts { pressure: true, ..kernel });
+        for (levels, pressure) in [(&[5, 10, 20, 40, 60][..], false), (&[15], true), (&[20, 15], true), (&[80], true)] {
+            assert_eq!(android_facts(kernel, reading(200, false, levels)).pressure, pressure, "trim levels {levels:?}");
+        }
+    }
 
     #[test]
     fn job_allowance_recovers_with_current_usage_and_falls_back_to_private_usage() {

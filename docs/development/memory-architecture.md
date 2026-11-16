@@ -140,10 +140,12 @@ layer change and a lazy open.
 | macOS | `host_statistics64`; Metal working set | Dispatch memory-pressure source | Swap and compressor |
 | Web | `navigator.deviceMemory` (coarse, at most 8 GiB); none for the GPU | GPU `out-of-memory` error scopes; device lost | wasm32's 4 GiB; the tab |
 
-Today only the queries exist, sampled once per admission
-(`crates/layer-color/src/photo/memory.rs`,
-`crates/layer-render-wgpu/src/display_memory.rs`). No signal is subscribed on
-any host.
+The queries are sampled about once a second off the frame path
+(`crates/layer-render-wgpu/src/memory_sample.rs`). Android reads
+`ActivityManager.MemoryInfo` there and forwards its `lowMemory` and the
+`onTrimMemory` levels as pressure (`crates/layer-core/src/memory_budget/system.rs`).
+Linux reads cgroup `memory.high` as pressure and the web halves its budget after
+a GPU out-of-memory error; the other signals above are not subscribed yet.
 
 ### Computing the budget
 
@@ -167,7 +169,9 @@ band = reserve / 4
 - Without available samples, use the memory/process ceiling. Without process
   usage, use the process limit; without that limit, omit its cap.
 - `reserve` keeps room for the system and other apps: max(10 % of physical,
-  1 GiB) on desktops, max(15 %, 0.75 GiB) on tablets.
+  1 GiB) on desktops, max(15 %, 0.75 GiB) on tablets. Android uses its own
+  low-memory line, `MemoryInfo.threshold`, instead: its low-memory killer frees
+  cached apps for the foreground app, so availability recovers as Capy grows.
 - `share` is the default limit: 0.6 of physical memory on desktops, 0.45 on
   tablets. The internal override replaces it, higher or lower; the reserve still
   applies, so a high override never makes the system kill Capy.

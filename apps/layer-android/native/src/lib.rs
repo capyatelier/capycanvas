@@ -64,6 +64,8 @@ mod proof;
 mod papers;
 #[cfg(target_os = "android")]
 mod photo_reader;
+#[cfg(target_os = "android")]
+mod system_memory;
 
 #[cfg(target_os = "android")]
 mod hdr;

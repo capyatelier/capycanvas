@@ -491,6 +491,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
 
     init {
         PhotoReader.context = application
+        SystemMemory.attach(application)
         worker.post {
             attempt {
                 latinKeyMap = runCatching { KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD) }.getOrNull()

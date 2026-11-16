@@ -1,5 +1,7 @@
 mod system;
-pub use system::system_facts;
+pub use system::{AndroidMemory, android_facts, system_facts};
+#[cfg(target_os = "android")]
+pub use system::read_android_memory_with;
 
 use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, MutexGuard, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}}};
 use web_time::Instant;
@@ -13,6 +15,7 @@ pub struct MemoryFacts {
     pub total_bytes: Option<u64>,
     pub host_default_bytes: Option<u64>,
     pub available_bytes: Option<u64>,
+    pub low_memory_bytes: Option<u64>,
     pub process_limit_bytes: Option<u64>,
     pub process_used_bytes: Option<u64>,
     pub tablet: bool,
@@ -505,7 +508,9 @@ impl MemoryBudget {
     }
 }
 fn fraction(bytes: u64, numerator: u64, denominator: u64) -> u64 { (u128::from(bytes) * u128::from(numerator) / u128::from(denominator)) as u64 }
-fn reserve(facts: MemoryFacts) -> u64 { fraction(facts.total_bytes.unwrap_or(0), if facts.tablet {15} else {10},100).max(if facts.tablet {768 * MIB} else {1024 * MIB}) }
+fn reserve(facts: MemoryFacts) -> u64 {
+    facts.low_memory_bytes.unwrap_or_else(|| fraction(facts.total_bytes.unwrap_or(0), if facts.tablet {15} else {10},100).max(if facts.tablet {768 * MIB} else {1024 * MIB}))
+}
 fn device_limit(facts: DeviceMemoryFacts, ours: u64) -> u64 {
     let ceiling = facts.budget_bytes.map_or_else(|| facts.heap_bytes.map_or(u64::MAX, |bytes| bytes / 2), |bytes| fraction(bytes,80,100));
     ceiling.saturating_sub(facts.fixed_bytes.max(facts.usage_bytes.unwrap_or(0).saturating_sub(ours)))
@@ -1017,6 +1022,57 @@ mod tests {
             trace.limits.push(limit);
         }
         trace
+    }
+    const MOVINK_TOTAL: u64 = 8_070_660 * 1024;
+    const MOVINK_THRESHOLD: u64 = 216 * MIB;
+    const MOVINK_CACHED_CHROME: u64 = (165_236 + 1_145_252) * 1024;
+    fn movink(available: u64, low_memory: bool, trim_levels: &[i32]) -> MemoryFacts {
+        android_facts(MemoryFacts { total_bytes: Some(MOVINK_TOTAL), available_bytes: Some(1_224_712 * 1024), tablet: true, ..Default::default() },
+            Some(AndroidMemory { total_bytes: MOVINK_TOTAL, available_bytes: available, threshold_bytes: MOVINK_THRESHOLD, low_memory, trim_levels: trim_levels.to_vec() }))
+    }
+    #[test]
+    fn android_low_memory_and_critical_trims_still_cut_the_budget() {
+        for (low_memory, trim_levels) in [(true, &[][..]), (false, &[15][..]), (false, &[20, 80][..])] {
+            let budget = MemoryBudget::with_facts(movink(MOVINK_CACHED_CHROME, false, &[]));
+            let steady = budget.ram_limit_bytes();
+            budget.update_ram(movink(MOVINK_CACHED_CHROME, false, &[5, 10, 20, 40, 60]), 1000);
+            assert_eq!(budget.ram_limit_bytes(), steady, "running, hidden and background trims are not pressure");
+            budget.update_ram(movink(MOVINK_CACHED_CHROME, low_memory, trim_levels), 2000);
+            assert_eq!(budget.ram_limit_bytes(), steady * 3 / 4, "low memory {low_memory}, trims {trim_levels:?}");
+            for second in 3..30 {
+                budget.update_ram(movink(MOVINK_CACHED_CHROME, true, &[]), second * 1000);
+                assert_eq!(budget.ram_limit_bytes(), steady * 3 / 4, "held pressure does not regrow at {second} s");
+            }
+        }
+    }
+    #[test]
+    fn android_kills_of_cached_apps_let_a_first_picture_and_the_share_in() {
+        let lmkd_floor = MOVINK_THRESHOLD + 128 * MIB;
+        let mut cached_apps = 3_321_165_824u64;
+        let budget = MemoryBudget::with_facts(movink(MOVINK_CACHED_CHROME, false, &[]));
+        let gpu = budget.register_device(DeviceMemoryFacts { heap_bytes: Some(MOVINK_TOTAL), unified: true, ..Default::default() });
+        let display = owner(&budget, MemoryClass::Visible, Some(gpu), 0, 0);
+        let samples = owner(&budget, MemoryClass::Warm, None, 8 * GIB, 0);
+        let picture = 600 * MIB;
+        let (mut pinned, mut decoded, mut available, mut ready) = (0, 0, MOVINK_CACHED_CHROME, None);
+        for second in 0..600 {
+            let held = pinned + decoded;
+            if pinned < picture && let Some(step) = display.admit_working_through((pinned + 64 * MIB).min(picture), None) {
+                pinned = (pinned + 64 * MIB).min(picture);
+                step.commit(&display, MemoryReport { gpu_bytes: pinned, pinned_gpu_bytes: pinned, demand_gpu_bytes: picture, ..Default::default() }).unwrap();
+                if pinned == picture { ready.get_or_insert(second); }
+            }
+            decoded = samples.grant().ram_bytes;
+            samples.report(MemoryReport { ram_bytes: decoded, demand_ram_bytes: 8 * GIB, ..Default::default() });
+            available = (available + held).saturating_sub(pinned + decoded);
+            let killed = lmkd_floor.saturating_sub(available).min(cached_apps);
+            cached_apps -= killed;
+            available += killed;
+            assert!(available >= MOVINK_THRESHOLD, "the budget pushed Android below its low-memory line at {second} s");
+            budget.update_ram(movink(available, false, &[]), second * 1000);
+        }
+        assert!(ready.is_some_and(|second| second < 10), "the first picture was admitted at {ready:?} s under a {} MiB limit", budget.ram_limit_bytes() / MIB);
+        assert_eq!(budget.ram_limit_bytes(), fraction(MOVINK_TOTAL, 45, 100), "memory Android freed from cached apps reaches the tablet share");
     }
     #[test]
     fn sustained_pressure_does_not_regrow_the_budget() {

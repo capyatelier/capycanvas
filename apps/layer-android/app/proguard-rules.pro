@@ -3,3 +3,4 @@
 -keep class art.capycanvas.SessionOwners { *; }
 -keep class art.capycanvas.SessionOwners$Held { *; }
 -keep class art.capycanvas.PhotoReader { public static boolean decode(int, int, int, long, long, int); }
+-keep class art.capycanvas.SystemMemory { public static long[] sample(); }
