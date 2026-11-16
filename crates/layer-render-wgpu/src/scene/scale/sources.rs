@@ -228,7 +228,7 @@ impl Cache {
         let Some(acceptance)=self.pages.lock().unwrap().accept_version(&interest)? else {return Ok(Err(None));};
         let native=native.for_unit(acceptance.input_unit())?;
         if self.pages.lock().unwrap().holds(&acceptance,&native,&areas) {
-            if !self.pages.lock().unwrap().held_refusal(&acceptance).is_some_and(crate::residency::Blocked::fits) {return Ok(Ok(acceptance));}
+            if self.pages.lock().unwrap().held_refusal(&acceptance).is_none() {return Ok(Ok(acceptance));}
             self.pages.lock().unwrap().finish_inputs(&acceptance);
         }
         #[cfg(test)]

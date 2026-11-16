@@ -128,6 +128,7 @@ mod layer_tests;
 #[cfg(test)]
 mod cold_camera_storm;
 mod frame_demand;
+mod schedule;
 #[cfg(test)]
 mod test_support;
 mod present;
@@ -3592,6 +3593,7 @@ impl WgpuRasterizer {
         self.settling.is_some() || !self.background_ready.load(std::sync::atomic::Ordering::Acquire)
             || self.color_sample_pending() || self.selection_paint_pending() || self.region_pending()
             || self.filter_previews_pending() || self.effect_validation_pending() || self.brush_stamp_pending() || self.fill_preview_in_flight()
+            || self.scene.as_deref().is_some_and(scene::Scene::objects_in_flight)
     }
     pub fn raster_preparation_ready(&self, previous: u64) -> bool {
         self.preparation_progress()>previous && self.restore_preparation().is_some() && (self.restore_pages_ready()
@@ -3756,9 +3758,7 @@ impl WgpuRasterizer {
         let in_flight=self.source_tiles.borrow().charge_upload(encoder,reservation,bytes);
         self.metrics.source_upload_peak_bytes=self.metrics.source_upload_peak_bytes.max(in_flight);
     }
-    fn decode_wait_blocks_frame(&self)->bool {self.preparation_can_wake() && self.image_decode_waiting()}
-    pub(crate) fn objects_wait_for_wake(&self)->bool {self.decode_wait_blocks_frame() && self.scene.as_deref().is_some_and(scene::Scene::objects_waiting)}
-    fn objects_runnable(&self)->bool {self.scene.as_deref().is_some_and(scene::Scene::objects_pending) && !self.objects_wait_for_wake()}
+    fn objects_outstanding(&self)->bool {self.scene.as_deref().and_then(|scene|scene.objects_outstanding(self)).is_some()}
     fn moving_images_pending(&self) -> bool {
         self.moving_images_outstanding().is_some_and(|state| match state { frame_demand::Outstanding::Runnable => true, frame_demand::Outstanding::Blocked(input) => !self.wakes(input) })
     }
@@ -3783,8 +3783,6 @@ impl WgpuRasterizer {
     }
     fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
         if self.moving_projection.is_none() {self.prepare_moving_projection(packet)?;}
-        let required = self.scene.as_ref().map(|scene| scene.required_object_sources()).transpose()?.unwrap_or_default();
-        self.source_tiles.borrow().demand_images(required);
         let mut images = std::mem::take(&mut self.moving_images);
         images.retire_evicted(encoder);
         let budget = if packet.dab_batches.is_empty() && self.moving_layer.is_none() { MOVING_IMAGE_IDLE_STEPS } else { MOVING_IMAGE_INPUT_STEPS };
@@ -4408,7 +4406,7 @@ impl WgpuRasterizer {
         if settled_commit.is_none() && (retained_transition
             || !self.background_ready.load(std::sync::atomic::Ordering::Acquire) && !self.navigator.pending()
             && !self.moving_images_pending()
-            && !self.objects_runnable()
+            && !self.objects_outstanding()
             && !self.scale_display.as_ref().is_some_and(scene::scale::Cache::approximating)
             && self.document_damage.is_empty()
             && self.empty_artwork_frame(packet, self.transform_preview.as_ref()))
@@ -5239,7 +5237,7 @@ impl WgpuRasterizer {
         let animated = packet.scene.order().iter().any(|&h| packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated()));
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).
-        if !dirty.is_empty() || animated || display_rebuilt || !unchanged || self.objects_runnable()
+        if !dirty.is_empty() || animated || display_rebuilt || !unchanged || self.objects_outstanding()
             || self.scale_display.as_ref().is_some_and(|cache|cache.has_pending_work(self)) {
             let mut scene = self.scene.take().map(Ok).unwrap_or_else(|| scene::Scene::new(self))?;
             // A moved target's damage is stored in image coordinates. Round to

@@ -492,7 +492,6 @@ fn discarded_required_source_writes_reuse_their_own_slots() {
     let (_, mut cache) = standalone();
     let source = scan_source(1, 0);
     let (first, pending) = cache.plan(&r, &source, [0, 0]).unwrap();
-    cache.demand_images([(source.clone(), [0, 0])]);
     drop(pending);
     let (second, _) = cache.plan(&r, &source, [0, 0]).unwrap();
     assert_eq!(first.view, second.view);
@@ -802,7 +801,6 @@ fn stored_source_cancelled_promotion_does_not_leave_a_protected_duplicate_key() 
     Scene::promote_source(&mut r,&mut cancelled,tile).unwrap();
     r.uploads.finish(&cancelled);drop(cancelled);
     assert!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_none());
-    r.source_tiles.borrow().demand_images([(source.clone(),[0,0])]);
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let tile=stored_code_tile(&mut r,&source,0,&mut encoder);
     assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
@@ -1205,42 +1203,6 @@ fn a_persistent_read_for_an_earlier_frame_does_not_take_a_later_write_under_its_
 }
 
 #[test]
-fn required_source_priority_has_linear_key_comparisons() {
-    const PAGES:usize=512;
-    let template=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[17,43,97,255]);
-    let blob=template.tiles[&[0;2]].clone();
-    let source=Arc::new(SourceImage {extent:[128*PAGE_SIZE,4*PAGE_SIZE],
-        tiles:(0..PAGES as u32).map(|n|([n%128,n/128],blob.clone())).collect(),..(*template).clone()});
-    source.validate().unwrap();
-    let independent=Arc::new((*source).clone());
-    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let (display,mut cache)=standalone();
-    for x in 0..32 {drop(cache.plan(&r,&source,[x,0]).unwrap());}
-    drop(cache.plan(&r,&independent,[0;2]).unwrap());
-    for seed in [19usize,301] {
-        display.heap().begin_frame();
-        let requests:Vec<_>=(0..PAGES).flat_map(|n| {
-            let at=(n*73+seed)%PAGES;let coordinate=[at as u32%128,at as u32/128];
-            std::iter::repeat_n((source.clone(),coordinate),if n%3==0 {2}else {1})
-        }).collect();
-        struct Count;
-        impl Drop for Count {fn drop(&mut self) {KEY_COMPARISONS.with(|count|count.set(None));}}
-        let comparisons={
-            KEY_COMPARISONS.with(|count|assert!(count.replace(Some(0)).is_none()));
-            let _count=Count;
-            cache.demand_images(requests.iter().cloned());
-            KEY_COMPARISONS.with(|count|count.get().unwrap())
-        };
-        for slot in &cache.slots {
-            let requested=slot.key.as_ref().is_some_and(|key|requests.iter().any(|(source,coordinate)|Key::Image(Arc::downgrade(source),*coordinate).matches(key)));
-            assert_eq!(slot.lease.demand().is_some(),requested,"seed {seed}: only the current frame's requested slots are demanded");
-        }
-        assert!(comparisons<=4*requests.len() as u64,
-            "{comparisons} key comparisons for {} requests exceed linear source-priority work",requests.len());
-    }
-}
-
-#[test]
 fn retired_source_texture_waits_for_its_fence_and_last_encoded_consumer_after_cache_drop() {
     let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let (_,mut cache)=standalone();
@@ -1578,7 +1540,6 @@ fn source_lease_counters_match_a_slot_walk_after_seeded_leases_requirements_prom
             1 => !leases.is_empty() && { leases.swap_remove((seed >> 8) as usize % leases.len()); true },
             2 => {
                 display.heap().begin_frame();
-                cache.demand_images((0..(seed >> 8) % 12).map(|x| (source.clone(), [((seed >> 16) + x) as u32 % 24, 0])));
                 evict(&display, &mut cache, 4 * NORMALIZED_PAGE_BYTES);
                 true
             }

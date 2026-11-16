@@ -1099,7 +1099,7 @@ fn an_overview_refused_before_it_shows_a_cell_waits_for_the_release_instead_of_r
     let refusal=objects.blocked(crate::residency::Class::Prefetch,1).expect("a full tier refuses a prefetch unit");
     r.wait_for_release(refusal.clone());
     let overview=r.scale_display.as_mut().unwrap().overview.as_mut().expect("the zoomed view keeps an overview");
-    overview.pixels.take();overview.evict_window(overview.plan.bounds);overview.refuse(overview.plan.bounds,&refusal);
+    overview.pixels.take();overview.evict_window(overview.plan.bounds);overview.refuse(None,overview.plan.bounds,&refusal);
     let committed=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().overview.as_ref().unwrap().pixels.committed_root().is_some();
     let mut audit=crate::frame_demand::DemandAudit::default();
     for step in 0..4 {

@@ -1071,7 +1071,7 @@ impl Cache {
             let exact=self.exact_units(scene,r,packet,encoder,commands,budget,cells,&class,false)?;
             if stroking && matches!(destination,Destination::View) {self.reach_stroke(packet);}
             blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
-            refusals.extend(exact.refusals);
+            refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
             let prepared = self.prepared_regions(scene, packet, &destination, budget);
             let halves:Vec<_>=self.graph.prepared.clone().into_iter().flatten().filter(|half|self.graph.caches(half)).collect();
             let preview=matches!(destination,Destination::Preview);
@@ -1084,7 +1084,7 @@ impl Cache {
                     let halves=self.pivot_halves().into_iter().map(|half|pages::Key {expression:half,..cell.clone()}).collect();
                     let exact=self.exact_units(scene,r,packet,encoder,commands,budget,halves,&class,true)?;
                     blocks.extend(exact.blocks.into_iter().map(|(key,input)|(key.plan().bounds,input)));
-                    refusals.extend(exact.refusals);
+                    refusals.extend(exact.refusals.into_iter().map(|(region,refusal)|(region,refusal,None)));
                     if self.pivot_missing(region) {continue;}
                 }
                 let requests=self.region_sources(scene,r,packet,region,tiled);
@@ -1096,7 +1096,7 @@ impl Cache {
                 }
                 let handle=match self.accept_parent(scene,r,packet,region,&requests,*retained,tiled,std::slice::from_ref(&root),target,preview,class(region),if budget.required(class(region)) {class(region)} else {Class::Prefetch},encoder) {
                     Ok(Ok(handle))=>handle,
-                    Ok(Err(Some(refusal)))=>{refusals.push((region,refusal));continue;},
+                    Ok(Err(Some(refusal)))=>{refusals.push((region,refusal,None));continue;},
                     Ok(Err(None))=>{blocks.push((region,waiting_input(scene,r,false)));continue;},
                     Err(GpuRasterError::NotPublished)=>{blocks.push((region,waiting_input(scene,r,true)));continue;},
                     Err(error)=>return Err(error),
@@ -1105,7 +1105,7 @@ impl Cache {
                 budget.spend(object_cache::PASS_TAPS);
                 let sources=self.pages.lock().unwrap().take_inputs(&handle)?;
                 if let Some(refusal)=sources.objects_refusal() {
-                    refusals.push((region,refusal.clone()));
+                    refusals.push((region,refusal.clone(),Some(arrivals)));
                     if self.displays(region) {
                         if class(region).demanded() {self.pages.lock().unwrap().hold_inputs(&handle,sources)?;}else {self.pages.lock().unwrap().finish_inputs(&handle);}
                         continue;
@@ -1116,6 +1116,7 @@ impl Cache {
                 accepted.push((region,handle,sources,evaluated));
             }
             let mut completed = Vec::<ReadyUnit>::new();
+            let mut sleeping=Vec::new();
             let native = root.native_capture(packet.scene, self.plan.level);
             let mut accepted=accepted.into_iter();
             for (region,handle,mut sources,evaluated) in accepted.by_ref() {
@@ -1168,6 +1169,7 @@ impl Cache {
                     },
                     Err(error@(GpuRasterError::NotReady|GpuRasterError::NotPublished)) => {
                         blocks.push((region,waiting_input(scene,r,error==GpuRasterError::NotPublished)));
+                        sleeping.push((region,std::mem::take(&mut unit.waits)));
                         self.pages.lock().unwrap().hold_inputs(&handle,std::mem::take(&mut unit.sources))?;
                         scene.discard_jobs_from(start);
                     }
@@ -1223,6 +1225,7 @@ impl Cache {
                     }
                 }
             }
+            sleeping.extend(completed.iter_mut().filter(|ready|ready.publish).map(|ready|(ready.handle.region(),std::mem::take(&mut ready.unit.waits))));
             self.encode_units(scene, r, encoder, completed.iter_mut().map(|ready| std::mem::take(&mut ready.unit)))?;
             for ReadyUnit {handle,publish,..} in completed {
                 self.pages.lock().unwrap().finish_inputs(&handle);
@@ -1245,7 +1248,8 @@ impl Cache {
             if !held && (!written.is_empty() || transition || self.pixels.committed_root().is_none()) {self.commit_window(r,encoder)?;}
             if presented==pages::Accuracy::Exact {blocks.extend(composed.iter().map(|region|(*region,waiting_input(scene,r,false))));}
             for (region,input) in blocks {self.block(arrivals,region,input);}
-            for (region,refusal) in refusals {self.refuse(region,&refusal);}
+            if !matches!(destination,Destination::Navigator) {for (region,waits) in sleeping {self.sleep(region,waits);}}
+            for (region,refusal,since) in refusals {self.refuse(since,region,&refusal);}
         }
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
         if view && live && self.ends_contact(packet) {self.write_back(r,scene,encoder)?;}
@@ -1469,6 +1473,7 @@ struct Unit {
     pages: Vec<pages::Write>,
     reads: Vec<pages::Held>,
     work: u64,
+    waits: Vec<super::object_cache::ObjectWait>,
 }
 impl Unit {
     fn ready(&mut self, scene: &mut Scene, r: &mut WgpuRasterizer, encoder: &mut submission::CommandEncoder, start: usize, class: Class) -> Result<bool, GpuRasterError> {
@@ -1684,7 +1689,11 @@ impl Evaluator<'_> {
         let moving = moving || self.r.moving_layer.is_some() || self.preview;
         let fallback = self.accepted.objects_fall_back();
         let preview = if moving || fallback {self.scene.collection_preview(self.r,&request)?} else {None};
-        if preview.is_none() && !fallback && let Some(pieces)=self.scene.canonical_cover(self.r,self.packet,content,&request,self.accepted,self.class)? {
+        let canonical=if preview.is_none() && !fallback {
+            let (pieces,waits)=self.scene.canonical_cover(self.r,self.packet,content,&request,self.accepted,self.class)?;
+            self.unit.waits.extend(waits);pieces
+        } else {None};
+        if let Some(pieces)=canonical {
             let window=request.bounds();
             self.scene.jobs.push(Job::Clear(target.view.clone(), wgpu::Color::TRANSPARENT));
             for (view,piece) in pieces {

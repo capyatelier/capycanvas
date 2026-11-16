@@ -171,7 +171,7 @@ impl Cache {
         for cache in std::iter::once(&*self).chain(self.overview.as_deref()) {
             for (key,input) in exact.blocks.iter().filter(|(key,_)|key.level==cache.plan.level) {cache.block(since,key.plan().bounds,*input);}
         }
-        for (region,refusal) in &exact.refusals {self.refuse(*region,refusal);}
+        for (region,refusal) in &exact.refusals {self.refuse(None,*region,refusal);}
         self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);
         if self.pivot_pending {
             self.prepare_pivot(scene,r,packet,encoder,budget,self.plan.bounds,&|_|Class::Refinement)?;

@@ -247,9 +247,18 @@ impl Scene {
         pixels: sources::PreparedSourcePixels, class: Class,
     ) -> Result<crate::source_access::RawTile, GpuRasterError> { decode_prepared_raster(r, encoder, blob, space, destination, pixels, class) }
     pub(crate) fn compiling(&self) -> bool { !self.pending_pipelines.ready() }
-    pub(crate) fn objects_pending(&self) -> bool { self.object_results.pending() || self.vectors_deferred() }
-    pub(crate) fn objects_demanded(&self) -> bool { self.object_results.demanded() || self.vectors_deferred() }
-    pub(crate) fn objects_waiting(&self) -> bool { self.object_results.waiting() && !self.vectors_deferred() }
+    pub(crate) fn objects_outstanding(&self, r: &WgpuRasterizer) -> Option<crate::frame_demand::Outstanding> {
+        use crate::frame_demand::Input;
+        if self.vectors_deferred() { return Some(crate::frame_demand::Outstanding::Runnable); }
+        let compiling = || !r.scene_pipelines.objects.pipelines().into_iter().chain([&r.scene_pipelines.constant.2]).all(|pipeline| pipeline.ready());
+        self.tiers.schedule.demand(|input, since| match input {
+            Input::Compile => compiling(),
+            Input::Gpu => self.objects_in_flight(),
+            Input::Residency | Input::Name => !r.arrived_since(since),
+            input => r.waits_on(input),
+        })
+    }
+    pub(crate) fn objects_in_flight(&self) -> bool { self.object_results.in_flight() || self.exact_object_results.in_flight() }
     pub(crate) fn object_edit_damage(before: SceneView<'_>, after: SceneView<'_>, extent: [u32; 2]) -> Option<scale::Damage> {
         edited_damage(before, after, extent)
     }
@@ -288,8 +297,8 @@ impl Scene {
     fn capture_requester(&self) -> Class { if self.object_live || self.object_query { Class::Visible } else { Class::Refinement } }
     pub(super) fn canonical_cover(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, content: &object_spatial::Content,
         request: &CollectionJob, accepted:&mut sources::AcceptedInputs, class: Class,
-    ) -> Result<Option<Vec<(wgpu::TextureView, DocRect)>>, GpuRasterError> {
-        let (pieces, mut ready, missing) = self.object_results.cover(request,Some(accepted));
+    ) -> Result<(Option<Vec<(wgpu::TextureView, DocRect)>>, Vec<object_cache::ObjectWait>), GpuRasterError> {
+        let (pieces, mut ready, missing, waits) = self.object_results.cover(request,Some(accepted));
         self.object_results.stamp(request, class);
         let offset = packet.scene.evaluation_offset64();
         let mut parts = Vec::new();
@@ -307,7 +316,7 @@ impl Scene {
         } else if !parts.is_empty() {
             self.object_results.admit(r, class.max(Class::Prefetch), &parts, Some(accepted))?;
         }
-        Ok(ready.then_some(pieces))
+        Ok(if ready {(Some(pieces), Vec::new())} else {(None, waits)})
     }
     fn preview_source(r: &WgpuRasterizer, id: PortableId, source: &Arc<SourceImage>, nearest: bool, format:wgpu::TextureFormat, inverse: [f64; 6], size: [u32;2]) -> Option<crate::object_image_mips::MovingSource> {
         let level = if nearest { 0 } else { crate::object_image_mips::MovingImages::level(inverse) };

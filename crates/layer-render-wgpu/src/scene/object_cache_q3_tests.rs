@@ -26,7 +26,9 @@ fn initialized_object_bytes_are_charged_once_before_settle() {
         objects::ObjectWindow {origin:[0.;2],side:1.,size:extent});
     let mut cache=ObjectCache::for_scene(&scene,false);
     assert!(cache.resolve_collection(&r,document.scene(),&request,None).unwrap().is_none());
-    let mut task=cache.tasks.pop_front().unwrap();
+    let closure=ObjectCache::closure(&r,&request).unwrap();
+    assert!(cache.admit(&r,crate::residency::Class::Visible,std::slice::from_ref(&request),None).unwrap().is_none());
+    let mut task=cache.tasks.pop_first().unwrap().1;
     let mut native=sources::Inputs::default();native.image(&task.job.source,[0;2],r.device.working_space());
     task.inputs=crate::test_support::prepare_raster(&mut r,|r| {
         native.acquire(r,crate::residency::Class::Visible)
@@ -36,9 +38,11 @@ fn initialized_object_bytes_are_charged_once_before_settle() {
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     cache.advance_task(&mut r,&mut scene,&mut encoder,&sampler,&mut task,PASS_TAPS).unwrap();
     let accumulation=task.accumulation.as_ref().expect("initialization must allocate the accumulator");
+    let uniform=cache.uniform.as_ref().map_or(0,|(uniform,_)|uniform.size());
     let physical=task.texture.as_ref().map_or(0,texture_bytes)+accumulation.gpu_bytes()
         +task.collection.as_ref().map_or(0,|c|c.spare.as_ref().map_or(0,texture_bytes)+c.result.as_ref().map_or(0,texture_bytes));
-    assert_eq!(r.scene_tiers.display.used()-before,physical,"object allocation must consume its reservation, including the single shared uniform");
+    assert!(physical-uniform<=closure.bytes,"the admitted closure bounds the allocation");
+    assert_eq!(r.scene_tiers.display.used()-before,uniform,"object allocation consumes its admitted reservation; only the single shared uniform adds");
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
 }
 
@@ -59,7 +63,7 @@ fn a_refused_object_admission_wakes_once_when_the_display_limit_rises() {
     let mut scene=Scene::new(&r).unwrap();
     let content=scene.object_spatial.content(document.scene(),owner).unwrap();
     let request=scene.collection_job(&r,frame,owner,content,objects::ObjectWindow {origin:[0.;2],side:1.,size:extent});
-    let bytes=scene.object_results.window_bytes(&r,&request).unwrap();
+    let bytes=ObjectCache::closure(&r,&request).unwrap().total();
     let held=scene.object_results.working.charge(1);
     let display=r.scene_tiers.display.clone();
     display.set_limit(display.used()+bytes/2,0);
@@ -93,7 +97,7 @@ fn a_ledger_refused_object_admission_is_blocked_on_the_ledger_and_wakes_once_whe
     let mut scene=Scene::new(&r).unwrap();
     let content=scene.object_spatial.content(document.scene(),owner).unwrap();
     let request=scene.collection_job(&r,frame,owner,content,objects::ObjectWindow {origin:[0.;2],side:1.,size:extent});
-    let bytes=scene.object_results.window_bytes(&r,&request).unwrap();
+    let bytes=ObjectCache::closure(&r,&request).unwrap().total();
     let raster=r.admit_raster_working(512*MIB).expect("the raster holds most of the device");
     r.memory.display_owner().report(layer_core::MemoryReport {demand_gpu_bytes:1,..Default::default()});
     r.scene_tiers.display.set_limit(u64::MAX,0);

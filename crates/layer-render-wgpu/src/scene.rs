@@ -333,13 +333,13 @@ pub(super) fn raw_output(scope:&SceneScope)->Option<Output> {Some(match scope {
 #[derive(Clone,Copy)]
 pub(crate) struct Usage {pub(crate) working:u64,pub(crate) ram:u64,pub(crate) pinned:u64}
 #[derive(Clone)]
-pub(crate) struct Tiers {pub(super) display:Arc<crate::residency::Tier>,pub(super) windows:Arc<crate::residency::Tier>,pub(super) retiring:Arc<crate::residency::Tier>,pub(super) gpu:Arc<crate::residency::Tier>,pub(super) ram:Arc<crate::residency::Tier>,pub(super) objects:Arc<crate::residency::Tier>,pub(super) pinned:Arc<crate::residency::Tier>,pub(super) moving:[Arc<crate::residency::Tier>;2],pub(super) decodes:Arc<crate::residency::Tier>}
+pub(crate) struct Tiers {pub(super) display:Arc<crate::residency::Tier>,pub(super) windows:Arc<crate::residency::Tier>,pub(super) retiring:Arc<crate::residency::Tier>,pub(super) gpu:Arc<crate::residency::Tier>,pub(super) ram:Arc<crate::residency::Tier>,pub(super) objects:Arc<crate::residency::Tier>,pub(super) pinned:Arc<crate::residency::Tier>,pub(super) moving:[Arc<crate::residency::Tier>;2],pub(super) decodes:Arc<crate::residency::Tier>,pub(super) schedule:crate::schedule::Schedule}
 impl Default for Tiers {
     fn default()->Self {
         let retiring=Arc::new(crate::residency::Tier::default());
         let display=crate::residency::Tier::retiring_into(&retiring);
         Self {windows:crate::residency::Tier::within(&display),retiring,gpu:crate::residency::Tier::within(&display),objects:crate::residency::Tier::within(&display),moving:[crate::residency::Tier::within(&display),Default::default()],
-            ram:Default::default(),pinned:Default::default(),decodes:Default::default(),display}
+            ram:Default::default(),pinned:Default::default(),decodes:Default::default(),schedule:Default::default(),display}
     }
 }
 impl Tiers {
@@ -543,7 +543,7 @@ impl Scene {
             ram:self.images.metadata_bytes()+self.scale_sources.storage_bytes()+results_ram+exact_ram+self.object_spatial.storage_bytes()-self.object_spatial.key_bytes()+self.object_spatial.walked_key_bytes()}
     }
     #[cfg(test)]
-    pub(crate) fn object_gpu(&self)->[u64;2] {[self.tiers.objects.used(),self.object_results.walked_bytes()[1]+self.exact_object_results.walked_bytes()[1]]}
+    pub(crate) fn object_gpu(&self)->[u64;2] {[self.tiers.objects.used(),self.object_results.walked_bytes()[1]+self.exact_object_results.walked_bytes()[1]+self.tiers.schedule.reserved()]}
     pub(crate) fn usage(&self)->Usage {self.tiers.usage()}
     pub(crate) fn working_bytes(&self)->u64 {self.usage().working}
     pub(crate) fn store_metadata_bytes(&self)->u64 {self.scale_pages.lock().unwrap().metadata_bytes()}
@@ -558,12 +558,6 @@ impl Scene {
         self.object_results.flush_retiring(encoder);
         self.exact_object_results.flush_retiring(encoder);
         bytes
-    }
-    pub(crate) fn required_object_sources(&self) -> Result<Vec<sources::RequiredSource>, GpuRasterError> {
-        let mut tiles = Vec::new();
-        self.object_results.required_sources(&mut tiles)?;
-        self.exact_object_results.required_sources(&mut tiles)?;
-        Ok(tiles)
     }
     pub(super) fn submit_source_uploads(
         r: &mut WgpuRasterizer,

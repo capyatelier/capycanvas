@@ -155,6 +155,7 @@ impl Reservation {
     pub(crate) fn bytes(&self)->u64 {self.0.bytes()}
     pub(crate) fn class(&self)->Class {self.1}
     pub(crate) fn split(&mut self, bytes:u64)->Option<Self> {self.0.split(bytes).map(|charge|Self(charge,self.1))}
+    pub(crate) fn grow(&mut self, bytes:u64) {self.0.tier.add(bytes);self.0.bytes+=bytes;}
     pub(crate) fn charge(self, bytes: u64) -> Charge {
         let Self(mut charge, _) = self;
         if bytes < charge.bytes { charge.tier.release(charge.bytes - bytes); } else { charge.tier.add(bytes - charge.bytes); }

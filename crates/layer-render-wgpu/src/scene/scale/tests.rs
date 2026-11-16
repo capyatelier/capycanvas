@@ -2832,7 +2832,7 @@ fn a_large_display_prefetch_refusal_never_shrinks_the_raster_grant() {
     let cache=r.scale_display.as_ref().unwrap();
     cache.evict_window(cache.plan.bounds);
     let refusal=r.scene_tiers.display.blocked(crate::residency::Class::Prefetch,2<<30).expect("the prefetch does not fit");
-    cache.refuse(cache.plan.bounds,&refusal);
+    cache.refuse(None,cache.plan.bounds,&refusal);
     r.frame_room(frame);
     assert!(r.memory.raster_grant()>=before,"a display prefetch refusal took the raster's room: {} -> {}",before,r.memory.raster_grant());
 }

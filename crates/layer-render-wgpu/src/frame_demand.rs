@@ -23,8 +23,7 @@ impl WgpuRasterizer {
         use Outstanding::{Blocked, Runnable};
         let decode = self.image_decode_waiting();
         let gated = |pending: bool| pending.then_some(if decode { Blocked(Input::Decode) } else { Runnable });
-        let objects_waiting = decode && self.scene.as_deref().is_some_and(scene::Scene::objects_waiting);
-        let objects = |pending: bool| pending.then_some(if objects_waiting { Blocked(Input::Decode) } else { Runnable });
+        let objects = self.scene.as_deref().and_then(|scene| scene.objects_outstanding(self));
         let selection_compiled = self.selection_clip.pipelines().into_iter().take(2).all(|pipeline| pipeline.ready());
         [
             ("display selection", self.pending_display_selection.is_some()
@@ -43,7 +42,7 @@ impl WgpuRasterizer {
             ("document damage", (!self.document_damage.is_empty()).then_some(Runnable)),
             ("settling", self.settling.is_some().then_some(Runnable)),
             ("retouch sources", gated(self.retouch.as_ref().is_some_and(|retouch| retouch.pending()))),
-            ("navigator", self.navigator.outstanding(self).map(|state| if objects_waiting { Blocked(Input::Decode) } else { state })),
+            ("navigator", self.navigator.outstanding(self).map(|state| match objects { Some(Blocked(input)) => Blocked(input), _ => state })),
             ("canonical names", (self.navigator.waiting_for_name()
                 || self.scale_display.as_ref().is_some_and(|cache| cache.waiting_for_name(self))).then_some(Blocked(Input::Name))),
             ("transform sources", gated(self.transform_sources_pending && self.transform_preview.is_some())),
@@ -51,7 +50,7 @@ impl WgpuRasterizer {
                 .then_some(Blocked(Input::Compile))),
             ("moving images", self.moving_images_outstanding()),
             ("decodes", gated(self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()))),
-            ("objects", objects(self.moving_layer.is_none() && self.scene.as_deref().is_some_and(scene::Scene::objects_demanded))),
+            ("objects", objects.filter(|_| self.moving_layer.is_none())),
             ("display", self.scale_display.as_ref().and_then(|cache| cache.outstanding(self))),
             ("display retention", self.retention_above_grant().then_some(Runnable)),
             ("paper shade", self.paper_shade_work_pending().then_some(Runnable)),

@@ -61,7 +61,6 @@ impl std::hash::Hash for Key {
 #[cfg(test)]
 std::thread_local! {
     static READS:std::cell::RefCell<Vec<Key>>=const {std::cell::RefCell::new(Vec::new())};
-    static KEY_COMPARISONS:std::cell::Cell<Option<u64>>=const {std::cell::Cell::new(None)};
 }
 #[cfg(test)]
 std::thread_local! {
@@ -568,8 +567,6 @@ impl Key {
         Self::Raster(RasterIdentity::of(blob), space, destination, blob.descriptor)
     }
     fn matches(&self, other: &Self) -> bool {
-        #[cfg(test)]
-        KEY_COMPARISONS.with(|count|if let Some(value)=count.get() {count.set(Some(value+1));});
         match (self, other) {
             (Self::Image(a, x), Self::Image(b, y)) => a.ptr_eq(b) && x == y,
             (Self::PaintBase(a, x, p), Self::PaintBase(b, y, q)) => a.ptr_eq(b) && x == y && p == q,
@@ -911,10 +908,6 @@ impl AcceptedInputs {
         self.leases.retain(|input|input.read.as_ref().is_some_and(|read|inputs.tiles.iter().any(|(key,_,_,_)|read.key.matches(key))));
         self.placements.retain(&inputs.placements);
         self.decisions.0.retain(|key,_|inputs.decisions.0.contains_key(key));
-    }
-    pub(crate) fn holds_image(&self,source:&Arc<SourceImage>,coordinate:[u32;2])->bool {
-        let key=Key::Image(Arc::downgrade(source),coordinate);
-        self.iter().filter_map(|input|input.read.as_ref()).any(|read|read.key.matches(&key))
     }
     pub(crate) fn finish_image(&mut self,source:&Arc<SourceImage>,coordinate:[u32;2]) {
         let key=Key::Image(Arc::downgrade(source),coordinate);
@@ -1314,15 +1307,6 @@ impl DecodedTiles {
         self.in_flight.set_limit(upload_bytes, upload_bytes / 2);
     }
     pub fn upload_limit(&self) -> u64 { self.in_flight.limit() }
-    pub(crate) fn demand_images(&self, tiles: impl IntoIterator<Item = RequiredSource>) {
-        let demanded = tiles.into_iter().filter_map(|(source, coordinate)| self.keys.get(&Key::Image(Arc::downgrade(&source), coordinate)).copied()).collect::<Vec<_>>();
-        let epoch = self.decoded.heap().epoch();
-        for index in demanded.into_iter().rev() {
-            let slot = &self.slots[index];
-            slot.touch(epoch);slot.offer();
-            slot.lease.stamp(crate::residency::Class::Prefetch);
-        }
-    }
     pub(crate) fn release_unused(&self, keep: u64) {
         let epoch = self.decoded.heap().epoch();
         let unused = |slot: &&Slot| slot.used.load(Ordering::Relaxed).saturating_add(1) < epoch && slot.ready() && !slot.leased();

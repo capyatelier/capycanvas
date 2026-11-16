@@ -1,16 +1,22 @@
 use super::*;
 use crate::object_sampling::{ObjectAccumulator, SamplingPhase};
 use objects::{COLLECTION_PART, CollectionJob, ObjectJob, ObjectKey};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 type Coordinates = Arc<std::sync::Mutex<crate::object_image_mips::CoordinateSlot>>;
 type CoordinateKey = ([u64; 6], [u32; 2], u32, u32);
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::residency::{Charge, Lease, Reservation, Tier};
+use crate::residency::{Charge, Lease, Tier};
+use crate::schedule::{Budget, Closure, Group, Schedule};
+use crate::frame_demand::Input;
 
 pub(super) type DamageKey = (u32, Option<OccurrenceHandle>);
+type Place = (OccurrenceHandle, u64, [i64; 2], u64);
+type Space = (layer_core::BlendSpace, layer_core::color::RgbSpace);
+pub(super) type ObjectWait = (Arc<Lease>, Option<crate::schedule::Waiter>);
 pub(super) const INTERACTIVE_TAPS: u64 = 1 << 20;
 pub(super) const IDLE_TAPS: u64 = 8 << 20;
-const PREFETCH: usize = 18;
+const SEATS: usize = (IDLE_TAPS / PASS_TAPS) as usize;
+static OWNERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub(super) const PASS_TAPS: u64 = 1 << 16;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -39,7 +45,8 @@ struct Task {
     inputs:sources::AcceptedInputs,
     gpu: Charge,
     ram: Charge,
-    reserved: Option<Reservation>,
+    group: Option<Group>,
+    seated: u32,
     lease: Arc<Lease>,
     pin: std::sync::Weak<TaskPin>,
     hold: Option<Arc<TaskPin>>,
@@ -59,18 +66,14 @@ impl Task {
     fn offer(&self) {
         let pages = u64::from(self.key.size[0].div_ceil(PAGE_SIZE)) * u64::from(self.key.size[1].div_ceil(PAGE_SIZE));
         let done = if !self.valid.load(Ordering::Acquire) { 0 } else if self.complete { pages } else { self.tile as u64 };
-        let bytes = self.gpu_bytes() + self.reserved.as_ref().map_or(0, Reservation::bytes);
+        let bytes = self.gpu_bytes();
         self.lease.offer(bytes, crate::residency::rebuild_value(done * PASS_TAPS, bytes));
     }
     fn unfinished(&self) -> bool { !self.complete || !self.valid.load(Ordering::Acquire) }
-    fn runnable(&self) -> bool {
-        if !self.valid.load(Ordering::Acquire) { return true; }
-        if self.complete { return false; }
-        let Some(accumulation) = &self.accumulation else { return true; };
-        if self.collection.as_ref().is_some_and(|c| c.next) { return true; }
-        if !accumulation.nearest_coordinates_ready() { return self.coordinates.as_ref().is_none_or(|slot| slot.lock().unwrap().result.is_some()); }
-        self.phase != 1 || self.tile >= self.tiles.len() || !self.inputs.holds_image(&self.job.source, self.tiles[self.tile])
-            || sources::accepted_image(&self.inputs, &self.job.source, self.tiles[self.tile]).map_or(true, |read| read.ready())
+    fn waits_for(&self) -> Input {
+        let decoding = self.coordinates.as_ref().is_some_and(|slot| slot.lock().unwrap().result.is_none())
+            || self.phase == 1 && self.tile < self.tiles.len() && sources::accepted_image(&self.inputs, &self.job.source, self.tiles[self.tile]).is_ok_and(|read| !read.ready());
+        if decoding { Input::Decode } else { Input::Gpu }
     }
     fn use_in(&mut self, frame: u64, tier: &Arc<Tier>) -> Option<Arc<TaskPin>> { (self.used != frame).then(|| { self.used = frame; self.pin(tier) }) }
     fn sync(&mut self, tier: &Arc<Tier>, retains: bool) {
@@ -81,7 +84,7 @@ impl Task {
         self.offer();
     }
     fn release(&mut self) {
-        self.hold = None; self.reserved = None;
+        self.hold = None; self.group = None;
         if let Some(pin) = self.pin.upgrade() { pin.0.lock().unwrap().resize(0); }
         self.gpu.resize(0); self.ram.resize(0);
     }
@@ -92,8 +95,10 @@ impl Drop for InFlight { fn drop(&mut self) { self.0.store(false, Ordering::Rele
 struct Retired { #[cfg(not(target_arch = "wasm32"))] _task: Task, _charges: [Charge; 3] }
 pub(super) struct ObjectCache {
     keys: object_spatial::KeyLeases, gpu: Arc<Tier>, working: Arc<Tier>, pinned: Arc<Tier>, ram: Arc<Tier>, retired: Arc<Tier>, retired_gpu: Arc<Tier>,
+    objects: Arc<Tier>, schedule: Schedule, owner: u64,
     queues: Charge, damage_bytes: Charge, coordinate_slots: Charge, frame: u64, used: Vec<Arc<TaskPin>>,
-    tasks: VecDeque<Task>, damage: BTreeMap<DamageKey, scale::Damage>, retiring: Vec<Task>, in_flight: Arc<AtomicBool>,
+    tasks: BTreeMap<u64, Task>, places: BTreeSet<Place>, spaces: HashMap<Space, usize>, next: u64,
+    damage: BTreeMap<DamageKey, scale::Damage>, retiring: Vec<Task>, in_flight: Arc<AtomicBool>,
     coordinates: HashMap<CoordinateKey, crate::object_image_mips::CoordinateDestination>, retains: bool, uniform: Option<(wgpu::Buffer, Charge)>, requester: Class,
     evicted: Arc<AtomicBool>,
 }
@@ -103,44 +108,87 @@ impl ObjectCache {
         let [ram, retired] = [(); 2].map(|()| Tier::within(&tiers.ram));
         let working = Tier::within(&gpu);
         Self { keys, pinned: Tier::within(&tiers.pinned), queues: ram.charge(0), damage_bytes: ram.charge(0), coordinate_slots: ram.charge(0), gpu, working, ram, retired, retired_gpu,
-            frame: 1, used: Vec::new(), tasks: VecDeque::new(), damage: BTreeMap::new(), retiring: Vec::new(), in_flight: Default::default(),
+            objects: tiers.objects.clone(), schedule: tiers.schedule.clone(), owner: OWNERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            frame: 1, used: Vec::new(), tasks: BTreeMap::new(), places: BTreeSet::new(), spaces: HashMap::new(), next: 0,
+            damage: BTreeMap::new(), retiring: Vec::new(), in_flight: Default::default(),
             coordinates: HashMap::new(), retains, uniform: None, requester: Class::Visible, evicted: Default::default() }
     }
     pub(super) fn set_requester(&mut self, class: Class) { self.requester = class; }
-    fn uniform_bytes(&self) -> u64 { self.uniform.as_ref().map_or(0, |(uniform, _)| uniform.size()) }
     fn started(&self, task: &Task) -> bool { Arc::ptr_eq(task.gpu.tier(), &self.working) }
-    fn sync_queues(&mut self) { self.queues.resize((self.tasks.capacity() + self.retiring.capacity()) as u64 * std::mem::size_of::<Task>() as u64); }
-    fn prepare_inputs(&mut self,r:&mut WgpuRasterizer,scene:&mut Scene,task:&mut Task)->Result<(),GpuRasterError> {
-        let mut wanted=sources::Inputs::default();
-        for &coordinate in task.tiles.iter().skip(task.tile).take(PREFETCH) {wanted.image(&task.job.source,coordinate,r.device.working_space());}
-        task.inputs.retain(&wanted);
-        let coordinates=task.tiles.iter().skip(task.tile).take(PREFETCH).copied().collect::<Vec<_>>();
-        for coordinate in coordinates {
-            let mut inputs=sources::Inputs::default();inputs.image(&task.job.source,coordinate,r.device.working_space());
+    fn queue_bytes(&self) -> u64 {
+        (self.tasks.len() * std::mem::size_of::<(u64, Task)>() + self.places.len() * std::mem::size_of::<Place>()
+            + self.spaces.capacity() * std::mem::size_of::<(Space, usize)>() + self.retiring.capacity() * std::mem::size_of::<Task>()) as u64
+    }
+    fn sync_queues(&mut self) { self.queues.resize(self.queue_bytes()); }
+    fn cells(request: &CollectionJob, bounds: DocRect) -> ([i64; 2], [i64; 2]) {
+        let side = (f64::from(PAGE_SIZE) * request.window.side.max(1.)) as i64;
+        (bounds.min.map(|v| v.div_euclid(side)), std::array::from_fn(|axis| (bounds.max[axis] - 1).max(bounds.min[axis]).div_euclid(side)))
+    }
+    fn index(&mut self, id: u64, request: &CollectionJob, add: bool) {
+        let ([x0, y0], [x1, y1]) = Self::cells(request, request.bounds());
+        for y in y0..=y1 { for x in x0..=x1 {
+            let place = (request.owner, request.window.side.to_bits(), [x, y], id);
+            if add { self.places.insert(place); } else { self.places.remove(&place); }
+        }}
+        let space = self.spaces.entry((request.blend, request.context)).or_default();
+        if add { *space += 1; } else { *space -= 1; if *space == 0 { self.spaces.remove(&(request.blend, request.context)); } }
+    }
+    fn near(&self, request: &CollectionJob, bounds: DocRect) -> Vec<u64> {
+        let ([x0, y0], [x1, y1]) = Self::cells(request, bounds);
+        let side = request.window.side.to_bits();
+        let mut ids: Vec<u64> = (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| [x, y]))
+            .flat_map(|cell| self.places.range((request.owner, side, cell, 0)..=(request.owner, side, cell, u64::MAX)).map(|place| place.3)).collect();
+        ids.sort_unstable(); ids.dedup();
+        #[cfg(test)] crate::test_support::PassCounts {object_lookups:1,object_lookup_visits:ids.len() as u64,..Default::default()}.record();
+        ids
+    }
+    fn find(&self, request: &CollectionJob) -> Option<u64> {
+        let origin = request.bounds();
+        self.near(request, DocRect { max: origin.min.map(|v| v + 1), ..origin }).into_iter()
+            .find(|id| self.tasks[id].collection.as_ref().is_some_and(|c| c.request.same(request)))
+    }
+    fn insert(&mut self, task: Task) -> u64 {
+        let id = self.next; self.next += 1;
+        if let Some(c) = &task.collection { let request = c.request.clone(); self.index(id, &request, true); }
+        self.tasks.insert(id, task); self.sync_queues();
+        id
+    }
+    fn take(&mut self, id: u64) -> Option<Task> {
+        let task = self.tasks.remove(&id)?;
+        if let Some(c) = &task.collection { let request = c.request.clone(); self.index(id, &request, false); }
+        Some(task)
+    }
+    fn retire_where(&mut self, mut retired: impl FnMut(&Task) -> bool) {
+        let ids: Vec<u64> = self.tasks.iter().filter(|(_, task)| retired(task)).map(|(id, _)| *id).collect();
+        for id in ids { if let Some(task) = self.take(id) { self.retire(task); } }
+        self.sync_queues();
+    }
+    fn prepare_inputs(&mut self,r:&mut WgpuRasterizer,task:&mut Task)->Result<(),GpuRasterError> {
+        let Some(group)=&task.group else {return Ok(());};
+        for index in task.tile..task.tiles.len() {
+            let mut inputs=sources::Inputs::default();inputs.image(&task.job.source,task.tiles[index],r.device.working_space());
             if task.inputs.contains(&inputs) {continue;}
-            let mut context=(&mut *self,&mut *scene,&mut *task);
-            let accepted=inputs.accept(r,&mut context,|(cache,scene,task),r,inputs| {
-                task.sync(&cache.pinned,cache.retains);
-                let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
-                r.admit_display(Some(scene),Class::Visible,bytes).ok()
-            },|_,_|Ok(()),|(cache,_,task),_,_| {task.sync(&cache.pinned,cache.retains);Ok(())});
-            match accepted {
-                Ok(Some(((),inputs)))=>task.inputs.extend(inputs)?,
-                Ok(None)=>break,
-                Err(error) if error.is_preparation_pending()=>break,
-                Err(error)=>return Err(error),
+            let Some(seat)=self.schedule.budget(group,Budget::seat).flatten() else {break;};
+            match inputs.accept(r,&mut (),|_,_,_|Some(seat),|_,_|Ok(()),|_,_,_|Ok(())) {
+                Ok(Some(((),inputs)))=>{task.inputs.extend(inputs)?;task.seated+=1;},
+                Ok(None)=>{self.schedule.budget(group,Budget::vacate);break;},
+                Err(error)=>{self.schedule.budget(group,Budget::vacate);if error.is_preparation_pending() {break;} return Err(error);},
             }
         }
         task.inputs.prepare(r)?;Ok(())
     }
+    fn vacate(&self,task:&mut Task) {
+        if let Some(group)=&task.group {for _ in 0..task.seated {self.schedule.budget(group,Budget::vacate);}}
+        task.seated=0;task.inputs=Default::default();
+    }
     pub fn retire_evicted(&mut self) -> u64 {
         if !self.evicted.swap(false, Ordering::AcqRel) { return 0; }
         let mut bytes = 0;
-        for task in std::mem::take(&mut self.tasks) {
-            if task.lease.evicted() && task.pin.strong_count() == 0 { bytes += task.gpu_bytes(); self.retire(task); }
-            else { task.lease.restore(); task.offer(); self.tasks.push_back(task); }
-        }
-        self.sync_queues();
+        self.retire_where(|task| {
+            let evicted = task.lease.evicted() && task.pin.strong_count() == 0;
+            if evicted { bytes += task.gpu_bytes(); } else { task.lease.restore(); task.offer(); }
+            evicted
+        });
         bytes
     }
     #[cfg(test)]
@@ -149,38 +197,23 @@ impl ObjectCache {
         self.gpu.heap().evict(used.saturating_sub(gpu), Class::Fallback);
         self.retire_evicted()
     }
-    pub fn clear(&mut self) { while let Some(task) = self.tasks.pop_front() { self.retire(task); } self.damage.clear(); self.damage_bytes.resize(0); self.coordinates.clear(); }
-    fn retire(&mut self, mut task: Task) { task.coordinates = None; task.reserved = None; task.lease.hold(); task.hold = Some(task.pin(&self.pinned)); self.retiring.push(task); self.sync_queues(); }
-    pub fn pending(&self) -> bool { self.tasks.iter().any(Task::unfinished) }
-    pub fn demanded(&self) -> bool { self.tasks.iter().any(|task| task.unfinished() && task.lease.recent()) }
-    pub fn waiting(&self) -> bool { self.pending() && !self.in_flight.load(Ordering::Acquire) && !self.tasks.iter().any(Task::runnable) }
-    pub fn required_sources(&self, tiles: &mut Vec<sources::RequiredSource>) -> Result<(), GpuRasterError> {
-        let Some(task) = self.tasks.iter().find(|task| task.unfinished()) else { return Ok(()); };
-        let restarted = !task.valid.load(Ordering::Acquire);
-        let next = task.collection.as_ref().filter(|collection| restarted || collection.next)
-            .map(|collection| collection.request.child(0, collection.request.part(if restarted { 0 } else { collection.part }), task.job.output.clone())).transpose()?;
-        let job = next.as_ref().unwrap_or(&task.job);
-        if task.tiles.is_empty() || restarted || next.is_some() {
-            let (_, bounds, _) = working_set(job)?;
-            tiles.extend(page_coordinates(bounds).take(PREFETCH).map(|coordinate| (job.source.clone(), coordinate)));
-        } else {
-            tiles.extend(task.tiles.iter().skip(task.tile).take(PREFETCH).map(|&coordinate| (task.job.source.clone(), coordinate)));
-        }
-        Ok(())
-    }
+    pub fn clear(&mut self) { self.retire_where(|_| true); self.damage.clear(); self.damage_bytes.resize(0); self.coordinates.clear(); }
+    fn retire(&mut self, mut task: Task) { task.coordinates = None; task.group = None; task.lease.hold(); task.hold = Some(task.pin(&self.pinned)); self.retiring.push(task); self.sync_queues(); }
+    pub fn pending(&self) -> bool { self.tasks.values().any(Task::unfinished) }
+    pub fn in_flight(&self) -> bool { self.in_flight.load(Ordering::Acquire) }
     #[cfg(test)]
     pub fn request_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
-        self.tasks.iter().filter_map(|task| task.collection.as_ref().map(|collection|
+        self.tasks.values().filter_map(|task| task.collection.as_ref().map(|collection|
             (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
     }
     #[cfg(test)]
     pub fn completed_windows(&self) -> Vec<(std::sync::Weak<AtomicBool>, OccurrenceHandle, objects::ObjectWindow)> {
-        self.tasks.iter().filter(|task| task.complete).filter_map(|task| task.collection.as_ref().map(|collection|
+        self.tasks.values().filter(|task| task.complete).filter_map(|task| task.collection.as_ref().map(|collection|
             (Arc::downgrade(&task.valid), collection.request.owner, collection.request.window))).collect()
     }
     #[cfg(test)]
     pub fn work_progress(&self) -> (usize, usize, u64) {
-        (self.tasks.len(), self.tasks.iter().filter(|task|task.complete).count(), self.tasks.iter().map(|task|task.step + task.tile as u64 * 1000000 + task.phase as u64 * 1000000000 + task.collection.as_ref().map_or(0,|c|c.part as u64 * 1000000000000)).sum())
+        (self.tasks.len(), self.tasks.values().filter(|task|task.complete).count(), self.tasks.values().map(|task|task.step + task.tile as u64 * 1000000 + task.phase as u64 * 1000000000 + task.collection.as_ref().map_or(0,|c|c.part as u64 * 1000000000000)).sum())
     }
     #[cfg(test)]
     pub fn bytes(&self) -> u64 { let [ram, gpu] = self.memory_bytes(); ram + gpu }
@@ -188,25 +221,21 @@ impl ObjectCache {
     pub fn memory_bytes(&self) -> [u64; 2] { [self.ram.used() + self.retired.used(), self.gpu.used() + self.retired_gpu.used()] }
     #[cfg(test)]
     pub fn walked_bytes(&self) -> [u64; 3] {
-        let tasks = || self.tasks.iter().chain(self.retiring.iter());
-        let gpu = self.uniform_bytes() + self.retired_gpu.used() + tasks().map(|task| task.gpu_bytes() + task.reserved.as_ref().map_or(0, Reservation::bytes)).sum::<u64>();
+        let tasks = || self.tasks.values().chain(self.retiring.iter());
+        let gpu = self.uniform.as_ref().map_or(0, |(uniform, _)| uniform.size()) + self.retired_gpu.used() + tasks().map(Task::gpu_bytes).sum::<u64>();
         let ram = self.damage.values().map(|damage| std::mem::size_of::<(u32, scale::Damage)>() as u64 + damage.regions.capacity() as u64 * std::mem::size_of::<PixelRect>() as u64).sum::<u64>()
             + self.retired.used() + self.coordinates.values().filter_map(std::sync::Weak::upgrade).map(|coordinates| { let state = coordinates.lock().unwrap(); std::mem::size_of::<Option<crate::object_image_mips::CoordinateResult>>() as u64 + state.result.as_ref().and_then(|result| result.as_ref().ok()).map_or(0, |bytes| bytes.capacity() as u64) }).sum::<u64>()
             + self.coordinates.capacity() as u64 * (std::mem::size_of::<CoordinateKey>() + std::mem::size_of::<crate::object_image_mips::CoordinateDestination>()) as u64
-            + (self.tasks.capacity() + self.retiring.capacity()) as u64 * std::mem::size_of::<Task>() as u64 + tasks().map(Task::ram_bytes).sum::<u64>();
+            + self.queue_bytes() + tasks().map(Task::ram_bytes).sum::<u64>();
         let pinned = self.retired_gpu.used() + self.retiring.iter().map(Task::gpu_bytes).sum::<u64>()
-            + self.tasks.iter().filter(|task| task.used == self.frame || task.pin.strong_count() > usize::from(task.hold.is_some()) || !self.retains).map(Task::gpu_bytes).sum::<u64>();
+            + self.tasks.values().filter(|task| task.used == self.frame || task.pin.strong_count() > usize::from(task.hold.is_some()) || !self.retains).map(Task::gpu_bytes).sum::<u64>();
         [ram, gpu, pinned]
     }
     #[cfg(test)]
     pub fn pinned_gpu_bytes(&self) -> u64 { self.pinned.used() }
-    pub fn needs_retirement(&self) -> bool { !self.retiring.is_empty() || (!self.retains && self.tasks.iter().any(|task| task.used == self.frame && task.complete)) }
+    pub fn needs_retirement(&self) -> bool { !self.retiring.is_empty() || (!self.retains && self.tasks.values().any(|task| task.used == self.frame && task.complete)) }
     pub fn flush_retired(&mut self, encoder: &crate::submission::CommandEncoder) {
-        if self.retains { self.reset_used(); } else {
-            let mut retained = VecDeque::new();
-            while let Some(task) = self.tasks.pop_front() { if task.used == self.frame && task.complete { self.retire(task); } else { retained.push_back(task); } }
-            self.tasks = retained; self.sync_queues();
-        }
+        if self.retains { self.reset_used(); } else { let frame = self.frame; self.retire_where(|task| task.used == frame && task.complete); }
         self.flush_retiring(encoder);
     }
     pub fn flush_retiring(&mut self,encoder:&crate::submission::CommandEncoder) {
@@ -223,32 +252,45 @@ impl ObjectCache {
     }
     pub fn reset_used(&mut self) { self.frame += 1; self.used.clear(); }
     pub fn take_damage(&mut self) -> BTreeMap<DamageKey, scale::Damage> { self.damage_bytes.resize(0); std::mem::take(&mut self.damage) }
-    pub fn cover(&mut self, request: &CollectionJob, mut inputs:Option<&mut sources::AcceptedInputs>) -> (Vec<(wgpu::TextureView, DocRect)>, bool, Vec<DocRect>) {
+    pub fn cover(&mut self, request: &CollectionJob, mut inputs:Option<&mut sources::AcceptedInputs>) -> (Vec<(wgpu::TextureView, DocRect)>, bool, Vec<DocRect>, Vec<ObjectWait>) {
         let window = request.bounds();
         let mut missing = vec![window];
         let mut pieces = Vec::new();
         let mut complete = true;
-        for task in &mut self.tasks {
+        let mut waits = Vec::new();
+        for id in self.near(request, window) {
+            let Self { tasks, pinned, used, frame, schedule, .. } = self;
+            let task = tasks.get_mut(&id).expect("an indexed object window is cached");
             let Some(bounds) = task.collection.as_ref().filter(|c| c.request.same_content(request)).map(|c| c.request.bounds()) else { continue; };
             if bounds.intersect(window).is_empty() { continue; }
-            if let Some(inputs)=inputs.as_deref_mut() {inputs.hold(task.pin(&self.pinned));}
             missing = missing.into_iter().flat_map(|rect| rect.subtract(bounds)).filter(|rect| !rect.is_empty()).collect();
-            if task.complete && task.valid.load(Ordering::Acquire) {
-                self.used.extend(task.use_in(self.frame, &self.pinned)); task.offer();
+            let ready = task.complete && task.valid.load(Ordering::Acquire);
+            if let Some(inputs)=inputs.as_deref_mut() {
+                if !inputs.declaring() {waits.push((task.lease.clone(),task.group.as_ref().filter(|_|!ready).and_then(|group|schedule.waiter(group))));}
+                inputs.hold(task.pin(pinned));
+            }
+            if ready {
+                used.extend(task.use_in(*frame, pinned)); task.offer();
                 pieces.push((task.job.output.clone(), bounds));
             } else { complete = false; }
         }
-        (pieces, complete, missing)
+        (pieces, complete, missing, waits)
     }
     pub(super) fn stamp(&mut self, request: &CollectionJob, class: Class) {
         let window = request.bounds();
-        for task in &mut self.tasks {
-            if task.collection.as_ref().is_some_and(|c| c.request.same_content(request) && !c.request.bounds().intersect(window).is_empty()) { task.lease.stamp(class); }
+        let epoch = self.gpu.heap().epoch();
+        for id in self.near(request, window) {
+            let task = &self.tasks[&id];
+            if task.collection.as_ref().is_some_and(|c| c.request.same_content(request) && !c.request.bounds().intersect(window).is_empty()) {
+                task.lease.stamp(class);
+                if let Some(group)=&task.group {self.schedule.rewant(group,class,epoch);}
+            }
         }
     }
     pub fn prepare_collection(&mut self, r: &WgpuRasterizer, scene: SceneView<'_>, request: &CollectionJob, inputs:Option<&mut sources::AcceptedInputs>) -> Result<bool, GpuRasterError> {
-        if let Some(task) = self.tasks.iter_mut().find(|task| task.collection.as_ref().is_some_and(|c| c.request.same(request))) {
+        if let Some(task) = self.find(request).and_then(|id| self.tasks.get_mut(&id)) {
             task.lease.stamp(self.requester);
+            if let Some(group)=&task.group {self.schedule.rewant(group,self.requester,self.gpu.heap().epoch());}
             if let Some(inputs)=inputs {inputs.hold(task.pin(&self.pinned));}
             let ready = task.complete && task.valid.load(Ordering::Acquire);
             if self.retains && ready { self.used.extend(task.use_in(self.frame, &self.pinned)); }
@@ -257,82 +299,73 @@ impl ObjectCache {
         self.resolve_collection(r, scene, request, inputs).map(|_| false)
     }
     pub fn resolve_collection(&mut self,r:&WgpuRasterizer,_scene:SceneView<'_>,request:&CollectionJob,inputs:Option<&mut sources::AcceptedInputs>)->Result<Option<wgpu::TextureView>,GpuRasterError> {
-        let mut retained=VecDeque::new();
-        while let Some(task)=self.tasks.pop_front() {
-            if task.collection.as_ref().is_some_and(|c|c.request.blend!=request.blend || c.request.context!=request.context) {self.retire(task);}
-            else {retained.push_back(task);}
+        if self.spaces.keys().any(|space|*space!=(request.blend,request.context)) {
+            self.retire_where(|task|task.collection.as_ref().is_some_and(|c|c.request.blend!=request.blend || c.request.context!=request.context));
         }
-        self.tasks=retained;self.sync_queues();
-        if let Some(task)=self.tasks.iter_mut().find(|task|task.collection.as_ref().is_some_and(|c|c.request.same(request))) {
+        if let Some(task)=self.find(request).and_then(|id|self.tasks.get_mut(&id)) {
             task.lease.stamp(self.requester);
+            if let Some(group)=&task.group {self.schedule.rewant(group,self.requester,self.gpu.heap().epoch());}
             if let Some(inputs)=inputs {inputs.hold(task.pin(&self.pinned));}
             if task.complete && task.valid.load(Ordering::Acquire) {self.used.extend(task.use_in(self.frame,&self.pinned));task.offer();return Ok(Some(task.job.output.clone()));}
             return Ok(None);
         }
-        self.window_bytes(r,request)?;
-        let task=self.task(r,request,None,self.requester)?;
-        self.push(task,inputs);
+        self.add(r,request,self.requester,inputs)?;
         Ok(None)
     }
-    fn task(&self,r:&WgpuRasterizer,request:&CollectionJob,reserved:Option<Reservation>,class:Class)->Result<Task,GpuRasterError> {
+    fn add(&mut self,r:&WgpuRasterizer,request:&CollectionJob,class:Class,inputs:Option<&mut sources::AcceptedInputs>)->Result<(),GpuRasterError> {
+        let group=self.schedule.want(self.owner,self.next,class,false,Self::closure(r,request)?,self.gpu.heap().epoch());
         let job=request.child(0,request.part(0),r.empty_view.clone())?;
         let key=Key {object:job.key.clone(),inverse:job.inverse.map(f64::to_bits),size:job.size};
         let lease=self.gpu.heap().lease(&self.evicted);lease.stamp(class);
         let collection=Collection {_metadata:self.keys.lease(&request.authored),request:request.clone(),part:0,spare:None,result:None,next:false};
-        Ok(Task {collection:Some(collection),key,job,texture:None,accumulation:None,tiles:Vec::new(),phase:0,tile:0,step:0,
+        let mut task=Task {collection:Some(collection),key,job,texture:None,accumulation:None,tiles:Vec::new(),phase:0,tile:0,step:0,
             valid:Arc::new(AtomicBool::new(true)),bounds:request.bounds(),side:request.window.side,complete:false,used:0,coordinates:None,coordinates_first:0,inputs:Default::default(),
-            gpu:self.gpu.charge(0),ram:self.ram.charge(0),reserved,lease,pin:std::sync::Weak::new(),hold:None})
-    }
-    fn push(&mut self,mut task:Task,inputs:Option<&mut sources::AcceptedInputs>) {
+            gpu:self.gpu.charge(0),ram:self.ram.charge(0),group:Some(group),seated:0,lease,pin:std::sync::Weak::new(),hold:None};
         task.sync(&self.pinned,self.retains);
         if let Some(inputs)=inputs {inputs.hold(task.pin(&self.pinned));}
-        self.tasks.push_back(task);self.sync_queues();
+        self.insert(task);
+        Ok(())
     }
-    fn window_bytes(&self,r:&WgpuRasterizer,request:&CollectionJob)->Result<u64,GpuRasterError> {
+    fn closure(r:&WgpuRasterizer,request:&CollectionJob)->Result<Closure,GpuRasterError> {
         let part=request.part(0);
-        let mut maximum=0;
+        let (mut maximum,mut pages)=(0,0);
         for index in 0..request.keys.len() {
             let job=request.child(index,part,r.empty_view.clone())?;
             r.preflight_image_sampling(job.inverse,job.size,job.nearest)?;
-            maximum=maximum.max(working_set(&job)?.0);
+            let (bytes,_,footprint)=working_set(&job)?;
+            maximum=maximum.max(bytes);pages=pages.max(footprint);
         }
         let pixels=u64::from(part.size[0])*u64::from(part.size[1]);
         let result = if request.parts() > 1 { request.window.size.map(u64::from).into_iter().product::<u64>() * 16 } else { 0 };
-        let bytes=maximum+pixels*16+result;
-        if bytes > r.memory.display_limit() {return Err(GpuRasterError::SourceWorkingSetExceeded);}
-        Ok(bytes)
+        let (bytes,seat)=(maximum+pixels*16+result,sources::NORMALIZED_PAGE_BYTES);
+        let room=r.memory.display_limit().saturating_sub(bytes)/seat;
+        if room==0 {return Err(GpuRasterError::SourceWorkingSetExceeded);}
+        Ok(Closure {bytes,seats:pages.clamp(1,SEATS).min(room as usize) as u32,seat})
     }
     pub(super) fn admit(&mut self,r:&WgpuRasterizer,class:Class,requests:&[CollectionJob],mut inputs:Option<&mut sources::AcceptedInputs>)->Result<Option<crate::residency::Blocked>,GpuRasterError> {
-        let mut missing=Vec::<(CollectionJob,u64)>::new();
+        let epoch=self.gpu.heap().epoch();
         for request in requests {
-            if let Some(task)=self.tasks.iter_mut().find(|task|task.collection.as_ref().is_some_and(|c|c.request.same(request))) {
+            if let Some(task)=self.find(request).and_then(|id|self.tasks.get_mut(&id)) {
                 task.lease.stamp(class);
+                if let Some(group)=&task.group {self.schedule.rewant(group,class,epoch);}
                 if let Some(inputs)=inputs.as_deref_mut() {inputs.hold(task.pin(&self.pinned));}
-            } else if !missing.iter().any(|(known,_)|known.same(request)) {missing.push((request.clone(),self.window_bytes(r,request)?));}
+            } else {self.add(r,request,class,inputs.as_deref_mut())?;}
         }
-        if missing.is_empty() {return Ok(None);}
-        let bytes=missing.iter().map(|(_,bytes)|bytes).sum::<u64>();
-        let admission=class.min(if self.working.used()==0 || !self.retains {Class::Visible} else {Class::Prefetch});
-        let mut reservation=match r.admit_tier(None,&self.working,admission,bytes) {Ok(reservation)=>reservation,Err(blocked)=>return Ok(Some(blocked))};
-        for (request,bytes) in missing {
-            let reserved=reservation.split(bytes).ok_or(GpuRasterError::Invariant("an admitted window exceeds its unit reservation"))?;
-            let task=self.task(r,&request,Some(reserved),class)?;
-            self.push(task,inputs.as_deref_mut());
-        }
-        Ok(None)
+        let stop=self.schedule.admit(epoch,r.arrival_token(),r.memory.display_grant(),|class,bytes|r.admit_tier(None,&self.objects,class,bytes));
+        let waiting=requests.iter().any(|request|self.find(request).is_some_and(|id|self.tasks[&id].group.as_ref().is_some_and(|group|!self.schedule.admitted(group))));
+        Ok(stop.filter(|_|waiting))
     }
     pub fn retain(&mut self, scene: SceneView<'_>, blend:layer_core::BlendSpace, context:layer_core::color::RgbSpace) {
-        let mut retained=VecDeque::new();
-        while let Some(mut task)=self.tasks.pop_front() {
-            let keep=if let Some(collection)=&mut task.collection {
+        self.retire_where(|task| {
+            let keep=if let Some(collection)=&task.collection {
                 let owner=collection.request.owner;
                 collection.request.blend==blend && collection.request.context==context && (!collection.request.display || scene.visible(owner))
                     && collection.request.authored.iter().map(|key|key.handle).eq(scene.object_handle(owner))
                     && collection.request.authored.iter().all(|key|key.same_authored(&ObjectKey::new(scene,owner,key.handle)))
             } else {scene.object_owner(task.key.object.handle).is_some_and(|owner|ObjectKey::new(scene,owner,task.key.object.handle).same_authored(&task.key.object) && (!task.job.live||scene.visible(owner)))};
-            if keep {retained.push_back(task);} else {self.retire(task);}
-        }
-        self.tasks=retained;self.sync_queues();self.coordinates.retain(|_,token|token.strong_count()!=0);self.sync_coordinate_slots();
+            !keep
+        });
+        self.coordinates.retain(|_,token|token.strong_count()!=0);self.sync_coordinate_slots();
     }
     fn sync_coordinate_slots(&mut self) {
         self.coordinate_slots.resize(self.coordinates.capacity() as u64*(std::mem::size_of::<CoordinateKey>()+std::mem::size_of::<crate::object_image_mips::CoordinateDestination>()) as u64);
@@ -344,27 +377,34 @@ impl ObjectCache {
     }
     pub fn advance_with_memory(&mut self, r: &mut WgpuRasterizer, scene:&mut Scene, encoder: &mut crate::submission::CommandEncoder, allowance: u64) -> Result<u64, GpuRasterError> {
         let sampler = r.scene_pipelines.objects.clone();
-        if self.tasks.iter().any(Task::unfinished)
-            && !r.compilation.require(sampler.pipelines().into_iter().chain([&r.scene_pipelines.constant.2]), startup::DOCUMENT) { return Ok(0); }
-        if self.in_flight.load(Ordering::Acquire) { return Ok(0); }
-        self.tasks.make_contiguous().sort_by_key(|task| { let demand = task.lease.demand(); (demand.is_none(), demand) });
-        let mut used = 0;
-        let mut index = 0;
-        while used < allowance && index < self.tasks.len() {
-            if self.tasks[index].complete && self.tasks[index].valid.load(Ordering::Acquire) { index += 1; continue; }
-            let mut task = self.tasks.remove(index).unwrap();
-            let result = self.advance_task(r, scene, encoder, &sampler, &mut task, allowance - used);
-            let complete = task.complete;
-            if complete {
-                task.accumulation = None; task.tiles = Vec::new(); task.coordinates = None;task.inputs=Default::default(); if let Some(c) = &mut task.collection { c.spare = None; }
-                task.gpu = self.gpu.charge(task.gpu_bytes());
+        let epoch = self.gpu.heap().epoch();
+        for (&id, task) in &mut self.tasks {
+            if task.unfinished() && task.group.is_none() && let Some(c) = &task.collection {
+                task.group = Some(self.schedule.want(self.owner, id, task.lease.demand().unwrap_or(Class::Prefetch), false, Self::closure(r, &c.request)?, epoch));
             }
-            task.sync(&self.pinned, self.retains);
-            self.tasks.insert(index.min(self.tasks.len()), task);self.sync_queues();
-            let taps = result?;
-            used += taps;
-            if complete || taps==0 {index+=1;}
         }
+        for tag in self.schedule.lapsed(self.owner) { if let Some(task) = self.take(tag) { self.retire(task); } }
+        self.schedule.admit(epoch, r.arrival_token(), r.memory.display_grant(), |class, bytes| r.admit_tier(Some(scene), &self.objects, class, bytes));
+        let runnable = self.schedule.runnable(self.owner);
+        let since = r.arrival_token();
+        if runnable.is_empty() { return Ok(0); }
+        if !r.compilation.require(sampler.pipelines().into_iter().chain([&r.scene_pipelines.constant.2]), startup::DOCUMENT) { self.schedule.hold(self.owner, Input::Compile, since); return Ok(0); }
+        if self.in_flight.load(Ordering::Acquire) { self.schedule.hold(self.owner, Input::Gpu, since); return Ok(0); }
+        let mut used = 0;
+        for tag in runnable {
+            if used >= allowance { break; }
+            let Some(mut task) = self.tasks.remove(&tag) else { continue; };
+            let result = self.advance_task(r, scene, encoder, &sampler, &mut task, allowance - used);
+            if task.complete {
+                task.accumulation = None; task.tiles = Vec::new(); task.coordinates = None; self.vacate(&mut task); task.group = None;
+                if let Some(c) = &mut task.collection { c.spare = None; }
+                task.gpu = self.gpu.charge(task.gpu_bytes());
+            } else if let Some(group) = &task.group && matches!(result, Ok(0)) { self.schedule.block(group, task.waits_for(), since); }
+            task.sync(&self.pinned, self.retains);
+            self.tasks.insert(tag, task);
+            used += result?;
+        }
+        if self.in_flight.load(Ordering::Acquire) { self.schedule.hold(self.owner, Input::Gpu, since); }
         crate::performance_trace::counter(c"Capy object sampling taps", used);
         Ok(used)
     }
@@ -375,13 +415,13 @@ impl ObjectCache {
         let mut previous = None;
         if !task.valid.load(Ordering::Acquire) {
             if let Some(c)=&mut task.collection {c.part=0;c.next=false;task.job=c.request.child(0,c.request.part(0),task.job.output.clone())?;task.key.object=task.job.key.clone();task.key.inverse=task.job.inverse.map(f64::to_bits);}
-            task.complete = false; task.used = 0; previous = task.accumulation.take(); task.coordinates = None; task.coordinates_first = 0; task.phase = 0; task.tile = 0;task.inputs=Default::default(); task.step = 0; task.valid = Arc::new(AtomicBool::new(true));
+            task.complete = false; task.used = 0; previous = task.accumulation.take(); task.coordinates = None; task.coordinates_first = 0; task.phase = 0; task.tile = 0;self.vacate(task); task.step = 0; task.valid = Arc::new(AtomicBool::new(true));
         }
         if let Some(c)=&mut task.collection && c.next {
             c.next=false;
             task.job=c.request.child(0,c.request.part(c.part),task.texture.as_ref().unwrap().create_view(&Default::default()))?;
             task.key.object=task.job.key.clone();task.key.inverse=task.job.inverse.map(f64::to_bits);
-            previous=task.accumulation.take();task.tiles=Vec::new();task.phase=0;task.tile=0;task.inputs=Default::default();task.step=0;task.coordinates_first=0;
+            previous=task.accumulation.take();task.tiles=Vec::new();task.phase=0;task.tile=0;self.vacate(task);task.step=0;task.coordinates_first=0;
         }
         if task.accumulation.is_none() && self.started(task) {
             let (_, bounds, pages) = working_set(&task.job)?;
@@ -392,53 +432,28 @@ impl ObjectCache {
             track_batch(encoder, &flight); recorded = true;
         }
         if task.accumulation.is_none() {
-            let (working, bounds, pages) = working_set(&task.job)?;
-            let output = task.texture.as_ref().map_or(0, texture_bytes);
-            let collection_bytes=if let Some(c)=&task.collection {
-                u64::from(task.key.size[0])*u64::from(task.key.size[1])*16*u64::from(c.spare.is_none() && c.request.blend==layer_core::BlendSpace::Perceptual)
-                    + if c.result.is_none() && c.request.parts()>1 {c.request.window.size.map(u64::from).into_iter().product::<u64>()*16} else {0}
-            } else {0};
-            let extra = working.saturating_sub(output).saturating_sub(self.uniform_bytes())+collection_bytes;
-            let working_bytes = task.gpu_bytes() + extra;
-            if working_bytes > r.memory.display_limit() { return Err(GpuRasterError::SourceWorkingSetExceeded); }
-            let running = self.tasks.iter().any(|other| self.started(other) && other.unfinished());
-            let class = task.lease.demand().unwrap_or(Class::Prefetch).min(if running {Class::Prefetch} else {Class::Visible});
-            let reserved = task.reserved.take();
-            let mut inputs=sources::Inputs::default();
-            if !objects::inline_sampling(r) && let Some(coordinate)=page_coordinates(bounds).next() {inputs.image(&task.job.source,coordinate,r.device.working_space());}
-            let mut allocation=None;
-            let mut context=(&mut *self,&mut *scene,&mut *task,&mut allocation);
-            let accepted=inputs.accept(r,&mut context,|(cache,scene,task,allocation),r,inputs| {
-                task.sync(&cache.pinned,cache.retains);
-                let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
-                **allocation=Some(match reserved {Some(reserved)=>reserved,None=>r.admit_tier(Some(scene),&cache.working,class,working_bytes).ok()?});
-                let sources=r.admit_display(Some(scene),class,bytes).ok()?;
-                Some(sources)
-            },|(cache,_,task,_),r| {
-                if task.texture.is_none() {
-                    let (texture,output)=create_color_target(&r.device,task.key.size,"private canonical object result");
-                    task.texture=Some(texture);task.job.output=output;
-                }
-                if let Some(c)=&mut task.collection {
-                    if c.spare.is_none() && c.request.blend==layer_core::BlendSpace::Perceptual {c.spare=Some(create_color_target(&r.device,task.key.size,"object color conversion").0);}
-                    if c.result.is_none() && c.request.parts()>1 {c.result=Some(create_color_target(&r.device,c.request.window.size,"private object window").0);}
-                }
-                if cache.uniform.is_none() {
-                    let uniform=crate::object_sampling::ObjectSampler::uniform(&r.device);
-                    let charge=cache.gpu.charge(uniform.size());
-                    cache.uniform=Some((uniform,charge));
-                }
-                let (uniform,_)=cache.uniform.as_ref().unwrap();
-                let acc=sampler.create(&r.device,crate::object_sampling::SamplingRequest {inverse:task.job.inverse,size:task.job.size,nearest:task.job.nearest},&task.job.output,&r.empty_view,uniform)?;
-                task.tiles.clear();task.tiles.reserve_exact(pages);task.tiles.extend(page_coordinates(bounds));task.accumulation=Some(acc);Ok(())
-            },|(cache,_,task,allocation),_,_| {
-                if task.accumulation.is_some() && let Some(allocation)=allocation.take() {task.gpu=allocation.charge(task.gpu_bytes());}
-                task.sync(&cache.pinned,cache.retains);Ok(())
-            });
-            if let Some(allocation)=allocation.take() {task.reserved=Some(allocation);}
-            let inputs=match accepted {Ok(Some(((),inputs)))=>inputs,Ok(None)=>return Ok(0),
-                Err(error) if error.is_preparation_pending()=>return Ok(0),Err(error)=>return Err(error)};
-            task.inputs.extend(inputs)?;sampler.initialize(encoder,task.accumulation.as_ref().unwrap());steps+=PASS_TAPS;
+            let Some(group)=task.group.as_ref().filter(|group|self.schedule.start(group)) else {return Ok(0);};
+            let (_, bounds, pages) = working_set(&task.job)?;
+            if task.texture.is_none() {
+                let (texture,output)=create_color_target(&r.device,task.key.size,"private canonical object result");
+                task.texture=Some(texture);task.job.output=output;
+            }
+            if let Some(c)=&mut task.collection {
+                if c.spare.is_none() && c.request.blend==layer_core::BlendSpace::Perceptual {c.spare=Some(create_color_target(&r.device,task.key.size,"object color conversion").0);}
+                if c.result.is_none() && c.request.parts()>1 {c.result=Some(create_color_target(&r.device,c.request.window.size,"private object window").0);}
+            }
+            if self.uniform.is_none() {
+                let uniform=crate::object_sampling::ObjectSampler::uniform(&r.device);
+                let charge=self.gpu.charge(uniform.size());
+                self.uniform=Some((uniform,charge));
+            }
+            let (uniform,_)=self.uniform.as_ref().unwrap();
+            let acc=sampler.create(&r.device,crate::object_sampling::SamplingRequest {inverse:task.job.inverse,size:task.job.size,nearest:task.job.nearest},&task.job.output,&r.empty_view,uniform)?;
+            task.tiles.clear();task.tiles.reserve_exact(pages);task.tiles.extend(page_coordinates(bounds));task.accumulation=Some(acc);
+            let bytes=task.gpu_bytes();
+            task.gpu=self.schedule.budget(group,|budget|budget.spend(&self.working,bytes)).ok_or(GpuRasterError::Invariant("a started object window has no admitted budget"))?;
+            task.sync(&self.pinned,self.retains);
+            sampler.initialize(encoder,task.accumulation.as_ref().unwrap());steps+=PASS_TAPS;
             track_batch(encoder, &flight); recorded = true;
         }
         let guard = crate::submission::CacheWrite::shared(task.valid.clone()); guard.track(encoder);
@@ -465,8 +480,7 @@ impl ObjectCache {
             steps += u64::from(count);
             if !task.accumulation.as_ref().unwrap().nearest_coordinates_ready() { return Ok(steps); }
         }
-        if !recorded { track_batch(encoder, &flight); }
-        self.prepare_inputs(r,scene,task)?;
+        self.prepare_inputs(r,task)?;
         while steps < budget {
             let encoded = match task.phase {
                 0 => sampler.encode_step(&r.device, encoder, &mut r.uploads, task.accumulation.as_ref().unwrap(), &SamplingPhase::Denominator { extent: task.job.source.extent }, task.step)?,
@@ -474,7 +488,7 @@ impl ObjectCache {
                     let coordinate = task.tiles[task.tile];
                     let input = {
                         let mut needed=sources::Inputs::default();needed.image(&task.job.source,coordinate,r.device.working_space());
-                        if !task.inputs.contains(&needed) {self.prepare_inputs(r,scene,task)?;}
+                        if !task.inputs.contains(&needed) {self.prepare_inputs(r,task)?;}
                         if !task.inputs.contains(&needed) {break;}
                         let read=sources::accepted_image(&task.inputs,&task.job.source,coordinate)?;
                         let before=encoder.pass_count();
@@ -498,6 +512,7 @@ impl ObjectCache {
             task.step = 0;
             if task.phase == 1 && task.tile < task.tiles.len() {
                 task.inputs.finish_image(&task.job.source,task.tiles[task.tile]);task.tile += 1;
+                if let Some(group)=&task.group {self.schedule.budget(group,Budget::vacate);task.seated-=1;}
             }
             else if task.phase < 2 { task.phase += 1; }
             else {
@@ -534,6 +549,7 @@ impl ObjectCache {
                 break;
             }
         }
+        if !recorded && steps > 0 { track_batch(encoder, &flight); }
         Ok(steps)
     }
 }

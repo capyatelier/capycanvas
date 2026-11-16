@@ -248,7 +248,7 @@ fn only_the_current_frames_demand_keeps_an_object_result_from_grant_eviction() {
         r.begin_frame_memory(frame);
         for request in requests {
             let mut accepted=sources::AcceptedInputs::default();
-            assert!(scene.canonical_cover(r,frame,&content,request,&mut accepted,Class::Visible).unwrap().is_some());
+            assert!(scene.canonical_cover(r,frame,&content,request,&mut accepted,Class::Visible).unwrap().0.is_some());
         }
         scene.object_results.reset_used();
     };
@@ -291,52 +291,25 @@ fn frame_demanding(r:&mut WgpuRasterizer,frame:FramePacket<'_>,requests:&[super:
 fn an_unfinished_object_window_no_frame_or_held_unit_demands_is_evicted_under_pressure() {
     let extent=[512,256];
     let (mut r,doc,requests)=unfinished_windows(extent);
-    let admitted=r.scene.as_ref().unwrap().object_results.memory_bytes()[1];
+    let admitted=r.scene_tiers.objects.used();
     let mut held=sources::AcceptedInputs::default();
     r.scene.as_mut().unwrap().object_results.cover(&requests[1],Some(&mut held));
     assert_eq!(frame_demanding(&mut r,packet(doc.scene(),extent),&requests[..1],false),2,"without pressure an undemanded window stays resident");
     assert_eq!(frame_demanding(&mut r,packet(doc.scene(),extent),&requests[..1],true),2,"a unit that holds the window's inputs keeps it under pressure");
     drop(held);
     assert_eq!(frame_demanding(&mut r,packet(doc.scene(),extent),&requests[..1],true),1,"pressure evicts the window no frame or held unit demands");
-    assert!(r.scene.as_ref().unwrap().object_results.memory_bytes()[1]<admitted,"the evicted window returns its reservation");
+    assert!(r.scene_tiers.objects.used()<admitted,"the evicted window returns its reservation");
 }
 
 #[test]
-fn unfinished_object_windows_no_recent_frame_demands_request_no_frame_but_frames_that_run_advance_them() {
+fn unstarted_object_windows_no_frame_wants_are_cancelled_and_request_no_frame() {
     let extent=[512,256];
     let (mut r,doc,_requests)=unfinished_windows(extent);
-    r.end_frame_memory();
-    assert!(r.frame_work(),"the windows the last frame demanded request frames");
-    for _ in 0..2 {r.begin_frame_memory(packet(doc.scene(),extent));r.end_frame_memory();}
-    assert_eq!(r.scene.as_ref().unwrap().object_results.request_windows().len(),2,"the windows stay resident without pressure");
-    assert!(!r.frame_work(),"windows no recent frame demands request no frame");
-    assert!(r.objects_runnable(),"a frame that runs for other work still composes the unfinished windows");
-    assert!(r.scene.as_ref().unwrap().object_results.pending(),"a capture drain still waits for every unfinished window");
-}
-
-#[test]
-fn an_unfinished_object_window_the_next_frames_do_not_demand_completes_without_pressure() {
-    let extent=[512,256];
-    let (mut r,doc,requests)=unfinished_windows(extent);
-    r.end_frame_memory();
-    pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines())).unwrap();
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
-    while r.scene.as_ref().unwrap().object_results.completed_windows().len()<2 {
-        r.begin_frame_memory(packet(doc.scene(),extent));
-        let mut scene=r.scene.take().unwrap();
-        assert!(scene.object_results.resolve_collection(&r,doc.scene(),&requests[0],None).is_ok());
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();
-        let empty=super::super::object_cache::ObjectCache::for_scene(&scene,false);
-        let mut cache=std::mem::replace(&mut scene.object_results,empty);
-        cache.advance(&mut r,&mut scene,&mut encoder,&mut Scene::begin_work(false)).unwrap();
-        scene.object_results=cache;r.scene=Some(scene);
-        r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
-        r.end_frame_memory();
-        assert_eq!(r.scene.as_ref().unwrap().object_results.request_windows().len(),2,"no pressure releases the window the camera left");
-        assert!(std::time::Instant::now()<deadline,"the window only an earlier frame demanded completes");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    let reserved=r.scene_tiers.objects.used();
+    assert!(r.frame_work(),"the windows the last frame wanted request frames");
+    for _ in 0..4 {frame_demanding(&mut r,packet(doc.scene(),extent),&[],false);}
+    assert!(r.scene_tiers.objects.used()<reserved,"cancelled windows release their reservations");
+    assert!(!r.frame_work(),"windows no frame wants request no frame");
 }
 
 #[test]
@@ -646,31 +619,6 @@ fn consecutive_ordered_captures_have_independent_submission_budgets() {
 }
 
 #[test]
-fn required_canonical_sources_follow_only_the_next_bounded_task() {
-    let objects = [[255, 0, 0, 255], [0, 0, 255, 255]].map(|color| {
-        let mut object = ImageObject::new(image([8192, 256], color));
-        object.affine = Affine64([1. / 32., 0., 0., 1., 0., 0.]);
-        object
-    });
-    let (doc, owner, handles) = document([256; 2], objects.into());
-    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    let mut scene = Scene::new(&r).unwrap();
-    let mut cache = super::super::object_cache::ObjectCache::for_scene(&scene,false);
-    for handle in handles {
-        let owner = doc.scene().object_owner(handle).unwrap();
-        let request = canonical_request(&r, &mut scene, &doc, owner,
-            ObjectWindow { origin: [0.; 2], side: 1., size: [256; 2] });
-        assert!(cache.resolve_collection(&r, doc.scene(), &request,None).unwrap().is_none());
-    }
-    let mut required = Vec::new();
-    cache.required_sources(&mut required).unwrap();
-    let first = doc.scene().object_layer(owner).unwrap();
-    assert_eq!(required.len(), 18);
-    assert!(required.iter().all(|(source, _)| Arc::ptr_eq(source, first.image.storage())));
-    assert_eq!(required.iter().map(|(_, coordinate)| *coordinate).collect::<Vec<_>>(),
-        (0..18).map(|x| [x, 0]).collect::<Vec<_>>());
-}
-#[test]
 fn object_masks_attached_effects_and_clipping_follow_both_stack_evaluators() {
     let (mut doc, owner, _) = document([64; 2], vec![ImageObject::new(image([16; 2], [255, 0, 0, 255]))]);
     let mut clip_image = ImageObject::new(image([16; 2], [0, 0, 255, 128]));
@@ -723,7 +671,7 @@ fn coarse_linear_object_node_includes_source_outside_its_output_cell() {
         let composed = scene.compose(&mut r, frame, if iteration == 0 { window } else { PixelRect::EMPTY }, &mut encoder, None, &mut Scene::begin_work(false));
         if let Err(error) = &composed { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
-        if composed.is_ok() && !scene.objects_pending() && !r.moving_images.pending() && !r.image_decode_waiting() { settled = true; break; }
+        if composed.is_ok() && scene.objects_outstanding(&r).is_none() && !r.moving_images.pending() && !r.image_decode_waiting() { settled = true; break; }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(settled);
@@ -873,11 +821,11 @@ fn retiring_an_unstarted_window_releases_its_unit_reservation_at_once() {
     let r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut scene=Scene::new(&r).unwrap();scene.object_display=true;
     let request=canonical_request(&r,&mut scene,&doc,owner,ObjectWindow {origin:[0.;2],side:1.,size:[PAGE_SIZE;2]});
-    let before=scene.object_results.memory_bytes()[1];
+    let before=scene.tiers.objects.used();
     assert!(scene.object_results.admit(&r,crate::residency::Class::Visible,&[request],None).unwrap().is_none());
-    assert!(scene.object_results.memory_bytes()[1]>before,"the unit reserves its window");
+    assert!(scene.tiers.objects.used()>before,"the admitted window holds its reservation");
     scene.object_results.clear();
-    assert_eq!(scene.object_results.memory_bytes()[1],before,"a retired window that never started holds no reservation until the next flush");
+    assert_eq!(scene.tiers.objects.used(),before,"a retired window that never started holds no reservation until the next flush");
 }
 #[test]
 fn a_started_canonical_task_finishes_its_parts_under_pressure_while_queued_starts_wait() {
@@ -1753,7 +1701,7 @@ fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
         for _ in 0..2000 {
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             r.drain_image_decodes(&mut encoder).unwrap();
-            if let Some(pieces) = scene.canonical_cover(r, frame, &content, &request, accepted, Class::Visible).unwrap() {
+            if let Some(pieces) = scene.canonical_cover(r, frame, &content, &request, accepted, Class::Visible).unwrap().0 {
                 r.uploads.finish(&encoder); encoder.submit(&r.queue);
                 return (taps, pieces.into_iter().map(|(_, bounds)| bounds).collect::<Vec<_>>());
             }
@@ -2226,37 +2174,4 @@ fn object_counters_match_a_cache_walk_after_seeded_windows_edits_and_completions
     crate::test_support::settle_decodes(&mut r);
     let held = r.source_results.iter().map(|(_, _, charge)| charge.bytes()).sum::<u64>();
     assert_eq!(r.scene_tiers.decodes.used(), held, "once the queue drains, only held results keep decode working-set charges");
-}
-
-#[test]
-fn an_admission_refused_cell_takes_no_idle_frames_until_a_release_then_wakes() {
-    use layer_render::{CanvasRenderer,FrameDemand};
-    let (doc, _, _) = document([1024; 2], vec![ImageObject::new(image([1024; 2], [255, 0, 0, 255]))]);
-    let mut r = crate::memory::memory_tests::renderer(doc.composition().color,
-        layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}).unwrap();
-    let (wake, woken) = std::sync::mpsc::channel(); let wake = std::sync::Mutex::new(wake);
-    r.set_preparation_wake(Arc::new(move || { let _ = wake.lock().unwrap().send(()); }));
-    let budget = r.factory.memory_budget().clone();
-    budget.set_ram_override(Some(384 << 20));
-    let frame = packet(doc.scene(), [1024; 2]);
-    r.memory_demand(frame);
-    r.refresh_memory_limits();
-    let import = budget.admit_import(budget.import_headroom_bytes()).unwrap();
-    crate::test_support::submit_ready(&mut r, frame).unwrap();crate::test_support::complete(&r);
-    let mut frames = 0;
-    while r.next_frame() == FrameDemand::Work {
-        frames += 1; assert!(frames < 20, "a cell refused object admission stops demanding frames");
-        crate::test_support::submit_ready(&mut r, frame).unwrap(); crate::test_support::complete(&r);
-    }
-    assert!(!r.settled(), "the refused cell is still owed");
-    let start = std::time::Instant::now(); let mut idle = 0;
-    while start.elapsed() < std::time::Duration::from_secs(1) {
-        if r.next_frame() == FrameDemand::Work { idle += 1; crate::test_support::submit_ready(&mut r, frame).unwrap(); crate::test_support::complete(&r); }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert_eq!(idle, 0, "a cell refused object admission runs no frames before a release");
-    while woken.try_recv().is_ok() {}
-    drop(import); r.refresh_memory_limits();
-    woken.recv_timeout(std::time::Duration::from_secs(10)).expect("the release wakes the refused cell");
-    assert!(r.next_frame() == FrameDemand::Work, "the woken renderer retries the refused cell");
 }

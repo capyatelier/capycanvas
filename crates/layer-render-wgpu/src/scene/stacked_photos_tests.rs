@@ -127,18 +127,65 @@ fn fit_frame(doc:&layer_core::Document,viewport:[u32;2])->FramePacket<'_> {
 
 const PHOTO:[u32;2]=[1024,768];
 
-fn open_photos(doc:&layer_core::Document,budget:u64)->WgpuRasterizer {
+const PHOTO_TILES:u64=28*4*3;
+
+struct Open {frames:usize,idle:usize}
+fn progress(r:&WgpuRasterizer)->(u64,u64,(usize,usize,u64),u64,u64,u64) {
+    let counts=crate::test_support::PassCounts::snapshot();
+    (r.source_tiles.borrow().misses,r.moving_images.tile_builds,r.scene.as_ref().map_or((0,0,0),|scene|scene.object_results.work_progress()),counts.composite_commits,counts.unit_acceptances,r.navigator.revision)
+}
+fn open_photos(doc:&layer_core::Document,budget:u64)->(WgpuRasterizer,Open) {
     let frame=fit_frame(doc,[560,420]);
     assert_eq!(crate::display_mips::view_level(frame.view.document_to_surface,crate::display_mips::MAX_LEVEL),Some(0));
     let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(budget),..Default::default()}).unwrap();
-    crate::test_support::submit_settled(&mut r,frame);
-    r
+    let (signal,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
+    let (mut open,mut first)=(Open {frames:0,idle:0},true);
+    loop {
+        r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
+        let before=progress(&r);
+        let next=if first {frame} else {FramePacket {composite_all:false,reset_layers:false,..frame}};
+        if r.can_submit() && let std::task::Poll::Ready(result)=r.submit_when_ready(next,None) {
+            result.unwrap();first=false;open.frames+=1;
+            r.wait_idle().unwrap();
+            if progress(&r)==before {open.idle+=1;}
+        }
+        r.wait_idle().unwrap();
+        assert!(std::time::Instant::now()<deadline,"the photo open settles within a minute: {} frames, {} without progress",open.frames,open.idle);
+        if first {std::thread::sleep(std::time::Duration::from_millis(1));continue;}
+        if r.next_frame()==layer_render::FrameDemand::Work {continue;}
+        if r.settled() {return (r,open);}
+        assert!(woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(),"an idle open waits on inputs whose completion never woke it: terms {:?} census {:?} held {}",
+            r.outstanding_terms(),r.scene.as_ref().map(|scene|scene.tiers.schedule.census()),r.source_results.len());
+    }
+}
+
+#[test]
+fn a_cold_fit_open_of_twenty_eight_photos_decodes_each_tile_once_and_never_spins() {
+    let doc=photo_stack(PHOTO,Default::default());
+    let (r,open)=open_photos(&doc,8<<30);
+    let decodes=r.source_tiles.borrow().misses;
+    assert!(decodes<=2*PHOTO_TILES,"the open decodes each tile at most once for its pages and once for its mips: {decodes} for {PHOTO_TILES} tiles");
+    assert_eq!(open.idle,0,"every Work frame of the open advances something");
+    assert_eq!(r.moving_images.completed_images,28,"every photo's mips are complete when the view settles");
+}
+
+#[test]
+fn an_icc_photo_stack_settles_under_a_grant_smaller_than_its_windows() {
+    use layer_core::color::{ColorProfile,RgbSpace};
+    let profile=ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap().into());
+    let doc=photo_stack(PHOTO,profile);
+    let (r,open)=open_photos(&doc,384<<20);
+    let decodes=r.source_tiles.borrow().misses;
+    assert!(decodes<=2*PHOTO_TILES,"windows admitted with their inputs decode each tile at most twice: {decodes} for {PHOTO_TILES} tiles");
+    assert_eq!(open.idle,0,"every Work frame of the open advances something: {} frames",open.frames);
 }
 
 #[test]
 fn fit_photo_page_windows_each_read_only_their_own_tile() {
     let doc=photo_stack(PHOTO,Default::default());
-    let mut r=open_photos(&doc,8<<30);
+    let (mut r,_)=open_photos(&doc,8<<30);
     let frame=fit_frame(&doc,[560,420]);
     let mut scene=r.scene.take().unwrap();
     let windows:Vec<_>=scene.object_results.request_windows().into_iter().filter(|(_,_,window)|window.side==1.).collect();
@@ -149,4 +196,18 @@ fn fit_photo_page_windows_each_read_only_their_own_tile() {
         let pages=super::super::object_cache::working_set(&job.child(0,job.part(0),r.empty_view.clone()).unwrap()).unwrap().2;
         assert_eq!(pages,1,"the page window at {:?} reads {pages} source tiles",window.origin);
     }
+}
+
+#[test]
+fn a_fit_open_finds_object_windows_by_key_and_composes_a_waiting_cell_only_after_its_windows_settle() {
+    let doc=photo_stack(PHOTO,Default::default());
+    let before=crate::test_support::PassCounts::snapshot();
+    let (r,open)=open_photos(&doc,8<<30);
+    let counts=crate::test_support::PassCounts::snapshot().delta(before);
+    let windows=r.scene.as_ref().unwrap().object_results.work_progress().0;
+    let cells=u64::from(PHOTO[0].div_ceil(PAGE_SIZE)*PHOTO[1].div_ceil(PAGE_SIZE));
+    assert!(counts.object_lookup_visits<=2*counts.object_lookups,
+        "an object window lookup visits only the windows indexed under its content and cell: {} visits for {} lookups among {windows} windows",counts.object_lookup_visits,counts.object_lookups);
+    assert!(2*counts.destination_units<=open.frames as u64*cells,
+        "a cell waiting on object windows is composed again when they settle, not every frame: {} units over {} frames of {cells} cells",counts.destination_units,open.frames);
 }

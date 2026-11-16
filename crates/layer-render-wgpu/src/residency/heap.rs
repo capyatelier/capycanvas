@@ -97,7 +97,6 @@ impl Lease {
         if std::mem::take(&mut state.evicted) { self.heap.pending.fetch_sub(state.bytes, SeqCst); }
     }
     pub(crate) fn demand(&self) -> Option<Class> { self.state.lock().unwrap().demand.class_at(self.heap.epoch()) }
-    pub(crate) fn recent(&self) -> bool { self.state.lock().unwrap().demand.protects(self.heap.epoch(), Class::Refinement) }
     pub(crate) fn stamp(&self, class: Class) { self.state.lock().unwrap().demand.stamp(self.heap.epoch(), class); }
     pub(crate) fn guard(&self, guard: Weak<dyn Send + Sync>) { self.state.lock().unwrap().guard = Some(guard); }
 }
