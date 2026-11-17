@@ -1491,6 +1491,7 @@ void WorkspaceView::AttachOverlays(UIElement const& root,std::function<void()> c
     impl->bubbles->Attach(root,[weak,cancelHeader]{if(auto self=weak.lock())self->gestures->Cancel();cancelHeader();});
 }
 JsonArray WorkspaceView::DrawerSources()const{return impl->data->drawerSources;}
+CapyUi::NativeInputSemantic WorkspaceView::InputSemantic(DependencyObject const& hit)const{return impl->bubbles->InputSemantic(hit);}
 JsonArray WorkspaceView::OverlayInputRegions(UIElement const& reference)const{auto result=impl->bubbles->InputRegions(reference);for(auto value:impl->pressure->inputRegions(reference))result.Append(value);return result;}
 JsonArray WorkspaceView::Glass(UIElement const& reference,JsonArray& connections,JsonArray& arcs,JsonArray& colors,JsonArray& panels)const{return impl->glass(reference,connections,arcs,colors,panels);}
 void WorkspaceView::MeasureChrome(){impl->layoutUpdated();}

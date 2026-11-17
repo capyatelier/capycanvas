@@ -349,7 +349,7 @@ function Invoke-BubbleHdrRetirement([long]$Id){
             Wait-Until {[Math]::Abs((Packet $Id).color.intensity.stops-4) -lt .08} 'Context retirement did not begin with an admitted intensity contact'
             switch($context.name){
                 'slot' {Invoke 'color-background';Wait-Until {(Model).state.colors.slot -eq 'background'} 'HDR slot did not switch while held'}
-                'mask' {(Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x51);Wait-Until {(Model).state.layer_tools.quick_mask -and !(Packet $Id).color -and !(Find "bubble-intensity-$Id" -Visible)} 'Mask context did not retire HDR intensity'}
+                'mask' {(Control 'drawing-canvas').SetFocus();Invoke-CapyKeyInput -Target 'drawing-canvas' -Action {[CapyRowPointer]::Key([uint32]$review.Id,0x51)};Wait-Until {(Model).state.layer_tools.quick_mask -and !(Packet $Id).color -and !(Find "bubble-intensity-$Id" -Visible)} 'Mask context did not retire HDR intensity'}
                 'document' {Next-Drawing;Wait-Until {(Model).windows_tabs.selected -eq $script:HdrSdrId -and (Model).brush_ready -and !(Packet $Id).color -and !(Find "bubble-intensity-$Id" -Visible)} 'SDR document did not retire HDR intensity'}
             }
             $target=Bubble-HdrState

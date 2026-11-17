@@ -46,7 +46,7 @@ function Command([string]$Id){
     Wait-Until {$search=Find 'command-search';$search -and !$search.Current.IsOffscreen} 'Command search did not open'
     (Find 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($label)
     Wait-Until {(Find 'command-result-0').Current.Name -eq $label} "Command search did not find $Id"
-    Key 0x0D
+    Invoke-CapyKeyInput -Target 'command-search' -Action {Key 0x0D}
     Wait-Until {!(Find 'command-search')} 'Command search did not close'
 }
 function Screen([double]$X,[double]$Y){

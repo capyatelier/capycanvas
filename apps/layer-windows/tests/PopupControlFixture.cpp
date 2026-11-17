@@ -155,7 +155,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     ControlContext context;std::shared_ptr<TextServicesLibrary> textServices;unsigned imeChecks=0;std::shared_ptr<std::vector<J>> imeTrace=std::make_shared<std::vector<J>>();
     bool windowClosed=false;OwnedPopup owner;std::optional<OwnedPopup::Ticket> origin;std::vector<MenuFlyout> popups;HWND hwnd=nullptr;unsigned checks=0,keys=0,presses=0,blurs=0,opened=0,closedCount=0,originPresses=0;
-    std::filesystem::path output;hstring phase,group;std::wstring nativeSetupFailures;
+    std::filesystem::path output;hstring phase,group;std::wstring nativeSetupFailures;J nativeInputFailure;
     winrt::apartment_context apartment;
     static void require(bool value,wchar_t const* text){if(!value)throw hresult_error(E_FAIL,text);}
     static HWND handle(Window const& value){HWND result=nullptr;check_hresult(value.as<IWindowNative>()->get_WindowHandle(&result));return result;}
@@ -174,10 +174,20 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         input[0].mi.dwFlags=right?MOUSEEVENTF_RIGHTDOWN:MOUSEEVENTF_LEFTDOWN;input[1].mi.dwFlags=right?MOUSEEVENTF_RIGHTUP:MOUSEEVENTF_LEFTUP;
         require(SendInput(2,input,sizeof(INPUT))==2,L"Native pointer injection failed");
     }
+    static std::pair<Point,UIElement> nativeHit(FrameworkElement const& target,Point local){
+        auto position=target.TransformToVisual(nullptr).TransformPoint(local);
+        auto hits=VisualTreeHelper::FindElementsInHostCoordinates(position,NativeInputHitRoot(target.XamlRoot()),false).First();
+        return {position,hits.HasCurrent()?hits.Current():UIElement{nullptr}};
+    }
     POINT nativePoint(FrameworkElement const& target,Point local){
-        privacy();auto position=target.TransformToVisual(nullptr).TransformPoint(local);
-        bool hit=false;for(auto const& element:VisualTreeHelper::FindElementsInHostCoordinates(position,target))if(descendantOf(element,target))hit=true;
-        require(hit,L"Native gesture does not hit its intended body");
+        privacy();auto [position,hit]=nativeHit(target,local);
+        bool intended=hit&&descendantOf(hit,target);
+        if(!intended){
+            auto describe=[](DependencyObject const& node){A path;for(auto parent=node;parent&&path.Size()<12;parent=VisualTreeHelper::GetParent(parent))path.Append(O({{L"type",S(get_class_name(parent))},{L"id",S(parent.try_as<UIElement>()?AutomationProperties::GetAutomationId(parent.as<UIElement>()):hstring{})}}));return O({{L"type",S(node?get_class_name(node):hstring{})},{L"id",S(node&&node.try_as<UIElement>()?AutomationProperties::GetAutomationId(node.as<UIElement>()):hstring{})},{L"path",path}});};
+            auto bounds=target.TransformToVisual(nullptr).TransformBounds({0,0,float(target.ActualWidth()),float(target.ActualHeight())});A at;at.Append(N(position.X));at.Append(N(position.Y));A box;for(double value:{bounds.X,bounds.Y,bounds.Width,bounds.Height})box.Append(N(value));
+            nativeInputFailure=O({{L"stage",S(L"native-point")},{L"expected",describe(target)},{L"point",at},{L"first_hit",describe(hit)},{L"target_bounds",box},{L"root_type",S(get_class_name(NativeInputHitRoot(target.XamlRoot())))}});
+        }
+        require(intended,L"Native gesture does not hit its intended body");
         auto scale=target.XamlRoot().RasterizationScale();POINT point{LONG(position.X*scale),LONG(position.Y*scale)};check_bool(ClientToScreen(hwnd,&point));
         DWORD targetProcess=0;auto targetWindow=WindowFromPoint(point);GetWindowThreadProcessId(targetWindow,&targetProcess);
         require(targetProcess==GetCurrentProcessId()&&GetAncestor(targetWindow,GA_ROOTOWNER)==GetAncestor(hwnd,GA_ROOTOWNER),L"Native gesture leaves owned window");return point;
@@ -1218,7 +1228,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         auto cleanup=[&]{controller->Cancel();uint32_t index=0;if(root.Children().IndexOf(surface,index))root.Children().RemoveAt(index);};
         try{
             co_await wait([&]{return body.IsLoaded()&&body.ActualWidth()==320&&list.ScrollView();},L"Workspace swipe admission fixture did not arrange its real native row");
-            presenter->SetOffset(64,false);co_await wait([&]{return presenter->Offset()==64;},L"Workspace tap-to-close fixture did not reveal its real presenter");
+            presenter->SetOffset(64,false);co_await wait([&]{auto hit=nativeHit(body,{160,28}).second;return presenter->Offset()==64&&hit&&descendantOf(hit,body);},L"Workspace tap-to-close fixture did not reveal its real presenter");
             nativePress(body,false,Point{160,28});co_await wait([&]{return presenter->AtRest();},L"Native workspace body tap did not close its revealed swipe");
             require(*selected==0,L"Closing a workspace swipe selected its row");
             NativeContact contact(PT_TOUCH,[trace=imeTrace](hresult_error const& error){wchar_t hex[11]{};swprintf_s(hex,L"0x%08X",uint32_t(error.code().value));trace->push_back(O({{L"case",S(L"workspace-swipe-admission")},{L"cleanup_error",S(error.message())},{L"hresult",S(hex)}}));});
@@ -1235,6 +1245,10 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             require(presenter->Offset()==32,L"Unchanged reveal width lost its presentation during native resize");++checks;
         }catch(...){imeTrace->push_back(O({{L"case",S(L"workspace-swipe-admission")},{L"status",S(AutomationProperties::GetItemStatus(list))},{L"down_id",N(*contactId)},{L"released_id",N(*releasedId)},{L"offset",N(presenter->Offset())},{L"at_rest",B(presenter->AtRest())},{L"selected",N(*selected)},{L"deleted",N(*deleted)}}));cleanup();throw;}
         cleanup();co_await wait([&]{return !list.IsLoaded();},L"Workspace swipe admission did not unload its real row");
+    }
+    static bool nativeSelectionReady(ItemsView const& list,ItemContainer const& row,int index){
+        auto scroll=nativeScrollView(list);auto repeater=scroll.Content().try_as<ItemsRepeater>();
+        return scroll.VerticalOffset()==0&&row.IsLoaded()&&repeater&&repeater.GetElementIndex(row)==index&&repeater.TryGetElement(index)==row;
     }
     winrt::Windows::Foundation::IAsyncAction selectableRowsContract(){
         phase=L"selectable-rows-contract";
@@ -1266,11 +1280,24 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                     {L"layout_slot",O({{L"x",N(slot.X)},{L"y",N(slot.Y)},{L"width",N(slot.Width)},{L"height",N(slot.Height)}})}}));throw;
             }
             scroll.SetScrollPercent(-1,100);co_await wait([&]{return nativeScrollView(list).VerticalOffset()==nativeScrollView(list).ScrollableHeight();},L"Direct host Scroll provider did not move its native ScrollView");
-            scroll.SetScrollPercent(-1,0);co_await wait([&]{return nativeScrollView(list).VerticalOffset()==0;},L"Direct host Scroll provider did not restore its native ScrollView");
+            scroll.SetScrollPercent(-1,0);co_await wait([&]{return nativeSelectionReady(list,rows[1],1);},L"Direct host Scroll provider did not restore its native ScrollView");
+            auto selectionReturned=[&](Automation::Peers::AutomationPeer const& rowPeer){
+                auto chosen=selection.GetSelection();require(chosen.size()==1&&peer.as<Automation::Peers::IAutomationPeerProtected>().PeerFromProvider(chosen[0])==rowPeer,L"Host Selection provider did not return its selected native row");
+            };
+            list.DeselectAll();rowItems(list).RemoveAt(1);
+            co_await wait([&]{return !rows[1].IsLoaded();},L"Native selection schedule did not clear its retained row");
+            auto detachedPeer=Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(rows[1]);
+            auto detached=detachedPeer.GetPattern(Automation::Peers::PatternInterface::SelectionItem).as<Automation::Provider::ISelectionItemProvider>();
+            detached.Select();
+            require(detached.IsSelected()&&rows[1].IsSelected()&&selection.GetSelection().empty(),L"Unrealized native selection did not separate its row flags from host selection");
+            if(nativeSelectionReady(list,rows[1],1))selectionReturned(detachedPeer);
+            require(!nativeSelectionReady(list,rows[1],1),L"Unrealized row was admitted for native selection");
+            rows[1].IsSelected(false);rowItems(list).InsertAt(1,rows[1]);
+            co_await wait([&]{return nativeSelectionReady(list,rows[1],1);},L"Direct host Scroll provider did not restore its native ScrollView");
             auto rowPeer=Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(rows[1]);
             auto selected=rowPeer.GetPattern(Automation::Peers::PatternInterface::SelectionItem).as<Automation::Provider::ISelectionItemProvider>();
             selected.Select();co_await wait([&]{return selected.IsSelected()&&rows[1].IsSelected();},L"Native SelectionItem did not select its ItemContainer");
-            auto chosen=selection.GetSelection();require(chosen.size()==1&&peer.as<Automation::Peers::IAutomationPeerProtected>().PeerFromProvider(chosen[0])==rowPeer,L"Host Selection provider did not return its selected native row");
+            selectionReturned(rowPeer);
             require(peer.as<Automation::Peers::IAutomationPeerProtected>().PeerFromProvider(selected.SelectionContainer())==peer,L"Native row SelectionContainer is not its selectable host");
             selectRow(list,rows[0]);require(!selected.IsSelected()&&rows[0].IsSelected(),L"Programmatic selection did not clear the previous native row");
             auto content=nativeScrollView(list).Content().as<UIElement>();auto idle=content.ManipulationMode();auto canonical=ManipulationModes::TranslateRailsY|ManipulationModes::TranslateInertia;
@@ -1941,6 +1968,134 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }catch(...){bubbles->frames.revoke();bubbles->contact.reset();root.Children().RemoveAt(0);throw;}
     }
 
+    winrt::Windows::Foundation::IAsyncOperation<J> nativeInputQuery(J request){
+        auto owner=hwnd;auto payload=std::wstring(request.Stringify());auto nonce=std::wstring(str(request,L"request"));
+        std::wstring response;std::exception_ptr failure;bool initialized=false;
+        co_await resume_background();
+        try{
+            check_hresult(CoInitializeEx(nullptr,COINIT_MULTITHREADED));initialized=true;
+            com_ptr<::IUIAutomation> client;check_hresult(CoCreateInstance(CLSID_CUIAutomation8,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(client.put())));
+            com_ptr<::IUIAutomationElement> surface;check_hresult(client->ElementFromHandle(owner,surface.put()));
+            auto find=[&](wchar_t const* id){
+                VARIANT value{};value.vt=VT_BSTR;value.bstrVal=SysAllocString(id);if(!value.bstrVal)throw std::bad_alloc();
+                com_ptr<::IUIAutomationCondition> condition;auto result=client->CreatePropertyCondition(UIA_AutomationIdPropertyId,value,condition.put());SysFreeString(value.bstrVal);check_hresult(result);
+                com_ptr<::IUIAutomationElement> element;check_hresult(surface->FindFirst(TreeScope_Descendants,condition.get(),element.put()));
+                require(bool(element),L"Native input query transport is absent from UIA");return element;
+            };
+            auto arguments=find(NativeInputQuery::ArgumentsId),command=find(NativeInputQuery::CommandId);
+            com_ptr<::IUnknown> value,invoke;check_hresult(arguments->GetCurrentPattern(UIA_ValuePatternId,value.put()));check_hresult(command->GetCurrentPattern(UIA_InvokePatternId,invoke.put()));
+            auto setter=value.as<::IUIAutomationValuePattern>();auto text=SysAllocStringLen(payload.data(),UINT(payload.size()));if(!text)throw std::bad_alloc();
+            auto assigned=setter->SetValue(text);SysFreeString(text);check_hresult(assigned);check_hresult(invoke.as<::IUIAutomationInvokePattern>()->Invoke());
+            auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(response.empty()){
+                BSTR text=nullptr;check_hresult(arguments->get_CurrentItemStatus(&text));std::wstring status(text?text:L"",SysStringLen(text));SysFreeString(text);
+                if(status.find(nonce)!=std::wstring::npos)response=std::move(status);
+                else{require(std::chrono::steady_clock::now()<deadline,L"Native input query did not echo its one request");Sleep(5);}
+            }
+        }catch(...){failure=std::current_exception();}
+        if(initialized)CoUninitialize();co_await apartment;if(failure)std::rethrow_exception(failure);
+        co_return J::Parse(response);
+    }
+    static A nativeInputRect(Rect const& rect){A values;for(double value:{rect.X,rect.Y,rect.Width,rect.Height})values.Append(N(value));return values;}
+    static void nativeInputGeometryError(J& snapshot,hresult_error const& error){wchar_t code[11]{};swprintf_s(code,L"0x%08X",uint32_t(error.code().value));snapshot.Insert(L"getter_hresult",S(code));snapshot.Insert(L"getter_error",S(error.message()));}
+    J nativeInputGeometry(FrameworkElement const& target,double width,double height,GeneralTransform const& transform){
+        J snapshot;
+        try{
+            snapshot.Insert(L"width",N(width));snapshot.Insert(L"height",N(height));
+            snapshot.Insert(L"logical_bounds",nativeInputRect(transform.TransformBounds({0,0,float(width),float(height)})));
+            A ancestors;snapshot.Insert(L"ancestors",ancestors);
+            for(auto node=target.as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))if(auto element=node.try_as<UIElement>())
+                ancestors.Append(O({{L"type",S(get_class_name(element))},{L"id",S(AutomationProperties::GetAutomationId(element))},{L"opacity",N(element.Opacity())},{L"visibility",N(int32_t(element.Visibility()))},{L"hit_test_visible",B(element.IsHitTestVisible())}}));
+        }catch(hresult_error const& error){nativeInputGeometryError(snapshot,error);}
+        return snapshot;
+    }
+    J nativeInputFailureGeometry(FrameworkElement const& target){
+        J snapshot;
+        try{auto transform=target.TransformToVisual(target.XamlRoot().Content().as<UIElement>());snapshot=nativeInputGeometry(target,target.ActualWidth(),target.ActualHeight(),transform);}
+        catch(hresult_error const& error){nativeInputGeometryError(snapshot,error);}
+        try{auto peer=Automation::Peers::FrameworkElementAutomationPeer::FromElement(target);snapshot.Insert(L"peer_present",B(bool(peer)));if(peer)snapshot.Insert(L"peer_screen_bounds",nativeInputRect(peer.GetBoundingRectangle()));}
+        catch(hresult_error const& error){nativeInputGeometryError(snapshot,error);}
+        return snapshot;
+    }
+    J nativeInputRequest(hstring kind,FrameworkElement target=nullptr,J* geometry=nullptr){
+        GUID nonce{};check_hresult(CoCreateGuid(&nonce));wchar_t text[40]{};require(StringFromGUID2(nonce,text,40)>0,L"Input query nonce was not generated");
+        auto request=O({{L"request",S(text)},{L"kind",S(kind)}});
+        if(target){
+            auto content=target.XamlRoot().Content().as<UIElement>();auto transform=target.TransformToVisual(content);auto width=target.ActualWidth(),height=target.ActualHeight();auto at=transform.TransformPoint({float(width/2),float(height/2)});
+            auto screen=target.XamlRoot().CoordinateConverter().ConvertLocalToScreen(at);A point;point.Append(N(screen.X));point.Append(N(screen.Y));request.Insert(L"screen",point);
+            if(geometry)*geometry=nativeInputGeometry(target,width,height,transform);
+        }
+        return request;
+    }
+    winrt::Windows::Foundation::IAsyncAction nativeInputContract(){
+        auto query=NativeInputQuery::Find(hwnd);require(bool(query),L"Native input observer was not installed for the private fixture window");
+        Grid surface;surface.Width(160);surface.Height(100);Button target;TextBox edit;Border overlay;
+        buttonFeedback(target,SolidColorBrush(Windows::UI::Color{255,0,0,0}));
+        target.Content(box_value(L"Native receipt target"));target.Width(120);target.Height(50);target.HorizontalAlignment(HorizontalAlignment::Left);target.VerticalAlignment(VerticalAlignment::Top);
+        edit.Width(120);edit.Height(32);edit.HorizontalAlignment(HorizontalAlignment::Left);edit.VerticalAlignment(VerticalAlignment::Bottom);
+        overlay.Width(120);overlay.Height(50);overlay.HorizontalAlignment(HorizontalAlignment::Left);overlay.VerticalAlignment(VerticalAlignment::Top);overlay.Background(clear());
+        AutomationProperties::SetAutomationId(target,L"native-input-target");AutomationProperties::SetAutomationId(edit,L"native-input-editor");AutomationProperties::SetAutomationId(overlay,L"native-input-overlay");
+        surface.Children().Append(target);surface.Children().Append(edit);surface.Children().Append(overlay);root.Children().Append(surface);
+        co_await wait([&]{return surface.IsLoaded()&&target.ActualWidth()>0;},L"Native input contract did not arrange");
+        bool refused=false;try{nativePoint(target,Point{60,25});}catch(hresult_error const& error){if(error.message()==L"Native gesture does not hit its intended body")refused=true;else throw;}
+        require(refused,L"Covered native target was admitted");nativeInputFailure=J{};
+        edit.Focus(FocusState::Keyboard);co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==edit;},L"Native input contract editor did not take focus");
+        auto request=nativeInputRequest(L"pointer",target);auto beforeFocus=FocusManager::GetFocusedElement(root.XamlRoot());auto beforeKeys=keys;auto beforePresses=presses;
+        auto blocked=co_await nativeInputQuery(request);
+        require(str(blocked,L"request")==str(request,L"request")&&num(blocked,L"process_id")==GetCurrentProcessId()&&num(blocked,L"hwnd")==double(uintptr_t(hwnd)),L"Native query transport changed request or window identity");
+        require(array(object(blocked,L"pointer"),L"path").GetStringAt(0)==L"native-input-overlay",L"Native query searched behind the top hit-testable overlay");
+        require(FocusManager::GetFocusedElement(root.XamlRoot())==beforeFocus&&keys==beforeKeys&&presses==beforePresses&&!visiblePopup(),L"Native query transport changed focus or sent input");
+        overlay.IsHitTestVisible(false);auto admitted=co_await nativeInputQuery(nativeInputRequest(L"pointer",target));
+        bool named=false;for(auto id:array(object(admitted,L"pointer"),L"path"))named|=id.GetString()==L"native-input-target";
+        require(named&&flag(object(admitted,L"pointer"),L"enabled"),L"Native query did not name the unoccluded target");
+        auto previous=query->Journal()->Read()->serial;nativePress(target);
+        co_await wait([&]{return query->Journal()->Read()->serial>previous;},L"Native observer did not retain a real Down");
+        bool received=false;for(auto const& down:query->Journal()->Read()->downs)if(down.serial>previous&&down.admitted==NativeInputAdmission::Accepted)for(auto const& id:down.path)received|=id==L"native-input-target";
+        require(received,L"Native control entry did not retain its admitted Down identity");
+        AutomationProperties::SetAutomationId(target,L"");
+        received=false;for(auto const& down:query->Journal()->Read()->downs)if(down.serial>previous)for(auto const& id:down.path)received|=id==L"native-input-target";
+        require(received,L"Retired native metadata changed an earlier Down identity");
+        previous=query->Journal()->Read()->serial;nativePress(edit);
+        co_await wait([&]{return query->Journal()->Read()->serial>previous;},L"Native root did not retain an ordinary arrival");
+        bool arrival=false;for(auto const& down:query->Journal()->Read()->downs)if(down.serial>previous){require(down.admitted==NativeInputAdmission::Unknown,L"Root arrival was falsely reported as admitted");arrival=true;}
+        require(arrival,L"Native root arrival was absent");
+        auto focusIdentity=[](auto const& element){A path;for(auto const& id:NativeInputObserver::Path(element.template try_as<DependencyObject>()))path.Append(S(hstring(id)));return O({{L"path",path},{L"type",S(element?get_class_name(element):hstring{})}});};
+        auto checkTransport=[&](hstring const& stage,J const& request,J const& state,bool named,bool isOpen,auto const& before,J const& beforeState,auto const& current,FrameworkElement const& target,J const& geometryBefore){
+            if(named&&isOpen&&current==before)return;
+            auto after=focusIdentity(current),hit=object(state,L"pointer"),geometryAfter=nativeInputFailureGeometry(target);
+            auto pointOwner=GetAncestor(reinterpret_cast<HWND>(uintptr_t(num(state,L"point_hwnd"))),GA_ROOTOWNER),windowOwner=GetAncestor(hwnd,GA_ROOTOWNER);
+            auto firstId=[](J const& element){for(auto id:array(element,L"path"))if(!id.GetString().empty())return id.GetString();return hstring{};};
+            nativeInputFailure=O({{L"stage",S(stage)},{L"query",state},{L"request",request},{L"named",B(named)},{L"opened",B(isOpen)},{L"focus_unchanged",B(current==before)},{L"focus_before",beforeState},{L"focus_after",after},{L"point_root_owner",N(double(uintptr_t(pointOwner)))},{L"window_root_owner",N(double(uintptr_t(windowOwner)))},{L"geometry_before",geometryBefore},{L"geometry_after",geometryAfter}});
+            auto screen=request.GetNamedArray(L"screen");
+            auto detail=hstring(L"Native ")+stage+L" query: named="+to_hstring(named)+L" opened="+to_hstring(isOpen)+L" focus_same="+to_hstring(current==before)
+                +L" point_hwnd="+to_hstring(uint64_t(num(state,L"point_hwnd")))+L" point_pid="+to_hstring(uint64_t(num(state,L"point_process")))+L" owners="+to_hstring(uint64_t(uintptr_t(pointOwner)))+L"/"+to_hstring(uint64_t(uintptr_t(windowOwner)))
+                +L" size_before="+to_hstring(num(geometryBefore,L"width"))+L"x"+to_hstring(num(geometryBefore,L"height"))+L" size_after="+to_hstring(num(geometryAfter,L"width"))+L"x"+to_hstring(num(geometryAfter,L"height"))+L" screen="+to_hstring(int64_t(screen.GetNumberAt(0)))+L","+to_hstring(int64_t(screen.GetNumberAt(1)))+L" hit="+firstId(hit)+L"/"+str(hit,L"type")+L" before="+firstId(beforeState)+L" after="+firstId(after)+L" query_error="+str(state,L"error");
+            require(false,detail.c_str());
+        };
+        ContentDialog dialog;TextBox modal;AutomationProperties::SetAutomationId(modal,L"native-input-modal");dialog.Title(box_value(L"Native query modal"));dialog.Content(modal);dialog.CloseButtonText(L"Close");dialog.XamlRoot(root.XamlRoot());
+        auto modalOpened=std::make_shared<bool>(false);dialog.Opened([modalOpened](auto&&,auto&&){*modalOpened=true;});dialog.Closed([modalOpened](auto&&,auto&&){*modalOpened=false;});auto showing=dialog.ShowAsync();
+        co_await wait([&]{return *modalOpened&&modal.IsLoaded()&&modal.ActualWidth()>0;},L"Native query modal did not open");modal.Focus(FocusState::Keyboard);
+        co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==modal;},L"Native query modal did not own focus");
+        auto modalFocus=FocusManager::GetFocusedElement(root.XamlRoot());auto modalBefore=focusIdentity(modalFocus);J modalGeometry;auto modalRequest=nativeInputRequest(L"pointer",modal,&modalGeometry);auto modalState=co_await nativeInputQuery(modalRequest);
+        named=false;for(auto id:array(object(modalState,L"pointer"),L"path"))named|=id.GetString()==L"native-input-modal";
+        auto modalCurrent=FocusManager::GetFocusedElement(root.XamlRoot());
+        checkTransport(L"modal",modalRequest,modalState,named,*modalOpened,modalFocus,modalBefore,modalCurrent,modal,modalGeometry);
+        dialog.Hide();co_await showing;
+        Flyout flyout;TextBox popup;popup.Width(120);AutomationProperties::SetAutomationId(popup,L"native-input-popup");flyout.Content(popup);auto popupOpened=std::make_shared<bool>(false);flyout.Opened([popupOpened](auto&&,auto&&){*popupOpened=true;});flyout.Closed([popupOpened](auto&&,auto&&){*popupOpened=false;});flyout.ShowAt(target);
+        co_await wait([&]{return *popupOpened&&popup.IsLoaded()&&popup.ActualWidth()>0;},L"Native query popup did not open");popup.Focus(FocusState::Keyboard);
+        J popupGeometry;auto popupRequest=nativeInputRequest(L"pointer",popup,&popupGeometry);
+        co_await wait([&]{
+            auto sample=query->Query(popupRequest);bool hitTarget=false;for(auto id:array(object(sample,L"pointer"),L"path"))hitTarget|=id.GetString()==L"native-input-popup";
+            auto focused=FocusManager::GetFocusedElement(root.XamlRoot());bool ownsFocus=focused==popup;
+            if(!hitTarget||!ownsFocus)nativeInputFailure=O({{L"stage",S(L"popup-input-ready")},{L"query",sample},{L"request",popupRequest},{L"named",B(hitTarget)},{L"opened",B(*popupOpened)},{L"focused",B(ownsFocus)},{L"focus",focusIdentity(focused)},{L"geometry_before",popupGeometry}});
+            return hitTarget&&ownsFocus;
+        },L"Native query popup did not become input-ready");
+        nativeInputFailure=J{};
+        auto popupFocus=FocusManager::GetFocusedElement(root.XamlRoot());auto popupBefore=focusIdentity(popupFocus);auto popupState=co_await nativeInputQuery(popupRequest);
+        named=false;for(auto id:array(object(popupState,L"pointer"),L"path"))named|=id.GetString()==L"native-input-popup";
+        checkTransport(L"popup",popupRequest,popupState,named,*popupOpened,popupFocus,popupBefore,FocusManager::GetFocusedElement(root.XamlRoot()),popup,popupGeometry);flyout.Hide();
+        co_await wait([&]{return !*popupOpened;},L"Native query popup did not close");root.Children().RemoveAtEnd();
+    }
     winrt::Windows::Foundation::IAsyncAction controlCases(){
         phase=L"color-strip-presentation";co_await colorStripPresentation();
         phase=L"bubble-press-timestamps";co_await bubblePressTimestamps();
@@ -1961,6 +2116,7 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         tooltip(owned,L"");require(AutomationProperties::GetHelpText(owned).empty(),L"Clearing tooltip-owned help retained its caption");
         tooltip(metadata,L"First metadata tooltip");tooltip(metadata,L"Second metadata tooltip");tooltip(metadata,L"");
         require(AutomationProperties::GetHelpText(metadata).empty(),L"Nonvisual tooltip-owned help did not update and clear");
+        phase=L"native-input-contract";co_await nativeInputContract();
         phase=L"primitives";
         {
             Button tab;tab.Content(box_value(L"Retained tab"));tab.Width(100);tab.Height(30);
@@ -2087,10 +2243,10 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             else if(group==L"text-layout")co_await textLayoutCases();
         } catch(hresult_error const& e){resultCode=1;wchar_t hex[11]{};swprintf_s(hex,L"0x%08X",static_cast<unsigned>(e.code().value));error=hstring(hex)+L": "+e.message();}catch(...){resultCode=1;error=L"Unhandled popup fixture failure";}
         owner.Cancel();auto count=checks;auto imeCount=imeChecks;auto step=to_string(phase);auto suite=to_string(group);auto message=to_string(error);auto path=output;
-        A imeEvents;for(auto const& event:*imeTrace)imeEvents.Append(event);auto imeJson=to_string(imeEvents.Stringify());
+        A imeEvents;for(auto const& event:*imeTrace)imeEvents.Append(event);auto imeJson=to_string(imeEvents.Stringify());auto inputFailureJson=to_string(nativeInputFailure.Stringify());
         co_await resume_background();
         {std::ofstream file(path.parent_path()/L"workspace-ime-events.json");file<<imeJson;if(!file)resultCode=1;}
-        {std::ofstream file(path);file<<"{\"group\":\""<<suite<<"\",\"passed\":"<<count<<",\"ime_passed\":"<<imeCount<<",\"exit_code\":"<<resultCode<<",\"phase\":\""<<step<<"\"}\n";if(!file)resultCode=1;}
+        {std::ofstream file(path);file<<"{\"group\":\""<<suite<<"\",\"passed\":"<<count<<",\"ime_passed\":"<<imeCount<<",\"exit_code\":"<<resultCode<<",\"phase\":\""<<step<<"\",\"native_input_failure\":"<<inputFailureJson<<"}\n";if(!file)resultCode=1;}
         if(!message.empty()){std::ofstream file(path.parent_path()/L"popup-fixture-error.log");file<<message;}
         co_await apartment;other.Close();if(!windowClosed)window.Close();Application::Current().Exit();
     }

@@ -57,12 +57,19 @@ function Contact-Receipt($Point,[double]$Previous){
     } 'Native contact Down was not acknowledged at the requested point'
     $receipt.gesture
 }
+function Contact-Down($Point,$At,[bool]$RequireEdgeReceipt=$true){
+    $route=Input-Trace $At.x $At.y
+    $canvas=@($route.hit|Where-Object {$_.id -eq 'drawing-canvas' -and $_.process -eq $review.Id}).Count -gt 0
+    $before=if($canvas){Wait-CapyInputTarget 'drawing-canvas' 'pointer' @($At.x,$At.y)}
+    $previous=[double](Gesture).edge_contact.time
+    [CapyRowPointer]::Down($Device,$At.x,$At.y)
+    if($canvas){Assert-CapyPointerDown $before 'drawing-canvas' $Device @($At.x,$At.y);return Gesture}
+    if($RequireEdgeReceipt){Contact-Receipt $Point $previous}else{Gesture}
+}
 function Contact($Point){
     $at=Screen $Point.x $Point.y
     if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
-    $previous=[double](Gesture).edge_contact.time
-    [CapyRowPointer]::Down($Device,$at.x,$at.y)
-    try{(Contact-Receipt $Point $previous).edge}finally{[CapyRowPointer]::Cancel();Wait-Until {!(Gesture).edge} 'Native contact Cancel did not settle'}
+    try{(Contact-Down $Point $at).edge}finally{[CapyRowPointer]::Cancel();Wait-Until {!(Gesture).edge} 'Native contact Cancel did not settle'}
 }
 function Within($Point,[object[]]$Bounds){@($Bounds|Where-Object {$_ -and $Point.x -ge $_.x -and $Point.x -le $_.x+$_.width -and $Point.y -ge $_.y -and $Point.y -le $_.y+$_.height}).Count -gt 0}
 function Reach-Point([object[]]$Candidates,[scriptblock]$Accept){
@@ -189,9 +196,7 @@ function Check-ReachSweep([string]$Theme){
             $at=Screen $sample.x $sample.y
             if($Device -eq 'mouse'){[CapyRowPointer]::Hover($at.x,$at.y)}
             try{
-                $previous=[double](Gesture).edge_contact.time
-                [CapyRowPointer]::Down($Device,$at.x,$at.y)
-                $down=if(Within $sample $surfaces){Contact-Receipt $sample $previous}else{Gesture}
+                $down=Contact-Down $sample $at (Within $sample $surfaces)
                 $eligible=$null -ne $down.edge -and $(if($sample.axis -eq 'horizontal'){$down.edge.contact -eq 'free'}else{[bool]$down.edge.vertical})
                 $claimed=$false
                 if($eligible){

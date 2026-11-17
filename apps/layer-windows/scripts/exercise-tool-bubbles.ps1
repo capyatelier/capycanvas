@@ -1765,7 +1765,7 @@ try{
         $id=$packet.view.id
         if($packet.view.kind -eq 'layers' -and $packet.view.card){Tap (Screen ($width*.9) ($height*.8));Wait-Until {$null -eq (View $id).card} 'Outside contact did not fold Layers'}
         $from=if($packet.view.kind -eq 'color'){Relative $id @((-$packet.view.diameter*.5+3),0)}else{Center $id}
-        Drag $from (Screen ($width*.5) 12)
+        if($packet.view.kind -eq 'color'){Invoke-CapyPointerInput -Target @{record=$id;part='face'} -Point @($from.x,$from.y) -Device $Device -Action {Drag $from (Screen ($width*.5) 12)}}else{Drag $from (Screen ($width*.5) 12)}
         Wait-Until {$null -eq (Packet $id)} 'Title-bar drop did not put bubble back'
     }
     if(@(Packets).Count){throw 'Put back left bubbles behind'}

@@ -14,6 +14,14 @@ if($LASTEXITCODE -ne 0){throw 'Canvas queue test build failed. Run from a Visual
 & $executable
 if($LASTEXITCODE -ne 0){throw 'Canvas queue test failed.'}
 
+$source=Join-Path $PSScriptRoot '../tests/native-input-receipt.cpp'
+$object=Join-Path $OutputDirectory 'native-input-receipt.obj'
+$executable=Join-Path $OutputDirectory 'native-input-receipt-test.exe'
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization $source "/Fo$object" "/Fe$executable" /link @manifest
+if($LASTEXITCODE -ne 0){throw 'Native input receipt test build failed.'}
+& $executable
+if($LASTEXITCODE -ne 0){throw 'Native input receipt test failed.'}
+
 $source=Join-Path $PSScriptRoot '../tests/panel-scroll.cpp'
 $object=Join-Path $OutputDirectory 'panel-scroll.obj'
 $executable=Join-Path $OutputDirectory 'panel-scroll-test.exe'

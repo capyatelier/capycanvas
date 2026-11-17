@@ -134,11 +134,18 @@ try{
  $tokens=$null;$errors=$null
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-edge-reach.ps1'),[ref]$tokens,[ref]$errors)
  if($errors.Count){throw($errors|Out-String)}
- foreach($name in 'Contact','Contact-Receipt'){
+ foreach($name in 'Contact','Contact-Receipt','Contact-Down'){
   $function=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}.GetNewClosure(),$true)
   if(!$function){throw "Missing actual edge contact helper $name"}
   . ([scriptblock]::Create($function.Extent.Text.Replace('[CapyRowPointer]','[CapyEdgeContactTest.Pointer]')))
  }
+ $review=@{Id=7}
+ function Input-Trace($X,$Y){
+  if($X-ne10-or$Y-ne20){throw 'Edge freshness queried another point'}
+  @{hit=@(@{id='edge-control';process=7})}
+ }
+ function Wait-CapyInputTarget{throw 'UI edge freshness unexpectedly requested canvas readiness'}
+ function Assert-CapyPointerDown{throw 'UI edge freshness bypassed its root contact receipt'}
  function Screen([double]$X,[double]$Y){@{x=[int]$X;y=[int]$Y}}
  function Gesture{
   if([CapyEdgeContactTest.Pointer]::Cancels){return [pscustomobject]@{edge=$null}}

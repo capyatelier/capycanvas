@@ -1,5 +1,6 @@
 #pragma once
 #include "UiControls.h"
+#include "NativeInputObserver.h"
 
 class WorkspaceBubbles {
 public:
@@ -14,6 +15,7 @@ public:
     void Glass(CapyUi::A&,CapyUi::A&,CapyUi::A&,winrt::Microsoft::UI::Xaml::UIElement const&)const;
     CapyUi::A TraceOverlays(winrt::Microsoft::UI::Xaml::UIElement const&)const;
     CapyUi::J TraceFrames()const;
+    CapyUi::NativeInputSemantic InputSemantic(winrt::Microsoft::UI::Xaml::DependencyObject const&)const;
     void TraceRendering(uint64_t);
     CapyUi::A InputRegions(winrt::Microsoft::UI::Xaml::UIElement const&)const;
 private:

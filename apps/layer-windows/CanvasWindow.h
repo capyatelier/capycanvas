@@ -23,6 +23,8 @@
 #include "PenSourceCache.h"
 #include <winrt/Windows.Devices.Haptics.h>
 #include "PointerModality.h"
+#include "NativeInputReceipt.h"
+#include <winrt/Microsoft.UI.Content.h>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -43,6 +45,7 @@ void CapyLifecycle(char const* event);
 namespace CapyUi {struct WorkspaceData;}
 struct OrderedTraceFile;
 
+namespace CapyUi {class NativeInputQuery;}
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
     CanvasWindow(std::function<void()> createWindow,std::function<void(uint64_t)> onClosed,
@@ -69,6 +72,8 @@ private:
     void SendLaunchFiles(winrt::Windows::Data::Json::JsonObject const& model);
     struct Size { uint32_t width=1, height=1; float scale=1; };
     winrt::Microsoft::UI::Xaml::Window window;
+    std::shared_ptr<CapyUi::NativeInputQuery> testInputQuery;
+    winrt::Microsoft::UI::Content::ContentCoordinateConverter inputCoordinates{nullptr};
     uint64_t const windowId;
     HWND nativeWindow=nullptr;
     std::function<void()> createWindow,testDeviceLoss;
@@ -137,6 +142,7 @@ private:
     std::set<uint32_t> xamlContacts;
     // Captured together under mutex; never pair a new DPI with an old camera.
     float inputScale=1;
+    std::function<void(CapyUi::NativeCanvasDown)> independentDownReceipt;
     CapyView inputView{};
     std::unordered_map<uint32_t,std::pair<std::wstring,std::wstring>> heldKeys; // UI thread
     std::unordered_set<uint32_t> penButtons; // input thread
@@ -295,7 +301,8 @@ private:
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
     using PointerPoints=winrt::Windows::Foundation::Collections::IVector<winrt::Microsoft::UI::Input::PointerPoint>;
     std::vector<CapyPointer> PointerSamples(winrt::Microsoft::UI::Input::PointerPoint const&,PointerPoints const&,uint32_t phase,bool predict);
-    void Pointer(std::vector<CapyPointer>,winrt::Windows::System::VirtualKeyModifiers,bool pen,bool barrel,uint64_t arrival);
+    bool Pointer(std::vector<CapyPointer>,winrt::Windows::System::VirtualKeyModifiers,bool pen,bool barrel,uint64_t arrival);
+    std::optional<CapyUi::NativeCanvasDown> CanvasDown(winrt::Microsoft::UI::Input::PointerPoint const&);
     void XamlPointer(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,uint32_t phase);
     void CanvasTouch(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
     void CanvasTouch(CanvasTouchGesture&,winrt::Microsoft::UI::Input::PointerPoint const&,PointerPoints const&,uint32_t phase);

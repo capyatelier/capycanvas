@@ -1903,7 +1903,7 @@ public static class CapyEdgeSweepTest {
  }
  $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-edge-reach.ps1'),[ref]$tokens,[ref]$errors)
  if($errors.Count){throw($errors|Out-String)}
- foreach($name in 'Escape-Edge','Settled','Contact-Receipt','Within'){
+ foreach($name in 'Escape-Edge','Settled','Contact-Receipt','Contact-Down','Within'){
   $fn=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq$name}.GetNewClosure(),$true)
   if(!$fn){throw "Missing actual sweep function $name"}
   . ([scriptblock]::Create($fn.Extent.Text.Replace('[CapyRowPointer]','[CapyEdgeSweepTest]')))
@@ -1915,6 +1915,19 @@ public static class CapyEdgeSweepTest {
  $sequence=($statements[0..$last]|ForEach-Object {$_.Extent.Text})-join"`n"
  $sequence=$sequence.Replace('[CapyRowPointer]','[CapyEdgeSweepTest]').Replace('[CapyRowPointer+Point]','[CapyEdgeSweepTest+Point]')
  function Read-CanvasProgress{throw 'Non-idle edge sweep unexpectedly requested renderer idle progress'}
+ function Input-Trace($X,$Y){
+  if($X-ne100-or$Y-ne200){throw 'Sweep route query changed its original point'}
+  @{hit=@(@{id=$(if($script:sweepMode-eq'canvas'){'drawing-canvas'}else{'edge-control'});process=7})}
+ }
+ function Wait-CapyInputTarget($Target,$Kind,$Point){
+  if($script:sweepMode-ne'canvas'-or$Target-cne'drawing-canvas'-or$Kind-cne'pointer'-or($Point-join',')-cne'100,200'-or[CapyEdgeSweepTest]::Downs){throw 'Canvas sweep readiness lost its declared route or preceded the wrong contact'}
+  $script:sweepNativeQueries++;@{down_serial=0}
+ }
+ function Assert-CapyPointerDown($Before,$Target,$PointerDevice,$Point){
+  if($script:sweepMode-ne'canvas'-or$Target-cne'drawing-canvas'-or$Before.down_serial-ne0-or[CapyEdgeSweepTest]::Downs-ne1-or![CapyEdgeSweepTest]::Active-or
+     [CapyEdgeSweepTest]::Device-cne$PointerDevice-or[math]::Abs([CapyEdgeSweepTest]::X-$Point[0])-gt1-or[math]::Abs([CapyEdgeSweepTest]::Y-$Point[1])-gt1){throw 'Canvas sweep native Down was not admitted at its declared point'}
+  $script:sweepNativeReceipts++
+ }
  function Start-Sleep([int]$Milliseconds){}
  function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt12;$poll++){if(& $Condition){return}};throw $Message}
  function Gesture{
@@ -1970,10 +1983,11 @@ public static class CapyEdgeSweepTest {
  $modes=if($Device-eq'mouse'){@('delayed','late-down','wrong-serial','wrong-edge-serial','wrong-position','stale-move-input','old-down','earlier-move','wrong-pointer','stale-down','unclaimed','settled','settled-error','ineligible','settled-ineligible','ineligible-wrong-down','denied','canvas','stale-terminal','missing-layout','missing-presentation','wrong-geometry')}else{@('delayed','late-down','stale-terminal','missing-layout','missing-presentation','wrong-geometry')}
  foreach($mode in $modes){
   $surfaces=if($mode-eq'canvas'){@(@{x=0;y=0;width=500;height=700})}else{@(@{x=500;y=700;width=20;height=40})}
-  $script:sweepMode=$mode;$script:sweepTerminalReads=0;$script:sweepMotionReads=0;$script:sweepDownReads=0;$script:sweepAcknowledged=$false;$script:sweepEarlyModelReads=0;$script:sweepModelReads=0;$script:sweepPresentationReads=0;$script:sweepGeometryReads=0;$script:sweepPublished=100;$script:sweepDisplayed=100
+  $script:sweepMode=$mode;$script:sweepNativeQueries=0;$script:sweepNativeReceipts=0;$script:sweepTerminalReads=0;$script:sweepMotionReads=0;$script:sweepDownReads=0;$script:sweepAcknowledged=$false;$script:sweepEarlyModelReads=0;$script:sweepModelReads=0;$script:sweepPresentationReads=0;$script:sweepGeometryReads=0;$script:sweepPublished=100;$script:sweepDisplayed=100
   $rows=[Collections.Generic.List[object]]::new();$script:sweepRows=[Collections.Generic.List[object]]::new()
   [CapyEdgeSweepTest]::Phase=0;[CapyEdgeSweepTest]::Downs=0;[CapyEdgeSweepTest]::Cancels=0;[CapyEdgeSweepTest]::Escapes=0;[CapyEdgeSweepTest]::Moves=0;[CapyEdgeSweepTest]::Active=$false;[CapyEdgeSweepTest]::Committed=$false;[CapyEdgeSweepTest]::SharedClaimed=$mode-notin'unclaimed','settled','settled-error','ineligible','settled-ineligible','ineligible-wrong-down','denied','canvas'
   $failure=$null;try{. ([scriptblock]::Create($sequence))}catch{$failure=$_}
+  if($script:sweepNativeQueries-ne[int]($mode-eq'canvas')-or$script:sweepNativeReceipts-ne[int]($mode-eq'canvas')){throw 'Sweep replaced its declared UI or independent-canvas Down authority'}
   if([CapyEdgeSweepTest]::Committed){throw 'Actual mouse sweep skipped cancellation and committed the delayed shared claim with ordinary Up'}
   if($mode-eq'wrong-geometry'-and(!$failure-or!$failure.Exception.Message.Contains('before: <restored-divider>; after: <changed-divider>'))){throw 'Sweep geometry failure omitted the compared divider geometry'}
   $expected=switch($mode){{$_-in'wrong-serial','wrong-edge-serial','wrong-position','stale-move-input','old-down','earlier-move','wrong-pointer'}{'Native edge sweep request was not acknowledged'}'stale-terminal'{'Native gesture release was not acknowledged'}'missing-layout'{'Canceled edge sweep did not acknowledge its exact workspace layout'}'missing-presentation'{'The display did not show the latest canvas frame'}'wrong-geometry'{'Canceled edge sweep changed the arranged divider geometry'}{$_-in'unclaimed','settled','settled-error'}{'Edge sweep lost or retained a contact:'}'stale-down'{'Native contact Down was not acknowledged at the requested point'}}

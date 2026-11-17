@@ -137,6 +137,7 @@ inline std::shared_ptr<State> state(Primitives::ButtonBase const& button){
     button.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler([state](auto&&,PointerRoutedEventArgs const& e){
         auto button=state->owner.get();if(!button||!button.IsEnabled())return;auto point=e.GetCurrentPoint(button);
         if(!PointerGesture::PrimaryContact(point))return;
+        NativeInputObserver::Down(button,e,NativeInputAdmission::Accepted);
         if(state->pointer)state->end(true);state->pointer=point.PointerId();state->inside=state->hit(e);state->hoverAllowed=point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Touch;
         if(point.PointerDeviceType()!=Microsoft::UI::Input::PointerDeviceType::Mouse&&(state->taps=routedTaps(button.XamlRoot())))state->taps->presses[point.PointerId()]={make_weak(button),point.Timestamp(),std::nullopt,state->hold};
         if(state->input)state->input->owners[*state->pointer]=state;state->present();

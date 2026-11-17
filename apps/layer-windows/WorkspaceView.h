@@ -3,6 +3,7 @@
 #include "NativeHandles.h"
 #include "FilterPreviews.h"
 #include "CanvasModelInputs.h"
+#include "NativeInputObserver.h"
 #include <functional>
 #include <memory>
 
@@ -36,6 +37,7 @@ public:
     void CanvasContact(bool active);
     void AttachOverlays(winrt::Microsoft::UI::Xaml::UIElement const&,std::function<void()>);
     winrt::Windows::Data::Json::JsonArray DrawerSources() const;
+    CapyUi::NativeInputSemantic InputSemantic(winrt::Microsoft::UI::Xaml::DependencyObject const&)const;
     winrt::Windows::Data::Json::JsonArray OverlayInputRegions(winrt::Microsoft::UI::Xaml::UIElement const&)const;
     winrt::Windows::Data::Json::JsonArray Glass(winrt::Microsoft::UI::Xaml::UIElement const& reference,winrt::Windows::Data::Json::JsonArray& connections,winrt::Windows::Data::Json::JsonArray& arcs,winrt::Windows::Data::Json::JsonArray& colors,winrt::Windows::Data::Json::JsonArray& panels) const;
     void ChromeSent(uint64_t revision);

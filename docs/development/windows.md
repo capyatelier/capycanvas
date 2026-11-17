@@ -365,6 +365,7 @@ afterwards.
 ## Test
 
 The normal suite's `hdr-dial-commit.ps1` checks that Dial history references acknowledge a committed edit.
+The normal suite's `input-ready.ps1`, `input-inventory.ps1` and `bubble-input-targets.ps1` verify native receiver receipts and the scoped input callers.
 
 | Where | Checks |
 | --- | --- |

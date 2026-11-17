@@ -1,5 +1,6 @@
 #pragma once
 #include "PointerCompletion.h"
+#include "NativeInputObserver.h"
 #include <windows.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Input.h>
@@ -68,7 +69,9 @@ public:
         auto clicks=std::make_shared<PointerClick>();
         element.AddHandler(UIElement::PointerPressedEvent(),winrt::box_value(Input::PointerEventHandler([clicks](auto&& sender,Input::PointerRoutedEventArgs const& e){
             auto point=e.GetCurrentPoint(nullptr);
-            if(PrimaryContact(point)&&Captured(sender.template as<UIElement>(),point.PointerId()))clicks->Begin(point.PointerId());
+            if(PrimaryContact(point)&&Captured(sender.template as<UIElement>(),point.PointerId())){
+                NativeInputObserver::Down(sender.template as<UIElement>(),e,NativeInputAdmission::Accepted);clicks->Begin(point.PointerId());
+            }
         })),true);
         element.Unloaded([clicks,finish](auto&&,auto&&){if(auto id=clicks->Cancel())finish(*id,true);});
         element.AddHandler(UIElement::PreviewKeyDownEvent(),winrt::box_value(Input::KeyEventHandler([clicks](auto&&,auto&&){clicks->Reset();})),true);
@@ -173,8 +176,10 @@ public:
         auto view=surface.get();if(!view||!view.IsLoaded())return false;
         auto point=event.GetCurrentPoint(view);auto id=point.PointerId();
         if(!PointerGesture::PrimaryContact(point))return false;
+        auto receipt=NativeInputObserver::Prepare(view,event);
         if(Owns(id))Cancel(id);
-        if(capture&&!view.CapturePointer(event.Pointer()))return false;
+        if(capture&&!view.CapturePointer(event.Pointer())){receipt.Record(NativeInputAdmission::Rejected);return false;}
+        receipt.Record(NativeInputAdmission::Accepted);
         pointers.emplace(id,event.Pointer());
         registry->Observe(id,this,[weak=weak_from_this(),id]{if(auto self=weak.lock())self->Cancel(id);});return true;
     }

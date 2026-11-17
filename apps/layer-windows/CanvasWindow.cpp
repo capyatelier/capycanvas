@@ -7,6 +7,7 @@
 #include "PenInput.h"
 #include "UiControls.h"
 #include "SmokeCommand.h"
+#include "NativeInputQuery.h"
 #include "KeyNames.h"
 #include "NativeKeyRepeats.h"
 #include "NavigationCursors.h"
@@ -668,6 +669,18 @@ bool CanvasWindow::StartPrepared(CapyLaunch  prepared) {
     surfaceState.Reset(capy_surface_generation(host));
     nativeWindow=Handle();capy_set_window(host,nativeWindow);
     check_bool(SetWindowSubclass(Handle(),WindowMessage,1,reinterpret_cast<DWORD_PTR>(this)));
+    testInputQuery=CapyUi::InstallNativeInputQuery(window,windowId,[weak=weak_from_this()]{
+        auto self=weak.lock();return self&&CapyUi::flag(self->lastModel,L"windows_isolated_settings");
+    },[weak=weak_from_this()](DependencyObject const& hit,Point){
+        CapyUi::NativeInputSemantic target;if(auto self=weak.lock()){
+            target.canvas=CapyUi::descendantOf(hit,self->canvasFocus);
+            if(!target.canvas&&self->workspace)target=self->workspace->InputSemantic(hit);
+        }return target;
+    });
+    if(testInputQuery){
+        if(auto xaml=panel.XamlRoot())inputCoordinates=xaml.CoordinateConverter();
+        independentDownReceipt=testInputQuery->IndependentReceiver(panel);
+    }
     auto dark=panel.ActualTheme()==ElementTheme::Dark;
     capy_action(host,SystemTheme().c_str());
     capy_action(host,SystemMotion().c_str());
@@ -1077,32 +1090,53 @@ void CanvasWindow::LeaveHover(HoverRoute route){
     if(hoverRoute!=route)return;
     hoverRoute=HoverRoute::None;SendIndependent(CanvasCommand{CanvasCommandKind::Input,R"({"type":"cursor_leave"})"});
 }
+std::optional<CapyUi::NativeCanvasDown> CanvasWindow::CanvasDown(Microsoft::UI::Input::PointerPoint const& point){
+    {std::lock_guard lock(mutex);if(closing)return std::nullopt;}
+    if(!inputCoordinates)return std::nullopt;
+    auto screen=inputCoordinates.ConvertLocalToScreen(point.Position());
+    auto type=point.PointerDeviceType();using Device=Microsoft::UI::Input::PointerDeviceType;
+    CapyUi::NativeCanvasDown down;down.pointer=point.PointerId();down.time=point.Timestamp();down.screen={screen.X,screen.Y};
+    down.device=type==Device::Mouse?CapyUi::NativeInputDevice::Mouse:type==Device::Pen?CapyUi::NativeInputDevice::Pen:CapyUi::NativeInputDevice::Touch;
+    return down;
+}
 void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e,uint32_t phase){
     if(phase<=2)hoverRoute=HoverRoute::Independent;
     auto current=e.CurrentPoint();
     if(phase<=2)ObservePointerModality(current);
-    Pointer(PointerSamples(current,e.GetIntermediatePoints(),phase,true),e.KeyModifiers(),
+    auto down=phase==1&&independentDownReceipt?CanvasDown(current):std::nullopt;
+    bool accepted=Pointer(PointerSamples(current,e.GetIntermediatePoints(),phase,true),e.KeyModifiers(),
         current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen,current.Properties().IsBarrelButtonPressed(),latencyTrace.enabled?Now():0);
+    if(down){down->admitted=accepted&&!current.Properties().IsCanceled()?CapyUi::NativeInputAdmission::Accepted:CapyUi::NativeInputAdmission::Rejected;independentDownReceipt(*down);}
     e.Handled(true);
 }
 void CanvasWindow::XamlPointer(PointerRoutedEventArgs const& e,uint32_t phase){
-    if(closing||!inputDispatcher)return;
+    std::optional<CapyUi::NativeInputObserver::Pending> down;
+    if(phase==1&&testInputQuery&&!closed)down=CapyUi::NativeInputObserver::Prepare(panel,e,CapyUi::NativeInputRoute::XamlCanvas);
+    auto rejected=[&]{if(down)down->Record(CapyUi::NativeInputAdmission::Rejected);};
+    if(closing||!inputDispatcher){rejected();return;}
     auto current=e.GetCurrentPoint(panel);auto id=current.PointerId();
     phase=CanvasPointerPhase(phase,current.Properties().IsCanceled());
     if(phase==1){
-        if(e.Handled()||e.OriginalSource()!=panel||!panel.CapturePointer(e.Pointer()))return;
+        if(e.Handled()||e.OriginalSource()!=panel||!panel.CapturePointer(e.Pointer())){rejected();return;}
         xamlContacts.insert(id);
-    }else if(phase!=0&&!xamlContacts.contains(id))return;
-    else if(phase==0&&(e.Handled()||e.OriginalSource()!=panel))return;
+    }else if(phase!=0&&!xamlContacts.contains(id)){rejected();return;}
+    else if(phase==0&&(e.Handled()||e.OriginalSource()!=panel)){rejected();return;}
     auto history=e.GetIntermediatePoints(panel);auto samples=PointerSamples(current,history,phase,false);
     auto modifiers=e.KeyModifiers();auto arrival=latencyTrace.enabled?Now():0;
     bool pen=current.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Pen,barrel=current.Properties().IsBarrelButtonPressed();
-    inputDispatcher.TryEnqueue([weak=weak_from_this(),samples=std::move(samples),modifiers,pen,barrel,arrival,phase]() mutable {
+    auto send=[weak=weak_from_this(),samples=std::move(samples),modifiers,pen,barrel,arrival,phase]() mutable {
         if(auto self=weak.lock();self&&!self->closing){
             if(phase<=2)self->hoverRoute=HoverRoute::Xaml;
-            self->Pointer(std::move(samples),modifiers,pen,barrel,arrival);
+            return self->Pointer(std::move(samples),modifiers,pen,barrel,arrival);
         }
+        return false;
+    };
+    bool queued;
+    if(down&&down->journal)queued=inputDispatcher.TryEnqueue([send=std::move(send),receipt=*down,phase]() mutable {
+        receipt.Record(send()&&phase==1?CapyUi::NativeInputAdmission::Accepted:CapyUi::NativeInputAdmission::Rejected);
     });
+    else queued=inputDispatcher.TryEnqueue(std::move(send));
+    if(!queued)rejected();
     CanvasTouch(xamlCanvasTouch,current,history,phase);e.Handled(true);
     if(phase==3||phase==4){xamlContacts.erase(id);panel.ReleasePointerCapture(e.Pointer());}
 }
@@ -1155,20 +1189,20 @@ std::vector<CapyPointer> CanvasWindow::PointerSamples(Microsoft::UI::Input::Poin
     }
     return samples;
 }
-void CanvasWindow::Pointer(std::vector<CapyPointer> samples,Windows::System::VirtualKeyModifiers modifiers,bool pen,bool barrel,uint64_t arrival){
-    if(samples.empty())return;auto first=samples.front();auto id=uint32_t(first.id);
-    {std::lock_guard lock(mutex);if(closing)return;}
+bool CanvasWindow::Pointer(std::vector<CapyPointer> samples,Windows::System::VirtualKeyModifiers modifiers,bool pen,bool barrel,uint64_t arrival){
+    if(samples.empty())return false;auto first=samples.front();auto id=uint32_t(first.id);
+    {std::lock_guard lock(mutex);if(closing)return false;}
     if(first.phase==1){
-        if(!SyncContactModifiers(modifiers))return;
+        if(!SyncContactModifiers(modifiers))return false;
     }
-    if(pen&&!PenButtons(id,first.phase!=4&&barrel))return;
+    if(pen&&!PenButtons(id,first.phase!=4&&barrel))return false;
     for(auto& p:samples){p.sequence=++sequence;latencyTrace.Input(p,arrival);}
-    if(samples.size()<=CanvasWorkBuffer::PointerBatch){if(!SendIndependent(std::move(samples)))return;}
+    if(samples.size()<=CanvasWorkBuffer::PointerBatch){if(!SendIndependent(std::move(samples)))return false;}
     else for(size_t at=0;at<samples.size();at+=CanvasWorkBuffer::PointerBatch){
         auto end=std::min(samples.size(),at+CanvasWorkBuffer::PointerBatch);
-        if(!SendIndependent(std::vector<CapyPointer>(samples.begin()+at,samples.begin()+end)))return;
+        if(!SendIndependent(std::vector<CapyPointer>(samples.begin()+at,samples.begin()+end)))return false;
     }
-    TrackContact(id,first.phase,first.tool==3);
+    TrackContact(id,first.phase,first.tool==3);return true;
 }
 void CanvasWindow::Wheel(Microsoft::UI::Input::PointerEventArgs const& e){
     ObservePointerModality(e.CurrentPoint());

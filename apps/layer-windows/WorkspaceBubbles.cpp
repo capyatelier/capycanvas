@@ -640,6 +640,15 @@ J WorkspaceBubbles::TraceFrames()const{
         {L"applied",O({{L"frame",N(double(impl->appliedFrame))},{L"qpc",N(double(impl->appliedQpc))},{L"serial",N(double(impl->appliedSerial))},{L"overflow",N(double(impl->appliedOverflow))},{L"settled",B(impl->appliedSettled)},{L"query_wake",N(double(impl->wakes))},{L"reply_wake",N(double(impl->motionReplyWake))},{L"motion_moving",B(flag(impl->motionReply,L"moving"))},
             {L"inspector_frames",N(double(impl->inspectorFrames))},{L"inspector_invalid",N(double(impl->inspectorInvalid))},{L"current",current}})}});
 }
+NativeInputSemantic WorkspaceBubbles::InputSemantic(DependencyObject const& hit)const{
+    for(auto node=hit;node;node=VisualTreeHelper::GetParent(node)){
+        for(auto const& [id,record]:impl->records)for(auto const& [key,part]:record->parts)if(node==part->root){
+            NativeInputSemantic result;result.record=id;result.part=part->key.c_str();return result;
+        }
+        if(node==impl->workspace)break;
+    }
+    return {};
+}
 A WorkspaceBubbles::InputRegions(UIElement const& reference)const{
     A result;if(!impl->layer.IsLoaded())return result;
     for(auto const& [id,r]:impl->records)if(!r->faded)for(auto const& [key,p]:r->parts)if(p->root.IsHitTestVisible()&&p->root.Visibility()==Visibility::Visible){

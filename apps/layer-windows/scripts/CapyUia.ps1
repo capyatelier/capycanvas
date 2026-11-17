@@ -1245,3 +1245,5 @@ function Wait-OverviewProjection{
         $true
     } 'Published overview slots did not converge to live Navigator bounds'
 }
+
+. (Join-Path $PSScriptRoot 'InputReady.ps1')

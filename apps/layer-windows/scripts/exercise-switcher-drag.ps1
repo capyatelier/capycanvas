@@ -98,17 +98,20 @@ function Press([string]$Id,[switch]$Grip){
 function Move-To($At){
     [CapyRowPointer]::Move($At.x,$At.y)
 }
-function Native-TapAt($Control,[double]$Drift,[switch]$Vertical,[double]$Fraction=.5,[int]$MoveSettleMilliseconds=0,$At=$null){
+function Native-TapAt($Control,[double]$Drift,[switch]$Vertical,[double]$Fraction=.5,[int]$MoveSettleMilliseconds=0,$At=$null,[string]$InputTarget){
     $bounds=$Control.Current.BoundingRectangle;$x=if($At){[int]$At.x}else{[int]($bounds.X+$bounds.Width*$Fraction)};$y=if($At){[int]$At.y}else{[int]($bounds.Y+$bounds.Height/2)}
     if($At -and !$bounds.Contains($x,$y)){throw 'Exact routed point is outside its arranged native target'}
     $dx=if($Vertical){0}else{[int]($Drift*$scale)};$dy=[int]($Drift*$scale)
     if($x+$dx -ge $bounds.Right -or $y+$dy -ge $bounds.Bottom){throw 'Invalid run: native row/button tap drift leaves its bounds'}
     $trace=@{device=$Device;runtime_id=@($Control.GetRuntimeId());bounds=$bounds.ToString();from=@($x,$y);to=@(($x+$dx),($y+$dy));drift_dip=$Drift;move_settle_ms=$MoveSettleMilliseconds;gesture_before=Gesture}
-    [CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 35
-    if($Drift){[CapyRowPointer]::Move($x+$dx,$y+$dy)}
-    if($MoveSettleMilliseconds){Start-Sleep -Milliseconds $MoveSettleMilliseconds}
-    if($MoveSettleMilliseconds){$trace.gesture_before_up=Gesture}
-    [CapyRowPointer]::Up($Device -eq 'pen')
+    $contact={
+        [CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 35
+        if($Drift){[CapyRowPointer]::Move($x+$dx,$y+$dy)}
+        if($MoveSettleMilliseconds){Start-Sleep -Milliseconds $MoveSettleMilliseconds}
+        if($MoveSettleMilliseconds){$trace.gesture_before_up=Gesture}
+        [CapyRowPointer]::Up($Device -eq 'pen')
+    }
+    if($InputTarget){Invoke-CapyPointerInput -Target $InputTarget -Point @($x,$y) -Device $Device -Action $contact}else{& $contact}
     $trace.gesture_after=Gesture
     $trace
 }
@@ -150,7 +153,7 @@ function Pin-Buttons {
     $id=(Storage).id;$before=@((Storage).switcher.id) -contains $id;$saved=@((Storage).order)
     foreach($expected in @((!$before),$before)){
         $revision=(Storage).switcher_revision
-        $trace=Native-TapAt (Control ('workspace-manager-pin-'+$id) -Arranged) 1;$trace.case='pin-with-grip-menu'
+        $trace=Native-TapAt (Control ('workspace-manager-pin-'+$id) -Arranged) 1 -InputTarget ('workspace-manager-pin-'+$id);$trace.case='pin-with-grip-menu'
         Wait-Until {(Storage).switcher_revision -gt $revision -and !(Storage).switcher_busy} 'Native pin input was not acknowledged'
         if((@((Storage).switcher.id) -contains $id) -ne $expected){throw 'Native pin did not retain its visibility action'}
         if(((Storage).order -join '|') -ne ($saved -join '|') -or (Find 'workspace-manager-move-up')){throw 'Pin input reordered rows or opened the grip menu'}
@@ -367,14 +370,14 @@ function Rejected-InlineNameAdmission([string]$Id){
             $pin=Control ('workspace-manager-pin-'+$selected) -Arranged
             $pinBefore=@((Storage).switcher.id) -contains $selected
             $beforePinRevision=(Storage).switcher_revision;$changedPins=@($order|Where-Object {if($_ -eq $selected){!$pinBefore}else{$pins -contains $_}})
-            $null=Native-TapAt $pin 0
+            $null=Native-TapAt $pin 0 -InputTarget ('workspace-manager-pin-'+$selected)
             Wait-Until {
                 $w=Storage
                 !$w.switcher_busy -and $w.switcher_revision -eq ($beforePinRevision+1) -and (($w.switcher.id -join '|') -ceq ($changedPins -join '|'))
             } 'A native pin edit after the follow-up did not publish its exact change'
             $changedPinRevision=(Storage).switcher_revision
             if((Manager).prompt_action.type -ne 'rename' -or (Manager).prompt_action.value -ne $Id){throw 'The acknowledged pin edit followed navigation that replaced Rename'}
-            $null=Native-TapAt $pin 0
+            $null=Native-TapAt $pin 0 -InputTarget ('workspace-manager-pin-'+$selected)
             Wait-Until {
                 $w=Storage
                 !$w.switcher_busy -and $w.switcher_revision -eq ($changedPinRevision+1) -and (($w.switcher.id -join '|') -ceq ($pins -join '|'))
@@ -552,17 +555,20 @@ function Held-Acknowledgement([string]$Id,[ValidateSet('pin','apply','row')][str
     }
 }
 
-function Held-Button($Control,[string]$Case){
+function Held-Button($Control,[string]$Case,[string]$InputTarget){
     $bounds=$Control.Current.BoundingRectangle
     if(!$Control.Current.IsEnabled){throw "$Case is disabled before contact"}
     $trace=@{case=$Case;device=$Device;bounds=$bounds.ToString();enabled_before=$Control.Current.IsEnabled;passed=$false}
     try{
-        [CapyRowPointer]::Down($Device,[int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2))
-        Start-Sleep -Milliseconds 200
-        $trace.enabled_before_up=$Control.Current.IsEnabled;$trace.workspace_before_up=Storage
-        [CapyRowPointer]::Up($Device -eq 'pen')
-        if(!$trace.enabled_before_up){throw "$Case disabled while native contact was held"}
-        $trace.passed=$true
+        $contact={
+            [CapyRowPointer]::Down($Device,[int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2))
+            Start-Sleep -Milliseconds 200
+            $trace.enabled_before_up=$Control.Current.IsEnabled;$trace.workspace_before_up=Storage
+            [CapyRowPointer]::Up($Device -eq 'pen')
+            if(!$trace.enabled_before_up){throw "$Case disabled while native contact was held"}
+            $trace.passed=$true
+        }
+        if($InputTarget){Invoke-CapyPointerInput -Target $InputTarget -Point @([int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2)) -Device $Device -Action $contact}else{& $contact}
     }finally{
         [CapyRowPointer]::Cancel()
         $taps.Add($trace);$taps|ConvertTo-Json -Depth 25|Set-Content (Join-Path $run 'native-taps.json')
@@ -575,7 +581,7 @@ function Held-Rename([string]$Id){
     $entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Held pin workspace')
     $pin=Control ('workspace-manager-pin-'+$active) -Arranged
     $before=@((Manager).rows|Where-Object id -eq $active)[0].pin.selected;$revision=(Storage).switcher_revision
-    Held-Button $pin 'rename-held-pin'
+    Held-Button $pin 'rename-held-pin' -InputTarget ('workspace-manager-pin-'+$active)
     Wait-Until {$null -eq (Manager).prompt -and (Storage).switcher_revision -gt $revision -and @((Manager).rows|Where-Object id -eq $Id)[0].title -eq 'Held pin workspace'} 'Held pin lost its click or inline name'
     if(@((Manager).rows|Where-Object id -eq $active)[0].pin.selected -eq $before){throw 'Held pin did not toggle'}
     Preview-Intact

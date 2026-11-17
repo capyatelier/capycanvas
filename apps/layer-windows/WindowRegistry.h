@@ -1,5 +1,6 @@
 #pragma once
 #include "TraceFile.h"
+#include "NativeInputQuery.h"
 #include <microsoft.ui.xaml.window.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <array>
@@ -62,6 +63,7 @@ inline void RegisterFixtureWindow(winrt::Microsoft::UI::Xaml::Window const& wind
     if(!hwnd||process!=GetCurrentProcessId()||thread!=GetCurrentThreadId())throw winrt::hresult_invalid_argument(L"Fixture window is not owned by this UI thread");
     auto content=window.Content().as<winrt::Microsoft::UI::Xaml::FrameworkElement>();
     UpdateWindowRegistry(nullptr,hwnd,id?id:uint64_t(uintptr_t(hwnd)),applied,content.IsLoaded());
+    if(NativeInputPrivateDesktop())InstallNativeInputQuery(window,id?id:uint64_t(uintptr_t(hwnd)),NativeInputPrivateDesktop);
     auto token=std::make_shared<winrt::event_token>();auto weak=winrt::make_weak(content);
     if(!content.IsLoaded())*token=content.Loaded([weak,token,hwnd](auto&&,auto&&){
         if(auto root=weak.get()){root.Loaded(*token);*token={};}

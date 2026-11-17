@@ -19,6 +19,12 @@ if($LASTEXITCODE -ne 0){throw 'Renderer health regression failed.'}
 & (Join-Path $PSScriptRoot '../tests/uia-owned-search.ps1')
 foreach($shell in @((Get-Process -Id $PID).Path,(Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'))|Select-Object -Unique){
     [IO.Directory]::CreateDirectory($testBuildDirectory)|Out-Null
+    & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/input-ready.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Native input readiness regression failed.'}
+    & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/input-inventory.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Scoped input inventory regression failed.'}
+    & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/bubble-input-targets.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Inventory input target regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/file-drop.ps1')
     if($LASTEXITCODE -ne 0){throw 'File drop request regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/ime-setup.ps1')

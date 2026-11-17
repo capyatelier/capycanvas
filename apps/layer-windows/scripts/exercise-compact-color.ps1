@@ -366,8 +366,10 @@ function Slot-OpenMenu([string]$Device,[string]$Slot){
     if($Device -eq 'mouse'){[CapyRowPointer]::RightClick($point[0],$point[1])}
     elseif($Device -eq 'keyboard'){$button.SetFocus();Wait-Until {$button.Current.HasKeyboardFocus} 'The swatch did not take keyboard focus';[CapyRowPointer]::Key([uint32]$review.Id,0x5D)}
     else{
+        Invoke-CapyPointerInput -Target ('color-'+$Slot) -Point $point -Device $Device -Action {
         [CapyRowPointer]::Down($Device,$point[0],$point[1])
         try{Start-Sleep -Milliseconds 1100;$trace.menu_before_release=[bool](Find 'color-swatch-edit' -Visible);$trace.colors_before_release=Slot-Colors}finally{[CapyRowPointer]::Up()}
+        }
         $trace.menu_after_release=[bool](Find 'color-swatch-edit' -Visible);$trace.colors_after_release=Slot-Colors
         [IO.File]::WriteAllText((Join-Path $run ("slot-hit-$($script:slotMenuCases.Count)-$Device-$Slot.json")),($trace|ConvertTo-Json -Depth 12))
     }
@@ -678,16 +680,18 @@ try{
         $x=[int]($bounds.X+$bounds.Width*.5);$y=[int]($bounds.Y+$bounds.Height*.5)
         if($device -eq 'mouse'){[CapyRowPointer]::RightClick($x,$y)}
         elseif($device -eq 'keyboard'){$button.SetFocus();[CapyRowPointer]::Key(0x5D)}
-        else{[CapyRowPointer]::Down($device,$x,$y);Start-Sleep -Milliseconds 1100;[CapyRowPointer]::Up()}
+        else{Invoke-CapyPointerInput -Target 'color-foreground' -Point @($x,$y) -Device $device -Action {[CapyRowPointer]::Down($device,$x,$y);Start-Sleep -Milliseconds 1100;[CapyRowPointer]::Up()}}
         Wait-Until {$null -ne (Find 'color-swatch-swap')} "$device did not open the native paint menu"
         [CapyRowPointer]::Key(0x1B)
         Wait-Until {$null -eq (Find 'color-swatch-swap')} "$device paint menu did not dismiss"
     }
     $bounds=(Control 'color-foreground').Current.BoundingRectangle
+    Invoke-CapyPointerInput -Target 'color-foreground' -Point @([int]($bounds.X+$bounds.Width*.5),[int]($bounds.Y+$bounds.Height*.5)) -Device 'mouse' -Action {
     [CapyRowPointer]::Down('mouse',[int]($bounds.X+$bounds.Width*.5),[int]($bounds.Y+$bounds.Height*.5))
     Start-Sleep -Milliseconds 1100
     if(Find 'color-swatch-swap'){throw 'Mouse hold incorrectly opened the paint menu'}
     [CapyRowPointer]::Up()
+    }
     # Partial Zen was retired in the shared UI. Exercise the retained drawer
     # through its ordinary toolbar tile, which is the current user workflow.
     $tileId=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -ExpandProperty id
