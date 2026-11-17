@@ -20,13 +20,13 @@ struct Factory {
     memory: Mutex<std::sync::Weak<crate::memory_sample::MemorySampler>>,
     #[cfg(not(target_arch = "wasm32"))]
     allocator_memory: layer_core::MemoryOwner,
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[cfg(all(any(test, feature = "test-support"), not(target_arch = "wasm32")))]
     _memory_fixture: Option<Arc<crate::memory_sample::MemorySampler>>,
 }
 impl Drop for Factory {
     fn drop(&mut self) { self.budget.unregister_device(self.memory_device); }
 }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn fixture_factory(hardware: &RendererFactory, budget: layer_core::MemoryBudget, facts: layer_core::DeviceMemoryFacts) -> RendererFactory {
     let memory_device = budget.register_device(facts);
     let mut shared = hardware.0.shared.clone();
@@ -74,7 +74,7 @@ impl RendererFactory {
             #[cfg(target_arch = "wasm32")] memory_summary: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] memory: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] allocator_memory,
-            #[cfg(all(test, not(target_arch = "wasm32")))] _memory_fixture: None }));
+            #[cfg(all(any(test, feature = "test-support"), not(target_arch = "wasm32")))] _memory_fixture: None }));
         factory
     }
     pub(super) fn pipeline_device(&self, color: layer_core::color::DocumentColor) -> PipelineDevice {

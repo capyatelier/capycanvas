@@ -32,12 +32,7 @@ pub(crate) fn renderer(color: layer_core::color::DocumentColor, facts: layer_cor
     renderer_in_budget(color, facts, budget)
 }
 pub(crate) fn renderer_in_budget(color: layer_core::color::DocumentColor, facts: layer_core::DeviceMemoryFacts, budget: MemoryBudget) -> Result<WgpuRasterizer, GpuRasterError> {
-    let hardware = WgpuRasterizer::new_native_headless(color)?;
-    let factory = crate::renderer_factory::fixture_factory(&hardware.factory, budget, facts);
-    let device = factory.pipeline_device(color);
-    let mut renderer = WgpuRasterizer::from_factory_inner(factory, device, Initialization::Headless)?;
-    renderer.initialize_native(color)?;
-    Ok(*renderer)
+    WgpuRasterizer::new_native_headless_in(color, facts, budget).map(|renderer| *renderer)
 }
 
 pub(crate) fn cold_color_pressure(r: &mut WgpuRasterizer) {

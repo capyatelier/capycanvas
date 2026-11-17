@@ -332,6 +332,16 @@ impl WgpuRasterizer {
         r.initialize_native(color)?;
         Ok(r)
     }
+    /// Native document renderer whose device is registered in `budget` with `facts`.
+    #[cfg(all(any(test, feature = "test-support"), not(target_arch = "wasm32")))]
+    pub fn new_native_headless_in(color: DocumentColor, facts: layer_core::DeviceMemoryFacts, budget: layer_core::MemoryBudget) -> Result<Box<Self>, GpuRasterError> {
+        let hardware = Self::new_native_headless(color)?;
+        let factory = crate::renderer_factory::fixture_factory(&hardware.factory, budget, facts);
+        let device = factory.pipeline_device(color);
+        let mut renderer = Self::from_factory_inner(factory, device, Initialization::Headless)?;
+        renderer.initialize_native(color)?;
+        Ok(renderer)
+    }
 
     #[cfg(test)]
     pub(crate) fn native_capture_on_gpu(

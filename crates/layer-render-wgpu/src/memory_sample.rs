@@ -17,7 +17,7 @@ impl Drop for MemorySampler {
 }
 #[derive(Clone)]
 struct Sample { memory: MemorySnapshot, budget: Arc<MemoryBudgetSummary> }
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(super) fn fixture_sampler(budget: MemoryBudget, id: MemoryDevice) -> MemorySampler {
     let refresh = budget.clone();
     MemorySampler::with_updates(move || {

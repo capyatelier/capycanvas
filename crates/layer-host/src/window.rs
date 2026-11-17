@@ -449,12 +449,12 @@ impl<P: Parked> DocumentWindow<P> {
         }
         let tiles = host.session.park_document()?;
         let retired = self.retire_gpu(host);
+        let renderer = host.warm.take(target, self.gpu.as_ref().map(|gpu| &gpu.device));
         let retired = self.park_warm(host, retired);
         self.documents.exchange_with(target, tiles, |next| {
             std::mem::swap(&mut *host.session, next.session_mut());
             exchange(next);
         }).map_err(|reason| reason.message(host.session.localization()))?;
-        let renderer = host.warm.take(target, self.gpu.as_ref().map(|gpu| &gpu.device));
         self.changed(host);
         host.startup = Default::default();
         let activation = Activation {
@@ -894,8 +894,11 @@ mod tests {
     fn host_on(platform: layer_ui::Platform) -> crate::test_storage::StoredHost {
         let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        host_with(platform, gpu.into(), document, [64, 48])
+    }
+    fn host_with(platform: layer_ui::Platform, gpu: Box<WgpuRasterizer>, document: layer_core::Document, viewport: [u32; 2]) -> crate::test_storage::StoredHost {
         let mut host = NativeHost::new(platform).unwrap();
-        *host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], platform).unwrap();
+        *host.session = UiSession::new(Renderer(Some(gpu)), document, viewport, platform).unwrap();
         let mut host=crate::test_storage::StoredHost::new(host);
         host.session.set_document_replacement(false);
         settle(&mut host);
@@ -946,12 +949,16 @@ mod tests {
     }
 
     fn candidate(window: &Window, host: &NativeHost) -> Option<Box<UiSession<Renderer>>> {
+        let project = layer_ui::NewDocumentOptions::default().project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        prepared(window, host, project)
+    }
+
+    fn prepared(window: &Window, host: &NativeHost, project: layer_core::Document) -> Option<Box<UiSession<Renderer>>> {
         let admission = window
             .documents
             .admission(&host.session.retained_document_tiles());
         let environment =
             OpenEnvironment::capture(&host.session, admission, Default::default()).unwrap();
-        let project = layer_ui::NewDocumentOptions::default().project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         Some(environment.prepare(project, || false).unwrap())
     }
 
@@ -967,7 +974,11 @@ mod tests {
     }
 
     fn open(window: &mut Window, host: &mut NativeHost) {
-        let mut next = candidate(window, host);
+        let next = candidate(window, host);
+        open_with(window, host, next);
+    }
+
+    fn open_with(window: &mut Window, host: &mut NativeHost, mut next: Option<Box<UiSession<Renderer>>>) {
         let open = opened(host);
         drop(window.adopt(host, &mut next, open, || true, |s| s).unwrap());
         settle(host);
@@ -1193,6 +1204,45 @@ mod tests {
             host.prepare_canvas_frame(down + frame * 8_000_000, down + frame * 8_000_000, true).unwrap();
         }
         assert!(host.session.engine().metrics().last_consumed_paint_ns >= down, "the pen-down after a warm switch paints within two frames");
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_4k_drawing_of_32_layers_and_a_photo_alternating_on_a_12_gb_tablet_resume_warm_on_every_switch() {
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { total_bytes: Some(12 << 30), available_bytes: Some(6 << 30), tablet: true, ..Default::default() });
+        let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 3840, 2160, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let gpu = WgpuRasterizer::new_native_headless_in(document.composition().color, layer_core::DeviceMemoryFacts { unified: true, ..Default::default() }, budget).unwrap();
+        let mut host = host_with(layer_ui::Platform::Android, gpu, document, [2880, 1800]);
+        let mut window = Window::default();
+        for _ in 1..32 { invoke(&mut host, CommandId::AddLayer); }
+        host.dispatch(UiAction::SetZoom { zoom: 0.6455 }).unwrap();
+        let drawing = window.documents.selected();
+        let records = stroke(&window, &host, drawing, 1_000_000_000);
+        pen(&mut host, 7, &records);
+        settle_strokes(&mut host);
+        presented(&mut host);
+        let source = layer_core::color::source::rgba8_source([3000, 2000], |x, y| [(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 255]);
+        let photo = layer_ui::clipboard_document(vec![("Photo".into(), std::sync::Arc::unwrap_or_clone(source))], Default::default(), host.session.localization()).unwrap();
+        let next = prepared(&window, &host, photo);
+        open_with(&mut window, &mut host, next);
+        presented(&mut host);
+        let photo = window.documents.selected();
+        let cap = host.session.engine().backend().0.as_ref().unwrap().warm_tab_bytes();
+        assert_eq!(cap, 192 << 20);
+        let mut parked = std::collections::HashMap::new();
+        for target in [drawing, photo, drawing, photo] {
+            parked.extend(host.warm.0.iter().map(|(id, gpu)| (*id, gpu.warm_bytes())));
+            let mut activation = switch(&mut window, &mut host, target);
+            assert!(activation.renderer.is_some(), "switching to {target} built a new renderer; parked bytes {parked:?}, cap {cap}");
+            activation.work().unwrap();
+            let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
+            host.replace_renderer(Renderer(Some(gpu))).unwrap();
+            window.changed(&mut host);
+            let gpu = host.session.engine().backend();
+            assert!(layer_render::CanvasRenderer::showing_drawing(gpu) && gpu.0.as_ref().unwrap().has_presentable_frame(), "switching to {target} presents the retained drawing on its first frame");
+            presented(&mut host);
+        }
+        assert!(parked[&drawing] <= cap && parked[&photo] <= cap && parked[&drawing] + parked[&photo] > cap, "parked bytes {parked:?} must each fit the {cap} cap and together exceed it");
         finish(host, window);
     }
 
