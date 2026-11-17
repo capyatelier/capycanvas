@@ -1336,6 +1336,25 @@ fn selecting_another_layer_releases_the_units_admitted_for_the_previous_pivot() 
 }
 
 #[test]
+fn a_unit_in_flight_reserves_no_ancestor_above_the_level_it_reduces_into() {
+    let extent=[2048,1024];let mut doc=document_at(extent);
+    let below=translucent_layers(&mut doc,extent,18);
+    let top=paint_occurrence(&mut doc,"Top",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
+    let (mut r,_)=edited_pivot_with_evicted_cells(&mut doc,extent,top);
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    refine_spent_frame(&mut r,frame);
+    let reduced=|cache:&Cache|cache.plan.level.max(cache.overview.as_ref().map_or(0,|overview|overview.plan.level));
+    let navigator=r.navigator.cache().map_or(0,reduced);
+    let cache=r.scale_display.as_ref().unwrap();let level=reduced(cache);
+    assert!(navigator>level,"the Navigator reduces to level {navigator}, deeper than the view's {level}");
+    assert!(cache.streamed_interests(frame.view).next().is_some(),"the spent frame leaves a unit in flight");
+    let reserved:Vec<_>={let store=cache.pages.lock().unwrap();store.retained_pages().into_iter().filter(|page|page.key.source.is_none() && page.key.level>level && page.written.is_empty() && store.pinned(&page.key))
+        .map(|page|(page.key.level,page.key.coordinate)).collect()};
+    assert!(reserved.is_empty(),"a view unit in flight holds unwritten ancestor pages above the level {level} it reduces into: {reserved:?}");
+}
+
+#[test]
 fn selecting_another_layer_lets_the_previous_pivots_halves_yield() {
     let extent=[512,256];let mut doc=document_at(extent);
     let mut entries=translucent_layers(&mut doc,extent,18);

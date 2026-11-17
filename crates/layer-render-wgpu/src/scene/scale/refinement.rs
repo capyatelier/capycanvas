@@ -267,8 +267,8 @@ impl Cache {
     }
     fn continues_admitted(&self,key:&pages::Key)->bool {self.streaming.units.iter().any(|unit|self.cell_parts(&unit.interest.key).contains(key))}
     fn exact_level(&self)->u32 {self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level))}
-    fn ancestors(&self,r:&WgpuRasterizer,key:&pages::Key)->Vec<pages::Key> {
-        let level=std::iter::once(self).chain(r.scale_display.as_ref()).chain(r.navigator.cache()).map(Cache::exact_level).fold(0,u32::max);
+    fn ancestors(&self,key:&pages::Key)->Vec<pages::Key> {
+        let level=self.exact_level();
         self.cell_parts(key).into_iter().flat_map(|part|(part.level+1..=level)
             .map(move|level|pages::Key {level,coordinate:part.coordinate.map(|value|value>>(level-part.level)),..part.clone()})).collect()
     }
@@ -362,7 +362,7 @@ impl Cache {
             self.streaming.turned=work;pass.closed=Some(Closed::Full);
             return Ok(self.flight(region,&Closed::Full));
         }
-        let ancestors=self.ancestors(r,key);
+        let ancestors=self.ancestors(key);
         let parts=if halves.is_some() {self.cell_parts(key)}else {vec![key.clone()]};
         let outputs=parts.into_iter().map(|part|(part,region)).chain(ancestors.iter().map(|ancestor|(ancestor.clone(),ancestor.plan().bounds))).collect();
         let handle=match self.accept_working(scene,r,interest.clone(),outputs,inputs,[scratch,0],plan,true,class(region),class(region),encoder)? {
