@@ -92,8 +92,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         transition(true)
         host.viewModelScope.launch {
             try {
-                val current=JSONObject(query(obj("op" to "view"))).getLong("selected")
-                if(id==current) {
+                if(JSONObject(query(obj("op" to "prepare","id" to id))).getBoolean("current")) {
                     selector=false
                     if(close) {
                         drain();waitReady(true)
@@ -101,14 +100,16 @@ internal class DrawingTabsController(private val host: CanvasHost) {
                     }
                     return@launch
                 }
-                query(obj("op" to "prepare"))
                 drain(); waitReady()
                 activate(id); selector=false
                 refresh()
                 if(close) { waitReady(true); host.withNative { Native.dispatch(it,obj("type" to "invoke","command" to "close_document").toString()) }; host.documentChanged() }
             } catch(e:CancellationException) { throw e }
             catch(e:Exception) { host.reportActionError(e.message ?: "Could not switch drawings") }
-            finally { transition(false); host.recovery.capture(); if(currentCoroutineContext().isActive)resume() }
+            finally {
+                withContext(NonCancellable) { runCatching { query(obj("op" to "end_switch")) } }
+                transition(false); host.recovery.capture(); if(currentCoroutineContext().isActive)resume()
+            }
         }
     }
     fun closeSelected() { if(!blocked) { if(selected==0L)host.closeWorkspaceWindow() else select(selected,true) } }

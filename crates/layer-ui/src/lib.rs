@@ -211,7 +211,7 @@ pub use session::{CanvasAnchor, CanvasAnchorChoice, CanvasSizeAction, CanvasSize
 pub use session::{ImageResample, ImageResampleChoice, ImageSizeAction, ImageSizeView};
 pub use session::{NewDrawingAction, NewDrawingChoice, NewDrawingCopy, NewDrawingDialogView, NewDrawingDrawerView, NewDrawingOrder, PaperChoice, PaperColorChoice, PaperColorDrawerView, PaperReliefView, PresetBrowserView, PresetSaveView, PresetTabView, PresetTileView, ResolutionChoice, SheetView};
 pub use session::{FrequencySeparationAction, FrequencySeparationView};
-pub use session::{LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, RefineKind, SelectionRefineView, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
+pub use session::{DocumentSwitch, LayerControls, PreparedWorkspace, ProofMode, UiSession, SelectionBrushOptions, SelectionMenu, SelectionAction, RefineKind, SelectionRefineView, SelectionDisplayOptions, MaskEditingView, SelectionTool, SelectionConstraint, SelectionOptions, SelectionMode};
 pub use settings::{
     ChoicePresentation, DeviceClass, FingerDrawing, HostRequest, HostRequestKind, Platform,
     PreferenceAction,

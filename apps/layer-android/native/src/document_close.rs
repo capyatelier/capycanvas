@@ -24,6 +24,16 @@ mod tests {
     }
 
     #[test]
+    fn tab_controller_switch_requests_name_their_drawing_and_end_the_switch() {
+        let mut host = NativeHost::new(Platform::Android).unwrap();
+        host.session.suspend_renderer().unwrap();
+        let mut window = DocumentWindow::<Box<UiSession<Renderer>>>::default();
+        let mut request = |text: &str| window.request(&mut host, serde_json::from_str::<layer_host::window::TabRequest>(text).unwrap()).unwrap();
+        assert_eq!(request(r#"{"op":"prepare","id":1}"#), serde_json::json!({"current": true}));
+        assert_eq!(request(r#"{"op":"end_switch"}"#), serde_json::Value::Null);
+    }
+
+    #[test]
     fn rejected_commit_preserves_the_job_for_cancellation() {
         let (mut host, mut window, mut job) = prepared();
         host.session.replace_renderer(Renderer::default()).unwrap();

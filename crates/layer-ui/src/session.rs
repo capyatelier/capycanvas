@@ -101,6 +101,7 @@ mod vector_properties;
 mod transform_frame;
 #[path = "deferred_edits.rs"]
 mod deferred_edits;
+pub use deferred_edits::DocumentSwitch;
 #[path = "finger_input.rs"]
 mod finger_input;
 pub use painted_selections::SelectionBrushOptions;
@@ -326,6 +327,7 @@ pub struct UiSession<R: CanvasRenderer> {
     vector_points: vector_points::VectorPoints,
     figure_options: figures::FigureOptions,
     deferred_edits: std::collections::VecDeque<deferred_edits::DeferredEdit>,
+    switch_contacts: deferred_edits::SwitchContacts,
     selection_masks: selection_masks::SelectionMasks,
     canvas_size: Option<canvas_size::CanvasSizeDraft>,
     image_size: Option<image_size::ImageSizeDraft>,
@@ -614,6 +616,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             vector_points: Default::default(),
             figure_options: Default::default(),
             deferred_edits: Default::default(),
+            switch_contacts: Default::default(),
             selection_masks: Default::default(),
             canvas_size: None,
             image_size: None,
@@ -1228,7 +1231,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         self.storage_activity.touch();
-        let mut reply = self.route_input(input)?;
+        self.release_switch_contacts();
+        let mut reply = match self.hold_switch_input(&input) {
+            Some(reply) => reply,
+            None => self.route_input(input)?,
+        };
         self.finger.finish_input();
         if self.canvas_bar_presentation().map(|value| value.hold) != self.state.canvas_bar.as_ref().map(|_| self.canvas_bar_hold()) {
             reply.change = merge_change(reply.change, self.changed(0, false));
@@ -4682,6 +4689,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) {
         self.storage_activity.touch();
+        self.release_switch_contacts();
+        if self.hold_switch_pen(event) { return; }
         if event.tool == layer_engine::ToolKind::Finger && self.finger.withdrawn { return; }
         let Some(event)=self.filter_pen(event) else {return;};
         if event.phase==PenPhase::Down && !event.flags.contains(layer_engine::SampleFlags::PREDICTED){self.finish_fill_reveal();}
@@ -5204,6 +5213,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
         self.frame_clock = Some((now_ns, web_time::Instant::now()));
+        self.release_switch_contacts();
         let commands_pending = std::mem::replace(&mut self.frame_commands_pending, true);
         let pending_edits = self.engine.has_pending_document_edits();
         let command_activity = (self.canvas_idle(), self.engine.can_undo(), self.engine.can_redo());

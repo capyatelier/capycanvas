@@ -386,18 +386,20 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     }
   }
   const trim=()=>app.await_document_trim().catch(error=>{const detail=String(error);message(()=>app.document_storage_retained(detail));});
-  async function transition(action){
+  async function transition(action,cancel){
     if(changing)throw transportFailure("change_in_progress");
     changing=true;tabs.cancel();
     let activity;
     const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
+    const controls=[...canvas.parentElement.parentElement.children].filter(node=>node!==canvas.parentElement&&!node.inert);
+    for(const node of controls)node.inert=true;
     try{
       activity=app.prepare_document_switch();await proof.pause();await readyToPark();
       await action();
       await resumeCanvas();
       trim().catch(message);
       recovery.autosave().catch(message);
-    }finally{activity?.free();changing=false;blocker.remove();proof.resume();tabs.refresh(true);pruneHandles();wake();}
+    }catch(error){cancel?.();throw error;}finally{activity?.free();changing=false;blocker.remove();for(const node of controls)node.inert=false;proof.resume();tabs.refresh(true);pruneHandles();wake();}
   }
   async function select(id){
     if(id==null||String(id)===String(app.document_tabs(0).selected))return;
@@ -549,8 +551,8 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,canvasReady
     if(closing||changing||!published.document_file.close_ready)return;
     closing=true;
     const id=app.document_tabs(0).selected;
-    transition(async()=>{let prepared=app.prepare_document_close(screenInfo());try{await recovery.retire(id,true);const close=prepared;prepared=null;applyChange(app.commit_document_close(close));}finally{prepared?.free();}})
-      .catch(error=>{applyChange(app.cancel_document_close());message(error);})
+    transition(async()=>{let prepared=app.prepare_document_close(screenInfo());try{await recovery.retire(id,true);const close=prepared;prepared=null;applyChange(app.commit_document_close(close));}finally{prepared?.free();}},()=>applyChange(app.cancel_document_close()))
+      .catch(message)
       .finally(()=>{closing=false;tabs.refresh(true);pruneHandles();});
   }};
 }

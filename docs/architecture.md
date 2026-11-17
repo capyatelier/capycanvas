@@ -79,7 +79,11 @@ so its edit commits once the earlier work lands. Fill, wand and selection brush
 results stay with the renderer until then. Transform mode and grid
 choices stay available during background rendering, preserving queued input and
 edit order. Camera navigation stays available;
-document activation and renderer replacement retire queued input. Hosts forward
+renderer replacement retires queued input. Hosts forward every canvas contact
+during a drawing switch: a pen, mouse or finger-drawing contact that starts
+after `prepare_document_switch` is held until the returned `DocumentSwitch` is
+dropped, then drawn into the drawing active then, or dropped if that drawing
+is still suspended. Hosts forward
 Undo and Redo without waiting for raster capture themselves.
 An accepted ready raster replacement updates any queued history restore for its
 target. Pending raster operations retain the earlier revision they need to replay.

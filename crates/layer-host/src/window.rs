@@ -33,7 +33,10 @@ pub enum TabRequest {
         width: f32,
     },
     Ready,
-    Prepare,
+    Prepare {
+        id: u64,
+    },
+    EndSwitch,
     Recovery {
         id: u64,
     },
@@ -187,6 +190,7 @@ impl CloseDocumentFence {
 pub struct DocumentWindow<P> {
     pub documents: DocumentSessions<P>,
     pub gpu: Option<GpuContext>,
+    switching: Option<layer_ui::DocumentSwitch>,
 }
 impl<P> Default for DocumentWindow<P> {
     fn default() -> Self {
@@ -195,7 +199,7 @@ impl<P> Default for DocumentWindow<P> {
 }
 impl<P> DocumentWindow<P> {
     pub fn localized(localization: &layer_ui::Localizer) -> Self {
-        Self { documents: DocumentSessions::localized(localization), gpu: None }
+        Self { documents: DocumentSessions::localized(localization), gpu: None, switching: None }
     }
     pub fn set_localization(&mut self, localization: std::sync::Arc<layer_ui::Localizer>) -> bool {
         self.documents.set_localization(&localization)
@@ -267,7 +271,7 @@ impl<P: Parked> DocumentWindow<P> {
     }
 
     pub fn request(&mut self, host: &mut NativeHost, request: TabRequest) -> Result<Value, String> {
-        if !matches!(&request, TabRequest::View { .. } | TabRequest::PhoneMenu | TabRequest::Ready | TabRequest::Recovery { .. } | TabRequest::Storage { .. }) {
+        if !matches!(&request, TabRequest::View { .. } | TabRequest::PhoneMenu | TabRequest::Ready | TabRequest::EndSwitch | TabRequest::Recovery { .. } | TabRequest::Storage { .. }) {
             host.require_document_owner()?;
         }
         Ok(match request {
@@ -279,7 +283,12 @@ impl<P: Parked> DocumentWindow<P> {
                 json!(host.session.phone_menu().map(|menu| menu.view(&selector, host.session.state().platform, localization)))
             }
             TabRequest::View { width } => self.view(host, width),
-            TabRequest::Prepare => { host.session.prepare_document_switch()?; Value::Null },
+            TabRequest::Prepare { id } => {
+                let current = id == self.documents.selected();
+                if !current { self.switching = Some(host.session.prepare_document_switch()?); }
+                json!({"current": current})
+            }
+            TabRequest::EndSwitch => { self.switching = None; Value::Null },
             TabRequest::Ready => json!({
                 "available": host.session.can_switch_document(),
                 "park": self.park_ready(host)?,
@@ -939,7 +948,11 @@ mod tests {
     }
 
     fn digests(host: &NativeHost) -> Vec<[u8; 32]> {
-        let tiles = host.session.retained_document_tiles();
+        session_digests(&host.session)
+    }
+
+    fn session_digests(session: &UiSession<Renderer>) -> Vec<[u8; 32]> {
+        let tiles = session.retained_document_tiles();
         let mut digests: Vec<_> = tiles.blobs().unwrap().iter().map(|b| b.content_digest().unwrap()).collect();
         digests.sort();
         digests
@@ -1159,6 +1172,220 @@ mod tests {
         }
     }
 
+    fn stroke(window: &Window, host: &NativeHost, drawing: u64, start_ns: u64) -> Vec<f64> {
+        let view = layer_core::Affine(window.session(host, drawing).unwrap().state().camera.document_to_surface());
+        let points = [[6., 6.], [18., 12.], [30., 20.], [42., 26.], [54., 36.]];
+        points.iter().enumerate().flat_map(|(index, [x, y])| {
+            let at = view.map(layer_core::Point { x: *x, y: *y });
+            let phase = if index == 0 { 1. } else if index + 1 == points.len() { 3. } else { 2. };
+            [f64::from(at.x), f64::from(at.y), 0.7, 0., 0., 0., 0., (start_ns + index as u64 * 8_000_000) as f64, phase]
+        }).collect()
+    }
+
+    fn settle_strokes(host: &mut NativeHost) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut now = 100_000_000_000;
+        loop {
+            now += 8_000_000;
+            host.prepare_canvas_frame(now, now, true).unwrap();
+            host.session.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).unwrap();
+            for id in host.session.state().requests.iter().map(|request| request.id).collect::<Vec<_>>() {
+                host.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+            }
+            if host.session.can_park_document() && host.session.retained_document_tiles().try_blobs().unwrap().is_some() { return; }
+            assert!(Instant::now() < deadline, "strokes did not settle: {}", host.session.rendering_diagnostics());
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn pen(host: &mut NativeHost, id: u64, records: &[f64]) {
+        let view_revision = host.session.state().camera.revision;
+        host.pointer_batch(crate::PointerBatch { id, tool: 0, button: 0, records, predicted: false, view_revision,
+            device_flags: layer_engine::SampleFlags(0) }).unwrap();
+    }
+
+    fn drawn_directly(host: &mut NativeHost, contacts: &[(u64, Vec<f64>)]) -> Vec<[u8; 32]> {
+        for _ in contacts { invoke(host, CommandId::Undo); }
+        settle_strokes(host);
+        for (id, records) in contacts {
+            let later: Vec<f64> = records.chunks(9).flat_map(|r| { let mut r = r.to_vec(); r[7] += 60e9; r }).collect();
+            pen(host, *id, &later);
+            settle_strokes(host);
+        }
+        digests(host)
+    }
+
+    #[test]
+    fn contacts_before_the_switched_drawing_can_paint_keep_every_sample() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let (outgoing, revision) = (window.documents.selected(), host.session.engine().document().revision);
+        let blank = session_digests(window.session(&host, 1).unwrap());
+        let first = stroke(&window, &host, 1, 1_000_000_000);
+        let second = stroke(&window, &host, 1, 2_000_000_000);
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        let mut activation = switch(&mut window, &mut host, 1);
+        pen(&mut host, 7, &first[..18]);
+        activation.work().unwrap();
+        let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
+        host.session.replace_renderer(Renderer(Some(gpu))).unwrap();
+        window.changed(&mut host);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        pen(&mut host, 7, &first[18..]);
+        pen(&mut host, 8, &second);
+        settle_strokes(&mut host);
+        let switched = digests(&host);
+        assert_ne!(switched, blank);
+        assert_eq!(window.session(&host, outgoing).unwrap().engine().document().revision, revision);
+        assert_eq!(switched, drawn_directly(&mut host, &[(7, first), (8, second)]));
+        finish(host, window);
+    }
+
+    #[test]
+    fn contacts_after_a_switch_request_draw_into_the_switched_to_drawing() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let (outgoing, revision) = (window.documents.selected(), host.session.engine().document().revision);
+        let (empty, blank) = (digests(&host), session_digests(window.session(&host, 1).unwrap()));
+        let first = stroke(&window, &host, 1, 1_000_000_000);
+        let second = stroke(&window, &host, 1, 2_000_000_000);
+        assert_eq!(window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap(), json!({"current": false}));
+        pen(&mut host, 7, &first[..27]);
+        settle_strokes(&mut host);
+        assert_eq!(digests(&host), empty);
+        let mut activation = switch(&mut window, &mut host, 1);
+        pen(&mut host, 7, &first[27..]);
+        pen(&mut host, 8, &second);
+        activation.work().unwrap();
+        let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
+        host.session.replace_renderer(Renderer(Some(gpu))).unwrap();
+        window.changed(&mut host);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        settle_strokes(&mut host);
+        assert_eq!(window.session(&host, outgoing).unwrap().engine().document().revision, revision);
+        let switched = digests(&host);
+        assert_ne!(switched, blank);
+        assert_eq!(switched, drawn_directly(&mut host, &[(7, first), (8, second)]));
+        finish(host, window);
+    }
+
+    #[test]
+    fn contacts_held_for_an_abandoned_switch_draw_into_the_current_drawing() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let current = window.documents.selected();
+        let empty = digests(&host);
+        let contact = stroke(&window, &host, current, 1_000_000_000);
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        pen(&mut host, 7, &contact[..18]);
+        settle_strokes(&mut host);
+        assert_eq!(digests(&host), empty);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        pen(&mut host, 7, &contact[18..]);
+        settle_strokes(&mut host);
+        assert_eq!(window.documents.selected(), current);
+        let held = digests(&host);
+        assert_ne!(held, empty);
+        assert_eq!(held, drawn_directly(&mut host, &[(7, contact)]));
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_drawing_whose_renderer_did_not_resume_can_still_be_left_after_a_contact() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let outgoing = window.documents.selected();
+        let contact = stroke(&window, &host, 1, 1_000_000_000);
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        drop(switch(&mut window, &mut host, 1));
+        pen(&mut host, 7, &contact);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        let mut back = window.switch(&mut host, outgoing, false, Default::default(), |_| {}).unwrap().unwrap().0;
+        back.work().unwrap();
+        resume(&mut window, &mut host, &mut back);
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_finger_stroke_during_a_switch_draws_into_the_drawing_switched_to() {
+        let mut host = host_on(layer_ui::Platform::Android);
+        host.set_device_class(layer_ui::DeviceClass::Phone);
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let (outgoing, revision) = (window.documents.selected(), host.session.engine().document().revision);
+        let blank = session_digests(window.session(&host, 1).unwrap());
+        let contact = stroke(&window, &host, 1, 1_000_000_000);
+        let finger = |host: &mut NativeHost, records: &[f64]| host.pointer_batch(crate::PointerBatch { id: 9, tool: 3, button: 0, records,
+            predicted: false, view_revision: host.session.state().camera.revision, device_flags: layer_engine::SampleFlags(0) }).unwrap();
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        finger(&mut host, &contact[..27]);
+        let mut activation = switch(&mut window, &mut host, 1);
+        finger(&mut host, &contact[27..]);
+        activation.work().unwrap();
+        resume(&mut window, &mut host, &mut activation);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        settle_strokes(&mut host);
+        assert_eq!(window.session(&host, outgoing).unwrap().engine().document().revision, revision);
+        assert_ne!(digests(&host), blank);
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_drawing_whose_renderer_did_not_resume_can_be_left_and_closed_after_later_contacts() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let outgoing = window.documents.selected();
+        let contact = stroke(&window, &host, 1, 1_000_000_000);
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        pen(&mut host, 7, &contact[..18]);
+        drop(switch(&mut window, &mut host, 1));
+        pen(&mut host, 7, &contact[18..]);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        let later = stroke(&window, &host, 1, 2_000_000_000);
+        pen(&mut host, 8, &later);
+        assert!(host.session.can_park_document() && !host.session.holding_input(), "after EndSwitch: park={} holding={}",
+            host.session.can_park_document(), host.session.holding_input());
+        let mut back = window.switch(&mut host, outgoing, false, Default::default(), |_| {}).unwrap().unwrap().0;
+        back.work().unwrap();
+        resume(&mut window, &mut host, &mut back);
+        drop(switch(&mut window, &mut host, 1));
+        let unprepared = stroke(&window, &host, 1, 3_000_000_000);
+        pen(&mut host, 9, &unprepared);
+        assert!(host.session.can_park_document() && !host.session.holding_input());
+        host.session.request_session_close().unwrap();
+        let (mut after_close, closed) = window.switch(&mut host, 0, true, Default::default(), |_| {}).unwrap().unwrap();
+        assert!(closed.is_some());
+        assert_eq!(window.documents.selected(), outgoing);
+        after_close.work().unwrap();
+        resume(&mut window, &mut host, &mut after_close);
+        finish(host, window);
+    }
+
+    #[test]
+    fn contacts_held_for_a_failed_switch_are_not_replayed_when_its_drawing_resumes_later() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let contact = stroke(&window, &host, 1, 1_000_000_000);
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
+        let mut activation = switch(&mut window, &mut host, 1);
+        pen(&mut host, 7, &contact);
+        window.request(&mut host, TabRequest::EndSwitch).unwrap();
+        let blank = digests(&host);
+        activation.work().unwrap();
+        let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
+        host.session.replace_renderer(Renderer(Some(gpu))).unwrap();
+        window.changed(&mut host);
+        settle_strokes(&mut host);
+        assert_eq!(digests(&host), blank, "a contact the drawing could not paint when its switch ended replays once it resumes");
+        finish(host, window);
+    }
+
     #[test]
     fn drawing_switch_applies_crop_and_restores_the_previous_tool() {
         let mut host = host();
@@ -1168,7 +1395,7 @@ mod tests {
         invoke(&mut host, CommandId::Pencil);
         invoke(&mut host, CommandId::Crop);
         invoke(&mut host, CommandId::CropRatioSixteenNine);
-        window.request(&mut host, TabRequest::Prepare).unwrap();
+        window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
         settle(&mut host);
         assert!(host.session.command(CommandId::Pencil).selected);
         assert_ne!(host.session.engine().document().composition().size, before);

@@ -207,7 +207,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             panel_measurements:_,panel_copy:_,customization_copy:_,command_search:_,last_toolbar_context:_,frame_commands_pending:_,brush_stamps:_,canvas_bar:_,notices:_,
             pen:_,pen_input:_,finger:_,input_pending:_,host_requests_changed:_,pen_contact:_,discarded_contacts:_,rendering_suspended:_,window_hidden:_,frame_clock:_,storage_activity:_,drawing_switch_pending:_,launch_finished:_,workspace_attention:_,host_attention:_,touch:_,navigation:_,navigator_drag:_,
             effect_gesture:_,preview_target:_,paper_preview:_,papers:_,object_motion:_,property_editor:_,sdr_gesture:_,last_proof_mode:_,proof_setup_pending:_,filter_previews:_,
-            eyedropper:_,region_tools:_,selection_tools:_,tonal_tools:_,painted_selections:_,vector_lines:_,vector_moves:_,vector_paths:_,vector_points:_,figure_options:_,deferred_edits:_,selection_masks:_,
+            eyedropper:_,region_tools:_,selection_tools:_,tonal_tools:_,painted_selections:_,vector_lines:_,vector_moves:_,vector_paths:_,vector_points:_,figure_options:_,deferred_edits:_,switch_contacts:_,selection_masks:_,
             canvas_size:_,image_size:_,frequency_separation:_,content_bounds:_,conversion:_,rulers:_,retouch:_,operation:_,objects:_,
             system_theme:_,system_accent:_,platform_prediction_available:_,logical_viewport:_,initial_fit:_,restored_view:_,preparation_context:_,toolbar_brushes:_,
             automatic_camera_revision:_,workspace_view_revision:_,divider_drag:_,edge_contacts:_,floating_resize:_,floating_auto_fit:_,workspace_drag:_,workspace_tab_drag:_,

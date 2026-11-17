@@ -504,3 +504,92 @@ fn a_waiting_selection_press_that_is_cancelled_leaves_no_selection_mode_behind()
     let bounds = s.engine.document().working.selection.as_ref().unwrap().coverage_bounds();
     assert!(bounds.min.x >= 499., "the later drag replaces the selection instead of adding to it: {bounds:?}");
 }
+
+fn contact(s: &mut UiSession<Recorder>, samples: &[(u64, PenPhase)]) {
+    for (sequence, phase) in samples {
+        let event = event(s, *sequence, *phase, 0.5);
+        let phase = match phase { PenPhase::Down => ContactPhase::Down, PenPhase::Up => ContactPhase::Up, _ => ContactPhase::Move };
+        let reply = s.input(UiInput::Pointer { id: event.device_id, phase, kind: PointerKind::Pen, button: PointerButton::Primary,
+            position: [event.surface_position.x, event.surface_position.y], time_ns: event.timestamp_ns }).unwrap();
+        if reply.paint { s.pen(event); }
+    }
+}
+
+#[test]
+fn a_contact_during_a_switch_paints_every_sample_into_the_drawing_switched_to() {
+    let samples = [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Move), (4, PenPhase::Move), (5, PenPhase::Up)];
+    let mut reference = session(Platform::Gtk);
+    reference.frame(1, 1).unwrap();
+    contact(&mut reference, &samples);
+    settle(&mut reference);
+    let (mut outgoing, mut incoming) = (session(Platform::Gtk), session(Platform::Gtk));
+    outgoing.frame(1, 1).unwrap();
+    incoming.frame(1, 1).unwrap();
+    incoming.park_document().unwrap();
+    let switch = outgoing.prepare_document_switch().unwrap();
+    contact(&mut outgoing, &samples[..2]);
+    settle(&mut outgoing);
+    outgoing.park_document().unwrap();
+    incoming.inherit_window_state(&outgoing).unwrap();
+    incoming.replace_renderer(Recorder::default()).unwrap();
+    drop(switch);
+    contact(&mut incoming, &samples[2..]);
+    settle(&mut incoming);
+    assert_eq!(outgoing.engine.metrics().committed_strokes, 0);
+    assert!(outgoing.renderer_mut().recorded_dabs.is_empty());
+    assert_eq!(incoming.engine.metrics().committed_strokes, 1);
+    assert_eq!(incoming.renderer_mut().recorded_dabs, reference.renderer_mut().recorded_dabs);
+}
+
+#[test]
+fn a_contact_held_for_an_abandoned_switch_paints_into_the_current_drawing() {
+    let samples = [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Move), (4, PenPhase::Up)];
+    let mut reference = session(Platform::Gtk);
+    reference.frame(1, 1).unwrap();
+    contact(&mut reference, &samples);
+    settle(&mut reference);
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    let switch = s.prepare_document_switch().unwrap();
+    contact(&mut s, &samples[..2]);
+    settle(&mut s);
+    assert!(s.renderer_mut().recorded_dabs.is_empty());
+    drop(switch);
+    contact(&mut s, &samples[2..]);
+    settle(&mut s);
+    assert_eq!(s.engine.metrics().committed_strokes, 1);
+    assert_eq!(s.renderer_mut().recorded_dabs, reference.renderer_mut().recorded_dabs);
+}
+
+#[test]
+fn a_contact_held_during_a_cancelled_close_paints_into_the_drawing_kept_open() {
+    let samples = [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Move), (4, PenPhase::Up)];
+    let mut reference = session(Platform::Web);
+    reference.frame(1, 1).unwrap();
+    contact(&mut reference, &samples);
+    settle(&mut reference);
+    let mut s = session(Platform::Web);
+    s.frame(1, 1).unwrap();
+    let switch = s.prepare_document_switch().unwrap();
+    s.park_document().unwrap();
+    contact(&mut s, &samples);
+    drop(switch);
+    s.cancel_document_park().unwrap();
+    settle(&mut s);
+    assert_eq!(s.engine.metrics().committed_strokes, 1, "a contact accepted during a cancelled close is lost from the drawing that stays open");
+    assert_eq!(s.renderer_mut().recorded_dabs, reference.renderer_mut().recorded_dabs);
+}
+
+#[test]
+fn a_predicted_sample_of_a_held_contact_after_a_live_touch_stays_out_of_the_outgoing_drawing() {
+    let mut s = session(Platform::Gtk);
+    s.frame(1, 1).unwrap();
+    let switch = s.prepare_document_switch().unwrap();
+    contact(&mut s, &[(1, PenPhase::Down), (2, PenPhase::Move)]);
+    let reply = s.input(pointer_input(9, ContactPhase::Down, PointerKind::Touch, PointerButton::Primary, [700., 500.], 25_000_000)).unwrap();
+    assert!(!reply.paint);
+    s.pen(predicted(&s, 3));
+    assert!(!s.engine.has_pending_input() && s.can_park_document(), "a predicted sample of a held pen contact reached the outgoing drawing");
+    s.input(pointer_input(9, ContactPhase::Up, PointerKind::Touch, PointerButton::Primary, [700., 500.], 26_000_000)).unwrap();
+    drop(switch);
+}

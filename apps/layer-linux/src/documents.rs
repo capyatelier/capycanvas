@@ -829,7 +829,7 @@ impl Documents {
             }
         ));
     }
-    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<(crate::render_thread::CanvasTransition,layer_core::package::session_store::CompactionActivity), String> {
+    async fn prepare_switch(&self, w: &Rc<Workspace>) -> Result<(crate::render_thread::CanvasTransition,(layer_core::package::session_store::CompactionActivity,layer_ui::DocumentSwitch)), String> {
         let activity=layer_core::package::session_store::CompactionActivity::hold();
         w.restart.stores.adopt_binding(self.selected(),w.recovery().binding.clone())?;
         if w.gpu.borrow().is_none() {
@@ -848,11 +848,11 @@ impl Documents {
             }
             glib::timeout_future(Duration::from_millis(8)).await;
         }
-        {
+        let switch = {
             let mut gpu = w.gpu.borrow_mut();
             let session = &mut gpu.as_mut().unwrap().session;
-            session.prepare_document_switch()?;
-        }
+            session.prepare_document_switch().inspect_err(|_| self.changing.set(false))?
+        };
         while w
             .gpu
             .borrow()
@@ -904,7 +904,7 @@ impl Documents {
             w.local_tone.resume();
             return Err(error);
         }
-        Ok((transition,activity))
+        Ok((transition,(activity,switch)))
     }
     fn park(&self, w: &Workspace) -> Option<GpuCanvas> {
         w.gpu.borrow_mut().take()

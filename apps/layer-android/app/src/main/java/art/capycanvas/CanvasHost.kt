@@ -879,8 +879,7 @@ class CanvasHost @JvmOverloads constructor(application: Application, screen: JSO
                     val refining = phase == 1 && measuredInputs != null &&
                         JSONObject(Native.displayStatus(handle)).optBoolean("pending_composition")
                     if (phase == 1 && !predicted) main.post(hideNotice)
-                    if (phase == 1 && !predicted && documentInputBlocked) suppressedContacts.add(id)
-                    if (phase == 1 && !predicted && !documentInputBlocked) {
+                    if (phase == 1 && !predicted) {
                         val event = obj("kind" to "contact", "canvas" to true,
                             "position" to JSONArray(listOf(samples[0] / surfaceDensity, samples[1] / surfaceDensity)))
                         val reply = JSONObject(Native.input(handle, chromeInput(event).toString()))

@@ -200,9 +200,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.document_switch_interaction_idle(self.rendering_suspended, &[])
             && (self.rendering_suspended || self.pending_filters.is_none() && self.document_interaction_idle_reason_for_switch(true,true).is_none())
     }
-    pub fn prepare_document_switch(&mut self) -> Result<(), String> {
+    pub fn prepare_document_switch(&mut self) -> Result<DocumentSwitch, String> {
+        self.release_switch_contacts();
         self.prepare_document_action()?;
-        if self.can_switch_document() { Ok(()) }
+        if self.can_switch_document() { Ok(self.open_document_switch()) }
         else { Err(DocumentTransportRefusal::SwitchOperation.message(self.localization()).to_string()) }
     }
     pub fn can_park_document(&self) -> bool {
@@ -331,12 +332,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         self.drawing_switch_pending = true;
         self.begin_canvas_transition();
+        self.adopt_switch_contacts(previous);
         Ok(self.changed(regions::ALL, true))
     }
 
     pub fn inherit_restored_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
         self.restore_editing(previous.editing_state())?;
-        self.inherit_window_state(previous)
+        let change = self.inherit_window_state(previous)?;
+        self.switch_contacts = Default::default();
+        Ok(change)
     }
 
     /// Initialize a newly opened drawing from the current painting tools. Do
@@ -472,6 +476,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// readbacks are cancelled; pending filter validation resumes from retained
     /// source bytes before it can publish a catalog or edit.
     pub fn replace_renderer(&mut self, mut renderer: R) -> Result<(R, UiChange), String> {
+        self.release_switch_contacts();
         if (!self.engine.document().artwork.objects.is_empty() || self.engine.document().artwork.paint.iter().any(|(_, _, source)| source.base.is_some()))
             && !renderer.supports_tiled_sources()
         {

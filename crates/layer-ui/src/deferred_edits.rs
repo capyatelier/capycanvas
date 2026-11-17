@@ -15,6 +15,24 @@ pub(super) struct DeferredEdit {
     input: EditInput,
 }
 
+/// Keeps a drawing switch open. Contacts that start while one is open belong
+/// to the drawing that is active when it closes, if that drawing can paint.
+pub struct DocumentSwitch {
+    _request: std::sync::Arc<()>,
+}
+#[derive(Clone)]
+enum SwitchInput {
+    Pointer(UiInput),
+    Pen(PenEvent),
+}
+#[derive(Clone, Default)]
+pub(super) struct SwitchContacts {
+    request: std::sync::Weak<()>,
+    contacts: Vec<u64>,
+    pen_contact: Option<u64>,
+    held: std::collections::VecDeque<(u64, SwitchInput)>,
+}
+
 fn real(event: &PenEvent) -> bool {
     !event.flags.contains(layer_engine::SampleFlags::PREDICTED) && !event.flags.contains(layer_engine::SampleFlags::CORRECTION)
 }
@@ -50,6 +68,64 @@ fn mode_command(action: &UiAction) -> Option<CommandId> {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn open_document_switch(&mut self) -> DocumentSwitch {
+        let request = self.switch_contacts.request.upgrade().unwrap_or_else(|| {
+            let request = std::sync::Arc::new(());
+            self.switch_contacts.request = std::sync::Arc::downgrade(&request);
+            request
+        });
+        DocumentSwitch { _request: request }
+    }
+    pub(super) fn hold_switch_input(&mut self, input: &UiInput) -> Option<InputReply> {
+        let UiInput::Pointer { id, phase, kind, .. } = *input else { return None };
+        let starts = phase == ContactPhase::Down && (kind != PointerKind::Touch || self.finger_drawing())
+            && self.switch_contacts.request.strong_count() > 0;
+        let switch = &mut self.switch_contacts;
+        let held = starts || switch.contacts.contains(&id);
+        switch.pen_contact = held.then_some(id);
+        if !held { return None; }
+        switch.contacts.retain(|contact| *contact != id);
+        if !matches!(phase, ContactPhase::Up | ContactPhase::Cancel) { switch.contacts.push(id); }
+        switch.held.push_back((id, SwitchInput::Pointer(input.clone())));
+        self.bound_switch_contacts();
+        Some(InputReply { handled: true, paint: true, change: self.changed(0, false), ..Default::default() })
+    }
+    pub(super) fn hold_switch_pen(&mut self, event: PenEvent) -> bool {
+        let predicted = event.flags.contains(layer_engine::SampleFlags::PREDICTED);
+        let Some(id) = self.switch_contacts.pen_contact else { return predicted && self.switch_contacts.contacts.contains(&event.device_id) };
+        if !predicted {
+            self.switch_contacts.held.push_back((id, SwitchInput::Pen(event)));
+            self.bound_switch_contacts();
+        }
+        true
+    }
+    fn bound_switch_contacts(&mut self) {
+        let held = &mut self.switch_contacts.held;
+        if held.len() <= HELD_SAMPLES { return; }
+        let oldest = held[0].0;
+        held.retain(|(id, _)| *id != oldest);
+    }
+    pub(super) fn release_switch_contacts(&mut self) {
+        if self.switch_contacts.request.strong_count() > 0 { return; }
+        let held = std::mem::take(&mut self.switch_contacts).held;
+        if !self.rendering_suspended { self.replay_switch_input(held); }
+    }
+    pub(super) fn adopt_switch_contacts(&mut self, previous: &Self) {
+        let open = previous.switch_contacts.request.strong_count() > 0;
+        self.switch_contacts = if open { previous.switch_contacts.clone() } else { Default::default() };
+    }
+    fn replay_switch_input(&mut self, held: std::collections::VecDeque<(u64, SwitchInput)>) {
+        let mut painting = false;
+        for (_, input) in held {
+            match input {
+                SwitchInput::Pointer(input) => painting = match self.input(input) {
+                    Ok(reply) => reply.paint,
+                    Err(error) => { self.notify(error); false }
+                },
+                SwitchInput::Pen(event) => if painting { self.pen(event) },
+            }
+        }
+    }
     fn defer_edit(&mut self, input: EditInput) {
         self.deferred_edits.push_back(DeferredEdit {
             drawing: (self.engine.document().owner, self.state.document_file.epoch),

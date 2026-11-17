@@ -1014,12 +1014,12 @@ impl WebApp {
     }
     pub fn input(&mut self, input: JsValue) -> Result<JsValue, JsValue> {
         let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
-        if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
+        if !self.gpu_ready() && !self.session.rendering_suspended() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
             return serialize(&layer_ui::InputReply::default());
         }
         if let layer_ui::UiInput::Pointer { phase: layer_ui::ContactPhase::Down, .. } = &input {
             if let Some(control) = self.tone.pending.take() { control.cancel(); }
-            if !self.brush_ready() {
+            if self.gpu_ready() && !self.brush_ready() {
                 self.prepare_startup()?;
                 self.startup = self.rasterizer()?.poll_startup().map_err(js)?;
             }
@@ -1136,7 +1136,7 @@ impl WebApp {
     /// A contact that begins before painting is ready is held whole and
     /// delivered once it is.
     pub fn pen(&mut self, records: &[f64], view_revision: u64) -> Result<u32, JsValue> {
-        if !self.gpu_ready() {
+        if !self.gpu_ready() && !self.session.rendering_suspended() {
             return Err(js("Drawing is unavailable until the GPU is connected"));
         }
         if !records.len().is_multiple_of(11) {

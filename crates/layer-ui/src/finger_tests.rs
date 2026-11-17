@@ -588,3 +588,46 @@ fn paint_commands_start_with_one_finger_drag_on_touch_platforms() {
         }
     }
 }
+
+fn held_finger_sample(s: &mut UiSession<Recorder>, offset: u64, id: u64, phase: ContactPhase, position: [f32; 2], ms: u64) {
+    let time_ns = 1_000_000_000 + ms * 1_000_000;
+    let reply = s.input(pointer_input(id, phase, PointerKind::Touch, PointerButton::Primary, position, time_ns)).unwrap();
+    if reply.paint {
+        let event = PenEvent { device_id: offset + id, sequence: 0, timestamp_ns: time_ns,
+            surface_position: Point { x: position[0], y: position[1] }, tool: ToolKind::Finger,
+            phase: pen_phase(phase), ..event(s, 0, pen_phase(phase), 1.) };
+        s.pen(event);
+    }
+}
+
+fn held_finger_run(script: &[(u64, ContactPhase, [f32; 2], u64)], offset: u64, switching: bool) -> (u64, String, String) {
+    let mut s = finger_session();
+    s.frame(1, 1).unwrap();
+    for id in s.state.requests.iter().map(|request| request.id).collect::<Vec<_>>() {
+        s.dispatch(UiAction::CompleteRequest { id, error: None }).unwrap();
+    }
+    let switch = switching.then(|| s.prepare_document_switch().unwrap());
+    for (id, phase, position, ms) in script { held_finger_sample(&mut s, offset, *id, *phase, *position, *ms); }
+    drop(switch);
+    finger_frames(&mut s, 2000);
+    finger_frames(&mut s, 2010);
+    (s.engine.metrics().committed_strokes, format!("{:?}", s.renderer_mut().recorded_dabs), format!("{:?}", s.state.camera.view()))
+}
+
+#[test]
+fn finger_contacts_held_for_a_switch_replay_as_they_route_live() {
+    use ContactPhase::{Down, Move, Up};
+    let pinch = [(1, Down, [250., 300.], 10), (1, Move, [350., 300.], 30), (2, Down, [500., 400.], 60), (1, Move, [300., 350.], 80),
+        (2, Move, [600., 450.], 90), (1, Up, [300., 350.], 110), (2, Up, [600., 450.], 120)];
+    let late_second = [(1, Down, [250., 300.], 10), (1, Move, [350., 300.], 30), (1, Move, [400., 300.], 700), (2, Down, [600., 500.], 800),
+        (2, Move, [650., 550.], 820), (1, Move, [450., 300.], 840), (2, Up, [650., 550.], 860), (1, Up, [450., 300.], 880)];
+    let mut failures = Vec::new();
+    for (name, script) in [("pinch", &pinch[..]), ("late second finger", &late_second[..])] {
+        for (host, offset) in [("same pointer and pen ids (NativeHost, Web)", 0), ("touch pen ids offset (GTK TOUCH_DEVICES)", 1 << 40)] {
+            let live = held_finger_run(script, offset, false);
+            let held = held_finger_run(script, offset, true);
+            if live != held { failures.push(format!("{name} / {host}: live strokes {} vs held {}", live.0, held.0)); }
+        }
+    }
+    assert!(failures.is_empty(), "held finger input replays differently from live routing: {failures:?}");
+}

@@ -9,7 +9,7 @@ pub(super) struct DocumentGpu {
 }
 
 #[wasm_bindgen]
-pub struct WebDocumentTransition { _activity:layer_core::package::session_store::CompactionActivity }
+pub struct WebDocumentTransition { _activity:layer_core::package::session_store::CompactionActivity, _switch:layer_ui::DocumentSwitch }
 
 #[wasm_bindgen]
 pub struct WebDocumentClose {
@@ -73,8 +73,8 @@ impl WebApp {
     }
 
     pub fn prepare_document_switch(&mut self) -> Result<WebDocumentTransition, JsValue> {
-        self.session.prepare_document_switch().map_err(js)?;
-        Ok(WebDocumentTransition {_activity:layer_core::package::session_store::CompactionActivity::hold()})
+        let switch = self.session.prepare_document_switch().map_err(js)?;
+        Ok(WebDocumentTransition {_activity:layer_core::package::session_store::CompactionActivity::hold(), _switch:switch})
     }
 
     /// Poll without blocking the browser: an immediate Undo may have moved an
@@ -222,7 +222,7 @@ impl WebApp {
     }
     pub fn cancel_document_close(&mut self)->Result<JsValue,JsValue> {
         self.session.reset_document_close();
-        if self.session.rendering_suspended(){serialize(&self.session.cancel_document_park().map_err(js)?)}else{self.document_changed()}
+        if self.session.rendering_suspended()&&self.gpu_ready(){serialize(&self.session.cancel_document_park().map_err(js)?)}else{self.document_changed()}
     }
 }
 

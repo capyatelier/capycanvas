@@ -749,7 +749,7 @@ impl NativeHost {
             });
             self.dirty = true;
         }
-        if paint && self.session.engine().backend().0.is_some() {
+        if paint && (self.session.engine().backend().0.is_some() || self.session.rendering_suspended()) {
             self.sequence += 1;
             self.deliver(event);
         }
@@ -3962,6 +3962,31 @@ mod tests {
                 id: 7, tool: 0, button: 0, records: &[100., 100., 0.5, 0., 0., 0., 0., 1_000_000., 0.],
                 predicted: false, view_revision: host.session.state().camera.revision, device_flags,
             }).is_err());
+        }
+    }
+
+    #[test]
+    fn a_pen_contact_before_the_first_renderer_does_not_ink_once_it_installs() {
+        let reference = GpuReference::new();
+        for platform in [layer_ui::Platform::Windows, layer_ui::Platform::Mac] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.resize(640, 480, 1.).unwrap();
+            let revision = host.session.engine().document().revision;
+            let records: Vec<f64> = (0..8u64).flat_map(|i| {
+                let phase = match i { 0 => 1., 7 => 3., _ => 2. };
+                [100. + i as f64 * 20., 200., 0.8, 0., 0., 0., 0., (1_000_000_000 + i * 8_000_000) as f64, phase]
+            }).collect();
+            pointer(&mut host, 5, 0, 0, &records, false).unwrap();
+            let color = host.session.engine().document().composition().color;
+            let renderer = GpuContext::of(&reference).rasterizer(color, &RendererOptions::default(), false).unwrap();
+            host.replace_renderer(Renderer(Some(renderer))).unwrap();
+            host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+            let clock = std::cell::Cell::new(0);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !host.startup.complete || host.session.frame_demand() != layer_render::FrameDemand::Wait {
+                frame_step(&mut host, &clock, deadline);
+            }
+            assert_eq!(host.session.engine().document().revision, revision, "{platform:?}: a contact made before the renderer existed inks once it installs");
         }
     }
 
