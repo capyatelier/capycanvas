@@ -825,7 +825,7 @@ impl PreviewDeclaration {
             if index==0 || !same_material_update(batch,&packet.dab_batches[index-1]) {first=index;}
             if batch.kind==DabBatchKind::Preview && batch.style.execution==BrushExecution::Watercolor {wetness_before.insert(index,first);}
         }
-        let transport_outputs=commands.iter().filter(|command|command.batch.style.execution==BrushExecution::Watercolor && command.batch.style.transport.as_ref().is_some_and(|transport|transport.distance>=1. && (transport.wet_flow>0. || transport.dry_flow>0.)) && command.batch.dab_count!=0 && is_last_watercolor_update_batch(packet.dab_batches,command.index)).map(|command| {
+        let transport_outputs=commands.iter().filter(|command|command.batch.style.execution==BrushExecution::Watercolor && command.batch.style.transport.as_ref().is_some_and(|transport|transport.distance>=1. && (transport.wet_flow>0. || transport.dry_flow>0.)) && is_last_watercolor_update_batch(packet.dab_batches,command.index,packet.scene.target_extent(command.batch.target))).map(|command| {
             let outputs=commands.iter().filter(|other|same_material_update(&other.batch,&command.batch) && wetness_before.get(&other.index)==wetness_before.get(&command.index)).flat_map(|other|other.outputs.iter().copied()).collect();
             (command.index,outputs)
         }).collect();

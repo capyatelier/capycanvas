@@ -94,6 +94,29 @@ fn a_stroke_on_a_layer_offset_off_the_page_grid_reduces_only_tiles_its_contact_d
 }
 
 #[test]
+fn a_watercolor_update_ending_in_a_batch_off_its_layer_commits_its_pages_before_the_next_update() {
+    let extent=[1024,1024];let doc=document_at(extent);let target=doc.active_target().unwrap();
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::WetWatercolor);
+    let frame=FramePacket {composite_all:true,..packet(doc.scene(),extent)};
+    let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
+    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let wash=|x:f32,y:f32|layer_render::Dab {radii:[60.;2],material:[0.5,0.8,1.,0.8],..stroke_dab(x,y)};
+    let dabs=[wash(128.,128.),wash(-4000.,-4000.),wash(900.,900.)];
+    let batch=|kind,index:usize|layer_render::DabBatch {kind,first_dab:index as u32,stroke_start:index==0,
+        ..crate::test_support::dab_batch(target,style.clone(),dabs[index].bounds())};
+    let persistent=[batch(layer_render::DabBatchKind::Persistent,0),batch(layer_render::DabBatchKind::Persistent,1)];
+    crate::test_support::submit_ready(&mut r,FramePacket {dabs:&dabs,dab_batches:&persistent,time_seconds:0.01,..frame}).unwrap();
+    crate::test_support::submit_ready(&mut twin,FramePacket {dabs:&dabs,dab_batches:&persistent[..1],time_seconds:0.01,..frame}).unwrap();
+    let preview=[batch(layer_render::DabBatchKind::Preview,2)];
+    for r in [&mut r,&mut twin] {
+        crate::test_support::submit_ready(r,FramePacket {dabs:&dabs,dab_batches:&preview,time_seconds:0.02,..frame}).expect("the next update commits only the pages it wrote");
+        crate::test_support::submit_settled(r,FramePacket {time_seconds:0.03,..frame});
+    }
+    let error=max_error(&display_pixels(&r),&display_pixels(&twin));
+    assert!(error<1e-4,"the update keeps the wash its first batch painted: {error}");
+}
+
+#[test]
 fn watercolor_carried_across_a_level_page_edge_during_contact_matches_a_recomposing_twin() {
     let extent=[2048,1024];let doc=document_at(extent);let target=doc.active_target().unwrap();
     let style=crate::layer_tests::preset_style(DefaultBrushPreset::WatercolorWash);

@@ -2282,7 +2282,7 @@ impl WgpuRasterizer {
 
     fn brush_work_planned(batch: &DabBatch, tiles: &[BrushTile], extent: [u32; 2]) -> bool {
         if batch.style.execution == BrushExecution::Liquify { !tiles.is_empty() }
-        else { batch.dab_count != 0 && !batch_pixel_rect(batch, extent).is_empty() }
+        else { paints(batch, extent) }
     }
 
     fn preview_pages(batches: &[DabBatch], batch: &DabBatch, tiles: &[BrushTile], extent: [u32; 2]) -> std::collections::BTreeSet<[u32; 2]> {
@@ -2942,7 +2942,7 @@ impl WgpuRasterizer {
         if plan.requires_destination() {
             let preview = context.target.is_preview();
             let watercolor_last = plan.state.watercolor_wetness
-                && is_last_watercolor_update_batch(context.batches, batch_index);
+                && is_last_watercolor_update_batch(context.batches, batch_index, context.target_extent);
             self.material_reads=(!pointwise(&batch.style)).then(IdMap::default);
             let encoded=self.encode_material_batch(encoder, batch_index, batch, context);
             self.material_reads=None;
@@ -4367,6 +4367,7 @@ impl WgpuRasterizer {
         self.end_frame_memory();
         self.fit_grants();
         self.brush_inputs=None;
+        self.watercolor_written.clear();
         if let Err(error)=result {
             self.clear_preview_stamps();
             return Err(error);
@@ -5710,12 +5711,17 @@ fn batch_pixel_rect(batch: &DabBatch, extent: [u32; 2]) -> PixelRect {
     damage.expand(transport_radius, extent)
 }
 
-fn is_last_watercolor_update_batch(batches: &[DabBatch], index: usize) -> bool {
+fn paints(batch: &DabBatch, extent: [u32; 2]) -> bool {
+    batch.dab_count != 0 && !batch_pixel_rect(batch, extent).is_empty()
+}
+
+fn is_last_watercolor_update_batch(batches: &[DabBatch], index: usize, extent: [u32; 2]) -> bool {
     let current = &batches[index];
-    batches[index + 1..]
-        .iter()
-        .take_while(|b| same_material_update(b, current))
-        .all(|b| b.dab_count == 0)
+    paints(current, extent)
+        && batches[index + 1..]
+            .iter()
+            .take_while(|b| same_material_update(b, current))
+            .all(|b| !paints(b, extent))
 }
 
 fn same_material_update(a: &DabBatch, b: &DabBatch) -> bool {
