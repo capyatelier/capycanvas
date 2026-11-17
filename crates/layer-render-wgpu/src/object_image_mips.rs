@@ -716,7 +716,7 @@ pub(crate) struct MipDecodeQueue {
     #[cfg(target_arch="wasm32")]
     external:Option<(u64,MipDecodeRequest)>,
     #[cfg(target_arch="wasm32")]
-    completed:Option<(u64,PreparedImageWork)>,
+    completed:VecDeque<(u64,PreparedImageWork)>,
     ready:Arc<std::sync::atomic::AtomicUsize>,
     outstanding:Vec<Outstanding>,
     next_sequence:u64,
@@ -953,7 +953,7 @@ impl MipDecodeQueue {
         #[cfg(not(target_arch="wasm32"))]
         {Self::native(device.source_samples.clone(),device.working_space(),ram)}
         #[cfg(target_arch="wasm32")]
-        {let _=device;Ok(Self {external:None,completed:None,ready:Default::default(),outstanding:Vec::new(),next_sequence:0,working:Tier::within(ram),priority:None})}
+        {let _=device;Ok(Self {external:None,completed:VecDeque::new(),ready:Default::default(),outstanding:Vec::new(),next_sequence:0,working:Tier::within(ram),priority:None})}
     }
     #[cfg(not(target_arch="wasm32"))]
     fn native(cache:Arc<layer_core::raster::DecodedTileCache>,destination:RgbSpace,ram:&Arc<Tier>)->Result<Self,GpuRasterError> {
@@ -1034,7 +1034,7 @@ impl MipDecodeQueue {
         #[cfg(not(target_arch="wasm32"))]
         let (sequence,mut result)=self.results.try_recv().ok()?;
         #[cfg(target_arch="wasm32")]
-        let (sequence,mut result)=self.completed.take()?;
+        let (sequence,mut result)=self.completed.pop_front()?;
         self.ready.fetch_sub(1,Ordering::AcqRel);
         let charge=match self.outstanding.iter().position(|stored|stored.sequence==sequence) {
             Some(index)=>{let stored=self.outstanding.swap_remove(index);result.raise(stored.class);stored.charge},
@@ -1055,7 +1055,7 @@ impl MipDecodeQueue {
     #[cfg(target_arch="wasm32")]
     pub(crate) fn take_external(&mut self)->Option<(u64,MipDecodeRequest)> {self.external.take()}
     #[cfg(target_arch="wasm32")]
-    pub(crate) fn complete_external(&mut self,sequence:u64,result:PreparedImageWork) {self.completed=Some((sequence,result));self.ready.store(1,Ordering::Release);}
+    pub(crate) fn complete_external(&mut self,sequence:u64,result:PreparedImageWork) {self.completed.push_back((sequence,result));self.ready.fetch_add(1,Ordering::AcqRel);}
 }
 
 #[cfg(test)]

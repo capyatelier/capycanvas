@@ -294,7 +294,7 @@ pub(super) struct Papers {
     #[cfg(target_arch="wasm32")]
     decoder: Option<BrowserRasterDecoder>,
     #[cfg(target_arch="wasm32")]
-    decoded: std::rc::Rc<std::cell::RefCell<Option<(u64,object_image_mips::PreparedImageWork)>>>,
+    decoded: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u64,object_image_mips::PreparedImageWork)>>>,
     #[cfg(target_arch="wasm32")]
     wake: std::rc::Rc<std::cell::RefCell<Option<std::task::Waker>>>,
 }
@@ -357,7 +357,7 @@ impl Papers {
     }
     pub fn images_ready(&self)->bool {
         #[cfg(target_arch="wasm32")]
-        if self.decoded.borrow().is_some() {return true;}
+        if !self.decoded.borrow().is_empty() {return true;}
         self.decode.as_ref().is_some_and(|queue|queue.ready())
     }
     pub fn image_waiting(&self)->bool {self.decode.as_ref().is_some_and(|queue|queue.pending()) && !self.images_ready()}
@@ -373,7 +373,7 @@ impl Papers {
     }
     fn advance_images(&mut self,device:&PipelineDevice,queue:&wgpu::Queue,held:Option<&TextureSource>)->Result<(),GpuRasterError> {
         #[cfg(target_arch="wasm32")]
-        if let Some((sequence,result))=self.decoded.borrow_mut().take() && let Some(decode)=&mut self.decode {decode.complete_external(sequence,result);}
+        for (sequence,result) in std::mem::take(&mut *self.decoded.borrow_mut()) {if let Some(decode)=&mut self.decode {decode.complete_external(sequence,result);}}
         while let Some((prepared,_))=self.decode.as_mut().and_then(|decode|decode.poll()) {
             let object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels}=prepared else {return Err(GpuRasterError::InvalidImage);};
             for bake in &mut self.bakes {
@@ -421,7 +421,7 @@ impl Papers {
                 let pixels=callback(blob.clone(),space,space,true).await.and_then(|pixels|match pixels {
                     PreparedImagePixels::NativeSamples(pixels)=>Ok(pixels),_=>Err("Invalid prepared paper samples".into()),
                 });
-                *result.borrow_mut()=Some((sequence,object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels}));
+                result.borrow_mut().push_back((sequence,object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels}));
                 if let Some(wake)=wake.borrow_mut().take() {wake.wake();}
             });
         }

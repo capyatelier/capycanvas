@@ -1123,7 +1123,7 @@ pub struct WgpuRasterizer {
     #[cfg(target_arch = "wasm32")]
     browser_nearest_coordinate_decoder: Option<BrowserNearestCoordinateDecoder>,
     #[cfg(target_arch = "wasm32")]
-    browser_image_result: std::rc::Rc<std::cell::RefCell<Option<(u64,object_image_mips::PreparedImageWork)>>>,
+    browser_image_result: std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<(u64,object_image_mips::PreparedImageWork)>>>,
     #[cfg(target_arch = "wasm32")]
     browser_image_wake: std::rc::Rc<std::cell::RefCell<Option<std::task::Waker>>>,
     snapshot_decode_wake: Option<Arc<std::sync::Mutex<Option<std::task::Waker>>>>,
@@ -3442,13 +3442,13 @@ impl WgpuRasterizer {
         if self.held_result_ready() || self.papers.images_ready() {return false;}
         if self.bake_preflight.as_ref().is_some_and(|state|state.waiting()) {return true;}
         #[cfg(target_arch = "wasm32")]
-        if self.browser_image_result.borrow().is_some() { return false; }
+        if !self.browser_image_result.borrow().is_empty() { return false; }
         self.moving_decode.as_ref().map_or(self.papers.image_waiting(),|(_,queue)|
             !queue.ready() && (queue.pending() || self.papers.image_waiting()))
     }
     pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<PreparedImageUpload>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
-        if let Some((sequence,result)) = self.browser_image_result.borrow_mut().take() {
+        for (sequence,result) in std::mem::take(&mut *self.browser_image_result.borrow_mut()) {
             if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(sequence,result); }
         }
         if self.source_tiles.borrow().uploads_full(residency::Class::Visible) { return Ok(None); }
@@ -3717,7 +3717,7 @@ impl WgpuRasterizer {
             };
             wasm_bindgen_futures::spawn_local(async move {
                 let prepared=future.await;
-                *result.borrow_mut() = Some((sequence,prepared));
+                result.borrow_mut().push_back((sequence,prepared));
                 let signal = wake.borrow_mut().take();
                 if let Some(waker) = signal { waker.wake(); }
             });
