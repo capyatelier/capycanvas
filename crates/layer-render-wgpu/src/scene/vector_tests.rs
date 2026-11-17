@@ -337,7 +337,7 @@ fn a_background_picture_is_held_only_while_preparation_is_pending_within_one_set
         r.presentation_released = web_time::Instant::now().checked_sub(released);
         r.composite_revision = r.composite_revision.wrapping_add(1);
         r.background_frame = background;
-        r.release_presentation(preparation_pending);
+        r.release_presentation(|_| preparation_pending);
         r.presentable_revision != r.composite_revision
     };
     let within = std::time::Duration::ZERO;

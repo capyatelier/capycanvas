@@ -4371,8 +4371,7 @@ impl WgpuRasterizer {
             self.clear_preview_stamps();
             return Err(error);
         }
-        let preparation_pending = self.frame_preparation_pending();
-        self.release_presentation(preparation_pending);
+        self.release_presentation(Self::frame_preparation_pending);
         if self.composite_revision != revision && self.has_presentable_frame()
             && matches!(packet.scene.scope(), None | Some(layer_core::SceneScope::All)) {
             self.presentation.showing = true;
@@ -4422,11 +4421,11 @@ impl WgpuRasterizer {
         EvaluationContext { elapsed: packet.time_seconds, phases }
     }
 
-    fn release_presentation(&mut self, preparation_pending: bool) {
+    fn release_presentation(&mut self, preparation_pending: impl FnOnce(&Self) -> bool) {
         if self.presentable_revision == self.composite_revision { return; }
         let now = web_time::Instant::now();
         let recent = self.presentation_released.is_some_and(|released| now.saturating_duration_since(released) < frame_pace::SETTLE_PRESENTATION);
-        if self.background_frame && recent && preparation_pending { return; }
+        if self.background_frame && recent && preparation_pending(self) { return; }
         self.presentable_revision = self.composite_revision;
         self.presentation_released = Some(now);
     }
