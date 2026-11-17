@@ -313,6 +313,25 @@ fn after_present_trims_free_storage_but_keeps_presentation_and_root_overview() {
 
 
 #[test]
+fn a_held_raster_head_takes_the_displays_working_reservations_out_of_its_pinned_report() {
+    let doc = layer_core::Document::new(layer_core::PortableId::random(), 1024, 1024,
+        layer_core::DocumentNames {paint: "Small canvas".into(), paper: "Paper".into()});
+    let budget = MemoryBudget::with_facts(MemoryFacts {host_default_bytes: Some(8 << 30), override_bytes: Some(8 << 30), ..Default::default()});
+    let mut r = renderer_in_budget(doc.composition().color, layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}, budget.clone()).unwrap();
+    let frame = FramePacket {view: crate::test_support::view([1024; 2]), ..packet(doc.scene(), [1024; 2])};
+    crate::test_support::submit_settled(&mut r, frame);
+    let usage = r.display_usage();
+    let held = usage.pinned.iter().sum::<u64>() + r.composition_memory(r.scene.as_deref())[1] + r.retired_display_bytes.used();
+    let reserved = r.current_display_memory_report().pinned_gpu_bytes;
+    assert!(reserved >= held + r.memory.working_limit(), "without a head the display pins its working reservations");
+    let head = r.raster_tiers.raster.blocked(crate::residency::Class::Authored, u64::MAX / 2).expect("the head cannot fit");
+    *r.memory.head.borrow_mut() = Some((head, 1));
+    let report = r.current_display_memory_report();
+    assert_eq!(report.pinned_gpu_bytes, held, "a held head stops the display's admissions, so only held bytes stay pinned");
+    assert!(report.demand_gpu_bytes >= held + r.memory.working_limit(), "the working reservations stay in the display's demand");
+}
+
+#[test]
 fn first_frame_preparation_publishes_demand_and_uses_the_next_grant() {
     let doc = layer_core::Document::new(layer_core::PortableId::random(), 8192, 8192,
         layer_core::DocumentNames {paint: "Large canvas".into(), paper: "Paper".into()});
@@ -1115,6 +1134,49 @@ fn a_ledger_refused_display_admission_waits_without_frames_and_wakes_once_when_t
 }
 
 #[test]
+fn a_held_raster_head_whose_room_drains_on_the_poll_thread_is_woken() {
+    let mut r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    let transient=crate::present_transition::Charge::new(768*MIB,&r.device.transient_display,r.device.transient_memory.clone());
+    r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
+    assert!(r.admit_raster_working(512*MIB).is_err(),"the retiring display bytes hold the room the raster head needs");
+    assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"the renderer waits for the retiring bytes to drain");
+    let edge=r.device.retirement_handle();
+    edge.flush().unwrap();
+    while woken.try_recv().is_ok() {}
+    edge.run(move||drop(transient));
+    edge.flush().unwrap();
+    let woke=woken.try_recv().is_ok();
+    assert!(r.memory.raster.handle.gpu_working_limit()>=r.raster_tiers.raster.used()+512*MIB,"the drained bytes leave room for the head");
+    assert!(woke,"the bytes that drain on the poll thread wake the held raster head");
+}
+
+#[test]
+fn a_refused_authored_raster_head_stops_lower_display_admissions_and_takes_the_display_overdraft() {
+    let mut r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
+    r.scene_tiers.display.set_limit(u64::MAX,0);
+    let notice=Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let retained=r.scene_tiers.display.heap().lease(&notice);
+    let mut held=Some(r.admit_display(None,crate::residency::Class::Visible,640*MIB).expect("required work may exceed the grant"));
+    retained.offer(640*MIB,0);
+    let frame=|r:&mut WgpuRasterizer|{r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();};
+    frame(&mut r);
+    assert!(r.admit_raster_working(512*MIB).is_err(),"the display overdraft holds the room the raster head needs");
+    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB).is_err(),"a lower class is not admitted while a higher head is blocked on memory");
+    let mut admitted=None;
+    for _ in 0..4 {
+        frame(&mut r);
+        if retained.evicted() {held=None;}
+        if let Ok(reservation)=r.admit_raster_working(512*MIB) {admitted=Some(reservation);break;}
+    }
+    assert!(admitted.is_some(),"the refused authored head takes the room of display bytes above the grant, evicted={}",retained.evicted());
+    assert!(r.admit_display(None,crate::residency::Class::Visible,MIB).is_ok(),"the stop ends once the head is admitted");
+    drop(held);
+}
+
+#[test]
 fn an_over_grant_display_admission_marks_undemanded_victims_before_its_overdraft() {
     let r=legacy_scene_renderer(Default::default());
     r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
@@ -1231,22 +1293,17 @@ fn refused_display_admission_is_woken_by_a_released_charge() {
     receive.recv_timeout(std::time::Duration::from_secs(1)).expect("the refused display unit must subscribe to release");
 }
 
-fn raster_headroom(r: &mut WgpuRasterizer) -> u64 {
-    let (mut fits, mut refused) = (0u64, 1u64 << 44);
-    while refused - fits > 1 {
-        let bytes = fits + (refused - fits) / 2;
-        if r.admit_raster_working(bytes).is_ok() { fits = bytes; } else { refused = bytes; }
-    }
-    fits
+fn raster_headroom(r: &WgpuRasterizer) -> u64 {
+    r.memory.raster.handle.gpu_working_limit().saturating_sub(r.raster_tiers.raster.used())
 }
 
 #[test]
 fn raster_admission_counts_pages_and_retained_buffers_from_creation() {
     let mut r = legacy_scene_renderer(Default::default());
-    let headroom = raster_headroom(&mut r);
+    let headroom = raster_headroom(&r);
     let page = r.create_page([0, 0], "unpublished raster page");
     assert!(r.admit_raster_working(headroom).is_err(), "a page counts from its creation, before any layer holds it");
-    let headroom = raster_headroom(&mut r);
+    let headroom = raster_headroom(&r);
     r.refresh_memory_limits();
     let held = r.raster_tiers.raster.used();
     r.raster_buffers.put(r.device.create_buffer(&wgpu::BufferDescriptor { label: Some("retained raster buffer"), size: 64 << 10,
@@ -1265,7 +1322,6 @@ fn refused_raster_admission_is_woken_by_a_released_page() {
     let (send, receive) = std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
     while receive.try_recv().is_ok() {}
-    r.raster_tiers.raster.update_limit(r.memory.raster.handle.gpu_working_limit());
     let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
     assert!(r.admit_raster_working(room + 1).is_err());
     drop(page);

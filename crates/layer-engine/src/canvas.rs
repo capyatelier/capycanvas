@@ -965,7 +965,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
     pub fn frame_demand(&self) -> layer_render::FrameDemand {
         use layer_render::FrameDemand;
-        if self.backend.waits_for_frame_slot() { return self.backend.next_frame(); }
+        if self.backend.waits_for_frame_slot() || !self.has_pending_input() && self.has_active_stroke() && self.backend.stroke_waits_for_memory() { return self.backend.next_frame(); }
         let engine = if self.has_pending_input() || self.has_active_stroke() || self.editor.document().has_animated_effects() {
             FrameDemand::Animate
         } else if self.document_edits_queued() || (self.can_park() && self.editor.memory_report_pending()) {
@@ -3351,6 +3351,22 @@ mod tests {
     }
 
     #[test]
+    fn a_stroke_held_only_by_refused_memory_waits_for_the_renderer_instead_of_animating() {
+        let (mut input, mut canvas) = engine("Held stroke",64,64);
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        canvas.backend_mut().restore_blocked = true;
+        canvas.render_frame_at(2_000_000_000).unwrap();
+        assert!(canvas.has_active_stroke() && !canvas.has_pending_input());
+        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Wait, "a stroke waiting only on memory sleeps until the renderer wakes it");
+        input.push(event(2, PenPhase::Move, 20.)).unwrap();
+        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Animate, "new input still animates");
+        canvas.backend_mut().restore_blocked = false;
+        canvas.render_frame_at(3_000_000_000).unwrap();
+        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Animate, "the released stroke animates again");
+    }
+
+    #[test]
     fn contact_preview_and_camera_wait_do_not_replace_the_capture_boundary() {
         let (mut input, mut canvas) = engine("Capture boundary",64,64);
         canvas.render_frame_at(1_000_000_000).unwrap();
@@ -3453,6 +3469,7 @@ mod tests {
         fn has_pending_submission(&self) -> bool { self.unrelated_submission }
         fn can_submit(&self) -> bool { !self.slot_full }
         fn waits_for_frame_slot(&self) -> bool { self.slot_full }
+        fn stroke_waits_for_memory(&self) -> bool { self.restore_blocked }
         fn raster_dependencies_ready(&mut self, _packet: FramePacket<'_>, _preview: Option<&layer_render::TransformPreview>) -> bool {
             !std::mem::take(&mut self.pending_preparation) && !self.restore_blocked
         }

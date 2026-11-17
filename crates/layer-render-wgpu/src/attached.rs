@@ -81,6 +81,7 @@ impl CanvasRenderer for AttachedRenderer {
     }
     fn next_frame(&self) -> layer_render::FrameDemand { self.0.as_ref().map_or(layer_render::FrameDemand::Wait, |gpu| gpu.next_frame()) }
     fn waits_for_frame_slot(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.waits_for_frame_slot()) }
+    fn stroke_waits_for_memory(&self) -> bool { self.0.as_ref().is_some_and(|gpu| gpu.stroke_waits_for_memory()) }
     fn prepare_moving_layer(&mut self, layer: Option<layer_core::authored::OccurrenceHandle>) {
         if let Some(gpu) = self.0.as_mut() {
             gpu.prepare_moving_layer(layer);

@@ -642,9 +642,18 @@ fn host_journey(context:&str,document:Document,renderer:WgpuRasterizer,view:View
 
 #[test]
 fn a_host_driven_open_and_stroke_settle_without_a_lost_wake_or_a_spin() {
+    for seed in SEEDS {for (total,pinned) in [(5_342_732_697u64,0u64),(1_193_000_000,600<<20)] {host_driven_open_and_stroke(seed,total,pinned);}}
+}
+
+#[test]
+fn a_host_driven_stroke_whose_navigator_refusal_parks_at_680_mib_pinned_is_woken_by_the_next_release() {
+    host_driven_open_and_stroke(0x139a,1_193_000_000,680<<20);
+}
+
+fn host_driven_open_and_stroke(seed:u64,total:u64,pinned:u64) {
     let zoom=0.7f32;
     let mut brush=layer_core::default_brush(layer_core::CONTACT_BRUSH_PRESETS.into_iter().find(|preset|*preset as u32==2).unwrap());brush.diameter=1024.;
-    for seed in SEEDS {for (total,pinned) in [(5_342_732_697u64,0u64),(1_193_000_000,600<<20)] {
+    {
         let mut document=document(Fixture::Paint32,seed);
         let handles:Vec<_>=document.artwork.occurrences.iter().map(|(handle,_,_)|handle).collect();
         for handle in handles {document.artwork.occurrences.get_mut(handle).unwrap().visible=true;}
@@ -663,8 +672,8 @@ fn a_host_driven_open_and_stroke_settle_without_a_lost_wake_or_a_spin() {
         let view=ViewState {width_px:size[0],height_px:size[1],document_to_surface:[zoom,0.,0.,zoom,
             size[0] as f32/2.-zoom*extent[0] as f32/2.,size[1] as f32/2.-zoom*extent[1] as f32/2.]};
         let steps=vec![(Some(top),Vec::new()),(None,ellipse_stroke(view,1,[520.*zoom,299.*zoom],180))];
-        host_journey(&format!("Paint32 seed={seed:x} total={total} pinned={pinned}"),document,renderer,view,brush.clone(),&reads,steps);
-    }}
+        host_journey(&format!("Paint32 seed={seed:x} total={total} pinned={pinned}"),document,renderer,view,brush,&reads,steps);
+    }
 }
 
 #[test]

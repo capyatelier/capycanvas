@@ -66,6 +66,21 @@ fn a_refusal_behind_this_frames_claims_waits_for_room_beyond_them() {
 }
 
 #[test]
+fn a_refusal_behind_claims_no_later_frame_remakes_fits_once_the_renderer_settles() {
+    let tier = tier(8, 0);
+    let _resident = tier.charge(3);
+    tier.begin_frame();
+    let earlier = tier.charge(3);
+    let blocked = tier.admit(Class::Prefetch, 3).err().expect("the frame's earlier claim leaves no room");
+    drop(earlier);
+    tier.end_frame();
+    assert!(!blocked.fits(), "the frame's own claims stay ahead of the unit while frames run");
+    assert!(tier.settle(), "settling forgets claims that no running frame remakes");
+    assert!(blocked.fits(), "the unit fits the room it would be admitted to");
+    assert!(!tier.settle(), "a settled refusal settles once");
+}
+
+#[test]
 fn a_refusal_behind_this_frames_lasting_claims_fits_once_the_frame_ends() {
     let tier = tier(8, 0);
     tier.begin_frame();

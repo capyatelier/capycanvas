@@ -14,7 +14,7 @@ pub mod temp_files;
 pub mod memory_budget;
 mod document_memory;
 pub use document_memory::DocumentMemory;
-pub use memory_budget::{MemoryBudget, MemoryFacts, DeviceMemoryFacts, MemoryDevice, MemoryOwner, MemoryReservation, MemoryOwnerKind, MemoryClass, MemoryReport, MemoryGrant, MemoryBudgetSnapshot, MemoryOwnerTotals, MemoryDeviceSnapshot};
+pub use memory_budget::{MemoryBudget, MemoryFacts, DeviceMemoryFacts, MemoryDevice, MemoryOwner, MemoryReservation, MemoryWatch, MemoryOwnerKind, MemoryClass, MemoryReport, MemoryGrant, MemoryBudgetSnapshot, MemoryOwnerTotals, MemoryDeviceSnapshot};
 
 use std::collections::BTreeSet;
 pub mod color;

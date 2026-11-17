@@ -573,6 +573,7 @@ impl WgpuRasterizer {
             .collect()
     }
     fn retire_restore(&mut self) {
+        self.end_head();
         let bytes=self.staged_restore_bytes();
         if bytes==0 {self.restore_preflight=None;return;}
         let restore=self.restore_preflight.take().unwrap();
@@ -673,7 +674,12 @@ impl WgpuRasterizer {
     pub(crate) fn staged_restore_mask_bytes(&self)->u64 {
         self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().flat_map(|target|&target.pages.masks).map(|(_,page)|page.storage_bytes()).sum())
     }
-    pub(crate) fn projected_restore_bytes(&self)->u64 {self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten().try_fold(0u64,|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}
+    pub(crate) fn projected_restore_bytes(&self)->u64 {self.restore_preflight.as_ref().map_or(0,|restore|restore.targets.iter().flatten()
+        .try_fold(self.unreserved_preview_bytes(restore),|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}
+    fn unreserved_preview_bytes(&self,restore:&RestorePreflight)->u64 {
+        if restore.preview.is_some() {return 0;}
+        restore.outputs().iter().filter(|(_,output)|output.preview()).map(|(_,output)|output.bytes(self,0)).sum()
+    }
     pub(crate) fn staged_transform_source(&self,target:SourceTarget)->Option<(&Arc<RasterData>,&PreparedPages)> {
         self.restore_preflight.as_ref()?.targets.iter().flatten().find(|entry|entry.replace && entry.target==target && entry.complete()).map(|entry|(&entry.data,&entry.pages))
     }
@@ -845,8 +851,8 @@ impl WgpuRasterizer {
         Ok(restore.complete())
     }
     fn reserve_preview_outputs(&mut self)->bool {
-        let Some(restore)=self.restore_preflight.as_ref().filter(|restore|restore.preview.is_none()) else {return true;};
-        let bytes=restore.outputs().iter().filter(|(_,output)|output.preview()).map(|(_,output)|output.bytes(self,0)).sum::<u64>();
+        let Some(restore)=self.restore_preflight.as_ref() else {return true;};
+        let bytes=self.unreserved_preview_bytes(restore);
         if bytes==0 {return true;}
         let admitted=match self.preview_working.take().filter(|held|held.bytes()>=bytes) {
             Some(held)=>Ok(held),None=>self.admit_raster_working(bytes),

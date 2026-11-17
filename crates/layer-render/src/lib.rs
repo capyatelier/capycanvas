@@ -958,6 +958,7 @@ pub trait CanvasRenderer {
     fn has_pending_submission(&self) -> bool { false }
     fn next_frame(&self) -> FrameDemand { FrameDemand::Wait }
     fn waits_for_frame_slot(&self) -> bool { false }
+    fn stroke_waits_for_memory(&self) -> bool { false }
     /// Host frame-mailbox backpressure before consuming input.
     fn can_submit(&self) -> bool {
         true

@@ -97,6 +97,7 @@ impl WgpuRasterizer {
     }
     pub(crate) fn frame_demand(&self) -> FrameDemand {
         if self.region_step_runnable() || self.completion_edge() || self.frame_work() { return FrameDemand::Work; }
+        if self.scene_tiers.display.settle() && self.frame_work() { return FrameDemand::Work; }
         #[cfg(debug_assertions)]
         self.assert_blocked_inputs_outstanding();
         FrameDemand::Wait

@@ -3,7 +3,7 @@ pub use system::{AndroidMemory, android_facts, system_facts};
 #[cfg(target_os = "android")]
 pub use system::read_android_memory_with;
 
-use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, MutexGuard, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}}};
+use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, Mutex, MutexGuard, OnceLock, Weak, atomic::{AtomicBool, AtomicU64, Ordering}}};
 use web_time::Instant;
 
 const MIB: u64 = 1024 * 1024;
@@ -86,7 +86,7 @@ pub struct MemoryBudgetSnapshot {
     pub devices: Vec<MemoryDeviceSnapshot>,
 }
 #[derive(Default)]
-struct Grants { ram: AtomicU64, gpu: AtomicU64, wake: OnceLock<Arc<dyn Fn() + Send + Sync>> }
+struct Grants { ram: AtomicU64, gpu: AtomicU64, working_limit: AtomicU64, wake: OnceLock<Arc<dyn Fn() + Send + Sync>> }
 #[derive(Default)]
 struct PendingReport { version: AtomicU64, values: [AtomicU64; 7] }
 impl PendingReport {
@@ -144,7 +144,8 @@ struct Waiter { wait: Wait, wake: Arc<dyn Fn() + Send + Sync> }
 #[derive(Default)]
 struct BudgetCache { limit: AtomicU64, headroom: AtomicU64, refusals: AtomicU64 }
 #[derive(Default)]
-struct Manager { state: Mutex<State>, cache: BudgetCache }
+struct Manager { state: Mutex<State>, cache: BudgetCache, watchers: Mutex<Vec<Weak<dyn Fn() + Send + Sync>>> }
+pub struct MemoryWatch { _wake: Arc<dyn Fn() + Send + Sync> }
 #[derive(Clone)]
 pub struct MemoryBudget(Arc<Manager>);
 impl Default for MemoryBudget { fn default() -> Self { Self::new() } }
@@ -167,7 +168,11 @@ impl MemoryOwner {
     pub fn set_wake(&self, wake:Arc<dyn Fn() + Send + Sync>) {
         let result=self.0.grants.wake.set(wake);debug_assert!(result.is_ok(),"Memory owner wake is already registered");
     }
-    pub fn publish(&self, report: MemoryReport) -> bool { self.0.pending.publish(report) }
+    pub fn publish(&self, report: MemoryReport) -> bool {
+        let published=self.0.pending.publish(report);
+        if published {self.0.budget.changed();}
+        published
+    }
     pub fn report(&self, mut report: MemoryReport) {
         report.ram_bytes = report.ram_bytes.max(report.pinned_ram_bytes);
         report.gpu_bytes = report.gpu_bytes.max(report.pinned_gpu_bytes);
@@ -204,8 +209,12 @@ impl MemoryOwner {
         self.reserve(state,bytes)
     }
     pub fn fits_working_through(&self,gpu_bytes:u64)->bool {
-        let state=self.0.budget.0.state.lock().unwrap();
-        state.fits_working(self.0.id,state.working_through(self.0.id,gpu_bytes))
+        let budget=&self.0.budget;
+        let mut state=budget.0.state.lock().unwrap();
+        let changed=state.apply_reports();
+        let fits=state.fits_working(self.0.id,state.working_through(self.0.id,gpu_bytes));
+        if changed {budget.rebalance(state);}
+        fits
     }
     fn reserve(&self,mut state:MutexGuard<'_,State>,bytes:MemoryGrant)->Option<MemoryReservation> {
         let budget=&self.0.budget;
@@ -219,6 +228,8 @@ impl MemoryOwner {
         MemoryGrant { ram_bytes: self.0.grants.ram.load(Ordering::Acquire), gpu_bytes: self.0.grants.gpu.load(Ordering::Acquire) }
     }
     pub fn working(&self)->MemoryGrant {self.0.budget.0.state.lock().unwrap().working(self.0.id)}
+    pub fn published_gpu_working_limit(&self)->u64 {self.0.grants.working_limit.load(Ordering::Acquire)}
+    pub fn flush(&self) {self.0.budget.flush_reports();}
     pub fn gpu_working_limit(&self)->u64 {
         let budget=&self.0.budget;
         let mut state=budget.0.state.lock().unwrap();
@@ -348,6 +359,15 @@ impl MemoryBudget {
         wakes.extend(ready.into_iter().map(|waiter| waiter.wake));
         drop(state);
         for wake in wakes { wake(); }
+        self.changed();
+    }
+    pub fn watch(&self, wake: Arc<dyn Fn() + Send + Sync>) -> MemoryWatch {
+        self.0.watchers.lock().unwrap().push(Arc::downgrade(&wake));
+        MemoryWatch { _wake: wake }
+    }
+    fn changed(&self) {
+        let watchers:Vec<_>={let mut watchers=self.0.watchers.lock().unwrap();watchers.retain(|watcher|watcher.strong_count()!=0);watchers.iter().filter_map(Weak::upgrade).collect()};
+        for watcher in watchers { watcher(); }
     }
     pub fn new() -> Self { Self::with_facts(MemoryFacts::default()) }
     pub fn with_facts(facts: MemoryFacts) -> Self { let budget = Self(Arc::new(Manager::default())); budget.update_ram(facts, 0); budget }
@@ -664,6 +684,7 @@ impl State {
             let gpu_changed=owner.grants.gpu.swap(unified[i],Ordering::AcqRel)!=unified[i];
             if (changed || gpu_changed) && let Some(wake)=owner.grants.wake.get() {wakes.push(wake.clone());}
         }
+        for (id,owner) in &self.owners {owner.grants.working_limit.store(self.gpu_working_limit(*id),Ordering::Release);}
         wakes
     }
 }

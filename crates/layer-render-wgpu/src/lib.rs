@@ -1427,7 +1427,7 @@ impl WgpuRasterizer {
                 view_formats: &[],
             })
         });
-        let raster_tiers = memory::RasterTiers::default();
+        let raster_tiers = memory::RasterTiers::new(memory.raster_owner());
         let zero_charge = raster_tiers.paint.charge(zero_pages.iter().map(texture_bytes).sum());
         let declared_scratch = [device.working_format(), device.scalar_format()]
             .map(|format| create_page_surface(&device, &float_texture_layout, &sampler, [1, 1], format, "declared scratch page", &raster_tiers.paint));
@@ -3576,6 +3576,8 @@ impl WgpuRasterizer {
         self.memory.set_wake(wake.clone());
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let edge=self.device.retirement_handle();
+            self.memory.watch(self.factory.memory_budget(),Arc::new(move||edge.signal_release()));
             self.papers.set_wake(wake.clone());
             if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
             self.decode_wake=Some(wake.clone());
@@ -3962,6 +3964,9 @@ impl CanvasRenderer for WgpuRasterizer {
     fn has_pending_submission(&self) -> bool { self.settling.is_some() }
     fn next_frame(&self) -> layer_render::FrameDemand { self.frame_demand() }
     fn waits_for_frame_slot(&self) -> bool { self.frame_slot_blocked() }
+    fn stroke_waits_for_memory(&self) -> bool {
+        self.preparation_can_wake() && self.restore_preparation()==Some(frame_demand::Outstanding::Blocked(frame_demand::Input::Residency))
+    }
     fn poll_pending(&mut self, view: layer_render::ViewState) -> Result<(), Self::Error> {
         self.refresh_memory_limits();
         if let Some(selection) = self.pending_display_selection.clone() { self.set_selection_outline(Some(&selection))?; }

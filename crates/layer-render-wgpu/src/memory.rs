@@ -40,9 +40,9 @@ impl Owner {
 
 #[derive(Clone)]
 pub(crate) struct RasterTiers {pub(crate) raster:Arc<crate::residency::Tier>,pub(crate) paint:Arc<crate::residency::Tier>,pub(crate) admitted:Arc<crate::residency::Tier>}
-impl Default for RasterTiers {
-    fn default()->Self {
-        let raster=Arc::new(crate::residency::Tier::default());
+impl RasterTiers {
+    pub(crate) fn new(ledger:MemoryOwner)->Self {
+        let raster=crate::residency::Tier::limited_by(ledger);
         Self {paint:crate::residency::Tier::within(&raster),admitted:crate::residency::Tier::within(&raster),raster}
     }
 }
@@ -81,11 +81,15 @@ pub(super) struct Memory {
     preparation: std::cell::Cell<u64>,
     target: std::cell::Cell<u64>,
     refused: std::cell::Cell<u64>,
+    head: std::cell::RefCell<Option<(crate::residency::Blocked,u64)>>,
+    head_asked: std::cell::Cell<bool>,
     trimmed: std::cell::Cell<Option<[u64; 2]>>,
     retired: std::cell::Cell<Option<[u64; 2]>>,
     wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     resources: Arc<std::sync::atomic::AtomicU64>,
     overdraft: std::cell::RefCell<Vec<layer_core::MemoryReservation>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    watch: std::cell::RefCell<Option<layer_core::MemoryWatch>>,
     unified: bool,
     pub idle: std::sync::atomic::AtomicBool,
 }
@@ -138,7 +142,7 @@ impl Memory {
                 |handle| { let report = handle.reported(); Owner { handle, published: std::cell::Cell::new(report) } }),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
-            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(),
+            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), head: Default::default(), head_asked: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
             unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true),
         };
         memory.applied_limits.set(Some(memory.grants()));
@@ -151,6 +155,8 @@ impl Memory {
     pub(crate) fn retention_grant(&self) -> u64 { self.display.handle.grant().gpu_bytes }
     pub(crate) fn retention_limit(&self) -> u64 { if self.unified { self.display_grant() } else { self.retention_grant() } }
     pub(crate) fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) { *self.wake.lock().unwrap() = Some(wake); }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn watch(&self, budget: &layer_core::MemoryBudget, edge: Arc<dyn Fn() + Send + Sync>) { *self.watch.borrow_mut() = Some(budget.watch(edge)); }
     pub(crate) fn raster_grant(&self) -> u64 { self.raster.handle.grant().gpu_bytes }
     pub(crate) fn staging_grant(&self) -> u64 { self.staging.handle.grant().gpu_bytes }
     pub(crate) fn sample_grant(&self) -> u64 { self.samples.handle.grant().ram_bytes }
@@ -167,8 +173,12 @@ impl Memory {
         if kind==Kind::Scene {self.overdraft.borrow_mut().clear();}
     }
     fn overdrawn(&self)->bool {!self.overdraft.borrow().is_empty()}
+    fn stop(&self,class:crate::residency::Class)->Option<crate::residency::Blocked> {
+        self.head.borrow().as_ref().filter(|(head,_)|head.class()<class).map(|(head,_)|head.clone())
+    }
+    fn head_bytes(&self)->u64 {self.head.borrow().as_ref().map_or(0,|(_,bytes)|*bytes)}
     fn carry_overdraft(&self,used:u64) {
-        if used>self.retention_grant() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
+        if used>self.retention_grant() && self.head.borrow().is_none() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
     }
     pub fn sample_owner(&self) -> MemoryOwner { self.samples.handle.clone() }
     pub(crate) fn raster_owner(&self) -> MemoryOwner { self.raster.handle.clone() }
@@ -248,9 +258,9 @@ impl WgpuRasterizer {
     }
     pub(crate) fn admit_raster_working(&mut self,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
         #[cfg(test)] crate::test_support::PassCounts {raster_admissions:1,..Default::default()}.record();
-        self.sync_raster_report();
+        self.memory.head_asked.set(true);
+        self.sync_raster_report();self.factory.memory_budget().flush_reports();
         let tiers=self.raster_tiers.clone();
-        tiers.raster.update_limit(self.memory.raster.handle.gpu_working_limit());
         let reservation=match tiers.admitted.admit(crate::residency::Class::Authored,bytes) {
             Ok(reservation)=>reservation,
             Err(blocked)=>{
@@ -259,10 +269,15 @@ impl WgpuRasterizer {
                 if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
                 match tiers.admitted.admit(crate::residency::Class::Authored,bytes) {
                     Ok(reservation)=>reservation,
-                    Err(blocked)=>{self.wait_for_release(blocked.clone());return Err(blocked);},
+                    Err(blocked)=>{
+                        *self.memory.head.borrow_mut()=Some((blocked.clone(),bytes));self.memory.invalidate_limits();
+                        self.trim_display_to_grant(self.scene.as_deref());
+                        self.wait_for_release(blocked.clone());return Err(blocked);
+                    },
                 }
             },
         };
+        self.end_head();
         self.memory.invalidate_limits();self.refresh_memory_limits();Ok(reservation)
     }
     pub(crate) fn admit_raster_window(&mut self,least:u64,most:u64,reserve:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
@@ -316,7 +331,6 @@ impl WgpuRasterizer {
         self.memory.apply_limits(grants);
         self.scene_tiers.display.update_limit(self.memory.display_limit());
         self.scene_tiers.display.set_grant(display);
-        self.raster_tiers.raster.update_limit(self.memory.raster.handle.gpu_working_limit());
         self.device.resource_limit.store(self.memory.display_grant(),std::sync::atomic::Ordering::Release);
         self.device.source_samples.set_limit(ram.min(usize::MAX as u64) as usize);
         if self.device.source_samples.trim_unused(SOURCE_SLOTS)!=0 {self.publish_samples();}
@@ -380,14 +394,27 @@ impl WgpuRasterizer {
         self.factory.memory_budget().flush_reports();
         self.scene_tiers.display.set_grant(self.memory.retention_limit());
     }
-    pub(crate) fn end_frame_memory(&mut self) {self.scene_tiers.display.heap().begin_frame();self.scene_tiers.display.end_frame();}
+    pub(crate) fn end_frame_memory(&mut self) {
+        if !self.memory.head_asked.replace(false) {self.end_head();}
+        self.scene_tiers.display.heap().begin_frame();self.scene_tiers.display.end_frame();
+    }
     fn trim_display_to_grant(&self,scene:Option<&scene::Scene>) {
-        let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
-        let excess=display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used()));
+        let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();let before=display.used();
+        let excess=display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used())).max(self.head_deficit());
         display.heap().reclaim(excess);
         let excess=excess.saturating_sub(display.heap().pending());
         if excess!=0 && let Some(scene)=scene {scene.release_pages_by(excess);}
+        if display.used()<before {self.memory.display.publish(self.display_memory_report(scene,self.composition_memory(scene)));}
         self.memory.trimmed.set(Some([grant,display.used()]));
+    }
+    fn head_deficit(&self)->u64 {
+        let raster=&self.raster_tiers.raster;
+        raster.used().saturating_add(self.memory.head_bytes()).saturating_sub(raster.limit()).min(self.memory.head_bytes())
+    }
+    pub(crate) fn end_head(&self) {
+        if self.memory.head.take().is_none() {return;}
+        self.memory.invalidate_limits();self.publish_memory();
+        if let Some(wake)=&self.preparation_wake {wake();}
     }
     pub(crate) fn retention_above_grant(&self)->bool {
         let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
@@ -403,6 +430,7 @@ impl WgpuRasterizer {
         admitted
     }
     fn admit_within(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        if let Some(head)=self.memory.stop(class) {return Err(head);}
         let display=&self.scene_tiers.display;
         display.set_grant(self.memory.retention_limit());
         let scene=scene.or(self.scene.as_deref());
@@ -412,7 +440,8 @@ impl WgpuRasterizer {
             display.heap().evict(over(),class);
             if let Some(scene)=scene {scene.trim_pages_by(over().saturating_sub(display.heap().pending()),class);}
             let total=display.used().saturating_add(bytes);
-            (over()!=0).then(||ledger.admit_working_through(total,self.preparation_wake.clone()).ok_or_else(||tier.refused_by(ledger.clone(),class,bytes))).transpose()?
+            (over()!=0).then(||ledger.admit_working_through(total,None).ok_or_else(||tier.refused_by(ledger.clone(),class,bytes))).transpose()
+                .inspect_err(|blocked|self.wait_for_release(blocked.clone()))?
         } else {None};
         let reservation=tier.admit(class,bytes).or_else(|blocked| {
             if let Some(scene)=scene {scene.trim_pages_by(blocked.deficit(),class);}
@@ -515,13 +544,14 @@ impl WgpuRasterizer {
         let ram=usage.ram.saturating_add(scene.map_or(0,scene::Scene::store_metadata_bytes));
         let gpu=self.scene_tiers.display.used();
         let demand=self.memory.demand.get();
-        let mut pinned=usage.pinned;pinned[0]=pinned[0].saturating_add(presented).saturating_add(self.retired_display_bytes.used());
-        let pinned=demand.pinned(pinned);let wanted=demand.wanted(self.memory.preparation.get());
+        let mut held=usage.pinned;held[0]=held[0].saturating_add(presented).saturating_add(self.retired_display_bytes.used());
+        let pinned=demand.pinned(held);let wanted=demand.wanted(self.memory.preparation.get());
         let floor=self.scene_tiers.display.floor();let refused=self.memory.refused.get();
         let required=total(pinned).saturating_add(wanted[4].saturating_sub(pinned[4])).saturating_add(floor)
             .max(if refused==0 {0}else {gpu.saturating_add(refused).saturating_add(floor)}).max(self.memory.preparation.get());
         self.memory.target.set(total(std::array::from_fn(|part| wanted[part].max(pinned[part]))).max(required));
-        MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes: total(pinned),
+        let pinned_gpu_bytes=if self.memory.head_bytes()==0 {total(pinned)}else {total(held)};
+        MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes,
             demand_ram_bytes: ram, demand_gpu_bytes: required, optional_gpu_bytes: u64::MAX, ..Default::default() }
     }
     fn raster_pins(&self)->u64 {
@@ -540,7 +570,7 @@ impl WgpuRasterizer {
         MemoryReport {ram_bytes:ram,gpu_bytes:gpu,
             pinned_ram_bytes:self.raster_buffers.working.used().max(WORKING_BYTES),
             pinned_gpu_bytes:raster_floor,demand_ram_bytes:ram.max(WORKING_BYTES),
-            demand_gpu_bytes:gpu.saturating_add(self.projected_restore_bytes())
+            demand_gpu_bytes:gpu.saturating_add(self.projected_restore_bytes().max(self.memory.head_bytes()))
                 .saturating_add(raster_floor.saturating_sub(raster_pins)).max(WORKING_BYTES),..Default::default()}
     }
     fn staging_memory_report(&self)->MemoryReport {

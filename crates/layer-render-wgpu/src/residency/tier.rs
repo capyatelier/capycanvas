@@ -20,18 +20,20 @@ pub(crate) struct Tier {
     refusals: std::sync::Mutex<Vec<(std::sync::Weak<AtomicU64>, u64)>>,
     retiring: Option<Arc<Tier>>,
     parent: Option<Arc<Tier>>,
+    ledger: Option<layer_core::MemoryOwner>,
     heap: Arc<super::Heap>,
     #[cfg(not(target_arch = "wasm32"))]
     edge: std::sync::OnceLock<RetirementHandle>,
 }
 impl Default for Tier {
     fn default() -> Self {
-        Self { used: AtomicU64::new(0), yielding: AtomicU64::new(0), limit: AtomicU64::new(0), floor: AtomicU64::new(0), grant: AtomicU64::new(u64::MAX), frame: AtomicU64::new(u64::MAX), refusals: Default::default(), retiring: None, parent: None, heap: Default::default(),
+        Self { used: AtomicU64::new(0), yielding: AtomicU64::new(0), limit: AtomicU64::new(0), floor: AtomicU64::new(0), grant: AtomicU64::new(u64::MAX), frame: AtomicU64::new(u64::MAX), refusals: Default::default(), retiring: None, parent: None, ledger: None, heap: Default::default(),
             #[cfg(not(target_arch = "wasm32"))] edge: Default::default() }
     }
 }
 impl Tier {
     pub(crate) fn retiring_into(retiring: &Arc<Self>) -> Arc<Self> { Arc::new(Self { retiring: Some(retiring.clone()), ..Default::default() }) }
+    pub(crate) fn limited_by(ledger: layer_core::MemoryOwner) -> Arc<Self> { Arc::new(Self { ledger: Some(ledger), ..Default::default() }) }
     pub(crate) fn within(parent: &Arc<Self>) -> Arc<Self> { Arc::new(Self { parent: Some(parent.clone()), limit: AtomicU64::new(u64::MAX), heap: parent.heap.clone(), ..Default::default() }) }
     pub(crate) fn heap(&self) -> &Arc<super::Heap> { &self.heap }
     fn root_used(&self) -> u64 { self.parent.as_ref().map_or_else(|| self.used(), |parent| parent.root_used()) }
@@ -56,9 +58,21 @@ impl Tier {
     pub(crate) fn begin_frame(&self) { self.frame.store(self.used(), SeqCst); }
     pub(crate) fn end_frame(&self) {
         let used = self.used();
-        for (ahead, at) in self.refusals.lock().unwrap().drain(..) {
-            if let Some(ahead) = ahead.upgrade() { ahead.store(at.saturating_sub(used), SeqCst); }
-        }
+        self.refusals.lock().unwrap().retain_mut(|(ahead, at)| {
+            let Some(ahead) = ahead.upgrade() else { return false; };
+            if *at != u64::MAX { ahead.store(at.saturating_sub(used), SeqCst); *at = u64::MAX; }
+            true
+        });
+    }
+    pub(crate) fn settle(&self) -> bool {
+        let mut settled = false;
+        self.refusals.lock().unwrap().retain(|(ahead, at)| {
+            let Some(ahead) = ahead.upgrade() else { return false; };
+            if *at == u64::MAX { settled |= ahead.swap(0, SeqCst) != 0; }
+            true
+        });
+        if settled { self.release_edge(); }
+        settled
     }
     fn refusal(self: &Arc<Self>, class: Class, bytes: u64, ledger: Option<layer_core::MemoryOwner>) -> Blocked {
         let (start, used) = (self.frame.load(SeqCst), self.used());
@@ -67,7 +81,8 @@ impl Tier {
         Blocked { tier: self.clone(), class, bytes, ahead, ledger }
     }
     pub(crate) fn is_root(&self) -> bool { self.parent.is_none() }
-    pub(crate) fn limit(&self) -> u64 { self.limit.load(SeqCst) }
+    pub(crate) fn limit(&self) -> u64 { self.ledger.as_ref().map_or_else(|| self.limit.load(SeqCst), layer_core::MemoryOwner::published_gpu_working_limit) }
+    fn root_ledger(&self) -> Option<&layer_core::MemoryOwner> { self.parent.as_ref().map_or(self.ledger.as_ref(), |parent| parent.root_ledger()) }
     pub(crate) fn floor(&self) -> u64 { self.floor.load(SeqCst) }
     pub(crate) fn set_limit(&self, limit: u64, floor: u64) {
         if (self.limit.swap(limit, SeqCst) < limit) | (self.floor.swap(floor, SeqCst) > floor) { self.release_edge(); }
@@ -181,6 +196,8 @@ impl Blocked {
     pub(crate) fn wake_on_release(self, edge: &RetirementHandle, wake: Arc<dyn Fn() + Send + Sync>) { edge.wait_for_release(&self, wake); }
     pub(crate) fn bind(&self, edge: &RetirementHandle) -> RetirementHandle {
         let bound = self.tier.edge.get_or_init(|| edge.clone()).clone();
+        let mut parent = self.tier.parent.as_ref();
+        while let Some(tier) = parent { tier.edge.get_or_init(|| bound.clone()); parent = tier.parent.as_ref(); }
         fence(SeqCst);
         bound
     }
@@ -190,6 +207,7 @@ impl Blocked {
     pub(crate) fn covering(self, bytes: u64) -> Self { Self { bytes: self.bytes.max(bytes), ..self } }
     pub(crate) fn alone(self) -> Self { Self { ahead: Default::default(), ..self } }
     pub(crate) fn fits(&self) -> bool {
+        if let Some(ledger) = self.tier.root_ledger() { ledger.flush(); }
         let bytes = self.need();
         self.tier.fits_through(self.class, bytes)
             && self.ledger.as_ref().is_none_or(|ledger| ledger.fits_working_through(self.tier.root_used().saturating_sub(self.tier.root_evictable(self.class)).saturating_add(bytes)))
