@@ -36,7 +36,7 @@ fn shared_ready_encode_error_discards_jobs_before_any_unit_state_commits() {
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     for owner in &owners {
         let id=doc.scene().source_target(*owner).unwrap();
-        cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
     }
     let before_coverage=cache.coverage_snapshot();
     let before_branches=cache.commit_state();

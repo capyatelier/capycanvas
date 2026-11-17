@@ -1832,6 +1832,7 @@ fn settle_observing(r:&mut WgpuRasterizer,frame:FramePacket<'_>,mut observe:impl
         r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
         let next=if !submitted {frame}else {FramePacket {composite_all:false,..frame}};
         let preview=r.transform_preview.clone();
+        crate::test_support::pace(r);
         if r.can_submit() && let std::task::Poll::Ready(result)=r.submit_when_ready(next,preview.as_ref()) {result.unwrap();submitted=true;observe(r);}
         r.wait_idle().unwrap();
         if submitted && r.next_frame()!=layer_render::FrameDemand::Work && r.settled() {return;}

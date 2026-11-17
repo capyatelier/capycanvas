@@ -729,8 +729,11 @@ stream.
 Each frame does at most what its budget allows; the rest waits for the next
 frame or for idle.
 
-**One work arbiter.** Today canonical object work (2²⁰ interactive / 2²³ idle
-taps), mip preparation (2 or 32 steps), exact refinement (16 or 4 pages),
+**One work arbiter.** Today canonical object work (2²³ taps idle; at most
+2²⁰ while the view moves, halved after a moving frame that misses its interval
+and grown by an eighth after one that meets it; one unit while the frames in
+flight hold more than an interval of best-effort GPU work), mip preparation
+(2 or 32 steps), exact refinement (16 or 4 pages),
 uploads and readbacks each keep their own allowance, and camera motion is not
 "input" to the canonical pause. In the end state one arbiter charges every kind
 of preparation, composition, upload, readback and retirement against a single

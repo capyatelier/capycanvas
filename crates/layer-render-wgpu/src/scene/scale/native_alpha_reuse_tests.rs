@@ -561,12 +561,46 @@ fn a_mask_stroke_on_a_group_or_an_attached_filter_composes_like_the_unsplit_stac
             let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
             crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
             for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
-            display_pixels(&r)
+            let shown = display_pixels(&r);
+            crate::test_support::submit_settled(&mut r, frame);
+            [shown, display_pixels(&r)]
         };
-        let masked_stroke = stroke(SourceTarget::Coverage(mask), [125.5, 126.5], [1.; 4]);
-        let unsplit = stroke(paint, [400.5, 200.5], [0.; 4]);
-        let error = crate::test_support::max_error(&masked_stroke, &unsplit);
-        assert!(error < 2e-5, "{owner}: a mask stroke must compose like the unsplit stack: error={error}");
+        let [masked_stroke, masked_settled] = stroke(SourceTarget::Coverage(mask), [125.5, 126.5], [1.; 4]);
+        let [unsplit, unsplit_settled] = stroke(paint, [400.5, 200.5], [0.; 4]);
+        let error = crate::test_support::max_relative_error(&masked_stroke, &unsplit);
+        assert!(error <= crate::test_support::DISPLAY_HALF_ULP, "{owner}: a mask stroke must show like the unsplit stack within display precision: relative error={error}");
+        assert_eq!(crate::test_support::max_error(&masked_settled, &unsplit_settled), 0., "{owner}: a settled mask stroke must compose exactly like the unsplit stack");
+    }
+}
+
+#[test]
+fn a_masked_stroke_settles_to_the_same_pixels_however_its_frames_split_the_work() {
+    let extent = [517, 259];
+    let compose = |owner: &str, taps: [u64; 2]| crate::test_support::with_pace(taps, || {
+        let mut doc = document_at(extent);
+        let paint = source_at(&doc, 0);
+        let layer = doc.scene().source_owner(paint).unwrap();
+        let masked = if owner == "group" { crate::artwork_sample_tests::add_group(&mut doc, vec![layer], 0) } else { attach_filter(&mut doc, owner) };
+        let mask = coverage_mask(&mut doc, masked, Default::default(), None);
+        doc.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.;
+        let mut frame = packet(doc.scene(), extent);
+        frame.composite_all = true;
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        crate::test_support::submit_ready(&mut r, frame).unwrap();
+        for (target, center, color) in [(SourceTarget::Coverage(mask), [125.5, 126.5], [1.; 4]), (paint, [400.5, 200.5], [0.; 4])] {
+            let mut dab = crate::tests::test_dab(center, color, 0.8);
+            dab.radii = [13.25, 11.75];
+            let batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+            crate::test_support::submit_ready(&mut r, FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+            for _ in 0..2 { crate::test_support::submit_ready(&mut r, frame).unwrap(); r.wait_idle().unwrap(); }
+        }
+        crate::test_support::submit_settled(&mut r, frame);
+        display_pixels(&r)
+    });
+    for owner in ["group", "brightness_to_opacity", "threshold"] {
+        let [slow, fast] = [compose(owner, [crate::scene::PASS_TAPS; 2]), compose(owner, [crate::frame_pace::MOVING_TAPS, crate::frame_pace::IDLE_TAPS])];
+        assert_eq!(crate::test_support::max_error(&slow, &fast), 0., "{owner}: one frame and many frames settle to different pixels");
     }
 }
 
@@ -877,6 +911,7 @@ fn fused_prediction_tracks_actual_warm_primary_and_forces_relocated_pages() {
         }
         crate::test_support::submit_ready(&mut r, frame).unwrap();crate::test_support::submit_ready(&mut reference, FramePacket {composite_all:true,..frame}).unwrap();
         assert!(r.preview_pages.is_empty());
+        crate::test_support::submit_settled(&mut r, frame);crate::test_support::submit_settled(&mut reference, FramePacket {composite_all:true,..frame});
         assert_pixels_equal(&display_pixels(&r),&display_pixels(&reference),r.scale_display.as_ref().unwrap().plan.size[0],(name,blend,level,"removed"));
     }}}}
 }

@@ -133,7 +133,7 @@ fn cells_a_frame_composes_leave_their_refinement_units_to_refinement_and_settle_
     crate::test_support::complete(&r);
     let mut scene = r.scene.take().unwrap();
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    let mut budget = Scene::begin_work(false); budget.spend(object_cache::IDLE_TAPS);
+    let mut budget = crate::test_support::work(false); let capacity = budget.capacity(); budget.spend(capacity);
     scene.refine_display(&mut r, frame, &mut encoder, &mut budget).unwrap();
     drop(budget);
     r.uploads.finish(&encoder); encoder.submit(&r.queue); r.scene = Some(scene);
@@ -740,7 +740,7 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
         assert!(window.next_frame()==layer_render::FrameDemand::Work);
         let mut scene = window.scene.take().unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&window.device, &Default::default());
-        scene.refine_display(&mut window, frame, &mut encoder,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);scene.refine_display(&mut window, frame, &mut encoder,&mut work).unwrap();}
         drop(encoder);
         window.scene = Some(scene);
         crate::test_support::submit_ready(&mut window, FramePacket { composite_all: false, ..frame }).unwrap();

@@ -225,7 +225,7 @@ fn ready_results(r:&mut WgpuRasterizer,scene:&mut Scene,doc:&layer_core::Documen
         r.drain_image_decodes(&mut encoder).unwrap();
         let empty=super::super::object_cache::ObjectCache::for_scene(scene,false);
         let mut cache=std::mem::replace(&mut scene.object_results,empty);
-        cache.advance(r,scene,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);cache.advance(r,scene,&mut encoder,&mut work).unwrap();}
         scene.object_results=cache;
         r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         assert!(std::time::Instant::now()<deadline,"canonical results complete");
@@ -327,7 +327,7 @@ fn an_unrelated_effect_format_change_reuses_ready_canonical_image_results() {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
     let result=loop {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();cache.advance(&mut r,&mut scene,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+        r.drain_image_decodes(&mut encoder).unwrap();{let mut work=crate::test_support::work(false);cache.advance(&mut r,&mut scene,&mut encoder,&mut work).unwrap();}
         r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         if let Some(result)=cache.resolve_collection(&r,doc.scene(),&request,None).unwrap() {break result;}
         assert!(std::time::Instant::now()<deadline,"canonical image preparation completes");
@@ -365,7 +365,7 @@ fn object_frame_work_uses_the_scene_grant_beyond_cache_retention() {
     let mut cache=std::mem::replace(&mut scene.object_results,empty);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.objects.pipelines())).unwrap();
-    cache.advance(&mut r, &mut scene, &mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);cache.advance(&mut r, &mut scene, &mut encoder,&mut work).unwrap();}
     assert!(cache.pinned_gpu_bytes() > crate::memory::OBJECT_CACHE_BYTES / 2);
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
@@ -495,7 +495,7 @@ fn object_read_mapping_preserves_f64_relative_coordinates_and_requested_density(
             if let Some(view) = cache.resolve_collection(&r, doc.scene(), &request,None).unwrap() { break view; }
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             r.drain_image_decodes(&mut encoder).unwrap();
-            cache.advance(&mut r, &mut scene, &mut encoder,&mut Scene::begin_work(true)).unwrap();
+            {let mut work=crate::test_support::work(true);cache.advance(&mut r, &mut scene, &mut encoder,&mut work).unwrap();}
             r.uploads.finish(&encoder); encoder.submit(&r.queue); r.wait_idle().unwrap();
             assert!(std::time::Instant::now() < deadline, "object sampling at side {side} must finish through the decode queue");
         };
@@ -520,8 +520,10 @@ fn private_canonical_jobs_yield_and_cancel_before_publication() {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         r.prepare_moving_images(packet(doc.scene(), [64; 2]), &mut encoder).unwrap();
         let passes = encoder.pass_count();
-        let taps = cache.advance(&mut r, &mut compositor, &mut encoder,&mut Scene::begin_work(true)).unwrap();
-        let limit = super::super::object_cache::INTERACTIVE_TAPS + crate::object_sampling::DISPATCH_TAPS;
+        let mut budget = crate::test_support::work(true);
+        let taps = cache.advance(&mut r, &mut compositor, &mut encoder,&mut budget).unwrap();
+        let limit = budget.capacity() + crate::object_sampling::DISPATCH_TAPS;
+        drop(budget);
         assert!(taps <= limit && (encoder.pass_count() - passes) * super::super::object_cache::PASS_TAPS <= limit, "canonical refinement has a bounded per-frame workload");
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
         if !cache.pending() {
@@ -585,7 +587,7 @@ fn ordered_worker_captures(single_capture: bool) {
     scene.exact_object_results=super::super::object_cache::ObjectCache::for_scene(&scene,true);
     if !single_capture {
         assert!(u64::from(side).pow(2)*handles.len() as u64+64*64*handles.len() as u64
-            >super::super::object_cache::IDLE_TAPS);
+            >crate::frame_pace::IDLE_TAPS);
     }
     let mut retained=Vec::new();
     for (index,handle) in handles.into_iter().enumerate() {
@@ -668,7 +670,7 @@ fn coarse_linear_object_node_includes_source_outside_its_output_cell() {
     for iteration in 0..2000 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         if r.prepare_moving_images(frame, &mut encoder).unwrap() { scene.invalidate_object_previews([8192; 2]); }
-        let composed = scene.compose(&mut r, frame, if iteration == 0 { window } else { PixelRect::EMPTY }, &mut encoder, None, &mut Scene::begin_work(false));
+        let composed = {let mut work=crate::test_support::work(false);scene.compose(&mut r, frame, if iteration == 0 { window } else { PixelRect::EMPTY }, &mut encoder, None, &mut work)};
         if let Err(error) = &composed { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
         if composed.is_ok() && scene.objects_outstanding(&r).is_none() && !r.moving_images.pending() && !r.image_decode_waiting() { settled = true; break; }
@@ -726,7 +728,7 @@ fn exact_interactive_objects_read_parked_samples_on_decode_workers() {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
     let result=loop {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();cache.advance(&mut r,&mut compositor,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+        r.drain_image_decodes(&mut encoder).unwrap();{let mut work=crate::test_support::work(false);cache.advance(&mut r,&mut compositor,&mut encoder,&mut work).unwrap();}
         r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         if let Some(view)=cache.resolve_collection(&r,doc.scene(),&request,None).unwrap() {break view;}
         assert!(std::time::Instant::now()<deadline,"exact samples must finish through the decode queue");
@@ -755,7 +757,7 @@ fn canonical_results_at_the_request_limit_survive_a_fitting_grant_until_consumed
     loop {
         scene.begin_frame();
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        r.drain_image_decodes(&mut encoder).unwrap();cache.advance(&mut r,&mut scene,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+        r.drain_image_decodes(&mut encoder).unwrap();{let mut work=crate::test_support::work(false);cache.advance(&mut r,&mut scene,&mut encoder,&mut work).unwrap();}
         cache.flush_retired(&encoder);
         r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();
         let completed=cache.work_progress().1;
@@ -781,7 +783,7 @@ fn attempt(r:&mut WgpuRasterizer)->bool {
     r.drain_image_decodes(&mut encoder).unwrap();
     let empty=super::super::object_cache::ObjectCache::for_scene(&scene,false);
     let mut cache=std::mem::replace(&mut scene.object_results,empty);
-    cache.advance(r,&mut scene,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);cache.advance(r,&mut scene,&mut encoder,&mut work).unwrap();}
     cache.flush_retired(&encoder);
     let complete=!cache.pending();scene.object_results=cache;r.scene=Some(scene);
     r.apply_frame_grants(&mut encoder);
@@ -859,11 +861,11 @@ fn a_started_canonical_task_finishes_its_parts_under_pressure_while_queued_start
     queue(&r,&mut scene,1);
     let limit=r.scene_tiers.display.limit();
     r.scene_tiers.display.set_limit(r.scene_tiers.display.used().saturating_sub(16<<20),0);
-    let finished=(0..400).any(|_|pass(&mut r,&mut scene,super::super::object_cache::IDLE_TAPS).1==1);
+    let finished=(0..400).any(|_|pass(&mut r,&mut scene,crate::frame_pace::IDLE_TAPS).1==1);
     assert!(finished,"a started task continues into its next part without a new admission");
     assert_eq!(scene.object_results.pinned_gpu_bytes(),0,"a queued task whose working set does not fit stays unstarted");
     r.scene_tiers.display.set_limit(limit,0);
-    let settled=(0..4000).any(|_|pass(&mut r,&mut scene,super::super::object_cache::IDLE_TAPS).1==2);
+    let settled=(0..4000).any(|_|pass(&mut r,&mut scene,crate::frame_pace::IDLE_TAPS).1==2);
     assert!(settled,"the queued task starts once the release makes room");
 }
 #[test]
@@ -970,14 +972,13 @@ fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
     let requests: Vec<_> = [[0., 0.], [256., 0.], [0., 256.], [256., 256.]].into_iter()
         .zip(doc.scene().order().iter().copied()).map(|(origin,owner)| canonical_request(&r, &mut compositor, &doc, owner, ObjectWindow { origin, side: 1., size: [256; 2] })).collect();
     for request in &requests { assert!(cache.resolve_collection(&r, doc.scene(), request,None).unwrap().is_none()); }
-    let mut complete = false;
-    for _ in 0..4000 {
+    let complete = (0..4000).any(|_| {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         r.drain_image_decode(&mut encoder).unwrap();
         let before = encoder.pass_count();
-        cache.advance(&mut r, &mut compositor, &mut encoder,&mut Scene::begin_work(true)).unwrap();
+        {let mut work=crate::test_support::work(true);cache.advance(&mut r, &mut compositor, &mut encoder,&mut work).unwrap();}
         let passes = encoder.pass_count() - before;
-        cache.advance(&mut r, &mut compositor, &mut encoder,&mut Scene::begin_work(true)).unwrap();
+        {let mut work=crate::test_support::work(true);cache.advance(&mut r, &mut compositor, &mut encoder,&mut work).unwrap();}
         assert_eq!(encoder.pass_count() - before, passes, "a cache has only one batch in flight");
         assert!(passes <= 24, "sampling and source preparation remain bounded: {passes}");
         assert!(cache.bytes() <= 64 * 1024 * 1024);
@@ -985,8 +986,8 @@ fn simultaneous_photo_results_bound_batches_and_survive_deferred_retries() {
             assert!(report.allocations.iter().filter(|allocation| allocation.name == "image-object sampling parameters").count() <= 1);
         }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();
-        if !cache.pending() { complete = true; break; }
-    }
+        !cache.pending()
+    });
     assert!(complete, "all four private results make bounded progress");
     let views: Vec<_> = requests.iter().map(|request| cache.resolve_collection(&r, doc.scene(), request,None).unwrap().unwrap()).collect();
     cache.reset_used();
@@ -1308,7 +1309,7 @@ fn unfinished_collection_cancels_changed_content_and_display_visibility_but_keep
     let content=scene.object_spatial.content(doc.scene(),owner).unwrap();
     let request=scene.collection_job(&r,packet(doc.scene(),[256;2]),owner,content,ObjectWindow {origin:[0.;2],side:1.,size:[256;2]});
     let mut cache=super::super::object_cache::ObjectCache::for_scene(&scene,false);cache.resolve_collection(&r,doc.scene(),&request,None).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());cache.advance(&mut r,&mut scene,&mut encoder,&mut Scene::begin_work(true)).unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());{let mut work=crate::test_support::work(true);cache.advance(&mut r,&mut scene,&mut encoder,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
     doc.artwork.occurrences.get_mut(owner).unwrap().visible=false;
     cache.retain(doc.scene(),request.blend,request.context);assert!(!cache.pending(),"hidden display owner cancels unfinished work");
@@ -1707,7 +1708,7 @@ fn overlapping_canonical_windows_sample_only_their_uncovered_content() {
             }
             let empty=super::super::object_cache::ObjectCache::for_scene(&scene,false);
             let mut cache=std::mem::replace(&mut scene.object_results,empty);
-            taps += cache.advance(r, scene, &mut encoder,&mut Scene::begin_work(false)).unwrap();
+            {let mut work=crate::test_support::work(false);taps += cache.advance(r, scene, &mut encoder,&mut work).unwrap();}
             scene.object_results = cache;
             r.uploads.finish(&encoder); encoder.submit(&r.queue); r.wait_idle().unwrap();
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1968,7 +1969,7 @@ fn accepted_canonical_results_survive_pressure_until_consumed_and_released() {
         while cache.pending() {
             scene.begin_frame();
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-            r.drain_image_decodes(&mut encoder).unwrap();cache.advance(&mut r,&mut scene,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+            r.drain_image_decodes(&mut encoder).unwrap();{let mut work=crate::test_support::work(false);cache.advance(&mut r,&mut scene,&mut encoder,&mut work).unwrap();}
             cache.flush_retired(&encoder);
             r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();
             assert!(interests.iter().all(|interest|interest.upgrade().is_some()),"accepted canonical work cannot disappear before consumption");
@@ -2054,7 +2055,7 @@ fn perceptual_object_completion_preserves_an_unready_capture_prefix() {
     assert!(cache.resolve_collection(&r,doc.scene(),&request,None).unwrap().is_none());
     for _ in 0..64 {
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-        cache.advance(&mut r,&mut scene,&mut encoder,&mut Scene::begin_work(false)).expect("canonical completion must not encode another capture's cold prefix");
+        {let mut work=crate::test_support::work(false);cache.advance(&mut r,&mut scene,&mut encoder,&mut work).expect("canonical completion must not encode another capture's cold prefix");}
         assert_eq!(scene.jobs.len(),1);
         assert!(matches!(&scene.jobs[0],Job::DecodedTile(held) if Arc::ptr_eq(held,&pending)));
         assert_eq!(scene.source_jobs,ranges);assert!(!pending.ready());

@@ -2606,8 +2606,8 @@ pub(super) mod query_tests {
         scene.begin_frame();commands.begin();scene.scale_sources.prepare(&renderer,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         cache.prepare_graph(&renderer,frame,&scene).unwrap();
-        cache.render_graph(&mut scene,&mut renderer,frame,PixelRect::full(extent),
-            &mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None).unwrap();
+        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut renderer,frame,PixelRect::full(extent),
+            &mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View,None).unwrap();}
         scene.encode_jobs(&mut renderer,&mut encoder).unwrap();
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
         renderer.scene=Some(scene);renderer.scale_display=Some(cache);renderer
@@ -2616,7 +2616,7 @@ pub(super) mod query_tests {
     fn refine(renderer:&mut WgpuRasterizer,frame:FramePacket<'_>) {
         let mut scene=renderer.scene.take().unwrap();
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        scene.refine_display(renderer,frame,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);scene.refine_display(renderer,frame,&mut encoder,&mut work).unwrap();}
         renderer.scene=Some(scene);renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
     }
 
@@ -2767,7 +2767,7 @@ pub(super) mod query_tests {
         pollster::block_on(renderer.compilation.prepare_all([&pipelines.constant.2,&pipelines.fold.pipeline,&pipelines.objects.preview,&kernels.compose,&kernels.reduce_pair,&kernels.reduce])).unwrap();
         assert_eq!(leaf.child(0,leaf.window,renderer.empty_view.clone()).unwrap().key.image,id);
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        cache.render_graph(&mut scene,renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::Preview,None).unwrap();
+        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::Preview,None).unwrap();}
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
         assert!(cache.displays(bounds([0;2],plan.level,extent)),"the overview unit must commit on the frame its regional mip inputs and halo are ready");
         assert!(!cache.displays(plan.bounds));
@@ -2802,7 +2802,7 @@ pub(super) mod query_tests {
         crate::scene::scale::tests::prepare_fixture_frame(&renderer,frame,&scene);
         scene.begin_frame();cache.prepare_graph(&renderer,frame,&scene).unwrap();
         let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-        cache.render_graph(&mut scene,&mut renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None).unwrap();
+        {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut renderer,frame,plan.bounds,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View,None).unwrap();}
         renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
         let coverage=cache.coverage_snapshot();
         assert!(coverage.ready(bounds([0;2],plan.level,extent),Accuracy::Display),"one complete page must publish without the rest of its level");
@@ -3479,7 +3479,7 @@ pub(super) mod query_tests {
             for frame_index in 0..3 {
                 scene.begin_frame();commands.begin();
                 let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-                let result=if exact {cache.refine(&mut scene,&mut r,frame,&mut encoder,&mut commands,&mut Scene::begin_work(false))}
+                let result=if exact {{let mut work=crate::test_support::work(false);cache.refine(&mut scene,&mut r,frame,&mut encoder,&mut commands,&mut work)}}
                     else {cache.copy_level(&scene,&mut r,&mut encoder,&mut commands)};
                 r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
                 let report=r.display_memory_report(Some(&scene),cache.frame_memory(&r,commands.storage_bytes()));
@@ -3519,7 +3519,7 @@ pub(super) mod query_tests {
         loop {
             let mut scene=renderer.scene.take().unwrap();
             let mut encoder=submission::CommandEncoder::new(&renderer.device,&Default::default());
-            let result=scene.refine_display(&mut renderer,frame,&mut encoder,&mut Scene::begin_work(false));
+            let result={let mut work=crate::test_support::work(false);scene.refine_display(&mut renderer,frame,&mut encoder,&mut work)};
             renderer.scene=Some(scene);
             assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"{result:?}");
             renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();

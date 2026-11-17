@@ -564,6 +564,21 @@ pub(crate) fn evict_sources(r: &mut WgpuRasterizer) {
 
 pub(crate) fn complete(r: &WgpuRasterizer) { complete_device(&r.device); }
 
+thread_local! { static PACE: std::cell::Cell<[u64; 2]> = const { std::cell::Cell::new([crate::frame_pace::MOVING_TAPS, crate::frame_pace::IDLE_TAPS]) }; }
+
+pub(crate) fn with_pace<T>(taps: [u64; 2], run: impl FnOnce() -> T) -> T {
+    let previous = PACE.replace(taps);
+    let result = run();
+    PACE.set(previous);
+    result
+}
+
+pub(crate) fn pace(r: &mut WgpuRasterizer) { r.frame_pace.pin(0., PACE.get()); }
+
+pub(crate) fn work(motion: bool) -> crate::scene::WorkBudget {
+    crate::scene::Scene::begin_paced(motion, PACE.get()[usize::from(!motion)])
+}
+
 pub(crate) fn complete_device(device: &crate::PipelineDevice) {
     #[cfg(not(target_arch="wasm32"))]
     device.wait_queue().unwrap();
@@ -602,6 +617,7 @@ pub(crate) fn submit_ready(r: &mut WgpuRasterizer, frame: FramePacket<'_>) -> Re
     let preview = r.transform_preview.clone();
     loop {
         r.poll_pending(frame.view)?;
+        pace(r);
         if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(frame, preview.as_ref()) { return result; }
         assert!(std::time::Instant::now() < deadline, "frame dependencies must become ready");
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -648,6 +664,7 @@ pub(crate) fn submit_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
         r.poll_pending(frame.view).unwrap();
         let next = if first { frame } else { idle };
         let preview = r.transform_preview.clone();
+        pace(r);
         if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(next, preview.as_ref()) {
             result.unwrap();
             first = false;
@@ -903,6 +920,13 @@ pub(crate) fn float_presenter(r: &WgpuRasterizer) -> ViewportPresenter {
 
 pub(crate) fn max_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
     a.iter().flatten().zip(b.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0., f32::max)
+}
+
+pub(crate) const DISPLAY_HALF_ULP: f32 = 1. / 2048.;
+const HALF_MIN_NORMAL: f32 = 1. / 16384.;
+
+pub(crate) fn max_relative_error(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
+    a.iter().flatten().zip(b.iter().flatten()).map(|(a, b)| (a - b).abs() / a.abs().max(b.abs()).max(HALF_MIN_NORMAL)).fold(0., f32::max)
 }
 
 pub(crate) fn max_error_bytes(a: &[u8], b: &[u8]) -> f32 {

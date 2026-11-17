@@ -435,8 +435,8 @@ fn frequency_separation_at_sigma_85_bakes_discrete_gaussian_and_survives_history
 fn compose_region(r: &mut WgpuRasterizer, document: &Document, extent: [u32; 2], damage: PixelRect) {
     let mut scene = r.scene.take().unwrap();
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.compose(r, FramePacket { composite_all: false, ..packet(document, extent) },
-        damage, &mut encoder, None, &mut scene::Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);scene.compose(r, FramePacket { composite_all: false, ..packet(document, extent) },
+        damage, &mut encoder, None, &mut work).unwrap();}
     r.uploads.finish(&encoder);
     encoder.submit(&r.queue);
     r.scene = Some(scene);

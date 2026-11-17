@@ -45,7 +45,8 @@ fn display_level_updates_and_dirty_regions_batch_compute_passes() {
     r.metrics.frame_composited_pages.clear();
     let mut commands = RegionRecords::new(&r);
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let mut encoding = Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut Scene::begin_work(false) };
+    let mut work = crate::test_support::work(false);
+    let mut encoding = Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work };
     cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY, &mut encoding, Destination::View, None).unwrap();
     assert_eq!(r.metrics.frame_composited_pages, vec![(2, [0, 0]), (2, [7, 7])]);
     assert_eq!(encoder.pass_count(), 2, "distant dirty pages share composition and display reduction passes");
@@ -334,7 +335,7 @@ fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
     r.metrics.frame_composited_pages.clear();
     let mut scene=r.scene.take().unwrap();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    scene.refine_display(&mut r,frame,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);scene.refine_display(&mut r,frame,&mut encoder,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);r.scene=Some(scene);
     assert_eq!(r.metrics.frame_composited_pages,vec![(0,[0,0]),(0,[2,1])],"plain painting batches explicit regions across gaps");
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -434,7 +435,7 @@ fn idle_spatial_refinement_bounds_pass_work_and_yields_between_distant_contacts(
     r.metrics.frame_composited_pages.clear();
     let mut scene=r.scene.take().unwrap();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    scene.refine_display(&mut r,frame,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);scene.refine_display(&mut r,frame,&mut encoder,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);
     r.scene=Some(scene);
     assert_eq!(r.metrics.frame_composited_pages,vec![(0,[0,0])]);
@@ -1170,7 +1171,7 @@ fn exact_refinement_keeps_its_source_until_the_consuming_submission() {
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let mut scene=r.scene.take().unwrap();
     scene.begin_frame();r.metrics.frame_composited_pages.clear();
-    scene.refine_display(&mut r,FramePacket {composite_all:false,..frame},&mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);scene.refine_display(&mut r,FramePacket {composite_all:false,..frame},&mut encoder,&mut work).unwrap();}
     r.scene=Some(scene);
     assert!(r.metrics.frame_composited_pages.contains(&(0,[0;2])),"the real refinement path must encode a new native page");
     assert!(encoder.has_work());
@@ -1188,7 +1189,7 @@ fn exact_refinement_keeps_its_source_until_the_consuming_submission() {
 fn fit_exact_producer_survives_shared_preparation_while_its_store_read_waits() {
     fn attempt(cache:&mut Cache,scene:&mut Scene,r:&mut WgpuRasterizer,frame:FramePacket<'_>,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
         let write=scene.begin_write(r,encoder)?;cache.submission_valid=Some(scene.valid.clone());
-        let result=cache.refine(scene,r,frame,encoder,commands,&mut Scene::begin_work(false));
+        let result={let mut work=crate::test_support::work(false);cache.refine(scene,r,frame,encoder,commands,&mut work)};
         if matches!(&result,Err(error) if error.is_preparation_pending()) {scene.clear_unencoded_jobs();}
         if result.is_ok() || matches!(&result,Err(error) if error.is_preparation_pending()) {write.track(encoder);}
         result
@@ -1261,7 +1262,7 @@ fn refine_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,spent:bool) {
     scene.begin_frame();commands.begin();
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let write=scene.begin_write(r,&mut encoder).unwrap();cache.submission_valid=Some(scene.valid.clone());
-    let mut budget=Scene::begin_work(false);if spent {budget.spend(budget.remaining());}
+    let mut budget=crate::test_support::work(false);if spent {budget.spend(budget.remaining());}
     cache.refine(&mut scene,r,frame,&mut encoder,&mut commands,&mut budget).unwrap();
     write.track(&encoder);
     scene.scale_commands=Some(commands);r.scale_display=Some(cache);r.scene=Some(scene);

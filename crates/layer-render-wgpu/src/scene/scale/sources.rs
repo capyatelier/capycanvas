@@ -861,10 +861,10 @@ mod replacement_tests {
                 scene.reduce_color_pages(&mut renderer,frame,handle,image.plan,&image.view,&[[1,1]],Some(&placement),[0;2],&BTreeMap::new(),&mut inputs).map(drop)
             }else {
                 crate::test_support::prepare_raster(&mut renderer,|r| {
-                    cache.prepare_source(&mut scene,r,frame,&mut encoder,id,SourceRequest {
+                    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,r,frame,&mut encoder,id,SourceRequest {
                         plan,required:page_rect([1,1]).into(),covered:PixelRect::EMPTY,
-                    },Class::Prefetch,&mut Scene::begin_work(false))
-                }).map(drop)
+                    },Class::Prefetch,&mut work)
+                }}).map(drop)
             };
             let reads=super::super::super::sources::Inputs::take_accepted_read_results();
             drop(warm_leases);
@@ -976,9 +976,10 @@ mod replacement_tests {
         let mut scene=Scene::new(&previous).unwrap();scene.scale_sources.prepare(&previous,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(&previous,frame,&scene);
         let mut cache=Cache::new(&previous,Request {plan:display_mips::Plan::at(extent,1),evaluation:Evaluation::Display},document.scene().order().len());
+        let mut work=crate::test_support::work(false);
         cache.prepare_source(&mut scene,&mut previous,frame,&mut encoder,id,SourceRequest {
             plan:display_mips::Plan::at(extent,1),required:page_rect([0;2]).into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        },Class::Prefetch,&mut work).unwrap();drop(work);
         let key=scene.scale_sources.entries[&id].key(&previous,id,1,[0;2]);
         let texture=cache.pages.lock().unwrap().get(&key,page_rect([0;2]),pages::Accuracy::Display,key.level,crate::residency::Class::Visible).unwrap().texture.clone();
         let composite=pages::Key {source:None,..key.clone()};

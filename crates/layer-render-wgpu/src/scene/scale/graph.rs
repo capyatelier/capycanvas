@@ -676,8 +676,8 @@ fn native_level_retained_branches_batch_live_graph_pages_and_keep_islands_separa
             }
             let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default()); let mut commands = RegionRecords::new(&r);
             let work = r.metrics.composited_pixels;
-            cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY,
-                &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut Scene::begin_work(false) }, Destination::View, Some(&BTreeSet::new())).unwrap();
+            {let mut work=crate::test_support::work(false);cache.render_graph(&mut scene, &mut r, frame, PixelRect::EMPTY,
+                &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }, Destination::View, Some(&BTreeSet::new())).unwrap();}
             scene.encode_jobs(&mut r, &mut encoder).unwrap();
             let passes = encoder.pass_count(); let pages = if sparse { 2 } else { count };
             let batches = if sparse { 2 } else { count.div_ceil(SOURCE_SLOTS as u32) };

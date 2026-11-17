@@ -420,7 +420,7 @@ mod tests {
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             let before=crate::test_support::PassCounts::snapshot();
             crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder| {
-                navigator.refresh(r,discarded_frame,false,encoder,&mut Scene::begin_work(false))?;
+                {let mut work=crate::test_support::work(false);navigator.refresh(r,discarded_frame,false,encoder,&mut work)?;}
                 if navigator.revision==revision {Err(GpuRasterError::NotReady)}else {Ok(())}
             });
             receipt=encoder.submission();
@@ -467,7 +467,7 @@ mod tests {
         let mut navigator=std::mem::take(&mut r.navigator);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder| {
-            navigator.refresh(r,edit,false,encoder,&mut Scene::begin_work(false))?;
+            {let mut work=crate::test_support::work(false);navigator.refresh(r,edit,false,encoder,&mut work)?;}
             if navigator.pending() {Err(GpuRasterError::NotReady)}else {Ok(())}
         });
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);

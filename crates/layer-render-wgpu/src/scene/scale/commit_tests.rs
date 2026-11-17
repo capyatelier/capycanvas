@@ -45,9 +45,9 @@ fn a_ready_parent_commits_before_unrelated_cold_source_preparation_spends_its_fr
     for &id in &ids {
         attempt.scene.begin_frame();
         let mut encoder=submission::CommandEncoder::new(&attempt.r.device,&Default::default());
-        attempt.cache.prepare_source(&mut attempt.scene,&mut attempt.r,frame,&mut encoder,id,SourceRequest {
+        {let mut work=crate::test_support::work(false);attempt.cache.prepare_source(&mut attempt.scene,&mut attempt.r,frame,&mut encoder,id,SourceRequest {
             plan:display_mips::Plan::window(extent,1,middle),required:middle.into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        },Class::Prefetch,&mut work).unwrap();}
         attempt.r.uploads.finish(&encoder);encoder.submit(&attempt.r.queue);crate::test_support::complete(&attempt.r);
         let key=attempt.scene.scale_sources.entries[&id].key(&attempt.r,id,1,[2,0]);
         ready.push(attempt.cache.pages.lock().unwrap().get(&key,middle,pages::Accuracy::Display,key.level,crate::residency::Class::Visible).expect("each direct middle-parent source input must be committed before the attempt"));
@@ -112,9 +112,9 @@ fn a_ready_display_page_commits_during_continuous_input_without_an_idle_frame() 
     for &target in &targets {
         attempt.scene.begin_frame();
         let mut encoder=submission::CommandEncoder::new(&attempt.r.device,&Default::default());
-        attempt.cache.prepare_source(&mut attempt.scene,&mut attempt.r,initial,&mut encoder,target,SourceRequest {
+        {let mut work=crate::test_support::work(false);attempt.cache.prepare_source(&mut attempt.scene,&mut attempt.r,initial,&mut encoder,target,SourceRequest {
             plan:display_mips::Plan::at(extent,0),required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        },Class::Prefetch,&mut work).unwrap();}
         attempt.r.uploads.finish(&encoder);encoder.submit(&attempt.r.queue);crate::test_support::complete(&attempt.r);
         for coordinate in page_coordinates(PixelRect::full(extent)) {
             let key=attempt.scene.scale_sources.entries[&target].key(&attempt.r,target,0,coordinate);
@@ -261,8 +261,8 @@ impl Attempt {
         crate::scene::scale::tests::prepare_fixture_frame(r,frame,scene);
         let prepared=cache.prepare_graph(r,frame,scene);
         let before_branches=cache.commit_state();
-        let result=prepared.and_then(|()|
-            cache.render_graph(scene,r,frame,PixelRect::full(extent),&mut Encoding {encoder:&mut encoder,commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None));
+        let result={let mut work=crate::test_support::work(false);prepared.and_then(|()|
+            cache.render_graph(scene,r,frame,PixelRect::full(extent),&mut Encoding {encoder:&mut encoder,commands, retained:0, budget:&mut work},Destination::View,None))};
         let counts=PassCounts::snapshot().delta(before);
         cache.unchanged=true;
         if result.is_ok() {
@@ -300,8 +300,8 @@ impl Attempt {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         scene.begin_frame();commands.begin();scene.scale_sources.prepare(r,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(r,frame,scene);
-        let result=cache.prepare_graph(r,frame,scene).and_then(|()|cache.render_graph(scene,r,frame,PixelRect::full(doc.composition().size),
-            &mut Encoding {encoder:&mut encoder,commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None));
+        let result={let mut work=crate::test_support::work(false);cache.prepare_graph(r,frame,scene).and_then(|()|cache.render_graph(scene,r,frame,PixelRect::full(doc.composition().size),
+            &mut Encoding {encoder:&mut encoder,commands, retained:0, budget:&mut work},Destination::View,None))};
         cache.unchanged=true;
         if result.is_ok() {scene.encode_jobs(r,&mut encoder).unwrap();} else {scene.discard_unencoded_jobs();}
         r.uploads.finish(&encoder);if encoder.has_work() {encoder.submit(&r.queue);crate::test_support::complete(r);}
@@ -600,7 +600,7 @@ fn wanted_page_inputs_release_cancelled_leases_and_preserve_source_working_capac
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
         let prepared=crate::prepare_image_tile(&warm,coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
         Scene::decode_prepared_for(&mut r,&mut encoder,&warm,coordinate,prepared,crate::scene::sources::SourceUse::Exact,crate::residency::Class::Visible).unwrap();
-        let result=cache.render_graph(&mut scene,&mut r,frame,region,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None);
+        let result={let mut work=crate::test_support::work(false);cache.render_graph(&mut scene,&mut r,frame,region,&mut Encoding {encoder:&mut encoder,commands:&mut commands, retained:0, budget:&mut work},Destination::View,None)};
         assert!(result.is_ok() || matches!(result,Err(GpuRasterError::NotReady)),"step {step}: {result:?}");
         scene.discard_unencoded_jobs();r.uploads.finish(&encoder);
         if encoder.has_work() {encoder.submit(&r.queue);crate::test_support::complete(&r);}
@@ -708,14 +708,14 @@ fn navigator_keeps_all_refused_units_pending_without_a_false_publication() {
     assert!(r.memory.display_owner().admit_working(layer_core::MemoryGrant {ram_bytes:0,gpu_bytes:1}).is_none(),"the ordinary import must cause genuine working-admission refusal");
     let mut navigator=Navigator::default();let validation=r.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-    navigator.refresh(&mut r,frame(&doc,0),false,&mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);navigator.refresh(&mut r,frame(&doc,0),false,&mut encoder,&mut work).unwrap();}
     assert!(navigator.pending());assert!(navigator.view().is_none());
     assert_eq!(navigator.revision,0,"no admitted unit means no completed Navigator publication");
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);drop(pressure);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     crate::test_support::query_ready(&mut r,&mut encoder,|r,encoder| {
         r.scene.as_mut().unwrap().begin_frame();
-        navigator.refresh(r,frame(&doc,0),false,encoder,&mut Scene::begin_work(false))?;
+        {let mut work=crate::test_support::work(false);navigator.refresh(r,frame(&doc,0),false,encoder,&mut work)?;}
         if navigator.view().is_some() {Ok(())}else {Err(GpuRasterError::NotReady)}
     });
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);

@@ -136,7 +136,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     assert!(r.next_frame()==layer_render::FrameDemand::Work);
     let mut scene = r.scene.take().unwrap();
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    scene.refine_display(&mut r, frame, &mut encoder,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);scene.refine_display(&mut r, frame, &mut encoder,&mut work).unwrap();}
     drop(encoder);
     r.scene = Some(scene);
     submit(&mut r, &abandoned, v, false, true);

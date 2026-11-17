@@ -60,9 +60,9 @@ impl Pages {
         self.scene.scale_sources.prepare(&self.r,frame,&[]);
         crate::scene::scale::tests::prepare_fixture_frame(&self.r,frame,&self.scene);
         let prepared=self.cache.prepare_graph(&self.r,frame,&self.scene);
-        let result=prepared.and_then(|()|
+        let result={let mut work=crate::test_support::work(false);prepared.and_then(|()|
             self.cache.render_graph(&mut self.scene,&mut self.r,frame,dirty,
-                &mut Encoding {encoder:&mut encoder,commands:&mut self.commands, retained:0, budget:&mut Scene::begin_work(false)},Destination::View,None));
+                &mut Encoding {encoder:&mut encoder,commands:&mut self.commands, retained:0, budget:&mut work},Destination::View,None))};
         self.cache.unchanged=true;
         if result.is_ok() {self.scene.encode_jobs(&mut self.r,&mut encoder).unwrap();}
         else {self.scene.discard_unencoded_jobs();}
@@ -205,7 +205,7 @@ fn one_remaining_source_preparation_attempt_does_not_discover_every_cold_page() 
     pages.scene.begin_frame();
     pages.scene.scale_sources.prepare(&pages.r,frame,&[]);
     crate::scene::scale::tests::prepare_fixture_frame(&pages.r,frame,&pages.scene);
-    let mut budget=Scene::begin_work(false);budget.spend(object_cache::IDLE_TAPS-object_cache::PASS_TAPS);
+    let mut budget=crate::test_support::work(false);let capacity=budget.capacity();budget.spend(capacity-object_cache::PASS_TAPS);
     let unpublished=pages.cache.prepare_source(&mut pages.scene,&mut pages.r,frame,&mut encoder,target,
         SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut budget).unwrap().unpublished;
     assert!(!unpublished,"a cold decode is not an unpublished input");assert_eq!(encoder.pass_count(),0);
@@ -215,6 +215,6 @@ fn one_remaining_source_preparation_attempt_does_not_discover_every_cold_page() 
     let requested=pages.r.moving_decode.as_ref().map(|(_,queue)|queue.requested_image_tiles()).unwrap_or_default();
     assert_eq!(requested.len(),1,"one remaining preparation attempt must discover one cold input, not every page: {requested:?}");
     assert_eq!(pages.r.source_tiles.borrow().allocated_slots()-before_slots,1);
-    assert_eq!(budget.used,object_cache::IDLE_TAPS,"a pending attempt consumes the remaining frame budget");
+    assert_eq!(budget.used,capacity,"a pending attempt consumes the remaining frame budget");
     pages.scene.discard_unencoded_jobs();pages.r.uploads.finish(&encoder);drop(encoder);
 }

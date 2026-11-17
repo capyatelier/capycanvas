@@ -55,7 +55,7 @@ pub(super) fn prepare_layer_pages(r:&mut WgpuRasterizer,frame:FramePacket<'_>) {
         scene.begin_frame();
         let requests=cache.region_sources(&scene,r,frame,cache.plan.bounds,false);
         let ready=requests.iter().all(|(id,request)|cache.source_ready(&scene,r,*id,request));
-        for (id,request) in requests {cache.prepare_source(&mut scene,r,frame,&mut encoder,id,request,Class::Visible,&mut Scene::begin_work(false)).unwrap();}
+        for (id,request) in requests {{let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,r,frame,&mut encoder,id,request,Class::Visible,&mut work).unwrap();}}
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
         r.scene=Some(scene);r.scale_display=Some(cache);
         if ready {return;}
@@ -850,7 +850,7 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
     let id=source_at(&doc,0);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     scene.begin_frame();
-    cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
     assert!(!source_chunks(&cache,id,2).is_empty());
     cache.pages.lock().unwrap().remove_source_level(id,3);
@@ -867,8 +867,8 @@ fn streamed_sources_reuse_valid_finer_pages_without_native_decoding() {
         crate::scene::scale::tests::prepare_fixture_frame(&r, frame, &scene);
         cache.prepare_graph(&r, frame, &scene).unwrap();
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        cache.render(&mut scene, &mut r, frame, PixelRect::full(frame.document_extent),
-            &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut Scene::begin_work(false) }, None).unwrap();
+        {let mut work=crate::test_support::work(false);cache.render(&mut scene, &mut r, frame, PixelRect::full(frame.document_extent),
+            &mut Encoding { encoder: &mut encoder, commands: &mut commands, retained:0, budget:&mut work }, None).unwrap();}
         scene.encode_jobs(&mut r, &mut encoder).unwrap();
         r.uploads.finish(&encoder);
         encoder.submit(&r.queue);
@@ -1134,7 +1134,7 @@ fn cold_identity_sources_prepare_adjacent_detail_without_redecoding() {
     assert!(source_levels(r.scale_display.as_ref().unwrap(),source_at(&doc,0)).contains_key(&3));
     let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());scene.begin_frame();
-    cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,source_at(&doc,0),SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,source_at(&doc,0),SourceRequest {plan:display_mips::Plan::at(frame.document_extent,2),required:PixelRect::full(frame.document_extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
     let updates=scene.scale_sources.entries[&source_at(&doc,0)].updates;
     let levels=source_levels(&cache,source_at(&doc,0)).keys().copied().collect::<BTreeSet<_>>();
@@ -1216,19 +1216,19 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         cache.pages.lock().unwrap().remove_source_level(id,1);
         scene.begin_frame();
-        cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {
             plan:display_mips::Plan::window(extent,1,fine),required:fine.into(),covered:PixelRect::EMPTY,
-        },Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        },Class::Prefetch,&mut work).unwrap();}
         cache.pages.lock().unwrap().remove_source_level(id,2);
         let plan=display_mips::Plan::window(extent,2,coarse);
         let updates=scene.scale_sources.entries[&id].updates;
         scene.begin_frame();
-        cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:fine.intersect(coarse).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:fine.intersect(coarse).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
         let complete=source_chunks(&cache,id,2).len();
         assert_eq!(complete,page_coordinates(fine.intersect(coarse)).count());
         assert_eq!(scene.scale_sources.entries[&id].updates,updates);
         scene.begin_frame();
-        cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:coarse.into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:coarse.into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
         assert_eq!(scene.scale_sources.entries[&id].updates-updates,(page_coordinates(coarse).count()-complete) as u64);
         r.uploads.finish(&encoder);encoder.submit(&r.queue);
         let image=source_image(&r,&cache,&scene.scale_sources.entries[&id],id,plan);
@@ -1427,10 +1427,10 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
     for tile in [[0,0],[3,3]] {
         cache.pages.lock().unwrap().discard_source_chunks(id,3,page_rect(tile));
         scene.begin_frame();
-        cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(extent,1),required:page_rect(tile).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+        {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan:display_mips::Plan::at(extent,1),required:page_rect(tile).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
     }
     scene.begin_frame();
-    cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut Scene::begin_work(false)).unwrap();
+    {let mut work=crate::test_support::work(false);cache.prepare_source(&mut scene,&mut r,frame,&mut encoder,id,SourceRequest {plan,required:PixelRect::full(extent).into(),covered:PixelRect::EMPTY},Class::Prefetch,&mut work).unwrap();}
     r.uploads.finish(&encoder);encoder.submit(&r.queue);
     let actual=pixels(&r,&source_image(&r,&cache,&scene.scale_sources.entries[&id],id,plan).texture);
     assert!(actual.iter().flatten().zip(expected.iter().flatten()).all(|(a,b)|(a-b).abs()<1e-6));
@@ -2699,9 +2699,18 @@ fn each_traversal_reads_only_the_inputs_its_declaration_recorded() {
     }
 }
 
-#[test]
-fn a_pan_frame_spends_only_the_interactive_budget_on_entering_pages() {
-    let mut doc = Document::new(PortableId::random(), 4096, 4096, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+fn submit_unpinned(r: &mut WgpuRasterizer, frame: FramePacket<'_>) {
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    loop {
+        r.poll_pending(frame.view).unwrap();
+        if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(frame, None) { return result.unwrap(); }
+        assert!(std::time::Instant::now() < deadline, "frame dependencies must become ready");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+fn pan_frame(prepare: impl FnOnce(&mut WgpuRasterizer, FramePacket<'_>)) -> WgpuRasterizer {
+    let mut doc = Document::new(PortableId::random(), 8192, 4096, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
     let extent = doc.composition().size;
     let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
@@ -2710,10 +2719,90 @@ fn a_pan_frame_spends_only_the_interactive_budget_on_entering_pages() {
     frame.view.width_px = 2048; frame.view.height_px = 2048;
     frame.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
     crate::test_support::submit_published(&mut r, frame);
-    frame.view.document_to_surface[4] = -2048.;
-    crate::test_support::submit_ready(&mut r, frame).unwrap();
+    frame.reset_layers = false;
+    crate::test_support::complete(&r);
+    crate::test_support::pace(&mut r);
+    prepare(&mut r, frame);
+    frame.view.document_to_surface[4] = -6144.;
+    submit_unpinned(&mut r, frame);
+    r
+}
+
+#[test]
+fn a_pan_frame_spends_only_the_interactive_budget_on_entering_pages() {
+    let r = pan_frame(|_, _| {});
     let pages = r.metrics.frame_composited_pages.len() as u64;
-    assert!(pages > 0 && pages <= object_cache::INTERACTIVE_TAPS / object_cache::PASS_TAPS, "a pan frame composed {pages} entering pages");
+    assert!(pages > 0 && pages <= r.test.frame_work[0] / object_cache::PASS_TAPS + 1, "a pan frame composed {pages} entering pages");
+}
+
+#[test]
+fn a_pan_frame_behind_a_frame_in_flight_longer_than_its_interval_composes_one_entering_page() {
+    let r = pan_frame(|r, frame| {
+        let [(first, ..), (second, ..)] = [0; 2].map(|_| crate::test_support::bounded_outstanding_gpu_work(r));
+        first.submit(&r.queue);
+        r.submit(frame).unwrap();
+        crate::test_support::complete(r);
+        second.submit(&r.queue);
+        r.submit(frame).unwrap();
+    });
+    assert!(r.metrics.frame_composited_pages.len() <= 1, "a pan frame behind a frame in flight longer than its interval composed {} entering pages", r.metrics.frame_composited_pages.len());
+}
+
+fn pan_behind_a_presentation(presentation_ms: f64, interval_ms: f64, steps: usize) -> (Vec<usize>, Vec<u64>) {
+    let mut doc = Document::new(PortableId::random(), 8192, 4096, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
+    frame.composite_all = false;
+    frame.view.width_px = 2048; frame.view.height_px = 2048;
+    frame.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
+    crate::test_support::submit_published(&mut r, frame);
+    frame.reset_layers = false;
+    let mut presentations: Vec<_> = {
+        let (_, calibrated, raw) = crate::test_support::bounded_outstanding_gpu_work(&r);
+        let divisor = (calibrated() / presentation_ms).round().max(1.) as u32;
+        (0..256).map(|_| raw(divisor)).collect()
+    };
+    let mut presenter = crate::ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, crate::SdrSurfaceColor::Srgb).unwrap();
+    crate::test_support::prepare_lit_presenter(&r, &mut presenter);
+    let (_texture, target) = crate::create_target(&r.device, [2048, 2048], wgpu::TextureFormat::Rgba8UnormSrgb, "paced pan presentation");
+    let interval = std::time::Duration::from_secs_f64(interval_ms / 1000.);
+    let mut started = std::time::Instant::now();
+    r.frame_pace.pin(interval_ms, [crate::frame_pace::MOVING_TAPS, crate::frame_pace::IDLE_TAPS]);
+    let mut tick = |r: &mut WgpuRasterizer, frame: FramePacket<'_>| {
+        loop {
+            std::thread::sleep(interval.saturating_sub(started.elapsed()));
+            started = std::time::Instant::now();
+            r.poll_pending(frame.view).unwrap();
+            if r.can_submit() && let std::task::Poll::Ready(result) = r.submit_when_ready(frame, None) { result.unwrap(); break; }
+        }
+        if presenter.needs_present(r, frame.view, [0.; 4]) {
+            presenter.present(r, &target, frame.view, [0.; 4]).unwrap();
+            r.device.submit(&r.queue, [presentations.pop().expect("enough presentations")]).unwrap();
+        }
+    };
+    let mut entering = Vec::new();
+    for step in 1..=steps {
+        frame.view.document_to_surface[4] = -256. * step as f32;
+        tick(&mut r, frame);
+        entering.push(r.metrics.frame_composited_pages.len());
+    }
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    let mut fill = Vec::new();
+    while publication_pending(&r) {
+        assert!(std::time::Instant::now() < deadline, "the panned view fills");
+        tick(&mut r, frame);
+        fill.push(r.test.frame_work[0]);
+    }
+    (entering, fill)
+}
+
+#[test]
+fn a_pan_behind_a_presentation_longer_than_its_interval_composes_entering_pages_steadily_and_fills_in_whole_idle_frames() {
+    let (entering, fill) = pan_behind_a_presentation(18., 1000. / 90., 8);
+    assert!(entering[1..].iter().all(|pages| *pages == 1), "moving frames behind a presentation longer than their window compose one entering page each: {entering:?}");
+    assert!(!fill.is_empty() && fill.iter().all(|taps| *taps >= crate::frame_pace::IDLE_TAPS), "frames filling the view after the pan admit less than the fixed idle budget: {fill:?}");
 }
 
 #[test]

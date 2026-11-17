@@ -13,11 +13,9 @@ pub(super) type DamageKey = (u32, Option<OccurrenceHandle>);
 type Place = (OccurrenceHandle, u64, [i64; 2], u64);
 type Space = (layer_core::BlendSpace, layer_core::color::RgbSpace);
 pub(super) type ObjectWait = (Arc<Lease>, Option<crate::schedule::Waiter>);
-pub(super) const INTERACTIVE_TAPS: u64 = 1 << 20;
-pub(super) const IDLE_TAPS: u64 = 8 << 20;
-const SEATS: usize = (IDLE_TAPS / PASS_TAPS) as usize;
+const SEATS: usize = super::IDLE_FRAME_TILES;
 static OWNERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub(super) const PASS_TAPS: u64 = 1 << 16;
+pub(crate) const PASS_TAPS: u64 = 1 << 16;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Key { object: ObjectKey, inverse: [u64; 6], size: [u32; 2] }

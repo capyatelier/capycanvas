@@ -59,6 +59,7 @@ pub(super) mod sources;
 pub(crate) mod placement;
 mod objects;
 mod object_cache;
+pub(crate) use object_cache::PASS_TAPS;
 mod object_spatial;
 mod vectors;
 pub(crate) use vectors::{MotionSplit, Prepared, active_split, motion_bounds, motion_split, moved_bounds, paths_bounds, prepared, preview_bounds, preview_damage};
@@ -69,23 +70,26 @@ pub(crate) mod scale;
 pub(crate) use scale::{Capture,Declared,Input,SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 
 const FILL_LINES_PIPELINE:usize=9;
-#[cfg(not(target_arch="wasm32"))]
-pub(crate) const IDLE_FRAME_TILES:usize=(object_cache::IDLE_TAPS/object_cache::PASS_TAPS) as usize;
+pub(crate) const IDLE_FRAME_TILES:usize=(crate::frame_pace::IDLE_TAPS/PASS_TAPS) as usize;
 
 use crate::residency::Class;
 thread_local! {static ATTEMPT_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };}
-pub(crate) struct WorkBudget { used: u64, motion: bool }
+pub(crate) struct WorkBudget { used: u64, capacity: u64, motion: bool }
 impl Drop for WorkBudget {
     fn drop(&mut self) {ATTEMPT_OPEN.with(|open|open.set(false));}
 }
 impl WorkBudget {
     fn required(&self,class:Class)->bool {class==Class::Authored || class==Class::Visible && !self.motion}
-    fn capacity(&self)->u64 {if self.motion {object_cache::INTERACTIVE_TAPS}else{object_cache::IDLE_TAPS}}
+    fn capacity(&self)->u64 {self.capacity}
     fn remaining(&self)->u64 {self.capacity().saturating_sub(self.used)}
     fn allowance(&self,class:Class)->u64 {if self.required(class) {u64::MAX}else {self.remaining()}}
     fn fits(&self,class:Class,progressed:bool,work:u64)->bool {self.required(class) || work<=self.remaining() || !progressed && !(self.motion && class==Class::Fallback)}
     fn spend(&mut self,work:u64) {self.used=self.used.saturating_add(work);}
     fn spent(&self)->u64 {self.used}
+}
+#[cfg(test)]
+impl WorkBudget {
+    pub(crate) fn counts(&self)->[u64;2] {[self.capacity,self.used]}
 }
 const FRAGMENTS: [(&str, &str); 11] = [
     ("fragment_main", "tile layer composition"),
@@ -687,9 +691,9 @@ impl Scene {
         self.jobs[start..].iter().map(Job::work).fold(records,u64::saturating_add)
             .saturating_add(passes.saturating_mul(object_cache::PASS_TAPS))
     }
-    pub(crate) fn begin_work(motion:bool)->WorkBudget {
+    pub(crate) fn begin_paced(motion:bool,taps:u64)->WorkBudget {
         debug_assert!(!ATTEMPT_OPEN.with(|open|open.replace(true)),"a work attempt is already open on this thread");
-        WorkBudget {used:0,motion}
+        WorkBudget {used:0,capacity:taps.max(PASS_TAPS),motion}
     }
     pub fn begin_frame(&mut self) {
         self.clear_material_pages();
@@ -2086,7 +2090,7 @@ impl Scene {
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             r.drain_image_decodes(&mut encoder)?;
             let mut objects=std::mem::replace(&mut self.exact_object_results,object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
-            let result=objects.advance_with_memory(r,self,&mut encoder,object_cache::IDLE_TAPS);
+            let result=objects.advance_with_memory(r,self,&mut encoder,crate::frame_pace::IDLE_TAPS);
             self.exact_object_results=objects;
             let idle=result? == 0 && !encoder.has_work();
             r.uploads.finish(&encoder);
@@ -2270,7 +2274,7 @@ impl Scene {
                 let result = self.encode_jobs_for(r, encoder, preview.then_some([tile[0]*PAGE_SIZE,tile[1]*PAGE_SIZE,packet.document_extent[0],packet.document_extent[1]]), accepted.decode_class());
                 if result.is_err() { self.object_results.reset_used(); self.exact_object_results.reset_used(); return result; }
                 self.object_results.flush_retired(encoder); self.exact_object_results.flush_retired(encoder);
-                if self.inline_objects.taps > object_cache::IDLE_TAPS {
+                if self.inline_objects.taps > crate::frame_pace::IDLE_TAPS {
                     self.inline_objects.taps = 0;
                     Self::submit_chunk(r, encoder, "after inline object sampling")?;
                     if r.snapshot_cancelled.as_ref().is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Relaxed)) {

@@ -122,6 +122,7 @@ mod shader_limits;
 mod gradient;
 mod flood;
 mod frame_timing;
+mod frame_pace;
 mod performance_trace;
 mod layer_masks;
 #[cfg(test)]
@@ -1265,6 +1266,7 @@ pub struct WgpuRasterizer {
     last_submission: Option<wgpu::SubmissionIndex>,
     metrics: GpuRasterMetrics,
     telemetry: telemetry::Telemetry,
+    frame_pace: frame_pace::FramePace,
 }
 
 /// What tests switch and count in a renderer.
@@ -1280,6 +1282,7 @@ struct TestHooks {
     source_captures: std::cell::Cell<u64>,
     /// Drop the next frame's encoder unsubmitted.
     discard_frame: bool,
+    frame_work: [u64; 2],
 }
 
 impl WgpuRasterizer {
@@ -1490,6 +1493,7 @@ impl WgpuRasterizer {
             snapshot_cancelled: None,
             startup: None,
             telemetry,
+            frame_pace: Default::default(),
             adapter,
             device,
             queue,
@@ -4346,6 +4350,7 @@ impl WgpuRasterizer {
         for page in &self.preview_pages {page.primary.set_preview(None);if let Some(secondary)=&page.secondary {secondary.set_preview(None);}}
     }
     fn submit_frame(&mut self, packet: FramePacket<'_>, native_commit: Option<raster::native_edit::NativeFrame>) -> Result<(), GpuRasterError> {
+        self.frame_pace.start(&self.device, &self.queue);
         self.activate_presentation(packet.scene);
         self.prepare_moving_projection(packet)?;
         let revision = self.composite_revision;
@@ -4512,7 +4517,8 @@ impl WgpuRasterizer {
             scene.effect_passes = 0;
         }
         let requested_view = packet.view;
-        let mut work = scene::Scene::begin_work(self.motion(packet));
+        let motion = self.motion(packet);
+        let mut work = scene::Scene::begin_paced(motion, self.frame_pace.begin(motion));
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
             scene.begin_vector_frame();
@@ -5341,8 +5347,12 @@ impl WgpuRasterizer {
         #[cfg(test)]
         if std::mem::take(&mut self.test.discard_frame) {drop(encoder);return Ok(());}
         let publication=encoder.submission();
+        let submitting = web_time::Instant::now();
         let submission = encoder.submit(&self.queue)
             .ok_or_else(|| GpuRasterError::WaitFailed("GPU device service retired".into()))?;
+        self.frame_pace.submitted(&self.device, &self.queue, submitting);
+        #[cfg(test)]
+        { self.test.frame_work = work.counts(); }
         if let Some(liquify)=&mut self.liquify {liquify.publish(packet.scene,packet.dab_batches,&publication);}
         self.region_chunks_submitted();
         self.telemetry.submitted(&self.queue);
