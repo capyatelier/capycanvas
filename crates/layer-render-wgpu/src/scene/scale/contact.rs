@@ -55,9 +55,11 @@ fn reads(node:&graph::Node,target:SourceTarget,tainted:&mut crate::IdSet<usize>)
     read
 }
 
-fn local_reach(packet:FramePacket<'_>,target:SourceTarget)->Vec<PixelRect> {
+fn source_phase(scene:&Scene,target:SourceTarget)->[u32;2] {scene.scale_sources.entries.get(&target).map_or([0;2],|source|source.phase)}
+fn phased_tiles(tile:[u32;2],phase:[u32;2])->impl Iterator<Item=[u32;2]> {page_coordinates(page_rect(tile).translated(phase))}
+fn local_reach(packet:FramePacket<'_>,target:SourceTarget,phase:[u32;2])->Vec<PixelRect> {
     let extent=packet.scene.target_extent(target);
-    packet.dab_batches.iter().map(|batch|crate::pixel_rect::pixel_rect(batch.damage,extent)).filter(|reach|!reach.is_empty()).collect()
+    packet.dab_batches.iter().map(|batch|crate::pixel_rect::pixel_rect(batch.damage,extent)).filter(|reach|!reach.is_empty()).map(|reach|reach.translated(phase)).collect()
 }
 fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
     let first=packet.dab_batches.first()?;
@@ -188,7 +190,7 @@ impl Cache {
         let required=self.dab_cells(packet).into_iter().chain(touched.iter().filter(|cell|!cell.intersect(plan.bounds).is_empty()).copied()).collect::<Vec<_>>();
         let ready=scope.into_iter().filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
-        let reach=local_reach(packet,target);
+        let reach=local_reach(packet,target,source_phase(scene,target));
         let reduced=reach.iter().copied().flat_map(page_coordinates).collect();
         let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,reach)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
@@ -213,8 +215,9 @@ impl Cache {
         let Some(current)=contact.next.as_ref().map(|(current,..)|current.clone()) else {return Ok(true);};
         let frame=Arc::new(contact.frame.advanced(target,current,r.preview_declaration.clone()));
         let known=contact.cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>();
-        let changed=contact.next.iter().flat_map(|(_,changed,..)|changed.iter().copied());
-        let tiles=local_reach(packet,target).into_iter().flat_map(page_coordinates).chain(changed).collect::<BTreeSet<_>>();
+        let phase=source_phase(scene,target);
+        let changed=contact.next.iter().flat_map(|(_,changed,..)|changed.iter().flat_map(|tile|phased_tiles(*tile,phase)));
+        let tiles=local_reach(packet,target,phase).into_iter().flat_map(page_coordinates).chain(changed).collect::<BTreeSet<_>>();
         let tiles=if frame.watercolor(target) {tiles.into_iter().flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles};
         let tiles=tiles.into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<Vec<_>>();
         let reach=tiles.iter().copied().map(page_rect).collect::<Vec<_>>();
@@ -380,7 +383,8 @@ impl Cache {
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
-        let changed=changed.into_iter().chain(stale.keys().copied()).collect::<BTreeSet<_>>();
+        let phase=source_phase(scene,target);
+        let changed=changed.into_iter().flat_map(|tile|phased_tiles(tile,phase)).chain(stale.keys().copied()).collect::<BTreeSet<_>>();
         let mut reductions=Vec::new();
         if let Some(level)=contact.level {
             let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));

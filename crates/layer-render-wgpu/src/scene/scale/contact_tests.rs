@@ -70,6 +70,30 @@ fn a_stroke_on_an_offset_layer_crossing_a_level_page_edge_stays_in_contact_and_m
 }
 
 #[test]
+fn a_stroke_on_a_layer_offset_off_the_page_grid_reduces_only_tiles_its_contact_declared() {
+    let extent=[2048,2048];
+    let mut doc=document_at(extent);
+    let working=doc.working.occurrence.unwrap();doc.artwork.occurrences.get_mut(working).unwrap().offset=[-2,-1];
+    let target=doc.active_target().unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,2);
+    let [mut r,mut twin]=[renderer(&doc),renderer(&doc)];
+    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let xs=[1500.,1510.,1520.,1530.,1540.,1550.,1560.,1570.,1580.];
+    let mut contact=false;
+    for (step,x) in xs.iter().enumerate() {
+        let dab=stroke_dab(*x,1200.);let batch=stroke_batch(target,&dab,step==0,step+1==xs.len());
+        let next=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame};
+        crate::test_support::submit_ready(&mut twin,FramePacket {composite_all:true,..next}).unwrap();
+        crate::test_support::submit_ready(&mut r,next).expect("a contact frame reads only tiles its contact declared");
+        contact|=r.scale_display.as_ref().unwrap().contact_id().is_some();
+    }
+    assert!(contact,"the stroke enters contact");
+    for r in [&mut r,&mut twin] {crate::test_support::submit_settled(r,frame);}
+    let error=max_error(&display_pixels(&r),&display_pixels(&twin));
+    assert!(error<1e-4,"the offset stroke keeps every dab: {error}");
+}
+
+#[test]
 fn watercolor_carried_across_a_level_page_edge_during_contact_matches_a_recomposing_twin() {
     let extent=[2048,1024];let doc=document_at(extent);let target=doc.active_target().unwrap();
     let style=crate::layer_tests::preset_style(DefaultBrushPreset::WatercolorWash);
