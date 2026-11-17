@@ -230,7 +230,7 @@ void WorkspaceBubbles::Impl::traceLayout(){
             auto const& part=native->second;owner=uint64_t(reinterpret_cast<uintptr_t>(part->root.as<::IUnknown>().get()));
             accessible=part->accessible?uint64_t(reinterpret_cast<uintptr_t>(part->accessible.as<::IUnknown>().get())):0;
             bounds=part->root.TransformToVisual(workspace).TransformBounds({0,0,float(part->root.ActualWidth()),float(part->root.ActualHeight())});
-            valid=part->root.Visibility()==Visibility::Visible&&part->root.Opacity()>0&&r->root.Visibility()==Visibility::Visible&&r->root.Opacity()>0;
+            valid=part->root.Visibility()==Visibility::Visible&&part->visual.Opacity()>0&&r->root.Visibility()==Visibility::Visible&&r->root.Opacity()>0;
         }
         if(!row->count){row->owner=owner;row->accessible=accessible;}
         row->identityChanged|=owner!=row->owner||accessible!=row->accessible||scale!=row->scale;
@@ -272,7 +272,7 @@ void WorkspaceBubbles::Impl::update(std::shared_ptr<Record> const& r,J const& pa
     bool tweenBeads=sameDiameter&&!(contact&&contact->record==r&&contact->mode==L"beads"&&contact->moved);
     auto part=[&](hstring const& key,J const& value,Point at,Size size,double radius,bool squircle=false,bool glass=true,double strength=1,double from=.6,double duration=180,double delay=0){
         live.insert(key);auto& p=r->parts[key];bool activated=!p||p->appearance.target==0;if(!p){p=std::make_shared<Part>(key,(key==L"face"||key==L"badge")&&!r->parts.contains(L"card")?1:0);
-            p->root.RenderTransform(p->transform);p->shadow.IsHitTestVisible(false);p->selection.IsHitTestVisible(false);p->hover.IsHitTestVisible(false);p->decorations.IsHitTestVisible(false);p->art.IsHitTestVisible(key==L"card"||key==L"pill");p->root.Children().Append(p->shadow);p->root.Children().Append(p->ink);p->root.Children().Append(p->decorations);p->ink.Children().Append(p->background);p->ink.Children().Append(p->selection);p->ink.Children().Append(p->hover);p->ink.Children().Append(p->art);r->root.Children().Append(p->root);
+            p->root.RenderTransform(p->transform);p->shadow.IsHitTestVisible(false);p->selection.IsHitTestVisible(false);p->hover.IsHitTestVisible(false);p->decorations.IsHitTestVisible(false);p->art.IsHitTestVisible(key==L"card"||key==L"pill");p->visual.Children().Append(p->shadow);p->visual.Children().Append(p->ink);p->visual.Children().Append(p->decorations);p->root.Children().Append(p->visual);p->ink.Children().Append(p->background);p->ink.Children().Append(p->selection);p->ink.Children().Append(p->hover);p->ink.Children().Append(p->art);r->root.Children().Append(p->root);
         }
         if(p->retired){p->art.IsHitTestVisible(true);p->retired=false;p->contentDirty=true;p->appearance.snap(0);}
         if(key==L"halo"&&p->appearance.target==0)p->appearance.snap(0);
@@ -324,7 +324,7 @@ bool WorkspaceBubbles::Impl::draw(std::shared_ptr<Record> const& r,std::shared_p
     bool item=prefix(p->key,L"item:")||prefix(p->key,L"brush:");auto index=item?std::stod(to_string(p->key).substr(to_string(p->key).find(':')+1)):-1;
     auto marked=[&](V const& hit){return item?hit&&hit.ValueType()==JsonValueType::Object&&num(hit.GetObject(),L"item",-1)==index:kind(hit)==L"face"&&p->key==L"face"&&str(r->view,L"kind")!=L"color"&&str(r->view,L"kind")!=L"history";};
     bool hovered=marked(r->hovered),pressed=r->pressed&&contact&&contact->record==r;
-    p->hot=item&&hovered&&contact&&contact->record==r&&contact->mode==L"choose"&&p->appearance.target>0;p->transform.ScaleX(p->scale());p->transform.ScaleY(p->scale());p->root.Opacity(p->appearance.value);Canvas::SetZIndex(p->root,p->order);
+    p->hot=item&&hovered&&contact&&contact->record==r&&contact->mode==L"choose"&&p->appearance.target>0;p->transform.ScaleX(p->scale());p->transform.ScaleY(p->scale());p->visual.Opacity(p->appearance.value);Canvas::SetZIndex(p->root,p->order);
     p->ink.Opacity(p->strength);
     p->shadow.Opacity(prefix(p->key,L"bead:")&&!p->glass?p->strength:1);
     p->root.IsHitTestVisible(p->appearance.target>0&&!r->faded);if(p->accessible)p->accessible.Visibility(p->appearance.target>0?Visibility::Visible:Visibility::Collapsed);bool selected=flag(p->data,L"selected")&&(p->key==L"face"||item||prefix(p->key,L"bead:")&&p->glass);

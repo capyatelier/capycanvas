@@ -1812,7 +1812,16 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             auto cardRoot=card->root;auto host=card->cardHost;auto inspector=card->inspector.get();auto cardPeer=peer(host);
             require(cardPeer&&inspector&&card->appearance.value==1,L"Card fixture did not create a live native inspector and peer");
             auto retainedCard=[&]{auto found=record->parts.find(L"card");return found!=record->parts.end()&&found->second==card&&ChromeFrames::Id(found->second->root)==ChromeFrames::Id(cardRoot)&&ChromeFrames::Id(found->second->cardHost)==ChromeFrames::Id(host)&&found->second->inspector.get()==inspector&&peer(found->second->cardHost)==cardPeer;};
-            apply(closed);frame(1000);frame(1075);
+            apply(closed);frame(1000);
+            auto face=record->parts.at(L"face");
+            auto effectiveOpacity=[&](UIElement element){double opacity=1;while(element){opacity*=element.Opacity();if(element==face->root)return opacity;element=Media::VisualTreeHelper::GetParent(element).try_as<UIElement>();}return -1.;};
+            require(face->appearance.value==0&&effectiveOpacity(face->accessible)==1,L"Delayed bubble face hit peer inherited its ink fade");
+            require(effectiveOpacity(face->ink)==0,L"Delayed bubble face ink did not retain its fade");
+            actions->clear();invoke(face->accessible);bubbles->frames.revoke();
+            co_await wait([actions]{return actions->size()==1;},L"Delayed bubble face peer did not dispatch its shared tap");bubbles->frames.revoke();
+            auto faceAction=object(actions->front(),L"action");
+            require(str(actions->front(),L"type")==L"bubble"&&str(faceAction,L"type")==L"tap"&&num(faceAction,L"id")==record->id,L"Delayed bubble face peer dispatched the wrong shared tap");
+            actions->clear();frame(1075);
             require(retainedCard()&&card->retired&&card->appearance.target==0&&card->appearance.value>0&&card->appearance.value<1&&!card->art.IsHitTestVisible()&&!card->root.IsHitTestVisible()&&card->root.Parent()==record->root,L"Card retirement did not retain its disabled native inspector during the fade");
             apply(open);frame(1075);frame(1275);
             require(retainedCard()&&!card->retired&&card->appearance.target==1&&card->appearance.value==1&&card->art.IsHitTestVisible()&&card->root.IsHitTestVisible()&&!card->contentDirty,L"Interrupted card retirement recreated its peer or left native content inert");

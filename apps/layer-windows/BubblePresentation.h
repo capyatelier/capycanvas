@@ -52,7 +52,7 @@ struct IntensityArt {
 struct Part {
     hstring key,shadowKey,surfaceKey,theme;
     J data;
-    Canvas root,ink,art,decorations,shadow;
+    Canvas root,visual,ink,art,decorations,shadow;
     Shapes::Path background,selection,hover;
     std::optional<OverlayPhase> appliedOverlayPhase;
     Button accessible{nullptr};
