@@ -487,10 +487,11 @@ fn settles_after_strokes(fixture:Fixture,(budget,heap):(MemoryBudget,u64),view:V
     live.set_brush(brush).unwrap();
     let mut presenter=crate::ViewportPresenter::for_surface(live.backend(),wgpu::TextureFormat::Rgba8UnormSrgb,crate::SdrSurfaceColor::Srgb).unwrap();
     let output=create_target(&live.backend().device,[view.width_px,view.height_px],wgpu::TextureFormat::Rgba8UnormSrgb,"stroked presentation");
-    let (mut stroked,mut current,mut pushed,mut sequence)=(None::<(u64,u64)>,0,0,0);let deadline=Instant::now()+Duration::from_secs(30);
+    let (mut stroked,mut current,mut pushed,mut sequence,mut idle)=(None::<(u64,u64)>,0,0,0,0);
     for frame in 0.. {
-        if Instant::now()>deadline {break;}
+        if idle>=64 {break;}
         while wakes.try_recv().is_ok() {}
+        let before=host_progress(&live);
         reads.advance(frame);
         let stroke=strokes[current].1;
         if stroked.is_some() {
@@ -505,6 +506,7 @@ fn settles_after_strokes(fixture:Fixture,(budget,heap):(MemoryBudget,u64),view:V
         live.render_frame().unwrap();live.backend_mut().wait_idle().unwrap();
         if presenter.needs_present(live.backend(),view,[0.18,0.18,0.18,1.]) {presenter.present(live.backend_mut(),&output.1,view,[0.18,0.18,0.18,1.]).unwrap();}
         let feeding=stroked.is_some() && pushed<stroke.len();
+        idle=if host_progress(&live)==before && !feeding && !reads.gated() && !live.raster_backing_pending() {idle+1}else {0};
         let quiet=!feeding && !live.has_pending_input() && !live.has_active_stroke() && !live.has_pending_document_edits();
         let r=live.backend();
         let settled=quiet && r.settled() && r.scale_display.as_ref().is_some_and(|cache|cache.storm_view_settled(view).is_ok());
@@ -533,7 +535,7 @@ fn settles_after_strokes(fixture:Fixture,(budget,heap):(MemoryBudget,u64),view:V
         if !feeding && matches!(live.frame_demand(),layer_render::FrameDemand::Wait|layer_render::FrameDemand::WaitUntil(_)) && !reads.gated() {let _=wakes.recv_timeout(QUIET);}
     }
     let r=live.backend();
-    panic!("stroke {current} never settled: stroked={}, display used {} of grant {}, source tile misses {}, outstanding {:?}",
+    panic!("stroke {current} never settled after {idle} frames that advanced nothing: stroked={}, display used {} of grant {}, source tile misses {}, outstanding {:?}",
         stroked.is_some(),r.scene_tiers.display.used(),r.memory.display_grant(),r.metrics().source_tile_misses,r.outstanding_terms());
 }
 
