@@ -2785,7 +2785,7 @@ impl WgpuRasterizer {
         for batch in packet.dab_batches.iter().filter(|batch|batch.kind==DabBatchKind::Preview && batch.style.execution==BrushExecution::Liquify) {
             if let Some(input)=self.liquify.as_ref().and_then(|liquify|liquify.captured_input(batch.target,batch.stroke_id,consumer)) {inputs.insert(batch.target,input);}
         }
-        let declaration=scene::PreviewDeclaration::capture_with_plans(self,packet,quality,inputs,plans,stamps.clone())?;
+        let declaration=scene::PreviewDeclaration::capture_with_plans(self,packet,quality,inputs,self.fill_preview.clone(),plans,stamps.clone())?;
         if stamps.is_none() && let (Some(held),Some(candidate))=(&self.preview_declaration,&declaration)
             && !held.in_contact() && held.matches_metadata(candidate)?
             && held.matches_history(|plane,coordinate,pass|self.preview_seed_versions(held,plane,coordinate,pass,from_persistent)

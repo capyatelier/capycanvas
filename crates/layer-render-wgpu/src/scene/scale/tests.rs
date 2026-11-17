@@ -16,8 +16,7 @@ pub(crate) fn queue_unencoded_clear(scene:&mut Scene,r:&WgpuRasterizer)->Result<
 pub(crate) fn unencoded_job_counts(scene:&Scene)->[usize;2] {[scene.jobs.len(),scene.source_jobs.len()]}
 
 pub(super) fn prepare_fixture_frame(r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene) {
-    let declared=Declared {preview:r.preview_declaration.clone(),..Default::default()};
-    scene.scale_pages.lock().unwrap().set_expected(Arc::new(SignatureFrame::capture(r,packet,declared).unwrap()));
+    scene.scale_pages.lock().unwrap().set_expected(Arc::new(SignatureFrame::capture(r,packet,Declared::live(r)).unwrap()));
 }
 
 pub(super) fn evict_composite_pages(cache:&Cache,areas:&[PixelRect]) {pages::evict_composite_pages(cache,areas)}

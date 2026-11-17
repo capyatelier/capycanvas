@@ -206,6 +206,14 @@ impl Capture {
         destination: &wgpu::Texture,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
+        self.region_reading(r, packet, region, destination, false, encoder)
+    }
+    pub fn authored_region_into(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, destination: &wgpu::Texture,
+        encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
+        self.region_reading(r, packet, region, destination, true, encoder)
+    }
+    fn region_reading(&mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect, destination: &wgpu::Texture,
+        authored: bool, encoder: &mut crate::submission::CommandEncoder) -> Result<(), GpuRasterError> {
         if region.width() > destination.width() || region.height() > destination.height() {
             return Err(GpuRasterError::InvalidExtent);
         }
@@ -223,7 +231,8 @@ impl Capture {
         if self.scene.is_none() { self.scene = Some(scene::Scene::new(r)?); }
         let scene = self.scene.as_mut().unwrap();
         let output = packet.scene.scope().and_then(scene::raw_output).unwrap_or(scene::Output::Artwork(None));
-        scene.capture_region_prepared(r, packet, destination, region, output, encoder)?;
+        if authored { scene.capture_authored_region(r, packet, destination, region, output, encoder)?; }
+        else { scene.capture_region_prepared(r, packet, destination, region, output, encoder)?; }
         self.window = Some(window);
         self.peak_image_bytes = self.peak_image_bytes.max(bytes);
         Ok(())

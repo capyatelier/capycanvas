@@ -675,7 +675,9 @@ impl RawRegions {
                     let region = page_rect(*coordinate).intersect(PixelRect::full([w, h]));
                     if self.captured.len() <= slot { self.captured.push(crate::create_color_target(&r.device, [PAGE_SIZE; 2], "raw region capture")); }
                     let (texture, view) = self.captured[slot].clone();
-                    self.capture.region_into(r, frame.as_ref().unwrap().packet([w, h]), region, &texture, encoder)?;
+                    let packet = frame.as_ref().unwrap().packet([w, h]);
+                    if sampling == Sampling::Target { self.capture.authored_region_into(r, packet, region, &texture, encoder)?; }
+                    else { self.capture.region_into(r, packet, region, &texture, encoder)?; }
                     Some(source_access::RawTile { texture: texture.into(), view })
                 };
                 if let Some(source) = &source { leases.extend(r.source_tiles.borrow().lease(&source.view)); }

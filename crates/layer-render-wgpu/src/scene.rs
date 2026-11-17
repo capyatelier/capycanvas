@@ -365,6 +365,7 @@ pub(super) struct Scene {
     object_live: bool,
     presented_backdrop: Option<OccurrenceHandle>,
     object_query: bool,
+    authored: bool,
     scale_sources: scale::Sources,
     placement_frame: Arc<sources::Placements>,
     scale_pages: scale::Pages,
@@ -738,6 +739,7 @@ impl Scene {
             object_live: false,
             presented_backdrop: None,
             object_query: false,
+            authored: false,
             positions: r.transforms.as_ref().map_or_else(|| paint_transform::mesh::Positions::new(device), paint_transform::mesh::Positions::sharing).charged(&tiers.gpu),
             position_key: None,
             mesh_geometry: Default::default(),
@@ -913,8 +915,8 @@ impl Scene {
         self.accept_traversal(r,placements,declaration.clone(),traverse)
     }
     pub(super) fn capture_declaration(&self,r:&WgpuRasterizer,packet:FramePacket<'_>)->Result<sources::Declaration,GpuRasterError> {
-        let frame=SignatureFrame::capture(r,packet,Declared {preview:r.preview_declaration.clone(),..Default::default()})?;
-        Ok(sources::Declaration::scene(Arc::new(frame),self.submission.clone()))
+        let frame=Arc::new(SignatureFrame::capture(r,packet,if self.authored {Declared::default()} else {Declared::live(r)})?);
+        Ok(if self.authored {sources::Declaration::authored(frame,self.submission.clone())} else {sources::Declaration::scene(frame,self.submission.clone())})
     }
     /// Consume a bounded group before gathering the next one: these textures
     /// belong to the fixed, queue-ordered source cache.
@@ -2017,6 +2019,15 @@ impl Scene {
         self.object_query = true;
         let result = self.capture_region(r, packet, destination, region, output, encoder);
         self.object_query = false;
+        result
+    }
+    pub(crate) fn capture_authored_region(
+        &mut self, r: &mut WgpuRasterizer, packet: FramePacket<'_>, destination: &wgpu::Texture,
+        region: PixelRect, output: Output, encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        self.authored = true;
+        let result = self.capture_region_prepared(r, packet, destination, region, output, encoder);
+        self.authored = false;
         result
     }
 

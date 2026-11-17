@@ -16,6 +16,9 @@ pub(crate) struct Declared {
     pub vector_motion: Option<layer_render::VectorMotion>,
     pub vector_motion_paths: Option<Arc<[layer_core::authored::vector::PathItem]>>,
 }
+impl Declared {
+    pub fn live(r:&WgpuRasterizer)->Self {Self {preview:r.preview_declaration.clone(),fill:r.fill_preview.clone(),..Self::default()}}
+}
 #[derive(Clone)]
 pub(crate) struct Input { pub source:SceneSnapshot, pub version:ContentVersion }
 impl Input {
@@ -256,15 +259,14 @@ impl Prepared {
             }
         }
         if declared.preview.is_none() {
-            match PreviewDeclaration::capture(r,packet,declared.quality,declared.preview_inputs.clone()) {
+            match PreviewDeclaration::capture(r,packet,declared.quality,declared.preview_inputs.clone(),declared.fill.clone()) {
                 Ok(preview)=>declared.preview=preview.map(Arc::new),
                 Err(GpuRasterError::NotReady)=> {
-                    if let Some(target)=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||r.fill_preview.as_ref().map(|fill|fill.target)) {needed.push(target);}
+                    if let Some(target)=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||declared.fill.as_ref().map(|fill|fill.target)) {needed.push(target);}
                 },
                 Err(error)=>return Err(error),
             }
         }
-        declared.fill=declared.fill.or_else(||r.fill_preview.clone());
         declared.vector_preview=declared.vector_preview.or_else(||r.vector_preview.clone());
         if declared.vector_motion.is_none() {
             declared.vector_motion=r.composed_vector_motion().map(|(motion,_)|motion.clone());
@@ -373,7 +375,7 @@ impl Prepared {
     }
     pub(super) fn watercolor(&self,target:SourceTarget)->bool {self.snapshot.watercolor.contains_key(&target)}
     pub(crate) fn prepare(r:&WgpuRasterizer,packet:FramePacket<'_>)->Result<Arc<Self>,GpuRasterError> {
-        Self::capture(r,packet,Declared {preview:r.preview_declaration.clone(),..Default::default()}).map(Arc::new)
+        Self::capture(r,packet,Declared::live(r)).map(Arc::new)
     }
     pub(super) fn holds_scene(&self,scene:SceneView<'_>)->bool {
         let (held,artwork)=(&self.snapshot.scene,scene.artwork());
@@ -771,17 +773,17 @@ struct CapturedInputs {_proofs:Vec<resident::Input>,version:ContentVersion}
 #[derive(Clone,Copy,PartialEq,Eq,Hash)]
 struct PreviewRequest {plane:usize,bounds:[u32;4],stage:PreviewStage,pass:PreviewPass}
 impl PreviewDeclaration {
-    pub fn capture(r:&WgpuRasterizer,packet:FramePacket<'_>,quality:PreviewQuality,inputs:IdMap<SourceTarget,Input>)->Result<Option<Self>,GpuRasterError> {
+    pub fn capture(r:&WgpuRasterizer,packet:FramePacket<'_>,quality:PreviewQuality,inputs:IdMap<SourceTarget,Input>,fill:Option<layer_render::FillPreview>)->Result<Option<Self>,GpuRasterError> {
         let plans=brush_tiles::plan_packet(packet,|target|packet.scene.target_extent(target))?;
         let rectangular=r.preview_from_persistent(packet.dab_batches) && !WgpuRasterizer::sparse_preview(packet.dab_batches);
         let plans:Vec<_>=packet.dab_batches.iter().zip(plans).map(|(batch,tiles)|brush_tiles::destinations(&tiles,batch_pixel_rect(batch,packet.scene.target_extent(batch.target)),batch.kind==DabBatchKind::Preview && rectangular,batch.first_dab).into_owned()).collect();
-        Self::capture_with_plans(r,packet,quality,inputs,&plans,None)
+        Self::capture_with_plans(r,packet,quality,inputs,fill,&plans,None)
     }
-    pub fn capture_with_plans(r:&WgpuRasterizer,packet:FramePacket<'_>,quality:PreviewQuality,inputs:IdMap<SourceTarget,Input>,plans:&[Vec<BrushTile>],stamps:Option<Arc<PreviewStamps>>)->Result<Option<Self>,GpuRasterError> {
-        let target=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||r.fill_preview.as_ref().map(|fill|fill.target));
+    pub fn capture_with_plans(r:&WgpuRasterizer,packet:FramePacket<'_>,quality:PreviewQuality,inputs:IdMap<SourceTarget,Input>,fill:Option<layer_render::FillPreview>,plans:&[Vec<BrushTile>],stamps:Option<Arc<PreviewStamps>>)->Result<Option<Self>,GpuRasterError> {
+        let target=packet.dab_batches.iter().find(|batch|batch.kind==DabBatchKind::Preview).map(|batch|batch.target).or_else(||fill.as_ref().map(|fill|fill.target));
         let Some(target)=target else {return Ok(None);};
         let mut versions=IdMap::default();versions.insert(target,r.raster_versions(packet.scene,target)?);
-        let mut declaration=Self::from_plans(packet,versions,inputs,quality,r.fill_preview.clone(),plans,stamps)?;
+        let mut declaration=Self::from_plans(packet,versions,inputs,quality,fill,plans,stamps)?;
         if let Some(declaration)=&mut declaration && let Some(fill)=&mut declaration.fill {
             fill.coverage=Some(r.coverage_versions(&fill.operation.coverage)?);
         }

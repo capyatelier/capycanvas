@@ -173,16 +173,20 @@ pub(crate) struct Declaration {
     wanted:Option<Arc<super::SignatureFrame>>,
     consumer:Option<crate::submission::Submission>,
     raw:Option<RawChoice>,
+    authored:bool,
     failure:Option<GpuRasterError>,
 }
 impl Declaration {
     pub(crate) fn scene(wanted:Arc<super::SignatureFrame>,consumer:Option<crate::submission::Submission>)->Self {
-        Self {wanted:Some(wanted),consumer,raw:None,failure:None}
+        Self {wanted:Some(wanted),consumer,raw:None,authored:false,failure:None}
     }
-    pub(crate) fn current(consumer:Option<crate::submission::Submission>)->Self {Self {wanted:None,consumer,raw:None,failure:None}}
+    pub(crate) fn authored(wanted:Arc<super::SignatureFrame>,consumer:Option<crate::submission::Submission>)->Self {
+        Self {authored:true,..Self::scene(wanted,consumer)}
+    }
+    pub(crate) fn current(consumer:Option<crate::submission::Submission>)->Self {Self {wanted:None,consumer,raw:None,authored:false,failure:None}}
     pub(crate) fn raw(preview:Option<(super::PreviewStage,Option<(super::PreviewPass,u32)>)>,expected:Option<crate::raster::contents::Versions>,
         consumer:Option<crate::submission::Submission>,
-    )->Self {Self {wanted:None,consumer,raw:Some(RawChoice {preview,expected}),failure:None}}
+    )->Self {Self {wanted:None,consumer,raw:Some(RawChoice {preview,expected}),authored:false,failure:None}}
     pub(crate) fn with_raw_layers(mut self)->Self {self.raw=Some(RawChoice {preview:None,expected:None});self}
     fn wanted(&self)->Result<&super::SignatureFrame,GpuRasterError> {
         self.wanted.as_deref().ok_or(GpuRasterError::Invariant("source declaration has no signature frame"))
@@ -391,11 +395,11 @@ impl Inputs {
         self.decisions.insert(address,false,[selected,None])?;
         Ok(true)
     }
-    #[expect(clippy::too_many_arguments, reason = "A color decision reads the frame's versions for one consumer use")]
-    fn color(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,wanted:Option<&super::SignatureFrame>,consumer:Option<&crate::submission::Submission>,id:SourceTarget,coordinate:[u32;2],use_:SourceUse)->Result<(),GpuRasterError> {
+    fn color(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,declaration:&Declaration,id:SourceTarget,coordinate:[u32;2],use_:SourceUse)->Result<(),GpuRasterError> {
+        let (wanted,consumer)=(declaration.wanted.as_deref(),declaration.consumer.as_ref());
         if self.record_capture(r,scene,wanted,consumer,(id,RasterPlane::Color,coordinate))? {return Ok(());}
         let persistent=r.paint_layers.iter().find(|layer|layer.id==id).and_then(|layer|layer.pages.iter().find(|page|page.coordinate==coordinate));
-        let preview=(r.preview_layer_id==Some(id)).then(||r.preview_page(coordinate)).flatten();
+        let preview=(!declaration.authored && r.preview_layer_id==Some(id)).then(||r.preview_page(coordinate)).flatten();
         let page=preview.filter(|_|r.preview_requires_base).or(persistent);
         let resident=page.map(|page|r.read_scene_color_input(scene,id,page,preview.is_some_and(|p|std::ptr::eq(p,page)),wanted,consumer))
             .transpose()?.flatten().map(Selected::resident);
@@ -416,9 +420,10 @@ impl Inputs {
         };
         self.decisions.insert((id,RasterPlane::Mask,coordinate),false,[input,None])
     }
-    fn scalar(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,wanted:Option<&super::SignatureFrame>,consumer:Option<&crate::submission::Submission>,id:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->Result<(),GpuRasterError> {
+    fn scalar(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,declaration:&Declaration,id:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->Result<(),GpuRasterError> {
+        let (wanted,consumer)=(declaration.wanted.as_deref(),declaration.consumer.as_ref());
         if self.record_capture(r,scene,wanted,consumer,(id,plane,coordinate))? {return Ok(());}
-        let predicted=r.preview_wetness_page(id,coordinate);
+        let predicted=r.preview_wetness_page(id,coordinate).filter(|_|!declaration.authored);
         let page=predicted.or_else(||r.paint_layers.iter().find(|layer|layer.id==id)
             .and_then(|layer|layer.watercolor_wetness_pages.iter().find(|page|page.coordinate==coordinate)));
         let resident=page.map(|page|r.read_scene_wetness_input(scene,id,page,predicted.is_some(),wanted,consumer))
@@ -791,7 +796,7 @@ impl AcceptedInputs {
         let address=(target,RasterPlane::Color,coordinate);
         let reads=self.decide(r,address,None,|inputs,declaration|match declaration.raw {
             Some(_)=>declaration.raw_color(inputs,r,target,coordinate),
-            None=>inputs.color(r,scene,declaration.wanted.as_deref(),declaration.consumer.as_ref(),target,coordinate,use_),
+            None=>inputs.color(r,scene,declaration,target,coordinate,use_),
         })?;
         if use_==SourceUse::Exact && let Some((inputs,_))=self.declaring.as_deref_mut() {inputs.require_exact(address);}
         Ok(reads)
@@ -805,7 +810,7 @@ impl AcceptedInputs {
     pub(crate) fn scalar(&mut self,r:&WgpuRasterizer,scene:SceneView<'_>,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->Result<Option<source_access::SourceRead>,GpuRasterError> {
         self.decide(r,(target,plane,coordinate),None,|inputs,declaration|match declaration.raw {
             Some(_)=>inputs.raw_scalar(r,target,plane,coordinate,declaration.wanted.as_deref(),declaration.consumer.as_ref()),
-            None=>inputs.scalar(r,scene,declaration.wanted.as_deref(),declaration.consumer.as_ref(),target,plane,coordinate),
+            None=>inputs.scalar(r,scene,declaration,target,plane,coordinate),
         }).map(|[input,_]|input)
     }
     pub(crate) fn mask(&mut self,r:&WgpuRasterizer,target:SourceTarget,source:&CoverageSource,coordinate:[u32;2])->Result<Option<source_access::SourceRead>,GpuRasterError> {

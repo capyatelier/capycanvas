@@ -2088,6 +2088,71 @@ mod tests {
     }
 
     #[test]
+    fn fill_drag_stop_at_colors_keeps_the_press_region_under_its_own_preview() {
+        #[derive(Clone, Copy, Debug)]
+        enum Drag { Unseen, Previewed, PreviewedThenContinued }
+        let (mut outcomes, mut commits) = (Vec::new(), Vec::new());
+        for drag in [Drag::Unseen, Drag::Previewed, Drag::PreviewedThenContinued] {
+            let document = layer_ui::new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+            let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Windows, document);
+            host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+            let clock = std::cell::Cell::new(1_000_000_000);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            let settle = |host: &mut NativeHost| while !host.startup.complete || host.frame_demand() != layer_render::FrameDemand::Wait
+                || host.session.engine().has_pending_document_edits() || host.session.holding_input() { frame_step(host, &clock, deadline); };
+            settle(&mut host);
+            let ink = layer_core::color::source::rgba8_source([384, 256], |x, y| {
+                let line = [40, 150, 270].into_iter().any(|left| x >= left && x < left + 90 && (50..170).contains(&y)
+                    && (x < left + 6 || x >= left + 84 || !(56..164).contains(&y)));
+                if line { [0, 0, 0, 255] } else { [0; 4] }
+            });
+            host.session.import_layer_source("Reference ink", std::sync::Arc::unwrap_or_clone(ink)).unwrap();
+            host.dirty = true;
+            settle(&mut host);
+            host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::ReferenceSelection }).unwrap();
+            host.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } }).unwrap();
+            for command in [layer_ui::CommandId::Fill, layer_ui::CommandId::FillConnected, layer_ui::CommandId::CloseGapsAuto, layer_ui::CommandId::SelectionReference] {
+                host.dispatch(UiAction::Invoke { command }).unwrap();
+            }
+            host.dispatch(serde_json::from_value(json!({"type":"set_color","rgba":[0.85,0.1,0.05,1.]})).unwrap()).unwrap();
+            host.dispatch(UiAction::SetToolSetting { id: "grain_depth".into(), value: 0. }).unwrap();
+            assert!(host.session.command(layer_ui::CommandId::StopAtColors).selected);
+            settle(&mut host);
+            let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
+            let record = |[x, y]: [f32; 2], phase: f64, at: u64| {
+                let p = surface.map(Point { x, y });
+                [f64::from(p.x), f64::from(p.y), 0.5, 0., 0., 0., 0., at as f64, phase]
+            };
+            let checkpoint = host.session.engine().checkpoint();
+            let start = clock.get();
+            pointer(&mut host, 71, 1, 0, &record([85., 110.], 1., start), false).unwrap();
+            let previewed = |host: &NativeHost| host.session.engine().backend().0.as_ref().unwrap().fill_preview_ready().is_some();
+            if !matches!(drag, Drag::Unseen) { while !previewed(&host) { frame_step(&mut host, &clock, deadline); } }
+            pointer(&mut host, 71, 1, 0, &record([195., 110.], 2., start + 10_000_000), false).unwrap();
+            if matches!(drag, Drag::PreviewedThenContinued) {
+                frame_step(&mut host, &clock, deadline);
+                let shown = host.session.engine().backend().0.as_ref().unwrap().fill_preview_ready();
+                while host.session.engine().backend().0.as_ref().unwrap().fill_preview_ready() == shown { frame_step(&mut host, &clock, deadline); }
+            }
+            pointer(&mut host, 71, 1, 0, &record([195., 110.], 3., start + 20_000_000), false).unwrap();
+            while host.session.engine().checkpoint() == checkpoint { frame_step(&mut host, &clock, deadline); }
+            settle(&mut host);
+            let document = host.session.engine().document();
+            let raster = document.scene().raster(document.active_target().unwrap()).unwrap().wait_data().unwrap();
+            let mut tiles: Vec<_> = raster.tiles.iter().filter(|(key, _)| key.plane == layer_core::raster::RasterPlane::Color)
+                .map(|(key, tile)| (key.coordinate, tile.wait_backing().unwrap().decode_on_worker().unwrap().to_vec())).collect();
+            tiles.sort_by_key(|(coordinate, _)| *coordinate);
+            let size = layer_core::raster::TILE_SIZE;
+            let alpha = |x: u32, y: u32| tiles.iter().find(|(coordinate, _)| *coordinate == [x / size, y / size])
+                .map_or(0, |(_, pixels)| pixels[((y % size * size + x % size) * 4 + 3) as usize]);
+            outcomes.push((drag, alpha(85, 110), alpha(195, 110)));
+            commits.push(tiles);
+        }
+        assert!(outcomes.iter().all(|&(_, press, crossed)| press == 255 && crossed == 255), "Fill drag lost a region it crossed: {outcomes:?}");
+        assert!(commits.iter().all(|tiles| *tiles == commits[0]), "Fill drag pixels depend on when its preview appeared: {outcomes:?}");
+    }
+
+    #[test]
     fn optional_region_preparation_does_not_starve_visible_layer_thumbnails() {
         let mut document = layer_ui::new_drawing(128, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         for (name, rgba) in [("Red", [220, 40, 30, 255]), ("Blue", [30, 60, 220, 255])] {
