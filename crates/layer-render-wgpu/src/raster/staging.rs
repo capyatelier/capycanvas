@@ -774,7 +774,7 @@ impl WgpuRasterizer {
     pub(crate) fn restore_preparation(&self)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::{Input,Outstanding};
         let restore=self.restore_preflight.as_ref().filter(|restore|restore.waiting())?;
-        Some(if restore.refused.as_ref().is_some_and(|refused|!refused.fits()) {Outstanding::Blocked(Input::Residency)}
+        Some(if restore.refused.as_ref().is_some_and(|refused|self.refuses(refused)) {Outstanding::Blocked(Input::Residency)}
             else if self.image_decode_waiting() {Outstanding::Blocked(Input::Decode)}else {Outstanding::Runnable})
     }
     pub(crate) fn restore_pages_ready(&self)->bool {self.restore_preflight.as_ref()

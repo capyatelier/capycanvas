@@ -24,7 +24,7 @@ impl Navigator {
         if self.held(r) || !self.pending() {return None;}
         use crate::frame_demand::{Input,Outstanding};
         let cache=self.cache.as_ref()?;
-        Some(cache.cells_demand(r,false).unwrap_or(if cache.parked() {Outstanding::Blocked(Input::Residency)}else {Outstanding::Runnable}))
+        Some(cache.cells_demand(r,false).unwrap_or(if cache.parked(r) {Outstanding::Blocked(Input::Residency)}else {Outstanding::Runnable}))
     }
     pub fn waiting_for_name(&self)->bool {
         self.cache.as_ref().is_some_and(|cache|cache.presented_matches_expected().is_none())

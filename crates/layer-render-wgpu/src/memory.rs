@@ -416,6 +416,11 @@ impl WgpuRasterizer {
         #[cfg(not(target_arch="wasm32"))]
         if let Some(wake)=self.preparation_wake.clone() {blocked.wake_on_release(&self.device.retirement_handle(),wake);}
     }
+    pub(crate) fn refuses(&self,refusal:&crate::residency::Blocked)->bool {
+        #[cfg(not(target_arch="wasm32"))]
+        if let Some(wake)=&self.preparation_wake {return self.device.retirement_handle().refuses(refusal,wake);}
+        !refusal.fits()
+    }
     pub(super) fn prepare_capture_memory(&mut self, scene: SceneView<'_>, extent: [u32; 2]) {
         self.memory.demand_region(scene, extent, PixelRect::full(extent));
         let demand=self.memory.demand.get();

@@ -1314,10 +1314,10 @@ impl Cell {
     fn refusal_applies(&self,refusal:&crate::residency::Blocked)->bool {
         refusal.class()!=Class::Refinement || self.current && self.shown.as_ref().is_some_and(|shown|!shown.exact)
     }
-    fn refused(&self)->bool {self.refusal.as_ref().is_some_and(|refusal|self.refusal_applies(refusal) && !refusal.fits())}
-    fn parked(&self)->bool {self.refused() && self.refusal.as_ref().is_some_and(|refusal|!refusal.class().floor_reserved())}
+    fn refused(&self,r:&WgpuRasterizer)->bool {self.refusal.as_ref().is_some_and(|refusal|self.refusal_applies(refusal) && r.refuses(refusal))}
+    fn parked(&self,r:&WgpuRasterizer)->bool {self.refused(r) && self.refusal.as_ref().is_some_and(|refusal|!refusal.class().floor_reserved())}
     fn waiting(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Input> {
-        if self.refused() {return Some(crate::frame_demand::Input::Residency);}
+        if self.refused(r) {return Some(crate::frame_demand::Input::Residency);}
         self.blocked.filter(|input|match input {
             crate::frame_demand::Input::Name=>self.naming(r),
             input=>waits(r,*input,self.arrivals),
@@ -1530,7 +1530,7 @@ impl Cache {
         self.above_revision=Some((above,revision));
         Ok(())
     }
-    pub(super) fn select_cells(&self,visible:PixelRect,presented:Accuracy,class:&dyn Fn(PixelRect)->Class,since:crate::frame_demand::ArrivalToken)->Result<Selection,GpuRasterError> {
+    pub(super) fn select_cells(&self,r:&WgpuRasterizer,visible:PixelRect,presented:Accuracy,class:&dyn Fn(PixelRect)->Class,since:crate::frame_demand::ArrivalToken)->Result<Selection,GpuRasterError> {
         let mut selection=Selection {copies:Vec::new(),composes:Vec::new(),transition:false,waiting:false};
         let Some((mut cells,mut store,template))=self.cells() else {return Ok(selection);};
         let frame=store.expected().cloned().ok_or(GpuRasterError::Invariant("signature frame is missing or inconsistent"))?;
@@ -1538,7 +1538,7 @@ impl Cache {
         let (plan,input_level)=(self.plan,self.required_input_level());
         let exact_input_level=super::refinement::exact_input_level(frame.scene(),input_level);
         for (index,coordinate) in coordinates(plan.bounds,plan.level).enumerate() {
-            if !cells.cells[index].queued || cells.cells[index].refused() {continue;}
+            if !cells.cells[index].queued || cells.cells[index].refused(r) {continue;}
             let region=bounds(coordinate,plan.level,plan.extent);
             let key=Key {coordinate,..template.clone()};
             let cell=&mut cells.cells[index];
@@ -1710,7 +1710,7 @@ impl Cache {
         use crate::frame_demand::Outstanding::{Blocked,Runnable};
         let (cells,_store,_)=self.cells()?;
         let mut blocked=None;
-        for cell in cells.cells.iter().filter(|cell|cell.pending() && !cell.parked() && (refining || cell.queued)) {
+        for cell in cells.cells.iter().filter(|cell|cell.pending() && !cell.parked(r) && (refining || cell.queued)) {
             match cell.waiting(r) {
                 None=>return Some(Runnable),
                 Some(input)=>blocked=blocked.or(Some(Blocked(input))),
@@ -1725,16 +1725,16 @@ impl Cache {
             if cell.pending() {cell.blocked=input;cell.name=None;cell.arrivals=since;cell.queued=true;}
         }
     }
-    pub(super) fn parked(&self)->bool {
-        self.cells().is_some_and(|(cells,_store,_)|cells.cells.iter().any(|cell|cell.pending() && cell.parked()))
+    pub(super) fn parked(&self,r:&WgpuRasterizer)->bool {
+        self.cells().is_some_and(|(cells,_store,_)|cells.cells.iter().any(|cell|cell.pending() && cell.parked(r)))
     }
     pub(super) fn forget_refusals(&self) {
         for cell in &mut self.cells.lock().unwrap().cells {cell.refusal=None;}
     }
-    pub(super) fn refused(&self,region:PixelRect)->bool {
+    pub(super) fn refused(&self,r:&WgpuRasterizer,region:PixelRect)->bool {
         let cells=self.cells.lock().unwrap();
         let reached=Cells::reached(self.plan,region);
-        !reached.is_empty() && reached.into_iter().all(|index|cells.cells.get(index).is_some_and(Cell::refused))
+        !reached.is_empty() && reached.into_iter().all(|index|cells.cells.get(index).is_some_and(|cell|cell.refused(r)))
     }
     pub(super) fn shown_pages(&self,bounds:PixelRect)->BTreeSet<[u32;2]> {
         let Some((cells,_store,_))=self.cells() else {return BTreeSet::new();};
@@ -2038,7 +2038,7 @@ pub(super) mod query_tests {
     fn refinement_pressure_view(document:&layer_core::Document)->(WgpuRasterizer,FramePacket<'_>,crate::residency::Charge,crate::residency::Blocked) {
         let extent=document.composition().size;
         let mut frame=packet(document.scene(),extent);frame.composite_all=false;frame.view.width_px=64;frame.view.height_px=64;
-        let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        let mut r=crate::memory::memory_tests::renderer(document.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(2<<30),..Default::default()}).unwrap();
         crate::test_support::submit_settled(&mut r,frame);crate::test_support::complete(&r);
         r.set_preparation_wake(Arc::new(||{}));
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
@@ -2102,7 +2102,7 @@ pub(super) mod query_tests {
         r.wait_for_release(refused.clone());
         let main=r.scale_display.as_ref().unwrap();
         for cache in std::iter::once(main).chain(main.overview.as_deref()) {cache.refuse(cache.plan.bounds,&refused);}
-        assert!(std::iter::once(main).chain(main.overview.as_deref()).any(|cache|table(cache).cells.iter().any(Cell::parked)),"the fixture parks refused exactness");
+        assert!(std::iter::once(main).chain(main.overview.as_deref()).any(|cache|table(cache).cells.iter().any(|cell|cell.parked(&r))),"the fixture parks refused exactness");
         assert!(r.outstanding_terms().is_empty(),"parked optional work is not outstanding: {:?}",r.outstanding_terms());
         assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"an idle renderer with parked refinement requests no frame");
         assert!(r.settled(),"parked optional work does not hold settledness");
@@ -2113,6 +2113,35 @@ pub(super) mod query_tests {
         crate::test_support::submit_settled(&mut r,frame);
         let main=r.scale_display.as_ref().unwrap();
         assert!(std::iter::once(main).chain(main.overview.as_deref()).all(|cache|table(cache).cells.iter().all(|cell|!cell.pending())),"the resumed refinement completes every cell");
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_required_cell_refused_again_after_its_release_wake_fired_is_woken_by_the_next_release() {
+        use crate::frame_demand::{Input,Outstanding};
+        let document=super::super::tests::document_at([2048,512]);
+        let (mut r,_frame,held,refinement)=refinement_pressure_view(&document);
+        let (wake,woken)=std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=wake.send(());}));
+        let display=r.scene_tiers.display.clone();let room=held.bytes();
+        assert!(room>0,"the fixture holds room the refused cell needs");
+        let bytes=display.limit()-display.used().saturating_sub(display.yielding())+1;
+        let refused=display.blocked(Class::Visible,bytes).expect("the held room refuses the visible unit").alone();
+        r.wait_for_release(refused.clone());
+        let main=r.scale_display.as_ref().unwrap();let overview=main.overview.as_deref().unwrap();
+        overview.refuse(overview.plan.bounds,&refinement);
+        table(main).cells[0].invalidate();
+        main.refuse(main.plan.bounds,&refused);
+        let edge=r.device.retirement_handle();
+        drop(held);edge.flush().unwrap();
+        woken.try_recv().expect("the release wakes the refused cell");
+        let retaken=display.charge(room);
+        assert_eq!(r.outstanding_terms(),vec![("display",Outstanding::Blocked(Input::Residency))],"the cell still reports its refusal before it retried");
+        assert_eq!(r.next_frame(),layer_render::FrameDemand::Wait,"a refused required cell waits for a release");
+        while woken.try_recv().is_ok() {}
+        drop(retaken);edge.flush().unwrap();
+        woken.try_recv().expect("the next release wakes the cell that still reports its refusal");
+        assert_eq!(r.next_frame(),layer_render::FrameDemand::Work,"the released room resumes the required cell");
     }
 
     #[cfg(not(target_arch="wasm32"))]
@@ -2247,7 +2276,7 @@ pub(super) mod query_tests {
         {let mut cells=table(&cache);cells.cells[index].shown=None;cells.cells[index].invalidate();}
         let mut commands=RegionRecords::new(&r);
         let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
-        let selection=cache.select_cells(cache.plan.bounds,Accuracy::Display,&|_|Class::Visible,r.arrival_token()).unwrap();
+        let selection=cache.select_cells(&r,cache.plan.bounds,Accuracy::Display,&|_|Class::Visible,r.arrival_token()).unwrap();
         assert_eq!(selection.copies.len(),1,"the unshown cell copies its current Store page");
         assert!(!cache.copy_cells(&mut r,&mut encoder,&mut commands,selection.copies).unwrap().is_empty(),"the interrupted frame copies the cell");
         cache.commit_window(&mut r,&mut encoder).unwrap();

@@ -1035,7 +1035,7 @@ impl Cache {
         let selected=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else {Class::Visible};
         let selection=match contact.filter(|_|live) {
             Some(composes)=>pages::Selection {copies:Vec::new(),composes,transition:false,waiting:false},
-            None=>self.select_cells(served,presented,&selected,arrivals)?,
+            None=>self.select_cells(r,served,presented,&selected,arrivals)?,
         };
         let transition=selection.transition;
         let direct=if view {self.stroke_only(packet)}else {stroking};
@@ -1229,7 +1229,7 @@ impl Cache {
                 if publish {composed.push(handle.region());}
             }
             let held=target==Root::Store && {
-                let selection=self.select_cells(served,presented,&selected,arrivals)?;
+                let selection=self.select_cells(r,served,presented,&selected,arrivals)?;
                 let complete=!transition || selection.complete(served);
                 let input=blocks.iter().find_map(|(_,input)|*input);
                 if !complete {blocks.extend(selection.copies.iter().map(|(_,copy,_)|(copy.region,input)));}
@@ -1292,7 +1292,7 @@ impl Cache {
 
     fn copy_level(&mut self,scene:&Scene,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,commands:&mut RegionRecords)->Result<PixelRect,GpuRasterError> {
         if !self.ensure_window(r,scene,encoder) {return Err(GpuRasterError::NotReady);}
-        let selection=self.select_cells(self.plan.bounds,pages::Accuracy::Display,&|_|Class::Visible,r.arrival_token())?;
+        let selection=self.select_cells(r,self.plan.bounds,pages::Accuracy::Display,&|_|Class::Visible,r.arrival_token())?;
         if selection.transition && !selection.complete(self.plan.bounds) {return Ok(PixelRect::EMPTY);}
         let copied=self.copy_cells(r,encoder,commands,selection.copies)?;
         if !copied.is_empty() {self.commit_window(r,encoder)?;}

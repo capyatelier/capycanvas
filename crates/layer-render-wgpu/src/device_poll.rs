@@ -92,16 +92,18 @@ impl RetirementHandle {
     pub fn release_wake(&self)->Notify {let handle=self.clone();Arc::new(move||handle.pulse())}
     pub(crate) fn same(&self,other:&Self)->bool {Arc::ptr_eq(&self.0,&other.0)}
     pub(crate) fn wait_for_release(&self,blocked:&crate::residency::Blocked,wake:Notify) {
+        if !self.refuses(blocked,&wake) || self.closed() {wake();}
+    }
+    pub(crate) fn refuses(&self,blocked:&crate::residency::Blocked,wake:&Notify)->bool {
         let edge=blocked.bind(self);
         debug_assert!(edge.same(self),"a tier signals only the poll owner it first waited on");
-        let notify={let mut waiters=edge.0.waiters.lock().unwrap();edge.0.armed.store(true,SeqCst);
-            let fits=blocked.fits() || edge.closed();
-            if !fits {match waiters.iter_mut().find(|(waiting,old)|Arc::ptr_eq(old,&wake) && waiting.same_wait(blocked)) {
-                Some((waiting,_))=>if blocked.need()<waiting.need() {*waiting=blocked.clone();},
-                None=>waiters.push((blocked.clone(),wake.clone())),
-            }}
-            fits};
-        if notify {wake();}
+        let mut waiters=edge.0.waiters.lock().unwrap();edge.0.armed.store(true,SeqCst);
+        let refused=!blocked.fits();
+        if refused && !edge.closed() {match waiters.iter_mut().find(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same_wait(blocked)) {
+            Some((waiting,_))=>if blocked.need()<waiting.need() {*waiting=blocked.clone();},
+            None=>waiters.push((blocked.clone(),wake.clone())),
+        }}
+        refused
     }
     fn callback<A:Send+'static,F:FnOnce(A)+Send+'static>(&self,callback:Option<F>)->impl FnOnce(A)+Send+'static+use<A,F> {
         let ticket=Arc::new(Ticket {value:Mutex::new(callback)});

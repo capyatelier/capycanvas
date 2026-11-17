@@ -126,7 +126,7 @@ impl Cache {
         let mut naming=false;
         for coordinate in pages::coordinates(self.plan.bounds,self.plan.level) {
             let region=pages::bounds(coordinate,self.plan.level,self.plan.extent).intersect(self.plan.bounds);
-            if held.contains(&region) || self.refused(region) {continue;}
+            if held.contains(&region) || self.refused(r,region) {continue;}
             let cell=self.refinement_interest(self.plan.level,region).key;
             for half in &halves {
                 let mut frontier=Vec::new();
@@ -194,7 +194,7 @@ impl Cache {
         let mut pass=Pass {started:false,owed,closed:None};
         let flying=admitted.len();
         for (index,cell) in admitted.into_iter().chain(cells).enumerate() {
-            if index>=flying && std::iter::once(&*self).chain(self.overview.as_deref()).any(|cache|cache.plan.level==cell.level && cache.refused(cell.plan().bounds)) {continue;}
+            if index>=flying && std::iter::once(&*self).chain(self.overview.as_deref()).any(|cache|cache.plan.level==cell.level && cache.refused(r,cell.plan().bounds)) {continue;}
             let carried=previous.iter().position(|(key,_)|*key==cell).map(|index|previous.swap_remove(index).1).unwrap_or_default();
             if index>=flying && let Some(closed)=pass.closed.as_ref().filter(|closed|closed.applies(class(cell.plan().bounds))) {
                 match self.flight(cell.plan().bounds,closed) {
