@@ -30,6 +30,31 @@ if($LASTEXITCODE -ne 0){throw 'DataPackage file drop test build failed.'}
 & $executable $OutputDirectory
 if($LASTEXITCODE -ne 0){throw 'DataPackage file drop test failed.'}
 
+function Get-SettingsProducer([string]$Text,[string]$Pattern,[string]$Name){
+ $found=[regex]::Matches($Text,$Pattern)
+ if($found.Count -ne 1){throw "Expected exactly one SettingsView $Name producer"}
+ $start=$found[0].Index;$depth=0
+ $tokens=[regex]::Matches($Text.Substring($start),'(?s)"(?:\\.|[^"\\])*"|''(?:\\.|[^''\\])*''|//[^\r\n]*|/\*.*?\*/|[{}]')
+ foreach($token in $tokens){
+  if($token.Value -eq '{'){$depth++}
+  elseif($token.Value -eq '}'){$depth--;if($depth -eq 0){return $Text.Substring($start,$token.Index+1)}}
+ }
+ throw "Unbalanced SettingsView $Name producer"
+}
+$native=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '../SettingsView.cpp'))
+$show=Get-SettingsProducer $native '(?m)^[ \t]*fire_and_forget\s+show\s*\(\s*\)\s*\{' 'show'
+$apply=Get-SettingsProducer $native '(?m)^[ \t]*void\s+apply\s*\(\s*J\s+const\s*&\s*snapshot\s*\)\s*\{' 'apply'
+$retire=Get-SettingsProducer $apply 'if\s*\(\s*!\s*model\s*\.\s*Size\s*\(\s*\)\s*\)\s*\{' 'shared retirement'
+[IO.File]::WriteAllText((Join-Path $OutputDirectory 'settings-show.inc'),$show,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $OutputDirectory 'settings-retire.inc'),$retire,[Text.UTF8Encoding]::new($false))
+$source=Join-Path $PSScriptRoot '../tests/settings-show.cpp'
+$object=Join-Path $OutputDirectory 'settings-show.obj'
+$executable=Join-Path $OutputDirectory 'settings-show-test.exe'
+& cl /nologo /std:c++20 /EHsc /W4 /WX $optimization ('/I'+$OutputDirectory) $source "/Fo$object" "/Fe$executable" /link @manifest
+if($LASTEXITCODE -ne 0){throw 'Preferences show test build failed.'}
+& $executable
+if($LASTEXITCODE -ne 0){throw 'Preferences show test failed.'}
+
 & {
  $tokens=$null;$errors=$null
  $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'build.ps1'),[ref]$tokens,[ref]$errors)
