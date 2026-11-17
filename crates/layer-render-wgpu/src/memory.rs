@@ -347,7 +347,7 @@ impl WgpuRasterizer {
         self.source_tiles.get_mut().flush_retired(encoder);
         self.memory.sync_report(Kind::Scene,self.display_memory_report(scene.as_deref(),composition));
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
-        self.memory.carry_overdraft(self.scene_tiers.display.used());
+        if self.warm.is_none() {self.memory.carry_overdraft(self.scene_tiers.display.used());}
     }
     fn memory_pass_due(&self)->bool {
         let display=&self.scene_tiers.display;
@@ -358,7 +358,7 @@ impl WgpuRasterizer {
         let floor=self.scene_tiers.display.floor();
         self.memory.retired.set(Some([self.scene_tiers.display.heap().epoch(),floor]));
         let sources=self.source_tiles.get_mut();
-        sources.release_unused(floor);
+        if self.warm.is_some() {sources.release_ready();} else {sources.release_unused(floor);}
         let decoded=sources.retire_evicted();sources.flush_retired(encoder);
         if decoded+self.moving_images.retire_evicted(encoder)+scene.map_or(0,|scene|scene.retire_victims(encoder))!=0 {encoder.retain_resources();}
     }
@@ -551,8 +551,8 @@ impl WgpuRasterizer {
             .max(if refused==0 {0}else {gpu.saturating_add(refused).saturating_add(floor)}).max(self.memory.preparation.get());
         self.memory.target.set(total(std::array::from_fn(|part| wanted[part].max(pinned[part]))).max(required));
         let pinned_gpu_bytes=if self.memory.head_bytes()==0 {total(pinned)}else {total(held)};
-        MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes,
-            demand_ram_bytes: ram, demand_gpu_bytes: required, optional_gpu_bytes: u64::MAX, ..Default::default() }
+        self.warm_report(MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes,
+            demand_ram_bytes: ram, demand_gpu_bytes: required, optional_gpu_bytes: u64::MAX, ..Default::default() }, gpu)
     }
     fn raster_pins(&self)->u64 {
         let held=self.staged_restore_mask_bytes().saturating_add(self.raster_tiers.admitted.used());
@@ -567,16 +567,16 @@ impl WgpuRasterizer {
         let gpu = self.raster_tiers.raster.used().saturating_add(self.staged_restore_mask_bytes());
         let raster_pins = self.raster_pins();
         let raster_floor = raster_pins.max(WORKING_BYTES);
-        MemoryReport {ram_bytes:ram,gpu_bytes:gpu,
+        self.warm_report(MemoryReport {ram_bytes:ram,gpu_bytes:gpu,
             pinned_ram_bytes:self.raster_buffers.working.used().max(WORKING_BYTES),
             pinned_gpu_bytes:raster_floor,demand_ram_bytes:ram.max(WORKING_BYTES),
             demand_gpu_bytes:gpu.saturating_add(self.projected_restore_bytes().max(self.memory.head_bytes()))
-                .saturating_add(raster_floor.saturating_sub(raster_pins)).max(WORKING_BYTES),..Default::default()}
+                .saturating_add(raster_floor.saturating_sub(raster_pins)).max(WORKING_BYTES),..Default::default()},0)
     }
     fn staging_memory_report(&self)->MemoryReport {
         let [uploads,pinned]=self.uploads.memory_bytes();let [restore,restore_pinned]=self.restore_uploads.memory_bytes();
-        MemoryReport {gpu_bytes:uploads.saturating_add(restore),pinned_gpu_bytes:pinned.saturating_add(restore_pinned).max(WORKING_BYTES),
-            demand_gpu_bytes:uploads.saturating_add(restore).max(WORKING_BYTES),..Default::default()}
+        self.warm_report(MemoryReport {gpu_bytes:uploads.saturating_add(restore),pinned_gpu_bytes:pinned.saturating_add(restore_pinned).max(WORKING_BYTES),
+            demand_gpu_bytes:uploads.saturating_add(restore).max(WORKING_BYTES),..Default::default()},0)
     }
     pub(crate) fn current_display_memory_report(&self)->MemoryReport {
         self.display_memory_report(self.scene.as_deref(),self.composition_memory(self.scene.as_deref()))
@@ -589,11 +589,11 @@ impl WgpuRasterizer {
         self.memory.raster.publish(self.raster_memory_report());
         self.memory.staging.publish(self.staging_memory_report());
     }
-    fn publish_samples(&self) {
+    pub(crate) fn publish_samples(&self) {
         let samples = self.device.source_samples.stats();
-        self.memory.samples.publish(MemoryReport { ram_bytes: samples.physical_bytes as u64,
+        self.memory.samples.publish(self.warm_report(MemoryReport { ram_bytes: samples.physical_bytes as u64,
             pinned_ram_bytes: (samples.pinned_bytes as u64).max(SOURCE_WORKING_BYTES),
-            demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() });
+            demand_ram_bytes: DECODED_SAMPLE_BYTES, ..Default::default() }, 0));
     }
     pub fn after_present(&mut self) {
         if !self.memory.idle.load(std::sync::atomic::Ordering::Acquire)

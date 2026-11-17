@@ -899,6 +899,7 @@ pub trait CanvasRenderer {
     /// Classifies internal preparation state for the shared submission invariant.
     fn is_preparation_pending(_error: &Self::Error) -> bool { false }
     fn adopt_committed_pages(&mut self, _previous: &mut Self) where Self:Sized {}
+    fn resume_retained(&mut self, _document: &layer_core::Document) -> bool { false }
     /// Input postpones optional shader work. Shared editor state separately
     /// holds admission during a stroke/gesture or unfinished document edit.
     fn shader_input(&mut self) {}

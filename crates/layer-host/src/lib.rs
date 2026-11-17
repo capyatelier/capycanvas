@@ -197,6 +197,8 @@ pub struct NativeHost {
     catalog: Box<layer_ui::UiCatalog>,
     localization_generation: u64,
     thumbnails: layer_ui::ThumbnailRequests,
+    warm: window::WarmTabs,
+    navigator_shown: bool,
 }
 
 #[cfg(not(target_arch="wasm32"))]
@@ -240,6 +242,8 @@ impl NativeHost {
         self.require_document_owner()?;
         let previous = self.session.state().revision;
         let (retired, change) = self.session.replace_renderer(renderer)?;
+        let device = self.session.engine().backend().0.as_ref().map(|gpu| gpu.device());
+        self.warm.retain(|_, gpu| device == Some(gpu.device()));
         self.chrome_ready = false;
         self.preparation.retire();
         self.install_preparation_wake();
@@ -247,6 +251,11 @@ impl NativeHost {
         let prepared = prepare(self)?;
         if self.session.engine().backend().0.is_some() {self.prepare_canvas_startup()?;}
         Ok((retired, prepared))
+    }
+
+    pub fn release_gpu(&mut self) -> Renderer {
+        self.warm.retain(|_, _| false);
+        Renderer(self.session.renderer_mut().0.take())
     }
 
     pub fn set_wake(&mut self,wake:std::sync::Arc<dyn Fn()+Send+Sync>) {
@@ -259,6 +268,7 @@ impl NativeHost {
     }
     pub fn poll_preparation(&mut self)->layer_render::FrameDemand {
         if self.preparation.take() {
+            self.warm.retain(|_, gpu| gpu.keeps_warm());
             self.dirty |= self.session.engine().backend().0.as_ref()
                 .is_some_and(|gpu|gpu.frame_preparation_pending());
         }
@@ -395,6 +405,8 @@ impl NativeHost {
             catalog,
             localization_generation: 0,
             thumbnails: Default::default(),
+            warm: Default::default(),
+            navigator_shown: false,
         }
     }
     /// Regions changed since the platform service last observed accepted input.
@@ -691,6 +703,7 @@ impl NativeHost {
         self.pointer_event_inner(event, button, false)
     }
     pub fn suspend_renderer(&mut self) -> Result<(), String> {
+        self.warm.retain(|_, _| false);
         self.last_pen = None;
         let previous = self.session.state().revision;
         let change = self.session.suspend_renderer()?;

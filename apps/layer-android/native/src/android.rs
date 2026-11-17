@@ -572,7 +572,7 @@ impl App {
         self.tone.clear();
         self.surface = None;
         self.host.reset_canvas_frame_rate();
-        let retired = self.host.session.renderer_mut().0.take();
+        let retired = self.host.release_gpu().0;
         self.instance = None;
         self.window.gpu = None;
         self.blank_presented = false;

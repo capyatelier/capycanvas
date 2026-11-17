@@ -105,6 +105,9 @@ impl Activation {
         if self.selected == 0 {
             return Ok(());
         }
+        if self.renderer.is_some() {
+            return Ok(());
+        }
         let gpu = self
             .gpu
             .as_ref()
@@ -114,6 +117,40 @@ impl Activation {
     }
     pub fn take_renderer(&mut self) -> Option<Box<WgpuRasterizer>> {
         self.renderer.take()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct WarmTabs(Vec<(u64, Box<WgpuRasterizer>)>);
+impl WarmTabs {
+    fn park(&mut self, id: u64, mut gpu: Box<WgpuRasterizer>, document: &layer_core::Document, view: layer_render::ViewState, navigator: bool, wake: std::sync::Arc<dyn Fn() + Send + Sync>) -> Option<Box<WgpuRasterizer>> {
+        if !gpu.park_warm(document, view, navigator) {
+            return Some(gpu);
+        }
+        gpu.set_preparation_wake(wake);
+        let cap = gpu.warm_tab_bytes();
+        self.0.push((id, gpu));
+        while self.bytes() > cap {
+            let _ = retire_render_resources(self.0.remove(0).1);
+        }
+        None
+    }
+    fn take(&mut self, id: u64, device: Option<&wgpu::Device>) -> Option<Box<WgpuRasterizer>> {
+        let index = self.0.iter().position(|(tab, _)| *tab == id)?;
+        let gpu = self.0.remove(index).1;
+        if device == Some(gpu.device()) { return Some(gpu); }
+        let _ = retire_render_resources(gpu);
+        None
+    }
+    pub(crate) fn retain(&mut self, keep: impl Fn(u64, &WgpuRasterizer) -> bool) {
+        let mut index = 0;
+        while index < self.0.len() {
+            if keep(self.0[index].0, &self.0[index].1) { index += 1; }
+            else { let _ = retire_render_resources(self.0.remove(index).1); }
+        }
+    }
+    fn bytes(&self) -> u64 {
+        self.0.iter().map(|(_, gpu)| gpu.warm_bytes()).sum()
     }
 }
 
@@ -245,7 +282,14 @@ impl<P: Parked> DocumentWindow<P> {
         renderer
     }
 
+    fn park_warm(&self, host: &mut NativeHost, renderer: Option<Box<WgpuRasterizer>>) -> Option<Box<WgpuRasterizer>> {
+        let wake = host.wake_callback();
+        let view = host.session.engine().view();
+        host.warm.park(self.documents.selected(), renderer?, host.session.engine().document(), view, host.navigator_shown, wake)
+    }
+
     pub fn changed(&self, host: &mut NativeHost) {
+        host.warm.retain(|id, _| self.documents.contains_parked(id));
         host.document_count = self.documents.order().len();
         host.document_adopted();
         host.invalidate_snapshot();
@@ -405,10 +449,12 @@ impl<P: Parked> DocumentWindow<P> {
         }
         let tiles = host.session.park_document()?;
         let retired = self.retire_gpu(host);
+        let retired = self.park_warm(host, retired);
         self.documents.exchange_with(target, tiles, |next| {
             std::mem::swap(&mut *host.session, next.session_mut());
             exchange(next);
         }).map_err(|reason| reason.message(host.session.localization()))?;
+        let renderer = host.warm.take(target, self.gpu.as_ref().map(|gpu| &gpu.device));
         self.changed(host);
         host.startup = Default::default();
         let activation = Activation {
@@ -420,7 +466,7 @@ impl<P: Parked> DocumentWindow<P> {
             options,
             retired,
             retirement_barrier: false,
-            renderer: None,
+            renderer,
         };
         Ok(Some((activation, None)))
     }
@@ -489,11 +535,12 @@ impl<P: Parked> DocumentWindow<P> {
             next
         });
         host.document_close_prepared = false;
+        let renderer = host.warm.take(self.documents.selected(), self.gpu.as_ref().map(|gpu| &gpu.device));
         self.changed(host);
         host.startup = Default::default();
         Ok((Activation {_activity:prepared.activity,selected:self.documents.selected(),epoch:host.session.state().document_file.epoch,
             gpu:self.gpu.clone(),color:host.session.engine().document().composition().color,
-            options:prepared.options,retired,retirement_barrier:true,renderer:None}, closed))
+            options:prepared.options,retired,retirement_barrier:true,renderer}, closed))
     }
 
     /// Checks that the activation still targets the selected drawing, its
@@ -766,6 +813,7 @@ impl<P: Parked> DocumentWindow<P> {
         }
         let tiles = host.session.park_document()?;
         let retired = self.retire_gpu(host);
+        let retired = self.park_warm(host, retired);
         let outgoing = std::mem::replace(&mut host.session, candidate.take().unwrap());
         self.documents.append(park(outgoing), tiles, host.session.localization());
         self.changed(host);
@@ -1089,6 +1137,193 @@ mod tests {
         settle(&mut host);
         assert_eq!(digests(&host), exact);
         let _ = std::fs::remove_dir_all(directory);
+        finish(host, window);
+    }
+
+    fn presented(host: &mut NativeHost) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !host.session.engine().backend().0.as_ref().unwrap().has_presentable_frame() {
+            assert!(Instant::now() < deadline, "the drawing never presented");
+            host.prepare_canvas_frame(0, 0, true).unwrap();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        settle(host);
+    }
+
+    fn warm_switch(window: &mut Window, host: &mut NativeHost, id: u64) {
+        let mut activation = switch(window, host, id);
+        activation.work().unwrap();
+        let gpu = window.resume(host, &mut activation).unwrap().unwrap();
+        host.replace_renderer(Renderer(Some(gpu))).unwrap();
+        window.changed(host);
+    }
+
+    #[test]
+    fn a_warm_switch_presents_the_retained_drawing_on_the_first_frame() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        let filled = window.documents.selected();
+        open(&mut window, &mut host);
+        assert_eq!(host.warm.0.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [filled], "the drawing left for a new one stays warm");
+        warm_switch(&mut window, &mut host, filled);
+        assert!(host.warm.0.iter().map(|(id, _)| *id).eq([2]), "the drawing switched away from stays warm");
+        let gpu = host.session.engine().backend();
+        assert!(layer_render::CanvasRenderer::showing_drawing(gpu) && gpu.0.as_ref().unwrap().has_presentable_frame(), "the first frame after a warm switch presents the retained drawing");
+        assert!(host.startup.canvas_ready, "a warm drawing needs no canvas startup");
+        settle(&mut host);
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_dab_after_a_warm_switch_is_accepted_within_two_frames() {
+        let mut host = host();
+        let mut window = Window::default();
+        let first = window.documents.selected();
+        open(&mut window, &mut host);
+        warm_switch(&mut window, &mut host, first);
+        let transform = layer_core::Affine(host.session.state().camera.document_to_surface());
+        let at = transform.map(layer_core::Point { x: 32., y: 24. });
+        let down = 1_000_000_000u64;
+        let records = [f64::from(at.x), f64::from(at.y), 0.5, 0., 0., 0., 0., down as f64, 1.,
+            f64::from(at.x) + 4., f64::from(at.y), 0.5, 0., 0., 0., 0., (down + 8_000_000) as f64, 2.];
+        let view_revision = host.session.state().camera.revision;
+        host.pointer_batch(crate::PointerBatch { id: 7, tool: 0, button: 0, records: &records, predicted: false, view_revision, device_flags: layer_engine::SampleFlags(0) }).unwrap();
+        for frame in 1..=2 {
+            host.prepare_canvas_frame(down + frame * 8_000_000, down + frame * 8_000_000, true).unwrap();
+        }
+        assert!(host.session.engine().metrics().last_consumed_paint_ns >= down, "the pen-down after a warm switch paints within two frames");
+        finish(host, window);
+    }
+
+    #[test]
+    fn background_drawings_stay_within_the_warm_cap() {
+        let mut host = host();
+        let mut window = Window::default();
+        for _ in 0..3 { open(&mut window, &mut host); }
+        let cap = host.session.engine().backend().0.as_ref().unwrap().warm_tab_bytes();
+        assert!(host.warm.0.len() >= 1 && host.warm.bytes() <= cap, "{} warm bytes over the {cap} cap", host.warm.bytes());
+        assert!(host.warm.0.iter().all(|(id, _)| window.documents.contains_parked(*id)));
+        finish(host, window);
+    }
+
+    #[test]
+    fn rapid_back_and_forth_warm_switches_never_stall_or_lose_pixels() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        let first = window.documents.selected();
+        let filled = digests(&host);
+        open(&mut window, &mut host);
+        let second = window.documents.selected();
+        for round in 0..6 {
+            warm_switch(&mut window, &mut host, if round % 2 == 0 { first } else { second });
+            host.prepare_canvas_frame(0, 0, true).unwrap();
+        }
+        settle(&mut host);
+        assert_eq!(window.documents.selected(), second);
+        assert!(host.warm.0.iter().map(|(id, _)| *id).eq([first]));
+        warm_switch(&mut window, &mut host, first);
+        settle(&mut host);
+        assert_eq!(digests(&host), filled);
+        finish(host, window);
+    }
+
+    #[test]
+    fn an_evicted_background_drawing_switches_cold_without_stalling() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        let first = window.documents.selected();
+        let filled = digests(&host);
+        open(&mut window, &mut host);
+        host.warm.retain(|_, _| false);
+        warm_switch(&mut window, &mut host, first);
+        assert!(!layer_render::CanvasRenderer::showing_drawing(host.session.engine().backend()), "an evicted drawing has no retained display");
+        presented(&mut host);
+        assert_eq!(digests(&host), filled);
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_background_drawing_from_a_replaced_gpu_switches_cold_on_the_new_one() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        let first = window.documents.selected();
+        open(&mut window, &mut host);
+        assert!(host.warm.0.iter().map(|(id, _)| *id).eq([first]));
+        let color = host.session.engine().document().composition().color;
+        let recovered = WgpuRasterizer::new_native_headless(color).unwrap();
+        let device = recovered.device().clone();
+        drop(host.replace_renderer(Renderer(Some(recovered.into()))).unwrap());
+        presented(&mut host);
+        warm_switch(&mut window, &mut host, first);
+        presented(&mut host);
+        assert_eq!(host.session.engine().backend().0.as_ref().unwrap().device(), &device, "the drawing resumes on the recovered GPU");
+        assert!(host.warm.0.iter().map(|(id, _)| *id).eq([2]));
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_replaced_or_lost_gpu_releases_the_background_drawings_held_on_it() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        open(&mut window, &mut host);
+        open(&mut window, &mut host);
+        assert_eq!(host.warm.0.len(), 2);
+        let color = host.session.engine().document().composition().color;
+        let recovered = WgpuRasterizer::new_native_headless(color).unwrap();
+        let device = recovered.device().clone();
+        drop(host.replace_renderer(Renderer(Some(recovered.into()))).unwrap());
+        host.poll_preparation();
+        presented(&mut host);
+        host.poll_preparation();
+        assert!(host.warm.0.iter().all(|(_, gpu)| gpu.device() == &device),
+            "{} background drawings still hold the replaced GPU", host.warm.0.iter().filter(|(_, gpu)| gpu.device() != &device).count());
+        open(&mut window, &mut host);
+        assert_eq!(host.warm.0.len(), 1);
+        drop(host.release_gpu());
+        assert!(host.warm.0.is_empty(), "a lost GPU releases every background drawing before recovery makes a device");
+        finish(host, window);
+    }
+
+    #[test]
+    fn a_renderer_suspended_after_gpu_failure_releases_background_drawings() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        open(&mut window, &mut host);
+        open(&mut window, &mut host);
+        assert_eq!(host.warm.0.len(), 2);
+        host.suspend_renderer().unwrap();
+        drop(host.session.renderer_mut().0.take());
+        window.gpu = None;
+        assert!(host.warm.0.is_empty(), "{} background drawings still hold the failed GPU after the Windows save-after-failure sequence", host.warm.0.len());
+        finish(host, window);
+    }
+
+    #[test]
+    fn pressure_before_a_switch_still_evicts_background_drawings() {
+        let mut host = host();
+        let mut window = Window::default();
+        fill(&mut host);
+        let first = window.documents.selected();
+        open(&mut window, &mut host);
+        open(&mut window, &mut host);
+        assert_eq!(host.warm.0.len(), 2);
+        let budget = layer_core::MemoryBudget::process();
+        let id = host.session.engine().backend().0.as_ref().unwrap().renderer_factory().memory_device();
+        let active = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Visible, Some(id));
+        active.report(layer_core::MemoryReport { demand_gpu_bytes: u64::MAX, ..Default::default() });
+        budget.flush_reports();
+        assert!(host.warm.0.iter().all(|(_, gpu)| !gpu.keeps_warm()), "the pressure takes every background display");
+        warm_switch(&mut window, &mut host, first);
+        host.poll_preparation();
+        let stale = host.warm.0.iter().filter(|(_, gpu)| !gpu.keeps_warm()).count();
+        assert!(host.warm.0.is_empty(), "{} background drawings outlived the pressure that took their memory ({stale} over their grant)", host.warm.0.len());
+        drop(active);
         finish(host, window);
     }
 

@@ -177,7 +177,7 @@ impl MetalHost {
         self.surface = None;
         host.reset_canvas_frame_rate();
         self.timing = None;
-        let retired = host.session.renderer_mut().0.take();
+        let retired = host.release_gpu().0;
         self.instance = None;
         self.blank_presented = false;
         self.presented_panel_revision = None;

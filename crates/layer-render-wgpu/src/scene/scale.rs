@@ -307,6 +307,7 @@ pub(crate) struct Cache {
     streaming: refinement::Streaming,
     pivot_waiting: Option<(crate::frame_demand::Input,crate::frame_demand::ArrivalToken)>,
     pivot_refusal: Option<crate::residency::Blocked>,
+    reduction_refusal: Option<crate::residency::Blocked>,
     pivot_pending: bool,
     pivot_edit: Option<(OccurrenceHandle,layer_core::raster::ContentStamp,bool)>,
     pointer: Option<[f32;2]>,
@@ -614,6 +615,12 @@ fn dab_reach(packet:FramePacket<'_>,extent:[u32;2])->impl Iterator<Item=PixelRec
     }).filter(|reach|!reach.is_empty())
 }
 
+fn samples_next(view:layer_render::ViewState,level:u32)->bool {
+    let [a,b,c,d,_,_]=view.document_to_surface.map(f64::from);
+    let reach=[a.hypot(b),c.hypot(d),a.hypot(c),b.hypot(d)].into_iter().fold(0.,f64::max)/(a*d-b*c).abs();
+    reach>f64::from(1u32<<level)*0.8f64.exp2()
+}
+
 fn coarse_level(plan: display_mips::Plan) -> u32 {
     plan.level + u32::from(plan.size.iter().any(|size| *size > display_mips::MAX_SIDE))
 }
@@ -693,7 +700,7 @@ impl Cache {
             layer_count: layers,
             overview, preparing: false, declaring: false, exact_tile: None,
             unchanged: false, graph: Default::default(), transform: r.transform_preview.clone(), retired: None, previous: None, standing: None, complete: false, contact: false, gesture: None, stroked: None, presented: pages::Accuracy::Display, refused_at: None,
-            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
+            streaming: Default::default(), pivot_waiting: None, pivot_refusal: None, reduction_refusal: None, pivot_pending: false, pivot_edit: None, pointer: None,
         }
     }
     fn geometry(r: &WgpuRasterizer, plan: display_mips::Plan) -> wgpu::Buffer {
@@ -836,6 +843,22 @@ impl Cache {
         r.uploads.write_at(encoder,&self.geometry,0,&bytes)
     }
     pub(crate) fn pinned_page_bytes(&self) -> u64 { self.pages.lock().unwrap().pinned_bytes() }
+    pub(crate) fn keep_warm(&mut self,r:&mut WgpuRasterizer,encoder:&mut submission::CommandEncoder,view:layer_render::ViewState,mut room:u64)->Result<Vec<[u32;2]>,GpuRasterError> {
+        self.streaming=Default::default();
+        if self.complete {self.overview=None;self.previous=None;}
+        if !(self.complete && samples_next(view,self.plan.level)) && self.pixels.release_next() {self.write_projection_scales(r,encoder)?;}
+        let halves=if self.graph.root.is_some() {self.wanted_halves(self.plan.bounds,view)} else {Vec::new()};
+        let halves=halves.into_iter().take_while(|key|{let fits=key.bytes()<=room;room=room.saturating_sub(key.bytes());fits}).collect::<Vec<_>>();
+        let mut cells=halves.iter().map(|key|key.coordinate).collect::<Vec<_>>();
+        cells.dedup();
+        let active=self.graph.parts.as_ref().map(|parts|parts.nodes[1].clone());
+        self.pages.lock().unwrap().park(|key|halves.contains(key)
+            || key.source.is_some() && Some(&key.expression)==active.as_ref() && key.level==self.plan.level && cells.contains(&key.coordinate));
+        Ok(cells)
+    }
+    pub(crate) fn release_warm_cell(&self,coordinate:[u32;2]) {
+        self.pages.lock().unwrap().release_except(|key|key.level!=self.plan.level || key.coordinate!=coordinate);
+    }
     pub(crate) fn charged_scratch_bytes(&self)->u64 {self.output_charge.bytes()+self.overview.iter().chain(&self.previous).map(|cache|cache.charged_scratch_bytes()).sum::<u64>()}
     fn window_memory(&self)->u64 { self.window_bytes().saturating_sub(self.charged_scratch_bytes()) }
     fn owed_window_bytes(&self)->u64 {
@@ -851,8 +874,8 @@ impl Cache {
         if key.source.is_none() && self.graph.content.as_ref()!=Some(&key.expression) {self.pages.lock().unwrap().set_optional(&key);}
         Ok(Ok(image))
     }
-    fn reserve_window(&self,r:&WgpuRasterizer,scene:&Scene,bytes:u64)->Option<crate::residency::Reservation> {
-        r.admit_tier(Some(scene),&r.scene_tiers.windows,Class::Visible,bytes).ok()
+    fn reserve_window(&self,r:&WgpuRasterizer,scene:&Scene,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        r.admit_tier(Some(scene),&r.scene_tiers.windows,Class::Visible,bytes)
     }
     pub(crate) fn frame_memory(&self,r:&WgpuRasterizer,retained:u64)->[u64;2] {
         let other=r.scale_display.as_ref().map_or(0,Cache::window_memory);
@@ -908,8 +931,8 @@ impl Cache {
             + self.exact_tile.as_ref().map_or(0, |image| texture_bytes(&image.texture))
     }
     pub(crate) fn scratch_images(&self) -> usize { self.graph.root.as_ref().map_or(0, |root| root.cost().1 as usize + 1) }
-    pub(crate) fn trim_scratch(&mut self) -> Vec<Image> {
-        let keep = self.scratch_images();
+    pub(crate) fn trim_scratch(&mut self, parked: bool) -> Vec<Image> {
+        let keep = if parked { 0 } else { self.scratch_images() };
         let mut retired = Vec::new();
         if self.graph.motion.as_ref().is_none_or(|[above,_]|graph::Expression::is_clear(above)) {
             retired.extend(self.above.take());self.above_revision=None;
@@ -920,7 +943,7 @@ impl Cache {
             retired.push(image);self.used.pop();
         }
         for cache in self.overview.iter_mut() {
-            retired.extend(cache.trim_scratch());
+            retired.extend(cache.trim_scratch(parked));
         }
         retired
     }
@@ -1333,7 +1356,7 @@ impl Cache {
         let format=self.precision.format();
         if self.pixels.root().is_none_or(|image|image.texture.format()!=format) {
             let bytes=self.plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(format.block_copy_size(None).unwrap());
-            let Some(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(None);};
+            let Ok(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(None);};
             let charge=reservation.charge(bytes);
             let retired=self.pixels.take();
             let bytes=retired.iter().map(Image::bytes).sum();
@@ -1358,7 +1381,11 @@ impl Cache {
         if !self.coverage_complete() {return self.write_projection_scales(r,encoder);}
         if self.pixels.next().is_none() {
             let bytes=self.owed_window_bytes();
-            let Some(reservation)=self.reserve_window(r,scene,bytes) else {return self.write_projection_scales(r,encoder);};
+            let reservation=match self.reserve_window(r,scene,bytes) {
+                Ok(reservation)=>reservation,
+                Err(refusal)=>{self.reduction_refusal=Some(refusal);return self.write_projection_scales(r,encoder);},
+            };
+            self.reduction_refusal=None;
             self.pixels.ensure(r,self.plan,self.precision.format(),reservation.charge(bytes));
         }
         let levels = [self.pixels.root().unwrap().clone(), self.pixels.next().unwrap().clone()];

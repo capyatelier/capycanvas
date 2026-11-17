@@ -82,6 +82,11 @@ impl Pixels {
             display_mips::Plan::window(plan.extent, plan.level + 1, plan.bounds),format),charge));
     }
     pub fn storage_bytes(&self) -> u64 { self.root.iter().chain(&self.next).map(|window|window.image.bytes()).sum() }
+    pub(super) fn release_next(&mut self)->bool {
+        let (Some(root),Some(_))=(self.root().map(|root|root.plan.size),self.next.take()) else {return false;};
+        self.unreduced=PixelRect::new(0,0,root[0],root[1]);
+        true
+    }
     pub(super) fn take(&mut self)->Vec<Image> {
         self.root.take().into_iter().chain(self.next.take()).map(|window|window.image).collect()
     }
@@ -865,6 +870,14 @@ impl Store {
         let unwanted=self.pages.iter().filter(|(_,page)|page.unwanted()).map(|(key,_)|key.clone()).collect::<Vec<_>>();
         self.release_unwanted(&unwanted);
     }
+    pub(super) fn park(&mut self,kept:impl Fn(&Key)->bool) {
+        self.inputs.clear();
+        self.release_except(kept);
+    }
+    pub(super) fn release_except(&mut self,kept:impl Fn(&Key)->bool) {
+        let released=self.pages.iter().filter(|(key,page)|!page.pinned() && !kept(key)).map(|(key,_)|key.clone()).collect::<Vec<_>>();
+        for key in released {let image=self.remove(&key).image;self.retire(image);}
+    }
     pub(super) fn release_unwanted(&mut self,keys:&[Key]) {
         for key in keys {
             if self.pages.get(key).is_some_and(Page::unwanted) {let image=self.remove(key).image;self.retire(image);}
@@ -1562,7 +1575,7 @@ impl Cache {
         if copies.iter().any(|copy|copy.image.texture.format()!=self.precision.format()) && !commands.projection_ready(r,self.precision.format()) {return Ok(());}
         if self.above.root().is_none_or(|image|image.plan!=plan || image.texture.format()!=self.precision.format()) {
             let bytes=plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(self.precision.format().block_copy_size(None).unwrap());
-            let Some(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(());};
+            let Ok(reservation)=self.reserve_window(r,scene,bytes) else {return Ok(());};
             let window=reservation.charge(bytes);
             let old=self.above.take();let bytes=old.iter().map(Image::bytes).sum();
             let charge=crate::DisplayRetirement {_charge:r.retired_display_bytes.charge(bytes),
@@ -1619,7 +1632,7 @@ impl Cache {
         let format=self.precision.format();
         if self.pixels.root().is_some_and(|image|image.texture.format()==format) {return true;}
         let bytes=self.plan.size.map(u64::from).into_iter().product::<u64>()*u64::from(format.block_copy_size(None).unwrap());
-        let Some(reservation)=self.reserve_window(r,scene,bytes) else {return false;};
+        let Ok(reservation)=self.reserve_window(r,scene,bytes) else {return false;};
         let charge=reservation.charge(bytes);
         self.end_contact(encoder);
         let retired=self.pixels.take();
@@ -3401,7 +3414,7 @@ pub(super) mod query_tests {
             let window_bytes=cache.plan.size.map(u64::from).into_iter().product::<u64>()*16
                 +cache.plan.level_size(cache.plan.level+1).map(u64::from).into_iter().product::<u64>()*16;
             let initial_scene=r.memory.display_grant();let initial_display=r.memory.display_owner().grant().gpu_bytes;
-            let reservation=cache.reserve_window(&r,&scene,window_bytes).unwrap_or_else(||panic!("projection setup: Scene={initial_scene} Display={initial_display} window_bytes={window_bytes}"));
+            let reservation=cache.reserve_window(&r,&scene,window_bytes).unwrap_or_else(|_|panic!("projection setup: Scene={initial_scene} Display={initial_display} window_bytes={window_bytes}"));
             let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
             cache.pixels.ensure_root(&r,cache.plan,wgpu::TextureFormat::Rgba32Float,"composition window",reservation.charge(window_bytes));
             cache.pixels.ensure(&r,cache.plan,wgpu::TextureFormat::Rgba32Float,r.scene_tiers.windows.charge(0));

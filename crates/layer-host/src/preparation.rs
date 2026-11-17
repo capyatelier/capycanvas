@@ -64,7 +64,7 @@ impl PreparationWake {
     pub fn take(&self)->bool {self.0.pending.swap(false,Ordering::AcqRel)}
     pub fn retire(&self) {
         let mut registration=self.0.registration.lock().unwrap();
-        registration.generation=registration.generation.wrapping_add(1);self.0.pending.store(false,Ordering::Release);
+        registration.generation=registration.generation.wrapping_add(1);
     }
     pub fn close(&self) {
         let mut registration=self.0.registration.lock().unwrap();

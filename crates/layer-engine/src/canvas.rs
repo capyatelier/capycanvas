@@ -396,8 +396,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             context.original = context.current.clone();
         }
         self.restore_rasters.clear();
-        self.rebuild_all = true;
-        self.composite_all = true;
+        if !backend.resume_retained(self.editor.document()) {
+            self.rebuild_all = true;
+            self.composite_all = true;
+        }
         self.prepared_retouch = None;
         backend.adopt_committed_pages(&mut self.backend);
         self.pending_frame=None;

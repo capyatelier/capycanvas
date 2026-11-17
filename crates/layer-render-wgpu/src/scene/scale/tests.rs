@@ -229,7 +229,7 @@ mod commit;
 pub(super) mod cell_keys;
 
 #[path = "contact_tests.rs"]
-mod contact;
+pub(crate) mod contact;
 
 #[path = "scratch_tests.rs"]
 mod scratch_ownership;
@@ -409,7 +409,7 @@ fn a_view_without_an_overview_admits_its_root_window_beyond_a_quarter_of_the_sce
     let _budget=crate::memory::memory_tests::display_frame_with_budget(&mut r,frame,used+2*bytes);
     let grant=r.memory.display_grant();
     assert!(grant/4<r.scene_tiers.display.used()+bytes && r.scene_tiers.display.used()+bytes<=grant,"the window fits the display grant but not a quarter of it: window={bytes} grant={grant}");
-    assert!(cache.reserve_window(&r,r.scene.as_ref().unwrap(),bytes).is_some(),"the view's required root window is admitted within the scene budget");
+    assert!(cache.reserve_window(&r,r.scene.as_ref().unwrap(),bytes).is_ok(),"the view's required root window is admitted within the scene budget");
 }
 
 #[test]

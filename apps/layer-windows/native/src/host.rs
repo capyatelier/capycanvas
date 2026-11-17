@@ -483,7 +483,7 @@ impl CapyHost {
             self.held_canvas = None;
             self.presenter_key = None;
             self.surface_ready.retire_chrome();
-            let renderer = layer_host::Renderer(self.native.session.renderer_mut().0.take());
+            let renderer = self.native.release_gpu();
             if let Some(service) = self.documents.as_mut().and_then(|d| d.recovery.as_mut()) { service.retire_renderer(renderer); } else { drop(renderer); }
             self.native.startup = Default::default();
             // Completed document candidates may still own the removed device;

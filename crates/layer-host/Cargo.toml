@@ -22,3 +22,4 @@ pollster = "0.4"
 
 [dev-dependencies]
 layer-core = { path = "../layer-core", features = ["test-support"] }
+layer-render-wgpu = { path = "../layer-render-wgpu", features = ["test-support"] }

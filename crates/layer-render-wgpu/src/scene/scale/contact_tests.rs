@@ -945,26 +945,26 @@ fn a_memory_trim_during_a_stroke_ends_the_contact_for_cells_it_did_not_declare_i
     assert!(error<1e-4,"the trimmed renderer keeps every dab and recomposes the cells it released: {error}");
 }
 
-fn layered_fit(doc:&layer_core::Document)->(WgpuRasterizer,FramePacket<'_>) {
+pub(crate) fn layered_fit(doc:&layer_core::Document)->(WgpuRasterizer,FramePacket<'_>) {
     let extent=doc.composition().size;let scale=1200./extent[1] as f32;
     let r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
     frame.view.width_px=1920;frame.view.height_px=1200;frame.view.document_to_surface=[scale,0.,0.,scale,(1920.-scale*extent[0] as f32)/2.,0.];
     (r,frame)
 }
-fn named(doc:&layer_core::Document,name:&str)->layer_core::OccurrenceHandle {
+pub(crate) fn named(doc:&layer_core::Document,name:&str)->layer_core::OccurrenceHandle {
     doc.scene().order().iter().copied().find(|handle|doc.scene().occurrence(*handle).unwrap().name.as_ref()==name).unwrap()
 }
 fn pencil(x:f32,y:f32,radius:f32,style:&layer_render::DabStyle)->layer_render::Dab {
     let mut dab=material_dab(x,y,style);dab.radii=[radius;2];dab.previous=[radius,radius,1.,0.];dab.motion=[8.,0.];dab
 }
-fn pencil_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,stroke:u64,[x,y]:[f32;2],radius:f32,step:usize)->crate::test_support::PassCounts {
+pub(crate) fn pencil_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,stroke:u64,[x,y]:[f32;2],radius:f32,step:usize)->crate::test_support::PassCounts {
     let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
     let x=x+16.*step as f32;
     let counts=predicted_frame(r,frame,target,&style,stroke,&[pencil(x,y,radius,&style),pencil(x+8.,y,radius,&style)],step==0,0.01*(step+1) as f32);
     crate::test_support::complete(r);counts
 }
-fn pencil_lift(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,stroke:u64,[x,y]:[f32;2],radius:f32) {
+pub(crate) fn pencil_lift(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,stroke:u64,[x,y]:[f32;2],radius:f32) {
     let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
     let last=pencil(x,y,radius,&style);let end=layer_render::DabBatch {stroke_id:layer_core::StrokeId(stroke),stroke_start:false,stroke_end:true,..dab_batch(target,style,last.bounds())};
     crate::test_support::submit_ready(r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&end),time_seconds:1.,..frame}).unwrap();

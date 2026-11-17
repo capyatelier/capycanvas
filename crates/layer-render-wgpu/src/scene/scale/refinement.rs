@@ -72,6 +72,12 @@ impl Cache {
         use crate::frame_demand::Outstanding::Runnable;
         if self.contact || self.preparing {return Some(Runnable);}
         self.cells_demand(r,refining(r)).or_else(||self.pixels.committed_root().is_none().then(||self.residual_demand(r)))
+            .or_else(||self.reduction_demand(r))
+    }
+    fn reduction_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
+        use crate::frame_demand::{Input,Outstanding::{Blocked,Runnable}};
+        (!self.pixels.unreduced().is_empty() && self.pixels.committed_root().is_some() && self.coverage_complete())
+            .then(||if self.reduction_refusal.as_ref().is_some_and(|refusal|r.refuses(refusal)) {Blocked(Input::Residency)}else {Runnable})
     }
 
     pub(super) fn release_streaming(&mut self,encoder:&crate::submission::CommandEncoder) {

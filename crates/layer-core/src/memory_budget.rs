@@ -475,6 +475,7 @@ impl MemoryBudget {
         let mut state=self.0.state.lock().unwrap();
         if state.apply_reports() {self.rebalance(state);}
     }
+    pub fn facts(&self) -> MemoryFacts { self.0.state.lock().unwrap().facts }
     pub fn ram_limit_bytes(&self) -> u64 { self.0.cache.limit.load(Ordering::Acquire) }
     pub fn import_headroom_bytes(&self) -> u64 { self.0.cache.headroom.load(Ordering::Acquire) }
     fn refused(&self) { let _ = self.0.cache.refusals.try_update(Ordering::Relaxed, Ordering::Relaxed, |count| Some(count.saturating_add(1))); }

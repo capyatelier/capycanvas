@@ -1330,6 +1330,9 @@ impl DecodedTiles {
             if kept > keep { slot.lease.evict(); }
         }
     }
+    pub(crate) fn release_ready(&self) {
+        for slot in self.slots.iter().filter(|slot| slot.ready() && !slot.leased()) { slot.lease.evict(); }
+    }
     pub(crate) fn retire_evicted(&mut self) -> u64 {
         if !self.evicted.swap(false, Ordering::AcqRel) { return 0; }
         let (mut bytes, mut index) = (0, 0);

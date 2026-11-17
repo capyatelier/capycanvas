@@ -35,6 +35,7 @@ impl Navigator {
     }
     pub fn scale(&self) -> f32 { self.cache.as_ref().map_or(1., |c| (1 << c.plan.level) as f32) }
     pub fn storage_bytes(&self) -> u64 { self.cache.as_ref().map_or(0, Cache::window_bytes) }
+    pub(crate) fn release(&mut self) { self.cache = None; }
 
     pub(in crate::scene) fn prepare(&mut self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,pages:Pages,reset:bool)->Result<(),GpuRasterError> {
         #[cfg(test)] crate::test_support::PassCounts {navigator_checks:1,..Default::default()}.record();

@@ -102,6 +102,7 @@ mod saved_pipelines;
 pub use saved_pipelines::SavedPipelines;
 mod renderer_factory;
 mod memory;
+mod warm;
 pub use memory::new_drawing_working_bytes as new_drawing_memory_requirement;
 pub use renderer_factory::RendererFactory;
 use pipeline_device::PipelineDevice;
@@ -1161,6 +1162,7 @@ pub struct WgpuRasterizer {
     composite_revision: u64,
     presentation: DrawingPresentation,
     canvas_transition: layer_render::CanvasFade,
+    warm: Option<warm::Warm>,
     artwork_revision: u64,
     composite_damage: PixelRect,
     /// The composite's blend space, from the latest frame.
@@ -1595,6 +1597,7 @@ impl WgpuRasterizer {
             composite_revision: 0,
             presentation: DrawingPresentation::default(),
             canvas_transition: Default::default(),
+            warm: None,
             artwork_revision: 0,
             composite_damage: PixelRect::EMPTY,
             thumbnails: thumbnails::Thumbnails::new(),
@@ -1750,9 +1753,9 @@ impl WgpuRasterizer {
         self.scene=scene;self.scale_display=cache;
     }
     pub(crate) fn retire_scratch(&self,scene:Option<&mut scene::Scene>,cache:Option<&mut scene::scale::Cache>,encoder:&mut submission::CommandEncoder) {
-        let keep=cache.as_ref().map_or(0,|cache|cache.scratch_images());
+        let keep=cache.as_ref().filter(|_|self.warm.is_none()).map_or(0,|cache|cache.scratch_images());
         let mut pages=scene.map_or_else(Vec::new,|scene|scene.trim_scratch(keep));
-        let images=cache.map_or_else(Vec::new,|cache|cache.trim_scratch());
+        let images=cache.map_or_else(Vec::new,|cache|cache.trim_scratch(self.warm.is_some()));
         let bytes=pages.iter().map(PageSurface::storage_bytes).sum::<u64>()
             +images.iter().map(scene::Image::bytes).sum::<u64>();
         if bytes!=0 {
@@ -4157,6 +4160,14 @@ impl CanvasRenderer for WgpuRasterizer {
     fn set_clipping_preview(&mut self, shadows: bool, highlights: bool) { self.clipping_preview = [shadows, highlights]; }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
+    }
+    fn resume_retained(&mut self, document: &layer_core::Document) -> bool {
+        let Some(warm) = self.warm.take() else { return false; };
+        self.memory.invalidate_limits();
+        self.publish_memory();
+        self.publish_samples();
+        self.factory.memory_budget().flush_reports();
+        warm == warm::Warm::of(document)
     }
     fn showing_drawing(&self) -> bool { self.presentation.showing }
     fn showing_navigator(&self) -> bool { self.presentation.navigator }

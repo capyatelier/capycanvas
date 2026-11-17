@@ -331,6 +331,7 @@ impl NativeHost {
         let proof = self.proof.lut(&self.session);
         let staged = display.blank_presented && self.startup.canvas_ready;
         let overviews = navigators.placements(self, display.scale);
+        self.navigator_shown = !overviews.is_empty();
         let session = &self.session;
         let state = session.state();
         let style = state.palette.glass;
