@@ -269,8 +269,9 @@ impl NativeHost {
     pub fn poll_preparation(&mut self)->layer_render::FrameDemand {
         if self.preparation.take() {
             self.warm.retain(|_, gpu| gpu.keeps_warm());
-            self.dirty |= self.session.engine().backend().0.as_ref()
-                .is_some_and(|gpu|gpu.frame_preparation_pending());
+            if !self.startup.complete && let Some(Ok(progress)) = self.session.renderer_mut().0.as_mut().map(|gpu| gpu.poll_startup()) {
+                self.dirty |= progress != self.startup;
+            }
         }
         self.frame_demand()
     }
@@ -1602,6 +1603,76 @@ mod tests {
         assert!(host.error.is_none() && host.poisoned().is_none());
     }
 
+    #[test]
+    fn a_windows_host_whose_stroke_waits_on_memory_frames_only_when_its_renderer_asks() {
+        use layer_render::{CanvasRenderer, FrameDemand};
+        use std::time::{Duration, Instant};
+        const MIB: u64 = 1 << 20;
+        let budget = layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { host_default_bytes: Some(8 << 30), override_bytes: Some(8 << 30), ..Default::default() });
+        let roomy = layer_core::DeviceMemoryFacts { budget_bytes: Some(4 << 30), ..Default::default() };
+        let document = layer_ui::new_drawing(4096, 3072, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless_in(document.composition().color, roomy, budget.clone()).unwrap();
+        let device = gpu.renderer_factory().memory_device();
+        let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        *native.session = UiSession::from_project(Renderer(Some(gpu)), document, None, [640, 480], layer_ui::Platform::Windows).unwrap();
+        native.startup = Default::default();
+        native.resize(640, 480, 1.).unwrap();
+        let mut host = crate::test_storage::StoredHost::new(native);
+        host.set_wake(std::sync::Arc::new(|| {}));
+        host.session.renderer_mut().0.as_mut().unwrap().finish_startup_catalog();
+        let clock = std::cell::Cell::new(0);
+        let deadline = Instant::now() + Duration::from_secs(240);
+        while !host.startup.complete { frame_step(&mut host, &clock, deadline); }
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let gpu = host.session.engine().backend().0.as_ref().unwrap();
+        let presenter = std::cell::RefCell::new(layer_render_wgpu::ViewportPresenter::for_surface(gpu, format, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap());
+        let target = gpu.device().create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: 640, height: 480, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        let navigators = scene::Navigators::new(scene::SlotUnits::Physical);
+        let windows_frame = |host: &mut NativeHost| {
+            let presenter = &mut *presenter.borrow_mut();
+            frame_step(host, &clock, deadline);
+            host.poll_canvas_presentation(presenter).unwrap();
+            let composition = host.compose_scene(presenter, &mut Default::default(), &navigators, &[], None,
+                scene::SceneDisplay { scale: 1., headroom: 1., blank_presented: true, compositor_hdr: false }).unwrap();
+            if host.withheld_frame(&composition).is_none() {
+                let gpu = host.session.engine().backend().0.as_ref().unwrap();
+                presenter.present(gpu, &target.create_view(&Default::default()), host.session.state().camera.view(), [0.2; 4]).unwrap();
+                gpu.on_gpu_done({ let wake = host.wake_callback(); move || wake() });
+                host.session.renderer_mut().0.as_mut().unwrap().after_present();
+            }
+        };
+        let serve = |host: &mut NativeHost, window: Duration| {
+            let started = Instant::now();
+            let mut frames = 0;
+            while started.elapsed() < window {
+                if host.poll_preparation() == FrameDemand::Wait { std::thread::sleep(Duration::from_millis(1)); } else { frames += 1; windows_frame(host); }
+            }
+            frames
+        };
+        host.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::GPen as u32 }).unwrap();
+        host.dispatch(UiAction::SetBrushSize { value: 400. }).unwrap();
+        serve(&mut host, Duration::from_secs(10));
+        let resident = budget.snapshot().devices.into_iter().find(|d| d.device == device).unwrap().physical_bytes;
+        budget.update_device(device, layer_core::DeviceMemoryFacts { fixed_bytes: (4u64 << 30) * 80 / 100 - resident.saturating_sub(260 * MIB), ..roomy });
+        budget.flush_reports();
+        let surface = layer_core::Affine(host.session.state().camera.document_to_surface());
+        for sample in 0..24u32 {
+            let at = surface.map(Point { x: 4096. * (0.2 + 0.6 * sample as f32 / 23.), y: 1600. });
+            let phase = match sample { 0 => 1., 23 => 3., _ => 2. };
+            pointer(&mut host, 77, 1, 0, &[f64::from(at.x), f64::from(at.y), 0.6, 0., 0., 0., 0., clock.get() as f64, phase], false).unwrap();
+            windows_frame(&mut host);
+        }
+        let waiting = serve(&mut host, Duration::from_secs(2));
+        assert!(host.session.engine().backend().stroke_waits_for_memory(), "the stroke waits on memory");
+        assert!(waiting <= 4, "a stroke waiting on memory drove {waiting} frames that could not admit it");
+        budget.update_device(device, roomy);
+        budget.flush_reports();
+        serve(&mut host, Duration::from_secs(10));
+        assert_eq!(host.session.engine().document().revision, 1, "the stroke commits once room returns");
+        assert_eq!(serve(&mut host, Duration::from_secs(2)), 0, "a settled host requested idle frames");
+    }
+
     fn serve_on_wakes(host: &mut NativeHost, woken: &std::sync::mpsc::Receiver<()>, clock: &std::cell::Cell<u64>, deadline: std::time::Instant, done: impl Fn(&NativeHost) -> bool) {
         while !done(host) {
             match host.poll_preparation() {
@@ -2723,8 +2794,9 @@ mod tests {
         host.set_wake(Arc::new(move || {let _=notify.send(());}));
         host.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Visibility {id:layer_ui::occurrence_token(id),value:true}}).unwrap();
         frame_step(&mut host,&clock,deadline);
-        notified.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
-        assert!(host.poll_preparation()==layer_render::FrameDemand::Work,"first-show saved-selection merge completion must resume its visible tint");
+        while host.poll_preparation()!=layer_render::FrameDemand::Work {
+            notified.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).expect("first-show saved-selection merge completion must resume its visible tint");
+        }
         loop {
             frame_step(&mut host,&clock,deadline);
             if host.dirty {continue;}

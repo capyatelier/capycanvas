@@ -109,6 +109,9 @@ impl PreviewPipeline {
             });
         crate::bindings::group(&r.device, "saved mask display", &self.layout, [&params, input, output].map(|b| b.as_entire_binding()))
     }
+    fn compiled(&self, r: &WgpuRasterizer) -> bool {
+        r.selection_clip.pipelines().into_iter().all(|pipeline| pipeline.ready()) && self.merge.ready()
+    }
     fn ready(&self, r: &WgpuRasterizer, thumbnail: bool) -> Result<bool, GpuRasterError> {
         r.compilation.check()?;
         let clip = r.compilation
@@ -122,6 +125,10 @@ impl PreviewPipeline {
     }
 }
 impl WgpuRasterizer {
+    pub(crate) fn selection_previews_outstanding(&self) -> Option<crate::frame_demand::Outstanding> {
+        use crate::frame_demand::{Input, Outstanding};
+        self.selection_previews.pending.then(|| if self.selection_previews.pipeline.as_ref().is_some_and(|gpu| gpu.compiled(self)) { Outstanding::Runnable } else { Outstanding::Blocked(Input::Compile) })
+    }
     pub(super) fn prepare_selection_previews(
         &mut self,
         packet: FramePacket<'_>,

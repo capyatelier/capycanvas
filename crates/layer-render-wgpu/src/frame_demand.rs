@@ -46,7 +46,7 @@ impl WgpuRasterizer {
         [
             ("display selection", self.pending_display_selection.is_some()
                 .then_some(if selection_compiled { Runnable } else { Blocked(Input::Compile) })),
-            ("selection previews", self.selection_previews.pending.then_some(Blocked(Input::Compile))),
+            ("selection previews", self.selection_previews_outstanding()),
             ("fill preview", self.fill_preview_outstanding()),
             ("held decode results", self.held_result_ready().then_some(Runnable)),
             ("fill edges", gated(self.fill_edges_preflight.as_ref().is_some_and(|state| state.pending()))),
