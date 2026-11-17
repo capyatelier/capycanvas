@@ -8,7 +8,7 @@ pub(super) struct BrushStamps {
     pipelines: Vec<(u32, Deferred<wgpu::ComputePipeline>)>,
     pending: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<ReadbackImage, GpuRasterError>>,
-    rx: mpsc::Receiver<Result<ReadbackImage, GpuRasterError>>,
+    rx: crate::frame_demand::Delivery<Result<ReadbackImage, GpuRasterError>>,
 }
 
 fn shader_source(flags:u32) -> Cow<'static,str> {
@@ -26,7 +26,7 @@ impl BrushStamps {
         let pipeline_layout=r.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label:Some("brush stamp"),bind_group_layouts:&[Some(&layout),Some(&r.advanced_texture_layout)],immediate_size:0,
         });
-        let (tx,rx)=mpsc::channel();
+        let (tx,rx)=crate::frame_demand::Delivery::channel();
         Self {layout,pipeline_layout,pipelines:Vec::new(),pending:None,tx,rx}
     }
 
@@ -109,6 +109,7 @@ impl WgpuRasterizer {
         let result=stamps.request(self,id,request);self.brush_stamps=Some(stamps);result
     }
     pub(super) fn brush_stamp_pending(&self)->bool {self.brush_stamps.as_ref().is_some_and(|stamps|stamps.pending.is_some())}
+    pub(super) fn brush_stamp_ready(&self)->bool {self.brush_stamps.as_ref().is_some_and(|stamps|stamps.pending.is_some() && stamps.rx.arrived())}
     pub(super) fn poll_brush_stamp(&mut self)->Option<Result<ReadbackImage,GpuRasterError>> {
         let stamps=self.brush_stamps.as_mut()?;
         let result=stamps.rx.try_recv().ok()?;stamps.pending=None;Some(result)

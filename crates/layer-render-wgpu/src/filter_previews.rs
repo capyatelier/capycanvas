@@ -24,7 +24,7 @@ pub(crate) struct FilterPreviews {
     preparing: bool,
     cancelled: bool,
     tx: mpsc::Sender<Result<ReadbackImage, GpuRasterError>>,
-    rx: mpsc::Receiver<Result<ReadbackImage, GpuRasterError>>,
+    rx: crate::frame_demand::Delivery<Result<ReadbackImage, GpuRasterError>>,
 }
 impl FilterPreviews {
     pub(crate) fn rendition_changed(&mut self) {
@@ -32,7 +32,7 @@ impl FilterPreviews {
         self.cancelled |= self.request.is_some();
     }
     fn new(r: &mut WgpuRasterizer) -> Result<Self, GpuRasterError> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::frame_demand::Delivery::channel();
         Ok(Self {
             scene: Scene::new(r)?,
             tiles: tiles::texture(r),
@@ -353,7 +353,7 @@ impl WgpuRasterizer {
         previews.request = None;previews.clear_analysis();
         // Old callbacks retain only their sender. Dropping the receiver keeps
         // them from advancing or completing the next request, without a wait.
-        (previews.tx, previews.rx) = mpsc::channel();
+        (previews.tx, previews.rx) = crate::frame_demand::Delivery::channel();
         previews.rendering.clear();
         previews.rows.clear();
     }
@@ -361,6 +361,9 @@ impl WgpuRasterizer {
         self.filter_previews
             .as_ref()
             .is_some_and(|p| p.request.is_some())
+    }
+    pub(crate) fn filter_previews_ready(&self) -> bool {
+        self.filter_previews.as_ref().is_some_and(|p| p.request.is_some() && (p.preparing || p.cancelled || p.rendering.is_empty() || p.rx.arrived()))
     }
     pub(crate) fn start_filter_previews(
         &mut self,

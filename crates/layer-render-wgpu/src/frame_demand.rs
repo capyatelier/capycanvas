@@ -12,6 +12,22 @@ pub(crate) struct ArrivalToken(pub(super) u64);
 
 const LANE_POLL: std::time::Duration = std::time::Duration::from_millis(50);
 
+pub(crate) struct Delivery<T> { rx: std::sync::mpsc::Receiver<T>, held: std::cell::RefCell<Option<T>> }
+impl<T> Delivery<T> {
+    pub(crate) fn channel() -> (std::sync::mpsc::Sender<T>, Self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (tx, Self { rx, held: std::cell::RefCell::new(None) })
+    }
+    pub(crate) fn arrived(&self) -> bool {
+        let mut held = self.held.borrow_mut();
+        if held.is_none() { *held = self.rx.try_recv().ok(); }
+        held.is_some()
+    }
+    pub(crate) fn try_recv(&self) -> Result<T, std::sync::mpsc::TryRecvError> {
+        self.held.borrow_mut().take().map_or_else(|| self.rx.try_recv(), Ok)
+    }
+}
+
 impl WgpuRasterizer {
     #[cfg(test)]
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {
@@ -97,7 +113,12 @@ impl WgpuRasterizer {
     fn completion_edge(&self) -> bool {
         let Some(wake) = self.preparation_wake.as_ref().filter(|_| self.gpu_results_pending()) else { return false; };
         let completions = self.device.on_next_completion(wake);
-        self.observed_completions.swap(completions, std::sync::atomic::Ordering::AcqRel) != completions && self.frame_results_pending()
+        self.observed_completions.swap(completions, std::sync::atomic::Ordering::AcqRel) != completions && self.frame_results_ready()
+    }
+    fn frame_results_ready(&self) -> bool {
+        self.settling.is_some() && self.background_ready.load(std::sync::atomic::Ordering::Acquire) && self.raster_ready()
+            || self.color_sample_ready() || self.selection_paint_ready() || self.region_pending()
+            || self.filter_previews_ready() || self.effect_validation_pending() || self.brush_stamp_ready()
     }
     pub(crate) fn frame_demand(&self) -> FrameDemand {
         if self.region_step_runnable() || self.completion_edge() || self.frame_work() { return FrameDemand::Work; }

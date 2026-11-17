@@ -9,7 +9,7 @@ pub(super) struct ColorSampler {
     capture: artwork::Capture,
     buffer: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<ColorSample, GpuRasterError>>,
-    rx: mpsc::Receiver<Result<ColorSample, GpuRasterError>>,
+    rx: crate::frame_demand::Delivery<Result<ColorSample, GpuRasterError>>,
     pending: bool,
     waiting: Option<(ColorSampleRequest, Option<Arc<artwork::Frame>>)>,
     charge: crate::residency::Charge,
@@ -23,7 +23,7 @@ impl ColorSampler {
         self.charge.resize(bytes);
     }
     pub fn new(tier: &Arc<crate::residency::Tier>) -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::frame_demand::Delivery::channel();
         Self {
             charge: tier.charge(0),
             capture: Default::default(),
@@ -46,6 +46,9 @@ impl ColorSampler {
 impl WgpuRasterizer {
     pub fn color_sample_pending(&self) -> bool {
         self.color_sampler.pending || self.color_sampler.waiting.is_some()
+    }
+    pub(super) fn color_sample_ready(&self) -> bool {
+        self.color_sampler.waiting.is_some() || self.color_sampler.pending && self.color_sampler.rx.arrived()
     }
 
     pub(super) fn start_color_sample(

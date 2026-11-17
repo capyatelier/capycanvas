@@ -109,6 +109,30 @@ fn retained_fade_preserves_pending_refinement_and_accepts_camera_and_paint() {
 }
 
 #[test]
+fn a_frame_result_in_flight_asks_for_no_frame_that_cannot_deliver_it() {
+    use std::time::{Duration,Instant};
+    let extent=[64;2];
+    let document=paint_document(extent,"Result in flight");
+    let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let (wake,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=wake.send(());}));
+    let frame=packet(document.scene(),extent);
+    submit_settled(&mut r,frame);
+    r.wait_idle().unwrap();
+    r.fill_preview_done=Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    assert!(r.settled() && r.frame_results_pending());
+    let idle=FramePacket {composite_all:false,..frame};
+    let (started,mut frames)=(Instant::now(),0);
+    while started.elapsed()<Duration::from_secs(2) {
+        r.poll_pending(frame.view).unwrap();
+        if r.next_frame()==layer_render::FrameDemand::Wait {let _=woken.recv_timeout(Duration::from_millis(20));continue;}
+        frames+=1;
+        if r.can_submit() {let _=r.submit_when_ready(idle,None);}
+    }
+    assert!(frames<=2,"a result still in flight drove {frames} frames that could not deliver it");
+}
+
+#[test]
 fn a_settled_canvas_demands_no_frame_and_wakes_its_host_for_five_seconds() {
     use std::time::{Duration,Instant};
     let extent=[64;2];

@@ -11,7 +11,7 @@ pub(super) struct SelectionPainter {
     pub active: Option<Painting>,
     pending: Option<wgpu::Buffer>,
     tx: mpsc::Sender<Result<SelectionPaintResult, GpuRasterError>>,
-    rx: mpsc::Receiver<Result<SelectionPaintResult, GpuRasterError>>,
+    rx: crate::frame_demand::Delivery<Result<SelectionPaintResult, GpuRasterError>>,
     charge: crate::residency::Charge,
 }
 pub(super) struct Pipelines {
@@ -41,7 +41,7 @@ impl SelectionPainter {
         self.charge.resize(bytes);
     }
     pub fn from_pipelines(recipes: Arc<Pipelines>, tier: &Arc<crate::residency::Tier>) -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = crate::frame_demand::Delivery::channel();
         Self { recipes, active: None, pending: None, tx, rx, charge: tier.charge(0) }
     }
 }
@@ -448,6 +448,9 @@ impl WgpuRasterizer {
         self.selection_painter
             .as_ref()
             .is_some_and(|p| p.pending.is_some())
+    }
+    pub(super) fn selection_paint_ready(&self) -> bool {
+        self.selection_painter.as_ref().is_some_and(|p| p.pending.is_some() && p.rx.arrived())
     }
     pub(super) fn update_selection_paint(
         &mut self,
