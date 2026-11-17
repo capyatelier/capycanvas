@@ -19,8 +19,9 @@ try{
         if($Kind -eq 'presentation-state' -and !$Value.ContainsKey('render_progress')){$Value.render_progress=@{owner=19;epoch=0;revision=0;content_owner=19;content_epoch=0;content_revision=0;settled=$true;outstanding_work=$false}}
         $Value|ConvertTo-Json -Depth 8 -Compress|Set-Content -LiteralPath (Join-Path $out "$Kind-$PID-7.json")
     }
-    function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Seconds=8,[switch]$Closing,[scriptblock]$ResetBound,[switch]$Unscaled){
+    function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Seconds=8,[switch]$Closing,[scriptblock]$ResetBound,[switch]$Unscaled,[scriptblock]$TimeoutMessage){
         for($poll=0;$poll -lt 4;$poll++){if($ResetBound){$null=& $ResetBound};if(& $Condition){return};$script:polls++;if($script:advance){& $script:advance}}
+        if($TimeoutMessage){$Message=& $TimeoutMessage}
         throw $Message
     }
     function Expect([string]$Name,[bool]$Refused){
@@ -176,7 +177,7 @@ public class CapyStrokeProgressClock {
     $committed=$script:strokeInputs-and($script:progressCase-notin@('heartbeat','outer')-and($script:progressCase-notin@('slow','paused')-or$time-ge25))
     return @{state=@{document_file=@{revision=[long][bool]$committed;epoch=$(if($script:strokeInputs-and$script:progressCase-eq'switched'){1}else{0})}};windows_tabs=@{selected=3}}
    }
-   @{state=@{document_file=@{revision=[long]$time;epoch=$(if($script:progressCase-eq'changing-document'){[long]$time}else{0});busy=($time-lt25)}};windows_tabs=@{selected=3}}
+   @{state=@{document_file=@{revision=$(if($script:progressCase-eq'never-idle'){9}elseif($script:progressCase-eq'owned-revision'){[long]$time}else{0});epoch=$(if($script:progressCase-eq'changing-document'){[long]$time}else{0});busy=($time-lt25)}};windows_tabs=@{selected=3}}
   }
   function Read-Snapshot([string]$Path){
    $time=[CapyStrokeProgressClock]::Seconds;$case=$script:progressCase
@@ -201,20 +202,22 @@ public class CapyStrokeProgressClock {
    $work=$case-in@('owned-work','paused-work','outer','present-work','pixels-work','pixels-composed')
    $work=$work-and($case-eq'outer'-or$time-lt$(if($script:progressMode-eq'pixels'){9}else{25}))
    if($case-eq'stopped-work'){$work=$time-lt4}
-   $shown=if($case-in@('displayed','gapped','changing-owner','changing-document','changing-window','present-required-ahead')){[long]$time}else{0}
-   $content=if($case-in@('content','foreign-content-owner','foreign-content-epoch','pixels-content')){[long]$time}else{0}
+   $shown=if($case-eq'never-idle'){29663+[long]$time}elseif($case-in@('displayed','gapped','changing-owner','changing-document','changing-window','present-required-ahead')){[long]$time}else{0}
+   $content=if($case-eq'never-idle'){9}elseif($case-in@('content','foreign-content-owner','foreign-content-epoch','pixels-content')){[long]$time}else{0}
    $progress=@{owner=$(if($case-eq'changing-owner'){19+[long]$time}else{19});epoch=(Model).state.document_file.epoch;revision=(Model).state.document_file.revision;content_owner=$(if($case-eq'foreign-content-owner'){20}else{19});content_epoch=$(if($case-eq'foreign-content-epoch'){1}else{0});content_revision=$content;settled=(!$work);outstanding_work=$work;busy=($case-eq'busy')}
    if($case-eq'wrong-document'){$progress.epoch=1}
    if($case-eq'malformed-owner'){$progress.owner='19'}
    if($case-eq'malformed-work'){$progress.outstanding_work='true'}
    if($case-eq'malformed-display'){$shown=[string]$time}
    if($script:progressMode-eq'present'){
-    $progress.content_revision=if($time-ge25){[long]$time}else{0}
-    if($case-eq'present-display'){$shown=[long]$time}
+    $progress.content_revision=if($case-eq'never-idle'){9}elseif($time-ge25){[long]$time}else{0}
+    if($case-eq'never-idle'){}
+    elseif($case-eq'present-display'){$shown=[long]$time}
+    elseif($case-eq'present-catches-up'){$shown=if($time-ge4){25}else{[long]$time}}
     elseif($case-ne'present-required-ahead'){$shown=if($time-ge25){25}else{0}}
    }
    if($script:progressMode-eq'pixels'){$shown=25}
-   @{process_id=$(if($case-eq'foreign-process'){8}else{7});window_id=$(if($case-eq'foreign-window'){12}elseif($case-eq'changing-window'){11+[long]$time}else{11});presentation_epoch=$(if($case-eq'paused-work'){1}else{[long]$time+1});required=$(if($case-eq'present-required-ahead'-and$time-lt25){[long]$time+1}else{25});displayed=$shown;render_progress=$progress}
+   @{process_id=$(if($case-eq'foreign-process'){8}else{7});window_id=$(if($case-eq'foreign-window'){12}elseif($case-eq'changing-window'){11+[long]$time}else{11});presentation_epoch=$(if($case-eq'paused-work'){1}else{[long]$time+1});required=$(if($case-eq'never-idle'){29666+[long]$time}elseif($case-eq'present-required-ahead'-and$time-lt25){[long]$time+1}else{25});displayed=$shown;render_progress=$progress}
   }
   $review=[pscustomobject]@{Id=7;HasExited=$false};$review|Add-Member ScriptMethod Refresh {}
   $script:CapyEach=$null;$script:CapyWaitSeconds=8
@@ -222,6 +225,9 @@ public class CapyStrokeProgressClock {
    $oldTokens=$null;$oldErrors=$null
    $oldAst=[Management.Automation.Language.Parser]::ParseFile($env:CAPY_OLD_CANVAS_HELPER,[ref]$oldTokens,[ref]$oldErrors)
    if($oldErrors.Count){throw 'OLD canvas helper does not parse'}
+   if($env:CAPY_OLD_CANVAS_CASE-eq'never-idle'){
+    foreach($name in 'Test-CanvasProgress','Wait-Canvas'){. (Import-ProgressHelper $oldAst $name)}
+   }else{
    foreach($name in 'Wait-Until','Wait-PresentedFrame'){. (Import-ProgressHelper $oldAst $name)}
    Reset-Progress 'present' 'present-work'
    if($env:CAPY_OLD_CANVAS_CASE-eq'matched-fence-pending'){
@@ -231,8 +237,17 @@ public class CapyStrokeProgressClock {
    }
    Wait-PresentedFrame -Idle
    throw 'OLD accepted slow owned work beyond its unchanged canvas-settle bound'
+   }
   }
   $progressChecks=0
+  Reset-Progress 'present' 'never-idle';$failure=$null
+  try{Wait-PresentedFrame -Idle}catch{$failure=$_}
+  if(!$failure-or$failure.Exception.Message-cne'Canvas kept presenting without work: required=29673 displayed=29670 revision=9'-or[CapyStrokeProgressClock]::Seconds-ne8){throw "Idle frames extended the unchanged canvas bound: $failure"}
+  $progressChecks++
+  Reset-Progress 'condition' 'displayed';$failure=$null
+  try{Wait-Canvas {if([CapyStrokeProgressClock]::Seconds-ge2){throw 'Original condition failure'};$false} 'Original condition failure'}catch{$failure=$_}
+  if(!$failure-or$failure.Exception.Message-cne'Original condition failure'-or[CapyStrokeProgressClock]::Seconds-ne2){throw "Idle diagnostics replaced the original condition failure: $failure"}
+  $progressChecks++
   foreach($case in 'slow','hardware','heartbeat','paused','unacknowledged','missing','malformed','foreign','switched','outer','missing-baseline'){
    Reset-Progress 'stroke' $case;$failure=$null;$existing=@{checks=0}
    try{Wait-CanvasStroke {$script:strokeInputs++};Wait-Until {$existing.checks++;$true} 'original pixel assertion'}catch{$failure=$_}
@@ -252,11 +267,13 @@ public class CapyStrokeProgressClock {
    }
    $progressChecks++
   }
-  foreach($case in 'owned-work','paused-work','displayed','content','heartbeat','busy','stale-content','missing','missing-ui','foreign-process','foreign-ui','foreign-window','wrong-document','malformed-owner','malformed-work','malformed-display','foreign-content-owner','foreign-content-epoch','changing-owner','changing-document','changing-window','gapped','stopped-work','outer'){
+  foreach($case in 'owned-work','paused-work','owned-revision','displayed','content','heartbeat','busy','stale-content','missing','missing-ui','foreign-process','foreign-ui','foreign-window','wrong-document','malformed-owner','malformed-work','malformed-display','foreign-content-owner','foreign-content-epoch','changing-owner','changing-document','changing-window','gapped','stopped-work','outer'){
    Reset-Progress 'condition' $case;$failure=$null
    try{Wait-Canvas {[CapyStrokeProgressClock]::Seconds-ge25-and$script:progressCase-ne'outer'} 'Controlled canvas condition did not finish'}catch{$failure=$_}
-   if($case-in@('owned-work','paused-work','displayed','content')){
+   if($case-in@('owned-work','paused-work','owned-revision','content')){
     if($failure-or[CapyStrokeProgressClock]::Seconds-ne25){throw "Owned canvas progress did not preserve the condition: $case $failure"}
+   }elseif($case-eq'displayed'){
+    if(!$failure-or$failure.Exception.Message-cne'Canvas kept presenting without work: required=25 displayed=7 revision=0'-or[CapyStrokeProgressClock]::Seconds-ne8){throw "Display-only frames reset the canvas bound: $failure"}
    }elseif($case-eq'outer'){
     if(!$failure-or$failure.Exception.Message-cne'outer row timeout'){throw 'Canvas progress swallowed the outer row timeout'}
    }else{
@@ -282,12 +299,14 @@ public class CapyStrokeProgressClock {
   try{Wait-Canvas {[CapyStrokeProgressClock]::Seconds-ge25} 'Owned work did not finish' -Seconds 5 -Unscaled}catch{$failure=$_}
   if($failure-or[CapyStrokeProgressClock]::Seconds-ne25){throw "Unscaled canvas bound rejected owned progress: $failure"}
   $progressChecks++
-  foreach($case in 'present-work','present-display','present-required-ahead','present-heartbeat'){
+  foreach($case in 'present-work','present-catches-up','present-display','present-required-ahead','present-heartbeat'){
    Reset-Progress 'present' $case;$failure=$null
    try{Wait-PresentedFrame -Idle}catch{$failure=$_}
    if($case-eq'present-heartbeat'){
     if(!$failure-or$failure.Exception.Message-cne'The canvas did not settle on screen'-or[CapyStrokeProgressClock]::Seconds-ne8){throw "Idle presentation accepted heartbeat without displayed pixels: $failure"}
-   }elseif($failure-or[CapyStrokeProgressClock]::Seconds-ne25){throw "Idle presentation lost its required/displayed join: $case $failure"}
+   }elseif($case-in@('present-display','present-required-ahead')){
+    if(!$failure-or$failure.Exception.Message-notlike'Canvas kept presenting without work: required=* displayed=* revision=0'-or[CapyStrokeProgressClock]::Seconds-ne8){throw "Display-only frames extended idle presentation: $case $failure"}
+   }elseif($failure-or[CapyStrokeProgressClock]::Seconds-ne$(if($case-eq'present-catches-up'){4}else{25})){throw "Idle presentation lost its required/displayed join: $case $failure"}
    $progressChecks++
   }
   foreach($case in 'pixels-work','pixels-content','pixels-heartbeat','pixels-composed','pixels-already-stable'){

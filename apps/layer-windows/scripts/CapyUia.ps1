@@ -47,7 +47,7 @@ function Sta([scriptblock]$Script,[object[]]$Arguments=@()){
 }
 
 function Wait-Scale{if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}}
-function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound,[switch]$Unscaled){
+function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound,[switch]$Unscaled,[scriptblock]$TimeoutMessage){
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{
         if($script:CapyEach){& $script:CapyEach}
@@ -55,6 +55,7 @@ function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Secon
         if($review){$review.Refresh();if($review.HasExited){if($Closing){return};throw "Owned review exited with code $($review.ExitCode): $Message"}}
         Start-Sleep -Milliseconds 50
     }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($Unscaled){1}else{Wait-Scale}))
+    if($TimeoutMessage){$Message=& $TimeoutMessage}
     throw $Message
 }
 function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound){
@@ -86,16 +87,25 @@ function Read-CanvasProgress{
 }
 function Test-CanvasProgress($WaitState){
     $sample=Read-CanvasProgress;$previous=$WaitState.previous;$WaitState.previous=$sample
-    if(!$sample){return $false}
+    if(!$sample){$WaitState.presentingWithoutWork=$false;return $false}
     $progress=$sample.render_progress;$before=$previous.render_progress
     $same=$previous -and $previous.process_id -eq $sample.process_id -and $previous.window_id -eq $sample.window_id -and $before.owner -eq $progress.owner -and $before.epoch -eq $progress.epoch
-    $progress.outstanding_work -or ($same -and (
-        ($null -ne $sample.displayed -and $null -ne $previous.displayed -and $sample.displayed -gt $previous.displayed) -or
-        ($null -ne $progress.content_revision -and $null -ne $before.content_revision -and $progress.content_owner -eq $progress.owner -and $progress.content_epoch -eq $progress.epoch -and $progress.content_owner -eq $before.content_owner -and $progress.content_epoch -eq $before.content_epoch -and $progress.content_revision -gt $before.content_revision)))
+    $advanced=$same -and ($progress.revision -gt $before.revision -or
+        ($null -ne $progress.content_revision -and $null -ne $before.content_revision -and $progress.content_owner -eq $progress.owner -and $progress.content_epoch -eq $progress.epoch -and $progress.content_owner -eq $before.content_owner -and $progress.content_epoch -eq $before.content_epoch -and $progress.content_revision -gt $before.content_revision))
+    $work=$progress.outstanding_work -or $advanced
+    if($work -or !$same -or !$progress.settled){$WaitState.presentingWithoutWork=$false}
+    elseif(($null -ne $sample.required -and $null -ne $previous.required -and $sample.required -gt $previous.required) -or
+        ($null -ne $sample.displayed -and $null -ne $previous.displayed -and $sample.displayed -gt $previous.displayed)){$WaitState.presentingWithoutWork=$true}
+    $work
 }
 function Wait-Canvas([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[switch]$Unscaled){
-    $canvasProgress=@{previous=$null}
-    Wait-CapyCondition $Condition $Message $Seconds -Closing:$Closing -ResetBound {Test-CanvasProgress $canvasProgress} -Unscaled:$Unscaled
+    $canvasProgress=@{previous=$null;presentingWithoutWork=$false}
+    Wait-CapyCondition $Condition $Message $Seconds -Closing:$Closing -ResetBound {Test-CanvasProgress $canvasProgress} -Unscaled:$Unscaled -TimeoutMessage {
+        if($canvasProgress.presentingWithoutWork){
+            $last=$canvasProgress.previous
+            "Canvas kept presenting without work: required=$($last.required) displayed=$($last.displayed) revision=$($last.render_progress.revision)"
+        }else{$Message}
+    }
 }
 function Wait-CanvasStroke([scriptblock]$PaintAction){
     $strokeBefore=Model;$strokeBaseline=Read-CanvasProgress
