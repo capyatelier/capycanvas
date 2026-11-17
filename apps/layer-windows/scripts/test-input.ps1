@@ -43,9 +43,11 @@ function Get-SettingsProducer([string]$Text,[string]$Pattern,[string]$Name){
 }
 $native=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '../SettingsView.cpp'))
 $show=Get-SettingsProducer $native '(?m)^[ \t]*fire_and_forget\s+show\s*\(\s*\)\s*\{' 'show'
+$hide=Get-SettingsProducer $native '(?m)^[ \t]*void\s+hide\s*\(\s*\)\s*\{' 'hide'
 $apply=Get-SettingsProducer $native '(?m)^[ \t]*void\s+apply\s*\(\s*J\s+const\s*&\s*snapshot\s*\)\s*\{' 'apply'
 $retire=Get-SettingsProducer $apply 'if\s*\(\s*!\s*model\s*\.\s*Size\s*\(\s*\)\s*\)\s*\{' 'shared retirement'
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'settings-show.inc'),$show,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $OutputDirectory 'settings-hide.inc'),$hide,[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'settings-retire.inc'),$retire,[Text.UTF8Encoding]::new($false))
 $source=Join-Path $PSScriptRoot '../tests/settings-show.cpp'
 $object=Join-Path $OutputDirectory 'settings-show.obj'

@@ -72,7 +72,8 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     XamlRoot::Changed_revoker rootChanged;
     hstring theme,resultsKey,revealed;
     double searchFocus=-1;
-    bool showing=false,closing=false,built=false,stopping=false,showFailed=false,dismissing=false;
+    bool showing=false,closing=false,built=false,stopping=false,showFailed=false,dismissing=false,requested=false;
+    uint64_t requests=0;
     enum class ProfileReturn{None,Requested,Managing} profileReturn=ProfileReturn::None;
     uint64_t escapes=0,escaped=0;
     void publishAllocations(){
@@ -126,7 +127,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             }
         });
     }
-    void hide(){if(dialog){dismissing=true;dialog.Hide();}}
+    void hide(){if(dialog){dismissing=true;if(!std::exchange(closing,true)&&preferences(data).Size())data->dispatch(O({{L"type",S(L"close_settings")}}));dialog.Hide();}}
     void escape(){
         if(escaped==escapes)return;
         escaped=escapes;
@@ -456,7 +457,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     }
     fire_and_forget show(){
         auto lifetime=shared_from_this();showing=true;closing=false;changed();
-        hstring message;ContentDialog shown{nullptr};
+        hstring message;ContentDialog shown{nullptr};auto request=requests;
         try{shown=dialog=ContentDialog();configure();dialog.Content(frame);co_await shown.ShowAsync();}
         catch(hresult_error const& failure){
             showFailed=true;message=failure.message();
@@ -466,7 +467,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(dialog)dialog.Content(nullptr);dialog=nullptr;
         showing=false;closing=false;dismissing=false;
         if(showFailed&&!stopping){data->dispatch(O({{L"type",S(L"close_settings")}}));report(to_string(message));}
-        else if(!reconciled&&!stopping&&preferences(data).Size())data->dispatch(O({{L"type",S(L"close_settings")}}));
+        else if(!reconciled&&!stopping&&request==requests&&preferences(data).Size())data->dispatch(O({{L"type",S(L"close_settings")}}));
         changed();
     }
     void fit(){
@@ -485,6 +486,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         auto document=str(object(snapshot,L"windows_document"),L"type");bool managing=document==L"workflow"||document==L"workflow_busy";
         if(profileReturn==ProfileReturn::Requested&&managing)profileReturn=ProfileReturn::Managing;
         else if(profileReturn==ProfileReturn::Managing&&!managing){profileReturn=ProfileReturn::None;data->dispatch(O({{L"type",S(L"open_settings")},{L"page",S(L"color")}}));}
+        if(model.Size()&&!requested)++requests;requested=model.Size()!=0;
         if(!model.Size()){if(shortcutPage)shortcutPage->Apply(snapshot);showFailed=false;if(showing&&!closing&&dialog){dismissing=true;closing=true;dialog.Hide();}return;}
         if(showFailed)return;
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};

@@ -1,4 +1,5 @@
 #include <coroutine>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <iostream>
@@ -27,7 +28,7 @@ struct Data {
     unsigned closes=0;
     bool open=true;
     unsigned Size()const{return open?1u:0u;}
-    void dispatch(Action const& action){if(action.type!=L"close_settings")throw std::runtime_error("Unexpected shared action");++closes;}
+    void dispatch(Action const& action){if(action.type!=L"close_settings")throw std::runtime_error("Unexpected shared action");++closes;open=false;}
 };
 Data const& preferences(std::shared_ptr<Data> const& data){return *data;}
 struct ContentDialog {
@@ -55,12 +56,14 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
     ContentDialog dialog{nullptr};
     std::shared_ptr<Data> data=std::make_shared<Data>();
     std::unique_ptr<ShortcutPage> shortcutPage;
-    bool showing=false,closing=false,showFailed=false,stopping=false,dismissing=false;
+    bool showing=false,closing=false,showFailed=false,stopping=false,dismissing=false,requested=false;
+    uint64_t requests=0;
     int frame=17;
     void changed(){}
     void configure(){}
     void report(std::string const&){throw std::runtime_error("Unexpected show error");}
 #include "settings-show.inc"
+#include "settings-hide.inc"
     void RetireShared(int snapshot){
         auto model=preferences(data);
 #include "settings-retire.inc"
@@ -98,6 +101,13 @@ int main(){
     run("Closing does not dispatch a duplicate close",[]{
         auto view=std::make_shared<Fixture>();view->show();view->closing=true;auto shown=view->dialog;shown.Complete();
         require(view->data->closes==0,"A reconciled Preferences close dispatched twice");
+    });
+    run("pre-Opened hide preserves an immediate shared reopen",[]{
+        auto view=std::make_shared<Fixture>();view->show();auto old=view->dialog;
+        view->hide();
+        require(old.state->hidden,"Pre-Opened Close did not hide the pending native dialog");
+        view->data->open=true;view->data->closes=0;old.Complete();
+        require(view->data->open&&view->data->closes==0,"Stale pre-Opened completion closed the immediately reopened shared request");
     });
     return failures?1:0;
 }
