@@ -1001,6 +1001,33 @@ fn first_dab_after_a_switch_and_a_reaction_gap() -> Switched {
 }
 
 #[test]
+fn an_edited_pivot_prepares_its_next_stroke_sources_when_the_frame_budget_is_spent() {
+    let doc=crate::memory::memory_tests::layered_raster_document(8,16);
+    let (mut r,frame)=layered_fit(&doc);
+    let layer=named(&doc,"Layer 5");let target=doc.scene().source_target(layer).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(layer));
+    crate::test_support::submit_settled(&mut r,frame);
+    let at=[1200.,1200.];
+    for step in 0..3 {pencil_frame(&mut r,frame,target,1,at,12.,step);}
+    pencil_lift(&mut r,frame,target,1,at,12.);
+    crate::test_support::submit_settled(&mut r,frame);
+    assert!(r.scale_display.as_ref().unwrap().pivot_edited(),"the stroke edits the pivot");
+    let (mut cache,mut scene)=(r.scale_display.take().unwrap(),r.scene.take().unwrap());
+    for level in 0..=cache.plan.level {cache.pages.lock().unwrap().remove_source_level(target,level);}
+    let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
+    let admitted={
+        let mut budget=crate::test_support::work(false);budget.spend(budget.remaining());
+        let spent=budget.spent();
+        scene.begin_frame();scene.scale_sources.prepare(&r,frame,&[]);
+        cache.prepare_edit_sources(&mut scene,&mut r,frame,&mut encoder,&mut budget).unwrap();
+        budget.spent()-spent
+    };
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    r.scale_display=Some(cache);r.scene=Some(scene);
+    assert!(admitted>=object_cache::PASS_TAPS,"a frame whose budget earlier work spent admits no unit to prepare the next stroke's sources");
+}
+
+#[test]
 fn the_first_contact_frame_after_a_switch_folds_no_layers_and_declares_only_cells_near_its_dab() {
     let Switched {counts,decodes,reach,contact,..}=first_dab_after_a_switch_and_a_reaction_gap();
     assert!(contact,"the pen-down frame after a switch and a reaction gap begins its contact: {counts:?}");

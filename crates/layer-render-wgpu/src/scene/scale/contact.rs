@@ -156,13 +156,15 @@ impl Cache {
         let near=PixelRect::new((x-span).max(0.) as u32,(y-span).max(0.) as u32,(x+span).max(0.) as u32+1,(y+span).max(0.) as u32+1).intersect(self.plan.bounds);
         let tiled=self.tiled(r,packet,scene,&root);
         let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
+        let mut prepared=false;
         for coordinate in pages::coordinates(near,self.plan.level) {
             let cell=pages::bounds(coordinate,self.plan.level,self.plan.extent);
             if self.pivot_missing(cell) {continue;}
             for (id,request) in self.region_sources(scene,r,packet,cell,tiled) {
                 if inside.contains(&id) || self.source_ready(scene,r,id,&request) {continue;}
-                if budget.remaining()<object_cache::PASS_TAPS {return Ok(());}
+                if prepared && budget.remaining()<object_cache::PASS_TAPS {return Ok(());}
                 self.prepare_source(scene,r,packet,encoder,id,request,Class::Refinement,budget)?;
+                prepared=true;
             }
         }
         Ok(())
@@ -221,7 +223,7 @@ impl Cache {
         let mut waiting=self.contact_cells().into_iter().filter(|cell|!known.contains(cell) && !scope.contains(cell) && self.keyless(*cell)).collect::<Vec<_>>();
         waiting.sort_by_key(|cell|centre_distance(view,*cell));
         let mut cells=scope.into_iter().filter(|cell|!known.contains(cell)).collect::<Vec<_>>();
-        cells.extend(waiting.into_iter().take(usize::from(budget.remaining()>=object_cache::PASS_TAPS)));
+        cells.extend(waiting.into_iter().take(1));
         cells.retain(|cell|!self.pivot_missing(*cell));
         let declared=if cells.is_empty() && reach.is_empty() {Some(Declared::default())}
             else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells.clone(),&cells,reach)?};
