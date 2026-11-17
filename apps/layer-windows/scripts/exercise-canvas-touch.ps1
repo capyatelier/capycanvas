@@ -111,16 +111,16 @@ function Check-Scrubs{
  foreach($degrees in 0,45,90){
   $angle=$degrees*[Math]::PI/180
   Scrub-Touch @([Math]::Cos($angle),[Math]::Sin($angle))
-  Wait-Until {(Paint-Checkpoint) -ne $paint -and (Scrub-Pixels) -eq $scrubEmpty} "The $degrees-degree scrub did not clear the active paint layer"
+  Wait-Canvas {(Paint-Checkpoint) -ne $paint -and (Scrub-Pixels) -eq $scrubEmpty} "The $degrees-degree scrub did not clear the active paint layer"
   $cleared=Paint-Checkpoint
   if((Wait-StablePixels {Scrub-Pixels}) -ne $scrubEmpty){throw "The $degrees-degree clear did not retain exact empty-layer pixels"}
   Capture ("scrub-clear-"+$degrees) -WithModel -Composed
   Scrub-Key 0x5A
-  Wait-Until {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} "One Undo did not restore the exact $degrees-degree scrub artwork"
+  Wait-Canvas {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} "One Undo did not restore the exact $degrees-degree scrub artwork"
   Scrub-Key 0x59
-  Wait-Until {(Paint-Checkpoint) -eq $cleared -and (Scrub-Pixels) -eq $scrubEmpty} "One Redo did not restore the exact $degrees-degree scrub clear"
+  Wait-Canvas {(Paint-Checkpoint) -eq $cleared -and (Scrub-Pixels) -eq $scrubEmpty} "One Redo did not restore the exact $degrees-degree scrub clear"
   Scrub-Key 0x5A
-  Wait-Until {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} "The $degrees-degree scrub did not restore the seed for the next contact group"
+  Wait-Canvas {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} "The $degrees-degree scrub did not restore the seed for the next contact group"
   $checks.Add(@{name="scrub $degrees degrees";camera='exact';pixels='exact';undo_redo='one step';painted=$painted;cleared=$scrubEmpty})
  }
  Scrub-Lock
@@ -146,9 +146,9 @@ function Check-Scrubs{
  [CapyRowPointer]::Down('pen',($cx-60),($cy-25))
  try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($cx-60+$i*5),($cy-25));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
  Scrub-Park
- Wait-Until {(Paint-Checkpoint) -ne $paint -and (Scrub-Pixels) -ne $painted} 'A pen did not paint after the scrub releases'
+ Wait-Canvas {(Paint-Checkpoint) -ne $paint -and (Scrub-Pixels) -ne $painted} 'A pen did not paint after the scrub releases'
  Scrub-Key 0x5A
- Wait-Until {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} 'One Undo did not restore exact artwork after the continued pen contact'
+ Wait-Canvas {(Paint-Checkpoint) -eq $paint -and (Scrub-Pixels) -eq $painted} 'One Undo did not restore exact artwork after the continued pen contact'
  Capture 'scrub-continued-input' -WithModel -Composed
  [CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Action Close -DiscardUnsaved
@@ -166,14 +166,14 @@ try{
  @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
  Write-Output "Owned touch review $($review.Id): $run"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'Isolated canvas did not start' 45
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'Isolated canvas did not start' 45
  $handle=$native.window.Handle;$root=$native.window.Root
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=Camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  Use-PaintWorkspace
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close for gesture space'}
  Fit-Canvas;Select-Tool 'pen'
- Wait-Until {(Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Canvas and selected pen did not settle before input'
+ Wait-Canvas {(Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Canvas and selected pen did not settle before input'
  $area=(Camera).work_area
  $bounds=(Control 'drawing-canvas').Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
@@ -187,7 +187,7 @@ try{
  $seedRevision=(Model).state.document_file.revision
  [CapyRowPointer]::Down('mouse',($cx-60),($cy-50))
  try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($cx-60+$i*5),($cy-50+[int](10*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
- Wait-Until {$m=Model;$m.state.document_file.revision -gt $seedRevision -and $m.state.document_file.modified} 'Visible mouse seed stroke did not finish'
+ Wait-Canvas {$m=Model;$m.state.document_file.revision -gt $seedRevision -and $m.state.document_file.modified} 'Visible mouse seed stroke did not finish'
  if($ScrubOnly){Scrub-Park;Check-Scrubs;return}
  $seeded=Signature;$unpanned=Camera
  [CapyRowPointer]::RightDrag(($cx+40),($cy+40),($cx+100),($cy+70))
@@ -261,7 +261,7 @@ try{
  [CapyRowPointer]::Down('pen',($cx-70),($cy+60))
  try{for($i=1;$i -le 28;$i++){[CapyRowPointer]::Move(($cx-70+$i*5),($cy+60+[int](12*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
  Start-Sleep -Milliseconds 300
- Wait-Until {(Model).state.document_file.revision -gt $revision} 'Pen stroke after touch did not finish'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision} 'Pen stroke after touch did not finish'
  @{before_pen_revision=$revision;after_pen=(Model).state.document_file}|ConvertTo-Json -Compress|Write-Output
  Capture 'pen-after-touch';[CapyRowPointer]::Verify();[CapyRowPointer]::Dispose()
  function Redo {((Model).state.commands|Where-Object id -eq 'redo').enabled}
@@ -276,9 +276,9 @@ try{
  Wait-Until {!(Redo)} 'Redo did not restore the pen stroke after the tap'
  Write-Output 'two-finger tap undoes without moving the view passed'
  $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
- Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'One Undo did not leave the seed drawing'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'One Undo did not leave the seed drawing'
  $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
- Wait-Until {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'Two independent Undo steps did not remove pen and seed strokes'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'Two independent Undo steps did not remove pen and seed strokes'
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $handle.ToInt64() -Action Close
  if((Get-Item -LiteralPath (Join-Path $run 'stderr.log')).Length){throw 'Touch runtime stderr requires inspection'}
  @{checks=$checks;drawing='preserved throughout navigation';pen_after_touch='new stroke and independent Undo';close='zero exit within five seconds';scope='OS-injected multi-touch and pen; physical digitizers, pressure/tilt and 120 Hz acceptance remain separate'}|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $run 'result.json')

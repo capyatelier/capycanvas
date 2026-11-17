@@ -6,6 +6,7 @@ if(!$EvidenceDirectory){$EvidenceDirectory=Split-Path -Parent $StateFile}
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 $app=Get-Process -Id $ProcessId
+$review=$app;$CapyStateFile=$StateFile
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected a controlled CapyCanvas review process.'}
 $app.Refresh()
 if($app.HasExited -or !$WindowHandle){throw 'The controlled drawing window is unavailable'}
@@ -183,7 +184,7 @@ function Close-Preferences {
     Wait-Until {!(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }
 Wait-Until {Read-Model} 'Launch this review instance with CAPY_TRACE_UI=1 and pass its ui-state.json file' 30
-Wait-Until {(Read-Model).brush_ready} 'Shared brush startup did not finish before interaction checks' 45
+Wait-Canvas {(Read-Model).brush_ready} 'Shared brush startup did not finish before interaction checks' 45
 if(!(Read-Model).windows_isolated_settings){throw 'Launch this fixture with CAPY_STORAGE_DIR pointing to a disposable profile.'}
 if(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)){throw 'Close Preferences before running this fixture.'}
 try{& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'}catch{

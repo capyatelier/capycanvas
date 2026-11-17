@@ -92,7 +92,7 @@ try{
  $stderr=Join-Path $run 'stderr.log'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr;$null=$review.Handle
  Write-Output "Owned stroke recording review $($review.Id): $run"
- Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Recording review did not start' 45
+ Wait-Canvas {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Recording review did not start' 45
  $root=$registeredWindow.Root
  if($Theme){Wait-Until {(Model).state.theme -eq $Theme} 'Recording theme did not apply'}
  Invoke 'panel-tab-stats'
@@ -103,7 +103,7 @@ try{
  Wait-Until {(Label) -eq 'Stop stroke recording'} 'Recording did not start'
  Recording-Geometry 'stop'
  Invoke 'Test pen' -Name
- Wait-Until {(Model).state.document_file.modified} 'Controlled pen stroke did not reach the drawing'
+ Wait-Canvas {(Model).state.document_file.modified} 'Controlled pen stroke did not reach the drawing'
  Invoke 'stroke-recording'
  Save-To $first
  $size=Recording-File $first

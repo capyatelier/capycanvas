@@ -19,7 +19,7 @@ function Button([string]$Name) {
     Control $Name -Name -Type ([System.Windows.Automation.ControlType]::Button) -Arranged
 }
 function Check-Caption {
-    Wait-Until {
+    Wait-Canvas {
         $model=Model
         $model -and $model.canvas_ready -and $model.brush_ready -and $null -eq $model.canvas_notice -and !$model.windows_filter_load.pending
     } 'Startup status did not settle before caption validation' 45
@@ -34,7 +34,7 @@ function Check-Caption {
         throw ('Restored editor reports a native error: ' + $status.Current.Name)
     }
 }
-function Wait-Canvas {
+function Wait-LifecycleCanvas {
     Wait-Until {
         $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'drawing-canvas'))
@@ -58,9 +58,9 @@ function Close-Drawing([string]$Choice) {
     if(![CapyWindowLifecycle]::IsZoomed($handle)){throw 'Unsaved decision changed the maximized state'}
     (Button $Choice).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     if($Choice -eq 'Cancel'){
-        Wait-Until {$model=Model;$model -and !$model.state.document_file.busy} 'Cancelled close did not finish'
+        Wait-Canvas {$model=Model;$model -and !$model.state.document_file.busy} 'Cancelled close did not finish'
         if(!(Model).state.document_file.modified -or (Model).state.document_file.close_ready){throw 'Cancelled close lost the drawing'}
-        Wait-Canvas
+        Wait-LifecycleCanvas
     }
 }
 function Request-WindowClose {
@@ -91,7 +91,7 @@ try {
             Check-Closed
             continue
         }
-        Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
+        Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
         if(!(Model).windows_isolated_settings){throw 'Lifecycle review requires an isolated profile'}
         $root=$native.window.Root;$handle=$native.window.Handle
         if($scenario -eq 'warming'){
@@ -110,15 +110,15 @@ try {
         }
         if($scenario -eq 'dirty'){
             & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
-            Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the document'
+            Wait-Canvas {(Model).state.document_file.modified} 'Controlled stroke did not dirty the document'
             Lose-Gpu
             Minimize
             Request-WindowClose
             Check-Closed
             continue
         }
-        Wait-Until {$model=Model;$model.state.document_file.modified -and !$model.windows_recovery.busy -and !$model.windows_recovery.restoring} 'Closing the window did not keep the unsaved drawing' 60
-        Wait-Canvas
+        Wait-Canvas {$model=Model;$model.state.document_file.modified -and !$model.windows_recovery.busy -and !$model.windows_recovery.restoring} 'Closing the window did not keep the unsaved drawing' 60
+        Wait-LifecycleCanvas
         [CapyWindowLifecycle]::ShowWindowAsync($handle,3)|Out-Null
         Wait-Until {[CapyWindowLifecycle]::IsZoomed($handle)} 'Review did not maximize'
         Lose-Gpu

@@ -12,6 +12,8 @@ public:
     ~WorkspaceExpansion();
     void Apply(double configurationHeight);
     CapyUi::J Geometry()const;
+    void TraceFrame(uint64_t frame,CapyUi::J const& geometry);
+    CapyUi::J TraceFrames()const;
     winrt::hstring Panel()const;
     bool Closing()const;
 private:

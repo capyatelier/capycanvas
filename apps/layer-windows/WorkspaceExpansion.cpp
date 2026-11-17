@@ -2,7 +2,10 @@
 #include "WorkspaceExpansion.h"
 #include "WorkspaceQuery.h"
 #include "WorkspaceGeometry.h"
+#include <array>
 #include <chrono>
+#include <deque>
+#include <optional>
 #include <winrt/Windows.UI.ViewManagement.h>
 
 using namespace CapyUi;
@@ -20,6 +23,14 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
     double height=0;
     bool closing=false,animating=false,dirty=false,busy=false,disposed=false,measurePending=false,startPending=false;
     uint64_t generation=0;
+    bool tracing=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    struct Frame {
+        uint64_t frame;hstring panel;double group;std::array<double,8> boxes;
+        bool Same(Frame const& other)const{return panel==other.panel&&group==other.group&&boxes==other.boxes;}
+    };
+    std::deque<Frame> frames;
+    uint64_t frame=0,dropped=0;
+    std::optional<Frame> lastFrame;
     void init(){
         timer=root.DispatcherQueue().CreateTimer();timer.Interval(std::chrono::milliseconds(16));
         timer.Tick([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->drive();});
@@ -43,6 +54,7 @@ struct WorkspaceExpansion::Impl:std::enable_shared_from_this<Impl>{
         bool transition=next!=panel||closing!=wanted.empty();
         if(transition||layout!=layoutKey||std::abs(measured-height)>.5){
             if(transition){from=geometry;started=Clock::now();animating=true;measurePending=startPending=!wanted.empty();}
+            if(tracing&&transition&&!wanted.empty()){frames.clear();dropped=0;lastFrame.reset();}
             if(!wanted.empty()&&(transition||layout!=layoutKey))measurePending=true;
             panel=next;closing=wanted.empty();layoutKey=layout;height=measured;
             dirty=true;++generation;timer.Start();
@@ -90,3 +102,27 @@ void WorkspaceExpansion::Apply(double height){impl->apply(height);}
 J WorkspaceExpansion::Geometry()const{return impl->geometry;}
 hstring WorkspaceExpansion::Panel()const{return impl->panel;}
 bool WorkspaceExpansion::Closing()const{return impl->closing;}
+
+void WorkspaceExpansion::TraceFrame(uint64_t frame,J const& geometry){
+    if(!impl->tracing)return;
+    impl->frame=frame;
+    if(!geometry.Size()){impl->lastFrame.reset();return;}
+    Impl::Frame next{frame,impl->panel,num(geometry,L"group"),{}};
+    auto bounds=object(geometry,L"bounds"),configuration=object(geometry,L"configuration");
+    next.boxes={num(bounds,L"x"),num(bounds,L"y"),num(bounds,L"width"),num(bounds,L"height"),
+        num(configuration,L"x"),num(configuration,L"y"),num(configuration,L"width"),num(configuration,L"height")};
+    if(impl->lastFrame&&impl->lastFrame->Same(next))return;
+    impl->lastFrame=next;
+    if(impl->frames.size()==64){impl->frames.pop_front();++impl->dropped;}
+    impl->frames.push_back(std::move(next));
+}
+J WorkspaceExpansion::TraceFrames()const{
+    A records;
+    for(auto const& row:impl->frames){
+        auto box=[&](size_t offset){return O({{L"x",N(row.boxes[offset])},{L"y",N(row.boxes[offset+1])},
+            {L"width",N(row.boxes[offset+2])},{L"height",N(row.boxes[offset+3])}});};
+        records.Append(O({{L"frame",N(double(row.frame))},{L"panel",S(row.panel)},
+            {L"geometry",O({{L"group",N(row.group)},{L"bounds",box(0)},{L"configuration",box(4)}})}}));
+    }
+    return O({{L"frame",N(double(impl->frame))},{L"dropped",N(double(impl->dropped))},{L"records",records}});
+}

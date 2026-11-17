@@ -42,7 +42,7 @@ function Start-Review([string]$Language){
  $script:review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run "stderr-$Language.log")
  $null=$review.Handle
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$m=Model;$native.window -and $m.canvas_ready -and (Review-Ready $m) -and !$m.windows_workspace.busy} 'The vector edge review did not start' 90
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$m=Model;$native.window -and $m.canvas_ready -and (Review-Ready $m) -and !$m.windows_workspace.busy} 'The vector edge review did not start' 90
  $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle;$script:noticeFrame=$null
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  if(![CapyRowPointer]::SetForegroundWindow($drawingWindow)){throw 'The owned drawing did not accept foreground input'}
@@ -148,7 +148,7 @@ try{
  Start-Review 'en'
  if((Model).state.theme -ne $Theme){throw "The review opened in $((Model).state.theme) instead of $Theme"}
  $v1=New-VectorLayer
- Wait-Until {$m=Model;$m.state.brush.preset -ne $null -and $m.brush_ready} 'G-Pen is not ready' 120
+ Wait-Canvas {$m=Model;$m.state.brush.preset -ne $null -and $m.brush_ready} 'G-Pen is not ready' 120
  $rows=@(300,450,600)
  Stroke (Line @(400,$rows[0]) @(1200,$rows[0]))
  Expect 'pen line' @(800,$rows[0]) 'ink'

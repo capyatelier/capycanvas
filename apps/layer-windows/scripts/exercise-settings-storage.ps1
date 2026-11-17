@@ -74,7 +74,7 @@ function Start-App {
     $null=$review.Handle
     @{process_id=$review.Id;run=$run;profile=$settingsProfile}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/settings-storage-review.json')
     Write-Output "Owned settings review $($review.Id), launch $launch"
-    Wait-Until {
+    Wait-Canvas {
         $review.Refresh()
         if($review.HasExited){throw 'Review app exited during startup'}
         $script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)

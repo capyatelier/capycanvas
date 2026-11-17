@@ -127,7 +127,7 @@ function Start-Slide([double]$Grab=8){
  Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'})[0].active -eq 'tool_settings'} 'Selected preview setup did not select Tool'
  if($Journey -notlike 'release-*' -and !$script:previewSelectionChecked){
   (Control 'drawing-canvas').SetFocus()
-  Wait-Until {(Control 'drawing-canvas').Current.HasKeyboardFocus -and (Presentation).shaders_ready} 'Selected tab reference needs canvas focus and ready shaders'
+  Wait-Canvas {(Control 'drawing-canvas').Current.HasKeyboardFocus -and (Presentation).shaders_ready} 'Selected tab reference needs canvas focus and ready shaders'
   Wait-StablePixels {
    $box=(Control 'panel-tab-tool_settings' -Arranged).Current.BoundingRectangle
    "$box/$(Screen-Pixels ([int]($box.Left+$box.Width/2)) ([int]($box.Top+$box.Height/2)))"
@@ -684,7 +684,7 @@ try{
  [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/tab-drag-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
  Write-Output "Owned tab review $($review.Id)"
  $native=@{window=$null}
- Wait-Until {$startup=Model;if(!(Review-Ready $startup) -or $startup.windows_workspace.busy){return $false};$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Review did not start' 75
+ Wait-Canvas {$startup=Model;if(!(Review-Ready $startup) -or $startup.windows_workspace.busy){return $false};$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Review did not start' 75
  $drawingWindow=$native.window.Handle;$root=$native.window.Root
  [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
@@ -799,7 +799,7 @@ try{
  Wait-Until {(Current-Group).floating -and !(Presentation).workspace_update.drag.drop_hint} 'Detached tab did not leave the dock target'
  Capture 'detached' -Composed
  Start-Sleep -Milliseconds 800
- Wait-Until {(Presentation).shaders_ready} 'Shader preparation did not settle before retained-control motion' 60
+ Wait-Canvas {(Presentation).shaders_ready} 'Shader preparation did not settle before retained-control motion' 60
  $floating=Current-Group;$floatingX=$floating.bounds.x
  $before=Presentation
  $retainedTab=(Control 'panel-tab-tool_settings').GetRuntimeId() -join ':'
@@ -839,7 +839,7 @@ try{
  $oldCamera=(Control 'canvas-camera').Current.Name
  Invoke 'navigator-zoom_in'
  Wait-Until {(Control 'canvas-camera').Current.Name -ne $oldCamera -and (Presentation).model_revision -gt $before.model_revision} 'Mixed camera update did not publish its native controls and model'
- Wait-Until {
+ Wait-Canvas {
   $m=Model;$p=Presentation
   $p.shaders_ready -and !$m.windows_recovery.busy -and $p.checkpoint_camera.zoom -eq $m.state.camera.zoom -and $p.revision -ge $m.workspace_update.revision
  } 'Camera checkpoint did not settle before Navigator motion' 60

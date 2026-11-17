@@ -147,13 +147,13 @@ function Navigator-Foreground([string]$Hex){
  Invoke 'edit-color-hex';$entry=Control 'edit-color-hex-entry';$entry.SetFocus();$value=$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern);$previous=$value.Current.Value;$value.SetValue($Hex)
  [CapyRowPointer]::Key([uint32]$review.Id,0x0D);Invoke 'edit-color-apply';Wait-Until {!(Find 'edit-color-apply')} 'Witness colour editor did not close'
  $expected=[Drawing.ColorTranslator]::FromHtml($Hex)
- Wait-Until {$model=Model;$actual=$model.state.colors.foreground.rgba;$expectedRgba=@(($expected.R/255.),($expected.G/255.),($expected.B/255.),($expected.A/255.));$model.brush_ready -and @(0..3|Where-Object {[Math]::Abs($actual[$_]-$expectedRgba[$_]) -gt .002}).Count -eq 0} 'Witness foreground did not commit'
+ Wait-Canvas {$model=Model;$actual=$model.state.colors.foreground.rgba;$expectedRgba=@(($expected.R/255.),($expected.G/255.),($expected.B/255.),($expected.A/255.));$model.brush_ready -and @(0..3|Where-Object {[Math]::Abs($actual[$_]-$expectedRgba[$_]) -gt .002}).Count -eq 0} 'Witness foreground did not commit'
  $previous
 }
 function Navigator-WitnessSize([double]$Size){
  (Control 'tool-setting-size' -Arranged).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Size.ToString('R',[Globalization.CultureInfo]::InvariantCulture))
  (Control 'drawing-canvas' -Arranged).SetFocus()
- Wait-Until {$model=Model;[Math]::Abs($model.state.brush.diameter-$Size) -lt .001 -and $model.brush_ready} 'Witness brush size did not commit'
+ Wait-Canvas {$model=Model;[Math]::Abs($model.state.brush.diameter-$Size) -lt .001 -and $model.brush_ready} 'Witness brush size did not commit'
 }
 function Navigator-MainAuthored($Pose,$Document,[bool]$Expected,[string]$Name){
  $window=[CapyNavigatorCapture+Rect]::new();[CapyNavigatorCapture]::GetWindowRect($drawingWindow,[ref]$window)|Out-Null
@@ -173,24 +173,24 @@ function Navigator-DetachedStroke {
  if(Find 'navigator-overview' -Visible){throw 'Authored update requires a detached Navigator'}
  $original=(Model).state.brush;$originalBrush=$original|ConvertTo-Json -Depth 5 -Compress
  Invoke (Tool-Tile 'pen')
- Wait-Until {$model=Model;@($model.state.commands|Where-Object {$_.id -eq 'pen' -and $_.selected}).Count -eq 1 -and $model.brush_ready} 'Opaque Pen did not become ready'
+ Wait-Canvas {$model=Model;@($model.state.commands|Where-Object {$_.id -eq 'pen' -and $_.selected}).Count -eq 1 -and $model.brush_ready} 'Opaque Pen did not become ready'
  $penSize=(Model).state.brush.diameter;Navigator-WitnessSize 4
  Fit-Canvas;$pose=(Model).state.camera;$document=(Model).state.tabs[0];$revision=(Model).state.document_file.revision
  Navigator-MainAuthored $pose $document $false ("retained-detached-before-$revision")
  $x=[int]($script:navOrigin.x+$pose.translation[0]+$document.width*$pose.zoom*.05);$y=[int]($script:navOrigin.y+$pose.translation[1]+$document.height*$pose.zoom*.10)
  [CapyRowPointer]::Down('mouse',$x,$y)
  try{for($i=1;$i -le 12;$i++){[CapyRowPointer]::Move([int]($x+$document.width*$pose.zoom*.12*$i/12),$y)}}finally{[CapyRowPointer]::Up()}
- Wait-Until {$view=Model;$view.state.document_file.revision -ne $revision -and $view.brush_ready} 'Detached authored stroke did not commit'
+ Wait-Canvas {$view=Model;$view.state.document_file.revision -ne $revision -and $view.brush_ready} 'Detached authored stroke did not commit'
  Navigator-MainAuthored $pose $document $true ("retained-detached-ready-$revision")
  Navigator-WitnessSize $penSize
  if($original.tool -ne (Model).state.brush.tool){Invoke (Tool-Tile $original.tool)}
- Wait-Until {$model=Model;($model.state.brush|ConvertTo-Json -Depth 5 -Compress) -ceq $originalBrush -and $model.brush_ready} 'Authored witness did not restore the original brush'
+ Wait-Canvas {$model=Model;($model.state.brush|ConvertTo-Json -Depth 5 -Compress) -ceq $originalBrush -and $model.brush_ready} 'Authored witness did not restore the original brush'
  for($i=0;$i -lt 14;$i++){& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View';Invoke 'zoom_out'}
 }
 function Navigator-DetachedUndo {
  if(Find 'navigator-overview' -Visible){throw 'Authored Undo requires a detached Navigator'}
  $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
- Wait-Until {(Model).state.document_file.revision -ne $revision} 'Detached authored Undo did not commit'
+ Wait-Canvas {(Model).state.document_file.revision -ne $revision} 'Detached authored Undo did not commit'
 }
 function Navigator-MarkRegion($Image){@(($Image[0]+$Image[2]*.025),($Image[1]+$Image[3]*.04),($Image[0]+$Image[2]*.20),($Image[1]+$Image[3]*.17))}
 function Navigator-AuthoredFrame($Previous,$Bitmap,$Result,[bool]$Expected,[int]$Index){
@@ -477,7 +477,7 @@ function Navigator-RetainedFrames {
   for($step=1;$step -le 12;$step++){[CapyRowPointer]::Move([int]($x+$document.width*$camera.zoom*($mark[2]-$mark[0])*$step/12),[int]($y+$document.height*$camera.zoom*($mark[3]-$mark[1])*$step/12))}
   [CapyRowPointer]::Up()
  }
- Wait-Until {(Model).state.document_file.modified} 'Asymmetric Navigator witness was not drawn'
+ Wait-Canvas {(Model).state.document_file.modified} 'Asymmetric Navigator witness was not drawn'
  try{Wait-Until {$after=Capture 'retained-after-marks';try{(Different $witnessBefore $after $witnessArea) -ge 20}finally{$after.Dispose()}} 'Asymmetric witness did not reach the Navigator image'}finally{$witnessBefore.Dispose()}
  for($step=0;$step -lt 14;$step++){Invoke 'navigator-zoom_out'}
  Navigator-Reference
@@ -508,10 +508,10 @@ function Navigator-RetainedFrames {
   $contextStart=Model;$returnTab=$contextStart.windows_tabs.selected;$otherTab=@($contextStart.windows_tabs.tabs|Where-Object {$_.id -ne $returnTab})[0]
   if(!$otherTab){throw 'Closed Navigator context check requires another drawing'}
   Invoke ('drawing-tab-'+$otherTab.id)
-  Wait-Until {$current=Model;$current.windows_tabs.selected -eq $otherTab.id -and $current.brush_ready -and $current.canvas_ready} 'Closed Navigator context destination did not settle' 60
+  Wait-Canvas {$current=Model;$current.windows_tabs.selected -eq $otherTab.id -and $current.brush_ready -and $current.canvas_ready} 'Closed Navigator context destination did not settle' 60
   $contextOther=Model
   Invoke ('drawing-tab-'+$returnTab)
-  Wait-Until {$current=Model;$current.windows_tabs.selected -eq $returnTab -and $current.brush_ready -and $current.canvas_ready} 'Closed Navigator context return did not settle' 60
+  Wait-Canvas {$current=Model;$current.windows_tabs.selected -eq $returnTab -and $current.brush_ready -and $current.canvas_ready} 'Closed Navigator context return did not settle' 60
   $contextEnd=Model
   $script:navClosedContext=@{drawing=$returnTab;other_drawing=$otherTab.id;generation_before=$contextStart.state.toolbar_context_generation;generation_other=$contextOther.state.toolbar_context_generation;generation_after=$contextEnd.state.toolbar_context_generation;runtime_id_before=$drawerIdentity}
   $script:navClosedContext|ConvertTo-Json|Set-Content (Join-Path $run 'closed-context.json')

@@ -116,7 +116,7 @@ function Start-Review([switch]$Maximized){
     $script:stderr=Join-Path $run "stderr-$launch.log"
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle;$owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready)} 'Tilt review did not start' 45
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready)} 'Tilt review did not start' 45
     $script:root=$owned.window.Root;$script:drawingWindow=$owned.window.Handle
     if($Maximized){Maximize-DrawingWindow}
     Use-PaintWorkspace
@@ -492,7 +492,7 @@ try{
     if((Saved) -ne $saved){throw 'Cancel saved the first unbound response'}
     Close-Review
     Start-Review -Maximized;Tool 'pen'
-    Wait-Until {(Model).brush_ready} 'The painting preset was not ready for sensor isolation checks' 45
+    Wait-Canvas {(Model).brush_ready} 'The painting preset was not ready for sensor isolation checks' 45
     Open-Tilt;Assert-Geometry
     if((Tilt).ready){throw 'The restarted cold session identified a pen before input'}
     Preview 'cold'
@@ -532,7 +532,7 @@ try{
     if((Curve) -ne $applied -or (Json (Tilt).axes) -ne $axes){throw 'Close committed an unapplied Reset'}
     Native-Click 'pen-tilt-close';Close-Review
     Start-Review -Maximized;Tool 'pen'
-    Wait-Until {(Model).brush_ready} 'The painting preset was not ready for sensor isolation checks' 45
+    Wait-Canvas {(Model).brush_ready} 'The painting preset was not ready for sensor isolation checks' 45
     Open-Tilt
     Preview 'persisted' $applied
     if((Saved) -ne $persisted -or (Curve) -ne $applied -or (Json (Tilt).axes) -ne $axes){throw 'Restart did not rebind the same persisted physical-source calibration'}

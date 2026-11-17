@@ -398,7 +398,7 @@ function New-Journey([string]$Theme,[switch]$Full) {
         if($preset -eq 'Cinematic'){
             $original=(Model).windows_tabs.selected;$count=@((Model).windows_tabs.tabs).Count
             Press 'new-drawing-create'
-            Wait-Until {$view=Model;!$view.state.new_drawing -and @($view.windows_tabs.tabs).Count -eq $count+1 -and $view.canvas_ready -and $view.brush_ready -and !$view.state.document_file.busy} 'Cinematic did not create a ready drawing' 60
+            Wait-Canvas {$view=Model;!$view.state.new_drawing -and @($view.windows_tabs.tabs).Count -eq $count+1 -and $view.canvas_ready -and $view.brush_ready -and !$view.state.document_file.busy} 'Cinematic did not create a ready drawing' 60
             $papers=@((Model).state.layers|Where-Object paper)
             if($papers.Count -ne 1 -or $papers[0].paper.id -ne 'none' -or $papers[0].paper.label -ne 'None'){throw 'Created Cinematic did not retain one plain None Paper'}
             Wait-PresentedFrame -Idle
@@ -557,7 +557,7 @@ function New-Journey([string]$Theme,[switch]$Full) {
     Wait-Until {$model=Model;@($model.windows_tabs.tabs|Where-Object id -eq $model.windows_tabs.selected)[0].title -eq 'Harbor study'} 'The new drawing did not take its name'
     Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 96} 'New drawing did not use the chosen size'
 }
-function Idle {Wait-Until {$current=Model;$current -and !$current.state.document_file.busy} 'Document request did not finish' 45}
+function Idle {Wait-Canvas {$current=Model;$current -and !$current.state.document_file.busy} 'Document request did not finish' 45}
 function Confirm-Dialog {
     $script:scope=$root
     $request=@{value=$null}
@@ -739,14 +739,14 @@ function Draw {
         if(!$tile){throw 'The shared toolbar has no Pen command tile'}
         (Control "tile-toolbar-$($tile.id)" -Arranged).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     }
-    Wait-Until {(Model).brush_ready -and ((Model).state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready' 45
+    Wait-Canvas {(Model).brush_ready -and ((Model).state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready' 45
     if((Model).state.layer_tools.mask_editing -or (Model).state.layer_tools.quick_mask -or (Model).state.layer_tools.editing_layer.mask_selected){throw 'Controlled stroke is editing a mask'}
     $script:drawIndex++
     $channel=(.02+.02*$script:drawIndex).ToString('R',[Globalization.CultureInfo]::InvariantCulture)
     Set-InkColor @('.03',$channel,'.025')
     $revision=(Model).state.document_file.revision
     Invoke-Control 'Test pen'
-    Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
+    Wait-Canvas {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
 }
 function Ink-ColorMatches($Definition,[double[]]$Channels) {
     if($Definition.rgba.Count -ne 4 -or $Channels.Count -ne 3 -or $Definition.rgba[3] -ne 1){return $false}
@@ -815,7 +815,7 @@ function Draw-Below {
             [CapyRowPointer]::Up()
         }finally{[CapyRowPointer]::Dispose()}
     }finally{[CapyDocumentControls]::SetThreadDpiAwarenessContext($context)|Out-Null}
-    Wait-Until {(Model).state.document_file.revision -gt $revision} 'The stroke below the controlled stroke did not modify the drawing'
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision} 'The stroke below the controlled stroke did not modify the drawing'
 }
 function Test-GpuRecovery {
     function Signature {
@@ -914,7 +914,7 @@ function Test-GpuRecovery {
         $documentRevision=(Model).state.document_file.revision
         $script:scope=$root
         Invoke-Control 'Undo'
-        Wait-Until {(Model).state.document_file.revision -gt $documentRevision} 'Pre-recovery Undo did not finish'
+        Wait-Canvas {(Model).state.document_file.revision -gt $documentRevision} 'Pre-recovery Undo did not finish'
         $undone=(Model).state.document_file.revision
         if($attempt -eq 2){
             Wait-Until {(Stroke-InkPixels) -eq 0} 'Pre-recovery Undo did not reach the canvas'
@@ -925,8 +925,8 @@ function Test-GpuRecovery {
         }else{
             Start-GpuLoss @('Test pen')
         }
-        Wait-Until {(Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready} 'GPU reconstruction did not finish' 60
-        Wait-Until {(Model).state.document_file.revision -gt $undone} 'GPU recovery lost queued pen samples'
+        Wait-Canvas {(Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready} 'GPU reconstruction did not finish' 60
+        Wait-Canvas {(Model).state.document_file.revision -gt $undone} 'GPU recovery lost queued pen samples'
         if(((Control 'navigator-overview' -Arranged).GetRuntimeId() -join ':') -ne $navigatorIdentity){throw 'GPU replacement rebuilt the live Navigator'}
         $documentRevision=(Model).state.document_file.revision
         Wait-Until {(Signature) -eq $beforeRecovery} 'GPU recovery changed document, history, camera, workspace or brush'
@@ -940,10 +940,10 @@ function Test-GpuRecovery {
         }
         $script:scope=$root
         Invoke-Control 'Undo'
-        Wait-Until {(Model).state.document_file.revision -ne $documentRevision} 'Undo after reconstruction did not change the document'
+        Wait-Canvas {(Model).state.document_file.revision -ne $documentRevision} 'Undo after reconstruction did not change the document'
         $undoRevision=(Model).state.document_file.revision
         Invoke-Control 'Redo'
-        Wait-Until {(Model).state.document_file.revision -ne $undoRevision -and (Signature) -eq $beforeRecovery} 'Redo after reconstruction did not restore the drawing'
+        Wait-Canvas {(Model).state.document_file.revision -ne $undoRevision -and (Signature) -eq $beforeRecovery} 'Redo after reconstruction did not restore the drawing'
         Wait-Until {$thumbnail=Find-Id "layer-$imported-thumbnail";$thumbnail -and $thumbnail.Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not recover' 15
     }
     $navigatorReference=[Drawing.Bitmap]::new((Join-Path $run 'gpu-navigator-before-loss.png'));$navigatorBefore=$null;$navigatorZoomed=$null
@@ -1051,7 +1051,7 @@ function Test-GpuUnavailableSave([switch]$CurrentReview) {
 function Test-PhotoPaper {
     $original=(Model).windows_tabs.selected;$count=@((Model).windows_tabs.tabs).Count
     File-Command 'open_document';Picker 'Open';Choose-Path $imageSource
-    Wait-Until {$view=Model;@($view.windows_tabs.tabs).Count -eq $count+1 -and $view.brush_ready -and !$view.state.document_file.busy} 'PNG did not open as a ready drawing' 60
+    Wait-Canvas {$view=Model;@($view.windows_tabs.tabs).Count -eq $count+1 -and $view.brush_ready -and !$view.state.document_file.busy} 'PNG did not open as a ready drawing' 60
     Use-PaintWorkspace
     if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke-Control 'Layers'}
     Wait-Until {$state=(Model).state;@($state.layers).Count -eq 1 -and !@($state.layers|Where-Object paper).Count -and $state.layer_tools.add_paper -and (Control 'layer-add-paper' -Arranged)} 'Opened PNG did not expose Add Paper without a Paper layer'
@@ -1075,7 +1075,7 @@ function Test-LightNewDrawing {
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
     Write-Output "Light New drawing review process $($review.Id)"
     Bind-ReviewWindow 'No light review window'
-    Wait-Until {$model=Model;(Input-Ready $model) -and $model.state.theme -eq 'light'} 'Light review did not start' 45
+    Wait-Canvas {$model=Model;(Input-Ready $model) -and $model.state.theme -eq 'light'} 'Light review did not start' 45
     if($Journey -eq 'paper-color'){Test-PaperColorReopen}elseif($Journey -eq 'new-drawing-problem'){Test-NewDrawingProblem 'light'}else{New-Journey 'light'}
     if($Journey -eq 'new-drawing'){Test-PhotoPaper}
     if($Journey -eq 'full'){Color-Workflows}
@@ -1083,7 +1083,7 @@ function Test-LightNewDrawing {
     if((Get-Item -LiteralPath $stderr).Length){throw 'Light native review reported stderr'}
 }
 Bind-ReviewWindow 'No review window'
-Wait-Until {Input-Ready} 'Canvas startup did not finish' 45
+Wait-Canvas {Input-Ready} 'Canvas startup did not finish' 45
 if(!(Model).windows_isolated_settings){throw 'Review must use an isolated profile'}
 if($focusedGpu -or $nativeWriteback){
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
@@ -1093,14 +1093,14 @@ if($Journey -eq 'paper-color'){Test-PaperColorReopen}
 elseif($Journey -eq 'new-drawing-problem'){Test-NewDrawingProblem 'dark'}
 elseif($focusedColor -or $focusedGpu -or $retention -or $transition){New-FocusedDrawing}elseif(!$nativeWriteback){New-Journey 'dark' -Full}
 if($transition){
-    Wait-Until {(Model).brush_ready -and (Model).canvas_ready} 'First transition drawing did not become ready' 60
+    Wait-Canvas {(Model).brush_ready -and (Model).canvas_ready} 'First transition drawing did not become ready' 60
     $firstId=(Model).windows_tabs.selected
     $revision=(Model).state.document_file.revision
     Invoke-Control 'Test pen'
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).brush_ready} 'Transition source stroke did not complete' 60
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).brush_ready} 'Transition source stroke did not complete' 60
     Capture 'transition-ink' -Composed -WithModel
     New-FocusedDrawing
-    Wait-Until {(Model).brush_ready -and (Model).canvas_ready} 'Second transition drawing did not become ready' 60
+    Wait-Canvas {(Model).brush_ready -and (Model).canvas_ready} 'Second transition drawing did not become ready' 60
     $secondId=(Model).windows_tabs.selected
     if($firstId -eq $secondId){throw 'Transition needs two distinct drawings'}
     Capture 'transition-before' -Composed -WithModel
@@ -1110,7 +1110,7 @@ if($transition){
     $sample=Sample-Frames $area {param($i)if($i -eq 3){Choose-Item $tab}}
     try{
         for($i=0;$i -lt $sample.frames.Count;$i++){$sample.frames[$i].Save((Join-Path $run ('transition-frame-{0:D3}.png' -f $i)))}
-        Wait-Until {(Model).windows_tabs.selected -eq $firstId -and (Model).brush_ready -and (Model).canvas_ready} 'Transition destination did not settle' 60
+        Wait-Canvas {(Model).windows_tabs.selected -eq $firstId -and (Model).brush_ready -and (Model).canvas_ready} 'Transition destination did not settle' 60
         $envelope=[TabFrames+Envelope]::new($sample.frames[2],$sample.frames[$sample.frames.Count-1]);$scores=@();$covered=@()
         if(([TabFrames+Envelope]::new($sample.frames[2],$sample.frames[2])).Difference($sample.frames[$sample.frames.Count-1]) -eq 0){throw 'Transition did not display distinct drawing pixels'}
         for($i=0;$i -lt $sample.frames.Count;$i++){
@@ -1261,7 +1261,7 @@ function Document-Panel([string]$Id) {
     Wait-Until {@((Model).layout.groups|Where-Object active -eq $Id).Count -eq 1} "Native writeback panel did not activate: $Id"
 }
 function Writeback-Ready {
-    Wait-Until {$view=Model;$canvas=Find-Id 'drawing-canvas';$view.canvas_ready -and $view.brush_ready -and !$view.state.document_file.busy -and $canvas -and $canvas.Current.IsEnabled -and !$canvas.Current.IsOffscreen} 'Native writeback drawing did not become ready' 60
+    Wait-Canvas {$view=Model;$canvas=Find-Id 'drawing-canvas';$view.canvas_ready -and $view.brush_ready -and !$view.state.document_file.busy -and $canvas -and $canvas.Current.IsEnabled -and !$canvas.Current.IsOffscreen} 'Native writeback drawing did not become ready' 60
     $view=Model
     if($view.error -or $view.state.host_error -or $view.windows_gpu_generation -ne $script:writebackGpu){throw 'Native writeback changed the GPU owner or reported an editor error'}
 }
@@ -1331,7 +1331,7 @@ function Native-Writeback {
             if($indices.Count -ne 1){return $false};$gpen.index=$indices[0];$true
         } 'The native Pen group has no unique G-Pen'
         Press "tool-subtool-$($gpen.index)"
-        Wait-Until {(Model).state.brush.preset -eq 1 -and (Model).brush_ready} 'G-Pen did not prepare for native writeback' 60
+        Wait-Canvas {(Model).state.brush.preset -eq 1 -and (Model).brush_ready} 'G-Pen did not prepare for native writeback' 60
         Type-Text 'tool-setting-size' '160' -Commit
         Wait-Until {[Math]::Abs((Model).state.brush.diameter-160) -lt .001} 'Native writeback brush size did not commit'
         Set-InkColor @('0','0','0')
@@ -1344,15 +1344,15 @@ function Native-Writeback {
         foreach($x in @(128,384,640)){$point=Writeback-Point $x 128 $projection;if(!$area.Contains([Windows.Rect]::new($point[0]-48,$point[1]-48,96,96))){throw 'Native writeback tile sample leaves the clear canvas work area'}}
         $before=Writeback-State;$baseline=Stable-WritebackPixels
         Writeback-Stroke $device
-        Wait-Until {$view=Model;$view.state.document_file.revision -gt $before.file.revision -and $view.state.document_file.modified -and @($view.state.layers|Where-Object id -eq $before.editing_layer)[0].paint_revision -ne @($before.layers|Where-Object id -eq $before.editing_layer)[0].paint_revision} 'Native continuous stroke did not commit' 45
+        Wait-Canvas {$view=Model;$view.state.document_file.revision -gt $before.file.revision -and $view.state.document_file.modified -and @($view.state.layers|Where-Object id -eq $before.editing_layer)[0].paint_revision -ne @($before.layers|Where-Object id -eq $before.editing_layer)[0].paint_revision} 'Native continuous stroke did not commit' 45
         Writeback-Ready;$painted=Stable-WritebackPixels;$after=Writeback-State
         for($i=0;$i -lt 3;$i++){if($painted.Split(',')[$i] -eq $baseline.Split(',')[$i]){throw "Native $name stroke did not change tile column $i"}}
         Capture $name -WithModel -Composed
         Writeback-Command 'Edit' 'undo'
-        Writeback-Checked {param($p) Wait-Until {(Model).state.document_file.revision -gt $after.file.revision -and (Model).state.document_file.modified -eq $before.file.modified -and (Writeback-Pixels '' $p) -eq $baseline} 'One Undo did not restore all native writeback baseline pixels' 45}
+        Writeback-Checked {param($p) Wait-Canvas {(Model).state.document_file.revision -gt $after.file.revision -and (Model).state.document_file.modified -eq $before.file.modified -and (Writeback-Pixels '' $p) -eq $baseline} 'One Undo did not restore all native writeback baseline pixels' 45}
         $undone=Writeback-State
         Writeback-Command 'Edit' 'redo'
-        Writeback-Checked {param($p) Wait-Until {(Model).state.document_file.revision -gt $undone.file.revision -and (Writeback-Pixels '' $p) -eq $painted} 'One Redo did not restore all native writeback stroke pixels' 45}
+        Writeback-Checked {param($p) Wait-Canvas {(Model).state.document_file.revision -gt $undone.file.revision -and (Writeback-Pixels '' $p) -eq $painted} 'One Redo did not restore all native writeback stroke pixels' 45}
         $redone=Writeback-State
         File-Command 'save_document';Picker 'Save As';Choose-Path $file;Idle
         Wait-Until {(Test-Path -LiteralPath $file) -and (Model).state.document_file.location.uri -eq $file -and !(Model).state.document_file.modified} 'Native writeback Save did not establish a clean checkpoint' 60
@@ -1362,7 +1362,7 @@ function Native-Writeback {
         Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count} 'Saved native writeback drawing did not close' 45
         $epoch=[Math]::Max((Model).state.document_file.epoch,$saved.file.epoch)
         File-Command 'open_document';Picker 'Open';Choose-Path $file;Idle
-        Wait-Until {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $file -and !(Model).state.document_file.modified} 'Native writeback Open did not admit a fresh clean drawing' 60
+        Wait-Canvas {(Model).state.document_file.epoch -gt $epoch -and (Model).state.document_file.location.uri -eq $file -and !(Model).state.document_file.modified} 'Native writeback Open did not admit a fresh clean drawing' 60
         Writeback-Ready
         Document-Panel 'properties'
         Wait-Until {@((Model).state.layer_properties.controls|Where-Object key -eq 'color_mode')[0].value.value -eq $choice[1]} 'Reopened native writeback lost its color mode'
@@ -1524,7 +1524,7 @@ function Import-Start {
     Picker 'Open'
 }
 function Import-Idle {
-    Wait-Until {$current=Model;$current -and !$current.state.document_file.busy} 'Image import did not finish' 30
+    Wait-Canvas {$current=Model;$current -and !$current.state.document_file.busy} 'Image import did not finish' 30
     $script:scope=$root
 }
 if($focusedGpu){
@@ -1565,7 +1565,7 @@ Import-Start;Picker-Button '2';Import-Idle
 Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -lt .000001} 'Import picker lost the focused layer draft'
 if(@((Model).state.layers).Count -ne 2){throw 'Cancelling image import inserted a layer'}
 Invoke-Control 'Undo'
-Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore the clean opacity checkpoint'
+Wait-Canvas {!(Model).state.document_file.modified} 'Undo did not restore the clean opacity checkpoint'
 $badImage=Join-Path $run 'Invalid image.png'
 [IO.File]::WriteAllText($badImage,'synthetic invalid image')
 Import-Start;Choose-Path $badImage
@@ -1581,7 +1581,7 @@ Wait-Until {(Find-Id "layer-$imported-thumbnail").Current.ItemStatus -eq 'Ready'
 Invoke-Control 'Apply transform'
 Wait-Until {((Model).state.commands|Where-Object id -eq 'undo').enabled} 'Placement did not enter undo history'
 Invoke-Control 'Undo'
-Wait-Until {@((Model).state.layers).Count -eq 2 -and !(Model).state.document_file.modified} 'Import Undo did not restore the clean document'
+Wait-Canvas {@((Model).state.layers).Count -eq 2 -and !(Model).state.document_file.modified} 'Import Undo did not restore the clean document'
 Invoke-Control 'Redo'
 Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.id -eq $imported} 'Import Redo did not restore the image'
 
@@ -1633,7 +1633,7 @@ $script:scope=$root;File-Command 'export_again';Picker 'Save As';$moved=Join-Pat
 Wait-Until {(Test-Path -LiteralPath $moved) -and (Model).state.document_file.export_uri -eq $moved} 'Export Again did not fall back to choosing a new destination'
 $revision=(Model).state.document_file.revision
 $script:scope=$root;Invoke-Control 'Undo'
-Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Undo did not remove the Export Again stroke'
+Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Undo did not remove the Export Again stroke'
 $webp=Join-Path $run 'Export.webp'
 File-Command 'export_document' {
     Combo-Select (Owned 'export-format') {$_.Current.Name -like 'WebP*'}
@@ -1759,7 +1759,7 @@ $stderr=Join-Path $run 'reopened.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 $null=$review.Handle
 Bind-ReviewWindow 'No restarted review window'
-Wait-Until {(Input-Ready) -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Session did not reopen' 120
+Wait-Canvas {(Input-Ready) -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Session did not reopen' 120
 if(@((Model).state.tabs|Where-Object active)[0].id -ne $reopenedDrawing){throw 'Session reopened a different drawing'}
 if((Model).state.settings.dark_base -ne '#223344' -or !(Model).state.document_file.modified){throw 'Window close lost the focused Preferences draft or unsaved drawing'}
 Request-Close;Wait-Closed 'Restarted session close did not finish'
@@ -1771,7 +1771,7 @@ $null=$review.Handle
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
 Write-Output "Untitled close review process $($review.Id)"
 Bind-ReviewWindow 'No untitled review window'
-Wait-Until {Input-Ready} 'Untitled canvas did not finish starting' 45
+Wait-Canvas {Input-Ready} 'Untitled canvas did not finish starting' 45
 Test-UntitledClose
 if(!$RecoverGpu -and !$FailGpu){
     Test-LightNewDrawing

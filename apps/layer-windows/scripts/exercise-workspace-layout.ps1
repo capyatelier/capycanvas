@@ -277,7 +277,7 @@ try{
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/workspace-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned workspace review $($review.Id)"
-    Wait-Until {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing -and (Review-Ready) -and (Model).state.theme -eq $Theme} 'Review did not start' 45
+    Wait-Canvas {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing -and (Review-Ready) -and (Model).state.theme -eq $Theme} 'Review did not start' 45
     $root=$drawing.Root
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyRowPointer]::SetForegroundWindow($drawing.Handle)|Out-Null
@@ -387,7 +387,7 @@ try{
     $camera=(Model).state.camera|ConvertTo-Json -Depth 12 -Compress
     $recovery=@{unavailable_observed=$false}
     Invoke 'Test GPU loss' -Name
-    Wait-Until {
+    Wait-Canvas {
         $rate=Find 'renderer-stat-2';if($rate -and $rate.Current.Name -eq [string][char]0x2014){$recovery.unavailable_observed=$true}
         (Model).windows_gpu_generation -eq $generation+1 -and (Model).brush_ready -and (Renderer-Stats).frames -gt 0
     } 'Diagnostics GPU recovery did not replace its renderer' 60

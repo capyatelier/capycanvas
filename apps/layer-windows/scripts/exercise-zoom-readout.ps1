@@ -213,7 +213,7 @@ function Move-Paint($Stroke){
 }
 function Paint-Wheel{
  Invoke-Id (Tool-Tile 'pen')
- Wait-Until {$view=Model;$view.brush_ready -and ($view.state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready before the paint-contact wheel check'
+ Wait-Canvas {$view=Model;$view.brush_ready -and ($view.state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready before the paint-contact wheel check'
  Invoke-Id 'color-edit'
  Wait-Until {Find 'edit-color-apply'} 'Paint-contact check did not open Edit Color'
  Invoke-Id 'edit-color-hex'
@@ -248,11 +248,11 @@ function Paint-Wheel{
   [CapyRowPointer]::Up()
  }finally{[CapyRowPointer]::Cancel()}
  $committed=@{view=$null}
- Wait-Until {$committed.view=Model;$committed.view.state.document_file.revision -gt $revision} 'The mouse stroke after refused wheels did not commit'
+ Wait-Canvas {$committed.view=Model;$committed.view.state.document_file.revision -gt $revision} 'The mouse stroke after refused wheels did not commit'
  Assert-Camera $paintCamera $committed.view.state.camera
  Capture "paint-wheel-$Theme" -WithModel -Composed
  $revision=$committed.view.state.document_file.revision;Invoke 'Undo' -Name
- Wait-Until {$view=Model;$view.state.document_file.revision -gt $revision -and $view.state.document_file.modified -eq $modified} 'One Undo did not restore the drawing after the wheel-protected stroke'
+ Wait-Canvas {$view=Model;$view.state.document_file.revision -gt $revision -and $view.state.document_file.modified -eq $modified} 'One Undo did not restore the drawing after the wheel-protected stroke'
  $checks.paint_contact_wheel='live ink before and after vertical, horizontal, Shift and Ctrl wheel; camera fixed; stroke commits and undoes once'
 }
 function Toggle-Lock([string]$Id,[string]$Field,[bool]$Locked){
@@ -624,7 +624,7 @@ function Open-ParityDrawing {
  $source=(Model).windows_tabs.selected;$count=@((Model).windows_tabs.tabs).Count
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
  Invoke-Id 'new_document';New-DrawingPixels 2048 1536;Invoke 'new-drawing-create'
- Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count+1 -and (Model).windows_tabs.selected -ne $source -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Navigation second drawing did not become ready' 90
+ Wait-Canvas {@((Model).windows_tabs.tabs).Count -eq $count+1 -and (Model).windows_tabs.selected -ne $source -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Navigation second drawing did not become ready' 90
 }
 function Navigation-Drawings {
  Navigation-Command 'pen';Wait-Until {Navigation-Selected 'pen'} 'Pen did not select before drawing cycle'
@@ -633,7 +633,7 @@ function Navigation-Drawings {
  $peer=(Model).windows_tabs.selected;$peerDrawing=Navigation-PaintState;$tabIds=@((Model).windows_tabs.tabs.id)|ConvertTo-Json -Compress
  foreach($pair in @(@{mods=@(0x11,0x10);key=0x09;target=$source},@{mods=@(0x11);key=0x22;target=$peer},@{mods=@(0x11);key=0x21;target=$source},@{mods=@(0x11);key=0x09;target=$peer})){
   Navigation-Focus;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]$pair.mods,[uint16]$pair.key)
-  Wait-Until {(Model).windows_tabs.selected -eq $pair.target -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Native drawing cycle shortcut did not activate the adjacent drawing'
+  Wait-Canvas {(Model).windows_tabs.selected -eq $pair.target -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Native drawing cycle shortcut did not activate the adjacent drawing'
   $expectedDrawing=if($pair.target -eq $source){$sourceDrawing}else{$peerDrawing}
   if((Navigation-PaintState) -ne $expectedDrawing){throw 'Drawing activation changed its retained document/history'}
  }
@@ -644,7 +644,7 @@ function Navigation-Drawings {
   if(!$item.Current.IsEnabled -or !$command.enabled -or $item.Current.Name -ne $command.label){throw 'Window drawing command did not match its enabled shared caption'}
   if($pair.command -eq 'previous_drawing'){Capture "navigation-window-menu-$Device-$Theme" -Composed -WithModel}
   $item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-  Wait-Until {
+  Wait-Canvas {
    $closed=try{$item.Current.IsOffscreen}catch [System.Windows.Automation.ElementNotAvailableException]{$true}
    $closed -and (Model).windows_tabs.selected -eq $pair.target -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)
   } 'Window-menu drawing command did not close and activate the adjacent drawing'
@@ -656,7 +656,7 @@ function Navigation-Drawings {
  try{
   [CapyRowPointer]::Hold(0x5a,$true);Wait-Until {(Model).navigation_cursor -eq 'zoom'} 'Parked Zoom key was not acknowledged'
   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x09)
-  Wait-Until {(Model).windows_tabs.selected -eq $source -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Held-key drawing cycle did not activate its target'
+  Wait-Canvas {(Model).windows_tabs.selected -eq $source -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Held-key drawing cycle did not activate its target'
   [CapyRowPointer]::Hold(0x5a,$false)
   Navigation-Command 'save_view'
   if(!(Navigation-Selected 'pen') -or (Model).navigation_cursor){throw 'Releasing a parked navigation key changed the newly active drawing'}
@@ -675,7 +675,7 @@ function Navigation-Drawings {
  Navigation-Shortcut 'Drawings' 'Drawings' 0x76 -Replace
  Wait-Until {$command=(Model).state.commands|Where-Object id -eq 'drawings';$command.shortcut -eq 'F7' -and @($command.bindings).Count -eq 1 -and $command.bindings[0].key -eq 'f7'} 'Drawings did not adopt only the captured F7 binding'
  Navigation-Focus;[CapyRowPointer]::Key([uint32]$review.Id,0x75)
- Wait-Until {(Model).windows_tabs.selected -eq $peer -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Custom F6 did not invoke shared Next Drawing'
+ Wait-Canvas {(Model).windows_tabs.selected -eq $peer -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'Custom F6 did not invoke shared Next Drawing'
  Navigation-Focus;[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),0x41)
  Navigation-DrawingsClosed 'Replaced Drawings chord'
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x4b)
@@ -745,7 +745,7 @@ function Navigation-Polygon {
  $checks.navigation_selection_views=@{camera=$selectionViews;document_history_before=$selectionState;selection_before=$selectionBefore;selection_artwork_history='preserved'}
  $revision=(Model).state.document_file.revision
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5a)
- Wait-Until {!(Model).state.layer_tools.has_selection -and (Model).state.document_file.revision -gt $revision} 'One Undo did not remove the navigated polygon selection'
+ Wait-Canvas {!(Model).state.layer_tools.has_selection -and (Model).state.document_file.revision -gt $revision} 'One Undo did not remove the navigated polygon selection'
  if((@((Model).state.layers|Select-Object id,paint_revision,mask_revision)|ConvertTo-Json -Compress) -ne $paint){throw 'Polygon navigation or selection history changed paint'}
  $checks.navigation_polygon=@{vertices=$vertexDevice;navigation=$Device;camera_after_fit=$polygonFit;mode=if($Device -eq 'touch'){'held-Z zoom'}else{'held-Space pan'};result='Unfinished polygon survives navigation and Fit; native completion creates selection; one Undo removes it; paint preserved';raw_visual_review='triangle required'}
 }
@@ -841,7 +841,7 @@ try {
  Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'The zoom drawing window did not open' 45
  $drawingWindow=$native.window.Handle;$root=$native.window.Root
  if(!$parityCapture){Use-PaintWorkspace}
- Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Zoom review did not start' 45
+ Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Zoom review did not start' 45
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null

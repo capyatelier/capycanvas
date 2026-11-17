@@ -130,7 +130,7 @@ try {
     $null=$review.Handle
     Write-Output "Owned selection review $($review.Id): $run"
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Selection review did not start' 90
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Selection review did not start' 90
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Start-Sleep -Milliseconds 600

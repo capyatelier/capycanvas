@@ -330,7 +330,8 @@ function Paper-ScaleRelief{
     $relief=[ordered]@{original=(Paper-Scale);held=0.;scale=0.;flat=$null;dragging=$null;released=$null};$baseline=@{pixels=@()}
     try{
         [CapyLayersCapture]::SetForegroundWindow($drawingWindow)|Out-Null;[CapyRowPointer]::Hover([int]($track.X+$track.Width*.5),$y)
-        Wait-Until {$pixels=Relief-Samples "scale-relief-flat-$theme";$settled=$baseline.pixels.Count -eq $pixels.Count -and (Relief-Comparison $baseline.pixels $pixels).changed -eq 0;$baseline.pixels=$pixels;$relief.flat=@{samples=$pixels.Count};$settled} 'The canvas did not settle before the Scale drag'
+        Wait-PresentedFrame -Idle
+        $baseline.pixels=Relief-Samples "scale-relief-flat-$theme";$relief.flat=@{samples=$baseline.pixels.Count}
         [CapyRowPointer]::Down('mouse',[int]($track.X+$track.Width*.5),$y)
         for($i=1;$i -le 12;$i++){[CapyRowPointer]::Move([int]($track.X+$track.Width*(.5+.03*$i)),$y);Start-Sleep -Milliseconds 30}
         Wait-Until {$relief.held=Paper-Scale;$relief.dragging=Relief-Comparison $baseline.pixels (Relief-Samples "scale-relief-dragging-$theme");$relief.dragging.textured} 'Holding the Scale slider did not shade the paper relief'

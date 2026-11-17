@@ -25,6 +25,10 @@ foreach($shell in @((Get-Process -Id $PID).Path,(Join-Path $env:SystemRoot 'Syst
     if($LASTEXITCODE -ne 0){throw 'Genuine IME fixture setup regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/composed-frames.ps1')
     if($LASTEXITCODE -ne 0){throw 'Composed frames helper regression failed.'}
+    & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/bubble-applied-frames.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Native bubble applied-frame regression failed.'}
+    & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/panel-scroll.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Native list fling receipt regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/clipboard-owner.ps1')
     if($LASTEXITCODE -ne 0){throw 'Clipboard owner lifetime regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/fixture-owner-census.ps1') -Helper (Join-Path $PSScriptRoot 'CapyUia.ps1') -Output (Join-Path $testBuildDirectory ('fixture-owner-'+[guid]::NewGuid().ToString('N')))

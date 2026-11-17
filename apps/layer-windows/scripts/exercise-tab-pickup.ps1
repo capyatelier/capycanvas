@@ -117,7 +117,7 @@ try {
     @{process_id=$review.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/tab-pickup-review.json')
     Write-Output "Owned tab pickup review $($review.Id) ($Device)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Tab review did not start' 75
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Tab review did not start' 75
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyWindowApi]::ShowWindow($drawingWindow,3)

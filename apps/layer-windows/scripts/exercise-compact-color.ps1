@@ -417,7 +417,7 @@ function Slot-MenuJourney{
     $canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$camera=(Model).state.camera;$area=$camera.work_area
     $script:slotPixelPoint=@([int]($canvas.X+($area[0]+$area[2]/2)*$canvas.Width/$camera.viewport[0]),[int]($canvas.Y+($area[1]+$area[3]/2)*$canvas.Height/$camera.viewport[1]))
     Slot-Park
-    Wait-Until {$model=Model;$model.canvas_ready -and $model.brush_ready -and $model.shaders_ready} 'The slot-menu pixel baseline did not finish its idle shaders'
+    Wait-Canvas {$model=Model;$model.canvas_ready -and $model.brush_ready -and $model.shaders_ready} 'The slot-menu pixel baseline did not finish its idle shaders'
     $empty=Wait-StablePixels {Slot-Pixels};$before=Slot-Checkpoint
     Slot-Receipt 'slot-empty' $empty $empty
     [CapyRowPointer]::Down('mouse',($script:slotPixelPoint[0]-30),$script:slotPixelPoint[1])
@@ -467,7 +467,7 @@ function Slot-MenuJourney{
     $colors=Slot-Colors
     $undoRevision=(Model).state.document_file.revision
     (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A);Slot-Park
-    Wait-Until {(Model).state.document_file.revision -gt $undoRevision -and !((Model).state.commands|Where-Object id -eq 'undo').enabled -and ((Model).state.commands|Where-Object id -eq 'redo').enabled} 'One Undo after slot menus did not acknowledge removing the seed stroke'
+    Wait-Canvas {(Model).state.document_file.revision -gt $undoRevision -and !((Model).state.commands|Where-Object id -eq 'undo').enabled -and ((Model).state.commands|Where-Object id -eq 'redo').enabled} 'One Undo after slot menus did not acknowledge removing the seed stroke'
     $undone=Wait-StablePixels {Slot-Pixels}
     Slot-Receipt 'slot-undone' $empty $undone
     if($undone -ne $empty){throw 'One Undo after slot menus did not remove only the seed stroke'}
@@ -542,7 +542,7 @@ function Pair-Journey{
     Assert-Pair 'pair-artwork-restored'
     Pair-Command 'new_document' 'File';New-DrawingPixels 128 96
     Pair-Choice 'document-depth' '16-bit float HDR';Invoke 'Create' -Name
-    Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Float drawing did not open' 60
+    Wait-Canvas {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Float drawing did not open' 60
     Pair-SetPaint @('1','0.5','0.25') '2'
     if((Model).paint_pair.definition.rgba[0] -le 1){throw 'HDR icon fixture did not establish paint above SDR white'}
     Assert-Pair 'pair-hdr'
@@ -618,7 +618,7 @@ try{
     [IO.File]::WriteAllText((Join-Path $run 'pid.txt'),[string]$review.Id)
     Write-Output "Compact color review $($review.Id), $run"
     $owned=@{window=$null}
-    Wait-Until {$m=Model;if(!(Review-Ready $m)){return $false};$owned.window=Owned-DrawingWindow $review -TraceDirectory $run;$null -ne $owned.window} 'Color fixture did not start' 60
+    Wait-Canvas {$m=Model;if(!(Review-Ready $m)){return $false};$owned.window=Owned-DrawingWindow $review -TraceDirectory $run;$null -ne $owned.window} 'Color fixture did not start' 60
     $root=$owned.window.Root
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyRowPointer]::SetForegroundWindow([IntPtr]$root.Current.NativeWindowHandle)|Out-Null

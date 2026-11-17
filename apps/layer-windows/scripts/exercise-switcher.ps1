@@ -189,7 +189,7 @@ function Launch([string]$Label){
     @{process_id=$review.Id;run=$run}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/switcher-review.json')
     Write-Output "Owned switcher review $($review.Id) ($Label)"
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready) -and !(Storage).switcher_busy} 'Switcher review did not start' 45
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready) -and !(Storage).switcher_busy} 'Switcher review did not start' 45
     $script:root=$owned.window.Root;$script:drawingWindow=$owned.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Wait-Until {$null -ne (Find 'workspace-switcher')} 'Maximized header did not show the workspace switcher'

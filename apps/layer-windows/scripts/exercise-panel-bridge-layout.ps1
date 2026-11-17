@@ -125,7 +125,7 @@ try{
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json))
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle;$owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Review-Ready)-and!(Model).windows_workspace.busy} 'Owned panel bridge fixture did not start' 90
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Review-Ready)-and!(Model).windows_workspace.busy} 'Owned panel bridge fixture did not start' 90
     $root=$owned.window.Root;$window=$owned.window.Handle
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyWindowApi]::ShowWindow($window,9)|Out-Null

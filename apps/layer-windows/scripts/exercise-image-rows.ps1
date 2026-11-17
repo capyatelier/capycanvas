@@ -19,7 +19,7 @@ function Start-Review([string]$Log){
  $null=$review.Handle
  Write-Output "Owned image row review $($review.Id): $run"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Image row review did not start' 90
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Image row review did not start' 90
  $script:drawingWindow=$native.window.Handle;$script:root=$native.window.Root
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Start-Sleep -Milliseconds 600
@@ -54,7 +54,7 @@ function Assert-ImageHistory([string]$Command,[scriptblock]$Ready){
  Wait-Until {((Model).state.commands|Where-Object id -eq $Command.ToLowerInvariant()).enabled} "$Command did not become available"
  $revision=(Model).state.document_file.revision
  Invoke $Command -Name
- Wait-Until {(Model).state.document_file.revision -ne $revision -and (& $Ready)} "$Command did not restore the expected image edit in one step"
+ Wait-Canvas {(Model).state.document_file.revision -ne $revision -and (& $Ready)} "$Command did not restore the expected image edit in one step"
 }
 function Assert-ImageTransform([string]$Name,$Before,$After){
  Assert-ObjectMotion $Before $After $Name
@@ -66,7 +66,7 @@ function Author-Image([string]$Name,$Before,[scriptblock]$Edit){
  Park;$pixels=Wait-StablePixels {Artwork-Pixels};$revision=(Model).state.document_file.revision
  @{before=$pixels}|ConvertTo-Json|Set-Content (Join-Path $run ("image-$Name-pixels.json"))
  & $Edit
- Wait-Until {(Model).state.document_file.revision -ne $revision -and ((Model).state.commands|Where-Object id -eq 'undo').enabled} "$Name did not commit an image edit"
+ Wait-Canvas {(Model).state.document_file.revision -ne $revision -and ((Model).state.commands|Where-Object id -eq 'undo').enabled} "$Name did not commit an image edit"
  Park;Wait-Until {Opaque-ImageChanged $pixels (Artwork-Pixels)} "$Name did not change the composed opaque artwork"
  $changed=Wait-StablePixels {Artwork-Pixels};Capture "image-$Name-$Device-$Theme" -WithModel -Composed
  try{Assert-ImageHistory 'Undo' {(Artwork-Pixels) -eq $pixels};Assert-ImageHistory 'Redo' {(Artwork-Pixels) -eq $changed}}
@@ -314,7 +314,7 @@ try{
  [CapyRowPointer]::Dispose()
  $reopenStderr=Join-Path $run 'reopen-stderr.log';Start-Review $reopenStderr
  Open-Project $saved
- Wait-Until {(Model).state.document_file.location.uri -eq $saved -and !(Model).state.document_file.busy -and @(Rows).Count -eq 2 -and (Model).brush_ready} 'The edited Object layer drawing did not reopen'
+ Wait-Canvas {(Model).state.document_file.location.uri -eq $saved -and !(Model).state.document_file.busy -and @(Rows).Count -eq 2 -and (Model).brush_ready} 'The edited Object layer drawing did not reopen'
  $reopened=Join-Path $run 'Object layers reopened.capy';Save-ProjectAs $reopened
  if((Identity (Package $reopened)) -ne $savedIdentity){throw 'Save/reopen changed image identities, shared sources, effective affines or sibling order'}
  Expand-PanelColumn 'layers'

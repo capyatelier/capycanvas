@@ -106,7 +106,7 @@ try {
         @{ process_id = $review.Id; delay_ms = $delay } | ConvertTo-Json | Set-Content (Join-Path $launch 'owner.json')
         Write-Output "Owned startup/close review $($review.Id), delay $delay ms"
         $startup = [Diagnostics.Stopwatch]::StartNew()
-        Wait-Until { $model = Model; $model.brush_ready -and $model.windows_workspace.ready } 'Owned review did not become ready within 60 seconds.' 60
+        Wait-Canvas { $model = Model; $model.brush_ready -and $model.windows_workspace.ready } 'Owned review did not become ready within 60 seconds.' 60
         $startup.Stop()
         Wait-Until { $view=Model; $view.launch.finished -and !$view.launch.visible -and $view.state.theme -eq $Theme } 'The shared launch did not finish on its ready presented frame.' 60
         $script:drawing=Owned-DrawingWindow $review

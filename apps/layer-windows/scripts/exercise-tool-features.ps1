@@ -81,8 +81,8 @@ function Check-Smoothing{
  [CapyRowPointer]::Key([uint32]$ProcessId,27);Wait-Until {(Field 'smoothing_strength').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value-eq'30'} 'Smoothing Escape did not restore30'
  $smoothing=@((Model).state.tool_settings|Where-Object id -eq 'smoothing_strength')
  if($smoothing.Count-ne1-or$smoothing[0].label-ne'Smoothing'-or$smoothing[0].group_id-or$smoothing[0].group){throw 'Smoothing must have one ungrouped control'}
- Select-Tool 'pencil';Wait-Until {(Model).brush_ready-and[math]::Abs((Value 'smoothing_strength')-.06)-lt.0001} 'Pencil smoothing default did not prepare' 8
- Select-Tool 'pen';Wait-Until {(Model).brush_ready-and[math]::Abs((Value 'smoothing_strength')-.3)-lt.0001} 'PerPen smoothing choices did not restore' 8
+ Select-Tool 'pencil';Wait-Canvas {(Model).brush_ready-and[math]::Abs((Value 'smoothing_strength')-.06)-lt.0001} 'Pencil smoothing default did not prepare' 8
+ Select-Tool 'pen';Wait-Canvas {(Model).brush_ready-and[math]::Abs((Value 'smoothing_strength')-.3)-lt.0001} 'PerPen smoothing choices did not restore' 8
  Dismiss-FeatureDrawer;$null=Reveal-Number 'smoothing_strength' 36 $scale
  $caption=Arranged 'number-caption-tool-setting-smoothing_strength' ([System.Windows.Automation.ControlType]::Text);$bounds=$caption.Current.BoundingRectangle
  $null=[CapyRowPointer]::DoubleClick([int]($bounds.Left+$bounds.Width/2),[int]($bounds.Top+$bounds.Height/2))
@@ -92,7 +92,7 @@ function Check-Smoothing{
  Select-Tool 'pen';Dismiss-FeatureDrawer;Feature-Command 'quick_mask'
  Wait-Until {!@((Model).state.tool_settings|Where-Object id -eq 'smoothing_strength').Count} 'Coverage mask retained smoothing' 8
  Feature-Command 'return_to_artwork';Feature-Command 'clone'
- Wait-Until {(Model).brush_ready-and@((Model).state.tool_settings|Where-Object id -eq 'smoothing_strength').Count-eq1} 'Clone smoothing did not prepare' 8
+ Wait-Canvas {(Model).brush_ready-and@((Model).state.tool_settings|Where-Object id -eq 'smoothing_strength').Count-eq1} 'Clone smoothing did not prepare' 8
  Check-Projection;Select-Tool 'pen';Dismiss-FeatureDrawer;Check-Projection
 }
 function Check-SizeKeys{
@@ -121,22 +121,22 @@ function Preview-Tap([string]$Device,[double]$Position){$at=Along (Box $strength
 function Check-SizeControls{
  Switch-Workspace 'Sketch' 'builtin:workspace:painter'
  foreach($tool in @('pencil','eraser')){
-  Feature-Command $tool;Wait-Until {$v=Model;$v.brush_ready-and@($v.state.commands|Where-Object {$_.id-eq$tool-and$_.selected}).Count-eq1} 'Sketch tool did not prepare' 8
+  Feature-Command $tool;Wait-Canvas {$v=Model;$v.brush_ready-and@($v.state.commands|Where-Object {$_.id-eq$tool-and$_.selected}).Count-eq1} 'Sketch tool did not prepare' 8
   $tile=Tile 'brush_size_slider';if(!$tile-or!$tile.component.numeric){throw 'Shared Sketch size slider unavailable'}
   $track='component-slider-'+$tile.id;$popup='slider-bookmark-'+$tile.id
   Begin-FeatureEvidence
   foreach($device in @('mouse','pen','touch')){
    Press $device (Along (Box $track) .25);Release
-   Wait-Until {(Find $popup -Visible)-and(Model).brush_ready} 'Sketch size click did not open its prepared preview' 8
+   Wait-Canvas {(Find $popup -Visible)-and(Model).brush_ready} 'Sketch size click did not open its prepared preview' 8
    $low=(Tile 'brush_size_slider').component.numeric.value
    $identity=(Control $track).GetRuntimeId()-join':'
    Press $device (Along (Box $track) .75);Release
-   Wait-Until {(Tile 'brush_size_slider').component.numeric.value-gt$low-and(Model).brush_ready} 'Sketch size increase did not prepare' 8
+   Wait-Canvas {(Tile 'brush_size_slider').component.numeric.value-gt$low-and(Model).brush_ready} 'Sketch size increase did not prepare' 8
    $high=(Tile 'brush_size_slider').component.numeric.value
    if((Model).state.brush.diameter-ne$high-or((Control $track).GetRuntimeId()-join':')-cne$identity){throw 'Sketch resize lost shared size or retained slider identity'}
    $from=Along (Box $track) .75;$to=Along (Box $track) .35
    Press $device $from;Drag $from $to;Release
-   Wait-Until {(Tile 'brush_size_slider').component.numeric.value-lt$high-and(Model).brush_ready} 'Sketch size drag did not update' 8
+   Wait-Canvas {(Tile 'brush_size_slider').component.numeric.value-lt$high-and(Model).brush_ready} 'Sketch size drag did not update' 8
    [CapyRowPointer]::Key([uint32]$ProcessId,27);Wait-Until {!(Find $popup -Visible)} 'Sketch size preview did not close' 8
    if((Model).state.host_error-or(Model).error){throw 'Sketch resize reported an error'}
   }
@@ -167,12 +167,12 @@ function Check-Preview{
  Check-FeatureEvidence
 }
 try{
- Wait-Until {$v=Model;(Review-Ready $v)-and!$v.windows_workspace.busy} 'Original feature startup did not complete' 45
+ Wait-Canvas {$v=Model;(Review-Ready $v)-and!$v.windows_workspace.busy} 'Original feature startup did not complete' 45
  if(!(Model).windows_isolated_settings-or(Model).state.theme-ne$Theme){throw 'Feature theme/profile mismatch'}
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  if(![CapyRowPointer]::SetForegroundWindow($drawingWindow)){throw 'Feature foreground unavailable'}
  [CapyRowPointer]::Initialize([uint32]$ProcessId)
- if($Journey-eq'size-controls'){Check-SizeControls}elseif($Journey-eq'preview'){Check-Preview}else{Select-Tool 'pen';Wait-Until {(Model).brush_ready} 'Original Pen did not prepare' 8;Dismiss-FeatureDrawer;Begin-FeatureEvidence;if($Journey-eq'smoothing'){Check-Smoothing}else{Check-SizeKeys};Check-FeatureEvidence}
+ if($Journey-eq'size-controls'){Check-SizeControls}elseif($Journey-eq'preview'){Check-Preview}else{Select-Tool 'pen';Wait-Canvas {(Model).brush_ready} 'Original Pen did not prepare' 8;Dismiss-FeatureDrawer;Begin-FeatureEvidence;if($Journey-eq'smoothing'){Check-Smoothing}else{Check-SizeKeys};Check-FeatureEvidence}
  [CapyRowPointer]::Verify()
  @{journey=$Journey;theme=$Theme;status='passed';authored_document='exact';canvas_pixels='original96px exact';original_budget='600 outer/45 startup/8 controls/20 scrollsteps/Close5 by entry';preview_idle_gpu_submission='not observed; requires renderer packet/metric qualification';physical_pressure_tilt='unverified';canonical_credit=$false}|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $OutputDirectory 'feature-proof.json')
 }finally{[CapyRowPointer]::Dispose()}

@@ -54,7 +54,7 @@ try {
     Wait-Until {$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};$owned.window=Owned-DrawingWindow $review;$owned.window} 'Size dialog drawing window did not open' 45
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     @{process_id=$review.Id;hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
-    Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Size dialog review did not start' 45
+    Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Size dialog review did not start' 45
     $checks.theme=(Model).state.theme
     if($PSBoundParameters.ContainsKey('Theme') -and $checks.theme -ne $Theme){throw 'Size dialog did not adopt its explicit isolated theme'}
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)

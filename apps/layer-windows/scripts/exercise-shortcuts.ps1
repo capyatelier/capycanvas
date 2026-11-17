@@ -8,7 +8,7 @@ $review=Get-Process -Id $ProcessId
 if($review.ProcessName -ne 'CapyCanvas'){throw 'Expected an owned CapyCanvas review'}
 $CapyStateFile=$StateFile;$CapyTraceDirectory=Split-Path -Parent $StateFile
 $native=@{window=$null}
-Wait-Until {$native.window=Owned-DrawingWindow $review; $native.window -and (Input-Ready)} 'Isolated review did not become ready' 45
+Wait-Canvas {$native.window=Owned-DrawingWindow $review; $native.window -and (Input-Ready)} 'Isolated review did not become ready' 45
 $root=$native.window.Root
 function Key([int]$Code,[switch]$Ctrl,[switch]$Shift){
     $modifiers=[Collections.Generic.List[uint16]]::new()
@@ -30,7 +30,7 @@ function Check-Undo([string]$Button){
  foreach($operation in @(@{key=0x5A;shift=$false;modified=$false},@{key=0x5A;shift=$true;modified=$true},@{key=0x5A;shift=$false;modified=$false},@{key=0x59;shift=$false;modified=$true})){
   $revision=(Model).state.document_file.revision
   Key $operation.key -Ctrl -Shift:$operation.shift
-  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $operation.modified} "Shortcut failed with focus on $Button"
+  Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $operation.modified} "Shortcut failed with focus on $Button"
   if(((Control $Button).GetRuntimeId() -join ':') -ne $identity -or !(Control $Button).Current.HasKeyboardFocus){throw 'Undo/Redo replaced the focused button or stole focus'}
  }
 }
@@ -67,9 +67,9 @@ function Check-HeldFocus {
   [CapyRowPointer]::Down('pen',$x,$y);$penHeld=$true
   foreach($step in 1..8){[CapyRowPointer]::Move(($x+$step*6),$y);Start-Sleep -Milliseconds 8}
   [CapyRowPointer]::Up();$penHeld=$false
-  Wait-Until {$model=Model;$model.state.document_file.revision -gt $revision -and $model.state.document_file.modified -and $model.state.layer_tools.tool -eq 'paint'} 'Pen after focus return did not paint with the restored tool'
+  Wait-Canvas {$model=Model;$model.state.document_file.revision -gt $revision -and $model.state.document_file.modified -and $model.state.layer_tools.tool -eq 'paint'} 'Pen after focus return did not paint with the restored tool'
   [CapyRowPointer]::Chord([uint32]$ProcessId,[uint16[]]@(0x11),0x5A)
-  Wait-Until {!(Model).state.document_file.modified} 'Undo did not remove the focus-return pen stroke'
+  Wait-Canvas {!(Model).state.document_file.modified} 'Undo did not remove the focus-return pen stroke'
  }finally{
   try{
    [CapyRowPointer]::VerifyPrivateDesktop($env:CAPY_PRIVATE_DESKTOP)
@@ -84,7 +84,7 @@ function Check-HeldFocus {
 [CapyRowPointer]::Initialize([uint32]$ProcessId)
 try{
  if((Model).state.document_file.modified){throw 'Use a clean isolated document for shortcut acceptance'}
- Invoke 'Test stroke' -Name;Wait-Until {(Model).state.document_file.modified} 'Test stroke did not finish'
+ Invoke 'Test stroke' -Name;Wait-Canvas {(Model).state.document_file.modified} 'Test stroke did not finish'
  Check-Undo 'tool-group-0'
  $pen=Tile 'pen';Check-Undo $pen
  foreach($pair in @(@{key=0x42;tool='brush'},@{key=0x45;tool='eraser'},@{key=0x50;tool='pen'})){
@@ -123,7 +123,7 @@ try{
  }
  Wait-Until {$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Escape did not close the native menu'
  Key 0x5A -Ctrl
- Wait-Until {!(Model).state.document_file.modified} 'Undo after closing the native menu did not restore the clean drawing'
+ Wait-Canvas {!(Model).state.document_file.modified} 'Undo after closing the native menu did not restore the clean drawing'
  Check-HeldFocus
  [CapyRowPointer]::Verify()
  @{button_shortcuts='Tool Set and toolbar Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y, retained native focus';tool_shortcuts='B/E/P from toolbar focus';native_controls='text editing, slider arrows, Space/Enter activation, Tab traversal, menu Escape';drawing='seed and focus-return strokes, clean after Undo';focus_loss='owned-root peer, Alt released away, restored pen paints';scope='owned native mouse and keyboard input; physical pen and performance remain separate'}|ConvertTo-Json

@@ -75,9 +75,9 @@ function Enclose([switch]$Cancel){
     [CapyRowPointer]::Up()
     Park
 }
-function Settled{Wait-Until {$m=Model;$m -and !$m.state.document_file.busy -and $m.brush_ready} 'The drawing did not settle' 30}
+function Settled{Wait-Canvas {$m=Model;$m -and !$m.state.document_file.busy -and $m.brush_ready} 'The drawing did not settle' 30}
 function Holes([bool]$Filled){
-    Wait-Until {$a=Pixel 85 110;$b=Pixel 195 110;(Red $a) -eq $Filled -and (Red $b) -eq $Filled} $(if($Filled){'The enclosed holes did not fill'}else{'The enclosed holes did not clear'}) 15
+    Wait-Canvas {$a=Pixel 85 110;$b=Pixel 195 110;(Red $a) -eq $Filled -and (Red $b) -eq $Filled} $(if($Filled){'The enclosed holes did not fill'}else{'The enclosed holes did not clear'}) 15
 }
 function Check-References([long]$Id){
     $null=Reveal-PanelControl 'tool_settings' 'tool-choice-selection-source-0'
@@ -156,7 +156,7 @@ function Check-Textures{
             $entry=New-DrawingControl 'new-drawing-paper-relief';$entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0')
             Invoke 'new-drawing-paper-use';Wait-Until {(Model).state.new_drawing.setup.paper.texture -eq $paper -and !(Model).state.new_drawing.drawer} 'Paper did not apply'
         }
-        Invoke 'new-drawing-create';Wait-Until {!(Model).state.new_drawing -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Texture drawing did not become ready' 45
+        Invoke 'new-drawing-create';Wait-Canvas {!(Model).state.new_drawing -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Texture drawing did not become ready' 45
         if(($paper -eq 'none') -and @((Model).state.layers|Where-Object {$_.paper.id -eq 'none'}).Count -ne 1){throw 'Digital Full HD did not create a None Paper'}
         Fit-Canvas;Command 'pen'
         $start=Screen 50 50;[CapyRowPointer]::Down('mouse',$start.x,$start.y)
@@ -173,17 +173,17 @@ function Check-Textures{
             $flat=$null
             foreach($percent in @(0,100,200)){
                 Texture-Strength $percent;Texture-Path $tool
-                Wait-Until {(Revision) -ne $emptyRevision} "Texture $tool did not paint at $percent%" 30
+                Wait-Canvas {(Revision) -ne $emptyRevision} "Texture $tool did not paint at $percent%" 30
                 Park;$filled=Wait-StablePixels -CapturePixels {Texture-Samples} -Idle
                 if($filled -eq $empty){throw "Texture $tool left sampled pixels empty at $percent%"}
                 if($percent -eq 0){$flat=$filled}elseif($paper -eq 'none' -and $filled -ne $flat){throw "Texture None changed $tool pixels at $percent%"}
                 if($paper -ne 'none' -and $percent -eq 200 -and $filled -eq $flat){throw "$paper did not texture $tool at 200%"}
                 if($percent -eq 100){Capture "texture-$paper-$tool-$Theme" -WithModel}
-                Chord @(0x11) 0x5A;Wait-Until {(Revision) -eq $emptyRevision} 'Texture Undo did not restore the target';Settled;Park
-                Wait-Until {(Texture-Samples) -eq $empty} 'Texture Undo did not restore pixels'
-                Chord @(0x11) 0x59;Wait-Until {(Revision) -ne $emptyRevision} 'Texture Redo did not restore the target';Settled;Park
-                Wait-Until {(Texture-Samples) -eq $filled} 'Texture Redo did not restore pixels'
-                Chord @(0x11) 0x5A;Wait-Until {(Revision) -eq $emptyRevision} 'Texture restoration Undo did not complete';Settled
+                Chord @(0x11) 0x5A;Wait-Canvas {(Revision) -eq $emptyRevision} 'Texture Undo did not restore the target';Settled;Park
+                Wait-Canvas {(Texture-Samples) -eq $empty} 'Texture Undo did not restore pixels'
+                Chord @(0x11) 0x59;Wait-Canvas {(Revision) -ne $emptyRevision} 'Texture Redo did not restore the target';Settled;Park
+                Wait-Canvas {(Texture-Samples) -eq $filled} 'Texture Redo did not restore pixels'
+                Chord @(0x11) 0x5A;Wait-Canvas {(Revision) -eq $emptyRevision} 'Texture restoration Undo did not complete';Settled
                 $records.Add(@{paper=$paper;tool=$tool;strength=$percent;pixels=$filled;undo_redo='passed'})
                 Write-Output "$paper $tool $percent% pixels and Undo/Redo passed"
             }
@@ -200,7 +200,7 @@ try {
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned enclose fill review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Enclose fill review did not start' 90
+    Wait-Canvas {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Enclose fill review did not start' 90
     $root=$registeredWindow.Root;$drawingWindow=$registeredWindow.Handle
     Maximize-DrawingWindow
     Use-PaintWorkspace
@@ -208,7 +208,7 @@ try {
     [CapyRowPointer]::Initialize([uint32]$review.Id)
 
     Open-Project $reference
-    Wait-Until {$tab=@((Model).state.tabs|Where-Object active)[0];$tab -and $tab.width -eq 384 -and $tab.height -eq 256 -and (Model).brush_ready} 'The reference image did not open' 45
+    Wait-Canvas {$tab=@((Model).state.tabs|Where-Object active)[0];$tab -and $tab.width -eq 384 -and $tab.height -eq 256 -and (Model).brush_ready} 'The reference image did not open' 45
     $referenceLayer=@((Model).state.layers|Where-Object editing)[0].id
     Invoke-Id 'layer-reference'
     Wait-Until {(Model).state.layer_tools.references_selected} 'The reference ink did not become a reference'
@@ -253,19 +253,19 @@ try {
     Holes $false
     $empty=Revision
     Enclose
-    Wait-Until {(Revision) -ne $empty} 'Enclose and Fill did not paint'
+    Wait-Canvas {(Revision) -ne $empty} 'Enclose and Fill did not paint'
     Settled;Park;Holes $true
     foreach($point in @(@(25,110),@(140,110),@(290,110),@(85,195))){if(Red (Pixel $point[0] $point[1])){throw "Enclose and Fill painted outside the enclosed holes at $($point -join ',')"}}
     $ink=Pixel 42 110;if(($ink|Measure-Object -Maximum).Maximum -gt 60){throw "The reference ink did not stay visible: $($ink -join ',')"}
     Capture "enclose-fill-$Theme" -WithModel
-    Chord @(0x11) 0x5A;Wait-Until {(Revision) -eq $empty} 'One Undo did not remove both holes';Settled;Park;Holes $false
-    Chord @(0x11) 0x59;Wait-Until {(Revision) -ne $empty} 'Redo did not restore the fill';Settled;Park;Holes $true
-    Chord @(0x11) 0x5A;Wait-Until {(Revision) -eq $empty} 'Undo did not remove the fill again';Settled
+    Chord @(0x11) 0x5A;Wait-Canvas {(Revision) -eq $empty} 'One Undo did not remove both holes';Settled;Park;Holes $false
+    Chord @(0x11) 0x59;Wait-Canvas {(Revision) -ne $empty} 'Redo did not restore the fill';Settled;Park;Holes $true
+    Chord @(0x11) 0x5A;Wait-Canvas {(Revision) -eq $empty} 'Undo did not remove the fill again';Settled
     Enclose -Cancel
     Settled;Start-Sleep -Milliseconds 500
     if((Revision) -ne $empty){throw 'Escape did not cancel the enclosure'}
     Park;Holes $false
-    Chord @(0x11) 0x59;Wait-Until {(Revision) -ne $empty} 'Cancelling an enclosure lost Redo';Settled;Park;Holes $true
+    Chord @(0x11) 0x59;Wait-Canvas {(Revision) -ne $empty} 'Cancelling an enclosure lost Redo';Settled;Park;Holes $true
     Use-Workspace 'builtin:workspace:painter' 'Sketch'
     Command 'enclose_fill';Command 'hand'
     $fill=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.control.slot -eq 'fill'})[0]

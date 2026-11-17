@@ -177,7 +177,7 @@ try {
     $null=$review.Handle
     Write-Output "Owned color editor review $($review.Id): $run"
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Color editor review did not start' 90
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Color editor review did not start' 90
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Start-Sleep -Milliseconds 600
@@ -192,7 +192,7 @@ try {
         (Control 'document-depth').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
         (Control '16-bit float HDR' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
         Invoke 'Create' -Name
-        Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR layout drawing did not open' 60
+        Wait-Canvas {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR layout drawing did not open' 60
         Check-EditorRegrow 'hdr'
         [CapyRowPointer]::Dispose()
         & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved

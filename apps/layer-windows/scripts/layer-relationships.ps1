@@ -10,7 +10,7 @@ function Relationship-Visibility([double]$Id,[bool]$Visible){
 }
 function Relationship-Undo{
     $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
-    Wait-Until {(Model).state.document_file.revision -ne $revision} 'Undo did not publish'
+    Wait-Canvas {(Model).state.document_file.revision -ne $revision} 'Undo did not publish'
 }
 function Relationship-Rows{
     @((Model).state.layers|ForEach-Object {[ordered]@{id=$_.id;depth=$_.depth;visible=$_.visible;alpha_locked=$_.alpha_locked;pass_through=$_.pass_through;relationship=$_.relationship}})|ConvertTo-Json -Depth 8 -Compress

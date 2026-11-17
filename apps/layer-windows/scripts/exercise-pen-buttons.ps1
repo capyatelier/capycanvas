@@ -60,7 +60,7 @@ function Select-EraserOracleBrush {
   $choice.id=$id;$true
  } 'The native G-Pen choice did not match the shared eraser oracle preset'
  Invoke-Id $choice.id
- Wait-Until {$m=Model;$m.state.brush.preset -eq 1 -and $m.brush_ready} 'G-Pen did not become ready for the eraser oracle'
+ Wait-Canvas {$m=Model;$m.state.brush.preset -eq 1 -and $m.brush_ready} 'G-Pen did not become ready for the eraser oracle'
 }
 function Barrel-Stroke([int]$X,[int]$Y,[switch]$Held) {
  Assert-PaperSegment 'barrel-stroke' $X $Y ($X+72) $Y
@@ -85,7 +85,7 @@ try {
  Write-Output "Owned pen button review $($review.Id): $run"
  Wait-Until {$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};$script:ownedDrawing=Owned-DrawingWindow $review;$null -ne $ownedDrawing} 'Owned pen drawing window did not open'
  $root=$ownedDrawing.Root
- Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Pen review did not start'
+ Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Pen review did not start'
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($ownedDrawing.Handle)|Out-Null
  [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -94,7 +94,7 @@ try {
  $windowPattern.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$windowPattern.Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized -and [Math]::Abs((Model).state.camera.viewport[0]-(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle.Width) -lt 1} 'Owned pen drawing did not maximize'
  Fit-Canvas
- Wait-Until {(Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Blank drawing did not become ready'
+ Wait-Canvas {(Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Blank drawing did not become ready'
  if((Model).state.document_file.modified){throw 'Fixture did not begin with a fresh drawing'}
  $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  $model=Model;$area=$model.layout.work_area;$density=$canvas.Width/$model.layout.viewport[0]
@@ -115,7 +115,7 @@ try {
   for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move($x+3*$i,$y+$i);Start-Sleep -Milliseconds 10}
   [CapyRowPointer]::Up($true)
   [CapyRowPointer]::PenHover($park.x,$park.y)
-  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Stroke-Pixels $y) -ne $empty} 'Pen stroke did not paint actual pixels'
+  Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Stroke-Pixels $y) -ne $empty} 'Pen stroke did not paint actual pixels'
   if((Wait-StablePixels {Stroke-Pixels $y}) -eq $empty){throw 'Pen stroke did not retain painted pixels'}
   $drawn=(Model).state.document_file.revision
   $clear=Find $clearId
@@ -128,7 +128,7 @@ try {
   [CapyRowPointer]::Move($at.x+$movement,$at.y)
   Start-Sleep -Milliseconds 35
   [CapyRowPointer]::Up($true)
-  Wait-Until {(Model).state.document_file.revision -gt $drawn -and (Stroke-Pixels $y) -eq $empty} 'One pen tap did not restore exact blank drawing pixels'
+  Wait-Canvas {(Model).state.document_file.revision -gt $drawn -and (Stroke-Pixels $y) -eq $empty} 'One pen tap did not restore exact blank drawing pixels'
   if((Wait-StablePixels {Stroke-Pixels $y}) -ne $empty){throw 'Cleared pixels did not remain blank'}
   $records+=@{movement_px=$movement;stroke_revision=$drawn;clear_revision=(Model).state.document_file.revision;single_tap=$true;pen_remained_in_range=$true}
   Write-Output "Draw then single Clear tap passed (drift $movement px)"
@@ -141,18 +141,18 @@ try {
  $midBlank=Join-Path $run 'barrel-mid-stroke-blank.png';$empty=Wait-StablePixels {Stroke-Pixels $y $midBlank}
  Barrel-Stroke $x $y
  [CapyRowPointer]::Hover($park.x,$park.y)
- Wait-Until {(Model).state.document_file.revision -gt $revision -and (Stroke-Pixels $y) -ne $empty} 'A mid-stroke barrel press left no painted pixels'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Stroke-Pixels $y) -ne $empty} 'A mid-stroke barrel press left no painted pixels'
  if((Camera) -ne $view){throw 'A mid-stroke barrel press moved the view'}
  $midStroke=Inked 'barrel-mid-stroke' $midBlank $y
  if($midStroke -lt .9){throw "A mid-stroke barrel press interrupted the stroke ($midStroke inked)"}
  $drawn=(Model).state.document_file.revision;Invoke-Id ('tile-commands-'+$undo.id)
- Wait-Until {(Model).state.document_file.revision -gt $drawn -and (Stroke-Pixels $y) -eq $empty} 'One Undo did not restore exact pixels before the whole barrel stroke'
+ Wait-Canvas {(Model).state.document_file.revision -gt $drawn -and (Stroke-Pixels $y) -eq $empty} 'One Undo did not restore exact pixels before the whole barrel stroke'
  if((Wait-StablePixels {Stroke-Pixels $y}) -ne $empty){throw 'Barrel stroke Undo did not retain exact baseline pixels'}
  $row=$y+[int](40*$density);$revision=(Model).state.document_file.revision
  $heldBlank=Join-Path $run 'barrel-held-blank.png';$heldEmpty=Wait-StablePixels {Stroke-Pixels $row $heldBlank}
  Barrel-Stroke $x $row -Held
  [CapyRowPointer]::Hover($park.x,$park.y)
- Wait-Until {(Model).state.document_file.revision -gt $revision -and (Stroke-Pixels $row) -ne $heldEmpty} 'A held barrel prevented the tip from painting actual pixels'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Stroke-Pixels $row) -ne $heldEmpty} 'A held barrel prevented the tip from painting actual pixels'
  if((Camera) -ne $view){throw 'A held barrel moved the view'}
  $held=Inked 'barrel-held' $heldBlank $row
  if($held -lt .9){throw "A held barrel did not paint the whole stroke ($held inked)"}
@@ -198,7 +198,7 @@ try {
    for($i=1;$i -le 18;$i++){[CapyRowPointer]::Move($X+4*$i,$Y);Start-Sleep -Milliseconds 10}
    [CapyRowPointer]::Up($true);[CapyRowPointer]::PenLeave()
   }
-  Wait-Until {(Model).state.document_file.revision -gt $revision} 'The pen stroke did not finish'
+  Wait-Canvas {(Model).state.document_file.revision -gt $revision} 'The pen stroke did not finish'
   Start-Sleep -Milliseconds 300
  }
  function Paper([double]$Across,[double]$Down){

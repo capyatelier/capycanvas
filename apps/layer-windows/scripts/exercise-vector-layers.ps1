@@ -36,9 +36,9 @@ function Tool-History([string]$Name,$Points,[string]$Before){
  $record=[ordered]@{name=$Name;points=$Points;before=$Before;after=$after;undo=$null;redo=$null}
  try{
   $revision=Revision;Shortcut-Command 'undo';Park
-  Wait-Until {$record.undo=Tool-Samples $Points;(Revision) -ne $revision -and $record.undo -eq $Before} "$Name Undo did not restore the exact artwork samples" 30
+  Wait-Canvas {$record.undo=Tool-Samples $Points;(Revision) -ne $revision -and $record.undo -eq $Before} "$Name Undo did not restore the exact artwork samples" 30
   $revision=Revision;Shortcut-Command 'redo';Park
-  Wait-Until {$record.redo=Tool-Samples $Points;(Revision) -ne $revision -and $record.redo -eq $after} "$Name Redo did not restore the exact artwork samples" 30
+  Wait-Canvas {$record.redo=Tool-Samples $Points;(Revision) -ne $revision -and $record.redo -eq $after} "$Name Redo did not restore the exact artwork samples" 30
  }finally{$record|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $run ("tools-$Name-history.json"))}
  $checks[$Name]=[ordered]@{undo='exact';redo='exact';sample_pixels=$Points.Count*81}
 }
@@ -122,7 +122,7 @@ function Editing-Command([string]$Id){
  Park
 }
 function Editing-Settled{
- Wait-Until {$m=Model;@($m.state.requests).Count -eq 0 -and !$m.state.document_file.busy} 'The vector editing request did not finish' 60
+ Wait-Canvas {$m=Model;@($m.state.requests).Count -eq 0 -and !$m.state.document_file.busy} 'The vector editing request did not finish' 60
 }
 function Editing-NudgeEdge([bool]$Wanted){
  Check-Projection
@@ -273,7 +273,7 @@ try{
  $null=$review.Handle
  Write-Output "Owned vector layer review $($review.Id): $run"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$m=Model;$native.window -and $m.canvas_ready -and (Review-Ready $m) -and !$m.windows_workspace.busy} 'The vector layer review did not start' 90
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$m=Model;$native.window -and $m.canvas_ready -and (Review-Ready $m) -and !$m.windows_workspace.busy} 'The vector layer review did not start' 90
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  if(![CapyRowPointer]::SetForegroundWindow($drawingWindow)){throw 'The owned drawing did not accept foreground input'}
@@ -285,7 +285,7 @@ try{
   & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
   $epoch=(Model).state.document_file.epoch
   New-DrawingPixels 2000 1400;Invoke 'new-drawing-create'
-  Wait-Until {$m=Model;$m.state.document_file.epoch -ne $epoch -and !$m.state.new_drawing -and !$m.state.document_file.busy -and $m.canvas_ready -and $m.brush_ready} 'The vector tools drawing did not become ready' 90
+  Wait-Canvas {$m=Model;$m.state.document_file.epoch -ne $epoch -and !$m.state.new_drawing -and !$m.state.document_file.busy -and $m.canvas_ready -and $m.brush_ready} 'The vector tools drawing did not become ready' 90
  }
  Set-Color '#1A1A1F'
  Fit-Canvas;Park;Take-Projection
@@ -295,7 +295,7 @@ try{
  $pencil=Select-Brush 'Pencil'
  $v1=New-VectorLayer
  $gpen=@{id=$null}
- Wait-Until {
+ Wait-Canvas {
   $m=Model;$tool=@($m.state.tool_set.subtools|Where-Object selected)[0]
   $gpen.id=$m.state.brush.preset
   $tool.label -eq 'G-Pen' -and $tool.action.type -eq 'select_brush' -and $tool.action.id -eq $m.state.brush.preset -and $m.brush_ready
@@ -303,7 +303,7 @@ try{
  $gpen=$gpen.id
  $revision=Revision
  Stroke (Line @(400,300) @(900,340))
- Wait-Until {(Revision) -ne $revision} 'The pen stroke did not reach the vector layer'
+ Wait-Canvas {(Revision) -ne $revision} 'The pen stroke did not reach the vector layer'
  Expect 'discover ink' @(650,320) 'ink'
  if((Active).id -ne $v1){throw 'Inking moved away from the vector layer'}
  Capture "1-discover-$Theme" -WithModel -Composed
@@ -321,7 +321,7 @@ try{
  Expect 'the refused pencil left the paths alone' @(650,520) 'ink' $false 5
  $revision=Revision
  Stroke (Line @(400,500) @(900,540))
- Wait-Until {(Revision) -ne $revision} 'The chosen pen did not reach the vector layer'
+ Wait-Canvas {(Revision) -ne $revision} 'The chosen pen did not reach the vector layer'
  Expect 'pen line after the notice' @(650,520) 'ink'
  Capture "2-use-pen-$Theme" -WithModel -Composed
  $null=Select-Brush 'Pencil'
@@ -335,7 +335,7 @@ try{
  Expect 'the refused pencil left nothing' @(650,720) 'mark' $false 5
  $paint=(Active).paint_revision
  Stroke (Line @(400,700) @(900,740))
- Wait-Until {$a=Active;$a.id -eq $p2 -and $a.paint_revision -ne $paint} 'The pencil did not paint the new paint layer' 60
+ Wait-Canvas {$a=Active;$a.id -eq $p2 -and $a.paint_revision -ne $paint} 'The pencil did not paint the new paint layer' 60
  Expect 'pencil on the new paint layer' @(650,720) 'mark'
  Capture "2-paint-layer-$Theme" -WithModel -Composed
  $checks.wrong_brush=[ordered]@{use_pen=$offer;paint_layer=$p2}
@@ -348,7 +348,7 @@ try{
  $null=Choose-Tool-Item (Tool-Item 'subtools' {param($item) $item.action.action.tool.figure.shape -eq 'ellipse' -and $item.action.action.tool.figure.paint -eq 'outline'} 'an ellipse outline') -Acknowledged
  $revision=Revision
  Stroke (Line @(1100,300) @(1400,500) 8)
- Wait-Until {(Revision) -ne $revision} 'The ellipse outline did not reach the vector layer'
+ Wait-Canvas {(Revision) -ne $revision} 'The ellipse outline did not reach the vector layer'
  Expect 'ellipse outline' @(1250,300) 'ink'
  Set-Color '#26B340'
  Select-Tool 'fill'
@@ -378,7 +378,7 @@ try{
  foreach($segment in @(@(@(300,1000),@(1100,1000)),@(@(500,850),@(500,1150)),@(@(900,850),@(900,1150)))){
   $revision=Revision
   Stroke (Line $segment[0] $segment[1])
-  Wait-Until {(Revision) -ne $revision} 'A crossing line did not reach the vector layer'
+  Wait-Canvas {(Revision) -ne $revision} 'A crossing line did not reach the vector layer'
  }
  foreach($point in @(@(400,1000),@(700,1000),@(1000,1000),@(500,900),@(900,900))){Expect 'crossing lines' $point 'ink'}
  Capture "4-crossing-lines-$Theme" -WithModel -Composed
@@ -395,7 +395,7 @@ try{
  if(!$chosen){$findings.Add("Choosing $($modes[2].label) in the Tools list did not take effect")}
  $revision=Revision
  Stroke (Line @(700,980) @(700,1020) 4)
- Wait-Until {(Revision) -ne $revision} 'The eraser did not edit the vector layer'
+ Wait-Canvas {(Revision) -ne $revision} 'The eraser did not edit the vector layer'
  Expect 'span between the crossings' @(700,1000) 'ink' $false 60
  foreach($point in @(@(560,1000),@(840,1000))){Expect 'erased up to the crossings, beyond the eraser' $point 'ink' $false -Deferred}
  foreach($point in @(@(400,1000),@(1000,1000),@(500,900),@(900,900))){Expect 'kept line parts' $point 'ink'}

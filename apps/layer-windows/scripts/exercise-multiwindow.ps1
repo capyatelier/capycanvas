@@ -48,12 +48,17 @@ function Model($Window=$current){
 function Use-Window($Window){
     [CapyWindowTest]::Check([uint32]$review.Id,[IntPtr]$Window.hwnd)
     $script:current=$Window
+    $script:CapyStateFile=Join-Path $directory "ui-state-$($review.Id)-$($Window.id).json"
     $owned=Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory
     if(!$owned){throw 'The requested owned window is not ready'}
     $script:root=$owned.Root
 }
 function Ready($Window){
-    Wait-Until {(Review-Ready (Model $Window) $Window.hwnd) -and (Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory)} "Window $($Window.id) did not become ready" 45
+    $stateFile=$script:CapyStateFile
+    try{
+        $script:CapyStateFile=Join-Path $directory "ui-state-$($review.Id)-$($Window.id).json"
+        Wait-Canvas {(Review-Ready (Model $Window) $Window.hwnd) -and (Owned-DrawingWindow $review -WindowHandle $Window.hwnd -TraceDirectory $directory)} "Window $($Window.id) did not become ready" 45
+    }finally{$script:CapyStateFile=$stateFile}
 }
 function Preferences {Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)}
 function Invoke-Edit([string]$Name) {
@@ -159,7 +164,7 @@ try {
     Close-Preferences
     Use-Window $first
     Invoke 'Test stroke' -Name
-    Wait-Until {(Model).state.document_file.modified} 'First window did not draw'
+    Wait-Canvas {(Model).state.document_file.modified} 'First window did not draw'
     if((Model $second).state.document_file.modified){throw 'Drawing dirtied the other document'}
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'file'
     Wait-Until {$item=Find 'close_document';$item -and $item.Current.IsEnabled} 'File menu did not offer Close'
@@ -167,7 +172,7 @@ try {
     Wait-Until {$null -ne (Find 'document-dialog')} 'Dirty close did not open its owning dialog'
     Use-Window $second
     Invoke 'Test stroke' -Name
-    Wait-Until {(Model).state.document_file.modified} 'Second window could not draw while the first was modal'
+    Wait-Canvas {(Model).state.document_file.modified} 'Second window could not draw while the first was modal'
     Use-Window $first
     Invoke 'Cancel' -Name -Within (Control 'document-dialog')
     Wait-Until {$null -eq (Find 'document-dialog') -and @((Model).state.requests|Where-Object {$_.kind.type -eq 'document'}).Count -eq 0} 'Cancel did not keep the first window open'
@@ -192,7 +197,11 @@ try {
             Use-Window $source
             Invoke 'Test GPU loss' -Name
             foreach($window in @($first,$second)){
-                Wait-Until {$state=Model $window;$state.windows_gpu_generation -eq $generations[$window.id]+1 -and $state.brush_ready} "Window $($window.id) did not reconstruct its GPU" 60
+                $stateFile=$script:CapyStateFile
+                try{
+                    $script:CapyStateFile=Join-Path $directory "ui-state-$($review.Id)-$($window.id).json"
+                    Wait-Canvas {$state=Model $window;$state.windows_gpu_generation -eq $generations[$window.id]+1 -and $state.brush_ready} "Window $($window.id) did not reconstruct its GPU" 60
+                }finally{$script:CapyStateFile=$stateFile}
                 if((Model $window).state.document_file.revision -ne $revisions[$window.id]){throw 'Multiwindow recovery changed a document revision'}
                 Wait-Until {(Recovery-Signature $window) -eq $before[$window.id]} 'Multiwindow recovery changed document, history, camera, workspace or brush'
             }
@@ -200,7 +209,7 @@ try {
         foreach($window in @($first,$second)){
             Use-Window $window
             Invoke-Edit 'Undo'
-            Wait-Until {!(Model).state.document_file.modified} 'Undo after multiwindow recovery did not restore the clean document'
+            Wait-Canvas {!(Model).state.document_file.modified} 'Undo after multiwindow recovery did not restore the clean document'
             Invoke-Edit 'Redo'
             Wait-Until {(Recovery-Signature $window) -eq $before[$window.id]} 'Redo after multiwindow recovery did not restore its document'
         }
@@ -245,9 +254,9 @@ try {
         Use-Window $second
         if(Find 'preferences-close-error'){throw 'Preference recovery appeared in the other window'}
         Invoke-Edit 'Undo'
-        Wait-Until {!(Model $second).state.document_file.modified} 'Other window could not undo while its peer awaited preference recovery'
+        Wait-Canvas {!(Model $second).state.document_file.modified} 'Other window could not undo while its peer awaited preference recovery'
         Invoke-Edit 'Redo'
-        Wait-Until {(Model $second).state.document_file.modified} 'Other window could not redo while its peer awaited preference recovery'
+        Wait-Canvas {(Model $second).state.document_file.modified} 'Other window could not redo while its peer awaited preference recovery'
         Use-Window $first
         $attempt=(Model $first).windows_settings_close.attempt
         Invoke 'Retry Storage' -Name -Within (Control 'preferences-close-error')
@@ -272,7 +281,7 @@ try {
     if($inherited.settings.dark_base -ne $expectedDark -or $inherited.settings.light_base -ne '#dcecfb'){throw 'New window did not inherit current preferences'}
     Use-Window $third
     Invoke 'Test stroke' -Name
-    Wait-Until {(Model $third).state.document_file.modified} 'Third window did not draw'
+    Wait-Canvas {(Model $third).state.document_file.modified} 'Third window did not draw'
     Wait-Until {(Model $second).windows_recovery.current -and (Model $third).windows_recovery.current} 'Unsaved drawings were not checkpointed' 30
     Stop-Process -Id $review.Id -Force;$review.WaitForExit()
     function Start-Review {
@@ -282,7 +291,11 @@ try {
     function Wait-Reopened([int]$Count,[string]$Message) {
         Wait-Until {@(Windows).Count -eq $Count} $Message 60
         foreach($window in @(Windows)){
-            Wait-Until {$m=Model $window;(Review-Ready $m $window.hwnd) -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} "Window $($window.id) did not finish reopening" 60
+            $stateFile=$script:CapyStateFile
+            try{
+                $script:CapyStateFile=Join-Path $directory "ui-state-$($review.Id)-$($window.id).json"
+                Wait-Canvas {$m=Model $window;(Review-Ready $m $window.hwnd) -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} "Window $($window.id) did not finish reopening" 60
+            }finally{$script:CapyStateFile=$stateFile}
             Register-CapyFixtureWindow $review $window.hwnd $directory
         }
         if(@(Windows).Count -ne $Count){throw $Message}

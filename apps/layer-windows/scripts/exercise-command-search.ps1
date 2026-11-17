@@ -36,7 +36,7 @@ try {
  Write-Output "Owned command search review $($review.Id): $run"
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Command search review did not start'
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Command search review did not start'
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
  if($scale -le 0){throw 'Owned command-search window DPI is unavailable'}

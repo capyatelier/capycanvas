@@ -1,4 +1,8 @@
 $ErrorActionPreference='Stop'
+function Wait-Canvas([scriptblock]$Condition,[string]$Message,[int]$Seconds,[switch]$Closing){
+ $call=@($Condition,$Message);if($PSBoundParameters.ContainsKey('Seconds')){$call+=,$Seconds}
+ if($Closing){Wait-Until @call -Closing}else{Wait-Until @call}
+}
 $scripts=Join-Path $PSScriptRoot '../scripts';$tokens=$null;$errors=$null
 function Tree([string]$Name){$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $scripts $Name),[ref]$tokens,[ref]$errors);if(@($errors).Count){throw($errors|Out-String)};$ast}
 function Function-Text($Ast,[string]$Name){$fn=@($Ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name}.GetNewClosure(),$true));if($fn.Count -ne 1){throw "Missing actual function: $Name"};$fn[0].Extent.Text}

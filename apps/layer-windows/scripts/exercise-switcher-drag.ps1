@@ -48,7 +48,7 @@ function Launch([string]$Label){
     @{process_id=$review.Id;run=$run}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/switcher-drag-review.json')
     Write-Output "Owned switcher review $($review.Id) ($Label)"
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready) -and !(Storage).switcher_busy} 'Switcher review did not start' 75
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready) -and !(Storage).switcher_busy} 'Switcher review did not start' 75
     $script:root=$owned.window.Root;$script:drawingWindow=$owned.window.Handle
     [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
     if(Find 'Test stroke' -Name){throw 'Switcher fixture requires the production UI without smoke controls'}

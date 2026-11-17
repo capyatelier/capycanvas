@@ -40,7 +40,7 @@ try {
  do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};$owned=Owned-DrawingWindow $review;if(!$owned){Start-Sleep -Milliseconds 100}}while(!$owned -and $watch.Elapsed.TotalSeconds -lt 45)
  if(!$owned){throw 'Notice drawing window did not open'}
  $root=$owned.Root;$drawingWindow=$owned.Handle
- Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Notice review did not start'
+ Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Notice review did not start'
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
@@ -49,7 +49,7 @@ try {
  Use-PaintWorkspace
  Fit-Canvas;Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
+ Wait-Canvas {(Model).state.document_file.modified} 'Controlled drawing did not finish'
  $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
  $point=@([int]($canvas.X+$canvas.Width*.5),[int]($canvas.Y+$canvas.Height*.4))
  if(Shown 'canvas-notice'){throw 'A notice showed before any refusal'}

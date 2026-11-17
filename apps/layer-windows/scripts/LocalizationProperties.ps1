@@ -161,7 +161,7 @@ function Blend-CaptionSurface{
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState -eq [System.Windows.Automation.WindowVisualState]::Maximized} 'Blend proof window did not maximize' 15
  Menu-Command 'file' 'open_document';Choose-Path (Join-Path $repo 'apps/layer-web/fixtures/shared-image-f64-builtin.capy')
- Wait-Until {@((Model).state.layers|Where-Object object).Count -eq 3 -and (Model).brush_ready} 'Blend image fixture did not prepare' 90
+ Wait-Canvas {@((Model).state.layers|Where-Object object).Count -eq 3 -and (Model).brush_ready} 'Blend image fixture did not prepare' 90
  $layer=@((Model).state.layers|Where-Object object)[0].id
  Invoke-Id "layer-$layer-name";Property-Panel 'properties'
  Wait-Until {$view=Fresh-Model $first 'en';$view.state.layer_properties.layer -eq $layer -and !$view.state.document_file.busy} 'Selected image Properties did not finish adoption' 30
@@ -647,7 +647,7 @@ function Toolbar-GroupedLanguageSurface{
  $pencil=@((Fresh-Model).state.commands|Where-Object id -eq 'pencil')
  if($pencil.Count-ne1-or!$pencil[0].enabled){throw 'Shared current Pencil command unavailable'}
  Search-Command $pencil[0].label 'pencil'
- Wait-Until {$v=Model;$v.state.brush.preset-eq2-and$v.brush_ready-and(@($v.state.tool_settings.id)-join',')-ceq'size,flow,grain_depth,material_hardness,smoothing_strength,angle,opacity'} 'Current Pencil did not prepare grouped options' 8
+ Wait-Canvas {$v=Model;$v.state.brush.preset-eq2-and$v.brush_ready-and(@($v.state.tool_settings.id)-join',')-ceq'size,flow,grain_depth,material_hardness,smoothing_strength,angle,opacity'} 'Current Pencil did not prepare grouped options' 8
  $pencilSmoothing=@((Fresh-Model).state.tool_settings|Where-Object id -eq 'smoothing_strength')
  if($pencilSmoothing.Count-ne1-or$pencilSmoothing[0].group_id-or$pencilSmoothing[0].group){throw 'Current Pencil smoothing must have no section heading'}
  $options=@(foreach($panel in (Fresh-Model).panels){$panel.tiles|Where-Object {$_.control.kind-eq'tool_options'}})
@@ -879,7 +879,7 @@ function Notice-Surface{
  $drawingRoot=$root
  Menu-Command 'file' 'open_document'
  Choose-Path (Join-Path $repo 'apps/layer-web/fixtures/shared-image-f64-builtin.capy')
- Wait-Until {@((Model).state.layers|Where-Object object).Count -eq 3 -and (Model).brush_ready} 'The notice image fixture did not prepare' 90
+ Wait-Canvas {@((Model).state.layers|Where-Object object).Count -eq 3 -and (Model).brush_ready} 'The notice image fixture did not prepare' 90
  $drawingWindow=$drawingRoot.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern);$settingsWindow=$settingsRoot.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern)
  $drawingPlacement=$drawingRoot.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern);$settingsPlacement=$settingsRoot.GetCurrentPattern([System.Windows.Automation.TransformPattern]::Pattern)
  $drawingWindow.SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Normal);Resize-Window $first 1280 950;$drawingPlacement.Move(0,0)
@@ -923,7 +923,7 @@ function Notice-Surface{
   $depth=@((Model).state.new_drawing.depths|Where-Object value -eq 'F32')[0]
   if(!$depth){throw 'The shared drawing inventory has no F32 depth'}
   Choose-Option 'document-depth' $depth.label;Invoke-Id 'new-drawing-create'
-  Wait-Until {$view=Model;$view.windows_tabs.selected -ne $original -and !$view.state.new_drawing -and $view.brush_ready -and $view.state.tabs[-1].width -eq 16384 -and $view.state.tabs[-1].height -eq 16384 -and $view.color_panel.document_depth -eq 'F32'} 'The sparse refusal drawing did not prepare' 90
+  Wait-Canvas {$view=Model;$view.windows_tabs.selected -ne $original -and !$view.state.new_drawing -and $view.brush_ready -and $view.state.tabs[-1].width -eq 16384 -and $view.state.tabs[-1].height -eq 16384 -and $view.color_panel.document_depth -eq 'F32'} 'The sparse refusal drawing did not prepare' 90
   $expected=Catalog-Text 'it' 'documents-too-large-memory' 'documents'
   Menu-Command 'edit' 'flat_all_areas'
   Wait-Until {

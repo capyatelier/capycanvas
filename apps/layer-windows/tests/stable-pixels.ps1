@@ -10,6 +10,9 @@ foreach($name in 'Wait-PresentedFrame','Wait-StablePixels'){
 function State-File{throw 'Pixel stability control unexpectedly requested a review trace'}
 function Read-Snapshot{throw 'Pixel stability control unexpectedly read a review snapshot'}
 function Wait-Until{throw 'Pixel stability control unexpectedly waited for presentation'}
+function Wait-Canvas{throw 'Pixel stability control unexpectedly waited for canvas progress'}
+function Read-CanvasProgress{throw 'Pixel stability control unexpectedly requested renderer progress'}
+function Test-CanvasProgress($Previous){$false}
 function Capture-CallerPixels{
     $sample=[pscustomobject]@{kind='column';x=1640;y=116;pixels='owned-pixels'}
     Wait-StablePixels {"$($sample.kind):$($sample.x),$($sample.y):$($sample.pixels)"}

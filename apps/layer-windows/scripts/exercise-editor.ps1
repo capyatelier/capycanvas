@@ -161,7 +161,7 @@ try{
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/editor-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned editor review $($review.Id)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace startup did not complete' 45

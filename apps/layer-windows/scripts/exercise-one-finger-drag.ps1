@@ -124,7 +124,7 @@ try{
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$review.Handle
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'One-finger review did not start' 120
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'One-finger review did not start' 120
  $root=$native.window.Root;$handle=$native.window.Handle
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -179,10 +179,10 @@ try{
  foreach($i in 3,2,1){
   Open-Preferences;Preference-Choice $i;Close-Preferences
   Select-Tool $(if($i -eq 2){'zoom'}else{'pen'})
-  Wait-Until {(Model).canvas_ready -and (Model).brush_ready} 'Canvas was not ready for finger input'
+  Wait-Canvas {(Model).canvas_ready -and (Model).brush_ready} 'Canvas was not ready for finger input'
   $before=Model;$camera=$before.state.camera;$pose=Pose $camera;$revision=$before.state.document_file.revision
   Touch-Drag
-  if($i -eq 1){Wait-Until {(Model).state.document_file.revision -gt $revision} 'Draw did not paint with injected Windows touch'}
+  if($i -eq 1){Wait-Canvas {(Model).state.document_file.revision -gt $revision} 'Draw did not paint with injected Windows touch'}
   elseif($i -eq 2){
    Wait-Until {$current=Camera;[Math]::Abs($current.translation[0]-$camera.translation[0]-60) -lt 1 -and [Math]::Abs($current.translation[1]-$camera.translation[1]-36) -lt 1 -and [Math]::Abs($current.zoom-$camera.zoom) -lt .0001 -and [Math]::Abs($current.rotation-$camera.rotation) -lt .0001} 'Move canvas with Zoom selected did not pan by the injected touch delta'
    if((Model).state.document_file.revision -ne $revision){throw 'Move canvas painted'}
@@ -193,7 +193,7 @@ try{
  Select-Tool 'fill'
  $revision=(Model).state.document_file.revision;$at=At 'drawing-canvas'
  [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
- Wait-Until {$m=Model;$m.state.document_file.revision -gt $revision -and !$m.state.document_file.busy -and $m.canvas_ready} 'Opaque picker sample did not finish filling'
+ Wait-Canvas {$m=Model;$m.state.document_file.revision -gt $revision -and !$m.state.document_file.busy -and $m.canvas_ready} 'Opaque picker sample did not finish filling'
  Select-Tool 'pen';Park;Capture 'picker-sample' -WithModel -Composed
  foreach($i in 3,2){
   Open-Preferences;Preference-Choice $i;Close-Preferences

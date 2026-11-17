@@ -90,7 +90,7 @@ try{
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/toolbars-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned toolbar review $($review.Id)"
-    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Review did not start' 45
+    Wait-Canvas {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Review did not start' 45
     if($PSBoundParameters.ContainsKey('Theme') -and (Model).state.theme -ne $Theme){throw 'Toolbar fixture did not adopt its explicit isolated theme'}
     $root=$registeredWindow.Root
     [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -205,7 +205,7 @@ try{
     Invoke 'Cancel' -Name -Within (Control 'workspace-manager') -Type ([System.Windows.Automation.ControlType]::Button)
     Wait-Until {$null -eq (Model).windows_workspace.page -and $null -eq (Model).windows_workspace.prompt -and $null -eq (Find 'workspace-manager') -and (Control 'drawing-canvas').Current.IsEnabled} 'Cancel did not close New Toolbar and release painting'
     Invoke 'Test stroke' -Name
-    Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'
+    Wait-Canvas {(Model).state.document_file.modified} 'Controlled stroke did not dirty the review'
     WindowCommand 'new_toolbar'
     $null=Control 'workspace-manager'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved

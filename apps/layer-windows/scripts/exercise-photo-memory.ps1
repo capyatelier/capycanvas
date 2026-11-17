@@ -71,7 +71,7 @@ try{
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
-    Wait-Until {$script:drawing=Owned-DrawingWindow $review;$drawing -and (Model).canvas_ready -and (Review-Ready)} 'Photo review did not start' 90
+    Wait-Canvas {$script:drawing=Owned-DrawingWindow $review;$drawing -and (Model).canvas_ready -and (Review-Ready)} 'Photo review did not start' 90
     $root=$drawing.Root
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -104,7 +104,7 @@ try{
     $pending=$monitor.BeginInvoke()
     Wait-Until {$control.ready} 'Photo memory monitor did not start' 10
     Open-Project $photo
-    Wait-Until {$m=Model;$tab=@($m.state.tabs|Where-Object active)[0];$tab.width -eq $Width -and $tab.height -eq $Height -and $m.canvas_ready -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'Large photo did not become ready' 120
+    Wait-Canvas {$m=Model;$tab=@($m.state.tabs|Where-Object active)[0];$tab.width -eq $Width -and $tab.height -eq $Height -and $m.canvas_ready -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'Large photo did not become ready' 120
     Wait-Until {
         $camera=(Model).state.camera;$work=$camera.work_area
         $camera.translation[0] -ge $work[0] -and $camera.translation[1] -ge $work[1] -and

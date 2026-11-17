@@ -1759,6 +1759,12 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }
         TraceSetting detailed(L"CAPY_LATENCY_TRACE",L"1");
         require(collectTransition()==1,L"Detailed bubble trace omitted its native transition");
+        {
+            phase=L"bubble-empty-applied";
+            WorkspaceBubbles empty(source,Canvas{},[]{},[]{});empty.TraceRendering(1);
+            auto applied=object(empty.TraceFrames(),L"applied");
+            require(num(applied,L"frame")==1&&num(applied,L"qpc")>0&&array(applied,L"current").Size()==0&&flag(applied,L"settled"),L"Empty bubble scene did not publish a settled applied frame");
+        }
         auto bubbles=std::make_shared<WorkspaceBubbles::Impl>();bubbles->data=source;bubbles->workspace=Canvas{};
         auto record=std::make_shared<CapyBubbles::Record>();record->id=27;record->center={200,120};record->root.RenderTransform(record->transform);
         bubbles->records.emplace(record->id,record);bubbles->layer.Children().Append(record->root);bubbles->workspace.Children().Append(bubbles->layer);

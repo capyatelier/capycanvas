@@ -1,4 +1,5 @@
-﻿Add-Type -AssemblyName System.Drawing
+﻿. (Join-Path $PSScriptRoot 'CanonicalJson.ps1')
+Add-Type -AssemblyName System.Drawing
 
 function New-BubbleHdrDrawing([string]$Depth){
     $script:HdrSdrId=(Model).windows_tabs.selected
@@ -449,7 +450,7 @@ function Assert-BubbleHdrNoTooltip([long]$Id,[string]$Stage='hdr-keyboard-no-too
     if(@($visible|Where-Object over).Count){throw 'Focused HDR intensity displayed a native tooltip over its presentation'}
 }
 function Assert-BubbleHdrFocus([long]$Id){
-    (Control 'drawing-canvas').SetFocus();$packet=Packet $Id;$spec=$packet.color.intensity
+    (Control 'drawing-canvas').SetFocus();$null=Wait-BubbleNative -Id $Id -Part 'face' -Focus $false -Message 'HDR focus ring did not apply its unfocused state';$packet=Packet $Id;$spec=$packet.color.intensity
     $face=(Control "tool-bubble-$Id" -Arranged).Current.BoundingRectangle;$bounds=$packet.color.bounds
     $marker=@{x=$face.X+($spec.point[0]-$bounds.x)*$scale;y=$face.Y+($spec.point[1]-$bounds.y)*$scale}
     $radius=($spec.geometry.marker_radius+4)*$scale
@@ -458,7 +459,7 @@ function Assert-BubbleHdrFocus([long]$Id){
     $before=Read-BubbleVisualPatch $at (Join-Path $run 'hdr-focus-before.png');$markerBefore=Bubble-HdrPixel $interior 'hdr-focus-marker-before'
     $element=Control "bubble-intensity-$Id";Focus-Keyboard $element
     Assert-BubbleHdrNoTooltip $Id 'hdr-focus-ring-no-tooltip'
-    Start-Sleep -Milliseconds 150;$after=Read-BubbleVisualPatch $at (Join-Path $run 'hdr-focus-after.png');$markerAfter=Bubble-HdrPixel $interior 'hdr-focus-marker-after'
+    $null=Wait-BubbleNative -Id $Id -Part 'face' -Focus $true -Message 'HDR focus ring did not apply its keyboard state';$after=Read-BubbleVisualPatch $at (Join-Path $run 'hdr-focus-after.png');$markerAfter=Bubble-HdrPixel $interior 'hdr-focus-marker-after'
     $color=[Drawing.ColorTranslator]::FromHtml((Model).state.palette.text);$ink=@{r=[int]$color.R;g=[int]$color.G;b=[int]$color.B}
     $samples=@(foreach($x in 0..8){
         $distance=[Math]::Sqrt([Math]::Pow($at.x+$x-4-$marker.x,2)+[Math]::Pow($at.y-$marker.y,2))
@@ -537,6 +538,7 @@ function Assert-BubbleHdrVisuals([long]$Id){
 }
 
 function Read-BubbleVisualPatch($Point,[string]$Path){
+    $null=[TabFrames]::DwmFlush()
     $bitmap=[Drawing.Bitmap]::new(9,9);$graphics=[Drawing.Graphics]::FromImage($bitmap)
     try{
         $graphics.CopyFromScreen($Point.x-4,$Point.y-4,0,0,$bitmap.Size)
@@ -571,14 +573,64 @@ function Bubble-VisualState([long]$Id){
         checkpoint=@($model.windows_tabs.session_stamps|Where-Object id -eq $model.windows_tabs.selected)[0].stamp.checkpoint
     }|ConvertTo-Json -Depth 90 -Compress
 }
-function Wait-BubbleOverlayPhase([long]$Id,[string]$Phase){
+function Bubble-AppliedFrames {
+    $native=((Workspace-Root).Current.ItemStatus|ConvertFrom-Json).bubble_frames.applied
+    if($null -eq $native.frame -or $null -eq $native.qpc -or $null -eq $native.serial -or $null -eq $native.overflow -or $native.overflow -ne 0 -or $null -eq $native.settled){throw 'Native bubble applied-frame evidence is missing or overflowed'}
+    $native
+}
+function Wait-BubbleNative([long]$Id=-1,[string]$Part='',[string]$Overlay='',[object]$Focus=$null,[string]$Message='Bubble edge scene did not settle'){
+    $after=(Bubble-AppliedFrames).frame;$afterQpc=[Diagnostics.Stopwatch]::GetTimestamp();$observed=@{value=$null;progress=$null;previous=$null}
     Wait-Until {
-        $workspace=Workspace-Root
-        if(!$workspace -or !$workspace.Current.ItemStatus){return $false}
-        $presentation=$workspace.Current.ItemStatus|ConvertFrom-Json
-        $overlay=@($presentation.elements|Where-Object id -eq "tool-bubble-overlay-$Id")
-        $overlay.Count -eq 1 -and $overlay[0].overlay_phase -ceq $Phase
-    } "Selected bubble overlay did not apply $Phase for $Id"
+        $native=Bubble-AppliedFrames
+        if($native.frame -le $after -or $native.qpc -le $afterQpc){return $false}
+        $hasMotionFields=$null -ne $native.query_wake -and $null -ne $native.reply_wake -and $null -ne $native.motion_moving
+        $settled=$native.settled -and $hasMotionFields -and $native.reply_wake -eq $native.query_wake -and !$native.motion_moving
+        $epoch=(Model).state.document_file.epoch
+        $parts=@($native.current|Where-Object {$_.epoch -eq $epoch -and $_.connected -and ($Id -lt 0 -or $_.bubble -eq $Id) -and (!$Part -or $_.part -ceq $Part)})
+        $packets=@(Packets|Where-Object {$Id -lt 0 -or $_.view.id -eq $Id})
+        if(!$packets.Count -and $Id -lt 0 -and !$Part -and !$Overlay -and $null -eq $Focus){
+            if($native.settled -isnot [bool] -or !$native.settled -or !$hasMotionFields -or $native.current -isnot [array]){return $false}
+            foreach($row in $native.current){
+                if($null -eq $row){return $false}
+                foreach($flag in @('connected','visible','backing_visible','inspector_visible')){if($row.$flag -isnot [bool] -or $row.$flag){return $false}}
+            }
+            $observed.value=$native;return $true
+        }
+        if(!$parts.Count -or @($parts|Where-Object {!$_.owner -or $_.last_frame -ne $native.frame -or $_.bounds_frame -ne $native.frame}).Count){return $false}
+        $ids=@($packets|ForEach-Object {$_.view.id})
+        if(!$packets.Count -or @($parts|Where-Object {$_.bubble -notin $ids}).Count){return $false}
+        foreach($packet in $packets){
+            $owned=@($parts|Where-Object bubble -eq $packet.view.id)
+            if(!$owned.Count){return $false}
+            $source=ConvertTo-Json -InputObject (Canonical $packet.view.source) -Depth 30 -Compress
+            if(@($owned|Where-Object {(ConvertTo-Json -InputObject (Canonical ($_.source|ConvertFrom-Json)) -Depth 30 -Compress) -cne $source}).Count){return $false}
+            $placement=@((Model).state.workspace.layout.bubbles.bubbles|Where-Object id -eq $packet.view.id)[0]
+            if(!$placement){return $false}
+            foreach($row in $owned){
+                if($row.placement.id -ne $packet.view.id -or $row.placement.corner -cne $placement.corner -or ($row.placement.offset|ConvertTo-Json -Compress) -cne ($placement.offset|ConvertTo-Json -Compress)){return $false}
+            }
+        }
+        $observed.progress=@($parts|ForEach-Object {@($_.owner,$_.serial,$_.target,$_.size,$_.bounds)})|ConvertTo-Json -Depth 20 -Compress
+        if(@($parts|Where-Object {!$_.terminal}).Count){return $false}
+        if(($Overlay -or $null -ne $Focus) -and @($parts|Where-Object {!$_.visible}).Count){return $false}
+        if($Overlay -and @($parts|Where-Object overlay_phase -CNE $Overlay).Count){return $false}
+        if($null -ne $Focus -and @($parts|Where-Object {$_.focus_ring -ne $Focus}).Count){return $false}
+        if(!$Overlay -and $null -eq $Focus -and !$settled){return $false}
+        $observed.value=$native;$true
+    } $Message -ResetBound {
+        $key=$observed.progress;if($null -eq $key){return $false}
+        if($null -eq $observed.previous){$observed.previous=$key;return $false}
+        if($key -cne $observed.previous){$observed.previous=$key;return $true};$false
+    }
+    $observed.value
+}
+function Assert-BubbleInspectorFrames($Before,$After){
+    if($null -eq $Before.inspector_frames -or $null -eq $Before.inspector_invalid -or $null -eq $After.inspector_frames -or $null -eq $After.inspector_invalid -or
+       $After.frame -le $Before.frame -or $After.inspector_frames -le $Before.inspector_frames -or $After.inspector_invalid -lt $Before.inspector_invalid){throw 'Retirement source did not record a native inspector frame'}
+    if($After.inspector_invalid -ne $Before.inspector_invalid){throw 'Retiring inspector detached or became invisible while its backing remained in native Rendering frames'}
+}
+function Wait-BubbleOverlayPhase([long]$Id,[string]$Phase){
+    $null=Wait-BubbleNative -Id $Id -Part 'face' -Overlay $Phase -Message "Selected bubble overlay did not apply $Phase for $Id"
 }
 function Bubble-VisualTags([long]$Id,[string]$Label){
     $center=Center $Id;$reach=((Packet $Id).reach+16)*$scale
@@ -645,7 +697,6 @@ function Assert-BubbleVisualStates([long]$Id){
     try{
         [CapyRowPointer]::Hover($away.x,$away.y)
         Wait-BubbleOverlayPhase $Id 'idle'
-        $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
         $baseline=Read-BubbleVisualPatch $samplePoint ($prefix+'-idle-patch.png')
         $idleBounds=Bubble-VisualBounds $face
         $sampleX=([Math]::Abs($samplePoint.x-($idleBounds[0]+$idleBounds[2]/2))+4)/($idleBounds[2]/2)
@@ -654,13 +705,11 @@ function Assert-BubbleVisualStates([long]$Id){
         $null=Screen-Pixels $point.x $point.y ($prefix+'-idle.png')
         [CapyRowPointer]::Hover($point.x,$point.y)
         Wait-BubbleOverlayPhase $Id 'hover'
-        $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
         $hover=Read-BubbleVisualPatch $samplePoint ($prefix+'-hover-patch.png')
         $evidence.hover=Measure-BubbleVisualOverlay $baseline $hover $ink .07
         $null=Screen-Pixels $point.x $point.y ($prefix+'-hover.png')
         [CapyRowPointer]::Down('mouse',$point.x,$point.y);$down=$true
         Wait-BubbleOverlayPhase $Id 'pressed'
-        $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
         $pressed=Read-BubbleVisualPatch $samplePoint ($prefix+'-pressed-patch.png')
         $pressedBounds=Bubble-VisualBounds $face
         $evidence.pressed=Measure-BubbleVisualOverlay $baseline $pressed $ink .14
@@ -673,8 +722,7 @@ function Assert-BubbleVisualStates([long]$Id){
             [CapyRowPointer]::Move($point.x,$point.y)
             Wait-Until {$at=Center $Id;[Math]::Abs($at.x-$origin.x) -lt 2 -and [Math]::Abs($at.y-$origin.y) -lt 2} 'Held bubble did not return to its starting position'
             Wait-BubbleOverlayPhase $Id 'hover'
-            $null=Wait-StablePixels {Patch-Pixels $samplePoint} -Composed
-            $returned=Read-BubbleVisualPatch $samplePoint ($prefix+"-returned-$cycle-patch.png")
+                $returned=Read-BubbleVisualPatch $samplePoint ($prefix+"-returned-$cycle-patch.png")
             $evidence["returned-$cycle"]=Measure-BubbleVisualOverlay $baseline $returned $ink .07
         }
         $null=Screen-Pixels $point.x $point.y ($prefix+'-returned.png')
@@ -704,7 +752,7 @@ function Assert-BubbleVisualStates([long]$Id){
             try{[CapyRowPointer]::Hover($away.x,$away.y)}catch{$evidence.hover_cleanup_failure=$_.ToString();if(!$visualFailure){throw}}finally{$evidence|ConvertTo-Json -Depth 10|Set-Content ($prefix+'.json')}
         }
     }
-    $null=Wait-StablePixels {Patch-Pixels $samplePoint}
+    Wait-BubbleVisualLayout
     $after=Bubble-VisualState $Id
     if($after -ne $before){@{before=($before|ConvertFrom-Json);after=($after|ConvertFrom-Json)}|ConvertTo-Json -Depth 90|Set-Content ($prefix+'-state-change.json');throw 'Cancelled visual state checks changed the bubble, workspace or artwork'}
     foreach($phase in @('hover','pressed','returned-1','returned-2','returned-3')){
@@ -716,12 +764,7 @@ function Assert-BubbleVisualStates([long]$Id){
     $checks.Add('three-held-drag-returns-retain-hover-fill')
 }
 function Wait-BubbleVisualLayout{
-    $settled=@{last='';same=0}
-    Wait-Until {
-        $bounds=@(foreach($packet in Packets){$center=Center $packet.view.id $packet;@($packet.view.id,$center.x,$center.y)})|ConvertTo-Json -Compress
-        if($bounds -eq $settled.last){$settled.same++}else{$settled.last=$bounds;$settled.same=0}
-        $settled.same -ge 5
-    } 'Bubble edge scene did not settle'
+    $null=Wait-BubbleNative
 }
 function Bubble-VisualBead([long]$Id,$Bead,[switch]$Pending){
     $point=Relative $Id $Bead.placement.center;$size=$Bead.placement.size*$scale

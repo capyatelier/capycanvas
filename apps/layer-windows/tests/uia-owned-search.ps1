@@ -1,8 +1,12 @@
-﻿$ErrorActionPreference='Stop'
+$ErrorActionPreference='Stop'
+function Wait-Canvas([scriptblock]$Condition,[string]$Message,[int]$Seconds,[switch]$Closing){
+ $call=@($Condition,$Message);if($PSBoundParameters.ContainsKey('Seconds')){$call+=,$Seconds}
+ if($Closing){Wait-Until @call -Closing}else{Wait-Until @call}
+}
 & {
  $tokens=$null;$errors=$null
  $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-effects.ps1'),[ref]$tokens,[ref]$errors)
- $wait=$source.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Wait-Until'-and@($n.CommandElements|Where-Object {$_.Value-eq'Filter slider release did not finish its gesture'}).Count-eq1},$true)
+ $wait=$source.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Wait-Canvas'-and@($n.CommandElements|Where-Object {$_.Value-eq'Filter slider release did not finish its gesture'}).Count-eq1},$true)
  $body=$wait.Parent.Parent.Statements;$index=[array]::IndexOf(@($body),$wait.Parent)
  $sequence=($body[$index..($index+1)]|ForEach-Object {$_.Extent.Text})-join"`n"
  function Model {
@@ -169,7 +173,7 @@ namespace CapyOwnedSearchTest {
  public class Review{public int Id=33;public IntPtr MainWindowHandle=new IntPtr(132146);public bool HasExited=false;public int ExitCode=0;public void Refresh(){}public bool CloseMainWindow(){return Driver.PostMessage(MainWindowHandle,0x0010,UIntPtr.Zero,IntPtr.Zero);}}
 }
 '@
-foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Scale','Wait-Until','Invoke','Review-Ready','Input-Ready')){
+foreach($name in @('Test-CapySearchItem','Find','Control','Wait-Scale','Wait-CapyCondition','Wait-Until','Invoke','Review-Ready','Input-Ready')){
     $fn=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}.GetNewClosure(),$true))
     if($fn.Count -ne 1){throw 'Missing actual UIA helper'}
     . ([scriptblock]::Create($fn[0].Extent.Text.Replace('System.Windows.Automation.','CapyOwnedSearchTest.')))
@@ -1039,6 +1043,7 @@ namespace CapyStampReadinessTest {
 '@
 & {
     . ([scriptblock]::Create($stablePixels[0].Extent.Text))
+    function Test-CanvasProgress($Previous){$false}
     $Device='mouse';$Theme='dark';$Id=23
     $image=[CapyOwnedSearchTest.Node]::new('bubble-stamp-23',33,340,260)
     $image.BoundingRectangle=[CapyOwnedSearchTest.Rect]::new(340,260,144,144)
@@ -1283,12 +1288,18 @@ namespace CapyBubbleOverlayTest {
     function Bubble-VisualState([long]$Id){'unchanged'}
     function Bubble-VisualBounds($Element){if([CapyBubbleOverlayTest.Input]::Held){return ,@(48.,48.,104.,104.)};return ,@(50.,50.,100.,100.)}
     function Patch-Pixels($Point){'stable'}
-    function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed){
-        $script:pixelReads++
-        if($script:pixelReads -le 6 -and (!$Composed -or $script:phaseReads -eq 0)){throw 'Overlay pixels sampled before applied phase and composed stability'}
-        & $CapturePixels
+    function Wait-BubbleNative([long]$Id,[string]$Part,[string]$Overlay,[string]$Message){
+        if($Part -cne 'face'){throw 'Overlay acknowledgement lost its native face scope'}
+        Wait-Until {
+            $workspace=Workspace-Root;if(!$workspace){return $false}
+            $elements=($workspace.Current.ItemStatus|ConvertFrom-Json).elements
+            $owned=@($elements|Where-Object id -eq "tool-bubble-overlay-$Id")
+            $owned.Count -eq 1 -and $owned[0].overlay_phase -ceq $Overlay
+        } $Message
     }
+    function Wait-BubbleVisualLayout{}
     function Read-BubbleVisualPatch($Point,[string]$Path){
+        $script:pixelReads++;if(!$script:phaseReads){throw 'Overlay pixels sampled before applied phase'}
         $value=switch($script:overlayPhase){'hover'{188};'pressed'{if($script:badColor){200}else{176}};default{200}}
         return ,@((1..81)|ForEach-Object {$pixel=if($script:popupShadow -and $script:overlayPhase -eq 'pressed' -and $Point.x -eq 100 -and $Point.y -eq 100 -and $_ -gt 78){0}else{$value};@{r=$pixel;g=$pixel;b=$pixel}})
     }
@@ -1342,6 +1353,7 @@ Write-Output 'Actual bubble overlay sequence waits for applied Fill before compo
         $control|Add-Member ScriptMethod SetFocus {};return $control
     }
     function Model{@{state=@{palette=@{text=$(if($case -eq 'retained-light'){'#2e2e32'}else{'#fafafb'})}}}}
+    function Wait-BubbleNative{}
     function Focus-Keyboard($Element){}
     function Assert-BubbleHdrNoTooltip([long]$Id,[string]$Stage){}
     function Start-Sleep([int]$Milliseconds){}
@@ -1768,7 +1780,7 @@ public static class CapyImageDragPacingTest {
     if($errors.Count){throw ($errors|Out-String)}
     $admissions=[ordered]@{'Review-Ready'=@{wait={Review-Ready};admit='review'};'Input-Ready'=@{wait={Input-Ready};admit='input'}}
     foreach($message in 'Light review did not start','Canvas startup did not finish','Session did not reopen','Untitled canvas did not finish starting'){
-        $wait=@($documents.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Until' -and $n.CommandElements.Count -ge 3 -and $n.CommandElements[2].Value -ceq $message}.GetNewClosure(),$true))
+        $wait=@($documents.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Wait-Canvas' -and $n.CommandElements.Count -ge 3 -and $n.CommandElements[2].Value -ceq $message}.GetNewClosure(),$true))
         if($wait.Count -ne 1){throw "Missing actual documents startup admission: $message"}
         $admissions[$message]=@{wait=$wait[0].CommandElements[1].ScriptBlock.GetScriptBlock();admit='input'}
     }
@@ -1902,6 +1914,7 @@ public static class CapyEdgeSweepTest {
  $statements=@($geometryChecks[1].Parent.Statements);$last=[array]::IndexOf($statements,$geometryChecks[1])
  $sequence=($statements[0..$last]|ForEach-Object {$_.Extent.Text})-join"`n"
  $sequence=$sequence.Replace('[CapyRowPointer]','[CapyEdgeSweepTest]').Replace('[CapyRowPointer+Point]','[CapyEdgeSweepTest+Point]')
+ function Read-CanvasProgress{throw 'Non-idle edge sweep unexpectedly requested renderer idle progress'}
  function Start-Sleep([int]$Milliseconds){}
  function Wait-Until([scriptblock]$Condition,[string]$Message){for($poll=0;$poll-lt12;$poll++){if(& $Condition){return}};throw $Message}
  function Gesture{
@@ -2331,7 +2344,8 @@ namespace CapyInertiaFixtureTest {
  $actual=@($source.FindAll({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Native-InertiaInterruption'},$true))
  if($actual.Count-ne1){throw 'Missing actual Native-InertiaInterruption'}
  . ([scriptblock]::Create($actual[0].Extent.Text.Replace('[CapyCanvasTouch]','[CapyInertiaFixtureTest.Input]')))
- function Settle-LayerScroll($Pattern){}
+ function Settle-LayerScroll($List,$Pattern,[long]$Contact=0,[switch]$Held,[Nullable[double]]$TargetPercent){}
+ function Read-PanelScrollReceipt($List){@{contact=[CapyInertiaFixtureTest.Input]::Downs}}
  function Settled-LayerState{
   @{state=@{layers=@(@{id=1},@{id=2});document_file=@{revision=7};layer_tools=@{editing_layer=@{id=1}}};windows_tabs=@{selected=3;session_stamps=@(@{id=3;stamp=@{checkpoint=9}})}}
  }
@@ -2948,7 +2962,7 @@ Write-Output 'Actual clipboard Copy routing rejects stale native context and rev
  if($errors.Count){throw($errors|Out-String)}
  $tool=$cursorAst.Find({param($node)$node-is[Management.Automation.Language.FunctionDefinitionAst]-and$node.Name-eq'Tool'},$true)
  if(!$tool){throw 'Missing actual cursor Tool helper'}
- $toolWait=@($tool.FindAll({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Wait-Until'},$true))[-1]
+ $toolWait=@($tool.FindAll({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Wait-Canvas'},$true))[-1]
  $baseline=@($cursorAst.FindAll({param($node)$node-is[Management.Automation.Language.AssignmentStatementAst]-and$node.Left.Extent.Text-eq'$empty'},$true))
  $leave=@($cursorAst.FindAll({param($node)$node-is[Management.Automation.Language.CommandAst]-and$node.GetCommandName()-eq'Wait-Until'-and$node.CommandElements[-1].Extent.Text-eq"'Leaving the pointer did not clear the retained cursor'"},$true))
  if(!$toolWait-or$baseline.Count-ne1-or$leave.Count-ne1){throw 'Missing actual cursor readiness, pixel reference or leave assertion'}
@@ -3032,7 +3046,7 @@ Write-Output 'Actual clipboard Copy routing rejects stale native context and rev
     $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-tool-variations.ps1'),[ref]$tokens,[ref]$errors)
     if($errors.Count){throw ($errors|Out-String)}
     $actual=$source.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Sketch-Drawers'},$true)
-    $ready=$actual.Body.Find({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Wait-Until'},$true)
+    $ready=$actual.Body.Find({param($node)$node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Wait-Canvas'},$true)
     $predicate=$ready.CommandElements[1].ScriptBlock.GetScriptBlock()
     $blank=$actual.Body.Find({param($node)$node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$blank'},$true)
     if(!$blank -or $ready.Extent.EndOffset -ge $blank.Extent.StartOffset){throw 'Sketch readiness is not before the exact blank baseline'}
@@ -3199,7 +3213,7 @@ namespace CapyNumericHoverTest {
  $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-lifecycle.ps1'),[ref]$tokens,[ref]$errors)
  if($errors.Count){throw($errors|Out-String)}
  $function=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq'Check-Caption'},$true)
- $wait=$function.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-ceq'Wait-Until'},$true)
+ $wait=$function.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-ceq'Wait-Canvas'},$true)
  if(!$wait){throw 'Missing actual lifecycle caption settle wait'}
  $root=[pscustomobject]@{}
  $root|Add-Member ScriptMethod FindFirst {param($Scope,$Condition)[pscustomobject]@{Current=[pscustomobject]@{IsOffscreen=$false;Name=('Preparing brush'+[char]0x2026)}}}
@@ -3405,7 +3419,7 @@ namespace CapyCanvasSeedTest {
     $signature=$source.Find({param($n)$n-is[Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-eq'Signature'},$true)
     if(!$signature){throw 'Missing actual canvas touch signature'}
     . ([scriptblock]::Create($signature.Extent.Text))
-    $wait=$source.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Wait-Until'-and@($n.CommandElements|Where-Object {$_.Value-eq'Visible mouse seed stroke did not finish'}).Count-eq1},$true)
+    $wait=$source.Find({param($n)$n-is[Management.Automation.Language.CommandAst]-and$n.GetCommandName()-eq'Wait-Canvas'-and@($n.CommandElements|Where-Object {$_.Value-eq'Visible mouse seed stroke did not finish'}).Count-eq1},$true)
     if(!$wait){throw 'Missing actual canvas touch seed acknowledgement'}
     $first=$wait
     while($first.Parent-isnot[Management.Automation.Language.StatementBlockAst]){$first=$first.Parent;if(!$first){throw 'Missing actual canvas touch seed block'}}
@@ -3447,6 +3461,7 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
  $helper=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
  $definition=$helper.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Wait-StablePixels'},$true)
  . ([scriptblock]::Create($definition.Extent.Text))
+ function Test-CanvasProgress($Previous){$false}
  function Texture-Samples{$script:textureDisplayed}
  function Park{$script:textureParks++}
  function Start-Sleep{param($Milliseconds)}
@@ -3630,4 +3645,74 @@ Write-Output 'Canvas touch acknowledges the committed seed before mouse navigati
 }
 Write-Output 'Actual Scopes Red channel sequence: pending counts defer unchanged pixel assertion; absent counts fail original acknowledgment without another input.'
 
+}
+
+& {
+ foreach($case in @(
+  @('exercise-canvas-bar.ps1','Maximized canvas did not settle'),
+  @('exercise-canvas-bar.ps1','The canvas bounds did not settle after drawing'),
+  @('exercise-scopes.ps1','The fitted view did not settle'),
+  @('exercise-scopes.ps1','The targeted drag did not finish'),
+  @('exercise-lifecycle.ps1','Modal input gate did not clear'),
+  @('exercise-documents.ps1','Focused native workspace did not finish maximizing'),
+  @('exercise-pen-buttons.ps1','Mouse middle drag did not pan the canvas')
+ )){
+  $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot ('../scripts/'+$case[0])),[ref]$tokens,[ref]$errors)
+  $message=$case[1]
+  $wait=@($source.FindAll({param($n)$n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -ceq 'Wait-Until' -and @($n.CommandElements|Where-Object {$_.Value -ceq $message}).Count -eq 1}.GetNewClosure(),$true))
+  if($wait.Count -ne 1){throw "Non-renderer wait was moved into canvas progress accounting: $message"}
+ }
+ 'Native geometry, modality and camera acknowledgements stay outside renderer progress.'
+}
+
+& {
+ $tokens=$null;$errors=$null
+ $editing=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-canvas-editing.ps1'),[ref]$tokens,[ref]$errors)
+ $actual=$editing.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Stable-Pixels'},$true)
+ . ([scriptblock]::Create($actual.Extent.Text))
+ $snap=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../scripts/exercise-snap.ps1'),[ref]$tokens,[ref]$errors)
+ $actual=$snap.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Stable-Patch'},$true)
+ . ([scriptblock]::Create($actual.Extent.Text))
+ foreach($name in 'Stable-Pixels','Stable-Patch'){
+  $sample=@{presented=$false;reads=0}
+  function Wait-PresentedFrame([switch]$Idle,[int]$Seconds,[switch]$Unscaled,[string]$Message){
+   $bound=if($name -ceq 'Stable-Pixels'){6}else{5}
+   $failure=if($name -ceq 'Stable-Pixels'){'Artwork samples did not settle'}else{'Canvas pixels did not settle for comparison'}
+   if(!$Idle -or !$Unscaled -or $Seconds -ne $bound -or $Message -cne $failure){throw 'Canvas sample changed its idle-content contract, bound or failure'}
+   $sample.presented=$true
+  }
+  function Pixels{if(!$sample.presented){throw 'Canvas pixels were sampled before displayed idle content'};$sample.reads++;'exact-pixels'}
+  function Patch-Hash{Pixels}
+  if((& $name) -cne 'exact-pixels' -or $sample.reads -ne 1){throw 'Canvas baseline replaced app completion with repeated identical reads'}
+ }
+ 'Canvas baseline samplers require published idle content before exactly one pixel read.'
+}
+
+& {
+ $prior=$script:CapyStateFile
+ try{
+  foreach($file in 'exercise-multiwindow.ps1','exercise-localization.ps1'){
+   $tokens=$null;$errors=$null
+   $source=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot ('../scripts/'+$file)),[ref]$tokens,[ref]$errors)
+   $actual=$source.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Ready'},$true)
+   . ([scriptblock]::Create($actual.Extent.Text))
+   $review=@{Id=33};$directory='owned-registry';$run=$directory;$window=@{id=9;hwnd=77}
+   $expected=Join-Path $directory 'ui-state-33-9.json'
+   function Model($Window){if($Window.id -ne 9){throw 'Ready queried another drawing'};@{owner=9}}
+   function Review-Ready($View,$Handle){if($View.owner -ne 9 -or $Handle -ne 77){throw 'Ready changed its window predicate'};$true}
+   function Owned-DrawingWindow($Process,$WindowHandle,$TraceDirectory){if($Process.Id -ne 33 -or $WindowHandle -ne 77 -or $TraceDirectory -cne $directory){throw 'Ready changed its owned registry predicate'};@{Root='owned'}}
+   function Wait-Canvas([scriptblock]$Condition,[string]$Message,[int]$Seconds){
+    if($script:CapyStateFile -cne $expected){throw 'Ready could credit progress from another owned window'}
+    if($reject){throw 'Readiness failed'}
+    if(!(& $Condition)){throw $Message}
+   }
+   foreach($reject in $false,$true){
+    $script:CapyStateFile='previous-window';$failure=$null
+    try{Ready $window}catch{$failure=$_.Exception.Message}
+    if($script:CapyStateFile -cne 'previous-window'){throw 'Ready did not restore the caller receipt on success or failure'}
+    if(($reject -and $failure -cne 'Readiness failed') -or (!$reject -and $failure)){throw "Ready receipt binding changed its endpoint: $file $failure"}
+   }
+  }
+ }finally{$script:CapyStateFile=$prior}
+ 'Per-window Ready binds the exact owned receipt and restores the caller path after success or failure.'
 }

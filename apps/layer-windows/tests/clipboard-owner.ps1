@@ -34,7 +34,7 @@ function Load-Function([string]$Path,[string]$Name){
  $node.Extent.Text.Replace('[Windows.Forms.Clipboard]','[CapyClipboardOwnerTest]')
 }
 $scripts=Join-Path $PSScriptRoot '../scripts'
-foreach($name in 'Sta','Wait-Scale','Wait-Until'){. ([scriptblock]::Create((Load-Function (Join-Path $scripts 'CapyUia.ps1') $name)))}
+foreach($name in 'Sta','Wait-Scale','Wait-CapyCondition','Wait-Until'){. ([scriptblock]::Create((Load-Function (Join-Path $scripts 'CapyUia.ps1') $name)))}
 foreach($name in 'Paste','Clipboard-Text','Set-ClipboardText','Clipboard-Closed'){
  . ([scriptblock]::Create((Load-Function (Join-Path $scripts 'exercise-color-editor.ps1') $name)))
 }

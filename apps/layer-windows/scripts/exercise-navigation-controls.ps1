@@ -111,7 +111,7 @@ try{
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Navigation review did not start' 120
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Navigation review did not start' 120
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null

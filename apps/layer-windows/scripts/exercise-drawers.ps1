@@ -29,7 +29,7 @@ try{
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/drawers-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned drawer review $($review.Id)"
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready)} 'Review did not start' 45
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready)} 'Review did not start' 45
     [CapyWindowApi]::ShowWindow($owned.window.Handle,3)|Out-Null
     Wait-Until {$owned.window=Owned-DrawingWindow $review $owned.window.Handle.ToInt64();$owned.window -and $owned.window.Root.Current.IsOffscreen -eq $false} 'Review did not become visible'
     $root=$owned.window.Root

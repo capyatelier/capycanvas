@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+﻿param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyWaitSeconds=10
@@ -43,7 +43,7 @@ function Same-Rect($a,$b) {
         [Math]::Abs($a.right-$b.right) -le 2 -and [Math]::Abs($a.bottom-$b.bottom) -le 2
 }
 function Ready {
-    Wait-Until {
+    Wait-Canvas {
         $model=Model;$client=[CapySnapWindow+Rect]::new()
         if(!$model -or [CapySnapWindow]::IsIconic($handle) -or ![CapySnapWindow]::GetClientRect($handle,[ref]$client)){return $false}
         $canvas=Find 'drawing-canvas';$origin=[CapyRowPointer+Point]::new()
@@ -79,13 +79,8 @@ function Patch-Hash {
     }finally{$bitmap.Dispose()}
 }
 function Stable-Patch {
-    $watch=[Diagnostics.Stopwatch]::StartNew();$last=Patch-Hash;$stable=0
-    do{
-        Start-Sleep -Milliseconds 100;$next=Patch-Hash
-        if($next -eq $last){$stable++}else{$stable=0};$last=$next
-        if($stable -ge 3){return $last}
-    }while($watch.Elapsed.TotalSeconds -lt 5)
-    throw 'Canvas pixels did not settle for comparison'
+    Wait-PresentedFrame -Idle -Seconds 5 -Unscaled -Message 'Canvas pixels did not settle for comparison'
+    Patch-Hash
 }
 function Check-Paint([string]$Name) {
     $model=Model;$area=$model.state.camera.work_area
@@ -106,15 +101,15 @@ function Check-Paint([string]$Name) {
         $x=$origin.x+$sample.X-20;$y=$origin.y+$sample.Y+[int]($sample.Height/2)
         [CapyRowPointer]::Down($device,$x,$y)
         try{for($i=1;$i -le 28;$i++){[CapyRowPointer]::Move(($x+[int]($i*($sample.Width+40)/28)),($y+[int]([Math]::Min(12,$sample.Height/4)*[Math]::Sin($i/4))));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
-        Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Resized canvas did not accept a stroke'
+        Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Resized canvas did not accept a stroke'
         Wait-Until {(Patch-Hash) -ne $before} 'Resized stroke did not appear in the canvas'
         $painted=Stable-Patch;Capture ($Name+'-'+$device)
         $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
-        Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $modified -and (Patch-Hash) -eq $before} 'One Undo did not restore original canvas pixels'
+        Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $modified -and (Patch-Hash) -eq $before} 'One Undo did not restore original canvas pixels'
         $revision=(Model).state.document_file.revision;Invoke 'Redo' -Name
-        Wait-Until {(Model).state.document_file.revision -gt $revision -and (Patch-Hash) -eq $painted} 'One Redo did not restore stroke pixels'
+        Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Patch-Hash) -eq $painted} 'One Redo did not restore stroke pixels'
         $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
-        Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $modified -and (Patch-Hash) -eq $before} 'Final Undo did not restore the pre-stroke drawing'
+        Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified -eq $modified -and (Patch-Hash) -eq $before} 'Final Undo did not restore the pre-stroke drawing'
         [CapyRowPointer]::Verify()
         Write-Output "$Name ${device}: visible stroke and one-step Undo/Redo passed"
     }
@@ -136,13 +131,13 @@ try{
     $null=$review.Handle
     @{process_id=$review.Id;executable=$Executable;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
     Write-Output "Owned Snap review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Isolated Snap review did not start' 45
+    Wait-Canvas {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Isolated Snap review did not start' 45
     $handle=$registeredWindow.Handle;$root=$registeredWindow.Root
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Ready
     if((Model).state.document_file.modified){throw 'Snap fixture requires a clean document'}
     $revision=(Model).state.document_file.revision;Invoke 'Test stroke' -Name
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Seed drawing did not finish'
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Seed drawing did not finish'
     $work=[CapySnapWindow]::WorkArea($handle)
     foreach($side in @('left','right')){
         [CapySnapWindow]::ShowWindowAsync($handle,9)|Out-Null
@@ -169,7 +164,7 @@ try{
     Wait-Until {![CapySnapWindow]::IsZoomed($handle)} 'Maximized window did not restore'
     Record 'restored-after-maximize' $before
     $revision=(Model).state.document_file.revision;Invoke 'Undo' -Name
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'One final Undo did not remove the preserved seed drawing'
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and !(Model).state.document_file.modified} 'One final Undo did not remove the preserved seed drawing'
     (Close-OwnedDrawing $review)|Out-Null
     if(!$review.WaitForExit([int](5000*(Wait-Scale))) -or $review.ExitCode -ne 0){throw 'Clean Snap review did not close with zero exit within five seconds'}
     if((Get-Item -LiteralPath $stderr).Length){throw 'Snap runtime stderr requires inspection'}

@@ -26,7 +26,7 @@ function Start-Review([string]$Name){
  $null=$review.Handle
  Write-Output "Owned clipboard review $($review.Id): $run"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Review did not start' 90
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Review did not start' 90
  if((Model).state.theme -ne $Theme){throw 'The clipboard review did not apply the requested theme'}
  $script:drawingWindow=$native.window.Handle;$script:root=$native.window.Root
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -53,16 +53,16 @@ function Cross-Window-Clip{
  try{
   $script:CapyStateFile=Join-Path $run ("ui-state-"+$review.Id+"-"+$peer.id+".json")
   $native=@{window=$null}
-  Wait-Until {$native.window=Owned-DrawingWindow $review ([long]$peer.hwnd);$native.window -and (Input-Ready (Model) $peer.hwnd) -and !(Model).windows_workspace.busy} 'The clipboard destination window did not become ready' 90
+  Wait-Canvas {$native.window=Owned-DrawingWindow $review ([long]$peer.hwnd);$native.window -and (Input-Ready (Model) $peer.hwnd) -and !(Model).windows_workspace.busy} 'The clipboard destination window did not become ready' 90
   $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle
   Chord @(0x11) 0x56
-  Wait-Until {(Requests) -eq 0 -and (Model).state.document_file.modified -and (Model).brush_ready} 'The copied layer did not paste into the second window' 90
+  Wait-Canvas {(Requests) -eq 0 -and (Model).state.document_file.modified -and (Model).brush_ready} 'The copied layer did not paste into the second window' 90
   Capture "cross-window-layer-$Theme" -WithModel
   if((Model).state.layer_tools.editing_layer.label -ne $label -or (Model).state.layer_tools.editing_layer.object){throw 'The second window imported the public PNG instead of retaining the copied layer'}
   Copied {Chord @(0x11) 0x43} 'The second window did not publish its copied layer before closing'
   & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close -DiscardUnsaved -StateDirectory $run
  }finally{$script:root=$sourceRoot;$script:drawingWindow=$sourceHandle;$script:CapyStateFile=$sourceState;[CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null}
- Wait-Until {@((Read-Snapshot $windowsFile).windows).Count -eq $before -and (Model).brush_ready} 'Closing the clipboard destination did not return to the source window'
+ Wait-Canvas {@((Read-Snapshot $windowsFile).windows).Count -eq $before -and (Model).brush_ready} 'Closing the clipboard destination did not return to the source window'
  if((Document-Identity) -ne $identity){throw 'Pasting in another window changed the original artwork'}
  $checks.same_process_cross_window_layer_copy='passed'
 }
@@ -159,7 +159,7 @@ function Paste-Position([string]$Command,[string]$Shortcut,[uint16[]]$Modifiers,
  $revision=(Model).state.document_file.revision
  if(!(Control 'drawing-canvas' -NoPopups).Current.HasKeyboardFocus){throw 'The canvas lost keyboard focus after cursor acknowledgment'}
  [CapyRowPointer]::Chord([uint32]$review.Id,$Modifiers,0x56)
- Wait-Until {(Model).state.document_file.revision -gt $revision -and @((Model).state.layers|Where-Object object).Count -eq 2 -and (Model).state.layer_tools.editing_layer.object -and (Requests) -eq 0} "$Shortcut did not paste a second image"
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and @((Model).state.layers|Where-Object object).Count -eq 2 -and (Model).state.layer_tools.editing_layer.object -and (Requests) -eq 0} "$Shortcut did not paste a second image"
  if((Model).state.layer_tools.tool -eq 'transform'){throw "$Shortcut opened placement handles"}
  $path=Join-Path $run ($Command+'.capy');Save-ProjectAs $path;$after=Package $path
  $added=@($after.manifest.objects|Where-Object {$_.type -eq 'capy.image-object/1' -and $_.id -notin $original.id})
@@ -183,7 +183,7 @@ function New-Image([scriptblock]$Action,[string]$Extent,[string]$Name,[int]$Obje
  $source=(Model).windows_tabs.selected;$count=@((Model).windows_tabs.tabs).Count;$identity=Document-Identity
  $identity|Set-Content (Join-Path $run ($Name+'-source-before.json'))
  & $Action
- Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count+1 -and (Model).windows_tabs.selected -ne $source -and (Model).brush_ready -and (Requests) -eq 0 -and !(Model).state.document_file.busy} "$Name did not open a new drawing" 90
+ Wait-Canvas {@((Model).windows_tabs.tabs).Count -eq $count+1 -and (Model).windows_tabs.selected -ne $source -and (Model).brush_ready -and (Requests) -eq 0 -and !(Model).state.document_file.busy} "$Name did not open a new drawing" 90
  $tab=Active-Tab
  if("$($tab.width)x$($tab.height)" -ne $Extent -or !(Model).state.document_file.modified -or (Model).state.document_file.location){throw "$Name did not open an unsaved drawing at the clipboard bounds"}
  if((Model).state.layer_tools.tool -eq 'transform'){throw "$Name opened placement handles"}
@@ -221,7 +221,7 @@ function New-Image([scriptblock]$Action,[string]$Extent,[string]$Name,[int]$Obje
   }
  }
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
- Wait-Until {@((Model).windows_tabs.tabs).Count -eq $count -and (Model).windows_tabs.selected -eq $source -and (Model).brush_ready -and !(Model).state.document_file.busy} "$Name did not return to its source drawing" 90
+ Wait-Canvas {@((Model).windows_tabs.tabs).Count -eq $count -and (Model).windows_tabs.selected -eq $source -and (Model).brush_ready -and !(Model).state.document_file.busy} "$Name did not return to its source drawing" 90
  $returned=Document-Identity;$returned|Set-Content (Join-Path $run ($Name+'-source-after.json'))
  if($returned -ne $identity){throw "$Name changed the source drawing"}
  $checks[$Name]=$Extent
@@ -238,18 +238,18 @@ function Copied([scriptblock]$Action,[string]$Message){
  Sta {[Windows.Forms.Clipboard]::SetText('awaiting copy')}|Out-Null;& $Action
  Wait-Until {(Formats) -contains 'art.capycanvas.clip.nonce' -and (Formats) -contains 'PNG' -and (Requests) -eq 0} $Message
 }
-function Settled{Wait-Until {(Requests) -eq 0 -and !(Model).state.document_file.busy} 'The clipboard request did not finish'}
+function Settled{Wait-Canvas {(Requests) -eq 0 -and !(Model).state.document_file.busy} 'The clipboard request did not finish'}
 function Changed([scriptblock]$Action){
  $revision=(Model).state.document_file.revision
  & $Action
- Wait-Until {(Model).state.document_file.revision -gt $revision} 'The clipboard edit was not acknowledged'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision} 'The clipboard edit was not acknowledged'
  Settled
 }
 function Mask-Changed([scriptblock]$Action){
  $id=(Model).state.layer_tools.editing_layer.id
  $revision=@((Model).state.layers|Where-Object id -eq $id)[0].mask_revision
  Changed $Action
- Wait-Until {@((Model).state.layers|Where-Object id -eq $id)[0].mask_revision -ne $revision} 'The pasted mask pixels did not change'
+ Wait-Canvas {@((Model).state.layers|Where-Object id -eq $id)[0].mask_revision -ne $revision} 'The pasted mask pixels did not change'
 }
 function Tool([string]$Command){
  Invoke-Id (Tool-Tile $Command)
@@ -291,7 +291,7 @@ try {
  Start-Review 'clipboard'
  $document=@((Model).state.tabs|Where-Object active)[0];$extent="$($document.width)x$($document.height)"
  Invoke 'Test stroke' -Name
- Wait-Until {(Model).state.document_file.modified} 'Stroke not acknowledged'
+ Wait-Canvas {(Model).state.document_file.modified} 'Stroke not acknowledged'
  $opacity=Control 'layer-opacity';$opacity.SetFocus();$opacity.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('55')
  (Control 'drawing-canvas' -NoPopups).SetFocus()
  Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -lt .000001 -and !(Model).state.layer_tools.has_selection} 'The authored clipboard layer opacity did not settle'
@@ -351,7 +351,7 @@ try {
  Chord @(0x11) 0x41;Wait-Until {(Model).state.layer_tools.has_selection} 'Insert-key Cut selection did not become ready'
  $insertRevision=(Model).state.document_file.revision
  Copied {Chord @(0x10) 0x2e} 'Shift+Delete did not publish the selected pixels'
- Wait-Until {(Model).state.document_file.revision -gt $insertRevision -and (Clip-Size) -eq $extent} 'Shift+Delete did not copy and erase the selected canvas'
+ Wait-Canvas {(Model).state.document_file.revision -gt $insertRevision -and (Clip-Size) -eq $extent} 'Shift+Delete did not copy and erase the selected canvas'
  if((Layers) -ne $count){throw 'Shift+Delete changed the layer count'}
  Changed {Invoke 'Undo' -Name}
  Chord @(0x11) 0x44;Wait-Until {!((Model).state.layer_tools.has_selection)} 'Insert-key selection did not clear after Cut Undo'
@@ -379,7 +379,7 @@ try {
  Chord @(0x11) 0x41;Wait-Until {(Model).state.layer_tools.has_selection} 'Ctrl+A did not select the canvas'
  $revision=(Model).state.document_file.revision
  Copied {Chord @(0x11) 0x58} 'Ctrl+X did not write the clipboard'
- Wait-Until {(Model).state.document_file.revision -gt $revision -and (Clip-Size) -eq $extent} 'Ctrl+X did not copy the selected canvas and erase it'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Clip-Size) -eq $extent} 'Ctrl+X did not copy the selected canvas and erase it'
  Chord @(0x11) 0x56;Settled
  Wait-Until {(Layers) -eq $count+1} 'Ctrl+V did not paste the cut pixels'
  Invoke 'Undo' -Name;Wait-Until {(Layers) -eq $count} 'Undo did not remove the pasted cut'
@@ -452,9 +452,9 @@ try {
  $tabSource=(Model).windows_tabs.selected;$tabIdentity=Document-Identity;$tabCount=@((Model).windows_tabs.tabs).Count
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'new_document'
  New-DrawingPixels 2048 1536;Invoke 'new-drawing-create'
- Wait-Until {@((Model).windows_tabs.tabs).Count -eq $tabCount+1 -and (Model).windows_tabs.selected -ne $tabSource -and (Requests) -eq 0 -and (Model).brush_ready} 'The tab clipboard review did not create a second drawing' 90
+ Wait-Canvas {@((Model).windows_tabs.tabs).Count -eq $tabCount+1 -and (Model).windows_tabs.selected -ne $tabSource -and (Requests) -eq 0 -and (Model).brush_ready} 'The tab clipboard review did not create a second drawing' 90
  Invoke 'Test stroke' -Name
- Wait-Until {(Model).state.document_file.modified} 'The tab clipboard review stroke did not reach the drawing'
+ Wait-Canvas {(Model).state.document_file.modified} 'The tab clipboard review stroke did not reach the drawing'
  Save-ProjectAs (Join-Path $run 'Tab clipboard.capy')
  $tabCopyIdentity=Document-Identity
  Copied {Chord @(0x11) 0x43} 'The tab clipboard review could not copy its drawing'
@@ -466,7 +466,7 @@ try {
  if((Clip-Size) -ne $tabExtent -or (Document-Identity) -ne $tabCopyIdentity){throw 'Copy from a focused drawing tab changed the artwork or clipboard pixels'}
  $checks.drawing_tabs_keep_artwork_copy='passed'
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
- Wait-Until {@((Model).windows_tabs.tabs).Count -eq $tabCount -and (Model).windows_tabs.selected -eq $tabSource -and (Model).brush_ready} 'The tab clipboard review did not return to the original drawing' 90
+ Wait-Canvas {@((Model).windows_tabs.tabs).Count -eq $tabCount -and (Model).windows_tabs.selected -eq $tabSource -and (Model).brush_ready} 'The tab clipboard review did not return to the original drawing' 90
  if((Document-Identity) -ne $tabIdentity){throw 'Clipboard keys on a drawing tab changed the original artwork'}
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'new_document'
  $null=Control 'new-drawing-dialog'
@@ -502,7 +502,7 @@ try {
  Start-Review 'startup'
  Sta {param($path)$image=[Drawing.Image]::FromFile($path);try{[Windows.Forms.Clipboard]::SetImage($image)}finally{$image.Dispose()}} @($foreign)|Out-Null
  Chord @(0x11) 0x56
- Wait-Until {$tab=Active-Tab;$tab.width -eq 40 -and $tab.height -eq 30 -and (Requests) -eq 0 -and !(Model).state.document_file.busy -and (Model).brush_ready} 'Startup Paste did not use the clipboard dimensions' 90
+ Wait-Canvas {$tab=Active-Tab;$tab.width -eq 40 -and $tab.height -eq 30 -and (Requests) -eq 0 -and !(Model).state.document_file.busy -and (Model).brush_ready} 'Startup Paste did not use the clipboard dimensions' 90
  if(!(Model).state.document_file.modified -or (Model).state.document_file.location -or (Model).state.layer_tools.tool -eq 'transform'){throw 'Startup Paste did not open an unsaved drawing without placement handles'}
  Capture "startup-paste-$Theme" -WithModel
  Save-ProjectAs (Join-Path $run 'Startup paste.capy')

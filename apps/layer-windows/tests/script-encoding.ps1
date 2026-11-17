@@ -129,8 +129,11 @@ try{
 }finally{$archive.Dispose()}
 foreach($fixtureName in @('exercise-clipboard.ps1','ObjectFixture.ps1')){& {
     param($FixtureName,$Manifest)
+    $canonical=Fixture-Ast 'CanonicalJson.ps1'
+    $canonicalFunction=$canonical.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Canonical'},$true)
+    . ([scriptblock]::Create($canonicalFunction.Extent.Text))
     $ast=Fixture-Ast $FixtureName
-    foreach($name in @('Json','Canonical','Root-Stack','Object-Layers','Affine','Effective-Affine','Front-Layer','Front-Object','Assert-ImageCopy')){
+    foreach($name in @('Json','Root-Stack','Object-Layers','Affine','Effective-Affine','Front-Layer','Front-Object','Assert-ImageCopy')){
         $fn=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}.GetNewClosure(),$true)
         if($fn){. ([scriptblock]::Create($fn.Extent.Text))}
     }

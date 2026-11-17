@@ -14,6 +14,7 @@ public:
     void Glass(CapyUi::A&,CapyUi::A&,CapyUi::A&,winrt::Microsoft::UI::Xaml::UIElement const&)const;
     CapyUi::A TraceOverlays(winrt::Microsoft::UI::Xaml::UIElement const&)const;
     CapyUi::J TraceFrames()const;
+    void TraceRendering(uint64_t);
     CapyUi::A InputRegions(winrt::Microsoft::UI::Xaml::UIElement const&)const;
 private:
     std::shared_ptr<Impl> impl;

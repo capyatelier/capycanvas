@@ -55,7 +55,7 @@ function Open-SimpleLayers {
  Wait-Until {$packet=@((Model).bubbles|Where-Object {$_.view.id -eq $script:layerBubble})[0];$packet.view.card -and !$packet.view.card.full} 'Simple Layers card did not reopen'
  Control "bubble-card-$script:layerBubble" -Arranged|Out-Null
 }
-function Undo-To([scriptblock]$Expected,[string]$Message){$revision=(Model).state.document_file.revision;Invoke 'Undo' -Name;Wait-Until {(Model).state.document_file.revision -gt $revision -and (& $Expected)} $Message}
+function Undo-To([scriptblock]$Expected,[string]$Message){$revision=(Model).state.document_file.revision;Invoke 'Undo' -Name;Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (& $Expected)} $Message}
 function Gesture-Camera{$c=(Model).state.camera;@($c.viewport,$c.work_area,$c.translation,$c.zoom,$c.rotation,$c.flipped)|ConvertTo-Json -Depth 8 -Compress}
 function Gesture-Pixels{
  if([CapyRowPointer]::GetForegroundWindow() -ne $handle){throw 'Gesture pixels lost the owned foreground window'}
@@ -72,7 +72,7 @@ try{
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $stderr=Join-Path $run 'stderr.log'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr -RedirectStandardOutput (Join-Path $run 'stdout.log');$null=$review.Handle
- $native=@{window=$null};Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Gesture review did not start' 45
+ $native=@{window=$null};Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Gesture review did not start' 45
  $root=$native.window.Root;$handle=$native.window.Handle;$drawingWindow=$handle
  [CapyCanvasTouch]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyCanvasTouch]::SetForegroundWindow($handle)|Out-Null
@@ -85,7 +85,7 @@ try{
  foreach($i in 1..2){$count=(Model).state.layers.Count;Invoke 'layer-new';Wait-Until {(Model).state.layers.Count -eq $count+1} 'Gesture seed layer did not appear'}
  $id=(Model).state.layer_tools.editing_layer.id
  (Control 'drawing-canvas' -Arranged).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x1b)
- Wait-Until {(Control 'drawing-canvas').Current.HasKeyboardFocus -and (Model).canvas_ready -and !(Model).state.document_file.busy -and !(Model).state.customization.drawer} 'Canvas did not receive focus and finish preparation'
+ Wait-Canvas {(Control 'drawing-canvas').Current.HasKeyboardFocus -and (Model).canvas_ready -and !(Model).state.document_file.busy -and !(Model).state.customization.drawer} 'Canvas did not receive focus and finish preparation'
  $canvas=Point 'drawing-canvas';$area=(Model).state.camera.work_area;$bounds=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle
  $cx=[int]($bounds.X+$area[0]+$area[2]/2);$cy=[int]($bounds.Y+$area[1]+$area[3]/2)
  [CapyCanvasTouch]::Initialize([uint32]$review.Id)
@@ -124,7 +124,7 @@ try{
  $blankPixels=Wait-StablePixels {Gesture-Pixels}
  $revision=(Model).state.document_file.revision;$paintRevision=(Row $id).paint_revision
  [CapyRowPointer]::Down('pen',($cx-30),$cy);for($i=1;$i -le 12;$i++){[CapyRowPointer]::Move(($cx-30+$i*5),$cy);Start-Sleep -Milliseconds 10};[CapyRowPointer]::Up()
- Wait-Until {(Model).state.document_file.revision -gt $revision -and (Row $id).paint_revision -ne $paintRevision -and @((Model).state.commands|Where-Object id -eq 'add_layer')[0].enabled} 'Content-selection seed stroke did not finish its painted revision and release'
+ Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Row $id).paint_revision -ne $paintRevision -and @((Model).state.commands|Where-Object id -eq 'add_layer')[0].enabled} 'Content-selection seed stroke did not finish its painted revision and release'
  [CapyRowPointer]::Hover([int]$pixelBounds.X+4,[int]$pixelBounds.Y+4)
  $seedPixels=Wait-StablePixels {Gesture-Pixels}
  if($seedPixels -ceq $blankPixels){throw 'Gesture seed changed history without effective artwork pixels'}
@@ -143,7 +143,7 @@ try{
  $opacity=(Model).state.layer_tools.editing_layer.opacity
  $field=Control 'layer-gesture-opacity' -Arranged
  $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('42');(Control 'drawing-canvas').SetFocus()
- Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.42) -lt .001 -and (Model).state.document_file.revision -gt $revision} 'Gesture opacity edit did not commit'
+ Wait-Canvas {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.42) -lt .001 -and (Model).state.document_file.revision -gt $revision} 'Gesture opacity edit did not commit'
  [CapyRowPointer]::Key([uint32]$review.Id,0x1b)
  Wait-Until {$null -eq (Model).state.layer_tools.opacity_popup} 'Opacity flyout did not close'
  Undo-To {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-$opacity) -lt .001} 'Undo did not restore gesture opacity';Record 'two-finger tap opacity edit and Undo'

@@ -142,7 +142,7 @@ function Start-Review([string]$Phase) {
     @{process_id=$review.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/header-review.json')
     Write-Output "Owned header review $($review.Id) ($Device)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Header review did not start' 45
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Header review did not start' 45
     $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
@@ -771,7 +771,7 @@ function New-HeaderDrawings([int]$Count=2){
         $before=Model;$next=$before.windows_tabs.upcoming_id;$expectedCount=@($before.windows_tabs.tabs).Count+1
         & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
         Invoke 'new_document';New-DrawingPixels 64 64;Invoke 'new-drawing-create'
-        Wait-Until {
+        Wait-Canvas {
             $created=Model
             @($created.windows_tabs.tabs).Count -eq $expectedCount -and $next -in @($created.windows_tabs.tabs.id) -and
                 $created.windows_tabs.selected -eq $next -and $created.windows_tabs.available -and

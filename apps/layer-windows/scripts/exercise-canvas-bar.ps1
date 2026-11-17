@@ -309,7 +309,7 @@ try {
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $invokeTrace.Start($root,[int]$review.Id)
  if(!$parityCapture){Use-PaintWorkspace}
- Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Canvas bar review did not start in the requested theme'
+ Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Canvas bar review did not start in the requested theme'
  $checks.initial_theme=$Theme
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -318,14 +318,14 @@ try {
  Wait-Until {$b=(Find 'drawing-canvas').Current.BoundingRectangle;$b.Width -gt 1200} 'Maximized canvas did not settle' 10
  Fit-Canvas;Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
+ Wait-Canvas {(Model).state.document_file.modified} 'Controlled drawing did not finish'
  $settled=@{rect=$null};Wait-Until {$settled.rect=(Find 'drawing-canvas').Current.BoundingRectangle;$settled.rect.Width -gt 1200} 'The canvas bounds did not settle after drawing' 10
  $canvas=$settled.rect
  $cx=[int]($canvas.X+$canvas.Width*.5);$cy=[int]($canvas.Y+$canvas.Height*.45)
  if(Bar){throw 'The bar showed before any selection or transform'}
  $preparedPaint=Paint
  Drag 'mouse' @(($cx-110),($cy-75)) @(($cx+110),($cy+45))
- Wait-Until {(Paint) -ne $preparedPaint} 'Controlled two-dimensional drawing did not finish'
+ Wait-Canvas {(Paint) -ne $preparedPaint} 'Controlled two-dimensional drawing did not finish'
 
  $selectionTile=Tool-Tile 'lasso';Invoke-Id $selectionTile;Subtool 'rectangle_select'
  $selection=@(@(($cx-160),($cy-110)),@(($cx+160),($cy+60)))
@@ -401,7 +401,7 @@ try {
  Wait-Until {@((Model).state.layers).Count -eq $layers+1 -and !(MenuOpen)} 'Copy Selection to New Layer did not add a layer through the bar menu' 5
  (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
- Wait-Until {@((Model).state.layers).Count -eq $layers -and (Paint) -eq $paint} 'One Undo did not remove the copied layer' 5
+ Wait-Canvas {@((Model).state.layers).Count -eq $layers -and (Paint) -eq $paint} 'One Undo did not remove the copied layer' 5
  $checks.selection_menus_copy_to_layer_one_undo_step='passed'
  Check-BarGeometry 'selection'
 
@@ -432,7 +432,7 @@ try {
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
  Wait-Until {$m=Model;!$m.state.layer_tools.has_selection -and ($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $effectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Undo did not remove only the loaded mask selection and preserve the effect history' 5
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
- Wait-Until {$m=Model;($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $adjustLayers -and (Paint) -eq $paint -and $m.state.layer_tools.has_selection -and ($m.state.canvas_bar.anchor -join ',') -ceq $selectionAnchor -and [bool]@($m.state.commands|Where-Object id -eq 'undo')[0].enabled -eq $adjustUndo -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Adjust Undo did not restore the exact layers, editing owner, selection and history availability' 5
+ Wait-Canvas {$m=Model;($m.state.layers|ConvertTo-Json -Depth 20 -Compress) -ceq $adjustLayers -and (Paint) -eq $paint -and $m.state.layer_tools.has_selection -and ($m.state.canvas_bar.anchor -join ',') -ceq $selectionAnchor -and [bool]@($m.state.commands|Where-Object id -eq 'undo')[0].enabled -eq $adjustUndo -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Adjust Undo did not restore the exact layers, editing owner, selection and history availability' 5
  [CapyRowPointer]::Hover($away[0],$away[1])
  if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $adjustPixels){throw 'One Adjust Undo did not restore the exact composed interior and exterior pixels'}
  Capture ('selection-adjust-undo-'+$Theme) -WithModel -Composed
@@ -445,7 +445,7 @@ try {
  (Owned 'Color' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
  Wait-Until {$null -ne (Owned 'Invert' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Adjust did not offer Invert' 5
  (Owned 'Invert' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Wait-Until {$m=Model;@($m.state.layers).Count -eq @($bakeBefore.state.layers).Count+1 -and !$m.state.layer_tools.has_selection -and $m.brush_ready} 'Selection-masked Invert did not settle'
+ Wait-Canvas {$m=Model;@($m.state.layers).Count -eq @($bakeBefore.state.layers).Count+1 -and !$m.state.layer_tools.has_selection -and $m.brush_ready} 'Selection-masked Invert did not settle'
  $bakeEffect=Model;$null=Assert-AdjustProjection $bakeBefore $bakeEffect
  $bakeEffectLayers=Bake-Layers $bakeEffect
  [CapyRowPointer]::Hover($away[0],$away[1])
@@ -457,15 +457,15 @@ try {
  (Control ("layer-$bakeOwner-name") -Arranged).SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x5D)
  Wait-Until {$null -ne (Owned $merge[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Layer menu did not expose Merge Visible' 5
  (Owned $merge[0].label -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Wait-Until {$m=Model;$m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count -and !(MenuOpen) -and @($m.state.layers).Count -lt @($bakeEffect.state.layers).Count -and !@($m.state.layers|Where-Object adjustment_effect).Count} 'Merge Visible did not settle the masked effect into paint' 60
+ Wait-Canvas {$m=Model;$m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count -and !(MenuOpen) -and @($m.state.layers).Count -lt @($bakeEffect.state.layers).Count -and !@($m.state.layers|Where-Object adjustment_effect).Count} 'Merge Visible did not settle the masked effect into paint' 60
  if(((Model).state.camera|ConvertTo-Json -Compress) -cne ($bakeEffect.state.camera|ConvertTo-Json -Compress)){throw 'Merge Visible changed the sampled camera'}
  if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Merge Visible changed exact composed masked-effect pixels'}
  $bakedOrder=@((Model).state.layers|ForEach-Object id) -join ','
  (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
- Wait-Until {$m=Model;$m.brush_ready -and (Bake-Layers $m) -ceq $bakeEffectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Merge Undo did not restore exact effect/mask layers and history'
+ Wait-Canvas {$m=Model;$m.brush_ready -and (Bake-Layers $m) -ceq $bakeEffectLayers -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and @($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'One Merge Undo did not restore exact effect/mask layers and history'
  if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Merge Undo changed exact masked-effect pixels'}
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11,0x10),0x5A)
- Wait-Until {$m=Model;$m.brush_ready -and ((@($m.state.layers)|ForEach-Object id) -join ',') -ceq $bakedOrder -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and !@($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'Merge Redo did not restore the baked layer identities and history'
+ Wait-Canvas {$m=Model;$m.brush_ready -and ((@($m.state.layers)|ForEach-Object id) -join ',') -ceq $bakedOrder -and @($m.state.commands|Where-Object id -eq 'undo')[0].enabled -and !@($m.state.commands|Where-Object id -eq 'redo')[0].enabled} 'Merge Redo did not restore the baked layer identities and history'
  if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Merge Redo changed exact masked-effect pixels'}
  $bakedOwner=@((Model).state.layers|Where-Object editing)
  if($bakedOwner.Count -ne 1 -or $bakedOwner[0].adjustment_effect -or !$bakedOwner[0].visible){throw 'Merge did not select one visible paint owner'}
@@ -474,7 +474,7 @@ try {
  Wait-Until {!@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible} 'Baked paint did not hide'
  if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -ceq $bakeEffectPixels){throw 'Hiding baked paint did not replace its composed pixels'}
  Tap $bakedVisibility 'mouse';[CapyRowPointer]::Hover($away[0],$away[1])
- Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible -and (Model).brush_ready} 'Baked paint did not show'
+ Wait-Canvas {@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible -and (Model).brush_ready} 'Baked paint did not show'
  if((Wait-StablePixels {((Screen-Pixels $cx $sampleY)+':'+(Screen-Pixels ($cx+240) $sampleY))}) -cne $bakeEffectPixels){throw 'Fresh baked paint redraw did not restore exact masked-effect pixels'}
  (Control 'drawing-canvas').SetFocus();[CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x5A)
  Wait-Until {!@((Model).state.layers|Where-Object {$_.id -eq $bakedOwner[0].id})[0].visible} 'One visibility Undo did not hide baked paint'
@@ -579,13 +579,13 @@ try {
 
  $revision=(Model).state.document_file.revision
  Tap 'canvas-bar-apply_transform' 'touch'
- Wait-Until {(Kind) -ne 'transform' -and (Model).state.document_file.revision -ne $revision} 'Apply on the bar did not commit the transform' 10
+ Wait-Canvas {(Kind) -ne 'transform' -and (Model).state.document_file.revision -ne $revision} 'Apply on the bar did not commit the transform' 10
  $applied=Paint
  (Control 'drawing-canvas').SetFocus()
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x5A)
- Wait-Until {(Paint) -eq $paint} 'One Undo did not restore the pixels before the transform' 5
+ Wait-Canvas {(Paint) -eq $paint} 'One Undo did not restore the pixels before the transform' 5
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),[uint16]0x59)
- Wait-Until {(Paint) -ne $paint -and !((Model).state.commands|Where-Object id -eq 'redo').enabled} 'Redo did not reapply the transform' 5
+ Wait-Canvas {(Paint) -ne $paint -and !((Model).state.commands|Where-Object id -eq 'redo').enabled} 'Redo did not reapply the transform' 5
  $checks.apply_one_undo_step='passed'
 
  $before=Paint;$revision=(Model).state.document_file.revision

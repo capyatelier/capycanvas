@@ -3,7 +3,7 @@ $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'apps/layer-windows/scripts/CapyUia.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'CapyUia does not parse'}
-foreach($name in 'Read-Snapshot','Wait-PresentedFrame','Wait-StablePixels'){
+foreach($name in 'Read-Snapshot','Read-CanvasProgress','Test-CanvasProgress','Wait-Canvas','Wait-PresentedFrame','Wait-StablePixels'){
     $helper=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true))
     if($helper.Count -ne 1){throw "Missing $name"}
     . ([scriptblock]::Create($helper[0].Extent.Text))
@@ -12,11 +12,15 @@ $out=Join-Path $repo ('artifacts/windows/presented-frame-'+[Guid]::NewGuid().ToS
 New-Item -ItemType Directory $out|Out-Null
 try{
     $review=[pscustomobject]@{Id=$PID}
-    $state=Join-Path $out "ui-state-$PID-7.json"
-    function State-File{$state}
-    function Write-Trace([string]$Kind,$Value){$Value|ConvertTo-Json -Compress|Set-Content -LiteralPath (Join-Path $out "$Kind-$PID-7.json")}
-    function Wait-Until([scriptblock]$Condition,[string]$Message){
-        for($poll=0;$poll -lt 4;$poll++){if(& $Condition){return};$script:polls++;if($script:advance){& $script:advance}}
+    $script:frameTestStatePath=Join-Path $out "ui-state-$PID-7.json"
+    function State-File{$script:frameTestStatePath}
+    function Write-Trace([string]$Kind,$Value){
+        if($Kind -eq 'ui-state' -and !$Value.model.state.document_file){$Value.model=@{state=@{document_file=@{epoch=0;revision=0}}}}
+        if($Kind -eq 'presentation-state' -and !$Value.ContainsKey('render_progress')){$Value.render_progress=@{owner=19;epoch=0;revision=0;content_owner=19;content_epoch=0;content_revision=0;settled=$true;outstanding_work=$false}}
+        $Value|ConvertTo-Json -Depth 8 -Compress|Set-Content -LiteralPath (Join-Path $out "$Kind-$PID-7.json")
+    }
+    function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Seconds=8,[switch]$Closing,[scriptblock]$ResetBound,[switch]$Unscaled){
+        for($poll=0;$poll -lt 4;$poll++){if($ResetBound){$null=& $ResetBound};if(& $Condition){return};$script:polls++;if($script:advance){& $script:advance}}
         throw $Message
     }
     function Expect([string]$Name,[bool]$Refused){
@@ -111,6 +115,23 @@ try{
         if(!$failed){throw "Idle wait accepted $($case.name)"}
         $checks++
     }
+    Write-Trace 'ui-state' @{process_id=$PID;window_id=7;presented=11;presentation_epoch=42;model=@{state=@{document_file=@{epoch=0;revision=1}}}}
+    foreach($case in 'pending-work','not-settled','undisplayed-revision','foreign-content-owner','foreign-content-epoch','missing-progress'){
+        $progress=@{owner=19;epoch=0;revision=1;content_owner=19;content_epoch=0;content_revision=1;settled=$true;outstanding_work=$false}
+        switch($case){
+            'pending-work'{$progress.outstanding_work=$true}
+            'not-settled'{$progress.settled=$false}
+            'undisplayed-revision'{$progress.content_revision=0}
+            'foreign-content-owner'{$progress.content_owner=20}
+            'foreign-content-epoch'{$progress.content_epoch=1}
+            'missing-progress'{$progress=$null}
+        }
+        Write-Trace 'presentation-state' @{process_id=$PID;window_id=7;presentation_epoch=43;required=12;displayed=12;render_progress=$progress}
+        $script:sampled=$false;$failure=$null
+        try{Wait-StablePixels {$script:sampled=$true;'pixels'} -Idle|Out-Null}catch{$failure=$_}
+        if(!$failure -or $failure.Exception.Message -cne 'The canvas did not settle on screen' -or $script:sampled){throw "Matching fences admitted $case before renderer idle"}
+        $checks++
+    }
     "Presented frame wait: $checks passed"
 }finally{Remove-Item -LiteralPath $out -Recurse -Force}
 
@@ -126,55 +147,159 @@ public class CapyStrokeProgressClock {
  public void Restart(){start=Seconds;Restarts++;}
 }
 '@
- foreach($name in 'Wait-Until','Wait-CanvasStroke'){
-  $definition=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
-  if(!$definition){throw "Missing progress helper: $name"}
-  . ([scriptblock]::Create($definition.Extent.Text.Replace('[Diagnostics.Stopwatch]','[CapyStrokeProgressClock]')))
+ function Import-ProgressHelper($Source,[string]$Name){
+  $definition=@($Source.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name},$true))
+  if($definition.Count-ne1){throw "Missing progress helper: $Name"}
+  [scriptblock]::Create($definition[0].Extent.Text.Replace('[Diagnostics.Stopwatch]','[CapyStrokeProgressClock]'))
  }
- function Wait-Scale{1}
- function State-File{Join-Path $repo 'ui-state-7-11.json'}
- function Start-Sleep([int]$Milliseconds){
-  if($Milliseconds-ne50){throw 'Stroke progress changed the existing poll cadence'}
-  [CapyStrokeProgressClock]::Seconds++
-  if([CapyStrokeProgressClock]::Seconds-gt40){throw 'outer row timeout'}
+ foreach($name in 'Wait-CapyCondition','Wait-Until','Read-CanvasProgress','Test-CanvasProgress','Wait-Canvas','Wait-CanvasStroke','Wait-PresentedFrame','Wait-StablePixels'){
+  . (Import-ProgressHelper $ast $name)
  }
- function Model{
-  $time=[CapyStrokeProgressClock]::Seconds
-  $committed=$script:strokeInputs-and($script:strokeCase-notin@('heartbeat','outer')-and($script:strokeCase-notin@('slow','paused')-or$time-ge25))
-  @{state=@{document_file=@{revision=[long][bool]$committed;epoch=$(if($script:strokeInputs-and$script:strokeCase-eq'switched'){1}else{0})}};windows_tabs=@{selected=3}}
- }
- function Read-Snapshot([string]$Path){
-  if((Split-Path -Leaf $Path)-like'ui-state-*'){return @{process_id=7;window_id=11;model=(Model)}}
-  $time=[CapyStrokeProgressClock]::Seconds;$sent=$script:strokeInputs-gt0
-  if($script:strokeCase-eq'missing-baseline'-or($sent-and$script:strokeCase-eq'missing')){return $null}
-  $work=$sent-and($script:strokeCase-eq'outer'-or($script:strokeCase-in@('slow','paused')-and$time-lt30))
-  $shown=$sent-and($script:strokeCase-eq'hardware'-or($script:strokeCase-in@('slow','paused')-and$time-ge31))
-  $progress=@{owner=19;epoch=0;revision=(Model).state.document_file.revision;content_owner=19;content_epoch=0;content_revision=$(if($shown){1}else{0});settled=(!$work);outstanding_work=$work}
-  if($sent-and$script:strokeCase-eq'unacknowledged'){$progress.content_revision=$null}
-  if($sent-and$script:strokeCase-eq'malformed'){$progress.outstanding_work='true'}
-  if($sent-and$script:strokeCase-eq'switched'){$progress.owner=20;$progress.epoch=1}
-  @{process_id=$(if($sent-and$script:strokeCase-eq'foreign'){8}else{7});window_id=11;presentation_epoch=$(if(!$sent){0}elseif($script:strokeCase-eq'paused'-and$time-lt31){1}else{[long]$time+1});render_progress=$progress}
- }
- $review=[pscustomobject]@{Id=7;HasExited=$false};$review|Add-Member ScriptMethod Refresh {}
- $script:CapyEach=$null;$script:CapyWaitSeconds=8
- foreach($case in 'slow','hardware','heartbeat','paused','unacknowledged','missing','malformed','foreign','switched','outer','missing-baseline'){
-  $script:strokeCase=$case;$script:strokeInputs=0;$failure=$null;$existing=@{checks=0}
-  [CapyStrokeProgressClock]::Seconds=0;[CapyStrokeProgressClock]::Restarts=0
-  try{Wait-CanvasStroke {$script:strokeInputs++};Wait-Until {$existing.checks++;$true} 'original pixel assertion'}catch{$failure=$_}
-  if($case-eq'missing-baseline'){
-   if(!$failure-or$script:strokeInputs-ne0-or$existing.checks){throw 'A missing owned baseline admitted a stroke'}
-  }elseif($script:strokeInputs-ne1){throw "Stroke progress repeated or omitted the original input: $case $failure"}
-  elseif($case-in@('slow','paused','hardware')){
-   if($failure-or$existing.checks-ne1){throw "A committed displayed stroke failed its progress gate: $case $failure"}
-   if($case-in@('slow','paused')-and[CapyStrokeProgressClock]::Seconds-ne31){throw 'The existing pixel assertion started before committed pixels were displayed'}
-   if($case-eq'hardware'-and[CapyStrokeProgressClock]::Seconds-ne0){throw 'An already-displayed hardware stroke acquired another wait'}
-  }elseif($case-eq'switched'){
-   if(!$failure-or$failure.Exception.Message-cne'The drawing changed during its stroke progress wait'-or$existing.checks){throw "A different document satisfied the stroke gate: $failure"}
-  }elseif($case-eq'outer'){
-   if(!$failure-or$failure.Exception.Message-cne'outer row timeout'-or$existing.checks){throw 'Stroke progress swallowed its outer row timeout'}
-  }else{
-   if(!$failure-or$failure.Exception.Message-cne'The stroke did not commit and reach the displayed canvas'-or$existing.checks-or[CapyStrokeProgressClock]::Seconds-gt9){throw "Idle, malformed or foreign progress escaped the unchanged bound: $case $failure"}
+ $progressDirectory=Join-Path $repo ('artifacts/windows/canvas-progress-'+[guid]::NewGuid().ToString('N'))
+ New-Item -ItemType Directory $progressDirectory|Out-Null
+ foreach($kind in 'ui-state','camera-state','presentation-state'){[IO.File]::WriteAllText((Join-Path $progressDirectory ($kind+'-7-11.json')),'mocked')}
+ try{
+  function Wait-Scale{$script:progressScale}
+  function State-File{Join-Path $progressDirectory 'ui-state-7-11.json'}
+  function Start-Sleep([int]$Milliseconds){
+   if($Milliseconds-ne$script:progressCadence){throw 'Canvas progress changed the existing poll cadence'}
+   [CapyStrokeProgressClock]::Seconds++
+   if([CapyStrokeProgressClock]::Seconds-gt40){throw 'outer row timeout'}
   }
- }
- 'Stroke progress: slow GPU work, commit/display join, immediate hardware completion, idle heartbeat, paused polling during outstanding work, missing/malformed/foreign receipts, document changes and outer interruption passed.'
+  function Reset-Progress([string]$Mode,[string]$Case){
+   $script:progressMode=$Mode;$script:progressCase=$Case;$script:strokeInputs=0;$script:progressReads=0;$script:progressCadence=50;$script:progressScale=1
+   [CapyStrokeProgressClock]::Seconds=0;[CapyStrokeProgressClock]::Restarts=0
+  }
+  function Model{
+   $time=[CapyStrokeProgressClock]::Seconds
+   if($script:progressMode-eq'stroke'){
+    $committed=$script:strokeInputs-and($script:progressCase-notin@('heartbeat','outer')-and($script:progressCase-notin@('slow','paused')-or$time-ge25))
+    return @{state=@{document_file=@{revision=[long][bool]$committed;epoch=$(if($script:strokeInputs-and$script:progressCase-eq'switched'){1}else{0})}};windows_tabs=@{selected=3}}
+   }
+   @{state=@{document_file=@{revision=[long]$time;epoch=$(if($script:progressCase-eq'changing-document'){[long]$time}else{0});busy=($time-lt25)}};windows_tabs=@{selected=3}}
+  }
+  function Read-Snapshot([string]$Path){
+   $time=[CapyStrokeProgressClock]::Seconds;$case=$script:progressCase
+   if((Split-Path -Leaf $Path)-like'ui-state-*'){
+    if($script:progressMode-ne'stroke'-and$case-eq'missing-ui'){return $null}
+    return @{process_id=$(if($case-eq'foreign-ui'){8}else{7});window_id=$(if($case-eq'changing-window'){11+[long]$time}else{11});presented=1;presentation_epoch=1;model=(Model)}
+   }
+   if((Split-Path -Leaf $Path)-like'camera-state-*'){return @{process_id=7;window_id=11;presented=1;presentation_epoch=1;camera=@{}}}
+   $script:progressReads++
+   if($script:progressMode-eq'stroke'){
+    $sent=$script:strokeInputs-gt0
+    if($case-eq'missing-baseline'-or($sent-and$case-eq'missing')){return $null}
+    $work=$sent-and($case-eq'outer'-or($case-in@('slow','paused')-and$time-lt30))
+    $shown=$sent-and($case-eq'hardware'-or($case-in@('slow','paused')-and$time-ge31))
+    $progress=@{owner=19;epoch=0;revision=(Model).state.document_file.revision;content_owner=19;content_epoch=0;content_revision=$(if($shown){1}else{0});settled=(!$work);outstanding_work=$work}
+    if($sent-and$case-eq'unacknowledged'){$progress.content_revision=$null}
+    if($sent-and$case-eq'malformed'){$progress.outstanding_work='true'}
+    if($sent-and$case-eq'switched'){$progress.owner=20;$progress.epoch=1}
+    return @{process_id=$(if($sent-and$case-eq'foreign'){8}else{7});window_id=11;displayed=0;presentation_epoch=$(if(!$sent){0}elseif($case-eq'paused'-and$time-lt31){1}else{[long]$time+1});render_progress=$progress}
+   }
+   if($case-eq'missing'-or($case-eq'gapped'-and$time%2-eq1)){return $null}
+   $work=$case-in@('owned-work','paused-work','outer','present-work','pixels-work','pixels-composed')
+   $work=$work-and($case-eq'outer'-or$time-lt$(if($script:progressMode-eq'pixels'){9}else{25}))
+   if($case-eq'stopped-work'){$work=$time-lt4}
+   $shown=if($case-in@('displayed','gapped','changing-owner','changing-document','changing-window','present-required-ahead')){[long]$time}else{0}
+   $content=if($case-in@('content','foreign-content-owner','foreign-content-epoch','pixels-content')){[long]$time}else{0}
+   $progress=@{owner=$(if($case-eq'changing-owner'){19+[long]$time}else{19});epoch=(Model).state.document_file.epoch;revision=(Model).state.document_file.revision;content_owner=$(if($case-eq'foreign-content-owner'){20}else{19});content_epoch=$(if($case-eq'foreign-content-epoch'){1}else{0});content_revision=$content;settled=(!$work);outstanding_work=$work;busy=($case-eq'busy')}
+   if($case-eq'wrong-document'){$progress.epoch=1}
+   if($case-eq'malformed-owner'){$progress.owner='19'}
+   if($case-eq'malformed-work'){$progress.outstanding_work='true'}
+   if($case-eq'malformed-display'){$shown=[string]$time}
+   if($script:progressMode-eq'present'){
+    $progress.content_revision=if($time-ge25){[long]$time}else{0}
+    if($case-eq'present-display'){$shown=[long]$time}
+    elseif($case-ne'present-required-ahead'){$shown=if($time-ge25){25}else{0}}
+   }
+   if($script:progressMode-eq'pixels'){$shown=25}
+   @{process_id=$(if($case-eq'foreign-process'){8}else{7});window_id=$(if($case-eq'foreign-window'){12}elseif($case-eq'changing-window'){11+[long]$time}else{11});presentation_epoch=$(if($case-eq'paused-work'){1}else{[long]$time+1});required=$(if($case-eq'present-required-ahead'-and$time-lt25){[long]$time+1}else{25});displayed=$shown;render_progress=$progress}
+  }
+  $review=[pscustomobject]@{Id=7;HasExited=$false};$review|Add-Member ScriptMethod Refresh {}
+  $script:CapyEach=$null;$script:CapyWaitSeconds=8
+  if($env:CAPY_OLD_CANVAS_HELPER){
+   $oldTokens=$null;$oldErrors=$null
+   $oldAst=[Management.Automation.Language.Parser]::ParseFile($env:CAPY_OLD_CANVAS_HELPER,[ref]$oldTokens,[ref]$oldErrors)
+   if($oldErrors.Count){throw 'OLD canvas helper does not parse'}
+   foreach($name in 'Wait-Until','Wait-PresentedFrame'){. (Import-ProgressHelper $oldAst $name)}
+   Reset-Progress 'present' 'present-work'
+   if($env:CAPY_OLD_CANVAS_CASE-eq'matched-fence-pending'){
+    Reset-Progress 'pixels' 'pixels-work'
+    Wait-PresentedFrame -Idle
+    throw 'OLD accepted matching presentation fences while renderer work remained pending'
+   }
+   Wait-PresentedFrame -Idle
+   throw 'OLD accepted slow owned work beyond its unchanged canvas-settle bound'
+  }
+  $progressChecks=0
+  foreach($case in 'slow','hardware','heartbeat','paused','unacknowledged','missing','malformed','foreign','switched','outer','missing-baseline'){
+   Reset-Progress 'stroke' $case;$failure=$null;$existing=@{checks=0}
+   try{Wait-CanvasStroke {$script:strokeInputs++};Wait-Until {$existing.checks++;$true} 'original pixel assertion'}catch{$failure=$_}
+   if($case-eq'missing-baseline'){
+    if(!$failure-or$script:strokeInputs-ne0-or$existing.checks){throw 'A missing owned baseline admitted a stroke'}
+   }elseif($script:strokeInputs-ne1){throw "Stroke progress repeated or omitted the original input: $case $failure"}
+   elseif($case-in@('slow','paused','hardware')){
+    if($failure-or$existing.checks-ne1){throw "A committed displayed stroke failed its progress gate: $case $failure"}
+    if($case-in@('slow','paused')-and[CapyStrokeProgressClock]::Seconds-ne31){throw 'The existing pixel assertion started before committed pixels were displayed'}
+    if($case-eq'hardware'-and[CapyStrokeProgressClock]::Seconds-ne0){throw 'An already-displayed hardware stroke acquired another wait'}
+   }elseif($case-eq'switched'){
+    if(!$failure-or$failure.Exception.Message-cne'The drawing changed during its stroke progress wait'-or$existing.checks){throw "A different document satisfied the stroke gate: $failure"}
+   }elseif($case-eq'outer'){
+    if(!$failure-or$failure.Exception.Message-cne'outer row timeout'-or$existing.checks){throw 'Stroke progress swallowed its outer row timeout'}
+   }else{
+    if(!$failure-or$failure.Exception.Message-cne'The stroke did not commit and reach the displayed canvas'-or$existing.checks-or[CapyStrokeProgressClock]::Seconds-gt9){throw "Idle, malformed or foreign progress escaped the unchanged bound: $case $failure"}
+   }
+   $progressChecks++
+  }
+  foreach($case in 'owned-work','paused-work','displayed','content','heartbeat','busy','stale-content','missing','missing-ui','foreign-process','foreign-ui','foreign-window','wrong-document','malformed-owner','malformed-work','malformed-display','foreign-content-owner','foreign-content-epoch','changing-owner','changing-document','changing-window','gapped','stopped-work','outer'){
+   Reset-Progress 'condition' $case;$failure=$null
+   try{Wait-Canvas {[CapyStrokeProgressClock]::Seconds-ge25-and$script:progressCase-ne'outer'} 'Controlled canvas condition did not finish'}catch{$failure=$_}
+   if($case-in@('owned-work','paused-work','displayed','content')){
+    if($failure-or[CapyStrokeProgressClock]::Seconds-ne25){throw "Owned canvas progress did not preserve the condition: $case $failure"}
+   }elseif($case-eq'outer'){
+    if(!$failure-or$failure.Exception.Message-cne'outer row timeout'){throw 'Canvas progress swallowed the outer row timeout'}
+   }else{
+    $bound=if($case-eq'stopped-work'){12}else{8}
+    if(!$failure-or$failure.Exception.Message-cne'Controlled canvas condition did not finish'-or[CapyStrokeProgressClock]::Seconds-gt$bound){throw "Unowned or idle canvas progress reset the bound: $case $failure"}
+   }
+   $progressChecks++
+  }
+  foreach($helper in 'condition','present'){
+   foreach($unscaled in @($false,$true)){
+    Reset-Progress $helper $(if($helper-eq'present'){'present-heartbeat'}else{'heartbeat'})
+    $script:progressScale=3;$failure=$null;$message='Controlled five-second canvas endpoint did not finish'
+    try{
+     if($helper-eq'present'){Wait-PresentedFrame -Idle -Seconds 5 -Message $message -Unscaled:$unscaled}
+     else{Wait-Canvas {$false} $message -Seconds 5 -Unscaled:$unscaled}
+    }catch{$failure=$_}
+    $expected=if($unscaled){5}else{15}
+    if(!$failure-or$failure.Exception.Message-cne$message-or[CapyStrokeProgressClock]::Seconds-ne$expected){throw "Canvas endpoint changed its scale or message: $helper Unscaled=$unscaled $failure"}
+    $progressChecks++
+   }
+  }
+  Reset-Progress 'condition' 'owned-work';$script:progressScale=3;$failure=$null
+  try{Wait-Canvas {[CapyStrokeProgressClock]::Seconds-ge25} 'Owned work did not finish' -Seconds 5 -Unscaled}catch{$failure=$_}
+  if($failure-or[CapyStrokeProgressClock]::Seconds-ne25){throw "Unscaled canvas bound rejected owned progress: $failure"}
+  $progressChecks++
+  foreach($case in 'present-work','present-display','present-required-ahead','present-heartbeat'){
+   Reset-Progress 'present' $case;$failure=$null
+   try{Wait-PresentedFrame -Idle}catch{$failure=$_}
+   if($case-eq'present-heartbeat'){
+    if(!$failure-or$failure.Exception.Message-cne'The canvas did not settle on screen'-or[CapyStrokeProgressClock]::Seconds-ne8){throw "Idle presentation accepted heartbeat without displayed pixels: $failure"}
+   }elseif($failure-or[CapyStrokeProgressClock]::Seconds-ne25){throw "Idle presentation lost its required/displayed join: $case $failure"}
+   $progressChecks++
+  }
+  foreach($case in 'pixels-work','pixels-content','pixels-heartbeat','pixels-composed','pixels-already-stable'){
+   Reset-Progress 'pixels' $case;$script:progressCadence=100;$script:pixelSamples=0;$failure=$null;$pixels=$null
+   try{$pixels=Wait-StablePixels {$script:pixelSamples++;if($script:progressCase-eq'pixels-already-stable'-or[CapyStrokeProgressClock]::Seconds-ge9){'pixels'}else{[string][CapyStrokeProgressClock]::Seconds}} -Composed:($case-eq'pixels-composed')}catch{$failure=$_}
+   if($case-in@('pixels-work','pixels-content','pixels-already-stable')){
+    $expected=if($case-eq'pixels-already-stable'){3}else{12}
+    if($failure-or$pixels-cne'pixels'-or[CapyStrokeProgressClock]::Seconds-ne$expected-or$script:pixelSamples-ne($expected+1)){throw "Pixel stability changed its three exact comparisons: $case $failure"}
+   }elseif(!$failure-or$failure.Exception.Message-notlike'Canvas pixels did not settle for comparison*'-or[CapyStrokeProgressClock]::Seconds-ne5){throw "Pixel progress escaped the original five-second bound: $case $failure"}
+   if($case-eq'pixels-composed'-and$script:progressReads){throw 'Composed captures started consulting canvas progress'}
+   $progressChecks++
+  }
+  "Canvas progress: $progressChecks deterministic schedules passed"
+ }finally{Remove-Item -LiteralPath $progressDirectory -Recurse -Force}
 }

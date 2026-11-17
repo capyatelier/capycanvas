@@ -209,7 +209,7 @@ function Select-ShowcaseBrush{
  };$false
  } 'Loaded Oil command did not appear'
  Invoke-Id ('command-result-'+$hit.index)
- Wait-Until {(Model).state.brush.preset -eq 22 -and (Model).brush_ready} 'Loaded Oil did not select' 120
+ Wait-Canvas {(Model).state.brush.preset -eq 22 -and (Model).brush_ready} 'Loaded Oil did not select' 120
 }
 $profileDirectory=$null
 try{
@@ -219,7 +219,7 @@ try{
  [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme;language=@{Explicit=$Locale}}|ConvertTo-Json -Depth 5))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
- Wait-Until {$script:drawing=Owned-DrawingWindow $review;$drawing -and (Model).canvas_ready -and (Review-Ready)} 'Native editor did not start' 120
+ Wait-Canvas {$script:drawing=Owned-DrawingWindow $review;$drawing -and (Model).canvas_ready -and (Review-Ready)} 'Native editor did not start' 120
  $root=$drawing.Root;$drawingWindow=$drawing.Handle
  Wait-Until {(Model).windows_active_tag -eq $Locale -and (Model).state.settings.language.Explicit -eq $Locale} 'Native app did not load requested locale'
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -231,7 +231,7 @@ try{
  $sourcePath=[IO.Path]::GetFullPath((Join-Path (Split-Path $Recipe) $source))
  if((Get-FileHash $sourcePath -Algorithm SHA256).Hash.ToLower() -ne $selected.sourceSha256){throw 'Staged source artwork differs from its recipe'}
  Open-StoreProject $sourcePath
- Wait-Until {(Model).canvas_ready -and !(Model).state.document_file.busy -and @((Model).state.tabs|Where-Object {$_.active -and $_.title -like ([IO.Path]::GetFileNameWithoutExtension($source)+'*') -and $_.width -gt 0 -and $_.height -gt 0}).Count -eq 1} 'Imported artwork did not settle' 120
+ Wait-Canvas {(Model).canvas_ready -and !(Model).state.document_file.busy -and @((Model).state.tabs|Where-Object {$_.active -and $_.title -like ([IO.Path]::GetFileNameWithoutExtension($source)+'*') -and $_.width -gt 0 -and $_.height -gt 0}).Count -eq 1} 'Imported artwork did not settle' 120
  Fit-Canvas
  foreach($step in $selected.steps){
  switch($step.type){
@@ -278,7 +278,7 @@ try{
  }
  }
  (Control 'drawing-canvas').SetFocus()
- Wait-Until {(Model).brush_ready -and !(Model).windows_workspace.busy} 'Scene did not settle' 90
+ Wait-Canvas {(Model).brush_ready -and !(Model).windows_workspace.busy} 'Scene did not settle' 90
  Wait-Until {
  foreach($layer in (Model).state.layers){
  if(!$layer.has_thumbnail){continue}

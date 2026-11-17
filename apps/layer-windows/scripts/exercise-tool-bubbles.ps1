@@ -317,7 +317,7 @@ function Edge-Dismissal([long]$Id){
     }
     $checks.Add('edge-move-dismisses-before-up-retains-contact-without-painting-and-undo-redo')
 }
-function Settled-Capture([string]$Name){Start-Sleep -Milliseconds 450;Capture $Name -Composed -WithModel}
+function Settled-Capture([string]$Name){Wait-BubbleVisualLayout;Capture $Name -Composed -WithModel}
 function Menu-Item([string]$Name){Control $Name -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)}
 function Hold-Bubble([long]$Id){$p=Center $Id;[CapyRowPointer]::Down($Device,$p.x,$p.y);Wait-Until {$null -ne (Find 'Put back' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem))} 'Hold did not open bubble options';[CapyRowPointer]::Up()}
 function Header-Entries {@((Model).header.model.zones|ForEach-Object {$_})}
@@ -373,8 +373,7 @@ function Take([string]$Kind,[string]$Value,[double]$X,[double]$Y){
     $id=@(Packets|Where-Object {$_.view.id -notin $before})[0].view.id
     Wait-Until {$null -ne (Find "tool-bubble-$id" -Visible) -or $null -ne (Find "bubble-card-$id" -Visible)} 'Bubble is missing its arranged native view'
     $checks.Add("take-$Kind-$Value")
-    $settle=@{last='';same=0}
-    Wait-Until {$p=Center $id;$key="$($p.x),$($p.y)";if($key -eq $settle.last){$settle.same++}else{$settle.last=$key;$settle.same=0};$settle.same -ge 5} 'Released bubble did not settle'
+    $null=Wait-BubbleNative -Id $id -Message 'Released bubble did not settle'
     return [long]$id
 }
 function Capture-InspectorRetirement([long]$Id){
@@ -390,6 +389,7 @@ function Capture-InspectorRetirement([long]$Id){
     if($area.Contains($outside.x,$outside.y)){throw 'Retirement fixture outside contact overlaps its inspector'}
     $folder=Join-Path $run 'inspector-retirement';[IO.Directory]::CreateDirectory($folder)|Out-Null
     Capture 'inspector-retirement-before' -WithModel -Composed
+    $inspectorBefore=Bubble-AppliedFrames
     $peers=[Collections.Generic.List[object]]::new()
     $sample=Sample-Frames $area {
         param($i)
@@ -411,10 +411,12 @@ function Capture-InspectorRetirement([long]$Id){
                 $remaining=[TabFrames]::Remaining($sample.frames[$i],$final,$face)
                 $scores+=@{frame=$i;peer=$peers[$i];outside_face_pixels=$remaining[0];face_pixels=$remaining[1]}
             }
-            $bad=@($scores|Where-Object {$_.frame -ge 3 -and $_.outside_face_pixels -gt $scores[2].outside_face_pixels*.2 -and !$_.peer.connected}|ForEach-Object {$_.frame})
-            @{bubble=$Id;area=$area;face=$face;action_frame=3;retirement_ms=150;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;scores=$scores;invalid=$bad}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
+            $null=Wait-BubbleNative -Id $Id -Message 'Retirement fixture did not finish its native backing'
+            $inspectorAfter=Bubble-AppliedFrames
+            $bad=$inspectorAfter.inspector_invalid-$inspectorBefore.inspector_invalid
+            Assert-BubbleInspectorFrames $inspectorBefore $inspectorAfter
+            @{bubble=$Id;area=$area;face=$face;action_frame=3;retirement_ms=150;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;scores=$scores;native_before=$inspectorBefore;native_after=$inspectorAfter;invalid=$bad;capture_scope='independent composed pixels and prior UIA peer samples; native invariant is Rendering-indexed'}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
             if(!$peers[2].connected -or $scores[2].outside_face_pixels -le 0){throw 'Retirement source did not contain a visible inspector and composed backing'}
-            if($bad.Count){throw "Retiring inspector detached or became invisible while its backing remained in frames $($bad -join ','); captures: $folder"}
         }finally{$final.Dispose()}
     }finally{foreach($image in $sample.frames){$image.Dispose()}}
     Capture 'inspector-retirement-after' -WithModel -Composed
@@ -838,9 +840,64 @@ function Layer-Pair([long]$Id,[int]$Delay=16,[string]$Stage='fast'){
     if($result.actual_opacity -eq $result.expected_opacity){try{Verify-SliderRecovery $Id $result.expected_opacity $Stage}catch{$result.recovery_error=$_.Exception.Message;$result|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run ("layer-pair-observation-$Stage.json"))}}
     return $result
 }
-function Settle-LayerScroll($Pattern){
-    $stable=@{value=$null;watch=[Diagnostics.Stopwatch]::StartNew()}
-    Wait-Until {$value=$Pattern.Current.VerticalScrollPercent;if($null -eq $stable.value -or [Math]::Abs($value-$stable.value) -gt .001){$stable.value=$value;$stable.watch.Restart()};$stable.watch.ElapsedMilliseconds -ge 250} 'Native list inertia did not settle'
+function Read-PanelScrollReceipt($List){
+    $raw=$List.Current.ItemStatus;if([string]::IsNullOrEmpty($raw)){return $null}
+    $receipt=($raw|ConvertFrom-Json).panel_scroll;if(!$receipt){return $null}
+    foreach($field in @('contact','serial','terminal')){if($null -eq $receipt.$field){throw "Native list fling receipt is missing $field"}}
+    $receipt
+}
+function Test-PanelScrollFling($Receipt,[long]$After){
+    if(!$Receipt -or $Receipt.contact -le $After){return $false}
+    if($Receipt.contact -ne $After+1){throw 'Native list fling receipt belongs to a different contact'}
+    if(!$Receipt.release -or !$Receipt.inertia -or !$Receipt.applied){return $false}
+    foreach($event in @($Receipt.release,$Receipt.inertia,$Receipt.applied)){
+        foreach($field in @('serial','tick','target','offset')){if($null -eq $event.$field){throw "Native list fling event is missing $field"}}
+    }
+    $Receipt.release.kind -eq 'release' -and $Receipt.inertia.kind -eq 'target' -and $Receipt.applied.kind -eq 'applied' -and
+        $Receipt.inertia.inertial -and $Receipt.inertia.serial -gt $Receipt.release.serial -and $Receipt.applied.serial -gt $Receipt.inertia.serial -and
+        $Receipt.inertia.tick -ge $Receipt.release.tick -and $Receipt.applied.tick -ge $Receipt.inertia.tick -and
+        $Receipt.inertia.target -gt $Receipt.release.target -and $Receipt.applied.offset -gt $Receipt.release.offset
+}
+function Wait-PanelScrollFling($List,$Before){
+    $observed=@{serial=$Before.serial;receipt=$null}
+    Wait-Until {Test-PanelScrollFling $observed.receipt $Before.contact} 'Native list fling did not continue scrolling after contact release' -ResetBound {
+        $observed.receipt=Read-PanelScrollReceipt $List
+        if($observed.receipt -and $observed.receipt.contact -eq $Before.contact+1 -and $observed.receipt.serial -gt $observed.serial){$observed.serial=$observed.receipt.serial;return $true}
+        $false
+    }
+    $observed.receipt
+}
+function Test-PanelScrollSettled($Receipt,[double]$Percent,[long]$Contact=0,[switch]$Held){
+    if(!$Receipt){return $false}
+    foreach($field in @('holding','running','idle','offset','scrollable_height')){if($null -eq $Receipt.$field){throw "Native list settle receipt is missing $field"}}
+    if(!$Receipt.idle){return $false}
+    $tolerance=$Receipt.scrollable_height*.00001
+    if([Math]::Abs($Receipt.offset-$Percent*$Receipt.scrollable_height/100) -gt $tolerance){return $false}
+    if($Contact){
+        if($Receipt.contact -lt $Contact){return $false}
+        if($Receipt.contact -ne $Contact){throw 'Native list settle receipt belongs to a different contact'}
+        if($Held){if(!$Receipt.holding -or !$Receipt.running){return $false}}elseif(!$Receipt.terminal -or $Receipt.holding -or $Receipt.running){return $false}
+        if(!$Receipt.final_target){return $false}
+        if($null -eq $Receipt.final_target.target -or $Receipt.final_target.kind -notin @('contact','target')){throw 'Native list settle receipt has a malformed final target'}
+        if([Math]::Abs($Receipt.offset-$Receipt.final_target.target) -gt $tolerance){return $false}
+        if($Receipt.final_target.kind -eq 'contact'){return $true}
+        if(!$Receipt.last_applied){return $false}
+        if($null -eq $Receipt.last_applied.offset -or $Receipt.last_applied.kind -ne 'applied'){throw 'Native list settle receipt has a malformed ViewChanged application'}
+        return [Math]::Abs($Receipt.last_applied.offset-$Receipt.final_target.target) -le $tolerance
+    }
+    !$Receipt.holding -and !$Receipt.running
+}
+function Settle-LayerScroll($List,$Pattern,[long]$Contact=0,[switch]$Held,[Nullable[double]]$TargetPercent){
+    $observed=@{receipt=$null;serial=$null}
+    Wait-Until {
+        $percent=$Pattern.Current.VerticalScrollPercent
+        if($null -ne $TargetPercent -and [Math]::Abs($percent-[double]$TargetPercent) -gt .001){return $false}
+        Test-PanelScrollSettled $observed.receipt $percent $Contact -Held:$Held
+    } 'Native list inertia did not settle' -ResetBound {
+        $observed.receipt=Read-PanelScrollReceipt $List
+        if($observed.receipt -and (!$Contact -or $observed.receipt.contact -eq $Contact) -and ($null -eq $observed.serial -or $observed.receipt.serial -gt $observed.serial)){$observed.serial=$observed.receipt.serial;return $true}
+        $false
+    }
 }
 function Settled-LayerState{
     $stable=@{key=$null;model=$null;watch=[Diagnostics.Stopwatch]::StartNew()}
@@ -863,9 +920,9 @@ function Visible-NativeLayerRows($Card,$List){
 function Recycle-NativeLayerRows([long]$Id,$Card,$List,$Scroll){
     $records=@();$first=@((Model).state.layers)[0].id;$last=@((Model).state.layers)[-1].id
     foreach($percent in @(100,0,100)){
-        Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,$percent)
+        Settle-LayerScroll $List $Scroll;$Scroll.SetScrollPercent(-1,$percent)
         Wait-Until {[Math]::Abs($Scroll.Current.VerticalScrollPercent-$percent) -lt .1} 'Native long-scroll did not reach the requested end'
-        Settle-LayerScroll $Scroll;Settle-Bubbles;$visible=@(Visible-NativeLayerRows $Card $List)
+        Settle-LayerScroll $List $Scroll -TargetPercent $percent;Settle-Bubbles;$visible=@(Visible-NativeLayerRows $Card $List)
         if(!$visible.Count){throw 'Native long-scroll exposes no current shared layer rows'}
         $expected=if($percent -eq 0){$first}else{$last};$edge=Find "layer-row-$expected" -Within $Card -Visible
         if(!$edge){throw 'Native long-scroll did not expose the expected shared end row'}
@@ -899,22 +956,22 @@ function Layer-ListContacts([long]$Id){
     if(!$scroll.Current.VerticallyScrollable){throw 'Native bubble layer list did not overflow'}
     if($ScrollEpochOnly){Native-ScrollEpoch $Id;return}
     if($inertiaOnly){Native-InertiaInterruption $Id $list $scroll;return}
-    Settle-LayerScroll $scroll;$scroll.SetScrollPercent(-1,0);Settle-LayerScroll $scroll
+    Settle-LayerScroll $list $scroll;$scroll.SetScrollPercent(-1,0);Settle-LayerScroll $list $scroll -TargetPercent 0
     $beforeInputs=Settled-LayerState;$viewport=$list.Current.BoundingRectangle
     [CapyRowPointer]::Wheel([int]($viewport.X+$viewport.Width*.5),[int]($viewport.Y+$viewport.Height*.5),-120)
     Wait-Until {$scroll.Current.VerticalScrollPercent -gt .5} 'Native mouse wheel did not scroll the layer list'
-    Settle-LayerScroll $scroll;$wheelPercent=$scroll.Current.VerticalScrollPercent
+    Settle-LayerScroll $list $scroll;$wheelPercent=$scroll.Current.VerticalScrollPercent
     $null=Scroll-Pattern $list -Focus;[CapyRowPointer]::Key([uint32]$review.Id,0x22)
     Wait-Until {$scroll.Current.VerticalScrollPercent -gt $wheelPercent+.5} 'Native Page Down did not scroll the layer list'
-    Settle-LayerScroll $scroll;$keyboardPercent=$scroll.Current.VerticalScrollPercent;$afterInputs=Settled-LayerState
+    Settle-LayerScroll $list $scroll;$keyboardPercent=$scroll.Current.VerticalScrollPercent;$afterInputs=Settled-LayerState
     @{wheel_percent=$wheelPercent;page_down_percent=$keyboardPercent;before_revision=$beforeInputs.state.document_file.revision;after_revision=$afterInputs.state.document_file.revision}|ConvertTo-Json|Set-Content (Join-Path $run 'layer-scroll-inputs.json')
     if($afterInputs.state.document_file.revision -ne $beforeInputs.state.document_file.revision -or $afterInputs.state.layer_tools.editing_layer.id -ne $beforeInputs.state.layer_tools.editing_layer.id -or (@($afterInputs.state.layers.id)-join ',') -ne (@($beforeInputs.state.layers.id)-join ',')){throw 'Native wheel or keyboard scrolling changed artwork, selection or layer order'}
     $checks.Add('native-layer-list-wheel-keyboard-and-scroll-automation')
     $records=@()
     foreach($phase in @('single-before','pair-from-scrolling-list','single-after')){
-        Settle-LayerScroll $scroll;Settle-Bubbles
+        Settle-LayerScroll $list $scroll;Settle-Bubbles
         $scroll.SetScrollPercent(-1,0);Wait-Until {$scroll.Current.VerticalScrollPercent -lt .1} 'Layer list did not return to top'
-        Settle-LayerScroll $scroll;Settle-Bubbles
+        Settle-LayerScroll $list $scroll -TargetPercent 0;Settle-Bubbles
         $viewport=$list.Current.BoundingRectangle;$rows=@()
         foreach($layer in (Model).state.layers){$label=Find ("layer-$($layer.id)-name") -Within $card;if(!$label){continue};$b=$label.Current.BoundingRectangle;if(!$label.Current.IsOffscreen -and $b.Y -gt $viewport.Y+25 -and $b.Bottom -lt $viewport.Bottom-10){$rows+=@{id=$layer.id;point=@{x=[int]($b.X+$b.Width*.5);y=[int]($b.Y+$b.Height*.5)}}}}
         if(!$rows.Count){throw 'No interior visible native layer label for touch scrolling'}
@@ -922,6 +979,7 @@ function Layer-ListContacts([long]$Id){
         @{phase=$phase;first=$at;row=$row.id;viewport=$viewport.ToString();card=(Card-Bounds $Id);scroll_percent=$scroll.Current.VerticalScrollPercent}|ConvertTo-Json -Depth 10 -Compress|Add-Content (Join-Path $run 'list-contact-admission.jsonl')
         $before=Settled-LayerState;$revision=$before.state.document_file.revision;$order=@($before.state.layers.id)-join ',';$center=Center $Id
         $editing=$before.state.layer_tools.editing_layer.id;$checkpoint=@($before.windows_tabs.session_stamps|Where-Object id -eq $before.windows_tabs.selected)[0].stamp.checkpoint
+        $scrollContact=(Read-PanelScrollReceipt $list).contact+1
         $injection=[Collections.Generic.List[object]]::new()
         [CapyCanvasTouch]::Initialize([uint32]$review.Id)
         try{
@@ -939,7 +997,7 @@ function Layer-ListContacts([long]$Id){
             }
             $injection.Add(@{phase='up1-before';time=([Diagnostics.Stopwatch]::GetTimestamp()*1000.0/[Diagnostics.Stopwatch]::Frequency)});[CapyCanvasTouch]::Up(1);$injection.Add(@{phase='up1-accepted';time=([Diagnostics.Stopwatch]::GetTimestamp()*1000.0/[Diagnostics.Stopwatch]::Frequency)})
         }finally{[CapyCanvasTouch]::Dispose();$injection|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run ("list-injection-$phase.json"))}
-        Settle-LayerScroll $scroll;Settle-Bubbles
+        Settle-LayerScroll $list $scroll $scrollContact;Settle-Bubbles
         $after=Settled-LayerState;$endCenter=Center $Id
         $afterCheckpoint=@($after.windows_tabs.session_stamps|Where-Object id -eq $after.windows_tabs.selected)[0].stamp.checkpoint
         $record=@{phase=$phase;first=$at;first_scroll_percent=$scrolled;final_scroll_percent=$scroll.Current.VerticalScrollPercent;before_revision=$revision;after_revision=$after.state.document_file.revision;before_editing=$editing;after_editing=$after.state.layer_tools.editing_layer.id;before_checkpoint=$checkpoint;after_checkpoint=$afterCheckpoint;before_center=$center;after_center=$endCenter;order_unchanged=($order -eq (@($after.state.layers.id)-join ','))}
@@ -951,15 +1009,15 @@ function Layer-ListContacts([long]$Id){
     if($rowPairOnly){return}
     $scroll.SetScrollPercent(-1,0);Wait-Until {$scroll.Current.VerticalScrollPercent -lt .1} 'Inertia list did not return to top'
     $viewport=$list.Current.BoundingRectangle;$fling=@{x=[int]($viewport.X+$viewport.Width*.5);y=[int]($viewport.Y+$viewport.Height*.7)};$revision=Revision
+    $flingBefore=@{value=$null};Wait-Until {$flingBefore.value=Read-PanelScrollReceipt $list;$null -ne $flingBefore.value} 'Native list fling receipt is unavailable'
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{[CapyCanvasTouch]::Down(1,$fling.x,$fling.y);foreach($dy in @(15,40,80)){Start-Sleep -Milliseconds 25;[CapyCanvasTouch]::Move(1,$fling.x,($fling.y-$dy))};[CapyCanvasTouch]::Up(1)}finally{[CapyCanvasTouch]::Dispose()}
-    $released=$scroll.Current.VerticalScrollPercent;$tail=@();foreach($delay in @(50,100,200)) {Start-Sleep -Milliseconds $delay;$tail+=@{delay=$delay;percent=$scroll.Current.VerticalScrollPercent}}
-    @{at_release=$released;tail=$tail;before_revision=$revision;after_revision=(Revision)}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'layer-scroll-inertia.json')
-    if(@($tail|Where-Object {$_.percent -gt $released+.1}).Count -eq 0){throw 'Native list fling did not continue scrolling after contact release'}
+    $flingReceipt=Wait-PanelScrollFling $list $flingBefore.value
+    @{receipt=$flingReceipt;before_revision=$revision;after_revision=(Revision)}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'layer-scroll-inertia.json')
     if((Revision) -ne $revision){throw 'Native list inertia changed artwork history'}
     Native-InertiaInterruption $Id $list $scroll
     Native-BoundaryReversal $Id $list $scroll
-    Settle-LayerScroll $scroll
+    Settle-LayerScroll $list $scroll
     $scroll.SetScrollPercent(-1,0);Wait-Until {$scroll.Current.VerticalScrollPercent -lt .1} 'Restored layer list did not return to top'
     $viewport=$list.Current.BoundingRectangle;$selected=$null;$label=$null
     foreach($layer in (Model).state.layers){if($layer.id -eq (Model).state.layer_tools.editing_layer.id){continue};$candidate=Find ("layer-$($layer.id)-name") -Within $card;if(!$candidate){continue};$bounds=$candidate.Current.BoundingRectangle;if(!$candidate.Current.IsOffscreen -and $bounds.Y -gt $viewport.Y+4 -and $bounds.Bottom -lt $viewport.Bottom-4){$selected=$layer.id;$label=$candidate;break}}
@@ -981,7 +1039,7 @@ function Native-ScrollEpoch([long]$Id){
     Wait-Until {$m=Model;$m.windows_tabs.selected -eq $originalId -and $m.state.document_file.epoch -gt $epoch -and $m.state.document_file.revision -eq $file.revision -and $m.brush_ready -and $m.canvas_ready} 'Scroll epoch original drawing did not resume'
     if(!(View $Id).card){Tap (At "tool-bubble-$Id")};Wait-Until {$null -ne (View $Id).card} 'Scroll epoch Layers card did not open';Settle-Bubbles
     $card=Card $Id;$list=Control 'layer-list' -Within $card -Arranged;$scroll=Scroll-Pattern $list
-    $scroll.SetScrollPercent(-1,0);Settle-LayerScroll $scroll;$box=$list.Current.BoundingRectangle;$at=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
+    $scroll.SetScrollPercent(-1,0);Settle-LayerScroll $list $scroll -TargetPercent 0;$box=$list.Current.BoundingRectangle;$at=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
     $epoch=(Model).state.document_file.epoch;[CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{[CapyCanvasTouch]::Down(1,$at.x,$at.y);foreach($dy in @(25,55,90)){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$at.x,($at.y-$dy))};Wait-Until {$scroll.Current.VerticalScrollPercent -gt .5} 'Scroll epoch first contact did not actually pan';$beforeSwitch=$scroll.Current.VerticalScrollPercent;Next-Drawing
         Wait-Until {$m=Model;$m.windows_tabs.selected -eq $second -and $m.state.document_file.epoch -gt $epoch -and $m.brush_ready -and $m.canvas_ready} 'Active native scroll did not switch drawing';[CapyCanvasTouch]::Up(1)
@@ -990,11 +1048,12 @@ function Native-ScrollEpoch([long]$Id){
     $epoch=$secondState.state.document_file.epoch;Next-Drawing
     Wait-Until {$m=Model;$m.windows_tabs.selected -eq $originalId -and $m.state.document_file.epoch -gt $epoch -and $m.state.document_file.revision -eq $file.revision -and $m.brush_ready -and $m.canvas_ready} 'Scroll epoch original drawing did not return'
     if(!(View $Id).card){Tap (At "tool-bubble-$Id")};Wait-Until {$null -ne (View $Id).card} 'Scroll epoch returned card did not open';Settle-Bubbles
-    $list=Control 'layer-list' -Within (Card $Id) -Arranged;$scroll=Scroll-Pattern $list;Settle-LayerScroll $scroll;$scroll.SetScrollPercent(-1,0);Settle-LayerScroll $scroll
+    $list=Control 'layer-list' -Within (Card $Id) -Arranged;$scroll=Scroll-Pattern $list;Settle-LayerScroll $list $scroll;$scroll.SetScrollPercent(-1,0);Settle-LayerScroll $list $scroll -TargetPercent 0
     $box=$list.Current.BoundingRectangle;$at=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
+    $scrollContact=(Read-PanelScrollReceipt $list).contact+1
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{[CapyCanvasTouch]::Down(1,$at.x,$at.y);foreach($dy in @(25,55,90)){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$at.x,($at.y-$dy))};Wait-Until {$scroll.Current.VerticalScrollPercent -gt .5} 'Fresh native scroll did not resume after drawing switch';$fresh=$scroll.Current.VerticalScrollPercent;[CapyCanvasTouch]::Up(1)}finally{[CapyCanvasTouch]::Dispose()}
-    Settle-LayerScroll $scroll;$after=Settled-LayerState;$afterCheckpoint=@($after.windows_tabs.session_stamps|Where-Object id -eq $originalId)[0].stamp.checkpoint
+    Settle-LayerScroll $list $scroll $scrollContact;$after=Settled-LayerState;$afterCheckpoint=@($after.windows_tabs.session_stamps|Where-Object id -eq $originalId)[0].stamp.checkpoint
     if($after.state.document_file.revision -ne $file.revision -or $afterCheckpoint -ne $checkpoint){throw 'Drawing-switch scroll changed original artwork history'}
     @{original=$originalId;second=$second;before_switch_scroll=$beforeSwitch;fresh_scroll=$fresh;before_revision=$file.revision;after_revision=$after.state.document_file.revision;checkpoint=$checkpoint;after_checkpoint=$afterCheckpoint}|ConvertTo-Json -Depth 6|Set-Content (Join-Path $run 'native-scroll-document-epoch.json')
     $checks.Add('active-native-scroll-document-switch-and-fresh-scroll')
@@ -1049,10 +1108,11 @@ function Native-HistoryActions([long]$Id,$Paper,[string]$Before,[string]$Painted
     $checks.Add('native-history-accessibility-keyboard-and-disabled-state')
 }
 function Native-InertiaInterruption([long]$Id,$List,$Scroll){
-    Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,50);Settle-LayerScroll $Scroll
+    Settle-LayerScroll $List $Scroll;$Scroll.SetScrollPercent(-1,50);Settle-LayerScroll $List $Scroll -TargetPercent 50
     $origin=Settled-LayerState;$order=@($origin.state.layers.id)-join ',';$checkpoint=@($origin.windows_tabs.session_stamps|Where-Object id -eq $origin.windows_tabs.selected)[0].stamp.checkpoint
     $box=$List.Current.BoundingRectangle;$point=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
     $interruptStart=$null;$interrupted=$null;$admission=@{before=($List.Current.ItemStatus|ConvertFrom-Json).generation;native=$null}
+    $scrollContact=(Read-PanelScrollReceipt $List).contact+2
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{
         [CapyCanvasTouch]::Down(1,$point.x,$point.y)
@@ -1075,11 +1135,12 @@ function Native-InertiaInterruption([long]$Id,$List,$Scroll){
         Wait-Until {$Scroll.Current.VerticalScrollPercent -lt $interruptStart-.5} 'Fresh opposite native pan did not interrupt live inertia'
         $interrupted=$Scroll.Current.VerticalScrollPercent;[CapyCanvasTouch]::Up(1)
     }finally{[CapyCanvasTouch]::Dispose()}
-    Settle-LayerScroll $Scroll;$Scroll.SetScrollPercent(-1,0);Settle-LayerScroll $Scroll
+    Settle-LayerScroll $List $Scroll $scrollContact;$Scroll.SetScrollPercent(-1,0);Settle-LayerScroll $List $Scroll -TargetPercent 0
     $box=$List.Current.BoundingRectangle;$point=@{x=[int]($box.X+$box.Width*.5);y=[int]($box.Y+$box.Height*.65)}
+    $scrollContact=(Read-PanelScrollReceipt $List).contact+1
     [CapyCanvasTouch]::Initialize([uint32]$review.Id)
     try{[CapyCanvasTouch]::Down(1,$point.x,$point.y);foreach($dy in @(25,55,90)){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$point.x,($point.y-$dy))};Wait-Until {$Scroll.Current.VerticalScrollPercent -gt .5} 'Another fresh native pan failed after inertia interruption';$fresh=$Scroll.Current.VerticalScrollPercent;[CapyCanvasTouch]::Up(1)}finally{[CapyCanvasTouch]::Dispose()}
-    Settle-LayerScroll $Scroll;$after=Settled-LayerState;$afterCheckpoint=@($after.windows_tabs.session_stamps|Where-Object id -eq $after.windows_tabs.selected)[0].stamp.checkpoint
+    Settle-LayerScroll $List $Scroll $scrollContact;$after=Settled-LayerState;$afterCheckpoint=@($after.windows_tabs.session_stamps|Where-Object id -eq $after.windows_tabs.selected)[0].stamp.checkpoint
     $evidence=@{inertia_before=$moving.before;inertia_after=$moving.after;opposite_pan=$interrupted;fresh_pan=$fresh;before_revision=$origin.state.document_file.revision;after_revision=$after.state.document_file.revision;before_editing=$origin.state.layer_tools.editing_layer.id;after_editing=$after.state.layer_tools.editing_layer.id;before_checkpoint=$checkpoint;after_checkpoint=$afterCheckpoint;order_unchanged=($order -eq (@($after.state.layers.id)-join ','))}
     $evidence|ConvertTo-Json -Depth 8|Set-Content (Join-Path $run 'layer-scroll-interrupt-inertia.json')
     if(!$evidence.order_unchanged -or $evidence.before_revision -ne $evidence.after_revision -or $evidence.before_editing -ne $evidence.after_editing -or $checkpoint -ne $afterCheckpoint){throw 'Native inertia interruption changed artwork, selection, layer order or checkpoint'}
@@ -1089,13 +1150,13 @@ function Native-BoundaryReversal([long]$Id,$List,$Scroll){
     $stateKey={param($model)
         [ordered]@{document=$model.state.document_file;checkpoint=@($model.windows_tabs.session_stamps|Where-Object id -eq $model.windows_tabs.selected)[0].stamp.checkpoint;editing=$model.state.layer_tools.editing_layer;rows=@($model.state.layers|Select-Object id,depth,visible,locked,mask_linked,alpha_locked,pass_through,relationship,selected,editing)}|ConvertTo-Json -Depth 30 -Compress
     }
-    Settle-LayerScroll $Scroll;Settle-Bubbles
+    Settle-LayerScroll $List $Scroll;Settle-Bubbles
     $origin=Settled-LayerState;$before=& $stateKey $origin;$center=Center $Id;$records=[Collections.Generic.List[object]]::new()
     try{
         foreach($boundary in @(0,100)){
             $Scroll.SetScrollPercent(-1,$boundary)
             Wait-Until {[Math]::Abs($Scroll.Current.VerticalScrollPercent-$boundary) -lt .1} 'Boundary reversal did not reach its starting edge'
-            Settle-LayerScroll $Scroll;$card=Card $Id;$box=$List.Current.BoundingRectangle;$rows=@(Visible-NativeLayerRows $card $List)
+            Settle-LayerScroll $List $Scroll -TargetPercent $boundary;$card=Card $Id;$box=$List.Current.BoundingRectangle;$rows=@(Visible-NativeLayerRows $card $List)
             if(!$rows.Count){throw 'Boundary reversal lacks an interior native row'}
             $row=$rows[[int][Math]::Floor($rows.Count/2)];$bounds=(Control "layer-$($row.id)-name" -Within $card -Arranged).Current.BoundingRectangle
             $point=@{x=[int]($bounds.X+$bounds.Width*.5);y=[int]($bounds.Y+$bounds.Height*.5)}
@@ -1103,11 +1164,12 @@ function Native-BoundaryReversal([long]$Id,$List,$Scroll){
             if($distance -lt 16*$scale){throw 'Boundary reversal lacks native movement clearance'}
             $direction=if($boundary -eq 0){1}else{-1}
             $record=@{boundary=$boundary;from=$point;distance=$distance;viewport=$box.ToString();before_gesture=($List.Current.ItemStatus|ConvertFrom-Json);before_state=$before};$records.Add($record)
+            $scrollContact=(Read-PanelScrollReceipt $List).contact+1
             [CapyCanvasTouch]::Initialize([uint32]$review.Id)
             try{
                 [CapyCanvasTouch]::Down(1,$point.x,$point.y)
                 foreach($step in 1..3){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$point.x,[int]($point.y+$direction*$distance*$step/3))}
-                Settle-LayerScroll $Scroll;$record.outward_percent=$Scroll.Current.VerticalScrollPercent;$record.outward_gesture=$List.Current.ItemStatus|ConvertFrom-Json
+                Settle-LayerScroll $List $Scroll $scrollContact -Held;$record.outward_percent=$Scroll.Current.VerticalScrollPercent;$record.outward_gesture=$List.Current.ItemStatus|ConvertFrom-Json
                 if([Math]::Abs($record.outward_percent-$boundary) -ge .1){throw 'Outward native pan escaped its scroll boundary'}
                 if($record.outward_gesture.last_cancel.reason -ne 'native_scroll' -or $record.outward_gesture.last_cancel.generation -le $record.before_gesture.generation){throw 'Boundary contact did not enter native vertical pan admission'}
                 foreach($step in 1..3){Start-Sleep -Milliseconds 35;[CapyCanvasTouch]::Move(1,$point.x,[int]($point.y+$direction*$distance*(1-2*$step/3)))}
@@ -1115,7 +1177,7 @@ function Native-BoundaryReversal([long]$Id,$List,$Scroll){
                 $record.reverse_percent=$Scroll.Current.VerticalScrollPercent;$record.reverse_gesture=$List.Current.ItemStatus|ConvertFrom-Json
                 [CapyCanvasTouch]::Up(1)
             }finally{[CapyCanvasTouch]::Dispose()}
-            Settle-LayerScroll $Scroll;Settle-Bubbles;$after=Settled-LayerState
+            Settle-LayerScroll $List $Scroll $scrollContact;Settle-Bubbles;$after=Settled-LayerState
             $record.after_state=& $stateKey $after;$record.after_gesture=$List.Current.ItemStatus|ConvertFrom-Json;$record.after_center=Center $Id
             if($record.after_state -ne $before -or $record.after_center.x -ne $center.x -or $record.after_center.y -ne $center.y -or $record.after_gesture.phase -ne 'idle' -or $record.after_gesture.captured -or $record.after_gesture.menu_open){throw 'Boundary reversal changed document state, bubble position or retained a row contact'}
         }
@@ -1329,8 +1391,7 @@ function Next-Drawing{
     throw 'Next drawing header source lacks its native action button'
 }
 function Settle-Bubbles{
-    $settle=@{last='';same=0}
-    Wait-Until {$key=@(Packets|ForEach-Object {$point=Center $_.view.id $_;"$($_.view.id):$($point.x),$($point.y)"}) -join '|';if($key -eq $settle.last){$settle.same++}else{$settle.last=$key;$settle.same=0};$settle.same -ge 4} 'Native bubbles did not settle after document activation'
+    $null=Wait-BubbleNative -Message 'Native bubbles did not settle after document activation'
 }
 function Document-SwitchMenu([long]$Id){
     $original=(Model).windows_tabs.selected;$originalFile=(Model).state.document_file
@@ -1380,7 +1441,7 @@ function Rapid-Reopen([long]$Id){
         foreach($packet in @(Packets|Where-Object {$_.view.id -ne $Id})){$point=Center $packet.view.id $packet;[CapyRowPointer]::RightClick($point.x,$point.y);(Menu-Item 'Put back').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke();Wait-Until {$null -eq (Packet $packet.view.id)} 'Rapid fixture could not clear neighbor'}
         $bounds=Card-Bounds $Id;$current=Center $Id;$area=(Model).layout.work_area;$desired=Screen ($area.x+$area.width*.5) ($area.y+$area.height*.5)
         $from=@{x=[int]($bounds.X+3*$scale);y=[int]($bounds.Y+$bounds.Height*.5)};$to=@{x=($from.x+$desired.x-$current.x);y=($from.y+$desired.y-$current.y)}
-        Drag $from $to;Start-Sleep -Milliseconds 500
+        Drag $from $to;Settle-Bubbles
         Wait-Until {Placed $Id} 'Rapid card visible center does not match its authored position'
     }
     $center=Center $Id;$outside=Screen ($width*.90) ($height*.78)

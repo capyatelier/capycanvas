@@ -1486,6 +1486,7 @@ public static class CapyReviewOwnershipTest {
     function Model($Window){@{windows_recovery=@{busy=$false;restoring=$false};state=@{document_file=@{modified=$true}}}}
     function Review-Ready($Model,$Window){$true}
     function Wait-Until($Condition,$Message,$Seconds){if($Seconds -ne 60 -or !(& $Condition)){throw $Message}}
+    function Wait-Canvas($Condition,$Message,$Seconds){Wait-Until @PSBoundParameters}
     function Register-CapyFixtureWindow($Process,$WindowHandle,$TraceDirectory){
         if($Process.HasExited -or $TraceDirectory -cne $directory -or $WindowHandle -notin @($reopenedWindows.hwnd)){throw 'Reopened census did not receive its live owned window'}
         $entry=@{process_id=$Process.Id;process_start_utc=$Process.StartTime.ToUniversalTime().ToString('o');hwnd=$WindowHandle}

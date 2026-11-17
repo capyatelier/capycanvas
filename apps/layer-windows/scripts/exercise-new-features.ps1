@@ -32,7 +32,7 @@ function Tap([string]$Id,[string]$Device='mouse') {
         else{throw "No action for $Id"}
         Start-Sleep -Milliseconds 250;return
     }
-    Wait-Until {(Control $Id).Current.IsEnabled -and (Model).brush_ready} "Disabled $Id" 120
+    Wait-Canvas {(Control $Id).Current.IsEnabled -and (Model).brush_ready} "Disabled $Id" 120
     $null=[CapyRowPointer]::SetForegroundWindow($ownedDrawing.Handle);Start-Sleep -Milliseconds 100
     $at=At $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 60;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 240
 }
@@ -100,7 +100,7 @@ try {
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned feature review $($review.Id): $run"
-    Wait-Until {$script:ownedDrawing=Owned-DrawingWindow $review;$null -ne $ownedDrawing -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Feature review did not start' 90
+    Wait-Canvas {$script:ownedDrawing=Owned-DrawingWindow $review;$null -ne $ownedDrawing -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Feature review did not start' 90
     $root=$ownedDrawing.Root
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyRowPointer]::SetForegroundWindow($ownedDrawing.Handle)
     [CapyRowPointer]::Initialize([uint32]$review.Id)
@@ -191,7 +191,7 @@ try {
             $reversed=Model;$reversedLayer=@($reversed.state.layers|Where-Object id -eq $id)[0]
             if($reversed.state.document_file.revision -ne $reverseRevision -or $reversedLayer.locked -ne $reverseLayer.locked -or $reversedLayer.alpha_locked -ne $reverseLayer.alpha_locked){throw 'Reverse swipe changed the drawing or layer lock state'}
             Swipe $id -90 $device;$escapeRevision=(Model).state.document_file.revision;[CapyRowPointer]::Key(0x1b)
-            Wait-Until {$button=Find "layer-$id-swipe-delete";$m=Model;$drawer=$m.state.customization.drawer;(!$button -or $button.Current.IsOffscreen) -and $drawer -and (@($drawer.columns|ForEach-Object {$_}) -join ',') -eq 'layers' -and $m.state.document_file.revision -eq $escapeRevision} 'Escape did not close only the swipe while preserving the Layers drawer and drawing'
+            Wait-Canvas {$button=Find "layer-$id-swipe-delete";$m=Model;$drawer=$m.state.customization.drawer;(!$button -or $button.Current.IsOffscreen) -and $drawer -and (@($drawer.columns|ForEach-Object {$_}) -join ',') -eq 'layers' -and $m.state.document_file.revision -eq $escapeRevision} 'Escape did not close only the swipe while preserving the Layers drawer and drawing'
             Swipe $id -90 $device;Tap 'layer-actions' $device
             Wait-Until {$button=Find "layer-$id-swipe-delete";!$button -or $button.Current.IsOffscreen} 'Outside press did not close swipe'
             [CapyRowPointer]::Key(0x1b)

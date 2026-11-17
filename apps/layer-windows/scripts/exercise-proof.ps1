@@ -40,7 +40,7 @@ function Select-Choice([string]$Id,[string]$Name){
  $item=Control $Name -Name -Type ([System.Windows.Automation.ControlType]::ListItem)
  $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 }
-function Idle {Wait-Until {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'Proof/document operation did not finish' 60}
+function Idle {Wait-Canvas {$m=Model;$m -and !$m.windows_document -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'Proof/document operation did not finish' 60}
 function ProofPanel {
  if(Find 'panel-tab-proof'){Invoke 'panel-tab-proof'}
  Wait-Until {(Find 'proof-panel-mode')} 'Retained Proof panel did not open'
@@ -94,7 +94,7 @@ try {
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle;Write-Output "Proof review $($review.Id), $run"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Proof app did not start' 60
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Proof app did not start' 60
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $initial=(Model).state.document_file|ConvertTo-Json -Compress
  Command 'soft_proof'
@@ -161,11 +161,11 @@ try {
   return
  }
  Command 'undo' 'Edit';Idle
- Wait-Until {!(Model).state.document_file.modified} 'One Undo did not restore the clean drawing'
+ Wait-Canvas {!(Model).state.document_file.modified} 'One Undo did not restore the clean drawing'
  Command 'redo' 'Edit';Idle;Command 'soft_proof'
  Wait-Until {(Model).windows_proof.bytes -gt 0 -and (Model).windows_proof.text -eq 'Proof: Display P3'} 'Redo proof view did not recover' 60
  $revision=(Model).state.document_file.revision
- Button 'Test stroke';Wait-Until {(Model).state.document_file.revision -gt $revision -and ((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Stroke did not commit'
+ Button 'Test stroke';Wait-Canvas {(Model).state.document_file.revision -gt $revision -and ((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Stroke did not commit'
  $proofHash=Export 'proof-on.png'
  Command 'soft_proof';$plainHash=Export 'proof-off.png'
  if($proofHash -ne $plainHash){throw 'Proof contaminated exported pixels'}
@@ -174,7 +174,7 @@ try {
  Command 'soft_proof';Wait-Until {(Model).windows_proof.bytes -gt 0} 'Proof not ready before GPU removal'
  $generation=(Model).windows_gpu_generation;$file=(Model).state.document_file|ConvertTo-Json -Compress
  Button 'Test GPU loss'
- Wait-Until {(Model).windows_gpu_generation -gt $generation -and (Model).brush_ready -and !(Model).windows_rendering_suspended} 'D3D12 recovery failed' 60
+ Wait-Canvas {(Model).windows_gpu_generation -gt $generation -and (Model).brush_ready -and !(Model).windows_rendering_suspended} 'D3D12 recovery failed' 60
  Wait-Until {(Model).windows_proof.text -eq 'Proof: Display P3'} 'Proof did not survive GPU reconstruction'
  if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $file){throw 'GPU recovery changed proof or drawing history'}
  if((Export 'recovered.png') -ne $plainHash){throw 'GPU recovery changed drawing pixels'}

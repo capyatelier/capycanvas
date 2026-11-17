@@ -183,7 +183,7 @@ function Open-LayersReview([string]$Log){
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/layers-review.json'),(@{process_id=$script:review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned Layers review $($script:review.Id)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $script:review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
+    Wait-Canvas {$native.window=Owned-DrawingWindow $script:review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
     [CapyLayersCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle
     Use-PaintWorkspace
@@ -233,10 +233,10 @@ try {
     $identity=(Control "layer-$paint-name").GetRuntimeId() -join ':'
     Capture 'initial'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
-    Wait-Until {(Model).state.document_file.modified} 'Stroke not acknowledged'
+    Wait-Canvas {(Model).state.document_file.modified} 'Stroke not acknowledged'
     Wait-Until {$samples=Preview-Samples "layer-$paint-thumbnail";$samples -and $samples -ne $original} 'Thumbnail did not reflect paint' 15
     Invoke 'Undo' -Name
-    Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
+    Wait-Canvas {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
     Wait-Until {(Preview-Samples "layer-$paint-thumbnail") -eq $original} 'Thumbnail pixels did not restore after Undo' 15
     if((Preview-Samples "layer-$paint-thumbnail" 'undo') -ne $original){throw 'Saved thumbnail pixels did not restore after Undo'}
     if(((Control "layer-$paint-name").GetRuntimeId() -join ':') -ne $identity){throw 'Painting replaced the layer row'}
@@ -375,12 +375,12 @@ try {
     $native=@{window=$null}
     Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Restarted review did not start' 45
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
-    Wait-Until {(Review-Ready) -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Layer session did not reopen' 120
+    Wait-Canvas {(Review-Ready) -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Layer session did not reopen' 120
     if(@((Model).state.tabs|Where-Object active)[0].id -ne $reopenedDrawing){throw 'Layer session reopened a different drawing'}
     if(!(Model).state.document_file.modified -or [Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -gt .000001){throw 'Window close lost the focused layer draft'}
     Capture 'reopened-draft' -WithModel
     Invoke 'Undo' -Name
-    Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-1) -lt .000001 -and !(Model).state.document_file.modified} 'Restored layer draft did not Undo to the clean checkpoint'
+    Wait-Canvas {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-1) -lt .000001 -and !(Model).state.document_file.modified} 'Restored layer draft did not Undo to the clean checkpoint'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{layer_color_modes_and_local_filters='passed';thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json

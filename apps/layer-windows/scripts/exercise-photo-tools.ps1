@@ -29,7 +29,7 @@ function Layers {@((Model).state.layers)}
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Command([string]$Id){(Model).state.commands|Where-Object id -eq $Id|Select-Object -First 1}
 function Choice([string]$Id){@((Model).state.canvas_bar.items|Where-Object {$_.option.Choice.id -eq $Id})[0].option.Choice}
-function Idle {Wait-Until {$m=Model;$m -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'The document did not settle' 60}
+function Idle {Wait-Canvas {$m=Model;$m -and $m.brush_ready -and !$m.state.document_file.busy -and !@($m.state.requests).Count} 'The document did not settle' 60}
 function MenuOpen{
  $condition=[System.Windows.Automation.AndCondition]::new(
   [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),
@@ -327,7 +327,7 @@ try {
  $native=@{window=$null}
  Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'Review did not start' 45
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
- Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Photo tools review did not start'
+ Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Photo tools review did not start'
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
@@ -342,7 +342,7 @@ try {
  if($distortFilter){Check-TransformFootprint @($distortFilter);Close-PhotoReview;return}
  Fit-Canvas;Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
- Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
+ Wait-Canvas {(Model).state.document_file.modified} 'Controlled drawing did not finish'
  Idle
  $width=Width;$height=[int]@((Model).state.tabs)[0].height
 
@@ -385,10 +385,10 @@ try {
  [CapyRowPointer]::Hover($center[0],$center[1]);Start-Sleep -Milliseconds 200
  Drag 'mouse' $center @(($center[0]+90),($center[1]+40))
  Idle
- Wait-Until {(Paint) -ne $before -and (Model).state.layer_tools.has_selection} 'Dragging with Move did not move the selected pixels'
+ Wait-Canvas {(Paint) -ne $before -and (Model).state.layer_tools.has_selection} 'Dragging with Move did not move the selected pixels'
  if(@(Layers).Count -ne $layers){throw 'Moving selected pixels changed the layer count'}
  Undo
- Wait-Until {(Paint) -eq $before} 'One Undo did not return the moved pixels'
+ Wait-Canvas {(Paint) -eq $before} 'One Undo did not return the moved pixels'
  foreach($step in @(@('touch',$true),@('pen',$false))){
   Tap 'canvas-bar-more' $step[0]
   Wait-Until {MenuOpen} "More did not open from $($step[0])" 5
@@ -423,10 +423,10 @@ try {
  $stroke=Screen ($width*.65) ($height*.55)
  Drag 'pen' $stroke @(($stroke[0]+140),($stroke[1]+30))
  Idle
- Wait-Until {(Paint) -ne $before} 'A Clone Stamp stroke did not paint'
+ Wait-Canvas {(Paint) -ne $before} 'A Clone Stamp stroke did not paint'
  $cloned=Paint
  Undo
- Wait-Until {(Paint) -eq $before} 'One Undo did not remove the clone stroke'
+ Wait-Canvas {(Paint) -eq $before} 'One Undo did not remove the clone stroke'
  $checks.clone_alt_source_beside_focused_button_bar_and_stroke='passed'
 
  foreach($brush in @(@('Healing Brush','heal'),@('Spot Healing Brush','spot_heal'))){
@@ -436,9 +436,9 @@ try {
   $at=Screen ($width*.5) ($height*.6)
   Drag 'mouse' $at @(($at[0]+120),($at[1]-20))
   Idle
-  Wait-Until {(Paint) -ne $before} "$($brush[0]) did not paint" 60
+  Wait-Canvas {(Paint) -ne $before} "$($brush[0]) did not paint" 60
   Idle;Undo
-  Wait-Until {(Paint) -eq $before} "One Undo did not remove the $($brush[0]) stroke"
+  Wait-Canvas {(Paint) -eq $before} "One Undo did not remove the $($brush[0]) stroke"
  }
  $checks.healing_and_spot_healing_one_undo='passed'
 

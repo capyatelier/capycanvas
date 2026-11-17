@@ -171,6 +171,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(lastMove.Size())value.Insert(L"last_move",lastMove);
         if(lastIgnoredDown.Size())value.Insert(L"last_ignored_down",lastIgnoredDown);
+        if(auto scrollTag=list.Tag().try_as<J>();scrollTag&&scrollTag.HasKey(L"panel_scroll"))value.Insert(L"panel_scroll",scrollTag.GetNamedValue(L"panel_scroll"));
         AutomationProperties::SetItemStatus(list,value.Stringify());
     }
     void deferClick(){

@@ -84,7 +84,7 @@ function Save-Reopen([string]$Path){
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
     Wait-Until {(Model).state.document_file.epoch -ne $epoch} 'The saved drawing did not close'
     Open-Project $Path
-    Wait-Until {(Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and (Model).brush_ready} 'The saved drawing did not reopen' 90
+    Wait-Canvas {(Model).state.document_file.location.uri -eq $Path -and !(Model).state.document_file.busy -and (Model).brush_ready} 'The saved drawing did not reopen' 90
 }
 function Transparent([int]$X){Near (Pair $X) $background[$X]}
 function Park{
@@ -100,14 +100,14 @@ try{
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned illustration filter review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready) -and !(Model).windows_workspace.busy} 'The filter review did not start' 90
+    Wait-Canvas {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready) -and !(Model).windows_workspace.busy} 'The filter review did not start' 90
     $root=$registeredWindow.Root
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     Open-Project $source
-    Wait-Until {$tab=@((Model).state.tabs|Where-Object active)[0];$tab.width -eq 320 -and $tab.height -eq 192 -and (Model).brush_ready} 'The source image did not open' 90
+    Wait-Canvas {$tab=@((Model).state.tabs|Where-Object active)[0];$tab.width -eq 320 -and $tab.height -eq 192 -and (Model).brush_ready} 'The source image did not open' 90
     Fit-Canvas;Park
     Wait-Until {$sample=Pixel 40;$sample[0]-$sample[1] -gt 100} 'The source red patch was not visible'
     $original=Pixel 40;$partial=Pixel 200
@@ -165,7 +165,7 @@ try{
     try{for($y=0;$y -lt 192;$y++){for($x=0;$x -lt 320;$x++){$r=[int]($x*255/319);$g=[int]($y*255/191);$image.SetPixel($x,$y,[Drawing.Color]::FromArgb(255,$r,$g,(255-$r)))}};$image.Save($gradient,[Drawing.Imaging.ImageFormat]::Png)}finally{$image.Dispose()}
     $gradientEpoch=(Model).state.document_file.epoch
     Open-Project $gradient
-    Wait-Until {
+    Wait-Canvas {
         $view=Model;$tab=@($view.state.tabs|Where-Object active)[0];$file=$view.state.document_file
         $file.epoch -ne $gradientEpoch -and $file.modified -and $file.unsaved_name -eq 'Artistic gradient' -and !$file.location -and $tab.title -eq 'Artistic gradient' -and $tab.width -eq 320 -and $tab.height -eq 192 -and !$file.busy -and $view.brush_ready
     } 'Artistic gradient did not open' 90

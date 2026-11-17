@@ -56,7 +56,7 @@ function Launch([string]$Label){
     $null=$review.Handle
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/manager-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned manager review $($review.Id) ($Label)"
-    Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Manager review did not start' 45
+    Wait-Canvas {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow -and (Review-Ready)} 'Manager review did not start' 45
     [CapyWindowApi]::ShowWindow($registeredWindow.Handle,3)|Out-Null
     $script:root=$registeredWindow.Root
 }

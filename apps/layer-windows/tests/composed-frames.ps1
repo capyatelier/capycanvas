@@ -1,3 +1,4 @@
+param([string]$ExpansionFixture=(Join-Path $PSScriptRoot '../scripts/exercise-expansion.ps1'))
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot '../scripts/ComposedFrames.ps1')
 $baseline=[Drawing.Bitmap]::new(4,4);$changed=$null
@@ -33,3 +34,55 @@ try{
     foreach($name in 'gap','darker','stale','hole'){if($envelope.ExtraTint($images[$name],$images.final,$column,[Drawing.Rectangle]::Empty,$tint)){throw "Composed frames accepted the $name column state as one extra tint"}}
 }finally{foreach($image in $images.Values){$image.Dispose()}}
 Write-Output 'Composed frames actual helper compiled and compared memory pixels'
+
+& {
+    $tokens=$null;$errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile($ExpansionFixture,[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw ($errors|Out-String)}
+    $check=$ast.Find({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Check-NarrowExpansion'},$true)
+    $assignment=$check.Find({param($n)$n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -ceq '$expanded'},$true)
+    if(!$assignment){throw 'Missing actual narrow-expansion trajectory oracle'}
+    $statements=$assignment.Parent.Statements;$start=-1;$end=-1
+    for($i=0;$i -lt $statements.Count;$i++){
+        if($statements[$i].Extent.StartOffset -eq $assignment.Extent.StartOffset){$start=$i}
+        if($statements[$i] -is [Management.Automation.Language.AssignmentStatementAst] -and $statements[$i].Left.Extent.Text -ceq '$configuration'){$end=$i;break}
+    }
+    if($start -lt 0 -or $end -le $start){throw 'Missing actual narrow-expansion geometry assertions'}
+    if($start -gt 0 -and $statements[$start-1].Extent.Text.Contains('Narrow expansion native geometry history overflowed')){$start--}
+    $oracle=[scriptblock]::Create(($statements[$start..($end-1)]|ForEach-Object {$_.Extent.Text}) -join "`n")
+    function Set-Content{param($Path,[Parameter(ValueFromPipeline)]$Value)process{}}
+    function Geometry([double]$Width,[double]$Height,[double]$ConfigurationWidth=60){
+        [pscustomobject]@{group=4;bounds=[pscustomobject]@{width=$Width;height=$Height};configuration=[pscustomobject]@{width=$ConfigurationWidth}}
+    }
+    function Frame([int]$Serial,[double]$Width,[double]$Height){[pscustomobject]@{frame=$Serial;panel='sizes';geometry=(Geometry $Width $Height)}}
+    $checks=0
+    foreach($case in 'coalesced-uia','all-events','only-final','one-intermediate','repeated-geometry','wrong-height','wrong-configuration','stale','foreign-group','foreign-panel','unfinished','overflow','previous-overflow'){
+        $Panel='sizes';$placement=@([pscustomobject]@{id=4});$scale=1.;$folder=$PSScriptRoot
+        $docked=[pscustomobject]@{Width=100.;Height=200.};$final=Geometry 200 300
+        $receipts=@(1..3|ForEach-Object {[pscustomobject]@{expansion=$final}})
+        $beforeFrames=[pscustomobject]@{frame=10;dropped=0}
+        $expansionFrames=[pscustomobject]@{dropped=0;records=@((Frame 11 125 225),(Frame 12 150 250),(Frame 13 200 300))}
+        $expectedFailure=$null
+        switch($case){
+            'only-final' {$expansionFrames.records=@($expansionFrames.records[2]);$expectedFailure='Narrow expansion did not capture two distinct intermediate geometry samples'}
+            'one-intermediate' {$expansionFrames.records=@($expansionFrames.records[0],$expansionFrames.records[2]);$expectedFailure='Narrow expansion did not capture two distinct intermediate geometry samples'}
+            'repeated-geometry' {$expansionFrames.records[1].geometry=Geometry 125 225;$expectedFailure='Narrow expansion did not capture two distinct intermediate geometry samples'}
+            'wrong-height' {$expansionFrames.records[0].geometry=Geometry 125 270;$expectedFailure='Narrow expansion height departed from its width-derived shared trajectory'}
+            'wrong-configuration' {$expansionFrames.records[0].geometry=Geometry 125 225 80;$expectedFailure='Narrow expansion changed its resolved configuration width while opening'}
+            'stale' {$expansionFrames.records[0].frame=8;$expansionFrames.records[1].frame=9;$expectedFailure='Narrow expansion did not capture two distinct intermediate geometry samples'}
+            'foreign-group' {$expansionFrames.records[0].geometry.group=9;$expansionFrames.records[1].geometry.group=9;$expectedFailure='Narrow expansion did not capture two distinct intermediate geometry samples'}
+            'foreign-panel' {$expansionFrames.records[0].panel='navigator';$expansionFrames.records[1].panel='navigator';$expectedFailure='Narrow expansion did not capture two distinct intermediate geometry samples'}
+            'unfinished' {$receipts[0].expansion=Geometry 190 290;$expectedFailure='Narrow expansion did not finish within the composed sample window'}
+            'overflow' {$expansionFrames.dropped=1;$expectedFailure='Narrow expansion native geometry history overflowed'}
+            'previous-overflow' {$beforeFrames.dropped=99}
+        }
+        $changes=@([pscustomobject]@{Timestamp=13;Status=($final|ConvertTo-Json -Depth 8 -Compress)})
+        if($case -eq 'all-events'){$changes=@($expansionFrames.records|ForEach-Object {[pscustomobject]@{Timestamp=$_.frame;Status=($_.geometry|ConvertTo-Json -Depth 8 -Compress)}})}
+        $failure=$null
+        try{. $oracle}catch{$failure=$_.Exception.Message}
+        if($failure -cne $expectedFailure){throw "Actual narrow-expansion oracle $case failed: $failure (expected $expectedFailure)"}
+        if(!$expectedFailure -and $intermediate.Count -ne 2){throw 'Actual native trajectory omitted one distinct intermediate geometry'}
+        $checks++
+    }
+    Write-Output "Expansion native-frame trajectory: $checks actual-AST cases passed"
+}

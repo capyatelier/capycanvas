@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',
+﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark',
  [ValidateSet('full','smoke','smoke-light','preview','preview-light','controls','controls-light')][string]$Journey='full')
 $ErrorActionPreference='Stop'
 $Journey=$Journey.ToLowerInvariant();$Theme=$Theme.ToLowerInvariant()
@@ -37,7 +37,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path;$directory=Split-Path -
 $run=Join-Path $repo ('artifacts/windows/canvas-editing/'+[Guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 function Select-Tool([string]$Id){
  if(((Model).state.commands|Where-Object id -eq $Id).selected){return}
- Invoke (Tool-Tile $Id);Wait-Until {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return $ready.state.layer_tools.tool -eq 'transform'};($ready.state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
+ Invoke (Tool-Tile $Id);Wait-Canvas {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return $ready.state.layer_tools.tool -eq 'transform'};($ready.state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
 }
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Body-Point{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle
@@ -62,10 +62,8 @@ function Pixels {
  }finally{$bitmap.Dispose()}
 }
 function Stable-Pixels {
- Wait-PresentedFrame
- $watch=[Diagnostics.Stopwatch]::StartNew();$last=Pixels;$stable=0
- do{Start-Sleep -Milliseconds 100;$next=Pixels;if($next -eq $last){$stable++}else{$stable=0};$last=$next;if($stable -ge 3){return $last}}while($watch.Elapsed.TotalSeconds -lt 6)
- throw 'Artwork samples did not settle'
+ Wait-PresentedFrame -Idle -Seconds 6 -Unscaled -Message 'Artwork samples did not settle'
+ Pixels
 }
 function Assert-TranslatedSamples([string]$Blank,[string]$Before,[string]$After) {
  foreach($signature in @($Blank,$Before,$After)){
@@ -134,7 +132,7 @@ function Apply-Preview([string]$Name,[switch]$AcceptWithBrush,[switch]$Translate
  if((Signature) -ne $selected){throw "$Name preview committed early"}
  $revision=(Model).state.document_file.revision
  $acceptance=if($AcceptWithBrush){Invoke (Tool-Tile 'pen');'Pen selection'}else{Invoke 'canvas-bar-apply_transform';'Apply'}
- Wait-Until {
+ Wait-Canvas {
   $m=Model
   $m.state.layer_tools.tool -ne 'transform' -and $m.state.document_file.revision -gt $revision -and
    (!$AcceptWithBrush -or ($m.canvas_ready -and $m.brush_ready -and ($m.state.commands|Where-Object id -eq 'pen').selected))
@@ -149,10 +147,10 @@ function Apply-Preview([string]$Name,[switch]$AcceptWithBrush,[switch]$Translate
   @{command='Undo';name='restore';expected=$baselinePng}
  )){
   $revision=(Model).state.document_file.revision;Invoke $step.command -Name
-  Wait-Until {(Model).state.document_file.revision -ne $revision} "$Name $($step.command) did not finish"
+  Wait-Canvas {(Model).state.document_file.revision -ne $revision} "$Name $($step.command) did not finish"
   if($Translated){
    $expectedPixels=if($step.name -eq 'redo'){$appliedPixels}else{$baseline}
-   Wait-Until {(Pixels) -eq $expectedPixels} "$Name $($step.command) did not restore the artwork samples"
+   Wait-Canvas {(Pixels) -eq $expectedPixels} "$Name $($step.command) did not restore the artwork samples"
   }
   if($step.name -eq 'undo'){
    Select-Tool 'lasso';$checkpoint=(Model).state.document_file|ConvertTo-Json -Compress
@@ -173,7 +171,7 @@ try{
  @{process_id=$review.Id;executable=$Executable;theme=$Theme;journey=$Journey;sha256=(Get-FileHash -LiteralPath $Executable).Hash}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $run 'owner.json')
  Write-Output "Owned canvas editing review $($review.Id): $run"
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$m=Model;$null -ne $native.window -and (Review-Ready $m) -and $m.state.theme -eq $Theme} 'Isolated editing canvas did not start' 45
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$m=Model;$null -ne $native.window -and (Review-Ready $m) -and $m.state.theme -eq $Theme} 'Isolated editing canvas did not start' 45
  $handle=$native.window.Handle;$root=$native.window.Root
  Use-PaintWorkspace
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document'
@@ -189,7 +187,7 @@ try{
  Invoke 'new-drawing-color-mode-color';Invoke 'new-drawing-paper-color-0';Invoke 'new-drawing-color-use'
  Wait-Until {!((Model).state.new_drawing.drawer) -and !((Model).state.new_drawing.setup.paper.transparent)} 'Pixel fixture did not choose white paper'
  Invoke 'new-drawing-create'
- Wait-Until {!(Model).state.new_drawing -and (Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Flat paper pixel fixture did not become ready' 45
+ Wait-Canvas {!(Model).state.new_drawing -and (Model).canvas_ready -and (Model).brush_ready -and !(Model).state.document_file.busy} 'Flat paper pixel fixture did not become ready' 45
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$c=(Model).state.camera;$b=(Control 'drawing-canvas').Current.BoundingRectangle;[Math]::Abs($c.viewport[0]-$b.Width) -lt .1 -and $b.Width -gt 1600} 'Maximized canvas did not settle'
  if(@((Model).layout.groups|Where-Object active -eq 'layers').Count){Invoke 'column-icon-layers';Wait-Until {@((Model).layout.groups|Where-Object active -eq 'layers').Count -eq 0} 'Column did not close'}
@@ -210,7 +208,7 @@ try{
    Select-Tool 'figure';Invoke 'tool-group-1';Wait-Until {(Model).state.tool_set.groups[1].selected} 'Rectangle did not activate'
    Invoke 'tool-subtool-1';Wait-Until {(Model).state.tool_set.subtools[1].selected} 'Filled rectangle did not activate'
    Drag $device @(@(($cx-120),($cy-80)),@(($cx+120),($cy+80)))
-   Wait-Until {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
+   Wait-Canvas {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
    $rectangle=Stable-Pixels;Pass 'immediate filled-rectangle drag'
    Select-Tool 'lasso'
    Drag $device @(@(($cx-100),($cy-60)),@(($cx-20),($cy-60)),@(($cx-20),($cy+60)),@(($cx-100),($cy+60)),@(($cx-100),($cy-60)))
@@ -221,7 +219,7 @@ try{
    Select-Tool 'scale_rotate';Origin;$from=Body-Point
    Drag $device @($from,@(($from[0]+300),$from[1]))
    Wait-Until {[Math]::Abs((Value 'transform_x')-$x0-300/$camera.zoom) -lt 2 -and [Math]::Abs((Value 'transform_y')-$y0) -lt 2} 'Transform body did not move immediately'
-   Wait-Until {(Pixels) -ne $baseline} 'Move preview left the sampled pixels unchanged'
+   Wait-Canvas {(Pixels) -ne $baseline} 'Move preview left the sampled pixels unchanged'
    $previewSignature=Signature;$previewPixels=Stable-Pixels
    @{before=$selected;after=$previewSignature;baseline=$baseline;preview=$previewPixels;centers=$sampleCenters}|ConvertTo-Json -Depth 25|Set-Content (Join-Path $run 'move-preview-state.json')
    if($previewSignature -ne $selected){throw 'Move preview changed the document signature before Apply'}
@@ -259,14 +257,14 @@ try{
     Apply-Preview 'move' -Translated
    }
    Invoke 'Undo' -Name;Wait-Until {!(Model).state.layer_tools.has_selection} 'Selection Undo did not clear the lasso'
-   Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
+   Invoke 'Undo' -Name;Wait-Canvas {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'Figure Undo did not return to a clean drawing';Pass 'selection and seed Undo return clean'
   }
  }
  if($Journey -in @('full','controls')) {
   $device='mouse';$empty=Stable-Pixels
   Select-Tool 'figure';Invoke 'tool-group-1';Invoke 'tool-subtool-1'
   Drag $device @(@(($cx-120),($cy-80)),@(($cx+120),($cy+80)))
-  Wait-Until {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
+  Wait-Canvas {(Model).state.document_file.modified -and (Pixels) -ne $empty} 'Filled rectangle did not appear'
   Select-Tool 'scale_rotate';Origin;Wait-Until {$a=(Model).state.canvas_bar.anchor;$a -and [Math]::Abs((Value 'transform_x')-($a[0]+$a[2])/2) -lt .5} 'The transform bounds did not match the centred position';$bounds=(Model).state.canvas_bar.anchor
   $scale=[CapyEditingCapture]::GetDpiForWindow($handle)/96;$grid=Control 'tool-choice-transform-reference'
   $cells=@(0..8|ForEach-Object {Control "tool-choice-transform-reference-$_"})
@@ -295,12 +293,12 @@ try{
   Pass 'snap toggle and pivot drag'
   Capture ('transform-controls-'+(Model).state.theme)
   $revision=(Model).state.document_file.revision;Invoke 'canvas-bar-apply_transform'
-  Wait-Until {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'The anchored move did not apply'
+  Wait-Canvas {(Model).state.layer_tools.tool -ne 'transform' -and (Model).state.document_file.revision -gt $revision} 'The anchored move did not apply'
   $once=Stable-Pixels;$revision=(Model).state.document_file.revision
   Wait-Until {((Model).state.commands|Where-Object id -eq 'transform_again').enabled} 'Transform Again stayed disabled after a transform'
   & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke 'transform_again'
-  Wait-Until {(Model).state.document_file.revision -gt $revision -and (Pixels) -ne $once} 'Transform Again did not repeat the move'
-  Invoke 'Undo' -Name;Wait-Until {(Pixels) -eq $once} 'Transform Again was not one Undo'
+  Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Pixels) -ne $once} 'Transform Again did not repeat the move'
+  Invoke 'Undo' -Name;Wait-Canvas {(Pixels) -eq $once} 'Transform Again was not one Undo'
   Pass 'Transform Again'
   $beforeTheme=(Model).state.theme;Invoke 'settings-button'
   (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
@@ -322,7 +320,7 @@ try{
   Invoke 'canvas-bar-cancel_transform';Wait-Until {(Model).state.layer_tools.tool -ne 'transform'} 'Transform cancel did not finish'
   [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
   Wait-Until {!(Find 'tool-drawer' -Visible)} 'Tool Options did not close before artwork sampling'
-  Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Until {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
+  Invoke 'Undo' -Name;Invoke 'Undo' -Name;Wait-Canvas {!(Model).state.document_file.modified -and (Pixels) -eq $empty} 'The transform journey did not undo to a clean drawing'
  }
  if((Model).state.document_file.modified){throw 'Editing journey did not restore a clean drawing'}
  [CapyRowPointer]::Dispose();$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()

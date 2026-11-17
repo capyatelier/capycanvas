@@ -96,7 +96,7 @@ try {
  Write-Output "Owned shortcut page review $($review.Id): $run"
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  $native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Shortcut page review did not start' 45
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Shortcut page review did not start' 45
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null

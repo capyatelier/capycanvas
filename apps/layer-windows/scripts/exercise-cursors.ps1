@@ -16,7 +16,7 @@ function Start-App {
     $null=$review.Handle
     Wait-Until {$review.Refresh();$script:registeredWindow=Owned-DrawingWindow $review;$registeredWindow} 'Cursor review did not open' 60
     $script:root=$registeredWindow.Root
-    Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Cursor review did not prepare' 120
+    Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Cursor review did not prepare' 120
     if(!(Model).windows_isolated_settings){throw 'Cursor review requires isolated settings'}
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
@@ -60,7 +60,7 @@ function Tool([string]$Id) {
     (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($command.label)
     Wait-Until {$row=Find 'command-result-0' -Visible;$row -and $row.Current.Name.StartsWith($command.label)} "Tool search did not find $Id"
     [CapyRowPointer]::Key([uint32]$review.Id,0x0D)
-    Wait-Until {!(Find 'command-search' -Visible) -and @((Model).state.commands|Where-Object {$_.id -eq $Id -and $_.selected}).Count -eq 1 -and (Model).brush_ready -and (Model).canvas_ready -and (Model).shaders_ready} "Tool did not activate: $Id"
+    Wait-Canvas {!(Find 'command-search' -Visible) -and @((Model).state.commands|Where-Object {$_.id -eq $Id -and $_.selected}).Count -eq 1 -and (Model).brush_ready -and (Model).canvas_ready -and (Model).shaders_ready} "Tool did not activate: $Id"
 }
 function Pixels([string]$Name='') {
     $path=if($Name){Join-Path $run ($Name+'.png')}else{''}

@@ -6,6 +6,7 @@ Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
 [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $app=Get-Process -Id $ProcessId
+$review=$app;$CapyStateFile=$StateFile
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected an isolated CapyCanvas review process'}
 if(!$OutputDirectory){$OutputDirectory=Split-Path -Parent $StateFile}
 [IO.Directory]::CreateDirectory($OutputDirectory)|Out-Null
@@ -20,7 +21,7 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=8){
     throw $Message
 }
 $native=@{window=$null}
-Wait-Until {$native.window=Owned-DrawingWindow $app;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Review startup did not complete' 45
+Wait-Canvas {$native.window=Owned-DrawingWindow $app;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Review startup did not complete' 45
 if(!(Model).windows_isolated_settings){throw 'Use an isolated review settings profile'}
 $root=$native.window.Root;$drawingWindow=$native.window.Handle
 function Find([string]$Value,$Type=[System.Windows.Automation.ControlType]::Button,[switch]$Id){
@@ -107,7 +108,7 @@ function Select-Preset([int]$Preset){
     $items=@((Model).state.tool_set.subtools);$indices=@(for($i=0;$i -lt $items.Count;$i++){if((Tool-PresetId $items[$i]) -eq $Preset){$i}})
     if($indices.Count -ne 1){throw "Preset $Preset has no unique native Tool Set choice"}
     Invoke-Id ('tool-subtool-'+$indices[0])
-    Wait-Until {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} "Preset $Preset did not activate"
+    Wait-Canvas {(Model).state.brush.preset -eq $Preset -and (Model).brush_ready} "Preset $Preset did not activate"
 }
 function Select-Tool([string]$Id,[switch]$Cancel){
     $target=@{id=$null}
@@ -325,7 +326,7 @@ foreach($tool in $tools){
             $index=0
             while((Model).state.tool_set.subtools[$index].preview -ne $preset){$index++}
             Invoke-Id ('tool-subtool-'+$index)
-            Wait-Until {(Model).state.brush.preset -eq $preset -and (Model).brush_ready} "Liquify preset $preset did not activate"
+            Wait-Canvas {(Model).state.brush.preset -eq $preset -and (Model).brush_ready} "Liquify preset $preset did not activate"
             Check-Projection
             $ids=@((Model).state.tool_settings|ForEach-Object id)
             if('size' -notin $ids -or 'strength' -notin $ids){throw "Liquify preset $preset lacks Size or Strength"}
@@ -438,7 +439,7 @@ Wait-Until {((Model).state.commands|Where-Object id -eq 'show_rulers').selected 
 Check-Projection
 $check.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
 Select-Tool 'pen'
-Wait-Until {(Model).brush_ready} 'Selected pen did not become ready'
+Wait-Canvas {(Model).brush_ready} 'Selected pen did not become ready'
 Invoke-Control 'Test stroke'
 Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq 'undo' -and $_.enabled}).Count -eq 1} 'Controlled stroke did not complete'
 Select-Tool 'scale_rotate'

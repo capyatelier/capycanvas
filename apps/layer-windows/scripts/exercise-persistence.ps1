@@ -17,7 +17,7 @@ function Launch([string]$Profile,[string]$Label) {
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/persistence-review.json'),(@{process_id=$review.Id;run=$run;profile=$Profile}|ConvertTo-Json))
     Write-Output "Owned workspace persistence review $($review.Id) ($Label)"
     $owned=@{window=$null}
-    Wait-Until {$review.Refresh();if(!(Review-Ready)){return $false};$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Canvas did not start' 45
+    Wait-Canvas {$review.Refresh();if(!(Review-Ready)){return $false};$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Canvas did not start' 45
     $script:root=$owned.window.Root
     Wait-Until {(Model).windows_workspace.ready -and !(Model).windows_workspace.busy} 'Workspace did not open' 45
     Wait-Until {@((Model).panel_measurements|Where-Object {$_.panel -eq 'brushes' -and $_.content_height -gt 0 -and $_.content_height -ne 320}).Count -eq 1} 'Adopted workspace did not receive native measurements'

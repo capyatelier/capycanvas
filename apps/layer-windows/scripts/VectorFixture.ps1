@@ -125,13 +125,13 @@ function Select-Brush([string]$Brush){
 function Select-Tool([string]$Id){
  if(!(Selected $Id)){
   Invoke (Tool-Tile $Id)
-  Wait-Until {(Model).canvas_ready -and (Selected $Id)} "$Id did not become the tool"
+  Wait-Canvas {(Model).canvas_ready -and (Selected $Id)} "$Id did not become the tool"
  }
  if((Model).state.customization.drawer){
   (Control 'drawing-canvas').SetFocus();Key 0x1B
   Wait-Until {!(Model).state.customization.drawer} 'The tool drawer did not close'
  }
- Wait-Until {(Model).brush_ready} "$Id did not become ready" 120
+ Wait-Canvas {(Model).brush_ready} "$Id did not become ready" 120
  Park
 }
 function Tool-Item([string]$List,[scriptblock]$Match,[string]$Wanted){

@@ -159,7 +159,7 @@ function Undo-To([string]$Before,[string]$Reason){
 }
 function Canvas-Point([double]$X,[double]$Y){
     $canvas=Control 'drawing-canvas' -Arranged
-    Wait-Until {$canvas.Current.IsEnabled -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'The canvas did not become ready for a drag'
+    Wait-Canvas {$canvas.Current.IsEnabled -and (Model).brush_ready -and !(Find 'canvas-status' -Visible)} 'The canvas did not become ready for a drag'
     $bounds=$canvas.Current.BoundingRectangle;$camera=(Model).state.camera;$area=$camera.work_area
     $scale=$bounds.Width/$camera.viewport[0]
     @([int]($bounds.X+($area[0]+$area[2]*$X)*$scale),[int]($bounds.Y+($area[1]+$area[3]*$Y)*$scale))
@@ -248,7 +248,7 @@ try{
     $null=$review.Handle
     Write-Output "Owned scopes review $($review.Id): $run"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 120
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 120
     if(!(Model).windows_isolated_settings){throw 'Scopes fixture requires an isolated profile'}
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -286,7 +286,7 @@ try{
         Invoke 'column-icon-tool_settings';Wait-Until {!((Model).state.customization.column_drawers|Where-Object {$_.tabs.active -eq 'tool_settings'})} 'Tool settings did not close'
     }
     Drag-Canvas 'mouse' (Canvas-Point .1 .5) (Canvas-Point .9 .5)
-    Wait-Until {(Model).state.document_file.modified} 'The gradient did not reach the drawing'
+    Wait-Canvas {(Model).state.document_file.modified} 'The gradient did not reach the drawing'
     Wait-Until {$h=View 'histogram';$null -ne $h.data -and $h.status -and (Model).windows_scopes -gt 0} 'Histogram did not publish counts'
     Wait-Until {(Chart-Shades 'histogram-chart') -gt 3} 'Histogram did not draw its counts'
     $chart=Control 'histogram-chart'
@@ -350,7 +350,7 @@ try{
     $autoProjection=(Model).state.camera|Select-Object viewport,zoom,rotation,translation,work_area|ConvertTo-Json -Depth 8 -Compress
     Tap-Id 'property-action-auto_levels' 'mouse'
     $notice=@{text=$null}
-    Wait-Until {$text=(Model).state.notice.text;if($text){$notice.text=$text};(Properties-Json) -ne $before -or $notice.text} 'Auto did not finish' 60
+    Wait-Canvas {$text=(Model).state.notice.text;if($text){$notice.text=$text};(Properties-Json) -ne $before -or $notice.text} 'Auto did not finish' 60
     if((Properties-Json) -eq $before){throw "Auto finished without adjusting Levels: $($notice.text)"}
     $autoProperties=Properties-Json;$autoPixels=Canvas-Hash
     if($autoPixels -eq $pixels){throw 'Auto changed parameters without changing the limited-range gradient pixels'}
@@ -372,7 +372,7 @@ try{
         Wait-Until {(Model).state.color_picker.calibrating} "$device did not arm the white point"
         if(Find 'picker-setting-source' -Visible){throw 'Sampler Source stayed visible while calibrating'}
         $at=Canvas-Point .3 .5;$script:lastDevice=$device;[CapyRowPointer]::Down($device,$at[0],$at[1]);Start-Sleep -Milliseconds $(if($device -eq 'touch'){1500}else{60});[CapyRowPointer]::Up()
-        Wait-Until {(Model).state.document_file.revision -gt $revision -and !(Model).state.color_picker.calibrating} "$device white point did not adjust Levels"
+        Wait-Canvas {(Model).state.document_file.revision -gt $revision -and !(Model).state.color_picker.calibrating} "$device white point did not adjust Levels"
         if((Canvas-Hash) -eq $pixels){throw "$device white point did not change the drawing"}
         Invoke 'Undo' -Name;Wait-Until {(Properties-Json) -eq $before} "$device white point undo did not restore Levels"
         if((Canvas-Hash) -ne $pixels){throw "$device white point was not one Undo step"}
@@ -417,7 +417,7 @@ try{
     Window-Panel 'Histogram';Wait-Until {!(Shown 'histogram')} 'Histogram did not restore the Auto pixel projection'
     $autoEpoch=(Model).state.document_file.epoch
     Open-Project $autoFile
-    Wait-Until {(Model).state.document_file.epoch -gt $autoEpoch -and (Model).state.document_file.location.uri -eq $autoFile -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified -and (Model).brush_ready} 'Auto Levels did not reopen as a fresh clean drawing' 60
+    Wait-Canvas {(Model).state.document_file.epoch -gt $autoEpoch -and (Model).state.document_file.location.uri -eq $autoFile -and !(Model).state.document_file.busy -and !(Model).state.document_file.modified -and (Model).brush_ready} 'Auto Levels did not reopen as a fresh clean drawing' 60
     $levels=@((Model).state.layers|Where-Object label -eq 'Levels')[0].id
     Select-Panel 'layers';Invoke ('layer-'+$levels+'-name')
     Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $levels} 'The reopened Levels layer did not become active'

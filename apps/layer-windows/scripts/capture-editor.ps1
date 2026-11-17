@@ -115,7 +115,7 @@ function Settle {
         $script:stable -ge 3
     } 'Native editor geometry or startup did not settle'
 }
-Wait-Until {(Model).windows_workspace.ready -and (Model).brush_ready} 'Native editor did not become ready'
+Wait-Canvas {(Model).windows_workspace.ready -and (Model).brush_ready} 'Native editor did not become ready'
 if(!(Model).windows_isolated_settings){throw 'Capture requires an isolated profile and CAPY_TRACE_UI=1'}
 if(Find 'Test stroke'){throw 'Capture the production UI: remove CAPY_SMOKE_TEST before launching the editor'}
 if((Model).state.document_file.modified){throw 'Capture starts from an unmodified isolated document'}

@@ -47,54 +47,68 @@ function Sta([scriptblock]$Script,[object[]]$Arguments=@()){
 }
 
 function Wait-Scale{if($env:CAPY_WAIT_SCALE){[double]$env:CAPY_WAIT_SCALE}else{1}}
-function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound){
+function Wait-CapyCondition([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound,[switch]$Unscaled){
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{
         if($script:CapyEach){& $script:CapyEach}
         try{if($ResetBound -and (& $ResetBound)){$watch.Restart()};if(& $Condition){return}}catch [System.Windows.Automation.ElementNotAvailableException]{}
         if($review){$review.Refresh();if($review.HasExited){if($Closing){return};throw "Owned review exited with code $($review.ExitCode): $Message"}}
         Start-Sleep -Milliseconds 50
-    }while($watch.Elapsed.TotalSeconds -lt $Seconds*(Wait-Scale))
+    }while($watch.Elapsed.TotalSeconds -lt $Seconds*$(if($Unscaled){1}else{Wait-Scale}))
     throw $Message
 }
-function Wait-CanvasStroke([scriptblock]$PaintAction){
-    $strokeBefore=Model;$strokePath=State-File
-    if(!$review -or !$strokePath -or $null -eq $strokeBefore.state.document_file.revision){throw 'Stroke progress requires the owned drawing trace'}
-    $strokeUi=Read-Snapshot $strokePath
-    $strokePresentation=Join-Path (Split-Path -Parent $strokePath) ((Split-Path -Leaf $strokePath) -replace '^ui-state-','presentation-state-')
-    $readStrokeProgress={
-        $sample=Read-Snapshot $strokePresentation;$progress=$sample.render_progress
-        if($sample.process_id -ne $review.Id -or $sample.window_id -ne $strokeUi.window_id -or !$progress){return $null}
-        foreach($value in @($progress.owner,$progress.epoch,$progress.revision)){
-            if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return $null}
-        }
-        if($progress.settled -isnot [bool] -or $progress.outstanding_work -isnot [bool]){return $null}
-        if($null -ne $progress.content_revision){
-            foreach($value in @($progress.content_owner,$progress.content_epoch,$progress.content_revision)){
-                if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return $null}
-            }
-        }
-        $sample
+function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[scriptblock]$ResetBound){
+    Wait-CapyCondition $Condition $Message $Seconds -Closing:$Closing -ResetBound $ResetBound
+}
+function Read-CanvasProgress{
+    if(!$review){return}
+    $path=State-File
+    if(!$path){return}
+    $presentationPath=Join-Path (Split-Path -Parent $path) ((Split-Path -Leaf $path) -replace '^ui-state-','presentation-state-')
+    if(![IO.File]::Exists($path) -or ![IO.File]::Exists($presentationPath)){return}
+    $ui=Read-Snapshot $path
+    $sample=Read-Snapshot $presentationPath
+    $progress=$sample.render_progress
+    if($ui.process_id -ne $review.Id -or $null -eq $ui.window_id -or $sample.process_id -ne $review.Id -or $sample.window_id -ne $ui.window_id -or !$progress){return}
+    foreach($value in @($progress.owner,$progress.epoch,$progress.revision)){
+        if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return}
     }
-    $strokeBaseline=& $readStrokeProgress
-    if($strokeUi.process_id -ne $review.Id -or $null -eq $strokeUi.window_id -or !$strokeBaseline -or
-        $strokeBaseline.render_progress.epoch -ne $strokeBefore.state.document_file.epoch -or $strokeBaseline.render_progress.revision -ne $strokeBefore.state.document_file.revision){throw 'Stroke baseline lacks a matching renderer progress receipt'}
-    $strokeWait=@{sample=$null;model=$null}
+    if($progress.settled -isnot [bool] -or $progress.outstanding_work -isnot [bool]){return}
+    if($null -ne $progress.content_revision){
+        foreach($value in @($progress.content_owner,$progress.content_epoch,$progress.content_revision)){
+            if(($value -isnot [int] -and $value -isnot [long] -and $value -isnot [uint64]) -or $value -lt 0){return}
+        }
+    }
+    if($null -ne $sample.displayed -and (($sample.displayed -isnot [int] -and $sample.displayed -isnot [long] -and $sample.displayed -isnot [uint64]) -or $sample.displayed -lt 0)){return}
+    $file=$ui.model.state.document_file
+    if($null -eq $file.epoch -or $progress.epoch -ne $file.epoch -or $progress.revision -ne $file.revision){return}
+    $sample
+}
+function Test-CanvasProgress($WaitState){
+    $sample=Read-CanvasProgress;$previous=$WaitState.previous;$WaitState.previous=$sample
+    if(!$sample){return $false}
+    $progress=$sample.render_progress;$before=$previous.render_progress
+    $same=$previous -and $previous.process_id -eq $sample.process_id -and $previous.window_id -eq $sample.window_id -and $before.owner -eq $progress.owner -and $before.epoch -eq $progress.epoch
+    $progress.outstanding_work -or ($same -and (
+        ($null -ne $sample.displayed -and $null -ne $previous.displayed -and $sample.displayed -gt $previous.displayed) -or
+        ($null -ne $progress.content_revision -and $null -ne $before.content_revision -and $progress.content_owner -eq $progress.owner -and $progress.content_epoch -eq $progress.epoch -and $progress.content_owner -eq $before.content_owner -and $progress.content_epoch -eq $before.content_epoch -and $progress.content_revision -gt $before.content_revision)))
+}
+function Wait-Canvas([scriptblock]$Condition,[string]$Message,[int]$Seconds=$script:CapyWaitSeconds,[switch]$Closing,[switch]$Unscaled){
+    $canvasProgress=@{previous=$null}
+    Wait-CapyCondition $Condition $Message $Seconds -Closing:$Closing -ResetBound {Test-CanvasProgress $canvasProgress} -Unscaled:$Unscaled
+}
+function Wait-CanvasStroke([scriptblock]$PaintAction){
+    $strokeBefore=Model;$strokeBaseline=Read-CanvasProgress
+    if(!$strokeBaseline -or $strokeBaseline.render_progress.epoch -ne $strokeBefore.state.document_file.epoch -or $strokeBaseline.render_progress.revision -ne $strokeBefore.state.document_file.revision){throw 'Stroke baseline lacks a matching renderer progress receipt'}
     & $PaintAction
-    Wait-Until {
-        $sample=$strokeWait.sample;$model=$strokeWait.model
-        if(!$sample -or !$model){return $false}
-        $progress=$sample.render_progress;$file=$model.state.document_file
+    Wait-Canvas {
+        $sample=Read-CanvasProgress;$model=Model;$file=$model.state.document_file
+        if($file.epoch -ne $strokeBefore.state.document_file.epoch -or $model.windows_tabs.selected -ne $strokeBefore.windows_tabs.selected -or ($sample -and $sample.render_progress.owner -ne $strokeBaseline.render_progress.owner)){throw 'The drawing changed during its stroke progress wait'}
+        if(!$sample){return $false}
+        $progress=$sample.render_progress
         $file.revision -gt $strokeBefore.state.document_file.revision -and $null -ne $progress.content_revision -and
             $progress.content_owner -eq $strokeBaseline.render_progress.owner -and $progress.content_epoch -eq $file.epoch -and $progress.content_revision -ge $file.revision
-    } 'The stroke did not commit and reach the displayed canvas' -ResetBound {
-        $strokeWait.sample=& $readStrokeProgress;$strokeWait.model=Model
-        if(!$strokeWait.sample){return $false}
-        $progress=$strokeWait.sample.render_progress
-        if($progress.owner -ne $strokeBaseline.render_progress.owner -or $progress.epoch -ne $strokeBefore.state.document_file.epoch -or
-            $strokeWait.model.state.document_file.epoch -ne $strokeBefore.state.document_file.epoch -or $strokeWait.model.windows_tabs.selected -ne $strokeBefore.windows_tabs.selected){throw 'The drawing changed during its stroke progress wait'}
-        $progress.outstanding_work
-    }
+    } 'The stroke did not commit and reach the displayed canvas'
 }
 function Start-CapyDebugger([Diagnostics.Process]$Process,[string]$DebuggerPath,[string]$Run,$Drawing){
     $owner=[uint32]0
@@ -323,7 +337,7 @@ function Screen-Pixels([int]$X,[int]$Y,[string]$Path='',[switch]$Cursor) {
         try{[BitConverter]::ToString($hash.ComputeHash($bytes)).Replace('-','')}finally{$hash.Dispose()}
     }finally{$graphics.Dispose();$bitmap.Dispose()}
 }
-function Wait-PresentedFrame([switch]$Idle){
+function Wait-PresentedFrame([switch]$Idle,[int]$Seconds=$script:CapyWaitSeconds,[string]$Message,[switch]$Unscaled){
     if(!$review){return}
     $path=State-File;if(!$path){return}
     $folder=Split-Path -Parent $path;$leaf=Split-Path -Leaf $path
@@ -336,23 +350,28 @@ function Wait-PresentedFrame([switch]$Idle){
     if($null -eq $frame -and !$Idle){return}
     $presentation=Join-Path $folder ($leaf -replace '^ui-state-','presentation-state-')
     $presentationTarget=@{required=$null}
-    $message=if($Idle){'The canvas did not settle on screen'}else{'The display did not show the latest canvas frame'}
-    Wait-Until {
-        $display=if([IO.File]::Exists($presentation)){Read-Snapshot $presentation}
+    if(!$Message){$Message=if($Idle){'The canvas did not settle on screen'}else{'The display did not show the latest canvas frame'}}
+    Wait-Canvas {
+        $display=if($Idle){Read-CanvasProgress}elseif([IO.File]::Exists($presentation)){Read-Snapshot $presentation}
         if($display.process_id -ne $review.Id){return $false}
         if($null -ne $epoch -or $Idle){
             if($null -eq $epoch -or $null -eq $display.presentation_epoch -or $display.presentation_epoch -lt $epoch -or $null -eq $display.required){return $false}
-            if($Idle){return $null -ne $display.displayed -and $display.displayed -ge $display.required}
+            if($Idle){
+                $progress=$display.render_progress
+                return $null -ne $display.displayed -and $display.displayed -ge $display.required -and $progress.settled -and !$progress.outstanding_work -and
+                    $null -ne $progress.content_revision -and $progress.content_owner -eq $progress.owner -and $progress.content_epoch -eq $progress.epoch -and $progress.content_revision -ge $progress.revision
+            }
             if($null -eq $presentationTarget.required -or $display.required -lt $presentationTarget.required){$presentationTarget.required=$display.required}
             return $null -eq $display.displayed -or $display.displayed -ge $presentationTarget.required
         }
         $null -eq $display.displayed -or $display.displayed -ge $frame
-    } $message
+    } $Message $Seconds -Unscaled:$Unscaled
 }
 function Wait-StablePixels([scriptblock]$CapturePixels,[switch]$Composed,[switch]$Idle){
     if(!$Composed){Wait-PresentedFrame -Idle:$Idle}
-    $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $CapturePixels;$stable=0;$comparisons=0
+    $watch=[Diagnostics.Stopwatch]::StartNew();$last=& $CapturePixels;$stable=0;$comparisons=0;$pixelProgress=@{previous=$null}
     do{
+        if(!$Composed -and (Test-CanvasProgress $pixelProgress)){$watch.Restart()}
         Start-Sleep -Milliseconds 100;$next=& $CapturePixels;$comparisons++
         if($next -eq $last){$stable++}else{$stable=0};$last=$next
         if($stable -ge 3){return $last}

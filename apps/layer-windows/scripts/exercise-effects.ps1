@@ -506,7 +506,7 @@ function Check-PropertyLayout {
     for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($box.Left+$box.Width*(.3+.05*$i)),$y);Start-Sleep -Milliseconds 30}
     Wait-Until {[Math]::Abs($track.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value-.7) -lt .03 -and (Property 'midtones_red').value.value -ne $before} 'Filter slider did not preview the live drag'
     [CapyRowPointer]::Up()
-    Wait-Until {
+    Wait-Canvas {
         $view=Model;$stamp=@($view.windows_tabs.session_stamps|Where-Object id -eq $document)
         if($view.windows_tabs.selected -ne $document -or $view.state.document_file.epoch -ne $epoch -or $stamp.Count -ne 1 -or $null -eq $stamp[0].stamp.checkpoint -or $stamp[0].stamp.checkpoint -le $checkpoint -or !($view.state.commands|Where-Object id -eq 'undo').enabled){return $false}
         $released.value=@($view.state.layer_properties.controls|Where-Object key -eq 'midtones_red')[0].value.value;$null -ne $released.value
@@ -693,7 +693,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/effects-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned effects review $($review.Id)"
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready)} 'Review did not start' 45
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready)} 'Review did not start' 45
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     Use-PaintWorkspace
     [CapyEffectsCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -722,12 +722,12 @@ try {
     Capture 'initial-previews'
     $revision=(Model).state.document_file.revision
     Invoke 'Test stroke' -Name
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and ((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Stroke did not commit'
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and ((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Stroke did not commit'
     if((Preview-Hash 'curves') -ne $original){throw 'Document edit changed the bundled preview'}
     if(((Control 'filter-curves').GetRuntimeId() -join ':') -ne $rowIdentity){throw 'Document edit replaced the filter row'}
     Capture 'paint-previews'
     Invoke 'Undo' -Name
-    Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
+    Wait-Canvas {!(Model).state.document_file.modified} 'Undo did not restore checkpoint'
     Choose 'filter-category' 'Color'
     Wait-Until {(Model).state.filter_picker.category -eq 'color'} 'Category did not reach shared picker'
     Wait-Until {(Find 'filter-preview-hue_saturation').Current.ItemStatus -eq 'Ready'} 'New category preview not ready' 15

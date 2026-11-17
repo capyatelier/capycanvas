@@ -127,6 +127,7 @@ Write-Output 'Document invocation passed: ordinary acknowledgement, retired comm
    $script:headerModel.state.new_drawing=$null;$script:headerModel.windows_tabs.available=$false
   }else{throw 'Unexpected header action'}
  }
+ function Wait-Canvas([scriptblock]$Condition,[string]$Message,[int]$Seconds){Wait-Until @PSBoundParameters}
  function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds){
   if($Message -cne 'Header fixture drawing did not open' -or $Seconds -ne 60 -or !$script:headerPending){throw 'Unexpected header completion gate'}
   if(& $Condition){throw 'Old brush readiness accepted an unadopted drawing'}

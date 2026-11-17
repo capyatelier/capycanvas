@@ -68,7 +68,7 @@ function Color-Check([string]$phase){
 function Select-PenForScroll{
  $ProcessId=$review.Id
  Select-Tool 'pen'
- Wait-Until {(Model).brush_ready -and (Model).state.brush.tool -eq 'pen' -and @((Model).state.tool_set.subtools).Count -eq 10} 'Pen brush choices did not prepare'
+ Wait-Canvas {(Model).brush_ready -and (Model).state.brush.tool -eq 'pen' -and @((Model).state.tool_set.subtools).Count -eq 10} 'Pen brush choices did not prepare'
 }
 function Scroll-Check([string]$phase){
  $model=Model
@@ -139,7 +139,7 @@ try{
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json))
  $Executable=(Resolve-Path $Executable).Path;$directory=Split-Path $Executable
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError(Join-Path $run 'stderr.log');$null=$review.Handle
- $owned=@{window=$null};Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Review-Ready)-and!(Model).windows_workspace.busy} 'Owned drawer review did not start' 90
+ $owned=@{window=$null};Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Review-Ready)-and!(Model).windows_workspace.busy} 'Owned drawer review did not start' 90
  $root=$owned.window.Root;$window=$owned.window.Handle;[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  & (Join-Path $scripts 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $window.ToInt64() -Action Resize -Width 1800 -Height 1200
  [CapyWindowApi]::ShowWindow($window,9)|Out-Null;[CapyWindowExercise]::MoveWindow($window,40,40,1800,1200,$true)|Out-Null

@@ -29,7 +29,7 @@ function Start-Review([string]$Label,[switch]$AllowFailure){
     $null=$review.Handle;$native=@{window=$null}
     Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window} 'No review window'
     $script:drawingWindow=$native.window.Handle;$script:root=$native.window.Root
-    Wait-Until {$m=Model;$m.canvas_ready -and (Review-Ready $m) -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Session did not finish reopening' 120
+    Wait-Canvas {$m=Model;$m.canvas_ready -and (Review-Ready $m) -and !$m.windows_recovery.busy -and !$m.windows_recovery.restoring} 'Session did not finish reopening' 120
     if(!(Model).windows_isolated_settings){throw 'Session test requires isolated settings'}
     if(!$AllowFailure -and (Model).windows_recovery.error){throw (Model).windows_recovery.error}
     if(Find-Name 'Restore drawing'){throw 'Ordinary restart presented a recovery prompt'}
@@ -119,7 +119,7 @@ try {
     Command 'Edit' 'undo'
     Wait-Until {(Signature) -eq $before} 'Restored Undo did not return to the captured state'
     Command 'Edit' 'redo'
-    Wait-Until {(Model).state.document_file.modified} 'Restored edit did not mark the drawing modified'
+    Wait-Canvas {(Model).state.document_file.modified} 'Restored edit did not mark the drawing modified'
     $before=Signature
     Command 'File' 'close_document'
     Wait-Until {Find-Name 'Cancel'} 'Explicit drawing close did not ask about unsaved changes'
@@ -181,7 +181,7 @@ try {
     Command 'File' 'save_document'
     Wait-Until {!(Model).state.document_file.busy -and !(Model).state.document_file.modified} 'Saving the protected private copy did not clear modified state'
     Invoke-Control 'Test pen'
-    Wait-Until {(Model).state.document_file.modified} 'Editing the saved drawing did not create unsaved work'
+    Wait-Canvas {(Model).state.document_file.modified} 'Editing the saved drawing did not create unsaved work'
     Command 'File' 'close_document'
     Wait-Until {Find-Name 'Discard Changes'} 'Explicit close did not offer Discard'
     Invoke-Control 'Discard Changes'

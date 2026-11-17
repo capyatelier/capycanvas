@@ -53,7 +53,7 @@ try {
  do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100;$script:registeredWindow=Owned-DrawingWindow $review}while(!$registeredWindow -and $watch.Elapsed.TotalSeconds -lt 45)
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  $root=$registeredWindow.Root
- Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Prediction review did not start'
+ Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Prediction review did not start'
  [CapyRowPointer]::Initialize([uint32]$review.Id)
  Open-Preferences
  $native=Row 'Use Windows stroke prediction'

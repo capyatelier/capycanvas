@@ -1,6 +1,7 @@
 ﻿param([Parameter(Mandatory)][string]$Executable,[ValidateSet('dark','light')][string]$Theme='dark')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+. (Join-Path $PSScriptRoot 'CanonicalJson.ps1')
 $CapyFind='visible';$CapyPopups=$true;$CapyWaitSeconds=30
 Add-Type -AssemblyName System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -16,15 +17,6 @@ $run=Join-Path $repo ('artifacts/windows/image-objects/'+[Guid]::NewGuid().ToStr
 function Package([string]$Path){
     $members=[CapyPackageFixture]::Read($Path)
     [Text.Encoding]::UTF8.GetString(@($members|Where-Object Key -eq 'manifest.json')[0].Value)|ConvertFrom-Json
-}
-function Canonical($Value){
-    if($null -ne $Value -and $Value.GetType() -eq [System.Management.Automation.PSCustomObject]){
-        $record=[ordered]@{}
-        foreach($property in $Value.PSObject.Properties|Sort-Object Name){$record[$property.Name]=Canonical $property.Value}
-        return $record
-    }
-    if($Value -is [array]){return ,@($Value|ForEach-Object {Canonical $_})}
-    $Value
 }
 function Identity($Manifest){
     $objects=@($Manifest.objects|Where-Object type -in @('capy.image-object/1','capy.image/1','capy.paint-source/2','capy.occurrence/3')|Sort-Object id)
@@ -72,7 +64,7 @@ try{
     $null=$review.Handle
     Write-Output "Owned image object review $($review.Id): $run"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'The object review did not start' 90
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'The object review did not start' 90
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
@@ -84,7 +76,7 @@ try{
         $objects=@($before.objects|Where-Object type -eq 'capy.image-object/1')
         if($objects.Count -ne 3 -or @($before.objects|Where-Object type -eq 'capy.image/1').Count -ne 1 -or $objects[0].data.affine[4] -ne 16777217.125){throw 'The fixed shared image fixture changed'}
         Open-Project $source
-        Wait-Until {(Model).state.document_file.location.uri -eq $source -and !(Model).state.document_file.busy -and (Model).brush_ready -and (Objects-Row)} 'The object package did not open' 120
+        Wait-Canvas {(Model).state.document_file.location.uri -eq $source -and !(Model).state.document_file.busy -and (Model).brush_ready -and (Objects-Row)} 'The object package did not open' 120
         Fit-Canvas;Park
         Wait-Until {(Colored (Samples)) -gt 2} 'Cold image-object rendering produced no colored samples' 120
         $visible=Wait-StablePixels {(Samples) -join ';'}
@@ -106,7 +98,7 @@ try{
         & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke-Id 'close_document'
         Wait-Until {(Model).state.document_file.epoch -ne $epoch} 'The saved object drawing did not close'
         Open-Project $saved
-        Wait-Until {(Model).state.document_file.location.uri -eq $saved -and !(Model).state.document_file.busy -and (Model).brush_ready} 'The saved object drawing did not reopen' 120
+        Wait-Canvas {(Model).state.document_file.location.uri -eq $saved -and !(Model).state.document_file.busy -and (Model).brush_ready} 'The saved object drawing did not reopen' 120
         Fit-Canvas;Park
         Wait-Until {((Samples) -join ';') -eq $visible} 'Reopen changed the object pixels' 120
         $copy=Join-Path $run ($name+' reopened.capy');Save-ProjectAs $copy

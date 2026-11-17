@@ -270,7 +270,7 @@ function Start-PalettesReview([string]$Name){
     $null=$review.Handle;$script:CapyTrace=$null
     Write-Output "Owned palettes review $($review.Id): $run"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Palettes review did not start' 90
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Palettes review did not start' 90
     $script:root=$native.window.Root;$script:drawingWindow=$native.window.Handle
     $script:scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     Maximize-DrawingWindow

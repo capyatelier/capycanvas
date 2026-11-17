@@ -336,7 +336,7 @@ try {
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Transparency review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$native=Owned-DrawingWindow $review;if(!$native){return $false};$script:drawingWindow=$native.Handle;$script:root=$native.Root;(Review-Ready) -and !(Model).windows_workspace.busy} 'Transparency review did not start' 90
+    Wait-Canvas {$review.Refresh();$native=Owned-DrawingWindow $review;if(!$native){return $false};$script:drawingWindow=$native.Handle;$script:root=$native.Root;(Review-Ready) -and !(Model).windows_workspace.busy} 'Transparency review did not start' 90
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Start-Sleep -Milliseconds 600
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)

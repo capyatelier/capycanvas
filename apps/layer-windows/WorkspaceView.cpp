@@ -200,6 +200,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->chromeFrames->root=make_weak(root.as<FrameworkElement>());
         if(trace)resizeTraceFrame=CompositionTarget::Rendering(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){
             if(auto self=weak.lock()){
+                self->data->traceNativeFrame();
                 self->traceSurfaces();
                 if(!self->windowResizing)return;
                 LARGE_INTEGER now{};QueryPerformanceCounter(&now);
@@ -768,6 +769,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         bool mismatch=false,tabbed=false,escaped=false;
         double scale=root.XamlRoot()?root.XamlRoot().RasterizationScale():1;
         ++surfaceFrames;
+        if(expansion){
+            J geometry;auto expanded=expansion->Geometry();
+            if(expanded.Size())if(auto found=groups.find(uint32_t(num(expanded,L"group")));found!=groups.end()){
+                auto const& group=found->second;
+                if(!group.hidden&&group.frame.IsLoaded()&&group.configurationFrame.IsLoaded()&&group.frame.Visibility()==Visibility::Visible&&group.frame.Opacity()>0&&group.configurationFrame.Opacity()>0)
+                    geometry=O({{L"group",N(found->first)},{L"bounds",rectangle(allocatedBounds(group.frame,root))},
+                        {L"configuration",rectangle(allocatedBounds(group.configurationFrame,root))}});
+            }
+            expansion->TraceFrame(surfaceFrames,geometry);
+        }
+        if(bubbles)bubbles->TraceRendering(surfaceFrames);
         for(auto const& [id,group]:groups){
             if(group.hidden||!group.frame.IsLoaded()||group.frame.Visibility()!=Visibility::Visible||group.frame.Opacity()<=0)continue;
             bool visible=true;
@@ -922,7 +934,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"shaders_ready",B(flag(data->model,L"shaders_ready"))},{L"checkpoint_camera",object(object(data->model,L"windows_recovery"),L"camera")},
             {L"color_field_pixels",N(double(data->colorFieldPixels))},{L"texture_dialog",TextureDialogState(data)},
             {L"color_preview",object(data->colorPreview,L"picker").GetNamedValue(L"preview",JsonValue::CreateNullValue())},
-            {L"bubble_frames",bubbles->TraceFrames()},{L"workspace_update",workspaceUpdate()},{L"groups",positions},{L"columns",collapsed->Presentation()},{L"handles",grips},{L"elements",elements},
+            {L"expansion_frames",expansion?expansion->TraceFrames():J{}},{L"bubble_frames",bubbles->TraceFrames()},{L"workspace_update",workspaceUpdate()},{L"groups",positions},{L"columns",collapsed->Presentation()},{L"handles",grips},{L"elements",elements},
             {L"window_resizing",B(windowResizing)},{L"native_resize_pending",B(resizeHandback)},
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},

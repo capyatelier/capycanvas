@@ -54,7 +54,7 @@ try {
     }finally{Restore-CapyEnvironmentValue 'CAPY_SMOKE_TEST' $smoke}
     $null=$review.Handle
     Write-Output "Owned file activation review $($review.Id): $run"
-    Wait-Until {$m=Model;(Review-Ready $m) -and $m.state.theme -eq $Theme -and !$m.windows_workspace.busy -and @($m.state.commands|Where-Object {$_.id -eq 'open_document' -and $_.enabled}).Count} 'File activation review did not start' 90
+    Wait-Canvas {$m=Model;(Review-Ready $m) -and $m.state.theme -eq $Theme -and !$m.windows_workspace.busy -and @($m.state.commands|Where-Object {$_.id -eq 'open_document' -and $_.enabled}).Count} 'File activation review did not start' 90
     $before=@(Tabs).Count
     $first=Image 'First 日本語.png' ([Drawing.Color]::FromArgb(255,200,40,40))
     $second=Image 'Second drawing.png' ([Drawing.Color]::FromArgb(255,40,60,200))
@@ -94,10 +94,10 @@ try {
     Wait-Until {$m=Model;$m.state.layer_tools.tool -eq 'transform' -and @($m.state.layers).Count -eq @($source.state.layers).Count+1 -and !$m.state.document_file.busy} 'The canvas photo drop did not open Place' 60
     if(@(Tabs).Count -ne $count -or (Model).windows_tabs.selected -ne $tab){throw 'Canvas placement opened or selected another drawing'}
     Invoke-Id 'canvas-bar-apply_transform'
-    Wait-Until {$m=Model;$m.state.layer_tools.tool -ne 'transform' -and $m.state.document_file.revision -gt $revision -and @($m.state.layers).Count -eq @($source.state.layers).Count+1} 'Place did not accept the dropped photo' 60
+    Wait-Canvas {$m=Model;$m.state.layer_tools.tool -ne 'transform' -and $m.state.document_file.revision -gt $revision -and @($m.state.layers).Count -eq @($source.state.layers).Count+1} 'Place did not accept the dropped photo' 60
     $placed=(Model).state.document_file.revision
     Invoke 'Undo' -Name
-    Wait-Until {$m=Model;$m.state.document_file.revision -gt $placed -and (@($m.state.layers|Select-Object id,name,paint_revision,mask_revision)|ConvertTo-Json -Compress) -ceq $layers} 'One Undo did not restore the drawing before the photo drop' 60
+    Wait-Canvas {$m=Model;$m.state.document_file.revision -gt $placed -and (@($m.state.layers|Select-Object id,name,paint_revision,mask_revision)|ConvertTo-Json -Compress) -ceq $layers} 'One Undo did not restore the drawing before the photo drop' 60
     $effect=Drop-Files @($photo,$saved) 'drawing-tabs'
     if($effect -ne 'Copy'){throw "The drawing tabs refused an image and a drawing: $effect"}
     Wait-Until {@(Tabs).Count -eq $before+5 -and !(Model).state.document_file.busy} 'Files dropped on the drawing tabs did not open as drawings' 60

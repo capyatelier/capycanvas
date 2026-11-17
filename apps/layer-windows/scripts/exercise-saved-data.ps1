@@ -10,7 +10,7 @@ $review=$null
 function Launch([string]$Name){
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run ($Name+'-stderr.log'))
     $null=$review.Handle
-    Wait-Until {$review.Refresh();(Owned-DrawingWindow $review) -and (Model).windows_workspace.ready -and (Review-Ready)} 'Saved-data window did not become ready' 120
+    Wait-Canvas {$review.Refresh();(Owned-DrawingWindow $review) -and (Model).windows_workspace.ready -and (Review-Ready)} 'Saved-data window did not become ready' 120
     [CapyWindowApi]::ShowWindow((Owned-DrawingWindow $review).Handle,3)|Out-Null
     $owned=@{window=$null}
     Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window} 'Owned saved-data window is unavailable'

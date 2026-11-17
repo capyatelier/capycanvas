@@ -121,7 +121,7 @@ function Start-Review([string]$Theme,[string]$Name=$Theme){
     @{process_id=$review.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/edge-reach-review.json')
     Write-Output "Owned edge reach review $($review.Id) ($Device, $Theme)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Edge reach review did not start' 45
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy -and (Model).state.theme -eq $Theme} 'Edge reach review did not start' 45
     $script:root=$native.window.Root;$script:window=$native.window.Handle;$script:drawingWindow=$window
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));$null=[CapyRowPointer]::SetForegroundWindow($window)
     (Control 'drawing-canvas').SetFocus()

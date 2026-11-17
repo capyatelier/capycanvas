@@ -98,7 +98,7 @@ function Color-FitHeight{
     (Control 'document-depth').GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     (Control '16-bit float HDR' -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Invoke 'Create' -Name
-    Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR Color fit drawing did not open' 60
+    Wait-Canvas {(Model).color_panel.hdr -and (Model).brush_ready -and !(Model).state.document_file.busy} 'HDR Color fit drawing did not open' 60
     Invoke 'panel-tab-color';Color-Resize 'color-hdr-resized'
     $controls=Control 'color-controls' -Arranged;$retained=$controls.GetRuntimeId() -join ':'
     $bounds=$controls.Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.;$hdr=[bool](Model).color_panel.hdr
@@ -129,7 +129,7 @@ try {
     $null=$review.Handle
     Write-Output "Owned color picker review $($review.Id): $run"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Color picker review did not start' 90
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Color picker review did not start' 90
     $drawingWindow=$native.window.Handle;$root=$native.window.Root
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     Start-Sleep -Milliseconds 600
@@ -177,7 +177,7 @@ try {
     $revision=(Model).state.document_file.revision
     [CapyRowPointer]::Down('pen',($center.x-60),$center.y)
     try{for($i=1;$i -le 24;$i++){[CapyRowPointer]::Move(($center.x-60+$i*5),$center.y);Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Seed stroke did not finish'
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'Seed stroke did not finish'
     Wait-PresentedFrame
     $ink=Foreground
     if(Light $ink){throw 'Seed stroke uses a light foreground; picking could not distinguish it from paper'}
@@ -249,7 +249,7 @@ try {
     Escape-Picker
 
     $null=Control 'color-wheel'
-    Wait-Until {(Model).shaders_ready} 'Startup shaders did not finish' 180
+    Wait-Canvas {(Model).shaders_ready} 'Startup shaders did not finish' 180
     Key 0x49;Wait-Until {Picking} 'I did not start wheel preview picking'
     Hover-Until $paper {$null -ne (Preview)} 'No preview before sweep'
     $quiet=@{full=-1;since=[Diagnostics.Stopwatch]::StartNew()}

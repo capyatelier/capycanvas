@@ -105,7 +105,13 @@ function Focus-Canvas{
   [System.Windows.Automation.AutomationElement]::FocusedElement.Current.AutomationId -eq 'drawing-canvas'
  } 'Drawing canvas did not regain native keyboard focus' 30
 }
-function Ready($Window){Wait-Until {Review-Ready (Model $Window) $Window.hwnd} 'Window did not prepare' 120}
+function Ready($Window){
+ $stateFile=$script:CapyStateFile
+ try{
+  $script:CapyStateFile=Join-Path $run "ui-state-$($review.Id)-$($Window.id).json"
+  Wait-Canvas {Review-Ready (Model $Window) $Window.hwnd} 'Window did not prepare' 120
+ }finally{$script:CapyStateFile=$stateFile}
+}
 function Close-OwnedLocalizationWindows{
  $snapshot=Read-Snapshot (Join-Path $run "windows-$($review.Id).json")
  $windows=@($snapshot.windows)
@@ -184,7 +190,7 @@ function Fit-View{
  } 'View Fit did not acknowledge its camera' 15
 }
 function Key([uint16]$Code){[CapyRowPointer]::Key([uint32]$review.Id,$Code)}
-function Idle{Wait-Until {$view=Model;Assert-NoDrawingMemoryRefusal $view;$view -and !$view.state.document_file.busy} 'Document operation did not finish' 90}
+function Idle{Wait-Canvas {$view=Model;Assert-NoDrawingMemoryRefusal $view;$view -and !$view.state.document_file.busy} 'Document operation did not finish' 90}
 function Choose-Path([string]$Path){
  $hit=@{edit=$null;picker=$null}
  Wait-Until {
@@ -212,7 +218,7 @@ function Draw([int]$Stroke,[string]$Tag){
  [CapyRowPointer]::Down('mouse',$x,$y)
  foreach($step in 1..8){[CapyRowPointer]::Move([int]($x+$camera.zoom*$step),[int]($y+$camera.zoom*.25*$step))}
  [CapyRowPointer]::Up()
- Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $Tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.modified -and $view.state.document_file.revision -gt $before -and ($view.state.commands|Where-Object id -eq 'undo').enabled} 'Drawing after language publication did not finish its committed frame' 45
+ Wait-Canvas {$view=Model;$view -and $view.windows_active_tag -eq $Tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.modified -and $view.state.document_file.revision -gt $before -and ($view.state.commands|Where-Object id -eq 'undo').enabled} 'Drawing after language publication did not finish its committed frame' 45
 }
 function Canvas-Projection{
  if($root.Current.ProcessId -ne $review.Id -or $root.Current.NativeWindowHandle -ne $script:current.hwnd){throw 'Pixel projection does not belong to the current owned drawing'}
@@ -362,7 +368,7 @@ function Color-CaptionSurface{
  Language-Choice $english|Out-Null
  Wait-Until {(Model $first).windows_active_tag -eq 'en'} 'Color baseline did not adopt English' 30
  Use-Window $first;Menu-Command 'file' 'new_document';New-DrawingPixels 64 64;Invoke-Id 'new-drawing-create';Idle
- Wait-Until {$view=Model;$view -and $view.brush_ready -and $view.state.tabs[-1].width -eq 64 -and $view.state.tabs[-1].height -eq 64} 'Color localization drawing did not prepare' 60
+ Wait-Canvas {$view=Model;$view -and $view.brush_ready -and $view.state.tabs[-1].width -eq 64 -and $view.state.tabs[-1].height -eq 64} 'Color localization drawing did not prepare' 60
  if(!(Find 'color-controls' -Visible)){
   $tab=@('panel-tab-color','column-icon-color','drawer-tab-color')|Where-Object {Find $_ -Visible}|Select-Object -First 1
   if(!$tab){throw 'No native Color panel source is available'};Invoke-Id $tab
@@ -548,7 +554,7 @@ function Run-Journey{
  Panel-CopySurfaces
  Use-Window $textWindow
  Search-Command 'Pen' 'pen'
- Wait-Until {$view=Model;$view -and ($view.state.commands|Where-Object id -eq 'pen').selected -and $view.brush_ready} 'Pen did not become ready for continued drawing' 45
+ Wait-Canvas {$view=Model;$view -and ($view.state.commands|Where-Object id -eq 'pen').selected -and $view.brush_ready} 'Pen did not become ready for continued drawing' 45
  Open-Search
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('brush size')
  Wait-Until {(Search).query -eq 'brush size' -and (Search).results[0].id -ceq 'tool_setting.size' -and (Search).results[0].enabled -and (Find 'command-result-0').Current.Name -ceq (Search).results[0].label -and (Find 'command-result-0').Current.IsEnabled} 'Brush size parameter did not resolve' 15
@@ -606,14 +612,14 @@ function Run-Journey{
   if($pixelsDrawn -eq $pixelsBefore){throw 'Continued drawing did not change presented canvas pixels'}
   $drawn=(Fresh-Model $script:current $choice.tag).state.document_file.revision
   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17),90)
-  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $drawn} 'Undo stopped after language switching' 45
-  Wait-Until {(Canvas-Pixels) -eq $pixelsBefore} 'Undo did not restore the presented canvas pixels' 45
+  Wait-Canvas {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $drawn} 'Undo stopped after language switching' 45
+  Wait-Canvas {(Canvas-Pixels) -eq $pixelsBefore} 'Undo did not restore the presented canvas pixels' 45
   Canvas-Pixels ($choice.tag+'-pixels-undone')|Out-Null
   $undone=(Fresh-Model $script:current $choice.tag).state.document_file.revision
   [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(17,16),90)
-  Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $undone} 'Redo stopped after language switching' 45
+  Wait-Canvas {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and $null -ne $view.state.document_file.revision -and $view.state.document_file.revision -gt $undone} 'Redo stopped after language switching' 45
   Canvas-Pixels ($choice.tag+'-pixels-redone')|Out-Null
-  Wait-Until {(Canvas-Pixels) -eq $pixelsDrawn} 'Redo did not restore the presented drawing pixels' 45
+  Wait-Canvas {(Canvas-Pixels) -eq $pixelsDrawn} 'Redo did not restore the presented drawing pixels' 45
   Menu-Command 'file' 'save_document_as'
   $project=Join-Path $run ($choice.tag+'-'+$literalName+'.capy');Choose-Path $project
   Wait-Until {$view=Model;$view -and $view.windows_active_tag -eq $choice.tag -and (Test-Path -LiteralPath $project) -and $view.state.document_file.location.uri -eq $project -and !$view.state.document_file.modified} 'Unicode project save did not acknowledge its checkpoint' 45

@@ -163,7 +163,7 @@ try {
  [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle;$native=@{window=$null}
- Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'Layer drawer review did not start' 90
+ Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'Layer drawer review did not start' 90
  $root=$native.window.Root;$drawingWindow=$native.window.Handle
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
  Wait-Until {$canvas=(Control 'drawing-canvas' -Arranged).Current.BoundingRectangle;$window=$root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Current.WindowVisualState;$window -eq [System.Windows.Automation.WindowVisualState]::Maximized -and [Math]::Abs((Model).state.camera.viewport[0]-$canvas.Width) -lt .1} 'Maximized layer drawer viewport did not settle'

@@ -264,7 +264,7 @@ try {
     $null=$review.Handle
     @{process_id=$review.Id;run=$run;device=$Device}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/workspace-pickup-review.json')
     Write-Output "Owned workspace pickup review $($review.Id) ($Device)"
-    Wait-Until {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing -and (Review-Ready) -and (Model).state.theme -eq $Theme -and !(Model).windows_workspace.busy} 'Workspace review did not start' 45
+    Wait-Canvas {$script:drawing=Owned-DrawingWindow $review;$null -ne $drawing -and (Review-Ready) -and (Model).state.theme -eq $Theme -and !(Model).windows_workspace.busy} 'Workspace review did not start' 45
     $root=$drawing.Root
     if($DebuggerPath){
         $debugger=Start-CapyDebugger $review $DebuggerPath $run $drawing

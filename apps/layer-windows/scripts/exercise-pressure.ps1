@@ -64,7 +64,7 @@ function Native-Stroke([string]$Device){
     }
     [CapyRowPointer]::Up()
     [CapyRowPointer]::Hover([int]($bounds.Left+20),[int]($bounds.Top+20))
-    Wait-Until {(Model).state.document_file.modified -and ((Model).state.commands|Where-Object id -eq 'undo').enabled} "$Device could not paint while the utility remained open"
+    Wait-Canvas {(Model).state.document_file.modified -and ((Model).state.commands|Where-Object id -eq 'undo').enabled} "$Device could not paint while the utility remained open"
     $after=Wait-StablePixels {Screen-Pixels $from[0] $from[1]}
     if($after -eq $before){throw "$Device stroke did not change authored canvas pixels"}
     Wait-Until {$null -eq (Pressure).editor.marker} 'Pen pressure marker did not clear on release'
@@ -72,7 +72,7 @@ function Native-Stroke([string]$Device){
     Wait-Until {$undo.Current.IsEnabled} 'The native Undo button did not acknowledge the committed stroke'
     @{device=$Device;id=$undo.Current.AutomationId;name=$undo.Current.Name;enabled=$undo.Current.IsEnabled;offscreen=$undo.Current.IsOffscreen;document=(Model).state.document_file}|ConvertTo-Json -Compress|Add-Content (Join-Path $run 'native-history.jsonl')
     $undo.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Wait-Until {!(Model).state.document_file.modified} "$Device stroke did not undo to the clean checkpoint"
+    Wait-Canvas {!(Model).state.document_file.modified} "$Device stroke did not undo to the clean checkpoint"
     $restored=Wait-StablePixels {Screen-Pixels $from[0] $from[1]}
     if($restored -ne $before){throw "$Device Undo did not restore the exact sampled canvas pixels"}
 }
@@ -85,7 +85,7 @@ try{
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready)} 'Pressure review did not start' 45
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$null -ne $owned.window -and (Review-Ready)} 'Pressure review did not start' 45
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     Maximize-DrawingWindow
     Use-PaintWorkspace

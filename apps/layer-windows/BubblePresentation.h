@@ -182,11 +182,21 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
         std::array<winrt::Windows::Foundation::Rect,3> bounds{},expected{};
         std::array<uint64_t,3> frames{};
     };
-    bool tracing=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0&&GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0;
+    bool uiTracing=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    bool tracing=uiTracing&&GetEnvironmentVariableW(L"CAPY_LATENCY_TRACE",nullptr,0)!=0;
     uint64_t traceFrame=0,traceSerial=0,placementSerial=0,traceOverflow=0;
     std::vector<TransitionReceipt> transitionReceipts;
     std::vector<std::shared_ptr<LayoutReceipt>> layoutReceipts;
     std::map<std::pair<uint32_t,CapyUi::hstring>,std::shared_ptr<LayoutReceipt>> appliedLayouts;
+    struct AppliedReceipt {
+        uint64_t serial=0,first=0,last=0;
+        CapyUi::J state,published;
+    };
+    uint64_t appliedSerial=0,appliedFrame=0,appliedQpc=0,appliedOverflow=0,inspectorFrames=0,inspectorInvalid=0;
+    bool appliedSettled=false;
+    uint64_t motionReplyWake=0;
+    CapyUi::J motionReply;
+    std::map<std::pair<uint32_t,CapyUi::hstring>,AppliedReceipt> appliedReceipts;
     void tracePlacements(std::shared_ptr<CapyBubbles::Record> const&,bool alive=true);
     void traceTransition(std::shared_ptr<CapyBubbles::Record> const&,std::shared_ptr<CapyBubbles::Part> const&,CapyUi::hstring const&);
     void traceLayout();

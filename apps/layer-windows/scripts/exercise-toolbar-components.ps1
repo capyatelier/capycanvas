@@ -95,7 +95,7 @@ try {
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
     Write-Output "Owned toolbar review $($review.Id): $run"
-    Wait-Until {$review.Refresh();$native=Owned-DrawingWindow $review;if(!$native){return $false};$script:drawingWindow=$native.Handle;$script:root=$native.Root;(Review-Ready) -and !(Model).windows_workspace.busy} 'Toolbar review did not start' 90
+    Wait-Canvas {$review.Refresh();$native=Owned-DrawingWindow $review;if(!$native){return $false};$script:drawingWindow=$native.Handle;$script:root=$native.Root;(Review-Ready) -and !(Model).windows_workspace.busy} 'Toolbar review did not start' 90
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4));Focus-Review
     [CapyRowPointer]::Initialize([uint32]$review.Id)

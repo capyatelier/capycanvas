@@ -90,7 +90,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/navigator-review.json'),(@{process_id=$review.Id;run=$run}|ConvertTo-Json))
     Write-Output "Owned Navigator review $($review.Id)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready)} 'Review did not start' 45
     if(!(Model).windows_isolated_settings){throw 'Navigator fixture requires an isolated profile'}
     [CapyNavigatorCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
@@ -236,10 +236,10 @@ try {
     try {
         if(!(Surround-Matches $blank)){throw 'Navigator surround differs from the shared palette'}
         Wait-CanvasStroke {Invoke 'Test stroke' -Name}
-        Wait-Until {(Model).state.document_file.modified} 'Controlled stroke did not reach the shared document'
+        Wait-Canvas {(Model).state.document_file.modified} 'Controlled stroke did not reach the shared document'
         Wait-Until {$paint=Capture 'paint';try {(Different $blank $paint $area) -ge 20}finally{$paint.Dispose()}} 'Live GPU overview did not show the stroke'
         Invoke 'Undo' -Name
-        Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore the checkpoint'
+        Wait-Canvas {!(Model).state.document_file.modified} 'Undo did not restore the checkpoint'
         Wait-Until {$undo=Capture 'undo';try {(Different $blank $undo $area) -eq 0}finally{$undo.Dispose()}} 'Undo did not restore the GPU overview pixels'
     }finally{$blank.Dispose()}
     . (Join-Path $PSScriptRoot 'NavigatorFrames.ps1')

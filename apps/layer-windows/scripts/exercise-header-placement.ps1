@@ -110,7 +110,7 @@ try{
     Enter-CapyEnvironment;$env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json))
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$review.Handle
-    $owned=@{window=$null};Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Review-Ready)-and!(Model).windows_workspace.busy} 'Owned header placement fixture did not start' 90
+    $owned=@{window=$null};Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window-and(Review-Ready)-and!(Model).windows_workspace.busy} 'Owned header placement fixture did not start' 90
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -Action Resize -Width 1800 -Height 1050

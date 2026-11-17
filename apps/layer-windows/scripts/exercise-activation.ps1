@@ -16,7 +16,7 @@ $directory=$run
 $CapyTraceDirectory=$run
 $cases=[Collections.Generic.List[object]]::new()
 function Save-Cases {$cases|ConvertTo-Json -Depth 15|Set-Content -LiteralPath (Join-Path $run 'cases.json')}
-function Ready {Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Activation target workspace is not ready' 45}
+function Ready {Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Activation target workspace is not ready' 45}
 function Target-State([string]$Id,$Element=$null){
     if($Element){try{$bounds=$Element.Current.BoundingRectangle;if($Element.Current.IsOffscreen -or $bounds.IsEmpty -or $bounds.Width -le 0 -or $bounds.Height -le 0){$Element=$null}}catch [System.Windows.Automation.ElementNotAvailableException]{$Element=$null}}
     $target=if($Element){$Element}else{Control $Id}
@@ -153,7 +153,7 @@ function Check([string]$Name,[scriptblock]$Action,[scriptblock]$Expected) {
     try {
         Ready
         & $Action
-        Wait-Until {(& $Expected) -and (Model).brush_ready} "$Name did not reach its expected state with a ready renderer" 15
+        Wait-Canvas {(& $Expected) -and (Model).brush_ready} "$Name did not reach its expected state with a ready renderer" 15
         Start-Sleep -Milliseconds 200
         if(!(& $Expected) -or !(Model).brush_ready){throw "$Name did not retain its expected state with a ready renderer"}
         $row.passed=$true
@@ -179,7 +179,7 @@ try {
     [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Compress))
     $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $run 'stdout.log') -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle;$native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'Owned activation window did not become ready' 75
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$native.window -and (Review-Ready)} 'Owned activation window did not become ready' 75
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyWindowApi]::ShowWindow($drawingWindow,3)
@@ -229,7 +229,7 @@ try {
     if($Family -in @('all','preset')){foreach($drift in @(0,1,3)){
         $pen=Tool-Tile 'pen'
         if(!@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $pen})[0].selected){Invoke $pen}
-        Wait-Until {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $pen})[0].selected -and (Find 'tool-subtool-1').Current.IsEnabled -and (Model).brush_ready} 'Pen preset setup failed'
+        Wait-Canvas {@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {('tile-toolbar-'+$_.id) -eq $pen})[0].selected -and (Find 'tool-subtool-1').Current.IsEnabled -and (Model).brush_ready} 'Pen preset setup failed'
         if((Model).state.customization.drawer -or (Model).state.customization.expanded){[CapyRowPointer]::Key(0x1b)}
         Wait-Until {$null -eq (Model).state.customization.drawer -and $null -eq (Model).state.customization.expanded} 'Preset setup retained an overlapping control surface'
         $subtools=@((Model).state.tool_set.subtools);$index=0

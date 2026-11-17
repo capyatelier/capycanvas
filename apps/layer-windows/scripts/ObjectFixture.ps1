@@ -1,15 +1,7 @@
+. (Join-Path $PSScriptRoot 'CanonicalJson.ps1')
 function Package([string]$Path){
  $members=[CapyPackageFixture]::Read($Path)
  [Text.Encoding]::UTF8.GetString(@($members|Where-Object Key -eq 'manifest.json')[0].Value)|ConvertFrom-Json
-}
-function Canonical($Value){
- if($null -ne $Value -and $Value.GetType() -eq [System.Management.Automation.PSCustomObject]){
-  $record=[ordered]@{}
-  foreach($property in $Value.PSObject.Properties|Sort-Object Name){$record[$property.Name]=Canonical $property.Value}
-  return $record
- }
- if($Value -is [array]){return ,@($Value|ForEach-Object {Canonical $_})}
- $Value
 }
 function Json($Value){ConvertTo-Json -InputObject (Canonical $Value) -Depth 100 -Compress}
 function Identity($Manifest){Json @($Manifest.objects|Where-Object type -in @('capy.image-object/1','capy.image/1','capy.occurrence/3','capy.stack/1')|Sort-Object id)}

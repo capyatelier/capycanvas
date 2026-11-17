@@ -152,7 +152,7 @@ function Workspace([string]$Id){
 function Sketch-Drawers {
     Workspace 'builtin:workspace:painter'
     Maximize-DrawingWindow
-    Wait-Until {(Model).canvas_ready -and (Model).brush_ready -and (Model).shaders_ready} 'Sketch canvas did not become ready' 120
+    Wait-Canvas {(Model).canvas_ready -and (Model).brush_ready -and (Model).shaders_ready} 'Sketch canvas did not become ready' 120
     $paperPoint=Clear-CanvasPoint 'title-bar' 40 0;$park=Point 'title-bar'
     [CapyRowPointer]::Hover($park.x,$park.y)
     $blank=Wait-StablePixels {Screen-Pixels $paperPoint[0] $paperPoint[1]}
@@ -161,7 +161,7 @@ function Sketch-Drawers {
     [CapyRowPointer]::Down('pen',$paperPoint[0],$paperPoint[1])
     try{foreach($dx in 5,10,15,20,25,30,35,40){[CapyRowPointer]::Move(($paperPoint[0]+$dx),$paperPoint[1]);Start-Sleep -Milliseconds 12};[CapyRowPointer]::Up()}finally{[CapyRowPointer]::Cancel()}
     [CapyRowPointer]::Hover($park.x,$park.y)
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and (Screen-Pixels $paperPoint[0] $paperPoint[1]) -ne $blank} 'The native Sketch pen did not paint actual pixels' 45
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Screen-Pixels $paperPoint[0] $paperPoint[1]) -ne $blank} 'The native Sketch pen did not paint actual pixels' 45
     $painted=Wait-StablePixels {Screen-Pixels $paperPoint[0] $paperPoint[1]}
     $file=(Model).state.document_file|ConvertTo-Json -Depth 8 -Compress
     $entries=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.kind -eq 'tool'})
@@ -211,7 +211,7 @@ try{
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
     $owned=@{window=$null}
-    Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready)} 'Review did not start' 120
+    Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready)} 'Review did not start' 120
     $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null

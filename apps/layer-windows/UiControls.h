@@ -295,6 +295,9 @@ struct WorkspaceData : CanvasModelSource,std::enable_shared_from_this<WorkspaceD
     std::shared_ptr<ScopeFeed> scopes;
     std::shared_ptr<ColorStrip> colorStrip;
     std::function<void(bool)> popupChanged;
+    uint64_t traceRenderingSerial=0;
+    std::vector<std::function<bool(uint64_t)>> nativeFrameTraces;
+    void traceNativeFrame(){++traceRenderingSerial;std::erase_if(nativeFrameTraces,[this](auto const& publish){return !publish(traceRenderingSerial);});}
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
     std::function<void(std::string)> send,document,input,report;

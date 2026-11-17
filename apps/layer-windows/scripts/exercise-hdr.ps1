@@ -423,7 +423,7 @@ try {
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle;Write-Output "HDR review $($review.Id), $Depth, $run"
  $owned=@{window=$null}
- Wait-Until {$owned.window=Owned-DrawingWindow $review;$m=Model;$owned.window -and (Review-Ready $m) -and $m.canvas_ready -and $m.windows_tabs.available} 'Owned drawing did not start' 75
+ Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$m=Model;$owned.window -and (Review-Ready $m) -and $m.canvas_ready -and $m.windows_tabs.available} 'Owned drawing did not start' 75
  $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
  [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
@@ -431,13 +431,13 @@ try {
  $title=(Control 'drawing-title').Current.Name
  if($title -notmatch ' · \d+ × \d+$' -or (Find 'drawing-tab-1') -or (Find 'drawing-selector')){throw "One drawing did not show the plain title: $title"}
  if(!$DrawingTabsOnly -and !$ControlsOnly){
-  Button 'Test pen';Wait-Until {(Model).state.document_file.modified} 'Initial drawing did not become dirty' 60
+  Button 'Test pen';Wait-Canvas {(Model).state.document_file.modified} 'Initial drawing did not become dirty' 60
   Wait-Until {$root.Current.Name.StartsWith('• ')} 'Window title lacks the unsaved marker'
  }
  Command 'new_document' 'File';New-DrawingPixels 128 96
  if(!$DrawingTabsOnly){Select-Choice 'document-depth' $(if($Depth -eq 'F32'){'32-bit float HDR'}else{'16-bit float HDR'})}
  Button 'Create';Idle
- Wait-Until {(Model).brush_ready -and ($DrawingTabsOnly -or ((Model).color_panel.hdr -and (Model).color_panel.document_depth -eq $Depth -and (Model).windows_display.analysis.ready))} 'Drawing creation did not settle' 60
+ Wait-Canvas {(Model).brush_ready -and ($DrawingTabsOnly -or ((Model).color_panel.hdr -and (Model).color_panel.document_depth -eq $Depth -and (Model).windows_display.analysis.ready))} 'Drawing creation did not settle' 60
  if(!$DrawingTabsOnly){Assert-HdrOutputFormat (Model)}
  if(@((Model).windows_tabs.tabs).Count -ne 2 -or (!$DrawingTabsOnly -and !$ControlsOnly -and !(Model).windows_tabs.tabs[0].modified)){throw 'New did not retain the first drawing'}
  if(!$DrawingTabsOnly){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -WindowHandle $drawingWindow.ToInt64() -StateDirectory $run -Action Resize -Width 1800 -Height 1300}
@@ -456,11 +456,11 @@ try {
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x21)
  Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Ctrl+PgUp did not select the previous drawing' 60
  [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x11),0x22)
- Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available -and (Model).brush_ready -and ($DrawingTabsOnly -or (Model).windows_display.analysis.ready)} 'Ctrl+PgDn did not return to the drawing' 60
+ Wait-Canvas {(Model).windows_tabs.selected -eq 2 -and (Model).windows_tabs.available -and (Model).brush_ready -and ($DrawingTabsOnly -or (Model).windows_display.analysis.ready)} 'Ctrl+PgDn did not return to the drawing' 60
  }
  if($DrawingTabsOnly){
   Command 'new_document' 'File';Set-Text 'document-width' '32';Set-Text 'document-height' '24';Button 'Create';Idle
-  Wait-Until {@((Model).windows_tabs.tabs).Count -eq 3 -and (Model).windows_tabs.available -and (Model).brush_ready} 'Third clean drawing did not become ready' 60
+  Wait-Canvas {@((Model).windows_tabs.tabs).Count -eq 3 -and (Model).windows_tabs.available -and (Model).brush_ready} 'Third clean drawing did not become ready' 60
  }
  if(!$tabDropOnly){
  $keyboardTarget=Find 'drawing-selector'
@@ -490,7 +490,7 @@ try {
     $scale=[CapyRowPointer]::GetDpiForWindow($drawingWindow)/96.
     if($scale -le 0 -or [double]::IsNaN($scale) -or [double]::IsInfinity($scale)){throw 'Invalid run: owned drawing DPI is unavailable'}
     Invoke 'drawing-tab-3'
-    Wait-Until {(Model).windows_tabs.selected -eq 3 -and ((Model).windows_tabs.tabs.id -join ',') -eq '1,2,3' -and (Model).windows_tabs.available -and (Model).brush_ready} 'Near-edge middle-tab baseline did not become ready'
+    Wait-Canvas {(Model).windows_tabs.selected -eq 3 -and ((Model).windows_tabs.tabs.id -join ',') -eq '1,2,3' -and (Model).windows_tabs.available -and (Model).brush_ready} 'Near-edge middle-tab baseline did not become ready'
     Outside-Tap 'drawing-tab-2' $device -NearEdge
     $inactive=if((Model).windows_tabs.selected -eq 1){2}else{1}
     Write-Output "$device phase: tab outside release"
@@ -511,7 +511,7 @@ try {
      if($drift){[CapyRowPointer]::Move($x+$offset,$y+$offset)}
      [CapyRowPointer]::Up($device -eq 'pen')
      $contact.contact_ms=[CapyRowPointer]::ContactDurationMilliseconds;$contact.max_gap_ms=[CapyRowPointer]::MaxGapMilliseconds
-     try{Wait-Until {(Model).windows_tabs.selected -eq $id -and (Model).windows_tabs.available -and (Model).brush_ready} 'Native drawing-list body tap did not select its drawing' 60}
+     try{Wait-Canvas {(Model).windows_tabs.selected -eq $id -and (Model).windows_tabs.available -and (Model).brush_ready} 'Native drawing-list body tap did not select its drawing' 60}
      finally{$contact.actual_selected=(Model).windows_tabs.selected;$list=Find 'drawing-list';$contact.gesture_after=if($list){$list.Current.ItemStatus}else{$null};$contact|ConvertTo-Json -Depth 7|Set-Content (Join-Path $run ($device+'-list-tap-'+$drift+'.json'))}
      if(Find 'drawing-list'){[CapyRowPointer]::Key(0x1b);Wait-Until {!(Find 'drawing-list')} 'Drawing list did not dismiss after native selection'}
     }
@@ -526,13 +526,13 @@ try {
     $selector=Control 'drawing-selector' -Arranged
     Wait-Until {$selector.Current.ItemStatus -eq 'Closed'} 'Drawing popup did not finish closing before full-strip layout'
     [CapyWindowApi]::ShowWindow($drawingWindow,3)|Out-Null
-    Wait-Until {(Model).windows_tabs.available -and (Model).brush_ready} 'Drawing strip did not become ready after compact-list checks' 60
+    Wait-Canvas {(Model).windows_tabs.available -and (Model).brush_ready} 'Drawing strip did not become ready after compact-list checks' 60
     $null=Control 'drawing-tab-1' -Within $tabStrip -Arranged
    }
    Write-Output "$device phase: short tab tap"
    $id=if((Model).windows_tabs.selected -eq 1){2}else{1};$button=Control ('drawing-tab-'+$id) -Within $tabStrip -Arranged;$bounds=$button.Current.BoundingRectangle
    [CapyRowPointer]::Down($device,[int]($bounds.X+$bounds.Width/2),[int]($bounds.Y+$bounds.Height/2));[CapyRowPointer]::Up($device -eq 'pen')
-   Wait-Until {(Model).windows_tabs.selected -eq $id -and (Model).brush_ready -and (Model).windows_tabs.available} 'Native short tab tap did not select its drawing' 60
+   Wait-Canvas {(Model).windows_tabs.selected -eq $id -and (Model).brush_ready -and (Model).windows_tabs.available} 'Native short tab tap did not select its drawing' 60
    Write-Output "$device phase: tab acknowledged context"
    $selected=(Model).windows_tabs.selected;$button=Control 'drawing-tab-1' -Within $tabStrip -Arranged;$bounds=$button.Current.BoundingRectangle;$x=[int]($bounds.X+$bounds.Width/2);$y=[int]($bounds.Y+$bounds.Height/2)
    if($device -eq 'touch'){
@@ -566,7 +566,7 @@ try {
      [CapyRowPointer]::Down('pen',$x,$y);Start-Sleep -Milliseconds 35
      [CapyRowPointer]::Move($toX,$toY);Start-Sleep -Milliseconds 35
      [CapyRowPointer]::Up($true)
-     Wait-Until {(Model).windows_tabs.selected -eq $id -and (Model).windows_tabs.available -and (Model).brush_ready} 'One drifting pen tap did not select its drawing' 60
+     Wait-Canvas {(Model).windows_tabs.selected -eq $id -and (Model).windows_tabs.available -and (Model).brush_ready} 'One drifting pen tap did not select its drawing' 60
      Start-Sleep -Milliseconds 150
      if((Model).windows_tabs.selected -ne $id -or ((Model).windows_tabs.tabs.id -join ',') -ne $beforeOrder){throw 'Drifting drawing-tab tap changed the settled selection or drawing order'}
     }
@@ -608,7 +608,7 @@ try {
      $fast.taps+=@($tap)
      [CapyRowPointer]::Down($device,$tap.point[0],$tap.point[1]);[CapyRowPointer]::Up($device -eq 'pen')
      $tap.contact_ms=[CapyRowPointer]::ContactDurationMilliseconds;$tap.max_gap_ms=[CapyRowPointer]::MaxGapMilliseconds
-     Wait-Until {(Model).windows_tabs.selected -eq $tapId -and (Model).windows_tabs.available -and (Model).brush_ready} 'Fresh native tab tap after fast outside release did not select its drawing' 60
+     Wait-Canvas {(Model).windows_tabs.selected -eq $tapId -and (Model).windows_tabs.available -and (Model).brush_ready} 'Fresh native tab tap after fast outside release did not select its drawing' 60
      Wait-Until {$tabStrip.Current.ItemStatus -eq 'Ready'} 'Fresh native tab tap after fast outside release retained capture'
      $tap.after_selected=(Model).windows_tabs.selected;$tap.after_order=(Model).windows_tabs.tabs.id -join ',';$tap.native=NativeTabStatus
      if($tap.after_order -ne $beforeOrder -or $tap.native.active -or (Find 'drawing-order-undo')){throw 'Fresh native tab tap after fast outside release changed order or retained input'}
@@ -675,9 +675,9 @@ try {
  Invoke 'drawing-close-1';Button 'Cancel';Idle
  Wait-Until {(Model).windows_tabs.selected -eq 1 -and (Model).windows_tabs.available} 'Closing an inactive dirty tab did not activate and preserve it on Cancel' 60
  if(@((Model).windows_tabs.tabs).Count -ne 2){throw 'Close cancellation removed a drawing'}
- Command 'undo' 'Edit';Wait-Until {!(Model).state.document_file.modified} 'First drawing lost independent undo history'
- Command 'redo' 'Edit';Wait-Until {(Model).state.document_file.modified} 'First drawing lost independent redo history'
- Invoke 'drawing-tab-2';Wait-Until {(Model).windows_tabs.selected -eq 2 -and (Model).brush_ready -and (Model).color_panel.document_depth -eq $Depth -and (Model).windows_display.analysis.ready} 'Returning to HDR tab failed' 60
+ Command 'undo' 'Edit';Wait-Canvas {!(Model).state.document_file.modified} 'First drawing lost independent undo history'
+ Command 'redo' 'Edit';Wait-Canvas {(Model).state.document_file.modified} 'First drawing lost independent redo history'
+ Invoke 'drawing-tab-2';Wait-Canvas {(Model).windows_tabs.selected -eq 2 -and (Model).brush_ready -and (Model).color_panel.document_depth -eq $Depth -and (Model).windows_display.analysis.ready} 'Returning to HDR tab failed' 60
  if((Model).windows_tabs.parked_renderers -ne 0){throw 'Inactive drawing retained a renderer'}
 
  # Three drawings force a compact selector at this DPI; two still fit the strip.
@@ -829,7 +829,7 @@ try {
  Wait-Until {!(Find 'edit-color-intensity-entry')} 'HDR color restoration did not commit'
  Invoke 'edit-color-apply';Wait-Until {(Model).color_panel.intensity -eq 2 -and !(Find 'edit-color-apply')} 'HDR color restoration did not settle'
  $revision=(Model).state.document_file.revision
- Button 'Test pen';Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).windows_display.analysis.ready} 'HDR painting analysis failed' 60
+ Button 'Test pen';Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).windows_display.analysis.ready} 'HDR painting analysis failed' 60
  # Exercise the retained native Proof controls through the shared Window menu.
  [CapyRowPointer]::SetForegroundWindow($drawingWindow)|Out-Null
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
@@ -991,7 +991,7 @@ try {
  Write-Output 'HDR device recovery and master reopen'
  $generation=(Model).windows_gpu_generation
  Button 'Test GPU loss'
- Wait-Until {(Model).windows_gpu_generation -gt $generation -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'HDR device recovery failed' 60
+ Wait-Canvas {(Model).windows_gpu_generation -gt $generation -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'HDR device recovery failed' 60
  if((Delivery 'recovered.exr' 'format_exr') -ne $exr){throw 'GPU replacement changed float export'}
  Command 'open_document' 'File';Picker 'Open';Path-In-Picker $master;Idle
  Wait-Until {(Model).windows_display.analysis.ready} 'Reopened HDR analysis failed' 60
@@ -1003,10 +1003,10 @@ try {
  Write-Output 'HDR photo reopen and presentation'
  $import=Join-Path $run $(if($Depth -eq 'F32'){'HDR.exr'}else{'HDR.png'})
  Command 'open_document' 'File';Picker 'Open';Path-In-Picker $import;Idle
- Wait-Until {(Model).color_panel.document_depth -eq $Depth -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Exported HDR photo did not reopen as HDR' 60
+ Wait-Canvas {(Model).color_panel.document_depth -eq $Depth -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Exported HDR photo did not reopen as HDR' 60
  foreach($name in @('gain-map.jpg','gain-map.avif')){
   Command 'open_document' 'File';Picker 'Open';Path-In-Picker (Join-Path $run $name);Idle
-  Wait-Until {(Model).color_panel.hdr -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Gain-map photo did not reopen as HDR' 60
+  Wait-Canvas {(Model).color_panel.hdr -and (Model).brush_ready -and (Model).windows_display.analysis.ready} 'Gain-map photo did not reopen as HDR' 60
   Assert-CanvasInk $name
  }
  & (Join-Path $PSScriptRoot 'inspect-window.ps1') -TraceDirectory $CapyTraceDirectory -ProcessId $review.Id -Output (Join-Path $run 'hdr.png') -ClientOnly -Composed *> (Join-Path $run 'hdr.json')

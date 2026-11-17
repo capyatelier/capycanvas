@@ -21,7 +21,7 @@ try{
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$review.Handle
  Write-Output "Owned tooltip review $($review.Id): $run"
  $owned=@{window=$null}
- Wait-Until {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready)} 'Tooltip review did not start' 45
+ Wait-Canvas {$owned.window=Owned-DrawingWindow $review;$owned.window -and (Review-Ready)} 'Tooltip review did not start' 45
  $root=$owned.window.Root;$drawingWindow=$owned.window.Handle
  @{process_id=$review.Id;hwnd=$drawingWindow.ToInt64();name=$root.Current.Name;type=$root.Current.ControlType.ProgrammaticName}|ConvertTo-Json|Set-Content (Join-Path $run 'owned-window.json')
  $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)

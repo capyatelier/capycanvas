@@ -43,7 +43,7 @@ try {
     $watch=[Diagnostics.Stopwatch]::StartNew()
     do{$review.Refresh();if($review.HasExited){throw 'Review exited at startup'};Start-Sleep -Milliseconds 100;$script:registeredWindow=Owned-DrawingWindow $review}while(!$registeredWindow -and $watch.Elapsed.TotalSeconds -lt 45)
     $root=$registeredWindow.Root
-    Wait-Until {(Review-Ready) -and !(Model).windows_workspace.busy} 'Retouching review did not start' 45
+    Wait-Canvas {(Review-Ready) -and !(Model).windows_workspace.busy} 'Retouching review did not start' 45
     $root.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).SetWindowVisualState([System.Windows.Automation.WindowVisualState]::Maximized)
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     [CapyRowPointer]::SetForegroundWindow($registeredWindow.Handle)|Out-Null
@@ -56,7 +56,7 @@ try {
     $revision=(Model).state.document_file.revision
     [CapyRowPointer]::Down('mouse',$x,$y)
     try{for($i=1;$i -le 30;$i++){[CapyRowPointer]::Move($x+$i*8,$y+[int]([Math]::Sin($i/4)*30));Start-Sleep -Milliseconds 8}}finally{[CapyRowPointer]::Up()}
-    Wait-Until {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'The seed stroke did not finish'
+    Wait-Canvas {(Model).state.document_file.revision -gt $revision -and (Model).state.document_file.modified} 'The seed stroke did not finish'
     Start-Sleep -Milliseconds 1500
     Capture 'stroke' -Composed
     $before=(Layers).Count

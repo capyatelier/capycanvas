@@ -508,7 +508,7 @@ try {
     @{process_id=$review.Id;run=$run;device=$Device;theme=$Theme}|ConvertTo-Json|Set-Content (Join-Path $repo 'artifacts/windows/layer-pickup-review.json')
     Write-Output "Owned layer pickup review $($review.Id) ($Device)"
     $native=@{window=$null}
-    Wait-Until {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Layer review did not start' 45
+    Wait-Canvas {$native.window=Owned-DrawingWindow $review;$null -ne $native.window -and (Review-Ready) -and !(Model).windows_workspace.busy} 'Layer review did not start' 45
     $root=$native.window.Root;$drawingWindow=$native.window.Handle
     $null=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
     $null=[CapyRowPointer]::SetForegroundWindow($drawingWindow)
