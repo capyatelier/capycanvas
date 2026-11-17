@@ -125,6 +125,9 @@ impl Cache {
     fn pivot_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::Outstanding::{Blocked,Runnable};
         if !refining(r) || self.gesture.is_some() || self.graph.parts.is_none() {return None;}
+        let waiting=||Some(match self.pivot_waiting {Some((input,since)) if pages::waits(r,input,since)=>Blocked(input),_=>Runnable});
+        let flying=self.pivot_halves();
+        if self.streaming.units.iter().any(|unit|flying.contains(&unit.interest.key.expression)) {return waiting();}
         if self.pivot_refusal.as_ref().is_some_and(|refusal|r.refuses(refusal)) {return None;}
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         if halves.is_empty() {return self.pivot_input(r);}
@@ -137,7 +140,7 @@ impl Cache {
             for half in &halves {
                 let mut frontier=Vec::new();
                 self.pages.lock().unwrap().refinement_frontier(&pages::Key {expression:half.clone(),..cell.clone()},usize::MAX,&mut frontier,0);
-                if !frontier.is_empty() {return Some(match self.pivot_waiting {Some((input,since)) if pages::waits(r,input,since)=>Blocked(input),_=>Runnable});}
+                if !frontier.is_empty() {return waiting();}
             }
             naming=true;
         }

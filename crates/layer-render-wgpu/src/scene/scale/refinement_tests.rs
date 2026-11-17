@@ -1424,31 +1424,35 @@ fn a_fold_unit_whose_half_is_refused_holds_only_its_committed_halves() {
 }
 
 #[cfg(not(target_arch="wasm32"))]
-#[test]
-fn a_selection_that_moves_while_the_previous_halves_are_in_flight_builds_the_new_halves_once_they_release() {
-    let extent=[512,256];let mut doc=document_at(extent);
+fn moved_selection_builds_the_new_halves_after_the_previous_release(extent:[u32;2],zoom:f32,level:u32,room:u64) {
+    let mut doc=document_at(extent);
     let mut entries=translucent_layers(&mut doc,extent,18);
     let pivot=paint_occurrence(&mut doc,"Pivot",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
     entries.insert(entries.len()/2,pivot);
     set_root_entries(&mut doc,entries.clone());
     let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    fn zoomed(doc:&Document,extent:[u32;2],zoom:f32)->FramePacket<'_> {let mut frame=packet(doc.scene(),extent);frame.view.document_to_surface=[zoom,0.,0.,zoom,0.,0.];frame}
     layer_render::CanvasRenderer::set_working_layer(&mut r,Some(pivot));
-    settle_refinement(&mut r,&doc,extent,"open");
+    crate::test_support::submit_settled(&mut r,zoomed(&doc,extent,zoom));
     let index=doc.scene().order().iter().position(|&handle|handle==pivot).unwrap();
     paint_mut(&mut doc,index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
-    settle_refinement(&mut r,&doc,extent,"edit");
-    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    crate::test_support::submit_settled(&mut r,zoomed(&doc,extent,zoom));
+    let frame=FramePacket {composite_all:false,..zoomed(&doc,extent,zoom)};
     let previous=r.scale_display.as_ref().unwrap().pivot_halves();
-    evict_composite_pages(r.scale_display.as_ref().unwrap(),&[PixelRect::full(extent)]);
+    assert_eq!(r.scale_display.as_ref().unwrap().plan.level,level);
+    pages::evict_composite_pages_where(r.scale_display.as_ref().unwrap(),&[PixelRect::full(extent)],|key|key.level>=level || key.coordinate==[0,0]);
     refine_frame(&mut r,frame,true);
-    let unpinned:u64={
-        let cache=r.scale_display.as_ref().unwrap();
-        assert!(cache.streamed_interests(frame.view).any(|interest|previous.contains(&interest.key.expression)),"the spent frame leaves a half of the edited pivot in flight");
-        let store=cache.pages.lock().unwrap();
-        store.retained_pages().into_iter().filter(|page|page.key.source.is_none() && previous.contains(&page.key.expression) && !store.pinned(&page.key)).map(|page|page.key.bytes()).sum()
+    let (in_flight,pinned_below,unpinned)={
+        let cache=r.scale_display.as_ref().unwrap();let store=cache.pages.lock().unwrap();
+        let halves:Vec<_>=store.retained_pages().into_iter().filter(|page|page.key.source.is_none() && previous.contains(&page.key.expression)).collect();
+        (cache.streamed_interests(frame.view).any(|interest|previous.contains(&interest.key.expression)),
+            halves.iter().any(|page|page.key.level<level && !page.written.is_empty() && store.pinned(&page.key)),
+            halves.iter().filter(|page|!store.pinned(&page.key)).map(|page|page.key.bytes()).sum::<u64>())
     };
+    assert!(in_flight,"the spent frame leaves a half of the edited pivot in flight");
+    assert!(level==0 || pinned_below,"the cells in flight pin the previous pivot's lower-level halves");
     let display=r.scene_tiers.display.clone();
-    let held=display.charge(display.headroom(crate::residency::Class::Refinement)+display.yielding()+unpinned);
+    let held=display.charge((display.headroom(crate::residency::Class::Refinement)+display.yielding()+unpinned).saturating_sub(room));
     let (send,woken)=std::sync::mpsc::channel();
     r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
     layer_render::CanvasRenderer::set_working_layer(&mut r,Some(entries[0]));
@@ -1464,6 +1468,50 @@ fn a_selection_that_moves_while_the_previous_halves_are_in_flight_builds_the_new
     }
     let cache=r.scale_display.as_ref().unwrap();
     assert!(cache.pivot_halves().iter().all(|half|!previous.contains(half)),"the selection moves the pivot");
-    assert!(built(&r),"the new pivot's halves are built without a pen-down: {:?}",r.outstanding_terms());
+    assert!(built(&r),"with {room} more bytes of room the new pivot's halves are built without a pen-down: {:?}",r.outstanding_terms());
     drop(held);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_selection_that_moves_while_the_previous_halves_are_in_flight_builds_the_new_halves_once_they_release() {
+    moved_selection_builds_the_new_halves_after_the_previous_release([512,256],1.,0,0);
+}
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_half_unit_in_flight_is_driven_to_its_commit_while_a_sibling_refusal_is_parked() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let mut entries=translucent_layers(&mut doc,extent,18);
+    let pivot=paint_occurrence(&mut doc,"Pivot",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    entries.insert(entries.len()/2,pivot);
+    set_root_entries(&mut doc,entries);
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(pivot));
+    settle_refinement(&mut r,&doc,extent,"open");
+    let index=doc.scene().order().iter().position(|&handle|handle==pivot).unwrap();
+    paint_mut(&mut doc,index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
+    settle_refinement(&mut r,&doc,extent,"edit");
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    let halves=r.scale_display.as_ref().unwrap().pivot_halves();
+    pages::evict_composite_pages_where(r.scale_display.as_ref().unwrap(),&[PixelRect::full(extent)],|key|halves.contains(&key.expression));
+    refine_frame(&mut r,frame,true);
+    let flying=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().streamed_interests(frame.view).map(|interest|interest.key).filter(|key|halves.contains(&key.expression)).collect::<Vec<_>>();
+    let admitted=flying(&r);
+    assert!(!admitted.is_empty(),"the spent frame leaves a half unit in flight");
+    let display=r.scene_tiers.display.clone();
+    let refusal=display.blocked(crate::residency::Class::Refinement,u64::MAX/2).expect("a sibling's refusal that cannot fit");
+    r.scale_display.as_mut().unwrap().pivot_refusal=Some(refusal);
+    assert!(r.scale_display.as_ref().unwrap().outstanding(&r).is_some(),"a parked refusal hides the half unit in flight: {:?}",r.outstanding_terms());
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    for _ in 0..16 {
+        if flying(&r).is_empty() {break;}
+        if r.next_frame()!=layer_render::FrameDemand::Work {
+            assert!(woken.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),"the half unit in flight is never driven: {:?}",r.outstanding_terms());
+        }
+        crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+    }
+    let store=r.scale_display.as_ref().unwrap().pages.lock().unwrap();
+    assert!(admitted.iter().all(|key|store.retained_pages().into_iter().any(|page|page.key==*key && !page.written.is_empty())),"the admitted half units commit");
 }
