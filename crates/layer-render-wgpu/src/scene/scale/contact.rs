@@ -67,6 +67,14 @@ fn stroke(packet:FramePacket<'_>)->Option<(layer_core::StrokeId,SourceTarget)> {
         && matches!(batch.kind,DabBatchKind::Preview|DabBatchKind::Persistent)).then_some((first.stroke_id,first.target))
 }
 
+impl Contact {
+    fn reduced_tiles(&self,phase:[u32;2],reach:impl Iterator<Item=[u32;2]>)->BTreeSet<[u32;2]> {
+        let changed=self.next.iter().flat_map(|(_,changed,..)|changed.iter().flat_map(|tile|phased_tiles(*tile,phase)));
+        let tiles=reach.chain(changed).chain(self.stale.keys().copied());
+        if self.frame.watercolor(self.target) {tiles.flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles.collect()}
+    }
+}
+
 impl Cache {
     fn tiled(&self,r:&WgpuRasterizer,packet:FramePacket<'_>,scene:&Scene,root:&graph::Node)->bool {
         use_tiles(r,self.plan,packet,Some(scene)) && !(self.plan.level>0 && root.fused_transform(r))
@@ -216,10 +224,8 @@ impl Cache {
         let frame=Arc::new(contact.frame.advanced(target,current,r.preview_declaration.clone()));
         let known=contact.cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>();
         let phase=source_phase(scene,target);
-        let changed=contact.next.iter().flat_map(|(_,changed,..)|changed.iter().flat_map(|tile|phased_tiles(*tile,phase)));
-        let tiles=local_reach(packet,target,phase).into_iter().flat_map(page_coordinates).chain(changed).collect::<BTreeSet<_>>();
-        let tiles=if frame.watercolor(target) {tiles.into_iter().flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {tiles};
-        let tiles=tiles.into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<Vec<_>>();
+        let tiles=contact.reduced_tiles(phase,local_reach(packet,target,phase).into_iter().flat_map(page_coordinates))
+            .into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<Vec<_>>();
         let reach=tiles.iter().copied().map(page_rect).collect::<Vec<_>>();
         let scope=self.stroke_scope(packet,reached,from);
         let view=work_view(packet,0);
@@ -379,16 +385,13 @@ impl Cache {
     )->Result<(Vec<PixelRect>,Vec<PixelRect>),GpuRasterError> {
         let contact=self.gesture.as_mut().expect("live contact");
         let (root,tiled,target)=(contact.root.clone(),contact.tiled,contact.target);
-        let changed=contact.next.as_ref().map(|(_,changed,..)|changed.clone()).unwrap_or_default();
+        let reduced=contact.reduced_tiles(source_phase(scene,target),std::iter::empty());
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
-        let phase=source_phase(scene,target);
-        let changed=changed.into_iter().flat_map(|tile|phased_tiles(tile,phase)).chain(stale.keys().copied()).collect::<BTreeSet<_>>();
         let mut reductions=Vec::new();
         if let Some(level)=contact.level {
             let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));
-            let reduced:BTreeSet<_>=if contact.frame.watercolor(target) {changed.iter().copied().flat_map(crate::scene::watercolor_stencil).flatten().collect()}else {changed};
             for tile in &reduced {
                 let key=source.key(r,target,level,tile.map(|value|value>>level));
                 let region=page_rect(*tile).intersect(valid);

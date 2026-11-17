@@ -734,6 +734,40 @@ fn a_reduced_pencil_stroke_on_a_perceptual_photo_changes_display_texels_outside_
     assert!(moved.is_empty(),"frames after the first changing display texels outside their damaged rects to anything but the paint (frame, texels, largest change): {moved:?}");
     assert!(error<1e-4,"after pen-up the view differs from a renderer given only the persistent dabs by {error}");
 }
+
+#[test]
+fn a_wide_wet_watercolor_stroke_on_a_zoomed_out_photo_reads_only_tiles_its_contact_declared() {
+    use layer_engine::{CanvasEngine,PenEvent,PenPhase,SampleFlags,ViewTransform,input_queue};
+    let (extent,zoom,events)=([9504,6336],0.2,120);
+    let mut doc=document_at(extent);
+    let root=doc.artwork.root;doc.artwork.compositions.get_mut(root).unwrap().blend=layer_core::BlendSpace::Perceptual;
+    let mut view=crate::test_support::view([2200,1440]);
+    view.document_to_surface=[zoom,0.,0.,zoom,1100.-zoom*extent[0] as f32/2.,720.-zoom*extent[1] as f32/2.];
+    let [_,_,_,_,x,y]=view.document_to_surface;
+    let (mut input,consumer)=input_queue(1024);
+    let mut engine=CanvasEngine::new(renderer(&doc),doc,consumer,view,ViewTransform {revision:1,surface_to_document:[1./zoom,0.,0.,1./zoom,-x/zoom,-y/zoom]}).unwrap();
+    engine.set_brush(layer_core::BrushSnapshot {diameter:512.,..layer_core::default_brush(DefaultBrushPreset::WetWatercolor)}).unwrap();
+    let mut clock=1_000_000_000;
+    settle_engine(&mut engine,&mut clock);
+    let mut contact=false;
+    for step in 0..=events {
+        clock+=8_333_333;
+        let angle=step as f32/events as f32*std::f32::consts::TAU;
+        let phase=if step==0 {PenPhase::Down}else if step==events {PenPhase::Up}else {PenPhase::Move};
+        input.push(PenEvent {timestamp_ns:clock,view_revision:1,..crate::test_support::pen(step as u64+1,phase,[1100.+520.*angle.cos(),720.+299.*angle.sin()],SampleFlags::PRIMARY)}).unwrap();
+        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
+        loop {
+            engine.render_frame_at(clock).expect("a watercolor contact frame reads only tiles its contact declared");
+            engine.backend_mut().wait_idle().unwrap();
+            contact|=engine.backend().scale_display.as_ref().unwrap().contact_id().is_some();
+            if !engine.has_pending_input() {break;}
+            assert!(std::time::Instant::now()<deadline,"frame {step} is consumed");
+            clock+=8_333_333;
+        }
+    }
+    settle_engine(&mut engine,&mut clock);
+    assert!(contact,"the wash enters contact");
+}
 #[derive(PartialEq)]
 enum BrushFamily {DryOrRetouching,Smudge,WetOrWatercolor,Liquify}
 fn brush_family(preset:DefaultBrushPreset)->BrushFamily {
