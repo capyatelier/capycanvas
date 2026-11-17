@@ -17,11 +17,11 @@ impl WgpuRasterizer {
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {
         self.outstanding().into_iter().filter_map(|(term, state)| state.map(|state| (term, state))).collect()
     }
-    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 26] {
+    fn outstanding(&self) -> [(&'static str, Option<Outstanding>); 24] {
         let restoring = self.restore_preparation().is_some();
         self.terms().map(|(term, state)| (term, state.filter(|_| !restoring || matches!(term, "restore preparation" | "display selection" | "settling"))))
     }
-    fn terms(&self) -> [(&'static str, Option<Outstanding>); 26] {
+    fn terms(&self) -> [(&'static str, Option<Outstanding>); 24] {
         use Outstanding::{Blocked, Runnable};
         let decode = self.image_decode_waiting();
         let gated = |pending: bool| pending.then_some(if decode { Blocked(Input::Decode) } else { Runnable });
@@ -31,8 +31,6 @@ impl WgpuRasterizer {
             ("display selection", self.pending_display_selection.is_some()
                 .then_some(if selection_compiled { Runnable } else { Blocked(Input::Compile) })),
             ("selection previews", self.selection_previews.pending.then_some(Blocked(Input::Compile))),
-            ("paper decode results", self.papers.images_ready().then_some(Runnable)),
-            ("paper decodes", self.papers.image_waiting().then_some(Blocked(Input::Decode))),
             ("fill preview", self.fill_preview_outstanding()),
             ("held decode results", self.held_result_ready().then_some(Runnable)),
             ("fill edges", gated(self.fill_edges_preflight.as_ref().is_some_and(|state| state.pending()))),
@@ -111,7 +109,7 @@ impl WgpuRasterizer {
     }
     #[cfg(debug_assertions)]
     fn assert_blocked_inputs_outstanding(&self) {
-        let decodes = self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending()) || self.papers.image_waiting()
+        let decodes = self.moving_decode.as_ref().is_some_and(|(_, queue)| queue.pending())
             || self.bake_preflight.as_ref().is_some_and(|state| state.waiting());
         let lost: Vec<_> = self.outstanding().into_iter().filter(|(_, state)| match state {
             Some(Outstanding::Blocked(Input::Decode)) => !decodes,

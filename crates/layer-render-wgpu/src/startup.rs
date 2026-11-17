@@ -436,7 +436,7 @@ impl WgpuRasterizer {
     pub(crate) fn startup_outstanding(&self) -> Option<frame_demand::Outstanding> {
         let startup = self.startup.as_ref()
             .filter(|s| s.brush.is_some() && !s.finished && !(s.brush_ready && s.compiler.pending() == 0))?;
-        Some(if startup.papers.iter().any(|(_, id)| self.papers.work_pending(id)) { frame_demand::Outstanding::Runnable }
+        Some(if startup.papers.iter().any(|(_, id)| self.papers.work_pending(id, self.image_decode_waiting())) { frame_demand::Outstanding::Runnable }
             else { frame_demand::Outstanding::Blocked(frame_demand::Input::Compile) })
     }
     fn scene_scale_pipelines(&self,scene:SceneView<'_>)->impl Iterator<Item=&Deferred<wgpu::ComputePipeline>> {
@@ -708,8 +708,8 @@ impl WgpuRasterizer {
                 self.upload_mask(&id, width, height, width, &pixels)?;
             }
             let held = self.paper_overlay.as_ref().filter(|overlay| overlay.moving && paper::PaperTile::new(&overlay.paper.surface)
-                .is_ok_and(|tile| self.papers.nearest_slope(&overlay.paper.surface, &tile).is_some())).map(|overlay| &overlay.paper.surface.texture);
-            self.papers.advance(&self.device, &self.queue, false, held)?;
+                .is_ok_and(|tile| self.papers.nearest_slope(&overlay.paper.surface, &tile).is_some())).map(|overlay| overlay.paper.surface.texture.clone());
+            self.advance_papers(false, held)?;
         }
         if self.startup.is_some() {
             let shaded: Vec<_> = self.paper_overlay.iter().map(|o| (o.paper.clone(), VALIDATION))
@@ -1899,7 +1899,7 @@ mod gpu_tests {
             surface.mapping.0[0]*=scale;surface.mapping.0[3]*=scale;
             let other=layer_core::paper::PaperBinding {surface:Arc::new(surface),target_offset:[0;2]};
             r.papers.require(&r.device,Some(&r.compilation),&other,OTHER).unwrap();
-            r.papers.advance(&r.device,&r.queue,true,None).unwrap();
+            r.advance_papers(true,None).unwrap();
         }
         let evicted=papers.iter().filter(|id|r.papers.view(id).is_none()).count();
         let settle=std::time::Instant::now()+Duration::from_secs(3);

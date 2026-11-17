@@ -1472,7 +1472,7 @@ impl WgpuRasterizer {
         let restore_uploads = Uploads::new(&device, 64 * 1024);
         let layer_masks =
             layer_masks::MaskRenderer::from_pipelines(recipes.masks.clone());
-        let papers = paper::Papers::from_recipes(recipes.paper.clone(), &scene_tiers.decodes);
+        let papers = paper::Papers::from_recipes(recipes.paper.clone());
         let telemetry = telemetry::Telemetry::new(&device, &queue);
         let selection_clip = selection_clip::SelectionClip::from_pipelines(recipes.selection.clone(), &raster_tiers.paint);
         let scene_pipelines = recipes.scene.clone();
@@ -1962,7 +1962,7 @@ impl WgpuRasterizer {
     fn prepare_paper_binding(&mut self, binding: &layer_core::paper::PaperBinding, priority: startup::Class) -> Result<(), GpuRasterError> {
         let compiler = Some(&self.compilation);
         self.papers.require(&self.device, compiler, binding, priority)?;
-        if self.startup.is_none() { self.papers.advance(&self.device, &self.queue, true, None)?; }
+        if self.startup.is_none() { self.advance_papers(true, None)?; }
         Ok(())
     }
 
@@ -2000,7 +2000,7 @@ impl WgpuRasterizer {
         let id = self.papers.require(&self.device, compiler, binding, priority)?;
         self.papers.require_slope(&self.device, compiler, &id, priority);
         if self.startup.is_none() {
-            self.papers.advance(&self.device, &self.queue, true, None)?;
+            self.advance_papers(true, None)?;
         }
         Ok(())
     }
@@ -2037,9 +2037,31 @@ impl WgpuRasterizer {
         export.encode(&self.device, encoder, source, coverage, slope, tile.grain(&binding), light, origin).map(Some)
     }
 
+    fn advance_papers(&mut self, wait: bool, held: Option<layer_core::TextureSource>) -> Result<(), GpuRasterError> {
+        #[cfg(target_arch = "wasm32")]
+        for (sequence,result) in std::mem::take(&mut *self.browser_image_result.borrow_mut()) {
+            if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(sequence,result); }
+        }
+        while let Some((prepared, charge)) = self.moving_decode.as_mut().and_then(|(_, queue)| queue.poll()) {
+            self.source_results.push_back((self.device.working_space(), prepared, charge));
+        }
+        for (space, prepared, charge) in std::mem::take(&mut self.source_results) {
+            let object_image_mips::PreparedImageWork::Paper { blob, coordinate, pixels } = &prepared else {
+                self.source_results.push_back((space, prepared, charge));
+                continue;
+            };
+            self.papers.accept_image(&self.device, &self.queue, blob, *coordinate, pixels)?;
+            self.decode_consumed();
+        }
+        for (blob, coordinate) in self.papers.wanted_images(held.as_ref())? {
+            if !self.request_paper_decode(blob, coordinate)? { break; }
+        }
+        self.papers.advance(&self.device, &self.queue, wait, held.as_ref())
+    }
+
     fn paper_shade_work_pending(&self) -> bool {
         self.paper_lighting.as_ref().map(|lit| &lit.binding).or(self.paper_overlay.as_ref().map(|o| &o.paper))
-            .and_then(paper::PaperTile::id_for).is_some_and(|id| self.papers.work_pending(&id))
+            .and_then(paper::PaperTile::id_for).is_some_and(|id| self.papers.work_pending(&id, self.image_decode_waiting()))
     }
 
     fn texture_view(&self, id: &AssetId) -> Result<&wgpu::TextureView, GpuRasterError> {
@@ -3435,12 +3457,11 @@ impl WgpuRasterizer {
         self.moving_decode.as_ref().is_none_or(|(_,queue)|queue.has_room())
     }
     pub(crate) fn image_decode_waiting(&self) -> bool {
-        if self.held_result_ready() || self.papers.images_ready() {return false;}
+        if self.held_result_ready() {return false;}
         if self.bake_preflight.as_ref().is_some_and(|state|state.waiting()) {return true;}
         #[cfg(target_arch = "wasm32")]
         if !self.browser_image_result.borrow().is_empty() { return false; }
-        self.moving_decode.as_ref().map_or(self.papers.image_waiting(),|(_,queue)|
-            !queue.ready() && (queue.pending() || self.papers.image_waiting()))
+        self.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.ready() && queue.pending())
     }
     pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<object_image_mips::PreparedMipTile>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
@@ -3465,7 +3486,10 @@ impl WgpuRasterizer {
             self.source_results.push_back((space,prepared,charge));return Ok(None);
         }
         let result = (|| match &prepared {
-            object_image_mips::PreparedImageWork::Paper {..} => Err(GpuRasterError::InvalidImage),
+            object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels} => {
+                self.papers.accept_image(&self.device,&self.queue,blob,*coordinate,pixels)?;
+                Ok(None)
+            },
             object_image_mips::PreparedImageWork::Coordinates {destination,pixels} => {
                 if let Some(destination) = destination.upgrade() { destination.lock().unwrap().write(pixels.clone()); }
                 Ok(None)
@@ -3529,7 +3553,6 @@ impl WgpuRasterizer {
         if let Some((_,queue))=&self.moving_decode {queue.register_waker(wake);}
         #[cfg(target_arch="wasm32")]
         { *self.browser_image_wake.borrow_mut()=Some(wake.clone()); }
-        self.papers.register_waker(wake);
         if let Some(bake)=&self.bake_preflight {bake.register_decode_waker(wake);}
         if let Some(slot)=&self.snapshot_decode_wake {let previous=slot.lock().unwrap().replace(wake.clone());drop(previous);}
     }
@@ -3538,7 +3561,6 @@ impl WgpuRasterizer {
         if let Some((_,queue))=&self.moving_decode {queue.clear_waker();}
         #[cfg(target_arch="wasm32")]
         { self.browser_image_wake.borrow_mut().take(); }
-        self.papers.clear_waker();
         if let Some(bake)=&self.bake_preflight {bake.clear_decode_waker();}
         if let Some(slot)=&self.snapshot_decode_wake {let waiter=slot.lock().unwrap().take();drop(waiter);}
     }
@@ -3576,7 +3598,6 @@ impl WgpuRasterizer {
         {
             let edge=self.device.retirement_handle();
             self.memory.watch(self.factory.memory_budget(),Arc::new(move||edge.signal_release()));
-            self.papers.set_wake(wake.clone());
             if let Some((_,queue))=&self.moving_decode {queue.set_wake(wake.clone());}
             self.decode_wake=Some(wake.clone());
         }
@@ -3661,6 +3682,14 @@ impl WgpuRasterizer {
         self.dispatch_browser_image_decode()?;
         Ok(requested)
     }
+    fn request_paper_decode(&mut self,blob:Arc<layer_core::raster::TileBlob>,coordinate:[u32;2])->Result<bool,GpuRasterError> {
+        #[cfg(target_arch="wasm32")]
+        if self.browser_raster_decoder.is_none() { return Err(GpuRasterError::Effect("Paper preparation worker unavailable".into())); }
+        let requested=self.image_decode_queue(self.device.working_space())?.request_paper(blob,coordinate);
+        #[cfg(target_arch="wasm32")]
+        self.dispatch_browser_image_decode()?;
+        Ok(requested)
+    }
     pub(crate) fn request_nearest_coordinates(&mut self,inverse:[f64;6],size:[u32;2],first:u32,count:u32,destination:object_image_mips::CoordinateDestination)->Result<bool,GpuRasterError> {
         #[cfg(target_arch="wasm32")]
         if self.browser_nearest_coordinate_decoder.is_none() && (!self.snapshot_worker || self.browser_image_decoder.is_some()) {
@@ -3702,7 +3731,16 @@ impl WgpuRasterizer {
                         object_image_mips::PreparedImageWork::Raster(object_image_mips::PreparedRasterTile {class:request.class,blob:request.blob,space:request.space,destination:request.destination,scalar:request.scalar,pixels})
                     })
                 },
-                object_image_mips::MipDecodeRequest::Paper {..}=>return Err(GpuRasterError::InvalidImage),
+                object_image_mips::MipDecodeRequest::Paper {blob,coordinate} => {
+                    let callback = self.browser_raster_decoder.clone().ok_or_else(|| GpuRasterError::Effect("Paper preparation worker unavailable".into()))?;
+                    Box::pin(async move {
+                        let space=layer_core::color::RgbSpace::Srgb;
+                        let pixels=callback(blob.clone(),space,space,true).await.and_then(|pixels|match pixels {
+                            PreparedImagePixels::NativeSamples(pixels)=>Ok(pixels),_=>Err("Invalid prepared paper samples".into()),
+                        });
+                        object_image_mips::PreparedImageWork::Paper {blob,coordinate,pixels}
+                    })
+                },
                 object_image_mips::MipDecodeRequest::Coordinates(request) => {
                     let callback = self.browser_nearest_coordinate_decoder.clone();
                     if callback.is_none() && (!self.snapshot_worker || self.browser_image_decoder.is_some()) {
@@ -6880,7 +6918,7 @@ mod lut3d_tests;
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }
     pub fn set_browser_image_decoder(&mut self, worker: BrowserImageDecoder) { self.browser_image_decoder = Some(worker); }
-    pub fn set_browser_raster_decoder(&mut self, worker: BrowserRasterDecoder) { self.papers.set_decoder(worker.clone());self.browser_raster_decoder = Some(worker); }
+    pub fn set_browser_raster_decoder(&mut self, worker: BrowserRasterDecoder) { self.browser_raster_decoder = Some(worker); }
     #[cfg(target_arch = "wasm32")]
     pub fn set_browser_nearest_coordinate_decoder(&mut self, worker: BrowserNearestCoordinateDecoder) { self.browser_nearest_coordinate_decoder = Some(worker); }
 }
