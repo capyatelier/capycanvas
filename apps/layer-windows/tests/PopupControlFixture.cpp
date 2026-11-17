@@ -1767,8 +1767,9 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         }
         auto bubbles=std::make_shared<WorkspaceBubbles::Impl>();bubbles->data=source;bubbles->workspace=Canvas{};
         auto record=std::make_shared<CapyBubbles::Record>();record->id=27;record->center={200,120};record->root.RenderTransform(record->transform);
-        bubbles->records.emplace(record->id,record);bubbles->layer.Children().Append(record->root);bubbles->workspace.Children().Append(bubbles->layer);
-        auto surface=bubbles->workspace;surface.Width(400);surface.Height(240);root.Children().InsertAt(0,surface);
+        bubbles->records.emplace(record->id,record);bubbles->layer.Children().Append(record->root);
+        auto surface=bubbles->workspace;surface.Width(400);surface.Height(240);
+        Grid overlayHost;overlayHost.Width(400);overlayHost.Height(240);overlayHost.Children().Append(surface);overlayHost.Children().Append(bubbles->layer);root.Children().InsertAt(0,overlayHost);
         auto peer=[](FrameworkElement const& element){return Automation::Peers::FrameworkElementAutomationPeer::CreatePeerForElement(element);};
         auto invoke=[&](Button const& button){peer(button).GetPattern(Automation::Peers::PatternInterface::Invoke).as<Automation::Provider::IInvokeProvider>().Invoke();};
         auto frame=[&](double now){bubbles->advance(now,false);bubbles->present();surface.UpdateLayout();};
@@ -1778,8 +1779,11 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             phase=L"bubble-card-retirement";
             auto open=J::Parse(LR"({"reach":180,"view":{"id":27,"kind":"layers","selected":false,"enabled":true,"variants":false,"diameter":56,"face":[56,56],"icon":"layers","label":"Layers","layers":1,"card":{"size":[260,180],"full":false,"properties":false,"disclosure":"Properties"}}})");
             auto closed=J::Parse(open.Stringify());object(closed,L"view").Remove(L"card");
-            apply(open);frame(0);frame(200);
-            auto card=record->parts.at(L"card");auto cardRoot=card->root;auto host=card->cardHost;auto inspector=card->inspector.get();auto cardPeer=peer(host);
+            apply(open);auto card=record->parts.at(L"card");auto inkOwner=card->ink.Parent().as<Canvas>();uint32_t inkIndex=0;
+            require(inkOwner.Children().IndexOf(card->ink,inkIndex),L"Inspector visibility fixture lost its native ink ancestor");
+            Canvas unclipped;inkOwner.Children().RemoveAt(inkIndex);unclipped.Children().Append(card->ink);inkOwner.Children().InsertAt(inkIndex,unclipped);
+            frame(0);frame(200);
+            auto cardRoot=card->root;auto host=card->cardHost;auto inspector=card->inspector.get();auto cardPeer=peer(host);
             require(cardPeer&&inspector&&card->appearance.value==1,L"Card fixture did not create a live native inspector and peer");
             auto retainedCard=[&]{auto found=record->parts.find(L"card");return found!=record->parts.end()&&found->second==card&&ChromeFrames::Id(found->second->root)==ChromeFrames::Id(cardRoot)&&ChromeFrames::Id(found->second->cardHost)==ChromeFrames::Id(host)&&found->second->inspector.get()==inspector&&peer(found->second->cardHost)==cardPeer;};
             apply(closed);frame(1000);frame(1075);
@@ -1794,10 +1798,35 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             auto action=object(actions->front(),L"action");
             require(str(actions->front(),L"type")==L"layer"&&str(action,L"op")==L"new"&&!flag(action,L"group")&&!flag(action,L"clipped"),L"Revived card footer dispatched the wrong shared layer action");
             actions->clear();invoke(inspector->footer);bubbles->frames.revoke();
-            co_await wait([actions]{return actions->size()==1;},L"Revived card Properties footer did not dispatch");bubbles->frames.revoke();
+            co_await wait([actions,properties=inspector->properties->Root()]{return actions->size()==1&&properties.IsLoaded();},L"Revived card Properties footer did not dispatch or load its inspector");bubbles->frames.revoke();
             action=object(actions->front(),L"action");require(str(actions->front(),L"type")==L"bubble"&&str(action,L"type")==L"properties"&&num(action,L"id")==record->id,L"Revived Properties footer lost its bubble owner");
-            auto properties=J::Parse(open.Stringify());object(object(properties,L"view"),L"card").Insert(L"properties",B(true));apply(properties);frame(1400);
+            auto properties=J::Parse(open.Stringify());object(object(properties,L"view"),L"card").Insert(L"properties",B(true));apply(properties);inspector->started-=std::chrono::seconds(1);frame(1400);
             require(retainedCard()&&inspector->targetPosition==1&&inspector->properties->Root().IsHitTestVisible()&&!card->layers->Root().IsHitTestVisible(),L"Revived card did not present its native Properties page");
+            phase=L"bubble-inspector-applied-visibility";
+            auto propertiesRoot=inspector->properties->Root();surface.UpdateLayout();auto inkBounds=allocatedBounds(card->root,surface);
+            auto wrappedBounds=allocatedBounds(card->ink,surface);auto wrappedPeer=peer(host);
+            require(unclipped.ActualWidth()==0&&unclipped.ActualHeight()==0&&!unclipped.Clip()&&propertiesRoot.IsLoaded()&&retainedCard()&&wrappedBounds==inkBounds,
+                (L"Inspector visibility fixture changed the owned inspector or ink footprint; before="+rectangle(inkBounds).Stringify()+L"; after="+rectangle(wrappedBounds).Stringify()+L"; wrapper="+to_hstring(unclipped.ActualWidth())+L"x"+to_hstring(unclipped.ActualHeight())+L"; loaded="+to_hstring(uint32_t(propertiesRoot.IsLoaded()))+L"; retained="+to_hstring(uint32_t(retainedCard()))+L"; owner="+to_hstring(reinterpret_cast<uintptr_t>(get_abi(host)))+L"; peer_before="+to_hstring(reinterpret_cast<uintptr_t>(get_abi(cardPeer)))+L"; peer_after="+to_hstring(reinterpret_cast<uintptr_t>(get_abi(wrappedPeer)))).c_str());
+            auto traceInspector=[&](uint64_t at){bubbles->traceRendering(at);return bubbles->appliedReceipts.at({record->id,L"card"}).state;};
+            require(!descendantOf(card->ink,surface)&&descendantOf(card->ink,overlayHost),L"Inspector visibility fixture did not retain the app's sibling workspace and overlay hosts");
+            auto shown=traceInspector(1);auto invalid=bubbles->inspectorInvalid;
+            hstring ancestry;for(auto node=propertiesRoot.as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))if(auto element=node.try_as<FrameworkElement>()){ancestry=ancestry+get_class_name(element)+L"["+to_hstring(element.ActualWidth())+L"x"+to_hstring(element.ActualHeight())+L"] ";if(element==surface)break;}
+            require(flag(shown,L"backing_visible")&&flag(shown,L"inspector_visible"),(L"Visible inspector was rejected through its unsized unclipped Canvas ancestor; ink_owner_is_card_root="+to_hstring(uint32_t(inkOwner==card->root))+L"; "+ancestry).c_str());
+            apply(closed);frame(1450);frame(1525);shown=traceInspector(2);
+            require(retainedCard()&&card->retired&&card->appearance.value>0&&card->appearance.value<1&&flag(shown,L"backing_visible")&&flag(shown,L"inspector_visible")&&bubbles->inspectorInvalid==invalid,L"Retiring inspector lost its native visibility while its backing remained visible");
+            propertiesRoot.Visibility(Visibility::Collapsed);traceInspector(3);
+            require(bubbles->inspectorInvalid==++invalid,L"Retirement witness accepted a collapsed inspector over visible backing");
+            propertiesRoot.Visibility(Visibility::Visible);surface.UpdateLayout();shown=traceInspector(4);
+            require(flag(shown,L"inspector_visible")&&bubbles->inspectorInvalid==invalid,L"Restored inspector remained invalid over visible backing");
+            auto originalClip=propertiesRoot.Clip();RectangleGeometry hidden;hidden.Rect({0,0,0,0});propertiesRoot.Clip(hidden);traceInspector(5);
+            require(bubbles->inspectorInvalid==++invalid,L"Retirement witness ignored the inspector's explicit empty clip");
+            propertiesRoot.Clip(originalClip);shown=traceInspector(6);
+            require(flag(shown,L"inspector_visible")&&bubbles->inspectorInvalid==invalid,L"Retirement witness retained an obsolete inspector clip");
+            uint32_t propertiesIndex=0;require(inspector->pages.Children().IndexOf(propertiesRoot,propertiesIndex),L"Inspector visibility fixture lost its owned Properties page");
+            inspector->pages.Children().RemoveAt(propertiesIndex);surface.UpdateLayout();traceInspector(7);
+            require(bubbles->inspectorInvalid==++invalid,L"Retirement witness accepted a detached inspector over visible backing");
+            inspector->pages.Children().InsertAt(propertiesIndex,propertiesRoot);surface.UpdateLayout();
+            require(propertiesRoot.Parent()==inspector->pages,L"Inspector visibility fixture did not restore its owned Properties page");
             apply(open);frame(1600);require(retainedCard()&&inspector->targetPosition==0&&card->layers->Root().IsHitTestVisible(),L"Revived card did not return to its native Layers page");
             apply(closed);frame(2000);frame(2150);
             require(!record->parts.contains(L"card")&&!cardRoot.Parent(),L"Completed card retirement retained its native root");

@@ -27,6 +27,8 @@ foreach($shell in @((Get-Process -Id $PID).Path,(Join-Path $env:SystemRoot 'Syst
     if($LASTEXITCODE -ne 0){throw 'Composed frames helper regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/bubble-applied-frames.ps1')
     if($LASTEXITCODE -ne 0){throw 'Native bubble applied-frame regression failed.'}
+    & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/activation-tap-target.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Activation target admission regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/panel-scroll.ps1')
     if($LASTEXITCODE -ne 0){throw 'Native list fling receipt regression failed.'}
     & $shell -NoProfile -File (Join-Path $PSScriptRoot '../tests/clipboard-owner.ps1')

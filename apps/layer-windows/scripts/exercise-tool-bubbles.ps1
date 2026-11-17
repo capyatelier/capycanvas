@@ -414,8 +414,8 @@ function Capture-InspectorRetirement([long]$Id){
             $null=Wait-BubbleNative -Id $Id -Message 'Retirement fixture did not finish its native backing'
             $inspectorAfter=Bubble-AppliedFrames
             $bad=$inspectorAfter.inspector_invalid-$inspectorBefore.inspector_invalid
-            Assert-BubbleInspectorFrames $inspectorBefore $inspectorAfter
             @{bubble=$Id;area=$area;face=$face;action_frame=3;retirement_ms=150;frequency=[Diagnostics.Stopwatch]::Frequency;times=$sample.times;scores=$scores;native_before=$inspectorBefore;native_after=$inspectorAfter;invalid=$bad;capture_scope='independent composed pixels and prior UIA peer samples; native invariant is Rendering-indexed'}|ConvertTo-Json -Depth 8|Set-Content (Join-Path $folder 'frames.json')
+            Assert-BubbleInspectorFrames $inspectorBefore $inspectorAfter
             if(!$peers[2].connected -or $scores[2].outside_face_pixels -le 0){throw 'Retirement source did not contain a visible inspector and composed backing'}
         }finally{$final.Dispose()}
     }finally{foreach($image in $sample.frames){$image.Dispose()}}

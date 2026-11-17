@@ -14,6 +14,21 @@
 using namespace CapyBubbles;
 using Microsoft::UI::Xaml::Hosting::ElementCompositionPreview;
 namespace {
+bool traceVisible(FrameworkElement const& element,FrameworkElement const& reference){
+    if(!descendantOf(element,reference))return false;
+    auto bounds=allocatedBounds(element,reference);
+    if(bounds.Width<=0||bounds.Height<=0)return false;
+    for(auto node=element.as<DependencyObject>();node;node=VisualTreeHelper::GetParent(node))if(auto view=node.try_as<UIElement>()){
+        if(view.Visibility()!=Visibility::Visible||view.Opacity()<=0)return false;
+        if(auto clip=view.Clip())bounds=intersect(bounds,view.TransformToVisual(reference).TransformBounds(clip.Bounds()));
+        if(auto scroll=view.try_as<ScrollView>())bounds=intersect(bounds,view.TransformToVisual(reference).TransformBounds({0,0,float(scroll.ViewportWidth()),float(scroll.ViewportHeight())}));
+        if(auto scroll=view.try_as<ScrollViewer>())bounds=intersect(bounds,view.TransformToVisual(reference).TransformBounds({0,0,float(scroll.ViewportWidth()),float(scroll.ViewportHeight())}));
+        if(node==reference)bounds=intersect(bounds,{0,0,float(reference.ActualWidth()),float(reference.ActualHeight())});
+        if(bounds.Width<=0||bounds.Height<=0)return false;
+        if(node==reference)return true;
+    }
+    return false;
+}
 void remove(Canvas const& root,UIElement const& item){uint32_t at;if(root.Children().IndexOf(item,at))root.Children().RemoveAt(at);}
 Geometry outline(Size size,double radius,bool squircle){
     std::array<float,4> radii; radii.fill(float(radius));
@@ -551,8 +566,10 @@ A WorkspaceBubbles::TraceOverlays(UIElement const& reference)const{
     }
     return overlays;
 }
-void WorkspaceBubbles::TraceRendering(uint64_t frame){
-    auto& self=*impl;if(!self.uiTracing)return;self.appliedFrame=frame;
+void WorkspaceBubbles::TraceRendering(uint64_t frame){impl->traceRendering(frame);}
+void WorkspaceBubbles::Impl::traceRendering(uint64_t frame){
+    auto& self=*this;if(!self.uiTracing)return;self.appliedFrame=frame;
+    auto overlayHost=VisualTreeHelper::GetParent(self.layer).try_as<FrameworkElement>();
     LARGE_INTEGER now{};QueryPerformanceCounter(&now);self.appliedQpc=now.QuadPart;
     bool settled=self.records.empty()||(self.motionReply.Size()&&self.motionReplyWake==self.wakes&&!flag(self.motionReply,L"moving")&&self.restoreAt<0);
     std::set<std::pair<uint32_t,hstring>> observed;
@@ -580,10 +597,10 @@ void WorkspaceBubbles::TraceRendering(uint64_t frame){
             bool terminal=recordTerminal&&p->layout.value==p->layout.target&&p->appearance.value==p->appearance.target&&(!p->inspector||!p->inspector->animating);
             settled=settled&&terminal;
             Rect bounds{};if(connected)bounds=p->root.TransformToVisual(self.workspace).TransformBounds({0,0,float(p->root.ActualWidth()),float(p->root.ActualHeight())});
-            bool inspectorVisible=false;
-            if(p->inspector&&flag(p->data,L"properties")&&visible){
+            bool inspectorVisible=false,backingVisible=p->inspector&&visible&&traceVisible(p->ink,overlayHost);
+            if(backingVisible&&flag(p->data,L"properties")){
                 ++self.inspectorFrames;auto peer=p->inspector->properties->Root();
-                auto peerBounds=visibleBounds(peer,self.workspace);inspectorVisible=peer.Opacity()>0&&peerBounds.Width>0&&peerBounds.Height>0;
+                inspectorVisible=traceVisible(peer,overlayHost);
                 if(!inspectorVisible&&p->retired)++self.inspectorInvalid;
             }
             auto phase=p->appliedOverlayPhase.value_or(OverlayPhase::Idle);
@@ -593,7 +610,7 @@ void WorkspaceBubbles::TraceRendering(uint64_t frame){
                 {L"connected",B(connected)},{L"visible",B(visible)},{L"terminal",B(terminal)},{L"appearance_target",N(p->appearance.target)},
                 {L"overlay_phase",S(phase==OverlayPhase::Idle?L"idle":phase==OverlayPhase::Hover?L"hover":L"pressed")},
                 {L"focus_ring",B(p->intensity&&p->intensity->focus.Visibility()==Visibility::Visible)},
-                {L"inspector",B(bool(p->inspector))},{L"inspector_visible",B(inspectorVisible)},{L"backing_visible",B(bool(p->inspector)&&visible)}}),bounds);
+                {L"inspector",B(bool(p->inspector))},{L"inspector_visible",B(inspectorVisible)},{L"backing_visible",B(backingVisible)}}),bounds);
         }
     }
     std::vector<std::pair<uint32_t,hstring>> removed;

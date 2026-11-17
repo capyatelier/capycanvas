@@ -198,6 +198,7 @@ struct WorkspaceBubbles::Impl:std::enable_shared_from_this<WorkspaceBubbles::Imp
     CapyUi::J motionReply;
     std::map<std::pair<uint32_t,CapyUi::hstring>,AppliedReceipt> appliedReceipts;
     void tracePlacements(std::shared_ptr<CapyBubbles::Record> const&,bool alive=true);
+    void traceRendering(uint64_t);
     void traceTransition(std::shared_ptr<CapyBubbles::Record> const&,std::shared_ptr<CapyBubbles::Part> const&,CapyUi::hstring const&);
     void traceLayout();
     CapyUi::PressRepeat lastRing;

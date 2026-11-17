@@ -68,7 +68,10 @@ function Native-Tap([string]$Id,[double]$Drift,[string]$End='up',[switch]$Disabl
     if($Family -eq 'preset'){Capture ($script:caseName+'-before-hover') -Composed}
     if($Device -eq 'pen'){[CapyRowPointer]::PenHover($x,$y);Start-Sleep -Milliseconds 35}
     $script:lastInput.before_down=Target-State $Id $stable.item
-    if($script:lastInput.before_hover.bounds -ne $box.ToString() -or $script:lastInput.before_down.bounds -ne $box.ToString()){throw "Invalid run: target $Id moved before native input"}
+    foreach($state in @($script:lastInput.before_hover,$script:lastInput.before_down)){
+        $current=[Windows.Rect]::Parse($state.bounds)
+        if($current.X -ne $box.X -or $current.Y -ne $box.Y -or ($state.runtime_id -join ',') -cne ($script:lastInput.before_hover.runtime_id -join ',') -or $x -lt $current.Left -or $x -ge $current.Right -or $y -lt $current.Top -or $y -ge $current.Bottom -or $x+$dx -lt $current.Left -or $x+$dx -ge $current.Right -or $y+$dy -lt $current.Top -or $y+$dy -ge $current.Bottom){throw "Invalid run: target $Id moved before native input"}
+    }
     if($Disabled -and $script:lastInput.before_down.enabled){throw "Invalid run: $Id became enabled before disabled-control input"}
     if($Family -eq 'preset'){Capture ($script:caseName+'-before-down') -Composed}
     if($End -eq 'context' -and $Device -eq 'mouse'){[CapyRowPointer]::RightClick($x,$y);return}
