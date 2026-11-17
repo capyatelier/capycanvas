@@ -784,9 +784,9 @@ impl Cache {
         self.precision=r.display_precision(packet.scene);
         let plan = if self.evaluation == Evaluation::Native { display_mips::Plan::window(self.plan.extent, 0, self.plan.bounds) }
             else { input_plan(self.plan, packet.scene,Some(self.graph.objects())) };
-        let previous=self.graph.content.clone();
+        let shown=self.graph.content.iter().cloned().chain(self.pivot_halves()).collect::<Vec<_>>();
         self.graph.prepare(r, packet, sources, plan, held)?;
-        if let Some(previous)=previous.filter(|previous|self.graph.content.as_ref()!=Some(previous)) {self.pages.lock().unwrap().set_optional_content(&previous);}
+        for expression in shown.iter().filter(|expression|!self.shows(expression)) {self.pages.lock().unwrap().set_optional_content(expression);}
         Ok(())
     }
 

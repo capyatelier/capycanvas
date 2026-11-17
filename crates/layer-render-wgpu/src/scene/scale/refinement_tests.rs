@@ -1334,3 +1334,32 @@ fn selecting_another_layer_releases_the_units_admitted_for_the_previous_pivot() 
     let pages=r.scale_display.as_ref().unwrap().pages.lock().unwrap();
     assert!(admitted.iter().all(|key|!pages.accepted(key,key.plan().bounds,0)),"the next frame releases the inputs of the dropped unit");
 }
+
+#[test]
+fn selecting_another_layer_lets_the_previous_pivots_halves_yield() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let mut entries=translucent_layers(&mut doc,extent,18);
+    let pivot=paint_occurrence(&mut doc,"Pivot",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    entries.insert(entries.len()/2,pivot);
+    set_root_entries(&mut doc,entries.clone());
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(pivot));
+    settle_refinement(&mut r,&doc,extent,"open");
+    let index=doc.scene().order().iter().position(|&handle|handle==pivot).unwrap();
+    paint_mut(&mut doc,index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
+    settle_refinement(&mut r,&doc,extent,"edit");
+    let halves=r.scale_display.as_ref().unwrap().pivot_halves();
+    let built:Vec<_>={let store=r.scale_display.as_ref().unwrap().pages.lock().unwrap();
+        store.retained_pages().into_iter().filter(|page|page.key.source.is_none() && halves.contains(&page.key.expression) && !page.written.is_empty()).map(|page|page.key).collect()};
+    assert!(halves.len()==2 && !built.is_empty(),"the edited pivot's halves are built");
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(entries[0]));
+    settle_refinement(&mut r,&doc,extent,"another layer selected");
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(cache.pivot_halves().iter().all(|half|!halves.contains(half)),"the selection moves the pivot");
+    let (stale,yielding)={let store=cache.pages.lock().unwrap();
+        (store.retained_pages().into_iter().filter(|page|built.contains(&page.key) && !store.pinned(&page.key)).map(|page|page.key.bytes()).sum::<u64>(),store.tier().yielding())};
+    assert!(stale>0,"the previous pivot's halves are still retained");
+    pages::evict_composite_pages_where(cache,&[cache.plan.bounds],|key|built.contains(key));
+    let released=yielding-cache.pages.lock().unwrap().tier().yielding();
+    assert_eq!(released,stale,"the previous pivot's halves yield their {stale} bytes to a refusal once the selection moves");
+}

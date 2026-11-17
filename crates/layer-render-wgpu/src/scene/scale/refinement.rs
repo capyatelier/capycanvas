@@ -77,10 +77,8 @@ impl Cache {
     pub(super) fn release_streaming(&mut self,encoder:&crate::submission::CommandEncoder) {
         for page in std::mem::take(&mut self.streaming).cells.into_iter().flat_map(|(_,pins)|pins) {page.track(encoder);}
     }
-    fn current(&self,cell:&pages::Key)->bool {
-        std::iter::once(self).chain(self.overview.as_deref()).any(|cache|cache.graph.content.as_ref()==Some(&cell.expression))
-            || self.pivot_halves().contains(&cell.expression)
-    }
+    pub(super) fn shows(&self,expression:&graph::Node)->bool {self.graph.content.as_ref()==Some(expression) || self.pivot_halves().contains(expression)}
+    fn current(&self,cell:&pages::Key)->bool {self.shows(&cell.expression) || self.overview.as_ref().is_some_and(|overview|overview.graph.content.as_ref()==Some(&cell.expression))}
     fn full(&self,r:&WgpuRasterizer,budget:&WorkBudget,work:u64)->bool {
         let flight=std::iter::once(self).chain(r.scale_display.as_ref()).chain(r.navigator.cache()).map(|cache|cache.streaming.work()).sum::<u64>();
         flight!=0 && flight.saturating_add(budget.spent()).saturating_add(work)>budget.capacity()
@@ -93,7 +91,7 @@ impl Cache {
         }
     }
     fn retain_exact(&self,key:&pages::Key) {
-        if key.level!=self.plan.level || self.graph.content.as_ref()!=Some(&key.expression) && !self.pivot_halves().contains(&key.expression) {self.pages.lock().unwrap().set_optional(key);}
+        if key.level!=self.plan.level || !self.shows(&key.expression) {self.pages.lock().unwrap().set_optional(key);}
     }
     pub(super) fn pivot_missing(&self,region:PixelRect)->bool {
         let halves=self.pivot_halves().len();
