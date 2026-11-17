@@ -53,8 +53,11 @@ function Copied-Text([scriptblock]$Copy){
     Clipboard-Text
 }
 function Busy-Clipboard([scriptblock]$Action){
-    if(![ClipboardLock]::OpenClipboard([IntPtr]::Zero)){throw 'The fixture could not hold the clipboard open'}
-    try{& $Action}finally{[ClipboardLock]::CloseClipboard()|Out-Null}
+    $lock=@{held=$false}
+    try{
+        Wait-Until {$lock.held=[ClipboardLock]::OpenClipboard([IntPtr]::Zero);$lock.held} 'The fixture could not hold the clipboard open'
+        & $Action
+    }finally{if($lock.held){[ClipboardLock]::CloseClipboard()|Out-Null}}
 }
 function Clipboard-Refusal{$refusal=Find 'edit-color-error' -Within $editorFrame;$refusal -and !$refusal.Current.IsOffscreen -and $refusal.Current.Name -eq 'Could not use the clipboard. Try again.'}
 function Paste([string]$Text){
