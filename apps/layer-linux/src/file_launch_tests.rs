@@ -69,6 +69,23 @@ fn launch_window(app: &adw::Application) -> Option<adw::ApplicationWindow> {
         .and_then(|w| w.downcast().ok())
 }
 
+fn stylus(w: &Rc<Workspace>, camera: &layer_ui::Camera, point: [f32; 2], phase: PenPhase) {
+    let event = PenEvent { device_id: 92, ..pen_event(camera, point, phase, glib::monotonic_time() as u64 * 1000) };
+    let reply = w.interact(UiInput::Pointer {
+        id: event.device_id, phase: crate::input::contact_phase(phase), kind: PointerKind::Pen, button: PointerButton::Primary,
+        position: [event.surface_position.x, event.surface_position.y], time_ns: event.timestamp_ns,
+    });
+    if reply.paint { w.input.send(w, event); }
+    pump(20);
+}
+
+fn stylus_path(w: &Rc<Workspace>) {
+    let camera = state(w).camera;
+    for (phase, point) in [(PenPhase::Down, [32., 80.]), (PenPhase::Move, [80., 80.]), (PenPhase::Up, [128., 80.])] {
+        stylus(w, &camera, point, phase);
+    }
+}
+
 fn admission_input(w: &Rc<Workspace>) {
     new_photo::invoke(w, CommandId::Pen);
     w.dispatch(UiAction::SetBrushSize { value: 16. });
@@ -77,26 +94,22 @@ fn admission_input(w: &Rc<Workspace>) {
     let strokes = ui_session(w).engine().metrics().committed_strokes;
     w.documents.changing.set(true);
     w.dispatch(UiAction::Invoke { command: CommandId::AddLayer });
-    native_pen_path(w, &[[32., 80.], [80., 80.], [128., 80.]]);
+    stylus_path(w);
     w.documents.changing.set(false);
     new_photo::ready(w);
     assert_eq!(place_source::authored_snapshot(w), before);
     assert_eq!(ui_session(w).engine().metrics().committed_strokes, strokes);
-    native_pen_path(w, &[[32., 80.], [80., 80.], [128., 80.]]);
+    stylus_path(w);
     new_photo::ready(w);
     assert_eq!(ui_session(w).engine().metrics().committed_strokes, strokes + 1);
     assert_ne!(place_source::authored_snapshot(w), before);
     for finish in [PenPhase::Up, PenPhase::Cancel] {
         let camera = state(w).camera;
-        for (phase, point) in [(PenPhase::Down, [32., 112.]), (PenPhase::Move, [80., 112.])] {
-            w.input.send(w, PenEvent { device_id: 92,
-                ..pen_event(&camera, point, phase, glib::monotonic_time() as u64 * 1000) });
-            pump(20);
-        }
+        stylus(w, &camera, [32., 112.], PenPhase::Down);
+        stylus(w, &camera, [80., 112.], PenPhase::Move);
         assert!(!ui_session(w).can_park_document());
         w.documents.changing.set(true);
-        w.input.send(w, PenEvent { device_id: 92,
-            ..pen_event(&camera, [128., 112.], finish, glib::monotonic_time() as u64 * 1000) });
+        stylus(w, &camera, [128., 112.], finish);
         w.documents.changing.set(false);
         until(|| ui_session(w).can_park_document(), "finishing pen record retires contact during admission");
     }

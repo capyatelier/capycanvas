@@ -840,7 +840,7 @@ pub fn pad_buttons(workspace: &Rc<Workspace>) -> gtk::EventControllerLegacy {
     pads
 }
 
-fn contact_phase(phase: PenPhase) -> ContactPhase {
+pub(crate) fn contact_phase(phase: PenPhase) -> ContactPhase {
     match phase {
         PenPhase::Down => ContactPhase::Down,
         PenPhase::Up => ContactPhase::Up,
