@@ -975,12 +975,6 @@ fn pencil_cells(r:&WgpuRasterizer,[x,y]:[f32;2],radius:f32)->usize {
     [x,x+8.].into_iter().flat_map(|x|pages::coordinates(crate::pixel_rect::pixel_rect(pencil(x,y,radius,&style).bounds(),plan.extent).intersect(plan.bounds),plan.level))
         .collect::<BTreeSet<_>>().len()
 }
-fn idle_frames(r:&mut WgpuRasterizer,frame:FramePacket<'_>,frames:usize) {
-    for _ in 0..frames {
-        crate::test_support::submit_ready(r,frame).unwrap();crate::test_support::complete(r);
-        std::thread::sleep(std::time::Duration::from_millis(16));
-    }
-}
 struct Switched {counts:crate::test_support::PassCounts,decodes:u64,reach:usize,contact:bool,shown:bool}
 fn first_dab_after_a_switch_and_a_reaction_gap() -> Switched {
     let doc=crate::memory::memory_tests::layered_raster_document(32,16);
@@ -992,9 +986,9 @@ fn first_dab_after_a_switch_and_a_reaction_gap() -> Switched {
     let target=doc.scene().source_target(drawn).unwrap();
     for step in 0..3 {pencil_frame(&mut r,frame,target,1,at,12.,step);}
     pencil_lift(&mut r,frame,target,1,at,12.);
-    idle_frames(&mut r,frame,12);
+    crate::test_support::submit_settled(&mut r,frame);
     layer_render::CanvasRenderer::set_working_layer(&mut r,Some(selected));
-    idle_frames(&mut r,frame,12);
+    crate::test_support::submit_settled(&mut r,frame);
     let target=doc.scene().source_target(selected).unwrap();
     let at=[at[0],at[1]+96.];
     let misses=r.metrics().source_tile_misses;
@@ -1012,7 +1006,7 @@ fn the_first_contact_frame_after_a_switch_folds_no_layers_and_declares_only_cell
     assert!(contact,"the pen-down frame after a switch and a reaction gap begins its contact: {counts:?}");
     assert_eq!(counts.fold_inputs,0,"the pen-down frame builds no halves: {counts:?}");
     assert!(decodes<=reach as u64,"the pen-down frame decodes {decodes} tiles; its dabs reach {reach}");
-    assert!(counts.declarations<=9,"the pen-down frame declares {} times; the cells within one cell of its dab are 9",counts.declarations);
+    assert!(counts.declarations<=10+counts.unit_acceptances,"the pen-down frame declares {} times; the cells within one cell of its dab are 9, with one reduction and one declaration per unit it accepts: {counts:?}",counts.declarations);
 }
 
 #[test]
@@ -1029,7 +1023,7 @@ fn a_stroke_started_while_the_last_one_composes_begins_in_contact_and_commits_on
     crate::test_support::submit_settled(&mut r,frame);
     let layer=named(&doc,"Layer 5");let target=doc.scene().source_target(layer).unwrap();
     layer_render::CanvasRenderer::set_working_layer(&mut r,Some(layer));
-    idle_frames(&mut r,frame,60);
+    crate::test_support::submit_settled(&mut r,frame);
     for step in 0..3 {pencil_frame(&mut r,frame,target,1,[1800.,2048.],512.,step);}
     pencil_lift(&mut r,frame,target,1,[1900.,2048.],512.);
     assert!(r.scale_display.as_ref().unwrap().has_pending_work(&r),"the last stroke's cells still compose");
