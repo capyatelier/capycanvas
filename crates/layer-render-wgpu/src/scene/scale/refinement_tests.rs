@@ -1247,7 +1247,9 @@ fn settle_refinement(r:&mut WgpuRasterizer,doc:&Document,extent:[u32;2],context:
         let before=crate::test_support::PassCounts::snapshot();
         crate::test_support::submit_ready(r,FramePacket {composite_all:step==0,..frame}).unwrap();crate::test_support::complete(r);
         if r.next_frame()!=layer_render::FrameDemand::Work {return;}
-        idle=if crate::test_support::PassCounts::snapshot().delta(before).composite_commits==0 {idle+1}else {0};
+        let committed=crate::test_support::PassCounts::snapshot().delta(before).composite_commits!=0;
+        if !committed && r.image_decode_waiting() {crate::test_support::settle_decodes(r);continue;}
+        idle=if committed {0}else {idle+1};
         assert!(idle<16,"{context}: {idle} Work frames in a row committed nothing: {:?}",r.outstanding_terms());
     }
     panic!("{context}: the display never settled: {:?}",r.outstanding_terms());
