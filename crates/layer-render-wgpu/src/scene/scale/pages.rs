@@ -829,6 +829,12 @@ impl Store {
             if inputs.is_empty() {self.inputs.remove(accepted.key());}
         }
     }
+    pub(super) fn keep_outputs(&mut self,interest:&Interest,kept:&[Key]) {
+        let Some(input)=self.inputs.get_mut(&interest.key).and_then(|inputs|inputs.iter_mut().find(|input|input.at(interest.region,interest.input_level))) else {return;};
+        input.sources=Default::default();input.pin=None;
+        let released=input.pages.extract_if(..,|(key,_,_)|!kept.contains(key)).map(|(key,_,_)|key).collect::<Vec<_>>();
+        self.release_unwanted(&released);
+    }
     #[cfg(test)]
     pub(super) fn fixture_handle(&self,key:&Key,region:PixelRect,input_level:u32)->Accepted {
         self.inputs[key].iter().find(|input|input.at(region,input_level)).unwrap().accepted.clone()

@@ -266,6 +266,12 @@ impl Cache {
             && unit.coordinate.map(|value|value>>(cell.level-unit.level))==cell.coordinate && parts.iter().any(|part|part.expression==unit.expression))
     }
     fn continues_admitted(&self,key:&pages::Key)->bool {self.streaming.units.iter().any(|unit|self.cell_parts(&unit.interest.key).contains(key))}
+    fn keep_committed_halves(&self,key:&pages::Key) {
+        let Some(unit)=self.streaming.units.iter().find(|unit|unit.interest.key==*key) else {return;};
+        let mut store=self.pages.lock().unwrap();
+        let committed=self.cell_parts(key).into_iter().skip(1).filter(|half|store.has(half,half.plan().bounds,pages::Accuracy::Exact,0)).collect::<Vec<_>>();
+        store.keep_outputs(&unit.interest,&committed);
+    }
     fn exact_level(&self)->u32 {self.plan.level.max(self.overview.as_ref().map_or(0,|cache|cache.plan.level))}
     fn ancestors(&self,key:&pages::Key)->Vec<pages::Key> {
         let level=self.exact_level();
@@ -318,7 +324,7 @@ impl Cache {
             if self.pages.lock().unwrap().get(&part,region,pages::Accuracy::Exact,0,class(region)).is_none() {
                 match self.exact_capture(scene,r,packet,encoder,commands,budget,pass,pinned,&part,Some(&scopes[index]),None,class)? {
                     Outcome::Committed=>{},
-                    outcome=>return Ok(outcome),
+                    outcome=>{if matches!(outcome,Outcome::Refused(..)) {self.keep_committed_halves(key);}return Ok(outcome);},
                 }
             }
             halves[half]=Some(self.pages.lock().unwrap().get(&part,region,pages::Accuracy::Exact,0,class(region))

@@ -1255,17 +1255,26 @@ fn settle_refinement(r:&mut WgpuRasterizer,doc:&Document,extent:[u32;2],context:
     panic!("{context}: the display never settled: {:?}",r.outstanding_terms());
 }
 
-fn refine_spent_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>) {
+fn refine_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,spent:bool) {
     let mut cache=r.scale_display.take().unwrap();let mut scene=r.scene.take().unwrap();
     let mut commands=scene.scale_commands.take().unwrap_or_else(||RegionRecords::new(r));
     scene.begin_frame();commands.begin();
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let write=scene.begin_write(r,&mut encoder).unwrap();cache.submission_valid=Some(scene.valid.clone());
-    let mut budget=Scene::begin_work(false);budget.spend(budget.remaining());
+    let mut budget=Scene::begin_work(false);if spent {budget.spend(budget.remaining());}
     cache.refine(&mut scene,r,frame,&mut encoder,&mut commands,&mut budget).unwrap();
     write.track(&encoder);
     scene.scale_commands=Some(commands);r.scale_display=Some(cache);r.scene=Some(scene);
     r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(r);
+}
+
+fn fold_in_flight(r:&mut WgpuRasterizer,frame:FramePacket<'_>)->Vec<pages::Key> {
+    (0..8).find_map(|_| {
+        refine_frame(r,frame,true);
+        let cache=r.scale_display.as_ref().unwrap();
+        let folds:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).filter(|key|cache.graph.content.as_ref()==Some(&key.expression)).collect();
+        if folds.is_empty() {crate::test_support::settle_decodes(r);r.wait_idle().unwrap();None}else {Some(folds)}
+    }).expect("a spent frame leaves a fold unit in flight once its inputs are decoded")
 }
 
 fn translucent_layers(doc:&mut Document,extent:[u32;2],count:u32)->Vec<OccurrenceHandle> {
@@ -1296,10 +1305,8 @@ fn a_fold_unit_in_flight_whose_half_is_gone_admits_the_half_and_settles() {
     set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
     let (mut r,cells)=edited_pivot_with_evicted_cells(&mut doc,extent,top);
     let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
-    refine_spent_frame(&mut r,frame);
+    let folds=fold_in_flight(&mut r,frame);
     let cache=r.scale_display.as_ref().unwrap();let halves=cache.pivot_halves();
-    let folds:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).filter(|key|cache.graph.content.as_ref()==Some(&key.expression)).collect();
-    assert!(!folds.is_empty(),"a fold unit is left in flight by the spent frame");
     cache.pages.lock().unwrap().trim(0,crate::residency::Class::Fallback);
     for half in folds.iter().flat_map(|key|halves.iter().map(move|half|pages::Key {expression:half.clone(),..key.clone()})) {
         assert!(cache.pages.lock().unwrap().get(&half,half.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Refinement).is_some(),"a trim keeps the halves of a fold in flight");
@@ -1317,7 +1324,7 @@ fn selecting_another_layer_releases_the_units_admitted_for_the_previous_pivot() 
     set_root_entries(&mut doc,entries.clone());
     let (mut r,_)=edited_pivot_with_evicted_cells(&mut doc,extent,pivot);
     let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
-    refine_spent_frame(&mut r,frame);
+    refine_frame(&mut r,frame,true);
     let (halves,admitted)={
         let cache=r.scale_display.as_ref().unwrap();let halves=cache.pivot_halves();
         let admitted:Vec<_>=cache.streamed_interests(frame.view).map(|interest|interest.key).filter(|key|halves.contains(&key.expression)).collect();
@@ -1345,7 +1352,7 @@ fn a_unit_in_flight_reserves_no_ancestor_above_the_level_it_reduces_into() {
     set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
     let (mut r,_)=edited_pivot_with_evicted_cells(&mut doc,extent,top);
     let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
-    refine_spent_frame(&mut r,frame);
+    refine_frame(&mut r,frame,true);
     let reduced=|cache:&Cache|cache.plan.level.max(cache.overview.as_ref().map_or(0,|overview|overview.plan.level));
     let navigator=r.navigator.cache().map_or(0,reduced);
     let cache=r.scale_display.as_ref().unwrap();let level=reduced(cache);
@@ -1383,4 +1390,35 @@ fn selecting_another_layer_lets_the_previous_pivots_halves_yield() {
     pages::evict_composite_pages_where(cache,&[cache.plan.bounds],|key|built.contains(key));
     let released=yielding-cache.pages.lock().unwrap().tier().yielding();
     assert_eq!(released,stale,"the previous pivot's halves yield their {stale} bytes to a refusal once the selection moves");
+}
+
+#[test]
+fn a_fold_unit_whose_half_is_refused_holds_only_its_committed_halves() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let below=translucent_layers(&mut doc,extent,18);
+    let top=paint_occurrence(&mut doc,"Top",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    set_root_entries(&mut doc,std::iter::once(top).chain(below).collect());
+    let (mut r,cells)=edited_pivot_with_evicted_cells(&mut doc,extent,top);
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    let folds=fold_in_flight(&mut r,frame);
+    let cache=r.scale_display.as_ref().unwrap();let halves=cache.pivot_halves();
+    let lost:Vec<_>=folds.iter().flat_map(|key|halves.iter().map(move|half|pages::Key {expression:half.clone(),..key.clone()})).collect();
+    pages::evict_composite_pages_where(cache,&cells,|key|lost.contains(key));
+    let display=r.scene_tiers.display.clone();
+    let pages={let mut store=cache.pages.lock().unwrap();
+        store.retained_pages().into_iter().filter(|page|!folds.contains(&page.key)).map(|page|store.allocated(&page.key,crate::residency::Class::Visible).unwrap()).collect::<Vec<_>>()};
+    let pivot=doc.scene().order().iter().position(|&handle|handle==top).unwrap();
+    let sources={let tiles=r.source_tiles.borrow();(0..doc.scene().order().len()).filter(|index|*index!=pivot).flat_map(|index|{let source=paint_at(&doc,index).base.as_ref().unwrap().image.storage();
+        page_coordinates(PixelRect::full(extent)).filter_map(|coordinate|tiles.prepared_view(source,coordinate).and_then(|view|tiles.lease(view))).collect::<Vec<_>>()}).collect::<Vec<_>>()};
+    let held=(display.charge(display.headroom(crate::residency::Class::Refinement)),pages,sources);
+    assert_eq!(display.headroom(crate::residency::Class::Refinement),0,"only the fold's own closure leaves room for its lost half");
+    for step in 0..64 {
+        refine_frame(&mut r,frame,false);
+        let cache=r.scale_display.as_ref().unwrap();
+        let committed=lost.iter().all(|half|cache.pages.lock().unwrap().get(half,half.plan().bounds,pages::Accuracy::Exact,0,crate::residency::Class::Refinement).is_some());
+        let flying=cache.streamed_interests(frame.view).any(|interest|folds.contains(&interest.key));
+        if committed || !flying {drop(held);return;}
+        assert!(step<63,"a fold in flight holds its closure while its lost half is refused for memory");
+        crate::test_support::settle_decodes(&mut r);r.wait_idle().unwrap();
+    }
 }
