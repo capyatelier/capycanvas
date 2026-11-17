@@ -103,11 +103,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         std::vector<uint32_t> projected;
         bool Same(BridgeFrame const& other)const{return sent==other.sent&&presented==other.presented&&regions==other.regions&&bridges==other.bridges&&sizing==other.sizing&&pending==other.pending&&owners==other.owners&&projected==other.projected;}
     };
-    std::vector<BridgeFrame> bridgeFrames;
+    std::optional<BridgeFrame> bridgeFrame;
+    std::string bridgeFrameState;
+    JsonTraceHistory bridgeFrames,bridgeEvents;
     uint64_t bridgeFrameOverflow=0;
-    struct BridgeEvent {uint64_t serial,requested;int64_t qpc;hstring kind;bool accepted;BridgeFrame state;};
-    std::vector<BridgeEvent> bridgeEvents;
-    std::map<hstring,size_t> lastBridgeEvent;
+    struct BridgeEvent {uint64_t requested;bool accepted;BridgeFrame state;};
+    std::map<hstring,BridgeEvent> lastBridgeEvent;
     uint64_t bridgeEventSerial=0,bridgeEventOverflow=0;
     uint64_t surfaceFrames=0,surfaceGroups=0,surfaceMismatches=0,tabFrames=0,escapedLabels=0;
     double maximumSurfaceOffset=0;
@@ -820,9 +821,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(escaped)++escapedLabels;
         if(!bridgeTrace)return;
         auto frame=bridgeState();frame.first=frame.last=surfaceFrames;
-        if(!bridgeFrames.empty()&&bridgeFrames.back().Same(frame)){bridgeFrames.back().last=frame.last;bridgeFrames.back().lastQpc=frame.lastQpc;}
-        else if(bridgeFrames.size()<4096)bridgeFrames.push_back(std::move(frame));
-        else ++bridgeFrameOverflow;
+        if(bridgeFrame&&bridgeFrame->Same(frame)){bridgeFrame->last=frame.last;bridgeFrame->lastQpc=frame.lastQpc;}
+        else if(bridgeFrames.Size()+bool(bridgeFrame)<4096){
+            if(bridgeFrame)bridgeFrames.Append(bridgeFramePayload());
+            bridgeFrame=std::move(frame);bridgeFrameState=to_string(bridgeState(*bridgeFrame).Stringify());
+        }else ++bridgeFrameOverflow;
     }
     BridgeFrame bridgeState()const{
         LARGE_INTEGER qpc{};QueryPerformanceCounter(&qpc);
@@ -839,13 +842,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!bridgeTrace)return;
         auto state=bridgeState();auto found=lastBridgeEvent.find(kind);
         if(found!=lastBridgeEvent.end()){
-            auto const& previous=bridgeEvents[found->second];
+            auto const& previous=found->second;
             if(previous.requested==requested&&previous.accepted==accepted&&previous.state.Same(state))return;
         }
         auto serial=++bridgeEventSerial;
-        if(bridgeEvents.size()>=4096){++bridgeEventOverflow;return;}
-        lastBridgeEvent[kind]=bridgeEvents.size();
-        bridgeEvents.push_back({serial,requested,state.lastQpc,std::move(kind),accepted,std::move(state)});
+        if(bridgeEvents.Size()>=4096){++bridgeEventOverflow;return;}
+        auto sample=bridgeState(state);sample.Insert(L"serial",N(double(serial)));sample.Insert(L"kind",S(kind));sample.Insert(L"qpc",N(double(state.lastQpc)));
+        sample.Insert(L"requested_chrome_revision",N(double(requested)));sample.Insert(L"accepted",B(accepted));bridgeEvents.Append(to_string(sample.Stringify()));
+        lastBridgeEvent.insert_or_assign(kind,BridgeEvent{requested,accepted,std::move(state)});
     }
     J bridgeState(BridgeFrame const& frame)const{
         A owners,projected;
@@ -853,6 +857,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto id:frame.projected)projected.Append(N(id));
         return O({{L"chrome_revision",N(double(frame.sent))},{L"presented_chrome_revision",N(double(frame.presented))},{L"window_resizing",B(frame.sizing)},{L"native_resize_pending",B(frame.pending)},
             {L"glass_regions",N(double(frame.regions))},{L"bridges",N(double(frame.bridges))},{L"groups",owners},{L"projected",projected}});
+    }
+    std::string bridgeFramePayload()const{
+        if(!bridgeFrame)return {};
+        return JsonUnsignedFields(bridgeFrameState,{{"first_frame",bridgeFrame->first},{"last_frame",bridgeFrame->last},
+            {"first_qpc",uint64_t(bridgeFrame->firstQpc)},{"last_qpc",uint64_t(bridgeFrame->lastQpc)}});
     }
     void tracePresentation(){
         if(!trace)return;
@@ -918,17 +927,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         if(!windowResizing){
             for(auto const& bound:resizeBounds)boundSamples.Append(O({{L"qpc",N(double(bound.qpc))},{L"group",N(bound.group)},{L"kind",S(bound.column?L"column":L"group")},{L"bounds",rectangle(bound.bounds)},{L"outside",B(bound.outside)}}));
         }
-        A bridgeSamples,bridgeBoundaries;
-        for(auto const& frame:bridgeFrames){
-            auto sample=bridgeState(frame);sample.Insert(L"first_frame",N(double(frame.first)));sample.Insert(L"last_frame",N(double(frame.last)));
-            sample.Insert(L"first_qpc",N(double(frame.firstQpc)));sample.Insert(L"last_qpc",N(double(frame.lastQpc)));bridgeSamples.Append(sample);
-        }
-        for(auto const& event:bridgeEvents){
-            auto sample=bridgeState(event.state);sample.Insert(L"serial",N(double(event.serial)));sample.Insert(L"kind",S(event.kind));sample.Insert(L"qpc",N(double(event.qpc)));
-            sample.Insert(L"requested_chrome_revision",N(double(event.requested)));sample.Insert(L"accepted",B(event.accepted));bridgeBoundaries.Append(sample);
-        }
         LARGE_INTEGER snapshotQpc{};QueryPerformanceCounter(&snapshotQpc);
-        auto value=O({{L"revision",N(double(publication.Revision()))},
+        auto value=to_string(O({{L"revision",N(double(publication.Revision()))},
             {L"model_revision",N(double(publication.ModelRevision()))},
             {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
             {L"shaders_ready",B(flag(data->model,L"shaders_ready"))},{L"checkpoint_camera",object(object(data->model,L"windows_recovery"),L"camera")},
@@ -939,13 +939,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             {L"snapshot_qpc",N(double(snapshotQpc.QuadPart))},{L"native_sizing_start_qpc",N(double(nativeSizingStartQpc))},{L"native_sizing_end_qpc",N(double(nativeSizingEndQpc))},
             {L"resize_layout_frames",O({{L"count",N(double(resizeFrames.size()+resizeFrameOverflow))},{L"overflow",N(double(resizeFrameOverflow))},{L"tolerance",N(.01)},{L"samples",resizeSamples}})},
             {L"resize_panel_bounds",O({{L"count",N(double(resizeBounds.size()+resizeBoundsOverflow))},{L"overflow",N(double(resizeBoundsOverflow))},{L"samples",boundSamples}})},
-            {L"bridge_frames",O({{L"frame",N(double(surfaceFrames))},{L"overflow",N(double(bridgeFrameOverflow))},{L"samples",bridgeSamples}})},
-            {L"bridge_events",O({{L"serial",N(double(bridgeEventSerial))},{L"overflow",N(double(bridgeEventOverflow))},{L"samples",bridgeBoundaries}})},
             {L"surface_frames",O({{L"frames",N(double(surfaceFrames))},{L"groups",N(double(surfaceGroups))},{L"mismatched_frames",N(double(surfaceMismatches))},
                 {L"maximum_offset_px",N(maximumSurfaceOffset)},{L"tab_frames",N(double(tabFrames))},{L"escaped_label_frames",N(double(escapedLabels))},{L"first_mismatch",firstSurfaceMismatch}})},
             {L"panel_bridge_frame",panelBridgeFrame},{L"chrome_revision",N(double(data->chromeFrames->sentRevision))},
-            {L"presented_chrome_revision",object(data->model,L"windows_glass").GetNamedValue(L"chrome_revision",JsonValue::CreateNullValue())}}).Stringify();
-        if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
+            {L"presented_chrome_revision",object(data->model,L"windows_glass").GetNamedValue(L"chrome_revision",JsonValue::CreateNullValue())}}).Stringify());
+        auto tail=bridgeFramePayload();value.reserve(value.size()+bridgeFrames.Bytes()+bridgeEvents.Bytes()+tail.size()+256);value.pop_back();
+        value+=",\"bridge_frames\":{\"frame\":"+std::to_string(surfaceFrames)+",\"overflow\":"+std::to_string(bridgeFrameOverflow)+",\"samples\":";
+        bridgeFrames.AppendArray(value,tail);
+        value+="},\"bridge_events\":{\"serial\":"+std::to_string(bridgeEventSerial)+",\"overflow\":"+std::to_string(bridgeEventOverflow)+",\"samples\":";
+        bridgeEvents.AppendArray(value);value+="}}";
+        auto presentation=to_hstring(value);
+        if(presentation!=lastPresentation){lastPresentation=presentation;AutomationProperties::SetItemStatus(root,presentation);}
     }
 
     double configurationHeight(double width=0)const{

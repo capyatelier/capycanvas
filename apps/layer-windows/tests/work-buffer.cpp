@@ -91,6 +91,29 @@ int main() {
         assert(!receipt(LR"({"camera":{"revision":14},"revision":46,"windows_glass":{}})",false).HasKey(L"navigation"));
     }
     std::cout<<"Camera traces carry the active navigation through camera-only packets\n";
+    {
+        using J=winrt::Windows::Data::Json::JsonObject;
+        CapyUi::JsonTraceHistory frames,events;
+        auto state=J::Parse(LR"({"chrome_revision":12,"groups":[{"id":4,"gpu_background":true}],"projected":[4]})");
+        auto cached=winrt::to_string(state.Stringify());
+        auto tail=[&](uint64_t first,uint64_t last,uint64_t qpc){return CapyUi::JsonUnsignedFields(cached,{{"first_frame",first},{"last_frame",last},{"first_qpc",100},{"last_qpc",qpc}});};
+        assert(frames.Size()==0&&frames.Array()=="[]");
+        auto first=tail(7,9,130);frames.Append(first);
+        first="{}";
+        auto current=tail(10,14,190);
+        auto event=J::Parse(LR"({"kind":"chrome-ack\\\"\\\u65e5","serial":2,"accepted":false})");
+        events.Append(winrt::to_string(event.Stringify()));
+        auto wire=J::Parse(winrt::to_hstring("{\"frames\":"+frames.Array(current)+",\"events\":"+events.Array()+"}"));
+        auto samples=wire.GetNamedArray(L"frames");
+        assert(frames.Size()==1&&events.Size()==1&&samples.Size()==2);
+        assert(samples.GetObjectAt(0).GetNamedNumber(L"first_frame")==7&&samples.GetObjectAt(0).GetNamedNumber(L"last_frame")==9);
+        assert(samples.GetObjectAt(1).GetNamedNumber(L"first_frame")==10&&samples.GetObjectAt(1).GetNamedNumber(L"last_frame")==14&&samples.GetObjectAt(1).GetNamedNumber(L"last_qpc")==190);
+        assert(CapyUi::CanonicalJson(winrt::to_string(wire.GetNamedArray(L"events").GetObjectAt(0).Stringify()))==CapyUi::CanonicalJson(winrt::to_string(event.Stringify())));
+        frames.Append(current);
+        assert(frames.Size()==2&&CapyUi::CanonicalJson(frames.Array())==CapyUi::CanonicalJson(winrt::to_string(samples.Stringify())));
+        assert(CapyUi::CanonicalJson(winrt::to_string(samples.GetObjectAt(0).GetNamedArray(L"groups").Stringify()))==CapyUi::CanonicalJson(winrt::to_string(state.GetNamedArray(L"groups").Stringify())));
+    }
+    std::cout<<"Cached native trace arrays preserve sealed samples, a live tail and escaped events\n";
 #endif
     CapyUi::PointerModality modality;
     assert(!modality.Mouse());

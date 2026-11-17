@@ -104,6 +104,19 @@ inline std::string JsonUnsignedFields(std::string object,std::initializer_list<s
     }
     object+='}';return object;
 }
+class JsonTraceHistory {
+    std::string samples;
+    size_t count=0;
+public:
+    void Append(std::string_view sample){if(count++)samples+=',';samples+=sample;}
+    size_t Size()const{return count;}
+    size_t Bytes()const{return samples.size();}
+    void AppendArray(std::string& result,std::string_view tail={})const{
+        result.reserve(result.size()+samples.size()+tail.size()+3);result+='[';result+=samples;
+        if(!tail.empty()){if(count)result+=',';result+=tail;}result+=']';
+    }
+    std::string Array(std::string_view tail={})const{std::string result;AppendArray(result,tail);return result;}
+};
 inline V named(J const& value,wchar_t const* key){CanvasModelInputs::Capture::Read(value,key);return value.GetNamedValue(key,JsonValue::CreateNullValue());}
 inline J object(J const& value,wchar_t const* key){
     auto item=named(value,key);

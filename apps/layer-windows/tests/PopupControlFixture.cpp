@@ -648,9 +648,12 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
                 for(auto id:receivers){auto row=findId(array(status,L"groups"),id);require(row.Size()&&flag(row,L"gpu_background")==gpu&&flag(row,L"native_bridge_background")!=gpu,L"Continuing bridge receiver changed GPU/native ownership in a pending chrome phase");require(retained.at(id)&&findElement(surface,L"workspace-group-"+to_hstring(id))==retained.at(id),L"Pending chrome replaced a continuing native receiver");}
             };
             J document;auto publish=[&](uint64_t revision,float width){checkpoint=L"send-"+to_hstring(revision);stage(L"Width");surface.Width(width);stage(L"UpdateLayout");surface.UpdateLayout();stage(L"Resize");view->Resize(width,700);A connections,arcs,colors,panels;stage(L"Glass");view->Glass(surface,connections,arcs,colors,panels);stage(L"ChromeDocument");document=view->ChromeDocument();stage(L"ChromeSent");view->ChromeSent(revision);};
-            auto ack=[&](uint64_t requested,bool accepted,uint64_t presented){
+            auto applyAck=[&](uint64_t requested){
                 A extent;extent.Append(N(num(document,L"width")));extent.Append(N(num(document,L"height")));
                 checkpoint=L"ack-"+to_hstring(requested);stage(L"Apply");require(view->Apply(O({{L"windows_glass",O({{L"chrome_revision",N(double(requested))},{L"document",extent}})}})),L"Pending chrome acknowledgement packet was rejected by WorkspaceView");
+            };
+            auto ack=[&](uint64_t requested,bool accepted,uint64_t presented){
+                applyAck(requested);
                 auto status=snapshot(),events=object(status,L"bridge_events");require(num(events,L"overflow",-1)==0,L"Pending-owner decision evidence overflowed or was absent");J matched;
                 for(auto value:array(events,L"samples")){auto event=value.GetObject();if(str(event,L"kind")==L"chrome-ack"&&num(event,L"requested_chrome_revision",-1)==double(requested))matched=event;}
                 require(matched.Size()&&flag(matched,L"accepted")==accepted&&num(matched,L"presented_chrome_revision",-1)==double(presented),L"Real WorkspaceView did not accept/reject the forced chrome acknowledgement at its ownership boundary");
@@ -673,6 +676,29 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             checkpoint=L"sizing";stage(L"SetWindowResizing-true");view->SetWindowResizing(true);owners(false,true,false);publish(revision+3,1120);owners(false,true,false);
             checkpoint=L"handback";stage(L"SetWindowResizing-false");view->SetWindowResizing(false);owners(false,false,true);publish(revision+4,1120);owners(false,false,true);
             ack(revision+1,false,revision+2);owners(false,false,true);ack(revision+4,true,revision+4);owners(true,false,false);
+            {
+                publish(revision+5,1120);auto batchBaseline=snapshot();
+                auto serial=num(object(batchBaseline,L"bridge_events"),L"serial",-1);
+                require(serial>=0,L"Synchronous chrome fixture lacks its initial bridge event boundary");
+                struct ExpectedAck {uint64_t requested,presented;bool accepted;};
+                std::array<ExpectedAck,3> expected{{{revision+2,revision+4,false},{revision+3,revision+4,false},{revision+5,revision+5,true}}};
+                size_t completed=0;
+                for(auto const& item:expected){
+                    auto prior=AutomationProperties::GetItemStatus(surface);
+                    applyAck(item.requested);++completed;
+                    auto published=AutomationProperties::GetItemStatus(surface);
+                    require(published!=prior,L"Chrome acknowledgement did not publish ItemStatus synchronously");
+                    auto status=J::Parse(published),events=object(status,L"bridge_events");
+                    require(num(events,L"overflow",-1)==0,L"Synchronous chrome acknowledgement evidence overflowed or was absent");
+                    size_t found=0;
+                    for(auto value:array(events,L"samples")){
+                        auto event=value.GetObject();if(str(event,L"kind")!=L"chrome-ack"||num(event,L"serial",-1)<=serial)continue;
+                        require(found<completed&&num(event,L"requested_chrome_revision",-1)==double(expected[found].requested)&&num(event,L"presented_chrome_revision",-1)==double(expected[found].presented)&&flag(event,L"accepted")==expected[found].accepted,L"Cached chrome trace changed an ordered acknowledgement boundary");++found;
+                    }
+                    require(found==completed&&num(status,L"chrome_revision",-1)==double(revision+5),L"Synchronous chrome trace lost acknowledgements or the current chrome revision");
+                    if(completed==expected.size())require(num(status,L"presented_chrome_revision",-1)==double(revision+5),L"Synchronous chrome trace lost its final presentation");
+                }
+            }
             checkpoint=L"cleanup";stage(L"RemoveAt");root.Children().RemoveAt(0);stage(L"DestroyWorkspaceView");view.reset();
         }catch(...){root.Children().RemoveAt(0);view.reset();throw;}
     }
