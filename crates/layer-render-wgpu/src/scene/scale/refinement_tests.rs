@@ -1422,3 +1422,48 @@ fn a_fold_unit_whose_half_is_refused_holds_only_its_committed_halves() {
         crate::test_support::settle_decodes(&mut r);r.wait_idle().unwrap();
     }
 }
+
+#[cfg(not(target_arch="wasm32"))]
+#[test]
+fn a_selection_that_moves_while_the_previous_halves_are_in_flight_builds_the_new_halves_once_they_release() {
+    let extent=[512,256];let mut doc=document_at(extent);
+    let mut entries=translucent_layers(&mut doc,extent,18);
+    let pivot=paint_occurrence(&mut doc,"Pivot",Some(rgba8_source(extent,|x,y|[(y%251) as u8,90,(x%239) as u8,160])));
+    entries.insert(entries.len()/2,pivot);
+    set_root_entries(&mut doc,entries.clone());
+    let mut r=crate::memory::memory_tests::legacy_scene_renderer(doc.composition().color);
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(pivot));
+    settle_refinement(&mut r,&doc,extent,"open");
+    let index=doc.scene().order().iter().position(|&handle|handle==pivot).unwrap();
+    paint_mut(&mut doc,index).base=Some(layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x%233) as u8,(y%229) as u8,40,200]).into()));
+    settle_refinement(&mut r,&doc,extent,"edit");
+    let frame=FramePacket {composite_all:false,..packet(doc.scene(),extent)};
+    let previous=r.scale_display.as_ref().unwrap().pivot_halves();
+    evict_composite_pages(r.scale_display.as_ref().unwrap(),&[PixelRect::full(extent)]);
+    refine_frame(&mut r,frame,true);
+    let unpinned:u64={
+        let cache=r.scale_display.as_ref().unwrap();
+        assert!(cache.streamed_interests(frame.view).any(|interest|previous.contains(&interest.key.expression)),"the spent frame leaves a half of the edited pivot in flight");
+        let store=cache.pages.lock().unwrap();
+        store.retained_pages().into_iter().filter(|page|page.key.source.is_none() && previous.contains(&page.key.expression) && !store.pinned(&page.key)).map(|page|page.key.bytes()).sum()
+    };
+    let display=r.scene_tiers.display.clone();
+    let held=display.charge(display.headroom(crate::residency::Class::Refinement)+display.yielding()+unpinned);
+    let (send,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+    layer_render::CanvasRenderer::set_working_layer(&mut r,Some(entries[0]));
+    crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+    assert!(r.scale_display.as_ref().unwrap().pivot_refusal.is_some(),"the new pivot's halves are refused while the previous halves are in flight");
+    let built=|r:&WgpuRasterizer|{let cache=r.scale_display.as_ref().unwrap();!cache.pivot_halves().is_empty() && !cache.pivot_missing(cache.plan.bounds)};
+    for _ in 0..16 {
+        if built(&r) {break;}
+        if r.next_frame()!=layer_render::FrameDemand::Work {
+            assert!(woken.recv_timeout(std::time::Duration::from_secs(1)).is_ok(),"the new pivot's refused halves are never woken: {:?}",r.outstanding_terms());
+        }
+        crate::test_support::submit_ready(&mut r,frame).unwrap();crate::test_support::complete(&r);
+    }
+    let cache=r.scale_display.as_ref().unwrap();
+    assert!(cache.pivot_halves().iter().all(|half|!previous.contains(half)),"the selection moves the pivot");
+    assert!(built(&r),"the new pivot's halves are built without a pen-down: {:?}",r.outstanding_terms());
+    drop(held);
+}
