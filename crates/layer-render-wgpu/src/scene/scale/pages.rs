@@ -1798,10 +1798,13 @@ impl Cache {
             if cell.pending() {cell.waits.clone_from(&waits);}
         }
     }
-    pub(super) fn residual_demand(&self,r:&WgpuRasterizer)->crate::frame_demand::Outstanding {
+    pub(super) fn residual_demand(&self,r:&WgpuRasterizer)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::{Input,Outstanding};
-        if self.cells().is_some_and(|(cells,_store,_)|cells.cells.iter().any(|cell|cell.pending() && cell.parked(r))) {Outstanding::Blocked(Input::Residency)}
-        else {Outstanding::Runnable}
+        let Some((cells,_store,_))=self.cells() else {return Some(Outstanding::Runnable);};
+        let mut pending=cells.cells.iter().filter(|cell|cell.pending()).peekable();
+        if pending.clone().any(|cell|cell.parked(r)) {Some(Outstanding::Blocked(Input::Residency))}
+        else if pending.peek().is_some() && pending.all(Cell::sleeping) {None}
+        else {Some(Outstanding::Runnable)}
     }
     pub(super) fn forget_refusals(&self) {
         for cell in &mut self.cells.lock().unwrap().cells {cell.refusal=None;cell.waits.clear();}
@@ -3371,13 +3374,13 @@ pub(super) mod query_tests {
         let mut cache=Cache::new(&r,Request {plan:display_mips::Plan::at(extent,0),evaluation:Evaluation::Display},document.scene().order().len());
         cache.prepare_graph(&r,frame,&scene).unwrap();
         cache.refuse(Some(r.arrival_token()),cache.plan.bounds,&refused);
-        assert_eq!(cache.residual_demand(&r),Outstanding::Blocked(crate::frame_demand::Input::Residency),"the cell refused its object windows parks on residency");
+        assert_eq!(cache.residual_demand(&r),Some(Outstanding::Blocked(crate::frame_demand::Input::Residency)),"the cell refused its object windows parks on residency");
         let slot=Arc::new(std::sync::Mutex::new(crate::object_image_mips::CoordinateSlot::new(&Default::default())));
         r.source_results.push_back((r.device.working_space(),crate::object_image_mips::PreparedImageWork::Coordinates {
             destination:Arc::downgrade(&slot),pixels:Ok(Arc::new(vec![0;8]))},r.scene_tiers.ram.charge(0)));
         r.drain_image_decodes(&mut crate::submission::CommandEncoder::new(&r.device,&Default::default())).unwrap();
         assert!(!refused.fits(),"the stored refusal still cannot fit");
-        assert_eq!(cache.residual_demand(&r),Outstanding::Runnable,"an arrival after the refusal unparks the cell");
+        assert_eq!(cache.residual_demand(&r),Some(Outstanding::Runnable),"an arrival after the refusal unparks the cell");
         assert_eq!(cache.cells_demand(&r,false),Some(Outstanding::Runnable),"the cell retries its admission instead of waiting on a refusal whose release no one will signal");
     }
 
