@@ -208,7 +208,7 @@ fn a_reserved_object_window_starts_while_queued_reservations_fill_the_optional_r
         r.drain_image_decodes(&mut encoder).unwrap();
         let empty=super::super::object_cache::ObjectCache::for_scene(&scene,false);
         let mut cache=std::mem::replace(&mut scene.object_results,empty);
-        cache.advance_with_memory(&mut r,&mut scene,&mut encoder,u64::MAX).unwrap();
+        cache.advance_with_memory(&mut r,&mut scene,&mut encoder,|_|u64::MAX).unwrap();
         scene.object_results=cache;
         r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         if scene.object_results.work_progress().2>0 {return;}
@@ -850,7 +850,7 @@ fn a_started_canonical_task_finishes_its_parts_under_pressure_while_queued_start
         r.drain_image_decodes(&mut encoder).unwrap();
         let empty=super::super::object_cache::ObjectCache::for_scene(&scene,false);
         let mut cache=std::mem::replace(&mut scene.object_results,empty);
-        cache.advance_with_memory(r,scene,&mut encoder,allowance).unwrap();
+        cache.advance_with_memory(r,scene,&mut encoder,|_|allowance).unwrap();
         cache.flush_retired(&encoder);
         let progress=cache.work_progress();scene.object_results=cache;
         r.uploads.finish(&encoder);r.last_submission=encoder.submit(&r.queue);r.wait_idle().unwrap();

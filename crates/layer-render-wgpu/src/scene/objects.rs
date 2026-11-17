@@ -380,7 +380,7 @@ impl Scene {
         r.drain_image_decodes(encoder)?;
         self.object_results.retain(packet.scene, request.blend, r.device.working_space());
         let mut results = std::mem::replace(&mut self.object_results,super::object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
-        let advanced = results.advance_with_memory(r, self, encoder, crate::frame_pace::IDLE_TAPS);
+        let advanced = results.advance_with_memory(r, self, encoder, |_| crate::frame_pace::IDLE_TAPS);
         self.object_results = results;
         self.object_results.set_requester(Class::Navigator);
         let mut accepted=sources::AcceptedInputs::default();

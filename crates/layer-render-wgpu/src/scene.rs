@@ -2013,7 +2013,7 @@ impl Scene {
         r.drain_image_decodes(encoder)?;
         self.object_results.retain(packet.scene,packet.blend_space,r.device.working_space());
         let mut objects = std::mem::replace(&mut self.object_results,object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
-        let advanced = objects.advance_with_memory(r, self, encoder, u64::MAX);
+        let advanced = objects.advance_with_memory(r, self, encoder, |_| u64::MAX);
         self.object_results = objects;
         advanced?;
         self.object_query = true;
@@ -2090,7 +2090,7 @@ impl Scene {
             let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
             r.drain_image_decodes(&mut encoder)?;
             let mut objects=std::mem::replace(&mut self.exact_object_results,object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
-            let result=objects.advance_with_memory(r,self,&mut encoder,crate::frame_pace::IDLE_TAPS);
+            let result=objects.advance_with_memory(r,self,&mut encoder,|_|crate::frame_pace::IDLE_TAPS);
             self.exact_object_results=objects;
             let idle=result? == 0 && !encoder.has_work();
             r.uploads.finish(&encoder);
@@ -2439,7 +2439,7 @@ impl Scene {
         r.scale_display = Some(cache);
         let result=if result.is_ok() || matches!(&result,Err(error) if error.is_preparation_pending()) {
             let mut objects=std::mem::replace(&mut self.object_results,object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
-            let advanced=objects.advance_with_memory(r,self,encoder,budget.allowance(Class::Visible)).map(|used|budget.spend(used));
+            let advanced=objects.advance_with_memory(r,self,encoder,|class|budget.allowance(class.min(Class::Visible))).map(|used|budget.spend(used));
             self.object_results=objects;
             advanced.and(result)
         } else {result};

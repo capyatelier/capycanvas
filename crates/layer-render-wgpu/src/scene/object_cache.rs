@@ -370,10 +370,11 @@ impl ObjectCache {
     }
     #[cfg(test)]
     pub fn advance(&mut self,r:&mut WgpuRasterizer,scene:&mut Scene,encoder:&mut crate::submission::CommandEncoder,budget:&mut WorkBudget)->Result<u64,GpuRasterError> {
-        let used=self.advance_with_memory(r,scene,encoder,budget.allowance(Class::Prefetch))?;
+        let allowance=budget.allowance(Class::Prefetch);
+        let used=self.advance_with_memory(r,scene,encoder,|_|allowance)?;
         budget.spend(used);Ok(used)
     }
-    pub fn advance_with_memory(&mut self, r: &mut WgpuRasterizer, scene:&mut Scene, encoder: &mut crate::submission::CommandEncoder, allowance: u64) -> Result<u64, GpuRasterError> {
+    pub fn advance_with_memory(&mut self, r: &mut WgpuRasterizer, scene:&mut Scene, encoder: &mut crate::submission::CommandEncoder, allowance: impl Fn(Class) -> u64) -> Result<u64, GpuRasterError> {
         let sampler = r.scene_pipelines.objects.clone();
         let epoch = self.gpu.heap().epoch();
         for (&id, task) in &mut self.tasks {
@@ -390,9 +391,10 @@ impl ObjectCache {
         if self.in_flight.load(Ordering::Acquire) { self.schedule.hold(self.owner, Input::Gpu, since); return Ok(0); }
         let mut used = 0;
         for tag in runnable {
-            if used >= allowance { break; }
+            let Some(limit) = self.tasks.get(&tag).map(|task| allowance(task.lease.demand().unwrap_or(Class::Prefetch))) else { continue; };
+            if used >= limit { continue; }
             let Some(mut task) = self.tasks.remove(&tag) else { continue; };
-            let result = self.advance_task(r, scene, encoder, &sampler, &mut task, allowance - used);
+            let result = self.advance_task(r, scene, encoder, &sampler, &mut task, limit - used);
             if task.complete {
                 task.accumulation = None; task.tiles = Vec::new(); task.coordinates = None; self.vacate(&mut task); task.group = None;
                 if let Some(c) = &mut task.collection { c.spare = None; }

@@ -701,3 +701,50 @@ fn an_effects_storm_holds_composition_scratch_to_one_unit() {
         assert!(scratch<=r.memory.unit(),"composition scratch above one unit's working term: frame={frame}, scratch={scratch}, unit={}",r.memory.unit());
     }
 }
+
+#[test]
+fn a_pencil_stroke_over_a_photo_object_at_fit_composes_its_dabs_while_the_pen_is_down() {
+    let mut document=document(Fixture::Object,SEEDS[0]);
+    let root=document.artwork.root;document.artwork.compositions.get_mut(root).unwrap().blend=layer_core::BlendSpace::Perceptual;
+    let extent=document.composition().size;
+    let zoom=(2880./extent[0] as f32).min(1800./extent[1] as f32);
+    let view=centred(extent,zoom,[2880,1800]);
+    let total=11_872_739_328;
+    let budget=MemoryBudget::with_facts(MemoryFacts {total_bytes:Some(total),available_bytes:Some(8_613_953_536),tablet:true,..Default::default()});
+    let renderer=crate::memory::memory_tests::renderer_in_budget(document.composition().color,
+        DeviceMemoryFacts {heap_bytes:Some(total),unified:true,..Default::default()},budget).unwrap();
+    let [_,_,_,_,x,y]=view.document_to_surface;
+    let (mut input,mut live)=engine(document,renderer,view,ViewTransform {revision:1,surface_to_document:[1./zoom,0.,0.,1./zoom,-x/zoom,-y/zoom]});
+    live.set_brush(layer_core::BrushSnapshot {diameter:2048.,..layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil)}).unwrap();
+    let mut clock=1_000_000_000u64;
+    let deadline=Instant::now()+Duration::from_secs(120);
+    while matches!(live.frame_demand(),layer_render::FrameDemand::Work|layer_render::FrameDemand::Animate) || !live.backend().settled() {
+        clock+=8_333_333;live.render_frame_at(clock).unwrap();live.backend_mut().wait_idle().unwrap();
+        assert!(Instant::now()<deadline,"the open settles");
+    }
+    crate::test_support::evict_sources(live.backend_mut());
+    let mut frames=Vec::new();
+    for step in 0..=24u64 {
+        clock+=8_333_333;
+        let phase=if step==0 {PenPhase::Down}else {PenPhase::Move};
+        input.push(PenEvent {timestamp_ns:clock,view_revision:1,pressure:0.8,..crate::test_support::pen(step+1,phase,[500.+30.*step as f32,350.+8.*step as f32],SampleFlags::PRIMARY)}).unwrap();
+        let before=live.backend().metrics();
+        live.render_frame_at(clock).unwrap();
+        while live.has_pending_input() {
+            live.backend_mut().wait_idle().unwrap();live.render_frame_at(clock).unwrap();
+            assert!(Instant::now()<deadline,"pen input {step} is consumed");
+        }
+        live.backend_mut().wait_idle().unwrap();
+        let after=live.backend().metrics();
+        frames.push((after.composited_pixels-before.composited_pixels,after.source_tile_misses-before.source_tile_misses));
+    }
+    let shown=frames[1..].iter().filter(|(composited,_)|*composited>0).count();
+    assert!(shown*2>=frames.len()-1,"most stroke frames after pen-down compose their dabs (composited pixels, source tile misses per frame): {frames:?}");
+    let settled=8;
+    let document=|surface:f32,origin:f32|((surface-origin)/zoom) as i64;
+    let swath=[document(500.+30.*settled as f32,x)-1024,document(350.+8.*settled as f32,y)-1024,document(500.+30.*24.,x)+1024,document(350.+8.*24.,y)+1024]
+        .map(|v|v.clamp(0,i64::from(extent[0].max(extent[1]))) as u32);
+    let tiles=page_coordinates(PixelRect::new(swath[0],swath[1],swath[2].min(extent[0]),swath[3].min(extent[1]))).count() as u64;
+    let missed=frames[settled..].iter().map(|(_,misses)|misses).sum::<u64>();
+    assert!(missed<=2*tiles,"once pen-down's recomposition is done, the stroke misses only tiles its dabs reach, each once when queued and once when decoded ({missed} misses for {tiles} tiles): {frames:?}");
+}

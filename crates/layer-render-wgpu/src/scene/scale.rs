@@ -1059,7 +1059,7 @@ impl Cache {
         let live=self.gesture.is_some();
         let lane=if view && stroking {self.lane_halves(packet)}else {Vec::new()};
         if !lane.is_empty() {
-            let exact=self.exact_units(scene,r,packet,encoder,commands,budget,lane,&|_|Class::Visible,true)?;
+            let exact=self.exact_units(scene,r,packet,encoder,commands,budget,lane,&|_|Class::Authored,true)?;
             for (key,input) in exact.blocks {self.block(arrivals,key.plan().bounds,input);}
             for (region,refusal) in exact.refusals {self.refuse(None,region,&refusal);}
         }
@@ -1084,7 +1084,7 @@ impl Cache {
             {std::mem::take(&mut composes)}else {Vec::new()};
         let target=if transition && !direct || !streamed.is_empty() {Root::Store}else {Root::Window};
         let mut blocks=Vec::new();let mut refusals=Vec::new();
-        let class=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else if transition {Class::Authored}else {Class::Visible};
+        let class=|region:PixelRect|if region.intersect(visible).is_empty() {deferred}else if transition || own.contains(&region) {Class::Authored}else {Class::Visible};
         let side=1<<self.plan.level;
         let output_bounds=self.output_plan().bounds;
         let mut written=PixelRect::EMPTY;
