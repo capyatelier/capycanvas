@@ -442,6 +442,7 @@ tilt-reverse-vertical = 上下を反転
 tilt-swap-axes = 軸を入れ替え
 tilt-use-pen = ここでペンを使ってください
 common-stroke-input-limit = ストロークが入力上限に達したため終了しました。描いた部分は保持されています。
+common-stroke-memory = ここで描くためのメモリが足りません。メモリを空けるには、ほかの描画を閉じてください。
 
 native-color-stroke-recording-file-type = Capy ストローク記録
 

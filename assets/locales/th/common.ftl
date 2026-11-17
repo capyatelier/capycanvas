@@ -394,6 +394,7 @@ tilt-reverse-vertical = กลับแนวตั้ง
 tilt-swap-axes = สลับแกน
 tilt-use-pen = ใช้ปากกาที่นี่
 common-stroke-input-limit = เส้นถึงขีดจำกัดการป้อนข้อมูลและสิ้นสุดแล้ว ส่วนที่วาดไว้ยังคงอยู่
+common-stroke-memory = หน่วยความจำไม่พอสำหรับการวาดตรงนี้ ปิดภาพวาดอื่นเพื่อเพิ่มหน่วยความจำว่าง
 
 native-color-stroke-recording-file-type = การบันทึกเส้นของ Capy
 

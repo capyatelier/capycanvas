@@ -618,6 +618,7 @@ tilt-reverse-vertical = Dikeyi ters çevir
 tilt-swap-axes = Eksenleri değiştir
 tilt-use-pen = Kaleminizi burada kullanın
 common-stroke-input-limit = Çizgi giriş sınırına ulaştı ve tamamlandı. Boyadığınız kısım korundu.
+common-stroke-memory = Burada boyamak için yeterli bellek yok. Bellek açmak için başka bir çizimi kapatın.
 
 native-color-stroke-recording-file-type = Capy fırça darbesi kaydı
 

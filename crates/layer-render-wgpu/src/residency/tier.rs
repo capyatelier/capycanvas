@@ -78,7 +78,7 @@ impl Tier {
         let (start, used) = (self.frame.load(SeqCst), self.used());
         let ahead = Arc::new(AtomicU64::new(if start == u64::MAX { 0 } else { used.saturating_sub(start) }));
         if start != u64::MAX { self.refusals.lock().unwrap().push((Arc::downgrade(&ahead), used)); }
-        Blocked { tier: self.clone(), class, bytes, ahead, ledger }
+        Blocked { tier: self.clone(), class, bytes, ahead, ledger, with: None, drain: None }
     }
     pub(crate) fn is_root(&self) -> bool { self.parent.is_none() }
     pub(crate) fn limit(&self) -> u64 { self.ledger.as_ref().map_or_else(|| self.limit.load(SeqCst), layer_core::MemoryOwner::published_gpu_working_limit) }
@@ -128,6 +128,9 @@ impl Tier {
     }
     pub(crate) fn blocked(self: &Arc<Self>, class: Class, bytes: u64) -> Option<Blocked> {
         (!self.fits(class, bytes)).then(|| self.refusal(class, bytes, None))
+    }
+    pub(crate) fn wanting(self: &Arc<Self>, class: Class, bytes: u64) -> Blocked {
+        Blocked { tier: self.clone(), class, bytes, ahead: Default::default(), ledger: None, with: None, drain: None }
     }
     fn reserve_admission(self: &Arc<Self>, class: Class, bytes: u64) -> Result<(), Blocked> {
         self.used.try_update(SeqCst, SeqCst, |used|self.fits_after(used,class,bytes).then(||used+bytes))
@@ -184,11 +187,19 @@ impl Reservation {
     }
 }
 
+pub(crate) struct Drain { tiers: Vec<Arc<Tier>>, at: AtomicU64 }
+impl Drain {
+    pub(crate) fn new(tiers: Vec<Arc<Tier>>) -> Arc<Self> { let at = AtomicU64::new(tiers.iter().map(|tier| tier.used()).sum()); Arc::new(Self { tiers, at }) }
+    pub(crate) fn bytes(&self) -> u64 { self.tiers.iter().map(|tier| tier.used()).sum() }
+    fn drained(&self) -> bool { self.bytes() < self.at.load(SeqCst) }
+    fn rearm(&self) { self.at.store(self.bytes(), SeqCst); }
+}
+
 #[derive(Clone)]
-pub(crate) struct Blocked { tier: Arc<Tier>, class: Class, bytes: u64, ahead: Arc<AtomicU64>, ledger: Option<layer_core::MemoryOwner> }
+pub(crate) struct Blocked { tier: Arc<Tier>, class: Class, bytes: u64, ahead: Arc<AtomicU64>, ledger: Option<layer_core::MemoryOwner>, with: Option<Box<Blocked>>, drain: Option<Arc<Drain>> }
 impl std::fmt::Debug for Blocked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Blocked").field("class", &self.class).field("bytes", &self.bytes).field("ahead", &self.ahead.load(SeqCst)).field("used", &self.tier.used()).field("ledger", &self.ledger.is_some()).finish()
+        f.debug_struct("Blocked").field("class", &self.class).field("bytes", &self.bytes).field("ahead", &self.ahead.load(SeqCst)).field("used", &self.tier.used()).field("ledger", &self.ledger.is_some()).field("with", &self.with).finish()
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
@@ -198,6 +209,8 @@ impl Blocked {
         let bound = self.tier.edge.get_or_init(|| edge.clone()).clone();
         let mut parent = self.tier.parent.as_ref();
         while let Some(tier) = parent { tier.edge.get_or_init(|| bound.clone()); parent = tier.parent.as_ref(); }
+        if let Some(with) = &self.with { with.bind(&bound); }
+        for tier in self.drain.iter().flat_map(|drain| &drain.tiers) { tier.edge.get_or_init(|| bound.clone()); }
         fence(SeqCst);
         bound
     }
@@ -206,16 +219,26 @@ impl Blocked {
     pub(crate) fn class(&self)->Class {self.class}
     pub(crate) fn covering(self, bytes: u64) -> Self { Self { bytes: self.bytes.max(bytes), ..self } }
     pub(crate) fn alone(self) -> Self { Self { ahead: Default::default(), ..self } }
+    pub(crate) fn with(self, other: Blocked) -> Self { Self { with: Some(Box::new(other)), ..self } }
+    pub(crate) fn draining(self, drain: Arc<Drain>) -> Self { Self { drain: Some(drain), ..self } }
+    pub(crate) fn rearm(&self) { if let Some(drain) = &self.drain { drain.rearm(); } }
     pub(crate) fn fits(&self) -> bool {
+        if self.drain.as_ref().is_some_and(|drain| drain.drained()) { return true; }
         if let Some(ledger) = self.tier.root_ledger() { ledger.flush(); }
         let bytes = self.need();
         self.tier.fits_through(self.class, bytes)
             && self.ledger.as_ref().is_none_or(|ledger| ledger.fits_working_through(self.tier.root_used().saturating_sub(self.tier.root_evictable(self.class)).saturating_add(bytes)))
+            && self.with.as_ref().is_none_or(|with| with.fits())
     }
     pub(crate) fn need(&self) -> u64 { self.bytes.saturating_add(self.ahead.load(SeqCst)) }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn supersedes(&self, waiting: &Self) -> bool { self.with.is_some() || self.need() < waiting.need() }
     pub(crate) fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.ahead, &other.ahead) }
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn same_wait(&self, other: &Self) -> bool { Arc::ptr_eq(&self.tier, &other.tier) && self.class == other.class && self.ledger.is_some() == other.ledger.is_some() }
+    pub(crate) fn same_wait(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tier, &other.tier) && self.class == other.class && self.ledger.is_some() == other.ledger.is_some()
+            && match (&self.with, &other.with) { (None, None) => true, (Some(with), Some(other)) => with.same_wait(other), _ => false }
+    }
     pub(crate) fn deficit(&self) -> u64 { self.tier.used().saturating_add(self.bytes).saturating_sub(self.tier.available(self.class)) }
 }
 #[cfg(target_arch = "wasm32")]

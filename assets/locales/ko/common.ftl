@@ -442,6 +442,7 @@ tilt-reverse-vertical = 상하 반전
 tilt-swap-axes = 축 바꾸기
 tilt-use-pen = 여기에서 펜을 사용하세요
 common-stroke-input-limit = 획이 입력 한도에 도달하여 종료되었습니다. 그린 내용은 유지됩니다.
+common-stroke-memory = 여기에 그리기에 메모리가 부족합니다. 메모리를 확보하려면 다른 그림을 닫으세요.
 
 native-color-stroke-recording-file-type = Capy 획 기록
 

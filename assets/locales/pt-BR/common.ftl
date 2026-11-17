@@ -630,6 +630,7 @@ tilt-reverse-vertical = Inverter vertical
 tilt-swap-axes = Trocar eixos
 tilt-use-pen = Use a caneta aqui
 common-stroke-input-limit = O traço atingiu o limite de entrada e foi concluído. A pintura foi preservada.
+common-stroke-memory = Não há memória suficiente para pintar aqui. Feche outro desenho para liberar memória.
 
 native-color-stroke-recording-file-type = Gravação de traços do Capy
 

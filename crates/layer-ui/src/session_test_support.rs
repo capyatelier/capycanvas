@@ -93,9 +93,16 @@ pub(crate) struct Recorder {
     pub(crate) vector_motion: Option<layer_render::VectorMotion>,
     pub(crate) vector_motion_paths: Option<std::sync::Arc<[layer_core::authored::vector::PathItem]>>,
     pub(crate) motion_path_updates: usize,
+    pub(crate) memory_refusals: u64,
+    pub(crate) memory_refusal_next_frame: bool,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
+    fn stroke_memory_refusals(&self) -> u64 { self.memory_refusals }
+    fn poll_pending(&mut self, _view: layer_render::ViewState) -> Result<(), Self::Error> {
+        self.memory_refusals += u64::from(std::mem::take(&mut self.memory_refusal_next_frame));
+        Ok(())
+    }
     fn prepare_regions(&mut self, preparation: Option<&layer_render::RegionPreparation>) { self.region_preparation=preparation.cloned(); }
     fn evaluation_context(&self) -> EvaluationContext { self.evaluation.clone() }
     fn seed_evaluation_context(&mut self, context: EvaluationContext) { self.evaluation = context; }

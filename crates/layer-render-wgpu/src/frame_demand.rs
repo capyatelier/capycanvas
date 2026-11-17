@@ -10,6 +10,8 @@ pub(crate) enum Outstanding { Runnable, Blocked(Input) }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ArrivalToken(pub(super) u64);
 
+const LANE_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 impl WgpuRasterizer {
     #[cfg(test)]
     pub(crate) fn outstanding_terms(&self) -> Vec<(&'static str, Outstanding)> {
@@ -100,7 +102,8 @@ impl WgpuRasterizer {
         if self.scene_tiers.display.settle() && self.frame_work() { return FrameDemand::Work; }
         #[cfg(debug_assertions)]
         self.assert_blocked_inputs_outstanding();
-        self.presentation_due().map_or(FrameDemand::Wait, FrameDemand::WaitUntil)
+        let poll = self.lane_polls().then(|| web_time::Instant::now() + LANE_POLL);
+        [self.presentation_due(), poll].into_iter().flatten().min().map_or(FrameDemand::Wait, FrameDemand::WaitUntil)
     }
     #[cfg(debug_assertions)]
     fn assert_blocked_inputs_outstanding(&self) {

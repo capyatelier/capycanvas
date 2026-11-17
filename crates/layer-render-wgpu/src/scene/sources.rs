@@ -292,6 +292,13 @@ impl Inputs {
         },|_,_|Ok(()),|_,_,_|Ok(()))?
             .map(|((),inputs)|inputs).ok_or(GpuRasterError::NotReady)
     }
+    pub(crate) fn accept_lane(&self,r:&mut WgpuRasterizer)->Result<AcceptedInputs,GpuRasterError> {
+        self.accept(r,&mut (),|_,r,inputs| {
+            let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
+            r.admit_group(0,bytes).map(|(source,_)|source).ok()
+        },|_,_|Ok(()),|_,_,_|Ok(()))?
+            .map(|((),inputs)|inputs).ok_or(GpuRasterError::NotReady)
+    }
     fn insert(&mut self,key:Key,color:Option<SourceColor>,pixels:Option<Pixels>) {
         self.insert_for(key,color,pixels,SourceUse::Exact);
     }
@@ -1383,6 +1390,7 @@ impl DecodedTiles {
         let completion=owner.retirement(completion);
         completion
     }
+    pub(crate) fn retired_tier(&self)->Arc<crate::residency::Tier> {self.retired_bytes.clone()}
     pub(crate) fn flush_retired(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if self.retiring.is_empty() { return; }
         encoder.retain_resources();

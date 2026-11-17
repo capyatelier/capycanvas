@@ -625,6 +625,7 @@ tilt-reverse-vertical = Vertikal umkehren
 tilt-swap-axes = Achsen tauschen
 tilt-use-pen = Stift hier verwenden
 common-stroke-input-limit = Der Strich hat die Eingabegrenze erreicht und wurde beendet. Deine Zeichnung bleibt erhalten.
+common-stroke-memory = Nicht genug Speicher, um hier zu malen. Schließe eine andere Zeichnung, um Speicher freizugeben.
 
 native-color-stroke-recording-file-type = Capy-Strichaufzeichnung
 

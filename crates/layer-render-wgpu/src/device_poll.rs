@@ -100,7 +100,7 @@ impl RetirementHandle {
         let mut waiters=edge.0.waiters.lock().unwrap();edge.0.armed.store(true,SeqCst);
         let refused=!blocked.fits();
         if refused && !edge.closed() {match waiters.iter_mut().find(|(waiting,old)|Arc::ptr_eq(old,wake) && waiting.same_wait(blocked)) {
-            Some((waiting,_))=>if blocked.need()<waiting.need() {*waiting=blocked.clone();},
+            Some((waiting,_))=>if blocked.supersedes(waiting) {*waiting=blocked.clone();},
             None=>waiters.push((blocked.clone(),wake.clone())),
         }}
         refused

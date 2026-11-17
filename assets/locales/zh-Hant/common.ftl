@@ -442,6 +442,7 @@ tilt-reverse-vertical = 垂直反轉
 tilt-swap-axes = 交換座標軸
 tilt-use-pen = 在這裡使用筆
 common-stroke-input-limit = 筆畫達到輸入上限，已結束。已繪製的內容已保留。
+common-stroke-memory = 記憶體不足，無法在此處繪畫。請關閉其他繪圖以釋放記憶體。
 
 native-color-stroke-recording-file-type = Capy 筆畫記錄
 

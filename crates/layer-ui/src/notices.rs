@@ -606,6 +606,20 @@ mod localization_tests {
     }
 
     #[test]
+    fn a_stroke_waiting_on_memory_nothing_can_free_tells_the_person_once() {
+        let mut s = crate::session::test_support::launched(session(Platform::Gtk));
+        s.frame(1, 1).unwrap();
+        let before = s.last_notice_id();
+        s.engine.backend_mut().memory_refusal_next_frame = true;
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.state.notice.as_ref().map(|notice| notice.text.as_str()), Some(s.localization().text(MessageId::COMMON_STROKE_MEMORY).as_ref()));
+        let raised = s.last_notice_id();
+        assert_ne!(raised, before);
+        s.frame(3, 3).unwrap();
+        assert_eq!(s.last_notice_id(), raised, "the same wait is not announced again");
+    }
+
+    #[test]
     fn notice_language_refresh_preserves_identity_action_and_dry_mask_lifetime() {
         let mut session = session(Platform::Gtk);
         let action = session.notice_choice(&NoticeCopy::Stroke(StrokeRefusal::NoCloneSource), NoticeActionId::CloneSource, NoticeRun::Dispatch(Box::new(UiAction::Invoke { command: CommandId::CloneSourceArm })), None);

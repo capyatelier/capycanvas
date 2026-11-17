@@ -618,6 +618,7 @@ tilt-reverse-vertical = Đảo dọc
 tilt-swap-axes = Đổi trục
 tilt-use-pen = Dùng bút tại đây
 common-stroke-input-limit = Nét vẽ đã đạt giới hạn đầu vào và được kết thúc. Phần đã vẽ được giữ lại.
+common-stroke-memory = Không đủ bộ nhớ để vẽ ở đây. Hãy đóng một bản vẽ khác để giải phóng bộ nhớ.
 
 native-color-stroke-recording-file-type = Bản ghi nét vẽ Capy
 

@@ -626,6 +626,7 @@ tilt-reverse-vertical = Reverse vertical
 tilt-swap-axes = Swap axes
 tilt-use-pen = Use your pen here
 common-stroke-input-limit = That stroke reached the input limit and was finished. Your paint was kept.
+common-stroke-memory = Not enough memory to paint here. Close another drawing to free memory.
 
 native-header-recovery-help = Title bar recovery: menus and customization
 

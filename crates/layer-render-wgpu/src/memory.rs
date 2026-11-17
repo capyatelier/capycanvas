@@ -69,6 +69,9 @@ impl Demand {
     }
 }
 
+#[derive(Default)]
+struct Lane {refused:Option<crate::residency::Blocked>,wanted:u64,asked:bool,lent:u64,base:u64,lendable:u64,exhausted:bool,told:bool,refusals:u64}
+
 pub(super) struct Memory {
     display: Owner,
     samples: Owner,
@@ -81,8 +84,7 @@ pub(super) struct Memory {
     preparation: std::cell::Cell<u64>,
     target: std::cell::Cell<u64>,
     refused: std::cell::Cell<u64>,
-    head: std::cell::RefCell<Option<(crate::residency::Blocked,u64)>>,
-    head_asked: std::cell::Cell<bool>,
+    lane: std::cell::RefCell<Lane>,
     trimmed: std::cell::Cell<Option<[u64; 2]>>,
     retired: std::cell::Cell<Option<[u64; 2]>>,
     wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
@@ -142,7 +144,7 @@ impl Memory {
                 |handle| { let report = handle.reported(); Owner { handle, published: std::cell::Cell::new(report) } }),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
-            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), head: Default::default(), head_asked: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
+            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
             unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true),
         };
         memory.applied_limits.set(Some(memory.grants()));
@@ -173,12 +175,24 @@ impl Memory {
         if kind==Kind::Scene {self.overdraft.borrow_mut().clear();}
     }
     fn overdrawn(&self)->bool {!self.overdraft.borrow().is_empty()}
-    fn stop(&self,class:crate::residency::Class)->Option<crate::residency::Blocked> {
-        self.head.borrow().as_ref().filter(|(head,_)|head.class()<class).map(|(head,_)|head.clone())
+    fn stop(&self)->Option<crate::residency::Blocked> {self.lane.borrow().refused.clone()}
+    fn lent(&self,raster:u64)->u64 {
+        let lane=self.lane.borrow();
+        if lane.refused.is_some() {lane.lent}else {lane.lent.min(raster.saturating_add(lane.wanted).saturating_sub(lane.base))}
     }
-    fn head_bytes(&self)->u64 {self.head.borrow().as_ref().map_or(0,|(_,bytes)|*bytes)}
+    fn lend(&self,raster:u64,wanted:u64,more:u64) {
+        let lent=self.lent(raster);let mut lane=self.lane.borrow_mut();
+        lane.lent=lent.saturating_add(more).min(lane.lendable.max(lent));lane.wanted=wanted;
+        lane.base=raster.saturating_add(wanted).saturating_sub(lane.lent);
+    }
+    fn draw(&self,raster:u64,limit:u64) {
+        let lent=self.lent(raster);let drawn=raster.saturating_sub(limit.saturating_sub(lent)).min(lent);
+        let mut lane=self.lane.borrow_mut();(lane.lent,lane.wanted,lane.base)=(drawn,0,raster.saturating_sub(drawn));
+    }
+    pub(crate) fn stroke_memory_refusals(&self)->u64 {self.lane.borrow().refusals}
+    pub(crate) fn tell_exhausted(&self) {let mut lane=self.lane.borrow_mut();if lane.exhausted && !lane.told {lane.told=true;lane.refusals+=1;}}
     fn carry_overdraft(&self,used:u64) {
-        if used>self.retention_grant() && self.head.borrow().is_none() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
+        if used>self.retention_grant() && self.lane.borrow().refused.is_none() {self.overdraft.borrow_mut().extend(self.display.handle.admit_working_through(used,None));}
     }
     pub fn sample_owner(&self) -> MemoryOwner { self.samples.handle.clone() }
     pub(crate) fn raster_owner(&self) -> MemoryOwner { self.raster.handle.clone() }
@@ -257,36 +271,79 @@ impl WgpuRasterizer {
         self.memory.sync_report(Kind::RasterPool,self.raster_memory_report());
     }
     pub(crate) fn admit_raster_working(&mut self,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        self.admit_group(bytes,0).map(|(_,held)|held)
+    }
+    pub(crate) fn admit_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+        self.memory.lane.borrow_mut().asked=true;self.memory.lend(self.raster_tiers.raster.used(),raster,0);
+        let drain=crate::residency::Drain::new(self.draining());
+        let admitted=self.try_group(raster,display).or_else(|_|{self.yield_to_lane(raster,display);self.try_group(raster,display)});
+        match admitted {
+            Ok(held)=>{
+                self.memory.draw(self.raster_tiers.raster.used(),self.raster_tiers.raster.limit());
+                self.end_lane_wait();self.memory.invalidate_limits();self.publish_memory();self.refresh_memory_limits();Ok(held)
+            },
+            Err(blocked)=>Err(self.hold_lane(blocked.draining(drain))),
+        }
+    }
+    fn draining(&self)->Vec<Arc<crate::residency::Tier>> {
+        vec![self.retired_display_bytes.clone(),self.source_tiles.borrow().retired_tier(),self.device.transient_display.clone(),self.raster_buffers.transfer.clone()]
+    }
+    fn try_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
         #[cfg(test)] crate::test_support::PassCounts {raster_admissions:1,..Default::default()}.record();
-        self.memory.head_asked.set(true);
+        let class=crate::residency::Class::Authored;
         self.sync_raster_report();self.factory.memory_budget().flush_reports();
         let tiers=self.raster_tiers.clone();
-        let reservation=match tiers.admitted.admit(crate::residency::Class::Authored,bytes) {
-            Ok(reservation)=>reservation,
-            Err(blocked)=>{
-                let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
-                self.evict_raster(blocked.deficit(),&[],&[],&mut encoder);
-                if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
-                match tiers.admitted.admit(crate::residency::Class::Authored,bytes) {
-                    Ok(reservation)=>reservation,
-                    Err(blocked)=>{
-                        *self.memory.head.borrow_mut()=Some((blocked.clone(),bytes));self.memory.invalidate_limits();
-                        self.trim_display_to_grant(self.scene.as_deref());
-                        self.wait_for_release(blocked.clone());return Err(blocked);
-                    },
-                }
-            },
-        };
-        self.end_head();
-        self.memory.invalidate_limits();self.refresh_memory_limits();Ok(reservation)
+        let held=tiers.admitted.admit(class,raster).or_else(|blocked| {
+            let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
+            self.evict_raster(blocked.deficit(),&[],&[],&mut encoder);
+            if encoder.has_work() {self.last_submission=encoder.submit(&self.queue);}
+            tiers.admitted.admit(class,raster)
+        }).map_err(|blocked|blocked.with(self.scene_tiers.display.wanting(class,display)))?;
+        let display_tier=&self.scene_tiers.display;
+        let source=if display==0 {display_tier.admit(class,0)} else {self.admit_unstopped(None,display_tier,class,display)}
+            .map_err(|blocked|blocked.with(tiers.admitted.wanting(class,raster)))?;
+        Ok((source,held))
+    }
+    fn yield_to_lane(&mut self,raster:u64,display:u64) {
+        let deficit=|r:&Self|r.raster_tiers.raster.used().saturating_add(raster).saturating_sub(r.raster_tiers.raster.limit());
+        let shown=&self.scene_tiers.display;
+        self.trim_display_by(self.scene.as_deref(),deficit(self).max(shown.used().saturating_add(display).saturating_sub(shown.limit())));
+        self.factory.memory_budget().flush_reports();
+        self.memory.lend(self.raster_tiers.raster.used(),raster,if deficit(self)==0 {0}else {u64::MAX});
+        self.publish_memory();self.factory.memory_budget().flush_reports();
+        self.scene_tiers.display.update_limit(self.memory.display_limit());
+    }
+    fn hold_lane(&mut self,blocked:crate::residency::Blocked)->crate::residency::Blocked {
+        self.memory.lane.borrow_mut().refused=Some(blocked.clone());self.memory.invalidate_limits();
+        self.wait_for_release(blocked.clone());
+        let (display,raster)=(&self.scene_tiers.display,&self.raster_tiers.raster);
+        let ours=[&self.memory.display,&self.memory.raster,&self.memory.staging].map(|owner|{let report=owner.published.get();report.gpu_bytes.saturating_sub(report.pinned_gpu_bytes)});
+        let draining=crate::residency::Drain::new(self.draining()).bytes();
+        let optional=self.factory.memory_budget().snapshot().devices.iter().find(|device|device.device==self.factory.memory_device())
+            .map_or(0,|device|device.physical_bytes.saturating_sub(device.pinned_bytes)).saturating_sub(ours.into_iter().sum());
+        let mut lane=self.memory.lane.borrow_mut();
+        let short=raster.used().saturating_add(lane.wanted).saturating_sub(raster.limit());
+        let lent_out=lane.lent>=lane.lendable || short==0;
+        lane.exhausted=self.live_stroke.is_some() && draining==0 && optional<short.max(blocked.deficit()) && lent_out && display.yielding()==0 && display.heap().pending()==0 && !blocked.fits();
+        blocked
+    }
+    pub(crate) fn lane_polls(&self)->bool {
+        #[cfg(not(target_arch="wasm32"))] {self.preparation_wake.is_none() && self.lane_waits()}
+        #[cfg(target_arch="wasm32")] {self.lane_waits()}
+    }
+    pub(crate) fn lane_waits(&self)->bool {
+        self.scene_tiers.display.heap().pending()==0 && self.memory.stop().is_some_and(|lane|self.refuses(&lane))
+    }
+    fn end_lane_wait(&self) {
+        let ended={let mut lane=self.memory.lane.borrow_mut();(lane.wanted,lane.exhausted,lane.told)=(0,false,false);lane.refused.take().is_some()};
+        if !ended {return;}
+        self.memory.invalidate_limits();self.publish_memory();
+        if let Some(wake)=&self.preparation_wake {wake();}
     }
     pub(crate) fn admit_raster_window(&mut self,least:u64,most:u64,reserve:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        let wanted=most.saturating_add(reserve);
-        let mut reservation=self.admit_raster_working(wanted).or_else(|blocked| {
-            let fits=wanted.saturating_sub(blocked.deficit());
-            if fits<least.saturating_add(reserve) {return Err(blocked);}
-            self.admit_raster_working(fits)
-        })?;
+        let (wanted,raster)=(most.saturating_add(reserve),&self.raster_tiers.raster);
+        let room=raster.limit().saturating_sub(raster.used());
+        let mut reservation=self.admit_raster_working(if wanted<=room {wanted}else {room.max(least.saturating_add(reserve))})?;
         drop(reservation.split(reserve));
         Ok(reservation)
     }
@@ -363,6 +420,7 @@ impl WgpuRasterizer {
         if decoded+self.moving_images.retire_evicted(encoder)+scene.map_or(0,|scene|scene.retire_victims(encoder))!=0 {encoder.retain_resources();}
     }
     pub(crate) fn begin_frame_memory(&mut self, packet: FramePacket<'_>) {
+        if let Some(lane)=self.memory.stop() {lane.rearm();}
         if self.restore_preparation()==Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency))
             && let Some(scene)=&self.scene {scene.advance_demand_epoch();}
         self.frame_room(packet);
@@ -395,26 +453,20 @@ impl WgpuRasterizer {
         self.scene_tiers.display.set_grant(self.memory.retention_limit());
     }
     pub(crate) fn end_frame_memory(&mut self) {
-        if !self.memory.head_asked.replace(false) {self.end_head();}
+        if !std::mem::take(&mut self.memory.lane.borrow_mut().asked) {self.end_lane_wait();}
         self.scene_tiers.display.heap().begin_frame();self.scene_tiers.display.end_frame();
     }
     fn trim_display_to_grant(&self,scene:Option<&scene::Scene>) {
-        let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();let before=display.used();
-        let excess=display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used())).max(self.head_deficit());
+        let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
+        self.trim_display_by(scene,display.used().saturating_sub(grant.saturating_add(self.scene_tiers.retiring.used())));
+        self.memory.trimmed.set(Some([grant,display.used()]));
+    }
+    fn trim_display_by(&self,scene:Option<&scene::Scene>,excess:u64) {
+        let display=&self.scene_tiers.display;let before=display.used();
         display.heap().reclaim(excess);
         let excess=excess.saturating_sub(display.heap().pending());
         if excess!=0 && let Some(scene)=scene {scene.release_pages_by(excess);}
         if display.used()<before {self.memory.display.publish(self.display_memory_report(scene,self.composition_memory(scene)));}
-        self.memory.trimmed.set(Some([grant,display.used()]));
-    }
-    fn head_deficit(&self)->u64 {
-        let raster=&self.raster_tiers.raster;
-        raster.used().saturating_add(self.memory.head_bytes()).saturating_sub(raster.limit()).min(self.memory.head_bytes())
-    }
-    pub(crate) fn end_head(&self) {
-        if self.memory.head.take().is_none() {return;}
-        self.memory.invalidate_limits();self.publish_memory();
-        if let Some(wake)=&self.preparation_wake {wake();}
     }
     pub(crate) fn retention_above_grant(&self)->bool {
         let display=&self.scene_tiers.display;let grant=self.memory.retention_limit();
@@ -430,7 +482,10 @@ impl WgpuRasterizer {
         admitted
     }
     fn admit_within(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        if let Some(head)=self.memory.stop(class) {return Err(head);}
+        if let Some(lane)=self.memory.stop() {return Err(lane);}
+        self.admit_unstopped(scene,tier,class,bytes)
+    }
+    fn admit_unstopped(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
         let display=&self.scene_tiers.display;
         display.set_grant(self.memory.retention_limit());
         let scene=scene.or(self.scene.as_deref());
@@ -550,8 +605,10 @@ impl WgpuRasterizer {
         let required=total(pinned).saturating_add(wanted[4].saturating_sub(pinned[4])).saturating_add(floor)
             .max(if refused==0 {0}else {gpu.saturating_add(refused).saturating_add(floor)}).max(self.memory.preparation.get());
         self.memory.target.set(total(std::array::from_fn(|part| wanted[part].max(pinned[part]))).max(required));
-        let pinned_gpu_bytes=if self.memory.head_bytes()==0 {total(pinned)}else {total(held)};
-        self.warm_report(MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes,
+        let lendable=total(pinned).saturating_sub(total(held)).saturating_sub(demand.unit());
+        self.memory.lane.borrow_mut().lendable=lendable;
+        let lent=self.memory.lent(self.raster_tiers.raster.used()).min(lendable);
+        self.warm_report(MemoryReport { ram_bytes: ram, gpu_bytes: gpu, pinned_gpu_bytes: total(pinned)-lent,
             demand_ram_bytes: ram, demand_gpu_bytes: required, optional_gpu_bytes: u64::MAX, ..Default::default() }, gpu)
     }
     fn raster_pins(&self)->u64 {
@@ -570,7 +627,7 @@ impl WgpuRasterizer {
         self.warm_report(MemoryReport {ram_bytes:ram,gpu_bytes:gpu,
             pinned_ram_bytes:self.raster_buffers.working.used().max(WORKING_BYTES),
             pinned_gpu_bytes:raster_floor,demand_ram_bytes:ram.max(WORKING_BYTES),
-            demand_gpu_bytes:gpu.saturating_add(self.projected_restore_bytes().max(self.memory.head_bytes()))
+            demand_gpu_bytes:gpu.saturating_add(self.projected_restore_bytes().max(self.memory.lane.borrow().wanted))
                 .saturating_add(raster_floor.saturating_sub(raster_pins)).max(WORKING_BYTES),..Default::default()},0)
     }
     fn staging_memory_report(&self)->MemoryReport {

@@ -967,7 +967,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
     pub fn frame_demand(&self) -> layer_render::FrameDemand {
         use layer_render::FrameDemand;
-        if self.backend.waits_for_frame_slot() || !self.has_pending_input() && self.has_active_stroke() && self.backend.stroke_waits_for_memory() { return self.backend.next_frame(); }
+        if self.backend.waits_for_frame_slot() || self.pending_frame.is_some() && self.backend.stroke_waits_for_memory() { return self.backend.next_frame(); }
         let engine = if self.has_pending_input() || self.has_active_stroke() || self.editor.document().has_animated_effects() {
             FrameDemand::Animate
         } else if self.document_edits_queued() || (self.can_park() && self.editor.memory_report_pending()) {
@@ -3353,7 +3353,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stroke_held_only_by_refused_memory_waits_for_the_renderer_instead_of_animating() {
+    fn a_stroke_held_by_refused_memory_keeps_its_input_queued_and_waits_for_the_renderer() {
         let (mut input, mut canvas) = engine("Held stroke",64,64);
         canvas.render_frame_at(1_000_000_000).unwrap();
         input.push(event(1, PenPhase::Down, 16.)).unwrap();
@@ -3361,11 +3361,17 @@ mod tests {
         canvas.render_frame_at(2_000_000_000).unwrap();
         assert!(canvas.has_active_stroke() && !canvas.has_pending_input());
         assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Wait, "a stroke waiting only on memory sleeps until the renderer wakes it");
-        input.push(event(2, PenPhase::Move, 20.)).unwrap();
-        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Animate, "new input still animates");
-        canvas.backend_mut().restore_blocked = false;
+        for (sequence, phase, x) in [(2, PenPhase::Move, 20.), (3, PenPhase::Move, 28.), (4, PenPhase::Up, 36.)] { input.push(event(sequence, phase, x)).unwrap(); }
         canvas.render_frame_at(3_000_000_000).unwrap();
-        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Animate, "the released stroke animates again");
+        assert_eq!(canvas.metrics().input_events, 1, "input that arrives while the stroke waits stays queued in order");
+        assert!(canvas.has_active_stroke() && canvas.has_pending_input(), "the waiting stroke is never cancelled");
+        assert_eq!(canvas.frame_demand(), layer_render::FrameDemand::Wait, "queued input cannot advance the held frame, so it waits with the stroke");
+        assert!(!canvas.can_park(), "a drawing whose stroke waits on memory keeps its renderer and is never parked");
+        canvas.backend_mut().restore_blocked = false;
+        for frame in 4..16 { canvas.render_frame_at(frame * 1_000_000_000).unwrap(); }
+        assert_eq!(canvas.metrics().input_events, 4, "the queued input is consumed once memory returns");
+        assert!(!canvas.has_active_stroke() && !canvas.has_pending_input());
+        assert_eq!(canvas.metrics().committed_strokes, 1, "the stroke finishes with all of its input");
     }
 
     #[test]

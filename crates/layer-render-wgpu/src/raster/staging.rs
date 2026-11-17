@@ -573,7 +573,6 @@ impl WgpuRasterizer {
             .collect()
     }
     fn retire_restore(&mut self) {
-        self.end_head();
         let bytes=self.staged_restore_bytes();
         if bytes==0 {self.restore_preflight=None;return;}
         let restore=self.restore_preflight.take().unwrap();
@@ -678,7 +677,7 @@ impl WgpuRasterizer {
         .try_fold(self.unreserved_preview_bytes(restore),|bytes,target|bytes.checked_add(target.projected_bytes(self)?).ok_or(GpuRasterError::SizeOverflow)).unwrap_or(u64::MAX))}
     fn unreserved_preview_bytes(&self,restore:&RestorePreflight)->u64 {
         if restore.preview.is_some() {return 0;}
-        restore.outputs().iter().filter(|(_,output)|output.preview()).map(|(_,output)|output.bytes(self,0)).sum()
+        restore.outputs().iter().filter(|(_,output)|output.preview() && !output.preview_present(self,self.preview_level)).map(|(_,output)|output.bytes(self,0)).sum()
     }
     pub(crate) fn staged_transform_source(&self,target:SourceTarget)->Option<(&Arc<RasterData>,&PreparedPages)> {
         self.restore_preflight.as_ref()?.targets.iter().flatten().find(|entry|entry.replace && entry.target==target && entry.complete()).map(|entry|(&entry.data,&entry.pages))
@@ -710,7 +709,7 @@ impl WgpuRasterizer {
             r.drain_image_decodes(encoder)?;
             let mut ready=true;
             for (target,index,operation,damage) in operations {
-                let accepted=scene.declare_operation_masks(r,packet,target,index,operation,damage)?.accept_query(r,Some(&scene))?;
+                let accepted=scene.declare_operation_masks(r,packet,target,index,operation,damage)?.accept_lane(r)?;
                 ready&=accepted.prepare(r)?;
                 accepted.track(encoder);
             }
@@ -773,14 +772,14 @@ impl WgpuRasterizer {
         })?;
         if ready {Ok(inputs)}else {Err(GpuRasterError::NotReady)}
     }
-    pub(super) fn note_restore_admission<T>(&mut self,admitted:&Result<T,crate::residency::Blocked>) {
-        if admitted.is_err() {self.scene_tiers.display.heap().begin_frame();}
+    pub(crate) fn note_restore_admission<T>(&mut self,admitted:&Result<T,crate::residency::Blocked>) {
+        if admitted.is_err() {self.scene_tiers.display.heap().begin_frame();self.memory.tell_exhausted();}
         if let Some(restore)=&mut self.restore_preflight {restore.refused=admitted.as_ref().err().cloned();}
     }
     pub(crate) fn restore_preparation(&self)->Option<crate::frame_demand::Outstanding> {
         use crate::frame_demand::{Input,Outstanding};
         let restore=self.restore_preflight.as_ref().filter(|restore|restore.waiting())?;
-        Some(if restore.refused.as_ref().is_some_and(|refused|self.refuses(refused)) {Outstanding::Blocked(Input::Residency)}
+        Some(if restore.refused.is_some() && self.lane_waits() {Outstanding::Blocked(Input::Residency)}
             else if self.image_decode_waiting() {Outstanding::Blocked(Input::Decode)}else {Outstanding::Runnable})
     }
     pub(crate) fn restore_pages_ready(&self)->bool {self.restore_preflight.as_ref()
@@ -792,7 +791,8 @@ impl WgpuRasterizer {
         }
     }
     fn accept_restore_inputs(&mut self)->Result<bool,GpuRasterError> {
-        let Some(index)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().position(|target|target.as_ref().is_some_and(|target|!target.complete()))) else {return Ok(true);};
+        self.adopt_preview_working();
+        let Some(index)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().position(|target|target.as_ref().is_some_and(|target|!target.complete()))) else {return Ok(self.reserve_preview_outputs());};
         let target=self.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
         let first=target.next;
         let remaining=PREFETCH-usize::from(!matches!(target.pending[first],SourcePage::Output(_)));
@@ -804,9 +804,11 @@ impl WgpuRasterizer {
             if target.pages.storage_bytes()!=0 && target.inputs.contains(&inputs) {continue;}
             let output_bytes=target.projected_bytes(self)?;
             let accepted=inputs.accept(self,&mut (),|_,r,inputs| {
-                let admitted=(output_bytes!=0).then(||r.admit_raster_working(output_bytes)).transpose().and_then(|raster| {
-                    let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
-                    r.admit_display(None,crate::residency::Class::Authored,bytes).map(|source|(source,raster))
+                let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
+                let preview=r.restore_preflight.as_ref().map_or(0,|restore|r.unreserved_preview_bytes(restore));
+                let admitted=r.admit_group(output_bytes.saturating_add(preview),bytes).map(|(source,mut held)| {
+                    if preview!=0 {r.restore_preflight.as_mut().unwrap().preview=held.split(preview);}
+                    (source,(output_bytes!=0).then_some(held))
                 });
                 r.note_restore_admission(&admitted);
                 admitted.ok()
@@ -830,7 +832,7 @@ impl WgpuRasterizer {
         }
         let target=self.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
         Ok(target.pending[first].inputs(self.document_color().space)?.is_some_and(|inputs|
-            target.inputs.contains(&inputs) && target.projected_bytes(self).is_ok_and(|bytes|bytes==0)))
+            target.inputs.contains(&inputs) && target.projected_bytes(self).is_ok_and(|bytes|bytes==0)) && self.reserve_preview_outputs())
     }
     fn advance_restore(&mut self)->Result<bool,GpuRasterError> {
         if let Some(target)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete()))
@@ -850,18 +852,21 @@ impl WgpuRasterizer {
         }
         Ok(restore.complete())
     }
+    fn adopt_preview_working(&mut self) {
+        let Some(restore)=self.restore_preflight.as_ref() else {return;};
+        let bytes=self.unreserved_preview_bytes(restore);
+        if bytes==0 {return;}
+        if let Some(held)=self.preview_working.take().filter(|held|held.bytes()>=bytes) {self.restore_preflight.as_mut().unwrap().preview=Some(held);}
+    }
     fn reserve_preview_outputs(&mut self)->bool {
         let Some(restore)=self.restore_preflight.as_ref() else {return true;};
         let bytes=self.unreserved_preview_bytes(restore);
         if bytes==0 {return true;}
-        let admitted=match self.preview_working.take().filter(|held|held.bytes()>=bytes) {
-            Some(held)=>Ok(held),None=>self.admit_raster_working(bytes),
-        };
+        let admitted=self.admit_raster_working(bytes);
         self.note_restore_admission(&admitted);
         self.restore_preflight.as_mut().unwrap().preview=admitted.ok();self.restore_preflight.as_ref().unwrap().preview.is_some()
     }
     fn restore_ready(&mut self)->bool {
-        if !self.reserve_preview_outputs() {return false;}
         match self.advance_restore() {
             Ok(ready)=>ready,
             Err(error) if error.is_preparation_pending()=>false,
@@ -1151,6 +1156,19 @@ mod tests {
     fn restore_pixel(x:u32)->[u8;4] {[32+40*x as u8,64,96,255]}
 
     fn restore_window(count:u32)->(WgpuRasterizer,Arc<RasterData>) {
+        let (mut r,data)=restore_request(count,|color,target,extent,previous,data|Key::Direct {color,target,extent,before:DataKey::new(previous),after:DataKey::new(data)});
+        let outputs=r.projected_restore_bytes();
+        let reservation=r.admit_raster_working(outputs).unwrap();
+        r.record_restore_uploads(|r,encoder| {
+            let mut restore=r.restore_preflight.take().unwrap();
+            let result=restore.targets[0].as_mut().unwrap().allocate(r,encoder);
+            r.restore_preflight=Some(restore);result
+        }).unwrap();
+        r.commit_raster_working(reservation);
+        (r,data)
+    }
+
+    fn restore_request(count:u32,key:impl FnOnce(layer_core::color::DocumentColor,SourceTarget,[u32;2],&RasterData,&RasterData)->Key)->(WgpuRasterizer,Arc<RasterData>) {
         let extent=[count*PAGE_SIZE,PAGE_SIZE];
         let document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
             layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
@@ -1167,16 +1185,8 @@ mod tests {
         scene::Scene::decode_prepared_raster(&mut r,&mut encoder,&warm,color.space,color.space,pixels,crate::residency::Class::Visible).unwrap();
         r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
         let previous=RasterData::default();
-        r.replace_restore(Key::Direct {color,target,extent,before:DataKey::new(&previous),after:DataKey::new(&data)},
+        r.replace_restore(key(color,target,extent,&previous,&data),
             vec![Request {target,extent,before:previous,data:data.clone(),required:(0..count).map(|x|[x,0]).collect(),base:None,replace:true}],None,Vec::new());
-        let outputs=r.projected_restore_bytes();
-        let reservation=r.admit_raster_working(outputs).unwrap();
-        r.record_restore_uploads(|r,encoder| {
-            let mut restore=r.restore_preflight.take().unwrap();
-            let result=restore.targets[0].as_mut().unwrap().allocate(r,encoder);
-            r.restore_preflight=Some(restore);result
-        }).unwrap();
-        r.commit_raster_working(reservation);
         (r,data)
     }
 
@@ -1241,6 +1251,105 @@ mod tests {
         assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).source_input_misses,0);
         let restore=r.restore_preflight.as_ref().unwrap().targets[0].as_ref().unwrap();
         assert_eq!(restore.next,4);
+        assert_restore_pixels(&r,&data);
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_two_target_restore_whose_second_target_fits_once_the_first_targets_inputs_drain_finishes() {
+        let extent=[PAGE_SIZE;2];
+        let mut document=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],
+            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let first=document.active_target().unwrap();
+        let second=crate::test_support::add_paint(&mut document.artwork,"Second",extent).1;
+        let color=document.composition().color;
+        let mut r=crate::memory::memory_tests::renderer(color,layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+        r.ensure_document_metadata(extent,document.scene()).unwrap();
+        let tile=|x:u32|RasterTile::backed(TileBlob::encode(RasterPlane::Color.descriptor(color),&restore_pixel(x).repeat(PAGE_SIZE.pow(2) as usize)).unwrap());
+        let data=|x:u32|Arc::new(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[0,0]},tile(x))].into_iter().collect(),watercolor:None});
+        let warm=tile(2).wait_backing().unwrap();
+        pollster::block_on(r.compilation.prepare_all(startup::SourceKinds::for_descriptor(warm.descriptor).pipelines(&r.scene_pipelines.source))).unwrap();
+        let request=|target,data:Arc<RasterData>|Request {target,extent,before:RasterData::default(),data,required:[[0,0]].into_iter().collect(),base:None,replace:true};
+        r.replace_restore(Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
+            required:vec![(first,vec![[0,0]]),(second,vec![[0,0]])],outputs:Vec::new(),restored:Vec::new()},vec![request(first,data(0)),request(second,data(1))],None,Vec::new());
+        let (send,woken)=std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+        let restore=r.restore_preflight.as_ref().unwrap();
+        let output=restore.targets[0].as_ref().unwrap().projected_bytes(&r).unwrap();
+        let input=restore.targets[0].as_ref().unwrap().pending[0].inputs(color.space).unwrap().unwrap().additional_bytes(&r.source_tiles.borrow());
+        assert!(r.admit_raster_working(u64::MAX/2).is_err(),"the lane borrows every working reservation the display can lend");
+        r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
+        let held=r.scene_tiers.display.charge(r.current_display_memory_report().pinned_gpu_bytes.saturating_sub(r.scene_tiers.display.used()));
+        r.publish_memory();r.factory.memory_budget().flush_reports();r.refresh_memory_limits();
+        let room=r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
+        let filler=r.raster_tiers.admitted.admit(crate::residency::Class::Authored,room-2*output-input/2).unwrap();
+        let (mut refused,deadline)=(false,std::time::Instant::now()+std::time::Duration::from_secs(30));
+        while !r.restore_ready() {
+            if r.restore_preparation()==Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency)) {
+                refused=true;
+                woken.recv_timeout(std::time::Duration::from_secs(5)).expect("the first target's drained inputs wake the second target's group");
+            }
+            let inputs=r.restore_preflight.as_ref().unwrap().targets.iter().flatten().find(|target|!target.complete()).unwrap().inputs.clone();
+            inputs.prepare(&mut r).unwrap();
+            r.record_restore_uploads(|r,encoder|r.drain_image_decodes(encoder)).unwrap();
+            crate::test_support::complete(&r);r.refresh_memory_limits();
+            assert!(std::time::Instant::now()<deadline,"the restore must finish once the first target's inputs drain: {:?} refused {refused} targets {:?} raster {} of {} display {} of {}",
+                r.restore_preparation(),r.restore_preflight.as_ref().unwrap().targets.iter().flatten().map(|target|(target.next,target.pending.len(),target.pages.storage_bytes())).collect::<Vec<_>>(),
+                r.raster_tiers.raster.used(),r.raster_tiers.raster.limit(),r.scene_tiers.display.used(),r.scene_tiers.display.limit());
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(refused,"the second target's group waits while the first target's inputs hold the room");
+        let restore=r.restore_preflight.as_ref().unwrap();
+        assert!(restore.failure.is_none() && restore.targets.iter().flatten().all(|target|target.complete() && target.pages.colors.len()==1),"{:?}",restore.failure);
+        drop((filler,held));
+    }
+
+    #[test]
+    fn a_restore_reserves_only_the_preview_pages_it_lacks() {
+        let (mut r,_)=restore_request(2,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
+            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new()});
+        let page=Output::PreviewColor([0,0]).bytes(&r,0);
+        assert_eq!(r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap()),page);
+        r.prepare_preview_outputs(r.preview_level).unwrap();
+        let restore=r.restore_preflight.as_mut().unwrap();
+        let target=restore.targets[0].as_ref().unwrap().target;
+        let Key::Frame {outputs,..}=&mut restore.key else {unreachable!()};
+        *outputs=vec![(target,Output::PreviewColor([0,0])),(target,Output::PreviewColor([1,0]))];
+        assert_eq!(r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap()),page,"a stroke's next frame reserves the preview page it adds, not the pages it already holds");
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_refused_restore_group_holds_none_of_its_outputs_and_finishes_once_room_returns() {
+        let (mut r,data)=restore_request(2,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
+            required:vec![(target,vec![[0,0],[1,0]])],outputs:vec![(target,Output::PreviewColor([0,0]))],restored:Vec::new()});
+        let (send,woken)=std::sync::mpsc::channel();
+        r.set_preparation_wake(Arc::new(move||{let _=send.send(());}));
+        let preview=r.unreserved_preview_bytes(r.restore_preflight.as_ref().unwrap());
+        assert!(r.admit_raster_working(u64::MAX/2).is_err(),"the lane borrows every working reservation the display can lend");
+        let room=r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
+        let filler=r.raster_tiers.admitted.admit(crate::residency::Class::Authored,room-preview-preview/2).unwrap();
+        assert!(!r.restore_ready(),"the preview fits beside the held room but the whole group does not");
+        assert_eq!(r.restore_preparation(),Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency)));
+        assert!(r.restore_preflight.as_ref().unwrap().preview.is_none(),"a refused group holds none of its preview outputs");
+        assert_eq!(r.raster_tiers.admitted.used(),filler.bytes(),"a refused group holds no raster working memory");
+        assert!(r.admit_display(None,crate::residency::Class::Authored,1).is_err(),"display work waits behind the refused lane");
+        r.device.retirement_handle().flush().unwrap();
+        while woken.try_recv().is_ok() {}
+        drop(filler);
+        r.device.retirement_handle().flush().unwrap();
+        assert!(woken.try_recv().is_ok(),"the released room wakes the refused group");
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        while !r.restore_ready() {
+            let inputs=r.restore_preflight.as_ref().unwrap().targets[0].as_ref().unwrap().inputs.clone();
+            inputs.prepare(&mut r).unwrap();
+            r.record_restore_uploads(|r,encoder|r.drain_image_decodes(encoder)).unwrap();
+            crate::test_support::complete(&r);
+            assert!(std::time::Instant::now()<deadline,"the admitted group must finish the restore");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let restore=r.restore_preflight.as_ref().unwrap();
+        assert!(restore.failure.is_none() && restore.preview.is_some(),"the group keeps its preview outputs: {:?}",restore.failure);
         assert_restore_pixels(&r,&data);
     }
 

@@ -701,6 +701,7 @@ tilt-reverse-vertical = Balik vertikal
 tilt-swap-axes = Tukar sumbu
 tilt-use-pen = Gunakan pena di sini
 common-stroke-input-limit = Goresan mencapai batas input dan telah diselesaikan. Hasil lukisan tetap dipertahankan.
+common-stroke-memory = Memori tidak cukup untuk melukis di sini. Tutup gambar lain untuk mengosongkan memori.
 
 native-color-stroke-recording-file-type = Rekaman goresan Capy
 

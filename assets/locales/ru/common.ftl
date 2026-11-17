@@ -618,6 +618,7 @@ tilt-reverse-vertical = Отразить по вертикали
 tilt-swap-axes = Поменять оси
 tilt-use-pen = Используйте перо здесь
 common-stroke-input-limit = Мазок достиг предела ввода и был завершён. Нарисованное сохранено.
+common-stroke-memory = Недостаточно памяти, чтобы рисовать здесь. Закройте другой рисунок, чтобы освободить память.
 
 native-color-stroke-recording-file-type = Запись мазков Capy
 

@@ -88,7 +88,6 @@ impl RendererFactory {
     pub fn adapter(&self) -> &wgpu::Adapter { &self.0.adapter }
     pub(super) fn adapter_summary(&self) -> Arc<layer_render::GpuAdapter> { self.0.adapter_summary.clone() }
     pub fn device(&self) -> &wgpu::Device { &self.0.device }
-    #[cfg(feature = "test-support")]
     pub fn memory_device(&self) -> layer_core::MemoryDevice { self.0.memory_device }
     pub fn queue(&self) -> &wgpu::Queue { &self.0.queue }
     pub fn submit(&self,commands:impl IntoIterator<Item=wgpu::CommandBuffer>)->Option<wgpu::SubmissionIndex> {

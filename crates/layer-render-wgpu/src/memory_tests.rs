@@ -307,23 +307,110 @@ fn after_present_trims_free_storage_but_keeps_presentation_and_root_overview() {
 }
 
 
-#[test]
-fn a_held_raster_head_takes_the_displays_working_reservations_out_of_its_pinned_report() {
+fn device_bytes_after_the_lane_and_authored_display_work(waits: bool) -> (u64, u64, String) {
     let doc = layer_core::Document::new(layer_core::PortableId::random(), 1024, 1024,
         layer_core::DocumentNames {paint: "Small canvas".into(), paper: "Paper".into()});
     let budget = MemoryBudget::with_facts(MemoryFacts {host_default_bytes: Some(8 << 30), override_bytes: Some(8 << 30), ..Default::default()});
-    let mut r = renderer_in_budget(doc.composition().color, layer_core::DeviceMemoryFacts {unified: true, ..Default::default()}, budget.clone()).unwrap();
+    let mut r = renderer_in_budget(doc.composition().color, layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}, budget.clone()).unwrap();
     let frame = FramePacket {view: crate::test_support::view([1024; 2]), ..packet(doc.scene(), [1024; 2])};
     crate::test_support::submit_settled(&mut r, frame);
-    let usage = r.display_usage();
-    let held = usage.pinned.iter().sum::<u64>() + r.composition_memory(r.scene.as_deref())[1] + r.retired_display_bytes.used();
-    let reserved = r.current_display_memory_report().pinned_gpu_bytes;
-    assert!(reserved >= held + r.memory.working_limit(), "without a head the display pins its working reservations");
-    let head = r.raster_tiers.raster.blocked(crate::residency::Class::Authored, u64::MAX / 2).expect("the head cannot fit");
-    *r.memory.head.borrow_mut() = Some((head, 1));
-    let report = r.current_display_memory_report();
-    assert_eq!(report.pinned_gpu_bytes, held, "a held head stops the display's admissions, so only held bytes stay pinned");
-    assert!(report.demand_gpu_bytes >= held + r.memory.working_limit(), "the working reservations stay in the display's demand");
+    let unit = r.memory.working_limit();
+    if waits {
+        assert!(r.admit_raster_working(u64::MAX / 2).is_err(), "the lane cannot fit the device");
+    }
+    let display = r.admit_display(None, crate::residency::Class::Authored, unit);
+    assert_eq!(display.is_ok(), !waits, "a waiting lane holds every display admission back, so nothing draws on the reservations it borrows");
+    r.publish_memory(); budget.flush_reports(); r.sync_raster_report();
+    let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
+    let raster = r.admit_raster_working(room).expect("the lane takes the room its ledger shows");
+    r.publish_memory(); budget.flush_reports();
+    let device = budget.snapshot().devices[0];
+    let detail = format!("unit {unit} room {room} display used {} raster used {} physical {} limit {}", r.scene_tiers.display.used(), r.raster_tiers.raster.used(), device.physical_bytes, device.limit_bytes);
+    drop((display, raster));
+    (device.physical_bytes, device.limit_bytes, detail)
+}
+
+#[test]
+fn authored_display_work_beside_a_lane_that_never_waited_stays_within_the_device() {
+    let (physical, limit, detail) = device_bytes_after_the_lane_and_authored_display_work(false);
+    assert!(physical <= limit, "{detail}");
+}
+
+#[test]
+fn a_lane_admitted_after_it_waited_leaves_the_displays_working_reservations_backed() {
+    let (physical, limit, detail) = device_bytes_after_the_lane_and_authored_display_work(true);
+    assert!(physical <= limit, "the lane borrows the display's working reservations, so the ledger must not commit more than the device holds: {detail}");
+}
+
+#[test]
+fn a_lane_that_no_release_can_wake_asks_for_its_own_frame_until_room_returns() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r);
+    let held = r.raster_tiers.admitted.admit(crate::residency::Class::Authored, 64 * MIB).unwrap();
+    assert!(r.admit_raster_working(room).is_err(), "the lane needs the room the held bytes take");
+    assert!(layer_render::CanvasRenderer::stroke_waits_for_memory(&r), "the stroke follows the waiting lane");
+    assert!(matches!(r.next_frame(), layer_render::FrameDemand::WaitUntil(_)), "with no release edge to wake it, as on the Web, a waiting lane asks for a frame of its own");
+    drop(held);
+    assert!(r.admit_raster_working(room).is_ok(), "the frame it asked for retries the lane once room returns");
+    assert_eq!(r.next_frame(), layer_render::FrameDemand::Wait, "an admitted lane asks for no more frames");
+}
+
+#[test]
+fn a_lane_that_display_bytes_still_retiring_would_cover_is_woken_when_they_drain() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    let (send, woken) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
+    let retiring = r.retired_display_bytes.charge(64 * MIB);
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 16 * MIB;
+    let Err(refused) = r.admit_raster_working(wanted) else { panic!("the lane needs room the display holds while it retires") };
+    let edge = r.device.retirement_handle();
+    edge.flush().unwrap();
+    while woken.try_recv().is_ok() {}
+    edge.run(move || drop(retiring));
+    edge.flush().unwrap();
+    let (woke, stale) = (woken.try_recv().is_ok(), refused.fits());
+    r.publish_memory(); r.factory.memory_budget().flush_reports();
+    assert!(woke, "64 MiB drained from the display covers the 16 MiB the lane lacks, so the drain wakes it (fits before the display republishes: {stale}, after: {})", refused.fits());
+}
+
+#[test]
+fn a_stroke_lane_that_nothing_can_free_raises_one_message_per_wait_and_keeps_waiting() {
+    let mut r = renderer(Default::default(), layer_core::DeviceMemoryFacts {budget_bytes: Some(1 << 30), ..Default::default()}).unwrap();
+    let (send, woken) = std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.refresh_memory_limits();
+    let wait = |r: &mut WgpuRasterizer, bytes: u64| { let admitted = r.admit_raster_working(bytes); r.note_restore_admission(&admitted); admitted.map(drop) };
+    assert!(wait(&mut r, u64::MAX / 2).is_err());
+    assert_eq!(r.memory.stroke_memory_refusals(), 0, "only a stroke's lane tells the person");
+    r.end_frame_memory(); r.end_frame_memory();
+    r.live_stroke = Some(layer_core::StrokeId(1));
+    let transient = crate::present_transition::Charge::new(8 * MIB, &r.device.transient_display, r.device.transient_memory.clone());
+    r.publish_memory(); r.factory.memory_budget().flush_reports(); r.sync_raster_report();
+    let wanted = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used()) + lendable(&r) + 4 * MIB;
+    assert!(wait(&mut r, wanted).is_err());
+    assert_eq!(r.memory.stroke_memory_refusals(), 0, "bytes still draining can free the room the lane lacks, so it waits without a message");
+    let edge = r.device.retirement_handle();
+    edge.flush().unwrap();
+    while woken.try_recv().is_ok() {}
+    edge.run(move || drop(transient));
+    edge.flush().unwrap();
+    assert!(woken.try_recv().is_ok(), "the drained bytes wake the waiting lane");
+    wait(&mut r, wanted).expect("the drained bytes make room for the lane");
+    let fallback = r.admit_raster_window(MIB, u64::MAX / 2, 0);
+    r.note_restore_admission(&fallback);
+    drop(fallback.expect("the window falls back to the room it can get"));
+    assert_eq!(r.memory.stroke_memory_refusals(), 0, "a window that fits after its larger first try tells the person nothing");
+    assert!(wait(&mut r, u64::MAX / 2).is_err());
+    assert_eq!(r.memory.stroke_memory_refusals(), 1, "with nothing left to free, the waiting stroke tells the person once");
+    assert!(wait(&mut r, u64::MAX / 2).is_err());
+    assert_eq!(r.memory.stroke_memory_refusals(), 1, "the same wait does not repeat the message");
+    while woken.try_recv().is_ok() {}
+    assert!(wait(&mut r, MIB).is_ok(), "a lane that fits ends the wait");
+    assert!(woken.try_recv().is_ok(), "ending the wait wakes the work its stop held back");
+    assert!(wait(&mut r, u64::MAX / 2).is_err());
+    assert_eq!(r.memory.stroke_memory_refusals(), 2, "a later wait with nothing to free tells the person again");
 }
 
 #[test]
@@ -1292,12 +1379,17 @@ fn raster_headroom(r: &WgpuRasterizer) -> u64 {
     r.memory.raster.handle.gpu_working_limit().saturating_sub(r.raster_tiers.raster.used())
 }
 
+fn lendable(r: &WgpuRasterizer) -> u64 {
+    r.publish_memory();
+    r.memory.lane.borrow().lendable
+}
+
 #[test]
 fn raster_admission_counts_pages_and_retained_buffers_from_creation() {
     let mut r = legacy_scene_renderer(Default::default());
     let headroom = raster_headroom(&r);
     let page = r.create_page([0, 0], "unpublished raster page");
-    assert!(r.admit_raster_working(headroom).is_err(), "a page counts from its creation, before any layer holds it");
+    assert!(r.admit_raster_working(headroom + lendable(&r)).is_err(), "a page counts from its creation, before any layer holds it");
     let headroom = raster_headroom(&r);
     r.refresh_memory_limits();
     let held = r.raster_tiers.raster.used();
@@ -1318,7 +1410,7 @@ fn refused_raster_admission_is_woken_by_a_released_page() {
     r.set_preparation_wake(Arc::new(move || { let _ = send.send(()); }));
     while receive.try_recv().is_ok() {}
     let room = r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
-    assert!(r.admit_raster_working(room + 1).is_err());
+    assert!(r.admit_raster_working(room + lendable(&r) + 1).is_err());
     drop(page);
     receive.recv_timeout(std::time::Duration::from_secs(1)).expect("a release that makes the refused raster unit fit must wake it");
 }

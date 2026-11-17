@@ -5238,6 +5238,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let preview = self.sync_previews(now_ns, presentation_ns);
         let clone_source = self.engine.clone_source();
         let budget_completions=self.engine.metrics().input_budget_completions;
+        let memory_refusals=self.engine.backend().stroke_memory_refusals();
         if let Err(cause)=self.engine.render_frame_for(now_ns,presentation_ns) {
             if self.engine.document().memory().package_failure().is_some() {
                 self.raise_message_notice(MessageId::DOCUMENTS_PACKAGE_DAMAGED_BODY);
@@ -5252,6 +5253,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let transition_changed = self.advance_canvas_transition(now_ns);
         if self.engine.metrics().input_budget_completions!=budget_completions {
             self.raise_message_notice(MessageId::COMMON_STROKE_INPUT_LIMIT);
+        }
+        if self.engine.backend().stroke_memory_refusals()!=memory_refusals {
+            self.raise_message_notice(MessageId::COMMON_STROKE_MEMORY);
         }
         if self.engine.clone_source() != clone_source {
             self.sync_retouch_points();
