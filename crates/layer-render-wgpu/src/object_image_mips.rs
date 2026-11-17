@@ -37,17 +37,6 @@ struct Entry {
     charges:[Charge;2],
     lease:Arc<Lease>,
 }
-pub(crate) struct BuildBudget {root:usize,view:usize}
-impl BuildBudget {
-    pub(crate) fn new(steps:usize)->Self {
-        let root=(steps/4).max(1).min(steps);
-        Self {root,view:steps-root}
-    }
-    fn take(&mut self,root:bool)->bool {
-        let remaining=if root {&mut self.root}else {&mut self.view};
-        if *remaining==0 {return false;}*remaining-=1;true
-    }
-}
 impl Entry {
     fn matches(&self, id: PortableId, source: &Arc<SourceImage>) -> bool { self.id == id && self.source.ptr_eq(&Arc::downgrade(source)) }
     fn matches_plan(&self, target: &Planned) -> bool {
@@ -55,6 +44,8 @@ impl Entry {
             && self.image.texture.format() == target.request.format
     }
     fn ready(&self) -> bool { self.pending.is_empty() && self.valid.load(Ordering::Acquire) }
+    fn class(&self) -> Class { if self.root {Class::Navigator} else {Class::Visible} }
+    fn wants(&self, source: &Arc<SourceImage>, coordinate: [u32;2]) -> bool { self.source.ptr_eq(&Arc::downgrade(source)) && self.pending.contains(&coordinate) }
     fn ready_for(&self,bounds:PixelRect)->bool {
         self.valid.load(Ordering::Acquire) && !self.pending.iter().any(|coordinate|!crate::page_rect(*coordinate).intersect(bounds).is_empty())
     }
@@ -89,6 +80,7 @@ pub(crate) struct MovingImages {
     scratch: Arc<Tier>,
     work: Option<(display_mips::Image,crate::residency::Charge)>,
     allocation_waiting: bool,
+    published: bool,
     context: Option<RgbSpace>,
     pipelines: Option<display_mips::WindowPipelines>,
     planned: Option<(u64,Vec<MovingRequest>)>,
@@ -328,15 +320,15 @@ impl MovingImages {
         if targets.is_empty() {self.planned=Some((budget,requests.to_vec()));}
         Ok(MipPlan {targets,waiting:false})
     }
-    pub(crate) fn allocate(&mut self,r:&WgpuRasterizer,plan:MipPlan,encoder:&mut crate::submission::CommandEncoder)->bool {
-        if plan.targets.is_empty() {return false;}
+    pub(crate) fn allocate(&mut self,r:&WgpuRasterizer,plan:MipPlan,encoder:&mut crate::submission::CommandEncoder) {
+        if plan.targets.is_empty() {return;}
         self.pipelines(&r.device);
         let Ok(windows)=plan.targets.iter().map(|target|r.admit_tier(None,&self.building,Class::Visible,target.bytes)).collect::<Result<Vec<_>,_>>()
-            else {self.allocation_waiting=true;return false;};
+            else {self.allocation_waiting=true;return;};
         let (work,charge)=match self.work.take() {
             Some(work)=>work,
             None=>{
-                let Ok(reserved)=r.admit_tier(None,&self.scratch,Class::Visible,working_bytes()) else {self.allocation_waiting=true;return false;};
+                let Ok(reserved)=r.admit_tier(None,&self.scratch,Class::Visible,working_bytes()) else {self.allocation_waiting=true;return;};
                 let work=display_mips::Image::with_device(&r.device,display_mips::Plan::at([PAGE_SIZE;2],display_mips::MAX_LEVEL),display_mips::MAX_LEVEL);
                 let charge=reserved.charge(work.storage_bytes());
                 (work,charge)
@@ -388,10 +380,11 @@ impl MovingImages {
         replacements.iter().for_each(Entry::plan);
         self.entries.extend(replacements);
         self.work=Some((work,charge));
-        let changed=!copied.is_empty();
+        self.published|=!copied.is_empty();
         for (id,source) in copied {self.record_completed_image(id,&source);}
-        changed
     }
+    pub(crate) fn published(&self)->bool {self.published}
+    pub(crate) fn take_published(&mut self)->bool {std::mem::take(&mut self.published)}
     fn record_completed_image(&mut self,id:PortableId,source:&Weak<SourceImage>) {
         if self.entries.iter().filter(|entry|entry.requested && entry.id==id && entry.source.ptr_eq(source)).all(|entry|entry.pending.is_empty()) {self.completed_images+=1;}
     }
@@ -417,56 +410,40 @@ impl MovingImages {
         entries.sort_by_key(|entry|(!entry.root,std::cmp::Reverse(entry.rank)));
         entries.into_iter()
     }
-    fn give_unused(&self,budget:&mut BuildBudget) {
-        let mut root=false;let mut view=false;
-        for entry in self.order() {if entry.root {root=true;}else {view=true;}}
-        if !root {budget.view+=budget.root;budget.root=0;}
-        if !view {budget.root+=budget.view;budget.view=0;}
-    }
-    pub(crate) fn next_build(&mut self,budget:&mut BuildBudget,ready:impl Fn(PortableId,&Arc<SourceImage>,[u32;2],Option<wgpu::TextureFormat>)->bool)->Option<(PortableId,Arc<SourceImage>,[u32;2])> {
+    fn revalidate(&mut self) {
         for entry in &mut self.entries {
             if !entry.valid.load(Ordering::Acquire) {
                 entry.pending=crate::page_coordinates(entry.image.plan.bounds).collect();entry.valid=Arc::new(AtomicBool::new(true));
                 entry.charges[0]=self.building.charge(entry.storage_bytes());entry.offer();
             }
         }
-        self.give_unused(budget);
-        self.order().find_map(|entry| {
-            let source=entry.source.upgrade()?;let coordinate=*entry.pending.front()?;
-            if ready(entry.id,&source,coordinate,entry.encoded().then(||entry.image.texture.format())) && budget.take(entry.root) {
-                Some((entry.id,source,coordinate))
-            } else {None}
+    }
+    pub(crate) fn next_build(&mut self,admit:impl Fn(Class)->bool,ready:impl Fn(&Arc<SourceImage>,[u32;2],Option<wgpu::TextureFormat>)->bool)->Option<(Arc<SourceImage>,[u32;2],Class)> {
+        self.revalidate();
+        self.ready_tile(admit,ready)
+    }
+    fn ready_tile(&self,admit:impl Fn(Class)->bool,ready:impl Fn(&Arc<SourceImage>,[u32;2],Option<wgpu::TextureFormat>)->bool)->Option<(Arc<SourceImage>,[u32;2],Class)> {
+        self.order().filter(|entry|admit(entry.class())).find_map(|entry| {
+            let source=entry.source.upgrade()?;let format=entry.encoded().then(||entry.image.texture.format());
+            let coordinate=entry.pending.iter().copied().find(|coordinate|ready(&source,*coordinate,format))?;
+            Some((source,coordinate,entry.class()))
         })
     }
-    pub(crate) fn accept_build(&self,budget:&mut BuildBudget,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2])->bool {
-        self.give_unused(budget);
-        self.order().any(|entry|entry.matches(id,source) && entry.pending.front()==Some(&coordinate) && budget.take(entry.root))
+    pub(crate) fn buildable(&self,ready:impl Fn(&Arc<SourceImage>,[u32;2],Option<wgpu::TextureFormat>)->bool)->bool {self.ready_tile(|_|true,ready).is_some()}
+    pub(crate) fn wanted(&self)->Vec<(PortableId,Arc<SourceImage>,[u32;2],Class,Option<wgpu::TextureFormat>)> {
+        self.order().filter_map(|entry|Some((entry,entry.source.upgrade()?))).flat_map(|(entry,source)| {
+            let format=entry.encoded().then(||entry.image.texture.format());
+            entry.pending.iter().map(move|coordinate|(entry.id,source.clone(),*coordinate,entry.class(),format))
+        }).collect()
     }
-    pub(crate) fn upcoming(&self,count:usize)->Vec<(PortableId,Arc<SourceImage>,[u32;2])> {
-        let mut budget=BuildBudget::new(count);self.give_unused(&mut budget);
-        let mut upcoming=Vec::new();
-        for entry in self.order() {
-            let Some(source)=entry.source.upgrade() else {continue;};
-            let available=if entry.root {budget.root}else {budget.view};
-            for &coordinate in entry.pending.iter().take(available) {
-                budget.take(entry.root);upcoming.push((entry.id,source.clone(),coordinate));
-            }
-            if upcoming.len()==count {break;}
-        }
-        upcoming
+    pub(crate) fn wants(&self,source:&Arc<SourceImage>,coordinate:[u32;2])->bool {
+        self.pipelines.as_ref().is_some_and(|pipelines|pipelines.reduce.reduce.ready() && pipelines.half.ready())
+            && self.entries.iter().any(|entry|entry.valid.load(Ordering::Acquire) && entry.wants(source,coordinate))
     }
-    pub(crate) fn accepts_tile(&self,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2])->bool {
-        self.entries.iter().any(|entry|entry.matches(id,source) && entry.valid.load(Ordering::Acquire) && entry.pending.front()==Some(&coordinate))
-    }
-    pub(crate) fn needs_samples(&self,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2],texture:wgpu::TextureFormat)->bool {
-        self.entries.iter().any(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate)
-            && entry.encoded() && entry.image.texture.format()!=texture)
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn write_tile(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,id:PortableId,source:&Arc<SourceImage>,coordinate:[u32;2],texture:impl Into<crate::source_access::TileTexture>,pixels:Option<&crate::scene::sources::PreparedSourcePixels>)->Result<bool,GpuRasterError> {
+    pub(crate) fn write_tile(&mut self,r:&mut WgpuRasterizer,encoder:&mut crate::submission::CommandEncoder,source:&Arc<SourceImage>,coordinate:[u32;2],texture:impl Into<crate::source_access::TileTexture>,pixels:Option<&crate::scene::sources::PreparedSourcePixels>)->Result<bool,GpuRasterError> {
         let texture=&texture.into();
-        if !self.accepts_tile(id,source,coordinate) {return Err(GpuRasterError::InvalidImage);}
-        let windows=||self.entries.iter().filter(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate));
+        if !self.entries.iter().any(|entry|entry.valid.load(Ordering::Acquire) && entry.wants(source,coordinate)) {return Err(GpuRasterError::InvalidImage);}
+        let windows=||self.entries.iter().filter(|entry|entry.wants(source,coordinate));
         let level=windows().filter(|entry|!entry.encoded())
             .map(|entry|entry.image.plan.level).max();
         for entry in windows().filter(|entry|entry.encoded()) {
@@ -489,18 +466,20 @@ impl MovingImages {
             display_mips::Window::copy_tiles(self.pipelines.as_ref().unwrap(),encoder,&self.work.as_ref().unwrap().0,coordinate,
                 windows().filter(|entry|!entry.encoded()).map(|entry|&entry.image))?;
         }
-        let mut changed=false;
+        let mut completed=Vec::new();
         let mut entries=std::mem::take(&mut self.entries);
-        for entry in entries.iter_mut().filter(|entry|entry.matches(id,source) && entry.pending.contains(&coordinate)) {
+        for entry in entries.iter_mut().filter(|entry|entry.wants(source,coordinate)) {
             crate::submission::CacheWrite::shared(entry.valid.clone()).track(encoder);
             let position=entry.pending.iter().position(|pending|*pending==coordinate).unwrap();
             entry.pending.remove(position);
-            if entry.pending.is_empty() {changed=true;self.planned=None;self.settle(entry);}
+            if entry.pending.is_empty() {completed.push(entry.id);self.planned=None;self.settle(entry);}
         }
         self.entries=entries;
-        if changed {self.record_completed_image(id,&Arc::downgrade(source));}
+        completed.sort();completed.dedup();
+        for id in &completed {self.record_completed_image(*id,&Arc::downgrade(source));}
         self.tile_builds+=1;
-        Ok(changed)
+        self.published|=!completed.is_empty();
+        Ok(!completed.is_empty())
     }
 }
 

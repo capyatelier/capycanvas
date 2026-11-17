@@ -332,10 +332,11 @@ transparent extension, so admission depends only on mip readiness, not on the
 window's area or object count. A moving layer never queues canonical work for a superseded pose. The
 source cache reserves mip storage from its byte budget. Native source preparation
 runs on up to three workers, each with six tiles queued, and the queue removes
-duplicates. An idle frame writes up to 32 prepared tiles or reductions into mip
-pyramids and an input frame two; both frames request enough upcoming tiles to keep
-the workers busy until the next frame, so a cold document with many distinct
-images does not wait one frame per handful of tiles. Image identity and source
+duplicates. The drain that uploads a decoded tile writes it into every mip
+pyramid waiting for it. Resident tiles are written when a pyramid is planned,
+within the frame's work budget. The remaining tiles queue at the pyramid's class,
+Visible for a view window and Navigator for a whole-image root, until the working
+set refuses. Image identity and source
 interpretation select the pyramid independently of object placement. Nearest continues reading level zero.
 
 Canonical Object results sample privately across frames. A window larger than

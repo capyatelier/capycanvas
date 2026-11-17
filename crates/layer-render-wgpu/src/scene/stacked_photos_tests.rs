@@ -18,7 +18,7 @@ fn stacked_photos_reuse_canonical_regions_within_the_retained_budget() {
     for _ in 0..4000 {
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         r.drain_image_decodes(&mut encoder).unwrap();
-        r.prepare_moving_images(frame,&mut encoder).unwrap();
+        r.prepare_moving_images(frame,&mut encoder,&mut crate::test_support::work(false)).unwrap();
         r.uploads.finish(&encoder);encoder.submit(&r.queue);r.wait_idle().unwrap();
         if !r.moving_images_pending() {break;}
         std::thread::sleep(std::time::Duration::from_millis(1));

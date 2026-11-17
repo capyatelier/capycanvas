@@ -518,7 +518,7 @@ fn private_canonical_jobs_yield_and_cancel_before_publication() {
     let mut complete = None;
     for _ in 0..300 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.prepare_moving_images(packet(doc.scene(), [64; 2]), &mut encoder).unwrap();
+        r.prepare_moving_images(packet(doc.scene(), [64; 2]), &mut encoder, &mut crate::test_support::work(false)).unwrap();
         let passes = encoder.pass_count();
         let mut budget = crate::test_support::work(true);
         let taps = cache.advance(&mut r, &mut compositor, &mut encoder,&mut budget).unwrap();
@@ -669,7 +669,7 @@ fn coarse_linear_object_node_includes_source_outside_its_output_cell() {
     let mut settled = false;
     for iteration in 0..2000 {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        if r.prepare_moving_images(frame, &mut encoder).unwrap() { scene.invalidate_object_previews([8192; 2]); }
+        if r.prepare_moving_images(frame, &mut encoder, &mut crate::test_support::work(false)).unwrap() { scene.invalidate_object_previews([8192; 2]); }
         let composed = {let mut work=crate::test_support::work(false);scene.compose(&mut r, frame, if iteration == 0 { window } else { PixelRect::EMPTY }, &mut encoder, None, &mut work)};
         if let Err(error) = &composed { assert!(matches!(error, GpuRasterError::NotReady), "{error:?}"); }
         r.uploads.finish(&encoder); r.last_submission = encoder.submit(&r.queue); r.wait_idle().unwrap();

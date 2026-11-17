@@ -1434,6 +1434,9 @@ impl DecodedTiles {
         }
         self.prepared_slot(&Key::PaintBase(Arc::downgrade(base.image.storage()), base.offset, coordinate))
     }
+    pub(crate) fn resident_format(&self, source: &Arc<SourceImage>, coordinate: [u32; 2]) -> Option<wgpu::TextureFormat> {
+        self.keyed(&Key::Image(Arc::downgrade(source), coordinate)).filter(|slot| slot.ready()).map(|slot| slot.layer.format())
+    }
     fn prepared_slot(&self, key: &Key) -> Option<&wgpu::TextureView> {
         let slot = self.keyed(key).filter(|slot| slot.ready())?;
         slot.touch(self.decoded.heap().epoch());

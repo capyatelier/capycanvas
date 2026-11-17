@@ -61,9 +61,13 @@ impl WgpuRasterizer {
         ]
     }
     pub(crate) fn moving_images_outstanding(&self) -> Option<Outstanding> {
-        if self.window_samples_ready() { return Some(Outstanding::Runnable); }
-        (self.moving_images_waiting || self.moving_images.pending())
-            .then(|| if self.image_decode_waiting() { Outstanding::Blocked(Input::Decode) } else { Outstanding::Runnable })
+        let images = &self.moving_images;
+        if images.published() || images.buildable(|source, coordinate, format| self.mip_source_resident(source, coordinate, format)) {
+            return Some(Outstanding::Runnable);
+        }
+        if !(self.moving_images_waiting || images.pending()) { return None; }
+        if self.image_decode_waiting() { return Some(Outstanding::Blocked(Input::Decode)); }
+        Some(Outstanding::Runnable)
     }
     pub(crate) fn waits_on(&self, input: Input) -> bool {
         match input {

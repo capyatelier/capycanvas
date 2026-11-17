@@ -176,9 +176,6 @@ const INITIAL_TARGET_RECORDS: usize = 257;
 const READBACK_TIMEOUT: Duration = layer_core::raster::CAPTURE_TIMEOUT;
 const WHITE_MASK_ASSET: &str = "builtin:brush-tip/solid-white-v1";
 const PAGE_SIZE: u32 = 256;
-const MOVING_IMAGE_IDLE_STEPS: usize = 32;
-const MOVING_IMAGE_INPUT_STEPS: usize = 2;
-const MOVING_IMAGE_PREFETCH: usize = 18;
 // Queries consume each group before its source slots can be reused. This also
 // fits the portable sixteen sampled-texture bindings per shader stage.
 const SOURCE_SLOTS: usize = 16;
@@ -3416,11 +3413,6 @@ fn outline_damage(a: Option<&layer_core::Selection>, b: Option<&layer_core::Sele
         damage.union(pixel_rect(bounds, extent))
     })
 }
-pub(crate) struct PreparedImageUpload {
-    prepared: object_image_mips::PreparedMipTile,
-    tile: source_access::RawTile,
-    charge: residency::Charge,
-}
 impl WgpuRasterizer {
     fn held_result_ready(&self)->bool {
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
@@ -3430,16 +3422,7 @@ impl WgpuRasterizer {
         !self.source_tiles.borrow().uploads_full(result.class())
     }
     fn decode_result_eligible(&self,receipt:Option<&scene::sources::PendingTile>,result:&object_image_mips::PreparedImageWork)->bool {
-        if !self.decode_result_admitted(result) {return false;}
-        if let Some(receipt)=receipt { return Self::receipt_matches(receipt,result); }
-        !self.window_samples_needed(result)
-    }
-    fn window_samples_needed(&self,result:&object_image_mips::PreparedImageWork)->bool {
-        if let object_image_mips::PreparedImageWork::Image(tile)=result
-            && self.moving_images.accepts_tile(tile.id,&tile.source,tile.coordinate)
-            && let Some(view)=self.source_tiles.borrow().prepared_view(&tile.source,tile.coordinate)
-            && self.moving_images.needs_samples(tile.id,&tile.source,tile.coordinate,view.texture().format()) { return true; }
-        false
+        self.decode_result_admitted(result) && receipt.is_none_or(|receipt|Self::receipt_matches(receipt,result))
     }
     fn receipt_matches(receipt:&scene::sources::PendingTile,prepared:&object_image_mips::PreparedImageWork)->bool {
         match prepared {
@@ -3459,7 +3442,7 @@ impl WgpuRasterizer {
         self.moving_decode.as_ref().map_or(self.papers.image_waiting(),|(_,queue)|
             !queue.ready() && (queue.pending() || self.papers.image_waiting()))
     }
-    pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<PreparedImageUpload>, GpuRasterError> {
+    pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<object_image_mips::PreparedMipTile>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
         for (sequence,result) in std::mem::take(&mut *self.browser_image_result.borrow_mut()) {
             if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(sequence,result); }
@@ -3510,7 +3493,8 @@ impl WgpuRasterizer {
                     return Ok(None);
                 }
                 let tile=scene::Scene::decode_prepared_for(self,encoder,&prepared.source,prepared.coordinate,pixels.clone(),prepared.use_,prepared.class)?;
-                Ok(Some((prepared.clone(),tile)))
+                self.build_moving_tile(encoder,&prepared.source,prepared.coordinate,&tile.texture,Some(pixels))?;
+                Ok(Some(prepared.clone()))
             },
         })();
         if matches!(&result,Err(GpuRasterError::NotReady|GpuRasterError::SourceWorkingSetExceeded)) {
@@ -3518,7 +3502,15 @@ impl WgpuRasterizer {
             return Ok(None);
         }
         self.decode_consumed();
-        Ok(result?.map(|(prepared,tile)|PreparedImageUpload {prepared,tile,charge}))
+        result
+    }
+    fn build_moving_tile(&mut self,encoder:&mut submission::CommandEncoder,source:&Arc<layer_core::color::source::SourceImage>,coordinate:[u32;2],
+        texture:&source_access::TileTexture,pixels:Option<&scene::sources::PreparedSourcePixels>)->Result<(),GpuRasterError> {
+        if !self.moving_images.wants(source,coordinate) {return Ok(());}
+        let mut images=std::mem::take(&mut self.moving_images);
+        let result=images.write_tile(self,encoder,source,coordinate,texture,pixels);
+        self.moving_images=images;
+        result.map(drop)
     }
     fn decode_consumed(&mut self) {
         self.preparation_progress=self.preparation_progress.saturating_add(1);
@@ -3527,14 +3519,7 @@ impl WgpuRasterizer {
     pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
         loop {
             let previous=self.preparation_progress;
-            if let Some(upload)=self.drain_image_decode(encoder)? {
-                let prepared=upload.prepared;
-                if self.moving_images.accepts_tile(prepared.id,&prepared.source,prepared.coordinate)
-                    && self.moving_images.needs_samples(prepared.id,&prepared.source,prepared.coordinate,upload.tile.texture.format()) {
-                    self.source_results.push_back((self.device.working_space(),object_image_mips::PreparedImageWork::Image(prepared),upload.charge));
-                    break;
-                }
-            }
+            self.drain_image_decode(encoder)?;
             if self.preparation_progress==previous || !(self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready())) {break;}
         }
         Ok(())
@@ -3777,9 +3762,8 @@ impl WgpuRasterizer {
     fn moving_images_pending(&self) -> bool {
         self.moving_images_outstanding().is_some_and(|state| match state { frame_demand::Outstanding::Runnable => true, frame_demand::Outstanding::Blocked(input) => !self.wakes(input) })
     }
-    fn window_samples_ready(&self) -> bool {
-        self.source_results.iter().any(|(context,result,_)|*context==self.device.working_space() && self.window_samples_needed(result))
-            && self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade).is_none()
+    fn mip_source_resident(&self,source:&Arc<layer_core::color::source::SourceImage>,coordinate:[u32;2],format:Option<wgpu::TextureFormat>)->bool {
+        self.source_tiles.borrow().resident_format(source,coordinate).is_some_and(|resident|format.is_none_or(|format|resident==format))
     }
     fn prepare_moving_projection(&mut self, packet:FramePacket<'_>) -> Result<(),GpuRasterError> {
         let available = !self.snapshot_worker;
@@ -3796,66 +3780,53 @@ impl WgpuRasterizer {
         }
         Ok(())
     }
-    fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder) -> Result<bool, GpuRasterError> {
+    fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder, work: &mut scene::WorkBudget) -> Result<bool, GpuRasterError> {
         if self.moving_projection.is_none() {self.prepare_moving_projection(packet)?;}
+        self.drain_image_decodes(encoder)?;
         let mut images = std::mem::take(&mut self.moving_images);
         images.retire_evicted(encoder);
-        let budget = if packet.dab_batches.is_empty() && self.moving_layer.is_none() { MOVING_IMAGE_IDLE_STEPS } else { MOVING_IMAGE_INPUT_STEPS };
-        let mut changed = false;
-        let result:Result<bool,GpuRasterError> = (|| {
+        let result:Result<(),GpuRasterError> = (|| {
             if !self.moving_projection.as_ref().unwrap().requests.is_empty()
                 && !self.compilation.require(images.pipelines(&self.device),startup::DOCUMENT) {
-                self.moving_images_waiting=true;return Ok(false);
+                self.moving_images_waiting=true;return Ok(());
             }
             let budget_bytes = self.memory.mip_budget();
             let plan = images.plan(self, &self.moving_projection.as_ref().unwrap().requests, budget_bytes, encoder)?;
             self.moving_images_waiting = plan.waiting;
-            changed = images.allocate(self, plan, encoder);
+            images.allocate(self, plan, encoder);
             if self.moving_decode.as_ref().is_some_and(|(space,_)| *space != self.device.working_space()) {
                 self.moving_decode = None;self.source_results.clear();
                 #[cfg(target_arch = "wasm32")]
                 { self.browser_image_result = Default::default(); self.browser_image_wake = Default::default(); }
             }
-            let mut steps=0;let mut allowance=object_image_mips::BuildBudget::new(budget);
-            while steps<budget {
-                let cached=images.next_build(&mut allowance,|_,source,coordinate,format| {
-                    self.source_tiles.borrow().prepared_view(source,coordinate)
-                        .is_some_and(|view|format.is_none_or(|format|view.texture().format()==format))
-                });
-                if let Some((id,source,coordinate))=cached {
-                    let mut requested=scene::sources::Inputs::default();
-                    requested.image_for(&source,coordinate,self.device.working_space(),scene::sources::SourceUse::Native);
-                    let accepted=requested.accept_query(self,None)?;
-                    let read=scene::sources::accepted_image(&accepted,&source,coordinate)?;
-                    if !read.encode(self,encoder,residency::Class::Visible)? {return Err(GpuRasterError::NotReady);}
-                    let result=images.write_tile(self,encoder,id,&source,coordinate,&read.tile.texture,None);
-                    accepted.track(encoder);changed|=result?;
-                    steps+=1;continue;
-                }
-                if let Some(upload)=self.drain_image_decode(encoder)? {
-                    let prepared=upload.prepared;
-                    if images.accept_build(&mut allowance,prepared.id,&prepared.source,prepared.coordinate) {
-                        changed|=images.write_tile(self,encoder,prepared.id,&prepared.source,prepared.coordinate,&upload.tile.texture,
-                            Some(prepared.pixels.as_ref().map_err(|error|GpuRasterError::Color(error.clone()))?))?;
-                    }
-                    steps+=1;continue;
-                }
-                break;
+            let mut built=[false;6];
+            while let Some((source,coordinate,class))=images.next_build(|class|!built[class as usize] || work.remaining()>=scene::PASS_TAPS,
+                |source,coordinate,format|self.mip_source_resident(source,coordinate,format)) {
+                let mut requested=scene::sources::Inputs::default();
+                requested.image_for(&source,coordinate,self.device.working_space(),scene::sources::SourceUse::Native);
+                let accepted=requested.accept_query(self,None)?;
+                let read=scene::sources::accepted_image(&accepted,&source,coordinate)?;
+                if !read.encode(self,encoder,class)? {return Err(GpuRasterError::NotReady);}
+                let result=images.write_tile(self,encoder,&source,coordinate,&read.tile.texture,None);
+                accepted.track(encoder);result?;
+                work.spend(scene::PASS_TAPS);built[class as usize]=true;
             }
-            for (id,source,coordinate) in images.upcoming(MOVING_IMAGE_PREFETCH) {
-                let needed=self.source_tiles.borrow().prepared_view(&source,coordinate)
-                    .is_none_or(|view|images.needs_samples(id,&source,coordinate,view.texture().format()));
-                if needed && !self.request_image_decode(id,source,coordinate,residency::Class::Visible)? {break;}
+            let mut refused:Option<residency::Class>=None;
+            for (id,source,coordinate,class,format) in images.wanted() {
+                if refused.is_some_and(|refused|class>=refused) {continue;}
+                let needed=self.source_tiles.borrow().resident_format(&source,coordinate).is_none_or(|resident|format.is_some_and(|format|resident!=format));
+                if needed && !self.request_image_decode(id,source,coordinate,class)? {refused=Some(refused.map_or(class,|refused|refused.min(class)));}
             }
-            Ok(changed)
+            Ok(())
         })();
+        let changed=images.take_published();
         self.moving_images = images;
         match result {
             Err(error) if error.is_preparation_pending() => {
                 self.moving_images_waiting = true;
                 Ok(changed)
             }
-            result => result,
+            result => result.map(|()|changed),
         }
     }
     fn hold_background(&mut self, refinement: bool) {
@@ -4632,7 +4603,7 @@ impl WgpuRasterizer {
         );
         self.source_tiles.get_mut().flush_retired(&mut encoder);
         self.telemetry.begin(&self.device, &self.queue, encoder.diagnostics(), self.metrics.submissions + 1);
-        let moving_images_changed = self.prepare_moving_images(packet, &mut encoder)?;
+        let moving_images_changed = self.prepare_moving_images(packet, &mut encoder, &mut work)?;
         if moving_images_changed && let Some(scene) = &mut self.scene {
             scene.invalidate_object_previews(packet.document_extent);
         }

@@ -1430,7 +1430,7 @@ fn decode_results_keep_their_requester_class_and_navigator_results_cannot_take_t
     }
     let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     let upload = r.drain_image_decode(&mut encoder).unwrap().expect("a visible result may use the floor");
-    assert_eq!((upload.prepared.class, upload.prepared.coordinate), (Class::Visible, [1, 0]));
+    assert_eq!((upload.class, upload.coordinate), (Class::Visible, [1, 0]));
     assert!(r.drain_image_decode(&mut encoder).unwrap().is_none());
     assert!(matches!(r.source_results.iter().map(|(_, held, _)| held.class()).collect::<Vec<_>>()[..], [Class::Navigator]));
     Scene::submit_chunk(&mut r, &mut encoder, "test floor").unwrap();

@@ -81,10 +81,10 @@ impl Drop for WorkBudget {
 impl WorkBudget {
     fn required(&self,class:Class)->bool {class==Class::Authored || class==Class::Visible && !self.motion}
     fn capacity(&self)->u64 {self.capacity}
-    fn remaining(&self)->u64 {self.capacity().saturating_sub(self.used)}
+    pub(crate) fn remaining(&self)->u64 {self.capacity().saturating_sub(self.used)}
     fn allowance(&self,class:Class)->u64 {if self.required(class) {u64::MAX}else {self.remaining()}}
     fn fits(&self,class:Class,progressed:bool,work:u64)->bool {self.required(class) || work<=self.remaining() || !progressed && !(self.motion && class==Class::Fallback)}
-    fn spend(&mut self,work:u64) {self.used=self.used.saturating_add(work);}
+    pub(crate) fn spend(&mut self,work:u64) {self.used=self.used.saturating_add(work);}
     fn spent(&self)->u64 {self.used}
 }
 #[cfg(test)]
