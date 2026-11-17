@@ -228,11 +228,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn workspace_gestures_idle(&self)->bool {
         self.workspace_history.gesture_start().is_none() && !self.bubble_state.moving()
             && self.workspace_drag.is_none() && self.divider_drag.is_none() && self.floating_resize.is_none()
-            && self.interaction.pointer.is_none() && self.navigator_drag.is_none() && !self.state.document_file.busy
+            && self.interaction.pointer.is_none() && self.navigator_drag.is_none()
     }
     pub fn require_workspace_idle(&self)->Result<(),String> {
         self.require_document_snapshot_idle()?;
-        if self.workspace_gestures_idle() {Ok(())}
+        if self.workspace_gestures_idle() && !self.state.document_file.busy {Ok(())}
         else {Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_THE_CURRENT_INTERACTION_BEFORE_SWITCHING_WORKSPACES).to_string())}
     }
     pub fn editing_state(&self) -> EditingState {

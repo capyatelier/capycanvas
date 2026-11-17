@@ -247,7 +247,7 @@ impl<R:CanvasRenderer> UiSession<R> {
     pub fn can_replace_startup_session(&self,stamp:&SessionStamp)->bool {
         let mut current=self.session_stamp();
         current.state.camera=stamp.state.camera.clone();
-        self.document_switch_interaction_idle(false) && self.deferred_edits.is_empty() && current==*stamp && !self.state.document_file.modified
+        self.document_switch_interaction_idle(false, &[]) && self.deferred_edits.is_empty() && current==*stamp && !self.state.document_file.modified
             && self.state.document_file.location.is_none() && !self.engine.can_undo() && !self.engine.can_redo()
     }
     pub fn request_session_close(&mut self)->Result<UiChange,String> {

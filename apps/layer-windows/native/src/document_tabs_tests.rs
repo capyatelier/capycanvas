@@ -99,7 +99,7 @@ fn drawing_close_waits_for_the_pending_canvas_submission() {
     let mut service = DocumentService::open(|| {}).unwrap();
     host.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 }).unwrap();
     assert!(host.session.retained_document_tiles().try_blobs().unwrap().is_some());
-    assert!(service.window.adoption_ready(&host).unwrap());
+    assert!(!service.window.adoption_ready(&host).unwrap());
     assert!(!host.session.can_park_document());
     assert!(!service.window.park_ready(&host).unwrap());
     command(&mut host, CommandId::CloseDocument);

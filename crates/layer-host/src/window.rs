@@ -228,7 +228,8 @@ impl<P: Parked> DocumentWindow<P> {
     }
 
     pub fn adoption_ready(&self, host: &NativeHost) -> Result<bool, String> {
-        Ok(!host.document_close_prepared && host.session.retained_document_tiles().try_blobs()?.is_some())
+        Ok(!host.document_close_prepared && host.session.can_park_document_after(&opening_requests(&host.session))
+            && host.session.retained_document_tiles().try_blobs()?.is_some())
     }
 
     /// Takes the active renderer and retains its device for later activations.
@@ -732,12 +733,11 @@ impl<P: Parked> DocumentWindow<P> {
         {
             return Err("The drawing changed while opening; try again".into());
         }
-        let tiles = host.session.retained_document_tiles();
-        if tiles.try_blobs()?.is_none() {
-            return Err("Wait for drawing capture before opening".into());
+        if !self.adoption_ready(host)? {
+            return Err(layer_ui::DocumentTransportRefusal::OpenOperation.message(host.session.localization()).to_string());
         }
         self.documents
-            .admit(&tiles, next.engine().document()).map_err(|reason| reason.message(host.session.localization()))?;
+            .admit(&host.session.retained_document_tiles(), next.engine().document()).map_err(|reason| reason.message(host.session.localization()))?;
         if !restored {
             next.initialize_document_location(open.location)?;
         }
@@ -752,14 +752,7 @@ impl<P: Parked> DocumentWindow<P> {
         if !begin_commit() {
             return Err("Document operation cancelled".into());
         }
-        let requests: Vec<_> = host
-            .session
-            .state()
-            .requests
-            .iter()
-            .filter_map(|r| opening(&r.kind).then_some(r.id))
-            .collect();
-        for id in requests {
+        for id in opening_requests(&host.session) {
             host.session.complete_document_request(id, Ok(true))?;
         }
         let tiles = host.session.park_document()?;
@@ -773,6 +766,10 @@ impl<P: Parked> DocumentWindow<P> {
 
 fn device(session: &UiSession<Renderer>) -> Option<&wgpu::Device> {
     session.engine().backend().0.as_ref().map(|g| g.device())
+}
+
+fn opening_requests(session: &UiSession<Renderer>) -> Vec<u32> {
+    session.state().requests.iter().filter_map(|r| opening(&r.kind).then_some(r.id)).collect()
 }
 
 fn opening(kind: &HostRequestKind) -> bool {
@@ -976,6 +973,36 @@ mod tests {
         assert!(host.session.state().document_file.location.is_none());
         assert!(host.session.state().requests.is_empty());
         assert_eq!(window.session(&host, original_id).unwrap().engine().document().owner, original.owner);
+        finish(host, window);
+    }
+
+    #[test]
+    fn new_drawing_adoption_waits_for_its_settings_save_and_refusal_keeps_the_request() {
+        use layer_ui::NewDrawingAction as A;
+        let mut host = host();
+        let mut window = Window::default();
+        invoke(&mut host, CommandId::NewDocument);
+        for action in [A::Open { screen: None, untitled: 2 }, A::Unit { unit: layer_ui::LengthUnit::Px }, A::Width { value: 128. }, A::Height { value: 96. }, A::Create] {
+            host.dispatch(UiAction::NewDrawing { action }).unwrap();
+        }
+        let id = |host: &NativeHost, settings: bool| host.session.state().requests.iter()
+            .find(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. }) == settings).unwrap().id;
+        let (new, save) = (id(&host, false), id(&host, true));
+        let environment = OpenEnvironment::capture(&host.session, window.documents.admission(&host.session.retained_document_tiles()), Default::default()).unwrap();
+        let mut next = Some(environment.prepare(environment.new_drawing(None).unwrap().0, || false).unwrap());
+        let adoption = opened(&host);
+        let refused = window.adopt(&mut host, &mut next, adoption, || true, |s| s).err().unwrap();
+        assert!(next.is_some());
+        assert_eq!(host.session.document_request(new).err(), None, "{refused}");
+        assert!(!window.adoption_ready(&host).unwrap());
+        host.dispatch(UiAction::CompleteRequest { id: save, error: None }).unwrap();
+        assert!(window.adoption_ready(&host).unwrap());
+        let adoption = opened(&host);
+        drop(window.adopt(&mut host, &mut next, adoption, || true, |s| s).unwrap());
+        settle(&mut host);
+        assert!(host.session.state().requests.is_empty());
+        assert_eq!(window.documents.order().len(), 2);
+        assert_eq!(host.session.engine().document().composition().size, [128, 96]);
         finish(host, window);
     }
 

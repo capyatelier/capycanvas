@@ -192,12 +192,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// The host has no modal work and must wait for this boundary before normal
     /// parking. Failed renderers remain navigable/saveable/closeable.
-    pub(super) fn document_switch_interaction_idle(&self, suspended: bool)->bool {
+    pub(super) fn document_switch_interaction_idle(&self, suspended: bool, retired: &[u32])->bool {
         (suspended || self.workspace_gestures_idle() && !self.painted_selections.busy() && self.document_interaction_idle_reason_for_switch(false,true).is_none()) && !self.workspace_transition && !self.state.customization.header_editing
-            && self.state.requests.is_empty() && !self.state.document_file.busy
+            && self.state.requests.iter().all(|request| retired.contains(&request.id)) && self.files.pending.as_ref().is_none_or(|(id, _)| retired.contains(id))
     }
     pub fn can_switch_document(&self) -> bool {
-        self.document_switch_interaction_idle(self.rendering_suspended)
+        self.document_switch_interaction_idle(self.rendering_suspended, &[])
             && (self.rendering_suspended || self.pending_filters.is_none() && self.document_interaction_idle_reason_for_switch(true,true).is_none())
     }
     pub fn prepare_document_switch(&mut self) -> Result<(), String> {
@@ -206,8 +206,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         else { Err(DocumentTransportRefusal::SwitchOperation.message(self.localization()).to_string()) }
     }
     pub fn can_park_document(&self) -> bool {
+        self.can_park_document_after(&[])
+    }
+    pub fn can_park_document_after(&self, retired: &[u32]) -> bool {
         let idle = if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() };
-        self.document_switch_interaction_idle(self.rendering_suspended) && self.deferred_edits.is_empty()
+        self.document_switch_interaction_idle(self.rendering_suspended, retired) && self.deferred_edits.is_empty()
             && (self.rendering_suspended || (idle.is_ok() && self.engine.can_park()))
     }
 

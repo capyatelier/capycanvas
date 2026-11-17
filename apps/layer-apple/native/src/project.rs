@@ -665,7 +665,7 @@ pub unsafe extern "C" fn capy_apple_project_prepare_adopt(app:u64,task:u64,now:u
     if a.host.session.state().document_file.epoch!=t.epoch || a.host.session.engine().document().revision!=t.revision {return 0;}
     let ready=a.prepare_recovery(now);
     if ready!=0 {return ready;}
-    a.perform(|a|Ok(i32::from(a.host.session.retained_document_tiles().try_blobs()?.is_none()))).unwrap_or(-1)
+    a.perform(|a|Ok(i32::from(!a.window.adoption_ready(&a.host)?))).unwrap_or(-1)
 }
 /// # Safety
 /// Serial owner, after worker preparation and outgoing backing completion.
