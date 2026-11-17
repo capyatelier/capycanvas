@@ -892,9 +892,18 @@ mod tests {
         host_on(layer_ui::Platform::Mac)
     }
     fn host_on(platform: layer_ui::Platform) -> crate::test_storage::StoredHost {
+        host_in(platform, desktop_memory())
+    }
+    fn host_in(platform: layer_ui::Platform, budget: layer_core::MemoryBudget) -> crate::test_storage::StoredHost {
         let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
-        host_with(platform, gpu.into(), document, [64, 48])
+        let gpu = desktop_gpu(document.composition().color, budget);
+        host_with(platform, gpu, document, [64, 48])
+    }
+    fn desktop_memory() -> layer_core::MemoryBudget {
+        layer_core::MemoryBudget::with_facts(layer_core::MemoryFacts { total_bytes: Some(16 << 30), available_bytes: Some(8 << 30), ..Default::default() })
+    }
+    fn desktop_gpu(color: layer_core::color::DocumentColor, budget: layer_core::MemoryBudget) -> Box<WgpuRasterizer> {
+        WgpuRasterizer::new_native_headless_in(color, layer_core::DeviceMemoryFacts { budget_bytes: Some(4 << 30), ..Default::default() }, budget).unwrap()
     }
     fn host_with(platform: layer_ui::Platform, gpu: Box<WgpuRasterizer>, document: layer_core::Document, viewport: [u32; 2]) -> crate::test_storage::StoredHost {
         let mut host = NativeHost::new(platform).unwrap();
@@ -1304,9 +1313,9 @@ mod tests {
         open(&mut window, &mut host);
         assert!(host.warm.0.iter().map(|(id, _)| *id).eq([first]));
         let color = host.session.engine().document().composition().color;
-        let recovered = WgpuRasterizer::new_native_headless(color).unwrap();
+        let recovered = desktop_gpu(color, desktop_memory());
         let device = recovered.device().clone();
-        drop(host.replace_renderer(Renderer(Some(recovered.into()))).unwrap());
+        drop(host.replace_renderer(Renderer(Some(recovered))).unwrap());
         presented(&mut host);
         warm_switch(&mut window, &mut host, first);
         presented(&mut host);
@@ -1324,9 +1333,9 @@ mod tests {
         open(&mut window, &mut host);
         assert_eq!(host.warm.0.len(), 2);
         let color = host.session.engine().document().composition().color;
-        let recovered = WgpuRasterizer::new_native_headless(color).unwrap();
+        let recovered = desktop_gpu(color, desktop_memory());
         let device = recovered.device().clone();
-        drop(host.replace_renderer(Renderer(Some(recovered.into()))).unwrap());
+        drop(host.replace_renderer(Renderer(Some(recovered))).unwrap());
         host.poll_preparation();
         presented(&mut host);
         host.poll_preparation();
@@ -1356,14 +1365,14 @@ mod tests {
 
     #[test]
     fn pressure_before_a_switch_still_evicts_background_drawings() {
-        let mut host = host();
+        let budget = desktop_memory();
+        let mut host = host_in(layer_ui::Platform::Mac, budget.clone());
         let mut window = Window::default();
         fill(&mut host);
         let first = window.documents.selected();
         open(&mut window, &mut host);
         open(&mut window, &mut host);
         assert_eq!(host.warm.0.len(), 2);
-        let budget = layer_core::MemoryBudget::process();
         let id = host.session.engine().backend().0.as_ref().unwrap().renderer_factory().memory_device();
         let active = budget.register_owner(layer_core::MemoryOwnerKind::Other, layer_core::MemoryClass::Visible, Some(id));
         active.report(layer_core::MemoryReport { demand_gpu_bytes: u64::MAX, ..Default::default() });
