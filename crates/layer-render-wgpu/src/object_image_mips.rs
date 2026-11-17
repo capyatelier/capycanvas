@@ -658,8 +658,9 @@ impl DecodeKey {
         }
     }
 }
-#[cfg(not(target_arch="wasm32"))]
 const TILE_BYTES:u64=PAGE_SIZE as u64*PAGE_SIZE as u64*4;
+#[cfg(target_arch="wasm32")]
+const BROWSER_DECODES:u64=2;
 #[cfg(not(target_arch="wasm32"))]
 const SPECULATIVE_TILES_PER_WORKER:u64=6;
 #[cfg(not(target_arch="wasm32"))]
@@ -918,7 +919,7 @@ impl MipDecodeQueue {
         #[cfg(not(target_arch="wasm32"))]
         {self.pool.working_limit(class)}
         #[cfg(target_arch="wasm32")]
-        {let _=class;0}
+        {let _=class;BROWSER_DECODES*TILE_BYTES}
     }
     pub(crate) fn has_room(&self)->bool {self.working.used()<self.working_limit(Class::Visible).max(1)}
     fn admit(&self,bytes:u64,receipt:bool,class:Class)->Option<Charge> {
