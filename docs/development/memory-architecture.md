@@ -95,7 +95,10 @@ takes from the lowest class first and, within it, by the lowest
 Otherwise optional work (the Navigator, prefetch and refinement) never evicts
 what a higher class used this frame or the last, and refinement never evicts
 what visible or authored work last used; optional work that does not fit is
-refused and waits for a release instead of retrying every frame.
+refused and waits for a release instead of retrying every frame. A refused
+required admission releases the decoded tiles, object results and mips that no
+class used this frame or the last, down to the optional line, so finished
+inputs never hold the room reserved for required work.
 
 | Class | What | Where | Leaves when |
 | --- | --- | --- | --- |

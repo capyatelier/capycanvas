@@ -29,6 +29,7 @@ impl Heap {
     pub(crate) fn epoch(&self) -> u64 { self.epoch.load(SeqCst) }
     pub(crate) fn pending(&self) -> u64 { self.pending.load(SeqCst) }
     pub(crate) fn evict(&self, bytes: u64, class: Class) -> u64 { self.mark(bytes, |demand, epoch| demand.current(epoch, class) || demand.outranks(epoch, class)) }
+    pub(crate) fn release_stale(&self, bytes: u64) -> u64 { self.mark(bytes, |demand, epoch| demand.protects(epoch, Class::Refinement)) }
     pub(crate) fn reclaim(&self, bytes: u64) -> u64 { self.mark(bytes, |demand, epoch| demand.current(epoch, Class::Fallback)) }
     fn mark(&self, bytes: u64, protected: impl Fn(Demand, u64) -> bool) -> u64 {
         let wanted = bytes.saturating_sub(self.pending());

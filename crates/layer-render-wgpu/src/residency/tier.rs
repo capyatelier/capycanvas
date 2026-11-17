@@ -72,6 +72,7 @@ impl Tier {
     pub(crate) fn set_limit(&self, limit: u64, floor: u64) {
         if (self.limit.swap(limit, SeqCst) < limit) | (self.floor.swap(floor, SeqCst) > floor) { self.release_edge(); }
     }
+    pub(crate) fn above_optional(&self) -> u64 { self.used().saturating_sub(self.available(Class::Refinement)) }
     pub(crate) fn headroom(&self, class: Class) -> u64 {
         let own = self.available(class).saturating_sub(self.used());
         self.parent.as_ref().map_or(own, |parent| own.min(parent.headroom(class)))

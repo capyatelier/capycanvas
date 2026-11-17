@@ -397,6 +397,12 @@ impl WgpuRasterizer {
         self.admit_tier(scene,&self.scene_tiers.display,class,bytes)
     }
     pub(crate) fn admit_tier(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        let admitted=self.admit_within(scene,tier,class,bytes);
+        let display=&self.scene_tiers.display;
+        if admitted.is_err() && class.floor_reserved() {display.heap().release_stale(display.above_optional());}
+        admitted
+    }
+    fn admit_within(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
         let display=&self.scene_tiers.display;
         display.set_grant(self.memory.retention_limit());
         let scene=scene.or(self.scene.as_deref());
