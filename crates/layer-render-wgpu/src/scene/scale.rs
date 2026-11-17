@@ -1034,13 +1034,11 @@ impl Cache {
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
         if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
-        let mut lane=if view && stroking {self.lane_halves(packet)}else {Vec::new()};
-        for _ in 0..=self.plan.level {
-            if lane.is_empty() {break;}
+        let lane=if view && stroking {self.lane_halves(packet)}else {Vec::new()};
+        if !lane.is_empty() {
             let exact=self.exact_units(scene,r,packet,encoder,commands,budget,lane,&|_|Class::Visible,true)?;
             for (key,input) in exact.blocks {self.block(arrivals,key.plan().bounds,input);}
             for (region,refusal) in exact.refusals {self.refuse(None,region,&refusal);}
-            lane=if exact.committed {self.lane_halves(packet)}else {Vec::new()};
         }
         if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
             self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
