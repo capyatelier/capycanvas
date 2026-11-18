@@ -52,6 +52,9 @@ Progress notes, validation reports and other work records are not committed
 
 ## Design records
 
+- [Memory model: known issues and redesign requirements](memory-model-redesign.md):
+  issues open at the release of the renderer memory model, why its design needs
+  to be redone, and what the next design must guarantee.
 - [Brush design records](brushes/README.md): accepted equations, authoring controls
   and decision history for brush families, beginning with analytic dry media.
 - [Object layers: GA contract and long-term design](object-layer-ga-design.md):
