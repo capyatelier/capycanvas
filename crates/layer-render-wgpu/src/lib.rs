@@ -3463,7 +3463,19 @@ impl WgpuRasterizer {
         if !self.browser_image_result.borrow().is_empty() { return false; }
         self.moving_decode.as_ref().is_some_and(|(_,queue)|!queue.ready() && queue.pending())
     }
+    #[cfg(test)]
     pub(crate) fn drain_image_decode(&mut self, encoder: &mut submission::CommandEncoder) -> Result<Option<object_image_mips::PreparedMipTile>, GpuRasterError> {
+        self.drain_image_decode_where(encoder,&|_|true)
+    }
+    fn poll_wanted(&mut self,wanted:&dyn Fn(&object_image_mips::PreparedImageWork)->bool)->Option<(object_image_mips::PreparedImageWork,residency::Charge)> {
+        let space=self.device.working_space();
+        while let Some((result,charge))=self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll()) {
+            if wanted(&result) {return Some((result,charge));}
+            self.source_results.push_back((space,result,charge));
+        }
+        None
+    }
+    fn drain_image_decode_where(&mut self, encoder: &mut submission::CommandEncoder, wanted: &dyn Fn(&object_image_mips::PreparedImageWork)->bool) -> Result<Option<object_image_mips::PreparedMipTile>, GpuRasterError> {
         #[cfg(target_arch = "wasm32")]
         for (sequence,result) in std::mem::take(&mut *self.browser_image_result.borrow_mut()) {
             if let Some((_,queue)) = &mut self.moving_decode { queue.complete_external(sequence,result); }
@@ -3472,9 +3484,9 @@ impl WgpuRasterizer {
         let receipt=self.source_receipt.as_ref().and_then(std::sync::Weak::upgrade);
         let space=self.device.working_space();
         self.source_results.retain(|(context,..)|*context==space);
-        let held=self.source_results.iter().position(|(_,result,_)|self.decode_result_eligible(receipt.as_deref(),result));
-        let Some((prepared,charge))=held.and_then(|index|self.source_results.remove(index)).map(|(_,result,charge)|(result,charge))
-            .or_else(||self.moving_decode.as_mut().and_then(|(_,queue)|queue.poll())) else {return Ok(None);};
+        let held=self.source_results.iter().position(|(_,result,_)|wanted(result) && self.decode_result_eligible(receipt.as_deref(),result));
+        let held=held.and_then(|index|self.source_results.remove(index)).map(|(_,result,charge)|(result,charge));
+        let Some((prepared,charge))=held.or_else(||self.poll_wanted(wanted)) else {return Ok(None);};
         let prepared=match prepared {
             object_image_mips::PreparedImageWork::Raster(prepared) if prepared.scalar=>{
                 self.decode_consumed();
@@ -3541,12 +3553,28 @@ impl WgpuRasterizer {
         self.arrivals.fetch_add(1,std::sync::atomic::Ordering::AcqRel);
     }
     pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
-        loop {
-            let previous=self.preparation_progress;
-            self.drain_image_decode(encoder)?;
-            if self.preparation_progress==previous || !(self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready())) {break;}
-        }
+        self.drain_image_decodes_where(encoder,&|_|true,|_|true).map(drop)
+    }
+    pub(crate) fn drain_lane_decodes(&mut self, encoder: &mut submission::CommandEncoder, reads: &[Arc<scene::sources::PendingTile>]) -> Result<(), GpuRasterError> {
+        self.drain_image_decodes_where(encoder,&|result|reads.iter().any(|read|Self::receipt_matches(read,result)),|_|true).map(drop)
+    }
+    fn drain_frame_decodes(&mut self, encoder: &mut submission::CommandEncoder, work: &mut scene::WorkBudget, contact: bool) -> Result<(), GpuRasterError> {
+        self.drain_image_decodes_where(encoder,&|result|result.class()==residency::Class::Authored,|_|true)?;
+        if contact {return Ok(());}
+        let taken=self.drain_image_decodes_where(encoder,&|_|true,|taken|(taken+1)*scene::PASS_TAPS<=work.remaining())?;
+        work.spend(taken*scene::PASS_TAPS);
         Ok(())
+    }
+    fn drain_image_decodes_where(&mut self, encoder: &mut submission::CommandEncoder, wanted: &dyn Fn(&object_image_mips::PreparedImageWork)->bool, admit: impl Fn(u64)->bool) -> Result<u64, GpuRasterError> {
+        let mut taken=0;
+        while admit(taken) {
+            let previous=self.preparation_progress;
+            self.drain_image_decode_where(encoder,wanted)?;
+            if self.preparation_progress==previous {break;}
+            taken+=1;
+            if !(self.held_result_ready() || self.moving_decode.as_ref().is_some_and(|(_,queue)|queue.ready())) {break;}
+        }
+        Ok(taken)
     }
     pub(crate) fn register_image_decode_waker(&self,wake:&std::task::Waker) {
         #[cfg(not(target_arch="wasm32"))]
@@ -3820,7 +3848,7 @@ impl WgpuRasterizer {
     }
     fn prepare_moving_images(&mut self, packet: FramePacket<'_>, encoder: &mut submission::CommandEncoder, work: &mut scene::WorkBudget) -> Result<bool, GpuRasterError> {
         if self.moving_projection.is_none() {self.prepare_moving_projection(packet)?;}
-        self.drain_image_decodes(encoder)?;
+        self.drain_frame_decodes(encoder,work,!packet.dab_batches.is_empty())?;
         let mut images = std::mem::take(&mut self.moving_images);
         images.retire_evicted(encoder);
         let result:Result<(),GpuRasterError> = (|| {
@@ -5286,7 +5314,7 @@ impl WgpuRasterizer {
             dirty = PixelRect::full(packet.document_extent);
         }
 
-        self.drain_image_decodes(&mut encoder)?;
+        self.drain_frame_decodes(&mut encoder,&mut work,!original_batches.is_empty())?;
         let animated = packet.scene.order().iter().any(|&h| packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated()));
         // Newly populated display pages change visible pixels too, even when
         // the document itself did not change (for example after navigation).

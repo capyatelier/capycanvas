@@ -761,9 +761,10 @@ impl WgpuRasterizer {
         if !self.restore_pipelines_ready(kinds) {return Err(GpuRasterError::NotReady);}
         let inputs=requested.accept_query(self,None)?;
         inputs.prepare(self)?;
+        let reads=inputs.pending_reads();
         let ready=self.record_restore_uploads(|r,encoder| {
             scene::sources::Lease::track(inputs.iter().cloned().collect(),encoder);
-            r.drain_image_decodes(encoder)?;let mut ready=true;
+            r.drain_lane_decodes(encoder,&reads)?;let mut ready=true;
             for (blob,source,destination) in requests {
                 let read=scene::sources::accepted_raster(&inputs,blob,*source,*destination)?;
                 ready&=read.encode(r,encoder,crate::residency::Class::Authored)?;
@@ -840,7 +841,8 @@ impl WgpuRasterizer {
         if self.restore_preflight.is_none() {return Ok(true);}
         if !self.accept_restore_inputs()? {return Ok(false);}
         let result=self.record_restore_uploads(|r,encoder| {
-            r.drain_image_decodes(encoder)?;
+            let reads=r.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete())).map_or_else(Vec::new,|target|target.inputs.pending_reads());
+            r.drain_lane_decodes(encoder,&reads)?;
             let mut restore=r.restore_preflight.take().unwrap();
             let result=restore.targets.iter_mut().flatten().find(|target|!target.complete()).map_or(Ok(()),|target|target.advance(r,encoder));
             r.restore_preflight=Some(restore);result
