@@ -933,15 +933,11 @@ impl AcceptedInputs {
         for read in self.iter().filter_map(|lease|lease.read.as_ref()) {if !read.source().encode(r,encoder,class)? {return Ok(false);}}
         Ok(true)
     }
-    pub(crate) fn pending_reads(&self)->Vec<Arc<PendingTile>> {
-        self.iter().filter_map(|input|input.read.as_ref()).flat_map(|read|read.pending.iter())
-            .flat_map(|pending|std::iter::once(pending).chain(pending.dependency())).cloned().collect()
-    }
     pub(crate) fn prepare(&self,r:&mut WgpuRasterizer)->Result<bool,GpuRasterError> {
         if r.snapshot_worker && cfg!(not(target_arch="wasm32")) {return Ok(true);}
         let mut ready=true;
         for read in self.iter().filter_map(|input|input.read.as_ref()) {
-            for pending in &read.pending {match pending.prepare(r,self.decode_class().min(crate::residency::Class::Visible)) {
+            for pending in &read.pending {match pending.prepare(r,crate::residency::Class::Visible) {
                 Ok(())=>{},Err(error) if error.is_preparation_pending()=>ready=false,Err(error)=>return Err(error),
             }}
         }

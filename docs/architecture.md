@@ -45,10 +45,8 @@ decoded-but-unconsumed bytes stay within the workers plus one idle frame's tiles
 of native 8-bit samples, charged to the renderer's RAM, plus one request's room
 for an ordered receipt. Fallback, Navigator and prefetch decodes stop at six
 tiles per worker, since their units let go of their inputs between frames.
-Frames take ready results before the display walk, so the walk refills the
-room it frees. Results the stroke's own cells or restores read are taken
-whenever ready; every other result spends one pass of the frame's paced work
-budget, and a frame carrying a contact takes none of them. Dropping a queue invalidates its queued jobs and discards any
+Frames take every ready result before the display walk, so the walk refills the
+room it frees. Dropping a queue invalidates its queued jobs and discards any
 result already in progress; workers finish at most the pool's active jobs.
 Worker decoder caches include the destination color space.
 Raster restoration prepares private color, coverage and wetness pages before
