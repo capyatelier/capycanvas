@@ -142,7 +142,10 @@ impl Tier {
     }
     pub(crate) fn refused_by(self: &Arc<Self>, ledger: layer_core::MemoryOwner, class: Class, bytes: u64) -> Blocked { self.refusal(class, bytes, Some(ledger)) }
     pub(crate) fn admit(self: &Arc<Self>, class: Class, bytes: u64) -> Result<Reservation, Blocked> {
-        self.reserve_admission(class,bytes).inspect_err(|blocked| { blocked.tier.heap.evict(blocked.deficit(), class); })?;
+        self.admit_unevicted(class,bytes).inspect_err(|blocked| { blocked.tier.heap.evict(blocked.deficit(), class); })
+    }
+    pub(crate) fn admit_unevicted(self: &Arc<Self>, class: Class, bytes: u64) -> Result<Reservation, Blocked> {
+        self.reserve_admission(class,bytes)?;
         Ok(Reservation(Charge {tier:self.clone(),bytes},class))
     }
     fn release_edge(&self) {

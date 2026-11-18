@@ -90,6 +90,7 @@ pub(super) struct Memory {
     wake: Arc<std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     resources: Arc<std::sync::atomic::AtomicU64>,
     overdraft: std::cell::RefCell<Vec<layer_core::MemoryReservation>>,
+    fruitless: std::cell::RefCell<Vec<(Arc<crate::residency::Tier>,crate::residency::Class,u64,crate::residency::Blocked)>>,
     #[cfg(not(target_arch = "wasm32"))]
     watch: std::cell::RefCell<Option<layer_core::MemoryWatch>>,
     unified: bool,
@@ -144,7 +145,7 @@ impl Memory {
                 |handle| { let report = handle.reported(); Owner { handle, published: std::cell::Cell::new(report) } }),
             raster: Owner::new(factory, Kind::RasterPool, MemoryReport { pinned_gpu_bytes: working, pinned_ram_bytes: working, demand_gpu_bytes: working, demand_ram_bytes: working, ..Default::default() }),
             staging: Owner::new(factory, Kind::Staging, MemoryReport { pinned_gpu_bytes: working, demand_gpu_bytes: working, ..Default::default() }),
-            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
+            demand: std::cell::Cell::new(demand), demand_key: std::cell::Cell::new(None), applied_limits: std::cell::Cell::new(None), limits_dirty: std::cell::Cell::new(true), preparation: std::cell::Cell::new(0), target: std::cell::Cell::new(total(demand.wanted(0))), refused: Default::default(), lane: Default::default(), trimmed: Default::default(), retired: Default::default(), wake, resources, overdraft: Default::default(), fruitless: Default::default(), #[cfg(not(target_arch = "wasm32"))] watch: Default::default(),
             unified: factory.unified_memory(), idle: std::sync::atomic::AtomicBool::new(true),
         };
         memory.applied_limits.set(Some(memory.grants()));
@@ -300,7 +301,7 @@ impl WgpuRasterizer {
             tiers.admitted.admit(class,raster)
         }).map_err(|blocked|blocked.with(self.scene_tiers.display.wanting(class,display)))?;
         let display_tier=&self.scene_tiers.display;
-        let source=if display==0 {display_tier.admit(class,0)} else {self.admit_unstopped(None,display_tier,class,display)}
+        let source=if display==0 {display_tier.admit(class,0)} else {self.admit_unstopped(None,display_tier,class,display,true)}
             .map_err(|blocked|blocked.with(tiers.admitted.wanting(class,raster)))?;
         Ok((source,held))
     }
@@ -421,6 +422,7 @@ impl WgpuRasterizer {
     }
     pub(crate) fn begin_frame_memory(&mut self, packet: FramePacket<'_>) {
         if let Some(lane)=self.memory.stop() {lane.rearm();}
+        self.memory.fruitless.borrow_mut().clear();
         if self.restore_preparation()==Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency))
             && let Some(scene)=&self.scene {scene.advance_demand_epoch();}
         self.frame_room(packet);
@@ -476,32 +478,46 @@ impl WgpuRasterizer {
         self.admit_tier(scene,&self.scene_tiers.display,class,bytes)
     }
     pub(crate) fn admit_tier(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        let admitted=self.admit_within(scene,tier,class,bytes);
+        let scan=!self.searched_in_vain(tier,class,bytes);
+        let admitted=self.admit_within(scene,tier,class,bytes,scan);
         let display=&self.scene_tiers.display;
-        if admitted.is_err() && class.floor_reserved() {display.heap().release_stale(display.above_optional());}
+        if admitted.is_err() && scan && class.floor_reserved() {display.heap().release_stale(display.above_optional());}
+        if scan && self.memory.stop().is_none() && let Err(refusal)=&admitted {
+            let mut fruitless=self.memory.fruitless.borrow_mut();
+            fruitless.retain(|(searched,refused,least,_)|!(Arc::ptr_eq(searched,tier) && *refused>=class && *least>=bytes));
+            fruitless.push((tier.clone(),class,bytes,refusal.clone()));
+        }
         admitted
     }
-    fn admit_within(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
-        if let Some(lane)=self.memory.stop() {return Err(lane);}
-        self.admit_unstopped(scene,tier,class,bytes)
+    fn searched_in_vain(&self,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->bool {
+        let mut fruitless=self.memory.fruitless.borrow_mut();
+        fruitless.retain(|(_,_,_,refusal)|!refusal.fits());
+        fruitless.iter().any(|(searched,refused,least,_)|Arc::ptr_eq(searched,tier) && *refused<=class && bytes>=*least)
     }
-    fn admit_unstopped(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+    fn admit_within(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64,scan:bool)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        if let Some(lane)=self.memory.stop() {return Err(lane);}
+        self.admit_unstopped(scene,tier,class,bytes,scan)
+    }
+    fn admit_unstopped(&self,scene:Option<&scene::Scene>,tier:&Arc<crate::residency::Tier>,class:crate::residency::Class,bytes:u64,scan:bool)->Result<crate::residency::Reservation,crate::residency::Blocked> {
+        #[cfg(test)] crate::test_support::PassCounts {room_scans:u64::from(scan),..Default::default()}.record();
         let display=&self.scene_tiers.display;
         display.set_grant(self.memory.retention_limit());
         let scene=scene.or(self.scene.as_deref());
         let over=|| display.used().saturating_add(bytes).saturating_sub(display.grant());
         let cover=if class.floor_reserved() && over()!=0 {
             let ledger=&self.memory.display.handle;
-            display.heap().evict(over(),class);
-            if let Some(scene)=scene {scene.trim_pages_by(over().saturating_sub(display.heap().pending()),class);}
+            if scan {
+                display.heap().evict(over(),class);
+                if let Some(scene)=scene {scene.trim_pages_by(over().saturating_sub(display.heap().pending()),class);}
+            }
             let total=display.used().saturating_add(bytes);
             (over()!=0).then(||ledger.admit_working_through(total,None).ok_or_else(||tier.refused_by(ledger.clone(),class,bytes))).transpose()
                 .inspect_err(|blocked|self.wait_for_release(blocked.clone()))?
         } else {None};
-        let reservation=tier.admit(class,bytes).or_else(|blocked| {
+        let reservation=if scan {tier.admit(class,bytes).or_else(|blocked| {
             if let Some(scene)=scene {scene.trim_pages_by(blocked.deficit(),class);}
             tier.admit(class,bytes)
-        }).inspect_err(|blocked|self.wait_for_release(blocked.clone()))?;
+        })} else {tier.admit_unevicted(class,bytes)}.inspect_err(|blocked|self.wait_for_release(blocked.clone()))?;
         self.memory.overdraft.borrow_mut().extend(cover);
         Ok(reservation)
     }

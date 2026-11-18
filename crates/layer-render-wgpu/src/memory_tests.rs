@@ -1259,6 +1259,23 @@ fn a_refused_authored_raster_head_stops_lower_display_admissions_and_takes_the_d
 }
 
 #[test]
+fn refused_display_admissions_search_for_room_once_until_the_refusal_fits() {
+    use crate::residency::Class;
+    let r=renderer(Default::default(),layer_core::DeviceMemoryFacts {budget_bytes:Some(1<<30),..Default::default()}).unwrap();
+    r.scene_tiers.display.set_limit(64*MIB,0);
+    let held=r.admit_display(None,Class::Prefetch,48*MIB).expect("the first unit fits");
+    let scans=|admit:&mut dyn FnMut()|{let before=crate::test_support::PassCounts::snapshot();admit();crate::test_support::PassCounts::snapshot().delta(before).room_scans};
+    assert_eq!(scans(&mut ||for _ in 0..16 {assert!(r.admit_display(None,Class::Prefetch,32*MIB).is_err());}),1,"refused units of one class search for room once");
+    assert_eq!(scans(&mut ||assert_eq!(r.admit_display(None,Class::Refinement,32*MIB).err().map(|refusal|refusal.class()),Some(Class::Refinement),"a lower class is refused at its own class")),0);
+    assert_eq!(scans(&mut ||assert!(r.admit_display(None,Class::Refinement,24*MIB).is_err())),1,"a smaller unit still searches for room");
+    assert_eq!(scans(&mut ||drop(r.admit_display(None,Class::Prefetch,8*MIB).expect("a smaller unit that fits is admitted"))),1);
+    assert_eq!(scans(&mut ||assert!(r.admit_display(None,Class::Refinement,24*MIB).is_err())),0,"the smallest refused search is remembered");
+    assert_eq!(scans(&mut ||drop(r.admit_display(None,Class::Visible,MIB))),1,"a higher class still looks for room");
+    drop(held);
+    assert_eq!(scans(&mut ||assert!(r.admit_display(None,Class::Prefetch,32*MIB).is_ok(),"the search runs again once the refusal fits")),1);
+}
+
+#[test]
 fn an_over_grant_display_admission_marks_undemanded_victims_before_its_overdraft() {
     let r=legacy_scene_renderer(Default::default());
     r.memory.display.handle.report(MemoryReport {demand_gpu_bytes:1,..Default::default()});
