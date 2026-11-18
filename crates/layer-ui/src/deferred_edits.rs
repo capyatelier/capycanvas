@@ -283,23 +283,31 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_commands();
         true
     }
+    fn deferred_edit_retired(&self, edit: &DeferredEdit) -> bool {
+        self.state.document_file.close_ready || self.rendering_suspended
+            || edit.drawing != (self.engine.document().owner, self.state.document_file.epoch)
+    }
+    fn deferred_edit_waits(&self, edit: &DeferredEdit) -> bool {
+        self.applying_mode() || (self.engine.raster_backing_pending()
+            && !matches!(&edit.input, EditInput::Action(action) if configures_transform(action) || configures_brush(action) || held_actions::selects_tool(action))) || self.files.pending.is_some()
+            || matches!(&edit.input,EditInput::Action(_)) && self.fill_waits_for_commit()
+            || matches!(&edit.input, EditInput::Pen { event, .. } if starts_contact(event) && !self.paint_ready() || self.contact_waits_for_raster_backing(event))
+            || (matches!(&edit.input, EditInput::Action(action) if !configures_brush(action))
+                && (self.painted_selections.busy() || self.region_tools.publishing_edit()
+                    || self.input_pending || self.engine.has_pending_input() || self.engine.has_active_stroke()))
+    }
+    pub(super) fn deferred_edits_runnable(&self) -> bool {
+        self.deferred_edits.front().is_some_and(|edit| self.deferred_edit_retired(edit) || !self.deferred_edit_waits(edit))
+    }
     pub(super) fn poll_deferred_edits(&mut self) -> u32 {
         let mut changed = 0;
         let mut deferred = std::mem::take(&mut self.deferred_edits);
         while let Some(edit) = deferred.front() {
-            if self.state.document_file.close_ready || self.rendering_suspended
-                || edit.drawing != (self.engine.document().owner, self.state.document_file.epoch) {
+            if self.deferred_edit_retired(edit) {
                 deferred.pop_front();
                 continue;
             }
-            if self.applying_mode() || (self.engine.raster_backing_pending()
-                && !matches!(&edit.input, EditInput::Action(action) if configures_transform(action) || configures_brush(action) || held_actions::selects_tool(action))) || self.files.pending.is_some()
-                || matches!(&edit.input,EditInput::Action(_)) && self.fill_waits_for_commit()
-                || matches!(&edit.input, EditInput::Pen { event, .. } if starts_contact(event) && !self.paint_ready())
-                || (matches!(&edit.input, EditInput::Action(action) if !configures_brush(action))
-                    && (self.painted_selections.busy() || self.region_tools.publishing_edit()
-                        || self.input_pending || self.engine.has_pending_input() || self.engine.has_active_stroke()))
-            {
+            if self.deferred_edit_waits(edit) {
                 break;
             }
             let edit = deferred.pop_front().unwrap();

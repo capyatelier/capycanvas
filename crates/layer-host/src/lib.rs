@@ -490,7 +490,6 @@ impl NativeHost {
             let change=self.session.frame(now,presentation)?;
             self.apply_change(previous,change);
         }
-        self.dirty|=self.session.holding_input();
         Ok(())
     }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {self.dispatch_with(action,UiSession::dispatch)}

@@ -5206,7 +5206,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.selection_masks.refine.as_ref().is_some_and(|d| d.unsettled())
             || self.frequency_separation.as_ref().is_some_and(|d| d.unpublished())
             || self.painted_selections.busy()
-            || !self.deferred_edits.is_empty()
+            || self.deferred_edits_runnable()
             || self.content_bounds.busy()
             || self.conversion_busy()
             || self.notices.publishing()

@@ -82,6 +82,22 @@ fn a_completed_contact_waits_for_painting_before_the_edits_that_follow_it() {
 }
 
 #[test]
+fn a_held_contact_asks_for_no_frame_until_painting_is_ready() {
+    let mut s = held_session();
+    for (sequence, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
+        s.pen(event(&s, sequence, phase, 0.5));
+    }
+    settle(&mut s);
+    assert!(s.holding_input());
+    assert_eq!(s.frame_demand(), layer_render::FrameDemand::Wait, "a contact waiting for painting asks for no frame");
+    s.renderer_mut().painting_unready = false;
+    assert_ne!(s.frame_demand(), layer_render::FrameDemand::Wait, "painting becoming ready resumes the held contact");
+    settle(&mut s);
+    assert!(!s.holding_input() && s.deferred_edits.is_empty());
+    assert_eq!(s.frame_demand(), layer_render::FrameDemand::Wait);
+}
+
+#[test]
 fn a_contact_waiting_eight_seconds_after_undo_keeps_every_sample() {
     let mut s=session(Platform::Gtk);
     s.frame(1,1).unwrap();
