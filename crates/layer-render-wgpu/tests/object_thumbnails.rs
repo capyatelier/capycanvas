@@ -86,8 +86,10 @@ fn object_layer_rows_preview_placed_content_from_one_coarse_image() {
         assert!(std::time::Instant::now() < deadline, "the visible layer settles");
         clock += 8_000_000;
     }
+    let ink = named_occurrence(engine.document(), "Ink");
+    layer_thumbnail(&mut engine, ThumbnailTarget::Occurrence(ink));
     let (batches, visible) = layer_thumbnail(&mut engine, ThumbnailTarget::Occurrence(layers[0]));
-    assert_eq!(batches, 1, "a visible layer previews its objects from their prepared image levels");
+    assert_eq!(batches, 1, "once the Ink row has compiled the preview pipelines, a visible layer previews its objects from their prepared image levels");
     let (batches, hidden) = layer_thumbnail(&mut engine, ThumbnailTarget::Occurrence(layers[1]));
     assert!(batches < 8, "a hidden layer evaluates one coarse image instead of every document page: {batches}");
     for bytes in [&visible, &hidden] {

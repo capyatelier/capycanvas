@@ -29,6 +29,7 @@ fn operate(engine: &mut Engine, id: OccurrenceHandle, kind: RasterOperationKind)
             kind,
         })
         .unwrap();
+    submit_raster_backing(engine);
 }
 
 fn gradient(engine: &mut Engine, name: &str, colors: [[f32; 4]; 2], vertical: bool) {

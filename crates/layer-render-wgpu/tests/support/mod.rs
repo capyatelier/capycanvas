@@ -86,7 +86,17 @@ pub fn engine(document: Document) -> (Engine, InputProducer<PenEvent>) {
         };
     let mut engine = CanvasEngine::new(gpu, document, consumer, view, ViewTransform::IDENTITY).unwrap();
     engine.render_frame_at(0).unwrap();
+    submit_raster_backing(&mut engine);
     (engine, producer)
+}
+
+pub fn submit_raster_backing(engine: &mut Engine) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while engine.raster_backing_pending() {
+        assert!(std::time::Instant::now() < deadline, "raster frames submit once their pipelines compile");
+        std::thread::yield_now();
+        engine.render_frame().unwrap();
+    }
 }
 
 pub fn settle(engine: &mut Engine, mut time: u64) {
@@ -199,6 +209,7 @@ pub fn add_selection_mask(engine: &mut Engine, owner: OccurrenceHandle, selectio
     mask.selection = Some(selection);
     let operation = RasterOperation { placement: Affine::IDENTITY, coverage: mask, kind: RasterOperationKind::Coverage };
     engine.insert_with_operations(vec![edit], vec![(target, operation)], None).unwrap();
+    submit_raster_backing(engine);
 }
 
 pub fn convert_group(doc: &Document, handle: OccurrenceHandle, children: &[OccurrenceHandle]) -> Edit {
