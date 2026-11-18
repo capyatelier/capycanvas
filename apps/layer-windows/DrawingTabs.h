@@ -25,7 +25,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
     NativePresentation presentation;bool finishing=false;uint64_t contactGeneration=0;
     std::optional<uint32_t> pointer;Input::Pointer contact{nullptr};uint64_t source=0;Windows::Foundation::Point origin{},position{};
     PointerGesture hold;bool recognizing=false,dragging=false,held=false,releasing=false,updating=false,showing=false;
-    uint64_t selectedModel=0;
+    uint64_t selectedModel=0;weak_ref<FrameworkElement> opener;std::optional<FrameworkElement> reopen;
     hstring epoch,plainSource,plainCaption,storageError;bool storageTooltipReady=false;J model(){return branch(data->model,L"windows_tabs");}
     bool available(){return flag(model(),L"available")&&!flag(branch(data->model,L"header"),L"editing");}
     bool single(){return count(model(),L"tabs")<2;}
@@ -144,7 +144,7 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         if(recognizing){recognizing=false;hold.CompleteGesture();}if(!keepSlide)AutomationProperties::SetItemStatus(root,data->caption(L"header",L"ready"));}
     void cancel(){if(!pointer&&!finishing)return;auto previous=contact;bool captured=pointer.has_value();Button button=pointer&&tabs.contains(source)?tabs.at(source).select:nullptr;MenuFlyout menu=button?tabs.at(source).menu:nullptr;
         ++contactGeneration;release();if(!captured)endSlide();if(button&&previous)button.ReleasePointerCapture(previous);if(menu)menu.Hide();}
-    bool cancelAll(){bool active=pointer.has_value()||finishing;cancel();return (rowDrag&&rowDrag->Cancel())||active;}
+    bool cancelAll(){bool active=pointer.has_value()||finishing||reopen.has_value();reopen.reset();cancel();return (rowDrag&&rowDrag->Cancel())||active;}
     void move(PointerRoutedEventArgs const& e){if(pointer!=e.Pointer().PointerId())return;position=e.GetCurrentPoint(root).Position();
         if(recognizing)hold.Move(root,e);
         if(!dragging&&hold.Moved()){if(!claim())return;dragging=true;held=false;dragCursor(root,e.Pointer().PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch,true);if(tabs.contains(source))tabs.at(source).menu.Hide();beginSlide();}
@@ -164,7 +164,16 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         if(dragged||wasHeld)e.Handled(true);
     }
     void activateItem(winrt::Windows::Foundation::IInspectable const& value){for(auto const& [id,row]:rows)if(value==row.item||value==row.item.Child()){select(id);return;}}
-    void show(FrameworkElement anchor=nullptr){refresh();popup.ShowAt(anchor?anchor:selector);}
+    void show(FrameworkElement anchor=nullptr){
+        if(showing&&!popup.IsOpen()){reopen=anchor;return;}
+        auto focused=root.XamlRoot()?Input::FocusManager::GetFocusedElement(root.XamlRoot()).try_as<FrameworkElement>():nullptr;
+        if(!descendantOf(focused,listSurface))opener=focused?make_weak(focused):weak_ref<FrameworkElement>{};
+        refresh();popup.ShowAt(anchor?anchor:selector);
+    }
+    void returnFocus(){
+        auto xaml=listSurface.XamlRoot();if(!xaml||!descendantOf(Input::FocusManager::GetFocusedElement(xaml).try_as<DependencyObject>(),listSurface))return;
+        auto target=opener.get();if(!target||!target.IsLoaded()||!target.Focus(FocusState::Programmatic))selector.Focus(FocusState::Programmatic);
+    }
     void styleTab(Tab& t){
         t.box.CornerRadius({corner(),corner(),corner(),corner()});t.select.CornerRadius({corner(),corner(),corner(),corner()});t.close.CornerRadius({12*CornerFit,12*CornerFit,12*CornerFit,12*CornerFit});
         for(auto const& part:{t.select,t.close}){
@@ -246,7 +255,10 @@ struct DrawingTabs:std::enable_shared_from_this<DrawingTabs>{
         list=selectableRows(data);AutomationProperties::SetAutomationId(list,L"drawing-list");
         list.MaxHeight(420);listSurface.Children().Append(list);listSurface.Width(360);popup.Content(listSurface);TrackPopup(popup,data);
         rowDrag=std::make_unique<WorkspaceRowDrag>(list,listSurface,data,[weak]{auto s=weak.lock();return s&&s->available();},[weak](hstring id,std::optional<hstring> before,std::function<void()> ready){if(auto s=weak.lock())s->send(O({{L"op",S(L"reorder")},{L"id",N(double(std::stoull(id.c_str())))},{L"before",before?N(double(std::stoull(before->c_str()))):JsonValue::CreateNullValue()}}),std::move(ready));},[]{});
-        popup.Closed([weak](auto&&,auto&&){if(auto s=weak.lock()){s->showing=false;AutomationProperties::SetItemStatus(s->selector,s->data->caption(L"header",L"closed"));s->rowDrag->Cancel();}});popup.Opened([weak,data=data](auto&&,auto&&){if(auto s=weak.lock()){s->showing=true;AutomationProperties::SetItemStatus(s->selector,data->caption(L"header",L"open"));}});
+        popup.Closing([weak](auto&&,auto&&){if(auto s=weak.lock())s->returnFocus();});
+        popup.Closed([weak](auto&&,auto&&){if(auto s=weak.lock()){s->showing=false;AutomationProperties::SetItemStatus(s->selector,s->data->caption(L"header",L"closed"));s->rowDrag->Cancel();
+            if(s->reopen)s->list.DispatcherQueue().TryEnqueue([weak]{if(auto s=weak.lock())if(auto anchor=std::exchange(s->reopen,std::nullopt))s->show(*anchor);});
+        }});popup.Opened([weak,data=data](auto&&,auto&&){if(auto s=weak.lock()){s->showing=true;AutomationProperties::SetItemStatus(s->selector,data->caption(L"header",L"open"));}});
         list.ItemInvoked([weak](auto&&,ItemsViewItemInvokedEventArgs const& e){if(auto s=weak.lock();s&&!s->updating&&!s->rowDrag->SuppressClick()){s->activateItem(e.InvokedItem());}});
         ShortcutKeys(list,[weak](auto&&,KeyRoutedEventArgs const& e){if(auto s=weak.lock()){
             if(e.Key()==Windows::System::VirtualKey::Escape&&s->rowDrag->Escape()){e.Handled(true);return;}

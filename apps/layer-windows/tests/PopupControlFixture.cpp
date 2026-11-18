@@ -1581,9 +1581,17 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
         drawing->model=O({{L"windows_tabs",O({{L"available",B(true)},{L"selected",N(1)},{L"tabs",tabs}})}});
         auto requests=std::make_shared<std::vector<J>>();drawing->document=[requests](std::string value){requests->push_back(J::Parse(to_hstring(value)));};
         auto view=std::make_shared<DrawingTabs>();view->data=drawing;view->init();view->root.Width(360);view->root.Height(48);root.Children().InsertAt(0,view->root);
-        auto cleanup=[&]{view->popup.Hide();uint32_t index=0;if(root.Children().IndexOf(view->root,index))root.Children().RemoveAt(index);};
+        auto moves=std::make_shared<std::vector<DependencyObject>>();
+        auto focusMoves=FocusManager::GettingFocus([moves](auto&&,auto const& e){moves->push_back(e.NewFocusedElement());});
+        auto cleanup=[&]{FocusManager::GettingFocus(focusMoves);view->popup.Hide();uint32_t index=0;if(root.Children().IndexOf(view->root,index))root.Children().RemoveAt(index);};
+        auto returned=[&](size_t from,size_t to,wchar_t const* text){
+            require(to>from&&moves->at(from)==anchor,text);
+            for(size_t i=from;i<to;++i)require(!descendantOf(moves->at(i),view->listSurface),text);
+        };
         try{
             co_await wait([&]{return view->selector.IsLoaded()&&view->selector.ActualWidth()>0;},L"Drawing keyboard fixture did not arrange its production selector");
+            require(anchor.Focus(FocusState::Keyboard),L"Drawing keyboard fixture could not focus the control that opens its list");
+            co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==anchor;},L"Drawing keyboard fixture lost the focus that opens its list");
             view->show();co_await wait([&]{return view->showing&&view->rows.at(2).item.IsLoaded()&&view->rows.at(2).item.ActualHeight()>0;},L"Drawing keyboard fixture did not open its real list");
             auto chosen=view->rows.at(1).item;require(chosen.IsSelected(),L"Drawing list lost its shared selected row");
             Imaging::RenderTargetBitmap image;co_await image.RenderAsync(chosen);auto pixels=co_await image.GetPixelsAsync();auto width=image.PixelWidth(),height=image.PixelHeight();
@@ -1593,13 +1601,31 @@ struct Fixture:std::enable_shared_from_this<Fixture> {
             co_await apartment;imeTrace->push_back(O({{L"case",S(L"drawing-list-selected-row")},{L"width",N(width)},{L"height",N(height)}}));
             auto row=view->rows.at(2).item;require(row.Focus(FocusState::Keyboard),L"Drawing list could not focus its second native row");
             co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==row;},L"Drawing list focus moved before its Space input");
+            auto spaceMoves=moves->size();
             nativeKey(VK_SPACE,false);nativeKey(VK_SPACE,true);co_await wait([requests]{return !requests->empty();},L"Drawing list Space did not activate its focused native row");
             auto drained=std::make_shared<bool>(false);require(view->list.DispatcherQueue().TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::Low,[drained]{*drained=true;}),L"Drawing list did not queue its native key completion");
             co_await wait([drained]{return *drained;},L"Drawing list native Space did not complete");
             bool selected=requests->size()==1&&str(requests->front(),L"operation")==L"tabs"&&str(object(requests->front(),L"action"),L"op")==L"select"&&num(object(requests->front(),L"action"),L"id")==2;
             imeTrace->push_back(O({{L"case",S(L"drawing-list-space")},{L"passed",B(selected)},{L"requests",N(requests->size())}}));
             if(!selected)nativeSetupFailures+=L"Drawing list Space did not activate exactly its focused native row\n";
-            else co_await wait([&]{return !view->showing;},L"Drawing list Space did not close its native popup");
+            else{
+                co_await wait([&]{return !view->showing;},L"Drawing list Space did not close its native popup");
+                returned(spaceMoves,moves->size(),L"Choosing a drawing with Space did not return keyboard focus straight to the control that opened the list");
+                phase=L"drawing-list-reopen";
+                view->show();co_await wait([&]{return view->showing&&view->popup.IsOpen()&&row.IsLoaded()&&row.ActualHeight()>0;},L"Drawing list did not open again after Space");
+                require(row.Focus(FocusState::Keyboard),L"Drawing list could not focus its second native row again");
+                co_await wait([&]{return FocusManager::GetFocusedElement(root.XamlRoot())==row;},L"Drawing list focus moved before its Enter input");
+                auto enterMoves=moves->size(),enterRequests=requests->size();auto reopened=std::make_shared<std::optional<size_t>>();auto armed=std::make_shared<bool>(true);
+                auto reopen=view->popup.Closing(auto_revoke,[weak=std::weak_ptr(view),queue=view->list.DispatcherQueue(),moves,reopened,armed](auto&&,auto&&){
+                    if(std::exchange(*armed,false))queue.TryEnqueue(Microsoft::UI::Dispatching::DispatcherQueuePriority::High,[weak,moves,reopened]{if(auto drawings=weak.lock()){*reopened=moves->size();drawings->show();}});
+                });
+                nativeKey(VK_RETURN,false);nativeKey(VK_RETURN,true);
+                co_await wait([&]{return requests->size()>enterRequests&&reopened->has_value();},L"Drawing list Enter did not choose its focused native row and reopen while closing");
+                co_await wait([&]{return view->showing&&view->popup.IsOpen()&&row.IsLoaded()&&row.ActualHeight()>0;},L"Reopening the drawing list while it closed did not leave a live list");
+                reopen.revoke();
+                returned(enterMoves,**reopened,L"Choosing a drawing with Enter moved keyboard focus into its departing rows instead of back to the control that opened the list");
+                view->popup.Hide();co_await wait([&]{return !view->showing&&!view->popup.IsOpen();},L"Reopened drawing list did not close");
+            }
             ++checks;
         }catch(...){cleanup();throw;}
         cleanup();co_await wait([&]{return !view->showing;},L"Drawing keyboard fixture did not close its native popup");
