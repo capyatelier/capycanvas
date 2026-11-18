@@ -1251,7 +1251,7 @@ mod tests {
         let mut f = Fixture::new();
         let _pressure=f.hold_pressure();
         f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
-        assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+        assert!(matches!(f.service.pending_tab, Some(tabs::Action::Select { id: 2 })));
         assert!(f.service.deferred_action.is_none());
         f.service.stop_worker().unwrap();
     }
@@ -1260,7 +1260,7 @@ mod tests {
         for spilling in [false, true] {
             let mut f = Fixture::new();
             f.service.tab_action(&mut f.host, tabs::Action::Adjacent { forward: true }).unwrap();
-            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Select { id: 1 })));
             let mut pressure=spilling.then(||f.hold_pressure());
             let file = &f.host.session.state().document_file;
             f.act(DocumentAction::DropImages {
@@ -1269,7 +1269,7 @@ mod tests {
                 paths: vec![f.path("photo.png")], screen: Some(layer_core::Point { x: 20., y: 30. }), layer: None,
             });
             let id = f.service.incoming_drop.as_ref().unwrap().id;
-            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Select { id: 1 })));
             assert!(f.host.session.file_drop_pending(id));
             assert!(f.service.deferred_action.is_none());
             if pressure.is_none() {pressure=Some(f.hold_pressure());}
@@ -1277,7 +1277,7 @@ mod tests {
             f.service.poll(&mut f.host).unwrap();
             assert!(!f.service.window.documents.trim_in_flight());
             assert_eq!(f.service.incoming_drop.as_ref().unwrap().id, id);
-            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Adjacent { forward: true })));
+            assert!(matches!(f.service.pending_tab, Some(tabs::Action::Select { id: 1 })));
             assert!(f.service.workflow_control.is_none());
             assert!(matches!(DocumentService::request(&f.host, id), Ok(DocumentRequest::Place)));
         }

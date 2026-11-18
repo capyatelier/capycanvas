@@ -90,7 +90,9 @@ renderer replacement retires queued input. Hosts forward every canvas contact
 during a drawing switch: a pen, mouse or finger-drawing contact that starts
 after `prepare_document_switch` is held until the returned `DocumentSwitch` is
 dropped, then drawn into the drawing active then, or dropped if that drawing
-is still suspended. Hosts forward
+is still suspended. `hold_document_switch` opens the same hold before the
+drawing can switch, so a selection that waits for document work keeps the
+contacts that follow it. Hosts forward
 Undo and Redo without waiting for raster capture themselves.
 An accepted ready raster replacement updates any queued history restore for its
 target. Pending raster operations retain the earlier revision they need to replay.

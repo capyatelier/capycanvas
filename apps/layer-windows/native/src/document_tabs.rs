@@ -69,15 +69,14 @@ impl DocumentService {
     #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn tabs_view(&self, host: &NativeHost) -> Value {
         let mut view = self.window.view(host, 0.);
-        view["available"] = (self.idle()
-            && !self.close_window
-            && !self.closing_drawings
-            && !host.session.state().document_file.close_ready
-            && host.session.can_switch_document())
-        .into();
+        view["available"] = (self.idle() && !self.drawings_changing(host) && host.session.can_switch_document()).into();
         view["activating"] = self.activating.into();
         view["window_ready"] = self.window_close_ready(host).into();
         view
+    }
+    fn drawings_changing(&self, host: &NativeHost) -> bool {
+        self.close_window || self.closing_drawings || host.session.state().document_file.close_ready
+            || self.recovery.as_ref().is_some_and(crate::recovery::Service::restoring)
     }
     fn idle(&self) -> bool {
         self.pending_tab.is_none() && self.work_idle()
@@ -121,11 +120,40 @@ impl DocumentService {
         self.activate(host, activation)?;
         Ok(())
     }
-    fn select(&mut self, host: &mut NativeHost, id: u64) -> Result<(), String> {
-        if id != self.window.documents.selected() && !self.idle() {
-            return Err(layer_ui::DocumentTransportRefusal::SwitchOperation.message(host.session.localization()).to_string());
+    fn request_selection(&mut self, host: &mut NativeHost, action: Action) -> Result<(), String> {
+        match action {
+            Action::Close { .. } if !self.idle() || self.window.documents.trim_in_flight() => {
+                return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
+            }
+            Action::Close { .. } => drop(host.session.prepare_document_switch()?),
+            _ => self.window.hold_switch(host)?,
         }
-        self.switch(host, id, false)
+        self.pending_tab = Some(action);
+        host.invalidate_snapshot();
+        self.select_pending(host)
+    }
+    fn selection_ready(&self, host: &NativeHost) -> Result<bool, String> {
+        Ok(self.work_idle() && host.session.can_switch_document() && self.window.park_ready(host)?
+            && !(matches!(self.pending_tab, Some(Action::Close { .. })) && self.window.documents.trim_in_flight()))
+    }
+    fn select_pending(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        let changing = self.drawings_changing(host);
+        if self.pending_tab.is_some() && (changing || self.selection_ready(host)?) && let Some(action) = self.pending_tab.take() {
+            if !changing && let Err(error) = self.select(host, action) { host.error = Some(error); }
+            host.invalidate_snapshot();
+        }
+        if !matches!(self.pending_tab, Some(Action::Select { .. })) && !self.activating && self.window.end_switch() { host.dirty = true; }
+        Ok(())
+    }
+    fn select(&mut self, host: &mut NativeHost, action: Action) -> Result<(), String> {
+        let (Action::Select { id } | Action::Close { id }) = action else { return Ok(()) };
+        self.switch(host, id, false)?;
+        match action {
+            Action::Close { .. } if self.activating => self.close_next = true,
+            Action::Close { .. } => host.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::CloseDocument })?,
+            _ => {}
+        }
+        Ok(())
     }
     fn adopt_candidate(
         &mut self,
@@ -242,34 +270,15 @@ impl DocumentService {
         host: &mut NativeHost,
         action: Action,
     ) -> Result<(), String> {
-        if !self.idle() || self.close_window || self.closing_drawings || host.session.state().document_file.close_ready
-            || self.window.documents.trim_in_flight() && matches!(&action, Action::Close { .. }) {
+        if self.drawings_changing(host) {
             return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
-        if matches!(action, Action::Select { .. } | Action::Adjacent { .. } | Action::Close { .. }) {
-            host.session.prepare_document_switch()?;
-            if !self.window.park_ready(host)? { self.pending_tab = Some(action); host.invalidate_snapshot(); return Ok(()); }
-        }
-        match action {
-            Action::Select { id } => self.select(host, id)?,
-            Action::Adjacent { forward } => {
-                if let Some(id) = self.window.documents.adjacent(forward) {
-                    self.select(host, id)?;
-                }
-            }
-            Action::Close { id } => {
-                self.select(host, id)?;
-                if self.activating {
-                    self.close_next = true;
-                } else {
-                    host.dispatch(layer_ui::UiAction::Invoke {
-                        command: layer_ui::CommandId::CloseDocument,
-                    })?;
-                }
-            }
-            Action::RetryStorage => {
-                self.window.documents.storage_completed(Ok(()));
-            }
+        let request = match action {
+            Action::Select { .. } | Action::Close { .. } => return self.request_selection(host, action),
+            Action::Adjacent { forward } => match self.window.documents.adjacent(forward) {
+                Some(id) => return self.request_selection(host, Action::Select { id }),
+                None => return Ok(()),
+            },
             Action::Slide {
                 id,
                 hits,
@@ -287,30 +296,28 @@ impl DocumentService {
                     .and_then(|drag| drag.preview(point))
                     .filter(|slide| slide.attached)
                 {
-                    Some(slide) if slide.in_place => return self.tab_action(host, Action::Select { id }),
-                    Some(slide) => { self.window.request(host, TabRequest::Reorder { id, before: slide.before })?; }
-                    None => {}
+                    Some(slide) if slide.in_place => return self.request_selection(host, Action::Select { id }),
+                    Some(slide) => TabRequest::Reorder { id, before: slide.before },
+                    None => {
+                        host.invalidate_snapshot();
+                        return Ok(());
+                    }
                 }
             }
-            Action::Reorder { id, before } => {
-                self.window
-                    .request(host, TabRequest::Reorder { id, before })?;
-            }
-            Action::Step { id, forward } => {
-                self.window
-                    .request(host, TabRequest::Step { id, forward })?;
-            }
-            Action::History { redo } => {
-                self.window.request(host, TabRequest::History { redo })?;
-            }
+            Action::Reorder { id, before } => TabRequest::Reorder { id, before },
+            Action::Step { id, forward } => TabRequest::Step { id, forward },
+            Action::History { redo } => TabRequest::History { redo },
+            Action::RetryStorage => TabRequest::Storage { error: None },
+        };
+        if !self.idle() {
+            return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()).to_string());
         }
+        self.window.request(host, request)?;
         host.invalidate_snapshot();
         Ok(())
     }
     pub(super) fn poll_tabs(&mut self, host: &mut NativeHost) -> Result<(), String> {
-        if self.pending_tab.is_some() && self.work_idle() && self.window.park_ready(host)? {
-            let action = self.pending_tab.take().unwrap(); self.tab_action(host, action)?;
-        }
+        self.select_pending(host)?;
         if let Some((id, forward)) = host.session.state().requests.iter().find_map(|request| {
             if let HostRequestKind::AdjacentDrawing { forward } = request.kind { Some((request.id, forward)) } else { None }
         }) {

@@ -268,6 +268,16 @@ impl<P: Parked> DocumentWindow<P> {
                 || session.retained_document_tiles().try_blobs()?.is_some()))
     }
 
+    pub fn hold_switch(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        host.require_document_owner()?;
+        self.switching = Some(host.session.hold_document_switch()?);
+        Ok(())
+    }
+
+    pub fn end_switch(&mut self) -> bool {
+        self.switching.take().is_some()
+    }
+
     pub fn adoption_ready(&self, host: &NativeHost) -> Result<bool, String> {
         Ok(!host.document_close_prepared && host.session.can_park_document_after(&opening_requests(&host.session))
             && host.session.retained_document_tiles().try_blobs()?.is_some())
@@ -332,7 +342,7 @@ impl<P: Parked> DocumentWindow<P> {
                 if !current { self.switching = Some(host.session.prepare_document_switch()?); }
                 json!({"current": current})
             }
-            TabRequest::EndSwitch => { self.switching = None; Value::Null },
+            TabRequest::EndSwitch => { self.end_switch(); Value::Null },
             TabRequest::Ready => json!({
                 "available": host.session.can_switch_document(),
                 "park": self.park_ready(host)?,

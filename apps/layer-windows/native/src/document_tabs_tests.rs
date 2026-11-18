@@ -1,4 +1,3 @@
-#[cfg(target_os = "windows")]
 use crate::test_support::*;
 use super::*;
 #[cfg(target_os = "windows")]
@@ -8,7 +7,6 @@ use std::time::{Duration, Instant};
 fn command(host: &mut NativeHost, command: CommandId) {
     host.dispatch(UiAction::Invoke { command }).unwrap();
 }
-#[cfg(target_os = "windows")]
 fn request(host: &NativeHost) -> (u32, u64, u64) {
     let file = &host.session.state().document_file;
     (
@@ -147,26 +145,81 @@ fn window_close_cancels_unfinished_header_editing() {
 }
 
 #[test]
-fn adjacent_drawing_requests_retire_before_noop_and_service_refusal() {
+fn adjacent_drawing_requests_retire_and_wait_for_a_starting_drawing() {
     let mut host = NativeHost::new(Platform::Windows).unwrap();
+    host.session.suspend_renderer().unwrap();
     let mut service = DocumentService::open(|| {}).unwrap();
     let document = host.session.engine().document().clone();
     let checkpoint = host.session.engine().checkpoint();
     let selected = service.window.documents.selected();
-    for blocked in [false, true] {
-        service.activating = blocked;
+    for starting in [false, true] {
+        service.activating = starting;
         command(&mut host, CommandId::NextDrawing);
         assert!(host.session.state().requests.iter().any(|request|
             matches!(request.kind, HostRequestKind::AdjacentDrawing { forward: true })));
         service.poll(&mut host).unwrap();
         assert!(host.session.state().requests.is_empty());
+        assert_eq!(service.pending_tab.is_some(), starting);
+        service.activating = false;
+        service.poll(&mut host).unwrap();
+        assert!(service.pending_tab.is_none());
         assert_eq!(service.window.documents.selected(), selected);
         assert_eq!(host.session.engine().document(), &document);
         assert_eq!(host.session.engine().checkpoint(), checkpoint);
-        let error = blocked.then(|| layer_ui::DocumentTransportRefusal::ChangeInProgress.message(host.session.localization()));
-        assert_eq!(host.error.as_deref(), error.as_deref());
+        assert_eq!(host.error, None);
     }
-    service.activating = false;
+    service.stop_worker().unwrap();
+}
+
+#[test]
+fn a_drawing_chosen_while_another_opens_takes_the_stroke_that_follows() {
+    let digests = |service: &DocumentService, host: &NativeHost, id: u64| {
+        let session = service.window.session(host, id).unwrap();
+        (session.engine().can_undo(), session.retained_document_tiles().blobs().unwrap().iter().map(|blob| blob.content_digest().unwrap()).collect::<std::collections::BTreeSet<_>>())
+    };
+    let project = layer_ui::new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let gpu = WgpuRasterizer::new_native_headless(project.composition().color).unwrap();
+    let mut host = NativeHost::new(Platform::Windows).unwrap();
+    *host.session = UiSession::from_project(Renderer(Some(gpu.into())), project, None, [64, 48], Platform::Windows).unwrap();
+    host.resize(64, 48, 1.).unwrap();
+    let mut settings = host.session.state().settings.clone();
+    settings.pen_seen = true;
+    host.dispatch(UiAction::RestoreSettings { settings: Box::new(settings) }).unwrap();
+    let mut service = DocumentService::open(|| {}).unwrap();
+    settle(&mut service, &mut host);
+    let first = service.window.documents.selected();
+    let create = |service: &mut DocumentService, host: &mut NativeHost| {
+        let (id, epoch, revision) = request(host);
+        service.dispatch(host, DocumentAction::Create { id, epoch, revision }).unwrap();
+    };
+    command(&mut host, CommandId::NewDocument);
+    order_new_drawing(&mut host, [64, 48], "");
+    create(&mut service, &mut host);
+    settle(&mut service, &mut host);
+    let left = service.window.documents.selected();
+    let (before_first, before_left) = (digests(&service, &host, first), digests(&service, &host, left));
+    command(&mut host, CommandId::NewDocument);
+    order_new_drawing(&mut host, [64, 48], "");
+    service.tab_action(&mut host, Action::Select { id: first }).unwrap();
+    let view = layer_core::Affine(host.session.state().camera.document_to_surface());
+    let records = [[8., 8.], [24., 16.], [40., 28.], [56., 40.]].iter().enumerate().flat_map(|(index, [x, y])| {
+        let at = view.map(layer_core::Point { x: *x, y: *y });
+        let phase = match index { 0 => 1., 3 => 3., _ => 2. };
+        [f64::from(at.x), f64::from(at.y), 0.7, 0., 0., 0., 0., (1_000_000_000 + index as u64 * 8_000_000) as f64, phase]
+    }).collect::<Vec<_>>();
+    host.pointer_batch(layer_host::PointerBatch { id: 7, tool: 0, button: 0, records: &records, predicted: false,
+        view_revision: host.session.state().camera.revision, device_flags: layer_engine::SampleFlags(0) }).unwrap();
+    create(&mut service, &mut host);
+    settle(&mut service, &mut host);
+    assert_eq!(host.error, None);
+    assert_eq!(service.window.documents.order().len(), 3);
+    assert_eq!(service.window.documents.selected(), first);
+    let after_first = digests(&service, &host, first);
+    assert!(after_first.0);
+    assert_ne!(after_first.1, before_first.1);
+    assert_eq!(digests(&service, &host, left), before_left);
+    let opened = *service.window.documents.order().iter().find(|id| ![first, left].contains(id)).unwrap();
+    assert!(!digests(&service, &host, opened).0);
     service.stop_worker().unwrap();
 }
 

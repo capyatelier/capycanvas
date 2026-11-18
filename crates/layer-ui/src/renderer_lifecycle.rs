@@ -201,10 +201,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             && (self.rendering_suspended || self.pending_filters.is_none() && self.document_interaction_idle_reason_for_switch(true,true).is_none())
     }
     pub fn prepare_document_switch(&mut self) -> Result<DocumentSwitch, String> {
+        let switch = self.hold_document_switch()?;
+        if self.can_switch_document() { Ok(switch) }
+        else { Err(DocumentTransportRefusal::SwitchOperation.message(self.localization()).to_string()) }
+    }
+    pub fn hold_document_switch(&mut self) -> Result<DocumentSwitch, String> {
         self.release_switch_contacts();
         self.prepare_document_action()?;
-        if self.can_switch_document() { Ok(self.open_document_switch()) }
-        else { Err(DocumentTransportRefusal::SwitchOperation.message(self.localization()).to_string()) }
+        Ok(self.open_document_switch())
     }
     pub fn can_park_document(&self) -> bool {
         self.can_park_document_after(&[])
