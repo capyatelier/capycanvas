@@ -60,7 +60,7 @@ impl World {
         self.next_slot += 1;
     }
     fn token(&self) -> ArrivalToken { ArrivalToken(self.arrivals) }
-    fn demand(&self) -> Option<Outstanding> { let now = self.token(); self.schedule.demand(|_, since| since == now) }
+    fn demand(&self) -> Option<Outstanding> { let now = self.token(); Outstanding::either(self.schedule.demand(0, |_, since| since == now), self.schedule.demand(1, |_, since| since == now)) }
     fn reserved_and_pinned(&self) -> u64 {
         self.tier.used() - self.retiring.iter().map(|(_, charge)| charge.bytes()).sum::<u64>()
     }
@@ -251,10 +251,10 @@ fn a_blocked_head_stops_lower_admission_and_preempts_admitted_lower_groups() {
     assert!(world.schedule.admit(world.epoch, now, u64::MAX, |class, bytes| tier.admit(class, bytes)).is_some());
     assert!(!world.schedule.admitted(&blocked));
     assert!(!world.schedule.admitted(&after), "a lower group is never admitted while a higher head is blocked on memory");
-    assert_eq!(world.schedule.demand(waits), Some(Outstanding::Runnable), "the running head is still runnable");
+    assert_eq!(world.schedule.demand(0, waits), Some(Outstanding::Runnable), "the running head is still runnable");
     world.schedule.block(&high, Input::Gpu, now);
-    assert_eq!(world.schedule.demand(waits), Some(Outstanding::Blocked(Input::Residency)));
-    assert_eq!(world.schedule.demand(|_, since| since != now), Some(Outstanding::Runnable), "an arrival after the refusal makes the stopped head runnable");
+    assert_eq!(world.schedule.demand(0, waits), Some(Outstanding::Blocked(Input::Residency)));
+    assert_eq!(world.schedule.demand(0, |_, since| since != now), Some(Outstanding::Runnable), "an arrival after the refusal makes the stopped head runnable");
     drop(high);
     world.schedule.admit(world.epoch, now, u64::MAX, |class, bytes| tier.admit(class, bytes));
     assert!(world.schedule.admitted(&blocked) && world.schedule.admitted(&after));

@@ -162,6 +162,47 @@ fn open_photos(doc:&layer_core::Document,budget:u64)->(WgpuRasterizer,Open) {
 }
 
 #[test]
+fn a_thumbnail_window_and_a_canvas_window_admitted_together_both_complete() {
+    let (mut doc,_,_)=document(PHOTO,(0..2).map(|seed|ImageObject::new(noisy_photo(seed,PHOTO,Default::default()))).collect());
+    let layers=doc.scene().order().to_vec();
+    doc.artwork.occurrences.get_mut(layers[1]).unwrap().visible=false;
+    let doc=layer_core::Document::from_artwork(doc.artwork).unwrap();
+    let hidden=layer_render::ThumbnailTarget::Occurrence(layers[1]);
+    let frame=fit_frame(&doc,[560,420]);
+    let mut r=crate::memory::memory_tests::renderer(doc.composition().color,layer_core::DeviceMemoryFacts {budget_bytes:Some(8<<30),..Default::default()}).unwrap();
+    let (signal,woken)=std::sync::mpsc::channel();
+    r.set_preparation_wake(Arc::new(move||{let _=signal.send(());}));
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(60);
+    let (mut first,mut previewed,mut together)=(true,false,false);
+    loop {
+        r.poll_startup().unwrap();r.poll_pending(frame.view).unwrap();
+        let next=if first {frame} else {FramePacket {composite_all:false,reset_layers:false,..frame}};
+        if r.can_submit() && let std::task::Poll::Ready(result)=r.submit_when_ready(next,None) {result.unwrap();first=false;}
+        r.wait_idle().unwrap();
+        while !first && !previewed && !together {
+            r.poll_startup().unwrap();
+            previewed=r.prepare_thumbnail_batch(hidden).unwrap();
+            r.wait_idle().unwrap();
+            let scene=r.scene.as_ref().unwrap();
+            let canvas=[scene.object_results.owner(),scene.exact_object_results.owner()];
+            let admitted=scene.tiers.schedule.admitted_owners();
+            together=admitted.iter().any(|owner|canvas.contains(owner)) && admitted.iter().any(|owner|!canvas.contains(owner));
+            assert!(std::time::Instant::now()<deadline,"the thumbnail wants its window while the canvas's windows are admitted");
+        }
+        let census=r.scene.as_ref().map(|scene|scene.tiers.schedule.census());
+        assert!(std::time::Instant::now()<deadline,"the canvas and the thumbnail settle within a minute: thumbnail {previewed}, terms {:?}, census {census:?}",r.outstanding_terms());
+        if first {std::thread::sleep(std::time::Duration::from_millis(1));continue;}
+        if r.next_frame()==layer_render::FrameDemand::Work {continue;}
+        if !previewed {previewed=r.prepare_thumbnail_batch(hidden).unwrap();r.wait_idle().unwrap();continue;}
+        if r.settled() {break;}
+        assert!(woken.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).is_ok(),"an idle canvas waits on inputs whose completion never woke it: terms {:?}",r.outstanding_terms());
+    }
+    assert!(together,"the thumbnail's window and the canvas's windows were admitted in the one core at the same time");
+    let image=crate::test_support::thumbnail(&mut r,1,hidden);
+    assert!(image.bytes.as_chunks::<4>().0.iter().any(|pixel|pixel[0].abs_diff(pixel[1])>24 || pixel[1].abs_diff(pixel[2])>24),"the hidden photo's thumbnail shows the photo");
+}
+
+#[test]
 fn a_cold_fit_open_of_twenty_eight_photos_decodes_each_tile_once_and_never_spins() {
     let doc=photo_stack(PHOTO,Default::default());
     let (r,open)=open_photos(&doc,8<<30);

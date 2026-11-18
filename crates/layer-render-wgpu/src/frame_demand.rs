@@ -6,6 +6,11 @@ pub(crate) enum Input { FrameSlot, Decode, Compile, Gpu, Name, Residency }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outstanding { Runnable, Blocked(Input) }
+impl Outstanding {
+    pub(crate) fn either(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        if second == Some(Self::Runnable) { second } else { first.or(second) }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ArrivalToken(pub(super) u64);

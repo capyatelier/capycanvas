@@ -50,21 +50,30 @@ impl Entry {
 type Ranked = ((u8, u64), u64);
 enum Stop { Memory(ArrivalToken, Blocked), Full }
 #[derive(Default)]
-struct Core { entries: BTreeMap<u64, Entry>, queue: BTreeSet<Ranked>, active: BTreeSet<Ranked>, next: u64, stop: Option<Stop>, epoch: u64, dirty: bool, lapsed: Vec<(u64, u64)> }
+struct Core { entries: BTreeMap<u64, Entry>, queue: BTreeSet<Ranked>, active: BTreeSet<Ranked>, queued: BTreeMap<u64, usize>, next: u64, stop: Option<Stop>, epoch: u64, dirty: bool, lapsed: Vec<(u64, u64)> }
 impl Core {
+    fn count(&mut self, owner: u64, queued: bool) {
+        let count = self.queued.entry(owner).or_default();
+        if queued { *count += 1; } else { *count -= 1; }
+        if *count == 0 { self.queued.remove(&owner); }
+    }
     fn remove(&mut self, id: u64) -> Option<Entry> {
         let entry = self.entries.remove(&id)?;
-        self.queue.remove(&(entry.rank(), id)); self.active.remove(&(entry.rank(), id));
+        if self.queue.remove(&(entry.rank(), id)) { self.count(entry.owner, false); }
+        self.active.remove(&(entry.rank(), id));
         Some(entry)
     }
     fn enter(&mut self, id: u64, phase: Phase) -> Option<Phase> {
         let entry = self.entries.get_mut(&id)?;
-        let ranked = (entry.rank(), id);
+        let (ranked, owner) = ((entry.rank(), id), entry.owner);
         let wanted = matches!(phase, Phase::Wanted);
-        if wanted { self.active.remove(&ranked); self.queue.insert(ranked); } else { self.queue.remove(&ranked); self.active.insert(ranked); entry.blocked = None; }
-        Some(std::mem::replace(&mut entry.phase, phase))
+        if wanted { self.active.remove(&ranked); } else { self.active.insert(ranked); entry.blocked = None; }
+        let previous = std::mem::replace(&mut entry.phase, phase);
+        let moved = if wanted { self.queue.insert(ranked) } else { self.queue.remove(&ranked) };
+        if moved { self.count(owner, wanted); }
+        Some(previous)
     }
-    fn admitted(&self) -> impl Iterator<Item = &Entry> { self.active.iter().map(|(_, id)| &self.entries[id]) }
+    fn admitted(&self, owner: u64) -> impl Iterator<Item = &Entry> { self.active.iter().map(|(_, id)| &self.entries[id]).filter(move |entry| entry.owner == owner) }
 }
 
 #[derive(Clone, Default)]
@@ -84,6 +93,7 @@ impl Schedule {
         core.next += 1;
         let entry = Entry { owner, tag, class, obligation, closure, sequence: id, wanted: epoch, phase: Phase::Wanted, blocked: None, waiter: Weak::new() };
         core.queue.insert((entry.rank(), id));
+        core.count(owner, true);
         core.entries.insert(id, entry);
         core.dirty = true;
         Group { core: Arc::downgrade(&self.0), id }
@@ -137,7 +147,7 @@ impl Schedule {
             }
             core.stop = None;
             core.dirty = false;
-            let admitted = core.admitted().filter(|entry| entry.best_effort())
+            let admitted = core.active.iter().map(|(_, id)| &core.entries[id]).filter(|entry| entry.best_effort())
                 .fold((0, 0), |(count, bytes): (usize, u64), entry| (count + 1, bytes.saturating_add(entry.closure.total())));
             (expired, admitted)
         };
@@ -201,23 +211,27 @@ impl Schedule {
         let Core { entries, active, .. } = &mut *core;
         for (_, id) in active.iter() { if let Some(entry) = entries.get_mut(id).filter(|entry| entry.owner == owner) { entry.blocked = Some((input, since)); } }
     }
-    pub(crate) fn demand(&self, waits: impl Fn(Input, ArrivalToken) -> bool) -> Option<Outstanding> {
+    pub(crate) fn demand(&self, owner: u64, waits: impl Fn(Input, ArrivalToken) -> bool) -> Option<Outstanding> {
         let core = self.0.lock().unwrap();
         let blocked = |entry: &Entry| entry.blocked.filter(|&(input, since)| waits(input, since)).map(|(input, _)| input);
-        if core.admitted().any(|entry| blocked(entry).is_none()) { return Some(Outstanding::Runnable); }
-        if !core.queue.is_empty() {
+        if core.admitted(owner).any(|entry| blocked(entry).is_none()) { return Some(Outstanding::Runnable); }
+        if core.queued.contains_key(&owner) {
             match &core.stop {
                 Some(Stop::Memory(since, _)) if waits(Input::Residency, *since) => return Some(Outstanding::Blocked(Input::Residency)),
                 Some(Stop::Full) if !core.active.is_empty() => {},
                 _ => return Some(Outstanding::Runnable),
             }
         }
-        core.admitted().find_map(blocked).map(Outstanding::Blocked)
+        core.admitted(owner).find_map(blocked).map(Outstanding::Blocked)
     }
 }
 
 #[cfg(test)]
 impl Schedule {
+    pub(crate) fn admitted_owners(&self) -> BTreeSet<u64> {
+        let core = self.0.lock().unwrap();
+        core.active.iter().map(|(_, id)| core.entries[id].owner).collect()
+    }
     pub(crate) fn alive(&self, group: &Group) -> bool { self.0.lock().unwrap().entries.contains_key(&group.id) }
     pub(crate) fn census(&self) -> ([usize; 3], bool, bool) {
         let core = self.0.lock().unwrap();

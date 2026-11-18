@@ -251,12 +251,12 @@ impl Scene {
         use crate::frame_demand::Input;
         if self.vectors_deferred() { return Some(crate::frame_demand::Outstanding::Runnable); }
         let compiling = || !r.scene_pipelines.objects.pipelines().into_iter().chain([&r.scene_pipelines.constant.2]).all(|pipeline| pipeline.ready());
-        self.tiers.schedule.demand(|input, since| match input {
+        let waits = |input, since| match input {
             Input::Compile => compiling(),
-            Input::Gpu => self.objects_in_flight(),
             Input::Residency | Input::Name => !r.arrived_since(since),
             input => r.waits_on(input),
-        })
+        };
+        crate::frame_demand::Outstanding::either(self.object_results.demand(waits), self.exact_object_results.demand(waits))
     }
     pub(crate) fn objects_in_flight(&self) -> bool { self.object_results.in_flight() || self.exact_object_results.in_flight() }
     pub(crate) fn object_edit_damage(before: SceneView<'_>, after: SceneView<'_>, extent: [u32; 2]) -> Option<scale::Damage> {
@@ -379,12 +379,17 @@ impl Scene {
         }
         r.drain_image_decodes(encoder)?;
         self.object_results.retain(packet.scene, request.blend, r.device.working_space());
-        let mut results = std::mem::replace(&mut self.object_results,super::object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
-        let advanced = results.advance_with_memory(r, self, encoder, |_| crate::frame_pace::IDLE_TAPS);
-        self.object_results = results;
         self.object_results.set_requester(Class::Navigator);
         let mut accepted=sources::AcceptedInputs::default();
-        let canonical = advanced.and_then(|_| self.object_results.resolve_collection(r, packet.scene, &request,Some(&mut accepted)));
+        let canonical = match self.object_results.resolve_collection(r, packet.scene, &request,Some(&mut accepted)) {
+            Ok(None) => {
+                let mut results = std::mem::replace(&mut self.object_results,super::object_cache::ObjectCache::new(&self.tiers,Default::default(),false));
+                let advanced = results.advance_with_memory(r, self, encoder, |_| crate::frame_pace::IDLE_TAPS);
+                self.object_results = results;
+                advanced.and_then(|_| self.object_results.resolve_collection(r, packet.scene, &request,Some(&mut accepted)))
+            }
+            resolved => resolved,
+        };
         self.object_query = false;
         let Some(view) = canonical? else { return Ok(None); };
         accepted.track(encoder);

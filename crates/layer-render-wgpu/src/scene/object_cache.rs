@@ -112,6 +112,11 @@ impl ObjectCache {
             coordinates: HashMap::new(), retains, uniform: None, requester: Class::Visible, evicted: Default::default() }
     }
     pub(super) fn set_requester(&mut self, class: Class) { self.requester = class; }
+    #[cfg(test)]
+    pub(super) fn owner(&self) -> u64 { self.owner }
+    pub(super) fn demand(&self, waits: impl Fn(Input, crate::frame_demand::ArrivalToken) -> bool) -> Option<crate::frame_demand::Outstanding> {
+        self.schedule.demand(self.owner, |input, since| if input == Input::Gpu { self.in_flight() } else { waits(input, since) })
+    }
     fn started(&self, task: &Task) -> bool { Arc::ptr_eq(task.gpu.tier(), &self.working) }
     fn queue_bytes(&self) -> u64 {
         (self.tasks.len() * std::mem::size_of::<(u64, Task)>() + self.places.len() * std::mem::size_of::<Place>()
