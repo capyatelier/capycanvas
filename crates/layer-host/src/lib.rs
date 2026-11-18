@@ -1925,6 +1925,33 @@ mod tests {
     }
 
     #[test]
+    fn turning_a_masked_drawing_presents_the_turned_canvas() {
+        use layer_ui::CommandId;
+        let mut document = layer_ui::new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        document.working.selection = Some(layer_core::Selection::polygon(
+            [[0., 0.], [300., 0.], [300., 200.], [0., 200.]].map(|[x, y]| Point { x, y }).to_vec()).unwrap());
+        let (_reference, mut host) = gpu_document_host(layer_ui::Platform::Android, document);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let settle = |host: &mut NativeHost| {
+            frame_step(host, &clock, deadline);
+            while !host.startup.complete || host.dirty || host.session.frame_demand() != layer_render::FrameDemand::Wait
+                || host.session.engine().raster_backing_pending()
+            {
+                frame_step(host, &clock, deadline);
+            }
+        };
+        settle(&mut host);
+        host.dispatch(UiAction::Invoke { command: CommandId::MaskSelection }).unwrap();
+        settle(&mut host);
+        let layer = host.session.engine().document().working.occurrence.unwrap();
+        assert!(host.session.engine().document().scene().occurrence(layer).unwrap().mask.is_some());
+        host.dispatch(UiAction::Invoke { command: CommandId::RotateImageRight }).unwrap();
+        settle(&mut host);
+        assert_eq!(host.session.engine().document().composition().size, [256, 384]);
+    }
+
+    #[test]
     fn rapid_history_commands_preserve_the_selected_picture_at_fit_and_native_zoom() {
         use layer_ui::CommandId;
         let (_reference, mut host) = gpu_host(layer_ui::Platform::Windows, [768, 512]);

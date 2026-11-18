@@ -3555,8 +3555,10 @@ impl WgpuRasterizer {
     pub(crate) fn drain_image_decodes(&mut self, encoder: &mut submission::CommandEncoder) -> Result<(), GpuRasterError> {
         self.drain_image_decodes_where(encoder,&|_|true,|_|true).map(drop)
     }
-    pub(crate) fn drain_lane_decodes(&mut self, encoder: &mut submission::CommandEncoder, reads: &[Arc<scene::sources::PendingTile>]) -> Result<(), GpuRasterError> {
-        self.drain_image_decodes_where(encoder,&|result|reads.iter().any(|read|Self::receipt_matches(read,result)),|_|true).map(drop)
+    pub(crate) fn drain_lane_decodes(&mut self, encoder: &mut submission::CommandEncoder, reads: &[Arc<scene::sources::PendingTile>],
+        scalars: &[Arc<layer_core::raster::TileBlob>]) -> Result<(), GpuRasterError> {
+        self.drain_image_decodes_where(encoder,&|result|reads.iter().any(|read|Self::receipt_matches(read,result))
+            || matches!(result,object_image_mips::PreparedImageWork::Raster(tile) if tile.scalar && scalars.iter().any(|blob|scene::sources::same_raster_samples(blob,&tile.blob))),|_|true).map(drop)
     }
     fn drain_frame_decodes(&mut self, encoder: &mut submission::CommandEncoder, work: &mut scene::WorkBudget, contact: bool) -> Result<(), GpuRasterError> {
         self.drain_image_decodes_where(encoder,&|result|result.class()==residency::Class::Authored,|_|true)?;

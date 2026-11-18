@@ -170,9 +170,13 @@ impl TargetRestore {
         }
         Ok(Self {target,extent,defaults,data,selected,pending,next:0,pages:PreparedPages::default(),replace,scalars:Vec::new(),inputs:Default::default()})
     }
+    fn awaited_scalars(&self)->impl Iterator<Item=Arc<TileBlob>>+'_ {
+        self.pending.iter().skip(self.next).filter(|source|!matches!(source,SourcePage::Output(_))).take(PREFETCH).filter_map(|source|match source {
+            SourcePage::Raster(key,tile) if key.plane!=RasterPlane::Color=>tile.try_backing().and_then(Result::ok),_=>None,
+        })
+    }
     fn awaits(&self,blob:&TileBlob)->bool {
-        self.pending.iter().skip(self.next).filter(|source|!matches!(source,SourcePage::Output(_))).take(PREFETCH).any(|source|matches!(source,SourcePage::Raster(key,tile) if key.plane!=RasterPlane::Color
-            && tile.try_backing().and_then(Result::ok).is_some_and(|awaited|scene::sources::same_raster_samples(&awaited,blob))))
+        self.awaited_scalars().any(|awaited|scene::sources::same_raster_samples(&awaited,blob))
     }
     fn held(&self,blob:&TileBlob)->Option<&object_image_mips::PreparedRasterTile> {
         self.scalars.iter().find(|prepared|scene::sources::same_raster_samples(&prepared.blob,blob))
@@ -764,7 +768,7 @@ impl WgpuRasterizer {
         let reads=inputs.pending_reads();
         let ready=self.record_restore_uploads(|r,encoder| {
             scene::sources::Lease::track(inputs.iter().cloned().collect(),encoder);
-            r.drain_lane_decodes(encoder,&reads)?;let mut ready=true;
+            r.drain_lane_decodes(encoder,&reads,&[])?;let mut ready=true;
             for (blob,source,destination) in requests {
                 let read=scene::sources::accepted_raster(&inputs,blob,*source,*destination)?;
                 ready&=read.encode(r,encoder,crate::residency::Class::Authored)?;
@@ -841,8 +845,9 @@ impl WgpuRasterizer {
         if self.restore_preflight.is_none() {return Ok(true);}
         if !self.accept_restore_inputs()? {return Ok(false);}
         let result=self.record_restore_uploads(|r,encoder| {
-            let reads=r.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete())).map_or_else(Vec::new,|target|target.inputs.pending_reads());
-            r.drain_lane_decodes(encoder,&reads)?;
+            let (reads,scalars)=r.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete()))
+                .map_or_else(Default::default,|target|(target.inputs.pending_reads(),target.awaited_scalars().collect::<Vec<_>>()));
+            r.drain_lane_decodes(encoder,&reads,&scalars)?;
             let mut restore=r.restore_preflight.take().unwrap();
             let result=restore.targets.iter_mut().flatten().find(|target|!target.complete()).map_or(Ok(()),|target|target.advance(r,encoder));
             r.restore_preflight=Some(restore);result
