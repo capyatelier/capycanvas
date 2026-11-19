@@ -371,3 +371,42 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         }
     }
 }
+
+#[test]
+fn an_adjustment_layers_opacity_blend_and_mask_default_each_change_its_pixels_name_and_authored_revision() {
+    let extent = [256; 2];
+    let mut doc = document_at(extent);
+    composition_mut(&mut doc).blend = layer_core::BlendSpace::Linear;
+    let paint = primary_paint(&doc);
+    doc.artwork.paint.get_mut(paint).unwrap().base = Some(layer_core::authored::PaintBase::new(rgba8_source(extent, |_, _| [255; 4]).into()));
+    let effect = effect_occurrence(&mut doc, EffectInstance::new(crate::tests::fixture("invert").program()), "Invert");
+    insert_occurrence(&mut doc, effect, 0);
+    let mask = coverage_mask(&mut doc, effect, [0, 0], None);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut observe = |doc: &Document| {
+        crate::test_support::submit_settled(&mut r, packet(doc.scene(), extent));
+        let cache = r.scale_display.as_ref().unwrap();
+        let key = cache.page_key(cache.graph.root.clone().unwrap(), cache.plan.bounds);
+        let frame = cache.pages.lock().unwrap().expected().cloned().unwrap();
+        let name = frame.expected_key(&key, cache.plan.bounds, cache.required_input_level()).unwrap().into_version().identity();
+        (display_pixels(&r)[(extent[0] * extent[1] / 2 + extent[0] / 2) as usize][0], name, frame.authored_revision(&key.expression).unwrap())
+    };
+    let base = observe(&doc);
+    assert!(base.0.abs() < 2e-3, "Invert at full strength shows white paint as black: {}", base.0);
+    let changes: [(&str, f32, fn(&mut Document, OccurrenceHandle, CoverageHandle)); 3] = [
+        ("opacity", 0.5, |doc, effect, _| doc.artwork.occurrences.get_mut(effect).unwrap().opacity = 0.5),
+        ("blend", 1., |doc, effect, _| doc.artwork.occurrences.get_mut(effect).unwrap().blend = layer_core::LayerBlend::Screen),
+        ("mask default", 0.75, |doc, _, mask| doc.artwork.coverage.get_mut(mask).unwrap().default_coverage = 0.25),
+    ];
+    for (label, expected, change) in changes {
+        let mut changed = doc.clone();
+        change(&mut changed, effect, mask);
+        reindex(&mut changed);
+        let (pixel, name, authored) = observe(&changed);
+        assert!((pixel - expected).abs() < 2e-3, "{label}: the adjustment shows {pixel}, not {expected}");
+        assert_ne!(name, base.1, "{label} changes the regional name");
+        assert_ne!(authored, base.2, "{label} changes the authored revision");
+        let (pixel, name, authored) = observe(&doc);
+        assert!(pixel.abs() < 2e-3 && name == base.1 && authored == base.2, "{label}: the first document shows its first picture under its first name");
+    }
+}

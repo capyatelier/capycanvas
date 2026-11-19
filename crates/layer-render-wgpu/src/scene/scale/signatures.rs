@@ -314,6 +314,8 @@ impl Prepared {
         let effects=reads.effects.iter().filter_map(|handle|packet.scene.effect(*handle).map(|effect|(*handle,effect))).map(|(handle,effect)| {
             let mut version=effect_version(effect)?;
             if effect.animated() {version=ContentVersion::derive(u128::from(crate::effects::effective_phase(packet.scene,handle,packet.time_seconds).to_bits()),&[version]);}
+            let (opacity,blend,coverage)=crate::effects::occurrence_controls(packet.scene,handle);
+            let version=ContentVersion::derive(recipe(&(opacity.to_bits(),blend.code(),coverage.to_bits())),&[version]);
             Ok((handle,Definition {version,global:effect.program.analysis().is_some() || effect.program.passes.iter().any(|pass|matches!(pass.sampling,layer_core::EffectSampling::Document))}))
         }).collect::<Result<_,GpuRasterError>>()?;
         let vector_preview=declared.vector_preview.map(|preview| {let version=path_version(&preview.path);(preview,version)});

@@ -712,12 +712,16 @@ fn effect_geometry(scene: SceneView<'_>, handle: OccurrenceHandle) -> Result<[[f
     Ok(geometry)
 }
 
-fn effect_properties(device: &PipelineDevice, scene: SceneView<'_>, handle: OccurrenceHandle, time: f32, space: layer_core::BlendSpace) -> [f32; 4] {
+pub(crate) fn occurrence_controls(scene: SceneView<'_>, handle: OccurrenceHandle) -> (f32, layer_core::LayerBlend, f32) {
     let occurrence = scene.occurrence(handle).unwrap();
-    [occurrence.opacity, crate::blend_code(occurrence.blend, device, space) as f32,
+    (occurrence.opacity, occurrence.blend,
         scene.mask(handle).filter(|(use_, _)| use_.enabled).map_or(1., |(use_, coverage)| {
             if use_.inverted { 1. - coverage.default_coverage } else { coverage.default_coverage }
-        }), time]
+        }))
+}
+fn effect_properties(device: &PipelineDevice, scene: SceneView<'_>, handle: OccurrenceHandle, time: f32, space: layer_core::BlendSpace) -> [f32; 4] {
+    let (opacity, blend, coverage) = occurrence_controls(scene, handle);
+    [opacity, crate::blend_code(blend, device, space) as f32, coverage, time]
 }
 
 fn validated_module(source:&str)->Result<(naga::Module,naga::valid::ModuleInfo),GpuRasterError> {
