@@ -1,7 +1,8 @@
 use crate::submission::Submission;
 use layer_core::raster::ContentVersion;
 use crate::raster::contents::Intent;
-use std::sync::{Arc, Mutex};
+use crate::pixel_rect::PixelRect;
+use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Clone)]
 struct Version {
@@ -12,16 +13,49 @@ impl Version {
     fn same(&self,other:&Self)->bool {self.name.identity()==other.name.identity() && self.submission.same(&other.submission)}
 }
 
+#[derive(Clone)]
+pub(crate) struct Origin {
+    version: Version,
+    names: Weak<Mutex<Names>>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) enum Delta {
+    #[default]
+    Unknown,
+    InPlace(PixelRect),
+    Seeded { from: Origin, rect: PixelRect },
+}
+impl Delta {
+    pub(crate) fn seeded(from: &Input, rect: PixelRect) -> Self {
+        Self::Seeded { from: Origin { version: from.version.clone(), names: Arc::downgrade(&from.names) }, rect }
+    }
+}
+
 #[derive(Default)]
 struct Names {
     version: Option<Version>,
     before: Option<Version>,
+    delta: Delta,
 }
 
 impl Names {
     fn held(&self) -> Option<&Version> {
         self.version.as_ref().filter(|version| !version.submission.discarded())
             .or_else(|| self.before.as_ref().filter(|version| !version.submission.discarded()))
+    }
+    fn published(&self, version: &Version) -> bool {
+        self.version.as_ref().is_some_and(|published| !published.submission.discarded() && published.same(version))
+    }
+    fn publish(&mut self, version: Version, delta: Delta) {
+        let first = !self.version.as_ref().is_some_and(|previous| previous.submission.same(&version.submission));
+        if first { self.before = self.held().cloned(); }
+        self.delta = match (first, std::mem::take(&mut self.delta), delta) {
+            (true, _, delta) => delta,
+            (false, Delta::InPlace(a), Delta::InPlace(b)) => Delta::InPlace(a.union(b)),
+            _ => Delta::Unknown,
+        };
+        self.version = Some(version);
     }
 }
 
@@ -64,6 +98,20 @@ pub(crate) struct Input {
 impl Input {
     pub fn version(&self)->&ContentVersion {&self.version.name}
     pub(crate) fn same(&self,other:&Self)->bool {Arc::ptr_eq(&self.names,&other.names) && self.version.same(&other.version)}
+    pub(crate) fn live(&self)->bool {self.names.lock().unwrap().held().is_some_and(|held|held.same(&self.version))}
+    pub(crate) fn seed(&self)->Option<(Self,PixelRect)> {
+        let names=self.names.lock().unwrap();
+        if !names.published(&self.version) {return None;}
+        let Delta::Seeded {from,rect}=&names.delta else {return None;};
+        Some((Self {version:from.version.clone(),names:from.names.upgrade()?},*rect))
+    }
+    pub(crate) fn changed_since(&self,earlier:&Self)->Option<PixelRect> {
+        if !Arc::ptr_eq(&self.names,&earlier.names) {return None;}
+        if self.version.same(&earlier.version) {return Some(PixelRect::EMPTY);}
+        let names=self.names.lock().unwrap();
+        if !names.published(&self.version) || !names.before.as_ref().is_some_and(|before|before.same(&earlier.version)) {return None;}
+        match names.delta {Delta::InPlace(rect)=>Some(rect),_=>None}
+    }
 }
 
 pub(crate) struct RasterWrite<'a, T> {
@@ -76,6 +124,7 @@ pub(crate) struct Encoding {
     names:Arc<Mutex<Names>>,
     version:Version,
     intent:Option<Intent>,
+    delta:Delta,
 }
 
 pub(crate) struct Written {
@@ -152,11 +201,7 @@ impl<T> Resident<T> {
     pub fn retire(self) -> T { self.value }
 
     fn publish(&mut self, name: ContentVersion, submission: Submission) {
-        let mut names = self.names.lock().unwrap();
-        if !names.version.as_ref().is_some_and(|previous| previous.submission.same(&submission)) {
-            names.before = names.held().cloned();
-        }
-        names.version = Some(Version { name, submission });
+        self.names.lock().unwrap().publish(Version { name, submission }, Delta::Unknown);
     }
 }
 
@@ -183,7 +228,7 @@ impl<T:TextureStorage> Read<'_,T> {
 impl<T> RasterWrite<'_, T> {
     pub fn value(&self) -> &T { &self.resident.value }
     pub fn encoded(self,name:impl Into<ContentVersion>)->Encoding {
-        Encoding {names:self.resident.names.clone(),version:Version {name:name.into(),submission:self.submission.clone()},intent:self.intent}
+        Encoding {names:self.resident.names.clone(),version:Version {name:name.into(),submission:self.submission.clone()},intent:self.intent,delta:Delta::Unknown}
     }
     pub fn publish(self, name: impl Into<ContentVersion>) -> Written {
         let name = name.into();
@@ -194,11 +239,10 @@ impl<T> RasterWrite<'_, T> {
 
 impl Encoding {
     pub fn intent(&self)->Option<&Intent> {self.intent.as_ref()}
+    pub(crate) fn certified(mut self,delta:Delta)->Self {self.delta=delta;self}
     pub fn publish(mut self,actual:&Submission)->Written {
         self.version.submission=actual.clone();
-        let mut names=self.names.lock().unwrap();
-        if !names.version.as_ref().is_some_and(|previous|previous.submission.same(&self.version.submission)) {names.before=names.held().cloned();}
-        names.version=Some(self.version.clone());
+        self.names.lock().unwrap().publish(self.version.clone(),self.delta);
         Written {submission:self.version.submission.clone(),version:self.version,intent:self.intent}
     }
 }

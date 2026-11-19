@@ -2813,6 +2813,8 @@ impl Scene {
                             pass.set_bind_group(0, &self.reduction_binding, &[((base+j)*self.stride) as u32]);
                             pass.set_bind_group(1, &binding, &[]);
                             pass.dispatch_workgroups(values[2].div_ceil(8), values[3].div_ceil(8), 1);
+                            #[cfg(test)]
+                            crate::test_support::PassCounts {composed_texels:u64::from(values[2])*u64::from(values[3]),..Default::default()}.record();
                         }
                         Job::Resample { size, .. } => {
                             pass.set_pipeline(&r.scene_pipelines.resample.area);

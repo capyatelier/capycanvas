@@ -9,6 +9,23 @@ is 4248 × 2832.
 - Geometry measurements use the 12 MP photo at Fit zoom. Older UI-only rows
   name their own canvas sizes.
 
+## Stroke patches at 100%
+
+Measured 2026-11-18 against `b8f470bb4`: benchmark APKs in ABBA order, candidate
+`a0770fba1`. Each row has six five-second strokes per build on the 12 MP photo
+under an empty paint layer, default workspace, factory density and thermal
+status 0.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Pencil 30 px, 100% | 131.79 → 156.24 | 13.60 → 9.92 | 131.59 → 155.84 | 13.60 → 10.60 |
+| G-Pen 30 px, 100% | 124.52 → 143.54 | 14.52 → 12.47 | 124.22 → 142.73 | 14.52 → 13.02 |
+| Paintbrush 60 px, 100% | 102.62 → 116.62 | 16.66 → 14.39 | 102.62 → 116.32 | 16.66 → 14.39 |
+| Pencil 1024 px, Fit | 25.21 → 25.43 | 56.08 → 55.42 | 25.21 → 25.43 | 56.08 → 55.42 |
+
+Both builds miss the 60 updates/s target at 1024 px; a stroke below 50% zoom is
+not patched.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified

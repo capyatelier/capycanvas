@@ -784,6 +784,9 @@ impl AcceptedInputs {
         }
         Ok(())
     }
+    pub(crate) fn sole_color(&self,target:SourceTarget,coordinate:[u32;2])->Option<&crate::resident::Input> {
+        match self.decisions().0.get(&(target,RasterPlane::Color,coordinate)) {Some((_,[Some(Selected::Resident(_,witness)),None]))=>Some(witness),_=>None}
+    }
     pub(crate) fn witnesses(&self,target:SourceTarget,plane:RasterPlane,coordinate:[u32;2])->Vec<crate::resident::Input> {
         self.decisions().0.get(&(target,plane,coordinate)).into_iter().flat_map(|(_,choices)|choices)
             .filter_map(|choice|match choice {Some(Selected::Resident(_,witness))=>Some(witness.clone()),_=>None}).collect()

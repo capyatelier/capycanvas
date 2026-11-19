@@ -369,12 +369,13 @@ impl WrittenCoverage {
     }
 }
 #[derive(Clone)]
-pub(super) struct Held {image:Arc<Image>,pin:Arc<crate::residency::RetentionPin>}
+pub(super) struct Held {image:Arc<Image>,pin:Arc<crate::residency::RetentionPin>,written_at:u64}
 impl std::ops::Deref for Held {type Target=Image;fn deref(&self)->&Image {&self.image}}
 impl Held {
     #[cfg(test)]
     pub(super) fn image(&self)->&Arc<Image> {&self.image}
     pub(super) fn track(self,encoder:&submission::CommandEncoder) {encoder.hold(self.pin);}
+    pub(super) fn stamp(&self)->(usize,u64) {(Arc::as_ptr(&self.image) as usize,self.written_at)}
 }
 struct Page {
     image: Arc<Image>,
@@ -399,7 +400,7 @@ impl Page {
         self.pin.upgrade().unwrap_or_else(|| {let pin=Arc::new(self.retention.pin(tier.charge(self.image.bytes())));self.pin=Arc::downgrade(&pin);pin})
     }
     fn set_optional(&mut self,optional:bool) {self.optional=optional;self.retention.set_optional(optional);}
-    fn hold(&mut self,tier:&Arc<crate::residency::Tier>)->Held {Held {image:self.image.clone(),pin:self.pin(tier)}}
+    fn hold(&mut self,tier:&Arc<crate::residency::Tier>)->Held {Held {image:self.image.clone(),pin:self.pin(tier),written_at:self.written_at}}
     fn pinned(&self)->bool {self.pin.strong_count()!=0}
     fn unwanted(&self)->bool {self.coverage.written.is_empty() && !self.pinned()}
     fn matches(&self,frame:Option<&SignatureFrame>,area:PixelRect,required_input_level:u32)->Option<bool> {
@@ -1358,6 +1359,9 @@ pub(super) struct Projection {
     versions:Vec<Recorded>,
 }
 struct Shown {recorded:Option<Recorded>,submission:submission::Submission,exact:bool,direct:bool}
+impl Shown {
+    fn unnamed(&self)->bool {self.recorded.is_none() && !self.submission.discarded()}
+}
 pub(super) struct Selection {pub(super) copies:Vec<(usize,Projection,bool)>,pub(super) composes:Vec<PixelRect>,pub(super) transition:bool,pub(super) waiting:bool}
 impl Selection {
     pub(super) fn complete(&self,served:PixelRect)->bool {
@@ -1848,6 +1852,13 @@ impl Cache {
         self.cells().is_some_and(|(cells,_,_)|coordinates(region,self.plan.level).all(|coordinate|
             cells.cells.get(Cells::index(self.plan,coordinate)).is_some_and(|cell|cell.shown.as_ref().is_some_and(|shown|shown.recorded.is_none()))))
     }
+    pub(super) fn unnamed_writes(&self,regions:&[PixelRect])->Vec<Option<submission::Submission>> {
+        let Some((cells,_store,_))=self.cells() else {return vec![None;regions.len()];};
+        regions.iter().map(|region|match Cells::reached(self.plan,*region)[..] {
+            [index]=>cells.cells[index].shown.as_ref().filter(|shown|shown.unnamed()).map(|shown|shown.submission.clone()),
+            _=>None,
+        }).collect()
+    }
     pub(super) fn contact_cells(&self)->Vec<PixelRect> {
         let Some((cells,_store,_))=self.cells() else {return Vec::new();};
         cells.cells.iter().zip(coordinates(self.plan.bounds,self.plan.level)).filter(|(cell,_)|cell.queued && !cell.derived)
@@ -1876,7 +1887,7 @@ impl Cache {
         let Some((mut cells,_store,template))=self.cells() else {return;};
         let (plan,input_level)=(self.plan,self.required_input_level());
         for (cell,coordinate) in cells.cells.iter_mut().zip(coordinates(plan.bounds,plan.level)) {
-            let Some(shown)=cell.shown.as_mut().filter(|shown|shown.recorded.is_none() && !shown.submission.discarded()) else {continue;};
+            let Some(shown)=cell.shown.as_mut().filter(|shown|shown.unnamed()) else {continue;};
             let region=bounds(coordinate,plan.level,plan.extent);
             shown.recorded=page_coordinates(region).all(|tile|!predicted.contains(&tile))
                 .then(||materialize(frame,&Key {coordinate,..template.clone()},region,input_level).ok()).flatten();

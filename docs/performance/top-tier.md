@@ -5,6 +5,22 @@
 Reference: Wacom MovinkPad Pro 14 (DTHA140) with a 1800 × 2880, 120 Hz OLED. The
 canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 
+## Stroke patches at 100%
+
+Measured 2026-11-18 against `b8f470bb4`: benchmark APKs in ABBA order, candidate
+`a0770fba1`. Each row has six five-second strokes per build on the 9504 × 6336
+photo under an empty paint layer, default workspace, factory density and
+thermal status 0.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Pencil 30 px, 100% | 341.40 → 360.06 | 6.99 → 6.18 | 190.79 → 192.21 | 11.81 → 11.05 |
+| G-Pen 30 px, 100% | 339.79 → 367.04 | 6.73 → 6.09 | 192.21 → 193.40 | 11.09 → 10.70 |
+| Paintbrush 60 px, 100% | 345.69 → 367.33 | 7.61 → 6.15 | 190.26 → 192.80 | 11.73 → 10.84 |
+| Pencil 2048 px, Fit | 152.20 → 151.65 | 18.37 → 16.34 | 148.55 → 148.66 | 18.37 → 17.47 |
+
+A stroke below 50% zoom is not patched.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified

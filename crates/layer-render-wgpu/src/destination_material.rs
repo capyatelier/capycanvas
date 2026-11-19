@@ -222,6 +222,7 @@ impl WgpuRasterizer {
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let wetness_ticket=wet_intent.as_ref().filter(|_|preview).map(|wet_intent|self.preview_material_version(batch,batch_index,RasterPlane::WatercolorWetness,job.coordinate,scene::PreviewPass::Wetness,wet_intent)).transpose()?;
             let receipt=encoder.submission();
+            let delta=self.color_delta(batch,false,job.coordinate,job.local);
             let layer=&mut self.paint_layers[layer_index];
             let (color_pages,coverage_pages,wetness_pages)=if preview {(&mut self.preview_pages,&mut self.preview_coverage_pages,&mut self.preview_watercolor_wetness_pages)}
                 else {(&mut layer.pages,&mut layer.coverage_pages,&mut layer.watercolor_wetness_pages)};
@@ -249,7 +250,7 @@ impl WgpuRasterizer {
             let entry=if wetness.is_some() {Entry::Watercolor}else if coverage.is_some() {Entry::Coverage}else {Entry::Color};
             let next_publications=[
                 Some(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket.clone(),input:intent.clone(),
-                    encoding:destination.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))}),
+                    encoding:destination.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone())).certified(delta)}),
                 coverage.map(|write|MaterialPublication {kind:MaterialOutputKind::Coverage,coordinate:job.coordinate,preview:coverage_ticket.clone(),input:intent,
                     encoding:write.encoded(coverage_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))}),
                 wetness.map(|write|MaterialPublication {kind:MaterialOutputKind::Wetness,coordinate:job.coordinate,preview:wetness_ticket.clone(),input:wet_intent.unwrap(),

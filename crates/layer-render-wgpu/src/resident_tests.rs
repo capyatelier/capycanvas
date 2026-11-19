@@ -393,3 +393,60 @@ fn an_unbacked_live_write_is_not_the_selected_missing_page_default() {
         assert_eq!(owner.version(key).matches(&selected),Some(true));
     }
 }
+
+fn area(at: u32) -> crate::pixel_rect::PixelRect { crate::pixel_rect::PixelRect::new(at, at, at + 4, at + 4) }
+
+fn certified(page: &mut Resident<u32>, submission: &Submission, delta: crate::resident::Delta) -> crate::resident::Input {
+    let name: layer_core::raster::ContentVersion = ContentName::fresh().into();
+    page.overwrite(submission).unwrap().encoded(name.clone()).certified(delta).publish(submission);
+    page.read(&name, Some(submission)).unwrap().input()
+}
+
+#[test]
+fn an_in_place_record_bounds_what_one_submission_changed() {
+    use crate::{pixel_rect::PixelRect, resident::Delta};
+    let opened = receipt(SubmissionState::Submitted);
+    let mut page = Resident::unwritten(0u32);
+    let earlier = certified(&mut page, &opened, Delta::Unknown);
+    assert_eq!(earlier.changed_since(&earlier), Some(PixelRect::EMPTY));
+    let frame = receipt(SubmissionState::Encoding);
+    let one = certified(&mut page, &frame, Delta::InPlace(area(4)));
+    assert_eq!(one.changed_since(&earlier), Some(area(4)));
+    assert!(one.live() && !earlier.live());
+    let two = certified(&mut page, &frame, Delta::InPlace(area(20)));
+    assert_eq!(two.changed_since(&earlier), Some(area(4).union(area(20))), "a second write in the submission widens the record");
+    assert_eq!(one.changed_since(&earlier), None, "a superseded witness reads no record");
+    let unknown = certified(&mut page, &frame, Delta::Unknown);
+    assert_eq!(unknown.changed_since(&earlier), None, "an uncertified write leaves nothing claimed");
+    frame.0.store(SubmissionState::Submitted as u8, Ordering::Release);
+    let next = receipt(SubmissionState::Encoding);
+    let later = certified(&mut page, &next, Delta::InPlace(area(40)));
+    assert_eq!(later.changed_since(&earlier), None, "two submissions since the earlier read are not one bounded change");
+    assert_eq!(later.changed_since(&unknown), Some(area(40)));
+    assert_eq!(later.changed_since(&certified(&mut Resident::unwritten(0u32), &opened, Delta::Unknown)), None);
+    next.0.store(SubmissionState::Discarded as u8, Ordering::Release);
+    assert_eq!(later.changed_since(&unknown), None, "a discarded write is not believed");
+    assert!(!later.live() && unknown.live());
+}
+
+#[test]
+fn a_seeded_record_names_its_source_weakly() {
+    use crate::resident::Delta;
+    let frame = || receipt(SubmissionState::Submitted);
+    let (mut first, mut second) = (Resident::unwritten(0u32), Resident::unwritten(0u32));
+    let source = certified(&mut first, &frame(), Delta::Unknown);
+    assert!(source.seed().is_none());
+    let copy = certified(&mut second, &frame(), Delta::seeded(&source, area(4)));
+    assert!(copy.seed().is_some_and(|(from, rect)| from.same(&source) && from.live() && rect == area(4)));
+    let back = certified(&mut first, &frame(), Delta::seeded(&copy, area(20)));
+    assert!(back.seed().is_some_and(|(from, rect)| from.same(&copy) && rect == area(20)));
+    assert!(copy.seed().is_some_and(|(from, rect)| from.same(&source) && !from.live() && rect == area(4)),
+        "a copy stays a copy of the version it read");
+    assert!(source.seed().is_none(), "a superseded version has no readable record");
+    let unknown = certified(&mut second, &frame(), Delta::Unknown);
+    assert!(unknown.seed().is_none() && copy.seed().is_none());
+    let copy = certified(&mut second, &frame(), Delta::seeded(&back, area(8)));
+    assert!(copy.seed().is_some());
+    drop((first, source, back));
+    assert!(copy.seed().is_none(), "two surfaces that seed each other keep neither alive");
+}

@@ -95,3 +95,39 @@ fn zooming_back_to_fit_presents_the_held_revision_for_cells_it_has_not_composed(
     }
     harness.settle();close(&harness.present(),&fit);
 }
+
+#[test]
+fn an_engine_driven_pencil_stroke_at_72_percent_over_painted_tiles_composes_patches_after_its_second_frame() {
+    let mut document=blank_document([1024,768]);
+    let layer=paint_occurrence(&mut document,"Wash",Some(rgba8_source([1024,768],|x,y|[(x/4) as u8,90,(y/3) as u8,140]).into()));
+    insert_occurrence(&mut document,layer,1);
+    let mut harness=Harness::new(document);
+    harness.engine.set_instant_feedback(InstantFeedbackConfig {enabled:true,..Default::default()}).unwrap();
+    harness.zoom(0.72);harness.settle();
+    let mut brush=layer_core::default_brush(layer_core::DefaultBrushPreset::Pencil);brush.diameter=9.;
+    harness.engine.set_brush(brush).unwrap();
+    let [a,b,c,d,x,y]=harness.engine.view().document_to_surface;
+    let cell=u64::from(PAGE_SIZE).pow(2);
+    for pass in 0..2u64 {
+        let mut texels=Vec::new();
+        for step in 0..30u64 {
+            let point=[40.+10.*step as f32,300.+0.3*step as f32+4.*pass as f32];
+            let phase=if step==0 {PenPhase::Down} else if step==29 {PenPhase::Up} else {PenPhase::Move};
+            let before=crate::test_support::PassCounts::snapshot();
+            harness.input.push(PenEvent {pressure:if phase==PenPhase::Up {0.}else {0.6},view_revision:harness.view_revision,
+                ..crate::test_support::pen(100_000*(pass+1)+step,phase,[a*point[0]+c*point[1]+x,b*point[0]+d*point[1]+y],SampleFlags::PRIMARY)}).unwrap();
+            let submitted=harness.engine.backend().submitted_updates();
+            let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+            while harness.engine.backend().submitted_updates()==submitted {
+                prepare_engine_frame(&mut harness.engine);harness.engine.render_frame().unwrap();
+                assert!(std::time::Instant::now()<deadline,"pen event {step} was not submitted");
+            }
+            texels.push(crate::test_support::PassCounts::snapshot().delta(before).composed_texels);
+        }
+        harness.settle();
+        if pass==0 {continue;}
+        let whole=texels[2..].iter().filter(|texels|**texels>=cell).count();
+        assert!(whole<=2,"only a newly entered cell is composed whole after the second frame: {texels:?}");
+        assert!(texels[2..].iter().all(|texels|*texels>=cell || *texels<cell/64),"every other frame composes a small patch: {texels:?}");
+    }
+}

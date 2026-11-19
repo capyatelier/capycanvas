@@ -30,6 +30,15 @@ impl WgpuRasterizer {
         Ok(())
     }
 
+    pub(super) fn color_delta(&self,batch:&DabBatch,in_place:bool,coordinate:[u32;2],local:PixelRect)->resident::Delta {
+        if in_place {return resident::Delta::InPlace(local);}
+        let style=&batch.style;
+        if self.compact_preview_contribution(batch) || self.dry_material_block(batch)!=1 || stable_blender(style) || style.execution.retouches()
+            || !(pointwise(style) || destination_material::transported(style)) {return resident::Delta::Unknown;}
+        self.brush_inputs.as_ref().and_then(|inputs|inputs.sole_color(batch.target,coordinate))
+            .map_or(resident::Delta::Unknown,|source|resident::Delta::seeded(source,local))
+    }
+
     pub(super) fn encode_material_batch(
         &mut self,
         encoder: &mut crate::submission::CommandEncoder,
@@ -138,6 +147,7 @@ impl WgpuRasterizer {
                 self.material_source_binding(batch,batch_index, job.coordinate, context.target, &intent, display_slot, encoder)?
             };
             let receipt=encoder.submission();
+            let delta=self.color_delta(batch,in_place,job.coordinate,job.local);
             let color_ticket=preview.then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Color,&intent)).transpose()?;
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let pipelines=&self.pipelines.dry_material;
@@ -163,7 +173,7 @@ impl WgpuRasterizer {
             });
             write.value().preview.set(None);
             publications.push(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:job.coordinate,preview:color_ticket.clone(),input:intent.clone(),
-                encoding:write.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))});
+                encoding:write.encoded(color_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone())).certified(delta)});
             if let Some(coverage)=coverage {publications.push(MaterialPublication {kind:MaterialOutputKind::Coverage,coordinate:job.coordinate,preview:coverage_ticket.clone(),
                 input:intent,encoding:coverage.encoded(coverage_ticket.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|ticket|ticket.version().clone()))});}
             compute_jobs.push(dry_material::Job {output,source:source_bind_group,display,coordinate:job.coordinate,

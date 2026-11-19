@@ -29,6 +29,32 @@ pub(super) struct Contact {
     submissions:Vec<submission::Submission>,
     stamps:Arc<PreviewStamps>,
     reduced:BTreeSet<[u32;2]>,
+    baselines:BTreeMap<[u32;2],Baseline>,
+}
+
+type Description=(crate::resident::Input,PixelRect);
+struct Baseline {submission:submission::Submission,descriptions:Vec<Description>,reads:Vec<(usize,u64)>}
+fn descriptions(witness:&crate::resident::Input)->Vec<Description> {
+    let mut known=vec![(witness.clone(),PixelRect::EMPTY)];
+    while known.len()<3 && let Some((page,outside))=known.last() && let Some((from,rect))=page.seed() {known.push((from,outside.union(rect)));}
+    known
+}
+fn changed_since(now:&[Description],before:&[Description])->Option<PixelRect> {
+    now.iter().find_map(|(page,rect)|before.iter().find_map(|(earlier,outside)|Some(page.changed_since(earlier)?.union(*rect).union(*outside))))
+}
+fn whole_cell_composes(jobs:&[crate::scene::Job],region:PixelRect)->bool {
+    jobs.iter().all(|job|match job {
+        crate::scene::Job::Compose {values,..}=>[values[2],values[3]]==[region.width(),region.height()],
+        crate::scene::Job::DecodedTile(_)=>true,
+        _=>false,
+    })
+}
+fn crop(jobs:&mut [crate::scene::Job],region:PixelRect,rect:PixelRect) {
+    for job in jobs {
+        if let crate::scene::Job::Compose {values,..}=job {
+            values[0]+=rect.min_x()-region.min_x();values[1]+=rect.min_y()-region.min_y();values[2]=rect.width();values[3]=rect.height();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -211,7 +237,7 @@ impl Cache {
         self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
             previewed,next:None,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced});
+            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new()});
         Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
@@ -383,12 +409,15 @@ impl Cache {
     pub(super) fn compose_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,
         composes:Vec<PixelRect>,retained:u64,
     )->Result<(Vec<PixelRect>,Vec<PixelRect>),GpuRasterError> {
+        let drawn=self.unnamed_writes(&composes);
         let contact=self.gesture.as_mut().expect("live contact");
         let (root,tiled,target)=(contact.root.clone(),contact.tiled,contact.target);
+        let reads_tile=tiled && contact.plan.level==0 && contact.level.is_none() && contact.guard.watercolor.is_none();
         let reduced=contact.reduced_tiles(source_phase(scene,target),std::iter::empty());
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
+        let mut baselines=std::mem::take(&mut contact.baselines);
         let mut reductions=Vec::new();
         if let Some(level)=contact.level {
             let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));
@@ -409,9 +438,11 @@ impl Cache {
             if !reductions.is_empty() {reads.updates.push((target,reductions.len()));}
             if !reads.ready(scene,r,encoder,start,Class::Visible)? {return Err(GpuRasterError::NotReady);}
             let input=input_plan(self.plan,packet.scene,Some(self.graph.objects()));
-            let mut units=vec![reads];let mut composed=Vec::new();let mut blocked=Vec::new();
-            for region in composes {
+            let mut units=vec![reads];let mut composed=Vec::new();let mut blocked=Vec::new();let mut fresh=Vec::new();
+            for (region,drawn) in composes.into_iter().zip(drawn) {
                 let start=scene.jobs.len();let mut unit=Unit::default();
+                let tile=[region.min_x()/PAGE_SIZE,region.min_y()/PAGE_SIZE];
+                let before=baselines.remove(&tile);
                 let result=(|| {
                     let (_,declared)=cells.iter().find(|(cell,_)|*cell==region).ok_or(GpuRasterError::Invariant("a contact cell has no declared inputs"))?;
                     let mut accepted=declared.accept_query(r,Some(scene))?;
@@ -425,18 +456,30 @@ impl Cache {
                     Ok(())
                 })();
                 match result {
-                    Ok(())=>{unit.work=scene.planned_work(start);units.push(unit);composed.push(region);},
+                    Ok(())=>{
+                        let now=(reads_tile && unit.pages.is_empty() && whole_cell_composes(&scene.jobs[start..],region))
+                            .then(||unit.sources.sole_color(target,tile).filter(|witness|witness.live())).flatten()
+                            .map(|witness|(descriptions(witness),unit.reads.iter().map(pages::Held::stamp).collect::<Vec<_>>()));
+                        let rect=now.as_ref().zip(before)
+                            .filter(|((_,reads),before)|drawn.as_ref().is_some_and(|shown|shown.same(&before.submission)) && *reads==before.reads)
+                            .and_then(|((now,_),before)|changed_since(now,&before.descriptions))
+                            .map(|changed|changed.translated([region.min_x(),region.min_y()]).intersect(region)).filter(|rect|!rect.is_empty());
+                        if let Some(rect)=rect {crop(&mut scene.jobs[start..],region,rect);}
+                        if let Some((descriptions,reads))=now {fresh.push((tile,descriptions,reads));}
+                        unit.work=scene.planned_work(start);units.push(unit);composed.push(rect.unwrap_or(region));
+                    },
                     Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
                     Err(error)=>return Err(error),
                 }
             }
             self.encode_units(scene,r,encoder,units)?;
-            Ok((composed,blocked))
+            Ok((composed,blocked,fresh))
         })();
         let contact=self.gesture.as_mut().expect("live contact");
-        contact.inputs=inputs;contact.cells=cells;contact.stale=stale;
-        if result.is_err() {scene.discard_jobs_from(start);return result;}
+        contact.inputs=inputs;contact.cells=cells;contact.stale=stale;contact.baselines=baselines;
+        let (composed,blocked,fresh)=match result {Ok(done)=>done,Err(error)=>{scene.discard_jobs_from(start);return Err(error);}};
         let submission=encoder.submission();
+        contact.baselines.extend(fresh.into_iter().map(|(tile,descriptions,reads)|(tile,Baseline {submission:submission.clone(),descriptions,reads})));
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
         {
             let mut store=self.pages.lock().unwrap();
@@ -446,7 +489,7 @@ impl Cache {
             }
         }
         contact.submissions.push(submission);
-        result
+        Ok((composed,blocked))
     }
     pub(super) fn end_contact(&mut self,encoder:&mut submission::CommandEncoder) {
         let Some(contact)=self.gesture.take() else {return;};

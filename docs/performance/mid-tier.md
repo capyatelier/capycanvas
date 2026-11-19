@@ -25,6 +25,26 @@ canvas is 6000 × 4000.
   Kamvas Pad 12: a MediaTek MT8391 with the same Mali-G57 MC2 GPU and a 90 Hz
   panel. Use them only until the MovinkPad 11 is measured.
 
+## Stroke patches at 100%
+
+Measured 2026-11-18 against `b8f470bb4`: benchmark APKs in ABBA order, candidate
+`a0770fba1`, panel at 90 Hz. Each row has six five-second strokes per build
+(Pencil 30 px: twelve) on the tier's 24 MP photo under an empty paint layer,
+default workspace, factory density and thermal status 0.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms |
+| --- | ---: | ---: | ---: | ---: |
+| Pencil 30 px, 100% | 276.47 → 295.65 | 5.86 → 5.14 | 195.48 → 195.80 | 9.37 → 8.54 |
+| G-Pen 30 px, 100% | 274.04 → 272.08 | 6.20 → 5.71 | 195.08 → 195.04 | 9.61 → 9.13 |
+| Paintbrush 60 px, 100% | 222.50 → 241.54 | 7.50 → 6.37 | 191.33 → 195.38 | 10.06 → 9.94 |
+| Pencil 1536 px, Fit | 29.75 → 29.94 | 45.97 → 44.76 | 29.75 → 29.94 | 45.97 → 44.76 |
+
+On both builds some strokes, mostly the first of a launch, complete about 16%
+fewer updates: about 233 against 277 updates/s on control and 249 against 297
+on the candidate. Three of the six candidate G-Pen strokes are among them. Both
+builds miss the 90 updates/s target at 1536 px; a stroke below 50% zoom is not
+patched.
+
 ## Stored image-source format comparison
 
 Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK

@@ -1141,3 +1141,246 @@ fn a_stroke_started_while_the_last_one_composes_begins_in_contact_and_commits_on
     assert!(r.scale_display.as_ref().unwrap().gesture.is_some(),"the new stroke begins in contact: {counts:?}");
     assert!(counts.composite_commits<=own as u64,"the new stroke's first frame commits {} cells; its dabs reach {own}: {counts:?}",counts.composite_commits);
 }
+
+fn pen_dab(x:f32,style:&layer_render::DabStyle)->layer_render::Dab {
+    let mut dab=material_dab(x,300.,style);dab.radii=[4.5;2];dab.previous=[4.5,4.5,1.,0.];dab.motion=[3.,0.];dab
+}
+fn stroked_over_a_layer(extent:[u32;2],painted:bool)->layer_core::Document {
+    let mut doc=document_at(extent);
+    let paint=primary_paint(&doc);
+    doc.artwork.paint.get_mut(paint).unwrap().base=painted.then(||layer_core::authored::PaintBase::new(rgba8_source(extent,|x,y|[(x/3) as u8,(y/2) as u8,80,((x*7+y*13)%256) as u8]).into()));
+    let below=paint_occurrence(&mut doc,"Below",Some(rgba8_source(extent,|x,y|[(x/3) as u8,(y/2) as u8,140,255])));
+    let working=doc.scene().position(doc.working.occurrence.unwrap()).unwrap();
+    insert_occurrence(&mut doc,below,working+1);
+    doc
+}
+const STROKE:[(f32,f32);12]=[(480.,486.),(486.,492.),(492.,498.),(498.,504.),(504.,510.),(510.,516.),(516.,522.),(522.,516.),(522.,510.),(522.,510.),(522.,510.),(528.,534.)];
+fn stroke_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,style:&layer_render::DabStyle,dabs:&[layer_render::Dab],inked:bool,step:usize)->crate::test_support::PassCounts {
+    let batches=dabs.iter().enumerate().map(|(index,dab)|layer_render::DabBatch {
+        kind:if inked && index==0 {layer_render::DabBatchKind::Persistent}else {layer_render::DabBatchKind::Preview},
+        stroke_id:layer_core::StrokeId(1),first_dab:index as u32,stroke_start:inked && step==0 && index==0,stroke_end:false,
+        ..crate::test_support::dab_batch(target,style.clone(),dab.bounds())}).collect::<Vec<_>>();
+    let counts=crate::test_support::PassCounts::snapshot();
+    crate::test_support::submit_ready(r,FramePacket {dabs,dab_batches:&batches,time_seconds:0.1*(step+1) as f32,..frame}).unwrap();
+    crate::test_support::PassCounts::snapshot().delta(counts)
+}
+fn bits(r:&WgpuRasterizer)->Vec<[u32;4]> {display_pixels(r).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect()}
+fn redraw_whole(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,style:&layer_render::DabStyle,tips:&[layer_render::Dab],cells:&[PixelRect],step:usize)->u64 {
+    let cache=r.scale_display.as_ref().unwrap();
+    for cell in cells {cache.evict_window(*cell);}
+    stroke_frame(r,frame,target,style,tips,false,step).composed_texels
+}
+struct Stroked<'a> {label:&'a str,doc:&'a layer_core::Document,style:layer_render::DabStyle,tips:usize,in_place:bool}
+impl<'a> Stroked<'a> {
+    fn new(label:&'a str,doc:&'a layer_core::Document,preset:DefaultBrushPreset,tips:usize)->Self {
+        Self {label,doc,style:crate::layer_tests::preset_style(preset),tips,in_place:true}
+    }
+    fn started(&self)->(WgpuRasterizer,FramePacket<'a>,SourceTarget) {
+        let extent=self.doc.composition().size;
+        let mut frame=packet(self.doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+        let mut r=renderer(self.doc);
+        if !self.in_place {crate::test_support::write_only_dry_material(&mut r);}
+        crate::test_support::submit_settled(&mut r,frame);
+        (r,frame,self.doc.active_target().unwrap())
+    }
+    fn dabs(&self,(ink,tip):(f32,f32))->[layer_render::Dab;3] {[pen_dab(ink,&self.style),pen_dab(tip,&self.style),pen_dab(tip+9.,&self.style)]}
+    fn patched_and_whole_texels(&self,mut before:impl FnMut(usize,&mut WgpuRasterizer))->Vec<[u64;2]> {
+        let Self {label,style,tips,..}=self;
+        let (mut r,frame,target)=self.started();
+        let mut sequence=None;
+        STROKE.into_iter().enumerate().map(|(step,at)| {
+            before(step,&mut r);
+            let dabs=self.dabs(at);
+            let patched=stroke_frame(&mut r,frame,target,style,&dabs[..=*tips],true,step).composed_texels;
+            let shown=bits(&r);
+            let plan=r.scale_display.as_ref().unwrap().plan;
+            let cells=r.metrics.frame_composited_pages.iter().map(|(_,coordinate)|pages::bounds(*coordinate,plan.level,plan.extent)).collect::<Vec<_>>();
+            let whole=redraw_whole(&mut r,frame,target,style,&dabs[1..=*tips],&cells,step);
+            let held=r.scale_display.as_ref().unwrap().contact_id();
+            assert!(held.is_some() && (step==0 || held==sequence),"{label} frame {step}: the renderer keeps its stroke sequence");
+            sequence=held;
+            assert!(step==0 || bits(&r)==shown,"{label} frame {step}: a patched frame differs from a whole redraw of the same cells");
+            [patched,whole]
+        }).skip(1).collect()
+    }
+}
+fn sums(texels:&[[u64;2]])->[u64;2] {[0,1].map(|renderer|texels.iter().map(|frame|frame[renderer]).sum())}
+
+fn tile_read(r:&WgpuRasterizer,target:SourceTarget,tile:[u32;2],preview:bool)->(crate::resident::Input,Vec<[u32;4]>) {
+    let pages=if preview {&r.preview_pages}else {&r.paint_layers.iter().find(|layer|layer.id==target).unwrap().pages};
+    let read=r.read_color_page(target,pages.iter().find(|page|page.coordinate==tile).unwrap(),preview,None).unwrap();
+    (read.input(),crate::test_support::float_pixels(r,&read.value().texture).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect())
+}
+fn differing_outside(rect:PixelRect,now:&[[u32;4]],then:&[[u32;4]])->usize {
+    (0..PAGE_SIZE*PAGE_SIZE).filter(|index| {
+        let [x,y]=[index%PAGE_SIZE,index/PAGE_SIZE];
+        !(rect.min_x()..rect.max_x()).contains(&x) || !(rect.min_y()..rect.max_y()).contains(&y)
+    }).filter(|index|now[*index as usize]!=then[*index as usize]).count()
+}
+
+#[test]
+fn each_page_record_bounds_what_its_stroke_frame_wrote() {
+    use DefaultBrushPreset::*;
+    let extent=[768,512];let doc=stroked_over_a_layer(extent,true);let target=doc.active_target().unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let quarter=u64::from(PAGE_SIZE).pow(2)/4;
+    let style=crate::layer_tests::preset_style;
+    let locked=layer_render::DabStyle {alpha_locked:true,..style(Pencil)};
+    for (label,style,in_place,tips) in [("a Pencil",style(Pencil),true,1),("an alpha-locked Pencil",locked,true,1),("an ink pen",style(GPen),true,1),
+        ("an eraser",style(Eraser),true,1),("a paintbrush",style(Paintbrush),true,1),("a multiply glaze",style(MultiplyGlaze),true,1),
+        ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0)] {
+        let mut r=renderer(&doc);
+        if !in_place {crate::test_support::write_only_dry_material(&mut r);}
+        crate::test_support::submit_settled(&mut r,frame);
+        let dabs=|step:usize|[pen_dab(300.+3.*step as f32,&style),pen_dab(303.+3.*step as f32,&style)];
+        for step in 0..2 {stroke_frame(&mut r,frame,target,&style,&dabs(step)[..=tips],true,step);}
+        let (before,then)=tile_read(&r,target,[1,1],false);
+        stroke_frame(&mut r,frame,target,&style,&dabs(2)[..=tips],true,2);
+        let (written,now)=tile_read(&r,target,[1,1],false);
+        let rect=written.changed_since(&before).unwrap_or_else(|| {
+            let (from,rect)=written.seed().unwrap_or_else(||panic!("{label}: the stroke's write is recorded"));
+            assert!(from.same(&before),"{label}: the page is recorded as a copy of the version before the frame");rect
+        });
+        assert!(!rect.is_empty() && rect.area()<quarter,"{label}: the record names a small rectangle: {rect:?}");
+        assert_eq!(differing_outside(rect,&now,&then),0,"{label}: the page changed outside its recorded rectangle {rect:?}");
+        if tips==0 {continue;}
+        let (tip,shown)=tile_read(&r,target,[1,1],true);
+        let (from,rect)=tip.seed().unwrap_or_else(||panic!("{label}: the tip's write is recorded"));
+        assert!(from.same(&written) && rect.area()<quarter,"{label}: the tip is recorded as a copy of the page it was drawn over: {rect:?}");
+        assert_eq!(differing_outside(rect,&shown,&now),0,"{label}: the tip differs from the page outside its recorded rectangle {rect:?}");
+    }
+}
+
+fn patches_bit_for_bit<'a>(strokes:impl IntoIterator<Item=Stroked<'a>>) {
+    for stroked in strokes {
+        let texels=sums(&stroked.patched_and_whole_texels(|_,_|{}));
+        assert!(texels[0]<texels[1],"{}: the patched renderer composes less than the whole one: {texels:?}",stroked.label);
+    }
+}
+fn stays_whole<'a>(strokes:impl IntoIterator<Item=Stroked<'a>>) {
+    for stroked in strokes {
+        let texels=stroked.patched_and_whole_texels(|_,_|{});
+        assert!(texels.iter().all(|[patched,whole]|patched==whole),"{}: every cell is composed whole: {texels:?}",stroked.label);
+    }
+}
+
+#[test]
+fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_record() {
+    use DefaultBrushPreset::*;
+    let painted=stroked_over_a_layer([768,512],true);let unpainted=stroked_over_a_layer([768,512],false);
+    patches_bit_for_bit([
+        Stroked::new("a page written in place under a tip",&painted,Pencil,1),
+        Stroked {in_place:false,..Stroked::new("a page copied to its other surface under a tip",&painted,Pencil,1)},
+        Stroked::new("a page transported without a tip",&painted,Smudge,0),
+        Stroked::new("a page that first exists mid-stroke",&unpainted,Pencil,1),
+    ]);
+}
+
+#[test]
+fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
+    use DefaultBrushPreset::Pencil;
+    let painted=stroked_over_a_layer([768,512],true);let partial=stroked_over_a_layer([540,500],true);
+    let working=|doc:&layer_core::Document|doc.working.occurrence.unwrap();
+    let mut float=painted.clone();composition_mut(&mut float).color.depth=SampleDepth::F32;
+    let mut covered=painted.clone();
+    let above=paint_occurrence(&mut covered,"Above",Some(rgba8_source([768,512],|x,y|[200,(x/4) as u8,(y/3) as u8,((x+y)%200) as u8])));
+    let position=covered.scene().position(working(&covered)).unwrap();
+    insert_occurrence(&mut covered,above,position);
+    let mut clipped=painted.clone();
+    let owner=working(&clipped);set_attachment(clipped.artwork.occurrences.get_mut(owner).unwrap(),true);reindex(&mut clipped);
+    let mut faded=painted.clone();
+    let owner=working(&faded);
+    let occurrence=faded.artwork.occurrences.get_mut(owner).unwrap();occurrence.opacity=0.6;occurrence.blend=layer_core::LayerBlend::Multiply;
+    reindex(&mut faded);
+    patches_bit_for_bit([
+        Stroked::new("partial cells at the drawing's edge",&partial,Pencil,1),Stroked::new("a float drawing",&float,Pencil,1),
+        Stroked::new("a layer above",&covered,Pencil,1),Stroked::new("a clipped layer",&clipped,Pencil,1),
+        Stroked::new("a faded multiply layer",&faded,Pencil,1),
+    ]);
+}
+
+#[test]
+fn a_write_without_a_usable_record_composes_whole_cells_and_the_same_pixels() {
+    use DefaultBrushPreset::*;
+    let plain=stroked_over_a_layer([768,512],true);
+    stays_whole([Stroked::new("a Dither blender",&plain,DitherBlender,0),Stroked::new("a smudge tip",&plain,Smudge,1),Stroked::new("two tips",&plain,Pencil,2)]);
+}
+
+#[test]
+fn a_cell_drawn_by_more_than_whole_cell_draws_composes_whole_cells_and_the_same_pixels() {
+    use DefaultBrushPreset::Pencil;
+    let plain=stroked_over_a_layer([768,512],true);
+    let working=|doc:&layer_core::Document|doc.working.occurrence.unwrap();
+    let mut offset=plain.clone();
+    let owner=working(&offset);offset.artwork.occurrences.get_mut(owner).unwrap().offset=[3,5];
+    let mut masked=plain.clone();
+    let owner=working(&masked);
+    coverage_mask(&mut masked,owner,[0,0],Some(layer_core::Selection::polygon(vec![
+        layer_core::Point {x:100.,y:100.},layer_core::Point {x:700.,y:120.},layer_core::Point {x:680.,y:480.},layer_core::Point {x:120.,y:460.}]).unwrap()));
+    let above=|name:&str| {
+        let mut doc=plain.clone();
+        let effect=effect_occurrence(&mut doc,layer_core::EffectInstance::new(crate::tests::fixture(name).program()),name);
+        insert_occurrence(&mut doc,effect,0);doc
+    };
+    let [blurred,inverted]=["gaussian_blur","invert"].map(above);
+    stays_whole([Stroked::new("an offset layer",&offset,Pencil,1),Stroked::new("a masked layer",&masked,Pencil,1),
+        Stroked::new("a blur above",&blurred,Pencil,1),Stroked::new("an adjustment above",&inverted,Pencil,1)]);
+}
+
+#[test]
+fn a_cell_whose_cached_inputs_were_rebuilt_or_whose_record_was_dropped_is_composed_whole_once() {
+    let doc=stroked_over_a_layer([768,512],true);
+    let cell=PixelRect::new(256,256,512,512);
+    let stroked=Stroked::new("a Pencil",&doc,DefaultBrushPreset::Pencil,1);
+    let plain=stroked.patched_and_whole_texels(|_,_|{});
+    assert!(plain[1][0]<plain[1][1],"the third frame patches when nothing is lost: {plain:?}");
+    let rebuilt=stroked.patched_and_whole_texels(|step,r|if step==2 {evict_composite_pages(r.scale_display.as_ref().unwrap(),&[cell]);});
+    assert_eq!(rebuilt[1][0],rebuilt[1][1],"a cell whose cached inputs were rebuilt composes whole: {rebuilt:?}");
+    assert!(rebuilt[2][0]<rebuilt[2][1],"the cell patches again from its new baseline: {rebuilt:?}");
+    let dropped=stroked.patched_and_whole_texels(|step,r|if step==2 {r.scale_display.as_ref().unwrap().evict_window(cell);});
+    assert_eq!(dropped[1][0],dropped[1][1],"a cell without its record composes whole: {dropped:?}");
+    assert!(dropped[2][0]<dropped[2][1],"the cell patches again from its new baseline: {dropped:?}");
+}
+
+#[test]
+fn a_chain_of_patched_frames_ends_equal_to_a_whole_redraw_of_every_cell_the_sequence_drew() {
+    let doc=stroked_over_a_layer([768,512],true);
+    for in_place in [true,false] {
+        let stroked=Stroked {in_place,..Stroked::new("a Pencil",&doc,DefaultBrushPreset::Pencil,1)};
+        let (mut r,frame,target)=stroked.started();
+        let (mut texels,mut cells)=(Vec::new(),BTreeSet::new());
+        for (step,at) in STROKE.into_iter().enumerate() {
+            texels.push(stroke_frame(&mut r,frame,target,&stroked.style,&stroked.dabs(at)[..=1],true,step).composed_texels);
+            if step>0 {cells.extend(r.metrics.frame_composited_pages.iter().map(|(_,coordinate)|*coordinate));}
+        }
+        let shown=bits(&r);
+        let plan=r.scale_display.as_ref().unwrap().plan;
+        let cells=cells.into_iter().map(|coordinate|pages::bounds(coordinate,plan.level,plan.extent)).collect::<Vec<_>>();
+        let whole=redraw_whole(&mut r,frame,target,&stroked.style,&stroked.dabs(STROKE[11])[1..=1],&cells,12);
+        assert!(r.scale_display.as_ref().unwrap().contact_id().is_some() && texels[2..].iter().filter(|texels|**texels<whole/8).count()>=6,"in place {in_place}: the stroke stays one sequence and patches: {texels:?} against {whole}");
+        let after=bits(&r);
+        let differing=shown.iter().zip(&after).enumerate().filter(|(_,(a,b))|a!=b).map(|(index,_)|[index as u32%768,index as u32/768]).collect::<Vec<_>>();
+        assert!(differing.is_empty(),"in place {in_place}: a chain of patched frames differs from a whole redraw at {} pixels, from {:?} to {:?}, cells {cells:?}",differing.len(),differing.first(),differing.last());
+    }
+}
+
+#[test]
+fn a_stroke_inside_one_cell_composes_whole_cells_twice_and_then_only_its_patch() {
+    let extent=[768,512];let doc=stroked_over_a_layer(extent,true);let target=doc.active_target().unwrap();
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let cell=u64::from(PAGE_SIZE).pow(2);
+    for (preset,tips) in [(DefaultBrushPreset::Pencil,1),(DefaultBrushPreset::GPen,1),(DefaultBrushPreset::Smudge,0)] {
+        let style=crate::layer_tests::preset_style(preset);
+        let mut r=renderer(&doc);
+        crate::test_support::submit_settled(&mut r,frame);
+        let mut whole=0;
+        for step in 0..8 {
+            let x=300.+3.*step as f32;let dabs=[pen_dab(x,&style),pen_dab(x+3.,&style)];
+            let texels=stroke_frame(&mut r,frame,target,&style,&dabs[..=tips],true,step).composed_texels;
+            if step==0 {whole=texels;assert!(whole>=cell && whole%cell==0,"{preset:?} with {tips} tips: the first frame composes whole cells: {texels}");continue;}
+            if step==1 {assert_eq!(texels,whole,"{preset:?} with {tips} tips: the second frame composes whole cells");continue;}
+            let reach=[pen_dab(x-3.,&style),dabs[0],dabs[1]].iter().map(|dab|crate::pixel_rect::pixel_rect(dab.bounds(),extent)).reduce(PixelRect::union).unwrap();
+            assert!(texels<=whole/cell*reach.area(),"{preset:?} with {tips} tips, frame {step}: {texels} texels composed for a {reach:?} patch");
+        }
+    }
+}
