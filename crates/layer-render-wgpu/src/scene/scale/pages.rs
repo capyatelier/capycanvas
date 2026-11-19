@@ -1731,6 +1731,8 @@ impl Cache {
             encoder.copy_texture_to_texture(wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x,y,z:0},..window.texture.as_image_copy()},
                 wgpu::TexelCopyTextureInfo {origin:wgpu::Origin3d {x:px,y:py,z:0},..image.texture.as_image_copy()},wgpu::Extent3d {width,height,depth_or_array_layers:1});
             image.track(encoder);
+            #[cfg(test)]
+            crate::test_support::PassCounts {written_back:1,..Default::default()}.record();
             let write=Write {key:recorded.key.clone(),region:recorded.region,accuracy:if shown.exact {Accuracy::Exact}else {Accuracy::Display},accepted:Some(Accepted {frame:frame.clone(),recorded:recorded.clone()})};
             store.commit(write,0,encoder);
             shown.direct=false;

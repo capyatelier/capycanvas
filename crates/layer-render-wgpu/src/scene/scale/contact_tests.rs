@@ -339,48 +339,59 @@ fn a_frame_whose_commit_is_discarded_keeps_presenting_the_last_committed_root() 
 }
 
 #[test]
-fn after_pen_up_every_written_back_page_equals_a_keyed_composition_of_the_same_state() {
+fn a_zoom_after_pen_up_writes_back_pages_equal_to_a_keyed_composition_of_the_same_state() {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);
-    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
-    frame.view.width_px=extent[0];frame.view.height_px=extent[1];frame.view.document_to_surface=[1.,0.,0.,1.,0.,0.];
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
-    crate::test_support::submit_settled(&mut r,frame);
-    let xs=[300.,360.,420.,480.];let mut touched=PixelRect::EMPTY;
-    for (step,x) in xs.into_iter().enumerate() {
-        let dab=stroke_dab(x,300.);let batch=stroke_batch(target,&dab,step==0,step+1==xs.len());
-        touched=touched.union(crate::pixel_rect::pixel_rect(dab.bounds(),extent));
-        crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
-    }
-    crate::test_support::submit_ready(&mut r,frame).unwrap();
-    crate::test_support::complete(&r);
-    let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;let root=cache.graph.root.clone().unwrap();
-    let retained=cache.pages.lock().unwrap().retained_pages();
-    let mut written=Vec::new();
-    for coordinate in pages::coordinates(touched.intersect(plan.bounds),plan.level) {
-        let region=pages::bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);
-        let key=cache.page_key(root.clone(),region);
-        let page=retained.iter().find(|page|page.key==key && !page.written.is_empty());
-        assert!(page.is_some(),"the composed cell over {region:?} is written back to the Store at pen-up");
-        let page_plan=key.plan();
-        written.push((region,page_plan,pixels(&r,&page.unwrap().texture)));
-    }
-    let cache=r.scale_display.as_ref().unwrap();
-    cache.evict_window(plan.bounds);evict_composite_pages(cache,&[plan.bounds]);
-    crate::test_support::submit_published(&mut r,frame);
-    let window=display_pixels(&r);let plan=r.scale_display.as_ref().unwrap().plan;
-    for (region,page_plan,page) in written {
-        let [x,y,width,height]=paint_transform::texel_rect(region.window_local(plan.bounds),1<<plan.level);
-        let [px,py,_,_]=paint_transform::texel_rect(region.window_local(page_plan.bounds),1<<plan.level);
-        for row in 0..height {
-            let from=((py+row)*page_plan.size[0]+px) as usize;let to=((y+row)*plan.size[0]+x) as usize;
-            let error=max_error(&page[from..from+width as usize],&window[to..to+width as usize]);
-            assert!(error<1e-5,"the written-back page over {region:?} differs from a keyed composition by {error}");
+    let whole=layer_render::ViewState {width_px:extent[0],height_px:extent[1],document_to_surface:[1.,0.,0.,1.,0.,0.]};
+    let quarter=layer_render::ViewState {width_px:extent[0]/4,height_px:extent[1]/4,document_to_surface:[0.25,0.,0.,0.25,0.,0.]};
+    let part=layer_render::ViewState {width_px:512,height_px:512,document_to_surface:[1.,0.,0.,1.,-256.,-256.]};
+    for (label,view,zoomed) in [("a window over the whole drawing",whole,quarter),("a window over part of the drawing, zoomed to its overview",part,quarter)] {
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view;
+        let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        crate::test_support::submit_settled(&mut r,frame);
+        let xs=[300.,360.,420.,480.];let mut touched=PixelRect::EMPTY;
+        for (step,x) in xs.into_iter().enumerate() {
+            let dab=stroke_dab(x,384.);let batch=stroke_batch(target,&dab,step==0,step+1==xs.len());
+            touched=touched.union(crate::pixel_rect::pixel_rect(dab.bounds(),extent));
+            crate::test_support::submit_ready(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.01*(step+1) as f32,..frame}).unwrap();
+        }
+        crate::test_support::submit_ready(&mut r,frame).unwrap();
+        crate::test_support::complete(&r);
+        let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;let root=cache.graph.root.clone().unwrap();
+        let keys=pages::coordinates(touched.intersect(plan.bounds),plan.level).map(|coordinate| {
+            let region=pages::bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);(region,cache.page_key(root.clone(),region))
+        }).filter(|(region,key)|*region==key.plan().bounds).collect::<Vec<_>>();
+        assert!(keys.len()>=2,"{label}: the stroke covers whole cells of the window");
+        let before=crate::test_support::PassCounts::snapshot();
+        crate::test_support::submit_ready(&mut r,FramePacket {view:zoomed,..frame}).unwrap();
+        crate::test_support::complete(&r);
+        assert!(crate::test_support::PassCounts::snapshot().delta(before).written_back>=keys.len() as u64,"{label}: the zoom copies each stroked cell into the Store");
+        assert!(r.scale_display.as_ref().unwrap().retired.is_none(),"{label}: the displaced window is released once its cells are copied");
+        let retained=r.scale_display.as_ref().unwrap().pages.lock().unwrap().retained_pages();
+        let mut written=Vec::new();
+        for (region,key) in keys {
+            let page=retained.iter().find(|page|page.key==key && !page.written.is_empty());
+            assert!(page.is_some(),"{label}: the composed cell over {region:?} is written back to the Store when the window is displaced");
+            written.push((region,key.plan(),pixels(&r,&page.unwrap().texture)));
+        }
+        crate::test_support::submit_settled(&mut r,frame);
+        let cache=r.scale_display.as_ref().unwrap();
+        cache.evict_window(plan.bounds);evict_composite_pages(cache,&[plan.bounds]);
+        crate::test_support::submit_published(&mut r,frame);
+        let window=display_pixels(&r);let plan=r.scale_display.as_ref().unwrap().plan;
+        for (region,page_plan,page) in written {
+            let [x,y,width,height]=paint_transform::texel_rect(region.window_local(plan.bounds),1<<plan.level);
+            let [px,py,_,_]=paint_transform::texel_rect(region.window_local(page_plan.bounds),1<<plan.level);
+            for row in 0..height {
+                let from=((py+row)*page_plan.size[0]+px) as usize;let to=((y+row)*plan.size[0]+x) as usize;
+                let error=max_error(&page[from..from+width as usize],&window[to..to+width as usize]);
+                assert!(error<1e-5,"{label}: the written-back page over {region:?} differs from a keyed composition by {error}");
+            }
         }
     }
 }
 
 #[test]
-fn pen_up_writes_back_the_cells_shown_earlier_in_the_contact_without_composing_them_again() {
+fn pen_up_keeps_the_cells_shown_earlier_in_the_contact_without_composing_or_copying_them() {
     let extent=[2048,1024];let doc=document_at(extent);let target=primary_target(&doc);
     let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
     let mut r=renderer(&doc);crate::test_support::submit_settled(&mut r,frame);
@@ -396,14 +407,12 @@ fn pen_up_writes_back_the_cells_shown_earlier_in_the_contact_without_composing_t
     let composed=r.metrics.frame_composited_pages.iter().map(|(_,coordinate)|*coordinate).collect::<BTreeSet<_>>();
     let last=cells(xs[39]);let earlier=xs.iter().flat_map(|x|cells(*x)).filter(|cell|!last.contains(cell)).collect::<BTreeSet<_>>();
     assert!(composed.is_subset(&last),"pen-up composes only the cells its own dab reaches: {composed:?}");
-    let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;let root=cache.graph.root.clone().unwrap();
-    let retained=cache.pages.lock().unwrap().retained_pages();
+    let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;
     for coordinate in &earlier {
-        let key=cache.page_key(root.clone(),pages::bounds(*coordinate,plan.level,plan.extent).intersect(plan.bounds));
-        assert!(retained.iter().any(|page|page.key==key && !page.written.is_empty()),"pen-up writes back the cell {coordinate:?} shown earlier in the contact");
+        assert!(cache.displays(pages::bounds(*coordinate,plan.level,plan.extent).intersect(plan.bounds)),"pen-up keeps the cell {coordinate:?} shown earlier in the contact");
     }
     let view_cells=pages::coordinates(plan.bounds,plan.level).count() as u64;
-    assert!(counts.composite_commits>=earlier.len() as u64,"pen-up copies each earlier cell into the Store: {counts:?}");
+    assert_eq!(counts.written_back,0,"pen-up copies no cell into the Store: {counts:?}");
     assert!(counts.expected_keys<=6*view_cells,"pen-up keys stay bounded by the view, not the contact: {} keys for {view_cells} cells",counts.expected_keys);
 }
 
@@ -1362,6 +1371,21 @@ fn a_chain_of_patched_frames_ends_equal_to_a_whole_redraw_of_every_cell_the_sequ
         let differing=shown.iter().zip(&after).enumerate().filter(|(_,(a,b))|a!=b).map(|(index,_)|[index as u32%768,index as u32/768]).collect::<Vec<_>>();
         assert!(differing.is_empty(),"in place {in_place}: a chain of patched frames differs from a whole redraw at {} pixels, from {:?} to {:?}, cells {cells:?}",differing.len(),differing.first(),differing.last());
     }
+}
+
+#[test]
+fn a_stroke_that_starts_and_ends_in_one_frame_forms_no_sequence_and_settles() {
+    let doc=stroked_over_a_layer([768,512],true);let extent=doc.composition().size;let target=doc.active_target().unwrap();
+    let style=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let mut r=renderer(&doc);
+    crate::test_support::submit_settled(&mut r,frame);
+    let dab=pen_dab(300.,&style);
+    let batch=layer_render::DabBatch {stroke_start:true,stroke_end:true,..crate::test_support::dab_batch(target,style.clone(),dab.bounds())};
+    let before=crate::test_support::PassCounts::snapshot();
+    crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),time_seconds:0.1,..frame});
+    assert!(r.scale_display.as_ref().unwrap().contact_id().is_none() && r.next_frame()!=layer_render::FrameDemand::Work,"a one-frame stroke leaves no sequence and no frame owed");
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).written_back,0,"a one-frame stroke copies no cell into the Store");
 }
 
 #[test]

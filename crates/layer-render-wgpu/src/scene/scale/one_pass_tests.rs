@@ -5,23 +5,21 @@ fn two_layers()->layer_core::Document {
     let layer=paint_occurrence(&mut document,"Wash",Some(rgba8_source([512,256],|x,y|[(x/2) as u8,90,(y) as u8,140]).into()));
     insert_occurrence(&mut document,layer,1);document
 }
-fn store_matches_window(harness:&Harness,label:&str,required:bool) {
+fn store_matches_window(harness:&Harness,label:&str) {
     let r=harness.engine.backend();let cache=r.scale_display.as_ref().unwrap();let plan=cache.plan;
     let window=pixels(r,cache.texture());let side=1<<plan.level;
     for coordinate in pages::coordinates(plan.bounds,plan.level) {
         let region=pages::bounds(coordinate,plan.level,plan.extent).intersect(plan.bounds);
         let key=cache.page_key(cache.graph.root.clone().unwrap(),region);
         let image=cache.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,cache.required_input_level(),Class::Visible);
-        assert!(image.is_some() || !required,"{label}: cell {coordinate:?} is a Store page under its current key");
         let Some(image)=image else {continue;};
         let page=pixels(r,&image.texture);
         let [x,y,width,height]=paint_transform::texel_rect(region.window_local(plan.bounds),side);
         let [px,py,_,_]=paint_transform::texel_rect(region.window_local(image.plan.bounds),side);
         for row in 0..height {
             let from=((py+row)*image.plan.size[0]+px) as usize;let to=((y+row)*plan.size[0]+x) as usize;
-            close(&page[from..from+width as usize],&window[to..to+width as usize]);
+            assert!(crate::test_support::max_error(&page[from..from+width as usize],&window[to..to+width as usize])<5e-6,"{label}: the Store page of cell {coordinate:?} differs from the window");
         }
-        let _=label;
     }
 }
 
@@ -33,11 +31,16 @@ fn same_picture(actual:&mut Harness,reference:&mut Harness) {
 }
 
 #[test]
-fn after_contact_ends_every_cell_is_a_current_store_page_equal_to_the_window() {
+fn after_contact_ends_no_cell_is_copied_to_the_store_and_every_store_page_equals_the_window() {
     let mut actual=Harness::new(two_layers());actual.settle();
-    actual.gpen(1,96.,[1.,0.,0.,1.]);actual.settle();store_matches_window(&actual,"stroke",true);
-    assert!(actual.engine.undo().unwrap());actual.settle();store_matches_window(&actual,"undo",false);
-    assert!(actual.engine.redo().unwrap());actual.settle();store_matches_window(&actual,"redo",false);
+    let before=crate::test_support::PassCounts::snapshot();
+    actual.gpen(1,96.,[1.,0.,0.,1.]);actual.settle();
+    assert_eq!(crate::test_support::PassCounts::snapshot().delta(before).written_back,0,"a stroke's end copies no cell into the Store");
+    store_matches_window(&actual,"stroke");
+    let mut stroked=Harness::new(actual.engine.document().clone());stroked.settle();
+    same_picture(&mut actual,&mut stroked);
+    assert!(actual.engine.undo().unwrap());actual.settle();store_matches_window(&actual,"undo");
+    assert!(actual.engine.redo().unwrap());actual.settle();store_matches_window(&actual,"redo");
     let mut reference=Harness::new(actual.engine.document().clone());reference.settle();
     same_picture(&mut actual,&mut reference);
 }

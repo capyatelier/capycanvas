@@ -642,7 +642,10 @@ impl Cache {
             return (cache,true);
         };
         if old.plan!=plan && old.overview.as_ref().is_some_and(|overview|overview.plan==plan) {
-            return Self::select(old.overview.take().map(|overview|*overview),r,packet,request,unchanged);
+            let (mut next,replaced)=Self::select(old.overview.take().map(|overview|*overview),r,packet,request,unchanged);
+            old.exit_contact();
+            next.retired=Some(Box::new(old)).filter(|old|old.has_direct_cells());
+            return (next,replaced);
         }
         let unchanged=unchanged && old.transform==r.transform_preview;
         if old.plan.extent==plan.extent && old.plan.level==plan.level && old.plan.bounds.intersect(required)==required
@@ -1050,10 +1053,9 @@ impl Cache {
         if view && let Some(centre)=dab_centre(packet) {self.pointer=Some(centre);}
         let reached=if self.gesture.is_some() {self.contact_continues(scene,r,packet,encoder)}else {None};
         if self.gesture.is_some() && reached.is_none() {
-            self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
+            self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
         }
-        let live=self.gesture.is_some();
-        if std::mem::replace(&mut self.contact,stroking) && !stroking && !live {self.write_back(r,scene,encoder)?;}
+        self.contact=stroking;
         if self.pixels.root().is_some_and(|image|image.texture.format()!=self.precision.format()) {self.end_held_frame(r,packet)?;}
         if !self.ensure_window(r,scene,encoder) {self.previous=None;return Err(GpuRasterError::NotReady);}
         let live=self.gesture.is_some();
@@ -1064,7 +1066,7 @@ impl Cache {
             for (region,refusal) in exact.refusals {self.refuse(None,region,&refusal);}
         }
         if let Some(reached)=reached.filter(|_|live) && !self.grow_contact(scene,r,packet,encoder,*retained,budget,&reached,from)? {
-            self.end_held_frame(r,packet)?;self.write_back(r,scene,encoder)?;self.commit_window(r,encoder)?;
+            self.end_held_frame(r,packet)?;self.end_contact(encoder);self.commit_window(r,encoder)?;
         }
         let live=self.gesture.is_some();
         let visible=if matches!(destination,Destination::View) {display_mips::view_bounds(packet.view,self.plan.extent,0).unwrap_or(PixelRect::EMPTY)}else {PixelRect::EMPTY};
@@ -1286,7 +1288,7 @@ impl Cache {
             for (region,refusal,since) in refusals {self.refuse(since,region,&refusal);}
         }
         if view && !live && !stroking {self.pivot_pending=self.pivot_inputs_pending(scene,r,packet);}
-        if view && live && self.ends_contact(packet) {self.write_back(r,scene,encoder)?;}
+        if view && live && self.ends_contact(packet) {self.end_contact(encoder);}
         else if view && !live && stroking {self.begin_contact(scene,r,packet,encoder,*retained,budget,&composed)?;}
         self.project_above(scene,r,packet,encoder,commands)?;
         for region in &composed {
