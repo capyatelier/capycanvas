@@ -1241,9 +1241,12 @@ fn over_paper(mut doc:layer_core::Document,paper:bool)->layer_core::Document {
 }
 const STROKE:[(f32,f32);12]=[(480.,486.),(486.,492.),(492.,498.),(498.,504.),(504.,510.),(510.,516.),(516.,522.),(522.,516.),(522.,510.),(522.,510.),(522.,510.),(528.,534.)];
 fn stroke_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,style:&layer_render::DabStyle,dabs:&[layer_render::Dab],inked:bool,step:usize)->crate::test_support::PassCounts {
+    batched_frame(r,frame,target,style,dabs,usize::from(inked),step)
+}
+fn batched_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,style:&layer_render::DabStyle,dabs:&[layer_render::Dab],inked:usize,step:usize)->crate::test_support::PassCounts {
     let batches=dabs.iter().enumerate().map(|(index,dab)|layer_render::DabBatch {
-        kind:if inked && index==0 {layer_render::DabBatchKind::Persistent}else {layer_render::DabBatchKind::Preview},
-        stroke_id:layer_core::StrokeId(1),first_dab:index as u32,stroke_start:inked && step==0 && index==0,stroke_end:false,
+        kind:if index<inked {layer_render::DabBatchKind::Persistent}else {layer_render::DabBatchKind::Preview},
+        stroke_id:layer_core::StrokeId(1),first_dab:index as u32,stroke_start:inked>0 && step==0 && index==0,stroke_end:false,
         ..crate::test_support::dab_batch(target,style.clone(),dab.bounds())}).collect::<Vec<_>>();
     let counts=crate::test_support::PassCounts::snapshot();
     crate::test_support::submit_ready(r,FramePacket {dabs,dab_batches:&batches,time_seconds:0.1*(step+1) as f32,..frame}).unwrap();
@@ -1333,11 +1336,12 @@ impl Written {
         if !in_place {crate::test_support::write_only_dry_material(&mut r);}
         select_retouch(&mut r,target,style);
         crate::test_support::submit_settled(&mut r,frame);
-        let dabs=|step:usize|[0.,3.].map(|ahead|sized_dab([at[0]+3.*step as f32+ahead,at[1]],*radius,style));
+        let dabs=|step:usize|[0.,3.,6.].map(|ahead|sized_dab([at[0]+3.*step as f32+ahead,at[1]],*radius,style));
         for step in 0..2 {stroke_frame(&mut r,frame,target,style,&dabs(step)[..=*tips],true,step);}
         let before=page_reads(&r,target,false);
-        let [ink,tip]=dabs(2);
-        stroke_frame(&mut r,frame,target,style,&[ink,tip][..=*tips],true,2);
+        let drawn=dabs(2);
+        let (ink,tips)=drawn[..=*tips].split_first().unwrap();
+        stroke_frame(&mut r,frame,target,style,&drawn[..=tips.len()],true,2);
         let written=page_reads(&r,target,false);
         let grid=extent.map(|side|side.next_multiple_of(PAGE_SIZE));
         let cells=if crate::destination_material::blender(style).cells {style.blender.cell_size as u32-1}else {0};
@@ -1352,19 +1356,19 @@ impl Written {
                 assert!(style.blender.kind==layer_core::BlenderKind::Scatter && past_the_edge(*coordinate),"{label}: the stroke's write to page {coordinate:?} is recorded against the version before the frame");
                 continue;
             };
-            let reach=reached(&ink,*coordinate);
+            let reach=reached(ink,*coordinate);
             assert!(!rect.is_empty() && rect.union(reach)==reach,"{label}: the record of page {coordinate:?} names no more than its dab reaches: {rect:?} in {reach:?}");
             assert_eq!(differing_outside(rect,now,then),0,"{label}: page {coordinate:?} changed outside its recorded rectangle {rect:?}");
             partial+=usize::from(rect.area()<u64::from(PAGE_SIZE).pow(2));
         }
         assert!(partial>0,"{label}: a record names less than its page");
-        if *tips==0 {return;}
+        if tips.is_empty() {return;}
         let tipped=page_reads(&r,target,true);
         assert!(!tipped.is_empty(),"{label}: the tip is drawn");
         for (coordinate,(page,shown)) in &tipped {
             let (under,now)=&written[coordinate];
             let (from,rect)=page.seed().unwrap_or_else(||panic!("{label}: the tip's write to page {coordinate:?} is recorded"));
-            let reach=reached(&tip,*coordinate);
+            let reach=tips.iter().fold(PixelRect::EMPTY,|reach,tip|reach.union(reached(tip,*coordinate)));
             assert!(from.same(under) && rect.union(reach)==reach,"{label}: the tip on page {coordinate:?} is recorded as a copy of the page it was drawn over: {rect:?} in {reach:?}");
             assert_eq!(differing_outside(rect,shown,now),0,"{label}: the tip differs from page {coordinate:?} outside its recorded rectangle {rect:?}");
         }
@@ -1382,7 +1386,11 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
         ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0),
         ("a wet-edged brush",wet_edged_brush(),true,0)];
     let grayed=[("a Dither blender",style(DitherBlender),true,0),("a Dither blender without cells",celled(DitherBlender,1),true,0),("a Scatter blender",style(ScatterBlender),true,0),
-        ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1),("a Liquify push",style(LiquifyPush),true,0)];
+        ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1),("a Liquify push",style(LiquifyPush),true,0),
+        ("a smudge under a tip",style(Smudge),true,1),("a smudge under two tips",style(Smudge),true,2),("a soft blender under a tip",style(SoftBlender),true,1),
+        ("a Dither blender under a tip",style(DitherBlender),true,1),("a Dither blender without cells under a tip",celled(DitherBlender,1),true,1),("a Scatter blender under a tip",style(ScatterBlender),true,1),
+        ("a Scatter blender under two tips",style(ScatterBlender),true,2),("a Pencil under two tips",style(Pencil),true,2),
+        ("a Pencil stored write-only under two tips",style(Pencil),false,2),("a wet-edged brush under a tip",wet_edged_brush(),true,1)];
     for (gray,(label,style,in_place,tips)) in colored.into_iter().map(|row|(false,row)).chain(grayed.into_iter().map(|row|(true,row))) {
         Written {label:label.into(),doc:if gray {grayed_copy(&doc)}else {doc.clone()},style,in_place,tips,radius:4.5,at:[300.;2]}.is_bounded_by_its_page_records();
     }
@@ -1391,6 +1399,37 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
         for (label,style,in_place,tips,gray) in sized_writers() {
             Written {label:format!("{label} of {size} px"),doc:if gray {grayed_copy(&doc)}else {doc.clone()},style,in_place,tips,radius:size/2.,at:[480.+swept_reach(size),300.+swept_reach(size)]}
                 .is_bounded_by_its_page_records();
+        }
+    }
+}
+
+#[test]
+fn each_page_record_bounds_what_its_frame_wrote_at_every_brush_size() {
+    use DefaultBrushPreset::*;
+    let extent=[768,512];let doc=grayed_copy(&stroked_over_a_layer(extent,true));let target=doc.active_target().unwrap();
+    let style=crate::layer_tests::preset_style;
+    let page=u64::from(PAGE_SIZE).pow(2);
+    let read=|r:&WgpuRasterizer,preview:bool|page_reads(r,target,preview).remove(&[1,1]).expect("the stroke's page is stored");
+    for (label,style,inked,tips) in [("a smudge under a tip",style(Smudge),1,1),("a smudge in three batches under two tips",style(Smudge),3,2),
+        ("a smudge in two batches under three tips",style(Smudge),2,3),("a Dither blender under a tip",style(DitherBlender),1,1),
+        ("a Scatter blender in two batches under a tip",style(ScatterBlender),2,1)] {
+        for diameter in [5.,30.,100.,300.,600.,2000.] {
+            let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+            let mut r=renderer(&doc);
+            crate::test_support::submit_settled(&mut r,frame);
+            let reach=if diameter>600. {diameter*0.75}else {diameter/2.};
+            let dabs=|step:usize|(0..inked+tips).map(|index|sized_dab([300.-reach+3.*(step*inked+index) as f32,300.],diameter/2.,&style)).collect::<Vec<_>>();
+            for step in 0..2 {batched_frame(&mut r,frame,target,&style,&dabs(step),inked,step);}
+            let (before,then)=read(&r,false);
+            batched_frame(&mut r,frame,target,&style,&dabs(2),inked,2);
+            let (written,now)=read(&r,false);
+            let (from,rect)=written.seed().unwrap_or_else(||panic!("{label}, {diameter} px: the stroke's write is recorded"));
+            assert!(from.same(&before) && !rect.is_empty() && rect.area()<page,"{label}, {diameter} px: the page is recorded as a copy of the version before the frame outside part of it: {rect:?}");
+            assert_eq!(differing_outside(rect,&now,&then),0,"{label}, {diameter} px: the page changed outside its recorded rectangle {rect:?}");
+            let (tip,shown)=read(&r,true);
+            let (from,rect)=tip.seed().unwrap_or_else(||panic!("{label}, {diameter} px: the tip's write is recorded"));
+            assert!(from.same(&written) && !rect.is_empty() && rect.area()<page,"{label}, {diameter} px: the tip is recorded as a copy of the page it was drawn over outside part of it: {rect:?}");
+            assert_eq!(differing_outside(rect,&shown,&now),0,"{label}, {diameter} px: the tip differs from the page outside its recorded rectangle {rect:?}");
         }
     }
 }
@@ -1416,6 +1455,11 @@ fn patches_bit_for_bit_for_each_kind_of_page_record(paper:bool) {
         Stroked::new("a page written in place under a tip",&painted,Pencil,1),
         Stroked {in_place:false,..Stroked::new("a page copied to its other surface under a tip",&painted,Pencil,1)},
         Stroked::new("a page transported without a tip",&painted,Smudge,0),
+        Stroked::new("a page transported under a tip",&painted,Smudge,1),
+        Stroked::new("a page transported under two tips",&painted,Smudge,2),
+        Stroked::new("a page written in place under two tips",&painted,Pencil,2),
+        Stroked::new("a page a Dither blender rewrote in cells under a tip",&painted,DitherBlender,1),
+        Stroked::new("a page a Scatter blender rewrote in cells under two tips",&painted,ScatterBlender,2),
         Stroked::new("a page that first exists mid-stroke",&unpainted,Pencil,1),
         Stroked::new("a page a Dither blender rewrote in cells",&painted,DitherBlender,0),
         Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
@@ -1468,7 +1512,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
 fn a_write_without_a_usable_record_composes_whole_cells_and_the_same_pixels() {
     use DefaultBrushPreset::*;
     let plain=stroked_over_a_layer([768,512],true);
-    stays_whole([Stroked::new("a smudge tip",&plain,Smudge,1),Stroked::new("two tips",&plain,Pencil,2)]);
+    stays_whole([Stroked::new("a Liquify tip",&plain,LiquifyPush,1),Stroked::new("a watercolor wash",&plain,WatercolorWash,0)]);
 }
 
 #[test]
