@@ -1669,6 +1669,11 @@ fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
     doc.artwork.occurrences.get_mut(owner).unwrap().offset=scene_offset(scene);
     doc
 }
+fn same_texel(shown:&[f32;4],other:&[f32;4],float:bool)->bool {
+    let step=|value:f32|i32::from(layer_core::color::f16::from_f32(value).to_bits());
+    shown.iter().zip(other).all(|(a,b)|if float {a.to_bits()==b.to_bits()}else {(step(*a)-step(*b)).abs()<=1})
+}
+fn differing(shown:&[[f32;4]],other:&[[f32;4]],float:bool)->usize {shown.iter().zip(other).filter(|(a,b)|!same_texel(a,b,float)).count()}
 struct Zoomed<'a> {scene:&'a str,brush:String,style:layer_render::DabStyle,zoom:f32,diameter:f32,shift:[f32;2],tips:usize,frames:usize,redraws:bool}
 struct Redrawn {case:String,level:u32,float:bool,restarts:usize,texels:Vec<[u64;2]>}
 impl Redrawn {
@@ -1739,11 +1744,7 @@ impl<'a> Zoomed<'a> {
         let [mut patched,mut whole]=[self.settled(&doc,frame),self.settled(&doc,frame)];
         let cache=patched.scale_display.as_ref().unwrap();
         let (plan,float)=(cache.plan,cache.texture().format()==wgpu::TextureFormat::Rgba32Float);
-        let same=|patched:&WgpuRasterizer,whole:&WgpuRasterizer| {
-            let (patched,whole)=(display_pixels(patched),display_pixels(whole));
-            let step=|value:f32|i32::from(layer_core::color::f16::from_f32(value).to_bits());
-            patched.iter().zip(&whole).all(|(a,b)|a.iter().zip(b).all(|(a,b)|if float {a.to_bits()==b.to_bits()}else {(step(*a)-step(*b)).abs()<=1}))
-        };
+        let same=|patched:&WgpuRasterizer,whole:&WgpuRasterizer|differing(&display_pixels(patched),&display_pixels(whole),float)==0;
         let sequence=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().contact_id();
         let composed=|r:&WgpuRasterizer|r.metrics.frame_composited_pages.iter().flat_map(|(_,tile)|pages::coordinates(page_rect(*tile),level)).collect::<BTreeSet<_>>();
         let (mut held,mut drawn,mut compared,mut texels)=([None;2],BTreeSet::new(),0,[0;2]);
@@ -1776,6 +1777,32 @@ impl<'a> Zoomed<'a> {
         assert!(compared+3>=RETRACE.len(),"{case}: the stroke kept its sequence in only {compared} frames");
         println!("| {case}, retraced | {level} | {} | {compared} of {} frames compared | {} | {} |",if float {"float"}else {"half-float"},RETRACE.len(),texels[0],texels[1]);
         texels
+    }
+    fn reverses_like_a_twin_that_composes_every_frame(&self,lead:f32) {
+        let (case,doc)=(self.case(),self.document());let (frame,target)=(self.frame(&doc),doc.active_target().unwrap());
+        let whole=FramePacket {composite_all:true,..frame};
+        let [mut r,mut twin]=[self.settled(&doc,frame),self.settled(&doc,frame)];
+        let float=r.scale_display.as_ref().unwrap().texture().format()==wgpu::TextureFormat::Rgba32Float;
+        let mut before=Vec::new();
+        for step in 0..18 {
+            let (ink,ahead)=if step<12 {(458.+6.*step as f32,lead)}else {(530.-6.*(step-12) as f32,-lead)};
+            let dabs=[ink,ink+ahead].map(|x|self.at(x));
+            stroke_frame(&mut r,frame,target,&self.style,&dabs,true,step);
+            stroke_frame(&mut twin,whole,target,&self.style,&dabs,true,step);
+            assert!(step==0 || r.scale_display.as_ref().unwrap().contact_id().is_some(),"{case}, frame {step}: the stroke holds a contact");
+            before=display_pixels(&twin);
+            let texels=differing(&display_pixels(&r),&before,float);
+            assert_eq!(texels,0,"{case}, frame {step}: {texels} texels differ from a twin that composes every frame");
+        }
+        let last=self.at(494.);
+        let lift=layer_render::DabBatch {stroke_start:false,stroke_end:true,..crate::test_support::dab_batch(target,self.style.clone(),last.bounds())};
+        let up=FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:2.,..frame};
+        crate::test_support::submit_ready(&mut r,up).unwrap();
+        crate::test_support::submit_ready(&mut twin,FramePacket {composite_all:true,..up}).unwrap();
+        let (shown,now)=(display_pixels(&r),display_pixels(&twin));
+        let stale=shown.iter().zip(&now).zip(&before).filter(|((shown,now),before)|!same_texel(shown,now,float) && !same_texel(shown,before,float)).count();
+        assert_eq!(stale,0,"{case}, pen up: {stale} texels show neither the twin's pen-up frame nor its frame before");
+        println!("| {case}, reversing | 18 live frames equal | pen up shows {} texels of the frame before |",differing(&shown,&now,float));
     }
     fn redrawn(&self)->Redrawn {
         let Self {style,tips,frames,redraws,..}=self;
@@ -1884,6 +1911,15 @@ fn below_full_size_a_stroke_with_two_tips_on_an_offset_layer_leaves_its_level_pa
             assert_eq!(differing,[0;2],"{}, after {frames} frames: texels of the level pages, away from the tips and under them, differ from a full reduction by up to {largest:e}",stroke.case());
         }
     }}
+}
+#[test]
+fn below_full_size_a_pencil_reversing_on_an_offset_photo_layer_shows_each_frame_like_a_twin_that_composes_every_frame() {
+    let pencil=crate::layer_tests::preset_style(DefaultBrushPreset::Pencil);
+    for zoom in [0.25,0.14] {
+        for (brush,lead) in [("a Pencil predicting its tip",6.),("a Pencil without prediction, previewing its contact's tail",3.)] {
+            Zoomed::new("a photo layer offset by 5 and 7",brush,pencil.clone(),1,zoom).reverses_like_a_twin_that_composes_every_frame(lead);
+        }
+    }
 }
 
 fn pencil_and_smudge(scene:&str,zoom:f32)->[Zoomed<'_>;2] {
