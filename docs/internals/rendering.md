@@ -252,6 +252,12 @@ Scene encoding also checks each actual effect job and pending lookup dispatch.
 A missing recipe queues compilation and defers encoding; capture workers prepare
 the discovered recipes before retrying. Startup enumeration prefetches recipes
 and does not establish readiness for a different effect chain or capture output.
+`scale::Pipelines::display` lists the reduction, composition and projection
+kernels a display can dispatch at its precision: scratch images and source pages
+hold `Rgba32Float` texels whatever the window holds. Startup preparation and
+frame admission both require that list, and a composition job requires the
+kernel it binds
+(`a_prepared_drawing_shows_its_first_stroke_on_the_first_admitted_frame_and_compiles_only_its_display_kernels`).
 Private native bake preparation shares the active parent's shader compiler.
 Retained preparation keeps worker ownership alive without joining shader threads
 on render or input teardown; cold bake jobs defer until those workers publish.
