@@ -16,6 +16,8 @@ mod clone;
 #[path = "heal_tests.rs"]
 mod heal;
 
+impl RetouchSources { pub(crate) fn cached_pages(&self) -> usize { self.cache.pages.len() } }
+
 const SIZE: [u32; 2] = [768, 512];
 const TARGET: SourceTarget = SourceTarget::Paint(PaintHandle::from_index(0));
 const PHOTO: SourceTarget = SourceTarget::Paint(PaintHandle::from_index(1));

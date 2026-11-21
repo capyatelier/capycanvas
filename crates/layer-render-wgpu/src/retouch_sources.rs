@@ -382,11 +382,6 @@ impl RetouchSources {
             + PARAMETER_BYTES
     }
 
-    #[cfg(test)]
-    pub fn cached_pages(&self) -> usize {
-        self.cache.pages.len()
-    }
-
     fn pool_page(&mut self, r: &WgpuRasterizer) -> usize {
         self.free.pop().unwrap_or_else(|| {
             self.pool.push(Page::new(r, "retouch stroke-start page"));

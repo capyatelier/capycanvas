@@ -8,6 +8,7 @@ fn key() -> TileKey { TileKey { plane: RasterPlane::Color, coordinate: [0; 2] } 
 fn contents() -> Contents { Contents::new(Arc::new(RasterData::default())) }
 
 fn receipt(state: SubmissionState) -> Submission { Submission(Arc::new(AtomicU8::new(state as u8))) }
+impl<T> crate::resident::Read<'_, T> { fn name(&self) -> layer_core::raster::ContentStamp { self.version().identity() } }
 
 #[test]
 fn native_capture_visits_only_changed_tree_coordinates_and_declared_outputs() {

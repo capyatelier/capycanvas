@@ -3,6 +3,8 @@ use crate::test_support::{page_texture as texture, upload_page as upload, prepar
 use crate::{WgpuRasterizer, layer_tests::page_bytes};
 use layer_core::color::RgbSpace;
 
+impl NativeTileEncoder { pub(crate) fn with_device(device: &PipelineDevice) -> Self { Self::new(device, false) } }
+
 #[test]
 fn encoder_bindings_follow_tile_count_and_optional_tracking() {
     for in_place in [false,true] {for tracked in [false,true] {
