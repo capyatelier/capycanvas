@@ -1020,7 +1020,7 @@ fn preview_outputs_the_raster_cannot_hold_keep_the_frame_unready_instead_of_defe
     assert!(r.preview_pages.len()>=64,"the released raster holds the preview");
 }
 
-fn durable_color_renderer() -> (layer_core::Document, WgpuRasterizer, Arc<layer_core::raster::RasterData>) {
+pub(crate) fn durable_color_renderer() -> (layer_core::Document, WgpuRasterizer, Arc<layer_core::raster::RasterData>) {
     use layer_core::raster::{RasterData,RasterPlane,RasterRevision,RasterTile,TileBlob,TileKey};
     let extent=[PAGE_SIZE*8;2];
     let mut doc=layer_core::Document::new(layer_core::PortableId::random(),extent[0],extent[1],

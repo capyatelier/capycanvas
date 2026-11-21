@@ -10,11 +10,11 @@ pub(crate) struct BakePreflight {
     color:layer_core::color::DocumentColor,owner:u64,revision:u64,inputs:Vec<Input>,next:usize,
     renderer:Option<Box<WgpuRasterizer>>,pipelines:Option<compile::Needs>,scene:Option<Box<Scene>>,source:Option<Arc<layer_core::SceneSnapshot>>,initialized:bool,windowed:bool,
     steps:Vec<([u32;2],PixelRect,DocRect)>,retiring:Option<Arc<std::sync::atomic::AtomicBool>>,coordinate:usize,output:Option<Image>,output_recorded:bool,planning:bool,
-    pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,projected_bytes:u64,sources:Option<sources::AcceptedInputs>,
+    pages:Vec<(usize,[u32;2],Image)>,failure:Option<GpuRasterError>,admitted:bool,projected_bytes:u64,sources:Option<sources::AcceptedInputs>,
 }
 impl BakePreflight {
     pub fn matches(&self,packet:FramePacket<'_>,color:layer_core::color::DocumentColor)->bool {self.color==color && self.owner==packet.scene.owner() && self.revision==packet.scene.revision()}
-    fn complete(&self)->bool {self.failure.is_some() || self.next==self.inputs.len()}
+    fn complete(&self)->bool {self.failure.is_some() || self.admitted && self.next==self.inputs.len()}
     pub fn pending(&self)->bool {!self.complete()}
     pub fn projected_bytes(&self)->u64 {self.projected_bytes}
     pub fn waiting(&self)->bool {self.renderer.as_ref().is_some_and(|r|r.image_decode_waiting())}
@@ -167,9 +167,13 @@ impl WgpuRasterizer {
         }).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes).map(|()|bytes));
         let mut state=self.bake_preflight.take().filter(|old|old.color==self.document_color() && old.inputs.iter().map(|input|&input.key).eq(inputs.iter().map(|input|&input.key)))
             .unwrap_or(BakePreflight {color:self.document_color(),owner:packet.scene.owner(),revision:packet.scene.revision(),inputs,next:0,renderer:None,pipelines:None,scene:None,source:None,initialized:false,windowed:false,steps:Vec::new(),retiring:None,coordinate:0,
-                output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,projected_bytes:0,sources:None});
-        match projected {Ok(bytes)=>state.projected_bytes=bytes,Err(error)=>state.failure=Some(error)}
-        if let Err(error)=state.advance(self,packet) {state.failure=Some(error);}
+                output:None,output_recorded:false,planning:false,pages:Vec::new(),failure:None,admitted:false,projected_bytes:0,sources:None});
+        state.admitted=match projected {
+            Ok(bytes)=>{state.projected_bytes=bytes;true},
+            Err(GpuRasterError::NotReady|GpuRasterError::NotPublished)=>false,
+            Err(error)=>{state.failure=Some(error);false},
+        };
+        if state.admitted && let Err(error)=state.advance(self,packet) {state.failure=Some(error);}
         let complete=state.complete();self.bake_preflight=Some(state);complete
     }
     pub(crate) fn take_bake_failure(&mut self)->Option<GpuRasterError> {self.bake_preflight.as_mut().and_then(|state|state.failure.take())}

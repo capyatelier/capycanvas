@@ -266,13 +266,19 @@ enum Step {Seed(usize),Page(usize,[u32;2])}
 pub(crate) struct FillEdgesPreflight {
     owner:u64,color:layer_core::color::DocumentColor,inputs:Vec<Input>,steps:Vec<Step>,next:usize,
     capture:artwork::Capture,scene:Option<Box<Scene>>,seed:Texture,scratch:Vec<Texture>,zero:Texture,line_seeds:Vec<wgpu::Texture>,
-    pages:Vec<((usize,[u32;2]),Texture,Texture)>,failure:Option<GpuRasterError>,
+    pages:Vec<((usize,[u32;2]),Texture,Texture)>,failure:Option<GpuRasterError>,unadmitted:Option<(u64,usize)>,
 }
 impl FillEdgesPreflight {
     pub fn matches(&self,packet:FramePacket<'_>,color:layer_core::color::DocumentColor)->bool {
         self.owner==packet.scene.owner() && self.color==color
     }
-    pub fn pending(&self)->bool {self.failure.is_none() && self.next<self.steps.len()}
+    pub fn pending(&self)->bool {self.failure.is_none() && (self.unadmitted.is_some() || self.next<self.steps.len())}
+    fn admit(&mut self,r:&mut WgpuRasterizer)->Result<(),GpuRasterError> {
+        let Some((bytes,scratch))=self.unadmitted else {return Ok(());};
+        r.admit_preparation_bytes(r.projected_restore_bytes(),bytes)?;
+        self.scratch=(0..scratch).map(|_|create_color_target(&r.device,[SIDE,SIDE+1],"prepared fill line source")).collect();
+        self.unadmitted=None;Ok(())
+    }
     fn input(&self,target:SourceTarget,edges:&layer_core::FillEdges,external:&[bool],extent:[u32;2],offset:[i64;2])->Option<usize> {
         self.inputs.iter().position(|input|input.target==target && input.external==external && input.extent==extent && input.offset==offset
             && matches!(&input.operation.kind,RasterOperationKind::Fill {edges:Some(stored),..} if same_edges(stored,edges)))
@@ -341,17 +347,15 @@ impl WgpuRasterizer {
             let scalar_bytes=u64::from(SIDE).pow(2)*u64::from(self.device.scalar_format().block_copy_size(None).unwrap());
             let scratch_bytes=scratch_count as u64*u64::from(SIDE)*u64::from(SIDE+1)*u64::from(self.device.working_format().block_copy_size(None).unwrap());
             let bytes=(steps.iter().filter(|step|matches!(step,Step::Page(..))).count() as u64).checked_mul(2*scalar_bytes).and_then(|bytes|bytes.checked_add(scratch_bytes+scalar_bytes));
-            let failure=bytes.ok_or(GpuRasterError::SizeOverflow).and_then(|bytes|self.admit_preparation_bytes(self.projected_restore_bytes(),bytes)).err();
-            let scratch_count=if failure.is_none(){scratch_count}else{0};
             let line_seeds=inputs.iter().map(|input|create_color_target(&self.device,[1,input.external.len().max(1) as u32],"prepared fill line seeds").0).collect();
             FillEdgesPreflight {owner:packet.scene.owner(),color:self.document_color(),inputs,steps,next:0,capture:Default::default(),scene:None,
-                seed:create_color_target(&self.device,[1;2],"prepared fill seed"),
-                scratch:(0..scratch_count).map(|_|create_color_target(&self.device,[SIDE,SIDE+1],"prepared fill line source")).collect(),
-                zero:create_target(&self.device,[SIDE;2],self.device.scalar_format(),"prepared fill empty cover"),line_seeds,pages:Vec::new(),failure}
+                seed:create_color_target(&self.device,[1;2],"prepared fill seed"),scratch:Vec::new(),
+                zero:create_target(&self.device,[SIDE;2],self.device.scalar_format(),"prepared fill empty cover"),line_seeds,pages:Vec::new(),
+                failure:bytes.is_none().then_some(GpuRasterError::SizeOverflow),unadmitted:bytes.map(|bytes|(bytes,scratch_count))}
         };
         if state.pending() {
             let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
-            let result=self.drain_image_decodes(&mut encoder).and_then(|()|state.advance(self,packet,&mut encoder));
+            let result=state.admit(self).and_then(|()|self.drain_image_decodes(&mut encoder)).and_then(|()|state.advance(self,packet,&mut encoder));
             if let Err(error)=result && !matches!(error,GpuRasterError::NotReady|GpuRasterError::NotPublished) {state.failure=Some(error);}
             if encoder.has_work() {self.uploads.finish(&encoder);self.last_submission=encoder.submit(&self.queue);}
         }
@@ -519,5 +523,23 @@ mod tests {
         submit_ready(&mut control,FramePacket {reset_layers:true,..frame}).unwrap();
         control.set_fill_preview(Some(preview));submit_ready(&mut control,frame).unwrap();
         assert!(pixels==control.readback_srgb_rgba8().unwrap());
+    }
+    #[test]
+    fn a_fill_waiting_for_memory_is_not_ready_and_completes_once_room_is_made() {
+        let (mut document,target,operation)=fixture();let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        submit_ready(&mut r,FramePacket {reset_layers:true,..packet(document.scene(),[384;2])}).unwrap();
+        let batch=commit(&mut document,target,operation);
+        let frame=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(document.scene(),[384;2])};
+        let retiring=r.retired_display_bytes.charge(r.memory.display_grant()+r.memory.raster_grant());
+        crate::test_support::prepare_raster(&mut r,|r| {
+            assert!(!r.prepare_fill_edges(frame),"a fill that waits for memory is not ready");
+            if r.fill_edges_preflight.is_some(){Ok(())}else{Err(GpuRasterError::NotReady)}
+        }).unwrap();
+        assert!(r.take_fill_edges_failure().is_none(),"a wait for memory is not a failure");
+        assert!(r.fill_edges_preflight.as_ref().is_some_and(|state|state.pending() && state.pages.is_empty()));
+        drop(retiring);
+        crate::test_support::prepare_raster(&mut r,|r|if r.prepare_fill_edges(frame){Ok(())}else{Err(GpuRasterError::NotReady)}).unwrap();
+        assert!(r.take_fill_edges_failure().is_none());
+        assert!(r.fill_edges_preflight.as_ref().is_some_and(|state|!state.pages.is_empty()));
     }
 }
