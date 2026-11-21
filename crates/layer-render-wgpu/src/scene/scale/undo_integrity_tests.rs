@@ -233,3 +233,6 @@ mod one_pass;
 
 #[path="ui_held_restore_tests.rs"]
 mod ui_held_restore;
+
+#[path="stroke_repair_tests.rs"]
+mod stroke_repair;

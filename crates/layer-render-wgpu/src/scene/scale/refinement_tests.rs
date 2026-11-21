@@ -1164,7 +1164,7 @@ fn exact_refinement_keeps_its_source_until_the_consuming_submission() {
     let color=[31.,71.,113.].map(|channel|layer_core::color::srgb_decode(channel/255.));
     let expected=vec![[color[0],color[1],color[2],1.];key.plan().size.into_iter().product::<u32>() as usize];
     assert!(r.source_tiles.borrow().prepared_view(&source,[0;2]).is_some());
-    evict_composite_pages(cache,&[PixelRect::full(extent)]);
+    evict_composite_pages(cache,&[PixelRect::full(extent)]);cache.evict_window(PixelRect::full(extent));
     let validation=r.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let mut scene=r.scene.take().unwrap();
@@ -1292,7 +1292,9 @@ fn edited_pivot_with_evicted_cells(doc:&mut Document,extent:[u32;2],pivot:Occurr
     settle_refinement(&mut r,doc,extent,"edit");
     let cells:Vec<_>={let cache=r.scale_display.as_ref().unwrap();pages::coordinates(cache.plan.bounds,cache.plan.level).map(|coordinate|pages::bounds(coordinate,cache.plan.level,cache.plan.extent)).collect()};
     assert!(cells.len()>=2 && r.scale_display.as_ref().unwrap().plan.level==0,"the fixture refines two cells at level 0");
-    evict_composite_pages(r.scale_display.as_ref().unwrap(),&cells);
+    let cache=r.scale_display.as_ref().unwrap();
+    evict_composite_pages(cache,&cells);
+    for cell in &cells {cache.evict_window(*cell);}
     (r,cells)
 }
 

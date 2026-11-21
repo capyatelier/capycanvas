@@ -174,9 +174,9 @@ impl Cache {
         let since=r.arrival_token();
         let mut keys=Vec::new();
         for cache in std::iter::once(&*self).chain(self.overview.as_deref()).filter(|cache|cache.graph.root.is_some()) {
-            let mut coordinates=pages::coordinates(cache.plan.bounds,cache.plan.level).collect::<Vec<_>>();
-            coordinates.sort_by_key(|coordinate|centre_distance(packet.view,pages::bounds(*coordinate,cache.plan.level,cache.plan.extent)));
-            keys.extend(coordinates.into_iter().map(|coordinate|cache.refinement_interest(cache.plan.level,pages::bounds(coordinate,cache.plan.level,cache.plan.extent)).key));
+            let mut cells=cache.unsettled_cells();
+            cells.sort_by_key(|cell|centre_distance(packet.view,*cell));
+            keys.extend(cells.into_iter().map(|cell|cache.refinement_interest(cache.plan.level,cell).key));
         }
         let halves=if self.pivot_edited() {self.pivot_halves()}else {Vec::new()};
         if !halves.is_empty() {keys.extend(self.wanted_halves(self.plan.bounds,packet.view));}
@@ -265,7 +265,7 @@ impl Cache {
     }
 
     fn cell_parts(&self,cell:&pages::Key)->Vec<pages::Key> {
-        std::iter::once(cell.expression.clone()).chain(self.graph.parts.as_ref().filter(|_|self.graph.content.as_ref()==Some(&cell.expression))
+        std::iter::once(cell.expression.clone()).chain(self.graph.parts.as_ref().filter(|_|self.graph.content.as_ref()==Some(&cell.expression) && !self.pivot_halves().is_empty())
             .map(|parts|[parts.nodes[0].clone(),parts.nodes[2].clone()]).into_iter().flatten().filter(|node|!graph::Expression::is_clear(node)))
             .map(|expression|pages::Key {expression,..cell.clone()}).collect()
     }

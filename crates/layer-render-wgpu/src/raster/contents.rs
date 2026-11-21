@@ -33,10 +33,12 @@ impl Versions {
         self.pages[index(plane)].tile_version(coordinate).unwrap_or_else(||fallback(&self.defaults[index(plane)],coordinate))
     }
     pub fn region(&self, plane: RasterPlane, region: PixelRect) -> ContentVersion {
-        let bounds = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE,
-            region.max_x().div_ceil(PAGE_SIZE), region.max_y().div_ceil(PAGE_SIZE)];
         ContentVersion::derive(index(plane) as u128,
-            &[self.defaults[index(plane)].clone(), self.pages[index(plane)].region_version(bounds)])
+            &[self.defaults[index(plane)].clone(), self.pages[index(plane)].region_version(tiles(region))])
+    }
+    pub fn blank(&self, plane: RasterPlane, region: PixelRect) -> bool {
+        let bounds = tiles(region);
+        self.pages[index(plane)].region_version(bounds).identity() == ContentTree::default().region_version(bounds).identity()
     }
 
     pub fn root(&self, plane: RasterPlane) -> ContentVersion {
@@ -71,6 +73,9 @@ impl Intent {
 }
 
 pub(super) fn planes() -> [RasterPlane; 3] { [RasterPlane::Color, RasterPlane::Mask, RasterPlane::WatercolorWetness] }
+fn tiles(region: PixelRect) -> [u32; 4] {
+    [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE, region.max_x().div_ceil(PAGE_SIZE), region.max_y().div_ceil(PAGE_SIZE)]
+}
 pub(crate) fn index(plane: RasterPlane) -> usize {
     match plane { RasterPlane::Color => 0, RasterPlane::Mask => 1, RasterPlane::WatercolorWetness => 2 }
 }
