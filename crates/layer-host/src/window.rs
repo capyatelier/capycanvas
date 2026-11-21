@@ -1601,7 +1601,10 @@ mod tests {
         finish(host, window);
     }
 
-    fn a_contact_carried_across_a_switch_ends(lifts_after_the_switch_closes: bool) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Lift { BeforeTheSwitch, WhileTheSwitchIsOpen, AfterTheSwitchCloses }
+
+    fn a_contact_carried_across_a_switch_ends(lift: Lift) {
         let mut host = host();
         let mut window = Window::default();
         open(&mut window, &mut host);
@@ -1609,17 +1612,17 @@ mod tests {
         let next = stroke(&window, &host, 1, 2_000_000_000);
         window.request(&mut host, TabRequest::Prepare { id: 1 }).unwrap();
         let pressed_view = host.session.state().camera.revision;
-        pen(&mut host, 7, &carried[..18]);
+        pen(&mut host, 7, if lift == Lift::BeforeTheSwitch { &carried } else { &carried[..18] });
         let mut activation = switch(&mut window, &mut host, 1);
         assert!(host.session.state().camera.revision > pressed_view);
         let committed = host.session.engine().metrics().committed_strokes;
-        if !lifts_after_the_switch_closes { pen_at(&mut host, 7, &carried[18..], pressed_view); }
+        if lift == Lift::WhileTheSwitchIsOpen { pen_at(&mut host, 7, &carried[18..], pressed_view); }
         activation.work().unwrap();
         let gpu = window.resume(&host, &mut activation).unwrap().unwrap();
         host.session.replace_renderer(Renderer(Some(gpu))).unwrap();
         window.changed(&mut host);
         window.request(&mut host, TabRequest::EndSwitch).unwrap();
-        if lifts_after_the_switch_closes {
+        if lift == Lift::AfterTheSwitchCloses {
             let deadline = Instant::now() + Duration::from_secs(60);
             let mut now = 50_000_000_000;
             while !host.session.engine().has_active_stroke() {
@@ -1641,12 +1644,17 @@ mod tests {
 
     #[test]
     fn a_contact_carried_across_a_switch_ends_with_the_lift_its_old_view_stamped() {
-        a_contact_carried_across_a_switch_ends(false);
+        a_contact_carried_across_a_switch_ends(Lift::WhileTheSwitchIsOpen);
+    }
+
+    #[test]
+    fn a_contact_that_lifts_before_the_switch_adopts_its_drawing_is_painted_there() {
+        a_contact_carried_across_a_switch_ends(Lift::BeforeTheSwitch);
     }
 
     #[test]
     fn a_contact_carried_across_a_switch_ends_with_a_lift_that_arrives_after_the_switch_closes() {
-        a_contact_carried_across_a_switch_ends(true);
+        a_contact_carried_across_a_switch_ends(Lift::AfterTheSwitchCloses);
     }
 
     #[test]
