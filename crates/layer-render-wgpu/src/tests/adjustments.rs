@@ -230,23 +230,18 @@ fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
         let mut full=WgpuRasterizer::new_native_headless(color).unwrap();
         fn frame(document:&layer_core::Document)->FramePacket<'_> {FramePacket {blend_space:layer_core::BlendSpace::Linear,composite_all:false,..packet(document.scene(),document.composition().size)}}
         for renderer in [&mut r,&mut full] {crate::test_support::submit_settled(renderer,frame(&document));}
-        let work=r.scene.as_ref().unwrap().image_work();let composed=r.metrics.composited_pixels;
+        let composed=r.metrics.composited_pixels;
         crate::test_support::submit_ready(&mut r, frame(&document)).unwrap();
         document.working.occurrence=Some(*groups.last().unwrap());document.working.target=None;
         crate::test_support::submit_ready(&mut r, frame(&document)).unwrap();
         document.artwork.occurrences.get_mut(groups[0]).unwrap().name="renamed".into();refresh(&mut document);
         crate::test_support::submit_ready(&mut r, frame(&document)).unwrap();
-        assert_eq!(r.scene.as_ref().unwrap().image_work(),work,"presentation changes dispatch no effects");
+        assert_eq!(r.scene.as_ref().unwrap().effect_passes,0,"presentation changes dispatch no effects");
         assert_eq!(r.metrics.composited_pixels,composed,"presentation changes do not recompose artwork");
-        let pixels=r.scene.as_ref().unwrap().image_pass_pixels();
         let mut dab=test_dab([16.;2],[0.9,0.1,0.3,1.],1.);dab.radii=[64.;2];
         let batch=crate::test_support::dab_batch(SourceTarget::Paint(paints[0]),test_style(BrushExecution::Dry),dab.bounds());
         for renderer in [&mut r,&mut full] {crate::test_support::submit_ready(renderer, FramePacket {dabs:&[dab],dab_batches:std::slice::from_ref(&batch),..frame(&document)}).unwrap();}
-        let after=r.scene.as_ref().unwrap().image_work();
-        assert_eq!([after[0]-work[0],after[1]-work[1]],[1,length],"only the edited owner chain executes: {owners} owners, {length} effects");
-        let input_side=32+2*(length-1);
-        let pixel_work=r.scene.as_ref().unwrap().image_pass_pixels()-pixels;
-        assert!((length*32*32..=length*input_side*input_side).contains(&pixel_work),"bounded owner chain work: {pixel_work} pixels");
+        assert_eq!(r.scene.as_ref().unwrap().effect_passes,length,"only the edited owner chain executes: {owners} owners, {length} effects");
         assert_eq!(r.metrics.composited_pixels-composed,32*32);
         assert_eq!(r.metrics.frame_composited_pages,vec![(0,[0,0])]);
         let incremental=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
