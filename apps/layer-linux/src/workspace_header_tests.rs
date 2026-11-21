@@ -3789,6 +3789,26 @@ fn native_header_overflow_input() {
         "overflow never changes the stored item arrangement"
     );
     crate::capture(&d.w, d.input.dir.join("narrow.png").to_str().unwrap());
+    labels.layout.header.size = HeaderSize::Large;
+    d.w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(labels) });
+    d.w.dispatch(
+        HeaderAction::Move {
+            id: menu_labels,
+            zone: HeaderZone::Right,
+            before: None,
+        }
+        .action(),
+    );
+    pump(250);
+    assert!(!d.named(&format!("header-item-{menu_labels}")).is_mapped());
+    let button = d.named("header-overflow-2").downcast::<gtk::MenuButton>().unwrap();
+    d.click(button.upcast_ref());
+    let popup = button.popover().expect("right overflow popover");
+    assert!(popup.is_mapped(), "right overflow popover must be mapped");
+    let row = find_named(popup.upcast_ref(), &format!("header-overflow-item-{menu_labels}"))
+        .expect("Menu Labels row in right overflow popover");
+    d.click(&row);
+    new_drawing_from(&mut d, "right overflow Menu Labels");
     d.finish();
 }
 

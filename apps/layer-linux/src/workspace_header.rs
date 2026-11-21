@@ -1265,32 +1265,29 @@ impl Header {
                     .and_then(|m| m.location(id))
                     .map(|(z, _)| z.index())
                     .unwrap_or(0);
-                if entry.item == HeaderItem::DocumentTitle {
-                    let popup = w.documents.popup(w);
-                    self.overflow[zone].set_popover(Some(&popup));
-                    popup.popup();
-                } else if entry.item == HeaderItem::Workspaces {
-                    let popup = w.workspaces.switcher_popup(w);
-                    self.overflow[zone].set_popover(Some(&popup));
-                    popup.popup();
-                } else if matches!(entry.item, HeaderItem::Menu | HeaderItem::MenuLabels) {
-                    let model = w
-                        .gpu
-                        .borrow()
-                        .as_ref()
-                        .map(|g| g.session.application_menu(ApplicationMenu::Primary));
-                    if let Some(model) = model {
-                        // A transient nested menu is anchored to the visible overflow
-                        // control, never to the unallocated hidden component.
-                        let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
-                        crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
-                        w.populate_workspace_menu(&popup, model);
-                        w.watch_popover(popup.upcast_ref());
-                        popup.set_parent(&self.overflow[zone]);
-                        popup.connect_closed(|p| p.unparent());
-                        popup.popup();
+                let popup: Option<gtk::Popover> = match entry.item {
+                    HeaderItem::DocumentTitle => Some(w.documents.popup(w)),
+                    HeaderItem::Workspaces => Some(w.workspaces.switcher_popup(w).upcast()),
+                    HeaderItem::Menu | HeaderItem::MenuLabels => {
+                        let model = w
+                            .gpu
+                            .borrow()
+                            .as_ref()
+                            .map(|g| g.session.application_menu(ApplicationMenu::Primary));
+                        model.map(|model| {
+                            let popup = gtk::PopoverMenu::from_model(gtk::gio::MenuModel::NONE);
+                            crate::menu_presentation::configure(&popup,layer_ui::MenuTarget::Button,None);
+                            w.populate_workspace_menu(&popup, model);
+                            w.watch_popover(popup.upcast_ref());
+                            popup.upcast()
+                        })
                     }
-                } else {
+                    _ => None,
+                };
+                if let Some(popup) = popup {
+                    self.overflow[zone].set_popover(Some(&popup));
+                    popup.popup();
+                } else if !matches!(entry.item, HeaderItem::Menu | HeaderItem::MenuLabels) {
                     w.show_context(
                         self.overflow[zone].upcast_ref(),
                         ContextTarget::Header { id: Some(id) },
