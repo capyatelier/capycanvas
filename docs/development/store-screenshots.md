@@ -9,7 +9,7 @@ not need to render or download them.
 
 Store metadata generation, Windows CSV imports, Play listing uploads and Apple
 preparation live beside the Flatpak orchestration in
-[`capycanvas-web/site/scripts/store`](https://github.com/babymastodon/capycanvas-web/tree/main/site/scripts/store).
+[`capycanvas-web/site/scripts/store`](https://github.com/capyatelier/capycanvas-web/tree/main/site/scripts/store).
 AppStream remains the shared source of translated listing text. Store overrides
 live in that repository's `store/locales.json`. Keep native capture code here;
 keep artwork and scene values in the website's showcase recipe.

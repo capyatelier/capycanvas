@@ -2,7 +2,7 @@
 
 ## Report a vulnerability
 
-Use [private vulnerability reporting](https://github.com/babymastodon/capycanvas/security/advisories/new)
+Use [private vulnerability reporting](https://github.com/capyatelier/capycanvas/security/advisories/new)
 for security problems in Capy Canvas or its release tooling. Include the affected
 version or commit, platform, expected impact, and steps to reproduce. Use a
 small synthetic document when a drawing or imported file is needed.

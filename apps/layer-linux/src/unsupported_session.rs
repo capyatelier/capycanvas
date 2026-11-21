@@ -151,7 +151,7 @@ mod tests {
         for text in [&*view.title, &*view.body, &*view.learn_more, &*view.quit] {
             assert!(shown.iter().any(|label| label == text), "{text:?} missing from {shown:?}");
         }
-        assert_eq!(view.link, "https://github.com/babymastodon/capycanvas/issues/24#issuecomment-6842681386");
+        assert_eq!(view.link, "https://github.com/capyatelier/capycanvas/issues/35#issuecomment-7057532889");
         let quit = window.default_widget().expect("Quit is the default action");
         assert_eq!(quit.widget_name(), "unsupported-session-quit");
         assert_eq!(GtkWindowExt::focus(&window).map(|focus| focus.widget_name()).as_deref(), Some("unsupported-session-quit"));

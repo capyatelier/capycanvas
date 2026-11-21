@@ -2,7 +2,7 @@
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$root"
-repository=babymastodon/capycanvas
+repository=capyatelier/capycanvas
 url=https://flatpak.capycanvas.art
 large_files=capycanvas-downloads/flatpak
 large_files_url=https://downloads.capycanvas.art/flatpak

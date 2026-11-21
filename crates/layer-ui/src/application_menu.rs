@@ -12,7 +12,7 @@ pub struct ZoomMenu {
     pub buttons: Vec<CommandState>,
 }
 
-pub const X11_SUPPORT_LINK: &str = "https://github.com/babymastodon/capycanvas/issues/24#issuecomment-6842681386";
+pub const X11_SUPPORT_LINK: &str = "https://github.com/capyatelier/capycanvas/issues/35#issuecomment-7057532889";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,13 +33,13 @@ impl ApplicationLink {
     pub fn display(self) -> &'static str {
         match self {
             Self::Website => "capycanvas.art",
-            Self::SourceCode => "github.com/babymastodon/capycanvas",
+            Self::SourceCode => "github.com/capyatelier/capycanvas",
         }
     }
     pub fn url(self) -> &'static str {
         match self {
             Self::Website => "https://capycanvas.art/",
-            Self::SourceCode => "https://github.com/babymastodon/capycanvas",
+            Self::SourceCode => "https://github.com/capyatelier/capycanvas",
         }
     }
 }

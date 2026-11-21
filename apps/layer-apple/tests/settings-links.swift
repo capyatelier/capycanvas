@@ -130,7 +130,7 @@ import Vision
                 let preferences = store.snapshot["preferences"]
                 return preferences["page_requested"].bool && preferences["page"].string == "about" && preferences["query"].string.isEmpty
             }
-            try require(try text(in: host).contains { $0.string.contains("github.com/babymastodon/capycanvas") },
+            try require(try text(in: host).contains { $0.string.contains("github.com/capyatelier/capycanvas") },
                 "Opening the Settings search result must render its shared Source code destination")
             note("PASS platform \(platform): native Settings Website/Source code rejection displays an error; accepted retry clears it and preserves artwork")
         }

@@ -499,7 +499,7 @@ extension XCTestCase {
             XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         }
         let links = [("website", "https://capycanvas.art"),
-            ("source_code", "https://github.com/babymastodon/capycanvas")]
+            ("source_code", "https://github.com/capyatelier/capycanvas")]
         workspaceActivate(app.buttons["settings-button"])
         XCTAssertTrue(app.staticTexts["settings-page-about"].waitForExistence(timeout: 10))
         workspaceActivate(app.staticTexts["settings-page-about"])
@@ -580,7 +580,7 @@ extension XCTestCase {
                 "label == %@ OR label == %@ OR value == %@", label + ", " + value, value, value)).firstMatch
             XCTAssertTrue(content.exists, "About \(label) must show \(value)")
         }
-        for (id, label) in [("website", "capycanvas.art"), ("source_code", "github.com/babymastodon/capycanvas")] {
+        for (id, label) in [("website", "capycanvas.art"), ("source_code", "github.com/capyatelier/capycanvas")] {
             let link = app.descendants(matching: .any)["preference-" + id].firstMatch
             XCTAssertTrue(link.exists && link.isHittable, "About must expose the \(id) link")
             XCTAssertTrue(link.label.hasSuffix(label), "The native link label must retain its destination")

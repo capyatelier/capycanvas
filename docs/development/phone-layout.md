@@ -2,7 +2,7 @@
 
 [Developer guide](README.md) · [Workspace and UI](../ui/README.md) · [Default workspaces](../ui/default-workspaces.md) · [Title bar](../ui/window-bar.md)
 
-This plan covers [issue #8](https://github.com/babymastodon/capycanvas/issues/8):
+This plan covers [issue #15](https://github.com/capyatelier/capycanvas/issues/15):
 the workspace layouts don't fit phone screens. Today a docked column shrinks only
 to its panels' minimum (usually 242 px), that minimum overrides the canvas
 (`layout.rs`, band widths), and nothing in the layout reads the window's height.

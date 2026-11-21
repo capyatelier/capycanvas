@@ -5756,7 +5756,7 @@ class AndroidHostTest {
         compose.onNodeWithText("About").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "about" }
         compose.onNodeWithText("capycanvas.art").assertExists()
-        compose.onNodeWithText("github.com/babymastodon/capycanvas").assertExists()
+        compose.onNodeWithText("github.com/capyatelier/capycanvas").assertExists()
         capture("21-about")
         compose.onNodeWithTag("settings-done").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }

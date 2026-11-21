@@ -64,10 +64,10 @@
   </description>
   <launchable type="desktop-id">art.capycanvas.CapyCanvas.desktop</launchable>
   <url type="homepage">https://capycanvas.art/</url>
-  <url type="vcs-browser">https://github.com/babymastodon/capycanvas</url>
-  <url type="bugtracker">https://github.com/babymastodon/capycanvas/issues</url>
+  <url type="vcs-browser">https://github.com/capyatelier/capycanvas</url>
+  <url type="bugtracker">https://github.com/capyatelier/capycanvas/issues</url>
   <url type="help">https://capycanvas.art/docs/</url>
-  <url type="contribute">https://github.com/babymastodon/capycanvas#contributing</url>
+  <url type="contribute">https://github.com/capyatelier/capycanvas#contributing</url>
   <content_rating type="oars-1.1" />
   <requires>
     <display_length side="shortest" compare="ge">280</display_length>

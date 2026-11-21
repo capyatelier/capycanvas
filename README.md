@@ -177,7 +177,7 @@ covers how to load it. Building a new brush engine involves the shared code;
 the [brush guide](docs/internals/brushes.md#changing-a-brush) points to that.
 
 We also need help with interface design and testing the app with actual drawings.
-If a tool gets in the way of how you work, [tell us](https://github.com/babymastodon/capycanvas/issues)
+If a tool gets in the way of how you work, [tell us](https://github.com/capyatelier/capycanvas/issues)
 what you were trying to do.
 
 ## Development
