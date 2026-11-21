@@ -107,17 +107,13 @@ fn capture(
 ) -> Vec<u8> {
     let (target, _) =
         create_color_target(&r.device, [crop.width(), crop.height()], "window oracle");
-    let mut encoder = crate::submission::CommandEncoder::new(
-        &r.device,
-        &wgpu::CommandEncoderDescriptor::default(),
-    );
-    crate::test_support::query_ready(r, &mut encoder, |r, encoder| {
-        scene.capture_region(r, packet, &target, crop, scene::Output::Artwork(None), encoder)
+    crate::test_support::submit_encoded(r, |r, encoder| {
+        crate::test_support::query_ready(r, encoder, |r, encoder| {
+            scene.capture_region(r, packet, &target, crop, scene::Output::Artwork(None), encoder)
+        });
+        let planned=scene::Scene::capture_image_bound(packet.scene,crop);
+        assert!(scene.image_cache_bytes()<=planned,"crop={crop:?} actual={} planned={planned}",scene.image_cache_bytes());
     });
-    let planned=scene::Scene::capture_image_bound(packet.scene,crop);
-    assert!(scene.image_cache_bytes()<=planned,"crop={crop:?} actual={} planned={planned}",scene.image_cache_bytes());
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
     crate::layer_tests::page_bytes(r, &target)
 }
 

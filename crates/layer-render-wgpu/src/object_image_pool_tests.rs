@@ -1,8 +1,8 @@
 use super::*;
 use layer_core::{Document, authored::{Artwork, PaintBase, SourceTarget}};
-use crate::test_support::{GatedStore,ReadGate};
+use crate::test_support::{GatedStore,ReadGate,wait_until};
 use std::sync::Mutex;
-use std::time::{Duration,Instant};
+use std::time::Duration;
 
 const DEADLINE:Duration=Duration::from_secs(10);
 
@@ -20,11 +20,7 @@ fn queue(pool:&Arc<DecodePool>,destination:RgbSpace)->MipDecodeQueue {
     queue.pool=pool.clone();queue
 }
 fn result(queue:&mut MipDecodeQueue)->PreparedImageWork {
-    let deadline=Instant::now()+DEADLINE;
-    loop {
-        if let Some((result,_))=queue.poll() {return result;}
-        assert!(Instant::now()<deadline,"accepted decode did not complete");std::thread::sleep(Duration::from_millis(1));
-    }
+    wait_until("accepted decode did not complete",||queue.poll().map(|(result,_)|result).ok_or(()))
 }
 fn image_pixels(result:PreparedImageWork)->(PortableId,Arc<SourceImage>,crate::scene::sources::PreparedSourcePixels) {
     let PreparedImageWork::Image(tile)=result else {panic!("image request returned a different result kind")};
@@ -89,12 +85,11 @@ fn full_pool_retries_on_its_capacity_epoch_and_drops_cancelled_queued_and_active
 fn unpolled_results_stay_queue_local_and_do_not_block_another_queue() {
     let pool=DecodePool::start(1).unwrap();let mut full=queue(&pool,RgbSpace::Srgb);let mut other=queue(&pool,RgbSpace::DisplayP3);
     let inputs:Vec<_>=(0..pool.capacity).map(|i|(PortableId::random(),layer_core::color::source::rgba8_source([1;2],|_,_|[i as u8,31,19,255]))).collect();
-    let deadline=Instant::now()+DEADLINE;
     for (id,source) in &inputs {
-        while !full.request(*id,source.clone(),[0;2]) {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
+        wait_until("the queue must accept each request",||full.request(*id,source.clone(),[0;2]).then_some(()).ok_or(()));
         assert!(full.request(*id,source.clone(),[0;2]));
     }
-    while full.ready.load(Ordering::Acquire)!=pool.capacity {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(1));}
+    wait_until("every accepted decode must become ready",||match full.ready.load(Ordering::Acquire) {ready if ready==pool.capacity=>Ok(()),ready=>Err(ready)});
     assert!(!full.has_room());assert!(full.admit(TILE_BYTES,false,Class::Visible).is_none());assert!(full.admit(TILE_BYTES,true,Class::Visible).is_some());
     let source=layer_core::color::source::rgba8_source([1;2],|_,_|[91,82,73,255]);let id=PortableId::random();
     assert!(other.request(id,source.clone(),[0;2]));let (actual_id,actual_source,pixels)=image_pixels(result(&mut other));
@@ -169,11 +164,8 @@ fn decode_workers_run_below_the_compile_and_render_threads() {
     assert!(queue.request(PortableId::random(),layer_core::color::source::rgba8_source([1;2],|_,_|[1,2,3,255]),[0;2]));
     result(&mut queue);
     let frame_thread=unsafe {libc::getpriority(libc::PRIO_PROCESS,libc::gettid() as libc::id_t)};
-    let deadline=Instant::now()+DEADLINE;
-    loop {
+    wait_until(format_args!("decode workers run beside a frame thread at {frame_thread} at nice"),|| {
         let workers=decode_worker_niceness();
-        if !workers.is_empty() && workers.iter().all(|nice|*nice==BACKGROUND_NICE && *nice>frame_thread) {break;}
-        assert!(Instant::now()<deadline,"decode workers run at nice {workers:?} beside a frame thread at {frame_thread}");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        if !workers.is_empty() && workers.iter().all(|nice|*nice==BACKGROUND_NICE && *nice>frame_thread) {Ok(())} else {Err(workers)}
+    });
 }

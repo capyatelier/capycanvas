@@ -1,4 +1,4 @@
-use crate::test_support::complete;
+use crate::test_support::{complete,submit_encoded,wait_until};
 
 fn next_build(images:&mut MovingImages)->Option<(Arc<SourceImage>,[u32;2])> {
     images.next_build(|_|true,|_,_,_|true).map(|(source,coordinate,_)|(source,coordinate))
@@ -19,24 +19,25 @@ fn window_builds_while_overview_is_partial(bounds:PixelRect) {
     let mut images=MovingImages::within(&r.scene_tiers);let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
     upload_page(&r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let root=request.root(&r.device).unwrap().unwrap();
-    images.allocate(&r,MipPlan {targets:vec![root],waiting:false},&mut encoder);
-    for _ in 0..8 {
-        let (source,coordinate)=next_build(&mut images).unwrap();
-        images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-    }
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let root=request.root(&r.device).unwrap().unwrap();
+        images.allocate(r,MipPlan {targets:vec![root],waiting:false},encoder);
+        for _ in 0..8 {
+            let (source,coordinate)=next_build(&mut images).unwrap();
+            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+        }
+    });complete(&r);
     request.bounds=bounds;
     let window=request.allocation(&r.device,1,false).unwrap().unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    images.allocate(&r,MipPlan {targets:vec![window],waiting:false},&mut encoder);
-    let own=images.entries.iter().find(|entry|!entry.root).unwrap().pending.len();
-    let mut builds=0;
-    while images.entries.iter().any(|entry|!entry.root && !entry.pending.is_empty()) {
-        builds+=paced_builds(&mut r,&mut images,&mut encoder,&texture,|images|images.entries.iter().all(|entry|entry.root || entry.pending.is_empty()));
-    }
-    encoder.submit(&r.queue);complete(&r);
+    let (own,builds)=submit_encoded(&mut r,|r,encoder| {
+        images.allocate(r,MipPlan {targets:vec![window],waiting:false},encoder);
+        let own=images.entries.iter().find(|entry|!entry.root).unwrap().pending.len();
+        let mut builds=0;
+        while images.entries.iter().any(|entry|!entry.root && !entry.pending.is_empty()) {
+            builds+=paced_builds(r,&mut images,encoder,&texture,|images|images.entries.iter().all(|entry|entry.root || entry.pending.is_empty()));
+        }
+        (own,builds)
+    });complete(&r);
     assert!(builds<=2*own,"window waited behind unrelated overview inputs: builds={builds}, own={own}");
 }
 fn trim(images:&mut MovingImages,limit:u64,encoder:&mut crate::submission::CommandEncoder)->u64 {
@@ -64,11 +65,11 @@ fn overview_source_progress_survives_continuously_replaced_windows() {
     let mut previous=usize::MAX;
     for frame in 0..64 {
         request.bounds=if frame%2==0 {PixelRect::new(0,0,256,256)}else {PixelRect::new(1792,1792,2048,2048)};
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan=images.plan(&r,std::slice::from_ref(&request),32<<20,&mut encoder).unwrap();
-        images.allocate(&r,plan,&mut encoder);
-        paced_builds(&mut r,&mut images,&mut encoder,&texture,|_|false);
-        encoder.submit(&r.queue);complete(&r);
+        submit_encoded(&mut r,|r,encoder| {
+            let plan=images.plan(r,std::slice::from_ref(&request),32<<20,encoder).unwrap();
+            images.allocate(r,plan,encoder);
+            paced_builds(r,&mut images,encoder,&texture,|_|false);
+        });complete(&r);
         let remaining=images.entries.iter().filter(|entry|entry.root).map(|entry|entry.pending.len()).sum::<usize>();
         assert!(remaining<previous,"camera-window replacement cannot starve the overview: frame={frame}, remaining={remaining}, previous={previous}");
         if remaining==0 {return;}
@@ -101,19 +102,19 @@ fn ready_windows_publish_before_the_whole_image_completes_once() {
     let targets=vec![request.allocation(&r.device,request.level,false).unwrap().unwrap(),request.root(&r.device).unwrap().unwrap()];
     let mut images=MovingImages::within(&r.scene_tiers);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    images.allocate(&r,MipPlan {targets,waiting:false},&mut encoder);
-    let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);let mut window_published=false;
-    while let Some((source,coordinate))=next_build(&mut images) {
-        let changed=images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-        if !window_published && images.entries.iter().filter(|entry|!entry.root).all(|entry|entry.pending.is_empty()) {
-            assert!(images.entries.iter().any(|entry|entry.root && !entry.pending.is_empty()));
-            assert!(changed,"a ready viewport publishes before its whole-image fallback finishes");
-            assert_eq!(images.completed_images,0);window_published=true;
+    submit_encoded(&mut r,|r,encoder| {
+        images.allocate(r,MipPlan {targets,waiting:false},encoder);
+        let texture=page_texture(r,wgpu::TextureFormat::Rgba32Float);let mut window_published=false;
+        while let Some((source,coordinate))=next_build(&mut images) {
+            let changed=images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+            if !window_published && images.entries.iter().filter(|entry|!entry.root).all(|entry|entry.pending.is_empty()) {
+                assert!(images.entries.iter().any(|entry|entry.root && !entry.pending.is_empty()));
+                assert!(changed,"a ready viewport publishes before its whole-image fallback finishes");
+                assert_eq!(images.completed_images,0);window_published=true;
+            }
         }
-    }
-    assert!(window_published);assert_eq!(images.completed_images,1);
-    encoder.submit(&r.queue);complete(&r);
+        assert!(window_published);assert_eq!(images.completed_images,1);
+    });complete(&r);
 }
 
 #[test]
@@ -142,30 +143,30 @@ fn a_gigapixel_overview_commits_its_ready_regional_object_mip() {
         bounds:PixelRect::new(0,0,1191,853),format:wgpu::TextureFormat::Rgba16Float,rank:0};
     let mut images=crate::object_image_mips::MovingImages::within(&renderer.scene_tiers);
     pollster::block_on(renderer.compilation.prepare_all(images.pipelines(&renderer.device))).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&renderer.device,&Default::default());
-    let allocation=images.plan(&renderer,std::slice::from_ref(&request),32<<20,&mut encoder).unwrap();
-    images.allocate(&renderer,allocation,&mut encoder);
-    images.entries.retain(|entry|entry.root);
-    assert_eq!(images.entries.len(),1);
-    let root=&mut images.entries[0];
-    assert_eq!(root.image.plan.level,6);
-    let halo=crate::scene::scale::regional_object_overview_footprint(&renderer,&document,owner).expand(1<<root.image.plan.level,source_extent);
-    let footprint=crate::page_coordinates(halo).count();let pending=root.pending.len()-footprint;
-    let mut delivery=root.pending.drain(..).collect::<Vec<_>>();
-    delivery.sort_by_key(|coordinate|crate::page_rect(*coordinate).intersect(halo).is_empty());
-    root.pending=delivery.into();
-    let texture=page_texture(&renderer,wgpu::TextureFormat::Rgba32Float);
-    let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.25f32,0.5,0.75,1.]).flat_map(f32::to_le_bytes).collect();
-    upload_page(&renderer,&texture,&bytes);
-    for _ in 0..footprint {
-        let (source,coordinate)=next_build(&mut images).unwrap();
-        assert!(!crate::page_rect(coordinate).intersect(halo).is_empty());
-        images.write_tile(&mut renderer,&mut encoder,&source,coordinate,&texture,None).unwrap();
-    }
-    assert_eq!(images.tile_builds,footprint as u64);assert_eq!(images.completed_images,0);
-    assert_eq!(images.entries[0].pending.len(),pending);
-    assert!(images.entries.iter().all(|entry|!entry.ready()));
-    renderer.uploads.finish(&encoder);encoder.submit(&renderer.queue);renderer.wait_idle().unwrap();
+    submit_encoded(&mut renderer,|renderer,encoder| {
+        let allocation=images.plan(renderer,std::slice::from_ref(&request),32<<20,encoder).unwrap();
+        images.allocate(renderer,allocation,encoder);
+        images.entries.retain(|entry|entry.root);
+        assert_eq!(images.entries.len(),1);
+        let root=&mut images.entries[0];
+        assert_eq!(root.image.plan.level,6);
+        let halo=crate::scene::scale::regional_object_overview_footprint(renderer,&document,owner).expand(1<<root.image.plan.level,source_extent);
+        let footprint=crate::page_coordinates(halo).count();let pending=root.pending.len()-footprint;
+        let mut delivery=root.pending.drain(..).collect::<Vec<_>>();
+        delivery.sort_by_key(|coordinate|crate::page_rect(*coordinate).intersect(halo).is_empty());
+        root.pending=delivery.into();
+        let texture=page_texture(renderer,wgpu::TextureFormat::Rgba32Float);
+        let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.25f32,0.5,0.75,1.]).flat_map(f32::to_le_bytes).collect();
+        upload_page(renderer,&texture,&bytes);
+        for _ in 0..footprint {
+            let (source,coordinate)=next_build(&mut images).unwrap();
+            assert!(!crate::page_rect(coordinate).intersect(halo).is_empty());
+            images.write_tile(renderer,encoder,&source,coordinate,&texture,None).unwrap();
+        }
+        assert_eq!(images.tile_builds,footprint as u64);assert_eq!(images.completed_images,0);
+        assert_eq!(images.entries[0].pending.len(),pending);
+        assert!(images.entries.iter().all(|entry|!entry.ready()));
+    });renderer.wait_idle().unwrap();
     renderer.moving_images=images;
     let _store=crate::test_support::GatedStore::new(&layer_core::raster_storage::RetainedTiles::from_sources([source.as_ref()]),false);
     crate::scene::scale::assert_regional_object_overview(&mut renderer,&document,owner,id);
@@ -178,26 +179,27 @@ fn regional_root_inputs_are_ready_before_unrelated_source_chunks() {
     let request=request([9728,6400],bounds,31);
     let mut images=MovingImages::within(&r.scene_tiers);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&request),32<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);
-    let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-    let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.25f32,0.5,0.75,1.]).flat_map(f32::to_le_bytes).collect();
-    upload_page(&r,&texture,&bytes);
-    for _ in 0..20 {
-        let (source,coordinate)=next_build(&mut images).unwrap();
-        assert!(!crate::page_rect(coordinate).intersect(bounds.expand(64,request.source.extent)).is_empty());
-        images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-    }
-    assert_eq!(images.tile_builds,20);
-    let root=images.entries.iter().find(|entry|entry.root).unwrap();
-    assert_eq!(root.image.plan.level,6);assert_eq!(root.pending.len(),930);assert!(!root.ready());
-    let source=images.lookup(request.id,&request.source,6,bounds,request.format,r.device.working_space())
-        .expect("twenty committed regional inputs must publish without the other930chunks");
-    assert_eq!(source.level,6);
-    assert!(images.lookup(request.id,&request.source,6,PixelRect::new(1200,0,1280,853),request.format,r.device.working_space()).is_none(),
-        "an uncommitted sampling-halo tile must still defer the region");
-    encoder.submit(&r.queue);complete(&r);
+    let source=submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&request),32<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);
+        let texture=page_texture(r,wgpu::TextureFormat::Rgba32Float);
+        let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.25f32,0.5,0.75,1.]).flat_map(f32::to_le_bytes).collect();
+        upload_page(r,&texture,&bytes);
+        for _ in 0..20 {
+            let (source,coordinate)=next_build(&mut images).unwrap();
+            assert!(!crate::page_rect(coordinate).intersect(bounds.expand(64,request.source.extent)).is_empty());
+            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+        }
+        assert_eq!(images.tile_builds,20);
+        let root=images.entries.iter().find(|entry|entry.root).unwrap();
+        assert_eq!(root.image.plan.level,6);assert_eq!(root.pending.len(),930);assert!(!root.ready());
+        let source=images.lookup(request.id,&request.source,6,bounds,request.format,r.device.working_space())
+            .expect("twenty committed regional inputs must publish without the other930chunks");
+        assert_eq!(source.level,6);
+        assert!(images.lookup(request.id,&request.source,6,PixelRect::new(1200,0,1280,853),request.format,r.device.working_space()).is_none(),
+            "an uncommitted sampling-halo tile must still defer the region");
+        source
+    });complete(&r);
     let actual=crate::test_support::float_pixels(&r,source.view.texture());
     let width=source.view.texture().width() as usize;
     for y in 0..13 {for x in 0..18 {
@@ -211,28 +213,28 @@ fn panning_keeps_allocations_inside_the_view_margin() {
     let mut request=request([8192;2],PixelRect::new(2048,2048,3072,2816),31);
     let mut images=MovingImages::within(&r.scene_tiers);
     let budget=MovingImages::demand(std::slice::from_ref(&request),[1024,768]).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&request),budget,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&request),budget,encoder).unwrap();
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     request.bounds=PixelRect::new(2304,2048,3328,2816);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&request),budget,&mut encoder).unwrap();
-    assert_eq!(plan.targets.len(),1);
-    let allocation=plan.targets[0].plan;
-    assert_eq!(allocation.level,request.level);
-    assert!(allocation.bounds.width()<=request.bounds.width()*2+2*PAGE_SIZE);
-    assert!(allocation.bounds.height()<=request.bounds.height()*2+2*PAGE_SIZE);
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&request),budget,encoder).unwrap();
+        assert_eq!(plan.targets.len(),1);
+        let allocation=plan.targets[0].plan;
+        assert_eq!(allocation.level,request.level);
+        assert!(allocation.bounds.width()<=request.bounds.width()*2+2*PAGE_SIZE);
+        assert!(allocation.bounds.height()<=request.bounds.height()*2+2*PAGE_SIZE);
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     for offset in [32,128,256] {
         request.bounds=PixelRect::new(2304+offset,2048,3328+offset,2816);
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan=images.plan(&r,std::slice::from_ref(&request),budget,&mut encoder).unwrap();
-        assert!(plan.targets.is_empty(),"pan {offset} must reuse its allocation");
-        assert!(images.lookup(request.id,&request.source,request.level,request.bounds,request.format,r.device.working_space()).is_some());
-        assert!(images.storage_bytes()<=budget);
-        encoder.submit(&r.queue);complete(&r);
+        submit_encoded(&mut r,|r,encoder| {
+            let plan=images.plan(r,std::slice::from_ref(&request),budget,encoder).unwrap();
+            assert!(plan.targets.is_empty(),"pan {offset} must reuse its allocation");
+            assert!(images.lookup(request.id,&request.source,request.level,request.bounds,request.format,r.device.working_space()).is_some());
+            assert!(images.storage_bytes()<=budget);
+        });complete(&r);
     }
 }
 
@@ -242,18 +244,18 @@ fn view_windows_build_and_evict_by_stack_rank() {
     let requests=[MovingRequest {rank:1,..request([2048;2],PixelRect::new(256,256,512,512),31)},
         MovingRequest {rank:28,..request([2048;2],PixelRect::new(1536,1536,1792,1792),73)}];
     let mut images=MovingImages::within(&r.scene_tiers);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,32<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);
-    assert!(Arc::ptr_eq(&next_build(&mut images).unwrap().0,&requests[1].source));
-    assert_eq!(images.wanted()[0].0,requests[1].id);
-    drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,32<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);
+        assert!(Arc::ptr_eq(&next_build(&mut images).unwrap().0,&requests[1].source));
+        assert_eq!(images.wanted()[0].0,requests[1].id);
+        drain(r,&mut images,encoder);
+    });complete(&r);
     let low=images.entries.iter().find(|entry|entry.id==requests[0].id).unwrap().storage_bytes();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let limit=images.storage_bytes()-low;trim(&mut images,limit,&mut encoder);
-    assert!(images.entries.iter().all(|entry|entry.id==requests[1].id));
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|_,encoder| {
+        let limit=images.storage_bytes()-low;trim(&mut images,limit,encoder);
+        assert!(images.entries.iter().all(|entry|entry.id==requests[1].id));
+    });complete(&r);
 }
 
 #[test]
@@ -263,28 +265,28 @@ fn one_twenty_eight_and_one_hundred_mip_windows_share_one_gpu_bound_and_workspac
     for count in [1,28,100] {
         let requests:Vec<_>=(0..count).map(|index|request([4096,3072],PixelRect::new(1536,1024,2048,1536),index)).collect();
         let mut images=MovingImages::within(&r.scene_tiers);
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan=images.plan(&r,&requests,bound,&mut encoder).unwrap();
-        assert_eq!(plan.targets.iter().filter(|target|!target.root).count(),count as usize);
-        assert_eq!(plan.targets.iter().filter(|target|target.root).count(),count as usize);
-        images.allocate(&r,plan,&mut encoder);
-        assert_eq!(images.entries.len(),2*count as usize);
-        assert!(images.entries.iter().all(|entry|entry.pending.len()==crate::page_coordinates(entry.image.plan.bounds).count()));
-        assert!(images.storage_bytes()<=bound);
-        drain(&mut r,&mut images,&mut encoder);
-        assert!(images.entries.iter().all(Entry::ready));
-        assert_eq!(images.completed_images,u64::from(count));
-        assert!(images.storage_bytes()<=bound);
-        assert!(images.pinned_bytes()<images.storage_bytes());
-        encoder.submit(&r.queue);
+        submit_encoded(&mut r,|r,encoder| {
+            let plan=images.plan(r,&requests,bound,encoder).unwrap();
+            assert_eq!(plan.targets.iter().filter(|target|!target.root).count(),count as usize);
+            assert_eq!(plan.targets.iter().filter(|target|target.root).count(),count as usize);
+            images.allocate(r,plan,encoder);
+            assert_eq!(images.entries.len(),2*count as usize);
+            assert!(images.entries.iter().all(|entry|entry.pending.len()==crate::page_coordinates(entry.image.plan.bounds).count()));
+            assert!(images.storage_bytes()<=bound);
+            drain(r,&mut images,encoder);
+            assert!(images.entries.iter().all(Entry::ready));
+            assert_eq!(images.completed_images,u64::from(count));
+            assert!(images.storage_bytes()<=bound);
+            assert!(images.pinned_bytes()<images.storage_bytes());
+        });
         complete(&r);
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        assert!(trim(&mut images,0,&mut encoder)>0);
-        assert!(images.entries.is_empty());
-        assert!(images.retiring.used()!=0);
-        assert!(images.pinned_bytes()>0);
-        assert!(images.storage_bytes()<=bound);
-        encoder.submit(&r.queue);
+        submit_encoded(&mut r,|_,encoder| {
+            assert!(trim(&mut images,0,encoder)>0);
+            assert!(images.entries.is_empty());
+            assert!(images.retiring.used()!=0);
+            assert!(images.pinned_bytes()>0);
+            assert!(images.storage_bytes()<=bound);
+        });
         complete(&r);
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         trim(&mut images,0,&mut encoder);
@@ -301,21 +303,21 @@ fn image_window_pixels_are_local_and_never_claim_missing_source_regions() {
         let request=MovingRequest {format,..request([4096,3072],bounds,31)};
         let mut images=MovingImages::within(&r.scene_tiers);
         pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan=images.plan(&r,std::slice::from_ref(&request),32<<20,&mut encoder).unwrap();
-        images.allocate(&r,plan,&mut encoder);
-        assert_eq!(images.entries[0].image.plan.size,[512;2]);
-        let upcoming:Vec<_>=images.wanted().into_iter().take(16).collect();
-        assert_eq!(upcoming.len(),16);
-        assert!(upcoming.iter().all(|(_,_,coordinate,_,_)|images.entries[0].image.plan.bounds.intersect(crate::page_rect(*coordinate)).area()>0));
-        let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-        let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.25f32,0.5,0.75,1.]).flat_map(f32::to_le_bytes).collect();
-        upload_page(&r,&texture,&bytes);
-        for _ in 0..upcoming.len() {
-            let (source,coordinate)=next_build(&mut images).unwrap();
-            images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-        }
-        encoder.submit(&r.queue);
+        submit_encoded(&mut r,|r,encoder| {
+            let plan=images.plan(r,std::slice::from_ref(&request),32<<20,encoder).unwrap();
+            images.allocate(r,plan,encoder);
+            assert_eq!(images.entries[0].image.plan.size,[512;2]);
+            let upcoming:Vec<_>=images.wanted().into_iter().take(16).collect();
+            assert_eq!(upcoming.len(),16);
+            assert!(upcoming.iter().all(|(_,_,coordinate,_,_)|images.entries[0].image.plan.bounds.intersect(crate::page_rect(*coordinate)).area()>0));
+            let texture=page_texture(r,wgpu::TextureFormat::Rgba32Float);
+            let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).flat_map(|_|[0.25f32,0.5,0.75,1.]).flat_map(f32::to_le_bytes).collect();
+            upload_page(r,&texture,&bytes);
+            for _ in 0..upcoming.len() {
+                let (source,coordinate)=next_build(&mut images).unwrap();
+                images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+            }
+        });
         let source=images.lookup(request.id,&request.source,1,bounds,request.format,r.device.working_space()).unwrap();
         assert_eq!(source.origin,[1792,768]);
         assert_eq!(source.extent,[512;2]);
@@ -335,18 +337,18 @@ fn window_mips_keep_transparent_partial_source_edges() {
     let request=request(extent,PixelRect::full(extent),31);
     let mut images=MovingImages::within(&r.scene_tiers);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&request),16<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);
-    while let Some((source,coordinate))=next_build(&mut images) {
-        let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-        let bytes:Vec<_>=(0..PAGE_SIZE).flat_map(|y|(0..PAGE_SIZE).map(move|x|[x,y]))
-            .flat_map(|local|if (0..2).all(|axis|coordinate[axis]*PAGE_SIZE+local[axis]<extent[axis]) {[0.25f32,0.5,0.75,1.]}else{[0.;4]})
-            .flat_map(f32::to_le_bytes).collect();
-        upload_page(&r,&texture,&bytes);
-        images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-    }
-    encoder.submit(&r.queue);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&request),16<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);
+        while let Some((source,coordinate))=next_build(&mut images) {
+            let texture=page_texture(r,wgpu::TextureFormat::Rgba32Float);
+            let bytes:Vec<_>=(0..PAGE_SIZE).flat_map(|y|(0..PAGE_SIZE).map(move|x|[x,y]))
+                .flat_map(|local|if (0..2).all(|axis|coordinate[axis]*PAGE_SIZE+local[axis]<extent[axis]) {[0.25f32,0.5,0.75,1.]}else{[0.;4]})
+                .flat_map(f32::to_le_bytes).collect();
+            upload_page(r,&texture,&bytes);
+            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+        }
+    });
     let image=&images.entries[0].image;
     let bytes=crate::layer_tests::page_bytes(&r,&image.texture);
     let pixel=(129*image.texture.width() as usize+128)*8;
@@ -360,11 +362,11 @@ fn panning_reuses_overlapping_pages_and_holds_the_previous_window_until_ready() 
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let initial=request([2048;2],PixelRect::new(256,256,768,768),31);
     let mut images=MovingImages::within(&r.scene_tiers);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&initial),16<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);
-    drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&initial),16<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);
+        drain(r,&mut images,encoder);
+    });
     complete(&r);
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let shifted=MovingRequest {bounds:PixelRect::new(512,256,1024,768),..initial.clone()};
@@ -403,21 +405,19 @@ fn mip_windows_share_sources_and_invalidate_on_format_context_or_abandoned_submi
     assert!(images.pending());
     assert!(next_build(&mut images).is_some());
     assert_eq!(images.entries[0].pending.len(),4);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);
+    submit_encoded(&mut r,|r,encoder|{drain(r,&mut images,encoder);});
     complete(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let reused=images.plan(&r,std::slice::from_ref(&request),16<<20,&mut encoder).unwrap();
-    assert!(reused.targets.is_empty());
-    let changed=MovingRequest {format:wgpu::TextureFormat::Rgba32Float,..request};
-    let replaced=images.plan(&r,&[changed],16<<20,&mut encoder).unwrap();
-    assert_eq!(replaced.targets.len(),2);
-    assert_eq!(images.evictions,2);
-    assert!(images.pinned_bytes()>0);
-    images.allocate(&r,replaced,&mut encoder);
-    drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);
+    submit_encoded(&mut r,|r,encoder| {
+        let reused=images.plan(r,std::slice::from_ref(&request),16<<20,encoder).unwrap();
+        assert!(reused.targets.is_empty());
+        let changed=MovingRequest {format:wgpu::TextureFormat::Rgba32Float,..request};
+        let replaced=images.plan(r,&[changed],16<<20,encoder).unwrap();
+        assert_eq!(replaced.targets.len(),2);
+        assert_eq!(images.evictions,2);
+        assert!(images.pinned_bytes()>0);
+        images.allocate(r,replaced,encoder);
+        drain(r,&mut images,encoder);
+    });
     complete(&r);
 }
 
@@ -451,20 +451,20 @@ fn shrinking_grants_retire_fallbacks_and_complete_a_clipped_retarget() {
     let initial=request([4096;2],PixelRect::new(256,256,2304,2304),31);
     let target=MovingRequest {bounds:PixelRect::new(3840,1024,4096,1280),..initial.clone()};
     let mut images=MovingImages::within(&r.scene_tiers);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&initial),64<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&initial),64<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     let budget=working_bytes()+(1<<20);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&target),budget,&mut encoder).unwrap();
-    assert!(plan.waiting);assert!(images.retiring.used()!=0);
-    encoder.submit(&r.queue);complete(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,std::slice::from_ref(&target),budget,&mut encoder).unwrap();
-    assert!(!plan.waiting);assert!(!plan.targets.is_empty());
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&target),budget,encoder).unwrap();
+        assert!(plan.waiting);assert!(images.retiring.used()!=0);
+    });complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,std::slice::from_ref(&target),budget,encoder).unwrap();
+        assert!(!plan.waiting);assert!(!plan.targets.is_empty());
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     assert!(images.lookup(target.id,&target.source,1,target.bounds,target.format,r.device.working_space()).is_some());
     assert!(images.storage_bytes()<=budget);
     assert_eq!(MovingImages::demand(&[initial],[2560,1600]).unwrap(),MovingImages::demand(&[target],[2560,1600]).unwrap());
@@ -480,22 +480,21 @@ fn retargeting_unfinished_windows_preserves_every_completed_overlap_page() {
     upload_page(&r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
     for step in 0..6 {
         request.bounds=PixelRect::new(512+step*256,512,1024+step*256,1024);
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan=images.plan(&r,std::slice::from_ref(&request),32<<20,&mut encoder).unwrap();
-        images.allocate(&r,plan,&mut encoder);
-        let entry=images.entries.last().unwrap();
-        for coordinate in &completed {
-            if entry.image.plan.bounds.intersect(crate::page_rect(*coordinate)).area()>0 {
-                assert!(!entry.pending.contains(coordinate),"completed {coordinate:?} was discarded on step {step}");
+        submit_encoded(&mut r,|r,encoder| {
+            let plan=images.plan(r,std::slice::from_ref(&request),32<<20,encoder).unwrap();
+            images.allocate(r,plan,encoder);
+            let entry=images.entries.last().unwrap();
+            for coordinate in &completed {
+                if entry.image.plan.bounds.intersect(crate::page_rect(*coordinate)).area()>0 {
+                    assert!(!entry.pending.contains(coordinate),"completed {coordinate:?} was discarded on step {step}");
+                }
             }
-        }
-        let (source,coordinate)=next_build(&mut images).unwrap();
-        assert!(completed.insert(coordinate));
-        images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-        encoder.submit(&r.queue);complete(&r);
+            let (source,coordinate)=next_build(&mut images).unwrap();
+            assert!(completed.insert(coordinate));
+            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+        });complete(&r);
     }
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    drain(&mut r,&mut images,&mut encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder|{drain(r,&mut images,encoder);});complete(&r);
     assert!(images.lookup(request.id,&request.source,1,request.bounds,request.format,r.device.working_space()).is_some());
 }
 
@@ -583,27 +582,27 @@ fn roots_share_the_view_allowance_and_evict_before_requested_windows() {
     let requests=[first.clone(),MovingRequest {bounds:PixelRect::new(1536,1536,1792,1792),..first}];
     r.memory.mip_demand(32<<20,[2560,1600]);r.publish_memory();r.factory.memory_budget().flush_reports();
     let mut images=MovingImages::within(&r.scene_tiers);
-    pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,32<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);
-    let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-    upload_page(&r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
-    while images.entries.iter().any(|entry|!entry.root && !entry.ready()) {
-        let (source,coordinate,_)=images.next_build(|class|class==Class::Visible,|_,_,_|true).unwrap();
-        images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-    }
-    assert_eq!(images.entries.iter().filter(|entry|!entry.root && entry.ready()).count(),2);
-    assert!(images.entries.iter().any(|entry|entry.root && !entry.ready()));
-    assert_eq!(trim(&mut images,32<<20,&mut encoder),0);
-    assert_eq!(images.entries.iter().filter(|entry|!entry.root && entry.ready()).count(),2);
-    assert_eq!(images.retiring.used(),0);
-    drain(&mut r,&mut images,&mut encoder);
-    let roots=images.entries.iter().filter(|entry|entry.root).map(Entry::storage_bytes).sum::<u64>();
-    assert!(roots>0);
-    let limit=images.storage_bytes()-roots;assert_eq!(trim(&mut images,limit,&mut encoder),roots);
-    assert_eq!(images.entries.iter().filter(|entry|!entry.root && entry.ready()).count(),2);
-    assert!(images.entries.iter().all(|entry|!entry.root));
-    encoder.submit(&r.queue);complete(&r);
+    pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,32<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);
+        let texture=page_texture(r,wgpu::TextureFormat::Rgba32Float);
+        upload_page(r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
+        while images.entries.iter().any(|entry|!entry.root && !entry.ready()) {
+            let (source,coordinate,_)=images.next_build(|class|class==Class::Visible,|_,_,_|true).unwrap();
+            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+        }
+        assert_eq!(images.entries.iter().filter(|entry|!entry.root && entry.ready()).count(),2);
+        assert!(images.entries.iter().any(|entry|entry.root && !entry.ready()));
+        assert_eq!(trim(&mut images,32<<20,encoder),0);
+        assert_eq!(images.entries.iter().filter(|entry|!entry.root && entry.ready()).count(),2);
+        assert_eq!(images.retiring.used(),0);
+        drain(r,&mut images,encoder);
+        let roots=images.entries.iter().filter(|entry|entry.root).map(Entry::storage_bytes).sum::<u64>();
+        assert!(roots>0);
+        let limit=images.storage_bytes()-roots;assert_eq!(trim(&mut images,limit,encoder),roots);
+        assert_eq!(images.entries.iter().filter(|entry|!entry.root && entry.ready()).count(),2);
+        assert!(images.entries.iter().all(|entry|!entry.root));
+    });complete(&r);
 }
 
 #[test]
@@ -613,26 +612,26 @@ fn overview_inputs_and_prefetch_use_the_same_build_order() {
     let requests=[request([2048;2],PixelRect::new(256,256,512,512),31),request([2048;2],PixelRect::new(1536,1536,1792,1792),73)];
     r.memory.mip_demand(32<<20,[2560,1600]);r.publish_memory();r.factory.memory_budget().flush_reports();
     let mut images=MovingImages::within(&r.scene_tiers);
-    pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,32<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);
-    let roots=images.entries.iter().filter(|entry|entry.root).map(|entry|entry.pending.len()).sum::<usize>();
-    let upcoming=images.wanted();
-    assert!(upcoming.len()>roots);
-    for (id,_,coordinate,_,_) in &upcoming[..roots] {
-        assert!(images.entries.iter().any(|entry|entry.root && entry.id==*id && entry.pending.contains(coordinate)));
-    }
-    let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-    upload_page(&r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
-    while let Some((source,coordinate))=next_build(&mut images) {
-        if images.entries.iter().any(|entry|entry.root && !entry.ready()) {
-            assert!(images.entries.iter().any(|entry|entry.root && entry.wants(&source,coordinate)));
+    pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,32<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);
+        let roots=images.entries.iter().filter(|entry|entry.root).map(|entry|entry.pending.len()).sum::<usize>();
+        let upcoming=images.wanted();
+        assert!(upcoming.len()>roots);
+        for (id,_,coordinate,_,_) in &upcoming[..roots] {
+            assert!(images.entries.iter().any(|entry|entry.root && entry.id==*id && entry.pending.contains(coordinate)));
         }
-        images.write_tile(&mut r,&mut encoder,&source,coordinate,&texture,None).unwrap();
-        assert!(!images.entries.iter().any(|entry|entry.wants(&source,coordinate)));
-    }
-    assert!(images.entries.iter().all(Entry::ready));
-    encoder.submit(&r.queue);complete(&r);
+        let texture=page_texture(r,wgpu::TextureFormat::Rgba32Float);
+        upload_page(r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
+        while let Some((source,coordinate))=next_build(&mut images) {
+            if images.entries.iter().any(|entry|entry.root && !entry.ready()) {
+                assert!(images.entries.iter().any(|entry|entry.root && entry.wants(&source,coordinate)));
+            }
+            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+            assert!(!images.entries.iter().any(|entry|entry.wants(&source,coordinate)));
+        }
+        assert!(images.entries.iter().all(Entry::ready));
+    });complete(&r);
 }
 
 #[test]
@@ -758,22 +757,24 @@ fn nearest_windows_retain_codes_and_keep_their_identity_when_the_source_promotes
             format:MovingImages::source_format(&source),..moving_request()};
         let mut images=MovingImages::within(&r.scene_tiers);
         pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        let plan=images.plan(&r,std::slice::from_ref(&request),64<<20,&mut encoder).unwrap();
-        images.allocate(&r,plan,&mut encoder);
-        let pixels=crate::prepare_image_tile(&source,[0;2],r.device.working_space(),&r.device.source_samples,None).unwrap();
-        let tile=crate::scene::Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],pixels.clone()).unwrap();
-        images.write_tile(&mut r,&mut encoder,&source,[0;2],&tile.texture,Some(&pixels)).unwrap();
-        r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+        let (pixels,tile)=submit_encoded(&mut r,|r,encoder| {
+            let plan=images.plan(r,std::slice::from_ref(&request),64<<20,encoder).unwrap();
+            images.allocate(r,plan,encoder);
+            let pixels=crate::prepare_image_tile(&source,[0;2],r.device.working_space(),&r.device.source_samples,None).unwrap();
+            let tile=crate::scene::Scene::decode_prepared(r,encoder,&source,[0;2],pixels.clone()).unwrap();
+            images.write_tile(r,encoder,&source,[0;2],&tile.texture,Some(&pixels)).unwrap();
+            (pixels,tile)
+        });complete(&r);
         let before=images.lookup(request.id,&source,0,request.bounds,request.format,r.device.working_space()).unwrap();
         assert_eq!(crate::texture_bytes(before.view.texture()),u64::from(PAGE_SIZE).pow(2)*if depth==SampleDepth::U8 {4}else{8});
         let expected=match &pixels {crate::scene::sources::PreparedSourcePixels::NativeSamples(bytes)=>bytes,_=>unreachable!()};
         assert_eq!(crate::layer_tests::page_bytes(&r,before.view.texture()),**expected);
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-        let promoted=crate::scene::Scene::promote_source(&mut r,&mut encoder,tile).unwrap();
-        assert_eq!(promoted.texture.format(),wgpu::TextureFormat::Rgba32Float);
-        r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+        let promoted=submit_encoded(&mut r,|r,encoder| {
+            pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
+            let promoted=crate::scene::Scene::promote_source(r,encoder,tile).unwrap();
+            assert_eq!(promoted.texture.format(),wgpu::TextureFormat::Rgba32Float);
+            promoted
+        });complete(&r);
         let builds=images.tile_builds;
         let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
         let plan=images.plan(&r,std::slice::from_ref(&request),64<<20,&mut encoder).unwrap();
@@ -844,10 +845,11 @@ fn mixed_scale_windows_and_roots_use_the_requested_level_format_and_context() {
         MovingRequest {bounds:PixelRect::EMPTY,..request([512;2],PixelRect::EMPTY,17)}];
     r.memory.mip_demand(64<<20,[2560,1600]);r.publish_memory();r.factory.memory_budget().flush_reports();
     let mut images=MovingImages::within(&r.scene_tiers);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,64<<20,&mut encoder).unwrap();
-    assert_eq!(plan.targets.iter().filter(|target|!target.root).count(),3);
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,64<<20,encoder).unwrap();
+        assert_eq!(plan.targets.iter().filter(|target|!target.root).count(),3);
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     let lookup=|level,bounds,format,space|images.lookup(initial.id,&initial.source,level,bounds,format,space);
     assert_eq!(lookup(1,initial.bounds,initial.format,r.device.working_space()).unwrap().level,1);
     assert_eq!(lookup(3,initial.bounds,initial.format,r.device.working_space()).unwrap().level,3);
@@ -916,20 +918,20 @@ fn partial_view_readiness_notifies_the_renderer_before_its_root_completes() {
     r.prepare_moving_projection(frame).unwrap();r.begin_frame_memory(frame);
     let projected=r.moving_projection.as_ref().unwrap().requests[0].clone();
     let bounds=projected.allocation(&r.device,projected.level,false).unwrap().unwrap().plan.bounds;
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    for coordinate in crate::page_coordinates(bounds) {
-        let pixels=prepare_image_tile(&projected.source,coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
-        crate::scene::Scene::decode_prepared(&mut r,&mut encoder,&projected.source,coordinate,pixels).unwrap();
-    }
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-    pollster::block_on(r.compilation.prepare_all(r.moving_images.pipelines(&r.device))).unwrap();
-    let changed=r.prepare_moving_images(frame,&mut encoder,&mut crate::test_support::work(false)).unwrap();
-    assert!(r.moving_images.lookup(projected.id,&projected.source,projected.level,projected.bounds,projected.format,r.device.working_space()).is_some());
-    assert!(r.moving_images.pending());assert_eq!(r.moving_images.completed_images,0);
-    assert!(changed,"a newly ready view window must invalidate its presentation while the root is pending");
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        for coordinate in crate::page_coordinates(bounds) {
+            let pixels=prepare_image_tile(&projected.source,coordinate,r.device.working_space(),&r.device.source_samples,None).unwrap();
+            crate::scene::Scene::decode_prepared(r,encoder,&projected.source,coordinate,pixels).unwrap();
+        }
+    });complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
+        pollster::block_on(r.compilation.prepare_all(r.moving_images.pipelines(&r.device))).unwrap();
+        let changed=r.prepare_moving_images(frame,encoder,&mut crate::test_support::work(false)).unwrap();
+        assert!(r.moving_images.lookup(projected.id,&projected.source,projected.level,projected.bounds,projected.format,r.device.working_space()).is_some());
+        assert!(r.moving_images.pending());assert_eq!(r.moving_images.completed_images,0);
+        assert!(changed,"a newly ready view window must invalidate its presentation while the root is pending");
+    });complete(&r);
 }
 
 #[test]
@@ -941,21 +943,20 @@ fn a_tile_decoded_for_another_consumer_is_written_into_the_mip_windows_waiting_f
     let mut images=MovingImages::within(&r.scene_tiers);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
     pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    images.allocate(&r,MipPlan {targets,waiting:false},&mut encoder);
-    let last=*images.entries.iter().find(|entry|entry.root).unwrap().pending.back().unwrap();
-    r.moving_images=images;
-    assert!(r.request_image_decode(request.id,request.source.clone(),last,Class::Visible).unwrap());
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
-    while r.source_tiles.borrow().prepared_view(&request.source,last).is_none() {
-        r.drain_image_decodes(&mut encoder).unwrap();
-        assert!(std::time::Instant::now()<deadline,"the requested tile arrives");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    assert!(!r.moving_images.entries.iter().any(|entry|entry.pending.contains(&last)),
-        "the drain that uploads a tile writes it into every window waiting for it, so a later pass never decodes it again");
-    assert_eq!(r.source_tiles.borrow().misses,1);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        images.allocate(r,MipPlan {targets,waiting:false},encoder);
+        let last=*images.entries.iter().find(|entry|entry.root).unwrap().pending.back().unwrap();
+        r.moving_images=images;
+        assert!(r.request_image_decode(request.id,request.source.clone(),last,Class::Visible).unwrap());
+        wait_until("the requested tile arrives",|| {
+            if r.source_tiles.borrow().prepared_view(&request.source,last).is_some() {return Ok(());}
+            r.drain_image_decodes(encoder).unwrap();
+            Err(())
+        });
+        assert!(!r.moving_images.entries.iter().any(|entry|entry.pending.contains(&last)),
+            "the drain that uploads a tile writes it into every window waiting for it, so a later pass never decodes it again");
+        assert_eq!(r.source_tiles.borrow().misses,1);
+    });complete(&r);
 }
 
 #[test]
@@ -967,27 +968,26 @@ fn window_samples_whose_upload_is_refused_wait_for_room_instead_of_being_dropped
     let mut images=MovingImages::within(&r.scene_tiers);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
     pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    images.allocate(&r,MipPlan {targets,waiting:false},&mut encoder);
-    assert_eq!(images.entries.len(),4);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        images.allocate(r,MipPlan {targets,waiting:false},encoder);
+        assert_eq!(images.entries.len(),4);
+    });complete(&r);
     r.moving_images=images;
     r.source_tiles.borrow_mut().admit_limits(crate::scene::sources::NORMALIZED_PAGE_BYTES);
     assert!(r.request_exact_image_decode(base.id,base.source.clone(),[0;2],Class::Visible).unwrap());
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(10);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    while r.source_tiles.borrow().prepared_view(&base.source,[0;2]).is_none() {
-        r.drain_image_decodes(&mut encoder).unwrap();
-        assert!(std::time::Instant::now()<deadline,"the requested tile arrives");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    assert!(r.moving_images.entries.iter().any(|entry|!entry.ready()),"four windows' samples exceed the upload room left after the display's upload");
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    r.drain_image_decodes(&mut encoder).unwrap();
-    assert!(r.moving_images.entries.iter().all(Entry::ready),"the held samples are written once the upload room frees, without another decode");
-    assert_eq!(r.source_tiles.borrow().misses,1);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        wait_until("the requested tile arrives",|| {
+            if r.source_tiles.borrow().prepared_view(&base.source,[0;2]).is_some() {return Ok(());}
+            r.drain_image_decodes(encoder).unwrap();
+            Err(())
+        });
+        assert!(r.moving_images.entries.iter().any(|entry|!entry.ready()),"four windows' samples exceed the upload room left after the display's upload");
+    });complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        r.drain_image_decodes(encoder).unwrap();
+        assert!(r.moving_images.entries.iter().all(Entry::ready),"the held samples are written once the upload room frees, without another decode");
+        assert_eq!(r.source_tiles.borrow().misses,1);
+    });complete(&r);
 }
 
 #[test]
@@ -1004,33 +1004,33 @@ fn a_root_window_queues_the_decodes_only_it_needs_at_its_own_class() {
     queue.pool=Arc::new(DecodePool {dispatch:Default::default(),capacity:64,speculative:64*TILE_BYTES,epoch:Default::default(),capacity_waiters:Default::default()});
     r.moving_decode=Some((r.device.working_space(),queue));
     pollster::block_on(r.compilation.prepare_all(r.moving_images.pipelines(&r.device))).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    r.prepare_moving_images(frame,&mut encoder,&mut crate::test_support::work(false)).unwrap();
-    let view=r.moving_images.entries.iter().find(|entry|!entry.root).unwrap().image.plan.bounds;
-    let root=r.moving_images.entries.iter().find(|entry|entry.root).unwrap().image.plan.bounds;
-    let queued:Vec<_>=r.moving_decode.as_ref().unwrap().1.outstanding.iter().map(|outstanding|match &outstanding.key {
-        Some(DecodeKey::Image(_,coordinate))=>(*coordinate,outstanding.class),_=>unreachable!(),
-    }).collect();
-    assert_eq!(queued.len(),crate::page_coordinates(root).count(),"every tile the root needs is queued once");
-    for (coordinate,class) in queued {
-        let expected=if crate::page_rect(coordinate).intersect(view).is_empty() {Class::Navigator} else {Class::Visible};
-        assert_eq!(class,expected,"tile {coordinate:?} queues at the class of the most urgent window that needs it");
-    }
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        r.prepare_moving_images(frame,encoder,&mut crate::test_support::work(false)).unwrap();
+        let view=r.moving_images.entries.iter().find(|entry|!entry.root).unwrap().image.plan.bounds;
+        let root=r.moving_images.entries.iter().find(|entry|entry.root).unwrap().image.plan.bounds;
+        let queued:Vec<_>=r.moving_decode.as_ref().unwrap().1.outstanding.iter().map(|outstanding|match &outstanding.key {
+            Some(DecodeKey::Image(_,coordinate))=>(*coordinate,outstanding.class),_=>unreachable!(),
+        }).collect();
+        assert_eq!(queued.len(),crate::page_coordinates(root).count(),"every tile the root needs is queued once");
+        for (coordinate,class) in queued {
+            let expected=if crate::page_rect(coordinate).intersect(view).is_empty() {Class::Navigator} else {Class::Visible};
+            assert_eq!(class,expected,"tile {coordinate:?} queues at the class of the most urgent window that needs it");
+        }
+    });complete(&r);
 }
 
 fn promoted_boundary_window(r:&mut WgpuRasterizer,request:&MovingRequest,tiles:[&crate::source_access::TileTexture;2])->Vec<[f32;4]> {
     let mut images=MovingImages::within(&r.scene_tiers);
     pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let mut plan=images.plan(r,std::slice::from_ref(request),8<<20,&mut encoder).unwrap();
-    plan.targets.retain(|target|!target.root);
-    images.allocate(r,plan,&mut encoder);
-    assert_eq!(images.entries.len(),1);
-    for (x,texture) in tiles.into_iter().enumerate() {
-        images.write_tile(r,&mut encoder,&request.source,[x as u32,0],texture,None).unwrap();
-    }
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(r);
+    submit_encoded(r,|r,encoder| {
+        let mut plan=images.plan(r,std::slice::from_ref(request),8<<20,encoder).unwrap();
+        plan.targets.retain(|target|!target.root);
+        images.allocate(r,plan,encoder);
+        assert_eq!(images.entries.len(),1);
+        for (x,texture) in tiles.into_iter().enumerate() {
+            images.write_tile(r,encoder,&request.source,[x as u32,0],texture,None).unwrap();
+        }
+    });complete(r);
     let window=images.lookup(request.id,&request.source,1,request.bounds,request.format,r.device.working_space()).unwrap();
     assert_eq!(window.level,1);
     assert_eq!([window.view.texture().width(),window.view.texture().height()],[PAGE_SIZE,PAGE_SIZE/2]);
@@ -1064,26 +1064,27 @@ fn promoted_p3_page_boundary_keeps_a_reduced_gradient_within_two_display_codes()
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     assert_eq!(r.device.working_space(),RgbSpace::Srgb);
     let request=MovingRequest {source:source.clone(),bounds:PixelRect::full(extent),..moving_request()};
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let mut tiles=Vec::new();
-    for x in 0..2 {
-        let pixels=crate::prepare_image_tile(&source,[x,0],r.device.working_space(),&r.device.source_samples,None).unwrap();
-        let tile=crate::scene::Scene::decode_prepared(&mut r,&mut encoder,&source,[x,0],pixels).unwrap();
-        assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
-        tiles.push(tile);
-    }
-    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-    let left=crate::scene::Scene::promote_source(&mut r,&mut encoder,tiles.remove(0)).unwrap();
-    let right=tiles.remove(0);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    let (left,right)=submit_encoded(&mut r,|r,encoder| {
+        let mut tiles=Vec::new();
+        for x in 0..2 {
+            let pixels=crate::prepare_image_tile(&source,[x,0],r.device.working_space(),&r.device.source_samples,None).unwrap();
+            let tile=crate::scene::Scene::decode_prepared(r,encoder,&source,[x,0],pixels).unwrap();
+            assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+            tiles.push(tile);
+        }
+        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
+        let left=crate::scene::Scene::promote_source(r,encoder,tiles.remove(0)).unwrap();
+        let right=tiles.remove(0);
+        (left,right)
+    });complete(&r);
     assert_eq!(r.source_tiles.borrow().prepared_view(&source,[0,0]).unwrap().texture().format(),wgpu::TextureFormat::Rgba32Float);
     assert_eq!(r.source_tiles.borrow().prepared_view(&source,[1,0]).unwrap().texture().format(),wgpu::TextureFormat::Rgba8Unorm);
     let mixed=promoted_boundary_window(&mut r,&request,[&left.texture,&right.texture]);
     assert_eq!(r.source_tiles.borrow().prepared_view(&source,[1,0]).unwrap().texture().format(),wgpu::TextureFormat::Rgba8Unorm);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-    let right=crate::scene::Scene::promote_source(&mut r,&mut encoder,right).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    let right=submit_encoded(&mut r,|r,encoder| {
+        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
+        crate::scene::Scene::promote_source(r,encoder,right).unwrap()
+    });complete(&r);
     let reference=promoted_boundary_window(&mut r,&request,[&left.texture,&right.texture]);
     let code=|pixel:[f32;4],channel:usize|if pixel[3]==0. {0i16}else {
         (RgbSpace::Srgb.encode(f64::from(pixel[channel]/pixel[3])).clamp(0.,1.)*255.).round() as i16
@@ -1112,38 +1113,38 @@ fn a_drain_writes_window_samples_as_it_takes_them_so_none_wait_for_a_frame_or_de
     let exact=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[97,113,149,255]);
     let pixels=prepare_image_tile(&request.source,[0;2],r.device.working_space(),&r.device.source_samples,None).unwrap();
     assert!(matches!(pixels,PreparedSourcePixels::NativeSamples(_)));
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
-    crate::scene::Scene::decode_prepared_for(&mut r,&mut encoder,&request.source,[0;2],pixels.clone(),SourceUse::Exact,crate::residency::Class::Visible).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let target=request.allocation(&r.device,0,false).unwrap().unwrap();
-    let mut images=MovingImages::within(&r.scene_tiers);
-    pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-    images.allocate(&r,MipPlan {targets:vec![target],waiting:false},&mut encoder);
-    r.moving_images=images;
-    r.source_results.push_back((r.device.working_space(),PreparedImageWork::Image(PreparedMipTile {
-        class:crate::residency::Class::Visible,use_:SourceUse::Native,id:request.id,source:request.source.clone(),coordinate:[0;2],pixels:Ok(pixels),
-    }),r.scene_tiers.ram.charge(0)));
-    r.drain_image_decodes(&mut encoder).unwrap();
-    assert!(r.source_results.is_empty(),"the drain that takes a window's samples writes them instead of holding them");
-    assert_eq!(r.moving_images.tile_builds,1);
-    assert!(r.moving_images.entries.iter().all(Entry::ready));
-    assert!(r.moving_images_pending(),"the completed window keeps a frame runnable until it is published");
-    let (send,results)=std::sync::mpsc::sync_channel(2);
-    let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let queue=queued(results,ready.clone(),Vec::new(),2);let dispatch=queue.pool.dispatch.clone();
-    r.moving_decode=Some((r.device.working_space(),queue));
-    r.set_preparation_wake(Arc::new(|| {}));
-    let id=PortableId::random();
-    assert!(r.request_exact_image_decode(id,exact.clone(),[0;2],crate::residency::Class::Visible).unwrap());
-    let Some(DecodeJob {sequence,request:MipDecodeRequest::Image(_),..})=dispatch.try_take() else {panic!("the exact request reaches a worker");};
-    send.send((sequence,PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:SourceUse::Exact,id,source:exact.clone(),coordinate:[0;2],
-        pixels:prepare_image_tile(&exact,[0;2],r.device.working_space(),&r.device.source_samples,None)}))).unwrap();
-    ready.fetch_add(1,Ordering::AcqRel);
-    r.drain_image_decodes(&mut encoder).unwrap();
-    assert!(r.source_tiles.borrow().prepared_view(&exact,[0;2]).is_some(),"an exact query's result is taken by the next drain");
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline,&r.scene_pipelines.source.integer])).unwrap();
+        crate::scene::Scene::decode_prepared_for(r,encoder,&request.source,[0;2],pixels.clone(),SourceUse::Exact,crate::residency::Class::Visible).unwrap();
+    });complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let target=request.allocation(&r.device,0,false).unwrap().unwrap();
+        let mut images=MovingImages::within(&r.scene_tiers);
+        pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
+        images.allocate(r,MipPlan {targets:vec![target],waiting:false},encoder);
+        r.moving_images=images;
+        r.source_results.push_back((r.device.working_space(),PreparedImageWork::Image(PreparedMipTile {
+            class:crate::residency::Class::Visible,use_:SourceUse::Native,id:request.id,source:request.source.clone(),coordinate:[0;2],pixels:Ok(pixels),
+        }),r.scene_tiers.ram.charge(0)));
+        r.drain_image_decodes(encoder).unwrap();
+        assert!(r.source_results.is_empty(),"the drain that takes a window's samples writes them instead of holding them");
+        assert_eq!(r.moving_images.tile_builds,1);
+        assert!(r.moving_images.entries.iter().all(Entry::ready));
+        assert!(r.moving_images_pending(),"the completed window keeps a frame runnable until it is published");
+        let (send,results)=std::sync::mpsc::sync_channel(2);
+        let ready=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let queue=queued(results,ready.clone(),Vec::new(),2);let dispatch=queue.pool.dispatch.clone();
+        r.moving_decode=Some((r.device.working_space(),queue));
+        r.set_preparation_wake(Arc::new(|| {}));
+        let id=PortableId::random();
+        assert!(r.request_exact_image_decode(id,exact.clone(),[0;2],crate::residency::Class::Visible).unwrap());
+        let Some(DecodeJob {sequence,request:MipDecodeRequest::Image(_),..})=dispatch.try_take() else {panic!("the exact request reaches a worker");};
+        send.send((sequence,PreparedImageWork::Image(PreparedMipTile {class:crate::residency::Class::Visible,use_:SourceUse::Exact,id,source:exact.clone(),coordinate:[0;2],
+            pixels:prepare_image_tile(&exact,[0;2],r.device.working_space(),&r.device.source_samples,None)}))).unwrap();
+        ready.fetch_add(1,Ordering::AcqRel);
+        r.drain_image_decodes(encoder).unwrap();
+        assert!(r.source_tiles.borrow().prepared_view(&exact,[0;2]).is_some(),"an exact query's result is taken by the next drain");
+    });complete(&r);
 }
 
 
@@ -1187,14 +1188,14 @@ fn deferred_window_color_preparation_preserves_the_submitted_dab() {
     let mut sources = vec![photo.source.clone()];
     sources.extend((1..allowance / encoded_bytes).map(|value|
         layer_core::color::source::rgba8_source(extent, |_, _| [value as u8, 73, 149, 255])));
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    for source in &sources {
-        crate::test_support::query_ready(&mut r, &mut encoder, |r, encoder| {
-            let pixels = prepare_image_tile(source, [0; 2], r.device.working_space(), &r.device.source_samples, None).unwrap();
-            crate::scene::Scene::decode_prepared(r, encoder, source, [0; 2], pixels)
-        });
-    }
-    r.uploads.finish(&encoder); encoder.submit(&r.queue); complete(&r);
+    submit_encoded(&mut r, |r, encoder| {
+        for source in &sources {
+            crate::test_support::query_ready(r, encoder, |r, encoder| {
+                let pixels = prepare_image_tile(source, [0; 2], r.device.working_space(), &r.device.source_samples, None).unwrap();
+                crate::scene::Scene::decode_prepared(r, encoder, source, [0; 2], pixels)
+            });
+        }
+    }); complete(&r);
     assert_eq!(r.source_tiles.borrow().gpu_bytes(), allowance + r.source_tiles.borrow().non_slot_bytes());
     assert!(r.source_tiles.borrow().prepared_view(&photo.source, [0; 2]).is_some());
     assert_eq!(r.source_tiles.borrow().non_slot_bytes(), crate::native_tiles::transfer::TABLE_BYTES,
@@ -1225,10 +1226,10 @@ pub(crate) fn assert_optional_display_grant_decrease() {
     let mut frame=crate::test_support::packet(document.scene(),extent);
     frame.view=layer_render::ViewState {width_px:8192,height_px:8192,document_to_surface:[1.,0.,0.,1.,0.,0.]};
     crate::memory::memory_tests::legacy_scene_frame(&mut r,frame);
-    let mut images=MovingImages::within(&r.scene_tiers);let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,512<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    let mut images=MovingImages::within(&r.scene_tiers);submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,512<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     assert!(images.entries.iter().all(Entry::ready));
     r.end_frame_memory();
     r.moving_images=images;
@@ -1240,10 +1241,10 @@ fn ready_moving_windows_within_the_display_grant_survive_a_smaller_mip_share() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let requests=(0..4u8).map(|index|MovingRequest {rank:usize::from(index),..request([1024;2],PixelRect::new(0,0,512,512),31+index)}).collect::<Vec<_>>();
     let mut images=std::mem::take(&mut r.moving_images);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,256<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,256<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     let entries=images.entries.len();
     assert!(entries>1 && images.entries.iter().all(Entry::ready));
     r.moving_images=images;
@@ -1258,14 +1259,14 @@ fn a_moving_window_beyond_the_display_limit_is_refused_instead_of_allocated() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let requests=[request([1024;2],PixelRect::new(0,0,512,512),31)];
     let mut images=std::mem::take(&mut r.moving_images);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,256<<20,&mut encoder).unwrap();
-    let display=r.scene_tiers.display.clone();
-    display.set_limit(display.used()+plan.targets.iter().map(|target|target.bytes).sum::<u64>()/2,0);
-    images.allocate(&r,plan,&mut encoder);
-    assert!(display.used()<=display.limit(),"moving windows hold {} display bytes beyond the limit {}",display.used(),display.limit());
-    assert!(images.pending(),"the refused window waits for display room");
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,256<<20,encoder).unwrap();
+        let display=r.scene_tiers.display.clone();
+        display.set_limit(display.used()+plan.targets.iter().map(|target|target.bytes).sum::<u64>()/2,0);
+        images.allocate(r,plan,encoder);
+        assert!(display.used()<=display.limit(),"moving windows hold {} display bytes beyond the limit {}",display.used(),display.limit());
+        assert!(images.pending(),"the refused window waits for display room");
+    });complete(&r);
 }
 
 #[test]
@@ -1275,10 +1276,10 @@ fn display_reports_read_no_moving_image_entry_and_count_retiring_windows_until_c
     let mut images=std::mem::take(&mut r.moving_images);
     let report=|r:&WgpuRasterizer|{let report=r.current_display_memory_report();[report.gpu_bytes,report.pinned_gpu_bytes]};
     let before=report(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let plan=images.plan(&r,&requests,256<<20,&mut encoder).unwrap();
-    images.allocate(&r,plan,&mut encoder);drain(&mut r,&mut images,&mut encoder);
-    encoder.submit(&r.queue);complete(&r);
+    submit_encoded(&mut r,|r,encoder| {
+        let plan=images.plan(r,&requests,256<<20,encoder).unwrap();
+        images.allocate(r,plan,encoder);drain(r,&mut images,encoder);
+    });complete(&r);
     assert!(images.entries.len()>1 && images.entries.iter().all(Entry::ready));
     r.moving_images=images;
     let with=report(&r);
@@ -1294,11 +1295,11 @@ fn display_reports_read_no_moving_image_entry_and_count_retiring_windows_until_c
     assert_eq!(report(&next),with,"a same-device replacement reports the windows it adopted");
     let mut r=next;
     let work=r.moving_images.work_bytes();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let retired=trim(&mut r.moving_images,work,&mut encoder);
-    assert!(r.moving_images.entries.is_empty() && retired==stored-work);
-    assert_eq!((r.moving_images.storage_bytes(),r.moving_images.pinned_bytes()),(stored,work+retired),"retiring windows stay counted and pinned");
-    encoder.submit(&r.queue);complete(&r);r.device.retirement_handle().flush().unwrap();
+    submit_encoded(&mut r,|r,encoder| {
+        let retired=trim(&mut r.moving_images,work,encoder);
+        assert!(r.moving_images.entries.is_empty() && retired==stored-work);
+        assert_eq!((r.moving_images.storage_bytes(),r.moving_images.pinned_bytes()),(stored,work+retired),"retiring windows stay counted and pinned");
+    });complete(&r);r.device.retirement_handle().flush().unwrap();
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     trim(&mut r.moving_images,0,&mut encoder);
     assert_eq!((r.moving_images.storage_bytes(),r.moving_images.pending()),(0,false));

@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{submit_encoded, wait_until};
 use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
 fn standalone() -> (Arc<crate::residency::Tier>, DecodedTiles) {
@@ -55,12 +56,8 @@ fn equal_generated_rasters_reuse_gpu_pixels_without_another_sample_decode() {
     let second = Arc::new(TileBlob::encode(descriptor, &bytes).unwrap());
     assert_ne!(first.owner_identity(), second.owner_identity());
     pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline])).unwrap();
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let original = scene.raster_tile_for_query(&mut r, &first, RgbSpace::Srgb, &mut encoder).unwrap();
-    r.uploads.finish(&encoder); encoder.submit(&r.queue);
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let reused = scene.raster_tile_for_query(&mut r, &second, RgbSpace::Srgb, &mut encoder).unwrap();
-    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    let original = submit_encoded(&mut r, |r, encoder| scene.raster_tile_for_query(r, &first, RgbSpace::Srgb, encoder).unwrap());
+    let reused = submit_encoded(&mut r, |r, encoder| scene.raster_tile_for_query(r, &second, RgbSpace::Srgb, encoder).unwrap());
     assert_eq!(original.view, reused.view);
     assert_eq!(r.source_cache_work(), [1, 1]);
     let samples = r.device.source_samples.stats();
@@ -112,16 +109,16 @@ fn lease_foreign_sources(r: &mut WgpuRasterizer, count: usize) -> (Option<Arc<So
     if count == 0 { return (None, Vec::new()); }
     let source = scan_source(count, 173);
     pollster::block_on(r.compilation.prepare_all(crate::startup::SourceKinds::for_source(&source).pipelines(&r.scene_pipelines.source))).unwrap();
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let mut leases = Vec::with_capacity(count);
-    for x in 0..count as u32 {
-        let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
-        let tile=Scene::decode_prepared_for(r,&mut encoder,&source,[x,0],prepared,SourceUse::Exact,crate::residency::Class::Visible).unwrap();
-        assert_eq!(tile.texture.format(), wgpu::TextureFormat::Rgba32Float);
-        leases.push(r.source_tiles.borrow().lease(&tile.view).unwrap());
-    }
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
+    let leases = submit_encoded(r, |r, encoder| {
+        let mut leases = Vec::with_capacity(count);
+        for x in 0..count as u32 {
+            let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+            let tile=Scene::decode_prepared_for(r,encoder,&source,[x,0],prepared,SourceUse::Exact,crate::residency::Class::Visible).unwrap();
+            assert_eq!(tile.texture.format(), wgpu::TextureFormat::Rgba32Float);
+            leases.push(r.source_tiles.borrow().lease(&tile.view).unwrap());
+        }
+        leases
+    });
     crate::test_support::complete(r);
     (Some(source), leases)
 }
@@ -281,12 +278,12 @@ fn discarded_source_decodes_cannot_be_reused_as_valid_pixels() {
     drop(encoder);
     assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_none());
     for x in 0..2 {
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
-        let raw = Scene::decode_prepared(&mut r, &mut encoder, &source, [x, 0], prepared).unwrap();
-        assert_eq!(crate::resident::Storage::storage_bytes(&raw), encoded_bytes);
-        let tile = Scene::promote_source(&mut r, &mut encoder, raw).unwrap();
-        r.uploads.finish(&encoder); encoder.submit(&r.queue);
+        let tile = submit_encoded(&mut r, |r, encoder| {
+            let prepared = crate::prepare_image_tile(&source, [x, 0], r.document_color().space, &r.device.source_samples, None).unwrap();
+            let raw = Scene::decode_prepared(r, encoder, &source, [x, 0], prepared).unwrap();
+            assert_eq!(crate::resident::Storage::storage_bytes(&raw), encoded_bytes);
+            Scene::promote_source(r, encoder, raw).unwrap()
+        });
         let id = x as u8 + 32;
         let expected = [id.wrapping_mul(17), id.wrapping_mul(43).wrapping_add(61), id.wrapping_mul(97).wrapping_add(11)]
             .map(|code| RgbSpace::Srgb.decode(f64::from(code) / 255.) as f32);
@@ -504,18 +501,16 @@ fn prepared_source_samples_upload_without_renderer_decompression_and_share_cache
     let source=layer_core::color::source::rgba8_source([PAGE_SIZE;2],|_,_|[64,128,192,128]);
     let bytes=Arc::new([64,128,192,128].repeat((PAGE_SIZE*PAGE_SIZE) as usize));
     pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline])).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(bytes)).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    let tile=submit_encoded(&mut r,|r,encoder|Scene::decode_prepared(r,encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(bytes)).unwrap());
     assert_eq!(r.device.source_samples.stats().misses,0);
     assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
     assert_eq!(crate::layer_tests::page_bytes(&r,&tile.texture),[64,128,192,128].repeat((PAGE_SIZE*PAGE_SIZE) as usize));
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let hit=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(Arc::new(Vec::new()))).unwrap();
-    assert_eq!(tile.view,hit.view);
-    assert_eq!(r.source_cache_work(),[1,1]);
-    let exact=Scene::promote_source(&mut r,&mut encoder,hit).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    let exact=submit_encoded(&mut r,|r,encoder| {
+        let hit=Scene::decode_prepared(r,encoder,&source,[0;2],PreparedSourcePixels::NativeSamples(Arc::new(Vec::new()))).unwrap();
+        assert_eq!(tile.view,hit.view);
+        assert_eq!(r.source_cache_work(),[1,1]);
+        Scene::promote_source(r,encoder,hit).unwrap()
+    });
     let alpha=128./255.;
     let expected=[64,128,192].map(|code| RgbSpace::Srgb.decode(f64::from(code)/255.) as f32*alpha);
     for pixel in crate::test_support::float_pixels(&r,&exact.texture) {
@@ -532,9 +527,7 @@ fn prepared_icc_working_pixels_upload_exactly_without_renderer_color_transform()
     let source=Arc::new(source);let expected=[0.25f32,0.125,0.0625,0.5];
     let mut bytes=Vec::with_capacity(NORMALIZED_PAGE_BYTES as usize);
     for _ in 0..PAGE_SIZE*PAGE_SIZE {for value in expected {bytes.extend_from_slice(&value.to_ne_bytes());}}
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],PreparedSourcePixels::PremultipliedWorkingPixels(Arc::new(bytes))).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    let tile=submit_encoded(&mut r,|r,encoder|Scene::decode_prepared(r,encoder,&source,[0;2],PreparedSourcePixels::PremultipliedWorkingPixels(Arc::new(bytes))).unwrap());
     assert_eq!(r.device.source_samples.stats().misses,0);
     assert!(r.source_tiles.borrow().decoders.is_empty());
     assert!(crate::test_support::float_pixels(&r,&tile.texture).into_iter().all(|pixel| pixel==expected));
@@ -550,15 +543,11 @@ fn prepared_gray_alpha_samples_are_expanded_by_shared_worker_before_upload() {
     let PreparedSourcePixels::NativeSamples(bytes)=&prepared else {panic!("Expected native working samples")};
     assert!(bytes.as_chunks::<4>().0.iter().all(|pixel|*pixel==[96,96,96,192]));
     let codes=bytes.clone();
-    let reads=r.device.source_samples.stats();let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let tile=Scene::decode_prepared(&mut r,&mut encoder,&source,[0;2],prepared).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    let reads=r.device.source_samples.stats();let tile=submit_encoded(&mut r,|r,encoder|Scene::decode_prepared(r,encoder,&source,[0;2],prepared).unwrap());
     assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
     assert_eq!(crate::layer_tests::page_bytes(&r,&tile.texture).as_slice(),codes.as_slice());
     pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.source.pipeline])).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let exact=Scene::promote_source(&mut r,&mut encoder,tile).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    let exact=submit_encoded(&mut r,|r,encoder|Scene::promote_source(r,encoder,tile).unwrap());
     let after=r.device.source_samples.stats();assert_eq!((reads.hits,reads.misses),(after.hits,after.misses));
     let alpha=192f32/255.;let value=RgbSpace::Srgb.decode(96./255.) as f32*alpha;
     for pixel in crate::test_support::float_pixels(&r,&exact.texture) {
@@ -756,9 +745,7 @@ fn stored_code_renderer(source: &Arc<SourceImage>) -> (WgpuRasterizer, layer_cor
 fn assert_stored_code_upload(depth: SampleDepth) {
     let source = stored_code_source(depth, 1);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let tile = stored_code_tile(&mut r, &source, 0, &mut encoder);
-    r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+    let tile = submit_encoded(&mut r, |r, encoder| stored_code_tile(r, &source, 0, encoder)); crate::test_support::complete(&r);
     assert_eq!(tile.texture.format(), stored_code_format(depth));
     let sources = r.source_tiles.borrow();
     assert_eq!(sources.slots.len(), 1);
@@ -776,9 +763,7 @@ fn stored_source_u16_upload_retains_eight_byte_packed_codes() { assert_stored_co
 fn stored_source_encoded_slot_count_does_not_overstate_exact_working_capacity() {
     let source=stored_code_source(SampleDepth::U8,32);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    for x in 0..32 {stored_code_tile(&mut r,&source,x,&mut encoder);}
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    submit_encoded(&mut r,|r,encoder|{for x in 0..32 {stored_code_tile(r,&source,x,encoder);}});crate::test_support::complete(&r);
     let cache=r.source_tiles.borrow_mut();
     assert_eq!(cache.slots.len(),32);
     let encoded=cache.slots.iter().map(Slot::bytes).sum::<u64>();
@@ -791,22 +776,19 @@ fn stored_source_encoded_slot_count_does_not_overstate_exact_working_capacity() 
 fn stored_source_cancelled_promotion_does_not_leave_a_protected_duplicate_key() {
     let source=stored_code_source(SampleDepth::U8,1);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let tile=stored_code_tile(&mut r,&source,0,&mut encoder);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let tile=submit_encoded(&mut r,|r,encoder|stored_code_tile(r,&source,0,encoder));crate::test_support::complete(&r);
     let mut cancelled=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     Scene::promote_source(&mut r,&mut cancelled,tile).unwrap();
     r.uploads.finish(&cancelled);drop(cancelled);
     assert!(r.source_tiles.borrow().prepared_view(&source,[0,0]).is_none());
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let tile=stored_code_tile(&mut r,&source,0,&mut encoder);
-    assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
-    let key=Key::Image(Arc::downgrade(&source),[0,0]);
-    assert_eq!(r.source_tiles.borrow().slots.iter().filter(|slot|slot.key.as_ref().is_some_and(|stored|stored.matches(&key))).count(),1);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    Scene::promote_source(&mut r,&mut encoder,tile).unwrap();
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+    let tile=submit_encoded(&mut r,|r,encoder| {
+        let tile=stored_code_tile(r,&source,0,encoder);
+        assert_eq!(tile.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+        let key=Key::Image(Arc::downgrade(&source),[0,0]);
+        assert_eq!(r.source_tiles.borrow().slots.iter().filter(|slot|slot.key.as_ref().is_some_and(|stored|stored.matches(&key))).count(),1);
+        tile
+    });crate::test_support::complete(&r);
+    submit_encoded(&mut r,|r,encoder|{Scene::promote_source(r,encoder,tile).unwrap();});crate::test_support::complete(&r);
     assert_eq!(r.source_tiles.borrow().prepared_view(&source,[0,0]).unwrap().texture().format(),wgpu::TextureFormat::Rgba32Float);
 }
 
@@ -814,15 +796,14 @@ fn stored_source_cancelled_promotion_does_not_leave_a_protected_duplicate_key() 
 fn stored_source_new_exact_leases_do_not_retain_the_retired_encoded_representation() {
     let source=stored_code_source(SampleDepth::U16,1);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let encoded=stored_code_tile(&mut r,&source,0,&mut encoder);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+    let encoded=submit_encoded(&mut r,|r,encoder|stored_code_tile(r,&source,0,encoder));crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
     let encoded_lease=r.source_tiles.borrow().lease(&encoded.view).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let exact=Scene::promote_source(&mut r,&mut encoder,encoded).unwrap();
-    let exact_lease=r.source_tiles.borrow().lease(&exact.view).unwrap();
-    assert!(Arc::ptr_eq(&encoded_lease,&exact_lease));
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+    let (exact,exact_lease)=submit_encoded(&mut r,|r,encoder| {
+        let exact=Scene::promote_source(r,encoder,encoded).unwrap();
+        let exact_lease=r.source_tiles.borrow().lease(&exact.view).unwrap();
+        assert!(Arc::ptr_eq(&encoded_lease,&exact_lease));
+        (exact,exact_lease)
+    });crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
     assert_eq!(r.source_tiles.borrow().retired_bytes.used(),NORMALIZED_PAGE_BYTES/2);
     drop(encoded_lease);r.device.retirement_handle().flush().unwrap();
     let cache=r.source_tiles.borrow();
@@ -859,10 +840,10 @@ fn stored_source_display_decode_stays_within_its_profile_bound_of_exact_promotio
             r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
             assert_eq!(crate::layer_tests::page_bytes(&r,&raw.texture),*expected,"stored codes and padding are lossless");
             let display=crate::test_support::page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-            Scene::display_source(&mut r,&mut encoder,&source,coordinate,&raw.texture,&display.create_view(&Default::default())).unwrap();
-            let exact=Scene::promote_source(&mut r,&mut encoder,raw).unwrap();
-            r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);
+            let exact=submit_encoded(&mut r,|r,encoder| {
+                Scene::display_source(r,encoder,&source,coordinate,&raw.texture,&display.create_view(&Default::default())).unwrap();
+                Scene::promote_source(r,encoder,raw).unwrap()
+            });crate::test_support::complete(&r);
             let a=crate::layer_tests::page_bytes(&r,&display);
             let b=crate::layer_tests::page_bytes(&r,&exact.texture);
             for (a,b) in a.as_chunks::<16>().0.iter().zip(b.as_chunks::<16>().0) {
@@ -887,29 +868,31 @@ fn stored_source_exact_neighborhood_promotes_one_slot_and_reuses_its_lease() {
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         let source = stored_code_source(depth, 2);
         let (mut r, _doc, target) = stored_code_renderer(&source);
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        let original = stored_code_tile(&mut r, &source, 0, &mut encoder);
-        stored_code_tile(&mut r, &source, 1, &mut encoder);
-        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        let original = submit_encoded(&mut r, |r, encoder| {
+            let original = stored_code_tile(r, &source, 0, encoder);
+            stored_code_tile(r, &source, 1, encoder);
+            original
+        }); crate::test_support::complete(&r);
         let lease = r.source_tiles.borrow().lease(&original.view).unwrap();
         let index = r.source_tiles.borrow().slots.iter().position(|slot| slot.view == original.view).unwrap();
         let expected_key = Key::Image(Arc::downgrade(&source), [0, 0]);
         let sample_misses = r.device.source_samples.stats().misses;
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        r.read_raw_neighborhood(target, [0, 0], [Some([0, 0])], &mut encoder).unwrap();
-        let base = layer_core::authored::PaintBase::new(source.clone().into());
-        let exact = r.paint_base_tile(&base, [0, 0], &mut encoder).unwrap().unwrap();
-        assert_eq!(encoder.pass_count(), 1, "the first exact acquisition normalizes the encoded source once");
-        assert_eq!(exact.texture.format(), wgpu::TextureFormat::Rgba32Float);
-        {
-            let sources = r.source_tiles.borrow();
-            assert_eq!(sources.slots.len(), 2);
-            assert_eq!(sources.slots[index].view, exact.view);
-            assert!(sources.slots[index].key.as_ref().unwrap().matches(&expected_key));
-            assert!(Arc::ptr_eq(&lease, &sources.lease(&exact.view).unwrap()));
-            assert_eq!(sources.prepared_view(&source, [1, 0]).unwrap().texture().format(), stored_code_format(depth));
-        }
-        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        let (base, exact) = submit_encoded(&mut r, |r, encoder| {
+            r.read_raw_neighborhood(target, [0, 0], [Some([0, 0])], encoder).unwrap();
+            let base = layer_core::authored::PaintBase::new(source.clone().into());
+            let exact = r.paint_base_tile(&base, [0, 0], encoder).unwrap().unwrap();
+            assert_eq!(encoder.pass_count(), 1, "the first exact acquisition normalizes the encoded source once");
+            assert_eq!(exact.texture.format(), wgpu::TextureFormat::Rgba32Float);
+            {
+                let sources = r.source_tiles.borrow();
+                assert_eq!(sources.slots.len(), 2);
+                assert_eq!(sources.slots[index].view, exact.view);
+                assert!(sources.slots[index].key.as_ref().unwrap().matches(&expected_key));
+                assert!(Arc::ptr_eq(&lease, &sources.lease(&exact.view).unwrap()));
+                assert_eq!(sources.prepared_view(&source, [1, 0]).unwrap().texture().format(), stored_code_format(depth));
+            }
+            (base, exact)
+        }); crate::test_support::complete(&r);
         let misses = r.source_tiles.borrow().misses;
         for _ in 0..3 {
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -939,12 +922,13 @@ fn stored_source_promoted_slot_reloads_encoded_after_ordinary_eviction() {
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         let source = stored_code_source(depth, 1);
         let (mut r, _doc, _) = stored_code_renderer(&source);
-        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-        stored_code_tile(&mut r, &source, 0, &mut encoder);
-        let base = layer_core::authored::PaintBase::new(source.clone().into());
-        let promoted = r.paint_base_tile(&base, [0, 0], &mut encoder).unwrap().unwrap();
-        assert_eq!(promoted.texture.format(), wgpu::TextureFormat::Rgba32Float);
-        r.uploads.finish(&encoder); encoder.submit(&r.queue); crate::test_support::complete(&r);
+        let promoted = submit_encoded(&mut r, |r, encoder| {
+            stored_code_tile(r, &source, 0, encoder);
+            let base = layer_core::authored::PaintBase::new(source.clone().into());
+            let promoted = r.paint_base_tile(&base, [0, 0], encoder).unwrap().unwrap();
+            assert_eq!(promoted.texture.format(), wgpu::TextureFormat::Rgba32Float);
+            promoted
+        }); crate::test_support::complete(&r);
         drop(promoted);
         crate::test_support::evict_sources(&mut r);
         assert!(r.source_tiles.borrow().prepared_view(&source, [0, 0]).is_none());
@@ -1005,10 +989,11 @@ fn source_display_records_reuse_scene_uniform_storage_and_preserve_encoded_order
 fn assert_promoted_source_reuse_before_completion(hold_encoded: bool) {
     let source=stored_code_source(SampleDepth::U8,2);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    let encoded=stored_code_tile(&mut r,&source,0,&mut encoder);
-    assert_eq!(encoded.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
-    r.uploads.finish(&encoder);encoder.submit(&r.queue);crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
+    let encoded=submit_encoded(&mut r,|r,encoder| {
+        let encoded=stored_code_tile(r,&source,0,encoder);
+        assert_eq!(encoded.texture.format(),wgpu::TextureFormat::Rgba8Unorm);
+        encoded
+    });crate::test_support::complete(&r);r.device.retirement_handle().flush().unwrap();
     let encoded_lease=hold_encoded.then(||r.source_tiles.borrow().lease(&encoded.view).unwrap());
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
     let exact=Scene::promote_source(&mut r,&mut encoder,encoded).unwrap();
@@ -1075,12 +1060,11 @@ fn cold_restore_inputs_remain_owned_before_the_store_completes(base: bool) {
     let batch = crate::test_support::dab_batch(target(&document), crate::tests::test_style(layer_core::BrushExecution::Dry), dab.bounds());
     let frame = layer_render::FramePacket {dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch),
         reset_layers: true, ..crate::test_support::packet(document.scene(), [PAGE_SIZE; 2])};
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while store.gate.reads.load(Ordering::Acquire) == 0 {
+    wait_until(format_args!("decode worker did not request stored source bytes: base={base}"), || {
+        if store.gate.reads.load(Ordering::Acquire) != 0 { return Ok(()); }
         assert!(!renderer.raster_dependencies_ready(frame, None), "closed input store must defer restoration: base={base}");
-        assert!(std::time::Instant::now() < deadline, "decode worker did not request stored source bytes: base={base}");
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+        Err(())
+    });
     let accepted_view = {
         let cache = renderer.source_tiles.borrow();
         let slot = cache.slots.iter().find(|slot| slot.key.as_ref().is_some_and(|stored| stored.matches(&key)))
