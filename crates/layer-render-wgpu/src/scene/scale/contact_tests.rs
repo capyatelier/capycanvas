@@ -1261,7 +1261,9 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
         ("a smudge under a tip",style(Smudge),true,1),("a smudge under two tips",style(Smudge),true,2),("a soft blender under a tip",style(SoftBlender),true,1),
         ("a Dither blender under a tip",dither,true,1),("a Dither blender without cells under a tip",fine,true,1),("a Scatter blender under a tip",style(ScatterBlender),true,1),
         ("a Scatter blender under two tips",style(ScatterBlender),true,2),("a Pencil under two tips",style(Pencil),true,2),
-        ("a Pencil stored write-only under two tips",style(Pencil),false,2),("a wet-edged brush under a tip",wet_edged_brush(),true,1)];
+        ("a Pencil stored write-only under two tips",style(Pencil),false,2),("a wet-edged brush under a tip",wet_edged_brush(),true,1),
+        ("a Liquify push under a tip",style(LiquifyPush),true,1),("a Liquify twirl under a tip",style(LiquifyTwirl),true,1),
+        ("a Liquify crystals brush under a tip",style(LiquifyCrystals),true,1)];
     for (doc,(label,style,in_place,tips)) in colored.into_iter().map(|row|(&doc,row)).chain(grayed.into_iter().map(|row|(&graying,row))) {
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
         let mut r=renderer(doc);
@@ -1296,7 +1298,7 @@ fn each_page_record_bounds_what_its_frame_wrote_at_every_brush_size() {
     let page=u64::from(PAGE_SIZE).pow(2);
     for (label,style,inked,tips) in [("a smudge under a tip",style(Smudge),1,1),("a smudge in three batches under two tips",style(Smudge),3,2),
         ("a smudge in two batches under three tips",style(Smudge),2,3),("a Dither blender under a tip",style(DitherBlender),1,1),
-        ("a Scatter blender in two batches under a tip",style(ScatterBlender),2,1)] {
+        ("a Scatter blender in two batches under a tip",style(ScatterBlender),2,1),("a Liquify push under a tip",style(LiquifyPush),1,1)] {
         for diameter in [5.,30.,100.,300.,600.,2000.] {
             let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
             let mut r=renderer(&doc);
@@ -1307,8 +1309,11 @@ fn each_page_record_bounds_what_its_frame_wrote_at_every_brush_size() {
             let (before,then)=tile_read(&r,target,[1,1],false);
             batched_frame(&mut r,frame,target,&style,&dabs(2),inked,2);
             let (written,now)=tile_read(&r,target,[1,1],false);
-            let (from,rect)=written.seed().unwrap_or_else(||panic!("{label}, {diameter} px: the stroke's write is recorded"));
-            assert!(from.same(&before) && !rect.is_empty() && rect.area()<page,"{label}, {diameter} px: the page is recorded as a copy of the version before the frame outside part of it: {rect:?}");
+            let rect=written.changed_since(&before).unwrap_or_else(|| {
+                let (from,rect)=written.seed().unwrap_or_else(||panic!("{label}, {diameter} px: the stroke's write is recorded"));
+                assert!(from.same(&before),"{label}, {diameter} px: the page is recorded as a copy of the version before the frame");rect
+            });
+            assert!(!rect.is_empty() && rect.area()<page,"{label}, {diameter} px: the record names part of the page: {rect:?}");
             assert_eq!(differing_outside(rect,&now,&then),0,"{label}, {diameter} px: the page changed outside its recorded rectangle {rect:?}");
             let (tip,shown)=tile_read(&r,target,[1,1],true);
             let (from,rect)=tip.seed().unwrap_or_else(||panic!("{label}, {diameter} px: the tip's write is recorded"));
@@ -1349,6 +1354,8 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_re
         Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
         Stroked {style:clone_stamp(),..Stroked::new("a page a clone stamp copied onto under its tip",&painted,CloneStamp,1)},
         Stroked::new("a page Liquify pushed in place without a tip",&painted,LiquifyPush,0),
+        Stroked::new("a page Liquify pushed in place under a tip",&painted,LiquifyPush,1),
+        Stroked::new("a page Liquify twirled in place under a tip",&painted,LiquifyTwirl,1),
         Stroked {style:wet_edged_brush(),..Stroked::new("a page a wet-edged brush drew on in place without a tip",&painted,Pencil,0)},
     ]);
 }
@@ -1381,7 +1388,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
 fn a_write_without_a_usable_record_composes_whole_cells_and_the_same_pixels() {
     use DefaultBrushPreset::*;
     let plain=stroked_over_a_layer([768,512],true);
-    stays_whole([Stroked::new("a Liquify tip",&plain,LiquifyPush,1),Stroked::new("a watercolor wash",&plain,WatercolorWash,0)]);
+    stays_whole([Stroked::new("a watercolor wash",&plain,WatercolorWash,0),Stroked::new("a watercolor wash under a tip",&plain,WatercolorWash,1)]);
 }
 
 #[test]
