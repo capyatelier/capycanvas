@@ -1537,7 +1537,10 @@ fn group_working_layer(doc:&mut Document) {
     for entry in &mut entries {if *entry==owner {*entry=group;}}
     set_root_entries(doc,entries);
 }
-const OFFSETS:[(&str,[i64;2]);3]=[("a layer offset by 3 and 5",[3,5]),("a layer offset by 259 and -5",[259,-5]),("a layer offset by -130 and 77",[-130,77])];
+const OFFSETS:[&str;3]=["a layer offset by 3 and 5","a layer offset by 259 and -5","a layer offset by -130 and 77"];
+fn scene_offset(scene:&str)->[i64;2] {
+    scene.split_once(" offset by ").and_then(|(_,offset)|offset.split_once(" and ")).map_or([0;2],|(x,y)|[x,y].map(|side|side.parse().unwrap()))
+}
 fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
     let image=|seed:u32|rgba8_source(extent,move |x,y|[(x/(3+seed)) as u8,(y/2) as u8,(60*seed) as u8,((x*7+y*(13+seed))%256) as u8]);
     let mut doc=if scene.ends_with("without Paper") {document_at(extent)}else {
@@ -1556,7 +1559,7 @@ fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
             let position=doc.scene().position(owner).unwrap();
             insert_occurrence(&mut doc,layer,position+index/2);
         },
-        "a masked layer"|"a masked layer without Paper"=>{
+        _ if scene.starts_with("a masked layer")=>{
             let [width,height]=extent.map(|side|side as f32);
             coverage_mask(&mut doc,owner,[0,0],Some(layer_core::Selection::polygon(vec![layer_core::Point {x:width*0.1,y:height*0.1},
                 layer_core::Point {x:width*0.95,y:height*0.15},layer_core::Point {x:width*0.9,y:height*0.95},layer_core::Point {x:width*0.15,y:height*0.9}]).unwrap()));
@@ -1564,11 +1567,12 @@ fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
         "a layer under an adjustment"=>above(&mut doc,"invert"),
         "a layer under a blur"=>above(&mut doc,"gaussian_blur"),
         "a layer in a group"=>group_working_layer(&mut doc),
-        _=>if let Some((_,offset))=OFFSETS.into_iter().find(|(name,_)|*name==scene) {doc.artwork.occurrences.get_mut(owner).unwrap().offset=offset;},
+        _=>{},
     }
+    doc.artwork.occurrences.get_mut(owner).unwrap().offset=scene_offset(scene);
     doc
 }
-struct Zoomed<'a> {scene:&'a str,brush:String,style:layer_render::DabStyle,zoom:f32,diameter:f32,tips:usize,frames:usize,redraws:bool}
+struct Zoomed<'a> {scene:&'a str,brush:String,style:layer_render::DabStyle,zoom:f32,diameter:f32,shift:[f32;2],tips:usize,frames:usize,redraws:bool}
 struct Redrawn {case:String,level:u32,float:bool,restarts:usize,texels:Vec<[u64;2]>}
 impl Redrawn {
     fn patched(&self)->usize {self.texels[2..].iter().filter(|[patched,whole]|patched<whole).count()}
@@ -1579,11 +1583,11 @@ impl Redrawn {
     }
 }
 impl<'a> Zoomed<'a> {
-    fn new(scene:&'a str,brush:&str,style:layer_render::DabStyle,tips:usize,zoom:f32)->Self {Self {scene,brush:brush.into(),style,zoom,diameter:9.,tips,frames:STROKE.len(),redraws:true}}
+    fn new(scene:&'a str,brush:&str,style:layer_render::DabStyle,tips:usize,zoom:f32)->Self {Self {scene,brush:brush.into(),style,zoom,diameter:9.,shift:[0.;2],tips,frames:STROKE.len(),redraws:true}}
     fn level(&self)->u32 {(1./self.zoom).log2().floor() as u32}
     fn at(&self,x:f32)->layer_render::Dab {
-        let [left,top]=OFFSETS.into_iter().find(|(name,_)|*name==self.scene).map_or([0.;2],|(_,offset)|offset.map(|side|side as f32));
-        sized_dab([(x-256.)*(1u32<<self.level()) as f32-left,257.-top],self.diameter/2.,&self.style)
+        let [left,top]=scene_offset(self.scene).map(|side|side as f32);
+        sized_dab([(x-256.)*(1u32<<self.level()) as f32-left+self.shift[0],257.-top+self.shift[1]],self.diameter/2.,&self.style)
     }
     fn case(&self)->String {format!("{}, {} px, {} tips, on {} at {}%",self.brush,self.diameter,self.tips,self.scene,self.zoom*100.)}
     fn document(&self)->Document {zoomed_scene(self.scene,[320<<self.level(),140<<self.level()])}
@@ -1792,10 +1796,63 @@ fn below_full_size_every_patched_frame_equals_whole_cells_for_each_layer_setup()
 #[test]
 fn below_full_size_a_cell_drawn_through_an_effect_or_on_an_offset_layer_composes_whole_cells_and_the_same_pixels() {
     for zoom in ZOOMS {
-        for scene in ["a layer under an adjustment","a layer under a blur"].into_iter().chain(OFFSETS.map(|(scene,_)|scene)) {
+        for scene in ["a layer under an adjustment","a layer under a blur"].into_iter().chain(OFFSETS) {
             for stroke in pencil_and_smudge(scene,zoom) {stroke.stays_whole();}
         }
     }
+}
+
+fn keeps_its_ink_outside_the_canvas(label:&str,doc:&Document,mut r:WgpuRasterizer,frame:FramePacket<'_>,style:&layer_render::DabStyle,frames:impl Iterator<Item=Vec<layer_render::Dab>>) {
+    let target=doc.active_target().unwrap();
+    let canvas=DocRect::from(PixelRect::full(doc.composition().size)).translated(doc.scene().target_offset(target).map(|side|-side)).in_frame(doc.scene().target_extent(target));
+    let mut first=None;
+    for (step,dabs) in frames.enumerate() {
+        stroke_frame(&mut r,frame,target,style,&dabs,true,step);
+        first.get_or_insert_with(||page_reads(&r,target,false));
+    }
+    let inked:usize=page_reads(&r,target,false).iter().filter_map(|(coordinate,(_,now))|Some((coordinate,now,first.as_ref()?.get(coordinate)?)))
+        .map(|(coordinate,now,(_,then))|differing_outside(canvas.window_local(page_rect(*coordinate)),now,then)).sum();
+    assert!(inked>0,"{label}: the layer's pages keep the ink drawn outside the canvas");
+}
+const PAST_THE_CANVAS:[(&str,DefaultBrushPreset,usize,bool);3]=[("a Pencil",DefaultBrushPreset::Pencil,1,true),("an eraser",DefaultBrushPreset::Eraser,1,true),
+    ("a Dither blender",DefaultBrushPreset::DitherBlender,0,false)];
+
+#[test]
+fn a_stroke_on_the_part_of_an_offset_layer_outside_the_canvas_composes_whole_cells_and_keeps_its_ink() {
+    let plain=stroked_over_a_layer([768,512],true);
+    let offset=|by:[i64;2],masked:bool| {
+        let mut doc=plain.clone();let owner=doc.working.occurrence.unwrap();
+        if masked {coverage_mask(&mut doc,owner,[0,0],None);}
+        doc.artwork.occurrences.get_mut(owner).unwrap().offset=by;doc
+    };
+    let [right_and_up,left_and_down,masked]=[([200,-150],false),([-200,150],false),([200,-150],true)].map(|(by,masked)|offset(by,masked));
+    let edges=[("past the right edge",&right_and_up,[100.,0.],3),("across the right edge",&right_and_up,[50.,0.],1),("past the top edge",&right_and_up,[0.,-200.],1),
+        ("past the bottom edge",&left_and_down,[0.,130.],1),("past the left edge",&left_and_down,[-400.,0.],1),("across the left edge",&left_and_down,[-310.,0.],1),
+        ("past the right edge of a masked layer",&masked,[100.,0.],1)];
+    for (edge,doc,shift,brushes) in edges {for (brush,preset,tips,inks) in PAST_THE_CANVAS.into_iter().take(brushes) {
+        let stroked=Stroked {shift,..Stroked::new(format!("{brush} {edge}"),doc,preset,tips)};
+        if inks {
+            let (r,frame,_)=stroked.started();
+            keeps_its_ink_outside_the_canvas(&stroked.label,doc,r,frame,&stroked.style,STROKE.into_iter().map(|at|stroked.dabs(at)[..=tips].to_vec()));
+        }
+        stays_whole([stroked]);
+    }}
+}
+
+#[test]
+fn below_full_size_a_stroke_on_the_part_of_an_offset_layer_outside_the_canvas_composes_whole_cells_and_keeps_its_ink() {
+    let edges=[("past the right edge","a layer offset by 259 and -5",[259.,-5.],0.5),("across the right edge","a layer offset by 259 and -5",[140.,0.],0.5),
+        ("past the top edge","a layer offset by 40 and -160",[0.,-327.],0.5),("past the bottom edge","a layer offset by -130 and 77",[-100.,60.],0.5),
+        ("past the left edge","a layer offset by -130 and 77",[-567.,0.],0.5),("across the left edge","a layer offset by -130 and 77",[-500.,0.],0.5),
+        ("past the bottom edge","a layer offset by -130 and 77",[0.,317.],0.25),("past the right edge","a masked layer offset by 259 and -5",[259.,-5.],0.5)];
+    for (edge,scene,shift,zoom) in edges {for (brush,preset,tips,inks) in PAST_THE_CANVAS {
+        let stroke=Zoomed {shift,..Zoomed::new(scene,&format!("{brush} {edge}"),crate::layer_tests::preset_style(preset),tips,zoom)};
+        if inks {
+            let doc=stroke.document();let frame=stroke.frame(&doc);
+            keeps_its_ink_outside_the_canvas(&stroke.case(),&doc,stroke.settled(&doc,frame),frame,&stroke.style,STROKE.into_iter().map(|(ink,tip)|[ink,tip].map(|x|stroke.at(x))[..=tips].to_vec()));
+        }
+        stroke.stays_whole();
+    }}
 }
 
 fn every_preset(zoom:f32) {
