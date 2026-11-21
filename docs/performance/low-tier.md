@@ -64,6 +64,48 @@ On the control a Dither Blender stroke on the photo at Fit stops the canvas with
 Both blenders miss the target on both builds: their stroke frames compose whole
 cells, 1,179,648 texels per frame at 100% on both.
 
+## Stroke patches below 100%
+
+Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate
+`0b1138906`, which redraws only a stroke's damage in cells below full size. Each
+row has six five-second strokes per build at 25% on the 12 MP photo under an
+empty paint layer, with the default prediction.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pencil 9 px | 147.32 → 155.74 | 10.58 → 10.79 | 147.02 → 155.28 | 10.77 → 10.79 | 131,072 → 2,489 |
+| G-Pen 18 px | 140.54 → 152.40 | 11.32 → 10.38 | 140.04 → 151.86 | 11.40 → 10.46 | 131,072 → 2,856 |
+
+The same 9 px Pencil at 25% on three other layer setups, against `bd6ad1e02`
+with candidate `83785091c`:
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: |
+| A layer under a mask | 140.70 → 154.58 | 11.31 → 10.63 | 196,608 → 3,818 |
+| A layer with an offset | 137.96 → 137.81 | 11.66 → 11.90 | 131,072 → 131,072 |
+| A layer under an adjustment | 128.27 → 130.38 | 13.14 → 12.23 | 131,072 → 131,072 |
+
+A stroke on a layer with an offset or under an adjustment still redraws whole
+cells below 100%.
+
+A Paintbrush size ladder on the empty paint layer, against `bd6ad1e02` with
+candidate `0b1138906`:
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Paintbrush 30 px, 25% | 131.72 → 146.43 | 12.89 → 11.03 | 131.23 → 146.03 | 12.89 → 11.11 | 131,072 → 1,900 |
+| Paintbrush 30 px, 50% | 133.90 → 147.20 | 12.95 → 11.99 | 133.11 → 146.40 | 13.30 → 12.62 | 131,072 → 3,695 |
+| Paintbrush 100 px, 25% | 115.73 → 132.83 | 15.32 → 13.78 | 115.56 → 132.53 | 15.32 → 13.87 | 131,072 → 6,656 |
+| Paintbrush 100 px, 50% | 113.29 → 129.85 | 15.51 → 14.37 | 113.09 → 129.35 | 15.55 → 14.54 | 262,144 → 18,041 |
+| Paintbrush 300 px, 25% | 44.52 → 52.59 | 29.88 → 25.23 | 44.52 → 52.59 | 29.88 → 25.34 | 262,144 → 34,979 |
+| Paintbrush 300 px, 50% | 46.68 → 62.13 | 27.97 → 26.02 | 46.68 → 62.13 | 27.97 → 26.02 | 524,288 → 110,539 |
+| Paintbrush 600 px, 25% | 12.45 → 13.77 | 90.67 → 83.54 | 12.45 → 13.77 | 90.67 → 83.54 | 493,568 → 140,304 |
+| Paintbrush 600 px, 50% | 14.43 → 16.71 | 81.63 → 75.26 | 14.43 → 16.71 | 81.63 → 75.26 | 1,048,576 → 424,600 |
+
+The 300 px Paintbrush at 50% misses the 60 updates/s target on the control and
+holds it on the candidate. At 25% it misses on both builds, and the 600 px
+Paintbrush misses at both zooms on both.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified

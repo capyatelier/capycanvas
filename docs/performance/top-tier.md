@@ -58,6 +58,35 @@ canvas. The control has four strokes per row.
 Dither Blender misses the target on both builds. Both blenders compose whole
 cells in their stroke frames, 1,179,648 texels per frame on both builds.
 
+## Stroke patches below 100%
+
+Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate
+`0b1138906`, which redraws only a stroke's damage in cells below full size. The
+row has six five-second strokes per build at 25% on the 60.2 MP photo under an
+empty paint layer, with the default prediction.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pencil 9 px | 357.94 → 380.94 | 6.84 → 6.53 | 194.50 → 195.41 | 11.16 → 10.45 | 131,072 → 3,068 |
+
+A Paintbrush size ladder on the empty paint layer of the same drawing, between
+the same two builds:
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Paintbrush 30 px, 25% | 352.96 → 375.67 | 6.71 → 6.80 | 194.09 → 195.15 | 10.87 → 10.89 | 131,072 → 2,720 |
+| Paintbrush 30 px, 50% | 346.89 → 364.47 | 5.11 → 4.69 | 194.83 → 194.85 | 8.60 → 8.70 | 131,072 → 4,896 |
+| Paintbrush 100 px, 25% | 386.60 → 351.82 | 5.70 → 6.87 | 195.83 → 194.96 | 9.64 → 10.99 | 131,072 → 8,064 |
+| Paintbrush 100 px, 50% | 332.11 → 343.40 | 5.22 → 5.15 | 195.22 → 194.44 | 8.98 → 8.89 | 262,144 → 20,584 |
+| Paintbrush 300 px, 25% | 345.34 → 342.29 | 5.90 → 6.00 | 195.53 → 195.11 | 9.18 → 9.46 | 262,144 → 37,684 |
+| Paintbrush 300 px, 50% | 276.24 → 294.68 | 6.49 → 5.75 | 193.70 → 194.28 | 9.63 → 9.41 | 524,288 → 117,600 |
+| Paintbrush 600 px, 25% | 167.49 → 196.41 | 11.23 → 10.23 | 163.99 → 179.74 | 12.08 → 12.26 | 524,288 → 118,696 |
+| Paintbrush 600 px, 50% | 231.03 → 263.47 | 7.83 → 6.81 | 190.66 → 191.53 | 10.20 → 10.03 | 1,048,576 → 389,388 |
+
+The 100 px row at 25% completes fewer updates on the candidate while its fresh
+input updates are unchanged; every row holds the 120 updates/s target on both
+builds.
+
 ## Settled Fit half-float presentation
 
 Measured 2026-11-11: `3a98291d7` → `440f2dbff`, release Rust/unminified

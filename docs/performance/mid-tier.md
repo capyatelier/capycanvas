@@ -81,6 +81,36 @@ canvas; the panel ran at 90 Hz.
 Both blenders miss the target on both builds: their stroke frames compose whole
 cells.
 
+## Stroke patches below 100%
+
+Measured 2026-11-21 against `bd6ad1e02`: benchmark APKs in ABBA order, candidate
+`0b1138906`, which redraws only a stroke's damage in cells below full size. Each
+row has six five-second strokes per build at 25% on the 24 MP photo under an
+empty paint layer, with the default prediction. The panel ran at 90 Hz.
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Pencil 9 px | 285.96 → 310.63 | 6.00 → 5.07 | 197.69 → 197.78 | 9.41 → 8.25 | 131,072 → 3,808 |
+| G-Pen 18 px | 280.30 → 301.98 | 5.97 → 5.22 | 197.36 → 197.89 | 9.32 → 8.69 | 131,072 → 4,544 |
+
+A Paintbrush size ladder on the empty paint layer of the same drawing, between
+the same two builds:
+
+| Row | Completed updates/s, control → candidate | Completed p99 gap ms | Fresh input updates/s | Fresh input p99 gap ms | Composed texels per moving frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Paintbrush 30 px, 25% | 250.01 → 285.73 | 6.68 → 6.13 | 195.87 → 197.45 | 10.09 → 9.17 | 131,072 → 2,964 |
+| Paintbrush 30 px, 50% | 256.47 → 286.77 | 7.63 → 6.93 | 193.04 → 195.91 | 10.95 → 9.89 | 131,072 → 5,342 |
+| Paintbrush 100 px, 25% | 184.47 → 252.11 | 8.06 → 6.92 | 175.33 → 195.04 | 10.69 → 10.24 | 131,072 → 8,867 |
+| Paintbrush 100 px, 50% | 203.78 → 262.44 | 8.71 → 7.59 | 178.41 → 194.26 | 11.34 → 11.05 | 262,144 → 21,747 |
+| Paintbrush 300 px, 25% | 71.51 → 86.69 | 17.12 → 14.99 | 71.51 → 86.69 | 17.12 → 14.99 | 262,144 → 43,120 |
+| Paintbrush 300 px, 50% | 76.80 → 104.61 | 17.80 → 13.63 | 76.80 → 104.61 | 17.80 → 13.63 | 524,288 → 125,370 |
+| Paintbrush 600 px, 25% | 24.64 → 27.74 | 47.12 → 43.29 | 24.64 → 27.74 | 47.12 → 43.29 | 524,288 → 149,318 |
+| Paintbrush 600 px, 50% | 27.34 → 32.54 | 41.86 → 37.41 | 27.34 → 32.54 | 41.86 → 37.41 | 1,048,576 → 439,820 |
+
+The 300 px Paintbrush at 50% misses the 90 updates/s target on the control and
+holds it on the candidate. At 25% it misses on both builds, and the 600 px
+Paintbrush misses at both zooms on both.
+
 ## Stored image-source format comparison
 
 Measured 2026-11-06–07: frozen `01fe577d9` → format commit 1 candidate APK
