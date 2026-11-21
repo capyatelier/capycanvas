@@ -121,6 +121,10 @@ fn reads(node:&graph::Node,target:SourceTarget,tainted:&mut crate::IdSet<usize>)
 
 fn source_phase(scene:&Scene,target:SourceTarget)->[u32;2] {scene.scale_sources.entries.get(&target).map_or([0;2],|source|source.phase)}
 fn phased_tiles(tile:[u32;2],phase:[u32;2])->impl Iterator<Item=[u32;2]> {page_coordinates(page_rect(tile).translated(phase))}
+fn reductions<'a>(source:&'a sources::Source,r:&'a WgpuRasterizer,target:SourceTarget,level:u32,tiles:&'a BTreeSet<[u32;2]>)->impl Iterator<Item=(pages::Key,PixelRect,[u32;2])>+'a {
+    let valid=PixelRect::full(source.valid_extent(level));
+    tiles.iter().map(move |tile|(source.key(r,target,level,tile.map(|value|value>>level)),page_rect(*tile).intersect(valid),*tile)).filter(|(_,region,_)|!region.is_empty())
+}
 fn native_tiles(area:PixelRect,phase:[u32;2],extent:[u32;2])->impl Iterator<Item=[u32;2]> {
     page_coordinates(DocRect::from(area).translated(phase.map(|by|-i64::from(by))).in_frame(extent))
 }
@@ -298,9 +302,8 @@ impl Cache {
         let ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,None);
         let ready=scope.into_iter().filter(|cell|!self.pivot_missing(*cell)).collect::<Vec<_>>();
         if required.iter().any(|cell|!ready.contains(cell)) {return Ok(());}
-        let reach=local_reach(packet,target,source_phase(scene,target));
-        let reduced=reach.iter().copied().flat_map(page_coordinates).collect();
-        let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,reach)? else {return Ok(());};
+        let reduced=local_reach(packet,target,source_phase(scene,target)).into_iter().flat_map(page_coordinates).collect();
+        let Some(Declared {cells,inputs,pages,level})=self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,None,ready,&required,&reduced)? else {return Ok(());};
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
         request_ahead(r,packet.scene,&frame,encoder,target,source_phase(scene,target),ahead.iter().copied());
         let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
@@ -328,8 +331,7 @@ impl Cache {
         let known=contact.cells.iter().map(|(cell,_)|*cell).collect::<Vec<_>>();
         let phase=source_phase(scene,target);
         let tiles=contact.reduced_tiles(phase,local_reach(packet,target,phase).into_iter().flat_map(page_coordinates))
-            .into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<Vec<_>>();
-        let reach=tiles.iter().copied().map(page_rect).collect::<Vec<_>>();
+            .into_iter().filter(|tile|!contact.reduced.contains(tile)).collect::<BTreeSet<_>>();
         let scope=self.stroke_scope(packet,reached,from);
         let mut ahead=self.stroke_lead(scene,packet.scene,target,frame.watercolor(target),&scope,from);
         ahead.extend(&tiles);
@@ -342,8 +344,8 @@ impl Cache {
         let mut cells=scope.into_iter().filter(|cell|!known.contains(cell)).collect::<Vec<_>>();
         cells.extend(waiting.into_iter().take(1));
         cells.retain(|cell|!self.pivot_missing(*cell));
-        let declared=if cells.is_empty() && reach.is_empty() {Some(Declared::default())}
-            else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells.clone(),&cells,reach)?};
+        let declared=if cells.is_empty() && tiles.is_empty() {Some(Declared::default())}
+            else {self.declare_contact(scene,r,packet,encoder,retained,budget,&frame,&root,target,tiled,level,cells.clone(),&cells,&tiles)?};
         let Some(Declared {cells,inputs,pages,level})=declared else {return Ok(false);};
         let contact=self.gesture.as_mut().expect("live contact");
         contact.cells.extend(cells);
@@ -357,7 +359,7 @@ impl Cache {
     }
     #[expect(clippy::too_many_arguments,reason="A contact declares its cells with the frame's scene, encoding and budget, around the pages it already holds")]
     fn declare_contact(&mut self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,encoder:&mut submission::CommandEncoder,retained:u64,budget:&mut WorkBudget,
-        frame:&Arc<SignatureFrame>,root:&graph::Node,target:SourceTarget,tiled:bool,level:Option<u32>,cells:Vec<PixelRect>,prepared:&[PixelRect],reach:Vec<PixelRect>,
+        frame:&Arc<SignatureFrame>,root:&graph::Node,target:SourceTarget,tiled:bool,level:Option<u32>,cells:Vec<PixelRect>,prepared:&[PixelRect],tiles:&BTreeSet<[u32;2]>,
     )->Result<Option<Declared>,GpuRasterError> {
         let wet=frame.watercolor(target);
         let inside:BTreeSet<SourceTarget>=self.pivot_halves().iter().flat_map(|node|node.reads().0).collect();
@@ -416,29 +418,21 @@ impl Cache {
             cells.push((cell,declared));
         }
         let level=level.or_else(||requests.iter().find(|(id,_)|*id==target).map(|(_,request)|request.plan.level));
-        let request=level.filter(|_|!reach.is_empty()).map(|level|SourceRequest {plan:display_mips::Plan::at(self.plan.extent,level),required:Damage::from_regions(reach),covered:PixelRect::EMPTY});
-        let reductions=match &request {Some(request)=>self.declare_reductions(scene,r,packet,frame,target,request,encoder),None=>Ok(Default::default())};
+        let reductions=match level.filter(|_|!tiles.is_empty()) {Some(level)=>Self::declare_reductions(scene,r,packet,frame,target,level,tiles,encoder),None=>Ok(Default::default())};
         let Some(inputs)=reductions.ok().and_then(|inputs|inputs.accept_query(r,Some(scene)).ok()) else {return Ok(None);};
         self.touch_cell_keys(bounds);
         Ok(Some(Declared {cells,inputs,pages,level}))
     }
-    fn declare_reductions(&self,scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,frame:&Arc<SignatureFrame>,target:SourceTarget,request:&SourceRequest,
+    fn declare_reductions(scene:&mut Scene,r:&mut WgpuRasterizer,packet:FramePacket<'_>,frame:&Arc<SignatureFrame>,target:SourceTarget,level:u32,tiles:&BTreeSet<[u32;2]>,
         encoder:&mut submission::CommandEncoder,
     )->Result<crate::scene::sources::Inputs,GpuRasterError> {
-        let level=request.plan.level;
         let handle=packet.scene.source_owner(target).ok_or(GpuRasterError::NotReady)?;
-        let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));
-        let pages=request.required.regions.iter().flat_map(|area|pages::coordinates(*area,level))
-            .map(|coordinate|(source.key(r,target,level,coordinate).plan(),coordinate)).collect::<Vec<_>>();
-        let tiles=request.required.regions.iter().flat_map(|area|page_coordinates(area.intersect(valid))).collect::<BTreeSet<_>>();
+        let pages=reductions(&scene.scale_sources.entries[&target],r,target,level,tiles).map(|(key,_,tile)|(key.plan(),tile)).collect::<Vec<_>>();
         let wet=frame.watercolor(target);
         let placements=scene.source_placements(packet,scene::Output::Display)?;
         scene.declare(r,placements,crate::scene::sources::Declaration::scene(frame.clone(),Some(encoder.submission())),|scene,r,accepted| {
             let output=scene.reserve(r)?;let output=scene.pool[output].view.clone();
-            for tile in &tiles {
-                let plan=pages.iter().find(|(plan,_)|!plan.bounds.intersect(page_rect(*tile)).is_empty()).map(|(plan,_)|*plan).ok_or(GpuRasterError::NotReady)?;
-                scene.reduce_color_pages(r,packet,handle,plan,&output,&[*tile],None,[0;2],&BTreeMap::new(),accepted)?;
-            }
+            for (plan,tile) in &pages {scene.reduce_color_pages(r,packet,handle,*plan,&output,&[*tile],None,[0;2],&BTreeMap::new(),accepted)?;}
             if wet {accepted.declare_watercolor_stencils(r,packet.scene,target)?;}
             Ok(())
         })
@@ -502,15 +496,8 @@ impl Cache {
         let cells=std::mem::take(&mut contact.cells);
         let stale=std::mem::take(&mut contact.stale);
         let mut baselines=std::mem::take(&mut contact.baselines);
-        let mut reductions=Vec::new();
-        if let Some(level)=contact.level {
-            let source=&scene.scale_sources.entries[&target];let valid=PixelRect::full(source.valid_extent(level));
-            for tile in &reduced {
-                let key=source.key(r,target,level,tile.map(|value|value>>level));
-                let region=page_rect(*tile).intersect(valid);
-                if let Some(page)=contact.pages.get(&key).filter(|_|!region.is_empty()) {reductions.push((key,region,*tile,page.clone()));}
-            }
-        }
+        let reductions=contact.level.into_iter().flat_map(|level|reductions(&scene.scale_sources.entries[&target],r,target,level,&reduced))
+            .filter_map(|(key,region,tile)|contact.pages.get(&key).map(|page|(key,region,tile,page.clone()))).collect::<Vec<_>>();
         let recorded=contact.guard.watercolor.is_none() && frame.phase==[0;2] && !(r.preview_contribution && r.preview_layer_id==Some(target));
         let mut parts=stale.clone();
         let witnessed=reductions.iter().map(|(_,_,tile,_)| {
