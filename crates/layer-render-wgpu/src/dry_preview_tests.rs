@@ -551,19 +551,12 @@ fn canonical_paint(
 }
 
 fn dry_engine_frame(engine: &mut DryEngine, time: u64, requested: u64) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    loop {
+    crate::test_support::wait_until("dry fixture input and publication settle", || {
         engine.render_frame_for(time, requested).unwrap();
         engine.backend_mut().wait_idle().unwrap();
-        if !engine.has_pending_input() && !engine.has_pending_document_edits() {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "dry fixture input and publication settle"
-        );
-        std::thread::yield_now();
-    }
+        let pending = [engine.has_pending_input(), engine.has_pending_document_edits()];
+        if pending.contains(&true) { Err(pending) } else { Ok(()) }
+    });
 }
 
 fn dry_continuation_coverage(
@@ -755,23 +748,19 @@ fn canonical_dry_lift(
     });
     input.push(up).unwrap();
     let submitted = engine.metrics().frames;
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    for frame in 0.. {
-        let now = time + frame * 16_000_000;
+    let mut frames = 0..;
+    crate::test_support::wait_until("the stored Up's frames become ready", || {
+        let now = time + frames.next().unwrap() * 16_000_000;
         engine.render_frame_for(now, now).unwrap();
         engine.backend_mut().wait_idle().unwrap();
-        if !engine.has_pending_input() && !engine.has_pending_document_edits() {
-            break;
-        }
+        let pending = [engine.has_pending_input(), engine.has_pending_document_edits()];
+        if !pending.contains(&true) { return Ok(()); }
         assert!(
             engine.metrics().frames - submitted < 32,
             "the stored Up completes its real settlement frames"
         );
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the stored Up's frames become ready"
-        );
-    }
+        Err(pending)
+    });
     assert!(
         !engine.has_active_stroke(),
         "the actual Up commits before native comparison"

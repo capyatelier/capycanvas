@@ -355,13 +355,12 @@ fn bakes_freeze_mask_versions_and_keep_live_mask_pages_unchanged() {
         outputs.push((handle, target));
         batches.push(DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0, damage, ..batch(target) });
     }
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    while outputs.iter().any(|(_, target)| document.target_raster(*target).unwrap().try_data().is_none()) {
+    crate::test_support::wait_until("captured mask bakes did not settle", || {
+        if outputs.iter().all(|(_, target)| document.target_raster(*target).unwrap().try_data().is_some()) { return Ok(()); }
         let packet = FramePacket { dab_batches: &batches, ..packet(document.scene(), EXTENT) };
         if r.raster_dependencies_ready(packet, None) { r.submit(packet).unwrap(); }
-        assert!(std::time::Instant::now() < deadline, "captured mask bakes did not settle");
-        std::thread::yield_now();
-    }
+        Err(())
+    });
     for (_, target) in &outputs {
         let SourceTarget::Paint(handle) = target else { unreachable!() };
         document.artwork.paint.get_mut(*handle).unwrap().operations = Arc::default();

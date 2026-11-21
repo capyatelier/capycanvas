@@ -77,8 +77,7 @@ fn raw_planes(r: &mut WgpuRasterizer, document: &Document) -> Planes {
     let mut planes = Planes::new();
     for coordinate in page_coordinates(PixelRect::full(EXTENT)) {
         for plane in PLANES {
-            let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-            let tile = crate::test_support::query_ready(r, &mut encoder, |r, encoder| {
+            let tile = crate::test_support::submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder| {
                 let read = |r: &WgpuRasterizer, inputs: &mut crate::scene::sources::AcceptedInputs| {
                     if plane == RasterPlane::Color { inputs.raw_color(r, target, coordinate).map(|[base, _]| base) }
                     else { inputs.raw_scalar(r, target, plane, coordinate) }
@@ -92,9 +91,7 @@ fn raw_planes(r: &mut WgpuRasterizer, document: &Document) -> Planes {
                     return Err(GpuRasterError::NotReady);
                 }
                 Ok(source.map(|source| source.tile))
-            });
-            r.uploads.finish(&encoder);
-            encoder.submit(&r.queue);
+            }));
             if let Some(tile) = tile {
                 let bytes = page_bytes(r, &tile.texture);
                 let bytes = if plane == RasterPlane::WatercolorWetness && tile.texture.format() == wgpu::TextureFormat::Rgba32Float {

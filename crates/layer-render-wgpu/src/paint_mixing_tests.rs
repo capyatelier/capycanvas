@@ -3,6 +3,7 @@
 use super::*;
 use layer_core::color::{DocumentColor, RgbSpace, oklab};
 use layer_core::{BlendSpace, ColorMixSpace, Point, StrokeId};
+use crate::test_support::submit_ready;
 
 const RED: [f32; 4] = [1., 0., 0., 1.];
 const GREEN: [f32; 4] = [0., 1., 0., 1.];
@@ -26,20 +27,13 @@ fn encoded8(space: RgbSpace, linear: [f64; 3]) -> [u8; 3] {
     linear.map(|v| (space.encode(v).clamp(0., 1.) * 255.).round() as u8)
 }
 
-fn submit(r: &mut WgpuRasterizer, scene: SceneView<'_>, dabs: &[Dab], batches: &[DabBatch], reset: bool, space: BlendSpace) {
-    let batches: Vec<_> = batches.iter().cloned().map(|mut b| {
-        b.style.blend_space = space;
-        b
-    }).collect();
-    crate::test_support::submit_ready(r, FramePacket { dabs, dab_batches: &batches, reset_layers: reset, blend_space: space, ..crate::test_support::packet(scene, [128, 128]) })
-        .unwrap();
-}
-
 fn paint(r: &mut WgpuRasterizer, document: &Document, color: [f32; 4], center: [f32; 2], radius: f32, reset: bool, space: BlendSpace) {
     let mut dab = dab(color);
     dab.center = Point { x: center[0], y: center[1] };
     dab.radii = [radius; 2];
-    submit(r, document.scene(), &[dab], &[batch(target(document))], reset, space);
+    let mut batch = batch(target(document));
+    batch.style.blend_space = space;
+    submit_ready(r, FramePacket { dabs: &[dab], dab_batches: &[batch], reset_layers: reset, blend_space: space, ..packet(document.scene(), [128; 2]) }).unwrap();
 }
 
 /// Smudge pulls the green left half 8 px into the red right half and mixes it
@@ -54,6 +48,7 @@ fn pickup(color: DocumentColor, execution: BrushExecution, mix: ColorMixSpace, s
     composition.blend = space;
     paint(&mut r, &document, GREEN, [64., 64.], 200., true, space);
     let mut style = crate::tests::test_style(execution);
+    style.blend_space = space;
     style.wet_mix = layer_core::BrushWetMix { blur: 0., mix_space: mix, ..Default::default() };
     let mut contact = dab(RED);
     contact.radii = [200.; 2];
@@ -67,7 +62,7 @@ fn pickup(color: DocumentColor, execution: BrushExecution, mix: ColorMixSpace, s
         contact.material = [0., 0., 1., 0.];
     }
     let pickup = DabBatch { stroke_id: StrokeId(2), ..crate::test_support::dab_batch(target(&document), style, batch(target(&document)).damage) };
-    submit(&mut r, document.scene(), &[contact], &[pickup], false, space);
+    submit_ready(&mut r, FramePacket { dabs: &[contact], dab_batches: &[pickup], blend_space: space, ..packet(document.scene(), [128; 2]) }).unwrap();
     r
 }
 
@@ -135,12 +130,13 @@ fn wet_pickup_approaches_empty_paint_continuously() {
             let document = paint_document([128; 2], "faint pickup");
             paint(&mut r, &document, [0., 1., 0., alpha], [64.; 2], 200., true, BlendSpace::Linear);
             let mut style = crate::tests::test_style(BrushExecution::Wet);
+            style.blend_space = BlendSpace::Linear;
             style.wet_mix = layer_core::BrushWetMix { amount_of_paint: 0.5, mix_space: mixing, ..Default::default() };
             let mut contact = dab(RED);
             contact.radii = [200.; 2];
             contact.material = [0., 0., 1., 0.];
             let wet = DabBatch { stroke_id: StrokeId(2), ..crate::test_support::dab_batch(target(&document), style, batch(target(&document)).damage) };
-            submit(&mut r, document.scene(), &[contact], &[wet], false, BlendSpace::Linear);
+            submit_ready(&mut r, FramePacket { dabs: &[contact], dab_batches: &[wet], blend_space: BlendSpace::Linear, ..packet(document.scene(), [128; 2]) }).unwrap();
             composite(&mut r)
         };
         let (empty, faint) = (draw(0.), draw(1e-7));

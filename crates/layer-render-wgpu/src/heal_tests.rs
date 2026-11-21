@@ -109,12 +109,11 @@ fn spot_healing_batches_resident_candidates_across_pages() {
     draw(&mut engine, &mut input, pen(21, PenPhase::Up, [1360., 602.], SampleFlags::PRIMARY));
     let pages = &engine.backend().paint_layers.iter().find(|l| l.id == TARGET).unwrap().pages;
     assert!(pages.iter().filter(|p| p.secondary.is_some()).count() < pages.len(), "pen-up allocates every Healing destination before its batch");
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    while counts(&engine).heals == 0 {
+    crate::test_support::wait_until("the heal settles", || {
+        if counts(&engine).heals != 0 { return Ok(()); }
         engine.render_frame().unwrap();
-        assert!(std::time::Instant::now() < deadline, "the heal settles");
-        std::thread::yield_now();
-    }
+        Err(())
+    });
     let passes = engine.backend().metrics.command_passes - before;
     flush(&mut engine);
     assert_eq!(counts(&engine).heals, 1);
