@@ -127,6 +127,14 @@ impl ResourceInput for LeasedResources {
 #[derive(Clone, Debug)]
 pub struct ResourceEntry { pub kind: &'static str, pub data: Value, pub raw_encoding: &'static str, pub payload: Payload }
 impl ResourceEntry {
+    pub(crate) fn stored_record_bound(&self)->usize {
+        let widest=u64::MAX.to_string();let id=self.payload.id();let tile=matches!(self.payload,Payload::Tile(_));
+        let encoding=if tile || self.raw_encoding.len()>"capy.lz4-bytes/1".len() {self.raw_encoding}else {"capy.lz4-bytes/1"};
+        let mut record=json!({"id":id,"type":self.kind,"data":self.data,"encoding":encoding,"bytes":widest,"crc32":"ffffffff",
+            "location":{"pack":format!("packs/{id}.bin"),"offset":widest}});
+        if !tile {record["decoded_bytes"]=widest.into();}
+        crate::json_len(&record)+1
+    }
     pub(crate) fn store_record(&self,cancelled:&AtomicBool)->Result<(Value,EncodedIntegrity),String> {
         let (encoded,integrity)=self.payload.prepared(cancelled)?;
         let mut data=self.data.clone();
@@ -146,6 +154,7 @@ impl ResourceEntry {
 #[derive(Clone, Debug, Default)]
 pub struct ResourceInventory {
     pub entries: BTreeMap<PortableId, ResourceEntry>,
+    pub(crate) stored_bytes: usize,
     pub(crate) transfer: bool,
     pub(crate) private: bool,
     pub(crate) images: BTreeMap<PortableId, Value>,
@@ -171,7 +180,7 @@ impl ResourceInventory {
                     _=>{},
                 }
             }
-        } else { self.entries.insert(id, entry); }
+        } else { self.stored_bytes=self.stored_bytes.saturating_add(entry.stored_record_bound());self.entries.insert(id, entry); }
         Ok(reference(id))
     }
     pub(crate) fn image(&mut self,id:PortableId,record:Value)->Result<Value,String> {

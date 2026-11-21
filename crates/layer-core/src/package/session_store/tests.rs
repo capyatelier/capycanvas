@@ -265,6 +265,32 @@
         assert_eq!(restored.admit(limits).unwrap_err(),"Artwork exceeds the tile count limit");
     }
     #[test]
+    fn a_checkpoint_past_the_size_bound_drops_only_the_oldest_undo_states() {
+        let bound=GENERATION_ENVELOPE_BYTES+1024*1024;
+        let mut editor=Editor::new(Document::new(PortableId::random(),4096,4096,DocumentNames {paint:"ink".into(),paper:"paper".into()}));
+        let target=editor.document().working.target.unwrap();
+        let blob=TileBlob::encode(RasterPlane::Color.descriptor(Default::default()),&vec![9;256*256*4]).unwrap();
+        for _ in 0..40 {
+            let tiles=(0..256).map(|index|(TileKey {plane:RasterPlane::Color,coordinate:[index%16,index/16]},RasterTile::backed_shared(Arc::new(blob.alias(PortableId::random()))))).collect();
+            editor.perform(crate::Edit::SetRaster {target,revision:RasterRevision::backed(RasterData {tiles,..Default::default()})}).unwrap();
+        }
+        editor.undo().unwrap();editor.undo().unwrap();
+        let first_tile=|editor:&Editor|editor.document().scene().raster(target).unwrap().try_data().unwrap().unwrap().tiles.values().next().unwrap().wait_backing().unwrap().resource_id();
+        let capture=editor.capture_session(editor.capture(1,Default::default()).unwrap()).unwrap();
+        let directory=Directory::new();let cancel=AtomicBool::new(false);
+        let mut store=SessionStore::open(&directory.0).wait().unwrap();
+        let generation=store.checkpoint_within(&capture,json!({}).into(),bound,&cancel).wait().unwrap();
+        assert!(fs::metadata(store.generation_path(generation)).unwrap().len()<=bound);
+        drop(store);
+        let mut restored=SessionStore::open(&directory.0).wait().unwrap().load(ProjectLimits::default(),&cancel).wait().unwrap().unwrap().editor;
+        assert_eq!(first_tile(&restored),first_tile(&editor));
+        let mut kept=0;
+        while restored.can_undo() {restored.undo().unwrap();editor.undo().unwrap();kept+=1;assert_eq!(first_tile(&restored),first_tile(&editor));}
+        assert!(kept>0 && editor.can_undo());
+        for _ in 0..kept+2 {restored.redo().unwrap();editor.redo().unwrap();assert_eq!(first_tile(&restored),first_tile(&editor));}
+        assert!(!restored.can_redo() && !editor.can_redo());
+    }
+    #[test]
     fn full_disk_keeps_pressure_and_checkpoint_bytes_in_ram_without_publishing() {
         use crate::package::storage_budget::STORAGE_UNAVAILABLE;
         for authoritative in [false,true] {for operation in ["pressure","checkpoint"] {
@@ -506,7 +532,7 @@
         let bytes = store.generation_metadata(&store.head.as_ref().unwrap().current, ProjectLimits::default().metadata_bytes).wait().unwrap();
         let stored = StoredGeneration::parse(&bytes, ProjectLimits::default()).unwrap_or_else(|e| panic!("{}", e.message()));
         let locations = stored.locations.unwrap();
-        let mut spatial=super::super::session::SessionDraft::capture(&prepared.editor,prepared.metadata.clone(),&cancel).unwrap().spatial_order().into_iter().map(|(id,(_,y,x))|(id,[x,y])).collect::<Vec<_>>();spatial.sort_by_key(|(_,coordinate)|[coordinate[1],coordinate[0]]);
+        let mut spatial=super::super::session::SessionDraft::capture(&prepared.editor,prepared.metadata.clone(),u64::MAX,&cancel).unwrap().spatial_order().into_iter().map(|(id,(_,y,x))|(id,[x,y])).collect::<Vec<_>>();spatial.sort_by_key(|(_,coordinate)|[coordinate[1],coordinate[0]]);
         assert_eq!(spatial.len(), 2_000);
         assert!(spatial.windows(2).all(|pair| locations[&pair[0].0].offset < locations[&pair[1].0].offset));
         let pack = resource_owner(&store, tile_resource(&prepared).payload.resource_id(), tile_resource(&prepared).bytes);

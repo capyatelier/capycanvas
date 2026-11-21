@@ -198,7 +198,7 @@ impl SessionRecord {
 }
 
 #[derive(Default)]
-struct StateEncoder {inventory:ResourceInventory,records:Vec<ObjectVersion>,versions:BTreeMap<Vec<u8>,usize>,index_chunks:Vec<Vec<Value>>,index_versions:BTreeMap<Vec<u8>,usize>}
+struct StateEncoder {inventory:ResourceInventory,records:Vec<ObjectVersion>,versions:BTreeMap<Vec<u8>,usize>,index_chunks:Vec<Vec<Value>>,index_versions:BTreeMap<Vec<u8>,usize>,bytes:usize}
 impl StateEncoder {
     fn capture(&mut self,document:&Document,checkpoint:u64,cancel:&AtomicBool)->Result<StateRecord,String> {
             active(cancel)?;let art=&document.artwork;
@@ -206,9 +206,11 @@ impl StateEncoder {
             let (objects,next)=artwork_records::encode_with_inventory(art,cancel,std::mem::take(&mut self.inventory))?;self.inventory=next;
             let mut indices=Vec::with_capacity(objects.len());
             for record in objects {
+                let chunks=self.index_chunks.len();
                 let object=ObjectVersion::capture(record,&mut self.index_chunks,&mut self.index_versions)?;
+                self.bytes+=self.index_chunks[chunks..].iter().map(|chunk|crate::json_len(chunk)+1).sum::<usize>();
                 let key=serde_json::to_vec(&object).map_err(|e|e.to_string())?;
-                let index=if let Some(index)=self.versions.get(&key) {*index}else {let index=self.records.len();self.versions.insert(key,index);self.records.push(object);index};
+                let index=if let Some(index)=self.versions.get(&key) {*index}else {let index=self.records.len();self.bytes+=key.len()+1;self.versions.insert(key,index);self.records.push(object);index};
                 indices.push(index);
             }
             Ok(StateRecord {objects:indices,outputs:art.outputs.iter().map(|(_,id,_)|resources::reference(id)).collect(),working:WorkingRecord::capture(&document.working,&mut self.inventory)?,checkpoint})
@@ -237,29 +239,46 @@ pub(crate) struct SessionDraft {
     pub(crate) trusted_programs:super::TrustedPrograms,
 }
 impl SessionDraft {
-    pub(crate) fn capture(capture:&EditorCapture,metadata:SessionMetadata,cancel:&AtomicBool)->Result<Self,String> {
-        let (current,undo,redo)=capture.documents(cancel)?;let mut encoder=StateEncoder::default();encoder.inventory.private=true;
-        let opaque=current.artwork.extensions.resources.clone();
-        let current_state=encoder.capture(&current,capture.artwork.checkpoint.edit_checkpoint,cancel)?;
-        let mut undo_states=Vec::with_capacity(undo.len());let mut redo_states=Vec::with_capacity(redo.len());
-        for (history,target) in [(&undo,&mut undo_states),(&redo,&mut redo_states)] {
-            for (document,checkpoint) in history {target.push(encoder.capture(document,*checkpoint,cancel)?);}
+    pub(crate) fn capture(capture:&EditorCapture,metadata:SessionMetadata,bound:u64,cancel:&AtomicBool)->Result<Self,String> {
+        let (current,undo,redo)=capture.documents(cancel)?;
+        let mut history:Vec<_>=undo.iter().map(|state|(false,state)).chain(redo.iter().map(|state|(true,state))).collect();
+        let (mut draft,mut fitted)=Self::encode(capture,&current,&history,&metadata,bound,cancel)?;
+        if fitted<history.len() {
+            if redo.is_empty() {history.truncate(fitted);}else {history.sort_by_key(|(redo,_)|!redo);}
+            loop {
+                (draft,fitted)=Self::encode(capture,&current,&history,&metadata,bound,cancel)?;
+                if fitted==history.len() {break;}
+                history.truncate(fitted);
+            }
         }
-        let StateEncoder {mut inventory,records,versions:_,index_chunks,index_versions:_}=encoder;
-        let metadata_profiles=metadata.encode_profiles(&mut inventory)?;
+        Ok(draft)
+    }
+    fn encode(capture:&EditorCapture,current:&Document,history:&[(bool,&(Document,u64))],metadata:&SessionMetadata,bound:u64,cancel:&AtomicBool)->Result<(Self,usize),String> {
+        let mut encoder=StateEncoder::default();encoder.inventory.private=true;
+        let current_state=encoder.capture(current,capture.artwork.checkpoint.edit_checkpoint,cancel)?;
+        let metadata_profiles=metadata.encode_profiles(&mut encoder.inventory)?;
         current.artwork.metadata.validate()?;
         let mut artwork_metadata=serde_json::Map::new();
         for (kind,bytes) in ["exif","xmp","iptc"].into_iter().zip(current.artwork.metadata.blocks()) {
-            if let Some(bytes)=bytes {artwork_metadata.insert(kind.into(),inventory.bytes("capy.photo-metadata/1",bytes,json!({"kind":kind}))?);}
+            if let Some(bytes)=bytes {artwork_metadata.insert(kind.into(),encoder.inventory.bytes("capy.photo-metadata/1",bytes,json!({"kind":kind}))?);}
         }
-        let opaque=inventory.with_opaque(opaque.into_values())?;
+        let opaque=encoder.inventory.with_opaque(current.artwork.extensions.resources.values().cloned())?;
         let art=&current.artwork;
-        let record=SessionRecord {format:"capy.session".into(),version:1,checkpoint:capture.artwork.checkpoint,next_checkpoint:capture.next_checkpoint,next_stroke_id:current.next_stroke_id,
+        let mut record=SessionRecord {format:"capy.session".into(),version:1,checkpoint:capture.artwork.checkpoint,next_checkpoint:capture.next_checkpoint,next_stroke_id:current.next_stroke_id,
             layout:TransferLayout::capture(art),root:resources::reference(art.compositions.id(art.root).ok_or("Missing session root")?),
             default_output:resources::reference(art.outputs.id(art.default_output).ok_or("Missing session output")?),
-            artwork_metadata:(!artwork_metadata.is_empty()).then_some(Value::Object(artwork_metadata)),metadata:metadata.value,metadata_profiles,objects:records,index_chunks,resources:Vec::new(),
-            extension_records:art.extensions.records.clone(),extension_resources:art.extensions.resources.keys().copied().collect(),current:current_state,undo:undo_states,redo:redo_states};
-        Ok(Self {record,inventory,opaque,trusted_programs:capture.trusted_programs()?})
+            artwork_metadata:(!artwork_metadata.is_empty()).then_some(Value::Object(artwork_metadata)),metadata:metadata.value.clone(),metadata_profiles,objects:Vec::new(),index_chunks:Vec::new(),resources:Vec::new(),
+            extension_records:art.extensions.records.clone(),extension_resources:art.extensions.resources.keys().copied().collect(),current:current_state,undo:Vec::new(),redo:Vec::new()};
+        let mut record_bytes=crate::json_len(&record)+opaque.iter().map(|resource|crate::json_len(&resource.record(json!({"pack":format!("packs/{}.bin",resource.id),"offset":u64::MAX.to_string()})))+1).sum::<usize>();
+        let mut fitted=0;
+        for (redo,(document,checkpoint)) in history {
+            let state=encoder.capture(document,*checkpoint,cancel)?;record_bytes+=crate::json_len(&state)+1;
+            if (record_bytes+encoder.bytes+encoder.inventory.stored_bytes) as u64>bound {break;}
+            if *redo {record.redo.push(state);}else {record.undo.push(state);}
+            fitted+=1;
+        }
+        let StateEncoder {inventory,records,index_chunks,..}=encoder;record.objects=records;record.index_chunks=index_chunks;
+        Ok((Self {record,inventory,opaque,trusted_programs:capture.trusted_programs()?},fitted))
     }
     pub(crate) fn spatial_order(&self)->BTreeMap<PortableId,(usize,u32,u32)> {
         let mut order=BTreeMap::new();

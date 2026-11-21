@@ -26,6 +26,7 @@ mod native;
 pub use native::*;
 
 pub(super) const PACK_BYTES: u64 = 64 * 1024 * 1024;
+const GENERATION_ENVELOPE_BYTES: u64 = 1024 * 1024;
 mod head;
 mod io;
 mod metadata;
@@ -374,6 +375,9 @@ impl SessionStore {
     pub fn loaded_generation(&self) -> Option<PortableId> { self.loaded.as_ref().map(|loaded| loaded.id) }
     pub fn recovered_previous(&self) -> bool { self.loaded_generation().is_some_and(|loaded| Some(loaded) != self.generation()) }
     pub async fn checkpoint(&mut self,capture:&super::session::EditorCapture,metadata:super::session::SessionMetadata,cancelled:&AtomicBool)->Result<PortableId,String> {
+        self.checkpoint_within(capture,metadata,ProjectLimits::default().metadata_bytes,cancelled).await
+    }
+    async fn checkpoint_within(&mut self,capture:&super::session::EditorCapture,metadata:super::session::SessionMetadata,bound:u64,cancelled:&AtomicBool)->Result<PortableId,String> {
         let memory=capture.artwork().memory.as_ref().map(|memory|memory.weak());
         let key=CheckpointKey::of(capture);let profiles=metadata.profiles.clone();
         let result=async {
@@ -388,7 +392,7 @@ impl SessionStore {
             tiles.check_integrity()?;return self.publish_packed(metadata,roots,&programs,cancelled).await;
         }
         for blob in capture.retained_tiles().await_blobs().await? {if blob.compressed.needs_preparation() {blob.read_compressed().await?;}}
-        let draft=super::session::SessionDraft::capture(capture,metadata,cancelled)?;
+        let draft=super::session::SessionDraft::capture(capture,metadata,bound.saturating_sub(GENERATION_ENVELOPE_BYTES),cancelled)?;
         let mut inputs=draft.inventory.entries.values().map(|entry|StoreInput::entry(entry,cancelled)).collect::<Result<Vec<_>,_>>()?;
         for opaque in &draft.opaque {inputs.push(StoreInput::opaque(opaque.clone())?);}
         let order=draft.spatial_order();
