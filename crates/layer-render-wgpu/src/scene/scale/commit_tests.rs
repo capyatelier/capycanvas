@@ -209,7 +209,8 @@ impl Attempt {
         let mut r=if staged {crate::test_support::staged_renderer(&reference,doc.composition().color)}else{reference};
         pollster::block_on(r.compilation.prepare_all([r.scene_pipelines.source.for_format(wgpu::TextureFormat::Rgba8Unorm)])).unwrap();
         pollster::block_on(r.compilation.prepare_all(r.scene_pipelines.for_scene(&r,doc.scene(),&[]))).unwrap();
-        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.constant.2,&r.scene_pipelines.fold.pipeline,&r.scene_pipelines.scale.full.reduce])).unwrap();
+        pollster::block_on(r.compilation.prepare_all([&r.scene_pipelines.constant.2,&r.scene_pipelines.fold.pipeline,&r.scene_pipelines.scale.full.reduce,
+            &r.scene_pipelines.scale.output(r.display_precision(doc.scene()).format()).reduce_pair])).unwrap();
         r.ensure_document_metadata(extent,doc.scene()).unwrap();
         working_scene_frame(&mut r,frame(&doc,level));
         if let Some(region)=ready {

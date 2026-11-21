@@ -2558,10 +2558,7 @@ impl Scene {
                 },
                 Job::Placement(job)=>compute(&self.placement[usize::from(job.scalar)].placement_pipeline(&job.transform,job.taps)),
                 Job::Positions(..)=>r.transforms.as_ref().unwrap().mesh_pipelines().iter().for_each(&mut render),
-                Job::Compose {format,..}=> {
-                    let kernels=r.scene_pipelines.scale.output(*format);
-                    for pipeline in [&kernels.compose,&kernels.reduce_pair,&kernels.reduce] {compute(pipeline);}
-                },
+                Job::Compose {format,..}=>compute(&r.scene_pipelines.scale.output(*format).compose),
                 Job::Resample {..}=>compute(&r.scene_pipelines.resample.area),
                 Job::Reduce {kernel,format,..}=> {
                     let kernels=r.scene_pipelines.scale.output(*format);
@@ -3131,9 +3128,8 @@ impl Pipelines {
         self.pipeline.iter().zip(used).filter_map(|(pipeline,used)| used.then_some(pipeline))
     }
     pub fn fill_pipelines(&self,device:&PipelineDevice)->[&Deferred<wgpu::RenderPipeline>;3] { [&self.pipeline[10],&self.pipeline[3],&self.pipeline[fill_line_pipeline(device)]] }
-    pub fn scale_pipelines(&self,format:wgpu::TextureFormat) -> [&Deferred<wgpu::ComputePipeline>; 5] {
-        let output=self.scale.output(format);
-        [&output.reduce, &output.reduce_phased, &output.reduce_pair, &output.compose, &self.resample.area]
+    pub fn scale_pipelines(&self,format:wgpu::TextureFormat) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
+        self.scale.display(format).chain([&self.resample.area])
     }
     pub fn effects(&self, r: &WgpuRasterizer) -> effects::Effects {
         effects::Effects::new(r, &self.uniforms)
