@@ -84,6 +84,10 @@ struct Originals {
 }
 impl Originals {
     fn new(versions:raster::contents::Versions)->Self {Self {versions,tiles:BTreeMap::new(),atlases:Vec::new()}}
+    fn readable(&self,coordinate:[u32;2])->bool {
+        self.tiles.get(&coordinate).is_some_and(|tile|tile.capture.matches(&self.versions.tile(layer_core::raster::RasterPlane::Color,coordinate))==Some(true)
+            && tile.surface.read(&tile.capture,None).is_some())
+    }
 }
 impl std::fmt::Debug for Originals {
     fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
@@ -340,11 +344,11 @@ impl Liquify {
         for (batch,tiles) in packet.dab_batches.iter().zip(plans).filter(|(batch,_)|batch.style.execution==BrushExecution::Liquify) {
             let preview=batch.kind==DabBatchKind::Preview;
             if fields.get(&batch.target).is_some_and(|(id,_)|*id!=batch.stroke_id || batch.stroke_start && !preview) {fields.remove(&batch.target);}
-            let fields=fields.entry(batch.target).or_insert_with(|| {
-                let live=r.liquify.as_ref().and_then(|liquify|liquify.strokes.get(&batch.target)).filter(|stroke|stroke.id==batch.stroke_id && !(batch.stroke_start && !preview));
-                let previous=batch.style.liquify.as_ref().and_then(|c|c.field.as_ref()).and_then(|field|field.as_any().downcast_ref::<Field>()).filter(|field|field.device==*r.device);
-                (batch.stroke_id,live.map(|stroke|&stroke.field).or(previous).map_or_default(|field|field.tiles.iter().map(|(at,tile)|(*at,tile.bounds)).collect()))
-            });
+            let live=r.liquify.as_ref().and_then(|liquify|liquify.strokes.get(&batch.target)).filter(|stroke|stroke.id==batch.stroke_id && !(batch.stroke_start && !preview));
+            let previous=batch.style.liquify.as_ref().and_then(|c|c.field.as_ref()).and_then(|field|field.as_any().downcast_ref::<Field>()).filter(|field|field.device==*r.device);
+            let field=live.map(|stroke|&stroke.field).or(previous);
+            let originals=field.map(|field|field.originals.lock().expect("liquify sources"));
+            let fields=fields.entry(batch.target).or_insert_with(||(batch.stroke_id,field.map_or_default(|field|field.tiles.iter().map(|(at,tile)|(*at,tile.bounds)).collect())));
             let extent=packet.scene.target_extent(batch.target);
             let dabs=&packet.dabs[batch.first_dab as usize..(batch.first_dab+batch.dab_count) as usize];
             let mut outputs=Vec::new();
@@ -352,7 +356,7 @@ impl Liquify {
                 if !preview && tile.dabs.is_empty() && batch.style.liquify.as_ref().is_none_or(|c|c.amount.is_none()) {continue;}
                 let (_,bounds)=field_input_bounds(batch,dabs,tile.coordinate,extent,fields.1.iter().map(|(at,bounds)|(*at,*bounds)));
                 let coordinates=required.entry(batch.target).or_default();coordinates.insert(tile.coordinate);
-                coordinates.extend(page_coordinates(field_source_bounds(bounds,extent,preview)));
+                coordinates.extend(page_coordinates(field_source_bounds(bounds,extent,preview)).filter(|at|!originals.as_ref().is_some_and(|originals|originals.readable(*at))));
                 outputs.push((tile.coordinate,bounds));
             }
             if !preview {fields.1.extend(outputs);}

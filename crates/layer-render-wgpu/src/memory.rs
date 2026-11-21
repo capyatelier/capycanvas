@@ -274,9 +274,15 @@ impl WgpuRasterizer {
         self.admit_group(bytes,0).map(|(_,held)|held)
     }
     pub(crate) fn admit_group(&mut self,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
+        self.admit_group_within(raster,raster,display)
+    }
+    pub(crate) fn admit_group_within(&mut self,least:u64,raster:u64,display:u64)->Result<(crate::residency::Reservation,crate::residency::Reservation),crate::residency::Blocked> {
         self.memory.lane.borrow_mut().asked=true;self.memory.lend(self.raster_tiers.raster.used(),raster,0);
         let drain=crate::residency::Drain::new(self.draining());
-        let admitted=self.try_group(raster,display).or_else(|_|{self.yield_to_lane(raster,display);self.try_group(raster,display)});
+        let admitted=self.try_group(raster,display).or_else(|_|{self.yield_to_lane(raster,display);self.try_group(raster,display)}).or_else(|blocked| {
+            if least==raster {return Err(blocked);}
+            self.memory.lend(self.raster_tiers.raster.used(),least,0);self.try_group(least,display)
+        });
         match admitted {
             Ok(held)=>{
                 self.memory.draw(self.raster_tiers.raster.used(),self.raster_tiers.raster.limit());
