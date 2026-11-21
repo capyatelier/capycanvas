@@ -1173,6 +1173,14 @@ fn stroke_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,
     crate::test_support::submit_ready(r,FramePacket {dabs,dab_batches:&batches,time_seconds:0.1*(step+1) as f32,..frame}).unwrap();
     crate::test_support::PassCounts::snapshot().delta(counts)
 }
+fn clone_stamp()->layer_render::DabStyle {
+    layer_render::DabStyle {retouch:Some(layer_core::Retouch {source:layer_core::RetouchSource::Editing,offset:[40.,-120.],..Default::default()}),
+        ..crate::layer_tests::preset_style(DefaultBrushPreset::CloneStamp)}
+}
+fn select_retouch(r:&mut WgpuRasterizer,target:SourceTarget,style:&layer_render::DabStyle) {
+    let Some(retouch)=style.retouch.clone() else {return;};
+    layer_render::CanvasRenderer::prepare_retouch(r,Some(&layer_render::RetouchPreparation {execution:style.execution,target,retouch,points:vec![layer_core::Point {x:300.,y:300.}]}));
+}
 fn bits(r:&WgpuRasterizer)->Vec<[u32;4]> {display_pixels(r).into_iter().map(|pixel|pixel.map(f32::to_bits)).collect()}
 fn redraw_whole(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,style:&layer_render::DabStyle,tips:&[layer_render::Dab],cells:&[PixelRect],step:usize)->u64 {
     let cache=r.scale_display.as_ref().unwrap();
@@ -1187,10 +1195,11 @@ impl<'a> Stroked<'a> {
     fn started(&self)->(WgpuRasterizer,FramePacket<'a>,SourceTarget) {
         let extent=self.doc.composition().size;
         let mut frame=packet(self.doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
-        let mut r=renderer(self.doc);
+        let mut r=renderer(self.doc);let target=self.doc.active_target().unwrap();
         if !self.in_place {crate::test_support::write_only_dry_material(&mut r);}
+        select_retouch(&mut r,target,&self.style);
         crate::test_support::submit_settled(&mut r,frame);
-        (r,frame,self.doc.active_target().unwrap())
+        (r,frame,target)
     }
     fn dabs(&self,(ink,tip):(f32,f32))->[layer_render::Dab;3] {[pen_dab(ink,&self.style),pen_dab(tip,&self.style),pen_dab(tip+9.,&self.style)]}
     fn patched_and_whole_texels(&self,mut before:impl FnMut(usize,&mut WgpuRasterizer))->Vec<[u64;2]> {
@@ -1241,11 +1250,13 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
     let colored=[("a Pencil",style(Pencil),true,1),("an alpha-locked Pencil",locked,true,1),("an ink pen",style(GPen),true,1),
         ("an eraser",style(Eraser),true,1),("a paintbrush",style(Paintbrush),true,1),("a multiply glaze",style(MultiplyGlaze),true,1),
         ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0)];
-    let grayed=[("a Dither blender",dither,true,0),("a Dither blender without cells",fine,true,0),("a Scatter blender",style(ScatterBlender),true,0)];
+    let grayed=[("a Dither blender",dither,true,0),("a Dither blender without cells",fine,true,0),("a Scatter blender",style(ScatterBlender),true,0),
+        ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1)];
     for (doc,(label,style,in_place,tips)) in colored.into_iter().map(|row|(&doc,row)).chain(grayed.into_iter().map(|row|(&graying,row))) {
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
         let mut r=renderer(doc);
         if !in_place {crate::test_support::write_only_dry_material(&mut r);}
+        select_retouch(&mut r,target,&style);
         crate::test_support::submit_settled(&mut r,frame);
         let dabs=|step:usize|[pen_dab(300.+3.*step as f32,&style),pen_dab(303.+3.*step as f32,&style)];
         for step in 0..2 {stroke_frame(&mut r,frame,target,&style,&dabs(step)[..=tips],true,step);}
@@ -1290,6 +1301,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_re
         Stroked::new("a page that first exists mid-stroke",&unpainted,Pencil,1),
         Stroked::new("a page a Dither blender rewrote in cells",&painted,DitherBlender,0),
         Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
+        Stroked {style:clone_stamp(),..Stroked::new("a page a clone stamp copied onto under its tip",&painted,CloneStamp,1)},
     ]);
 }
 

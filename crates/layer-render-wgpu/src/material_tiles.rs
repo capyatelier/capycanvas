@@ -33,7 +33,7 @@ impl WgpuRasterizer {
     pub(super) fn color_delta(&self,batch:&DabBatch,in_place:bool,coordinate:[u32;2],local:PixelRect)->resident::Delta {
         if in_place {return resident::Delta::InPlace(local);}
         let style=&batch.style;
-        if self.compact_preview_contribution(batch) || self.dry_material_block(batch)!=1 || style.execution.retouches()
+        if self.compact_preview_contribution(batch) || self.dry_material_block(batch)!=1
             || !(pointwise(style) || destination_material::transported(style)) {return resident::Delta::Unknown;}
         let written=if stable_blender(style) {destination_material::rewritten(style,coordinate,local,self.target_extent(batch.target))}else {Some(local)};
         written.zip(self.brush_inputs.as_ref().and_then(|inputs|inputs.sole_color(batch.target,coordinate)))
