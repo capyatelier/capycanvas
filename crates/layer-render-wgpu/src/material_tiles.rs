@@ -30,14 +30,15 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    pub(super) fn color_delta(&self,batch:&DabBatch,in_place:bool,coordinate:[u32;2],local:PixelRect)->resident::Delta {
+    pub(super) fn color_delta(&self,batch:&DabBatch,in_place:bool,target:BrushEncodingTarget,coordinate:[u32;2],local:PixelRect,receipt:&submission::Submission)->resident::Delta {
         if in_place {return resident::Delta::InPlace(local);}
         let style=&batch.style;
         if self.compact_preview_contribution(batch) || self.dry_material_block(batch)!=1
             || !(pointwise(style) || destination_material::transported(style)) {return resident::Delta::Unknown;}
         let written=if stable_blender(style) {destination_material::rewritten(style,coordinate,local,self.target_extent(batch.target))}else {Some(local)};
+        let other_surface_of_its_page=target.material_source()==target;
         written.zip(self.brush_inputs.as_ref().and_then(|inputs|inputs.sole_color(batch.target,coordinate)))
-            .map_or(resident::Delta::Unknown,|(written,source)|resident::Delta::seeded(source,written))
+            .map_or(resident::Delta::Unknown,|(written,source)|if other_surface_of_its_page {resident::Delta::reseeded(source,written,receipt)}else {resident::Delta::seeded(source,written)})
     }
 
     pub(super) fn encode_material_batch(
@@ -148,7 +149,7 @@ impl WgpuRasterizer {
                 self.material_source_binding(batch,batch_index, job.coordinate, context.target, &intent, display_slot, encoder)?
             };
             let receipt=encoder.submission();
-            let delta=self.color_delta(batch,in_place,job.coordinate,job.local);
+            let delta=self.color_delta(batch,in_place,context.target,job.coordinate,job.local,&receipt);
             let color_ticket=preview.then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Color,&intent)).transpose()?;
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let pipelines=&self.pipelines.dry_material;
