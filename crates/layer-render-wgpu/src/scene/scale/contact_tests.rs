@@ -1152,7 +1152,8 @@ fn a_stroke_started_while_the_last_one_composes_begins_in_contact_and_commits_on
 }
 
 fn pen_dab(x:f32,style:&layer_render::DabStyle)->layer_render::Dab {
-    let mut dab=material_dab(x,300.,style);dab.radii=[4.5;2];dab.previous=[4.5,4.5,1.,0.];dab.motion=[3.,0.];dab
+    let mut dab=material_dab(x,300.,style);dab.radii=[4.5;2];dab.previous=[4.5,4.5,1.,0.];dab.motion=[3.,0.];
+    dab.material[3]=f32::from(style.execution==layer_core::BrushExecution::Liquify);dab
 }
 fn stroked_over_a_layer(extent:[u32;2],painted:bool)->layer_core::Document {
     let mut doc=document_at(extent);
@@ -1251,7 +1252,7 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
         ("an eraser",style(Eraser),true,1),("a paintbrush",style(Paintbrush),true,1),("a multiply glaze",style(MultiplyGlaze),true,1),
         ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0)];
     let grayed=[("a Dither blender",dither,true,0),("a Dither blender without cells",fine,true,0),("a Scatter blender",style(ScatterBlender),true,0),
-        ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1)];
+        ("a clone stamp",clone_stamp(),true,1),("a clone stamp stored write-only",clone_stamp(),false,1),("a Liquify push",style(LiquifyPush),true,0)];
     for (doc,(label,style,in_place,tips)) in colored.into_iter().map(|row|(&doc,row)).chain(grayed.into_iter().map(|row|(&graying,row))) {
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
         let mut r=renderer(doc);
@@ -1302,6 +1303,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_re
         Stroked::new("a page a Dither blender rewrote in cells",&painted,DitherBlender,0),
         Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
         Stroked {style:clone_stamp(),..Stroked::new("a page a clone stamp copied onto under its tip",&painted,CloneStamp,1)},
+        Stroked::new("a page Liquify pushed in place without a tip",&painted,LiquifyPush,0),
     ]);
 }
 

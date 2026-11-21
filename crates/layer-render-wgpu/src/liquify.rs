@@ -684,7 +684,7 @@ impl Liquify {
             let version=preview_version.as_ref().map_or_else(||layer_core::raster::ContentName::fresh().into(),|preview|preview.version().clone());
             if preview {preview_versions.insert(*coordinate,version.clone());}
             publications.push(MaterialPublication {kind:MaterialOutputKind::Color,coordinate:*coordinate,preview:preview_version,input:intent,
-                encoding:write.encoded(version)});
+                encoding:write.encoded(version).certified(if preview {resident::Delta::Unknown}else {resident::Delta::InPlace(local)})});
             for (index, &chunk) in chunks.iter().enumerate() {
                 let current = if preview {
                     current_tiles.get(coordinate).map_or(&r.empty_view, |tile| &tile.view)
