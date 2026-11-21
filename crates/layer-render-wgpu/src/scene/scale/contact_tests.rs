@@ -1392,7 +1392,10 @@ fn each_page_record_bounds_what_its_stroke_frame_wrote() {
         ("a Scatter blender under two tips",style(ScatterBlender),true,2),("a Pencil under two tips",style(Pencil),true,2),
         ("a Pencil stored write-only under two tips",style(Pencil),false,2),("a wet-edged brush under a tip",wet_edged_brush(),true,1),
         ("a Liquify push under a tip",style(LiquifyPush),true,1),("a Liquify twirl under a tip",style(LiquifyTwirl),true,1),
-        ("a Liquify crystals brush under a tip",style(LiquifyCrystals),true,1)];
+        ("a Liquify crystals brush under a tip",style(LiquifyCrystals),true,1),
+        ("wet paint under a tip",style(WetRound),true,1),("wet paint under two tips",style(WetRound),true,2),("loaded oil under a tip",style(LoadedOil),true,1),
+        ("a palette knife under two tips",style(PaletteKnife),true,2),("a wet blender under a tip",style(WetBlender),true,1),
+        ("gouache under a tip",style(OpaqueGouache),true,1),("a color mixer under two tips",style(ColorMixer),true,2),("a mixing brush under a tip",style(MixingBrush),true,1)];
     for (gray,(label,style,in_place,tips)) in colored.into_iter().map(|row|(false,row)).chain(grayed.into_iter().map(|row|(true,row))) {
         Written {label:label.into(),doc:if gray {grayed_copy(&doc)}else {doc.clone()},style,in_place,tips,radius:4.5,at:[300.;2]}.is_bounded_by_its_page_records();
     }
@@ -1414,7 +1417,8 @@ fn each_page_record_bounds_what_its_frame_wrote_at_every_brush_size() {
     let read=|r:&WgpuRasterizer,preview:bool|page_reads(r,target,preview).remove(&[1,1]).expect("the stroke's page is stored");
     for (label,style,inked,tips) in [("a smudge under a tip",style(Smudge),1,1),("a smudge in three batches under two tips",style(Smudge),3,2),
         ("a smudge in two batches under three tips",style(Smudge),2,3),("a Dither blender under a tip",style(DitherBlender),1,1),
-        ("a Scatter blender in two batches under a tip",style(ScatterBlender),2,1),("a Liquify push under a tip",style(LiquifyPush),1,1)] {
+        ("a Scatter blender in two batches under a tip",style(ScatterBlender),2,1),("a Liquify push under a tip",style(LiquifyPush),1,1),
+        ("wet paint in three batches under two tips",style(WetRound),3,2),("loaded oil in two batches under a tip",style(LoadedOil),2,1)] {
         for diameter in [5.,30.,100.,300.,600.,2000.] {
             let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
             let mut r=renderer(&doc);
@@ -1470,6 +1474,9 @@ fn patches_bit_for_bit_for_each_kind_of_page_record(paper:bool) {
         Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
         Stroked {style:clone_stamp(),..Stroked::new("a page a clone stamp copied onto under its tip",&painted,CloneStamp,1)},
         Stroked::new("a page Liquify pushed in place without a tip",&painted,LiquifyPush,0),
+        Stroked::new("a page wet paint transported under a tip",&painted,WetRound,1),
+        Stroked::new("a page loaded oil transported under two tips",&painted,LoadedOil,2),
+        Stroked::new("a page a palette knife transported without a tip",&painted,PaletteKnife,0),
         Stroked::new("a page Liquify pushed in place under a tip",&painted,LiquifyPush,1),
         Stroked::new("a page Liquify twirled in place under a tip",&painted,LiquifyTwirl,1),
         Stroked {style:wet_edged_brush(),..Stroked::new("a page a wet-edged brush drew on in place without a tip",&painted,Pencil,0)},
