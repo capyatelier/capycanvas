@@ -286,10 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cold_paint_base_query_requests_and_reads_its_pixels() {cold_source_query(false);}
-
-    #[test]
-    fn a_cold_backed_raster_query_requests_and_reads_its_pixels() {cold_source_query(true);}
+    fn a_cold_source_query_requests_and_reads_its_pixels() {for raster in [false,true] {cold_source_query(raster);}}
 
     #[test]
     fn paint_base_four_tile_window_and_aligned_lookup_preserve_edges_and_codes() {

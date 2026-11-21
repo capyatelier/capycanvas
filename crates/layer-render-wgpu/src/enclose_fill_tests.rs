@@ -866,23 +866,11 @@ fn enclose_fill_geometry_known_misses_only_shrink() {
     assert!(check_geometry("new case",Ok(())).is_ok());
 }
 #[test]
-fn enclose_fill_geometry_dry_pencil_pressure_25() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Pencil, 0.25);}
-#[test]
-fn enclose_fill_geometry_dry_pencil_pressure_50() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Pencil, 0.5);}
-#[test]
-fn enclose_fill_geometry_dry_pencil_pressure_80() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Pencil, 0.8);}
-#[test]
-fn enclose_fill_geometry_dry_charcoal_pressure_25() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Charcoal, 0.25);}
-#[test]
-fn enclose_fill_geometry_dry_charcoal_pressure_50() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Charcoal, 0.5);}
-#[test]
-fn enclose_fill_geometry_dry_charcoal_pressure_80() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Charcoal, 0.8);}
-#[test]
-fn enclose_fill_geometry_dry_crayon_pressure_25() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Crayon, 0.25);}
-#[test]
-fn enclose_fill_geometry_dry_crayon_pressure_50() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Crayon, 0.5);}
-#[test]
-fn enclose_fill_geometry_dry_crayon_pressure_80() {dry_geometry_sweep(layer_core::DefaultBrushPreset::Crayon, 0.8);}
+fn enclose_fill_geometry_dry_presets_at_each_pressure() {
+    for preset in [layer_core::DefaultBrushPreset::Pencil,layer_core::DefaultBrushPreset::Charcoal,layer_core::DefaultBrushPreset::Crayon] {
+        for pressure in [0.25,0.5,0.8] {dry_geometry_sweep(preset,pressure);}
+    }
+}
 
 #[test]
 fn enclose_fill_geometry_auto_off_line_tap_and_edges() {
