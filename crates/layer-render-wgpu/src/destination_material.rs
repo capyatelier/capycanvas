@@ -104,6 +104,7 @@ pub(super) fn rewritten(style: &layer_render::DabStyle, coordinate: [u32; 2], lo
         let page = page_rect(coordinate);
         return (page.intersect(PixelRect::full(extent)) == page).then(|| local.expand(cell - 1, [PAGE_SIZE; 2]));
     }
+    if local.is_empty() { return Some(local); }
     let origin = coordinate.map(|at| at * PAGE_SIZE);
     let low = |axis: usize, at: u32| ((origin[axis] + at) / cell * cell).saturating_sub(origin[axis]);
     let high = |axis: usize, at: u32| ((origin[axis] + at).div_ceil(cell) * cell - origin[axis]).min(PAGE_SIZE);
@@ -235,7 +236,7 @@ impl WgpuRasterizer {
             let coverage_ticket=(preview && job.coverage_index.is_some()).then(||self.preview_material_version(batch,batch_index,RasterPlane::Color,job.coordinate,scene::PreviewPass::Coverage,&intent)).transpose()?;
             let wetness_ticket=wet_intent.as_ref().filter(|_|preview).map(|wet_intent|self.preview_material_version(batch,batch_index,RasterPlane::WatercolorWetness,job.coordinate,scene::PreviewPass::Wetness,wet_intent)).transpose()?;
             let receipt=encoder.submission();
-            let delta=self.color_delta(batch,false,job.coordinate,job.local);
+            let delta=self.color_delta(batch,false,target,job.coordinate,job.local,&receipt);
             let layer=&mut self.paint_layers[layer_index];
             let (color_pages,coverage_pages,wetness_pages)=if preview {(&mut self.preview_pages,&mut self.preview_coverage_pages,&mut self.preview_watercolor_wetness_pages)}
                 else {(&mut layer.pages,&mut layer.coverage_pages,&mut layer.watercolor_wetness_pages)};
