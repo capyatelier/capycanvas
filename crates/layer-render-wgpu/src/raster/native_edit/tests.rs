@@ -659,6 +659,7 @@ fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
     set_mask(&mut layers,mask);
     paint_mut(&mut layers).raster = RasterRevision::backed(data);
     crate::test_support::submit_ready(r, packet(&layers, true)).unwrap();
+    restore_working_pages(r, &layers);
     layers
 }
 fn rewrite_native_inputs(r:&mut WgpuRasterizer,id:SourceTarget) {
@@ -694,6 +695,24 @@ fn rewrite_working(r:&mut WgpuRasterizer,layers:&mut Document) {
     for id in [target(layers),mask_target(layers)] {rewrite_native_inputs(r,id);}
     paint_mut(layers).raster=RasterRevision::pending();
     let mask=mask_target(layers);*layers.target_raster_mut(mask).unwrap()=RasterRevision::pending();
+}
+fn reconcile(r:&mut WgpuRasterizer,frame:FramePacket<'_>,plans:&[Vec<BrushTile>]) {
+    crate::test_support::prepare_raster(r,|r| {
+        if !r.prepare_raster_outputs(frame,plans) {return Err(GpuRasterError::NotReady);}
+        r.reconcile_rasters(frame,false,plans).map(drop)
+    }).unwrap();
+}
+fn restore_working_pages(r:&mut WgpuRasterizer,layers:&Document) {
+    let extent=layers.composition().size;
+    let dabs:Vec<_>=page_coordinates(PixelRect::full(extent)).map(|coordinate| {
+        let [x,y]=coordinate.map(|at|(at*PAGE_SIZE+PAGE_SIZE/2) as f32);
+        layer_render::Dab {center:layer_core::Point {x,y},flow:0.,..crate::layer_tests::dab([0.;4])}
+    }).collect();
+    let damage=dabs.iter().copied().map(layer_render::Dab::bounds).fold(layer_core::Rect::EMPTY,layer_core::Rect::union);
+    let batches=[target(layers),mask_target(layers)].map(|id|layer_render::DabBatch {dab_count:dabs.len() as u32,damage,..crate::layer_tests::batch(id)});
+    let frame=FramePacket {dabs:&dabs,dab_batches:&batches,..packet(layers,false)};
+    let plans=brush_tiles::plan_packet(frame,|id|frame.scene.target_extent(id)).unwrap();
+    reconcile(r,frame,&plans);
 }
 
 #[test]
@@ -960,6 +979,7 @@ fn native_capture_pass_budget_keeps_mixed_plane_jobs_in_one_encoder() {
         pollster::block_on(r.compilation.prepare_all(r.native_edit.as_ref().unwrap().required_pipelines(r.document_color.depth,true))).unwrap();
         rewrite_working(&mut r, &mut layers);
         while !r.raster_ready() { std::thread::yield_now(); }
+        reconcile(&mut r, packet(&layers, false), &[]);
         let mut job = r.prepare_native_rasters(layers.scene(),None).unwrap().unwrap();
         assert!(job.inputs.len() > MAX_BATCH_TILES);
         assert!(job.inputs.iter().any(|(t, _, _)| t.format() == wgpu::TextureFormat::Rgba32Float));
@@ -988,7 +1008,7 @@ fn native_capture_pass_budget_keeps_mixed_plane_jobs_in_one_encoder() {
         encoder.submit(&r.queue);
         for timer in &mut timers { timer.submitted(&r.queue); }
         for _ in 0..2 {
-            r.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(crate::READBACK_TIMEOUT) }).unwrap();
+            crate::test_support::complete(&r);
             for timer in &mut timers { timer.poll(&r.device, &r.queue); }
         }
         let samples = timers.each_mut().map(|timer| {
@@ -1016,6 +1036,7 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
     while !r.raster_ready() {
         std::thread::yield_now();
     }
+    reconcile(&mut r, packet(&layers, false), &[]);
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     let frame = r
         .encode_native_rasters(layers.scene(), &mut encoder)
@@ -1760,10 +1781,7 @@ fn native_mask_capture_consumes_preflight_and_preserves_unchanged_working_names(
             let dabs=[crate::layer_tests::dab([0.,0.,0.,1.])];
             let batches=[crate::layer_tests::batch(target)];let plans=[Vec::<BrushTile>::new()];
             let required=FramePacket {dabs:&dabs,dab_batches:&batches,..packet(&document,false)};
-            crate::test_support::prepare_raster(&mut r,|r| {
-                if !r.prepare_raster_outputs(required,&plans) {return Err(GpuRasterError::NotReady);}
-                r.reconcile_rasters(required,false,&plans)?;Ok(())
-            }).unwrap();
+            reconcile(&mut r,required,&plans);
             let live=ContentName::fresh();
             let mut authored=submission::CommandEncoder::new(&r.device,&Default::default());
             let receipt=authored.submission();let intent=r.raster_intent(target,RasterPlane::Mask,[0;2]).unwrap();
