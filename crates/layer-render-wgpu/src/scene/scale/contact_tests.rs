@@ -1151,10 +1151,11 @@ fn a_stroke_started_while_the_last_one_composes_begins_in_contact_and_commits_on
     assert!(counts.composite_commits<=own as u64,"the new stroke's first frame commits {} cells; its dabs reach {own}: {counts:?}",counts.composite_commits);
 }
 
-fn pen_dab(x:f32,style:&layer_render::DabStyle)->layer_render::Dab {
-    let mut dab=material_dab(x,300.,style);dab.radii=[4.5;2];dab.previous=[4.5,4.5,1.,0.];dab.motion=[3.,0.];
+fn sized_dab([x,y]:[f32;2],radius:f32,style:&layer_render::DabStyle)->layer_render::Dab {
+    let mut dab=material_dab(x,y,style);dab.radii=[radius;2];dab.previous=[radius,radius,1.,0.];dab.motion=[3.,0.];
     dab.material[3]=f32::from(style.execution==layer_core::BrushExecution::Liquify);dab
 }
+fn pen_dab(x:f32,style:&layer_render::DabStyle)->layer_render::Dab {sized_dab([x,300.],4.5,style)}
 fn stroked_over_a_layer(extent:[u32;2],painted:bool)->layer_core::Document {
     let mut doc=document_at(extent);
     let paint=primary_paint(&doc);
@@ -1174,10 +1175,7 @@ fn stroke_frame(r:&mut WgpuRasterizer,frame:FramePacket<'_>,target:SourceTarget,
     crate::test_support::submit_ready(r,FramePacket {dabs,dab_batches:&batches,time_seconds:0.1*(step+1) as f32,..frame}).unwrap();
     crate::test_support::PassCounts::snapshot().delta(counts)
 }
-fn clone_stamp()->layer_render::DabStyle {
-    layer_render::DabStyle {retouch:Some(layer_core::Retouch {source:layer_core::RetouchSource::Editing,offset:[40.,-120.],..Default::default()}),
-        ..crate::layer_tests::preset_style(DefaultBrushPreset::CloneStamp)}
-}
+fn clone_stamp()->layer_render::DabStyle {retouching(DefaultBrushPreset::CloneStamp)}
 fn wet_edged_brush()->layer_render::DabStyle {
     let mut style=crate::tests::test_style(layer_core::BrushExecution::Dry);style.rendering.wet_edge=0.6;style
 }
@@ -1434,6 +1432,183 @@ fn a_stroke_inside_one_cell_composes_whole_cells_twice_and_then_only_its_patch()
             assert!(texels<=whole/cell*reach.area(),"{preset:?} with {tips} tips, frame {step}: {texels} texels composed for a {reach:?} patch");
         }
     }
+}
+
+fn zoomed_scene(scene:&str,extent:[u32;2])->Document {
+    let image=|seed:u32|rgba8_source(extent,move |x,y|[(x/(3+seed)) as u8,(y/2) as u8,(60*seed) as u8,((x*7+y*(13+seed))%256) as u8]);
+    let mut doc=if scene=="a drawing without Paper" {document_at(extent)}else {
+        Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()})
+    };
+    let owner=doc.working.occurrence.unwrap();
+    let paint=primary_paint(&doc);
+    doc.artwork.paint.get_mut(paint).unwrap().base=(scene!="a blank layer").then(||PaintBase::new(image(0).into()));
+    let above=|doc:&mut Document,name:&str| {
+        let effect=effect_occurrence(doc,layer_core::EffectInstance::new(crate::tests::fixture(name).program()),name);
+        insert_occurrence(doc,effect,0);
+    };
+    match scene {
+        "the middle layer of five"=>for (index,name) in ["Top","Upper","Lower","Bottom"].into_iter().enumerate() {
+            let layer=paint_occurrence(&mut doc,name,Some(image(index as u32+1)));
+            let position=doc.scene().position(owner).unwrap();
+            insert_occurrence(&mut doc,layer,position+index/2);
+        },
+        "a layer offset by a few pixels"=>doc.artwork.occurrences.get_mut(owner).unwrap().offset=[3,5],
+        "a masked layer"=>{
+            let [width,height]=extent.map(|side|side as f32);
+            coverage_mask(&mut doc,owner,[0,0],Some(layer_core::Selection::polygon(vec![layer_core::Point {x:width*0.1,y:height*0.1},
+                layer_core::Point {x:width*0.95,y:height*0.15},layer_core::Point {x:width*0.9,y:height*0.95},layer_core::Point {x:width*0.15,y:height*0.9}]).unwrap()));
+        },
+        "a layer under an adjustment"=>above(&mut doc,"invert"),
+        "a layer under a blur"=>above(&mut doc,"gaussian_blur"),
+        "a layer in a group"=>{
+            let mut entries=doc.artwork.stacks.get(doc.composition().result).unwrap().entries.clone();
+            let group=stack_occurrence(&mut doc,"Group",vec![owner]);
+            doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.7;
+            for entry in &mut entries {if *entry==owner {*entry=group;}}
+            set_root_entries(&mut doc,entries);
+        },
+        _=>{},
+    }
+    doc
+}
+struct Zoomed<'a> {scene:&'a str,brush:String,style:layer_render::DabStyle,zoom:f32,diameter:f32,tips:usize,frames:usize,redraws:bool}
+struct Redrawn {case:String,level:u32,float:bool,restarts:usize,texels:Vec<[u64;2]>}
+impl Redrawn {
+    fn patched(&self)->usize {self.texels[2..].iter().filter(|[patched,whole]|patched<whole).count()}
+    fn steady(&self)->[u64;2] {[0,1].map(|renderer|self.texels[2..].iter().map(|frame|frame[renderer]).sum::<u64>()/(self.texels.len() as u64-2))}
+    fn row(&self)->String {
+        let [patched,whole]=self.steady();
+        format!("| {} | {} | {} | {} of {} | {patched} | {whole} | {} |",self.case,self.level,if self.float {"float"}else {"half-float"},self.patched(),self.texels.len()-2,self.restarts)
+    }
+}
+impl<'a> Zoomed<'a> {
+    fn new(scene:&'a str,brush:&str,style:layer_render::DabStyle,tips:usize,zoom:f32)->Self {Self {scene,brush:brush.into(),style,zoom,diameter:9.,tips,frames:STROKE.len(),redraws:true}}
+    fn level(&self)->u32 {(1./self.zoom).log2().floor() as u32}
+    fn at(&self,x:f32)->layer_render::Dab {sized_dab([(x-256.)*(1u32<<self.level()) as f32,257.],self.diameter/2.,&self.style)}
+    fn redrawn(&self)->Redrawn {
+        let Self {scene,brush,style,zoom,diameter,tips,frames,redraws}=self;
+        let level=self.level();let extent=[320<<level,140<<level];
+        let case=format!("{brush}, {diameter} px, {tips} tips, on {scene} at {}%",zoom*100.);
+        let doc=zoomed_scene(scene,extent);let target=doc.active_target().unwrap();
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
+        frame.view=crate::test_support::view(extent.map(|side|(side as f32*zoom).ceil() as u32));
+        frame.view.document_to_surface=[*zoom,0.,0.,*zoom,0.,0.];
+        let mut r=renderer(&doc);
+        select_retouch(&mut r,target,style);crate::test_support::submit_settled(&mut r,frame);
+        let cache=r.scale_display.as_ref().unwrap();
+        let (plan,float)=(cache.plan,cache.texture().format()==wgpu::TextureFormat::Rgba32Float);
+        assert_eq!(plan.level,level,"{case}: the view's level");
+        let sequence=|r:&WgpuRasterizer|r.scale_display.as_ref().unwrap().contact_id();
+        let mut restarts=0;
+        let texels=STROKE.into_iter().take(*frames).enumerate().map(|(step,(ink,tip))| {
+            let dabs=[ink,tip,tip+9.].map(|x|self.at(x));
+            let before=sequence(&r);
+            let patched=stroke_frame(&mut r,frame,target,style,&dabs[..=*tips],true,step).composed_texels;
+            let (shown,held)=(bits(&r),sequence(&r));
+            let tiles=r.metrics.frame_composited_pages.iter().map(|(_,tile)|*tile).collect::<BTreeSet<_>>();
+            let cells=tiles.iter().flat_map(|tile|pages::coordinates(page_rect(*tile),level)).collect::<BTreeSet<_>>()
+                .into_iter().map(|cell|pages::bounds(cell,level,plan.extent)).collect::<Vec<_>>();
+            let narrowed=cells.iter().copied().filter(|cell|page_coordinates(*cell).any(|tile|!tiles.contains(&tile))).collect::<Vec<_>>();
+            if !redraws {assert!(narrowed.is_empty(),"{case}, frame {step}: every cell is composed whole, not {narrowed:?}");return [patched,patched];}
+            let whole=redraw_whole(&mut r,frame,target,style,&dabs[1..=*tips],&cells,step);
+            if step==0 || held.is_none() || held!=before || sequence(&r)!=held {restarts+=usize::from(step>0);return [whole,whole];}
+            let redrawn=bits(&r);
+            assert_eq!(shown.len(),(plan.size[0]*plan.size[1]) as usize,"{case}: the display holds the window's texels");
+            let differing=narrowed.iter().flat_map(|cell| {
+                let [x,y,width,height]=paint_transform::texel_rect(cell.window_local(plan.bounds),1<<level);
+                (y..y+height).flat_map(move |row|(x..x+width).map(move |column|(row*plan.size[0]+column) as usize))
+            }).filter(|index|shown[*index]!=redrawn[*index]).count();
+            assert_eq!(differing,0,"{case}, frame {step}: the cells composed in part, {narrowed:?}, differ from a whole redraw of them");
+            assert!(patched<=whole,"{case}, frame {step}: {patched} texels composed where whole cells take {whole}");
+            [patched,whole]
+        }).collect::<Vec<_>>();
+        let last=self.at(540.);
+        let lift=layer_render::DabBatch {kind:layer_render::DabBatchKind::Persistent,stroke_id:layer_core::StrokeId(1),stroke_end:true,
+            ..crate::test_support::dab_batch(target,style.clone(),last.bounds())};
+        crate::test_support::submit_settled(&mut r,FramePacket {dabs:std::slice::from_ref(&last),dab_batches:std::slice::from_ref(&lift),time_seconds:2.,..frame});
+        crate::test_support::submit_settled(&mut r,frame);
+        let shown=bits(&r);
+        r.scale_display.as_ref().unwrap().evict_window(plan.bounds);
+        crate::test_support::submit_settled(&mut r,frame);
+        assert!(bits(&r)==shown,"{case}: after pen up the display differs from a whole redraw of every cell");
+        let redrawn=Redrawn {case,level,float,restarts,texels};
+        println!("{}",redrawn.row());
+        redrawn
+    }
+    fn patches(&self) {let redrawn=self.redrawn();assert!(redrawn.patched()*2>=redrawn.texels.len()-2,"{}: most frames compose less than whole cells: {:?}",redrawn.case,redrawn.texels);}
+    fn stays_whole(self) {Self {redraws:false,..self}.redrawn();}
+}
+const ZOOMS:[f32;3]=[0.5,0.25,0.125];
+fn retouching(preset:DefaultBrushPreset)->layer_render::DabStyle {
+    layer_render::DabStyle {retouch:Some(layer_core::Retouch {source:layer_core::RetouchSource::Editing,offset:[40.,-120.],..Default::default()}),..crate::layer_tests::preset_style(preset)}
+}
+fn writers()->Vec<(&'static str,layer_render::DabStyle,usize)> {
+    use DefaultBrushPreset::*;
+    let style=crate::layer_tests::preset_style;
+    vec![("a Pencil",style(Pencil),1),("a Pencil",style(Pencil),0),("an eraser",style(Eraser),1),("a paintbrush",style(Paintbrush),1),("a smudge",style(Smudge),0),("a smudge",style(Smudge),1),
+        ("wet paint",style(WetRound),0),("a Dither blender",style(DitherBlender),0),("a Scatter blender",style(ScatterBlender),0),("a clone stamp",retouching(CloneStamp),1),
+        ("a Liquify push",style(LiquifyPush),0),("a wet-edged brush",wet_edged_brush(),0)]
+}
+
+#[test]
+fn below_full_size_every_patched_frame_equals_whole_cells_for_each_kind_of_brush_write() {
+    for zoom in ZOOMS {for (brush,style,tips) in writers() {Zoomed::new("a photo layer",brush,style,tips,zoom).patches();}}
+    for zoom in ZOOMS {Zoomed::new("a photo layer","a watercolor wash",crate::layer_tests::preset_style(DefaultBrushPreset::WatercolorWash),0,zoom).stays_whole();}
+}
+
+fn pencil_and_smudge(scene:&str,zoom:f32)->[Zoomed<'_>;2] {
+    let style=crate::layer_tests::preset_style;
+    [Zoomed::new(scene,"a Pencil",style(DefaultBrushPreset::Pencil),1,zoom),Zoomed::new(scene,"a smudge",style(DefaultBrushPreset::Smudge),0,zoom)]
+}
+
+#[test]
+fn below_full_size_every_patched_frame_equals_whole_cells_for_each_layer_setup() {
+    for zoom in ZOOMS {
+        Zoomed::new("a blank layer","a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),1,zoom).patches();
+        for scene in ["the middle layer of five","a layer in a group","a drawing without Paper"] {for stroke in pencil_and_smudge(scene,zoom) {stroke.patches();}}
+    }
+    for zoom in [0.37,0.14] {for stroke in pencil_and_smudge("a photo layer",zoom) {stroke.patches();}}
+}
+
+#[test]
+fn below_full_size_a_cell_drawn_through_a_mask_an_effect_or_an_offset_composes_whole_cells_and_the_same_pixels() {
+    for zoom in ZOOMS {
+        for scene in ["a masked layer","a layer under an adjustment","a layer under a blur","a layer offset by a few pixels"] {
+            for stroke in pencil_and_smudge(scene,zoom) {stroke.stays_whole();}
+        }
+    }
+}
+
+fn every_preset(zoom:f32) {
+    for preset in DefaultBrushPreset::ALL {
+        let brush=layer_core::default_brush(preset);
+        let style=if brush.execution.retouches() {retouching(preset)}else {crate::layer_tests::preset_style(preset)};
+        use layer_core::BrushExecution::{Liquify,Watercolor};
+        let class=brush.execution_class();
+        let redrawn=Zoomed {diameter:30.,frames:6,redraws:class!=Watercolor,
+            ..Zoomed::new("a photo layer",&format!("{preset:?} ({class:?})"),style,usize::from(!matches!(class,Liquify|Watercolor)),zoom)}.redrawn();
+        let whole=class==Watercolor || redrawn.texels.iter().all(|[_,whole]|*whole==0);
+        assert_eq!(redrawn.patched()==0,whole,"{}: {:?}",redrawn.case,redrawn.texels);
+    }
+}
+#[test]
+fn at_half_size_every_brush_preset_but_watercolor_composes_less_than_whole_cells_and_the_same_pixels() {every_preset(0.5);}
+#[test]
+fn at_quarter_size_every_brush_preset_but_watercolor_composes_less_than_whole_cells_and_the_same_pixels() {every_preset(0.25);}
+#[test]
+fn at_an_eighth_size_every_brush_preset_but_watercolor_composes_less_than_whole_cells_and_the_same_pixels() {every_preset(0.125);}
+
+#[test]
+fn below_full_size_no_brush_size_composes_more_than_whole_cells_and_small_ones_compose_their_footprint() {
+    for (brush,style,tips) in writers().into_iter().filter(|(_,_,tips)|*tips==0).chain([("a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),1)]) {
+        for zoom in if brush=="a Pencil" {ZOOMS.to_vec()}else {vec![0.25]} {
+            for diameter in [5.,30.,100.,300.,600.,2000.] {Zoomed {diameter,frames:6,..Zoomed::new("a photo layer",brush,style.clone(),tips,zoom)}.redrawn();}
+        }
+    }
+    let redrawn=Zoomed::new("a blank layer","a Pencil",crate::layer_tests::preset_style(DefaultBrushPreset::Pencil),0,0.25).redrawn();
+    let (cell,footprint)=(u64::from(PAGE_SIZE).pow(2),(9u64.div_ceil(4)+1).pow(2));
+    let inside=redrawn.texels[2..].iter().filter(|[patched,_]|*patched<cell/64).collect::<Vec<_>>();
+    assert!(inside.len()>=8 && inside.iter().all(|[patched,_]|*patched<=4*footprint),"{}: a frame inside a cell composes a few times its {footprint} texel footprint: {:?}",redrawn.case,redrawn.texels);
 }
 
 #[test]

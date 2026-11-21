@@ -639,6 +639,9 @@ impl Store {
         }else {self.capture(&key,region,input_level)?};
         Ok(Write {key,region,accuracy,accepted:Some(accepted)})
     }
+    pub(super) fn restamped(&self,key:&Key,held:&Held)->Held {
+        Held {written_at:self.pages.get(key).map_or(held.written_at,|page|page.written_at),..held.clone()}
+    }
     pub(super) fn forget(&mut self,key:&Key,region:PixelRect) {
         if let Some(page)=self.pages.get_mut(key) {for coordinate in coordinates(region,page.coverage.written.level) {page.versions.remove(&coordinate);}}
     }
