@@ -340,12 +340,7 @@ fn region_cache_prewarm_completes_reuses_and_schedules_changed_preparation() {
         if !enclosed { query.enclosure = None; }
         assert!(r.request_region(query.clone().into()).unwrap());
         assert!(!r.regions.as_ref().unwrap().background_pending(), "a prepared tap must reuse its reference geometry");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let result = loop {
-            if let Some(result) = r.take_region() { break crate::test_support::mask_result(result.unwrap()); }
-            assert!(std::time::Instant::now() < deadline, "prepared region readback timed out");
-            std::thread::yield_now();
-        };
+        let result = crate::test_support::mask_result(crate::test_support::wait_until("prepared region readback timed out", || r.take_region().ok_or(())).unwrap());
         assert_eq!((result.request_id, result.placement, result.pixels.extent()), (91, Affine::IDENTITY, extent));
         score_geometry(&result.pixels, &expected, [0, 0], &[], "prepared region").unwrap();
         preparation.tolerance = 0.25;
@@ -722,17 +717,12 @@ fn fill_drag_with_different_auto_reaches_commits_and_reopens_the_second_seal_in_
     s.dispatch(UiAction::Invoke {command:CommandId::Fill}).unwrap();
     s.dispatch(UiAction::SetColor {rgba:[1.,0.,0.,1.]}).unwrap();
     let clock=std::time::Instant::now();
-    let settle=|s:&mut UiSession<WgpuRasterizer>| {
-        let deadline=std::time::Instant::now()+crate::READBACK_TIMEOUT;
-        loop {
-            let now=clock.elapsed().as_nanos() as u64;
-            s.frame(now,now).unwrap();
-            crate::test_support::complete(s.renderer_mut());
-            if s.paint_ready() && !s.holding_input() && !s.engine().has_pending_input() && s.require_document_idle().is_ok() && !s.engine().raster_backing_pending() && !s.engine().has_pending_document_edits() && s.renderer_mut().next_frame()!=layer_render::FrameDemand::Work {break;}
-            assert!(std::time::Instant::now()<deadline,"fill must settle");
-            std::thread::yield_now();
-        }
-    };
+    let settle=|s:&mut UiSession<WgpuRasterizer>|crate::test_support::wait_until("fill must settle",|| {
+        let now=clock.elapsed().as_nanos() as u64;
+        s.frame(now,now).unwrap();
+        crate::test_support::complete(s.renderer_mut());
+        if s.paint_ready() && !s.holding_input() && !s.engine().has_pending_input() && s.require_document_idle().is_ok() && !s.engine().raster_backing_pending() && !s.engine().has_pending_document_edits() && s.renderer_mut().next_frame()!=layer_render::FrameDemand::Work {Ok(())} else {Err(())}
+    });
     let pen=|s:&mut UiSession<WgpuRasterizer>,sequence,phase,point:[f32;2]| {
         let [a,b,c,d,x,y]=s.camera().document_to_surface();
         s.pen(PenEvent {device_id:1,sequence,timestamp_ns:clock.elapsed().as_nanos() as u64,view_revision:s.camera().revision,

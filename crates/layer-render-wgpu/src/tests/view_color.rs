@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::complete;
+use crate::test_support::{complete, view};
 use layer_core::{Document, authored::{Artwork, OccurrenceHandle, PaintSource, SourceTarget}};
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, rgb, source::*};
 use layer_render::ThumbnailTarget;
@@ -27,13 +27,6 @@ fn source(space: RgbSpace, codes: [u16; 4]) -> Document {
     let mut layer = document("profiled photo");
     paint_mut(&mut layer).base = Some(layer_core::authored::PaintBase::new((Arc::new(builder.finish().unwrap())).into()));
     layer
-}
-fn view() -> ViewState {
-    ViewState {
-        width_px: 256,
-        height_px: 256,
-        ..test_view()
-    }
 }
 fn document(name: &str) -> Document {
     let mut artwork = Artwork::new([256; 2]).unwrap();
@@ -158,7 +151,7 @@ fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     let target = texture(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
     let target = target.create_view(&Default::default());
     let mut p = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
-    let mut v = view();
+    let mut v = view([256; 2]);
     let surround = [0.04, 0.08, 0.2, 1.];
     let draw = |p: &mut ViewportPresenter, r: &WgpuRasterizer, v| {
         assert!(p.needs_present(r, v, surround));
@@ -410,7 +403,7 @@ fn canvas_and_navigator_checker_colors_are_exact_srgb_white_and_cccccc() {
             pollster::block_on(presenter.prepare(&r)).unwrap();
             presenter.present_overviews(&r, &target, [256; 2]).unwrap();
         } else { pollster::block_on(presenter.prepare(&r)).unwrap();
-        presenter.present(&r, &target, view(), [0.; 4]).unwrap(); }
+        presenter.present(&r, &target, view([256; 2]), [0.; 4]).unwrap(); }
         let actual = crate::layer_tests::page_bytes(&r, &texture);
         for (x, gray) in [(32, 255), (if overview { 40 } else { 48 }, 204)] {
             assert_eq!(&actual[(32 * 256 + x) * 4..][..4], [gray, gray, gray, 255], "overview={overview}");
@@ -596,7 +589,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
                     .map(|v| v * alpha + 1. * (1. - alpha));
                 pollster::block_on(presenter.prepare(&r)).unwrap();
                 presenter
-                    .present(&r, &target_view, view(), [0.; 4])
+                    .present(&r, &target_view, view([256; 2]), [0.; 4])
                     .unwrap();
                 let actual = crate::layer_tests::page_bytes(&r, &target);
                 let i = (16 * 256 + 16) * format.block_copy_size(None).unwrap() as usize;
@@ -611,7 +604,7 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
                     RgbSpace::Srgb.linear_transform(color.primaries()),
                     [0.15, 0.45, 0.07],
                 );
-                let mut outside = view();
+                let mut outside = view([256; 2]);
                 outside.document_to_surface[4] = 256.;
                 pollster::block_on(presenter.prepare(&r)).unwrap();
                 presenter
@@ -656,25 +649,16 @@ fn screen_check_counts_and_marks_only_colors_the_screen_cannot_show() {
         assert!(!presenter.check_screen(&r), "nothing to count before a check is configured");
         presenter.set_screen_check(&r, Some(check));
         pollster::block_on(presenter.prepare(&r)).unwrap();
-        presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+        presenter.present(&r, &target_view, view([256; 2]), [0.; 4]).unwrap();
         let plain = crate::layer_tests::page_bytes(&r, &target);
-        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-        while !presenter.check_screen(&r) {
-            assert!(std::time::Instant::now()<deadline,"screen count was not admitted");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        crate::test_support::wait_until("screen count was not admitted", || presenter.check_screen(&r).then_some(()).ok_or(()));
         assert!(!presenter.check_screen(&r), "one count per unchanged view");
-        let clipped = loop {
-            complete(&r);
-            if let Some(result) = presenter.screen_check_result() {
-                break result.unwrap();
-            }
-        };
+        let clipped = crate::test_support::wait_until("screen count must complete", || { complete(&r); presenter.screen_check_result().ok_or(()) }).unwrap();
         assert_eq!(clipped, outside, "{codes:?}");
         assert!(!presenter.check_screen(&r), "the counted view is current");
         presenter.set_screen_check(&r, Some(crate::ScreenCheck { mark: true, ..check }));
         pollster::block_on(presenter.prepare(&r)).unwrap();
-        presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+        presenter.present(&r, &target_view, view([256; 2]), [0.; 4]).unwrap();
         let marked = crate::layer_tests::page_bytes(&r, &target);
         let i = (16 * 256 + 16) * 4;
         if outside {
@@ -686,7 +670,7 @@ fn screen_check_counts_and_marks_only_colors_the_screen_cannot_show() {
     let mut presenter = ViewportPresenter::for_surface(&r, format, SdrSurfaceColor::DisplayP3).unwrap();
     presenter.set_screen_check(&r, Some(crate::ScreenCheck { from_view: None, surface_clips: false, bounded: true, mark: true }));
     pollster::block_on(presenter.prepare(&r)).unwrap();
-    presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+    presenter.present(&r, &target_view, view([256; 2]), [0.; 4]).unwrap();
     assert!(!presenter.check_screen(&r), "an unknown screen gamut is never counted");
 }
 
@@ -888,7 +872,7 @@ fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl 
                     for (proof, warning) in [(false, false), (true, false), (true, true), (false, true), (false, false)] {
                         presenter.set_proof(&r, Some(lut.clone()), proof, warning).unwrap();
                         pollster::block_on(presenter.prepare(&r)).unwrap();
-                        presenter.present(&r, &target_view, view(), [0.; 4]).unwrap();
+                        presenter.present(&r, &target_view, view([256; 2]), [0.; 4]).unwrap();
                         let actual = crate::layer_tests::page_bytes(&r, &target);
                         let expected = apply_proof(&lut, input, proof, warning);
                         let expected = rgb::apply(space.linear_transform(surface.primaries()),
@@ -941,7 +925,7 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
                             // still update when the proof inheritance shortcut applies.
                             capture.inherit_proof(&r,&presenter);
                             pollster::block_on(capture.prepare(&r)).unwrap();
-                            capture.present(&r,&output,view(),[0.;4]).unwrap();
+                            capture.present(&r,&output,view([256; 2]),[0.;4]).unwrap();
                             let mut expected=if compositor && !proof {[p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]]}
                             else if headroom==1. || proof {recipe.mapper(space,if proof {space} else {RgbSpace::Srgb}).map_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]])}
                             else {layer_core::color::hdr::map_display_premultiplied([p[0]*p[3],p[1]*p[3],p[2]*p[3],p[3]],headroom)};
@@ -1080,7 +1064,7 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
                         .unwrap();
                     capture.inherit_proof(&r, &presenter);
                     pollster::block_on(capture.prepare(&r)).unwrap();
-                    capture.present(&r, &output, view(), [0.; 4]).unwrap();
+                    capture.present(&r, &output, view([256; 2]), [0.; 4]).unwrap();
                     let actual = crate::layer_tests::page_bytes(&r, &target);
                     for (x, y) in [(30, 30), (126, 45), (129, 170), (203, 211)] {
                         let p = pixels[y * 256 + x];

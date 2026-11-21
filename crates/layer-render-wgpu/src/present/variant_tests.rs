@@ -1,7 +1,7 @@
 use super::*;
 use layer_core::{Affine, ImageTransform, Point};
 use layer_core::authored::{OccurrenceContent, SourceTarget};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 struct VariantFixture {
     document: layer_core::Document,
@@ -97,12 +97,11 @@ fn prepare_projection(renderer: &WgpuRasterizer, presenter: &ViewportPresenter) 
 }
 
 fn wait_for_projection(renderer: &WgpuRasterizer, presenter: &ViewportPresenter) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !presenter.pipelines_ready(renderer) {
+    crate::test_support::wait_until("the keyed viewport recipe must become ready", || {
+        if presenter.pipelines_ready(renderer) { return Ok(()); }
         renderer.compilation.check().unwrap();
-        assert!(Instant::now() < deadline, "the keyed viewport recipe must become ready");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+        Err(())
+    });
 }
 
 #[test]

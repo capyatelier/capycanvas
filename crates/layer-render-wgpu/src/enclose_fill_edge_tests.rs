@@ -35,13 +35,10 @@ fn cold_image_base_fill_reads_only_prepared_pages() {
         document.apply(layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&document.artwork.paint,handle,Some(source)).unwrap())).unwrap();
         let mut r=WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let frame=FramePacket {reset_layers:true,dab_batches:std::slice::from_ref(&batch),..packet(document.scene(),extent)};
-        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
-        loop {
+        crate::test_support::wait_until(format_args!("cold fill dependencies never became ready: same_layer={same_layer}"),|| {
             r.poll_pending(frame.view).unwrap();
-            if r.can_submit() && r.raster_dependencies_ready(frame,None) {break;}
-            assert!(std::time::Instant::now()<deadline,"cold fill dependencies never became ready: same_layer={same_layer}");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+            if r.can_submit() && r.raster_dependencies_ready(frame,None) {Ok(())} else {Err(())}
+        });
         r.submit(frame).unwrap_or_else(|error|panic!("submit after readiness: same_layer={same_layer}: {error:?}: {error}"));
     }
 }
@@ -72,10 +69,8 @@ fn stored_fill_prepares_cold_reference_tiles_beside_its_seed() {
     for (reference,image) in &references {
         let scope=layer_core::SceneScope::Raw(*reference);
         let mut capture=crate::artwork::Capture::default();
-        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-        crate::test_support::query_ready(r,&mut encoder,|r,encoder|capture.region_into(r,
-            packet(snapshot.view().with_scope(&scope),extent),PixelRect::new(240,32,241,33),&seed,encoder));
-        r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        crate::test_support::submit_encoded(r,|r,encoder|crate::test_support::query_ready(r,encoder,|r,encoder|capture.region_into(r,
+            packet(snapshot.view().with_scope(&scope),extent),PixelRect::new(240,32,241,33),&seed,encoder)));
         assert!(r.source_tiles.borrow().prepared_view(image,[0,0]).is_some());
         assert!(r.source_tiles.borrow().prepared_view(image,[1,0]).is_none(),"the fill halo must reach a cold tile");
     }

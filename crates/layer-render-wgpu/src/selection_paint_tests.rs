@@ -29,17 +29,7 @@ pub(super) fn receive(r: &mut WgpuRasterizer, mut request: SelectionPaint) -> Se
     request.enclosed = None;
     request.finish = true;
     assert!(self::paint(r, &request).unwrap());
-    let until = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
-        if let Some(result) = r.take_selection_paint() {
-            return Selection::pixels(result.unwrap().pixels);
-        }
-        assert!(
-            std::time::Instant::now() < until,
-            "selection paint capture timed out"
-        );
-        std::thread::yield_now();
-    }
+    Selection::pixels(crate::test_support::wait_until("selection paint capture timed out", || r.take_selection_paint().ok_or(())).unwrap().pixels)
 }
 #[test]
 fn a_selection_readback_completing_while_the_host_waits_wakes_the_host() {

@@ -19,14 +19,11 @@ impl Canvas {
         let result=self.session.frame(now,now).map(drop);crate::test_support::complete(self.session.renderer_mut());result
     }
     fn finish(&mut self) {
-        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-        loop {
+        crate::test_support::wait_until("the canvas must settle",|| {
             self.frame().unwrap();let engine=self.session.engine();
             if !self.session.holding_input() && !engine.has_pending_input() && !engine.has_pending_document_edits()
-                && !engine.raster_backing_pending() && !engine.has_active_stroke() && self.session.require_document_idle().is_ok() {return;}
-            assert!(std::time::Instant::now()<deadline,"the canvas must settle");
-            std::thread::yield_now();
-        }
+                && !engine.raster_backing_pending() && !engine.has_active_stroke() && self.session.require_document_idle().is_ok() {Ok(())} else {Err(())}
+        });
     }
     fn pen(&mut self,sequence:u64,phase:PenPhase,point:[f32;2]) {
         let [a,b,c,d,x,y]=self.session.camera().document_to_surface();
@@ -39,8 +36,7 @@ impl Canvas {
         *runtime.worker.as_ref().unwrap().error.lock().unwrap()=Some("Raster backing failed".into());
     }
     fn fail_frame(&mut self) {
-        let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-        while self.frame().is_ok() {assert!(std::time::Instant::now()<deadline,"the frame after a raster backing failure must fail");}
+        crate::test_support::wait_until("the frame after a raster backing failure must fail",||self.frame().err().ok_or(()));
     }
     fn restart(&mut self) {
         self.session.suspend_renderer().unwrap();
