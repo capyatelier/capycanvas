@@ -70,6 +70,7 @@ pub(crate) mod scale;
 pub(crate) use scale::{Capture,Declared,Input,SignatureFrame,PreviewDeclaration,PreviewVersion,PreviewStage,PreviewPass,PreviewQuality,PreviewSeed,PreviewStamps};
 
 const FILL_LINES_PIPELINE:usize=9;
+const RECORD_BYTES:usize=fold::RECORD_BYTES as usize;
 pub(crate) const IDLE_FRAME_TILES:usize=(crate::frame_pace::IDLE_TAPS/PASS_TAPS) as usize;
 
 use crate::residency::Class;
@@ -278,6 +279,37 @@ impl Job {
             Self::Positions(_,size)=>area(*size),
             Self::PaintBase(assembly)=>if assembly.recorded() {0}else {assembly.sources().map(texture).sum()},
             Self::Transform(_)=>object_cache::PASS_TAPS,
+        }
+    }
+    fn record(&self,r:&WgpuRasterizer,grid:Option<[u32;4]>)->[u8;RECORD_BYTES] {
+        let words=|values:&[u32]| {
+            let mut record=[0;RECORD_BYTES];
+            for (bytes,value) in record.as_chunks_mut::<4>().0.iter_mut().zip(values) {*bytes=value.to_ne_bytes();}
+            record
+        };
+        let settings=|data:&[f32;32],grid:[u32;4]| {
+            let mut values=[0;36];
+            for (value,data) in values.iter_mut().zip(data) {*value=data.to_bits();}
+            values[32..].copy_from_slice(&grid);
+            words(&values)
+        };
+        match self {
+            Self::Reduce {values,..}=>words(&scale::RegionRecords::reduction_record(r,*values)),
+            Self::Compose {values,..}=>words(values),
+            Self::Resample {values,..}=>*values,
+            Self::Fold(fold)=>fold.record(),
+            Self::Transform(region)=>region.values().copied().unwrap_or([0;RECORD_BYTES]),
+            Self::Draw {data,..}|Self::Effect {data,..}=>settings(data,grid.unwrap_or_default()),
+            Self::Clear(target,color)=>{
+                let size=target.texture().size();
+                let [w,h]=[size.width as f32,size.height as f32];
+                let mut data=[0.;32];
+                data[..8].copy_from_slice(&[0.,0.,w,h,w,h,0.,0.]);
+                data[12..16].copy_from_slice(&[color.r,color.g,color.b,color.a].map(|v|v as f32));
+                settings(&data,[0;4])
+            }
+            Self::Publish {..}|Self::Collection(_)|Self::Sampling(_)|Self::Vector(_)|Self::PaintBase(_)|Self::Positions(..)|Self::Placement(_)
+                |Self::VectorResample {..}|Self::DecodedTile(_)|Self::Watercolor {..}|Self::Copy {..}=>[0;RECORD_BYTES],
         }
     }
 }
@@ -497,6 +529,12 @@ impl Scene {
         }
         base
     }
+    fn stage_records(&mut self,r:&WgpuRasterizer,jobs:&[Job],grid:impl Fn(usize)->Option<[u32;4]>) {
+        self.upload.resize(jobs.len()*self.stride,0);
+        for (i,(slot,job)) in self.upload.chunks_exact_mut(self.stride).zip(jobs).enumerate() {
+            slot[..RECORD_BYTES].copy_from_slice(&job.record(r,grid(i)));
+        }
+    }
     pub(super) fn analysis_changed(&mut self) {
         self.retire_images(|scene| scene.images = images::ImageStages::charged(&scene.tiers.gpu, &scene.tiers.ram));
     }
@@ -708,7 +746,7 @@ impl Scene {
             pipeline,
             ..
         } = r.scene_pipelines.clone();
-        let stride = device.limits().min_uniform_buffer_offset_alignment.max(256) as usize;
+        let stride = (device.limits().min_uniform_buffer_offset_alignment as usize).max(RECORD_BYTES);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
             size: stride as u64 * 128,
@@ -2644,51 +2682,7 @@ impl Scene {
             Job::Effect { prepared, .. } => Some(&prepared._parameters), _ => None,
         }))?;
         let base=self.reserve_records(r,jobs.len());
-        self.upload.resize(jobs.len() * self.stride, 0);
-        for (i, job) in jobs.iter().enumerate() {
-            if matches!(job, Job::Draw {..} | Job::Effect {..}) {
-                let sampling = job_grid(i).unwrap_or_default();
-                for (dst, value) in self.upload[i*self.stride+128..i*self.stride+144].as_chunks_mut::<4>().0.iter_mut().zip(sampling) {
-                    dst.copy_from_slice(&value.to_ne_bytes());
-                }
-            }
-            let mut captured;
-            let data: Option<&[f32]> = match job {
-                Job::Reduce { values, .. } => {
-                    captured = [0.; 32];
-                    for (out, value) in captured.iter_mut().zip(scale::RegionRecords::reduction_record(r, *values)) { *out = f32::from_bits(value); }
-                    Some(&captured)
-                }
-                Job::Compose { values, .. } => {
-                    for (dst, value) in self.upload[i*self.stride..i*self.stride+80].as_chunks_mut::<4>().0.iter_mut().zip(values) {
-                        dst.copy_from_slice(&value.to_ne_bytes());
-                    }
-                    None
-                }
-                Job::Resample { values, .. } => {self.upload[i*self.stride..i*self.stride+values.len()].copy_from_slice(values);None}
-                Job::Fold(fold) => {self.upload[i*self.stride..i*self.stride+fold::RECORD_BYTES as usize].copy_from_slice(&fold.record());None}
-                Job::Transform(region) => {
-                    if let Some(values) = region.values() {self.upload[i*self.stride..i*self.stride+values.len()].copy_from_slice(values);}
-                    None
-                }
-                Job::Draw { data, .. } | Job::Effect { data, .. } => Some(data.as_slice()),
-                Job::Clear(target, color) => {
-                    let size = target.texture().size();
-                    let [w, h] = [size.width as f32, size.height as f32];
-                    captured = [0.; 32];
-                    captured[..8].copy_from_slice(&[0., 0., w, h, w, h, 0., 0.]);
-                    captured[12..16].copy_from_slice(&[color.r, color.g, color.b, color.a].map(|v| v as f32));
-                    Some(&captured)
-                }
-                _ => None,
-            };
-            if let Some(data) = data {
-                for (j, v) in data.iter().enumerate() {
-                    self.upload[i * self.stride + j * 4..i * self.stride + j * 4 + 4]
-                        .copy_from_slice(&v.to_ne_bytes());
-                }
-            }
-        }
+        self.stage_records(r,jobs,job_grid);
         if !self.upload.is_empty() {
             r.uploads.write_at(
                 encoder,
