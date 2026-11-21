@@ -133,6 +133,7 @@ fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() 
     for color in [DocumentColor::default(), DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 }] {
         let document = restore_document(color);
         let mut r = crate::memory::memory_tests::renderer_for_restore(&document);
+        r.snapshot_worker = true;
         let source = target(&document);
         r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
         let first = data(color, 33, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 1);
@@ -188,6 +189,7 @@ fn cached_restore_prefix_is_copied_before_cold_decodes_reuse_slots() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
     let document = restore_document(color);
     let mut r = crate::memory::memory_tests::renderer_for_restore(&document);
+    r.snapshot_worker = true;
     let source = target(&document);
     r.ensure_document_metadata([9504, 6336],document.scene()).unwrap();
     let target = create_color_target(&r.device, [PAGE_SIZE; 2], "cache warmup").0;
@@ -227,6 +229,7 @@ fn cached_restore_prefix_is_copied_before_cold_decodes_reuse_slots() {
 fn native_mask_restoration_keeps_existing_scalar_path() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
+    r.snapshot_worker = true;
     let mut document = restore_document(color);
     set_mask(&mut document,reveal_all([9504,6336], [0, 0]));
     let source = SourceTarget::Coverage(document.scene().mask(document.scene().order()[0]).unwrap().0.source);
