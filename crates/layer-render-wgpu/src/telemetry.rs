@@ -142,24 +142,21 @@ impl Telemetry {
             ..Default::default()
         }
     }
-
-    #[cfg(test)]
-    pub fn completed_snapshot(
-        &self,
-        device: &crate::PipelineDevice,
-        queue: &wgpu::Queue,
-    ) -> RendererTelemetry {
-        for _ in 0..2 {
-            crate::test_support::complete_device(device);
-            self.snapshot(device, queue);
-        }
-        self.snapshot(device, queue)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Telemetry {
+        pub(crate) fn completed_snapshot(&self, device: &crate::PipelineDevice, queue: &wgpu::Queue) -> RendererTelemetry {
+            for _ in 0..2 {
+                crate::test_support::complete_device(device);
+                self.snapshot(device, queue);
+            }
+            self.snapshot(device, queue)
+        }
+    }
 
     #[test]
     fn completed_timers_resolve_inside_the_next_drawing_submission() {

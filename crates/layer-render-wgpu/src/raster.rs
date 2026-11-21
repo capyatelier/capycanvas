@@ -524,12 +524,6 @@ impl WgpuRasterizer {
             self.raster.get_or_insert_with(Default::default).preparation_wake=previous.preparation_wake.clone();
         }
     }
-    #[cfg(all(test,not(target_arch="wasm32")))]
-    pub(crate) fn raster_publication_pending(&self)->bool {
-        self.raster.as_ref().and_then(|runtime|runtime.worker.as_ref())
-            .is_some_and(|worker|worker.pending.used()!=0)
-    }
-
     pub fn raster_ready(&self) -> bool {
         self.raster
             .as_ref()

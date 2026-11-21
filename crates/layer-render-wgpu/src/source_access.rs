@@ -141,15 +141,6 @@ impl WgpuRasterizer {
         Ok(accepted)
     }
 
-    #[cfg(test)]
-    pub(super) fn read_raw_neighborhood<const N:usize>(&mut self,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
-        encoder:&mut crate::submission::CommandEncoder,
-    )->Result<(scene::sources::AcceptedInputs,[Option<wgpu::TextureView>;N]),GpuRasterError> {
-        let mut accepted=self.accept_raw_neighborhood(layer,coordinate,offsets,None,None,encoder)?;
-        let views=self.raw_layer_neighborhood(&mut accepted,layer,coordinate,offsets,None,encoder)?;
-        Ok((accepted,views))
-    }
-
     pub(super) fn raw_layer_neighborhood<const N:usize>(
         &mut self,inputs:&mut scene::sources::AcceptedInputs,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
         captured:Option<&mut Vec<resident::Input>>,encoder:&mut crate::submission::CommandEncoder,
@@ -265,6 +256,16 @@ mod tests {
         std::array::from_fn(|i| if i==3 {alpha} else {RgbSpace::Srgb.decode(f64::from(p[i])/255.) as f32*alpha})
     }
     fn submit(r: &mut WgpuRasterizer, encoder: crate::submission::CommandEncoder) { r.uploads.finish(&encoder); encoder.submit(&r.queue); }
+
+    impl WgpuRasterizer {
+        pub(crate) fn read_raw_neighborhood<const N:usize>(&mut self,layer:SourceTarget,coordinate:[u32;2],offsets:[Option<[i32;2]>;N],
+            encoder:&mut crate::submission::CommandEncoder,
+        )->Result<(scene::sources::AcceptedInputs,[Option<wgpu::TextureView>;N]),GpuRasterError> {
+            let mut accepted=self.accept_raw_neighborhood(layer,coordinate,offsets,None,None,encoder)?;
+            let views=self.raw_layer_neighborhood(&mut accepted,layer,coordinate,offsets,None,encoder)?;
+            Ok((accepted,views))
+        }
+    }
 
     fn cold_source_query(raster: bool) {
         let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
