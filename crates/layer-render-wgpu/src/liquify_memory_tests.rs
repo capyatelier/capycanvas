@@ -17,6 +17,7 @@ struct Canvas {
     shown: wgpu::Texture,
     clock: u64,
     sequence: u64,
+    refused: Vec<u64>,
 }
 
 struct Memory { lane: u64, admitted: u64, strokes: u64 }
@@ -40,7 +41,7 @@ impl Canvas {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
         });
         let presenter = ViewportPresenter::for_surface(engine.backend(), format, SdrSurfaceColor::Srgb).unwrap();
-        let mut canvas = Self { engine, input, target, presenter, shown, clock: 1_000_000_000, sequence: 0 };
+        let mut canvas = Self { engine, input, target, presenter, shown, clock: 1_000_000_000, sequence: 0, refused: Vec::new() };
         assert!(canvas.settle(), "the photo must open");
         canvas
     }
@@ -79,11 +80,13 @@ impl Canvas {
                 let timestamp_ns = start_ns + contact * 4_001_000_000 + step * 4_000_000_000 / STEPS;
                 self.input.push(PenEvent { timestamp_ns, view_revision: 1, pressure: if phase == PenPhase::Up { 0. } else { 1. },
                     ..crate::test_support::pen(self.sequence, phase, [view.width_px as f32 * (0.5 + radius * angle.cos()), view.height_px as f32 * (0.5 + radius * angle.sin())], SampleFlags::PRIMARY) }).unwrap();
+                let refusals = self.engine.backend().stroke_memory_refusals();
                 self.frame(timestamp_ns);
                 for _ in 1..if held || step == STEPS { 1 } else { SAMPLE_FRAMES } {
                     if !self.engine.has_pending_input() && !self.engine.has_pending_document_edits() { break; }
                     self.frame(self.clock + FRAME_NS);
                 }
+                if self.engine.backend().stroke_memory_refusals() != refusals { self.refused.push(step); }
                 held |= self.engine.has_pending_input() && step != STEPS;
             }
         }
@@ -133,14 +136,30 @@ fn a_stroke_refused_its_own_memory_ends_with_the_drawing_as_it_was_and_the_next_
 }
 
 #[test]
-fn a_contact_refused_right_after_another_keeps_the_first_revision() {
-    let painted = |contacts: u64| {
-        let mut canvas = Canvas::photo(512);
+fn back_to_back_contacts_commit_the_revisions_a_roomy_run_commits() {
+    let revisions = |budget: u64| {
+        let mut canvas = Canvas::photo(budget);
         canvas.brush(layer_core::DefaultBrushPreset::LiquifyPush, 740.);
-        let revision = canvas.engine.document().revision;
-        assert!(canvas.ovals(1. / 3., contacts), "{contacts} contacts must end within {SETTLE_FRAMES} frames of the last input, not wait on {:?}", canvas.engine.backend().outstanding_terms());
-        assert_eq!((canvas.engine.document().revision, canvas.engine.backend().stroke_memory_refusals()), (revision + 1, contacts - 1), "the first contact commits and the second is refused");
-        canvas.contents()
+        let original = canvas.engine.document().artwork.clone();
+        assert!(canvas.ovals(1. / 3., 2), "{budget} MiB: both contacts must end within {SETTLE_FRAMES} frames of the last input, not wait on {:?}", canvas.engine.backend().outstanding_terms());
+        let mut revisions = vec![canvas.contents()];
+        while canvas.engine.undo().unwrap() {
+            assert!(canvas.settle());
+            revisions.push(canvas.contents());
+        }
+        assert!(canvas.engine.document().artwork == original, "{budget} MiB: Undo returns the photo");
+        for committed in revisions.iter().rev().skip(1) {
+            assert!(canvas.engine.redo().unwrap() && canvas.settle());
+            assert!(canvas.contents() == *committed, "{budget} MiB: Redo returns each committed contact");
+        }
+        revisions.reverse();
+        (revisions, canvas.refused)
     };
-    assert!(painted(2) == painted(1), "the refused second contact leaves the first contact's pixels");
+    let (roomy, refused) = revisions(1024);
+    assert_eq!((roomy.len(), refused), (3, Vec::new()), "a roomy run commits both contacts");
+    for budget in [512, 560] {
+        let (tight, refused) = revisions(budget);
+        assert!(tight.len() == 2 && tight[..] == roomy[..2], "{budget} MiB: the first contact's pixels are the roomy run's");
+        assert!(matches!(refused[..], [step] if step > 1), "{budget} MiB: the second contact paints past its first move before memory refuses it: {refused:?}");
+    }
 }

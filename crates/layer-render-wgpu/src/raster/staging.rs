@@ -71,6 +71,7 @@ struct TargetRestore {
     selected:RasterData,
     pending:Vec<SourcePage>,
     next:usize,
+    allocated:usize,
     pages:PreparedPages,
     replace:bool,
     scalars:Vec<object_image_mips::PreparedRasterTile>,
@@ -168,7 +169,7 @@ impl TargetRestore {
             pending.extend(required.iter().filter(|coordinate| !commit.is_some_and(|commit|commit.contains(target,RasterPlane::Color,**coordinate)) && (replace || !resident(&TileKey {plane:RasterPlane::Color,coordinate:**coordinate})) && !data.tiles.contains_key(&TileKey {plane:RasterPlane::Color,coordinate:**coordinate})
                 && source_access::paint_base_contains(&base,**coordinate)).map(|coordinate|SourcePage::Base(*coordinate,base.clone())));
         }
-        Ok(Self {target,extent,defaults,data,selected,pending,next:0,pages:PreparedPages::default(),replace,scalars:Vec::new(),inputs:Default::default()})
+        Ok(Self {target,extent,defaults,data,selected,pending,next:0,allocated:0,pages:PreparedPages::default(),replace,scalars:Vec::new(),inputs:Default::default()})
     }
     fn awaits(&self,blob:&TileBlob)->bool {
         self.pending.iter().skip(self.next).filter(|source|!matches!(source,SourcePage::Output(_))).take(PREFETCH).any(|source|matches!(source,SourcePage::Raster(key,tile) if key.plane!=RasterPlane::Color
@@ -177,9 +178,12 @@ impl TargetRestore {
     fn held(&self,blob:&TileBlob)->Option<&object_image_mips::PreparedRasterTile> {
         self.scalars.iter().find(|prepared|scene::sources::same_raster_samples(&prepared.blob,blob))
     }
-    fn projected_bytes(&self,r:&WgpuRasterizer)->Result<u64,GpuRasterError> {
-        if self.pages.storage_bytes()!=0 {return Ok(0);}
-        self.pending.iter().try_fold(0u64,|bytes,source|bytes.checked_add(source.output().bytes(r,r.preview_level)).ok_or(GpuRasterError::SizeOverflow))
+    fn projected_bytes(&self,r:&WgpuRasterizer)->Result<u64,GpuRasterError> {self.step_bytes(r,self.pending.len())}
+    fn step_bytes(&self,r:&WgpuRasterizer,end:usize)->Result<u64,GpuRasterError> {
+        self.pending[self.allocated.min(end)..end].iter().try_fold(0u64,|bytes,source|bytes.checked_add(source.output().bytes(r,r.preview_level)).ok_or(GpuRasterError::SizeOverflow))
+    }
+    fn step_end(&self,at:usize)->usize {
+        at+1+self.pending[at+1..].iter().take_while(|source|matches!(source,SourcePage::Output(_))).count()
     }
     fn add_outputs(&mut self,r:&WgpuRasterizer,outputs:&[(SourceTarget,Output)],reset:bool,clear_starts:bool,commit:Option<&paint_transform::PreparedTransformCommit>,restored:&[(SourceTarget,TileKey)]) {
         for (_,output) in outputs.iter().filter(|(target,_)|*target==self.target) {
@@ -219,8 +223,8 @@ impl TargetRestore {
             if !present {self.pending.push(SourcePage::Output(output.clone()));}
         }
     }
-    fn allocate(&mut self,r:&WgpuRasterizer,encoder:&mut submission::CommandEncoder)->Result<(),GpuRasterError> {
-        for source in &self.pending {match source.output() {
+    fn allocate(&mut self,r:&WgpuRasterizer,encoder:&mut submission::CommandEncoder,end:usize)->Result<(),GpuRasterError> {
+        for source in &self.pending[self.allocated.min(end)..end] {match source.output() {
             Output::Color(c)=> {
                 let mut page=r.create_page(c,"prepared raster color");
                 if matches!(source,SourcePage::Output(_)) {
@@ -246,6 +250,7 @@ impl TargetRestore {
             },
             _=>unreachable!(),
         }}
+        self.allocated=self.allocated.max(end);
         Ok(())
     }
     fn complete(&self)->bool {self.next==self.pending.len()}
@@ -261,8 +266,7 @@ impl TargetRestore {
         kinds
     }
     fn ready(&self,r:&WgpuRasterizer)->bool {
-        if self.projected_bytes(r).is_ok_and(|bytes|bytes!=0) {return false;}
-        let Some(source)=self.pending.get(self.next) else {return false;};
+        let Some(source)=self.pending[..self.allocated].get(self.next) else {return false;};
         if let SourcePage::Raster(key,tile)=source && key.plane!=RasterPlane::Color {
             let Some(Ok(blob))=tile.try_backing() else {return false;};
             return self.held(&blob).is_some() && r.source_tiles.borrow().upload_blocked(crate::residency::Class::Authored,native_tiles::scalar::COVERAGE_TILE_BYTES).is_none();
@@ -281,7 +285,7 @@ impl TargetRestore {
             }
         }
         let mut uploads=0;
-        while let Some(source)=self.pending.get(self.next) {
+        while let Some(source)=self.pending[..self.allocated].get(self.next) {
             if matches!(source,SourcePage::Output(_)) {self.next+=1;continue;}
             if uploads==UPLOADS {break;}
             let Some(inputs)=source.inputs(space)? else {break;};
@@ -801,31 +805,39 @@ impl WgpuRasterizer {
         let remaining=PREFETCH-usize::from(!matches!(target.pending[first],SourcePage::Output(_)));
         let indices=std::iter::once(first).chain(target.pending.iter().enumerate().skip(first)
             .filter(|(index,source)|*index!=first && !matches!(source,SourcePage::Output(_))).take(remaining).map(|(index,_)|index)).collect::<Vec<_>>();
+        let mut stepping=false;
         for at in indices {
             let target=self.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
             let Some(inputs)=target.pending[at].inputs(self.document_color().space)? else {break;};
-            if target.pages.storage_bytes()!=0 && target.inputs.contains(&inputs) {continue;}
-            let output_bytes=target.projected_bytes(self)?;
-            let accepted=inputs.accept(self,&mut (),|_,r,inputs| {
+            if at<target.allocated && target.inputs.contains(&inputs) {continue;}
+            let step=target.step_end(at);
+            let [least,most]=[step,if stepping {step}else {target.pending.len()}].map(|end|target.step_bytes(self,end));
+            let (least,most)=(least?,most?);
+            let mut end=step;
+            let accepted=inputs.accept(self,&mut end,|end,r,inputs| {
                 let bytes=inputs.additional_bytes(&r.source_tiles.borrow());
                 let preview=r.restore_preflight.as_ref().map_or(0,|restore|r.unreserved_preview_bytes(restore));
-                let admitted=r.admit_group(output_bytes.saturating_add(preview),bytes).map(|(source,mut held)| {
+                let admitted=r.admit_group_within(least.saturating_add(preview),most.saturating_add(preview),bytes).map(|(source,mut held)| {
                     if preview!=0 {r.restore_preflight.as_mut().unwrap().preview=held.split(preview);}
-                    (source,(output_bytes!=0).then_some(held))
+                    if held.bytes()!=least {*end=usize::MAX;}
+                    (source,(held.bytes()!=0).then_some(held))
                 });
                 r.note_restore_admission(&admitted);
                 admitted.ok()
-            },|_,r| {
-                if output_bytes!=0 {r.record_restore_uploads(|r,encoder| {
+            },|end,r| {
+                let target=r.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
+                let end=(*end).min(target.pending.len());
+                if end<=target.allocated {return Ok(());}
+                r.record_restore_uploads(|r,encoder| {
                     let mut restore=r.restore_preflight.take().unwrap();
-                    restore.targets[index].as_mut().unwrap().allocate(r,encoder)?;
-                    r.restore_preflight=Some(restore);Ok(())
-                })?;}
-                Ok(())
+                    let result=restore.targets[index].as_mut().unwrap().allocate(r,encoder,end);
+                    r.restore_preflight=Some(restore);result
+                })
             },|_,r,(_,raster)| {
                 if let Some(reservation)=raster {r.commit_raster_working(reservation);}
                 Ok(())
             });
+            stepping|=end==step;
             match accepted {
                 Ok(Some(((),inputs)))=>self.restore_preflight.as_mut().unwrap().targets[index].as_mut().unwrap().inputs.extend(inputs)?,
                 Ok(None)=>break,
@@ -835,7 +847,7 @@ impl WgpuRasterizer {
         }
         let target=self.restore_preflight.as_ref().unwrap().targets[index].as_ref().unwrap();
         Ok(target.pending[first].inputs(self.document_color().space)?.is_some_and(|inputs|
-            target.inputs.contains(&inputs) && target.projected_bytes(self).is_ok_and(|bytes|bytes==0)) && self.reserve_preview_outputs())
+            target.inputs.contains(&inputs) && first<target.allocated) && self.reserve_preview_outputs())
     }
     fn advance_restore(&mut self)->Result<bool,GpuRasterError> {
         if let Some(target)=self.restore_preflight.as_ref().and_then(|restore|restore.targets.iter().flatten().find(|target|!target.complete()))
@@ -1171,7 +1183,7 @@ mod tests {
         let reservation=r.admit_raster_working(outputs).unwrap();
         r.record_restore_uploads(|r,encoder| {
             let mut restore=r.restore_preflight.take().unwrap();
-            let result=restore.targets[0].as_mut().unwrap().allocate(r,encoder);
+            let target=restore.targets[0].as_mut().unwrap();let result=target.allocate(r,encoder,target.pending.len());
             r.restore_preflight=Some(restore);result
         }).unwrap();
         r.commit_raster_working(reservation);
@@ -1360,6 +1372,34 @@ mod tests {
         }
         let restore=r.restore_preflight.as_ref().unwrap();
         assert!(restore.failure.is_none() && restore.preview.is_some(),"the group keeps its preview outputs: {:?}",restore.failure);
+        assert_restore_pixels(&r,&data);
+    }
+
+    #[cfg(not(target_arch="wasm32"))]
+    #[test]
+    fn a_restore_stages_the_pages_of_the_sources_it_admitted_while_the_rest_wait_for_room() {
+        let (mut r,data)=restore_request(4,|color,target,extent,_,_|Key::Frame {color,extent,reset:false,clear_starts:false,roots:Vec::new(),bases:Vec::new(),
+            required:vec![(target,(0..4).map(|x|[x,0]).collect())],outputs:Vec::new(),restored:Vec::new()});
+        let page=r.projected_restore_bytes()/4;
+        assert!(r.admit_raster_working(u64::MAX/2).is_err(),"the lane borrows every working reservation the display can lend");
+        let room=r.raster_tiers.raster.limit().saturating_sub(r.raster_tiers.raster.used());
+        let filler=r.raster_tiers.admitted.admit(crate::residency::Class::Authored,room-2*page-page/2).unwrap();
+        assert!(!r.restore_ready(),"four pages do not fit beside the held room");
+        assert_eq!(r.restore_preparation(),Some(crate::frame_demand::Outstanding::Blocked(crate::frame_demand::Input::Residency)));
+        let staged=r.staged_restore_bytes();
+        assert!(staged!=0 && staged<4*page && staged%page==0,"the restore stages the pages of the sources it admitted, not all four or none: {staged}");
+        assert_eq!(r.projected_restore_bytes(),4*page-staged,"the restore still asks for the pages of the sources that wait");
+        drop(filler);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(30);
+        while !r.restore_ready() {
+            let inputs=r.restore_preflight.as_ref().unwrap().targets[0].as_ref().unwrap().inputs.clone();
+            inputs.prepare(&mut r).unwrap();
+            r.record_restore_uploads(|r,encoder|r.drain_image_decodes(encoder)).unwrap();
+            crate::test_support::complete(&r);
+            assert!(std::time::Instant::now()<deadline,"the restore must finish once the room returns: {:?}",r.restore_preparation());
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(r.restore_preflight.as_ref().unwrap().failure.is_none());
         assert_restore_pixels(&r,&data);
     }
 
