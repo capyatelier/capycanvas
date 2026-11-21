@@ -328,11 +328,9 @@ fn assert_settled(mut r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference:
     assert!(r.settled() && !publication_pending(r), "refinement and its Navigator refresh must settle: {:?}",r.outstanding_terms());
     match installed {Some(wake)=>r.set_preparation_wake(wake),None=>r.preparation_wake=None}
     let cache = r.scale_display.as_ref().unwrap();
-    let error = quality(&display_pixels(r), reference, cache.plan, cache.texture().format());
-    assert!(error[2] < 2e-5, "settled display {error:?}");
+    assert_reduction(&display_pixels(r), reference, cache.plan, cache.texture().format(), 2e-5, format_args!("settled display"));
     if let Some(overview) = &cache.overview {
-        let error = quality(&window_pixels(r, overview.pixels.root().unwrap(), overview.plan), reference, overview.plan, overview.pixels.root().unwrap().texture.format());
-        assert!(error[2] < 2e-5, "settled overview {error:?}");
+        assert_reduction(&window_pixels(r, overview.pixels.root().unwrap(), overview.plan), reference, overview.plan, overview.pixels.root().unwrap().texture.format(), 2e-5, format_args!("settled overview"));
     }
     assert_presentation_mip(r);
 
@@ -1839,6 +1837,17 @@ pub(crate) fn quality(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mip
     quality_linear(actual, exact, plan, format, |color| color)
 }
 
+fn within_one_half_float_step(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan) -> bool {
+    let ordinals = |color: [f32; 4]| color.map(|value| f32::from(layer_core::color::f16::from_f32(value).to_bits()));
+    quality_linear(actual, exact, plan, wgpu::TextureFormat::Rgba16Float, ordinals)[2] <= 1.
+}
+
+fn assert_reduction(actual: &[[f32; 4]], exact: &[[f32; 4]], plan: display_mips::Plan, format: wgpu::TextureFormat, bound: f32, context: std::fmt::Arguments<'_>) {
+    let error = quality(actual, exact, plan, format);
+    let reduced_into_half_float = plan.level > 0 && format == wgpu::TextureFormat::Rgba16Float;
+    assert!(error[2] < bound || reduced_into_half_float && within_one_half_float_step(actual, exact, plan), "{context}: {error:?}");
+}
+
 fn linear_color(color: [f32; 4], space: layer_core::BlendSpace, rgb: layer_core::color::RgbSpace) -> [f32; 4] {
     let a = color[3];
     if space == layer_core::BlendSpace::Linear || a <= 0. { return color; }
@@ -1897,7 +1906,7 @@ fn scaled_composition_preserves_exact_paint_and_replaces_full_display() {
     let plan = r.scale_display.as_ref().unwrap().plan;
     assert_eq!(plan.level, 3);
     assert_eq!(plan.bounds, PixelRect::full(extent));
-    assert!(quality(&original, &reference, plan, r.scale_display.as_ref().unwrap().texture().format())[2] < 1e-5);
+    assert_reduction(&original, &reference, plan, r.scale_display.as_ref().unwrap().texture().format(), 1e-5, format_args!("first display"));
     let mut dab = crate::tests::test_dab([255., 129.], [0.9, 0.02, 0.1, 0.7], 1.);
     dab.radii = [45.; 2];
     let batch = dab_batch(
@@ -2101,14 +2110,11 @@ fn scaled_layer_cache_tracks_stack_changes_and_odd_edges_at_each_level() {
             submit_published(&mut r, p);
             submit_published(&mut exact, p);
             let cache = r.scale_display.as_ref().unwrap();
-            let error = quality(
+            assert_reduction(
                 &pixels(&r, cache.texture()),
                 &pixels(&exact, crate::test_support::document_texture(&exact)),
-                cache.plan, cache.texture().format(),
-            );
-            assert!(
-                error[2] < 2e-5,
-                "constant-alpha stack, level {level}, change {change}: {error:?}"
+                cache.plan, cache.texture().format(), 2e-5,
+                format_args!("constant-alpha stack, level {level}, change {change}"),
             );
         }
     }
@@ -2263,14 +2269,11 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         assert_presentation_mip(&r);
         let cache = r.scale_display.as_ref().unwrap();
         assert!(cache.storage_bytes() <= crate::memory::CACHE_BYTES);
-        let error = quality(
+        assert_reduction(
             &display_pixels(&r),
             &pixels(&exact, crate::test_support::document_texture(&exact)),
-            cache.plan, cache.texture().format(),
-        );
-        assert!(
-            error[2] < 1e-5,
-            "derived level must include correct partial-edge weights: {error:?}"
+            cache.plan, cache.texture().format(), 1e-5,
+            format_args!("derived level must include correct partial-edge weights"),
         );
     }
     assert!(retained_root_pages(r.scale_display.as_ref().unwrap()).iter().map(|page|page.key.level).collect::<BTreeSet<_>>().len()>=2);
@@ -2286,14 +2289,11 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
             assert!(r.scale_display.as_ref().unwrap().graph.root!=previous_root);
         }
         let cache = r.scale_display.as_ref().unwrap();
-        let error = quality(
+        assert_reduction(
             &display_pixels(&r),
             &pixels(&exact, crate::test_support::document_texture(&exact)),
-            cache.plan, cache.texture().format(),
-        );
-        assert!(
-            error[2] < 1e-5,
-            "changed artwork must replace the retired neighbor: {error:?}"
+            cache.plan, cache.texture().format(), 1e-5,
+            format_args!("changed artwork must replace the retired neighbor"),
         );
     }
     occurrence_mut(&mut doc,0).visible = false;
@@ -2307,14 +2307,11 @@ fn unchanged_navigation_derives_and_reuses_a_bounded_neighbor_level() {
         submit_published(&mut r, p);
         submit_published(&mut exact, p);
         let cache = r.scale_display.as_ref().unwrap();
-        let error = quality(
+        assert_reduction(
             &display_pixels(&r),
             &pixels(&exact, crate::test_support::document_texture(&exact)),
-            cache.plan, cache.texture().format(),
-        );
-        assert!(
-            error[2] < 1e-5,
-            "an empty retained level must remain reusable after layer visibility changes"
+            cache.plan, cache.texture().format(), 1e-5,
+            format_args!("an empty retained level must remain reusable after layer visibility changes"),
         );
     }
 }
