@@ -30,10 +30,48 @@ pub(super) struct Contact {
     stamps:Arc<PreviewStamps>,
     reduced:BTreeSet<[u32;2]>,
     baselines:BTreeMap<[u32;2],Baseline>,
+    drawn_directly:bool,
 }
 
 type Description=(crate::resident::Input,PixelRect);
-struct Baseline {submission:submission::Submission,descriptions:Vec<Description>,reads:Vec<(usize,u64)>}
+enum Stroked {Tile(Vec<Description>),Level(PixelRect)}
+struct Baseline {submission:submission::Submission,stroked:Stroked,reads:Vec<(usize,u64)>}
+impl Baseline {
+    fn changed(&self,now:&Stroked,region:PixelRect)->Option<PixelRect> {
+        match (&self.stroked,now) {
+            (Stroked::Tile(before),Stroked::Tile(now))=>changed_since(now,before).map(|changed|changed.translated([region.min_x(),region.min_y()])),
+            (Stroked::Level(rewritten),Stroked::Level(_))=>Some(*rewritten),
+            _=>None,
+        }
+    }
+}
+#[derive(Clone,Copy)]
+enum Patch {Tile,Level}
+impl Patch {
+    fn of(contact:&Contact,tiled:bool,frame:SourceFrame)->Option<Self> {
+        if !tiled || contact.guard.watercolor.is_some() || !contact.drawn_directly {return None;}
+        match contact.level {
+            None=>(contact.plan.level==0).then_some(Self::Tile),
+            Some(level)=>(level==contact.plan.level && frame.origin()==[0;2]).then_some(Self::Level),
+        }
+    }
+    fn stroked(self,unit:&Unit,jobs:&[crate::scene::Job],target:SourceTarget,cell:[u32;2],texels:[u32;2])->Option<Stroked> {
+        if !unit.pages.is_empty() || !whole_cell_composes(jobs,texels) {return None;}
+        match self {
+            Self::Tile=>unit.sources.sole_color(target,cell).filter(|witness|witness.live()).map(|witness|Stroked::Tile(descriptions(witness))),
+            Self::Level=>Some(Stroked::Level(PixelRect::EMPTY)),
+        }
+    }
+}
+fn drawn_directly(node:&graph::Node,tainted:&crate::IdSet<usize>)->bool {
+    if !tainted.contains(&(Arc::as_ptr(node) as *const () as usize)) {return true;}
+    match node.as_ref() {
+        graph::Expression::Source {..}=>true,
+        graph::Expression::Opacity {input,..}=>drawn_directly(input,tainted),
+        graph::Expression::Combine {front,back,flags,..}=>flags&(32|64)==0 && drawn_directly(front,tainted) && drawn_directly(back,tainted),
+        _=>false,
+    }
+}
 fn descriptions(witness:&crate::resident::Input)->Vec<Description> {
     let mut known=vec![(witness.clone(),PixelRect::EMPTY)];
     while known.len()<3 && let Some((page,outside))=known.last() && let Some((from,rect))=page.seed() {known.push((from,outside.union(rect)));}
@@ -42,18 +80,16 @@ fn descriptions(witness:&crate::resident::Input)->Vec<Description> {
 fn changed_since(now:&[Description],before:&[Description])->Option<PixelRect> {
     now.iter().find_map(|(page,rect)|before.iter().find_map(|(earlier,outside)|Some(page.changed_since(earlier)?.union(*rect).union(*outside))))
 }
-fn whole_cell_composes(jobs:&[crate::scene::Job],region:PixelRect)->bool {
+fn whole_cell_composes(jobs:&[crate::scene::Job],texels:[u32;2])->bool {
     jobs.iter().all(|job|match job {
-        crate::scene::Job::Compose {values,..}=>[values[2],values[3]]==[region.width(),region.height()],
+        crate::scene::Job::Compose {values,..}=>[values[2],values[3]]==texels,
         crate::scene::Job::DecodedTile(_)=>true,
         _=>false,
     })
 }
-fn crop(jobs:&mut [crate::scene::Job],region:PixelRect,rect:PixelRect) {
+fn crop(jobs:&mut [crate::scene::Job],[x,y,width,height]:[u32;4]) {
     for job in jobs {
-        if let crate::scene::Job::Compose {values,..}=job {
-            values[0]+=rect.min_x()-region.min_x();values[1]+=rect.min_y()-region.min_y();values[2]=rect.width();values[3]=rect.height();
-        }
+        if let crate::scene::Job::Compose {values,..}=job {values[0]+=x;values[1]+=y;values[2]=width;values[3]=height;}
     }
 }
 
@@ -230,6 +266,7 @@ impl Cache {
         if required.iter().any(|region|!cells.iter().any(|(cell,_)|cell==region)) {return Ok(());}
         let footprints=frame.reader_regions(target,self.plan.level).into_iter().map(|(local,regions)|(local,regions.into_iter().flat_map(|region|self.reached_cells(region)).collect())).collect();
         let mut tainted=crate::IdSet::default();reads(&root,target,&mut tainted);
+        let drawn_directly=drawn_directly(&root,&tainted);
         let predicted=frame.preview_for(target).and_then(|preview|preview.contact_outputs().map(Iterator::collect)).unwrap_or_default();
         static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);
         self.pixels.hold_current(&frame);
@@ -237,7 +274,7 @@ impl Cache {
         self.gesture=Some(Contact {id:NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed),stroke,target,plan:self.plan,window,root,tiled,frame,composed,predicted,
             previewed,next:None,
             footprints,tainted,guard,generation:std::sync::Mutex::new(generation),exit:std::sync::OnceLock::new(),preview_level,cells,inputs,pages,level,
-            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new()});
+            stale,written:IdMap::default(),submissions:Vec::new(),stamps:Arc::default(),reduced,baselines:BTreeMap::new(),drawn_directly});
         Ok(())
     }
     #[expect(clippy::too_many_arguments,reason="A contact grows with the frame's scene, encoding and budget into the cells its stroke reaches")]
@@ -412,7 +449,9 @@ impl Cache {
         let drawn=self.unnamed_writes(&composes);
         let contact=self.gesture.as_mut().expect("live contact");
         let (root,tiled,target)=(contact.root.clone(),contact.tiled,contact.target);
-        let reads_tile=tiled && contact.plan.level==0 && contact.level.is_none() && contact.guard.watercolor.is_none();
+        let (plan,frame)=(contact.plan,source_frame(Some(&scene.scale_sources),packet.scene,target));
+        let patch=Patch::of(contact,tiled,frame);
+        let (side,span)=(1u32<<plan.level,PAGE_SIZE<<plan.level);
         let reduced=contact.reduced_tiles(source_phase(scene,target),std::iter::empty());
         let mut inputs=std::mem::take(&mut contact.inputs);
         let cells=std::mem::take(&mut contact.cells);
@@ -432,8 +471,11 @@ impl Cache {
             let handle=packet.scene.source_owner(target).ok_or(GpuRasterError::NotReady)?;
             let mut reads=Unit::default();
             for (_,_,tile,page) in &reductions {
-                scene.reduce_color_pages(r,packet,handle,page.plan,&page.view,&[*tile],None,[0;2],&stale,&mut inputs)?;
+                let rewritten=frame.document(scene.reduce_color_pages(r,packet,handle,page.plan,&page.view,&[*tile],None,[0;2],&stale,&mut inputs)?).in_frame(plan.extent);
                 reads.reads.push(page.clone());
+                for cell in pages::coordinates(rewritten,plan.level) {
+                    if let Some(Baseline {stroked:Stroked::Level(area),..})=baselines.get_mut(&cell) {*area=area.union(rewritten);}
+                }
             }
             if !reductions.is_empty() {reads.updates.push((target,reductions.len()));}
             if !reads.ready(scene,r,encoder,start,Class::Visible)? {return Err(GpuRasterError::NotReady);}
@@ -441,8 +483,8 @@ impl Cache {
             let mut units=vec![reads];let mut composed=Vec::new();let mut blocked=Vec::new();let mut fresh=Vec::new();
             for (region,drawn) in composes.into_iter().zip(drawn) {
                 let start=scene.jobs.len();let mut unit=Unit::default();
-                let tile=[region.min_x()/PAGE_SIZE,region.min_y()/PAGE_SIZE];
-                let before=baselines.remove(&tile);
+                let cell=[region.min_x()/span,region.min_y()/span];
+                let before=baselines.remove(&cell);
                 let result=(|| {
                     let (_,declared)=cells.iter().find(|(cell,_)|*cell==region).ok_or(GpuRasterError::Invariant("a contact cell has no declared inputs"))?;
                     let mut accepted=declared.accept_query(r,Some(scene))?;
@@ -457,16 +499,17 @@ impl Cache {
                 })();
                 match result {
                     Ok(())=>{
-                        let now=(reads_tile && unit.pages.is_empty() && whole_cell_composes(&scene.jobs[start..],region))
-                            .then(||unit.sources.sole_color(target,tile).filter(|witness|witness.live())).flatten()
-                            .map(|witness|(descriptions(witness),unit.reads.iter().map(pages::Held::stamp).collect::<Vec<_>>()));
-                        let rect=now.as_ref().zip(before)
+                        let [_,_,width,height]=paint_transform::texel_rect(PixelRect::full([region.width(),region.height()]),side);
+                        let now=patch.and_then(|patch|patch.stroked(&unit,&scene.jobs[start..],target,cell,[width,height]))
+                            .map(|stroked|(stroked,unit.reads.iter().map(pages::Held::stamp).collect::<Vec<_>>()));
+                        let texels=now.as_ref().zip(before)
                             .filter(|((_,reads),before)|drawn.as_ref().is_some_and(|shown|shown.same(&before.submission)) && *reads==before.reads)
-                            .and_then(|((now,_),before)|changed_since(now,&before.descriptions))
-                            .map(|changed|changed.translated([region.min_x(),region.min_y()]).intersect(region)).filter(|rect|!rect.is_empty());
-                        if let Some(rect)=rect {crop(&mut scene.jobs[start..],region,rect);}
-                        if let Some((descriptions,reads))=now {fresh.push((tile,descriptions,reads));}
-                        unit.work=scene.planned_work(start);units.push(unit);composed.push(rect.unwrap_or(region));
+                            .and_then(|((now,_),before)|before.changed(now,region))
+                            .map(|changed|paint_transform::texel_rect(changed.window_local(region),side)).filter(|[_,_,width,height]|width*height!=0);
+                        if let Some(texels)=texels {crop(&mut scene.jobs[start..],texels);}
+                        if let Some((stroked,reads))=now {fresh.push((cell,stroked,reads));}
+                        unit.work=scene.planned_work(start);units.push(unit);
+                        composed.push(texels.map_or(region,|[x,y,width,height]|PixelRect::new(x*side,y*side,(x+width)*side,(y+height)*side).translated([region.min_x(),region.min_y()]).intersect(region)));
                     },
                     Err(GpuRasterError::NotReady|GpuRasterError::NotPublished|GpuRasterError::SourceWorkingSetExceeded)=>{scene.discard_jobs_from(start);blocked.push(region);},
                     Err(error)=>return Err(error),
@@ -479,7 +522,7 @@ impl Cache {
         contact.inputs=inputs;contact.cells=cells;contact.stale=stale;contact.baselines=baselines;
         let (composed,blocked,fresh)=match result {Ok(done)=>done,Err(error)=>{scene.discard_jobs_from(start);return Err(error);}};
         let submission=encoder.submission();
-        contact.baselines.extend(fresh.into_iter().map(|(tile,descriptions,reads)|(tile,Baseline {submission:submission.clone(),descriptions,reads})));
+        contact.baselines.extend(fresh.into_iter().map(|(cell,stroked,reads)|(cell,Baseline {submission:submission.clone(),stroked,reads})));
         if let Some((versions,_,predicted,previewed))=contact.next.take() {contact.composed=versions;contact.predicted=predicted;contact.previewed=previewed;}
         {
             let mut store=self.pages.lock().unwrap();

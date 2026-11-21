@@ -1793,7 +1793,7 @@ impl Evaluator<'_> {
             let key=source.key(self.r,id,plan.level,coordinate);
             let region=key.plan().bounds.intersect(needed);
             let image=match &self.cache.gesture {
-                Some(contact)=>contact.pages.get(&key).cloned(),
+                Some(contact)=>contact.pages.get(&key).map(|held|self.cache.pages.lock().unwrap().restamped(&key,held)),
                 None=>self.cache.pages.lock().unwrap().get(&key,region,pages::Accuracy::Display,plan.level,self.class),
             }.ok_or(GpuRasterError::NotReady)?;
             inputs.push((key,image,region));
