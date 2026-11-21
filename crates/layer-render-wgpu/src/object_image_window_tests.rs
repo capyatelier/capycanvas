@@ -31,46 +31,40 @@ fn paced_builds(r:&mut WgpuRasterizer,images:&mut MovingImages,encoder:&mut crat
     builds
 }
 
-fn window_builds_while_overview_is_partial(bounds:PixelRect) {
-    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut request=request([2048;2],PixelRect::full([2048;2]),31);
-    let mut images=MovingImages::within(&r.scene_tiers);let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
-    pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
-    upload_page(&r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
-    submit_encoded(&mut r,|r,encoder| {
-        let root=request.root(&r.device).unwrap().unwrap();
-        images.allocate(r,MipPlan {targets:vec![root],waiting:false},encoder);
-        for _ in 0..8 {
-            let (source,coordinate)=next_build(&mut images).unwrap();
-            images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
-        }
-    });complete(&r);
-    request.bounds=bounds;
-    let window=request.allocation(&r.device,1,false).unwrap().unwrap();
-    let (own,builds)=submit_encoded(&mut r,|r,encoder| {
-        images.allocate(r,MipPlan {targets:vec![window],waiting:false},encoder);
-        let own=images.entries.iter().find(|entry|!entry.root).unwrap().pending.len();
-        let mut builds=0;
-        while images.entries.iter().any(|entry|!entry.root && !entry.pending.is_empty()) {
-            builds+=paced_builds(r,&mut images,encoder,&texture,|images|images.entries.iter().all(|entry|entry.root || entry.pending.is_empty()));
-        }
-        (own,builds)
-    });complete(&r);
-    assert!(builds<=2*own,"window waited behind unrelated overview inputs: builds={builds}, own={own}");
+#[test]
+fn a_window_does_not_wait_for_remaining_overview_inputs() {
+    for (case,bounds) in [("zoom",PixelRect::new(768,768,1024,1024)),("corner",PixelRect::new(0,0,256,256))] {
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut request=request([2048;2],PixelRect::full([2048;2]),31);
+        let mut images=MovingImages::within(&r.scene_tiers);let texture=page_texture(&r,wgpu::TextureFormat::Rgba32Float);
+        pollster::block_on(r.compilation.prepare_all(images.pipelines(&r.device))).unwrap();
+        upload_page(&r,&texture,&vec![0;PAGE_SIZE as usize*PAGE_SIZE as usize*16]);
+        submit_encoded(&mut r,|r,encoder| {
+            let root=request.root(&r.device).unwrap().unwrap();
+            images.allocate(r,MipPlan {targets:vec![root],waiting:false},encoder);
+            for _ in 0..8 {
+                let (source,coordinate)=next_build(&mut images).unwrap();
+                images.write_tile(r,encoder,&source,coordinate,&texture,None).unwrap();
+            }
+        });complete(&r);
+        request.bounds=bounds;
+        let window=request.allocation(&r.device,1,false).unwrap().unwrap();
+        let (own,builds)=submit_encoded(&mut r,|r,encoder| {
+            images.allocate(r,MipPlan {targets:vec![window],waiting:false},encoder);
+            let own=images.entries.iter().find(|entry|!entry.root).unwrap().pending.len();
+            let mut builds=0;
+            while images.entries.iter().any(|entry|!entry.root && !entry.pending.is_empty()) {
+                builds+=paced_builds(r,&mut images,encoder,&texture,|images|images.entries.iter().all(|entry|entry.root || entry.pending.is_empty()));
+            }
+            (own,builds)
+        });complete(&r);
+        assert!(builds<=2*own,"{case} window waited behind unrelated overview inputs: builds={builds}, own={own}");
+    }
 }
 fn trim(images:&mut MovingImages,limit:u64,encoder:&mut crate::submission::CommandEncoder)->u64 {
     images.live.heap().begin_frame();
     images.live.heap().evict(images.storage_bytes().saturating_sub(images.retiring.used()).saturating_sub(limit),Class::Fallback);
     images.retire_evicted(encoder)
-}
-
-#[test]
-fn zoom_window_does_not_wait_for_remaining_overview_inputs() {
-    window_builds_while_overview_is_partial(PixelRect::new(768,768,1024,1024));
-}
-#[test]
-fn corner_window_does_not_wait_for_remaining_overview_inputs() {
-    window_builds_while_overview_is_partial(PixelRect::new(0,0,256,256));
 }
 
 #[test]
