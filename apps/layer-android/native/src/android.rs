@@ -611,7 +611,7 @@ impl App {
         // A lost device may already have been retired by observe_gpu_failure.
         // Still propagate its error so the host offers renderer recovery.
         self.check_gpu()?;
-        if self.host.session.engine().backend().0.is_none() { return Ok(false); }
+        if self.host.session.rendering_suspended() || self.host.session.engine().backend().0.is_none() { return Ok(false); }
         self.frame_cost.fill(0);
         if let Some(surface) = &mut self.surface {
             if let Some((target, launch)) = surface.pending_target.take() {
