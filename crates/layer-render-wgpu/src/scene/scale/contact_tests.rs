@@ -1231,14 +1231,20 @@ fn differing_outside(rect:PixelRect,now:&[[u32;4]],then:&[[u32;4]])->usize {
 fn each_page_record_bounds_what_its_stroke_frame_wrote() {
     use DefaultBrushPreset::*;
     let extent=[768,512];let doc=stroked_over_a_layer(extent,true);let target=doc.active_target().unwrap();
-    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+    let mut graying=doc.clone();
+    let paint=primary_paint(&graying);graying.artwork.paint.get_mut(paint).unwrap().color_mode=layer_core::color::LayerColorMode::Grayscale;graying.revision+=1;
     let quarter=u64::from(PAGE_SIZE).pow(2)/4;
     let style=crate::layer_tests::preset_style;
     let locked=layer_render::DabStyle {alpha_locked:true,..style(Pencil)};
-    for (label,style,in_place,tips) in [("a Pencil",style(Pencil),true,1),("an alpha-locked Pencil",locked,true,1),("an ink pen",style(GPen),true,1),
+    let dither=style(DitherBlender);
+    let fine=layer_render::DabStyle {blender:layer_core::BrushBlender {cell_size:1.,..dither.blender},..dither.clone()};
+    let colored=[("a Pencil",style(Pencil),true,1),("an alpha-locked Pencil",locked,true,1),("an ink pen",style(GPen),true,1),
         ("an eraser",style(Eraser),true,1),("a paintbrush",style(Paintbrush),true,1),("a multiply glaze",style(MultiplyGlaze),true,1),
-        ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0)] {
-        let mut r=renderer(&doc);
+        ("a Pencil stored write-only",style(Pencil),false,1),("an ink pen stored write-only",style(GPen),false,1),("a smudge",style(Smudge),true,0),("wet paint",style(WetRound),true,0)];
+    let grayed=[("a Dither blender",dither,true,0),("a Dither blender without cells",fine,true,0),("a Scatter blender",style(ScatterBlender),true,0)];
+    for (doc,(label,style,in_place,tips)) in colored.into_iter().map(|row|(&doc,row)).chain(grayed.into_iter().map(|row|(&graying,row))) {
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view=view_at(extent,1);
+        let mut r=renderer(doc);
         if !in_place {crate::test_support::write_only_dry_material(&mut r);}
         crate::test_support::submit_settled(&mut r,frame);
         let dabs=|step:usize|[pen_dab(300.+3.*step as f32,&style),pen_dab(303.+3.*step as f32,&style)];
@@ -1282,6 +1288,8 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_kind_of_page_re
         Stroked {in_place:false,..Stroked::new("a page copied to its other surface under a tip",&painted,Pencil,1)},
         Stroked::new("a page transported without a tip",&painted,Smudge,0),
         Stroked::new("a page that first exists mid-stroke",&unpainted,Pencil,1),
+        Stroked::new("a page a Dither blender rewrote in cells",&painted,DitherBlender,0),
+        Stroked::new("a page a Scatter blender rewrote in cells",&painted,ScatterBlender,0),
     ]);
 }
 
@@ -1312,7 +1320,7 @@ fn every_patched_frame_equals_a_whole_frame_bit_for_bit_for_each_layer_setup() {
 fn a_write_without_a_usable_record_composes_whole_cells_and_the_same_pixels() {
     use DefaultBrushPreset::*;
     let plain=stroked_over_a_layer([768,512],true);
-    stays_whole([Stroked::new("a Dither blender",&plain,DitherBlender,0),Stroked::new("a smudge tip",&plain,Smudge,1),Stroked::new("two tips",&plain,Pencil,2)]);
+    stays_whole([Stroked::new("a smudge tip",&plain,Smudge,1),Stroked::new("two tips",&plain,Pencil,2)]);
 }
 
 #[test]

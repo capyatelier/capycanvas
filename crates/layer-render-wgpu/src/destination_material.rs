@@ -97,6 +97,19 @@ pub(super) fn blender(style: &layer_render::DabStyle) -> Blender {
     }
 }
 
+pub(super) fn rewritten(style: &layer_render::DabStyle, coordinate: [u32; 2], local: PixelRect, extent: [u32; 2]) -> Option<PixelRect> {
+    if !blender(style).cells { return Some(local); }
+    let cell = style.blender.cell_size as u32;
+    if style.blender.kind == layer_core::BlenderKind::Scatter {
+        let page = page_rect(coordinate);
+        return (page.intersect(PixelRect::full(extent)) == page).then(|| local.expand(cell - 1, [PAGE_SIZE; 2]));
+    }
+    let origin = coordinate.map(|at| at * PAGE_SIZE);
+    let low = |axis: usize, at: u32| ((origin[axis] + at) / cell * cell).saturating_sub(origin[axis]);
+    let high = |axis: usize, at: u32| ((origin[axis] + at).div_ceil(cell) * cell - origin[axis]).min(PAGE_SIZE);
+    Some(PixelRect::new(low(0, local.min_x()), low(1, local.min_y()), high(0, local.max_x()), high(1, local.max_y())))
+}
+
 /// The module that provides `entry` of `operation` for one blend code and blender.
 pub(super) fn module(operation: MaterialOperation, blend: u32, blender: Blender) -> Entries {
     match operation {
