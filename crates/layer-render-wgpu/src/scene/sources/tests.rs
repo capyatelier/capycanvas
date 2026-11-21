@@ -609,24 +609,21 @@ fn native_threshold_larger_than_the_decoded_floor_publishes_every_page_once() {
     let extent = [2560, 1792];
     let (doc, ..) = threshold_document(layer_core::color::source::rgba8_source(extent, |x, y|
         [(x / 7) as u8, (y / 5) as u8, ((x + y) / 3) as u8, 255]));
-    let render = |slots| {
-        let mut r = crate::memory::memory_tests::renderer_for_restore(&doc);
-        let mut frame = crate::test_support::packet(doc.scene(), extent);
-        frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
-        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-        crate::memory::memory_tests::declare_source_budget(&mut r, frame, slots, 16 << 20, 44 << 20);
-        crate::test_support::submit_published(&mut r, frame);
-        r
-    };
-    let floor = render(64);
-    let reference = render(1024);
+    let mut frame = crate::test_support::packet(doc.scene(), extent);
+    frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
+    frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+    let (mut floor, _pressure, _foreign_source, _foreign, capacity) = drained_source_renderer();
+    floor.begin_frame_memory(frame);
+    let mut reference = crate::memory::memory_tests::renderer_for_restore(&doc);
+    crate::test_support::submit_published(&mut floor, frame);
+    crate::test_support::submit_published(&mut reference, frame);
     let pages = page_coordinates(PixelRect::full(extent)).count() as u64;
+    assert!((capacity as u64) < pages);
     assert!(floor.scene_tiers.display.grant() < reference.scene_tiers.display.grant());
     assert!(reference.scene_tiers.display.grant() > pages * NORMALIZED_PAGE_BYTES);
     let [floor_cache, reference_cache] = [&floor, &reference].map(|r| r.scale_display.as_ref().unwrap());
     assert_eq!((floor_cache.plan.level, floor_cache.plan.bounds), (2, PixelRect::full(extent)));
-    let texels = floor_cache.plan.size.into_iter().map(u64::from).product::<u64>();
-    assert_eq!(floor.metrics.composited_pixels, texels, "resumed composition draws each output texel once");
+    assert_eq!(floor.metrics.composited_pixels, u64::from(extent[0]) * u64::from(extent[1]), "resumed composition draws each native pixel once");
     assert_eq!(crate::test_support::float_pixels(&floor, floor_cache.texture()),
         crate::test_support::float_pixels(&reference, reference_cache.texture()));
 }
