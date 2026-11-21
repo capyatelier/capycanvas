@@ -1,6 +1,5 @@
-use crate::test_support::floats;
 use super::*;
-use crate::test_support::pen;
+use crate::test_support::{Fixture, floats, pen, submit_encoded, view, wait_until};
 use layer_core::{
     BrushSnapshot, Document, CoverageSnapshot, RasterOperation, RasterOperationKind, Point, Retouch,
     Edit, authored::{CoverageHandle, Occurrence, OccurrenceContent, OccurrenceHandle,
@@ -24,14 +23,6 @@ const TARGET_USE: OccurrenceHandle = OccurrenceHandle::from_index(0);
 const PAPER_USE: OccurrenceHandle = OccurrenceHandle::from_index(1);
 const PHOTO_USE: OccurrenceHandle = OccurrenceHandle::from_index(2);
 const FILL: [f32; 4] = [1., 0., 0., 0.5];
-
-fn view(extent: [u32; 2]) -> ViewState {
-    ViewState {
-        width_px: extent[0],
-        height_px: extent[1],
-        document_to_surface: [1., 0., 0., 1., 0., 0.],
-    }
-}
 
 fn pattern(x: u32, y: u32) -> [u8; 4] {
     [(x % 251) as u8, (y % 241) as u8, ((x / 3 + y / 5) % 256) as u8, 255]
@@ -91,9 +82,8 @@ fn a_retouch_source_keeps_its_accepted_view_until_submission() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     r.ensure_document_metadata(document.composition().size,document.scene()).unwrap();
     let base=document.scene().paint_base(PHOTO).unwrap();
-    let mut upload=submission::CommandEncoder::new(&r.device,&Default::default());
-    crate::test_support::query_ready(&mut r,&mut upload,|r,encoder|r.paint_base_tile(base,[0,0],encoder)).unwrap();
-    r.uploads.finish(&upload);upload.submit(&r.queue);crate::test_support::complete(&r);
+    submit_encoded(&mut r,|r,upload| {crate::test_support::query_ready(r,upload,|r,encoder|r.paint_base_tile(base,[0,0],encoder)).unwrap();});
+    crate::test_support::complete(&r);
     let mut sources=RetouchSources::new(&mut r);
     let mut encoder=submission::CommandEncoder::new(&r.device,&Default::default());
     let view=sources.target_page(&mut r,PHOTO,None,[0,0],&mut encoder).unwrap().unwrap();
@@ -129,15 +119,11 @@ fn reveal_all(extent: [u32; 2]) -> CoverageSnapshot {
 }
 
 fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    loop {
+    wait_until("the engine must settle", || {
         engine.render_frame().unwrap();
-        if !engine.has_pending_input() && !engine.has_pending_document_edits() && engine.backend().next_frame()!=layer_render::FrameDemand::Work {
-            break;
-        }
-        assert!(std::time::Instant::now() < deadline);
-        std::thread::yield_now();
-    }
+        let pending = [engine.has_pending_input(), engine.has_pending_document_edits(), engine.backend().next_frame()==layer_render::FrameDemand::Work];
+        if pending.contains(&true) { Err(pending) } else { Ok(()) }
+    });
 }
 
 fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
@@ -173,13 +159,10 @@ fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngi
 fn draw(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, event: PenEvent) {
     input.push(event).unwrap();
     let submitted=engine.backend().submitted_updates();
-    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
-    loop {
+    wait_until("retouch input was not submitted",|| {
         engine.render_frame().unwrap();
-        if engine.backend().submitted_updates()!=submitted {break;}
-        assert!(std::time::Instant::now()<deadline,"retouch input was not submitted");
-        std::thread::yield_now();
-    }
+        if engine.backend().submitted_updates()==submitted {Err(submitted)} else {Ok(())}
+    });
 }
 
 fn stroke(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut InputProducer<PenEvent>, sequence: u64, from: [f32; 2], to: [f32; 2]) {
@@ -230,22 +213,17 @@ fn corrected_replay(engine: &mut CanvasEngine<WgpuRasterizer>, input: &mut Input
 fn sample(r: &mut WgpuRasterizer, page: [u32; 2], offset: [f32; 2]) -> (Vec<[f32; 4]>, bool) {
     let field = crate::test_support::page_texture(r, wgpu::TextureFormat::Rgba32Float);
     let view = field.create_view(&Default::default());
-    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    let complete = loop {
+    let complete = wait_until("the clone source's pages must decode", || {
         match r.draw_retouch_source(&view, page.map(|v| v * PAGE_SIZE), [PAGE_SIZE; 2], [1.; 2], offset) {
-            Err(GpuRasterError::NotReady) => crate::test_support::settle_decodes(r),
-            result => break result.unwrap(),
+            Err(pending @ GpuRasterError::NotReady) => { crate::test_support::settle_decodes(r); Err(pending) },
+            result => Ok(result.unwrap()),
         }
-        assert!(std::time::Instant::now() < deadline, "the clone source's pages must decode");
-    };
+    });
     (floats(&crate::layer_tests::page_bytes(r, &field)), complete)
 }
 
 fn layer_page(r: &mut WgpuRasterizer, layer: SourceTarget, page: [u32; 2]) -> Vec<[f32; 4]> {
-    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
-    let tile = crate::test_support::query_ready(r, &mut encoder, |r, encoder| r.raw_layer_tile(layer, page, encoder));
-    r.uploads.finish(&encoder);
-    encoder.submit(&r.queue);
+    let tile = submit_encoded(r, |r, encoder| crate::test_support::query_ready(r, encoder, |r, encoder| r.raw_layer_tile(layer, page, encoder)));
     tile.map_or_else(|| vec![[0.; 4]; (PAGE_SIZE * PAGE_SIZE) as usize], |tile| floats(&crate::layer_tests::page_bytes(r, &tile.texture)))
 }
 
@@ -563,34 +541,32 @@ fn stroke_start_pages_survive_estimated_samples_and_corrections() {
 fn retouch_reference_reads_arbitrary_base_offset_and_transparent_tile_override() {
     use layer_core::authored::{PaintBase, PaintBasePolicy};
     use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-    let extent=[600,520];let mut doc=document(extent);
+    let mut doc=document([600,520]);
     let SourceTarget::Paint(photo)=PHOTO else {unreachable!()};
     let paint=doc.artwork.paint.get_mut(photo).unwrap();
     paint.base=Some(PaintBase {image:rgba8_source([300,270],pattern).into(),offset:[17,31],policy:PaintBasePolicy::SourceProfile});
     paint.raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:RasterPlane::Color,coordinate:[1,1]},RasterTile::backed(TileBlob::encode(layer_core::color::DocumentColor::default().paint_descriptor(),&vec![0;256*256*4]).unwrap()))].into(),..Default::default()});
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut fixture=Fixture::new(doc);let (r,frame)=fixture.frame();
     r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,target:TARGET,retouch:Retouch {source:RetouchSource::References,references:Arc::new([PHOTO_USE].into()),..Default::default()},points:vec![Point {x:250.,y:250.}]}));
-    crate::test_support::submit_settled(&mut r, crate::test_support::packet(doc.scene(),extent));
-    let (pixels,complete)=sample(&mut r,[0,0],[0.;2]);assert!(complete);
+    crate::test_support::submit_settled(r,frame);
+    let (pixels,complete)=sample(r,[0,0],[0.;2]);assert!(complete);
     for (x,y) in [(0,0),(17,31),(250,250),(255,255)] {
         let expected=if x>=17&&y>=31 {reference(x-17,y-31)}else{[0.;4]};
         assert!(close(pixels[(y*256+x) as usize],expected),"{x},{y}");
     }
-    let (pixels,complete)=sample(&mut r,[1,1],[0.;2]);assert!(complete);
+    let (pixels,complete)=sample(r,[1,1],[0.;2]);assert!(complete);
     assert!(pixels.iter().all(|p|*p==[0.;4]));
 }
 
 #[test]
 fn a_clone_preview_from_persistent_accepts_the_captured_inputs_before_submit() {
-    let extent=[256;2];
-    let doc=document(extent);
-    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut fixture=Fixture::new(document([256;2]));
+    let (r,packet)=fixture.frame();
     let retouch=Retouch {source:RetouchSource::Editing,offset:[64.,0.],..Default::default()};
     r.prepare_retouch(Some(&RetouchPreparation {execution:layer_core::BrushExecution::Clone,
         target:PHOTO,retouch:retouch.clone(),points:vec![Point {x:160.,y:96.}]}));
-    let packet=crate::test_support::packet(doc.scene(),extent);
-    crate::test_support::submit_settled(&mut r,packet);
-    let (source,complete)=sample(&mut r,[0;2],retouch.offset);
+    crate::test_support::submit_settled(r,packet);
+    let (source,complete)=sample(r,[0;2],retouch.offset);
     assert!(complete);
     let before=r.current_raster_versions(PHOTO).unwrap();
     let mut style=crate::layer_tests::preset_style(layer_core::DefaultBrushPreset::CloneStamp);
@@ -603,15 +579,15 @@ fn a_clone_preview_from_persistent_accepts_the_captured_inputs_before_submit() {
         let batches=std::slice::from_ref(&batch);
         let frame=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:batches,composite_all:false,..packet};
         if kind==DabBatchKind::Preview {assert!(r.preview_from_persistent(batches));}
-        crate::test_support::submit_ready(&mut r,frame).unwrap_or_else(|error|panic!("{kind:?} clone batch after readiness: {error:?}"));
+        crate::test_support::submit_ready(r,frame).unwrap_or_else(|error|panic!("{kind:?} clone batch after readiness: {error:?}"));
         if kind==DabBatchKind::Preview {
             let page=r.preview_pages.iter().find(|page|page.coordinate==[0;2]).unwrap();
             let read=r.read_color_page(PHOTO,page,true,None).unwrap();
-            let pixels=crate::test_support::float_pixels(&r,&read.value().texture);
+            let pixels=crate::test_support::float_pixels(r,&read.value().texture);
             assert!(close(pixels[96*256+96],source[96*256+96]),"the preview must use its captured clone source");
             assert_eq!(before.root(layer_core::raster::RasterPlane::Color).matches(&r.current_raster_versions(PHOTO).unwrap().root(layer_core::raster::RasterPlane::Color)),Some(true),"preview must preserve authored pixels");
         }else {
-            assert!(close(pixels(&mut r,PHOTO)(96,96),source[96*256+96]),"the committed clone must use the same captured source");
+            assert!(close(pixels(r,PHOTO)(96,96),source[96*256+96]),"the committed clone must use the same captured source");
         }
     }
 }
